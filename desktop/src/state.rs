@@ -1,8 +1,8 @@
 use crate::error::Result;
+use crate::git::diff::DiffEngine;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-
 /// Global application state
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -241,7 +241,6 @@ pub enum LineOrigin {
 pub struct UIState {
   pub command_palette_open: bool,
   pub active_panel: Panel,
-  pub scroll_position: ScrollState,
 }
 
 impl Default for UIState {
@@ -249,7 +248,6 @@ impl Default for UIState {
     Self {
       command_palette_open: false,
       active_panel: Panel::FileList,
-      scroll_position: ScrollState::default(),
     }
   }
 }
@@ -258,15 +256,12 @@ impl Default for UIState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
   FileList,
-  DiffView,
-  CommitMessage,
 }
 
 /// Scroll state for virtualized lists
 #[derive(Debug, Clone, Default)]
 pub struct ScrollState {
   pub file_list: f32,
-  pub diff_view: f32,
 }
 
 /// Application configuration
@@ -320,25 +315,7 @@ impl Default for EditorConfig {
 pub enum Action {
   // Repository operations
   LoadRepository(PathBuf),
-  RefreshStatus,
-  StageFile(PathBuf),
-  UnstageFile(PathBuf),
-  StageHunk(HunkId),
-  UnstageHunk(HunkId),
-  Commit(String),
-  Push,
-  Pull,
-
-  // Auth operations
-  Login,
-  Logout,
-  RefreshPremiumStatus,
-
-  // UI operations
-  ToggleCommandPalette,
   SelectFile(PathBuf),
-  ExpandContext(HunkId, usize),
-  SetActivePanel(Panel),
 }
 
 /// Update the application state based on an action
@@ -374,60 +351,6 @@ pub fn update(state: &mut AppState, action: Action) -> Result<()> {
       log::info!("Successfully loaded repository");
     }
 
-    Action::RefreshStatus => {
-      log::info!("Refreshing status");
-    }
-
-    Action::StageFile(path) => {
-      log::info!("Staging file: {:?}", path);
-    }
-
-    Action::UnstageFile(path) => {
-      log::info!("Unstaging file: {:?}", path);
-    }
-
-    Action::StageHunk(hunk_id) => {
-      if let Some(repo) = state.workspace.get_active_repo_mut() {
-        repo.staged_hunks.insert(hunk_id);
-      }
-    }
-
-    Action::UnstageHunk(hunk_id) => {
-      if let Some(repo) = state.workspace.get_active_repo_mut() {
-        repo.staged_hunks.remove(&hunk_id);
-      }
-    }
-
-    Action::Commit(message) => {
-      log::info!("Committing with message: {}", message);
-    }
-
-    Action::Push => {
-      log::info!("Pushing changes");
-    }
-
-    Action::Pull => {
-      log::info!("Pulling changes");
-    }
-
-    Action::Login => {
-      log::info!("Logging in");
-    }
-
-    Action::Logout => {
-      state.auth.token = None;
-      state.auth.user = None;
-      state.auth.premium = false;
-    }
-
-    Action::RefreshPremiumStatus => {
-      log::info!("Refreshing premium status");
-    }
-
-    Action::ToggleCommandPalette => {
-      state.ui.command_palette_open = !state.ui.command_palette_open;
-    }
-
     Action::SelectFile(path) => {
       println!("SelectFile: {:?}", path);
       if let Some(repo) = state.workspace.get_active_repo_mut() {
@@ -437,7 +360,7 @@ pub fn update(state: &mut AppState, action: Action) -> Result<()> {
 
         // Load the diff for this file
         let git_repo = crate::git::open_repository(&repo.path)?;
-        let diff_engine = crate::git::diff::DiffEngine::new(git_repo.repo());
+        let diff_engine = DiffEngine::new(git_repo.repo());
 
         // Check if file is staged or unstaged
         let file_status = repo.status.files.iter().find(|f| f.path == path);
@@ -524,18 +447,6 @@ pub fn update(state: &mut AppState, action: Action) -> Result<()> {
           }
         }
       }
-    }
-
-    Action::ExpandContext(hunk_id, lines) => {
-      log::info!(
-        "Expanding context for hunk {:?} by {} lines",
-        hunk_id,
-        lines
-      );
-    }
-
-    Action::SetActivePanel(panel) => {
-      state.ui.active_panel = panel;
     }
   }
 

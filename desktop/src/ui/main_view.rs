@@ -12,6 +12,7 @@ use std::sync::Arc;
 /// Main application view - now a proper entity with click handlers
 pub struct MainView {
   workspace: WeakEntity<crate::workspace::Workspace>,
+  #[allow(dead_code)]
   storage: Arc<Storage>,
   /// Cache of EditorDiffView for each file
   editor_diffs: HashMap<PathBuf, Entity<EditorDiffView>>,
