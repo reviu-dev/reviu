@@ -1,7 +1,7 @@
-mod editor_diff_view;
+mod diff_view;
 mod main_view;
 
-pub use editor_diff_view::EditorDiffView;
+pub use diff_view::DiffView;
 pub use main_view::MainView;
 
 use gpui::rgb;
