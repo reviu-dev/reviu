@@ -7,9 +7,17 @@ rust-version = "1.75"
 [dependencies]
 # UI Framework
 gpui = { git = "https://github.com/zed-industries/zed" }
+text = { git = "https://github.com/zed-industries/zed" }
+rope = { git = "https://github.com/zed-industries/zed" }
+language = { git = "https://github.com/zed-industries/zed" }
+editor = { git = "https://github.com/zed-industries/zed" }
+buffer_diff = { git = "https://github.com/zed-industries/zed" }
+project = { git = "https://github.com/zed-industries/zed" }
+settings = { git = "https://github.com/zed-industries/zed" }
+theme = { git = "https://github.com/zed-industries/zed" }
 
 # Git operations
-git2 = "0.18"
+git2 = "0.20"
 
 # HTTP client for API calls
 reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
@@ -22,7 +30,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Local storage
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Secure credential storage
 keyring = "2.3"

@@ -119,12 +119,41 @@ impl<'repo> DiffEngine<'repo> {
       _ => return Ok(None),
     };
 
+    // Load file contents for lazy line loading
+    let old_content = if delta.status() != Delta::Added {
+      self.load_file_content(old_file.id()).ok()
+    } else {
+      None
+    };
+
+    let new_content = if delta.status() != Delta::Deleted {
+      // Try to read from working directory
+      let workdir_path = self.repo.workdir().map(|wd| wd.join(path));
+      if let Some(full_path) = workdir_path {
+        std::fs::read_to_string(full_path).ok()
+      } else {
+        None
+      }
+    } else {
+      None
+    };
+
     Ok(Some(FileDiff {
       path: PathBuf::from(path),
       old_path,
       status,
       hunks: Vec::new(),
+      old_content,
+      new_content,
     }))
+  }
+
+  /// Load file content from a git blob
+  fn load_file_content(&self, oid: git2::Oid) -> Result<String> {
+    let blob = self.repo.find_blob(oid)?;
+    let content = std::str::from_utf8(blob.content())
+      .map_err(|e| Error::Unknown(format!("Invalid UTF-8 in blob: {}", e)))?;
+    Ok(content.to_string())
   }
 
   /// Collect hunks for a specific file from the diff
@@ -231,7 +260,10 @@ fn parse_hunk_from_git2(hunk: git2::DiffHunk) -> Result<Hunk> {
     new_start: hunk.new_start(),
     new_lines: hunk.new_lines(),
     header,
-    lines: Vec::new(),
+    old_byte_range: 0..0, // Will be calculated from file content
+    new_byte_range: 0..0, // Will be calculated from file content
+    #[allow(deprecated)]
+    lines: Vec::new(), // Deprecated - use lazy loading
     context_expanded: false,
   })
 }
@@ -247,18 +279,12 @@ fn parse_line(line: git2::DiffLine) -> Option<Line> {
 
   let content = String::from_utf8_lossy(line.content()).to_string();
 
-  // Get line numbers (they're -1 if not applicable)
-  let old_lineno = if line.old_lineno().is_some() {
-    line.old_lineno()
-  } else {
-    None
-  };
-
-  let new_lineno = if line.new_lineno().is_some() {
-    line.new_lineno()
-  } else {
-    None
-  };
+  // git2 provides line numbers directly based on the origin:
+  // - Context lines: both old_lineno and new_lineno are present
+  // - Addition lines (+): only new_lineno is present
+  // - Deletion lines (-): only old_lineno is present
+  let old_lineno = line.old_lineno();
+  let new_lineno = line.new_lineno();
 
   Some(Line {
     origin,
