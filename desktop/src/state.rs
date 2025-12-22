@@ -184,9 +184,12 @@ pub struct FileDiff {
   pub old_path: Option<PathBuf>,
   pub status: FileStatusKind,
   pub hunks: Vec<Hunk>,
+  /// Full file content for lazy line loading
+  pub old_content: Option<String>,
+  pub new_content: Option<String>,
 }
 
-/// A hunk of changes in a diff
+/// A hunk of changes in a diff (metadata only, lines loaded on-demand)
 #[derive(Debug, Clone)]
 pub struct Hunk {
   pub id: HunkId,
@@ -195,8 +198,21 @@ pub struct Hunk {
   pub new_start: u32,
   pub new_lines: u32,
   pub header: String,
+  /// Byte range in old_content for this hunk
+  pub old_byte_range: std::ops::Range<usize>,
+  /// Byte range in new_content for this hunk
+  pub new_byte_range: std::ops::Range<usize>,
+  /// Lines are loaded lazily from old_content/new_content
+  /// This field is deprecated and will be removed
+  #[deprecated(note = "Use lazy line loading instead")]
   pub lines: Vec<Line>,
   pub context_expanded: bool,
+}
+
+impl Hunk {
+  // Note: Lines are now always parsed by git2 and stored in hunk.lines
+  // The byte ranges (old_byte_range, new_byte_range) are kept for potential
+  // future optimizations but are not currently used for line extraction
 }
 
 /// Unique identifier for a hunk
@@ -460,6 +476,9 @@ pub fn update(state: &mut AppState, action: Action) -> Result<()> {
                 new_start: 1,
                 new_lines: lines.len() as u32,
                 header: format!("@@ -0,0 +1,{} @@", lines.len()),
+                old_byte_range: 0..0,
+                new_byte_range: 0..content.len(),
+                #[allow(deprecated)]
                 lines,
                 context_expanded: false,
               };
@@ -470,6 +489,8 @@ pub fn update(state: &mut AppState, action: Action) -> Result<()> {
                 old_path: None,
                 status: FileStatusKind::Untracked,
                 hunks: vec![hunk],
+                old_content: None,
+                new_content: Some(content.clone()),
               };
 
               // Create diff state

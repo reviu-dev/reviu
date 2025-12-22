@@ -1,10 +1,11 @@
 use crate::state::{Action, AppState};
 use crate::storage::Storage;
-use crate::ui::Colors;
+use crate::ui::{Colors, EditorDiffView};
 use gpui::{
   div, prelude::*, px, AnyElement, Context, Entity, IntoElement, ParentElement, Styled, WeakEntity,
   Window,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -12,6 +13,8 @@ use std::sync::Arc;
 pub struct MainView {
   workspace: WeakEntity<crate::workspace::Workspace>,
   storage: Arc<Storage>,
+  /// Cache of EditorDiffView for each file
+  editor_diffs: HashMap<PathBuf, Entity<EditorDiffView>>,
 }
 
 impl MainView {
@@ -28,20 +31,11 @@ impl MainView {
       .detach();
     }
 
-    Self { workspace, storage }
-  }
-
-  /// Render the main view with state
-  pub fn render_with_state(state: &AppState, storage: Arc<Storage>) -> AnyElement {
-    div()
-      .flex()
-      .flex_col()
-      .size_full()
-      .bg(Colors::bg_primary())
-      .child(Self::render_header(state))
-      .child(div().flex().flex_1().child(Self::render_with_repo(state)))
-      .child(Self::render_status_bar(state))
-      .into_any_element()
+    Self {
+      workspace,
+      storage,
+      editor_diffs: HashMap::new(),
+    }
   }
 
   /// Render empty state when no repository is open
@@ -234,150 +228,6 @@ impl MainView {
       )
   }
 
-  /// Render the view when a repository is open
-  fn render_with_repo(state: &AppState) -> impl IntoElement {
-    log::info!(
-      "render_with_repo called, active_repo: {:?}",
-      state.workspace.active_repo
-    );
-    if let Some(repo) = state.workspace.get_active_repo() {
-      log::info!(
-        "Repository loaded: {}, files: {}",
-        repo.name,
-        repo.status.files.len()
-      );
-    }
-
-    div()
-      .flex()
-      .size_full()
-      .child(
-        // File list panel
-        div()
-          .w(px(300.0))
-          .h_full()
-          .border_r_1()
-          .border_color(Colors::border_primary())
-          .child(Self::render_file_list(state)),
-      )
-      .child(
-        // Diff view panel
-        div()
-          .flex_1()
-          .h_full()
-          .child(Self::render_diff_panel(state)),
-      )
-  }
-
-  /// Render file list panel
-  fn render_file_list(state: &AppState) -> impl IntoElement {
-    div()
-      .flex()
-      .flex_col()
-      .size_full()
-      .bg(Colors::bg_primary())
-      .child(Self::render_staged_section(state))
-      .child(Self::render_unstaged_section(state))
-  }
-
-  /// Render the staged changes section
-  fn render_staged_section(state: &AppState) -> impl IntoElement {
-    let staged_files: Vec<_> = state
-      .workspace
-      .get_active_repo()
-      .map(|repo| {
-        repo
-          .status
-          .files
-          .iter()
-          .filter(|f| f.staged)
-          .collect::<Vec<_>>()
-      })
-      .unwrap_or_default();
-
-    div()
-      .flex()
-      .flex_col()
-      .child(
-        div()
-          .px(px(12.0))
-          .py(px(8.0))
-          .border_b_1()
-          .border_color(Colors::border_primary())
-          .child(
-            div()
-              .text_xs()
-              .font_weight(gpui::FontWeight::BOLD)
-              .text_color(Colors::text_secondary())
-              .child(format!("STAGED ({})", staged_files.len())),
-          ),
-      )
-      .children(
-        staged_files
-          .iter()
-          .map(|file| Self::render_file_item(&file.path, file.status.clone(), file.staged)),
-      )
-      .children(if staged_files.is_empty() {
-        vec![div()
-          .px(px(12.0))
-          .py(px(8.0))
-          .text_xs()
-          .text_color(Colors::text_muted())
-          .child("No staged changes")]
-      } else {
-        vec![]
-      })
-  }
-
-  /// Render the unstaged changes section
-  fn render_unstaged_section(state: &AppState) -> impl IntoElement {
-    let unstaged_files: Vec<_> = state
-      .workspace
-      .get_active_repo()
-      .map(|repo| {
-        repo
-          .status
-          .files
-          .iter()
-          .filter(|f| !f.staged)
-          .collect::<Vec<_>>()
-      })
-      .unwrap_or_default();
-
-    div()
-      .flex()
-      .flex_col()
-      .child(
-        div()
-          .px(px(12.0))
-          .py(px(8.0))
-          .border_b_1()
-          .border_color(Colors::border_primary())
-          .child(
-            div()
-              .text_xs()
-              .font_weight(gpui::FontWeight::BOLD)
-              .text_color(Colors::text_secondary())
-              .child(format!("CHANGES ({})", unstaged_files.len())),
-          ),
-      )
-      .children(
-        unstaged_files
-          .iter()
-          .map(|file| Self::render_file_item(&file.path, file.status.clone(), file.staged)),
-      )
-      .children(if unstaged_files.is_empty() {
-        vec![div()
-          .px(px(12.0))
-          .py(px(8.0))
-          .text_xs()
-          .text_color(Colors::text_muted())
-          .child("No unstaged changes")]
-      } else {
-        vec![]
-      })
-  }
-
   /// Render a single file item
   fn render_file_item(
     path: &std::path::Path,
@@ -441,21 +291,20 @@ impl MainView {
       )
   }
 
-  /// Render diff panel
-  fn render_diff_panel(state: &AppState) -> impl IntoElement {
+  /// Render diff panel with scrolling support and virtualization
+  fn render_diff_panel(
+    &mut self,
+    state: &AppState,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
     // Check if we have a selected file to display
     if let Some(repo) = state.workspace.get_active_repo() {
       if let Some(selected_file) = repo.selected_files.first() {
         // Check if we have a diff loaded for this file
         if let Some(diff_state) = &repo.diff {
           if let Some(file_diff) = diff_state.files.iter().find(|f| &f.path == selected_file) {
-            return div()
-              .flex()
-              .flex_col()
-              .size_full()
-              .bg(Colors::bg_primary())
-              .child(Self::render_file_diff(file_diff))
-              .into_any_element();
+            return self.render_file_diff(file_diff, window, cx);
           }
         }
 
@@ -530,8 +379,13 @@ impl MainView {
       .into_any_element()
   }
 
-  /// Render a single file diff
-  fn render_file_diff(file_diff: &crate::state::FileDiff) -> impl IntoElement + '_ {
+  /// Render file diff using EditorDiffView for optimal performance
+  fn render_file_diff(
+    &mut self,
+    file_diff: &crate::state::FileDiff,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
     let file_name = file_diff
       .path
       .file_name()
@@ -540,12 +394,21 @@ impl MainView {
       .to_string();
 
     let status_text = file_diff.status.as_str().to_string();
+    let file_path = file_diff.path.clone();
+
+    // Get or create EditorDiffView for this file
+    let editor_view = self
+      .editor_diffs
+      .entry(file_path)
+      .or_insert_with(|| cx.new(|cx| EditorDiffView::new(Arc::new(file_diff.clone()), window, cx)))
+      .clone();
 
     div()
       .flex()
       .flex_col()
-      .border_b_1()
-      .border_color(Colors::border_primary())
+      .size_full()
+      .bg(Colors::bg_primary())
+      // File header
       .child(
         div()
           .flex()
@@ -570,95 +433,9 @@ impl MainView {
               .child(format!("({})", status_text)),
           ),
       )
-      .children(file_diff.hunks.iter().map(|hunk| Self::render_hunk(hunk)))
-  }
-
-  /// Render a single hunk
-  fn render_hunk(hunk: &crate::state::Hunk) -> impl IntoElement {
-    div()
-      .flex()
-      .flex_col()
-      .child(
-        div()
-          .px(px(16.0))
-          .py(px(4.0))
-          .bg(Colors::bg_tertiary())
-          .child(
-            div()
-              .text_xs()
-              .font_family("Monaco")
-              .text_color(Colors::text_muted())
-              .child(hunk.header.clone()),
-          ),
-      )
-      .children(hunk.lines.iter().map(|line| Self::render_line(line)))
-  }
-
-  /// Render a single line
-  fn render_line(line: &crate::state::Line) -> impl IntoElement + '_ {
-    let (bg_color, text_color, prefix) = match line.origin {
-      crate::state::LineOrigin::Addition => {
-        (Colors::diff_addition_bg(), Colors::diff_addition_fg(), "+")
-      }
-      crate::state::LineOrigin::Deletion => {
-        (Colors::diff_deletion_bg(), Colors::diff_deletion_fg(), "-")
-      }
-      crate::state::LineOrigin::Context => (Colors::diff_context_bg(), Colors::text_primary(), " "),
-    };
-
-    let old_lineno = line
-      .old_lineno
-      .map(|n| format!("{:4}", n))
-      .unwrap_or_else(|| "    ".to_string());
-    let new_lineno = line
-      .new_lineno
-      .map(|n| format!("{:4}", n))
-      .unwrap_or_else(|| "    ".to_string());
-
-    div()
-      .flex()
-      .items_start()
-      .bg(bg_color)
-      .child(
-        div()
-          .w(px(48.0))
-          .text_xs()
-          .font_family("Monaco")
-          .text_color(Colors::text_muted())
-          .text_align(gpui::TextAlign::Right)
-          .px(px(8.0))
-          .child(old_lineno),
-      )
-      .child(
-        div()
-          .w(px(48.0))
-          .text_xs()
-          .font_family("Monaco")
-          .text_color(Colors::text_muted())
-          .text_align(gpui::TextAlign::Right)
-          .px(px(8.0))
-          .child(new_lineno),
-      )
-      .child(
-        div()
-          .w(px(16.0))
-          .text_xs()
-          .font_family("Monaco")
-          .font_weight(gpui::FontWeight::BOLD)
-          .text_color(text_color)
-          .text_align(gpui::TextAlign::Center)
-          .child(prefix),
-      )
-      .child(
-        div()
-          .flex_1()
-          .text_xs()
-          .font_family("Monaco")
-          .text_color(text_color)
-          .px(px(8.0))
-          .py(px(2.0))
-          .child(line.content.trim_end().to_string()),
-      )
+      // EditorDiffView for high-performance diff display
+      .child(div().flex_1().size_full().child(editor_view))
+      .into_any_element()
   }
 
   /// Handle file click - dispatch SelectFile action
@@ -840,7 +617,7 @@ impl Render for MainView {
                 div()
                   .flex_1()
                   .h_full()
-                  .child(Self::render_diff_panel(&state)),
+                  .child(self.render_diff_panel(&state, _window, cx)),
               ),
           ),
         )
