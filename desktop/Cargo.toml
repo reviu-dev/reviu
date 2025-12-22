@@ -1,7 +1,57 @@
 [package]
 name = "reviu"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+rust-version = "1.75"
 
 [dependencies]
-gpui = { version = "*" }
+# UI Framework
+gpui = { git = "https://github.com/zed-industries/zed" }
+
+# Git operations
+git2 = "0.18"
+
+# HTTP client for API calls
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Local storage
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Secure credential storage
+keyring = "2.3"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID generation
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# System directories
+dirs = "5.0"
+
+[dev-dependencies]
+# Testing utilities
+tempfile = "3.8"
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
