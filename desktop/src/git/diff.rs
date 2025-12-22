@@ -162,6 +162,12 @@ impl<'repo> DiffEngine<'repo> {
             hunks_mut.push(parsed_hunk);
           }
         }
+      } else if let Some(line) = parse_line(_line) {
+        // Add line to the current hunk
+        let mut hunks_mut = hunks_clone.borrow_mut();
+        if let Some(current_hunk) = hunks_mut.last_mut() {
+          current_hunk.lines.push(line);
+        }
       }
 
       true
@@ -195,8 +201,7 @@ fn parse_hunk_from_git2(hunk: git2::DiffHunk) -> Result<Hunk> {
     header,
     old_byte_range: 0..0, // Will be calculated from file content
     new_byte_range: 0..0, // Will be calculated from file content
-    #[allow(deprecated)]
-    lines: Vec::new(), // Deprecated - use lazy loading
+    lines: Vec::new(),    // Lines will be populated from git2 diff
     context_expanded: false,
   })
 }

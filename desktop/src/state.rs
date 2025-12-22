@@ -202,9 +202,8 @@ pub struct Hunk {
   pub old_byte_range: std::ops::Range<usize>,
   /// Byte range in new_content for this hunk
   pub new_byte_range: std::ops::Range<usize>,
-  /// Lines are loaded lazily from old_content/new_content
-  /// This field is deprecated and will be removed
-  #[deprecated(note = "Use lazy line loading instead")]
+  /// Parsed lines for this hunk (additions, deletions, context)
+  /// Note: Lines are parsed by git2 and stored here for rendering
   pub lines: Vec<Line>,
   pub context_expanded: bool,
 }
@@ -401,7 +400,6 @@ pub fn update(state: &mut AppState, action: Action) -> Result<()> {
                 header: format!("@@ -0,0 +1,{} @@", lines.len()),
                 old_byte_range: 0..0,
                 new_byte_range: 0..content.len(),
-                #[allow(deprecated)]
                 lines,
                 context_expanded: false,
               };

@@ -1,6 +1,6 @@
 use crate::state::{Action, AppState};
 use crate::storage::Storage;
-use crate::ui::{Colors, EditorDiffView};
+use crate::ui::{Colors, DiffView};
 use gpui::{
   div, prelude::*, px, AnyElement, Context, Entity, IntoElement, ParentElement, Styled, WeakEntity,
   Window,
@@ -14,8 +14,8 @@ pub struct MainView {
   workspace: WeakEntity<crate::workspace::Workspace>,
   #[allow(dead_code)]
   storage: Arc<Storage>,
-  /// Cache of EditorDiffView for each file
-  editor_diffs: HashMap<PathBuf, Entity<EditorDiffView>>,
+  /// Cache of DiffView for each file
+  diff_views: HashMap<PathBuf, Entity<DiffView>>,
 }
 
 impl MainView {
@@ -35,7 +35,7 @@ impl MainView {
     Self {
       workspace,
       storage,
-      editor_diffs: HashMap::new(),
+      diff_views: HashMap::new(),
     }
   }
 
@@ -380,63 +380,23 @@ impl MainView {
       .into_any_element()
   }
 
-  /// Render file diff using EditorDiffView for optimal performance
+  /// Render file diff using DiffView with collapsible hunks
   fn render_file_diff(
     &mut self,
     file_diff: &crate::state::FileDiff,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> AnyElement {
-    let file_name = file_diff
-      .path
-      .file_name()
-      .and_then(|n| n.to_str())
-      .unwrap_or("Unknown")
-      .to_string();
-
-    let status_text = file_diff.status.as_str().to_string();
     let file_path = file_diff.path.clone();
 
-    // Get or create EditorDiffView for this file
-    let editor_view = self
-      .editor_diffs
+    // Get or create DiffView for this file
+    let diff_view = self
+      .diff_views
       .entry(file_path)
-      .or_insert_with(|| cx.new(|cx| EditorDiffView::new(Arc::new(file_diff.clone()), window, cx)))
+      .or_insert_with(|| cx.new(|cx| DiffView::new(Arc::new(file_diff.clone()), window, cx)))
       .clone();
 
-    div()
-      .flex()
-      .flex_col()
-      .size_full()
-      .bg(Colors::bg_primary())
-      // File header
-      .child(
-        div()
-          .flex()
-          .items_center()
-          .gap_2()
-          .px(px(16.0))
-          .py(px(12.0))
-          .bg(Colors::bg_secondary())
-          .border_b_1()
-          .border_color(Colors::border_primary())
-          .child(
-            div()
-              .text_sm()
-              .font_weight(gpui::FontWeight::BOLD)
-              .text_color(Colors::text_primary())
-              .child(file_name),
-          )
-          .child(
-            div()
-              .text_xs()
-              .text_color(Colors::text_muted())
-              .child(format!("({})", status_text)),
-          ),
-      )
-      // EditorDiffView for high-performance diff display
-      .child(div().flex_1().size_full().child(editor_view))
-      .into_any_element()
+    diff_view.into_any_element()
   }
 
   /// Handle file click - dispatch SelectFile action
@@ -504,123 +464,128 @@ impl Render for MainView {
         .bg(Colors::bg_primary())
         .child(Self::render_header(&state))
         .child(
-          div().flex().flex_1().child(
-            div()
-              .flex()
-              .size_full()
-              .child(
-                // File list panel with clickable items
-                div()
-                  .w(px(300.0))
-                  .h_full()
-                  .border_r_1()
-                  .border_color(Colors::border_primary())
-                  .child(
-                    div()
-                      .flex()
-                      .flex_col()
-                      .size_full()
-                      .bg(Colors::bg_primary())
-                      // Staged section
-                      .child(
-                        div()
-                          .flex()
-                          .flex_col()
-                          .child(
-                            div()
-                              .px(px(12.0))
-                              .py(px(8.0))
-                              .border_b_1()
-                              .border_color(Colors::border_primary())
-                              .child(
-                                div()
-                                  .text_xs()
-                                  .font_weight(gpui::FontWeight::BOLD)
-                                  .text_color(Colors::text_secondary())
-                                  .child(format!("STAGED ({})", staged_files.len())),
-                              ),
-                          )
-                          .children(staged_files.iter().map(|file| {
-                            let path = file.path.clone();
-                            div()
-                              .child(Self::render_file_item(
-                                &file.path,
-                                file.status.clone(),
-                                file.staged,
-                              ))
-                              .on_mouse_down(
-                                gpui::MouseButton::Left,
-                                cx.listener(move |view, _event, window, cx| {
-                                  view.handle_file_click(path.clone(), window, cx);
-                                }),
-                              )
-                          }))
-                          .children(if staged_files.is_empty() {
-                            vec![div()
-                              .px(px(12.0))
-                              .py(px(8.0))
-                              .text_xs()
-                              .text_color(Colors::text_muted())
-                              .child("No staged changes")]
-                          } else {
-                            vec![]
-                          }),
-                      )
-                      // Unstaged section
-                      .child(
-                        div()
-                          .flex()
-                          .flex_col()
-                          .child(
-                            div()
-                              .px(px(12.0))
-                              .py(px(8.0))
-                              .border_b_1()
-                              .border_color(Colors::border_primary())
-                              .child(
-                                div()
-                                  .text_xs()
-                                  .font_weight(gpui::FontWeight::BOLD)
-                                  .text_color(Colors::text_secondary())
-                                  .child(format!("CHANGES ({})", unstaged_files.len())),
-                              ),
-                          )
-                          .children(unstaged_files.iter().map(|file| {
-                            let path = file.path.clone();
-                            div()
-                              .child(Self::render_file_item(
-                                &file.path,
-                                file.status.clone(),
-                                file.staged,
-                              ))
-                              .on_mouse_down(
-                                gpui::MouseButton::Left,
-                                cx.listener(move |view, _event, window, cx| {
-                                  view.handle_file_click(path.clone(), window, cx);
-                                }),
-                              )
-                          }))
-                          .children(if unstaged_files.is_empty() {
-                            vec![div()
-                              .px(px(12.0))
-                              .py(px(8.0))
-                              .text_xs()
-                              .text_color(Colors::text_muted())
-                              .child("No unstaged changes")]
-                          } else {
-                            vec![]
-                          }),
-                      ),
-                  ),
-              )
-              .child(
-                // Diff view panel
-                div()
-                  .flex_1()
-                  .h_full()
-                  .child(self.render_diff_panel(&state, _window, cx)),
-              ),
-          ),
+          div()
+            .flex()
+            .flex_1()
+            .overflow_hidden() // CRITICAL: parent must clip to enable scrolling
+            .child(
+              div()
+                .flex()
+                .size_full()
+                .child(
+                  // File list panel with clickable items
+                  div()
+                    .w(px(300.0))
+                    .h_full()
+                    .border_r_1()
+                    .border_color(Colors::border_primary())
+                    .child(
+                      div()
+                        .flex()
+                        .flex_col()
+                        .size_full()
+                        .bg(Colors::bg_primary())
+                        // Staged section
+                        .child(
+                          div()
+                            .flex()
+                            .flex_col()
+                            .child(
+                              div()
+                                .px(px(12.0))
+                                .py(px(8.0))
+                                .border_b_1()
+                                .border_color(Colors::border_primary())
+                                .child(
+                                  div()
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(Colors::text_secondary())
+                                    .child(format!("STAGED ({})", staged_files.len())),
+                                ),
+                            )
+                            .children(staged_files.iter().map(|file| {
+                              let path = file.path.clone();
+                              div()
+                                .child(Self::render_file_item(
+                                  &file.path,
+                                  file.status.clone(),
+                                  file.staged,
+                                ))
+                                .on_mouse_down(
+                                  gpui::MouseButton::Left,
+                                  cx.listener(move |view, _event, window, cx| {
+                                    view.handle_file_click(path.clone(), window, cx);
+                                  }),
+                                )
+                            }))
+                            .children(if staged_files.is_empty() {
+                              vec![div()
+                                .px(px(12.0))
+                                .py(px(8.0))
+                                .text_xs()
+                                .text_color(Colors::text_muted())
+                                .child("No staged changes")]
+                            } else {
+                              vec![]
+                            }),
+                        )
+                        // Unstaged section
+                        .child(
+                          div()
+                            .flex()
+                            .flex_col()
+                            .child(
+                              div()
+                                .px(px(12.0))
+                                .py(px(8.0))
+                                .border_b_1()
+                                .border_color(Colors::border_primary())
+                                .child(
+                                  div()
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_color(Colors::text_secondary())
+                                    .child(format!("CHANGES ({})", unstaged_files.len())),
+                                ),
+                            )
+                            .children(unstaged_files.iter().map(|file| {
+                              let path = file.path.clone();
+                              div()
+                                .child(Self::render_file_item(
+                                  &file.path,
+                                  file.status.clone(),
+                                  file.staged,
+                                ))
+                                .on_mouse_down(
+                                  gpui::MouseButton::Left,
+                                  cx.listener(move |view, _event, window, cx| {
+                                    view.handle_file_click(path.clone(), window, cx);
+                                  }),
+                                )
+                            }))
+                            .children(if unstaged_files.is_empty() {
+                              vec![div()
+                                .px(px(12.0))
+                                .py(px(8.0))
+                                .text_xs()
+                                .text_color(Colors::text_muted())
+                                .child("No unstaged changes")]
+                            } else {
+                              vec![]
+                            }),
+                        ),
+                    ),
+                )
+                .child(
+                  // Diff view panel
+                  div()
+                    .flex_1()
+                    .h_full()
+                    .overflow_hidden()
+                    .child(self.render_diff_panel(&state, _window, cx)),
+                ),
+            ),
         )
         .child(Self::render_status_bar(&state))
         .into_any_element()
