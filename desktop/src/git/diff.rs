@@ -16,29 +16,6 @@ impl<'repo> DiffEngine<'repo> {
     Self { repo }
   }
 
-  /// Get diff for working directory vs index (unstaged changes)
-  pub fn diff_workdir_to_index(&self) -> Result<Vec<FileDiff>> {
-    let mut opts = DiffOptions::new();
-    opts.context_lines(0); // Minimal context by default
-    opts.interhunk_lines(0);
-
-    let diff = self.repo.diff_index_to_workdir(None, Some(&mut opts))?;
-    self.parse_diff(&diff)
-  }
-
-  /// Get diff for index vs HEAD (staged changes)
-  pub fn diff_index_to_head(&self) -> Result<Vec<FileDiff>> {
-    let mut opts = DiffOptions::new();
-    opts.context_lines(0);
-    opts.interhunk_lines(0);
-
-    let head = self.repo.head()?.peel_to_tree()?;
-    let diff = self
-      .repo
-      .diff_tree_to_index(Some(&head), None, Some(&mut opts))?;
-    self.parse_diff(&diff)
-  }
-
   /// Get diff for a specific file with custom context lines
   pub fn diff_file_with_context(
     &self,
@@ -162,14 +139,12 @@ impl<'repo> DiffEngine<'repo> {
     use std::rc::Rc;
 
     let hunks = Rc::new(RefCell::new(Vec::new()));
-    let current_hunk_idx = Rc::new(RefCell::new(None::<usize>));
     let is_target_file = Rc::new(RefCell::new(false));
 
     let hunks_clone = hunks.clone();
-    let current_hunk_idx_clone = current_hunk_idx.clone();
     let is_target_file_clone = is_target_file.clone();
 
-    diff.print(git2::DiffFormat::Patch, move |delta, _hunk_opt, line| {
+    diff.print(git2::DiffFormat::Patch, move |delta, _hunk_opt, _line| {
       // Check if this is our target file
       let delta_path = delta.new_file().path().or_else(|| delta.old_file().path());
       let is_target = delta_path == Some(file_path);
@@ -179,29 +154,14 @@ impl<'repo> DiffEngine<'repo> {
         return true;
       }
 
-      match line.origin() {
-        'H' => {
-          // Hunk header - create new hunk
-          if let Some(hunk_git) = _hunk_opt {
-            if let Ok(parsed_hunk) = parse_hunk_from_git2(hunk_git) {
-              let mut hunks_mut = hunks_clone.borrow_mut();
-              hunks_mut.push(parsed_hunk);
-              *current_hunk_idx_clone.borrow_mut() = Some(hunks_mut.len() - 1);
-            }
+      if _line.origin() == 'H' {
+        // Hunk header - create new hunk
+        if let Some(hunk_git) = _hunk_opt {
+          if let Ok(parsed_hunk) = parse_hunk_from_git2(hunk_git) {
+            let mut hunks_mut = hunks_clone.borrow_mut();
+            hunks_mut.push(parsed_hunk);
           }
         }
-        ' ' | '+' | '-' => {
-          // Diff line - add to current hunk
-          if let Some(idx) = *current_hunk_idx_clone.borrow() {
-            if let Some(parsed_line) = parse_line(line) {
-              let mut hunks_mut = hunks_clone.borrow_mut();
-              if let Some(hunk) = hunks_mut.get_mut(idx) {
-                hunk.lines.push(parsed_line);
-              }
-            }
-          }
-        }
-        _ => {}
       }
 
       true
@@ -212,33 +172,6 @@ impl<'repo> DiffEngine<'repo> {
       .into_inner();
 
     Ok(final_hunks)
-  }
-
-  /// Parse a git2::DiffHunk into our Hunk structure (without lines)
-  fn parse_hunk(&self, hunk: git2::DiffHunk) -> Result<Hunk> {
-    parse_hunk_from_git2(hunk)
-  }
-
-  /// Expand context for a specific hunk
-  pub fn expand_hunk_context(
-    &self,
-    file_path: &std::path::Path,
-    hunk_id: HunkId,
-    context_lines: u32,
-    staged: bool,
-  ) -> Result<Option<Hunk>> {
-    let file_diff = self.diff_file_with_context(file_path, context_lines, staged)?;
-
-    if let Some(file_diff) = file_diff {
-      for mut hunk in file_diff.hunks {
-        if hunk.id == hunk_id {
-          hunk.context_expanded = true;
-          return Ok(Some(hunk));
-        }
-      }
-    }
-
-    Ok(None)
   }
 }
 
@@ -292,115 +225,4 @@ fn parse_line(line: git2::DiffLine) -> Option<Line> {
     old_lineno,
     new_lineno,
   })
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-  use git2::Signature;
-  use std::fs;
-  use tempfile::tempdir;
-
-  fn setup_repo_with_changes() -> (tempfile::TempDir, Repository) {
-    let dir = tempdir().unwrap();
-    let repo = Repository::init(dir.path()).unwrap();
-
-    // Configure user
-    let mut config = repo.config().unwrap();
-    config.set_str("user.name", "Test User").unwrap();
-    config.set_str("user.email", "test@example.com").unwrap();
-
-    // Create initial commit
-    let file_path = dir.path().join("test.txt");
-    fs::write(&file_path, "line 1\nline 2\nline 3\n").unwrap();
-
-    let mut index = repo.index().unwrap();
-    index.add_path(std::path::Path::new("test.txt")).unwrap();
-    index.write().unwrap();
-
-    let tree_id = index.write_tree().unwrap();
-    let tree = repo.find_tree(tree_id).unwrap();
-    let sig = Signature::now("Test User", "test@example.com").unwrap();
-
-    repo
-      .commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
-      .unwrap();
-
-    // Modify the file
-    fs::write(&file_path, "line 1\nmodified line 2\nline 3\nnew line 4\n").unwrap();
-
-    (dir, repo)
-  }
-
-  #[test]
-  fn test_diff_engine_creation() {
-    let dir = tempdir().unwrap();
-    let repo = Repository::init(dir.path()).unwrap();
-    let engine = DiffEngine::new(&repo);
-    // Just verify it compiles and creates
-  }
-
-  #[test]
-  fn test_diff_workdir_to_index() {
-    let (_dir, repo) = setup_repo_with_changes();
-    let engine = DiffEngine::new(&repo);
-
-    let diffs = engine.diff_workdir_to_index().unwrap();
-    assert_eq!(diffs.len(), 1);
-    assert_eq!(diffs[0].path.to_str().unwrap(), "test.txt");
-    assert!(matches!(diffs[0].status, FileStatusKind::Modified));
-  }
-
-  #[test]
-  fn test_diff_with_hunks() {
-    let (_dir, repo) = setup_repo_with_changes();
-    let engine = DiffEngine::new(&repo);
-
-    let diffs = engine.diff_workdir_to_index().unwrap();
-    assert!(!diffs.is_empty());
-
-    let file_diff = &diffs[0];
-    assert!(!file_diff.hunks.is_empty());
-
-    let hunk = &file_diff.hunks[0];
-    assert!(!hunk.lines.is_empty());
-  }
-
-  #[test]
-  fn test_staged_diff() {
-    let (dir, repo) = setup_repo_with_changes();
-
-    // Stage the changes
-    let mut index = repo.index().unwrap();
-    index.add_path(std::path::Path::new("test.txt")).unwrap();
-    index.write().unwrap();
-
-    let engine = DiffEngine::new(&repo);
-    let diffs = engine.diff_index_to_head().unwrap();
-
-    assert_eq!(diffs.len(), 1);
-    assert_eq!(diffs[0].path.to_str().unwrap(), "test.txt");
-  }
-
-  #[test]
-  fn test_line_origins() {
-    let (_dir, repo) = setup_repo_with_changes();
-    let engine = DiffEngine::new(&repo);
-
-    let diffs = engine.diff_workdir_to_index().unwrap();
-    let file_diff = &diffs[0];
-    let hunk = &file_diff.hunks[0];
-
-    // Check that we have different line origins
-    let has_addition = hunk
-      .lines
-      .iter()
-      .any(|l| matches!(l.origin, LineOrigin::Addition));
-    let has_deletion = hunk
-      .lines
-      .iter()
-      .any(|l| matches!(l.origin, LineOrigin::Deletion));
-
-    assert!(has_addition || has_deletion);
-  }
 }

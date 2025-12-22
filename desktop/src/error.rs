@@ -21,32 +21,8 @@ pub enum Error {
   #[error("Keyring error: {0}")]
   Keyring(#[from] keyring::Error),
 
-  #[error("Repository not found: {0}")]
-  RepositoryNotFound(String),
-
   #[error("Invalid repository path: {0}")]
   InvalidRepositoryPath(String),
-
-  #[error("No repository open")]
-  NoRepositoryOpen,
-
-  #[error("File not found: {0}")]
-  FileNotFound(String),
-
-  #[error("Invalid diff operation: {0}")]
-  InvalidDiffOperation(String),
-
-  #[error("Authentication required")]
-  AuthenticationRequired,
-
-  #[error("Unauthorized: {0}")]
-  Unauthorized(String),
-
-  #[error("Network error: {0}")]
-  Network(String),
-
-  #[error("Configuration error: {0}")]
-  Config(String),
 
   #[error("Unknown error: {0}")]
   Unknown(String),

@@ -2,7 +2,6 @@ pub mod diff;
 mod operations;
 mod repository;
 
-pub use diff::DiffEngine;
 pub use repository::GitRepository;
 
 use crate::error::{Error, Result};

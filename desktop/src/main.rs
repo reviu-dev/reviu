@@ -1,5 +1,3 @@
-mod api;
-mod app;
 mod error;
 mod git;
 mod state;

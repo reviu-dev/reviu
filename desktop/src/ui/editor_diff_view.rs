@@ -100,11 +100,6 @@ impl EditorDiffView {
       Ok(())
     })
   }
-
-  /// Get the editor entity
-  pub fn editor(&self) -> &Entity<editor::Editor> {
-    &self.editor
-  }
 }
 
 impl Render for EditorDiffView {
