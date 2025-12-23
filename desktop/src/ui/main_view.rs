@@ -342,6 +342,10 @@ impl MainView {
       .border_1()
       .border_color(Colors::border_primary())
       .shadow_lg()
+      .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+        this.repository_dropdown_open = false;
+        cx.notify();
+      }))
       .children(
         sorted_repos
           .iter()
