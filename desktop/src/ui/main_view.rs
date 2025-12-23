@@ -70,7 +70,6 @@ impl MainView {
       .flex_col()
       .size_full()
       .bg(Colors::bg_primary())
-      .child(Self::render_header(None))
       .child(
         div().flex().flex_1().child(
           div()
@@ -82,7 +81,14 @@ impl MainView {
             .gap_4()
             .child(
               div()
-                .text_2xl()
+                .text_3xl()
+                .font_weight(gpui::FontWeight::BOLD)
+                .text_color(Colors::text_primary())
+                .child("Reviu"),
+            )
+            .child(
+              div()
+                .text_xl()
                 .text_color(Colors::text_primary())
                 .child("No repository open"),
             )
@@ -94,113 +100,59 @@ impl MainView {
             ),
         ),
       )
-      .child(Self::render_status_bar_empty())
+      .child(Self::render_status_bar(None))
       .into_any_element()
   }
 
-  /// Render the header/toolbar
-  fn render_header(state: Option<&AppState>) -> impl IntoElement {
-    let repo_name = state
-      .and_then(|s| s.workspace.get_active_repo())
-      .map(|repo| format!(" • {}", repo.name));
-
-    div()
-      .flex()
-      .items_center()
-      .h(px(48.0))
-      .px(px(16.0))
-      .border_b_1()
-      .border_color(Colors::border_primary())
-      .child(
-        div()
-          .flex()
-          .items_center()
-          .gap_2()
-          .child(
-            div()
-              .text_xl()
-              .font_weight(gpui::FontWeight::BOLD)
-              .text_color(Colors::text_primary())
-              .child("Reviu"),
-          )
-          .children(
-            repo_name.map(|name| div().text_sm().text_color(Colors::text_muted()).child(name)),
-          ),
-      )
-  }
-
   /// Render the status bar
-  fn render_status_bar(state: &AppState) -> impl IntoElement {
-    let branch = state
-      .workspace
-      .get_active_repo()
-      .and_then(|repo| repo.head.clone())
-      .unwrap_or_else(|| "No branch".to_string());
+  fn render_status_bar(state: Option<&AppState>) -> impl IntoElement {
+    let left_content = if let Some(state) = state {
+      let branch = state
+        .workspace
+        .get_active_repo()
+        .and_then(|repo| repo.head.clone())
+        .unwrap_or_else(|| "No branch".to_string());
 
-    let file_count = state
-      .workspace
-      .get_active_repo()
-      .map(|repo| repo.status.files.len())
-      .unwrap_or(0);
+      let file_count = state
+        .workspace
+        .get_active_repo()
+        .map(|repo| repo.status.files.len())
+        .unwrap_or(0);
 
-    div()
-      .flex()
-      .items_center()
-      .justify_between()
-      .h(px(24.0))
-      .px(px(16.0))
-      .bg(Colors::bg_primary())
-      .border_t_1()
-      .border_color(Colors::border_primary())
-      .child(
-        div()
-          .flex()
-          .gap_4()
-          .child(
-            div()
-              .text_xs()
-              .text_color(Colors::text_muted())
-              .child(format!("Branch: {}", branch)),
-          )
-          .child(
-            div()
-              .text_xs()
-              .text_color(Colors::text_muted())
-              .child(format!("{} files changed", file_count)),
-          ),
-      )
-      .child(
-        div()
-          .text_xs()
-          .text_color(Colors::text_muted())
-          .child("v0.1.0"),
-      )
-  }
-
-  /// Render the status bar when no repository is open
-  fn render_status_bar_empty() -> impl IntoElement {
-    div()
-      .flex()
-      .items_center()
-      .justify_between()
-      .h(px(24.0))
-      .px(px(16.0))
-      .bg(Colors::bg_primary())
-      .border_t_1()
-      .border_color(Colors::border_primary())
-      .child(
-        div().flex().gap_4().child(
+      div()
+        .flex()
+        .gap_4()
+        .child(
           div()
             .text_xs()
             .text_color(Colors::text_muted())
-            .child("No repository open"),
-        ),
-      )
+            .child(format!("Branch: {}", branch)),
+        )
+        .child(
+          div()
+            .text_xs()
+            .text_color(Colors::text_muted())
+            .child(format!("{} files changed", file_count)),
+        )
+    } else {
+      div().flex().gap_4()
+    };
+
+    div()
+      .flex()
+      .items_center()
+      .justify_between()
+      .h(px(24.0))
+      .px(px(16.0))
+      .bg(Colors::bg_primary())
+      .border_t_1()
+      .border_color(Colors::border_primary())
+      .child(left_content)
       .child(
         div()
           .text_xs()
           .text_color(Colors::text_muted())
-          .child("v0.1.0"),
+          .child("Reviu v0.1.0"),
       )
   }
 
@@ -693,7 +645,6 @@ impl Render for MainView {
         .flex_col()
         .size_full()
         .bg(Colors::bg_primary())
-        .child(Self::render_header(Some(&state)))
         .child(
           div()
             .flex()
@@ -818,7 +769,7 @@ impl Render for MainView {
                 ),
             ),
         )
-        .child(Self::render_status_bar(&state))
+        .child(Self::render_status_bar(Some(&state)))
         .into_any_element()
     } else {
       Self::render_empty_state()
