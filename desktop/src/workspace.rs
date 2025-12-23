@@ -66,13 +66,16 @@ impl Workspace {
 
     let weak_self = cx.entity().downgrade();
 
-    let this = Self {
+    let mut this = Self {
       weak_self: weak_self.clone(),
       state,
       storage: storage.clone(),
       focus_handle,
       main_view: None,
     };
+
+    // Restore recent repositories from storage
+    this.restore_recent_repos(cx);
 
     cx.emit(Event::WorkspaceCreated(cx.entity().downgrade()));
 
@@ -98,6 +101,16 @@ impl Workspace {
 
   /// Dispatch an action to update the state
   pub fn dispatch(&mut self, action: Action, cx: &mut Context<Self>) -> Result<()> {
+    // Check if we're switching repositories to update last_opened_at
+    if let Action::SwitchRepository(ref path) = action {
+      if let Some(repo) = self.state.workspace.repos.get(path) {
+        // Update last_opened_at in storage
+        if let Err(e) = self.storage.add_recent_repo(path, &repo.name) {
+          log::error!("Failed to update last_opened_at for repo: {}", e);
+        }
+      }
+    }
+
     crate::state::update(&mut self.state, action)?;
     self.persist_state()?;
     cx.notify();
@@ -143,9 +156,68 @@ impl Workspace {
     &self.state
   }
 
+  /// Restore recent repositories from storage
+  fn restore_recent_repos(&mut self, cx: &mut Context<Self>) {
+    let recent_repos = match self.storage.get_recent_repos(10) {
+      Ok(repos) => repos,
+      Err(e) => {
+        log::error!("Failed to load recent repos: {}", e);
+        return;
+      }
+    };
+
+    let mut first_valid_repo: Option<PathBuf> = None;
+
+    for (path, _name, _timestamp) in recent_repos {
+      // Only restore if the path still exists and is a valid git repo
+      if path.exists() && crate::git::is_git_repository(&path) {
+        if let Err(e) = self.dispatch(Action::LoadRepository(path.clone()), cx) {
+          log::error!("Failed to restore repository {:?}: {}", path, e);
+        } else {
+          log::info!("Restored repository: {:?}", path);
+          // Keep track of the first valid repo (most recently opened)
+          if first_valid_repo.is_none() {
+            first_valid_repo = Some(path);
+          }
+        }
+      } else {
+        log::warn!("Skipping invalid or missing repository: {:?}", path);
+        // Optionally remove from storage
+        let _ = self.storage.remove_recent_repo(&path);
+      }
+    }
+
+    // Automatically switch to the most recently opened repository
+    if let Some(path) = first_valid_repo {
+      if let Err(e) = self.dispatch(Action::SwitchRepository(path.clone()), cx) {
+        log::error!(
+          "Failed to switch to last opened repository {:?}: {}",
+          path,
+          e
+        );
+      } else {
+        log::info!("Switched to last opened repository: {:?}", path);
+      }
+    }
+  }
+
   /// Open a repository
   pub fn open_repository(&mut self, path: PathBuf, cx: &mut Context<Self>) -> Result<()> {
-    self.dispatch(Action::LoadRepository(path), cx)?;
+    // Get the repository name before dispatching
+    let repo_name = path
+      .file_name()
+      .and_then(|n| n.to_str())
+      .unwrap_or("Unknown")
+      .to_string();
+
+    // Load the repository into state
+    self.dispatch(Action::LoadRepository(path.clone()), cx)?;
+
+    // Save to recent repos in storage
+    if let Err(e) = self.storage.add_recent_repo(&path, &repo_name) {
+      log::error!("Failed to save recent repo: {}", e);
+    }
+
     Ok(())
   }
 
