@@ -331,10 +331,10 @@ impl DiffView {
     line_content: &str,
     line_origin: Option<LineOrigin>,
   ) -> impl IntoElement {
-    let (bg_color, fg_color, prefix) = match line_origin {
-      Some(LineOrigin::Addition) => (Colors::diff_addition_bg(), Colors::diff_addition_fg(), "+"),
-      Some(LineOrigin::Deletion) => (Colors::diff_deletion_bg(), Colors::diff_deletion_fg(), "-"),
-      _ => (Colors::diff_context_bg(), Colors::text_muted(), " "),
+    let (bg_color, fg_color) = match line_origin {
+      Some(LineOrigin::Addition) => (Colors::diff_addition_bg(), Colors::diff_addition_fg()),
+      Some(LineOrigin::Deletion) => (Colors::diff_deletion_bg(), Colors::diff_deletion_fg()),
+      _ => (Colors::diff_context_bg(), Colors::text_muted()),
     };
 
     let line_numbers = match line_origin {
@@ -365,7 +365,7 @@ impl DiffView {
           .text_xs()
           .font_family("monospace")
           .text_color(fg_color)
-          .child(format!("{} {}", prefix, line_content)),
+          .child(line_content.to_string()),
       )
   }
 
