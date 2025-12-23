@@ -48,7 +48,7 @@ impl SupportedLanguage {
     match self {
       Self::Rust => include_str!("../tree_sitter_queries/rust_highlights.scm"),
       Self::TypeScript => include_str!("../tree_sitter_queries/typescript_highlights.scm"),
-      Self::JavaScript => include_str!("../tree_sitter_queries/typescript_highlights.scm"),
+      Self::JavaScript => include_str!("../tree_sitter_queries/javascript_highlights.scm"),
       Self::Python => include_str!("../tree_sitter_queries/python_highlights.scm"),
       Self::Go => include_str!("../tree_sitter_queries/go_highlights.scm"),
     }
