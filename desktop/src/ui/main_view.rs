@@ -67,7 +67,7 @@ impl MainView {
       .flex_col()
       .size_full()
       .bg(Colors::bg_primary())
-      .child(Self::render_header_empty())
+      .child(Self::render_header(None))
       .child(
         div().flex().flex_1().child(
           div()
@@ -80,7 +80,7 @@ impl MainView {
             .child(
               div()
                 .text_2xl()
-                .text_color(Colors::text_secondary())
+                .text_color(Colors::text_primary())
                 .child("No repository open"),
             )
             .child(
@@ -96,10 +96,9 @@ impl MainView {
   }
 
   /// Render the header/toolbar
-  fn render_header(state: &AppState) -> impl IntoElement {
+  fn render_header(state: Option<&AppState>) -> impl IntoElement {
     let repo_name = state
-      .workspace
-      .get_active_repo()
+      .and_then(|s| s.workspace.get_active_repo())
       .map(|repo| format!(" • {}", repo.name));
 
     div()
@@ -108,7 +107,6 @@ impl MainView {
       .justify_between()
       .h(px(48.0))
       .px(px(16.0))
-      .bg(Colors::bg_secondary())
       .border_b_1()
       .border_color(Colors::border_primary())
       .child(
@@ -123,49 +121,16 @@ impl MainView {
               .text_color(Colors::text_primary())
               .child("Reviu"),
           )
-          .children(repo_name.map(|name| {
-            div()
-              .text_sm()
-              .text_color(Colors::text_secondary())
-              .child(name)
-          })),
+          .children(
+            repo_name.map(|name| div().text_sm().text_color(Colors::text_muted()).child(name)),
+          ),
       )
       .child(
         div().flex().gap_2().child(
           div()
             .text_sm()
-            .text_color(Colors::text_secondary())
+            .text_color(Colors::text_muted())
             .child("Cmd+O to open repository"),
-        ),
-      )
-  }
-
-  /// Render the header when no repository is open
-  fn render_header_empty() -> impl IntoElement {
-    div()
-      .flex()
-      .items_center()
-      .justify_between()
-      .h(px(48.0))
-      .px(px(16.0))
-      .bg(Colors::bg_secondary())
-      .border_b_1()
-      .border_color(Colors::border_primary())
-      .child(
-        div().flex().items_center().gap_2().child(
-          div()
-            .text_xl()
-            .font_weight(gpui::FontWeight::BOLD)
-            .text_color(Colors::text_primary())
-            .child("Reviu"),
-        ),
-      )
-      .child(
-        div().flex().gap_2().child(
-          div()
-            .text_sm()
-            .text_color(Colors::text_secondary())
-            .child("Press Cmd+O to open repository"),
         ),
       )
   }
@@ -190,7 +155,7 @@ impl MainView {
       .justify_between()
       .h(px(24.0))
       .px(px(16.0))
-      .bg(Colors::bg_secondary())
+      .bg(Colors::bg_primary())
       .border_t_1()
       .border_color(Colors::border_primary())
       .child(
@@ -200,13 +165,13 @@ impl MainView {
           .child(
             div()
               .text_xs()
-              .text_color(Colors::text_secondary())
+              .text_color(Colors::text_muted())
               .child(format!("Branch: {}", branch)),
           )
           .child(
             div()
               .text_xs()
-              .text_color(Colors::text_secondary())
+              .text_color(Colors::text_muted())
               .child(format!("{} files changed", file_count)),
           ),
       )
@@ -226,14 +191,14 @@ impl MainView {
       .justify_between()
       .h(px(24.0))
       .px(px(16.0))
-      .bg(Colors::bg_secondary())
+      .bg(Colors::bg_primary())
       .border_t_1()
       .border_color(Colors::border_primary())
       .child(
         div().flex().gap_4().child(
           div()
             .text_xs()
-            .text_color(Colors::text_secondary())
+            .text_color(Colors::text_muted())
             .child("No repository open"),
         ),
       )
@@ -249,7 +214,6 @@ impl MainView {
   fn render_file_item(
     path: &std::path::Path,
     status: crate::state::FileStatusKind,
-    staged: bool,
   ) -> impl IntoElement {
     let status_color = match status {
       crate::state::FileStatusKind::Modified => Colors::status_modified(),
@@ -277,7 +241,7 @@ impl MainView {
       .py(px(8.0))
       .cursor_pointer()
       .hover(|this| this.bg(Colors::hover()))
-      .active(|this| this.bg(Colors::border_primary()))
+      .active(|this| this.bg(Colors::active()))
       .child(
         div()
           .text_xs()
@@ -339,7 +303,7 @@ impl MainView {
           .child(
             div()
               .text_xl()
-              .text_color(Colors::text_secondary())
+              .text_color(Colors::text_muted())
               .child("Loading diff..."),
           )
           .child(
@@ -363,7 +327,7 @@ impl MainView {
           .child(
             div()
               .text_xl()
-              .text_color(Colors::text_secondary())
+              .text_color(Colors::text_muted())
               .child("No file selected"),
           )
           .child(
@@ -387,7 +351,7 @@ impl MainView {
       .child(
         div()
           .text_xl()
-          .text_color(Colors::text_secondary())
+          .text_color(Colors::text_muted())
           .child("No changes"),
       )
       .child(
@@ -442,8 +406,8 @@ impl MainView {
       .h_full()
       .cursor_col_resize()
       .bg(Colors::border_primary())
-      .hover(|style| style.bg(Colors::text_secondary()))
-      .active(|style| style.bg(Colors::text_primary()))
+      .hover(|style| style.bg(Colors::hover()))
+      .active(|style| style.bg(Colors::active()))
       .on_drag(ResizeHandle, |_, _, _, cx| {
         cx.stop_propagation();
         cx.new(|_| ResizeHandle)
@@ -505,7 +469,7 @@ impl Render for MainView {
         .flex_col()
         .size_full()
         .bg(Colors::bg_primary())
-        .child(Self::render_header(&state))
+        .child(Self::render_header(Some(&state)))
         .child(
           div()
             .flex()
@@ -545,18 +509,14 @@ impl Render for MainView {
                                 div()
                                   .text_xs()
                                   .font_weight(gpui::FontWeight::BOLD)
-                                  .text_color(Colors::text_secondary())
+                                  .text_color(Colors::text_muted())
                                   .child(format!("STAGED ({})", staged_files.len())),
                               ),
                           )
                           .children(staged_files.iter().map(|file| {
                             let path = file.path.clone();
                             div()
-                              .child(Self::render_file_item(
-                                &file.path,
-                                file.status.clone(),
-                                file.staged,
-                              ))
+                              .child(Self::render_file_item(&file.path, file.status.clone()))
                               .on_mouse_down(
                                 gpui::MouseButton::Left,
                                 cx.listener(move |view, _event, window, cx| {
@@ -590,18 +550,14 @@ impl Render for MainView {
                                 div()
                                   .text_xs()
                                   .font_weight(gpui::FontWeight::BOLD)
-                                  .text_color(Colors::text_secondary())
+                                  .text_color(Colors::text_muted())
                                   .child(format!("CHANGES ({})", unstaged_files.len())),
                               ),
                           )
                           .children(unstaged_files.iter().map(|file| {
                             let path = file.path.clone();
                             div()
-                              .child(Self::render_file_item(
-                                &file.path,
-                                file.status.clone(),
-                                file.staged,
-                              ))
+                              .child(Self::render_file_item(&file.path, file.status.clone()))
                               .on_mouse_down(
                                 gpui::MouseButton::Left,
                                 cx.listener(move |view, _event, window, cx| {
