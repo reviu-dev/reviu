@@ -14,7 +14,7 @@ impl Colors {
     rgb(0x00c951).into()
   }
 
-  pub fn error() -> gpui::Hsla {
+  pub fn destructive() -> gpui::Hsla {
     rgb(0xfb2c36).into()
   }
 
@@ -42,7 +42,7 @@ impl Colors {
   }
 
   pub fn diff_deletion_bg() -> gpui::Hsla {
-    let mut color: gpui::Hsla = Self::error();
+    let mut color: gpui::Hsla = Self::destructive();
     color.a = 0.20;
     color
   }
