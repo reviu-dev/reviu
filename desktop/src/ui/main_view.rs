@@ -76,15 +76,10 @@ impl MainView {
 
   /// Render the header/toolbar
   fn render_header(state: &AppState) -> impl IntoElement {
-    let repo_name = state.workspace.get_active_repo().map(|repo| {
-      log::info!("Rendering header with repo: {}", repo.name);
-      format!(" • {}", repo.name)
-    });
-
-    log::info!(
-      "render_header - has_repo: {}",
-      state.workspace.active_repo.is_some()
-    );
+    let repo_name = state
+      .workspace
+      .get_active_repo()
+      .map(|repo| format!(" • {}", repo.name));
 
     div()
       .flex()

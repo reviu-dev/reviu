@@ -48,23 +48,6 @@ impl Storage {
           UNIQUE(path)
       );
 
-      -- Feature flags cache (TTL: 5 minutes)
-      CREATE TABLE IF NOT EXISTS feature_flags (
-          key TEXT PRIMARY KEY,
-          enabled INTEGER NOT NULL,
-          cached_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-      );
-
-      -- Window state
-      CREATE TABLE IF NOT EXISTS window_state (
-          id INTEGER PRIMARY KEY CHECK (id = 1),
-          width INTEGER NOT NULL,
-          height INTEGER NOT NULL,
-          x INTEGER,
-          y INTEGER,
-          maximized INTEGER NOT NULL DEFAULT 0
-      );
-
       -- User cache
       CREATE TABLE IF NOT EXISTS user_cache (
           id TEXT PRIMARY KEY,
@@ -239,88 +222,6 @@ impl Storage {
     self.conn.execute("DELETE FROM recent_repos", [])?;
     Ok(())
   }
-
-  // Feature flags operations
-
-  /// Save a feature flag
-  pub fn save_feature_flag(&self, key: &str, enabled: bool) -> Result<()> {
-    self.conn.execute(
-      "INSERT OR REPLACE INTO feature_flags (key, enabled, cached_at) VALUES (?1, ?2, strftime('%s', 'now'))",
-      params![key, enabled as i32],
-    )?;
-    Ok(())
-  }
-
-  /// Get a feature flag
-  pub fn get_feature_flag(&self, key: &str, ttl_seconds: i64) -> Result<Option<bool>> {
-    let result = self
-      .conn
-      .query_row(
-        "SELECT enabled FROM feature_flags WHERE key = ?1 AND (strftime('%s', 'now') - cached_at) < ?2",
-        params![key, ttl_seconds],
-        |row| Ok(row.get::<_, i32>(0)? != 0),
-      )
-      .optional()?;
-    Ok(result)
-  }
-
-  /// Clear expired feature flags
-  pub fn clear_expired_feature_flags(&self, ttl_seconds: i64) -> Result<()> {
-    self.conn.execute(
-      "DELETE FROM feature_flags WHERE (strftime('%s', 'now') - cached_at) >= ?1",
-      params![ttl_seconds],
-    )?;
-    Ok(())
-  }
-
-  // Window state operations
-
-  /// Save window state
-  pub fn save_window_state(
-    &self,
-    width: i32,
-    height: i32,
-    x: Option<i32>,
-    y: Option<i32>,
-    maximized: bool,
-  ) -> Result<()> {
-    self.conn.execute(
-      "INSERT OR REPLACE INTO window_state (id, width, height, x, y, maximized) VALUES (1, ?1, ?2, ?3, ?4, ?5)",
-      params![width, height, x, y, maximized as i32],
-    )?;
-    Ok(())
-  }
-
-  /// Get window state
-  pub fn get_window_state(&self) -> Result<Option<WindowState>> {
-    let result = self
-      .conn
-      .query_row(
-        "SELECT width, height, x, y, maximized FROM window_state WHERE id = 1",
-        [],
-        |row| {
-          Ok(WindowState {
-            width: row.get(0)?,
-            height: row.get(1)?,
-            x: row.get(2)?,
-            y: row.get(3)?,
-            maximized: row.get::<_, i32>(4)? != 0,
-          })
-        },
-      )
-      .optional()?;
-    Ok(result)
-  }
-}
-
-/// Window state information
-#[derive(Debug, Clone)]
-pub struct WindowState {
-  pub width: i32,
-  pub height: i32,
-  pub x: Option<i32>,
-  pub y: Option<i32>,
-  pub maximized: bool,
 }
 
 #[cfg(test)]
@@ -378,6 +279,8 @@ mod tests {
 
     let repos = storage.get_recent_repos(10).unwrap();
     assert_eq!(repos.len(), 2);
+
+    println!("{:?}", repos[0]);
     assert_eq!(repos[0].1, "repo2"); // Most recent first
     assert_eq!(repos[1].1, "repo1");
   }
