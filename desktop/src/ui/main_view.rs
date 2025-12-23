@@ -264,6 +264,7 @@ impl MainView {
       .unwrap_or_else(|| "No repository".to_string());
 
     div()
+      .relative()
       .flex()
       .flex_col()
       .w_full()
@@ -274,7 +275,8 @@ impl MainView {
       .child(self.render_dropdown_trigger(active_name, cx))
       // Dropdown menu (if open)
       .when(self.repository_dropdown_open, |this| {
-        this.child(self.render_dropdown_menu(repos, active_repo, cx))
+        this
+          .child(gpui::deferred(self.render_dropdown_menu(repos, active_repo, cx)).with_priority(1))
       })
       .into_any_element()
   }
@@ -329,12 +331,17 @@ impl MainView {
     sorted_repos.sort_by(|(_, a), (_, b)| a.name.cmp(&b.name));
 
     div()
+      .absolute()
+      .top_full()
+      .left_0()
+      .w_full()
+      .occlude()
       .flex()
       .flex_col()
-      .w_full()
       .bg(Colors::bg_primary())
-      .border_b_1()
+      .border_1()
       .border_color(Colors::border_primary())
+      .shadow_lg()
       .children(
         sorted_repos
           .iter()
@@ -374,6 +381,7 @@ impl MainView {
       .w_full()
       .px(px(12.0))
       .py(px(6.0))
+      .bg(Colors::bg_primary())
       .cursor_pointer()
       .when(is_active, |this| this.bg(Colors::bg_secondary()))
       .hover(|this| this.bg(Colors::hover()))
@@ -422,6 +430,7 @@ impl MainView {
       .w_full()
       .px(px(12.0))
       .py(px(6.0))
+      .bg(Colors::bg_primary())
       .cursor_pointer()
       .hover(|this| this.bg(Colors::hover()))
       .active(|this| this.bg(Colors::active()))
