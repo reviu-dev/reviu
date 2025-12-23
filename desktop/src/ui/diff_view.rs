@@ -1,11 +1,12 @@
-//! Custom high-performance diff view
+//! Custom high-performance diff view with virtualization
+//! Uses GPUI's uniform_list for efficient rendering of large files
 //! Displays changed lines with CONTEXT_OFFSET lines around them
 //! Supports both local git (V1) and GitHub PR diffs (V2)
 
-use crate::state::{FileDiff, Line, LineOrigin};
+use crate::state::{FileDiff, LineOrigin};
 use gpui::{
-  div, prelude::*, px, AnyElement, Context, IntoElement, ParentElement, Render, ScrollHandle,
-  Styled, Window,
+  div, prelude::*, px, uniform_list, AnyElement, Context, IntoElement, ParentElement, Render,
+  Styled, UniformListScrollHandle, Window,
 };
 use std::sync::Arc;
 
@@ -13,12 +14,17 @@ use crate::ui::Colors;
 
 const CONTEXT_OFFSET: usize = 3; // Show 3 lines of context before and after changes
 
-/// Represents a range of lines to display
+/// Represents a display line - either a real line or an expansion button
 #[derive(Debug, Clone)]
-enum DisplayRange {
-  /// Show lines directly
-  Lines { start: usize, end: usize },
-  /// Show an expansion button
+enum DisplayLine {
+  /// A real line from the file
+  Line {
+    line_idx: usize,
+    line_num: usize,
+    content: String,
+    origin: Option<LineOrigin>,
+  },
+  /// An expansion button
   ExpandButton {
     hidden_lines: usize,
     region_id: usize,
@@ -26,7 +32,7 @@ enum DisplayRange {
   },
 }
 
-/// Custom diff view with perfect context handling
+/// Custom diff view with perfect context handling and virtualization
 /// Works with both local git files (V1) and GitHub PR files (V2)
 pub struct DiffView {
   /// File metadata
@@ -38,15 +44,15 @@ pub struct DiffView {
   line_changes: Vec<Option<LineOrigin>>,
   /// Expanded context regions
   expanded_regions: Vec<usize>,
-  /// Scroll handle for the diff content
-  scroll_handle: ScrollHandle,
+  /// Scroll handle for virtualization
+  scroll_handle: UniformListScrollHandle,
+  /// Flattened display lines (cached for rendering)
+  display_lines: Vec<DisplayLine>,
 }
 
 impl DiffView {
   pub fn new(file_diff: Arc<FileDiff>, _window: &mut Window, _cx: &mut Context<Self>) -> Self {
     // Load content - works for both V1 (local) and V2 (GitHub)
-    // V1: new_content is loaded from local filesystem
-    // V2: new_content will be fetched from GitHub API and stored in FileDiff
     let content = file_diff.new_content.as_deref().unwrap_or("");
     let all_lines: Vec<String> = if content.is_empty() {
       Vec::new()
@@ -56,12 +62,10 @@ impl DiffView {
 
     // Handle empty files (new files might have content but old files don't)
     if all_lines.is_empty() && file_diff.status.as_str() == "Added" {
-      // For new files, try to get content from hunks
       return Self::from_hunks_only(file_diff);
     }
 
     // Build line change map from hunks
-    // This works for both V1 and V2 as hunks are provided in both cases
     let mut line_changes = vec![None; all_lines.len()];
 
     for hunk in &file_diff.hunks {
@@ -75,13 +79,18 @@ impl DiffView {
       }
     }
 
-    Self {
+    let mut view = Self {
       file_diff,
       all_lines,
       line_changes,
       expanded_regions: Vec::new(),
-      scroll_handle: ScrollHandle::new(),
-    }
+      scroll_handle: UniformListScrollHandle::new(),
+      display_lines: Vec::new(),
+    };
+
+    // Calculate initial display lines
+    view.recalculate_display_lines();
+    view
   }
 
   /// Fallback constructor when only hunks are available (for new files)
@@ -99,13 +108,17 @@ impl DiffView {
       }
     }
 
-    Self {
+    let mut view = Self {
       file_diff,
       all_lines,
       line_changes,
       expanded_regions: Vec::new(),
-      scroll_handle: ScrollHandle::new(),
-    }
+      scroll_handle: UniformListScrollHandle::new(),
+      display_lines: Vec::new(),
+    };
+
+    view.recalculate_display_lines();
+    view
   }
 
   /// Get the number of hunks
@@ -119,12 +132,14 @@ impl DiffView {
   }
 
   /// Toggle region expansion
-  fn toggle_region(&mut self, region_id: usize, _cx: &mut Context<Self>) {
+  fn toggle_region(&mut self, region_id: usize, cx: &mut Context<Self>) {
     if let Some(pos) = self.expanded_regions.iter().position(|&id| id == region_id) {
       self.expanded_regions.remove(pos);
     } else {
       self.expanded_regions.push(region_id);
     }
+    self.recalculate_display_lines();
+    cx.notify();
   }
 
   /// Find all ranges of changed lines
@@ -135,11 +150,9 @@ impl DiffView {
     for (idx, change) in self.line_changes.iter().enumerate() {
       match (change, start) {
         (Some(_), None) => {
-          // Start of a change range
           start = Some(idx);
         }
         (None, Some(s)) => {
-          // End of a change range
           ranges.push((s, idx - 1));
           start = None;
         }
@@ -147,7 +160,6 @@ impl DiffView {
       }
     }
 
-    // Handle case where file ends with changes
     if let Some(s) = start {
       ranges.push((s, self.all_lines.len().saturating_sub(1)));
     }
@@ -155,13 +167,13 @@ impl DiffView {
     ranges
   }
 
-  /// Calculate display ranges with context and expansion buttons
-  fn calculate_display_ranges(&self) -> Vec<DisplayRange> {
-    let mut display_ranges = Vec::new();
+  /// Recalculate flattened display lines
+  fn recalculate_display_lines(&mut self) {
+    self.display_lines.clear();
     let change_ranges = self.find_change_ranges();
 
     if change_ranges.is_empty() {
-      return display_ranges;
+      return;
     }
 
     let mut region_id = 0;
@@ -170,55 +182,44 @@ impl DiffView {
       let is_first = i == 0;
       let is_last = i == change_ranges.len() - 1;
 
-      // Calculate visible start with context
       let visible_start = change_start.saturating_sub(CONTEXT_OFFSET);
 
       // Handle gap before this change block
       if is_first {
-        // First block - check if we need button to file start
         if visible_start > 0 {
           let expanded = self.is_region_expanded(region_id);
           if expanded {
-            // Show all lines from start
-            display_ranges.push(DisplayRange::Lines {
-              start: 0,
-              end: visible_start - 1,
-            });
+            for line_idx in 0..visible_start {
+              self.push_line(line_idx);
+            }
           } else {
-            // Show expand button
-            display_ranges.push(DisplayRange::ExpandButton {
+            self.display_lines.push(DisplayLine::ExpandButton {
               hidden_lines: visible_start,
               region_id,
-              label: "Show context from file start".to_string(),
+              label: "Show more".to_string(),
             });
           }
           region_id += 1;
         }
       } else {
-        // Not first block - check gap from previous block
         let (_, prev_end) = change_ranges[i - 1];
         let prev_visible_end =
           (prev_end + CONTEXT_OFFSET).min(self.all_lines.len().saturating_sub(1));
 
         if visible_start > prev_visible_end + 1 {
-          // There's a gap
           let gap_start = prev_visible_end + 1;
           let gap_end = visible_start - 1;
-          let gap_size = gap_end - gap_start + 1;
 
           let expanded = self.is_region_expanded(region_id);
           if expanded {
-            // Show gap lines
-            display_ranges.push(DisplayRange::Lines {
-              start: gap_start,
-              end: gap_end,
-            });
+            for line_idx in gap_start..=gap_end {
+              self.push_line(line_idx);
+            }
           } else {
-            // Show expand button
-            display_ranges.push(DisplayRange::ExpandButton {
-              hidden_lines: gap_size,
+            self.display_lines.push(DisplayLine::ExpandButton {
+              hidden_lines: gap_end - gap_start + 1,
               region_id,
-              label: "Show more context".to_string(),
+              label: "Show more".to_string(),
             });
           }
           region_id += 1;
@@ -227,50 +228,82 @@ impl DiffView {
 
       // Show the change block with context
       let visible_end = (change_end + CONTEXT_OFFSET).min(self.all_lines.len().saturating_sub(1));
-      display_ranges.push(DisplayRange::Lines {
-        start: visible_start,
-        end: visible_end,
-      });
+      for line_idx in visible_start..=visible_end {
+        self.push_line(line_idx);
+      }
 
       // Handle after last block
       if is_last && visible_end < self.all_lines.len().saturating_sub(1) {
-        let remaining_lines = self.all_lines.len().saturating_sub(1) - visible_end;
         let expanded = self.is_region_expanded(region_id);
 
         if expanded {
-          display_ranges.push(DisplayRange::Lines {
-            start: visible_end + 1,
-            end: self.all_lines.len() - 1,
-          });
+          for line_idx in (visible_end + 1)..self.all_lines.len() {
+            self.push_line(line_idx);
+          }
         } else {
-          display_ranges.push(DisplayRange::ExpandButton {
+          let remaining_lines = self.all_lines.len().saturating_sub(1) - visible_end;
+          self.display_lines.push(DisplayLine::ExpandButton {
             hidden_lines: remaining_lines,
             region_id,
-            label: "Show context to file end".to_string(),
+            label: "Show more".to_string(),
           });
         }
       }
     }
+  }
 
-    display_ranges
+  /// Helper to push a line to display_lines
+  fn push_line(&mut self, line_idx: usize) {
+    let content = self
+      .all_lines
+      .get(line_idx)
+      .map(|s| s.clone())
+      .unwrap_or_default();
+    let origin = self.line_changes.get(line_idx).copied().flatten();
+    let line_num = line_idx + 1;
+
+    self.display_lines.push(DisplayLine::Line {
+      line_idx,
+      line_num,
+      content,
+      origin,
+    });
+  }
+
+  /// Render a single display line
+  fn render_display_line(&self, display_line: &DisplayLine, cx: &mut Context<Self>) -> AnyElement {
+    match display_line {
+      DisplayLine::Line {
+        line_num,
+        content,
+        origin,
+        ..
+      } => self
+        .render_line(*line_num, content, *origin)
+        .into_any_element(),
+      DisplayLine::ExpandButton {
+        hidden_lines,
+        region_id,
+        label,
+      } => self
+        .render_expand_button(*region_id, *hidden_lines, label, cx)
+        .into_any_element(),
+    }
   }
 
   /// Render a single line
-  fn render_line(&self, line_idx: usize, line_num: usize) -> impl IntoElement {
-    let line_content = self
-      .all_lines
-      .get(line_idx)
-      .map(|s| s.as_str())
-      .unwrap_or("");
-    let line_origin = self.line_changes.get(line_idx).copied().flatten();
-
+  fn render_line(
+    &self,
+    line_num: usize,
+    line_content: &str,
+    line_origin: Option<LineOrigin>,
+  ) -> impl IntoElement {
     let (bg_color, fg_color, prefix) = match line_origin {
       Some(LineOrigin::Addition) => (Colors::diff_addition_bg(), Colors::diff_addition_fg(), "+"),
       Some(LineOrigin::Deletion) => (Colors::diff_deletion_bg(), Colors::diff_deletion_fg(), "-"),
       _ => (Colors::diff_context_bg(), Colors::text_muted(), " "),
     };
 
-    // For deletions, we don't increment line number (shown as empty on right)
     let line_numbers = match line_origin {
       Some(LineOrigin::Deletion) => format!("{:>4}    ", line_num),
       _ => format!("{:>4} {:>4}", line_num, line_num),
@@ -305,6 +338,7 @@ impl DiffView {
 
   /// Render an expand button
   fn render_expand_button(
+    &self,
     region_id: usize,
     hidden_lines: usize,
     label: &str,
@@ -326,7 +360,6 @@ impl DiffView {
         gpui::MouseButton::Left,
         cx.listener(move |view, _event, _window, cx| {
           view.toggle_region(region_id, cx);
-          cx.notify();
         }),
       )
       .child(
@@ -343,27 +376,6 @@ impl DiffView {
           ),
       )
   }
-
-  /// Render a display range
-  fn render_display_range(&self, range: &DisplayRange, cx: &mut Context<Self>) -> AnyElement {
-    match range {
-      DisplayRange::Lines { start, end } => {
-        let mut container = div().flex().flex_col().w_full();
-
-        for line_idx in *start..=*end {
-          let line_num = line_idx + 1;
-          container = container.child(self.render_line(line_idx, line_num));
-        }
-
-        container.into_any_element()
-      }
-      DisplayRange::ExpandButton {
-        hidden_lines,
-        region_id,
-        label,
-      } => Self::render_expand_button(*region_id, *hidden_lines, label, cx).into_any_element(),
-    }
-  }
 }
 
 impl Render for DiffView {
@@ -378,33 +390,19 @@ impl Render for DiffView {
 
     let status_text = self.file_diff.status.as_str().to_string();
     let hunk_count = self.file_diff.hunks.len();
+    let total_display_lines = self.display_lines.len();
 
-    // Calculate what to display
-    let display_ranges = self.calculate_display_ranges();
+    // Clone data for the closure
+    let display_lines = self.display_lines.clone();
 
-    let file_path_id = format!("diff-content-{}", self.file_diff.path.display());
-
-    let mut content_container = div()
-      .id(file_path_id)
-      .flex()
-      .flex_col()
-      .w_full()
-      .flex_1()
-      .overflow_y_scroll()
-      .track_scroll(&self.scroll_handle);
-
-    // Render all display ranges
-    for range in display_ranges {
-      content_container = content_container.child(self.render_display_range(&range, cx));
-    }
-
+    // Root container with fixed height
     div()
       .flex()
       .flex_col()
       .size_full()
       .overflow_hidden()
       .bg(Colors::bg_primary())
-      // File header
+      // File header (fixed height)
       .child(
         div()
           .flex()
@@ -440,7 +438,24 @@ impl Render for DiffView {
               ),
           ),
       )
-      // Scrollable diff content
-      .child(content_container)
+      // Virtualized scrollable content with uniform_list
+      .child(
+        uniform_list(
+          "diff-lines",
+          total_display_lines,
+          cx.processor(move |this, range, _window, cx| {
+            let mut items = Vec::new();
+            for idx in range {
+              if let Some(display_line) = display_lines.get(idx) {
+                items.push(this.render_display_line(display_line, cx));
+              }
+            }
+            items
+          }),
+        )
+        .flex_1()
+        .w_full()
+        .track_scroll(&self.scroll_handle),
+      )
   }
 }
