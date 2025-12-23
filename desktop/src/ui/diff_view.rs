@@ -426,7 +426,7 @@ impl Render for DiffView {
           .items_center()
           .justify_between()
           .px(px(16.0))
-          .py(px(12.0))
+          .py(px(8.0))
           .border_b_1()
           .border_color(Colors::border_primary())
           .child(
