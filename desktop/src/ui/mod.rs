@@ -4,44 +4,34 @@ mod main_view;
 pub use diff_view::DiffView;
 pub use main_view::MainView;
 
-use gpui::rgb;
+use gpui::{black, rgb, white};
 
 /// Color palette for the application
 pub struct Colors;
 
 impl Colors {
-  // Background colors
-  pub fn bg_primary() -> gpui::Hsla {
-    rgb(0x000000).into()
-  }
-
-  pub fn bg_secondary() -> gpui::Hsla {
-    rgb(0x252525).into()
-  }
-
-  pub fn bg_tertiary() -> gpui::Hsla {
-    rgb(0x2d2d2d).into()
-  }
-
-  // Text colors
-  pub fn text_primary() -> gpui::Hsla {
-    rgb(0xcccccc).into()
-  }
-
-  pub fn text_secondary() -> gpui::Hsla {
-    rgb(0x999999).into()
-  }
-
-  pub fn text_muted() -> gpui::Hsla {
-    rgb(0x666666).into()
-  }
-
   pub fn success() -> gpui::Hsla {
     rgb(0x00c951).into()
   }
 
   pub fn error() -> gpui::Hsla {
     rgb(0xfb2c36).into()
+  }
+
+  // Background colors
+  pub fn bg_primary() -> gpui::Hsla {
+    black()
+  }
+
+  // Text colors
+  pub fn text_primary() -> gpui::Hsla {
+    white()
+  }
+
+  pub fn text_muted() -> gpui::Hsla {
+    let mut color: gpui::Hsla = Colors::text_primary();
+    color.a = 0.7;
+    color
   }
 
   // Diff colors
@@ -85,11 +75,15 @@ impl Colors {
 
   // Interactive colors
   pub fn hover() -> gpui::Hsla {
-    rgb(0x2a2a2a).into()
+    let mut color: gpui::Hsla = white();
+    color.a = 0.10;
+    color
   }
 
   pub fn active() -> gpui::Hsla {
-    rgb(0x37373d).into()
+    let mut color: gpui::Hsla = white();
+    color.a = 0.30;
+    color
   }
 
   pub fn selected() -> gpui::Hsla {

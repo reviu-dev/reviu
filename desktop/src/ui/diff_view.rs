@@ -323,7 +323,7 @@ impl DiffView {
       .w_full()
       .h(px(24.0))
       .px(px(16.0))
-      .bg(Colors::bg_secondary())
+      .bg(Colors::bg_primary())
       .border_y_1()
       .border_color(Colors::border_primary())
       .cursor_pointer()
@@ -343,7 +343,7 @@ impl DiffView {
           .child(div().text_color(Colors::text_muted()).child("⋯"))
           .child(
             div()
-              .text_color(Colors::text_secondary())
+              .text_color(Colors::text_muted())
               .child(format!("{} hidden lines", hidden_lines)),
           ),
       )
@@ -387,7 +387,6 @@ impl Render for DiffView {
           .justify_between()
           .px(px(16.0))
           .py(px(12.0))
-          .bg(Colors::bg_secondary())
           .border_b_1()
           .border_color(Colors::border_primary())
           .child(
