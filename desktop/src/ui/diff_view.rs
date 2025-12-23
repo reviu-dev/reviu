@@ -5,8 +5,8 @@
 
 use crate::state::{FileDiff, LineOrigin};
 use gpui::{
-  div, prelude::*, px, uniform_list, AnyElement, Context, IntoElement, ParentElement, Render,
-  Styled, UniformListScrollHandle, Window,
+  div, prelude::*, px, relative, uniform_list, AnyElement, Context, IntoElement, ParentElement,
+  Render, Styled, UniformListScrollHandle, Window,
 };
 use std::sync::Arc;
 
@@ -272,7 +272,7 @@ impl DiffView {
       .items_center()
       .border_1()
       .border_color(Colors::border_primary())
-      // .w_full()
+      .w_full()
       .bg(bg_color)
       .h(px(24.0))
       .text_xs()
@@ -305,10 +305,9 @@ impl DiffView {
       )
       .child(
         div()
-          .flex()
-          .items_center()
           .px(px(8.0))
           .text_color(fg_color)
+          .line_height(relative(0.0))
           .child(line_content.to_string()),
       )
   }
