@@ -267,7 +267,6 @@ pub struct ScrollState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
   pub theme: Theme,
-  pub editor: EditorConfig,
   pub keybindings: HashMap<String, String>,
 }
 
@@ -275,7 +274,6 @@ impl Default for Config {
   fn default() -> Self {
     Self {
       theme: Theme::System,
-      editor: EditorConfig::default(),
       keybindings: HashMap::new(),
     }
   }
@@ -289,32 +287,13 @@ pub enum Theme {
   System,
 }
 
-/// Editor configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EditorConfig {
-  pub tab_size: usize,
-  pub font_family: String,
-  pub font_size: f32,
-  pub line_numbers: bool,
-}
-
-impl Default for EditorConfig {
-  fn default() -> Self {
-    Self {
-      tab_size: 2,
-      font_family: "Monaco".to_string(),
-      font_size: 13.0,
-      line_numbers: true,
-    }
-  }
-}
-
 /// Actions that can be dispatched to update state
 #[derive(Debug, Clone)]
 pub enum Action {
   // Repository operations
   LoadRepository(PathBuf),
   SelectFile(PathBuf),
+  SwitchRepository(PathBuf),
 }
 
 /// Update the application state based on an action
@@ -444,6 +423,27 @@ pub fn update(state: &mut AppState, action: Action) -> Result<()> {
             }
           }
         }
+      }
+    }
+
+    Action::SwitchRepository(path) => {
+      log::info!("Switching to repository: {:?}", path);
+
+      // Check if repository exists in workspace
+      if state.workspace.repos.contains_key(&path) {
+        // Set as active repository
+        state.workspace.set_active_repo(path.clone());
+
+        // Clear selection and diff for the new active repository
+        if let Some(repo) = state.workspace.get_active_repo_mut() {
+          repo.selected_files.clear();
+          repo.diff = None;
+          repo.staged_hunks.clear();
+        }
+
+        log::info!("Successfully switched to repository: {:?}", path);
+      } else {
+        log::warn!("Repository not found in workspace: {:?}", path);
       }
     }
   }

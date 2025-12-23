@@ -29,6 +29,8 @@ pub struct MainView {
   diff_views: HashMap<PathBuf, Entity<DiffView>>,
   /// Width of the file list panel
   file_list_width: Pixels,
+  /// State of the repository dropdown menu
+  repository_dropdown_open: bool,
 }
 
 impl MainView {
@@ -50,6 +52,7 @@ impl MainView {
       storage,
       diff_views: HashMap::new(),
       file_list_width: px(300.0), // Default width
+      repository_dropdown_open: false,
     }
   }
 
@@ -264,6 +267,236 @@ impl MainView {
               .child(file_path),
           ),
       )
+  }
+
+  /// Render the repository selector dropdown
+  fn render_repository_selector(&mut self, state: &AppState, cx: &mut Context<Self>) -> AnyElement {
+    let repos = &state.workspace.repos;
+    let active_repo = &state.workspace.active_repo;
+
+    // No repositories open
+    if repos.is_empty() {
+      return div()
+        .flex()
+        .items_center()
+        .w_full()
+        .px(px(12.0))
+        .py(px(8.0))
+        .bg(Colors::bg_secondary())
+        .border_b_1()
+        .border_color(Colors::border_primary())
+        .child(
+          div()
+            .text_sm()
+            .text_color(Colors::text_muted())
+            .child("No repository open"),
+        )
+        .into_any_element();
+    }
+
+    // One or more repositories - dropdown
+    self.render_repository_dropdown(active_repo, repos, cx)
+  }
+
+  /// Render repository dropdown for multiple repos
+  fn render_repository_dropdown(
+    &mut self,
+    active_repo: &Option<PathBuf>,
+    repos: &HashMap<PathBuf, crate::state::Repository>,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let active_name = active_repo
+      .as_ref()
+      .and_then(|p| repos.get(p))
+      .map(|r| r.name.clone())
+      .unwrap_or_else(|| "No repository".to_string());
+
+    div()
+      .flex()
+      .flex_col()
+      .w_full()
+      .bg(Colors::bg_secondary())
+      .border_b_1()
+      .border_color(Colors::border_primary())
+      // Trigger button
+      .child(self.render_dropdown_trigger(active_name, cx))
+      // Dropdown menu (if open)
+      .when(self.repository_dropdown_open, |this| {
+        this.child(self.render_dropdown_menu(repos, active_repo, cx))
+      })
+      .into_any_element()
+  }
+
+  /// Render the dropdown trigger button
+  fn render_dropdown_trigger(&self, active_name: String, cx: &mut Context<Self>) -> AnyElement {
+    div()
+      .id("repo-dropdown-trigger")
+      .flex()
+      .items_center()
+      .justify_between()
+      .w_full()
+      .px(px(12.0))
+      .py(px(8.0))
+      .cursor_pointer()
+      .hover(|this| this.bg(Colors::hover()))
+      .active(|this| this.bg(Colors::active()))
+      .on_mouse_down(
+        MouseButton::Left,
+        cx.listener(|view, _event, _window, cx| {
+          view.repository_dropdown_open = !view.repository_dropdown_open;
+          cx.notify();
+        }),
+      )
+      .child(
+        div()
+          .text_sm()
+          .font_weight(gpui::FontWeight::SEMIBOLD)
+          .text_color(Colors::text_primary())
+          .child(active_name),
+      )
+      // Chevron icon
+      .child(div().text_xs().text_color(Colors::text_muted()).child(
+        if self.repository_dropdown_open {
+          "▲"
+        } else {
+          "▼"
+        },
+      ))
+      .into_any_element()
+  }
+
+  /// Render the dropdown menu with repository list
+  fn render_dropdown_menu(
+    &self,
+    repos: &HashMap<PathBuf, crate::state::Repository>,
+    active_repo: &Option<PathBuf>,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    // Sort repositories by name
+    let mut sorted_repos: Vec<_> = repos.iter().collect();
+    sorted_repos.sort_by(|(_, a), (_, b)| a.name.cmp(&b.name));
+
+    div()
+      .flex()
+      .flex_col()
+      .w_full()
+      .bg(Colors::bg_primary())
+      .border_b_1()
+      .border_color(Colors::border_primary())
+      .children(
+        sorted_repos
+          .iter()
+          .enumerate()
+          .map(|(idx, (path, repo))| {
+            let is_active = active_repo.as_ref() == Some(path);
+            let path_clone = (*path).clone();
+
+            self.render_dropdown_item(idx, &repo.name, is_active, path_clone, cx)
+          })
+          .collect::<Vec<_>>(),
+      )
+      // Separator
+      .child(div().h(px(1.0)).w_full().bg(Colors::border_primary()))
+      // "Open Repository..." option
+      .child(self.render_open_repository_item(cx))
+      .into_any_element()
+  }
+
+  /// Render a single item in the dropdown menu
+  fn render_dropdown_item(
+    &self,
+    idx: usize,
+    repo_name: &str,
+    is_active: bool,
+    path: PathBuf,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let path_for_handler = path.clone();
+    let repo_name_owned = repo_name.to_string();
+
+    div()
+      .id(("repo-item", idx))
+      .flex()
+      .items_center()
+      .justify_between()
+      .w_full()
+      .px(px(12.0))
+      .py(px(6.0))
+      .cursor_pointer()
+      .when(is_active, |this| this.bg(Colors::bg_secondary()))
+      .hover(|this| this.bg(Colors::hover()))
+      .active(|this| this.bg(Colors::active()))
+      .on_mouse_down(
+        MouseButton::Left,
+        cx.listener(move |view, _event, _window, cx| {
+          view.handle_repository_select(path_for_handler.clone(), cx);
+        }),
+      )
+      .child(
+        div()
+          .text_sm()
+          .text_color(Colors::text_primary())
+          .child(repo_name_owned),
+      )
+      .when(is_active, |this| {
+        this.child(div().text_xs().text_color(Colors::success()).child("✓"))
+      })
+      .into_any_element()
+  }
+
+  /// Handle repository selection from dropdown
+  fn handle_repository_select(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    // Close the dropdown
+    self.repository_dropdown_open = false;
+
+    // Dispatch the action to switch repository
+    if let Some(workspace) = self.workspace.upgrade() {
+      workspace.update(cx, |ws, cx| {
+        if let Err(e) = ws.dispatch(Action::SwitchRepository(path), cx) {
+          log::error!("Failed to switch repository: {}", e);
+        }
+      });
+    }
+
+    cx.notify();
+  }
+
+  /// Render "Open Repository..." item in dropdown
+  fn render_open_repository_item(&self, cx: &mut Context<Self>) -> AnyElement {
+    div()
+      .id("open-repository-item")
+      .flex()
+      .items_center()
+      .w_full()
+      .px(px(12.0))
+      .py(px(6.0))
+      .cursor_pointer()
+      .hover(|this| this.bg(Colors::hover()))
+      .active(|this| this.bg(Colors::active()))
+      .on_mouse_down(
+        MouseButton::Left,
+        cx.listener(|view, _event, window, cx| {
+          view.handle_open_repository(window, cx);
+        }),
+      )
+      .child(
+        div()
+          .text_sm()
+          .text_color(Colors::text_primary())
+          .child("Open Repository..."),
+      )
+      .into_any_element()
+  }
+
+  /// Handle "Open Repository..." click - trigger file picker
+  fn handle_open_repository(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    // Close the dropdown
+    self.repository_dropdown_open = false;
+
+    // Trigger the file picker by dispatching the OpenRepository action (same as Cmd+O)
+    window.dispatch_action(Box::new(crate::workspace::OpenRepository), cx);
+
+    cx.notify();
   }
 
   /// Render diff panel with scrolling support and virtualization
@@ -485,6 +718,8 @@ impl Render for MainView {
                       .flex_col()
                       .size_full()
                       .bg(Colors::bg_primary())
+                      // Repository selector
+                      .child(self.render_repository_selector(&state, cx))
                       // Staged section
                       .child(
                         div()

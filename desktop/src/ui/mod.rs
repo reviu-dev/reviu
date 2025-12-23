@@ -23,6 +23,12 @@ impl Colors {
     black()
   }
 
+  pub fn bg_secondary() -> gpui::Hsla {
+    let mut color: gpui::Hsla = white();
+    color.a = 0.05;
+    color
+  }
+
   // Text colors
   pub fn text_primary() -> gpui::Hsla {
     white()
