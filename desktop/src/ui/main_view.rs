@@ -224,6 +224,24 @@ impl MainView {
       )
   }
 
+  /// Truncate path from the beginning if it's too long
+  fn truncate_path_start(path: &str, max_len: usize) -> String {
+    if path.len() <= max_len {
+      return path.to_string();
+    }
+
+    // Find a good split point (after a path separator)
+    let bytes_to_remove = path.len() - max_len + 3; // +3 for "..."
+    let mut split_pos = bytes_to_remove;
+
+    // Try to find the next '/' after the split position
+    if let Some(pos) = path[bytes_to_remove..].find('/') {
+      split_pos = bytes_to_remove + pos + 1;
+    }
+
+    format!("...{}", &path[split_pos..])
+  }
+
   /// Render a single file item
   fn render_file_item(
     path: &std::path::Path,
@@ -245,7 +263,8 @@ impl MainView {
       .file_name()
       .and_then(|n| n.to_str())
       .unwrap_or("Unknown");
-    let file_path = path.to_string_lossy().to_string();
+    let file_path_full = path.to_string_lossy().to_string();
+    let file_path = Self::truncate_path_start(&file_path_full, 40);
     let path_clone = path.to_path_buf();
 
     div()
