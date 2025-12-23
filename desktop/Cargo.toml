@@ -5,16 +5,8 @@ edition = "2021"
 rust-version = "1.75"
 
 [dependencies]
-# UI Framework
+# UI Framework - Only GPUI needed for custom diff view
 gpui = { git = "https://github.com/zed-industries/zed" }
-text = { git = "https://github.com/zed-industries/zed" }
-rope = { git = "https://github.com/zed-industries/zed" }
-language = { git = "https://github.com/zed-industries/zed" }
-editor = { git = "https://github.com/zed-industries/zed" }
-buffer_diff = { git = "https://github.com/zed-industries/zed" }
-project = { git = "https://github.com/zed-industries/zed" }
-settings = { git = "https://github.com/zed-industries/zed" }
-theme = { git = "https://github.com/zed-industries/zed" }
 
 # Git operations
 git2 = "0.20"
