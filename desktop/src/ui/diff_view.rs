@@ -95,11 +95,6 @@ impl DiffView {
     view
   }
 
-  /// Get the number of hunks
-  pub fn hunk_count(&self) -> usize {
-    self.file_diff.hunks.len()
-  }
-
   /// Check if a region is expanded
   fn is_region_expanded(&self, region_id: usize) -> bool {
     self.expanded_regions.contains(&region_id)
@@ -401,9 +396,18 @@ impl Render for DiffView {
       .unwrap_or("Unknown")
       .to_string();
 
-    let status_text = self.file_diff.status.as_str().to_string();
-    let hunk_count = self.file_diff.hunks.len();
     let total_display_lines = self.display_lines.len();
+
+    // Calculate additions and deletions
+    let mut additions = 0;
+    let mut deletions = 0;
+    for line in &self.all_lines {
+      match line.origin {
+        LineOrigin::Addition => additions += 1,
+        LineOrigin::Deletion => deletions += 1,
+        _ => {}
+      }
+    }
 
     // Clone data for the closure
     let display_lines = self.display_lines.clone();
@@ -437,17 +441,22 @@ impl Render for DiffView {
                   .text_color(Colors::text_primary())
                   .child(file_name),
               )
-              .child(
-                div()
-                  .text_xs()
-                  .text_color(Colors::text_muted())
-                  .child(format!(
-                    "({}) • {} hunks • {} lines",
-                    status_text,
-                    hunk_count,
-                    self.all_lines.len()
-                  )),
-              ),
+              .when(additions > 0, |this| {
+                this.child(
+                  div()
+                    .text_xs()
+                    .text_color(Colors::success())
+                    .child(format!("+{}", additions)),
+                )
+              })
+              .when(deletions > 0, |this| {
+                this.child(
+                  div()
+                    .text_xs()
+                    .text_color(Colors::destructive())
+                    .child(format!("-{}", deletions)),
+                )
+              }),
           ),
       )
       // Virtualized scrollable content with uniform_list
