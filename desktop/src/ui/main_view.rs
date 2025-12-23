@@ -2,12 +2,23 @@ use crate::state::{Action, AppState};
 use crate::storage::Storage;
 use crate::ui::{Colors, DiffView};
 use gpui::{
-  div, prelude::*, px, AnyElement, Context, Entity, IntoElement, ParentElement, Styled, WeakEntity,
-  Window,
+  div, prelude::*, px, AnyElement, Context, DragMoveEvent, Entity, IntoElement, MouseButton,
+  ParentElement, Pixels, Styled, WeakEntity, Window,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Drag handle for resizing the file list panel
+#[derive(Clone, Copy, Debug)]
+struct ResizeHandle;
+
+impl Render for ResizeHandle {
+  fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    // Return an invisible element - the visual is handled by the actual resize handle
+    div().size_0()
+  }
+}
 
 /// Main application view - now a proper entity with click handlers
 pub struct MainView {
@@ -16,6 +27,8 @@ pub struct MainView {
   storage: Arc<Storage>,
   /// Cache of DiffView for each file
   diff_views: HashMap<PathBuf, Entity<DiffView>>,
+  /// Width of the file list panel
+  file_list_width: Pixels,
 }
 
 impl MainView {
@@ -36,7 +49,15 @@ impl MainView {
       workspace,
       storage,
       diff_views: HashMap::new(),
+      file_list_width: px(300.0), // Default width
     }
+  }
+
+  /// Resize the file list panel
+  fn resize_file_list(&mut self, width: Pixels, cx: &mut Context<Self>) {
+    // Clamp width between 200px and 600px
+    self.file_list_width = width.max(px(200.0)).min(px(600.0));
+    cx.notify();
   }
 
   /// Render empty state when no repository is open
@@ -224,24 +245,6 @@ impl MainView {
       )
   }
 
-  /// Truncate path from the beginning if it's too long
-  fn truncate_path_start(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
-      return path.to_string();
-    }
-
-    // Find a good split point (after a path separator)
-    let bytes_to_remove = path.len() - max_len + 3; // +3 for "..."
-    let mut split_pos = bytes_to_remove;
-
-    // Try to find the next '/' after the split position
-    if let Some(pos) = path[bytes_to_remove..].find('/') {
-      split_pos = bytes_to_remove + pos + 1;
-    }
-
-    format!("...{}", &path[split_pos..])
-  }
-
   /// Render a single file item
   fn render_file_item(
     path: &std::path::Path,
@@ -258,20 +261,18 @@ impl MainView {
     };
 
     let status_str = status.short_str().to_string();
-    let status_badge = if staged { " [S]" } else { "" };
     let file_name = path
       .file_name()
       .and_then(|n| n.to_str())
       .unwrap_or("Unknown");
-    let file_path_full = path.to_string_lossy().to_string();
-    let file_path = Self::truncate_path_start(&file_path_full, 40);
+    let file_path = path.to_string_lossy().to_string();
     let path_clone = path.to_path_buf();
 
     div()
       .id(path_clone.to_string_lossy().to_string())
       .flex()
       .items_center()
-      .gap_2()
+      .gap_4()
       .px(px(12.0))
       .py(px(8.0))
       .cursor_pointer()
@@ -279,7 +280,6 @@ impl MainView {
       .active(|this| this.bg(Colors::border_primary()))
       .child(
         div()
-          .w(px(24.0))
           .text_xs()
           .font_weight(gpui::FontWeight::BOLD)
           .text_color(status_color)
@@ -291,16 +291,21 @@ impl MainView {
           .flex_col()
           .gap_1()
           .flex_1()
+          .min_w_0()
           .child(
             div()
               .text_sm()
               .text_color(Colors::text_primary())
-              .child(format!("{}{}", file_name, status_badge)),
+              .overflow_hidden()
+              .text_ellipsis_start()
+              .child(file_name.to_string()),
           )
           .child(
             div()
               .text_xs()
               .text_color(Colors::text_muted())
+              .overflow_hidden()
+              .text_ellipsis_start()
               .child(file_path),
           ),
       )
@@ -426,6 +431,30 @@ impl MainView {
 
     cx.notify();
   }
+
+  /// Render the resize handle for the file list panel
+  fn render_resize_handle(&self, cx: &Context<Self>) -> impl IntoElement {
+    const RESIZE_HANDLE_SIZE: Pixels = px(6.0);
+
+    div()
+      .id("file-list-resize-handle")
+      .w(RESIZE_HANDLE_SIZE)
+      .h_full()
+      .cursor_col_resize()
+      .bg(Colors::border_primary())
+      .hover(|style| style.bg(Colors::text_secondary()))
+      .active(|style| style.bg(Colors::text_primary()))
+      .on_drag(ResizeHandle, |_, _, _, cx| {
+        cx.stop_propagation();
+        cx.new(|_| ResizeHandle)
+      })
+      .on_mouse_down(
+        MouseButton::Left,
+        cx.listener(|_, _, _, cx| {
+          cx.stop_propagation();
+        }),
+      )
+  }
 }
 
 impl Render for MainView {
@@ -481,115 +510,121 @@ impl Render for MainView {
           div()
             .flex()
             .flex_1()
-            .overflow_hidden() // CRITICAL: parent must clip to enable scrolling
+            .overflow_hidden()
+            .on_drag_move(
+              cx.listener(|view, e: &DragMoveEvent<ResizeHandle>, _window, cx| {
+                // Calculate new width based on mouse position
+                let new_width = e.event.position.x;
+                view.resize_file_list(new_width, cx);
+              }),
+            )
             .child(
               div()
                 .flex()
                 .size_full()
                 .child(
                   // File list panel with clickable items
-                  div()
-                    .w(px(300.0))
-                    .h_full()
-                    .border_r_1()
-                    .border_color(Colors::border_primary())
-                    .child(
-                      div()
-                        .flex()
-                        .flex_col()
-                        .size_full()
-                        .bg(Colors::bg_primary())
-                        // Staged section
-                        .child(
-                          div()
-                            .flex()
-                            .flex_col()
-                            .child(
-                              div()
-                                .px(px(12.0))
-                                .py(px(8.0))
-                                .border_b_1()
-                                .border_color(Colors::border_primary())
-                                .child(
-                                  div()
-                                    .text_xs()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(Colors::text_secondary())
-                                    .child(format!("STAGED ({})", staged_files.len())),
-                                ),
-                            )
-                            .children(staged_files.iter().map(|file| {
-                              let path = file.path.clone();
-                              div()
-                                .child(Self::render_file_item(
-                                  &file.path,
-                                  file.status.clone(),
-                                  file.staged,
-                                ))
-                                .on_mouse_down(
-                                  gpui::MouseButton::Left,
-                                  cx.listener(move |view, _event, window, cx| {
-                                    view.handle_file_click(path.clone(), window, cx);
-                                  }),
-                                )
-                            }))
-                            .children(if staged_files.is_empty() {
-                              vec![div()
-                                .px(px(12.0))
-                                .py(px(8.0))
-                                .text_xs()
-                                .text_color(Colors::text_muted())
-                                .child("No staged changes")]
-                            } else {
-                              vec![]
-                            }),
-                        )
-                        // Unstaged section
-                        .child(
-                          div()
-                            .flex()
-                            .flex_col()
-                            .child(
-                              div()
-                                .px(px(12.0))
-                                .py(px(8.0))
-                                .border_b_1()
-                                .border_color(Colors::border_primary())
-                                .child(
-                                  div()
-                                    .text_xs()
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .text_color(Colors::text_secondary())
-                                    .child(format!("CHANGES ({})", unstaged_files.len())),
-                                ),
-                            )
-                            .children(unstaged_files.iter().map(|file| {
-                              let path = file.path.clone();
-                              div()
-                                .child(Self::render_file_item(
-                                  &file.path,
-                                  file.status.clone(),
-                                  file.staged,
-                                ))
-                                .on_mouse_down(
-                                  gpui::MouseButton::Left,
-                                  cx.listener(move |view, _event, window, cx| {
-                                    view.handle_file_click(path.clone(), window, cx);
-                                  }),
-                                )
-                            }))
-                            .children(if unstaged_files.is_empty() {
-                              vec![div()
-                                .px(px(12.0))
-                                .py(px(8.0))
-                                .text_xs()
-                                .text_color(Colors::text_muted())
-                                .child("No unstaged changes")]
-                            } else {
-                              vec![]
-                            }),
-                        ),
-                    ),
+                  div().w(self.file_list_width).h_full().child(
+                    div()
+                      .flex()
+                      .flex_col()
+                      .size_full()
+                      .bg(Colors::bg_primary())
+                      // Staged section
+                      .child(
+                        div()
+                          .flex()
+                          .flex_col()
+                          .child(
+                            div()
+                              .px(px(12.0))
+                              .py(px(8.0))
+                              .border_b_1()
+                              .border_color(Colors::border_primary())
+                              .child(
+                                div()
+                                  .text_xs()
+                                  .font_weight(gpui::FontWeight::BOLD)
+                                  .text_color(Colors::text_secondary())
+                                  .child(format!("STAGED ({})", staged_files.len())),
+                              ),
+                          )
+                          .children(staged_files.iter().map(|file| {
+                            let path = file.path.clone();
+                            div()
+                              .child(Self::render_file_item(
+                                &file.path,
+                                file.status.clone(),
+                                file.staged,
+                              ))
+                              .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(move |view, _event, window, cx| {
+                                  view.handle_file_click(path.clone(), window, cx);
+                                }),
+                              )
+                          }))
+                          .children(if staged_files.is_empty() {
+                            vec![div()
+                              .px(px(12.0))
+                              .py(px(8.0))
+                              .text_xs()
+                              .text_color(Colors::text_muted())
+                              .child("No staged changes")]
+                          } else {
+                            vec![]
+                          }),
+                      )
+                      // Unstaged section
+                      .child(
+                        div()
+                          .flex()
+                          .flex_col()
+                          .child(
+                            div()
+                              .px(px(12.0))
+                              .py(px(8.0))
+                              .border_b_1()
+                              .border_color(Colors::border_primary())
+                              .child(
+                                div()
+                                  .text_xs()
+                                  .font_weight(gpui::FontWeight::BOLD)
+                                  .text_color(Colors::text_secondary())
+                                  .child(format!("CHANGES ({})", unstaged_files.len())),
+                              ),
+                          )
+                          .children(unstaged_files.iter().map(|file| {
+                            let path = file.path.clone();
+                            div()
+                              .child(Self::render_file_item(
+                                &file.path,
+                                file.status.clone(),
+                                file.staged,
+                              ))
+                              .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(move |view, _event, window, cx| {
+                                  view.handle_file_click(path.clone(), window, cx);
+                                }),
+                              )
+                          }))
+                          .children(if unstaged_files.is_empty() {
+                            vec![div()
+                              .px(px(12.0))
+                              .py(px(8.0))
+                              .text_xs()
+                              .text_color(Colors::text_muted())
+                              .child("No unstaged changes")]
+                          } else {
+                            vec![]
+                          }),
+                      ),
+                  ),
+                )
+                .child(
+                  // Resize handle
+                  self.render_resize_handle(cx),
                 )
                 .child(
                   // Diff view panel
