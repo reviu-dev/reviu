@@ -142,18 +142,26 @@ impl DiffView {
     cx.notify();
   }
 
-  /// Find all ranges of changed lines
+  /// Find all ranges of changed lines (only Addition/Deletion, not Context)
+  /// Merges ranges that would overlap when context is added
   fn find_change_ranges(&self) -> Vec<(usize, usize)> {
-    let mut ranges = Vec::new();
+    let mut raw_ranges = Vec::new();
     let mut start: Option<usize> = None;
 
+    // First pass: find all individual change ranges
     for (idx, change) in self.line_changes.iter().enumerate() {
-      match (change, start) {
-        (Some(_), None) => {
+      // Only count actual changes (additions/deletions), not context lines
+      let is_actual_change = matches!(
+        change,
+        Some(LineOrigin::Addition) | Some(LineOrigin::Deletion)
+      );
+
+      match (is_actual_change, start) {
+        (true, None) => {
           start = Some(idx);
         }
-        (None, Some(s)) => {
-          ranges.push((s, idx - 1));
+        (false, Some(s)) => {
+          raw_ranges.push((s, idx - 1));
           start = None;
         }
         _ => {}
@@ -161,10 +169,34 @@ impl DiffView {
     }
 
     if let Some(s) = start {
-      ranges.push((s, self.all_lines.len().saturating_sub(1)));
+      raw_ranges.push((s, self.all_lines.len().saturating_sub(1)));
     }
 
-    ranges
+    // Second pass: merge ranges that would overlap when context is added
+    let mut merged_ranges: Vec<(usize, usize)> = Vec::new();
+
+    for (change_start, change_end) in raw_ranges {
+      let with_context_start: usize = change_start.saturating_sub(CONTEXT_OFFSET);
+      let with_context_end: usize =
+        (change_end + CONTEXT_OFFSET).min(self.all_lines.len().saturating_sub(1));
+
+      if let Some((_, last_end)) = merged_ranges.last_mut() {
+        let last_with_context_end: usize =
+          ((*last_end) + CONTEXT_OFFSET).min(self.all_lines.len().saturating_sub(1));
+
+        // If ranges overlap or touch when context is added, merge them
+        if with_context_start <= last_with_context_end {
+          // Extend the last range to include this one
+          *last_end = change_end;
+          continue;
+        }
+      }
+
+      // No overlap, add as new range
+      merged_ranges.push((change_start, change_end));
+    }
+
+    merged_ranges
   }
 
   /// Recalculate flattened display lines
@@ -182,7 +214,14 @@ impl DiffView {
       let is_first = i == 0;
       let is_last = i == change_ranges.len() - 1;
 
+      // Calculate context boundaries
       let visible_start = change_start.saturating_sub(CONTEXT_OFFSET);
+
+      // Debug: log the ranges to understand what's happening
+      eprintln!(
+        "Change block {}: change_start={}, change_end={}, visible_start={}",
+        i, change_start, change_end, visible_start
+      );
 
       // Handle gap before this change block
       if is_first {
