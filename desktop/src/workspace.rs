@@ -35,7 +35,7 @@ impl Workspace {
 
     // Initialize storage
     let data_dir = Self::get_data_dir();
-    let storage = Arc::new(Storage::new(&data_dir).expect("Failed to initialize storage"));
+    let storage = Storage::new(&data_dir).expect("Failed to initialize storage");
 
     // Load config from storage or use defaults
     let config = storage.load_config().ok().flatten().unwrap_or_default();
@@ -69,7 +69,7 @@ impl Workspace {
     let mut this = Self {
       weak_self: weak_self.clone(),
       state,
-      storage: storage.clone(),
+      storage: storage.into(),
       focus_handle,
       main_view: None,
     };

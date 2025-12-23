@@ -40,8 +40,8 @@ impl Storage {
           updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
       );
 
-      -- Recent repositories
-      CREATE TABLE IF NOT EXISTS recent_repos (
+      -- Repositories
+      CREATE TABLE IF NOT EXISTS repositories (
           path TEXT PRIMARY KEY,
           last_opened_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
           name TEXT,
@@ -176,13 +176,13 @@ impl Storage {
     }
   }
 
-  // Recent repositories operations
+  // Repository operations
 
   /// Add a repository to recent list
   pub fn add_recent_repo(&self, path: &Path, name: &str) -> Result<()> {
     let path_str = path.to_string_lossy().to_string();
     self.conn.execute(
-      "INSERT OR REPLACE INTO recent_repos (path, name, last_opened_at) VALUES (?1, ?2, strftime('%s', 'now'))",
+      "INSERT OR REPLACE INTO repositories (path, name, last_opened_at) VALUES (?1, ?2, strftime('%s', 'now'))",
       params![path_str, name],
     )?;
     Ok(())
@@ -191,7 +191,7 @@ impl Storage {
   /// Get recent repositories
   pub fn get_recent_repos(&self, limit: i64) -> Result<Vec<(PathBuf, String, i64)>> {
     let mut stmt = self.conn.prepare(
-      "SELECT path, name, last_opened_at FROM recent_repos ORDER BY last_opened_at DESC LIMIT ?1",
+      "SELECT path, name, last_opened_at FROM repositories ORDER BY last_opened_at DESC LIMIT ?1",
     )?;
 
     let repos = stmt
@@ -211,15 +211,9 @@ impl Storage {
   pub fn remove_recent_repo(&self, path: &Path) -> Result<()> {
     let path_str = path.to_string_lossy().to_string();
     self.conn.execute(
-      "DELETE FROM recent_repos WHERE path = ?1",
+      "DELETE FROM repositories WHERE path = ?1",
       params![path_str],
     )?;
-    Ok(())
-  }
-
-  /// Clear all recent repositories
-  pub fn clear_recent_repos(&self) -> Result<()> {
-    self.conn.execute("DELETE FROM recent_repos", [])?;
     Ok(())
   }
 }
