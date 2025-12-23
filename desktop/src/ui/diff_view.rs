@@ -259,9 +259,9 @@ impl DiffView {
     line_origin: Option<LineOrigin>,
   ) -> impl IntoElement {
     let (bg_color, fg_color) = match line_origin {
-      Some(LineOrigin::Addition) => (Colors::diff_addition_bg(), Colors::diff_addition_fg()),
-      Some(LineOrigin::Deletion) => (Colors::diff_deletion_bg(), Colors::diff_deletion_fg()),
-      _ => (Colors::diff_context_bg(), Colors::text_muted()),
+      Some(LineOrigin::Addition) => (Colors::diff_addition_bg(), Colors::text_primary()),
+      Some(LineOrigin::Deletion) => (Colors::diff_deletion_bg(), Colors::text_primary()),
+      _ => (Colors::bg_primary(), Colors::text_primary()),
     };
 
     let old_num = old_lineno.map_or("".to_string(), |n| format!("{}", n));

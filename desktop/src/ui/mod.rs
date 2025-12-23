@@ -12,7 +12,7 @@ pub struct Colors;
 impl Colors {
   // Background colors
   pub fn bg_primary() -> gpui::Hsla {
-    rgb(0x1e1e1e).into()
+    rgb(0x000000).into()
   }
 
   pub fn bg_secondary() -> gpui::Hsla {
@@ -36,25 +36,25 @@ impl Colors {
     rgb(0x666666).into()
   }
 
-  // Diff colors
-  pub fn diff_addition_bg() -> gpui::Hsla {
-    rgb(0x1a3a1a).into()
+  pub fn success() -> gpui::Hsla {
+    rgb(0x00c951).into()
   }
 
-  pub fn diff_addition_fg() -> gpui::Hsla {
-    rgb(0x4ade80).into()
+  pub fn error() -> gpui::Hsla {
+    rgb(0xfb2c36).into()
+  }
+
+  // Diff colors
+  pub fn diff_addition_bg() -> gpui::Hsla {
+    let mut color: gpui::Hsla = Self::success();
+    color.a = 0.20;
+    color
   }
 
   pub fn diff_deletion_bg() -> gpui::Hsla {
-    rgb(0x3a1a1a).into()
-  }
-
-  pub fn diff_deletion_fg() -> gpui::Hsla {
-    rgb(0xf87171).into()
-  }
-
-  pub fn diff_context_bg() -> gpui::Hsla {
-    rgb(0x2a2a2a).into()
+    let mut color: gpui::Hsla = Self::error();
+    color.a = 0.20;
+    color
   }
 
   // Status colors
