@@ -46,11 +46,11 @@ impl SupportedLanguage {
   /// Get the highlight query for this language
   fn highlight_query(&self) -> &'static str {
     match self {
-      Self::Rust => include_str!("../queries/rust_highlights.scm"),
-      Self::TypeScript => include_str!("../queries/typescript_highlights.scm"),
-      Self::JavaScript => include_str!("../queries/typescript_highlights.scm"), // Use TS query for JS
-      Self::Python => include_str!("../queries/python_highlights.scm"),
-      Self::Go => include_str!("../queries/go_highlights.scm"),
+      Self::Rust => include_str!("../tree_sitter_queries/rust_highlights.scm"),
+      Self::TypeScript => include_str!("../tree_sitter_queries/typescript_highlights.scm"),
+      Self::JavaScript => include_str!("../tree_sitter_queries/typescript_highlights.scm"),
+      Self::Python => include_str!("../tree_sitter_queries/python_highlights.scm"),
+      Self::Go => include_str!("../tree_sitter_queries/go_highlights.scm"),
     }
   }
 }
