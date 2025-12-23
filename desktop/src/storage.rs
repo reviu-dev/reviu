@@ -189,7 +189,7 @@ impl Storage {
   }
 
   /// Get recent repositories
-  pub fn get_recent_repos(&self, limit: usize) -> Result<Vec<(PathBuf, String, i64)>> {
+  pub fn get_recent_repos(&self, limit: i64) -> Result<Vec<(PathBuf, String, i64)>> {
     let mut stmt = self.conn.prepare(
       "SELECT path, name, last_opened_at FROM recent_repos ORDER BY last_opened_at DESC LIMIT ?1",
     )?;
