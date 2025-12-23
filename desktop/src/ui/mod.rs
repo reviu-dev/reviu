@@ -66,7 +66,9 @@ impl Colors {
 
   // Border colors
   pub fn border_primary() -> gpui::Hsla {
-    rgb(0x3e3e3e).into()
+    let mut color: gpui::Hsla = white();
+    color.a = 0.30;
+    color
   }
 
   pub fn border_focus() -> gpui::Hsla {
