@@ -177,8 +177,6 @@ impl DiffView {
 
     for (change_start, change_end) in raw_ranges {
       let with_context_start: usize = change_start.saturating_sub(CONTEXT_OFFSET);
-      let with_context_end: usize =
-        (change_end + CONTEXT_OFFSET).min(self.all_lines.len().saturating_sub(1));
 
       if let Some((_, last_end)) = merged_ranges.last_mut() {
         let last_with_context_end: usize =
@@ -293,11 +291,7 @@ impl DiffView {
 
   /// Helper to push a line to display_lines
   fn push_line(&mut self, line_idx: usize) {
-    let content = self
-      .all_lines
-      .get(line_idx)
-      .map(|s| s.clone())
-      .unwrap_or_default();
+    let content = self.all_lines.get(line_idx).cloned().unwrap_or_default();
     let origin = self.line_changes.get(line_idx).copied().flatten();
     let line_num = line_idx + 1;
 
