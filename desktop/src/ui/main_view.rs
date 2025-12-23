@@ -104,7 +104,6 @@ impl MainView {
     div()
       .flex()
       .items_center()
-      .justify_between()
       .h(px(48.0))
       .px(px(16.0))
       .border_b_1()
@@ -124,14 +123,6 @@ impl MainView {
           .children(
             repo_name.map(|name| div().text_sm().text_color(Colors::text_muted()).child(name)),
           ),
-      )
-      .child(
-        div().flex().gap_2().child(
-          div()
-            .text_sm()
-            .text_color(Colors::text_muted())
-            .child("Cmd+O to open repository"),
-        ),
       )
   }
 
