@@ -334,29 +334,24 @@ impl DiffView {
           view.toggle_region(region_id, cx);
         }),
       )
+      .text_xs()
       .child(
         div()
           .flex()
           .items_center()
           .gap_2()
-          .child(div().text_xs().text_color(Colors::text_muted()).child("⋯"))
+          .child(div().text_color(Colors::text_muted()).child("⋯"))
           .child(
             div()
-              .text_xs()
               .text_color(Colors::text_secondary())
               .child(format!("{} hidden lines", hidden_lines)),
           ),
       )
-      .child(
-        div()
-          .text_xs()
-          .text_color(Colors::text_muted())
-          .child(format!(
-            "Lines {}-{}",
-            start_new_lineno,
-            start_new_lineno + hidden_lines as u32 - 1
-          )),
-      )
+      .child(div().text_color(Colors::text_muted()).child(format!(
+        "Lines {}-{}",
+        start_new_lineno,
+        start_new_lineno + hidden_lines as u32 - 1
+      )))
   }
 }
 
