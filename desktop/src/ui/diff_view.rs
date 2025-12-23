@@ -12,37 +12,44 @@ use std::sync::Arc;
 
 use crate::ui::Colors;
 
-const CONTEXT_OFFSET: usize = 3; // Show 3 lines of context before and after changes
-
-/// Represents a display line - either a real line or an expansion button
+/// Represents a display line or expand button
 #[derive(Debug, Clone)]
 enum DisplayLine {
-  /// A real line from the file
+  /// A real line from a hunk
   Line {
     line_idx: usize,
-    line_num: usize,
+    old_lineno: Option<u32>,
+    new_lineno: Option<u32>,
     content: String,
     origin: Option<LineOrigin>,
   },
-  /// An expansion button
+  /// An expand button to show hidden lines between hunks
   ExpandButton {
-    hidden_lines: usize,
     region_id: usize,
-    label: String,
+    hidden_lines: usize,
+    start_old_lineno: u32,
+    start_new_lineno: u32,
   },
 }
 
-/// Custom diff view with perfect context handling and virtualization
+/// Line info stored for rendering
+#[derive(Debug, Clone)]
+struct LineInfo {
+  content: String,
+  origin: LineOrigin,
+  old_lineno: Option<u32>,
+  new_lineno: Option<u32>,
+}
+
+/// Custom diff view with virtualization and expandable gaps
 /// Works with both local git files (V1) and GitHub PR files (V2)
+/// Displays hunks with expand buttons for gaps between them
 pub struct DiffView {
   /// File metadata
   file_diff: Arc<FileDiff>,
-  /// All lines from the new file content
-  all_lines: Vec<String>,
-  /// Line change information (line_num -> LineOrigin)
-  /// Index corresponds to 0-based line index
-  line_changes: Vec<Option<LineOrigin>>,
-  /// Expanded context regions
+  /// All lines from hunks (includes context, additions, deletions)
+  all_lines: Vec<LineInfo>,
+  /// Expanded regions (gap IDs that are currently expanded)
   expanded_regions: Vec<usize>,
   /// Scroll handle for virtualization
   scroll_handle: UniformListScrollHandle,
@@ -52,71 +59,30 @@ pub struct DiffView {
 
 impl DiffView {
   pub fn new(file_diff: Arc<FileDiff>, _window: &mut Window, _cx: &mut Context<Self>) -> Self {
-    // Load content - works for both V1 (local) and V2 (GitHub)
-    let content = file_diff.new_content.as_deref().unwrap_or("");
-    let all_lines: Vec<String> = if content.is_empty() {
-      Vec::new()
-    } else {
-      content.lines().map(|s| s.to_string()).collect()
-    };
-
-    // Handle empty files (new files might have content but old files don't)
-    if all_lines.is_empty() && file_diff.status.as_str() == "Added" {
-      return Self::from_hunks_only(file_diff);
-    }
-
-    // Build line change map from hunks
-    let mut line_changes = vec![None; all_lines.len()];
+    // Build display lines directly from hunks to include deletions
+    // This preserves the original line order: context, deletions, additions
+    let mut all_lines = Vec::new();
 
     for hunk in &file_diff.hunks {
       for line in &hunk.lines {
-        if let Some(new_lineno) = line.new_lineno {
-          let idx = (new_lineno as usize).saturating_sub(1);
-          if idx < line_changes.len() {
-            line_changes[idx] = Some(line.origin);
-          }
-        }
+        all_lines.push(LineInfo {
+          content: line.content.clone(),
+          origin: line.origin,
+          old_lineno: line.old_lineno,
+          new_lineno: line.new_lineno,
+        });
       }
     }
 
     let mut view = Self {
       file_diff,
       all_lines,
-      line_changes,
       expanded_regions: Vec::new(),
       scroll_handle: UniformListScrollHandle::new(),
       display_lines: Vec::new(),
     };
 
     // Calculate initial display lines
-    view.recalculate_display_lines();
-    view
-  }
-
-  /// Fallback constructor when only hunks are available (for new files)
-  fn from_hunks_only(file_diff: Arc<FileDiff>) -> Self {
-    let mut all_lines = Vec::new();
-    let mut line_changes = Vec::new();
-
-    // Extract lines from hunks (additions only for new files)
-    for hunk in &file_diff.hunks {
-      for line in &hunk.lines {
-        if matches!(line.origin, LineOrigin::Addition) {
-          all_lines.push(line.content.clone());
-          line_changes.push(Some(LineOrigin::Addition));
-        }
-      }
-    }
-
-    let mut view = Self {
-      file_diff,
-      all_lines,
-      line_changes,
-      expanded_regions: Vec::new(),
-      scroll_handle: UniformListScrollHandle::new(),
-      display_lines: Vec::new(),
-    };
-
     view.recalculate_display_lines();
     view
   }
@@ -142,147 +108,100 @@ impl DiffView {
     cx.notify();
   }
 
-  /// Find all ranges of changed lines (only Addition/Deletion, not Context)
-  /// Merges ranges that would overlap when context is added
-  fn find_change_ranges(&self) -> Vec<(usize, usize)> {
-    let mut raw_ranges = Vec::new();
-    let mut start: Option<usize> = None;
-
-    // First pass: find all individual change ranges
-    for (idx, change) in self.line_changes.iter().enumerate() {
-      // Only count actual changes (additions/deletions), not context lines
-      let is_actual_change = matches!(
-        change,
-        Some(LineOrigin::Addition) | Some(LineOrigin::Deletion)
-      );
-
-      match (is_actual_change, start) {
-        (true, None) => {
-          start = Some(idx);
-        }
-        (false, Some(s)) => {
-          raw_ranges.push((s, idx - 1));
-          start = None;
-        }
-        _ => {}
-      }
-    }
-
-    if let Some(s) = start {
-      raw_ranges.push((s, self.all_lines.len().saturating_sub(1)));
-    }
-
-    // Second pass: merge ranges that would overlap when context is added
-    let mut merged_ranges: Vec<(usize, usize)> = Vec::new();
-
-    for (change_start, change_end) in raw_ranges {
-      let with_context_start: usize = change_start.saturating_sub(CONTEXT_OFFSET);
-
-      if let Some((_, last_end)) = merged_ranges.last_mut() {
-        let last_with_context_end: usize =
-          ((*last_end) + CONTEXT_OFFSET).min(self.all_lines.len().saturating_sub(1));
-
-        // If ranges overlap or touch when context is added, merge them
-        if with_context_start <= last_with_context_end {
-          // Extend the last range to include this one
-          *last_end = change_end;
-          continue;
-        }
-      }
-
-      // No overlap, add as new range
-      merged_ranges.push((change_start, change_end));
-    }
-
-    merged_ranges
-  }
-
-  /// Recalculate flattened display lines
+  /// Recalculate display lines by showing hunks and gaps between them
   fn recalculate_display_lines(&mut self) {
     self.display_lines.clear();
-    let change_ranges = self.find_change_ranges();
 
-    if change_ranges.is_empty() {
+    if self.file_diff.hunks.is_empty() {
       return;
     }
 
+    // Clone hunks to avoid borrow checker issues
+    let hunks = self.file_diff.hunks.clone();
+    let mut line_offset = 0; // Track position in all_lines
     let mut region_id = 0;
 
-    for (i, (change_start, change_end)) in change_ranges.iter().enumerate() {
-      let is_first = i == 0;
-      let is_last = i == change_ranges.len() - 1;
+    for (hunk_idx, hunk) in hunks.iter().enumerate() {
+      let is_first = hunk_idx == 0;
+      let is_last = hunk_idx == hunks.len() - 1;
 
-      // Calculate context boundaries
-      let visible_start = change_start.saturating_sub(CONTEXT_OFFSET);
-
-      // Debug: log the ranges to understand what's happening
-      eprintln!(
-        "Change block {}: change_start={}, change_end={}, visible_start={}",
-        i, change_start, change_end, visible_start
-      );
-
-      // Handle gap before this change block
-      if is_first {
-        if visible_start > 0 {
-          let expanded = self.is_region_expanded(region_id);
-          if expanded {
-            for line_idx in 0..visible_start {
-              self.push_line(line_idx);
-            }
-          } else {
-            self.display_lines.push(DisplayLine::ExpandButton {
-              hidden_lines: visible_start,
-              region_id,
-              label: "Show more".to_string(),
-            });
-          }
-          region_id += 1;
-        }
-      } else {
-        let (_, prev_end) = change_ranges[i - 1];
-        let prev_visible_end =
-          (prev_end + CONTEXT_OFFSET).min(self.all_lines.len().saturating_sub(1));
-
-        if visible_start > prev_visible_end + 1 {
-          let gap_start = prev_visible_end + 1;
-          let gap_end = visible_start - 1;
-
-          let expanded = self.is_region_expanded(region_id);
-          if expanded {
-            for line_idx in gap_start..=gap_end {
-              self.push_line(line_idx);
-            }
-          } else {
-            self.display_lines.push(DisplayLine::ExpandButton {
-              hidden_lines: gap_end - gap_start + 1,
-              region_id,
-              label: "Show more".to_string(),
-            });
-          }
-          region_id += 1;
-        }
-      }
-
-      // Show the change block with context
-      let visible_end = (change_end + CONTEXT_OFFSET).min(self.all_lines.len().saturating_sub(1));
-      for line_idx in visible_start..=visible_end {
-        self.push_line(line_idx);
-      }
-
-      // Handle after last block
-      if is_last && visible_end < self.all_lines.len().saturating_sub(1) {
-        let expanded = self.is_region_expanded(region_id);
-
-        if expanded {
-          for line_idx in (visible_end + 1)..self.all_lines.len() {
-            self.push_line(line_idx);
-          }
+      // Handle gap before first hunk
+      if is_first && hunk.new_start > 1 {
+        let gap_lines = (hunk.new_start - 1) as usize;
+        if self.is_region_expanded(region_id) {
+          // Load and show lines from new_content
+          self.load_gap_lines(1, hunk.new_start - 1, 1, hunk.old_start - 1);
         } else {
-          let remaining_lines = self.all_lines.len().saturating_sub(1) - visible_end;
           self.display_lines.push(DisplayLine::ExpandButton {
-            hidden_lines: remaining_lines,
             region_id,
-            label: "Show more".to_string(),
+            hidden_lines: gap_lines,
+            start_old_lineno: 1,
+            start_new_lineno: 1,
+          });
+        }
+        region_id += 1;
+      }
+
+      // Show all lines from this hunk
+      for i in 0..hunk.lines.len() {
+        self.push_line(line_offset + i);
+      }
+      line_offset += hunk.lines.len();
+
+      // Handle gap between this hunk and the next
+      if !is_last {
+        let next_hunk = &hunks[hunk_idx + 1];
+        let current_end = hunk.new_start + hunk.new_lines;
+        let next_start = next_hunk.new_start;
+
+        if next_start > current_end {
+          let gap_lines = (next_start - current_end) as usize;
+          if self.is_region_expanded(region_id) {
+            // Load and show lines from new_content
+            let old_start_line = hunk.old_start + hunk.old_lines;
+            let old_end_line = next_hunk.old_start - 1;
+            self.load_gap_lines(current_end, next_start - 1, old_start_line, old_end_line);
+          } else {
+            self.display_lines.push(DisplayLine::ExpandButton {
+              region_id,
+              hidden_lines: gap_lines,
+              start_old_lineno: hunk.old_start + hunk.old_lines,
+              start_new_lineno: current_end,
+            });
+          }
+          region_id += 1;
+        }
+      }
+    }
+  }
+
+  /// Load and display lines from a gap between hunks (unchanged lines)
+  fn load_gap_lines(
+    &mut self,
+    new_start_line: u32,
+    new_end_line: u32,
+    old_start_line: u32,
+    old_end_line: u32,
+  ) {
+    // Get lines from new_content
+    if let Some(new_content) = &self.file_diff.new_content {
+      let all_lines: Vec<&str> = new_content.lines().collect();
+
+      // Convert to 0-based indices
+      let start_idx = (new_start_line - 1) as usize;
+      let end_idx = new_end_line as usize;
+
+      for (i, line_idx) in (start_idx..end_idx).enumerate() {
+        if let Some(line_content) = all_lines.get(line_idx) {
+          let new_lineno = new_start_line + i as u32;
+          let old_lineno = old_start_line + i as u32;
+
+          self.display_lines.push(DisplayLine::Line {
+            line_idx: 0, // Not from all_lines array
+            old_lineno: Some(old_lineno),
+            new_lineno: Some(new_lineno),
+            content: line_content.to_string(),
+            origin: Some(LineOrigin::Context),
           });
         }
       }
@@ -291,35 +210,42 @@ impl DiffView {
 
   /// Helper to push a line to display_lines
   fn push_line(&mut self, line_idx: usize) {
-    let content = self.all_lines.get(line_idx).cloned().unwrap_or_default();
-    let origin = self.line_changes.get(line_idx).copied().flatten();
-    let line_num = line_idx + 1;
-
-    self.display_lines.push(DisplayLine::Line {
-      line_idx,
-      line_num,
-      content,
-      origin,
-    });
+    if let Some(line_info) = self.all_lines.get(line_idx) {
+      self.display_lines.push(DisplayLine::Line {
+        line_idx,
+        old_lineno: line_info.old_lineno,
+        new_lineno: line_info.new_lineno,
+        content: line_info.content.clone(),
+        origin: Some(line_info.origin),
+      });
+    }
   }
 
   /// Render a single display line
   fn render_display_line(&self, display_line: &DisplayLine, cx: &mut Context<Self>) -> AnyElement {
     match display_line {
       DisplayLine::Line {
-        line_num,
+        old_lineno,
+        new_lineno,
         content,
         origin,
         ..
       } => self
-        .render_line(*line_num, content, *origin)
+        .render_line(*old_lineno, *new_lineno, content, *origin)
         .into_any_element(),
       DisplayLine::ExpandButton {
-        hidden_lines,
         region_id,
-        label,
+        hidden_lines,
+        start_old_lineno,
+        start_new_lineno,
       } => self
-        .render_expand_button(*region_id, *hidden_lines, label, cx)
+        .render_expand_button(
+          *region_id,
+          *hidden_lines,
+          *start_old_lineno,
+          *start_new_lineno,
+          cx,
+        )
         .into_any_element(),
     }
   }
@@ -327,7 +253,8 @@ impl DiffView {
   /// Render a single line
   fn render_line(
     &self,
-    line_num: usize,
+    old_lineno: Option<u32>,
+    new_lineno: Option<u32>,
     line_content: &str,
     line_origin: Option<LineOrigin>,
   ) -> impl IntoElement {
@@ -337,53 +264,72 @@ impl DiffView {
       _ => (Colors::diff_context_bg(), Colors::text_muted()),
     };
 
-    let line_numbers = match line_origin {
-      Some(LineOrigin::Deletion) => format!("{:>4}    ", line_num),
-      _ => format!("{:>4} {:>4}", line_num, line_num),
-    };
+    let old_num = old_lineno.map_or("".to_string(), |n| format!("{}", n));
+    let new_num = new_lineno.map_or("".to_string(), |n| format!("{}", n));
 
     div()
       .flex()
-      .items_start()
-      .w_full()
+      .items_center()
+      .border_1()
+      .border_color(Colors::border_primary())
+      // .w_full()
       .bg(bg_color)
+      .h(px(24.0))
+      .text_xs()
+      .font_family("monospace")
       .child(
         div()
-          .w(px(80.0))
-          .px(px(8.0))
-          .py(px(2.0))
-          .text_xs()
-          .font_family("monospace")
+          .flex()
+          .items_center()
           .text_color(Colors::text_muted())
-          .child(line_numbers),
+          .border_r_1()
+          .border_color(Colors::border_primary())
+          .child(
+            div()
+              .flex()
+              .items_center()
+              .justify_center()
+              .border_r_1()
+              .border_color(Colors::border_primary())
+              .w(px(40.0))
+              .child(old_num),
+          )
+          .child(
+            div()
+              .flex()
+              .items_center()
+              .justify_center()
+              .w(px(40.0))
+              .child(new_num),
+          ),
       )
       .child(
         div()
-          .flex_1()
+          .flex()
+          .items_center()
           .px(px(8.0))
-          .py(px(2.0))
-          .text_xs()
-          .font_family("monospace")
           .text_color(fg_color)
           .child(line_content.to_string()),
       )
   }
 
-  /// Render an expand button
+  /// Render an expand button for gap between hunks
   fn render_expand_button(
     &self,
     region_id: usize,
     hidden_lines: usize,
-    label: &str,
+    start_old_lineno: u32,
+    start_new_lineno: u32,
     cx: &mut Context<Self>,
   ) -> impl IntoElement {
     div()
-      .id(format!("expand-{}", region_id))
+      .id(format!("expand-gap-{}", region_id))
       .flex()
       .items_center()
-      .justify_center()
+      .justify_between()
       .w_full()
-      .h(px(28.0))
+      .h(px(32.0))
+      .px(px(16.0))
       .bg(Colors::bg_secondary())
       .border_y_1()
       .border_color(Colors::border_primary())
@@ -405,8 +351,18 @@ impl DiffView {
             div()
               .text_xs()
               .text_color(Colors::text_secondary())
-              .child(format!("{} ({} lines)", label, hidden_lines)),
+              .child(format!("{} hidden lines", hidden_lines)),
           ),
+      )
+      .child(
+        div()
+          .text_xs()
+          .text_color(Colors::text_muted())
+          .child(format!(
+            "Lines {}-{}",
+            start_new_lineno,
+            start_new_lineno + hidden_lines as u32 - 1
+          )),
       )
   }
 }
