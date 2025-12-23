@@ -2,6 +2,7 @@ mod error;
 mod git;
 mod state;
 mod storage;
+mod syntax_highlighter;
 mod ui;
 mod workspace;
 

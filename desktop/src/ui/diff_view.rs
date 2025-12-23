@@ -4,9 +4,10 @@
 //! Supports both local git (V1) and GitHub PR diffs (V2)
 
 use crate::state::{FileDiff, LineOrigin};
+use crate::syntax_highlighter::{SupportedLanguage, SyntaxHighlighter};
 use gpui::{
   div, prelude::*, px, relative, uniform_list, AnyElement, Context, IntoElement, ParentElement,
-  Render, Styled, UniformListScrollHandle, Window,
+  Render, Styled, StyledText, UniformListScrollHandle, Window,
 };
 use std::sync::Arc;
 
@@ -55,6 +56,8 @@ pub struct DiffView {
   scroll_handle: UniformListScrollHandle,
   /// Flattened display lines (cached for rendering)
   display_lines: Vec<DisplayLine>,
+  /// Syntax highlighter for this file (if language is supported)
+  syntax_highlighter: Option<SyntaxHighlighter>,
 }
 
 impl DiffView {
@@ -74,12 +77,17 @@ impl DiffView {
       }
     }
 
+    // Try to create syntax highlighter based on file extension
+    let syntax_highlighter = SupportedLanguage::from_path(&file_diff.path)
+      .and_then(|lang| SyntaxHighlighter::new(lang).ok());
+
     let mut view = Self {
       file_diff,
       all_lines,
       expanded_regions: Vec::new(),
       scroll_handle: UniformListScrollHandle::new(),
       display_lines: Vec::new(),
+      syntax_highlighter,
     };
 
     // Calculate initial display lines
@@ -222,7 +230,11 @@ impl DiffView {
   }
 
   /// Render a single display line
-  fn render_display_line(&self, display_line: &DisplayLine, cx: &mut Context<Self>) -> AnyElement {
+  fn render_display_line(
+    &mut self,
+    display_line: &DisplayLine,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
     match display_line {
       DisplayLine::Line {
         old_lineno,
@@ -252,7 +264,7 @@ impl DiffView {
 
   /// Render a single line
   fn render_line(
-    &self,
+    &mut self,
     old_lineno: Option<u32>,
     new_lineno: Option<u32>,
     line_content: &str,
@@ -266,6 +278,31 @@ impl DiffView {
 
     let old_num = old_lineno.map_or("".to_string(), |n| format!("{}", n));
     let new_num = new_lineno.map_or("".to_string(), |n| format!("{}", n));
+
+    // Helper to render plain text without highlighting
+    let plain_text = || {
+      div()
+        .text_color(fg_color)
+        .child(line_content.to_string())
+        .into_any_element()
+    };
+
+    // Try to highlight the line with syntax highlighting
+    let content_element = if let Some(highlighter) = &mut self.syntax_highlighter {
+      let runs = highlighter.highlight_line(line_content, fg_color);
+      if runs.len() > 1 || (runs.len() == 1 && runs[0].color != fg_color) {
+        // We have syntax highlighting
+        StyledText::new(line_content.to_string())
+          .with_runs(runs)
+          .into_any_element()
+      } else {
+        // Fallback to plain text
+        plain_text()
+      }
+    } else {
+      // No highlighter, use plain text
+      plain_text()
+    };
 
     div()
       .flex()
@@ -300,9 +337,8 @@ impl DiffView {
       .child(
         div()
           .px(px(8.0))
-          .text_color(fg_color)
           .line_height(relative(0.0))
-          .child(line_content.to_string()),
+          .child(content_element),
       )
   }
 

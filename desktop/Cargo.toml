@@ -44,6 +44,15 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 # System directories
 dirs = "5.0"
 
+# Syntax highlighting with tree-sitter
+tree-sitter = "0.26.3"
+tree-sitter-rust = "0.24.0"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-python = "0.25.0"
+tree-sitter-go = "0.25.0"
+tree-sitter-javascript = "0.25.0"
+streaming-iterator = "0.1"
+
 [dev-dependencies]
 # Testing utilities
 tempfile = "3.8"
