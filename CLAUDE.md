@@ -14,6 +14,8 @@ Don't create fix summaries md files.
 
 YOU MUST use zed as a reference for building the desktop application, Zed project is cloned at: `./zed`
 
+Vue Zed extension project is cloned at: `./vue-zed-extension`
+
 gpui documentaion is located at: `./zed/crates/gpui/README.md`
 
 ## Desktop Application
