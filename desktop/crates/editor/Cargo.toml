@@ -1,0 +1,17 @@
+[package]
+name = "editor"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+buffer = { workspace = true }
+syntax = { workspace = true }
+gpui = { workspace = true }
+unicode-segmentation = { workspace = true }
+parking_lot = { workspace = true }
+smol = { workspace = true }
+ropey = { workspace = true }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
