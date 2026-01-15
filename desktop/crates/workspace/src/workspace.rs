@@ -7,11 +7,15 @@ use std::{
 use editor::Editor;
 use git::{FileStatusKind, open_repository};
 use gpui::{
-  App, ClickEvent, Context, Div, Entity, Focusable, InteractiveElement, PathPromptOptions, Render,
-  Rgba, Stateful, Task, Window, actions, div, prelude::*, px, rgb, uniform_list,
+  App, ClickEvent, Context, Div, DragMoveEvent, Entity, Focusable, InteractiveElement,
+  PathPromptOptions, Pixels, Point, Render, Rgba, Stateful, Task, Window, actions, deferred, div,
+  prelude::*, px, rgb, uniform_list,
 };
 
-const SIDEBAR_WIDTH: f32 = 260.0;
+const SIDEBAR_DEFAULT_WIDTH: Pixels = px(260.0);
+const SIDEBAR_MIN_WIDTH: Pixels = px(200.0);
+const SIDEBAR_MAX_WIDTH: Pixels = px(600.0);
+const SIDEBAR_RESIZE_HANDLE_WIDTH: Pixels = px(6.0);
 const HEADER_HEIGHT: f32 = 36.0;
 const FILE_POLL_INTERVAL_MS: u64 = 500;
 
@@ -36,6 +40,17 @@ pub struct WorkspaceView {
   error: Option<String>,
   current_dirty: bool,
   poll_task: Option<Task<()>>,
+  sidebar_width: Pixels,
+  previous_sidebar_drag_position: Option<Point<Pixels>>,
+}
+
+#[derive(Clone)]
+struct DraggedSidebar;
+
+impl Render for DraggedSidebar {
+  fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    gpui::Empty
+  }
 }
 
 impl WorkspaceView {
@@ -48,9 +63,19 @@ impl WorkspaceView {
       error: None,
       current_dirty: false,
       poll_task: None,
+      sidebar_width: SIDEBAR_DEFAULT_WIDTH,
+      previous_sidebar_drag_position: None,
     };
     view.start_file_polling(cx);
     view
+  }
+
+  fn resize_sidebar(&mut self, width: Pixels, cx: &mut Context<Self>) {
+    let width = width.max(SIDEBAR_MIN_WIDTH).min(SIDEBAR_MAX_WIDTH).round();
+    if self.sidebar_width != width {
+      self.sidebar_width = width;
+      cx.notify();
+    }
   }
 
   fn open_repository_clicked(
@@ -372,11 +397,28 @@ impl WorkspaceView {
         .child("No changes found.");
     }
 
+    let resize_handle = deferred(
+      div()
+        .id("sidebar-resize-handle")
+        .on_drag(DraggedSidebar, |drag, _, _, cx| {
+          cx.stop_propagation();
+          cx.new(|_| drag.clone())
+        })
+        .absolute()
+        .right(-SIDEBAR_RESIZE_HANDLE_WIDTH / 2.0)
+        .top(px(0.0))
+        .h_full()
+        .w(SIDEBAR_RESIZE_HANDLE_WIDTH)
+        .cursor_col_resize()
+        .occlude(),
+    );
+
     div()
-      .w(px(SIDEBAR_WIDTH))
+      .w(self.sidebar_width)
       .flex()
       .flex_col()
       .h_full()
+      .relative()
       .bg(rgb(0x181818))
       .border_r_1()
       .border_color(rgb(0x2a2a2a))
@@ -396,6 +438,7 @@ impl WorkspaceView {
           )),
       )
       .child(sidebar_body)
+      .child(resize_handle)
   }
 
   fn render_editor_header(&mut self, cx: &mut Context<Self>) -> Div {
@@ -469,7 +512,14 @@ impl WorkspaceView {
         },
       )
       .child(div().flex_none().text_sm().text_color(tag_color).child(tag))
-      .child(entry.display_name.clone())
+      .child(
+        div()
+          .flex_1()
+          .overflow_hidden()
+          .whitespace_nowrap()
+          .text_ellipsis_start()
+          .child(entry.display_name.clone()),
+      )
       .when(is_dirty, |this| {
         this.child(
           div()
@@ -530,6 +580,13 @@ impl Render for WorkspaceView {
       .key_context("Workspace")
       .on_action(cx.listener(Self::open_repository_action))
       .on_action(cx.listener(Self::save_file_action))
+      .on_drag_move(cx.listener(|workspace, e: &DragMoveEvent<DraggedSidebar>, _, cx| {
+        if workspace.previous_sidebar_drag_position != Some(e.event.position) {
+          workspace.previous_sidebar_drag_position = Some(e.event.position);
+          let new_width = e.event.position.x - e.bounds.left();
+          workspace.resize_sidebar(new_width, cx);
+        }
+      }))
   }
 }
 
