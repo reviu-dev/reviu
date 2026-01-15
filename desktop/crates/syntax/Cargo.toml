@@ -1,0 +1,12 @@
+[package]
+name = "syntax"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui.workspace = true
+tree-sitter-highlight.workspace = true
+tree-sitter-rust.workspace = true
+tree-sitter-typescript.workspace = true
+once_cell.workspace = true
