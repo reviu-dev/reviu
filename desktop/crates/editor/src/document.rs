@@ -167,6 +167,31 @@ impl Document {
     doc
   }
 
+  pub fn replace_all_text(&mut self, text: &str, cx: &mut Context<Self>) {
+    self.buffer = TextBuffer::from_text(text);
+
+    self.highlights.write().clear();
+    self.dirty_highlight_lines.write().clear();
+    *self.highlights_epoch.write() += 1;
+    *self.highlights_version.write() += 1;
+    self.viewport_highlight_generation.fetch_add(1, Ordering::Relaxed);
+
+    *self.diff_state.write() = None;
+    self.dirty_diff_lines.write().clear();
+    *self.diff_epoch.write() += 1;
+    *self.diff_version.write() += 1;
+    self.viewport_diff_generation.fetch_add(1, Ordering::Relaxed);
+
+    if self.highlighter.is_some() {
+      self.schedule_recompute_highlights(cx);
+    }
+    if self.diff_base_lines.is_some() {
+      self.schedule_recompute_diff(cx);
+    }
+
+    cx.notify();
+  }
+
   pub fn chars(&self) -> Box<dyn Iterator<Item = char> + '_> {
     if self.diff_base_lines.is_none() {
       Box::new(self.buffer.chars())
