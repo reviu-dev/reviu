@@ -1,6 +1,7 @@
 use editor::*;
 use gpui::{
-  App, Application, Bounds, KeyBinding, WindowBounds, WindowOptions, prelude::*, px, size,
+  App, Application, Bounds, Focusable, KeyBinding, WindowBounds, WindowOptions, prelude::*, px,
+  size,
 };
 use workspace::{OpenRepository, SaveFile, WorkspaceView};
 
@@ -66,8 +67,9 @@ fn main() {
       .unwrap();
 
     window
-      .update(cx, |_view, _window, cx| {
+      .update(cx, |view, window, cx| {
         cx.activate(true);
+        window.focus(&view.focus_handle(cx), cx);
       })
       .unwrap();
 
