@@ -2,7 +2,7 @@ use editor::*;
 use gpui::{
   App, Application, Bounds, KeyBinding, WindowBounds, WindowOptions, prelude::*, px, size,
 };
-use workspace::{OpenRepository, WorkspaceView};
+use workspace::{OpenRepository, SaveFile, WorkspaceView};
 
 const INITIAL_WINDOW_WIDTH: f32 = 1200.0;
 const INITIAL_WINDOW_HEIGHT: f32 = 800.0;
@@ -49,19 +49,27 @@ fn main() {
       KeyBinding::new("cmd-x", Cut, None),
       KeyBinding::new("cmd-z", Undo, None),
       KeyBinding::new("cmd-shift-z", Redo, None),
+      KeyBinding::new("cmd-s", SaveFile, None),
       KeyBinding::new("home", Home, None),
       KeyBinding::new("end", End, None),
       KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, None),
     ]);
 
-    cx.open_window(
-      WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        ..Default::default()
-      },
-      |_, cx| cx.new(WorkspaceView::new),
-    )
-    .unwrap();
+    let window = cx
+      .open_window(
+        WindowOptions {
+          window_bounds: Some(WindowBounds::Windowed(bounds)),
+          ..Default::default()
+        },
+        |_, cx| cx.new(WorkspaceView::new),
+      )
+      .unwrap();
+
+    window
+      .update(cx, |_view, _window, cx| {
+        cx.activate(true);
+      })
+      .unwrap();
 
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);

@@ -1,16 +1,21 @@
-use std::path::{Path, PathBuf};
+use std::{
+  fs,
+  path::{Path, PathBuf},
+  time::{Duration, SystemTime},
+};
 
 use editor::Editor;
 use git::{FileStatusKind, open_repository};
 use gpui::{
   App, ClickEvent, Context, Div, Entity, Focusable, InteractiveElement, PathPromptOptions, Render,
-  Rgba, Stateful, Window, actions, div, prelude::*, px, rgb, uniform_list,
+  Rgba, Stateful, Task, Window, actions, div, prelude::*, px, rgb, uniform_list,
 };
 
 const SIDEBAR_WIDTH: f32 = 260.0;
 const HEADER_HEIGHT: f32 = 36.0;
+const FILE_POLL_INTERVAL_MS: u64 = 500;
 
-actions!(workspace, [OpenRepository]);
+actions!(workspace, [OpenRepository, SaveFile]);
 
 #[derive(Clone)]
 struct FileEntry {
@@ -19,6 +24,8 @@ struct FileEntry {
   status: FileStatusKind,
   base_content: Option<String>,
   current_content: Option<String>,
+  saved_content: Option<String>,
+  last_modified: Option<SystemTime>,
 }
 
 pub struct WorkspaceView {
@@ -27,17 +34,23 @@ pub struct WorkspaceView {
   selected_file: Option<usize>,
   editor: Option<Entity<Editor>>,
   error: Option<String>,
+  current_dirty: bool,
+  poll_task: Option<Task<()>>,
 }
 
 impl WorkspaceView {
-  pub fn new(_cx: &mut Context<Self>) -> Self {
-    Self {
+  pub fn new(cx: &mut Context<Self>) -> Self {
+    let mut view = Self {
       root_path: None,
       files: Vec::new(),
       selected_file: None,
       editor: None,
       error: None,
-    }
+      current_dirty: false,
+      poll_task: None,
+    };
+    view.start_file_polling(cx);
+    view
   }
 
   fn open_repository_clicked(
@@ -92,6 +105,113 @@ impl WorkspaceView {
     .detach();
   }
 
+  fn start_file_polling(&mut self, cx: &mut Context<Self>) {
+    if self.poll_task.is_some() {
+      return;
+    }
+
+    let task = cx.spawn(async move |this, cx| {
+      loop {
+        cx
+          .background_executor()
+          .timer(Duration::from_millis(FILE_POLL_INTERVAL_MS))
+          .await;
+        let _ = this.update(cx, |view, cx| view.poll_current_file(cx));
+      }
+    });
+
+    self.poll_task = Some(task);
+  }
+
+  fn poll_current_file(&mut self, cx: &mut Context<Self>) {
+    let Some(selected_file) = self.selected_file else {
+      if self.current_dirty {
+        self.current_dirty = false;
+        cx.notify();
+      }
+      return;
+    };
+    let Some(editor) = self.editor.as_ref() else {
+      if self.current_dirty {
+        self.current_dirty = false;
+        cx.notify();
+      }
+      return;
+    };
+    let Some(entry) = self.files.get_mut(selected_file) else {
+      return;
+    };
+
+    let current_text = editor_buffer_text(editor, cx);
+    let saved_text = entry.saved_content.as_deref().unwrap_or("");
+    let is_dirty = current_text != saved_text;
+    let mut needs_notify = false;
+
+    if self.current_dirty != is_dirty {
+      self.current_dirty = is_dirty;
+      needs_notify = true;
+    }
+
+    if let Some(modified_time) = read_modified_time(&entry.path) {
+      if entry.last_modified != Some(modified_time) && !is_dirty {
+        if let Some(disk_text) = read_disk_text(&entry.path) {
+          reload_editor_content(editor, &disk_text, cx);
+          entry.current_content = Some(disk_text.clone());
+          entry.saved_content = Some(disk_text);
+          entry.last_modified = Some(modified_time);
+          if self.current_dirty {
+            self.current_dirty = false;
+          }
+          needs_notify = true;
+        } else {
+          entry.last_modified = Some(modified_time);
+        }
+      }
+    }
+
+    if needs_notify {
+      cx.notify();
+    }
+  }
+
+  fn save_file_clicked(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    self.save_current_file(cx);
+  }
+
+  fn save_file_action(&mut self, _: &SaveFile, _window: &mut Window, cx: &mut Context<Self>) {
+    self.save_current_file(cx);
+  }
+
+  fn save_current_file(&mut self, cx: &mut Context<Self>) {
+    let Some(selected_file) = self.selected_file else {
+      return;
+    };
+    let Some(editor) = self.editor.as_ref() else {
+      return;
+    };
+    let Some(entry) = self.files.get_mut(selected_file) else {
+      return;
+    };
+
+    let text = editor_buffer_text(editor, cx);
+    if let Some(parent) = entry.path.parent() {
+      if let Err(err) = fs::create_dir_all(parent) {
+        eprintln!("Failed to create directories for {}: {}", entry.display_name, err);
+        return;
+      }
+    }
+    if let Err(err) = fs::write(&entry.path, &text) {
+      eprintln!("Failed to save {}: {}", entry.display_name, err);
+      return;
+    }
+
+    entry.current_content = Some(text.clone());
+    entry.saved_content = Some(text);
+    entry.last_modified = read_modified_time(&entry.path);
+    self.current_dirty = false;
+    cx.notify();
+  }
+
   fn set_root_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
     match open_repository(&path) {
       Ok(repository) => {
@@ -100,17 +220,26 @@ impl WorkspaceView {
         self.files = repository
           .entries
           .into_iter()
-          .map(|entry| FileEntry {
-            path: repo_root.join(&entry.path),
-            display_name: entry.path.to_string_lossy().to_string(),
-            status: entry.status,
-            base_content: entry.base_content,
-            current_content: entry.current_content,
+          .map(|entry| {
+            let path = repo_root.join(&entry.path);
+            let current_content = entry.current_content;
+            let saved_content = current_content.clone();
+            let last_modified = read_modified_time(&path);
+            FileEntry {
+              path,
+              display_name: entry.path.to_string_lossy().to_string(),
+              status: entry.status,
+              base_content: entry.base_content,
+              current_content,
+              saved_content,
+              last_modified,
+            }
           })
           .collect();
         self.selected_file = None;
         self.editor = None;
         self.error = None;
+        self.current_dirty = false;
       }
       Err(err) => {
         self.root_path = Some(path);
@@ -118,35 +247,53 @@ impl WorkspaceView {
         self.selected_file = None;
         self.editor = None;
         self.error = Some(format!("Not a git repository: {err}"));
+        self.current_dirty = false;
       }
     }
     cx.notify();
   }
 
   fn select_file(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(entry) = self.files.get(index) else {
+    let Some((content, base_content, file_path)) = self.files.get(index).map(|entry| {
+      (
+        entry.current_content.clone(),
+        entry.base_content.clone(),
+        entry.path.clone(),
+      )
+    }) else {
       return;
     };
 
-    let Some(content) = entry.current_content.clone() else {
+    let Some(content) = content else {
       self.editor = None;
       self.selected_file = Some(index);
       self.error = Some(format!(
         "File content unavailable: {}",
-        entry.display_name
+        self
+          .files
+          .get(index)
+          .map(|entry| entry.display_name.clone())
+          .unwrap_or_else(|| "Unknown file".to_string())
       ));
       cx.notify();
       return;
     };
 
-    let base_content = entry.base_content.clone();
-    let file_ext = entry.path.extension().and_then(|ext| ext.to_str());
+    let file_ext = file_path.extension().and_then(|ext| ext.to_str());
     let editor = cx.new(|cx| Editor::new(&content, base_content.as_deref(), file_ext, cx));
     let focus_handle = editor.read(cx).focus_handle(cx);
+
+    if let Some(entry) = self.files.get_mut(index) {
+      if entry.saved_content.is_none() {
+        entry.saved_content = Some(content.clone());
+      }
+      entry.last_modified = read_modified_time(&entry.path);
+    }
 
     self.editor = Some(editor);
     self.selected_file = Some(index);
     self.error = None;
+    self.current_dirty = false;
 
     window.focus(&focus_handle, cx);
     cx.notify();
@@ -166,6 +313,7 @@ impl WorkspaceView {
     div()
       .key_context("Workspace")
       .on_action(cx.listener(Self::open_repository_action))
+      .on_action(cx.listener(Self::save_file_action))
       .size_full()
       .bg(rgb(0x141414))
       .text_color(color)
@@ -250,6 +398,43 @@ impl WorkspaceView {
       .child(sidebar_body)
   }
 
+  fn render_editor_header(&mut self, cx: &mut Context<Self>) -> Div {
+    let title = self
+      .selected_file
+      .and_then(|idx| self.files.get(idx).map(|entry| entry.display_name.clone()))
+      .unwrap_or_else(|| "File".to_string());
+
+    let mut header = div()
+      .h(px(HEADER_HEIGHT))
+      .px_3()
+      .flex()
+      .items_center()
+      .justify_between()
+      .bg(rgb(0x1d1d1d))
+      .child(div().text_sm().text_color(rgb(0xe0e0e0)).child(title));
+
+    if self.current_dirty {
+      header = header.child(
+        div()
+          .id("save-file")
+          .px_3()
+          .py_1()
+          .bg(rgb(0x2a2a2a))
+          .text_color(rgb(0xffffff))
+          .text_sm()
+          .border_1()
+          .border_color(rgb(0x3a3a3a))
+          .rounded_sm()
+          .cursor_pointer()
+          .hover(|style| style.opacity(0.9))
+          .child("Save")
+          .on_click(cx.listener(Self::save_file_clicked)),
+      );
+    }
+
+    header
+  }
+
   fn render_display_line(
     &self,
     idx: usize,
@@ -257,6 +442,7 @@ impl WorkspaceView {
     cx: &mut Context<Self>,
   ) -> Stateful<Div> {
     let is_selected = self.selected_file == Some(idx);
+    let is_dirty = is_selected && self.current_dirty;
     let (tag, tag_color) = status_tag(entry.status);
 
     div()
@@ -284,6 +470,15 @@ impl WorkspaceView {
       )
       .child(div().flex_none().text_sm().text_color(tag_color).child(tag))
       .child(entry.display_name.clone())
+      .when(is_dirty, |this| {
+        this.child(
+          div()
+            .flex_none()
+            .text_sm()
+            .text_color(rgb(0xe0b84a))
+            .child("*"),
+        )
+      })
   }
 }
 
@@ -300,8 +495,11 @@ impl Render for WorkspaceView {
       .size_full()
       .bg(rgb(0x1b1b1b));
 
-    if let Some(editor) = &self.editor {
-      main = main.child(editor.clone());
+    if let Some(editor) = self.editor.clone() {
+      let header = self.render_editor_header(cx);
+      main = main
+        .child(header)
+        .child(div().flex_1().child(editor));
     } else {
       let (message, color) = if let Some(error) = &self.error {
         (error.clone(), rgb(0xcc6666))
@@ -331,7 +529,29 @@ impl Render for WorkspaceView {
       .child(main)
       .key_context("Workspace")
       .on_action(cx.listener(Self::open_repository_action))
+      .on_action(cx.listener(Self::save_file_action))
   }
+}
+
+fn editor_buffer_text(editor: &Entity<Editor>, cx: &App) -> String {
+  let document = editor.read(cx).document().read(cx);
+  let len = document.buffer.len();
+  document.buffer.slice_to_string(0..len)
+}
+
+fn read_modified_time(path: &Path) -> Option<SystemTime> {
+  fs::metadata(path).ok().and_then(|metadata| metadata.modified().ok())
+}
+
+fn read_disk_text(path: &Path) -> Option<String> {
+  let bytes = fs::read(path).ok()?;
+  Some(String::from_utf8_lossy(&bytes).to_string())
+}
+
+fn reload_editor_content(editor: &Entity<Editor>, text: &str, cx: &mut App) {
+  editor.update(cx, |editor, cx| {
+    editor.reload_from_disk(text, cx);
+  });
 }
 
 fn root_label(path: &Path) -> String {

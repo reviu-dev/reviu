@@ -144,6 +144,22 @@ impl Editor {
     &self.document
   }
 
+  pub fn reload_from_disk(&mut self, text: &str, cx: &mut Context<Self>) {
+    let cursor_offset = self.cursor_offset();
+    self.document.update(cx, |doc, cx| {
+      doc.replace_all_text(text, cx);
+    });
+    self.line_layouts.clear();
+    self.undo_stack.clear();
+    self.redo_stack.clear();
+    self.marked_range = None;
+    self.selection_reversed = false;
+    self.target_column = None;
+    let new_len = self.document.read(cx).buffer.len();
+    let new_offset = cursor_offset.min(new_len);
+    self.move_to(new_offset, cx);
+  }
+
   /// Invalidate a single line in the cache
   pub(crate) fn invalidate_line(&mut self, line: usize) {
     self.line_layouts.remove(&line);
