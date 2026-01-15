@@ -415,6 +415,7 @@ impl WorkspaceView {
 
     div()
       .w(self.sidebar_width)
+      .flex_none()
       .flex()
       .flex_col()
       .h_full()
@@ -542,6 +543,7 @@ impl Render for WorkspaceView {
       .flex_1()
       .flex()
       .flex_col()
+      .min_w(px(0.0))
       .size_full()
       .bg(rgb(0x1b1b1b));
 
@@ -549,7 +551,7 @@ impl Render for WorkspaceView {
       let header = self.render_editor_header(cx);
       main = main
         .child(header)
-        .child(div().flex_1().child(editor));
+        .child(div().flex_1().min_w(px(0.0)).child(editor));
     } else {
       let (message, color) = if let Some(error) = &self.error {
         (error.clone(), rgb(0xcc6666))
