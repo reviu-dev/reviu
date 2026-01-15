@@ -7,9 +7,9 @@ use std::{
 use editor::Editor;
 use git::{FileStatusKind, open_repository};
 use gpui::{
-  App, ClickEvent, Context, Div, DragMoveEvent, Entity, Focusable, InteractiveElement,
-  PathPromptOptions, Pixels, Point, Render, Rgba, Stateful, Task, Window, actions, deferred, div,
-  prelude::*, px, rgb, uniform_list,
+  App, ClickEvent, Context, Div, DragMoveEvent, Entity, FocusHandle, Focusable,
+  InteractiveElement, PathPromptOptions, Pixels, Point, Render, Rgba, Stateful, Task, Window,
+  actions, deferred, div, prelude::*, px, rgb, uniform_list,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: Pixels = px(260.0);
@@ -42,6 +42,7 @@ pub struct WorkspaceView {
   poll_task: Option<Task<()>>,
   sidebar_width: Pixels,
   previous_sidebar_drag_position: Option<Point<Pixels>>,
+  focus_handle: FocusHandle,
 }
 
 #[derive(Clone)]
@@ -65,6 +66,7 @@ impl WorkspaceView {
       poll_task: None,
       sidebar_width: SIDEBAR_DEFAULT_WIDTH,
       previous_sidebar_drag_position: None,
+      focus_handle: cx.focus_handle(),
     };
     view.start_file_polling(cx);
     view
@@ -337,6 +339,7 @@ impl WorkspaceView {
 
     div()
       .key_context("Workspace")
+      .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(Self::open_repository_action))
       .on_action(cx.listener(Self::save_file_action))
       .size_full()
@@ -580,6 +583,7 @@ impl Render for WorkspaceView {
       .child(self.render_sidebar(cx))
       .child(main)
       .key_context("Workspace")
+      .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(Self::open_repository_action))
       .on_action(cx.listener(Self::save_file_action))
       .on_drag_move(cx.listener(|workspace, e: &DragMoveEvent<DraggedSidebar>, _, cx| {
@@ -589,6 +593,12 @@ impl Render for WorkspaceView {
           workspace.resize_sidebar(new_width, cx);
         }
       }))
+  }
+}
+
+impl Focusable for WorkspaceView {
+  fn focus_handle(&self, _cx: &App) -> FocusHandle {
+    self.focus_handle.clone()
   }
 }
 
