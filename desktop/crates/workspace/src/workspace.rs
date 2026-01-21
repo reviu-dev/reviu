@@ -5,19 +5,22 @@ use std::{
 };
 
 use crate::config::{ConfigStore, RecentRepository};
+use crate::theme::{AppColors, app_colors};
 use editor::Editor;
 use git::{FileStatusKind, open_repository};
 use gpui::{
-  App, ClickEvent, Context, Div, DragMoveEvent, Entity, FocusHandle, Focusable,
-  InteractiveElement, PathPromptOptions, Pixels, Point, Render, Rgba, Stateful, Task, Window,
-  actions, deferred, div, prelude::*, px, rgb, uniform_list,
+  App, ClickEvent, Context, Div, DragMoveEvent, Entity, FocusHandle, Focusable, InteractiveElement,
+  PathPromptOptions, Pixels, Point, Render, Rgba, Stateful, Task, Window, actions, deferred, div,
+  prelude::*, px, rgb, uniform_list,
 };
+use syntax::Theme;
 
 const SIDEBAR_DEFAULT_WIDTH: Pixels = px(260.0);
 const SIDEBAR_MIN_WIDTH: Pixels = px(200.0);
 const SIDEBAR_MAX_WIDTH: Pixels = px(600.0);
 const SIDEBAR_RESIZE_HANDLE_WIDTH: Pixels = px(6.0);
 const HEADER_HEIGHT: f32 = 36.0;
+const APP_HEADER_HEIGHT: f32 = 42.0;
 const FILE_POLL_INTERVAL_MS: u64 = 500;
 
 actions!(workspace, [OpenRepository, SaveFile]);
@@ -46,6 +49,7 @@ pub struct WorkspaceView {
   focus_handle: FocusHandle,
   recent_repositories: Vec<RecentRepository>,
   repo_picker_open: bool,
+  theme: Theme,
 }
 
 #[derive(Clone)]
@@ -73,6 +77,7 @@ impl WorkspaceView {
       focus_handle: cx.focus_handle(),
       recent_repositories,
       repo_picker_open: false,
+      theme: Theme::dark(),
     };
     view.start_file_polling(cx);
     view
@@ -86,13 +91,19 @@ impl WorkspaceView {
     }
   }
 
-  fn toggle_repo_picker(
-    &mut self,
-    _: &ClickEvent,
-    _window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
+  fn toggle_repo_picker(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
     self.repo_picker_open = !self.repo_picker_open;
+    cx.notify();
+  }
+
+  fn toggle_theme(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    self.theme.toggle();
+    let theme = self.theme.clone();
+    if let Some(editor) = self.editor.as_ref() {
+      editor.update(cx, |editor, cx| {
+        editor.set_theme(theme.clone(), cx);
+      });
+    }
     cx.notify();
   }
 
@@ -179,8 +190,7 @@ impl WorkspaceView {
 
     let task = cx.spawn(async move |this, cx| {
       loop {
-        cx
-          .background_executor()
+        cx.background_executor()
           .timer(Duration::from_millis(FILE_POLL_INTERVAL_MS))
           .await;
         let _ = this.update(cx, |view, cx| view.poll_current_file(cx));
@@ -263,7 +273,10 @@ impl WorkspaceView {
     let text = editor_buffer_text(editor, cx);
     if let Some(parent) = entry.path.parent() {
       if let Err(err) = fs::create_dir_all(parent) {
-        eprintln!("Failed to create directories for {}: {}", entry.display_name, err);
+        eprintln!(
+          "Failed to create directories for {}: {}",
+          entry.display_name, err
+        );
         return;
       }
     }
@@ -350,7 +363,8 @@ impl WorkspaceView {
     };
 
     let file_ext = file_path.extension().and_then(|ext| ext.to_str());
-    let editor = cx.new(|cx| Editor::new(&content, base_content.as_deref(), file_ext, cx));
+    let theme = self.theme.clone();
+    let editor = cx.new(|cx| Editor::new(&content, base_content.as_deref(), file_ext, theme, cx));
     let focus_handle = editor.read(cx).focus_handle(cx);
 
     if let Some(entry) = self.files.get_mut(index) {
@@ -370,12 +384,13 @@ impl WorkspaceView {
   }
 
   fn render_empty_state(&mut self, cx: &mut Context<Self>) -> Div {
+    let colors = app_colors(&self.theme);
     let (message, color, show_hint) = if let Some(error) = &self.error {
-      (error.clone(), rgb(0xcc6666), false)
+      (error.clone(), colors.error_text, false)
     } else {
       (
         "Open a repository to get started.".to_string(),
-        rgb(0xd0d0d0),
+        colors.text,
         true,
       )
     };
@@ -386,7 +401,7 @@ impl WorkspaceView {
       .on_action(cx.listener(Self::open_repository_action))
       .on_action(cx.listener(Self::save_file_action))
       .size_full()
-      .bg(rgb(0x141414))
+      .bg(colors.app_bg)
       .text_color(color)
       .flex()
       .flex_col()
@@ -398,7 +413,7 @@ impl WorkspaceView {
         this.child(
           div()
             .text_sm()
-            .text_color(rgb(0x9a9a9a))
+            .text_color(colors.text_subtle)
             .child("Press Cmd+O to open a repository."),
         )
       })
@@ -406,39 +421,65 @@ impl WorkspaceView {
         "open-folder-empty",
         "Open Repository",
         cx.listener(Self::open_repository_clicked),
+        &colors,
+      ))
+  }
+
+  fn render_app_header(&mut self, cx: &mut Context<Self>) -> Div {
+    let colors = app_colors(&self.theme);
+    let toggle_label = if self.theme.is_dark {
+      "Light Mode"
+    } else {
+      "Dark Mode"
+    };
+
+    div()
+      .h(px(APP_HEADER_HEIGHT))
+      .px_3()
+      .flex()
+      .items_center()
+      .justify_between()
+      .bg(colors.header_bg)
+      .border_b_1()
+      .border_color(colors.border)
+      .child(div().text_sm().text_color(colors.text).child("Reviu"))
+      .child(action_button(
+        "theme-toggle",
+        toggle_label,
+        cx.listener(Self::toggle_theme),
+        &colors,
       ))
   }
 
   fn render_repo_picker_header(&mut self, cx: &mut Context<Self>) -> Div {
+    let colors = app_colors(&self.theme);
     let label = self.repo_picker_label();
     let icon = if self.repo_picker_open { "^" } else { "v" };
 
-    div()
-      .border_b_1()
-      .border_color(rgb(0x2a2a2a))
-      .child(
-        div()
-          .id("repo-picker-toggle")
-          .h(px(HEADER_HEIGHT))
-          .px_3()
-          .flex()
-          .items_center()
-          .justify_between()
-          .bg(rgb(0x1d1d1d))
-          .cursor_pointer()
-          .child(div().text_sm().text_color(rgb(0xe0e0e0)).child(label))
-          .child(div().text_sm().text_color(rgb(0x9a9a9a)).child(icon))
-          .on_click(cx.listener(Self::toggle_repo_picker)),
-      )
+    div().border_b_1().border_color(colors.border).child(
+      div()
+        .id("repo-picker-toggle")
+        .h(px(HEADER_HEIGHT))
+        .px_3()
+        .flex()
+        .items_center()
+        .justify_between()
+        .bg(colors.header_bg)
+        .cursor_pointer()
+        .child(div().text_sm().text_color(colors.text).child(label))
+        .child(div().text_sm().text_color(colors.text_subtle).child(icon))
+        .on_click(cx.listener(Self::toggle_repo_picker)),
+    )
   }
 
   fn render_repo_picker_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    let colors = app_colors(&self.theme);
     let mut menu = div()
       .flex()
       .flex_col()
-      .bg(rgb(0x1c1c1c))
+      .bg(colors.menu_bg)
       .border_t_1()
-      .border_color(rgb(0x2a2a2a))
+      .border_color(colors.border)
       .id("repo-picker-menu")
       .absolute()
       .top(px(HEADER_HEIGHT))
@@ -455,7 +496,7 @@ impl WorkspaceView {
           .px_3()
           .py_2()
           .text_sm()
-          .text_color(rgb(0x808080))
+          .text_color(colors.text_muted)
           .child("No recent repositories."),
       );
     } else {
@@ -473,6 +514,7 @@ impl WorkspaceView {
     repo: &RecentRepository,
     cx: &mut Context<Self>,
   ) -> Stateful<Div> {
+    let colors = app_colors(&self.theme);
     let is_selected = self.root_path.as_ref() == Some(&repo.path);
     let label = root_label(repo.path.as_path());
 
@@ -483,11 +525,19 @@ impl WorkspaceView {
       .w_full()
       .text_sm()
       .cursor_pointer()
-      .text_color(rgb(0xe0e0e0))
+      .text_color(colors.text)
       .when_else(
         is_selected,
-        |this| this.bg(rgb(0x2a2a2a)).text_color(rgb(0xffffff)),
-        |this| this.bg(rgb(0x1c1c1c)).hover(|style| style.bg(rgb(0x222222))),
+        |this| {
+          this
+            .bg(colors.menu_selected_bg)
+            .text_color(colors.menu_selected_text)
+        },
+        |this| {
+          this
+            .bg(colors.menu_bg)
+            .hover(|style| style.bg(colors.menu_hover_bg))
+        },
       )
       .child(label)
       .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
@@ -496,17 +546,19 @@ impl WorkspaceView {
   }
 
   fn render_repo_add_item(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+    let colors = app_colors(&self.theme);
     div()
       .id("repo-picker-add")
       .px_3()
       .py_2()
       .w_full()
       .text_sm()
-      .text_color(rgb(0xe0e0e0))
+      .text_color(colors.text)
       .cursor_pointer()
       .border_t_1()
-      .border_color(rgb(0x2a2a2a))
-      .hover(|style| style.bg(rgb(0x222222)))
+      .border_color(colors.border)
+      .bg(colors.menu_bg)
+      .hover(|style| style.bg(colors.menu_hover_bg))
       .child("Add Repository...".to_string())
       .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
         this.start_open_repository(cx);
@@ -514,6 +566,7 @@ impl WorkspaceView {
   }
 
   fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let colors = app_colors(&self.theme);
     let list = uniform_list(
       "file-list",
       self.files.len(),
@@ -542,7 +595,7 @@ impl WorkspaceView {
         .flex()
         .items_center()
         .justify_center()
-        .text_color(rgb(0x808080))
+        .text_color(colors.text_muted)
         .child(message);
     }
 
@@ -569,16 +622,19 @@ impl WorkspaceView {
       .flex_col()
       .h_full()
       .relative()
-      .bg(rgb(0x181818))
+      .bg(colors.sidebar_bg)
       .border_r_1()
-      .border_color(rgb(0x2a2a2a))
+      .border_color(colors.border)
       .child(self.render_repo_picker_header(cx))
       .child(sidebar_body)
-      .when(self.repo_picker_open, |this| this.child(self.render_repo_picker_menu(cx)))
+      .when(self.repo_picker_open, |this| {
+        this.child(self.render_repo_picker_menu(cx))
+      })
       .child(resize_handle)
   }
 
   fn render_editor_header(&mut self, cx: &mut Context<Self>) -> Div {
+    let colors = app_colors(&self.theme);
     let title = self
       .selected_file
       .and_then(|idx| self.files.get(idx).map(|entry| entry.display_name.clone()))
@@ -590,26 +646,16 @@ impl WorkspaceView {
       .flex()
       .items_center()
       .justify_between()
-      .bg(rgb(0x1d1d1d))
-      .child(div().text_sm().text_color(rgb(0xe0e0e0)).child(title));
+      .bg(colors.header_bg)
+      .child(div().text_sm().text_color(colors.text).child(title));
 
     if self.current_dirty {
-      header = header.child(
-        div()
-          .id("save-file")
-          .px_3()
-          .py_1()
-          .bg(rgb(0x2a2a2a))
-          .text_color(rgb(0xffffff))
-          .text_sm()
-          .border_1()
-          .border_color(rgb(0x3a3a3a))
-          .rounded_sm()
-          .cursor_pointer()
-          .hover(|style| style.opacity(0.9))
-          .child("Save")
-          .on_click(cx.listener(Self::save_file_clicked)),
-      );
+      header = header.child(action_button(
+        "save-file",
+        "Save",
+        cx.listener(Self::save_file_clicked),
+        &colors,
+      ));
     }
 
     header
@@ -621,6 +667,7 @@ impl WorkspaceView {
     entry: &FileEntry,
     cx: &mut Context<Self>,
   ) -> Stateful<Div> {
+    let colors = app_colors(&self.theme);
     let is_selected = self.selected_file == Some(idx);
     let is_dirty = is_selected && self.current_dirty;
     let (tag, tag_color) = status_tag(entry.status);
@@ -631,7 +678,7 @@ impl WorkspaceView {
       .py_1()
       .w_full()
       .text_sm()
-      .text_color(rgb(0xcfcfcf))
+      .text_color(colors.list_text)
       .cursor_pointer()
       .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
         this.select_file(idx, window, cx);
@@ -641,11 +688,15 @@ impl WorkspaceView {
       .gap_2()
       .when_else(
         is_selected,
-        |this| this.bg(rgb(0x2a2a2a)),
         |this| {
           this
-            .bg(rgb(0x1a1a1a))
-            .hover(|style| style.bg(rgb(0x222222)))
+            .bg(colors.list_selected_bg)
+            .text_color(colors.list_selected_text)
+        },
+        |this| {
+          this
+            .bg(colors.list_bg)
+            .hover(|style| style.bg(colors.list_hover_bg))
         },
       )
       .child(div().flex_none().text_sm().text_color(tag_color).child(tag))
@@ -671,82 +722,98 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    if self.root_path.is_none() && self.recent_repositories.is_empty() {
-      return self.render_empty_state(cx);
-    }
+    let colors = app_colors(&self.theme);
+    let show_empty_only = self.root_path.is_none() && self.recent_repositories.is_empty();
 
-    let main = if self.root_path.is_none() {
+    let content = if show_empty_only {
+      div().flex_1().child(self.render_empty_state(cx))
+    } else {
+      let main = if self.root_path.is_none() {
+        div()
+          .flex_1()
+          .flex()
+          .flex_col()
+          .min_w(px(0.0))
+          .size_full()
+          .bg(colors.surface_bg)
+          .child(
+            div()
+              .flex()
+              .items_center()
+              .justify_center()
+              .size_full()
+              .text_color(colors.text_muted)
+              .child("Select a repository to get started."),
+          )
+      } else {
+        let mut main = div()
+          .flex_1()
+          .flex()
+          .flex_col()
+          .min_w(px(0.0))
+          .size_full()
+          .bg(colors.surface_bg);
+
+        if let Some(editor) = self.editor.clone() {
+          let header = self.render_editor_header(cx);
+          main = main
+            .child(header)
+            .child(div().flex_1().min_w(px(0.0)).child(editor));
+        } else {
+          let (message, color) = if let Some(error) = &self.error {
+            (error.clone(), colors.error_text)
+          } else if self.files.is_empty() {
+            (
+              "No changes found in this repository.".to_string(),
+              colors.text_muted,
+            )
+          } else {
+            ("Select a file to view it.".to_string(), colors.text_muted)
+          };
+
+          main = main.child(
+            div()
+              .flex()
+              .items_center()
+              .justify_center()
+              .size_full()
+              .text_color(color)
+              .child(message),
+          );
+        }
+
+        main
+      };
+
       div()
         .flex_1()
         .flex()
-        .flex_col()
-        .min_w(px(0.0))
-        .size_full()
-        .bg(rgb(0x1b1b1b))
-        .child(
-          div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .size_full()
-            .text_color(rgb(0x808080))
-            .child("Select a repository to get started."),
-        )
-    } else {
-      let mut main = div()
-        .flex_1()
-        .flex()
-        .flex_col()
-        .min_w(px(0.0))
-        .size_full()
-        .bg(rgb(0x1b1b1b));
-
-      if let Some(editor) = self.editor.clone() {
-        let header = self.render_editor_header(cx);
-        main = main
-          .child(header)
-          .child(div().flex_1().min_w(px(0.0)).child(editor));
-      } else {
-        let (message, color) = if let Some(error) = &self.error {
-          (error.clone(), rgb(0xcc6666))
-        } else if self.files.is_empty() {
-          ("No changes found in this repository.".to_string(), rgb(0x808080))
-        } else {
-          ("Select a file to view it.".to_string(), rgb(0x808080))
-        };
-
-        main = main.child(
-          div()
-            .flex()
-            .items_center()
-            .justify_center()
-            .size_full()
-            .text_color(color)
-            .child(message),
-        );
-      }
-
-      main
+        .flex_row()
+        .bg(colors.app_bg)
+        .child(self.render_sidebar(cx))
+        .child(main)
     };
 
     div()
       .size_full()
       .flex()
-      .flex_row()
-      .bg(rgb(0x141414))
-      .child(self.render_sidebar(cx))
-      .child(main)
+      .flex_col()
+      .bg(colors.app_bg)
+      .child(self.render_app_header(cx))
+      .child(content)
       .key_context("Workspace")
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(Self::open_repository_action))
       .on_action(cx.listener(Self::save_file_action))
-      .on_drag_move(cx.listener(|workspace, e: &DragMoveEvent<DraggedSidebar>, _, cx| {
-        if workspace.previous_sidebar_drag_position != Some(e.event.position) {
-          workspace.previous_sidebar_drag_position = Some(e.event.position);
-          let new_width = e.event.position.x - e.bounds.left();
-          workspace.resize_sidebar(new_width, cx);
-        }
-      }))
+      .on_drag_move(
+        cx.listener(|workspace, e: &DragMoveEvent<DraggedSidebar>, _, cx| {
+          if workspace.previous_sidebar_drag_position != Some(e.event.position) {
+            workspace.previous_sidebar_drag_position = Some(e.event.position);
+            let new_width = e.event.position.x - e.bounds.left();
+            workspace.resize_sidebar(new_width, cx);
+          }
+        }),
+      )
   }
 }
 
@@ -763,7 +830,9 @@ fn editor_buffer_text(editor: &Entity<Editor>, cx: &App) -> String {
 }
 
 fn read_modified_time(path: &Path) -> Option<SystemTime> {
-  fs::metadata(path).ok().and_then(|metadata| metadata.modified().ok())
+  fs::metadata(path)
+    .ok()
+    .and_then(|metadata| metadata.modified().ok())
 }
 
 fn read_disk_text(path: &Path) -> Option<String> {
@@ -784,7 +853,6 @@ fn root_label(path: &Path) -> String {
     .map(|name| name.to_string())
     .unwrap_or_else(|| path.display().to_string())
 }
-
 
 fn bump_recent_repository(repositories: &mut Vec<RecentRepository>, path: PathBuf) {
   if let Some(index) = repositories.iter().position(|repo| repo.path == path) {
@@ -811,16 +879,17 @@ fn action_button(
   id: &'static str,
   label: &str,
   on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+  colors: &AppColors,
 ) -> impl IntoElement {
   div()
     .id(id)
     .px_3()
     .py_1()
-    .bg(rgb(0x2a2a2a))
-    .text_color(rgb(0xffffff))
+    .bg(colors.button_bg)
+    .text_color(colors.button_text)
     .text_sm()
     .border_1()
-    .border_color(rgb(0x3a3a3a))
+    .border_color(colors.button_border)
     .rounded_sm()
     .cursor_pointer()
     .hover(|style| style.opacity(0.9))

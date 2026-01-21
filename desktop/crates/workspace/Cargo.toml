@@ -10,3 +10,4 @@ git = { workspace = true }
 gpui = { workspace = true }
 dirs = { workspace = true }
 rusqlite = { workspace = true }
+syntax = { workspace = true }

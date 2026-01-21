@@ -100,6 +100,7 @@ impl Editor {
     text: &str,
     base_text: Option<&str>,
     file_ext: Option<&str>,
+    theme: Theme,
     cx: &mut Context<Self>,
   ) -> Self {
     let document = cx.new(|cx| Document::new(text, base_text, file_ext, cx));
@@ -126,7 +127,7 @@ impl Editor {
       target_column: None,
       undo_stack: VecDeque::new(),
       redo_stack: VecDeque::new(),
-      theme: Theme::dark(),
+      theme,
       last_highlights_version: 0,
       last_highlights_epoch: 0,
       last_diff_version: 0,
@@ -135,9 +136,11 @@ impl Editor {
     }
   }
 
-  #[cfg(test)]
-  pub fn toggle_dark_mode(&mut self) {
-    self.theme.toggle();
+  pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
+    if self.theme.is_dark != theme.is_dark {
+      self.theme = theme;
+      cx.notify();
+    }
   }
 
   pub fn document(&self) -> &Entity<Document> {
@@ -518,7 +521,11 @@ impl EntityInputHandler for Editor {
     let line_height = window.line_height();
     let viewport_height = self.viewport_height;
     let scroll_offset_y = self.scroll_offset_y;
-    let new_line_count = if has_newline { new_text.matches('\n').count() } else { 0 };
+    let new_line_count = if has_newline {
+      new_text.matches('\n').count()
+    } else {
+      0
+    };
     let force_end_line = start_line.saturating_add(new_line_count).max(end_line);
     let force_range = start_line..(force_end_line + 1);
     let force_range = {
@@ -633,7 +640,11 @@ impl EntityInputHandler for Editor {
     let viewport_height = self.viewport_height;
     let scroll_offset_y = self.scroll_offset_y;
     let end_line = self.document.read(cx).char_to_line(range.end);
-    let new_line_count = if has_newline { new_text.matches('\n').count() } else { 0 };
+    let new_line_count = if has_newline {
+      new_text.matches('\n').count()
+    } else {
+      0
+    };
     let force_end_line = start_line.saturating_add(new_line_count).max(end_line);
     let force_range = start_line..(force_end_line + 1);
     let force_range = {
@@ -806,7 +817,7 @@ pub mod tests {
   impl EditorTestContext {
     /// Create a test context with specific text content
     pub fn with_text(mut cx: TestAppContext, text: &str) -> Self {
-      let editor = cx.new(|cx| Editor::new(text, None, None, cx));
+      let editor = cx.new(|cx| Editor::new(text, None, None, Theme::light(), cx));
 
       Self { cx, editor }
     }
@@ -1493,19 +1504,8 @@ pub mod tests {
   }
 
   #[gpui::test]
-  fn test_editor_toggle_dark_mode(cx: &mut TestAppContext) {
-    let editor = cx.new(|cx| Editor::new("", None, None, cx));
-
-    editor.update(cx, |editor, _| {
-      let was_dark = editor.theme.is_dark;
-      editor.toggle_dark_mode();
-      assert_eq!(editor.theme.is_dark, !was_dark);
-    });
-  }
-
-  #[gpui::test]
   fn test_syntax_highlights_cached(cx: &mut TestAppContext) {
-    let editor = cx.new(|cx| Editor::new("fn main() {}", None, Some("rs"), cx));
+    let editor = cx.new(|cx| Editor::new("fn main() {}", None, Some("rs"), Theme::light(), cx));
 
     // Wait for async highlighting to complete (it's scheduled but not immediate)
     editor.read_with(cx, |editor, cx| {
