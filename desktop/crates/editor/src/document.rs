@@ -118,10 +118,14 @@ impl Document {
       .and_then(languages::detect_language_config)
       .map(SyntaxHighlighter::new);
 
-    let diff_base_lines = base_text.map(|text| Arc::new(split_lines_to_arcs(text)));
-    let diff_base_hashes = diff_base_lines
-      .as_ref()
-      .map(|lines| Arc::new(hash_lines(lines)));
+    let (diff_base_lines, diff_base_hashes) = if let Some(text) = base_text {
+      let lines = split_lines_to_arcs(text);
+      let ends_with_newline = text.ends_with('\n');
+      let hashes = hash_lines(&lines, ends_with_newline);
+      (Some(Arc::new(lines)), Some(Arc::new(hashes)))
+    } else {
+      (None, None)
+    };
 
     let base_highlights = diff_base_lines
       .as_ref()
@@ -1048,6 +1052,7 @@ impl Document {
 
     let base_len = base_lines.len();
     let current_line_count = self.buffer.len_lines();
+    let buffer_has_trailing_newline = buffer_ends_with_newline(&self.buffer);
 
     let base_start = anchor_before
       .and_then(|idx| state.lines[idx].base_line.map(|line| line + 1))
@@ -1073,7 +1078,9 @@ impl Document {
     let base_slice: Vec<Arc<str>> = base_lines[base_start..base_end].to_vec();
     let base_hashes_slice: Vec<u64> = base_hashes[base_start..base_end].to_vec();
     let current_lines = collect_buffer_lines_range(&self.buffer, current_start, current_end);
-    let current_hashes = hash_string_lines(&current_lines);
+    let current_ends_with_newline =
+      buffer_has_trailing_newline && current_end == current_line_count;
+    let current_hashes = hash_string_lines(&current_lines, current_ends_with_newline);
 
     let diff_state = self.diff_state.clone();
     let diff_version = self.diff_version.clone();
@@ -1568,8 +1575,18 @@ fn collect_buffer_lines_range(
   lines
 }
 
+fn rope_ends_with_newline(rope: &Rope) -> bool {
+  let len = rope.len_chars();
+  len > 0 && rope.char(len - 1) == '\n'
+}
+
+fn buffer_ends_with_newline(buffer: &TextBuffer) -> bool {
+  rope_ends_with_newline(&buffer.snapshot())
+}
+
 fn collect_rope_lines_and_hashes(rope: &Rope) -> (Vec<String>, Vec<u64>) {
   let line_count = rope.len_lines();
+  let ends_with_newline = rope_ends_with_newline(rope);
   let mut lines = Vec::with_capacity(line_count);
   let mut hashes = Vec::with_capacity(line_count);
 
@@ -1582,12 +1599,19 @@ fn collect_rope_lines_and_hashes(rope: &Rope) -> (Vec<String>, Vec<u64>) {
         owned.pop();
       }
     }
-    hashes.push(hash_line(&owned));
+    let is_trailing_empty_line =
+      ends_with_newline && line_idx + 1 == line_count && owned.is_empty();
+    hashes.push(hash_line_with_trailing_marker(
+      &owned,
+      is_trailing_empty_line,
+    ));
     lines.push(owned);
   }
 
   (lines, hashes)
 }
+
+const TRAILING_NEWLINE_SENTINEL: &str = "\n";
 
 fn hash_line(text: &str) -> u64 {
   let mut hasher = DefaultHasher::new();
@@ -1595,12 +1619,44 @@ fn hash_line(text: &str) -> u64 {
   hasher.finish()
 }
 
-fn hash_lines(lines: &[Arc<str>]) -> Vec<u64> {
-  lines.iter().map(|line| hash_line(line)).collect()
+fn hash_line_with_trailing_marker(text: &str, is_trailing_empty_line: bool) -> u64 {
+  if is_trailing_empty_line {
+    hash_line(TRAILING_NEWLINE_SENTINEL)
+  } else {
+    hash_line(text)
+  }
 }
 
-fn hash_string_lines(lines: &[String]) -> Vec<u64> {
-  lines.iter().map(|line| hash_line(line)).collect()
+fn hash_lines(lines: &[Arc<str>], ends_with_newline: bool) -> Vec<u64> {
+  if lines.is_empty() {
+    return Vec::new();
+  }
+  let last_idx = lines.len().saturating_sub(1);
+  lines
+    .iter()
+    .enumerate()
+    .map(|(idx, line)| {
+      let is_trailing_empty_line =
+        ends_with_newline && idx == last_idx && line.is_empty();
+      hash_line_with_trailing_marker(line, is_trailing_empty_line)
+    })
+    .collect()
+}
+
+fn hash_string_lines(lines: &[String], ends_with_newline: bool) -> Vec<u64> {
+  if lines.is_empty() {
+    return Vec::new();
+  }
+  let last_idx = lines.len().saturating_sub(1);
+  lines
+    .iter()
+    .enumerate()
+    .map(|(idx, line)| {
+      let is_trailing_empty_line =
+        ends_with_newline && idx == last_idx && line.is_empty();
+      hash_line_with_trailing_marker(line, is_trailing_empty_line)
+    })
+    .collect()
 }
 
 fn build_line_starts(lines: &[DiffLine]) -> (Vec<usize>, usize) {
@@ -2529,18 +2585,43 @@ mod tests {
     let base_text = "old";
     let current_text = "new";
     let base_lines = split_lines_to_arcs(base_text);
-    let base_hashes = hash_lines(&base_lines);
+    let base_hashes = hash_lines(&base_lines, base_text.ends_with('\n'));
     let current_lines: Vec<String> = split_lines_to_arcs(current_text)
       .iter()
       .map(|line| line.to_string())
       .collect();
-    let current_hashes = hash_string_lines(&current_lines);
+    let current_hashes = hash_string_lines(&current_lines, current_text.ends_with('\n'));
 
     let state = compute_diff_state(&base_lines, &base_hashes, current_lines, current_hashes);
 
     assert_eq!(state.lines.len(), 2);
     assert_eq!(state.lines[0].kind, DiffLineKind::Deleted);
     assert_eq!(state.lines[1].kind, DiffLineKind::Added);
+  }
+
+  #[gpui::test]
+  fn test_diff_trailing_newline_blank_line_added(_cx: &mut TestAppContext) {
+    let base_text = "line1\n";
+    let current_text = "line1\n\n";
+    let base_lines = split_lines_to_arcs(base_text);
+    let base_hashes = hash_lines(&base_lines, base_text.ends_with('\n'));
+    let current_lines: Vec<String> = split_lines_to_arcs(current_text)
+      .iter()
+      .map(|line| line.to_string())
+      .collect();
+    let current_hashes = hash_string_lines(&current_lines, current_text.ends_with('\n'));
+
+    let state = compute_diff_state(&base_lines, &base_hashes, current_lines, current_hashes);
+    let added_indices: Vec<usize> = state
+      .lines
+      .iter()
+      .enumerate()
+      .filter(|(_, line)| line.kind == DiffLineKind::Added)
+      .map(|(idx, _)| idx)
+      .collect();
+
+    assert_eq!(added_indices, vec![1]);
+    assert_eq!(state.lines.last().unwrap().kind, DiffLineKind::Unchanged);
   }
 
   #[gpui::test]
