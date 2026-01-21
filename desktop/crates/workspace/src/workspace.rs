@@ -4,6 +4,7 @@ use std::{
   time::{Duration, SystemTime},
 };
 
+use crate::config::{ConfigStore, RecentRepository};
 use editor::Editor;
 use git::{FileStatusKind, open_repository};
 use gpui::{
@@ -43,6 +44,8 @@ pub struct WorkspaceView {
   sidebar_width: Pixels,
   previous_sidebar_drag_position: Option<Point<Pixels>>,
   focus_handle: FocusHandle,
+  recent_repositories: Vec<RecentRepository>,
+  repo_picker_open: bool,
 }
 
 #[derive(Clone)]
@@ -56,6 +59,7 @@ impl Render for DraggedSidebar {
 
 impl WorkspaceView {
   pub fn new(cx: &mut Context<Self>) -> Self {
+    let recent_repositories = ConfigStore::load_recent_repositories();
     let mut view = Self {
       root_path: None,
       files: Vec::new(),
@@ -67,6 +71,8 @@ impl WorkspaceView {
       sidebar_width: SIDEBAR_DEFAULT_WIDTH,
       previous_sidebar_drag_position: None,
       focus_handle: cx.focus_handle(),
+      recent_repositories,
+      repo_picker_open: false,
     };
     view.start_file_polling(cx);
     view
@@ -78,6 +84,36 @@ impl WorkspaceView {
       self.sidebar_width = width;
       cx.notify();
     }
+  }
+
+  fn toggle_repo_picker(
+    &mut self,
+    _: &ClickEvent,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.repo_picker_open = !self.repo_picker_open;
+    cx.notify();
+  }
+
+  fn select_recent_repository(&mut self, index: usize, cx: &mut Context<Self>) {
+    let Some(path) = self
+      .recent_repositories
+      .get(index)
+      .map(|repo| repo.path.clone())
+    else {
+      return;
+    };
+    self.repo_picker_open = false;
+    self.set_root_path(path, cx);
+  }
+
+  fn repo_picker_label(&self) -> String {
+    self
+      .root_path
+      .as_ref()
+      .map(|path| root_label(path.as_path()))
+      .unwrap_or_else(|| "Select Repository".to_string())
   }
 
   fn open_repository_clicked(
@@ -99,6 +135,10 @@ impl WorkspaceView {
   }
 
   fn start_open_repository(&mut self, cx: &mut Context<Self>) {
+    if self.repo_picker_open {
+      self.repo_picker_open = false;
+      cx.notify();
+    }
     let receiver = cx.prompt_for_paths(PathPromptOptions {
       files: false,
       directories: true,
@@ -240,10 +280,13 @@ impl WorkspaceView {
   }
 
   fn set_root_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    self.repo_picker_open = false;
     match open_repository(&path) {
       Ok(repository) => {
         let repo_root = repository.root;
         self.root_path = Some(repo_root.clone());
+        ConfigStore::persist_recent_repository(&repo_root);
+        bump_recent_repository(&mut self.recent_repositories, repo_root.clone());
         self.files = repository
           .entries
           .into_iter()
@@ -366,13 +409,111 @@ impl WorkspaceView {
       ))
   }
 
-  fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let root_label = self
-      .root_path
-      .as_ref()
-      .map(|path| root_label(path.as_path()))
-      .unwrap_or_else(|| "Repository".to_string());
+  fn render_repo_picker_header(&mut self, cx: &mut Context<Self>) -> Div {
+    let label = self.repo_picker_label();
+    let icon = if self.repo_picker_open { "^" } else { "v" };
 
+    div()
+      .border_b_1()
+      .border_color(rgb(0x2a2a2a))
+      .child(
+        div()
+          .id("repo-picker-toggle")
+          .h(px(HEADER_HEIGHT))
+          .px_3()
+          .flex()
+          .items_center()
+          .justify_between()
+          .bg(rgb(0x1d1d1d))
+          .cursor_pointer()
+          .child(div().text_sm().text_color(rgb(0xe0e0e0)).child(label))
+          .child(div().text_sm().text_color(rgb(0x9a9a9a)).child(icon))
+          .on_click(cx.listener(Self::toggle_repo_picker)),
+      )
+  }
+
+  fn render_repo_picker_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    let mut menu = div()
+      .flex()
+      .flex_col()
+      .bg(rgb(0x1c1c1c))
+      .border_t_1()
+      .border_color(rgb(0x2a2a2a))
+      .id("repo-picker-menu")
+      .absolute()
+      .top(px(HEADER_HEIGHT))
+      .left(px(0.0))
+      .right(px(0.0))
+      .w_full()
+      .max_h(px(240.0))
+      .overflow_y_scroll()
+      .occlude();
+
+    if self.recent_repositories.is_empty() {
+      menu = menu.child(
+        div()
+          .px_3()
+          .py_2()
+          .text_sm()
+          .text_color(rgb(0x808080))
+          .child("No recent repositories."),
+      );
+    } else {
+      for (index, repo) in self.recent_repositories.iter().enumerate() {
+        menu = menu.child(self.render_repo_menu_item(index, repo, cx));
+      }
+    }
+
+    menu.child(self.render_repo_add_item(cx))
+  }
+
+  fn render_repo_menu_item(
+    &self,
+    index: usize,
+    repo: &RecentRepository,
+    cx: &mut Context<Self>,
+  ) -> Stateful<Div> {
+    let is_selected = self.root_path.as_ref() == Some(&repo.path);
+    let label = root_label(repo.path.as_path());
+
+    div()
+      .id(("repo-picker-item", index))
+      .px_3()
+      .py_2()
+      .w_full()
+      .text_sm()
+      .cursor_pointer()
+      .text_color(rgb(0xe0e0e0))
+      .when_else(
+        is_selected,
+        |this| this.bg(rgb(0x2a2a2a)).text_color(rgb(0xffffff)),
+        |this| this.bg(rgb(0x1c1c1c)).hover(|style| style.bg(rgb(0x222222))),
+      )
+      .child(label)
+      .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+        this.select_recent_repository(index, cx);
+      }))
+  }
+
+  fn render_repo_add_item(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+    div()
+      .id("repo-picker-add")
+      .px_3()
+      .py_2()
+      .w_full()
+      .text_sm()
+      .text_color(rgb(0xe0e0e0))
+      .cursor_pointer()
+      .border_t_1()
+      .border_color(rgb(0x2a2a2a))
+      .hover(|style| style.bg(rgb(0x222222)))
+      .child("Add Repository...".to_string())
+      .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+        this.start_open_repository(cx);
+      }))
+  }
+
+  fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let list = uniform_list(
       "file-list",
       self.files.len(),
@@ -391,13 +532,18 @@ impl WorkspaceView {
 
     let mut sidebar_body = div().flex_1().overflow_hidden().child(list);
     if self.files.is_empty() {
+      let message = if self.root_path.is_some() {
+        "No changes found."
+      } else {
+        "No repository selected."
+      };
       sidebar_body = div()
         .flex_1()
         .flex()
         .items_center()
         .justify_center()
         .text_color(rgb(0x808080))
-        .child("No changes found.");
+        .child(message);
     }
 
     let resize_handle = deferred(
@@ -426,22 +572,9 @@ impl WorkspaceView {
       .bg(rgb(0x181818))
       .border_r_1()
       .border_color(rgb(0x2a2a2a))
-      .child(
-        div()
-          .h(px(HEADER_HEIGHT))
-          .px_3()
-          .flex()
-          .items_center()
-          .justify_between()
-          .bg(rgb(0x1d1d1d))
-          .child(div().text_sm().text_color(rgb(0xe0e0e0)).child(root_label))
-          .child(action_button(
-            "open-folder-sidebar",
-            "Open Repository",
-            cx.listener(Self::open_repository_clicked),
-          )),
-      )
+      .child(self.render_repo_picker_header(cx))
       .child(sidebar_body)
+      .when(self.repo_picker_open, |this| this.child(self.render_repo_picker_menu(cx)))
       .child(resize_handle)
   }
 
@@ -538,42 +671,63 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    if self.root_path.is_none() {
+    if self.root_path.is_none() && self.recent_repositories.is_empty() {
       return self.render_empty_state(cx);
     }
 
-    let mut main = div()
-      .flex_1()
-      .flex()
-      .flex_col()
-      .min_w(px(0.0))
-      .size_full()
-      .bg(rgb(0x1b1b1b));
-
-    if let Some(editor) = self.editor.clone() {
-      let header = self.render_editor_header(cx);
-      main = main
-        .child(header)
-        .child(div().flex_1().min_w(px(0.0)).child(editor));
+    let main = if self.root_path.is_none() {
+      div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .min_w(px(0.0))
+        .size_full()
+        .bg(rgb(0x1b1b1b))
+        .child(
+          div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size_full()
+            .text_color(rgb(0x808080))
+            .child("Select a repository to get started."),
+        )
     } else {
-      let (message, color) = if let Some(error) = &self.error {
-        (error.clone(), rgb(0xcc6666))
-      } else if self.files.is_empty() {
-        ("No changes found in this repository.".to_string(), rgb(0x808080))
-      } else {
-        ("Select a file to view it.".to_string(), rgb(0x808080))
-      };
+      let mut main = div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .min_w(px(0.0))
+        .size_full()
+        .bg(rgb(0x1b1b1b));
 
-      main = main.child(
-        div()
-          .flex()
-          .items_center()
-          .justify_center()
-          .size_full()
-          .text_color(color)
-          .child(message),
-      );
-    }
+      if let Some(editor) = self.editor.clone() {
+        let header = self.render_editor_header(cx);
+        main = main
+          .child(header)
+          .child(div().flex_1().min_w(px(0.0)).child(editor));
+      } else {
+        let (message, color) = if let Some(error) = &self.error {
+          (error.clone(), rgb(0xcc6666))
+        } else if self.files.is_empty() {
+          ("No changes found in this repository.".to_string(), rgb(0x808080))
+        } else {
+          ("Select a file to view it.".to_string(), rgb(0x808080))
+        };
+
+        main = main.child(
+          div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .size_full()
+            .text_color(color)
+            .child(message),
+        );
+      }
+
+      main
+    };
 
     div()
       .size_full()
@@ -629,6 +783,16 @@ fn root_label(path: &Path) -> String {
     .and_then(|name| name.to_str())
     .map(|name| name.to_string())
     .unwrap_or_else(|| path.display().to_string())
+}
+
+
+fn bump_recent_repository(repositories: &mut Vec<RecentRepository>, path: PathBuf) {
+  if let Some(index) = repositories.iter().position(|repo| repo.path == path) {
+    let repo = repositories.remove(index);
+    repositories.insert(0, repo);
+  } else {
+    repositories.insert(0, RecentRepository { path });
+  }
 }
 
 fn status_tag(status: FileStatusKind) -> (&'static str, Rgba) {

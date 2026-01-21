@@ -17,6 +17,7 @@ publish = false
 [workspace.dependencies]
 # External crates
 gpui = { git = "https://github.com/zed-industries/zed" }
+dirs = "5.0"
 unicode-segmentation = "1.12"
 ropey = "1.6"
 tree-sitter-highlight = "0.26"
@@ -26,6 +27,7 @@ once_cell = "1.20"
 parking_lot = "0.12"
 smol = "2.0"
 git2 = "0.20.1"
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Workspace member crates
 buffer = { path = "crates/buffer" }
