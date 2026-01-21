@@ -1,13 +1,13 @@
 use std::{
   fs,
   path::{Path, PathBuf},
-  time::{Duration, SystemTime},
+  time::{Duration, Instant, SystemTime},
 };
 
 use crate::config::{ConfigStore, RecentRepository};
 use crate::theme::{AppColors, app_colors};
 use editor::Editor;
-use git::{FileStatusKind, open_repository};
+use git::{FileStatusKind, RepositoryFile, open_repository};
 use gpui::{
   App, ClickEvent, Context, Div, DragMoveEvent, Entity, FocusHandle, Focusable, InteractiveElement,
   PathPromptOptions, Pixels, Point, Render, Rgba, Stateful, Task, Window, actions, deferred, div,
@@ -22,6 +22,7 @@ const SIDEBAR_RESIZE_HANDLE_WIDTH: Pixels = px(6.0);
 const HEADER_HEIGHT: f32 = 36.0;
 const APP_HEADER_HEIGHT: f32 = 42.0;
 const FILE_POLL_INTERVAL_MS: u64 = 500;
+const REPO_POLL_INTERVAL_MS: u64 = 1500;
 
 actions!(workspace, [OpenRepository, SaveFile]);
 
@@ -50,6 +51,7 @@ pub struct WorkspaceView {
   recent_repositories: Vec<RecentRepository>,
   repo_picker_open: bool,
   theme: Theme,
+  last_repo_poll: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -78,6 +80,7 @@ impl WorkspaceView {
       recent_repositories,
       repo_picker_open: false,
       theme: Theme::dark(),
+      last_repo_poll: None,
     };
     view.start_file_polling(cx);
     view
@@ -193,7 +196,10 @@ impl WorkspaceView {
         cx.background_executor()
           .timer(Duration::from_millis(FILE_POLL_INTERVAL_MS))
           .await;
-        let _ = this.update(cx, |view, cx| view.poll_current_file(cx));
+        let _ = this.update(cx, |view, cx| {
+          view.poll_current_file(cx);
+          view.poll_repository_status(cx);
+        });
       }
     });
 
@@ -251,6 +257,78 @@ impl WorkspaceView {
     }
   }
 
+  fn poll_repository_status(&mut self, cx: &mut Context<Self>) {
+    if self.root_path.is_none() {
+      return;
+    }
+
+    let now = Instant::now();
+    if let Some(last_poll) = self.last_repo_poll {
+      if now.duration_since(last_poll) < Duration::from_millis(REPO_POLL_INTERVAL_MS) {
+        return;
+      }
+    }
+
+    self.last_repo_poll = Some(now);
+    self.refresh_repository_statuses(cx);
+  }
+
+  fn refresh_repository_statuses(&mut self, cx: &mut Context<Self>) {
+    let Some(root_path) = self.root_path.clone() else {
+      return;
+    };
+
+    let selected_path = self
+      .selected_file
+      .and_then(|idx| self.files.get(idx).map(|entry| entry.path.clone()));
+    let selected_entry = self
+      .selected_file
+      .and_then(|idx| self.files.get(idx).cloned());
+    let selected_dirty = self.current_dirty;
+
+    let repository = match open_repository(&root_path) {
+      Ok(repository) => repository,
+      Err(err) => {
+        self.error = Some(format!("Not a git repository: {err}"));
+        return;
+      }
+    };
+
+    let repo_root = repository.root;
+    self.root_path = Some(repo_root.clone());
+    let mut files = repository_entries_to_files(&repo_root, repository.entries);
+
+    if let Some(path) = selected_path.as_ref() {
+      if let Some(index) = files.iter().position(|entry| entry.path == *path) {
+        if let Some(existing) = selected_entry.as_ref() {
+          let entry = &mut files[index];
+          entry.current_content = existing.current_content.clone();
+          entry.saved_content = existing.saved_content.clone();
+          entry.last_modified = existing.last_modified;
+        }
+      } else if selected_dirty {
+        if let Some(mut entry) = selected_entry {
+          entry.status = FileStatusKind::Modified;
+          files.push(entry);
+        }
+      } else {
+        self.selected_file = None;
+        self.editor = None;
+        self.current_dirty = false;
+      }
+    }
+
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let next_selected = selected_path
+      .as_ref()
+      .and_then(|path| files.iter().position(|entry| entry.path == *path));
+
+    self.files = files;
+    self.selected_file = next_selected;
+    self.error = None;
+    cx.notify();
+  }
+
   fn save_file_clicked(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
     self.save_current_file(cx);
   }
@@ -300,29 +378,12 @@ impl WorkspaceView {
         self.root_path = Some(repo_root.clone());
         ConfigStore::persist_recent_repository(&repo_root);
         bump_recent_repository(&mut self.recent_repositories, repo_root.clone());
-        self.files = repository
-          .entries
-          .into_iter()
-          .map(|entry| {
-            let path = repo_root.join(&entry.path);
-            let current_content = entry.current_content;
-            let saved_content = current_content.clone();
-            let last_modified = read_modified_time(&path);
-            FileEntry {
-              path,
-              display_name: entry.path.to_string_lossy().to_string(),
-              status: entry.status,
-              base_content: entry.base_content,
-              current_content,
-              saved_content,
-              last_modified,
-            }
-          })
-          .collect();
+        self.files = repository_entries_to_files(&repo_root, repository.entries);
         self.selected_file = None;
         self.editor = None;
         self.error = None;
         self.current_dirty = false;
+        self.last_repo_poll = Some(Instant::now());
       }
       Err(err) => {
         self.root_path = Some(path);
@@ -331,20 +392,23 @@ impl WorkspaceView {
         self.editor = None;
         self.error = Some(format!("Not a git repository: {err}"));
         self.current_dirty = false;
+        self.last_repo_poll = Some(Instant::now());
       }
     }
     cx.notify();
   }
 
   fn select_file(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-    let Some((content, base_content, file_path)) = self.files.get(index).map(|entry| {
-      (
-        entry.current_content.clone(),
-        entry.base_content.clone(),
-        entry.path.clone(),
-      )
-    }) else {
-      return;
+    let (content, base_content, file_path) = match self.files.get_mut(index) {
+      Some(entry) => {
+        refresh_entry_from_disk(entry);
+        (
+          entry.current_content.clone(),
+          entry.base_content.clone(),
+          entry.path.clone(),
+        )
+      }
+      None => return,
     };
 
     let Some(content) = content else {
@@ -846,12 +910,47 @@ fn reload_editor_content(editor: &Entity<Editor>, text: &str, cx: &mut App) {
   });
 }
 
+fn refresh_entry_from_disk(entry: &mut FileEntry) {
+  if let Some(modified_time) = read_modified_time(&entry.path) {
+    if entry.last_modified != Some(modified_time) {
+      if let Some(disk_text) = read_disk_text(&entry.path) {
+        entry.current_content = Some(disk_text.clone());
+        entry.saved_content = Some(disk_text);
+        entry.last_modified = Some(modified_time);
+      } else {
+        entry.last_modified = Some(modified_time);
+      }
+    }
+  }
+}
+
 fn root_label(path: &Path) -> String {
   path
     .file_name()
     .and_then(|name| name.to_str())
     .map(|name| name.to_string())
     .unwrap_or_else(|| path.display().to_string())
+}
+
+fn repository_entries_to_files(repo_root: &Path, entries: Vec<RepositoryFile>) -> Vec<FileEntry> {
+  entries
+    .into_iter()
+    .map(|entry| {
+      let path = repo_root.join(&entry.path);
+      let current_content = entry.current_content;
+      let saved_content = current_content.clone();
+      let last_modified = read_modified_time(&path);
+      FileEntry {
+        path,
+        display_name: entry.path.to_string_lossy().to_string(),
+        status: entry.status,
+        base_content: entry.base_content,
+        current_content,
+        saved_content,
+        last_modified,
+      }
+    })
+    .collect()
 }
 
 fn bump_recent_repository(repositories: &mut Vec<RecentRepository>, path: PathBuf) {
