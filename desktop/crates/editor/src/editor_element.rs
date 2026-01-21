@@ -232,6 +232,10 @@ impl Element for EditorElement {
       let diff_dirty = document.drain_dirty_diff_lines();
       (epoch, version, dirty, diff_epoch, diff_version, diff_dirty)
     };
+    let diff_changed = {
+      let editor = self.editor.read(cx);
+      diff_epoch > editor.last_diff_epoch || diff_version > editor.last_diff_version
+    };
     self.editor.update(cx, |editor, cx| {
       editor.viewport_height = bounds.size.height;
       editor.viewport_width = window.bounds().size.width;
@@ -310,6 +314,21 @@ impl Element for EditorElement {
         lines_to_shape,
       )
     };
+    if diff_changed {
+      let viewport = viewport.clone();
+      self.editor.update(cx, |editor, cx| {
+        editor.document.update(cx, |doc, cx| {
+          if doc.diff_enabled() {
+            doc.schedule_viewport_highlights(
+              viewport,
+              None,
+              crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
+              cx,
+            );
+          }
+        });
+      });
+    }
 
     let style = window.text_style();
     let font_size = style.font_size.to_pixels(window.rem_size());
