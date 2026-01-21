@@ -6454,6 +6454,7 @@ dependencies = [
  "git",
  "gpui",
  "rusqlite",
+ "syntax",
 ]
 
 [[package]]
