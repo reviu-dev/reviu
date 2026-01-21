@@ -1,8 +1,9 @@
 use gpui::{
-  App, Bounds, DispatchPhase, ElementId, ElementInputHandler, Entity, GlobalElementId, Hitbox,
-  HitboxBehavior, InspectorElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-  MouseUpEvent, PaintQuad, Pixels, Point, ScrollDelta, ScrollWheelEvent, ShapedLine, Style,
-  TextAlign, TextRun, TextStyle, Window, fill, point, prelude::*, px, relative, size,
+  App, Bounds, ContentMask, DispatchPhase, ElementId, ElementInputHandler, Entity, GlobalElementId,
+  Hitbox, HitboxBehavior, InspectorElementId, LayoutId, MouseButton, MouseDownEvent,
+  MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ScrollDelta, ScrollWheelEvent,
+  ShapedLine, Style, TextAlign, TextRun, TextStyle, Window, black, fill, point, prelude::*, px,
+  relative, size, white,
 };
 use std::{
   ops::Range,
@@ -12,8 +13,8 @@ use std::{
 };
 
 use crate::{
-  document::Document,
-  editor::{DEFAULT_MAX_LINE_WIDTH, Editor, ScrollAxis},
+  document::{DiffPanelSide, Document},
+  editor::{DEFAULT_MAX_LINE_WIDTH, DiffViewMode, Editor, ScrollAxis},
 };
 use syntax::{HighlightSpan, Theme};
 
@@ -26,14 +27,17 @@ const LINE_SCROLL_MULTIPLIER: f32 = 3.0;
 const SCROLL_AXIS_RATIO: f32 = 1.1;
 const SCROLL_AXIS_SWITCH_RATIO: f32 = 1.4;
 const SCROLL_AXIS_TIMEOUT_MS: u64 = 150;
+const SPLIT_DIVIDER_WIDTH: f32 = 1.0;
 
 /// Encapsulates layout information for mouse position -> text offset conversion
 #[derive(Clone)]
 pub struct PositionMap {
   pub shaped_lines: Vec<(usize, Arc<ShapedLine>)>,
+  pub row_to_line: Vec<Option<usize>>,
   pub bounds: Bounds<Pixels>,
   pub line_height: Pixels,
   pub viewport: Range<usize>,
+  pub scroll_x: Pixels,
 }
 
 impl PositionMap {
@@ -48,22 +52,21 @@ impl PositionMap {
 
     let y_offset = position.y - self.bounds.top();
     let row_in_viewport = (y_offset / self.line_height).floor() as usize;
-    let actual_row = self.viewport.start + row_in_viewport;
-
-    if actual_row >= document.len_lines() {
+    if row_in_viewport >= self.row_to_line.len() {
       return Some(document.len());
     }
+    let line_idx = self.row_to_line.get(row_in_viewport).copied().flatten()?;
 
     let shaped = self
       .shaped_lines
       .iter()
-      .find(|(idx, _)| *idx == actual_row)
+      .find(|(idx, _)| *idx == line_idx)
       .map(|(_, s)| s)?;
 
-    let x_offset = position.x - self.bounds.left();
+    let x_offset = position.x - self.bounds.left() - self.scroll_x;
     let column = shaped.closest_index_for_x(x_offset);
 
-    let line_start = document.line_to_char(actual_row);
+    let line_start = document.line_to_char(line_idx);
     Some(line_start + column)
   }
 }
@@ -132,20 +135,58 @@ pub(crate) fn highlights_to_text_runs(
   runs
 }
 
+fn split_bounds(
+  bounds: Bounds<Pixels>,
+  right_width: Pixels,
+  gutter_width: Pixels,
+) -> (Bounds<Pixels>, Bounds<Pixels>, Bounds<Pixels>) {
+  let total_width = bounds.size.width;
+  let right_width = right_width.min(total_width).max(px(0.0));
+  let panel_left = (bounds.right() - right_width).max(bounds.left());
+
+  let left = Bounds::from_corners(
+    point(bounds.left(), bounds.top()),
+    point(panel_left, bounds.bottom()),
+  );
+
+  let right_text_left = (panel_left + gutter_width).min(bounds.right());
+  let right = Bounds::from_corners(
+    point(right_text_left, bounds.top()),
+    point(bounds.right(), bounds.bottom()),
+  );
+
+  let divider = Bounds::from_corners(
+    point(panel_left, bounds.top()),
+    point(panel_left + px(SPLIT_DIVIDER_WIDTH), bounds.bottom()),
+  );
+
+  (left, right, divider)
+}
+
 pub struct EditorElement {
   editor: Entity<Editor>,
 }
 
 pub struct PrepaintState {
   shaped_lines: Vec<(usize, Arc<ShapedLine>)>,
+  shaped_lines_left: Vec<(usize, Arc<ShapedLine>)>,
   cursor_quad: Option<PaintQuad>,
-  diff_background_quads: Vec<PaintQuad>,
-  diff_word_quads: Vec<PaintQuad>,
+  diff_background_quads_left: Vec<PaintQuad>,
+  diff_background_quads_right: Vec<PaintQuad>,
+  diff_word_quads_left: Vec<PaintQuad>,
+  diff_word_quads_right: Vec<PaintQuad>,
   selection_quads: Vec<PaintQuad>,
+  divider_quads: Vec<PaintQuad>,
+  split_rows: Vec<crate::document::SplitDiffRow>,
   viewport: Range<usize>,
   bounds: Bounds<Pixels>,
+  left_bounds: Bounds<Pixels>,
+  right_bounds: Bounds<Pixels>,
   line_height: Pixels,
   scroll_hitbox: Hitbox,
+  split_mode: bool,
+  left_scroll_x: Pixels,
+  right_scroll_x: Pixels,
 }
 
 impl EditorElement {
@@ -238,15 +279,9 @@ impl Element for EditorElement {
     };
     self.editor.update(cx, |editor, cx| {
       editor.viewport_height = bounds.size.height;
-      editor.viewport_width = window.bounds().size.width;
-
-      if editor.scroll_axis_lock == Some(ScrollAxis::Vertical)
-        && editor.scroll_handle.offset().x != editor.last_scroll_x
-      {
-        editor
-          .scroll_handle
-          .set_offset(point(editor.last_scroll_x, px(0.0)));
-      }
+      editor.viewport_width = bounds.size.width
+        + px(crate::editor::GUTTER_WIDTH)
+        + px(crate::editor::EDITOR_PADDING) * 2.0;
 
       if diff_epoch > editor.last_diff_epoch || diff_version > editor.last_diff_version {
         editor.sync_view_selection_from_buffer(cx);
@@ -254,54 +289,145 @@ impl Element for EditorElement {
 
       if diff_epoch > editor.last_diff_epoch {
         editor.line_layouts.clear();
+        editor.line_layouts_left.clear();
         editor.last_diff_epoch = diff_epoch;
         editor.last_diff_version = diff_version;
       } else if diff_version > editor.last_diff_version {
         for line_idx in &dirty_diff_lines {
           editor.line_layouts.remove(line_idx);
+          editor.line_layouts_left.remove(line_idx);
         }
         editor.last_diff_version = diff_version;
       }
 
       if highlights_epoch > editor.last_highlights_epoch {
         editor.line_layouts.clear();
+        editor.line_layouts_left.clear();
         editor.last_highlights_epoch = highlights_epoch;
         editor.last_highlights_version = highlights_version;
       } else if highlights_version > editor.last_highlights_version {
         for line_idx in &dirty_highlight_lines {
           editor.line_layouts.remove(line_idx);
+          editor.line_layouts_left.remove(line_idx);
         }
         editor.last_highlights_version = highlights_version;
       }
     });
 
-    let (viewport, selected_range, cursor_offset, mut shaped_lines, lines_to_shape) = {
+    let (split_mode, left_bounds, right_bounds, divider_bounds) = {
+      let editor = self.editor.read(cx);
+      let document = editor.document().read(cx);
+      let split_mode = editor.diff_view_mode == DiffViewMode::Split && document.diff_enabled();
+      if split_mode {
+        let max_width = bounds.size.width.max(px(1.0));
+        let min_width = px(crate::editor::SPLIT_RIGHT_MIN_WIDTH).min(max_width);
+        let right_width = editor.split_right_width.max(min_width).min(max_width);
+        let gutter_width = px(crate::editor::GUTTER_WIDTH);
+        let (left, right, divider) = split_bounds(bounds, right_width, gutter_width);
+        (true, left, right, Some(divider))
+      } else {
+        (false, bounds, bounds, None)
+      }
+    };
+    let (left_scroll_x, right_scroll_x) = {
+      let editor = self.editor.read(cx);
+      (editor.scroll_offset_x_left, editor.scroll_offset_x_right)
+    };
+    let active_panel = {
+      let editor = self.editor.read(cx);
+      if split_mode {
+        editor.active_diff_panel
+      } else {
+        DiffPanelSide::Right
+      }
+    };
+
+    let (
+      viewport,
+      selected_range,
+      cursor_offset,
+      mut shaped_lines,
+      mut shaped_lines_left,
+      lines_to_shape,
+      lines_to_shape_left,
+      split_rows,
+    ) = {
       let editor = self.editor.read(cx);
       let document = editor.document().read(cx);
       let line_height = window.line_height();
       let scroll_offset = editor.scroll_offset_y;
 
-      let viewport =
-        self.calculate_viewport(bounds, line_height, scroll_offset, document.len_lines());
+      let total_rows = if split_mode {
+        document.split_row_count()
+      } else {
+        document.len_lines()
+      };
+      let viewport = self.calculate_viewport(bounds, line_height, scroll_offset, total_rows);
 
       let mut lines_to_shape = Vec::new();
+      let mut lines_to_shape_left = Vec::new();
       let mut shaped_lines = Vec::new();
+      let mut shaped_lines_left = Vec::new();
+      let mut split_rows = Vec::new();
 
-      for line_idx in viewport.clone() {
-        if line_idx >= document.len_lines() {
-          break;
-        }
-        match editor.line_layouts.get(&line_idx) {
-          Some(shaped) => {
-            // Arc::clone is cheap - just incrementing reference count
-            shaped_lines.push((line_idx, Arc::clone(shaped)));
+      if split_mode {
+        for row_idx in viewport.clone() {
+          let row = document
+            .split_row(row_idx)
+            .unwrap_or(crate::document::SplitDiffRow {
+              left_line: None,
+              right_line: None,
+            });
+          split_rows.push(row);
+
+          if let Some(line_idx) = row.left_line {
+            match editor.line_layouts_left.get(&line_idx) {
+              Some(shaped) => {
+                shaped_lines_left.push((line_idx, Arc::clone(shaped)));
+              }
+              None => {
+                let line_content = document
+                  .line_content(line_idx)
+                  .map(|cow| cow.into_owned())
+                  .unwrap_or_default();
+                lines_to_shape_left.push((line_idx, line_content));
+              }
+            }
           }
-          None => {
-            let line_content = document
-              .line_content(line_idx)
-              .map(|cow| cow.into_owned())
-              .unwrap_or_default();
-            lines_to_shape.push((line_idx, line_content));
+
+          if let Some(line_idx) = row.right_line {
+            match editor.line_layouts.get(&line_idx) {
+              Some(shaped) => {
+                shaped_lines.push((line_idx, Arc::clone(shaped)));
+              }
+              None => {
+                let line_content = document
+                  .line_content(line_idx)
+                  .map(|cow| cow.into_owned())
+                  .unwrap_or_default();
+                lines_to_shape.push((line_idx, line_content));
+              }
+            }
+          }
+        }
+      } else {
+        for line_idx in viewport.clone() {
+          if line_idx >= document.len_lines() {
+            break;
+          }
+
+          match editor.line_layouts.get(&line_idx) {
+            Some(shaped) => {
+              // Arc::clone is cheap - just incrementing reference count
+              shaped_lines.push((line_idx, Arc::clone(shaped)));
+            }
+            None => {
+              let line_content = document
+                .line_content(line_idx)
+                .map(|cow| cow.into_owned())
+                .unwrap_or_default();
+              lines_to_shape.push((line_idx, line_content));
+            }
           }
         }
       }
@@ -311,23 +437,37 @@ impl Element for EditorElement {
         editor.selected_range.clone(),
         editor.cursor_offset(),
         shaped_lines,
+        shaped_lines_left,
         lines_to_shape,
+        lines_to_shape_left,
+        split_rows,
       )
     };
+    let viewport_line_range = {
+      let document = self.editor.read(cx).document().read(cx);
+      if split_mode {
+        document
+          .split_row_range_to_line_range(viewport.clone())
+          .or_else(|| Some(viewport.clone()))
+      } else {
+        Some(viewport.clone())
+      }
+    };
     if diff_changed {
-      let viewport = viewport.clone();
-      self.editor.update(cx, |editor, cx| {
-        editor.document.update(cx, |doc, cx| {
-          if doc.diff_enabled() {
-            doc.schedule_viewport_highlights(
-              viewport,
-              None,
-              crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
-              cx,
-            );
-          }
+      if let Some(viewport) = viewport_line_range.clone() {
+        self.editor.update(cx, |editor, cx| {
+          editor.document.update(cx, |doc, cx| {
+            if doc.diff_enabled() {
+              doc.schedule_viewport_highlights(
+                viewport,
+                None,
+                crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
+                cx,
+              );
+            }
+          });
         });
-      });
+      }
     }
 
     let style = window.text_style();
@@ -337,30 +477,79 @@ impl Element for EditorElement {
     // Get theme for syntax highlighting and diff colors
     let theme = self.editor.read(cx).theme.clone();
 
-    let mut diff_background_quads = Vec::new();
+    let mut diff_background_quads_left = Vec::new();
+    let mut diff_background_quads_right = Vec::new();
+    let mut divider_quads = Vec::new();
     {
       let document = self.editor.read(cx).document().read(cx);
-      for line_idx in viewport.clone() {
-        let Some(info) = document.diff_line_info(line_idx) else {
-          continue;
-        };
-        let color = match info.kind {
-          crate::document::DiffLineKind::Added => Some(theme.diff_added_background()),
-          crate::document::DiffLineKind::Deleted => Some(theme.diff_removed_background()),
-          _ => None,
-        };
-        if let Some(color) = color {
-          let y = bounds.top() + line_height * (line_idx - viewport.start) as f32;
-          diff_background_quads.push(fill(
-            Bounds::from_corners(
-              point(bounds.left(), y),
-              point(bounds.right(), y + line_height),
-            ),
-            color,
-          ));
+      if let Some(divider_bounds) = divider_bounds {
+        divider_quads.push(fill(divider_bounds, theme.line_number()));
+      }
+      if split_mode {
+        for (row_offset, row) in split_rows.iter().enumerate() {
+          let y_left = left_bounds.top() + line_height * row_offset as f32;
+          if let Some(line_idx) = row.left_line {
+            if let Some(info) = document.diff_line_info(line_idx)
+              && matches!(info.kind, crate::document::DiffLineKind::Deleted)
+            {
+              diff_background_quads_left.push(fill(
+                Bounds::from_corners(
+                  point(left_bounds.left(), y_left),
+                  point(left_bounds.right(), y_left + line_height),
+                ),
+                theme.diff_removed_background(),
+              ));
+            }
+          }
+          let y_right = right_bounds.top() + line_height * row_offset as f32;
+          if let Some(line_idx) = row.right_line {
+            if let Some(info) = document.diff_line_info(line_idx)
+              && matches!(info.kind, crate::document::DiffLineKind::Added)
+            {
+              diff_background_quads_right.push(fill(
+                Bounds::from_corners(
+                  point(right_bounds.left(), y_right),
+                  point(right_bounds.right(), y_right + line_height),
+                ),
+                theme.diff_added_background(),
+              ));
+            }
+          }
+        }
+      } else {
+        for line_idx in viewport.clone() {
+          let Some(info) = document.diff_line_info(line_idx) else {
+            continue;
+          };
+          match info.kind {
+            crate::document::DiffLineKind::Added => {
+              let y = right_bounds.top() + line_height * (line_idx - viewport.start) as f32;
+              let start = bounds.left();
+              let end = bounds.right();
+              diff_background_quads_right.push(fill(
+                Bounds::from_corners(point(start, y), point(end, y + line_height)),
+                theme.diff_added_background(),
+              ));
+            }
+            crate::document::DiffLineKind::Deleted => {
+              let y = left_bounds.top() + line_height * (line_idx - viewport.start) as f32;
+              diff_background_quads_right.push(fill(
+                Bounds::from_corners(
+                  point(bounds.left(), y),
+                  point(bounds.right(), y + line_height),
+                ),
+                theme.diff_removed_background(),
+              ));
+            }
+            _ => {}
+          }
         }
       }
     }
+
+    let cache_range = viewport_line_range
+      .clone()
+      .unwrap_or_else(|| viewport.clone());
 
     let mut newly_shaped = Vec::new();
     for (line_idx, line_content) in lines_to_shape {
@@ -396,25 +585,117 @@ impl Element for EditorElement {
           shaped_lines.push((line_idx, shaped_arc));
         }
         // Limit cache size to prevent memory issues with large files
-        editor.ensure_cache_size(viewport.clone());
+        editor.ensure_cache_size(cache_range.clone());
       });
     }
 
-    // Calculate maximum line width for horizontal scrolling
-    let max_width = shaped_lines
+    let mut newly_shaped_left = Vec::new();
+    if split_mode {
+      for (line_idx, line_content) in lines_to_shape_left {
+        let document = self.editor.read(cx).document().read(cx);
+        let runs = if let Some(highlights) = document.get_highlights_for_line(line_idx) {
+          highlights_to_text_runs(highlights.as_ref(), &line_content, &theme, &style)
+        } else {
+          vec![TextRun {
+            len: line_content.len(),
+            font: style.font(),
+            color: style.color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+          }]
+        };
+
+        let shaped = window
+          .text_system()
+          .shape_line(line_content.into(), font_size, &runs, None);
+        newly_shaped_left.push((line_idx, shaped));
+      }
+    }
+
+    if split_mode && !newly_shaped_left.is_empty() {
+      self.editor.update(cx, |editor, _| {
+        for (line_idx, shaped) in newly_shaped_left {
+          let shaped_arc = Arc::new(shaped);
+          editor
+            .line_layouts_left
+            .insert(line_idx, shaped_arc.clone());
+          shaped_lines_left.push((line_idx, shaped_arc));
+        }
+        editor.ensure_cache_size(cache_range.clone());
+      });
+    }
+
+    let max_width_right = shaped_lines
       .iter()
       .map(|(_, shaped)| shaped.width)
       .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
       .unwrap_or(px(DEFAULT_MAX_LINE_WIDTH));
+    let max_width_left = shaped_lines_left
+      .iter()
+      .map(|(_, shaped)| shaped.width)
+      .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+      .unwrap_or(px(0.0));
+    let left_panel_width = left_bounds.size.width;
+    let right_panel_width = if split_mode {
+      right_bounds.size.width
+    } else {
+      bounds.size.width
+    };
 
     self.editor.update(cx, |editor, _| {
-      editor.max_line_width = editor.max_line_width.max(max_width);
+      editor.max_line_width = editor.max_line_width.max(max_width_right);
+      editor.max_line_width_left = editor.max_line_width_left.max(max_width_left);
+
+      let right_content_width = editor.max_line_width + px(crate::editor::EXTRA_EDITOR_WIDTH);
+      editor.scroll_offset_x_right = editor.clamp_scroll_x(
+        editor.scroll_offset_x_right,
+        right_content_width,
+        right_panel_width,
+      );
+
+      if split_mode {
+        let left_content_width = editor.max_line_width_left + px(crate::editor::EXTRA_EDITOR_WIDTH);
+        editor.scroll_offset_x_left = editor.clamp_scroll_x(
+          editor.scroll_offset_x_left,
+          left_content_width,
+          left_panel_width,
+        );
+      } else {
+        editor.scroll_offset_x_left = px(0.0);
+      }
     });
 
     let document = self.editor.read(cx).document().read(cx);
 
     let cursor_line = document.char_to_line(cursor_offset);
-    let cursor_quad = if viewport.contains(&cursor_line) {
+    let cursor_quad = if split_mode {
+      let (panel_bounds, panel_scroll_x, panel_lines) = match active_panel {
+        DiffPanelSide::Left => (left_bounds, left_scroll_x, &shaped_lines_left),
+        DiffPanelSide::Right => (right_bounds, right_scroll_x, &shaped_lines),
+      };
+      let shaped_opt = panel_lines
+        .iter()
+        .find(|(idx, _)| *idx == cursor_line)
+        .map(|(_, shaped)| shaped);
+      let row_idx = document.split_row_for_line(cursor_line, active_panel);
+      match (shaped_opt, row_idx) {
+        (Some(shaped), Some(row_idx)) if row_idx >= viewport.start && row_idx < viewport.end => {
+          let line_start = document.line_to_char(cursor_line);
+          let cursor_in_line = cursor_offset - line_start;
+          let cursor_x = shaped.x_for_index(cursor_in_line);
+          let y = panel_bounds.top() + line_height * (row_idx - viewport.start) as f32;
+          Some(fill(
+            Bounds::new(
+              point(panel_bounds.left() + cursor_x + panel_scroll_x, y),
+              size(px(2.), line_height),
+            ),
+            theme.cursor(),
+          ))
+        }
+        _ => None,
+      }
+    } else if viewport.contains(&cursor_line) {
       let shaped_opt = shaped_lines
         .iter()
         .find(|(idx, _)| *idx == cursor_line)
@@ -426,7 +707,7 @@ impl Element for EditorElement {
         let y = bounds.top() + line_height * (cursor_line - viewport.start) as f32;
         Some(fill(
           Bounds::new(
-            point(bounds.left() + cursor_x, y),
+            point(bounds.left() + cursor_x + right_scroll_x, y),
             size(px(2.), line_height),
           ),
           theme.cursor(),
@@ -438,42 +719,132 @@ impl Element for EditorElement {
       None
     };
 
-    let mut diff_word_quads = Vec::new();
-    for (line_idx, shaped_line) in &shaped_lines {
-      let Some(ranges) = document.diff_word_ranges(*line_idx) else {
-        continue;
-      };
-      let Some(info) = document.diff_line_info(*line_idx) else {
-        continue;
-      };
-      let color = match info.kind {
-        crate::document::DiffLineKind::Added => theme.diff_added_word_background(),
-        crate::document::DiffLineKind::Deleted => theme.diff_removed_word_background(),
-        _ => continue,
-      };
-      let line_len = document
-        .line_range(*line_idx)
-        .map(|range| range.end - range.start)
-        .unwrap_or(0);
-      let y = bounds.top() + line_height * (*line_idx - viewport.start) as f32;
-      for range in ranges.iter() {
-        let start = range.start.min(line_len);
-        let end = range.end.min(line_len);
-        if end <= start {
+    let mut diff_word_quads_left = Vec::new();
+    let mut diff_word_quads_right = Vec::new();
+    if split_mode {
+      for (line_idx, shaped_line) in &shaped_lines_left {
+        let Some(info) = document.diff_line_info(*line_idx) else {
+          continue;
+        };
+        if !matches!(info.kind, crate::document::DiffLineKind::Deleted) {
           continue;
         }
-        let x_start = shaped_line.x_for_index(start);
-        let x_end = shaped_line.x_for_index(end);
-        if x_end <= x_start {
+        let Some(ranges) = document.diff_word_ranges(*line_idx) else {
+          continue;
+        };
+        let Some(row_idx) = document.split_row_for_line(*line_idx, DiffPanelSide::Left) else {
+          continue;
+        };
+        if row_idx < viewport.start || row_idx >= viewport.end {
           continue;
         }
-        diff_word_quads.push(fill(
-          Bounds::from_corners(
-            point(bounds.left() + x_start, y),
-            point(bounds.left() + x_end, y + line_height),
-          ),
-          color,
-        ));
+        let line_len = document
+          .line_range(*line_idx)
+          .map(|range| range.end - range.start)
+          .unwrap_or(0);
+        let y = left_bounds.top() + line_height * (row_idx - viewport.start) as f32;
+        for range in ranges.iter() {
+          let start = range.start.min(line_len);
+          let end = range.end.min(line_len);
+          if end <= start {
+            continue;
+          }
+          let x_start = shaped_line.x_for_index(start);
+          let x_end = shaped_line.x_for_index(end);
+          if x_end <= x_start {
+            continue;
+          }
+          diff_word_quads_left.push(fill(
+            Bounds::from_corners(
+              point(left_bounds.left() + x_start + left_scroll_x, y),
+              point(left_bounds.left() + x_end + left_scroll_x, y + line_height),
+            ),
+            theme.diff_removed_word_background(),
+          ));
+        }
+      }
+
+      for (line_idx, shaped_line) in &shaped_lines {
+        let Some(info) = document.diff_line_info(*line_idx) else {
+          continue;
+        };
+        if !matches!(info.kind, crate::document::DiffLineKind::Added) {
+          continue;
+        }
+        let Some(ranges) = document.diff_word_ranges(*line_idx) else {
+          continue;
+        };
+        let Some(row_idx) = document.split_row_for_line(*line_idx, DiffPanelSide::Right) else {
+          continue;
+        };
+        if row_idx < viewport.start || row_idx >= viewport.end {
+          continue;
+        }
+        let line_len = document
+          .line_range(*line_idx)
+          .map(|range| range.end - range.start)
+          .unwrap_or(0);
+        let y = right_bounds.top() + line_height * (row_idx - viewport.start) as f32;
+        for range in ranges.iter() {
+          let start = range.start.min(line_len);
+          let end = range.end.min(line_len);
+          if end <= start {
+            continue;
+          }
+          let x_start = shaped_line.x_for_index(start);
+          let x_end = shaped_line.x_for_index(end);
+          if x_end <= x_start {
+            continue;
+          }
+          diff_word_quads_right.push(fill(
+            Bounds::from_corners(
+              point(right_bounds.left() + x_start + right_scroll_x, y),
+              point(
+                right_bounds.left() + x_end + right_scroll_x,
+                y + line_height,
+              ),
+            ),
+            theme.diff_added_word_background(),
+          ));
+        }
+      }
+    } else {
+      for (line_idx, shaped_line) in &shaped_lines {
+        let Some(ranges) = document.diff_word_ranges(*line_idx) else {
+          continue;
+        };
+        let Some(info) = document.diff_line_info(*line_idx) else {
+          continue;
+        };
+        let color = match info.kind {
+          crate::document::DiffLineKind::Added => theme.diff_added_word_background(),
+          crate::document::DiffLineKind::Deleted => theme.diff_removed_word_background(),
+          _ => continue,
+        };
+        let line_len = document
+          .line_range(*line_idx)
+          .map(|range| range.end - range.start)
+          .unwrap_or(0);
+        let y = bounds.top() + line_height * (*line_idx - viewport.start) as f32;
+        for range in ranges.iter() {
+          let start = range.start.min(line_len);
+          let end = range.end.min(line_len);
+          if end <= start {
+            continue;
+          }
+          let x_start = shaped_line.x_for_index(start);
+          let x_end = shaped_line.x_for_index(end);
+          if x_end <= x_start {
+            continue;
+          }
+          diff_word_quads_right.push(fill(
+            Bounds::from_corners(
+              point(bounds.left() + x_start + right_scroll_x, y),
+              point(bounds.left() + x_end + right_scroll_x, y + line_height),
+            ),
+            color,
+          ));
+        }
       }
     }
 
@@ -485,11 +856,39 @@ impl Element for EditorElement {
       let sel_end_line = document.char_to_line(sel_end);
 
       for line_idx in sel_start_line..=sel_end_line {
-        if !viewport.contains(&line_idx) {
+        let (panel_bounds, panel_scroll_x, panel_lines, panel_side) = if split_mode {
+          match active_panel {
+            DiffPanelSide::Left => (
+              left_bounds,
+              left_scroll_x,
+              &shaped_lines_left,
+              DiffPanelSide::Left,
+            ),
+            DiffPanelSide::Right => (
+              right_bounds,
+              right_scroll_x,
+              &shaped_lines,
+              DiffPanelSide::Right,
+            ),
+          }
+        } else {
+          (bounds, right_scroll_x, &shaped_lines, DiffPanelSide::Right)
+        };
+
+        let row_idx = if split_mode {
+          document.split_row_for_line(line_idx, panel_side)
+        } else {
+          Some(line_idx)
+        };
+        let Some(row_idx) = row_idx else {
+          continue;
+        };
+        if row_idx < viewport.start || row_idx >= viewport.end {
           continue;
         }
+
         let line_range = document.line_range(line_idx).unwrap();
-        let shaped_opt = shaped_lines
+        let shaped_opt = panel_lines
           .iter()
           .find(|(idx, _)| *idx == line_idx)
           .map(|(_, shaped)| shaped);
@@ -501,7 +900,7 @@ impl Element for EditorElement {
           let sel_line_end = sel_end.min(line_end) - line_start;
           let x_start = shaped.x_for_index(sel_line_start);
           let x_end = shaped.x_for_index(sel_line_end);
-          let y = bounds.top() + line_height * (line_idx - viewport.start) as f32;
+          let y = panel_bounds.top() + line_height * (row_idx - viewport.start) as f32;
 
           // If selection is empty on this line (selecting just the newline),
           // Only add width if we're actually selecting the newline character
@@ -514,8 +913,11 @@ impl Element for EditorElement {
 
           selection_quads.push(fill(
             Bounds::from_corners(
-              point(bounds.left() + x_start, y),
-              point(bounds.left() + visual_x_end, y + line_height),
+              point(panel_bounds.left() + x_start + panel_scroll_x, y),
+              point(
+                panel_bounds.left() + visual_x_end + panel_scroll_x,
+                y + line_height,
+              ),
             ),
             theme.selection(),
           ));
@@ -525,14 +927,24 @@ impl Element for EditorElement {
 
     PrepaintState {
       shaped_lines,
+      shaped_lines_left,
       cursor_quad,
-      diff_background_quads,
-      diff_word_quads,
+      diff_background_quads_left,
+      diff_background_quads_right,
+      diff_word_quads_left,
+      diff_word_quads_right,
       selection_quads,
+      divider_quads,
+      split_rows,
       viewport,
       bounds,
+      left_bounds,
+      right_bounds,
       line_height,
       scroll_hitbox,
+      split_mode,
+      left_scroll_x,
+      right_scroll_x,
     }
   }
 
@@ -560,21 +972,74 @@ impl Element for EditorElement {
       cx,
     );
 
+    let position_bounds = if prepaint.split_mode {
+      prepaint.right_bounds
+    } else {
+      prepaint.bounds
+    };
+
+    let (left_row_to_line, right_row_to_line) = if prepaint.split_mode {
+      (
+        prepaint
+          .split_rows
+          .iter()
+          .map(|row| row.left_line)
+          .collect(),
+        prepaint
+          .split_rows
+          .iter()
+          .map(|row| row.right_line)
+          .collect(),
+      )
+    } else {
+      let row_to_line: Vec<Option<usize>> = (0..prepaint.viewport.len())
+        .map(|offset| Some(prepaint.viewport.start + offset))
+        .collect();
+      (row_to_line.clone(), row_to_line)
+    };
+
     // Use Rc to avoid cloning PositionMap in closures
-    let position_map = Rc::new(PositionMap {
-      shaped_lines: prepaint.shaped_lines.clone(),
-      bounds: prepaint.bounds,
+    let left_position_map = Rc::new(PositionMap {
+      shaped_lines: prepaint.shaped_lines_left.clone(),
+      row_to_line: left_row_to_line,
+      bounds: prepaint.left_bounds,
       line_height: prepaint.line_height,
       viewport: prepaint.viewport.clone(),
+      scroll_x: prepaint.left_scroll_x,
+    });
+    let right_position_map = Rc::new(PositionMap {
+      shaped_lines: prepaint.shaped_lines.clone(),
+      row_to_line: right_row_to_line,
+      bounds: position_bounds,
+      line_height: prepaint.line_height,
+      viewport: prepaint.viewport.clone(),
+      scroll_x: prepaint.right_scroll_x,
     });
 
     window.on_mouse_event({
       let editor = self.editor.clone();
-      let position_map = Rc::clone(&position_map);
+      let left_position_map = Rc::clone(&left_position_map);
+      let right_position_map = Rc::clone(&right_position_map);
+      let split_mode = prepaint.split_mode;
+      let left_bounds = prepaint.left_bounds;
+      let right_bounds = prepaint.right_bounds;
       move |event: &MouseDownEvent, phase, window, cx| {
         if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
           editor.update(cx, |editor, cx| {
-            editor.mouse_left_down(event, &position_map, window, cx);
+            if split_mode {
+              let (panel, map) = if left_bounds.contains(&event.position) {
+                (DiffPanelSide::Left, Rc::clone(&left_position_map))
+              } else if right_bounds.contains(&event.position) {
+                (DiffPanelSide::Right, Rc::clone(&right_position_map))
+              } else {
+                return;
+              };
+              editor.active_diff_panel = panel;
+              editor.mouse_left_down(event, &map, window, cx);
+            } else {
+              editor.active_diff_panel = DiffPanelSide::Right;
+              editor.mouse_left_down(event, &right_position_map, window, cx);
+            }
           });
         }
       }
@@ -593,13 +1058,30 @@ impl Element for EditorElement {
 
     window.on_mouse_event({
       let editor = self.editor.clone();
-      let position_map = Rc::clone(&position_map);
+      let left_position_map = Rc::clone(&left_position_map);
+      let right_position_map = Rc::clone(&right_position_map);
+      let split_mode = prepaint.split_mode;
       move |event: &MouseMoveEvent, phase, window, cx| {
         if phase == DispatchPhase::Bubble {
-          let is_selecting = editor.read(cx).is_selecting;
+          let (is_selecting, active_panel) = {
+            let editor = editor.read(cx);
+            (
+              editor.is_selecting,
+              if split_mode {
+                editor.active_diff_panel
+              } else {
+                DiffPanelSide::Right
+              },
+            )
+          };
           if is_selecting {
+            let map = if split_mode && active_panel == DiffPanelSide::Left {
+              Rc::clone(&left_position_map)
+            } else {
+              Rc::clone(&right_position_map)
+            };
             editor.update(cx, |editor, cx| {
-              editor.mouse_dragged(event, &position_map, window, cx);
+              editor.mouse_dragged(event, &map, window, cx);
             });
           }
         }
@@ -610,11 +1092,18 @@ impl Element for EditorElement {
     window.on_mouse_event({
       let editor = self.editor.clone();
       let scroll_hitbox = prepaint.scroll_hitbox.clone();
+      let left_bounds = prepaint.left_bounds;
+      let right_bounds = prepaint.right_bounds;
+      let split_mode = prepaint.split_mode;
       move |event: &ScrollWheelEvent, phase, window, cx| {
         if phase == DispatchPhase::Bubble && scroll_hitbox.should_handle_scroll(window) {
           editor.update(cx, |editor, cx| {
             let document = editor.document().read(cx);
-            let total_lines = document.len_lines();
+            let total_rows = if split_mode {
+              document.split_row_count()
+            } else {
+              document.len_lines()
+            };
             let now = Instant::now();
             let reset_lock = editor
               .last_scroll_time
@@ -622,7 +1111,6 @@ impl Element for EditorElement {
               .unwrap_or(true);
             if reset_lock {
               editor.scroll_axis_lock = None;
-              editor.last_scroll_x = editor.scroll_handle.offset().x;
             }
             editor.last_scroll_time = Some(now);
 
@@ -630,13 +1118,12 @@ impl Element for EditorElement {
             // Note: Negative delta because scrolling down should increase scroll_offset
             let pixel_delta = event.delta.pixel_delta(window.line_height());
             let delta_x_px = pixel_delta.x;
-            let delta_y_px = -pixel_delta.y;
             let delta_y = match event.delta {
               ScrollDelta::Pixels(point) => -(point.y / px(PIXEL_SCROLL_DIVISOR)),
               ScrollDelta::Lines(point) => -(point.y * LINE_SCROLL_MULTIPLIER),
             };
             let abs_x = delta_x_px.abs();
-            let abs_y = delta_y_px.abs();
+            let abs_y = pixel_delta.y.abs();
             let axis = match editor.scroll_axis_lock {
               None => {
                 let axis = if abs_x > abs_y * SCROLL_AXIS_RATIO {
@@ -644,15 +1131,11 @@ impl Element for EditorElement {
                 } else {
                   ScrollAxis::Vertical
                 };
-                if axis == ScrollAxis::Horizontal {
-                  editor.last_scroll_x = editor.scroll_handle.offset().x;
-                }
                 editor.scroll_axis_lock = Some(axis);
                 axis
               }
               Some(axis) => {
                 if axis == ScrollAxis::Vertical && abs_x > abs_y * SCROLL_AXIS_SWITCH_RATIO {
-                  editor.last_scroll_x = editor.scroll_handle.offset().x;
                   editor.scroll_axis_lock = Some(ScrollAxis::Horizontal);
                   ScrollAxis::Horizontal
                 } else if axis == ScrollAxis::Horizontal && abs_y > abs_x * SCROLL_AXIS_SWITCH_RATIO
@@ -666,39 +1149,61 @@ impl Element for EditorElement {
             };
 
             if axis == ScrollAxis::Horizontal {
-              let new_scroll_x = editor.scroll_handle.offset().x + delta_x_px;
-              editor
-                .scroll_handle
-                .set_offset(point(new_scroll_x, px(0.0)));
-              editor.last_scroll_x = new_scroll_x;
+              let use_right = !split_mode || right_bounds.contains(&event.position);
+              let panel_width = if use_right {
+                right_bounds.size.width
+              } else {
+                left_bounds.size.width
+              };
+              let content_width = if use_right {
+                editor.max_line_width + px(crate::editor::EXTRA_EDITOR_WIDTH)
+              } else {
+                editor.max_line_width_left + px(crate::editor::EXTRA_EDITOR_WIDTH)
+              };
+              let current_scroll = if use_right {
+                editor.scroll_offset_x_right
+              } else {
+                editor.scroll_offset_x_left
+              };
+              let new_scroll =
+                editor.clamp_scroll_x(current_scroll + delta_x_px, content_width, panel_width);
+              if use_right {
+                editor.scroll_offset_x_right = new_scroll;
+              } else {
+                editor.scroll_offset_x_left = new_scroll;
+              }
               cx.notify();
               return;
             }
 
             let new_scroll = (editor.scroll_offset_y + delta_y)
               .max(0.0)
-              .min((total_lines.saturating_sub(1)) as f32);
+              .min((total_rows.saturating_sub(1)) as f32);
 
             editor.scroll_offset_y = new_scroll;
-            if editor.scroll_handle.offset().x != editor.last_scroll_x {
-              editor
-                .scroll_handle
-                .set_offset(point(editor.last_scroll_x, px(0.0)));
-            }
-            let viewport = editor.viewport_range(window.line_height(), total_lines);
+            let viewport = editor.viewport_range(window.line_height(), total_rows);
+            let viewport_line_range = if split_mode {
+              document
+                .split_row_range_to_line_range(viewport.clone())
+                .or_else(|| Some(viewport.clone()))
+            } else {
+              Some(viewport.clone())
+            };
             editor.document.update(cx, |doc, cx| {
-              doc.schedule_viewport_highlights(
-                viewport.clone(),
-                None,
-                crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
-                cx,
-              );
-              if doc.diff_enabled() {
-                doc.schedule_viewport_diff(
-                  viewport,
-                  crate::document::VIEWPORT_DIFF_MARGIN_LINES,
+              if let Some(viewport) = viewport_line_range.clone() {
+                doc.schedule_viewport_highlights(
+                  viewport.clone(),
+                  None,
+                  crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
                   cx,
                 );
+                if doc.diff_enabled() {
+                  doc.schedule_viewport_diff(
+                    viewport,
+                    crate::document::VIEWPORT_DIFF_MARGIN_LINES,
+                    cx,
+                  );
+                }
               }
             });
             cx.notify();
@@ -708,34 +1213,128 @@ impl Element for EditorElement {
       }
     });
 
-    // Paint diff backgrounds
-    for quad in &prepaint.diff_background_quads {
-      window.paint_quad(quad.clone());
-    }
+    if prepaint.split_mode {
+      let (active_panel, is_dark) = {
+        let editor = self.editor.read(cx);
+        (editor.active_diff_panel, editor.theme.is_dark)
+      };
+      let draw_left_selection = active_panel == DiffPanelSide::Left;
+      let draw_right_selection = active_panel == DiffPanelSide::Right;
+      let left_mask = ContentMask {
+        bounds: prepaint.left_bounds,
+      };
+      let right_mask = ContentMask {
+        bounds: prepaint.right_bounds,
+      };
+      let mut left_lines_to_paint = Vec::new();
+      let mut right_lines_to_paint = Vec::new();
+      for (row_offset, row) in prepaint.split_rows.iter().enumerate() {
+        if let Some(line_idx) = row.left_line {
+          if let Some((_, shaped_line)) = prepaint
+            .shaped_lines_left
+            .iter()
+            .find(|(idx, _)| *idx == line_idx)
+          {
+            let y = prepaint.left_bounds.top() + prepaint.line_height * row_offset as f32;
+            left_lines_to_paint.push((Arc::clone(shaped_line), y));
+          }
+        }
+        if let Some(line_idx) = row.right_line {
+          if let Some((_, shaped_line)) = prepaint
+            .shaped_lines
+            .iter()
+            .find(|(idx, _)| *idx == line_idx)
+          {
+            let y = prepaint.right_bounds.top() + prepaint.line_height * row_offset as f32;
+            right_lines_to_paint.push((Arc::clone(shaped_line), y));
+          }
+        }
+      }
 
-    // Paint diff word highlights
-    for quad in &prepaint.diff_word_quads {
-      window.paint_quad(quad.clone());
-    }
+      window.with_content_mask(Some(left_mask), |window| {
+        for quad in &prepaint.diff_background_quads_left {
+          window.paint_quad(quad.clone());
+        }
+        for quad in &prepaint.diff_word_quads_left {
+          window.paint_quad(quad.clone());
+        }
+        if draw_left_selection {
+          for quad in &prepaint.selection_quads {
+            window.paint_quad(quad.clone());
+          }
+        }
+        for (shaped_line, y) in &left_lines_to_paint {
+          shaped_line
+            .paint(
+              point(prepaint.left_bounds.left() + prepaint.left_scroll_x, *y),
+              prepaint.line_height,
+              TextAlign::Left,
+              None,
+              window,
+              cx,
+            )
+            .ok();
+        }
+      });
 
-    // Paint selection
-    for quad in &prepaint.selection_quads {
-      window.paint_quad(quad.clone());
-    }
+      let content_bg = if is_dark { black() } else { white() };
+      window.paint_quad(fill(prepaint.right_bounds, content_bg));
 
-    // Paint text lines
-    for (line_idx, shaped_line) in &prepaint.shaped_lines {
-      let y = bounds.top() + prepaint.line_height * (*line_idx - prepaint.viewport.start) as f32;
-      shaped_line
-        .paint(
-          point(bounds.left(), y),
-          prepaint.line_height,
-          TextAlign::Left,
-          None,
-          window,
-          cx,
-        )
-        .ok();
+      window.with_content_mask(Some(right_mask), |window| {
+        for quad in &prepaint.diff_background_quads_right {
+          window.paint_quad(quad.clone());
+        }
+        for quad in &prepaint.diff_word_quads_right {
+          window.paint_quad(quad.clone());
+        }
+        if draw_right_selection {
+          for quad in &prepaint.selection_quads {
+            window.paint_quad(quad.clone());
+          }
+        }
+        for (shaped_line, y) in &right_lines_to_paint {
+          shaped_line
+            .paint(
+              point(prepaint.right_bounds.left() + prepaint.right_scroll_x, *y),
+              prepaint.line_height,
+              TextAlign::Left,
+              None,
+              window,
+              cx,
+            )
+            .ok();
+        }
+      });
+
+      for quad in &prepaint.divider_quads {
+        window.paint_quad(quad.clone());
+      }
+    } else {
+      for quad in &prepaint.diff_background_quads_right {
+        window.paint_quad(quad.clone());
+      }
+
+      for quad in &prepaint.diff_word_quads_right {
+        window.paint_quad(quad.clone());
+      }
+
+      for quad in &prepaint.selection_quads {
+        window.paint_quad(quad.clone());
+      }
+
+      for (line_idx, shaped_line) in &prepaint.shaped_lines {
+        let y = bounds.top() + prepaint.line_height * (*line_idx - prepaint.viewport.start) as f32;
+        shaped_line
+          .paint(
+            point(bounds.left() + prepaint.right_scroll_x, y),
+            prepaint.line_height,
+            TextAlign::Left,
+            None,
+            window,
+            cx,
+          )
+          .ok();
+      }
     }
 
     // Paint cursor (if focused and visible from blink)
@@ -744,7 +1343,19 @@ impl Element for EditorElement {
       && cursor_visible
       && let Some(cursor_quad) = &prepaint.cursor_quad
     {
-      window.paint_quad(cursor_quad.clone());
+      if prepaint.split_mode {
+        let active_panel = self.editor.read(cx).active_diff_panel;
+        let bounds = if active_panel == DiffPanelSide::Left {
+          prepaint.left_bounds
+        } else {
+          prepaint.right_bounds
+        };
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+          window.paint_quad(cursor_quad.clone());
+        });
+      } else {
+        window.paint_quad(cursor_quad.clone());
+      }
     }
   }
 }

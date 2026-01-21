@@ -5,7 +5,10 @@
 
 use gpui::{ClipboardItem, Context, EntityInputHandler, Window, actions};
 
-use crate::{boundaries, editor::{Editor, TAB_WHITESPACE_COUNT}};
+use crate::{
+  boundaries,
+  editor::{Editor, TAB_WHITESPACE_COUNT},
+};
 
 actions!(
   editor,
@@ -527,12 +530,14 @@ pub fn paste(editor: &mut Editor, _: &Paste, window: &mut Window, cx: &mut Conte
 
 pub fn copy(editor: &mut Editor, _: &Copy, _: &mut Window, cx: &mut Context<Editor>) {
   if !editor.selected_range.is_empty() {
-    cx.write_to_clipboard(ClipboardItem::new_string(
-      editor
-        .document
-        .read(cx)
-        .slice_to_string(editor.selected_range.clone()),
-    ));
+    let doc = editor.document.read(cx);
+    let text = if editor.diff_view_mode == crate::editor::DiffViewMode::Split && doc.diff_enabled()
+    {
+      doc.slice_to_string_for_side(editor.selected_range.clone(), editor.active_diff_panel)
+    } else {
+      doc.slice_to_string(editor.selected_range.clone())
+    };
+    cx.write_to_clipboard(ClipboardItem::new_string(text));
   }
 }
 
@@ -541,12 +546,14 @@ pub fn cut(editor: &mut Editor, _: &Cut, window: &mut Window, cx: &mut Context<E
   if !editor.selected_range.is_empty() {
     let cursor = editor.cursor_offset();
     let current_line = editor.document.read(cx).char_to_line(cursor);
-    cx.write_to_clipboard(ClipboardItem::new_string(
-      editor
-        .document
-        .read(cx)
-        .slice_to_string(editor.selected_range.clone()),
-    ));
+    let doc = editor.document.read(cx);
+    let text = if editor.diff_view_mode == crate::editor::DiffViewMode::Split && doc.diff_enabled()
+    {
+      doc.slice_to_string_for_side(editor.selected_range.clone(), editor.active_diff_panel)
+    } else {
+      doc.slice_to_string(editor.selected_range.clone())
+    };
+    cx.write_to_clipboard(ClipboardItem::new_string(text));
     editor.replace_text_in_range(None, "", window, cx);
     // Invalidate cache from current line onwards since cut may affect multiple lines
     editor.invalidate_lines_from(current_line);
@@ -577,6 +584,7 @@ pub fn undo(editor: &mut Editor, _: &Undo, _window: &mut Window, cx: &mut Contex
 
       // Invalidate cache (content may have changed significantly)
       editor.line_layouts.clear();
+      editor.line_layouts_left.clear();
 
       // Move transaction to redo stack
       editor.redo_stack.push_back(transaction);
@@ -611,6 +619,7 @@ pub fn redo(editor: &mut Editor, _: &Redo, _window: &mut Window, cx: &mut Contex
 
       // Invalidate cache
       editor.line_layouts.clear();
+      editor.line_layouts_left.clear();
 
       // Move transaction to undo stack
       editor.undo_stack.push_back(transaction);

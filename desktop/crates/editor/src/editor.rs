@@ -7,18 +7,18 @@ use std::{
 
 use buffer::TransactionId;
 use gpui::{
-  App, Bounds, Context, CursorStyle, Entity, EntityInputHandler, FocusHandle, Focusable,
-  MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, ShapedLine,
-  UTF16Selection, Window, black, div, point, prelude::*, px, white,
+  App, Bounds, Context, CursorStyle, DragMoveEvent, Entity, EntityInputHandler, FocusHandle,
+  Focusable, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ShapedLine,
+  UTF16Selection, Window, black, div, prelude::*, px, white,
 };
 use syntax::Theme;
 
 use crate::{
   boundaries::{line_range_at_offset, word_range_at_offset},
   cursor_blink::CursorBlink,
-  document::Document,
+  document::{DiffPanelSide, Document},
   editor_element::{EditorElement, PositionMap},
-  gutter_element::GutterElement,
+  gutter_element::{GutterElement, GutterSide},
 };
 
 #[derive(Clone, Debug)]
@@ -35,7 +35,13 @@ const DEFAULT_VIEWPORT_WIDTH: f32 = 1200.0;
 /// Default maximum line width
 pub const DEFAULT_MAX_LINE_WIDTH: f32 = 800.0;
 /// Extra width added to editor content for horizontal scrolling
-const EXTRA_EDITOR_WIDTH: f32 = 200.0;
+pub(crate) const EXTRA_EDITOR_WIDTH: f32 = 200.0;
+/// Default width for the right diff panel in split mode
+const SPLIT_RIGHT_DEFAULT_WIDTH: f32 = 560.0;
+/// Minimum width for the right diff panel in split mode
+pub(crate) const SPLIT_RIGHT_MIN_WIDTH: f32 = 280.0;
+/// Width of the split resize handle
+const SPLIT_RESIZE_HANDLE_WIDTH: f32 = 6.0;
 /// Maximum number of cached shaped lines
 const MAX_CACHE_SIZE: usize = 200;
 /// Number of lines of padding when auto-scrolling to cursor
@@ -43,9 +49,9 @@ const SCROLL_PADDING: usize = 3;
 /// Number of spaces inserted for a tab
 pub(crate) const TAB_WHITESPACE_COUNT: usize = 2;
 /// Width of the gutter area
-const GUTTER_WIDTH: f32 = 70.0;
+pub(crate) const GUTTER_WIDTH: f32 = 70.0;
 /// Padding inside the editor content area
-const EDITOR_PADDING: f32 = 4.0;
+pub(crate) const EDITOR_PADDING: f32 = 4.0;
 
 pub struct Editor {
   pub document: Entity<Document>,
@@ -58,15 +64,18 @@ pub struct Editor {
 
   // Performance: cache and viewport
   pub line_layouts: HashMap<usize, Arc<ShapedLine>>,
+  pub line_layouts_left: HashMap<usize, Arc<ShapedLine>>,
 
   pub scroll_offset_y: f32, // Vertical scroll offset in lines (0.0 = top, 1.5 = 1.5 lines down)
   pub viewport_height: Pixels,
   pub viewport_width: Pixels,
   pub max_line_width: Pixels, // Maximum width of visible lines (never decreases to avoid scroll jumps)
-  pub scroll_handle: ScrollHandle, // Handle for horizontal scrolling
+  pub max_line_width_left: Pixels,
+  pub scroll_offset_x_left: Pixels,
+  pub scroll_offset_x_right: Pixels,
   pub(crate) scroll_axis_lock: Option<ScrollAxis>,
   pub(crate) last_scroll_time: Option<Instant>,
-  pub(crate) last_scroll_x: Pixels,
+  pub split_right_width: Pixels,
 
   // Cache size limit to prevent memory issues with large files
   pub(crate) max_cache_size: usize,
@@ -78,6 +87,8 @@ pub struct Editor {
   pub(crate) redo_stack: VecDeque<Transaction>,
 
   pub theme: Theme,
+  pub diff_view_mode: DiffViewMode,
+  pub active_diff_panel: DiffPanelSide,
 
   // Track syntax highlighting version to invalidate cache when highlights change
   pub last_highlights_version: usize,
@@ -93,6 +104,30 @@ pub struct Editor {
 pub(crate) enum ScrollAxis {
   Horizontal,
   Vertical,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DiffViewMode {
+  Inline,
+  Split,
+}
+
+impl DiffViewMode {
+  pub fn toggle(&mut self) {
+    *self = match self {
+      DiffViewMode::Inline => DiffViewMode::Split,
+      DiffViewMode::Split => DiffViewMode::Inline,
+    };
+  }
+}
+
+#[derive(Clone)]
+struct DraggedDiffSplitter;
+
+impl Render for DraggedDiffSplitter {
+  fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    gpui::Empty
+  }
 }
 
 impl Editor {
@@ -115,19 +150,24 @@ impl Editor {
       is_selecting: false,
       selected_range_buffer: Some(0..0),
       line_layouts: HashMap::new(),
+      line_layouts_left: HashMap::new(),
       scroll_offset_y: 0.0,
       viewport_height: px(DEFAULT_VIEWPORT_HEIGHT), // Will be updated on first render
       viewport_width: px(DEFAULT_VIEWPORT_WIDTH),   // Will be updated on first render
       max_line_width: px(DEFAULT_MAX_LINE_WIDTH),   // Will be updated on first render
-      scroll_handle: ScrollHandle::new(),
+      max_line_width_left: px(DEFAULT_MAX_LINE_WIDTH),
+      scroll_offset_x_left: px(0.0),
+      scroll_offset_x_right: px(0.0),
       scroll_axis_lock: None,
       last_scroll_time: None,
-      last_scroll_x: px(0.0),
+      split_right_width: px(SPLIT_RIGHT_DEFAULT_WIDTH),
       max_cache_size: MAX_CACHE_SIZE,
       target_column: None,
       undo_stack: VecDeque::new(),
       redo_stack: VecDeque::new(),
       theme,
+      diff_view_mode: DiffViewMode::Inline,
+      active_diff_panel: DiffPanelSide::Right,
       last_highlights_version: 0,
       last_highlights_epoch: 0,
       last_diff_version: 0,
@@ -143,6 +183,40 @@ impl Editor {
     }
   }
 
+  pub fn set_diff_view_mode(&mut self, mode: DiffViewMode, cx: &mut Context<Self>) {
+    if self.diff_view_mode != mode {
+      self.diff_view_mode = mode;
+      self.active_diff_panel = DiffPanelSide::Right;
+      self.line_layouts.clear();
+      self.line_layouts_left.clear();
+      self.max_line_width = px(DEFAULT_MAX_LINE_WIDTH);
+      self.max_line_width_left = px(DEFAULT_MAX_LINE_WIDTH);
+      cx.notify();
+    }
+  }
+
+  pub(crate) fn resize_split_right_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+    let max_width =
+      (self.viewport_width - px(GUTTER_WIDTH) - px(EDITOR_PADDING) * 2.0).max(px(1.0));
+    let min_width = px(SPLIT_RIGHT_MIN_WIDTH).min(max_width);
+    let width = width.max(min_width).min(max_width).round();
+    if self.split_right_width != width {
+      self.split_right_width = width;
+      cx.notify();
+    }
+  }
+
+  pub(crate) fn clamp_scroll_x(
+    &self,
+    scroll_x: Pixels,
+    content_width: Pixels,
+    panel_width: Pixels,
+  ) -> Pixels {
+    let panel_width = panel_width.max(px(1.0));
+    let max_scroll = (panel_width - content_width).min(px(0.0));
+    scroll_x.min(px(0.0)).max(max_scroll)
+  }
+
   pub fn document(&self) -> &Entity<Document> {
     &self.document
   }
@@ -153,6 +227,7 @@ impl Editor {
       doc.replace_all_text(text, cx);
     });
     self.line_layouts.clear();
+    self.line_layouts_left.clear();
     self.undo_stack.clear();
     self.redo_stack.clear();
     self.marked_range = None;
@@ -166,12 +241,16 @@ impl Editor {
   /// Invalidate a single line in the cache
   pub(crate) fn invalidate_line(&mut self, line: usize) {
     self.line_layouts.remove(&line);
+    self.line_layouts_left.remove(&line);
   }
 
   /// Invalidate all lines from start_line onwards (for multi-line edits)
   pub(crate) fn invalidate_lines_from(&mut self, start_line: usize) {
     self
       .line_layouts
+      .retain(|&line_idx, _| line_idx < start_line);
+    self
+      .line_layouts_left
       .retain(|&line_idx, _| line_idx < start_line);
   }
 
@@ -183,6 +262,14 @@ impl Editor {
 
       self
         .line_layouts
+        .retain(|&line_idx, _| line_idx >= viewport_start && line_idx < viewport_end);
+    }
+    if self.line_layouts_left.len() > self.max_cache_size {
+      let viewport_start = viewport.start.saturating_sub(50);
+      let viewport_end = viewport.end + 50;
+
+      self
+        .line_layouts_left
         .retain(|&line_idx, _| line_idx >= viewport_start && line_idx < viewport_end);
     }
   }
@@ -198,7 +285,19 @@ impl Editor {
     let document = self.document.read(cx);
     let cursor_offset = self.cursor_offset();
     let cursor_line = document.char_to_line(cursor_offset);
-    let total_lines = document.len_lines();
+    let split_mode = self.diff_view_mode == DiffViewMode::Split && document.diff_enabled();
+    let total_rows = if split_mode {
+      document.split_row_count()
+    } else {
+      document.len_lines()
+    };
+    let cursor_row = if split_mode {
+      document
+        .split_row_for_line(cursor_line, self.active_diff_panel)
+        .unwrap_or(cursor_line)
+    } else {
+      cursor_line
+    };
 
     // Calculate how many lines are visible in the viewport
     let line_height = window.line_height();
@@ -212,43 +311,93 @@ impl Editor {
     let scroll_end = scroll_start + visible_lines;
 
     // Ensure cursor is within the visible range with padding (vertical)
-    if cursor_line < scroll_start + scroll_padding {
+    if cursor_row < scroll_start + scroll_padding {
       // Cursor is too close to top, scroll up
-      self.scroll_offset_y = (cursor_line.saturating_sub(scroll_padding)) as f32;
-    } else if cursor_line >= scroll_end.saturating_sub(scroll_padding) {
+      self.scroll_offset_y = (cursor_row.saturating_sub(scroll_padding)) as f32;
+    } else if cursor_row >= scroll_end.saturating_sub(scroll_padding) {
       // Cursor is too close to bottom, scroll down
-      let target_line = cursor_line + scroll_padding;
+      let target_line = cursor_row + scroll_padding;
       self.scroll_offset_y = (target_line as f32 - visible_lines as f32 + 1.0).max(0.0);
     }
 
+    let active_panel = if split_mode {
+      self.active_diff_panel
+    } else {
+      DiffPanelSide::Right
+    };
+    let total_content_width =
+      (self.viewport_width - px(GUTTER_WIDTH) - px(EDITOR_PADDING) * 2.0).max(px(0.0));
+    let split_right_width = self.split_right_width.min(total_content_width);
+    let (text_area_width, current_scroll_x, max_line_width) =
+      if split_mode && active_panel == DiffPanelSide::Left {
+        let left_panel_width = (total_content_width - split_right_width).max(px(0.0));
+        (
+          left_panel_width,
+          self.scroll_offset_x_left,
+          self.max_line_width_left,
+        )
+      } else {
+        let panel_width = if split_mode {
+          split_right_width
+        } else {
+          total_content_width
+        };
+        let gutter_offset = if split_mode {
+          px(GUTTER_WIDTH)
+        } else {
+          px(0.0)
+        };
+        (
+          (panel_width - gutter_offset).max(px(0.0)),
+          self.scroll_offset_x_right,
+          self.max_line_width,
+        )
+      };
+
     // Ensure cursor is visible horizontally
-    if let Some(shaped_line) = self.line_layouts.get(&cursor_line) {
+    let shaped_line = if split_mode && active_panel == DiffPanelSide::Left {
+      self.line_layouts_left.get(&cursor_line)
+    } else {
+      self.line_layouts.get(&cursor_line)
+    };
+    if let Some(shaped_line) = shaped_line {
       let line_start = document.line_to_char(cursor_line);
       let cursor_in_line = cursor_offset - line_start;
       let cursor_x = shaped_line.x_for_index(cursor_in_line);
 
-      let horizontal_padding = px(GUTTER_WIDTH) + px(EDITOR_PADDING) + px(EXTRA_EDITOR_WIDTH);
-      let current_scroll_x = self.scroll_handle.offset().x;
+      let horizontal_padding = px(EDITOR_PADDING) + px(EXTRA_EDITOR_WIDTH);
 
       // Note: scroll_x is negative when scrolled right (0 = left edge, -100 = scrolled 100px right)
-      // visible area in absolute coordinates: [-current_scroll_x, -current_scroll_x + viewport_width]
+      // visible area in absolute coordinates: [-current_scroll_x, -current_scroll_x + text_area_width]
       let visible_start_x = -current_scroll_x;
-      let visible_end_x = -current_scroll_x + self.viewport_width;
+      let visible_end_x = -current_scroll_x + text_area_width;
 
       // Check if cursor is too far left
       if cursor_x < visible_start_x + horizontal_padding {
         let new_scroll_x = -(cursor_x - horizontal_padding).max(px(0.0));
-        self.scroll_handle.set_offset(point(new_scroll_x, px(0.0)));
+        let content_width = max_line_width + px(EXTRA_EDITOR_WIDTH);
+        let clamped = self.clamp_scroll_x(new_scroll_x, content_width, text_area_width);
+        if split_mode && active_panel == DiffPanelSide::Left {
+          self.scroll_offset_x_left = clamped;
+        } else {
+          self.scroll_offset_x_right = clamped;
+        }
       }
 
       // Check if cursor is too far right
       if cursor_x > visible_end_x - horizontal_padding {
-        let new_scroll_x = -(cursor_x - self.viewport_width + horizontal_padding);
-        self.scroll_handle.set_offset(point(new_scroll_x, px(0.0)));
+        let new_scroll_x = -(cursor_x - text_area_width + horizontal_padding);
+        let content_width = max_line_width + px(EXTRA_EDITOR_WIDTH);
+        let clamped = self.clamp_scroll_x(new_scroll_x, content_width, text_area_width);
+        if split_mode && active_panel == DiffPanelSide::Left {
+          self.scroll_offset_x_left = clamped;
+        } else {
+          self.scroll_offset_x_right = clamped;
+        }
       }
     }
 
-    let max_scroll = (total_lines as f32 - visible_lines as f32).max(0.0);
+    let max_scroll = (total_rows as f32 - visible_lines as f32).max(0.0);
     self.scroll_offset_y = self.scroll_offset_y.clamp(0.0, max_scroll);
   }
 
@@ -441,7 +590,12 @@ impl EntityInputHandler for Editor {
     let doc = self.document.read(cx);
     let range = self.range_from_utf16(&range_utf16, cx);
     actual_range.replace(self.range_to_utf16(&range, cx));
-    Some(doc.slice_to_string(range))
+    let text = if self.diff_view_mode == DiffViewMode::Split && doc.diff_enabled() {
+      doc.slice_to_string_for_side(range, self.active_diff_panel)
+    } else {
+      doc.slice_to_string(range)
+    };
+    Some(text)
   }
 
   fn selected_text_range(
@@ -478,6 +632,11 @@ impl EntityInputHandler for Editor {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    let split_mode =
+      self.diff_view_mode == DiffViewMode::Split && self.document.read(cx).diff_enabled();
+    if split_mode && self.active_diff_panel == DiffPanelSide::Left {
+      return;
+    }
     // Pause cursor blinking when typing
     self.cursor_blink.update(cx, |blink, cx| {
       blink.pause_blinking(cx);
@@ -551,19 +710,32 @@ impl EntityInputHandler for Editor {
       if doc.diff_enabled() {
         doc.schedule_recompute_diff(cx);
       }
-      let total_lines = doc.len_lines();
+      let total_rows = if split_mode {
+        doc.split_row_count()
+      } else {
+        doc.len_lines()
+      };
       let visible_line_count = ((viewport_height / line_height).ceil() as usize).max(1);
-      let start_line = (scroll_offset_y.floor() as usize).min(total_lines.saturating_sub(1));
-      let end_line = (start_line + visible_line_count).min(total_lines);
-      let viewport = start_line..end_line;
-      doc.schedule_viewport_highlights(
-        viewport.clone(),
-        force_range.clone(),
-        crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
-        cx,
-      );
-      if doc.diff_enabled() {
-        doc.schedule_viewport_diff(viewport, crate::document::VIEWPORT_DIFF_MARGIN_LINES, cx);
+      let start_row = (scroll_offset_y.floor() as usize).min(total_rows.saturating_sub(1));
+      let end_row = (start_row + visible_line_count).min(total_rows);
+      let viewport_rows = start_row..end_row;
+      let viewport_lines = if split_mode {
+        doc
+          .split_row_range_to_line_range(viewport_rows.clone())
+          .or_else(|| Some(viewport_rows.clone()))
+      } else {
+        Some(viewport_rows.clone())
+      };
+      if let Some(viewport) = viewport_lines {
+        doc.schedule_viewport_highlights(
+          viewport.clone(),
+          force_range.clone(),
+          crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
+          cx,
+        );
+        if doc.diff_enabled() {
+          doc.schedule_viewport_diff(viewport, crate::document::VIEWPORT_DIFF_MARGIN_LINES, cx);
+        }
       }
 
       cx.notify();
@@ -598,6 +770,11 @@ impl EntityInputHandler for Editor {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    let split_mode =
+      self.diff_view_mode == DiffViewMode::Split && self.document.read(cx).diff_enabled();
+    if split_mode && self.active_diff_panel == DiffPanelSide::Left {
+      return;
+    }
     // Pause cursor blinking when typing
     self.cursor_blink.update(cx, |blink, cx| {
       blink.pause_blinking(cx);
@@ -668,19 +845,32 @@ impl EntityInputHandler for Editor {
       if doc.diff_enabled() {
         doc.schedule_recompute_diff(cx);
       }
-      let total_lines = doc.len_lines();
+      let total_rows = if split_mode {
+        doc.split_row_count()
+      } else {
+        doc.len_lines()
+      };
       let visible_line_count = ((viewport_height / line_height).ceil() as usize).max(1);
-      let start_line = (scroll_offset_y.floor() as usize).min(total_lines.saturating_sub(1));
-      let end_line = (start_line + visible_line_count).min(total_lines);
-      let viewport = start_line..end_line;
-      doc.schedule_viewport_highlights(
-        viewport.clone(),
-        force_range.clone(),
-        crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
-        cx,
-      );
-      if doc.diff_enabled() {
-        doc.schedule_viewport_diff(viewport, crate::document::VIEWPORT_DIFF_MARGIN_LINES, cx);
+      let start_row = (scroll_offset_y.floor() as usize).min(total_rows.saturating_sub(1));
+      let end_row = (start_row + visible_line_count).min(total_rows);
+      let viewport_rows = start_row..end_row;
+      let viewport_lines = if split_mode {
+        doc
+          .split_row_range_to_line_range(viewport_rows.clone())
+          .or_else(|| Some(viewport_rows.clone()))
+      } else {
+        Some(viewport_rows.clone())
+      };
+      if let Some(viewport) = viewport_lines {
+        doc.schedule_viewport_highlights(
+          viewport.clone(),
+          force_range.clone(),
+          crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
+          cx,
+        );
+        if doc.diff_enabled() {
+          doc.schedule_viewport_diff(viewport, crate::document::VIEWPORT_DIFF_MARGIN_LINES, cx);
+        }
       }
     });
 
@@ -724,7 +914,23 @@ impl EntityInputHandler for Editor {
 
 impl Render for Editor {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    div()
+    let diff_split =
+      self.diff_view_mode == DiffViewMode::Split && self.document.read(cx).diff_enabled();
+    let gutter_bg = self.theme.gutter_background();
+    let content_bg = if self.theme.is_dark { black() } else { white() };
+    let content_width =
+      (self.viewport_width - px(GUTTER_WIDTH) - px(EDITOR_PADDING) * 2.0).max(px(0.0));
+    let max_width = content_width.max(px(1.0));
+    let min_width = px(SPLIT_RIGHT_MIN_WIDTH).min(max_width);
+    let right_width = if diff_split {
+      self.split_right_width.max(min_width).min(max_width)
+    } else {
+      max_width
+    };
+    let panel_left = (max_width - right_width).max(px(0.0));
+    let panel_left_with_padding = panel_left + px(EDITOR_PADDING);
+
+    let mut layout = div()
       .key_context("Editor")
       .track_focus(&self.focus_handle(cx))
       .cursor(CursorStyle::IBeam)
@@ -771,29 +977,74 @@ impl Render for Editor {
         |el| el.text_color(black()),
       )
       .flex()
-      .flex_row()
-      .child(
-        div()
-          .w(px(GUTTER_WIDTH))
-          .h_full()
-          .bg(self.theme.gutter_background())
-          .child(GutterElement::new(cx.entity().clone())),
+      .flex_row();
+
+    layout = layout.child(div().w(px(GUTTER_WIDTH)).h_full().bg(gutter_bg).child(
+      GutterElement::new(
+        cx.entity().clone(),
+        if diff_split {
+          GutterSide::Left
+        } else {
+          GutterSide::Inline
+        },
+      ),
+    ));
+
+    let mut content = div()
+      .flex_1()
+      .h_full()
+      .relative()
+      .bg(content_bg)
+      .overflow_hidden()
+      .on_drag_move(
+        cx.listener(|editor, e: &DragMoveEvent<DraggedDiffSplitter>, _, cx| {
+          let inner_right = e.bounds.right() - px(EDITOR_PADDING);
+          let new_width = inner_right - e.event.position.x;
+          editor.resize_split_right_width(new_width, cx);
+        }),
       )
       .child(
         div()
-          .flex_1()
-          .h_full()
-          .id("editor-content")
-          .overflow_x_scroll()
-          .track_scroll(&self.scroll_handle)
+          .absolute()
+          .top(px(0.0))
+          .left(px(0.0))
+          .right(px(0.0))
+          .bottom(px(0.0))
           .px(px(EDITOR_PADDING))
-          .child(
-            div()
-              .min_w(self.max_line_width + px(EXTRA_EDITOR_WIDTH))
-              .h_full()
-              .child(EditorElement::new(cx.entity().clone())),
-          ),
-      )
+          .child(EditorElement::new(cx.entity().clone())),
+      );
+
+    if diff_split {
+      content = content.child(
+        div()
+          .absolute()
+          .top(px(0.0))
+          .bottom(px(0.0))
+          .left(panel_left_with_padding)
+          .w(px(GUTTER_WIDTH))
+          .bg(gutter_bg)
+          .child(GutterElement::new(cx.entity().clone(), GutterSide::Right)),
+      );
+
+      let resize_handle = div()
+        .id("diff-split-resize-handle")
+        .absolute()
+        .top(px(0.0))
+        .bottom(px(0.0))
+        .left(panel_left_with_padding - px(SPLIT_RESIZE_HANDLE_WIDTH) / 2.0)
+        .w(px(SPLIT_RESIZE_HANDLE_WIDTH))
+        .cursor_col_resize()
+        .on_drag(DraggedDiffSplitter, |drag, _, _, cx| {
+          cx.stop_propagation();
+          cx.new(|_| drag.clone())
+        })
+        .occlude();
+      content = content.child(resize_handle);
+    }
+
+    layout = layout.child(content);
+
+    layout
   }
 }
 
