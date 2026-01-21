@@ -4,10 +4,18 @@ use gpui::{
 };
 use std::ops::Range;
 
-use crate::editor::Editor;
+use crate::editor::{DiffViewMode, Editor};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum GutterSide {
+  Inline,
+  Left,
+  Right,
+}
 
 pub struct GutterElement {
   editor: Entity<Editor>,
+  side: GutterSide,
 }
 
 pub struct GutterPrepaintState {
@@ -24,8 +32,8 @@ struct GutterLine {
 }
 
 impl GutterElement {
-  pub fn new(editor: Entity<Editor>) -> Self {
-    Self { editor }
+  pub fn new(editor: Entity<Editor>, side: GutterSide) -> Self {
+    Self { editor, side }
   }
 }
 
@@ -77,36 +85,110 @@ impl Element for GutterElement {
       let document = editor.document().read(cx);
       let line_height = window.line_height();
       let scroll_offset = editor.scroll_offset_y;
+      let split_mode = editor.diff_view_mode == DiffViewMode::Split && document.diff_enabled();
 
       // Calculate viewport (same logic as EditorElement)
       let visible_line_count = ((bounds.size.height / line_height).ceil() as usize).max(1);
-      let start_line = (scroll_offset.floor() as usize).min(document.len_lines().saturating_sub(1));
-      let end_line = (start_line + visible_line_count).min(document.len_lines());
+      let total_rows = if split_mode {
+        document.split_row_count()
+      } else {
+        document.len_lines()
+      };
+      let start_line = (scroll_offset.floor() as usize).min(total_rows.saturating_sub(1));
+      let end_line = (start_line + visible_line_count).min(total_rows);
       let viewport = start_line..end_line;
 
       // Format line numbers for visible lines
       let mut lines = Vec::new();
       for line_idx in viewport.clone() {
-        let diff_info = document.diff_line_info(line_idx);
-        let line_number = if let Some(info) = diff_info {
-          if matches!(info.kind, crate::document::DiffLineKind::Deleted) {
-            String::new()
+        let split_row = if split_mode {
+          document.split_row(line_idx)
+        } else {
+          None
+        };
+        let row_line = if split_mode {
+          if let Some(row) = split_row {
+            match self.side {
+              GutterSide::Left => row.left_line,
+              GutterSide::Right => row.right_line,
+              GutterSide::Inline => Some(line_idx),
+            }
           } else {
-            info
-              .current_line
-              .or(info.base_line)
-              .map(|idx| format!("{}", idx + 1))
-              .unwrap_or_default()
+            Some(line_idx)
           }
         } else {
-          format!("{}", line_idx + 1)
+          Some(line_idx)
+        };
+        let diff_info = row_line.and_then(|row_line| document.diff_line_info(row_line));
+        let hide_line_number = split_mode && split_row.is_some() && row_line.is_none();
+        let line_number = if hide_line_number {
+          String::new()
+        } else {
+          match (self.side, diff_info) {
+            (GutterSide::Inline, Some(info)) => {
+              if matches!(info.kind, crate::document::DiffLineKind::Deleted) {
+                String::new()
+              } else {
+                info
+                  .current_line
+                  .or(info.base_line)
+                  .map(|idx| format!("{}", idx + 1))
+                  .unwrap_or_default()
+              }
+            }
+            (GutterSide::Left, Some(info)) => {
+              if matches!(info.kind, crate::document::DiffLineKind::Added) {
+                String::new()
+              } else {
+                info
+                  .base_line
+                  .or(info.current_line)
+                  .map(|idx| format!("{}", idx + 1))
+                  .unwrap_or_default()
+              }
+            }
+            (GutterSide::Right, Some(info)) => {
+              if matches!(info.kind, crate::document::DiffLineKind::Deleted) {
+                String::new()
+              } else {
+                info
+                  .current_line
+                  .or(info.base_line)
+                  .map(|idx| format!("{}", idx + 1))
+                  .unwrap_or_default()
+              }
+            }
+            (_, None) => format!("{}", line_idx + 1),
+          }
         };
 
-        let marker_color = diff_info.and_then(|info| match info.gutter {
-          crate::document::DiffGutterKind::Added => Some(editor.theme.diff_gutter_added()),
-          crate::document::DiffGutterKind::Modified => Some(editor.theme.diff_gutter_modified()),
-          crate::document::DiffGutterKind::None => None,
-        });
+        let marker_color = match self.side {
+          GutterSide::Inline => diff_info.and_then(|info| match info.gutter {
+            crate::document::DiffGutterKind::Added => Some(editor.theme.diff_gutter_added()),
+            crate::document::DiffGutterKind::Modified => Some(editor.theme.diff_gutter_modified()),
+            crate::document::DiffGutterKind::None => None,
+          }),
+          GutterSide::Left => diff_info.and_then(|info| {
+            if matches!(info.kind, crate::document::DiffLineKind::Deleted) {
+              Some(editor.theme.diff_gutter_modified())
+            } else {
+              None
+            }
+          }),
+          GutterSide::Right => diff_info.and_then(|info| {
+            if matches!(info.kind, crate::document::DiffLineKind::Added) {
+              match info.gutter {
+                crate::document::DiffGutterKind::Added => Some(editor.theme.diff_gutter_added()),
+                crate::document::DiffGutterKind::Modified => {
+                  Some(editor.theme.diff_gutter_modified())
+                }
+                crate::document::DiffGutterKind::None => None,
+              }
+            } else {
+              None
+            }
+          }),
+        };
 
         lines.push(GutterLine {
           line_idx,

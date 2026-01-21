@@ -43,6 +43,18 @@ pub enum DiffGutterKind {
   Modified,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DiffPanelSide {
+  Left,
+  Right,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct SplitDiffRow {
+  pub left_line: Option<usize>,
+  pub right_line: Option<usize>,
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct DiffLineInfo {
   pub kind: DiffLineKind,
@@ -69,6 +81,9 @@ struct DiffState {
   len_chars: usize,
   current_to_view: Vec<Option<usize>>,
   base_to_view: Vec<Option<usize>>,
+  split_rows: Vec<SplitDiffRow>,
+  split_left_to_row: Vec<Option<usize>>,
+  split_right_to_row: Vec<Option<usize>>,
 }
 
 pub struct Document {
@@ -178,13 +193,17 @@ impl Document {
     self.dirty_highlight_lines.write().clear();
     *self.highlights_epoch.write() += 1;
     *self.highlights_version.write() += 1;
-    self.viewport_highlight_generation.fetch_add(1, Ordering::Relaxed);
+    self
+      .viewport_highlight_generation
+      .fetch_add(1, Ordering::Relaxed);
 
     *self.diff_state.write() = None;
     self.dirty_diff_lines.write().clear();
     *self.diff_epoch.write() += 1;
     *self.diff_version.write() += 1;
-    self.viewport_diff_generation.fetch_add(1, Ordering::Relaxed);
+    self
+      .viewport_diff_generation
+      .fetch_add(1, Ordering::Relaxed);
 
     if self.highlighter.is_some() {
       self.schedule_recompute_highlights(cx);
@@ -222,6 +241,59 @@ impl Document {
     }
   }
 
+  pub fn split_row_count(&self) -> usize {
+    let diff_state = self.diff_state.read();
+    if let Some(state) = diff_state.as_ref() {
+      state.split_rows.len()
+    } else {
+      self.buffer.len_lines()
+    }
+  }
+
+  pub fn split_row(&self, row_idx: usize) -> Option<SplitDiffRow> {
+    let diff_state = self.diff_state.read();
+    let state = diff_state.as_ref()?;
+    state.split_rows.get(row_idx).copied()
+  }
+
+  pub fn split_row_for_line(&self, line_idx: usize, side: DiffPanelSide) -> Option<usize> {
+    let diff_state = self.diff_state.read();
+    let state = diff_state.as_ref()?;
+    match side {
+      DiffPanelSide::Left => state.split_left_to_row.get(line_idx).copied().flatten(),
+      DiffPanelSide::Right => state.split_right_to_row.get(line_idx).copied().flatten(),
+    }
+  }
+
+  pub fn split_row_range_to_line_range(&self, range: Range<usize>) -> Option<Range<usize>> {
+    let diff_state = self.diff_state.read();
+    let state = diff_state.as_ref()?;
+    if range.start >= range.end || state.split_rows.is_empty() {
+      return None;
+    }
+
+    let mut min_line: Option<usize> = None;
+    let mut max_line: Option<usize> = None;
+    let end = range.end.min(state.split_rows.len());
+    for row_idx in range.start.min(end)..end {
+      if let Some(row) = state.split_rows.get(row_idx) {
+        if let Some(line_idx) = row.left_line {
+          min_line = Some(min_line.map_or(line_idx, |min| min.min(line_idx)));
+          max_line = Some(max_line.map_or(line_idx, |max| max.max(line_idx)));
+        }
+        if let Some(line_idx) = row.right_line {
+          min_line = Some(min_line.map_or(line_idx, |min| min.min(line_idx)));
+          max_line = Some(max_line.map_or(line_idx, |max| max.max(line_idx)));
+        }
+      }
+    }
+
+    match (min_line, max_line) {
+      (Some(min), Some(max)) => Some(min..(max + 1)),
+      _ => None,
+    }
+  }
+
   pub fn is_empty(&self) -> bool {
     self.len() == 0
   }
@@ -236,6 +308,37 @@ impl Document {
           .as_ref()
           .map(|text| Cow::Owned(text.to_string())),
         _ => line
+          .current_line
+          .and_then(|current_line| self.buffer.line_content(current_line)),
+      };
+    }
+    self.buffer.line_content(line_idx)
+  }
+
+  pub fn line_content_for_side(
+    &self,
+    line_idx: usize,
+    side: DiffPanelSide,
+  ) -> Option<Cow<'_, str>> {
+    let diff_state = self.diff_state.read();
+    if let Some(state) = diff_state.as_ref() {
+      let line = state.lines.get(line_idx)?;
+      return match line.kind {
+        DiffLineKind::Deleted => match side {
+          DiffPanelSide::Left => line
+            .deleted_text
+            .as_ref()
+            .map(|text| Cow::Owned(text.to_string()))
+            .or_else(|| Some(Cow::Borrowed(""))),
+          DiffPanelSide::Right => Some(Cow::Borrowed("")),
+        },
+        DiffLineKind::Added => match side {
+          DiffPanelSide::Left => Some(Cow::Borrowed("")),
+          DiffPanelSide::Right => line
+            .current_line
+            .and_then(|current_line| self.buffer.line_content(current_line)),
+        },
+        DiffLineKind::Unchanged => line
           .current_line
           .and_then(|current_line| self.buffer.line_content(current_line)),
       };
@@ -282,6 +385,45 @@ impl Document {
     for line_idx in start_line..=end_line {
       let line_start = self.line_to_char(line_idx);
       let mut line_text = self.line_content(line_idx).unwrap_or_default().into_owned();
+      if line_idx + 1 < total_lines {
+        line_text.push('\n');
+      }
+      let line_len = line_text.chars().count();
+      let slice_start = range.start.saturating_sub(line_start).min(line_len);
+      let slice_end = range.end.saturating_sub(line_start).min(line_len);
+      if slice_start < slice_end {
+        result.push_str(&slice_chars(&line_text, slice_start, slice_end));
+      }
+    }
+
+    result
+  }
+
+  pub fn slice_to_string_for_side(&self, range: Range<usize>, side: DiffPanelSide) -> String {
+    let diff_state = self.diff_state.read();
+    if diff_state.is_none() {
+      return self.buffer.slice_to_string(range);
+    }
+
+    if range.start >= range.end {
+      return String::new();
+    }
+
+    let total_lines = self.len_lines();
+    if total_lines == 0 {
+      return String::new();
+    }
+
+    let start_line = self.char_to_line(range.start);
+    let end_line = self.char_to_line(range.end.saturating_sub(1));
+    let mut result = String::new();
+
+    for line_idx in start_line..=end_line {
+      let line_start = self.line_to_char(line_idx);
+      let mut line_text = self
+        .line_content_for_side(line_idx, side)
+        .unwrap_or_default()
+        .into_owned();
       if line_idx + 1 < total_lines {
         line_text.push('\n');
       }
@@ -1636,8 +1778,7 @@ fn hash_lines(lines: &[Arc<str>], ends_with_newline: bool) -> Vec<u64> {
     .iter()
     .enumerate()
     .map(|(idx, line)| {
-      let is_trailing_empty_line =
-        ends_with_newline && idx == last_idx && line.is_empty();
+      let is_trailing_empty_line = ends_with_newline && idx == last_idx && line.is_empty();
       hash_line_with_trailing_marker(line, is_trailing_empty_line)
     })
     .collect()
@@ -1652,8 +1793,7 @@ fn hash_string_lines(lines: &[String], ends_with_newline: bool) -> Vec<u64> {
     .iter()
     .enumerate()
     .map(|(idx, line)| {
-      let is_trailing_empty_line =
-        ends_with_newline && idx == last_idx && line.is_empty();
+      let is_trailing_empty_line = ends_with_newline && idx == last_idx && line.is_empty();
       hash_line_with_trailing_marker(line, is_trailing_empty_line)
     })
     .collect()
@@ -1696,6 +1836,72 @@ fn build_mappings(
   (current_to_view, base_to_view)
 }
 
+fn build_split_rows(
+  lines: &[DiffLine],
+) -> (Vec<SplitDiffRow>, Vec<Option<usize>>, Vec<Option<usize>>) {
+  let mut rows = Vec::new();
+  let mut split_left_to_row = vec![None; lines.len()];
+  let mut split_right_to_row = vec![None; lines.len()];
+  let mut idx = 0;
+
+  while idx < lines.len() {
+    if lines[idx].gutter == DiffGutterKind::Modified {
+      let start = idx;
+      while idx < lines.len() && lines[idx].gutter == DiffGutterKind::Modified {
+        idx += 1;
+      }
+
+      let mut deleted = Vec::new();
+      let mut added = Vec::new();
+      for line_idx in start..idx {
+        match lines[line_idx].kind {
+          DiffLineKind::Deleted => deleted.push(line_idx),
+          DiffLineKind::Added => added.push(line_idx),
+          _ => {}
+        }
+      }
+
+      let count = deleted.len().max(added.len());
+      for row_idx in 0..count {
+        let left_line = deleted.get(row_idx).copied();
+        let right_line = added.get(row_idx).copied();
+        let row = rows.len();
+        if let Some(line_idx) = left_line {
+          split_left_to_row[line_idx] = Some(row);
+        }
+        if let Some(line_idx) = right_line {
+          split_right_to_row[line_idx] = Some(row);
+        }
+        rows.push(SplitDiffRow {
+          left_line,
+          right_line,
+        });
+      }
+    } else {
+      let line_idx = idx;
+      let (left_line, right_line) = match lines[line_idx].kind {
+        DiffLineKind::Deleted => (Some(line_idx), None),
+        DiffLineKind::Added => (None, Some(line_idx)),
+        DiffLineKind::Unchanged => (Some(line_idx), Some(line_idx)),
+      };
+      let row = rows.len();
+      if let Some(line_idx) = left_line {
+        split_left_to_row[line_idx] = Some(row);
+      }
+      if let Some(line_idx) = right_line {
+        split_right_to_row[line_idx] = Some(row);
+      }
+      rows.push(SplitDiffRow {
+        left_line,
+        right_line,
+      });
+      idx += 1;
+    }
+  }
+
+  (rows, split_left_to_row, split_right_to_row)
+}
+
 fn build_diff_state_from_lines(
   lines: Vec<DiffLine>,
   base_len: usize,
@@ -1703,12 +1909,16 @@ fn build_diff_state_from_lines(
 ) -> DiffState {
   let (line_starts, len_chars) = build_line_starts(&lines);
   let (current_to_view, base_to_view) = build_mappings(&lines, base_len, current_len);
+  let (split_rows, split_left_to_row, split_right_to_row) = build_split_rows(&lines);
   DiffState {
     lines,
     line_starts,
     len_chars,
     current_to_view,
     base_to_view,
+    split_rows,
+    split_left_to_row,
+    split_right_to_row,
   }
 }
 

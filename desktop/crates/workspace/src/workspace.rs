@@ -6,7 +6,7 @@ use std::{
 
 use crate::config::{ConfigStore, RecentRepository};
 use crate::theme::{AppColors, app_colors};
-use editor::Editor;
+use editor::{DiffViewMode, Editor};
 use git::{FileStatusKind, RepositoryFile, open_repository};
 use gpui::{
   App, ClickEvent, Context, Div, DragMoveEvent, Entity, FocusHandle, Focusable, InteractiveElement,
@@ -51,6 +51,7 @@ pub struct WorkspaceView {
   recent_repositories: Vec<RecentRepository>,
   repo_picker_open: bool,
   theme: Theme,
+  diff_view_mode: DiffViewMode,
   last_repo_poll: Option<Instant>,
 }
 
@@ -80,6 +81,7 @@ impl WorkspaceView {
       recent_repositories,
       repo_picker_open: false,
       theme: Theme::dark(),
+      diff_view_mode: DiffViewMode::Inline,
       last_repo_poll: None,
     };
     view.start_file_polling(cx);
@@ -105,6 +107,17 @@ impl WorkspaceView {
     if let Some(editor) = self.editor.as_ref() {
       editor.update(cx, |editor, cx| {
         editor.set_theme(theme.clone(), cx);
+      });
+    }
+    cx.notify();
+  }
+
+  fn toggle_diff_view(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    self.diff_view_mode.toggle();
+    let mode = self.diff_view_mode;
+    if let Some(editor) = self.editor.as_ref() {
+      editor.update(cx, |editor, cx| {
+        editor.set_diff_view_mode(mode, cx);
       });
     }
     cx.notify();
@@ -429,6 +442,10 @@ impl WorkspaceView {
     let file_ext = file_path.extension().and_then(|ext| ext.to_str());
     let theme = self.theme.clone();
     let editor = cx.new(|cx| Editor::new(&content, base_content.as_deref(), file_ext, theme, cx));
+    let mode = self.diff_view_mode;
+    editor.update(cx, |editor, cx| {
+      editor.set_diff_view_mode(mode, cx);
+    });
     let focus_handle = editor.read(cx).focus_handle(cx);
 
     if let Some(entry) = self.files.get_mut(index) {
@@ -496,6 +513,10 @@ impl WorkspaceView {
     } else {
       "Dark Mode"
     };
+    let diff_label = match self.diff_view_mode {
+      DiffViewMode::Inline => "Split Diff",
+      DiffViewMode::Split => "Inline Diff",
+    };
 
     div()
       .h(px(APP_HEADER_HEIGHT))
@@ -507,12 +528,24 @@ impl WorkspaceView {
       .border_b_1()
       .border_color(colors.border)
       .child(div().text_sm().text_color(colors.text).child("Reviu"))
-      .child(action_button(
-        "theme-toggle",
-        toggle_label,
-        cx.listener(Self::toggle_theme),
-        &colors,
-      ))
+      .child(
+        div()
+          .flex()
+          .items_center()
+          .gap_2()
+          .child(action_button(
+            "diff-toggle",
+            diff_label,
+            cx.listener(Self::toggle_diff_view),
+            &colors,
+          ))
+          .child(action_button(
+            "theme-toggle",
+            toggle_label,
+            cx.listener(Self::toggle_theme),
+            &colors,
+          )),
+      )
   }
 
   fn render_repo_picker_header(&mut self, cx: &mut Context<Self>) -> Div {
