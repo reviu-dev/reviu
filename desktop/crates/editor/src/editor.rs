@@ -16,7 +16,7 @@ use syntax::Theme;
 use crate::{
   boundaries::{line_range_at_offset, word_range_at_offset},
   cursor_blink::CursorBlink,
-  document::{DiffPanelSide, Document},
+  document::{DiffGutterKind, DiffLineKind, DiffPanelSide, Document},
   editor_element::{EditorElement, PositionMap},
   gutter_element::{GutterElement, GutterSide},
 };
@@ -110,6 +110,12 @@ pub(crate) enum ScrollAxis {
 pub enum DiffViewMode {
   Inline,
   Split,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ChangeDirection {
+  Next,
+  Previous,
 }
 
 impl DiffViewMode {
@@ -425,6 +431,69 @@ impl Editor {
     }
   }
 
+  pub fn change_position(&self, cx: &App) -> Option<(usize, usize)> {
+    let document = self.document.read(cx);
+    if !document.diff_enabled() {
+      return None;
+    }
+    let ranges = diff_change_ranges(&document);
+    if ranges.is_empty() {
+      return None;
+    }
+    let cursor_line = document.char_to_line(self.cursor_offset());
+    let current = current_change_index(&ranges, cursor_line).unwrap_or(0);
+    Some((current, ranges.len()))
+  }
+
+  pub fn jump_to_change(
+    &mut self,
+    direction: ChangeDirection,
+    window: &Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some((target_offset, target_panel)) = ({
+      let document = self.document.read(cx);
+      if !document.diff_enabled() {
+        return;
+      }
+      let line_count = document.len_lines();
+      if line_count == 0 {
+        return;
+      }
+
+      let change_ranges = diff_change_ranges(&document);
+      let cursor_line = document.char_to_line(self.cursor_offset());
+      let Some(target_range) = select_change_range(&change_ranges, cursor_line, direction) else {
+        return;
+      };
+      let target_line = preferred_change_line(&document, target_range);
+      let target_offset = document.line_to_char(target_line);
+      let target_panel = if self.diff_view_mode == DiffViewMode::Split && document.diff_enabled() {
+        document.diff_line_info(target_line).and_then(|info| {
+          if info.current_line.is_some() {
+            Some(DiffPanelSide::Right)
+          } else if info.base_line.is_some() {
+            Some(DiffPanelSide::Left)
+          } else {
+            None
+          }
+        })
+      } else {
+        None
+      };
+      Some((target_offset, target_panel))
+    }) else {
+      return;
+    };
+
+    if let Some(panel) = target_panel {
+      self.active_diff_panel = panel;
+    }
+    self.target_column = None;
+    self.move_to(target_offset, cx);
+    self.ensure_cursor_visible(window, cx);
+  }
+
   pub(crate) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
     self.selected_range = offset..offset;
     // Show cursor immediately on move
@@ -581,6 +650,85 @@ impl Editor {
 
     self.select_to(offset, cx);
   }
+}
+
+fn diff_change_ranges(document: &Document) -> Vec<Range<usize>> {
+  let line_count = document.len_lines();
+  let mut ranges = Vec::new();
+  let mut current_start: Option<usize> = None;
+  for line_idx in 0..line_count {
+    let changed = document
+      .diff_line_info(line_idx)
+      .map(|info| info.kind != DiffLineKind::Unchanged || info.gutter != DiffGutterKind::None)
+      .unwrap_or(false);
+    if changed {
+      if current_start.is_none() {
+        current_start = Some(line_idx);
+      }
+    } else if let Some(start) = current_start.take() {
+      ranges.push(start..line_idx);
+    }
+  }
+  if let Some(start) = current_start.take() {
+    ranges.push(start..line_count);
+  }
+  ranges
+}
+
+fn select_change_range<'a>(
+  ranges: &'a [Range<usize>],
+  cursor_line: usize,
+  direction: ChangeDirection,
+) -> Option<&'a Range<usize>> {
+  if ranges.is_empty() {
+    return None;
+  }
+
+  match direction {
+    ChangeDirection::Next => {
+      for (idx, range) in ranges.iter().enumerate() {
+        if cursor_line < range.start {
+          return Some(range);
+        }
+        if range.contains(&cursor_line) {
+          let next_idx = idx + 1;
+          return Some(&ranges[next_idx % ranges.len()]);
+        }
+      }
+      Some(&ranges[0])
+    }
+    ChangeDirection::Previous => {
+      for (idx, range) in ranges.iter().enumerate() {
+        if range.contains(&cursor_line) {
+          let prev_idx = idx.checked_sub(1).unwrap_or(ranges.len() - 1);
+          return Some(&ranges[prev_idx]);
+        }
+        if cursor_line < range.start {
+          let prev_idx = idx.checked_sub(1).unwrap_or(ranges.len() - 1);
+          return Some(&ranges[prev_idx]);
+        }
+      }
+      Some(&ranges[ranges.len() - 1])
+    }
+  }
+}
+
+fn current_change_index(ranges: &[Range<usize>], cursor_line: usize) -> Option<usize> {
+  ranges
+    .iter()
+    .position(|range| range.contains(&cursor_line))
+    .map(|idx| idx + 1)
+}
+
+fn preferred_change_line(document: &Document, range: &Range<usize>) -> usize {
+  for line_idx in range.clone() {
+    if let Some(info) = document.diff_line_info(line_idx)
+      && info.current_line.is_some()
+    {
+      return line_idx;
+    }
+  }
+  range.start
 }
 
 impl EntityInputHandler for Editor {
