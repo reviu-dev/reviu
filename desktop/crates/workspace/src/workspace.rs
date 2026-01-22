@@ -792,6 +792,8 @@ impl WorkspaceView {
       .flex()
       .items_center()
       .justify_between()
+      .border_b_1()
+      .border_color(colors.border)
       .bg(colors.header_bg)
       .child(div().text_sm().text_color(colors.text).child(title));
 
