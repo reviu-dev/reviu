@@ -7,11 +7,14 @@ use std::{
 use crate::config::{ConfigStore, RecentRepository};
 use crate::theme::{AppColors, app_colors};
 use editor::{ChangeDirection, DiffViewMode, Editor};
-use git::{FileStatusKind, RepositoryFile, open_repository};
+use git::{
+  FileStatusKind, RepositoryFile, discard_change, open_repository, stage_all, stage_path,
+  unstage_all, unstage_path,
+};
 use gpui::{
-  App, ClickEvent, Context, Div, DragMoveEvent, Entity, FocusHandle, Focusable, InteractiveElement,
-  PathPromptOptions, Pixels, Point, Render, Rgba, Stateful, Task, Window, actions, deferred, div,
-  prelude::*, px, rgb, uniform_list,
+  App, ClickEvent, Context, Div, DragMoveEvent, ElementId, Entity, FocusHandle, Focusable,
+  InteractiveElement, PathPromptOptions, Pixels, Point, Render, Rgba, Stateful, Task, Window,
+  actions, deferred, div, prelude::*, px, rgb,
 };
 use syntax::Theme;
 
@@ -37,10 +40,23 @@ struct FileEntry {
   last_modified: Option<SystemTime>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FileListKind {
+  Changes,
+  Staged,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectedFile {
+  Changes(usize),
+  Staged(usize),
+}
+
 pub struct WorkspaceView {
   root_path: Option<PathBuf>,
-  files: Vec<FileEntry>,
-  selected_file: Option<usize>,
+  changes: Vec<FileEntry>,
+  staged: Vec<FileEntry>,
+  selected_file: Option<SelectedFile>,
   editor: Option<Entity<Editor>>,
   error: Option<String>,
   current_dirty: bool,
@@ -69,7 +85,8 @@ impl WorkspaceView {
     let recent_repositories = ConfigStore::load_recent_repositories();
     let mut view = Self {
       root_path: None,
-      files: Vec::new(),
+      changes: Vec::new(),
+      staged: Vec::new(),
       selected_file: None,
       editor: None,
       error: None,
@@ -121,6 +138,71 @@ impl WorkspaceView {
       });
     }
     cx.notify();
+  }
+
+  fn stage_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    let Some(root_path) = self.root_path.clone() else {
+      return;
+    };
+    if let Err(err) = stage_path(&root_path, &path) {
+      self.error = Some(format!("Failed to stage file: {err}"));
+      cx.notify();
+      return;
+    }
+    self.error = None;
+    self.refresh_repository_statuses(cx);
+  }
+
+  fn unstage_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    let Some(root_path) = self.root_path.clone() else {
+      return;
+    };
+    if let Err(err) = unstage_path(&root_path, &path) {
+      self.error = Some(format!("Failed to unstage file: {err}"));
+      cx.notify();
+      return;
+    }
+    self.error = None;
+    self.refresh_repository_statuses(cx);
+  }
+
+  fn discard_file_change(&mut self, path: PathBuf, status: FileStatusKind, cx: &mut Context<Self>) {
+    let Some(root_path) = self.root_path.clone() else {
+      return;
+    };
+    if let Err(err) = discard_change(&root_path, &path, status) {
+      self.error = Some(format!("Failed to discard change: {err}"));
+      cx.notify();
+      return;
+    }
+    self.error = None;
+    self.refresh_repository_statuses(cx);
+  }
+
+  fn stage_all_files(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    let Some(root_path) = self.root_path.clone() else {
+      return;
+    };
+    if let Err(err) = stage_all(&root_path) {
+      self.error = Some(format!("Failed to stage all files: {err}"));
+      cx.notify();
+      return;
+    }
+    self.error = None;
+    self.refresh_repository_statuses(cx);
+  }
+
+  fn unstage_all_files(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    let Some(root_path) = self.root_path.clone() else {
+      return;
+    };
+    if let Err(err) = unstage_all(&root_path) {
+      self.error = Some(format!("Failed to unstage all files: {err}"));
+      cx.notify();
+      return;
+    }
+    self.error = None;
+    self.refresh_repository_statuses(cx);
   }
 
   fn jump_to_next_change(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -257,7 +339,14 @@ impl WorkspaceView {
       }
       return;
     };
-    let Some(entry) = self.files.get_mut(selected_file) else {
+    let SelectedFile::Changes(selected_index) = selected_file else {
+      if self.current_dirty {
+        self.current_dirty = false;
+        cx.notify();
+      }
+      return;
+    };
+    let Some(entry) = self.changes.get_mut(selected_index) else {
       return;
     };
 
@@ -314,12 +403,17 @@ impl WorkspaceView {
       return;
     };
 
-    let selected_path = self
-      .selected_file
-      .and_then(|idx| self.files.get(idx).map(|entry| entry.path.clone()));
-    let selected_entry = self
-      .selected_file
-      .and_then(|idx| self.files.get(idx).cloned());
+    let selected_entry = match self.selected_file {
+      Some(SelectedFile::Changes(idx)) => self.changes.get(idx).cloned(),
+      Some(SelectedFile::Staged(idx)) => self.staged.get(idx).cloned(),
+      None => None,
+    };
+    let selected_path = selected_entry.as_ref().map(|entry| entry.path.clone());
+    let selected_list = match self.selected_file {
+      Some(SelectedFile::Changes(_)) => Some(FileListKind::Changes),
+      Some(SelectedFile::Staged(_)) => Some(FileListKind::Staged),
+      None => None,
+    };
     let selected_dirty = self.current_dirty;
 
     let repository = match open_repository(&root_path) {
@@ -332,34 +426,64 @@ impl WorkspaceView {
 
     let repo_root = repository.root;
     self.root_path = Some(repo_root.clone());
-    let mut files = repository_entries_to_files(&repo_root, repository.entries);
+    let mut changes = repository_entries_to_files(&repo_root, repository.changes);
+    let mut staged = repository_entries_to_files(&repo_root, repository.staged);
 
     if let Some(path) = selected_path.as_ref() {
-      if let Some(index) = files.iter().position(|entry| entry.path == *path) {
-        if let Some(existing) = selected_entry.as_ref() {
-          let entry = &mut files[index];
-          entry.current_content = existing.current_content.clone();
-          entry.saved_content = existing.saved_content.clone();
-          entry.last_modified = existing.last_modified;
+      match selected_list {
+        Some(FileListKind::Changes) => {
+          if let Some(index) = changes.iter().position(|entry| entry.path == *path) {
+            if let Some(existing) = selected_entry.as_ref() {
+              let entry = &mut changes[index];
+              entry.current_content = existing.current_content.clone();
+              entry.saved_content = existing.saved_content.clone();
+              entry.last_modified = existing.last_modified;
+            }
+          } else if selected_dirty {
+            if let Some(mut entry) = selected_entry {
+              entry.status = FileStatusKind::Modified;
+              changes.push(entry);
+            }
+          } else {
+            self.selected_file = None;
+            self.editor = None;
+            self.current_dirty = false;
+          }
         }
-      } else if selected_dirty {
-        if let Some(mut entry) = selected_entry {
-          entry.status = FileStatusKind::Modified;
-          files.push(entry);
+        Some(FileListKind::Staged) => {
+          if let Some(index) = staged.iter().position(|entry| entry.path == *path) {
+            if let Some(existing) = selected_entry.as_ref() {
+              let entry = &mut staged[index];
+              entry.current_content = existing.current_content.clone();
+              entry.saved_content = existing.saved_content.clone();
+              entry.last_modified = existing.last_modified;
+            }
+          } else {
+            self.selected_file = None;
+            self.editor = None;
+            self.current_dirty = false;
+          }
         }
-      } else {
-        self.selected_file = None;
-        self.editor = None;
-        self.current_dirty = false;
+        None => {}
       }
     }
 
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-    let next_selected = selected_path
-      .as_ref()
-      .and_then(|path| files.iter().position(|entry| entry.path == *path));
+    changes.sort_by(|a, b| a.path.cmp(&b.path));
+    staged.sort_by(|a, b| a.path.cmp(&b.path));
+    let next_selected = match selected_list {
+      Some(FileListKind::Changes) => selected_path
+        .as_ref()
+        .and_then(|path| changes.iter().position(|entry| entry.path == *path))
+        .map(SelectedFile::Changes),
+      Some(FileListKind::Staged) => selected_path
+        .as_ref()
+        .and_then(|path| staged.iter().position(|entry| entry.path == *path))
+        .map(SelectedFile::Staged),
+      None => None,
+    };
 
-    self.files = files;
+    self.changes = changes;
+    self.staged = staged;
     self.selected_file = next_selected;
     self.error = None;
     cx.notify();
@@ -380,7 +504,10 @@ impl WorkspaceView {
     let Some(editor) = self.editor.as_ref() else {
       return;
     };
-    let Some(entry) = self.files.get_mut(selected_file) else {
+    let SelectedFile::Changes(selected_index) = selected_file else {
+      return;
+    };
+    let Some(entry) = self.changes.get_mut(selected_index) else {
       return;
     };
 
@@ -414,7 +541,8 @@ impl WorkspaceView {
         self.root_path = Some(repo_root.clone());
         ConfigStore::persist_recent_repository(&repo_root);
         bump_recent_repository(&mut self.recent_repositories, repo_root.clone());
-        self.files = repository_entries_to_files(&repo_root, repository.entries);
+        self.changes = repository_entries_to_files(&repo_root, repository.changes);
+        self.staged = repository_entries_to_files(&repo_root, repository.staged);
         self.selected_file = None;
         self.editor = None;
         self.error = None;
@@ -423,7 +551,8 @@ impl WorkspaceView {
       }
       Err(err) => {
         self.root_path = Some(path);
-        self.files = Vec::new();
+        self.changes = Vec::new();
+        self.staged = Vec::new();
         self.selected_file = None;
         self.editor = None;
         self.error = Some(format!("Not a git repository: {err}"));
@@ -434,30 +563,44 @@ impl WorkspaceView {
     cx.notify();
   }
 
-  fn select_file(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-    let (content, base_content, file_path) = match self.files.get_mut(index) {
-      Some(entry) => {
-        refresh_entry_from_disk(entry);
-        (
+  fn select_file(
+    &mut self,
+    list: FileListKind,
+    index: usize,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let (content, base_content, file_path, display_name) = match list {
+      FileListKind::Changes => match self.changes.get_mut(index) {
+        Some(entry) => {
+          refresh_entry_from_disk(entry);
+          (
+            entry.current_content.clone(),
+            entry.base_content.clone(),
+            entry.path.clone(),
+            entry.display_name.clone(),
+          )
+        }
+        None => return,
+      },
+      FileListKind::Staged => match self.staged.get_mut(index) {
+        Some(entry) => (
           entry.current_content.clone(),
           entry.base_content.clone(),
           entry.path.clone(),
-        )
-      }
-      None => return,
+          entry.display_name.clone(),
+        ),
+        None => return,
+      },
     };
 
     let Some(content) = content else {
       self.editor = None;
-      self.selected_file = Some(index);
-      self.error = Some(format!(
-        "File content unavailable: {}",
-        self
-          .files
-          .get(index)
-          .map(|entry| entry.display_name.clone())
-          .unwrap_or_else(|| "Unknown file".to_string())
-      ));
+      self.selected_file = Some(match list {
+        FileListKind::Changes => SelectedFile::Changes(index),
+        FileListKind::Staged => SelectedFile::Staged(index),
+      });
+      self.error = Some(format!("File content unavailable: {display_name}"));
       cx.notify();
       return;
     };
@@ -471,15 +614,29 @@ impl WorkspaceView {
     });
     let focus_handle = editor.read(cx).focus_handle(cx);
 
-    if let Some(entry) = self.files.get_mut(index) {
-      if entry.saved_content.is_none() {
-        entry.saved_content = Some(content.clone());
+    match list {
+      FileListKind::Changes => {
+        if let Some(entry) = self.changes.get_mut(index) {
+          if entry.saved_content.is_none() {
+            entry.saved_content = Some(content.clone());
+          }
+          entry.last_modified = read_modified_time(&entry.path);
+        }
       }
-      entry.last_modified = read_modified_time(&entry.path);
+      FileListKind::Staged => {
+        if let Some(entry) = self.staged.get_mut(index) {
+          if entry.saved_content.is_none() {
+            entry.saved_content = Some(content.clone());
+          }
+        }
+      }
     }
 
     self.editor = Some(editor);
-    self.selected_file = Some(index);
+    self.selected_file = Some(match list {
+      FileListKind::Changes => SelectedFile::Changes(index),
+      FileListKind::Staged => SelectedFile::Staged(index),
+    });
     self.error = None;
     self.current_dirty = false;
 
@@ -541,7 +698,7 @@ impl WorkspaceView {
       DiffViewMode::Split => "Inline Diff",
     };
 
-    div()
+    let header_row = div()
       .h(px(APP_HEADER_HEIGHT))
       .px_3()
       .flex()
@@ -550,7 +707,14 @@ impl WorkspaceView {
       .bg(colors.header_bg)
       .border_b_1()
       .border_color(colors.border)
-      .child(div().text_sm().text_color(colors.text).child("Reviu"))
+      .child(
+        div()
+          .flex()
+          .items_center()
+          .gap_2()
+          .child(div().text_sm().text_color(colors.text).child("Reviu"))
+          .child(self.render_repo_picker_toggle(cx)),
+      )
       .child(
         div()
           .flex()
@@ -594,28 +758,34 @@ impl WorkspaceView {
             cx.listener(Self::toggle_theme),
             &colors,
           )),
-      )
+      );
+
+    header_row
   }
 
-  fn render_repo_picker_header(&mut self, cx: &mut Context<Self>) -> Div {
+  fn render_repo_picker_toggle(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let colors = app_colors(&self.theme);
     let label = self.repo_picker_label();
     let icon = if self.repo_picker_open { "^" } else { "v" };
 
-    div().border_b_1().border_color(colors.border).child(
-      div()
-        .id("repo-picker-toggle")
-        .h(px(HEADER_HEIGHT))
-        .px_3()
-        .flex()
-        .items_center()
-        .justify_between()
-        .bg(colors.header_bg)
-        .cursor_pointer()
-        .child(div().text_sm().text_color(colors.text).child(label))
-        .child(div().text_sm().text_color(colors.text_subtle).child(icon))
-        .on_click(cx.listener(Self::toggle_repo_picker)),
-    )
+    div()
+      .id("repo-picker-toggle")
+      .px_2()
+      .py_1()
+      .flex()
+      .items_center()
+      .gap_2()
+      .bg(colors.button_bg)
+      .text_color(colors.text)
+      .text_sm()
+      .border_1()
+      .border_color(colors.button_border)
+      .rounded_sm()
+      .cursor_pointer()
+      .hover(|style| style.opacity(0.9))
+      .child(label)
+      .child(div().text_sm().text_color(colors.text_subtle).child(icon))
+      .on_click(cx.listener(Self::toggle_repo_picker))
   }
 
   fn render_repo_picker_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -624,14 +794,13 @@ impl WorkspaceView {
       .flex()
       .flex_col()
       .bg(colors.menu_bg)
-      .border_t_1()
+      .border_1()
       .border_color(colors.border)
       .id("repo-picker-menu")
       .absolute()
-      .top(px(HEADER_HEIGHT))
+      .top(px(APP_HEADER_HEIGHT))
       .left(px(0.0))
-      .right(px(0.0))
-      .w_full()
+      .w(self.sidebar_width)
       .max_h(px(240.0))
       .overflow_y_scroll()
       .occlude();
@@ -713,37 +882,21 @@ impl WorkspaceView {
 
   fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let colors = app_colors(&self.theme);
-    let list = uniform_list(
-      "file-list",
-      self.files.len(),
-      cx.processor(|this, range, _window, cx| {
-        let mut items = Vec::new();
-        for idx in range {
-          let Some(entry) = this.files.get(idx) else {
-            continue;
-          };
-          items.push(this.render_display_line(idx, entry, cx));
-        }
-        items
-      }),
-    )
-    .h_full();
-
-    let mut sidebar_body = div().flex_1().overflow_hidden().child(list);
-    if self.files.is_empty() {
-      let message = if self.root_path.is_some() {
-        "No changes found."
-      } else {
-        "No repository selected."
-      };
-      sidebar_body = div()
-        .flex_1()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(colors.text_muted)
-        .child(message);
-    }
+    let staged_section = self
+      .render_file_section(FileListKind::Staged, cx)
+      .flex_none();
+    let changes_section = self
+      .render_file_section(FileListKind::Changes, cx)
+      .flex_none();
+    let sidebar_body = div()
+      .id("sidebar-scroll")
+      .flex_1()
+      .flex()
+      .flex_col()
+      .min_h(px(0.0))
+      .overflow_y_scroll()
+      .child(staged_section)
+      .child(changes_section);
 
     let resize_handle = deferred(
       div()
@@ -767,15 +920,12 @@ impl WorkspaceView {
       .flex()
       .flex_col()
       .h_full()
+      .min_h(px(0.0))
       .relative()
       .bg(colors.sidebar_bg)
       .border_r_1()
       .border_color(colors.border)
-      .child(self.render_repo_picker_header(cx))
       .child(sidebar_body)
-      .when(self.repo_picker_open, |this| {
-        this.child(self.render_repo_picker_menu(cx))
-      })
       .child(resize_handle)
   }
 
@@ -783,8 +933,22 @@ impl WorkspaceView {
     let colors = app_colors(&self.theme);
     let title = self
       .selected_file
-      .and_then(|idx| self.files.get(idx).map(|entry| entry.display_name.clone()))
+      .and_then(|selected| match selected {
+        SelectedFile::Changes(idx) => self.changes.get(idx),
+        SelectedFile::Staged(idx) => self.staged.get(idx),
+      })
+      .map(|entry| entry.display_name.clone())
       .unwrap_or_else(|| "File".to_string());
+
+    let mut title_row = div()
+      .flex()
+      .items_center()
+      .gap_1()
+      .child(div().text_sm().text_color(colors.text).child(title));
+
+    if self.current_dirty {
+      title_row = title_row.child(div().text_sm().text_color(rgb(0xe0b84a)).child("*"));
+    }
 
     let mut header = div()
       .h(px(HEADER_HEIGHT))
@@ -795,7 +959,7 @@ impl WorkspaceView {
       .border_b_1()
       .border_color(colors.border)
       .bg(colors.header_bg)
-      .child(div().text_sm().text_color(colors.text).child(title));
+      .child(title_row);
 
     if self.current_dirty {
       header = header.child(action_button(
@@ -809,16 +973,182 @@ impl WorkspaceView {
     header
   }
 
+  fn render_file_section(&mut self, list: FileListKind, cx: &mut Context<Self>) -> Div {
+    let colors = app_colors(&self.theme);
+    let (title, entries_len) = match list {
+      FileListKind::Changes => ("Changes", self.changes.len()),
+      FileListKind::Staged => ("Staged", self.staged.len()),
+    };
+    let header = div()
+      .px_2()
+      .py_1()
+      .flex()
+      .items_center()
+      .justify_between()
+      .bg(colors.header_bg)
+      .border_b_1()
+      .border_color(colors.border)
+      .child(
+        div()
+          .text_sm()
+          .text_color(colors.text)
+          .child(format!("{title} ({entries_len})")),
+      )
+      .when(entries_len > 0, |this| match list {
+        FileListKind::Changes => this.child(action_button(
+          "stage-all",
+          "Stage All",
+          cx.listener(Self::stage_all_files),
+          &colors,
+        )),
+        FileListKind::Staged => this.child(action_button(
+          "unstage-all",
+          "Unstage All",
+          cx.listener(Self::unstage_all_files),
+          &colors,
+        )),
+      });
+
+    let list_view = {
+      let entries = match list {
+        FileListKind::Changes => &self.changes,
+        FileListKind::Staged => &self.staged,
+      };
+      let mut items = div().flex().flex_col();
+      for (idx, entry) in entries.iter().enumerate() {
+        items = items.child(self.render_display_line(list, idx, entry, cx));
+      }
+      items
+    };
+
+    let empty_message = match list {
+      FileListKind::Changes => {
+        if self.root_path.is_some() {
+          "No changes."
+        } else {
+          "No repository selected."
+        }
+      }
+      FileListKind::Staged => "No staged changes.",
+    };
+
+    let body = if entries_len == 0 {
+      div()
+        .flex_1()
+        .flex()
+        .items_center()
+        .justify_center()
+        .py_2()
+        .text_sm()
+        .text_color(colors.text_muted)
+        .child(empty_message)
+    } else {
+      div().flex().flex_col().child(list_view)
+    };
+
+    div()
+      .flex()
+      .flex_col()
+      .min_h(px(0.0))
+      .child(header)
+      .child(body)
+  }
+
   fn render_display_line(
     &self,
+    list: FileListKind,
     idx: usize,
     entry: &FileEntry,
     cx: &mut Context<Self>,
   ) -> Stateful<Div> {
     let colors = app_colors(&self.theme);
-    let is_selected = self.selected_file == Some(idx);
-    let is_dirty = is_selected && self.current_dirty;
+    let is_selected = match (self.selected_file, list) {
+      (Some(SelectedFile::Changes(selected)), FileListKind::Changes) => selected == idx,
+      (Some(SelectedFile::Staged(selected)), FileListKind::Staged) => selected == idx,
+      _ => false,
+    };
     let (tag, tag_color) = status_tag(entry.status);
+    let row_group = format!(
+      "file-row-{}-{}",
+      match list {
+        FileListKind::Changes => "changes",
+        FileListKind::Staged => "staged",
+      },
+      idx
+    );
+
+    let actions_bg = Rgba {
+      r: colors.button_bg.r,
+      g: colors.button_bg.g,
+      b: colors.button_bg.b,
+      a: (colors.button_bg.a * 0.8).min(1.0),
+    };
+    let actions_border = Rgba {
+      r: colors.button_border.r,
+      g: colors.button_border.g,
+      b: colors.button_border.b,
+      a: (colors.button_border.a * 0.8).min(1.0),
+    };
+    let mut actions_wrap = div()
+      .flex()
+      .items_center()
+      .gap_1()
+      .px_1()
+      .py_1()
+      .bg(actions_bg)
+      .border_1()
+      .border_color(actions_border)
+      .rounded_sm();
+
+    let mut actions = div()
+      .absolute()
+      .right(px(5.0))
+      .top(px(0.0))
+      .bottom(px(0.0))
+      .flex()
+      .items_center()
+      .opacity(0.0)
+      .group_hover(row_group.clone(), |style| style.opacity(1.0));
+
+    match list {
+      FileListKind::Changes => {
+        let path = entry.path.clone();
+        let discard_path = entry.path.clone();
+        let status = entry.status;
+        actions_wrap = actions_wrap
+          .child(mini_action_button(
+            format!("stage-file-{}", &row_group),
+            "+",
+            cx.listener(move |this, _: &ClickEvent, _window, cx| {
+              cx.stop_propagation();
+              this.stage_file(path.clone(), cx);
+            }),
+            &colors,
+          ))
+          .child(mini_action_button(
+            format!("discard-file-{}", &row_group),
+            "x",
+            cx.listener(move |this, _: &ClickEvent, _window, cx| {
+              cx.stop_propagation();
+              this.discard_file_change(discard_path.clone(), status, cx);
+            }),
+            &colors,
+          ));
+      }
+      FileListKind::Staged => {
+        let path = entry.path.clone();
+        actions_wrap = actions_wrap.child(mini_action_button(
+          format!("unstage-file-{}", &row_group),
+          "-",
+          cx.listener(move |this, _: &ClickEvent, _window, cx| {
+            cx.stop_propagation();
+            this.unstage_file(path.clone(), cx);
+          }),
+          &colors,
+        ));
+      }
+    }
+    actions = actions.child(actions_wrap);
 
     div()
       .id(idx)
@@ -829,8 +1159,10 @@ impl WorkspaceView {
       .text_color(colors.list_text)
       .cursor_pointer()
       .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-        this.select_file(idx, window, cx);
+        this.select_file(list, idx, window, cx);
       }))
+      .relative()
+      .group(row_group.clone())
       .flex()
       .items_center()
       .gap_2()
@@ -852,15 +1184,7 @@ impl WorkspaceView {
           .text_ellipsis_start()
           .child(entry.display_name.clone()),
       )
-      .when(is_dirty, |this| {
-        this.child(
-          div()
-            .flex_none()
-            .text_sm()
-            .text_color(rgb(0xe0b84a))
-            .child("*"),
-        )
-      })
+      .child(actions)
   }
 }
 
@@ -895,6 +1219,7 @@ impl Render for WorkspaceView {
           .flex()
           .flex_col()
           .min_w(px(0.0))
+          .min_h(px(0.0))
           .size_full()
           .bg(colors.surface_bg);
 
@@ -906,7 +1231,7 @@ impl Render for WorkspaceView {
         } else {
           let (message, color) = if let Some(error) = &self.error {
             (error.clone(), colors.error_text)
-          } else if self.files.is_empty() {
+          } else if self.changes.is_empty() && self.staged.is_empty() {
             (
               "No changes found in this repository.".to_string(),
               colors.text_muted,
@@ -933,6 +1258,7 @@ impl Render for WorkspaceView {
         .flex_1()
         .flex()
         .flex_row()
+        .min_h(px(0.0))
         .bg(colors.app_bg)
         .child(self.render_sidebar(cx))
         .child(main)
@@ -942,9 +1268,13 @@ impl Render for WorkspaceView {
       .size_full()
       .flex()
       .flex_col()
+      .relative()
       .bg(colors.app_bg)
       .child(self.render_app_header(cx))
       .child(content)
+      .when(self.repo_picker_open, |this| {
+        this.child(self.render_repo_picker_menu(cx))
+      })
       .key_context("Workspace")
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(Self::open_repository_action))
@@ -1064,6 +1394,31 @@ fn action_button(
     .id(id)
     .px_3()
     .py_1()
+    .bg(colors.button_bg)
+    .text_color(colors.button_text)
+    .text_sm()
+    .border_1()
+    .border_color(colors.button_border)
+    .rounded_sm()
+    .cursor_pointer()
+    .hover(|style| style.opacity(0.9))
+    .child(label.to_string())
+    .on_click(on_click)
+}
+
+fn mini_action_button(
+  id: impl Into<ElementId>,
+  label: &str,
+  on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+  colors: &AppColors,
+) -> impl IntoElement {
+  div()
+    .id(id)
+    .w(px(18.0))
+    .h(px(18.0))
+    .flex()
+    .items_center()
+    .justify_center()
     .bg(colors.button_bg)
     .text_color(colors.button_text)
     .text_sm()
