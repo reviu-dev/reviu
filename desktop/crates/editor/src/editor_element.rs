@@ -323,7 +323,7 @@ impl Element for EditorElement {
         let min_width = px(crate::editor::SPLIT_RIGHT_MIN_WIDTH).min(max_width);
         let max_right_width = (max_width - px(crate::editor::SPLIT_LEFT_MIN_WIDTH)).max(min_width);
         let right_width = editor.split_right_width.max(min_width).min(max_right_width);
-        let gutter_width = px(crate::editor::GUTTER_WIDTH);
+        let gutter_width = px(crate::editor::GUTTER_WIDTH + crate::editor::SPLIT_RESIZE_HANDLE_WIDTH);
         let (left, right, divider) = split_bounds(bounds, right_width, gutter_width);
         (true, left, right, Some(divider))
       } else {

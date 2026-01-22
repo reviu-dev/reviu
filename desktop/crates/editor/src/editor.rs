@@ -43,7 +43,7 @@ pub(crate) const SPLIT_RIGHT_MIN_WIDTH: f32 = 280.0;
 /// Minimum width for the left diff panel in split mode
 pub(crate) const SPLIT_LEFT_MIN_WIDTH: f32 = 100.0;
 /// Width of the split resize handle
-const SPLIT_RESIZE_HANDLE_WIDTH: f32 = 10.0;
+pub(crate) const SPLIT_RESIZE_HANDLE_WIDTH: f32 = 12.0;
 /// Maximum number of cached shaped lines
 const MAX_CACHE_SIZE: usize = 200;
 /// Number of lines of padding when auto-scrolling to cursor
@@ -347,7 +347,7 @@ impl Editor {
           total_content_width
         };
         let gutter_offset = if split_mode {
-          px(GUTTER_WIDTH)
+          px(GUTTER_WIDTH + SPLIT_RESIZE_HANDLE_WIDTH)
         } else {
           px(0.0)
         };
@@ -932,7 +932,7 @@ impl Render for Editor {
       max_width
     };
     let panel_left = (max_width - right_width).max(px(0.0));
-    let panel_left_with_padding = panel_left;
+    let right_gutter_width = px(GUTTER_WIDTH + SPLIT_RESIZE_HANDLE_WIDTH);
 
     let mut layout = div()
       .key_context("Editor")
@@ -1023,8 +1023,8 @@ impl Render for Editor {
           .absolute()
           .top(px(0.0))
           .bottom(px(0.0))
-          .left(panel_left_with_padding)
-          .w(px(GUTTER_WIDTH))
+          .left(panel_left)
+          .w(right_gutter_width)
           .bg(gutter_bg)
           .child(GutterElement::new(cx.entity().clone(), GutterSide::Right)),
       );
@@ -1034,7 +1034,7 @@ impl Render for Editor {
         .absolute()
         .top(px(0.0))
         .bottom(px(0.0))
-        .left(panel_left_with_padding - px(SPLIT_RESIZE_HANDLE_WIDTH) / 2.0)
+        .left(panel_left)
         .w(px(SPLIT_RESIZE_HANDLE_WIDTH))
         .bg(self.theme.line_number().opacity(0.35))
         .cursor_col_resize()
