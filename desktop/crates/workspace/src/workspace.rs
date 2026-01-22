@@ -6,7 +6,7 @@ use std::{
 
 use crate::config::{ConfigStore, RecentRepository};
 use crate::theme::{AppColors, app_colors};
-use editor::{DiffViewMode, Editor};
+use editor::{ChangeDirection, DiffViewMode, Editor};
 use git::{FileStatusKind, RepositoryFile, open_repository};
 use gpui::{
   App, ClickEvent, Context, Div, DragMoveEvent, Entity, FocusHandle, Focusable, InteractiveElement,
@@ -121,6 +121,29 @@ impl WorkspaceView {
       });
     }
     cx.notify();
+  }
+
+  fn jump_to_next_change(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(editor) = self.editor.as_ref() else {
+      return;
+    };
+    editor.update(cx, |editor, cx| {
+      editor.jump_to_change(ChangeDirection::Next, window, cx);
+    });
+  }
+
+  fn jump_to_previous_change(
+    &mut self,
+    _: &ClickEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(editor) = self.editor.as_ref() else {
+      return;
+    };
+    editor.update(cx, |editor, cx| {
+      editor.jump_to_change(ChangeDirection::Previous, window, cx);
+    });
   }
 
   fn select_recent_repository(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -533,6 +556,32 @@ impl WorkspaceView {
           .flex()
           .items_center()
           .gap_2()
+          .child(action_button(
+            "prev-change",
+            "Prev Change",
+            cx.listener(Self::jump_to_previous_change),
+            &colors,
+          ))
+          .child(action_button(
+            "next-change",
+            "Next Change",
+            cx.listener(Self::jump_to_next_change),
+            &colors,
+          ))
+          .when_some(
+            self
+              .editor
+              .as_ref()
+              .and_then(|editor| editor.read(cx).change_position(cx)),
+            |this, (current, total)| {
+              this.child(
+                div()
+                  .text_sm()
+                  .text_color(colors.text_subtle)
+                  .child(format!("{}/{}", current, total)),
+              )
+            },
+          )
           .child(action_button(
             "diff-toggle",
             diff_label,
