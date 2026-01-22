@@ -281,9 +281,7 @@ impl Element for EditorElement {
     };
     self.editor.update(cx, |editor, cx| {
       editor.viewport_height = bounds.size.height;
-      editor.viewport_width = bounds.size.width
-        + px(crate::editor::GUTTER_WIDTH)
-        + px(crate::editor::EDITOR_PADDING) * 2.0;
+      editor.viewport_width = bounds.size.width + px(crate::editor::GUTTER_WIDTH);
 
       if diff_epoch > editor.last_diff_epoch || diff_version > editor.last_diff_version {
         editor.sync_view_selection_from_buffer(cx);
@@ -323,7 +321,8 @@ impl Element for EditorElement {
       if split_mode {
         let max_width = bounds.size.width.max(px(1.0));
         let min_width = px(crate::editor::SPLIT_RIGHT_MIN_WIDTH).min(max_width);
-        let right_width = editor.split_right_width.max(min_width).min(max_width);
+        let max_right_width = (max_width - px(crate::editor::SPLIT_LEFT_MIN_WIDTH)).max(min_width);
+        let right_width = editor.split_right_width.max(min_width).min(max_right_width);
         let gutter_width = px(crate::editor::GUTTER_WIDTH);
         let (left, right, divider) = split_bounds(bounds, right_width, gutter_width);
         (true, left, right, Some(divider))
@@ -493,7 +492,7 @@ impl Element for EditorElement {
         let hatch_color = theme.line_number().opacity(0.35);
         let line_height_f32: f32 = line_height.into();
         let hatch_width = (line_height_f32 / 5.5).max(2.0);
-        let hatch_interval = hatch_width * 5.0;
+        let hatch_interval = hatch_width * 6.0;
         let mut left_hatch_start: Option<usize> = None;
         let mut right_hatch_start: Option<usize> = None;
         for (row_offset, row) in split_rows.iter().enumerate() {
