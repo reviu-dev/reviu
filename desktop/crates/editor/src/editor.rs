@@ -40,8 +40,10 @@ pub(crate) const EXTRA_EDITOR_WIDTH: f32 = 200.0;
 const SPLIT_RIGHT_DEFAULT_WIDTH: f32 = 560.0;
 /// Minimum width for the right diff panel in split mode
 pub(crate) const SPLIT_RIGHT_MIN_WIDTH: f32 = 280.0;
+/// Minimum width for the left diff panel in split mode
+pub(crate) const SPLIT_LEFT_MIN_WIDTH: f32 = 100.0;
 /// Width of the split resize handle
-const SPLIT_RESIZE_HANDLE_WIDTH: f32 = 6.0;
+const SPLIT_RESIZE_HANDLE_WIDTH: f32 = 10.0;
 /// Maximum number of cached shaped lines
 const MAX_CACHE_SIZE: usize = 200;
 /// Number of lines of padding when auto-scrolling to cursor
@@ -50,8 +52,6 @@ const SCROLL_PADDING: usize = 3;
 pub(crate) const TAB_WHITESPACE_COUNT: usize = 2;
 /// Width of the gutter area
 pub(crate) const GUTTER_WIDTH: f32 = 70.0;
-/// Padding inside the editor content area
-pub(crate) const EDITOR_PADDING: f32 = 4.0;
 
 pub struct Editor {
   pub document: Entity<Document>,
@@ -196,9 +196,9 @@ impl Editor {
   }
 
   pub(crate) fn resize_split_right_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
-    let max_width =
-      (self.viewport_width - px(GUTTER_WIDTH) - px(EDITOR_PADDING) * 2.0).max(px(1.0));
-    let min_width = px(SPLIT_RIGHT_MIN_WIDTH).min(max_width);
+    let total_width = (self.viewport_width - px(GUTTER_WIDTH)).max(px(1.0));
+    let min_width = px(SPLIT_RIGHT_MIN_WIDTH).min(total_width);
+    let max_width = (total_width - px(SPLIT_LEFT_MIN_WIDTH)).max(min_width);
     let width = width.max(min_width).min(max_width).round();
     if self.split_right_width != width {
       self.split_right_width = width;
@@ -325,9 +325,13 @@ impl Editor {
     } else {
       DiffPanelSide::Right
     };
-    let total_content_width =
-      (self.viewport_width - px(GUTTER_WIDTH) - px(EDITOR_PADDING) * 2.0).max(px(0.0));
-    let split_right_width = self.split_right_width.min(total_content_width);
+    let total_content_width = (self.viewport_width - px(GUTTER_WIDTH)).max(px(0.0));
+    let min_right_width = px(SPLIT_RIGHT_MIN_WIDTH).min(total_content_width);
+    let max_right_width = (total_content_width - px(SPLIT_LEFT_MIN_WIDTH)).max(min_right_width);
+    let split_right_width = self
+      .split_right_width
+      .max(min_right_width)
+      .min(max_right_width);
     let (text_area_width, current_scroll_x, max_line_width) =
       if split_mode && active_panel == DiffPanelSide::Left {
         let left_panel_width = (total_content_width - split_right_width).max(px(0.0));
@@ -365,7 +369,7 @@ impl Editor {
       let cursor_in_line = cursor_offset - line_start;
       let cursor_x = shaped_line.x_for_index(cursor_in_line);
 
-      let horizontal_padding = px(EDITOR_PADDING) + px(EXTRA_EDITOR_WIDTH);
+      let horizontal_padding = px(EXTRA_EDITOR_WIDTH);
 
       // Note: scroll_x is negative when scrolled right (0 = left edge, -100 = scrolled 100px right)
       // visible area in absolute coordinates: [-current_scroll_x, -current_scroll_x + text_area_width]
@@ -916,19 +920,19 @@ impl Render for Editor {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let diff_split =
       self.diff_view_mode == DiffViewMode::Split && self.document.read(cx).diff_enabled();
-    let gutter_bg = self.theme.gutter_background();
     let content_bg = if self.theme.is_dark { black() } else { white() };
-    let content_width =
-      (self.viewport_width - px(GUTTER_WIDTH) - px(EDITOR_PADDING) * 2.0).max(px(0.0));
+    let gutter_bg = content_bg;
+    let content_width = (self.viewport_width - px(GUTTER_WIDTH)).max(px(0.0));
     let max_width = content_width.max(px(1.0));
     let min_width = px(SPLIT_RIGHT_MIN_WIDTH).min(max_width);
+    let max_right_width = (max_width - px(SPLIT_LEFT_MIN_WIDTH)).max(min_width);
     let right_width = if diff_split {
-      self.split_right_width.max(min_width).min(max_width)
+      self.split_right_width.max(min_width).min(max_right_width)
     } else {
       max_width
     };
     let panel_left = (max_width - right_width).max(px(0.0));
-    let panel_left_with_padding = panel_left + px(EDITOR_PADDING);
+    let panel_left_with_padding = panel_left;
 
     let mut layout = div()
       .key_context("Editor")
@@ -998,7 +1002,7 @@ impl Render for Editor {
       .overflow_hidden()
       .on_drag_move(
         cx.listener(|editor, e: &DragMoveEvent<DraggedDiffSplitter>, _, cx| {
-          let inner_right = e.bounds.right() - px(EDITOR_PADDING);
+          let inner_right = e.bounds.right();
           let new_width = inner_right - e.event.position.x;
           editor.resize_split_right_width(new_width, cx);
         }),
@@ -1010,7 +1014,6 @@ impl Render for Editor {
           .left(px(0.0))
           .right(px(0.0))
           .bottom(px(0.0))
-          .px(px(EDITOR_PADDING))
           .child(EditorElement::new(cx.entity().clone())),
       );
 
@@ -1033,6 +1036,7 @@ impl Render for Editor {
         .bottom(px(0.0))
         .left(panel_left_with_padding - px(SPLIT_RESIZE_HANDLE_WIDTH) / 2.0)
         .w(px(SPLIT_RESIZE_HANDLE_WIDTH))
+        .bg(self.theme.line_number().opacity(0.35))
         .cursor_col_resize()
         .on_drag(DraggedDiffSplitter, |drag, _, _, cx| {
           cx.stop_propagation();

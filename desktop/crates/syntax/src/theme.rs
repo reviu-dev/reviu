@@ -41,24 +41,6 @@ impl Theme {
     }
   }
 
-  pub fn gutter_background(&self) -> Hsla {
-    if self.is_dark {
-      Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.12,
-        a: 1.0,
-      } // #1e1e1e
-    } else {
-      Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.96,
-        a: 1.0,
-      } // #f5f5f5
-    }
-  }
-
   pub fn line_number(&self) -> Hsla {
     if self.is_dark {
       Hsla {
