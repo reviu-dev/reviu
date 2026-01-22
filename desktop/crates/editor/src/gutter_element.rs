@@ -162,32 +162,40 @@ impl Element for GutterElement {
           }
         };
 
-        let marker_color = match self.side {
-          GutterSide::Inline => diff_info.and_then(|info| match info.gutter {
-            crate::document::DiffGutterKind::Added => Some(editor.theme.diff_gutter_added()),
-            crate::document::DiffGutterKind::Modified => Some(editor.theme.diff_gutter_modified()),
-            crate::document::DiffGutterKind::None => None,
-          }),
-          GutterSide::Left => diff_info.and_then(|info| {
-            if matches!(info.kind, crate::document::DiffLineKind::Deleted) {
-              Some(editor.theme.diff_gutter_modified())
-            } else {
-              None
-            }
-          }),
-          GutterSide::Right => diff_info.and_then(|info| {
-            if matches!(info.kind, crate::document::DiffLineKind::Added) {
-              match info.gutter {
-                crate::document::DiffGutterKind::Added => Some(editor.theme.diff_gutter_added()),
-                crate::document::DiffGutterKind::Modified => {
-                  Some(editor.theme.diff_gutter_modified())
-                }
-                crate::document::DiffGutterKind::None => None,
+        let marker_color = if split_mode && !matches!(self.side, GutterSide::Inline) {
+          None
+        } else {
+          match self.side {
+            GutterSide::Inline => diff_info.and_then(|info| match info.gutter {
+              crate::document::DiffGutterKind::Added => Some(editor.theme.diff_gutter_added()),
+              crate::document::DiffGutterKind::Modified => {
+                Some(editor.theme.diff_gutter_modified())
               }
-            } else {
-              None
-            }
-          }),
+              crate::document::DiffGutterKind::None => None,
+            }),
+            GutterSide::Left => diff_info.and_then(|info| {
+              if matches!(info.kind, crate::document::DiffLineKind::Deleted) {
+                Some(editor.theme.diff_gutter_modified())
+              } else {
+                None
+              }
+            }),
+            GutterSide::Right => diff_info.and_then(|info| {
+              if matches!(info.kind, crate::document::DiffLineKind::Added) {
+                match info.gutter {
+                  crate::document::DiffGutterKind::Added => {
+                    Some(editor.theme.diff_gutter_added())
+                  }
+                  crate::document::DiffGutterKind::Modified => {
+                    Some(editor.theme.diff_gutter_modified())
+                  }
+                  crate::document::DiffGutterKind::None => None,
+                }
+              } else {
+                None
+              }
+            }),
+          }
         };
 
         lines.push(GutterLine {
