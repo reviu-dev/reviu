@@ -841,11 +841,7 @@ impl WorkspaceView {
             .bg(colors.list_selected_bg)
             .text_color(colors.list_selected_text)
         },
-        |this| {
-          this
-            .bg(colors.list_bg)
-            .hover(|style| style.bg(colors.list_hover_bg))
-        },
+        |this| this.hover(|style| style.bg(colors.list_hover_bg)),
       )
       .child(div().flex_none().text_sm().text_color(tag_color).child(tag))
       .child(
