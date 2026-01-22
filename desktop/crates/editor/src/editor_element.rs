@@ -2,8 +2,8 @@ use gpui::{
   App, Bounds, ContentMask, DispatchPhase, ElementId, ElementInputHandler, Entity, GlobalElementId,
   Hitbox, HitboxBehavior, InspectorElementId, LayoutId, MouseButton, MouseDownEvent,
   MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ScrollDelta, ScrollWheelEvent,
-  ShapedLine, Style, TextAlign, TextRun, TextStyle, Window, black, fill, point, prelude::*, px,
-  relative, size, white,
+  ShapedLine, Style, TextAlign, TextRun, TextStyle, Window, black, fill, pattern_slash, point,
+  prelude::*, px, relative, size, white,
 };
 use std::{
   ops::Range,
@@ -173,6 +173,8 @@ pub struct PrepaintState {
   cursor_quad: Option<PaintQuad>,
   diff_background_quads_left: Vec<PaintQuad>,
   diff_background_quads_right: Vec<PaintQuad>,
+  diff_hatch_quads_left: Vec<PaintQuad>,
+  diff_hatch_quads_right: Vec<PaintQuad>,
   diff_word_quads_left: Vec<PaintQuad>,
   diff_word_quads_right: Vec<PaintQuad>,
   selection_quads: Vec<PaintQuad>,
@@ -479,6 +481,8 @@ impl Element for EditorElement {
 
     let mut diff_background_quads_left = Vec::new();
     let mut diff_background_quads_right = Vec::new();
+    let mut diff_hatch_quads_left = Vec::new();
+    let mut diff_hatch_quads_right = Vec::new();
     let mut divider_quads = Vec::new();
     {
       let document = self.editor.read(cx).document().read(cx);
@@ -486,6 +490,12 @@ impl Element for EditorElement {
         divider_quads.push(fill(divider_bounds, theme.line_number()));
       }
       if split_mode {
+        let hatch_color = theme.line_number().opacity(0.35);
+        let line_height_f32: f32 = line_height.into();
+        let hatch_width = (line_height_f32 / 5.5).max(2.0);
+        let hatch_interval = hatch_width * 5.0;
+        let mut left_hatch_start: Option<usize> = None;
+        let mut right_hatch_start: Option<usize> = None;
         for (row_offset, row) in split_rows.iter().enumerate() {
           let y_left = left_bounds.top() + line_height * row_offset as f32;
           if let Some(line_idx) = row.left_line {
@@ -515,6 +525,59 @@ impl Element for EditorElement {
               ));
             }
           }
+          let left_hatch = row.left_line.is_none() && row.right_line.is_some();
+          if left_hatch {
+            if left_hatch_start.is_none() {
+              left_hatch_start = Some(row_offset);
+            }
+          } else if let Some(start) = left_hatch_start.take() {
+            let start_y = left_bounds.top() + line_height * start as f32;
+            diff_hatch_quads_left.push(fill(
+              Bounds::from_corners(
+                point(left_bounds.left(), start_y),
+                point(left_bounds.right(), y_left),
+              ),
+              pattern_slash(hatch_color, hatch_width, hatch_interval),
+            ));
+          }
+
+          let right_hatch = row.right_line.is_none() && row.left_line.is_some();
+          if right_hatch {
+            if right_hatch_start.is_none() {
+              right_hatch_start = Some(row_offset);
+            }
+          } else if let Some(start) = right_hatch_start.take() {
+            let start_y = right_bounds.top() + line_height * start as f32;
+            diff_hatch_quads_right.push(fill(
+              Bounds::from_corners(
+                point(right_bounds.left(), start_y),
+                point(right_bounds.right(), y_right),
+              ),
+              pattern_slash(hatch_color, hatch_width, hatch_interval),
+            ));
+          }
+        }
+        if let Some(start) = left_hatch_start.take() {
+          let start_y = left_bounds.top() + line_height * start as f32;
+          let end_y = left_bounds.top() + line_height * split_rows.len() as f32;
+          diff_hatch_quads_left.push(fill(
+            Bounds::from_corners(
+              point(left_bounds.left(), start_y),
+              point(left_bounds.right(), end_y),
+            ),
+            pattern_slash(hatch_color, hatch_width, hatch_interval),
+          ));
+        }
+        if let Some(start) = right_hatch_start.take() {
+          let start_y = right_bounds.top() + line_height * start as f32;
+          let end_y = right_bounds.top() + line_height * split_rows.len() as f32;
+          diff_hatch_quads_right.push(fill(
+            Bounds::from_corners(
+              point(right_bounds.left(), start_y),
+              point(right_bounds.right(), end_y),
+            ),
+            pattern_slash(hatch_color, hatch_width, hatch_interval),
+          ));
         }
       } else {
         for line_idx in viewport.clone() {
@@ -931,6 +994,8 @@ impl Element for EditorElement {
       cursor_quad,
       diff_background_quads_left,
       diff_background_quads_right,
+      diff_hatch_quads_left,
+      diff_hatch_quads_right,
       diff_word_quads_left,
       diff_word_quads_right,
       selection_quads,
@@ -1255,6 +1320,9 @@ impl Element for EditorElement {
         for quad in &prepaint.diff_background_quads_left {
           window.paint_quad(quad.clone());
         }
+        for quad in &prepaint.diff_hatch_quads_left {
+          window.paint_quad(quad.clone());
+        }
         for quad in &prepaint.diff_word_quads_left {
           window.paint_quad(quad.clone());
         }
@@ -1282,6 +1350,9 @@ impl Element for EditorElement {
 
       window.with_content_mask(Some(right_mask), |window| {
         for quad in &prepaint.diff_background_quads_right {
+          window.paint_quad(quad.clone());
+        }
+        for quad in &prepaint.diff_hatch_quads_right {
           window.paint_quad(quad.clone());
         }
         for quad in &prepaint.diff_word_quads_right {
