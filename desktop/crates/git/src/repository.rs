@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use git2::{
-  IndexAddOption, Repository as GitRepository, ResetType, Status, StatusOptions, Tree,
+  IndexAddOption, Repository as GitRepository, ResetType, Signature, Status, StatusOptions, Tree,
 };
 use git2::build::CheckoutBuilder;
 
@@ -276,6 +276,61 @@ pub fn discard_change(
   options.force().path(&rel_path);
   repo.checkout_index(None, Some(&mut options))?;
   Ok(())
+}
+
+pub fn commit_repository(
+  repo_root: &Path,
+  message: &str,
+  amend: bool,
+) -> Result<(), git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  let message = message.trim();
+  let has_message = !message.is_empty();
+  if !amend && !has_message {
+    return Ok(());
+  }
+
+  let mut index = repo.index()?;
+  let tree_id = index.write_tree()?;
+  index.write()?;
+  let tree = repo.find_tree(tree_id)?;
+
+  let signature = repo
+    .signature()
+    .or_else(|_| Signature::now("Reviu", "reviu@example.com"))?;
+
+  let head_commit = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+  if amend {
+    if let Some(commit) = head_commit.as_ref() {
+      let message = if has_message { Some(message) } else { None };
+      commit.amend(
+        Some("HEAD"),
+        None,
+        Some(&signature),
+        None,
+        message,
+        Some(&tree),
+      )?;
+    } else if has_message {
+      repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &[])?;
+    }
+  } else if let Some(commit) = head_commit.as_ref() {
+    repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &[commit])?;
+  } else {
+    repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &[])?;
+  }
+
+  Ok(())
+}
+
+pub fn has_head_commit(repo_root: &Path) -> bool {
+  let Ok(repo) = GitRepository::discover(repo_root) else {
+    return false;
+  };
+  let Ok(head) = repo.head() else {
+    return false;
+  };
+  head.peel_to_commit().is_ok()
 }
 
 fn repo_root_path(repo: &GitRepository) -> Result<PathBuf, git2::Error> {
