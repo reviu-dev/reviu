@@ -8,8 +8,9 @@ use crate::config::{ConfigStore, RecentRepository};
 use crate::theme::{AppColors, app_colors};
 use editor::{ChangeDirection, DiffViewMode, Editor};
 use git::{
-  FileStatusKind, RepositoryFile, commit_repository, discard_change, has_head_commit,
-  open_repository, stage_all, stage_path, unstage_all, unstage_path,
+  FileStatusKind, RepositoryFile, can_undo_last_commit, commit_repository, discard_change,
+  has_head_commit, open_repository, stage_all, stage_path,
+  undo_last_commit as git_undo_last_commit, unstage_all, unstage_path,
 };
 use gpui::{
   App, ClickEvent, Context, Div, DragMoveEvent, ElementId, Entity, FocusHandle, Focusable,
@@ -23,7 +24,6 @@ const SIDEBAR_DEFAULT_WIDTH: Pixels = px(260.0);
 const SIDEBAR_MIN_WIDTH: Pixels = px(200.0);
 const SIDEBAR_MAX_WIDTH: Pixels = px(600.0);
 const SIDEBAR_RESIZE_HANDLE_WIDTH: Pixels = px(6.0);
-const HEADER_HEIGHT: f32 = 36.0;
 const APP_HEADER_HEIGHT: f32 = 42.0;
 const FILE_POLL_INTERVAL_MS: u64 = 500;
 const REPO_POLL_INTERVAL_MS: u64 = 1500;
@@ -72,6 +72,7 @@ pub struct WorkspaceView {
   commit_input: Entity<TextInput>,
   commit_menu_open: bool,
   has_head_commit: bool,
+  can_undo_last_commit: bool,
   last_repo_poll: Option<Instant>,
 }
 
@@ -115,6 +116,7 @@ impl WorkspaceView {
       commit_input,
       commit_menu_open: false,
       has_head_commit: false,
+      can_undo_last_commit: false,
       last_repo_poll: None,
     };
     view.start_file_polling(cx);
@@ -162,7 +164,9 @@ impl WorkspaceView {
   }
 
   fn toggle_commit_menu(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
-    if self.root_path.is_none() || (self.staged.is_empty() && !self.has_head_commit) {
+    if self.root_path.is_none()
+      || (self.staged.is_empty() && !self.has_head_commit && !self.can_undo_last_commit)
+    {
       return;
     }
     self.commit_menu_open = !self.commit_menu_open;
@@ -175,6 +179,27 @@ impl WorkspaceView {
 
   fn commit_amend_changes(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
     self.commit_changes_with_amend(true, cx);
+  }
+
+  fn undo_last_commit(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    let Some(root_path) = self.root_path.clone() else {
+      return;
+    };
+    if !can_undo_last_commit(&root_path) {
+      self.error =
+        Some("Cannot undo last commit: already pushed or no upstream branch.".to_string());
+      cx.notify();
+      return;
+    }
+    if let Err(err) = git_undo_last_commit(&root_path) {
+      self.error = Some(format!("Failed to undo last commit: {err}"));
+      cx.notify();
+      return;
+    }
+
+    self.error = None;
+    self.commit_menu_open = false;
+    self.refresh_repository_statuses(cx);
   }
 
   fn commit_changes_with_amend(&mut self, amend: bool, cx: &mut Context<Self>) {
@@ -496,6 +521,7 @@ impl WorkspaceView {
     let repo_root = repository.root;
     self.root_path = Some(repo_root.clone());
     self.has_head_commit = has_head_commit(&repo_root);
+    self.can_undo_last_commit = can_undo_last_commit(&repo_root);
     let mut changes = repository_entries_to_files(&repo_root, repository.changes);
     let mut staged = repository_entries_to_files(&repo_root, repository.staged);
 
@@ -1018,29 +1044,38 @@ impl WorkspaceView {
       .rounded_sm()
       .child(div().flex().items_start().w_full().child(input));
 
+    let content = div().px_2().py_2().child(
+      div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_2()
+        .child(input_field)
+        .child(self.render_commit_button(cx)),
+    );
+
     div()
       .flex_none()
-      .border_t_1()
-      .border_color(colors.border)
+      .relative()
       .bg(colors.sidebar_bg)
-      .px_2()
-      .py_2()
       .child(
         div()
-          .flex()
-          .flex_col()
-          .items_center()
-          .gap_2()
-          .child(input_field)
-          .child(self.render_commit_button(cx)),
+          .absolute()
+          .top(px(0.0))
+          .left(px(0.0))
+          .right(px(0.0))
+          .h(px(1.0))
+          .bg(colors.border),
       )
+      .child(content)
   }
 
   fn render_commit_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let colors = app_colors(&self.theme);
     let commit_enabled = self.root_path.is_some() && !self.staged.is_empty();
     let amend_enabled = self.root_path.is_some() && self.has_head_commit;
-    let menu_enabled = commit_enabled || amend_enabled;
+    let undo_enabled = self.root_path.is_some() && self.can_undo_last_commit;
+    let menu_enabled = commit_enabled || amend_enabled || undo_enabled;
     let show_menu = self.commit_menu_open && menu_enabled;
     let button_colors = ButtonColors::new(colors.button_text, colors.text_muted);
 
@@ -1091,17 +1126,19 @@ impl WorkspaceView {
   fn render_commit_menu(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let colors = app_colors(&self.theme);
     let amend_enabled = self.root_path.is_some() && self.has_head_commit;
+    let undo_enabled = self.root_path.is_some() && self.can_undo_last_commit;
     div()
       .id("commit-options-menu")
       .absolute()
       .right(px(0.0))
-      .bottom(px(32.0))
+      .bottom(px(34.0))
       .flex()
       .flex_col()
       .bg(colors.menu_bg)
       .border_1()
       .border_color(colors.border)
       .rounded_sm()
+      .occlude()
       .child(
         div()
           .id("commit-option-amend")
@@ -1118,6 +1155,26 @@ impl WorkspaceView {
           .child("Amend")
           .when(amend_enabled, |this| {
             this.on_click(cx.listener(Self::commit_amend_changes))
+          }),
+      )
+      .child(
+        div()
+          .id("commit-option-undo")
+          .px_3()
+          .py_2()
+          .border_t_1()
+          .border_color(colors.border)
+          .text_sm()
+          .text_color(if undo_enabled {
+            colors.text
+          } else {
+            colors.text_muted
+          })
+          .when(undo_enabled, |this| this.cursor_pointer())
+          .hover(|style| style.bg(colors.menu_hover_bg))
+          .child("Undo last commit")
+          .when(undo_enabled, |this| {
+            this.on_click(cx.listener(Self::undo_last_commit))
           }),
       )
   }
@@ -1144,7 +1201,7 @@ impl WorkspaceView {
     }
 
     let mut header = div()
-      .h(px(HEADER_HEIGHT))
+      .py_1()
       .px_3()
       .flex()
       .items_center()
