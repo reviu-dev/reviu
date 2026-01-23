@@ -2,7 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use git2::{
-  IndexAddOption, Repository as GitRepository, ResetType, Signature, Status, StatusOptions, Tree,
+  BranchType, IndexAddOption, Repository as GitRepository, ResetType, Signature, Status,
+  StatusOptions, Tree,
 };
 use git2::build::CheckoutBuilder;
 
@@ -331,6 +332,51 @@ pub fn has_head_commit(repo_root: &Path) -> bool {
     return false;
   };
   head.peel_to_commit().is_ok()
+}
+
+pub fn can_undo_last_commit(repo_root: &Path) -> bool {
+  let Ok(repo) = GitRepository::discover(repo_root) else {
+    return false;
+  };
+  let Ok(head) = repo.head() else {
+    return false;
+  };
+  if !head.is_branch() {
+    return false;
+  }
+  let Some(branch_name) = head.shorthand() else {
+    return false;
+  };
+  let Ok(branch) = repo.find_branch(branch_name, BranchType::Local) else {
+    return false;
+  };
+  let Ok(upstream) = branch.upstream() else {
+    return false;
+  };
+  let Ok(head_commit) = head.peel_to_commit() else {
+    return false;
+  };
+  if head_commit.parent_count() == 0 {
+    return false;
+  }
+  let Some(upstream_oid) = upstream.get().target() else {
+    return false;
+  };
+  let Ok((ahead, _behind)) = repo.graph_ahead_behind(head_commit.id(), upstream_oid) else {
+    return false;
+  };
+  ahead > 0
+}
+
+pub fn undo_last_commit(repo_root: &Path) -> Result<(), git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  let head = repo.head()?;
+  let head_commit = head.peel_to_commit()?;
+  let parent = head_commit
+    .parent(0)
+    .map_err(|_| git2::Error::from_str("No parent commit to reset to"))?;
+  repo.reset(parent.as_object(), ResetType::Soft, None)?;
+  Ok(())
 }
 
 fn repo_root_path(repo: &GitRepository) -> Result<PathBuf, git2::Error> {
