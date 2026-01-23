@@ -5,7 +5,6 @@ use std::{
 };
 
 use crate::config::{ConfigStore, RecentRepository};
-use crate::theme::{AppColors, app_colors};
 use editor::{ChangeDirection, DiffViewMode, Editor};
 use git::{
   FileStatusKind, RepositoryFile, can_undo_last_commit, commit_repository, discard_change,
@@ -13,17 +12,20 @@ use git::{
   undo_last_commit as git_undo_last_commit, unstage_all, unstage_path,
 };
 use gpui::{
-  App, ClickEvent, Context, Div, DragMoveEvent, ElementId, Entity, FocusHandle, Focusable,
-  InteractiveElement, PathPromptOptions, Pixels, Point, Render, Rgba, Stateful, Task, Window,
-  actions, deferred, div, prelude::*, px, rgb,
+  App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, Hsla, PathPromptOptions, Pixels,
+  Render, SharedString, Stateful, Task, Window, actions, div, prelude::*, px,
 };
-use syntax::Theme;
-use ui::{ButtonColors, TextInput, TextInputColors, button};
+use gpui_component::{ActiveTheme as _, Theme as ComponentTheme, ThemeMode};
+use syntax::Theme as SyntaxTheme;
+use ui::{
+  Anchor, Button, ButtonVariants, Collapsible, Disableable, IconName, Input, InputState, Popover,
+  ResizableState, SearchableVec, Select, SelectEvent, SelectItem, SelectState, Sidebar,
+  SidebarItem, Sizable, h_resizable, resizable_panel,
+};
 
 const SIDEBAR_DEFAULT_WIDTH: Pixels = px(260.0);
 const SIDEBAR_MIN_WIDTH: Pixels = px(200.0);
 const SIDEBAR_MAX_WIDTH: Pixels = px(600.0);
-const SIDEBAR_RESIZE_HANDLE_WIDTH: Pixels = px(6.0);
 const APP_HEADER_HEIGHT: f32 = 42.0;
 const FILE_POLL_INTERVAL_MS: u64 = 500;
 const REPO_POLL_INTERVAL_MS: u64 = 1500;
@@ -41,6 +43,47 @@ struct FileEntry {
   last_modified: Option<SystemTime>,
 }
 
+#[derive(Clone)]
+struct SidebarFileEntry {
+  path: PathBuf,
+  display_name: String,
+  status: FileStatusKind,
+}
+
+impl From<&FileEntry> for SidebarFileEntry {
+  fn from(entry: &FileEntry) -> Self {
+    Self {
+      path: entry.path.clone(),
+      display_name: entry.display_name.clone(),
+      status: entry.status,
+    }
+  }
+}
+
+#[derive(Clone)]
+struct RepoSelectItem {
+  label: SharedString,
+  path: PathBuf,
+}
+
+impl SelectItem for RepoSelectItem {
+  type Value = PathBuf;
+
+  fn title(&self) -> SharedString {
+    self.label.clone()
+  }
+
+  fn value(&self) -> &Self::Value {
+    &self.path
+  }
+
+  fn matches(&self, query: &str) -> bool {
+    let query = query.to_lowercase();
+    self.label.as_ref().to_lowercase().contains(&query)
+      || self.path.to_string_lossy().to_lowercase().contains(&query)
+  }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FileListKind {
   Changes,
@@ -53,6 +96,76 @@ enum SelectedFile {
   Staged(usize),
 }
 
+#[derive(Clone)]
+struct WorkspaceSidebarSection {
+  view: Entity<WorkspaceView>,
+  kind: FileListKind,
+  entries: Vec<SidebarFileEntry>,
+  selected_index: Option<usize>,
+  has_root: bool,
+  collapsed: bool,
+}
+
+impl WorkspaceSidebarSection {
+  fn new(
+    view: Entity<WorkspaceView>,
+    kind: FileListKind,
+    entries: Vec<SidebarFileEntry>,
+    selected_index: Option<usize>,
+    has_root: bool,
+  ) -> Self {
+    Self {
+      view,
+      kind,
+      entries,
+      selected_index,
+      has_root,
+      collapsed: false,
+    }
+  }
+}
+
+impl Collapsible for WorkspaceSidebarSection {
+  fn collapsed(mut self, collapsed: bool) -> Self {
+    self.collapsed = collapsed;
+    self
+  }
+
+  fn is_collapsed(&self) -> bool {
+    self.collapsed
+  }
+}
+
+impl SidebarItem for WorkspaceSidebarSection {
+  fn render(
+    self,
+    id: impl Into<gpui::ElementId>,
+    window: &mut Window,
+    cx: &mut App,
+  ) -> impl IntoElement {
+    let id = id.into();
+    let WorkspaceSidebarSection {
+      view,
+      kind,
+      entries,
+      selected_index,
+      has_root,
+      ..
+    } = self;
+
+    render_sidebar_section(
+      &view,
+      kind,
+      &entries,
+      selected_index,
+      has_root,
+      cx.theme(),
+      window,
+    )
+    .id(id)
+  }
+}
+
 pub struct WorkspaceView {
   root_path: Option<PathBuf>,
   changes: Vec<FileEntry>,
@@ -62,41 +175,28 @@ pub struct WorkspaceView {
   error: Option<String>,
   current_dirty: bool,
   poll_task: Option<Task<()>>,
-  sidebar_width: Pixels,
-  previous_sidebar_drag_position: Option<Point<Pixels>>,
   focus_handle: FocusHandle,
   recent_repositories: Vec<RecentRepository>,
-  repo_picker_open: bool,
-  theme: Theme,
+  repo_select: Option<Entity<SelectState<SearchableVec<RepoSelectItem>>>>,
+  sidebar_state: Entity<ResizableState>,
+  theme: SyntaxTheme,
   diff_view_mode: DiffViewMode,
-  commit_input: Entity<TextInput>,
-  commit_menu_open: bool,
+  commit_input: Entity<InputState>,
   has_head_commit: bool,
   can_undo_last_commit: bool,
   last_repo_poll: Option<Instant>,
 }
 
-#[derive(Clone)]
-struct DraggedSidebar;
-
-impl Render for DraggedSidebar {
-  fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-    gpui::Empty
-  }
-}
-
 impl WorkspaceView {
-  pub fn new(cx: &mut Context<Self>) -> Self {
+  pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     let recent_repositories = ConfigStore::load_recent_repositories();
-    let theme = Theme::dark();
-    let colors = app_colors(&theme);
-    let commit_input = cx.new(|cx| {
-      TextInput::new(
-        "Commit message...",
-        commit_input_colors(&colors, &theme),
-        cx,
-      )
-    });
+    let theme = if cx.theme().is_dark() {
+      SyntaxTheme::dark()
+    } else {
+      SyntaxTheme::light()
+    };
+    let commit_input = cx.new(|cx| InputState::new(window, cx).placeholder("Commit message..."));
+    let sidebar_state = cx.new(|_| ResizableState::default());
     let mut view = Self {
       root_path: None,
       changes: Vec::new(),
@@ -106,15 +206,13 @@ impl WorkspaceView {
       error: None,
       current_dirty: false,
       poll_task: None,
-      sidebar_width: SIDEBAR_DEFAULT_WIDTH,
-      previous_sidebar_drag_position: None,
       focus_handle: cx.focus_handle(),
       recent_repositories,
-      repo_picker_open: false,
+      repo_select: None,
+      sidebar_state,
       theme,
       diff_view_mode: DiffViewMode::Inline,
       commit_input,
-      commit_menu_open: false,
       has_head_commit: false,
       can_undo_last_commit: false,
       last_repo_poll: None,
@@ -123,27 +221,19 @@ impl WorkspaceView {
     view
   }
 
-  fn resize_sidebar(&mut self, width: Pixels, cx: &mut Context<Self>) {
-    let width = width.max(SIDEBAR_MIN_WIDTH).min(SIDEBAR_MAX_WIDTH).round();
-    if self.sidebar_width != width {
-      self.sidebar_width = width;
-      cx.notify();
-    }
-  }
-
-  fn toggle_repo_picker(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
-    self.repo_picker_open = !self.repo_picker_open;
-    cx.notify();
-  }
-
-  fn toggle_theme(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
-    self.theme.toggle();
+  fn toggle_theme(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+    let next_mode = if cx.theme().is_dark() {
+      ThemeMode::Light
+    } else {
+      ThemeMode::Dark
+    };
+    ComponentTheme::change(next_mode, Some(window), cx);
+    self.theme = if next_mode.is_dark() {
+      SyntaxTheme::dark()
+    } else {
+      SyntaxTheme::light()
+    };
     let theme = self.theme.clone();
-    let colors = app_colors(&theme);
-    self.commit_input.update(cx, |input, cx| {
-      input.set_colors(commit_input_colors(&colors, &theme));
-      cx.notify();
-    });
     if let Some(editor) = self.editor.as_ref() {
       editor.update(cx, |editor, cx| {
         editor.set_theme(theme.clone(), cx);
@@ -163,22 +253,12 @@ impl WorkspaceView {
     cx.notify();
   }
 
-  fn toggle_commit_menu(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
-    if self.root_path.is_none()
-      || (self.staged.is_empty() && !self.has_head_commit && !self.can_undo_last_commit)
-    {
-      return;
-    }
-    self.commit_menu_open = !self.commit_menu_open;
-    cx.notify();
+  fn commit_changes(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+    self.commit_changes_with_amend(false, window, cx);
   }
 
-  fn commit_changes(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
-    self.commit_changes_with_amend(false, cx);
-  }
-
-  fn commit_amend_changes(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
-    self.commit_changes_with_amend(true, cx);
+  fn commit_amend_changes(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
+    self.commit_changes_with_amend(true, window, cx);
   }
 
   fn undo_last_commit(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -198,12 +278,16 @@ impl WorkspaceView {
     }
 
     self.error = None;
-    self.commit_menu_open = false;
     self.refresh_repository_statuses(cx);
   }
 
-  fn commit_changes_with_amend(&mut self, amend: bool, cx: &mut Context<Self>) {
-    let message = self.commit_input.read(cx).text();
+  fn commit_changes_with_amend(
+    &mut self,
+    amend: bool,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let message = self.commit_input.read(cx).value().to_string();
     if self.root_path.is_none() {
       return;
     }
@@ -227,10 +311,8 @@ impl WorkspaceView {
 
     self.error = None;
     self.commit_input.update(cx, |input, cx| {
-      input.clear();
-      cx.notify();
+      input.set_value("", window, cx);
     });
-    self.commit_menu_open = false;
     self.refresh_repository_statuses(cx);
   }
 
@@ -322,26 +404,6 @@ impl WorkspaceView {
     });
   }
 
-  fn select_recent_repository(&mut self, index: usize, cx: &mut Context<Self>) {
-    let Some(path) = self
-      .recent_repositories
-      .get(index)
-      .map(|repo| repo.path.clone())
-    else {
-      return;
-    };
-    self.repo_picker_open = false;
-    self.set_root_path(path, cx);
-  }
-
-  fn repo_picker_label(&self) -> String {
-    self
-      .root_path
-      .as_ref()
-      .map(|path| root_label(path.as_path()))
-      .unwrap_or_else(|| "Select Repository".to_string())
-  }
-
   fn open_repository_clicked(
     &mut self,
     _: &ClickEvent,
@@ -361,10 +423,6 @@ impl WorkspaceView {
   }
 
   fn start_open_repository(&mut self, cx: &mut Context<Self>) {
-    if self.repo_picker_open {
-      self.repo_picker_open = false;
-      cx.notify();
-    }
     let receiver = cx.prompt_for_paths(PathPromptOptions {
       files: false,
       directories: true,
@@ -396,6 +454,32 @@ impl WorkspaceView {
       }
     })
     .detach();
+  }
+
+  fn repo_select_items(&self) -> SearchableVec<RepoSelectItem> {
+    let items = self
+      .recent_repositories
+      .iter()
+      .map(|repo| RepoSelectItem {
+        label: SharedString::from(root_label(repo.path.as_path())),
+        path: repo.path.clone(),
+      })
+      .collect::<Vec<_>>();
+
+    SearchableVec::new(items)
+  }
+
+  fn on_repo_select_event(
+    &mut self,
+    _: &Entity<SelectState<SearchableVec<RepoSelectItem>>>,
+    event: &SelectEvent<SearchableVec<RepoSelectItem>>,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let SelectEvent::Confirm(Some(path)) = event else {
+      return;
+    };
+    self.set_root_path(path.clone(), cx);
   }
 
   fn start_file_polling(&mut self, cx: &mut Context<Self>) {
@@ -630,7 +714,6 @@ impl WorkspaceView {
   }
 
   fn set_root_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-    self.repo_picker_open = false;
     match open_repository(&path) {
       Ok(repository) => {
         let repo_root = repository.root;
@@ -741,13 +824,13 @@ impl WorkspaceView {
   }
 
   fn render_empty_state(&mut self, cx: &mut Context<Self>) -> Div {
-    let colors = app_colors(&self.theme);
+    let theme = cx.theme().clone();
     let (message, color, show_hint) = if let Some(error) = &self.error {
-      (error.clone(), colors.error_text, false)
+      (error.clone(), theme.red, false)
     } else {
       (
         "Open a repository to get started.".to_string(),
-        colors.text,
+        theme.foreground,
         true,
       )
     };
@@ -758,7 +841,7 @@ impl WorkspaceView {
       .on_action(cx.listener(Self::open_repository_action))
       .on_action(cx.listener(Self::save_file_action))
       .size_full()
-      .bg(colors.app_bg)
+      .bg(theme.background)
       .text_color(color)
       .flex()
       .flex_col()
@@ -770,21 +853,20 @@ impl WorkspaceView {
         this.child(
           div()
             .text_sm()
-            .text_color(colors.text_subtle)
+            .text_color(theme.muted_foreground)
             .child("Press Cmd+O to open a repository."),
         )
       })
-      .child(action_button(
-        "open-folder-empty",
-        "Open Repository",
-        cx.listener(Self::open_repository_clicked),
-        &colors,
-      ))
+      .child(
+        Button::new("open-folder-empty")
+          .label("Open Repository")
+          .on_click(cx.listener(Self::open_repository_clicked)),
+      )
   }
 
-  fn render_app_header(&mut self, cx: &mut Context<Self>) -> Div {
-    let colors = app_colors(&self.theme);
-    let toggle_label = if self.theme.is_dark {
+  fn render_app_header(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    let theme = cx.theme().clone();
+    let toggle_label = if theme.is_dark() {
       "Light Mode"
     } else {
       "Dark Mode"
@@ -793,6 +875,11 @@ impl WorkspaceView {
       DiffViewMode::Inline => "Split Diff",
       DiffViewMode::Split => "Inline Diff",
     };
+    let change_position = self
+      .editor
+      .as_ref()
+      .and_then(|editor| editor.read(cx).change_position(cx));
+    let repo_select = self.render_repo_select(window, cx);
 
     let header_row = div()
       .h(px(APP_HEADER_HEIGHT))
@@ -800,387 +887,247 @@ impl WorkspaceView {
       .flex()
       .items_center()
       .justify_between()
-      .bg(colors.header_bg)
+      .bg(theme.title_bar)
       .border_b_1()
-      .border_color(colors.border)
+      .border_color(theme.title_bar_border)
       .child(
         div()
           .flex()
           .items_center()
           .gap_2()
-          .child(div().text_sm().text_color(colors.text).child("Reviu"))
-          .child(self.render_repo_picker_toggle(cx)),
+          .child(div().text_sm().text_color(theme.foreground).child("Reviu"))
+          .child(repo_select)
+          .child(
+            Button::new("open-repo")
+              .icon(IconName::FolderOpen)
+              .ghost()
+              .compact()
+              .tooltip("Open Repository")
+              .on_click(cx.listener(Self::open_repository_clicked)),
+          ),
       )
       .child(
         div()
           .flex()
           .items_center()
           .gap_2()
-          .child(action_button(
-            "prev-change",
-            "Prev Change",
-            cx.listener(Self::jump_to_previous_change),
-            &colors,
-          ))
-          .child(action_button(
-            "next-change",
-            "Next Change",
-            cx.listener(Self::jump_to_next_change),
-            &colors,
-          ))
-          .when_some(
-            self
-              .editor
-              .as_ref()
-              .and_then(|editor| editor.read(cx).change_position(cx)),
-            |this, (current, total)| {
-              this.child(
-                div()
-                  .text_sm()
-                  .text_color(colors.text_subtle)
-                  .child(format!("{}/{}", current, total)),
-              )
-            },
+          .child(
+            Button::new("prev-change")
+              .label("Prev Change")
+              .on_click(cx.listener(Self::jump_to_previous_change)),
           )
-          .child(action_button(
-            "diff-toggle",
-            diff_label,
-            cx.listener(Self::toggle_diff_view),
-            &colors,
-          ))
-          .child(action_button(
-            "theme-toggle",
-            toggle_label,
-            cx.listener(Self::toggle_theme),
-            &colors,
-          )),
+          .child(
+            Button::new("next-change")
+              .label("Next Change")
+              .on_click(cx.listener(Self::jump_to_next_change)),
+          )
+          .when_some(change_position, |this, (current, total)| {
+            this.child(
+              div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child(format!("{}/{}", current, total)),
+            )
+          })
+          .child(
+            Button::new("diff-toggle")
+              .label(diff_label)
+              .on_click(cx.listener(Self::toggle_diff_view)),
+          )
+          .child(
+            Button::new("theme-toggle")
+              .label(toggle_label)
+              .on_click(cx.listener(Self::toggle_theme)),
+          ),
       );
 
     header_row
   }
 
-  fn render_repo_picker_toggle(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let colors = app_colors(&self.theme);
-    let label = self.repo_picker_label();
-    let icon = if self.repo_picker_open { "^" } else { "v" };
+  fn render_repo_select(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> impl IntoElement {
+    let items = self.repo_select_items();
+    let sidebar_width = self
+      .sidebar_state
+      .read(cx)
+      .sizes()
+      .first()
+      .copied()
+      .unwrap_or(SIDEBAR_DEFAULT_WIDTH);
+    let repo_select = match self.repo_select.clone() {
+      Some(state) => state,
+      None => {
+        let state = cx.new(|cx| SelectState::new(items.clone(), None, window, cx).searchable(true));
+        cx.subscribe_in(&state, window, Self::on_repo_select_event)
+          .detach();
+        self.repo_select = Some(state.clone());
+        state
+      }
+    };
 
-    div()
-      .id("repo-picker-toggle")
-      .px_2()
-      .py_1()
-      .flex()
-      .items_center()
-      .gap_2()
-      .bg(colors.button_bg)
-      .text_color(colors.text)
-      .text_sm()
-      .border_1()
-      .border_color(colors.button_border)
-      .rounded_sm()
-      .cursor_pointer()
-      .hover(|style| style.opacity(0.9))
-      .child(label)
-      .child(div().text_sm().text_color(colors.text_subtle).child(icon))
-      .on_click(cx.listener(Self::toggle_repo_picker))
-  }
+    repo_select.update(cx, |state, cx| {
+      state.set_items(items, window, cx);
+      match self.root_path.clone() {
+        Some(root_path) => state.set_selected_value(&root_path, window, cx),
+        None => state.set_selected_index(None, window, cx),
+      }
+    });
 
-  fn render_repo_picker_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-    let colors = app_colors(&self.theme);
-    let mut menu = div()
-      .flex()
-      .flex_col()
-      .bg(colors.menu_bg)
-      .border_1()
-      .border_color(colors.border)
-      .id("repo-picker-menu")
-      .absolute()
-      .top(px(APP_HEADER_HEIGHT))
-      .left(px(0.0))
-      .w(self.sidebar_width)
-      .max_h(px(240.0))
-      .overflow_y_scroll()
-      .occlude();
-
-    if self.recent_repositories.is_empty() {
-      menu = menu.child(
+    Select::new(&repo_select)
+      .placeholder("Select Repository")
+      .search_placeholder("Search repositories")
+      .icon(IconName::Folder)
+      .menu_width(sidebar_width)
+      .empty(
         div()
-          .px_3()
+          .px_2()
           .py_2()
           .text_sm()
-          .text_color(colors.text_muted)
           .child("No recent repositories."),
-      );
-    } else {
-      for (index, repo) in self.recent_repositories.iter().enumerate() {
-        menu = menu.child(self.render_repo_menu_item(index, repo, cx));
-      }
-    }
-
-    menu.child(self.render_repo_add_item(cx))
-  }
-
-  fn render_repo_menu_item(
-    &self,
-    index: usize,
-    repo: &RecentRepository,
-    cx: &mut Context<Self>,
-  ) -> Stateful<Div> {
-    let colors = app_colors(&self.theme);
-    let is_selected = self.root_path.as_ref() == Some(&repo.path);
-    let label = root_label(repo.path.as_path());
-
-    div()
-      .id(("repo-picker-item", index))
-      .px_3()
-      .py_2()
-      .w_full()
-      .text_sm()
-      .cursor_pointer()
-      .text_color(colors.text)
-      .when_else(
-        is_selected,
-        |this| {
-          this
-            .bg(colors.menu_selected_bg)
-            .text_color(colors.menu_selected_text)
-        },
-        |this| {
-          this
-            .bg(colors.menu_bg)
-            .hover(|style| style.bg(colors.menu_hover_bg))
-        },
       )
-      .child(label)
-      .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
-        this.select_recent_repository(index, cx);
-      }))
-  }
-
-  fn render_repo_add_item(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-    let colors = app_colors(&self.theme);
-    div()
-      .id("repo-picker-add")
-      .px_3()
-      .py_2()
-      .w_full()
-      .text_sm()
-      .text_color(colors.text)
-      .cursor_pointer()
-      .border_t_1()
-      .border_color(colors.border)
-      .bg(colors.menu_bg)
-      .hover(|style| style.bg(colors.menu_hover_bg))
-      .child("Add Repository...".to_string())
-      .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-        this.start_open_repository(cx);
-      }))
+      .w(px(220.0))
   }
 
   fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let colors = app_colors(&self.theme);
-    let sidebar_width = self.sidebar_width;
-    let staged_section = self
-      .render_file_section(FileListKind::Staged, cx)
-      .flex_none();
-    let changes_section = self
-      .render_file_section(FileListKind::Changes, cx)
-      .flex_none();
-    let sidebar_body = div()
-      .id("sidebar-scroll")
-      .flex_1()
-      .flex()
-      .flex_col()
-      .min_h(px(0.0))
-      .overflow_y_scroll()
-      .child(staged_section)
-      .child(changes_section);
+    let theme = cx.theme().clone();
+    let view = cx.entity();
+    let staged_entries = self
+      .staged
+      .iter()
+      .map(SidebarFileEntry::from)
+      .collect::<Vec<_>>();
+    let changes_entries = self
+      .changes
+      .iter()
+      .map(SidebarFileEntry::from)
+      .collect::<Vec<_>>();
+    let selected_staged = match self.selected_file {
+      Some(SelectedFile::Staged(idx)) => Some(idx),
+      _ => None,
+    };
+    let selected_changes = match self.selected_file {
+      Some(SelectedFile::Changes(idx)) => Some(idx),
+      _ => None,
+    };
+    let staged_section: WorkspaceSidebarSection = WorkspaceSidebarSection::new(
+      view.clone(),
+      FileListKind::Staged,
+      staged_entries,
+      selected_staged,
+      self.root_path.is_some(),
+    );
+    let changes_section = WorkspaceSidebarSection::new(
+      view,
+      FileListKind::Changes,
+      changes_entries,
+      selected_changes,
+      self.root_path.is_some(),
+    );
     let commit_bar = self.render_commit_bar(cx);
 
-    let resize_handle = deferred(
-      div()
-        .id("sidebar-resize-handle")
-        .on_drag(DraggedSidebar, |drag, _, _, cx| {
-          cx.stop_propagation();
-          cx.new(|_| drag.clone())
-        })
-        .absolute()
-        .right(-SIDEBAR_RESIZE_HANDLE_WIDTH / 2.0)
-        .top(px(0.0))
-        .h_full()
-        .w(SIDEBAR_RESIZE_HANDLE_WIDTH)
-        .cursor_col_resize()
-        .occlude(),
-    );
+    let sidebar = Sidebar::new("workspace-sidebar")
+      .w_full()
+      .flex_1()
+      .bg(theme.sidebar)
+      .border_0()
+      .text_color(theme.sidebar_foreground)
+      .child(staged_section)
+      .child(changes_section);
 
     div()
-      .w(sidebar_width)
-      .flex_none()
+      .w_full()
       .flex()
       .flex_col()
-      .h_full()
-      .min_h(px(0.0))
-      .relative()
-      .bg(colors.sidebar_bg)
-      .border_r_1()
-      .border_color(colors.border)
-      .child(sidebar_body)
+      .bg(theme.sidebar)
+      .child(sidebar)
       .child(commit_bar)
-      .child(resize_handle)
   }
 
   fn render_commit_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let colors = app_colors(&self.theme);
+    let theme = cx.theme().clone();
     let input = self.commit_input.clone();
 
-    let input_field = div()
-      .w_full()
-      .min_h(px(30.0))
-      .px_2()
-      .py_1()
-      .bg(colors.header_bg)
-      .text_color(colors.text)
-      .border_1()
-      .border_color(colors.border)
-      .rounded_sm()
-      .child(div().flex().items_start().w_full().child(input));
-
-    let content = div().px_2().py_2().child(
-      div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap_2()
-        .child(input_field)
-        .child(self.render_commit_button(cx)),
-    );
-
     div()
-      .flex_none()
+      .flex()
+      .p_2()
       .relative()
-      .bg(colors.sidebar_bg)
+      .bg(theme.sidebar)
+      .border_t_1()
+      .border_color(theme.sidebar_border)
       .child(
         div()
-          .absolute()
-          .top(px(0.0))
-          .left(px(0.0))
-          .right(px(0.0))
-          .h(px(1.0))
-          .bg(colors.border),
+          .w_full()
+          .flex()
+          .flex_col()
+          .gap_2()
+          .child(Input::new(&input))
+          .child(self.render_commit_button(cx)),
       )
-      .child(content)
   }
 
   fn render_commit_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let colors = app_colors(&self.theme);
     let commit_enabled = self.root_path.is_some() && !self.staged.is_empty();
     let amend_enabled = self.root_path.is_some() && self.has_head_commit;
     let undo_enabled = self.root_path.is_some() && self.can_undo_last_commit;
-    let menu_enabled = commit_enabled || amend_enabled || undo_enabled;
-    let show_menu = self.commit_menu_open && menu_enabled;
-    let button_colors = ButtonColors::new(colors.button_text, colors.text_muted);
+    let menu_enabled = amend_enabled || undo_enabled;
+    let main_button = Button::new("commit-button-main")
+      .label("Commit")
+      .w_full()
+      .disabled(!commit_enabled)
+      .on_click(cx.listener(Self::commit_changes));
+    let menu_button = Button::new("commit-button-menu")
+      .compact()
+      .ghost()
+      .icon(IconName::ChevronDown)
+      .disabled(!menu_enabled);
 
-    let mut main_button = button("Commit", button_colors, !commit_enabled)
-      .id("commit-button-main")
-      .flex_1();
-    if commit_enabled {
-      main_button = main_button
-        .cursor_pointer()
-        .on_click(cx.listener(Self::commit_changes));
-    }
+    let menu = Popover::new("commit-options-popover")
+      .anchor(Anchor::BottomRight)
+      .trigger(menu_button)
+      .p_1()
+      .child(
+        div()
+          .flex()
+          .flex_col()
+          .gap_1()
+          .child(
+            Button::new("commit-option-amend")
+              .icon(IconName::Replace)
+              .label("Amend")
+              .ghost()
+              .compact()
+              .disabled(!amend_enabled)
+              .on_click(cx.listener(|this, event, window, cx| {
+                this.commit_amend_changes(event, window, cx);
+              })),
+          )
+          .child(
+            Button::new("commit-option-undo")
+              .icon(IconName::Undo)
+              .label("Undo last commit")
+              .ghost()
+              .compact()
+              .disabled(!undo_enabled)
+              .on_click(cx.listener(|this, event, window, cx| {
+                this.undo_last_commit(event, window, cx);
+              })),
+          ),
+      );
 
-    let mut menu_button = button("v", button_colors, !menu_enabled)
-      .id("commit-button-menu")
-      .px_2();
-    if menu_enabled {
-      menu_button = menu_button
-        .cursor_pointer()
-        .on_click(cx.listener(Self::toggle_commit_menu));
-    }
-
-    let mut button = div()
+    div()
       .flex()
       .items_center()
       .w_full()
-      .bg(colors.button_bg)
-      .text_color(colors.button_text)
-      .text_sm()
-      .border_1()
-      .border_color(colors.button_border)
-      .rounded_sm()
-      .child(main_button)
-      .child(div().w(px(1.0)).h_full().bg(colors.button_border))
-      .child(menu_button);
-    if commit_enabled {
-      button = button.hover(|style| style.opacity(0.9));
-    } else {
-      button = button.opacity(0.6);
-    }
-
-    div()
-      .relative()
-      .w_full()
-      .child(button)
-      .when(show_menu, |this| this.child(self.render_commit_menu(cx)))
-  }
-
-  fn render_commit_menu(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let colors = app_colors(&self.theme);
-    let amend_enabled = self.root_path.is_some() && self.has_head_commit;
-    let undo_enabled = self.root_path.is_some() && self.can_undo_last_commit;
-    div()
-      .id("commit-options-menu")
-      .absolute()
-      .right(px(0.0))
-      .bottom(px(34.0))
-      .flex()
-      .flex_col()
-      .bg(colors.menu_bg)
-      .border_1()
-      .border_color(colors.border)
-      .rounded_sm()
-      .occlude()
-      .child(
-        div()
-          .id("commit-option-amend")
-          .px_3()
-          .py_2()
-          .text_sm()
-          .text_color(if amend_enabled {
-            colors.text
-          } else {
-            colors.text_muted
-          })
-          .when(amend_enabled, |this| this.cursor_pointer())
-          .hover(|style| style.bg(colors.menu_hover_bg))
-          .child("Amend")
-          .when(amend_enabled, |this| {
-            this.on_click(cx.listener(Self::commit_amend_changes))
-          }),
-      )
-      .child(
-        div()
-          .id("commit-option-undo")
-          .px_3()
-          .py_2()
-          .border_t_1()
-          .border_color(colors.border)
-          .text_sm()
-          .text_color(if undo_enabled {
-            colors.text
-          } else {
-            colors.text_muted
-          })
-          .when(undo_enabled, |this| this.cursor_pointer())
-          .hover(|style| style.bg(colors.menu_hover_bg))
-          .child("Undo last commit")
-          .when(undo_enabled, |this| {
-            this.on_click(cx.listener(Self::undo_last_commit))
-          }),
-      )
+      .gap_1()
+      .child(div().flex_1().w_full().child(main_button))
+      .child(menu)
   }
 
   fn render_editor_header(&mut self, cx: &mut Context<Self>) -> Div {
-    let colors = app_colors(&self.theme);
+    let theme = cx.theme().clone();
     let title = self
       .selected_file
       .and_then(|selected| match selected {
@@ -1194,253 +1141,38 @@ impl WorkspaceView {
       .flex()
       .items_center()
       .gap_1()
-      .child(div().text_sm().text_color(colors.text).child(title));
+      .child(div().text_sm().text_color(theme.foreground).child(title));
 
     if self.current_dirty {
-      title_row = title_row.child(div().text_sm().text_color(rgb(0xe0b84a)).child("*"));
+      title_row = title_row.child(div().text_sm().text_color(theme.warning).child("*"));
     }
 
     let mut header = div()
-      .py_1()
+      .py_2()
       .px_3()
       .flex()
       .items_center()
       .justify_between()
       .border_b_1()
-      .border_color(colors.border)
-      .bg(colors.header_bg)
+      .border_color(theme.border)
+      .bg(theme.tab_bar)
       .child(title_row);
 
     if self.current_dirty {
-      header = header.child(action_button(
-        "save-file",
-        "Save",
-        cx.listener(Self::save_file_clicked),
-        &colors,
-      ));
+      header = header.child(
+        Button::new("save-file")
+          .label("Save")
+          .on_click(cx.listener(Self::save_file_clicked)),
+      );
     }
 
     header
   }
-
-  fn render_file_section(&mut self, list: FileListKind, cx: &mut Context<Self>) -> Div {
-    let colors = app_colors(&self.theme);
-    let (title, entries_len) = match list {
-      FileListKind::Changes => ("Changes", self.changes.len()),
-      FileListKind::Staged => ("Staged", self.staged.len()),
-    };
-    let header = div()
-      .px_2()
-      .py_1()
-      .flex()
-      .items_center()
-      .justify_between()
-      .bg(colors.header_bg)
-      .border_b_1()
-      .border_color(colors.border)
-      .child(
-        div()
-          .text_sm()
-          .text_color(colors.text)
-          .child(format!("{title} ({entries_len})")),
-      )
-      .when(entries_len > 0, |this| match list {
-        FileListKind::Changes => this.child(action_button(
-          "stage-all",
-          "Stage All",
-          cx.listener(Self::stage_all_files),
-          &colors,
-        )),
-        FileListKind::Staged => this.child(action_button(
-          "unstage-all",
-          "Unstage All",
-          cx.listener(Self::unstage_all_files),
-          &colors,
-        )),
-      });
-
-    let list_view = {
-      let entries = match list {
-        FileListKind::Changes => &self.changes,
-        FileListKind::Staged => &self.staged,
-      };
-      let mut items = div().flex().flex_col();
-      for (idx, entry) in entries.iter().enumerate() {
-        items = items.child(self.render_display_line(list, idx, entry, cx));
-      }
-      items
-    };
-
-    let empty_message = match list {
-      FileListKind::Changes => {
-        if self.root_path.is_some() {
-          "No changes."
-        } else {
-          "No repository selected."
-        }
-      }
-      FileListKind::Staged => "No staged changes.",
-    };
-
-    let body = if entries_len == 0 {
-      div()
-        .flex_1()
-        .flex()
-        .items_center()
-        .justify_center()
-        .py_2()
-        .text_sm()
-        .text_color(colors.text_muted)
-        .child(empty_message)
-    } else {
-      div().flex().flex_col().child(list_view)
-    };
-
-    div()
-      .flex()
-      .flex_col()
-      .min_h(px(0.0))
-      .child(header)
-      .child(body)
-  }
-
-  fn render_display_line(
-    &self,
-    list: FileListKind,
-    idx: usize,
-    entry: &FileEntry,
-    cx: &mut Context<Self>,
-  ) -> Stateful<Div> {
-    let colors = app_colors(&self.theme);
-    let is_selected = match (self.selected_file, list) {
-      (Some(SelectedFile::Changes(selected)), FileListKind::Changes) => selected == idx,
-      (Some(SelectedFile::Staged(selected)), FileListKind::Staged) => selected == idx,
-      _ => false,
-    };
-    let (tag, tag_color) = status_tag(entry.status);
-    let row_group = format!(
-      "file-row-{}-{}",
-      match list {
-        FileListKind::Changes => "changes",
-        FileListKind::Staged => "staged",
-      },
-      idx
-    );
-
-    let actions_bg = Rgba {
-      r: colors.button_bg.r,
-      g: colors.button_bg.g,
-      b: colors.button_bg.b,
-      a: (colors.button_bg.a * 0.8).min(1.0),
-    };
-    let actions_border = Rgba {
-      r: colors.button_border.r,
-      g: colors.button_border.g,
-      b: colors.button_border.b,
-      a: (colors.button_border.a * 0.8).min(1.0),
-    };
-    let mut actions_wrap = div()
-      .flex()
-      .items_center()
-      .gap_1()
-      .px_1()
-      .py_1()
-      .bg(actions_bg)
-      .border_1()
-      .border_color(actions_border)
-      .rounded_sm();
-
-    let mut actions = div()
-      .absolute()
-      .right(px(5.0))
-      .top(px(0.0))
-      .bottom(px(0.0))
-      .flex()
-      .items_center()
-      .opacity(0.0)
-      .group_hover(row_group.clone(), |style| style.opacity(1.0));
-
-    match list {
-      FileListKind::Changes => {
-        let path = entry.path.clone();
-        let discard_path = entry.path.clone();
-        let status = entry.status;
-        actions_wrap = actions_wrap
-          .child(mini_action_button(
-            format!("stage-file-{}", &row_group),
-            "+",
-            cx.listener(move |this, _: &ClickEvent, _window, cx| {
-              cx.stop_propagation();
-              this.stage_file(path.clone(), cx);
-            }),
-            &colors,
-          ))
-          .child(mini_action_button(
-            format!("discard-file-{}", &row_group),
-            "x",
-            cx.listener(move |this, _: &ClickEvent, _window, cx| {
-              cx.stop_propagation();
-              this.discard_file_change(discard_path.clone(), status, cx);
-            }),
-            &colors,
-          ));
-      }
-      FileListKind::Staged => {
-        let path = entry.path.clone();
-        actions_wrap = actions_wrap.child(mini_action_button(
-          format!("unstage-file-{}", &row_group),
-          "-",
-          cx.listener(move |this, _: &ClickEvent, _window, cx| {
-            cx.stop_propagation();
-            this.unstage_file(path.clone(), cx);
-          }),
-          &colors,
-        ));
-      }
-    }
-    actions = actions.child(actions_wrap);
-
-    div()
-      .id(idx)
-      .px_2()
-      .py_1()
-      .w_full()
-      .text_sm()
-      .text_color(colors.list_text)
-      .cursor_pointer()
-      .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-        this.select_file(list, idx, window, cx);
-      }))
-      .relative()
-      .group(row_group.clone())
-      .flex()
-      .items_center()
-      .gap_2()
-      .when_else(
-        is_selected,
-        |this| {
-          this
-            .bg(colors.list_selected_bg)
-            .text_color(colors.list_selected_text)
-        },
-        |this| this.hover(|style| style.bg(colors.list_hover_bg)),
-      )
-      .child(div().flex_none().text_sm().text_color(tag_color).child(tag))
-      .child(
-        div()
-          .flex_1()
-          .overflow_hidden()
-          .whitespace_nowrap()
-          .text_ellipsis_start()
-          .child(entry.display_name.clone()),
-      )
-      .child(actions)
-  }
 }
 
 impl Render for WorkspaceView {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    let colors = app_colors(&self.theme);
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
     let show_empty_only = self.root_path.is_none() && self.recent_repositories.is_empty();
 
     let content = if show_empty_only {
@@ -1453,14 +1185,14 @@ impl Render for WorkspaceView {
           .flex_col()
           .min_w(px(0.0))
           .size_full()
-          .bg(colors.surface_bg)
+          .bg(theme.background)
           .child(
             div()
               .flex()
               .items_center()
               .justify_center()
               .size_full()
-              .text_color(colors.text_muted)
+              .text_color(theme.muted_foreground)
               .child("Select a repository to get started."),
           )
       } else {
@@ -1471,7 +1203,7 @@ impl Render for WorkspaceView {
           .min_w(px(0.0))
           .min_h(px(0.0))
           .size_full()
-          .bg(colors.surface_bg);
+          .bg(theme.background);
 
         if let Some(editor) = self.editor.clone() {
           let header = self.render_editor_header(cx);
@@ -1480,14 +1212,14 @@ impl Render for WorkspaceView {
             .child(div().flex_1().min_w(px(0.0)).child(editor));
         } else {
           let (message, color) = if let Some(error) = &self.error {
-            (error.clone(), colors.error_text)
+            (error.clone(), theme.red)
           } else if self.changes.is_empty() && self.staged.is_empty() {
             (
               "No changes found in this repository.".to_string(),
-              colors.text_muted,
+              theme.muted_foreground,
             )
           } else {
-            ("Select a file to view it.".to_string(), colors.text_muted)
+            ("Select a file to view it.".to_string(), theme.muted_foreground)
           };
 
           main = main.child(
@@ -1504,14 +1236,17 @@ impl Render for WorkspaceView {
         main
       };
 
-      div()
-        .flex_1()
-        .flex()
-        .flex_row()
-        .min_h(px(0.0))
-        .bg(colors.app_bg)
-        .child(self.render_sidebar(cx))
-        .child(main)
+      div().flex_1().min_h(px(0.0)).bg(theme.background).child(
+        h_resizable("workspace-layout")
+          .with_state(&self.sidebar_state)
+          .child(
+            resizable_panel()
+              .size(SIDEBAR_DEFAULT_WIDTH)
+              .size_range(SIDEBAR_MIN_WIDTH..SIDEBAR_MAX_WIDTH)
+              .child(self.render_sidebar(cx)),
+          )
+          .child(resizable_panel().child(main)),
+      )
     };
 
     div()
@@ -1519,25 +1254,13 @@ impl Render for WorkspaceView {
       .flex()
       .flex_col()
       .relative()
-      .bg(colors.app_bg)
-      .child(self.render_app_header(cx))
+      .bg(theme.background)
+      .child(self.render_app_header(window, cx))
       .child(content)
-      .when(self.repo_picker_open, |this| {
-        this.child(self.render_repo_picker_menu(cx))
-      })
       .key_context("Workspace")
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(Self::open_repository_action))
       .on_action(cx.listener(Self::save_file_action))
-      .on_drag_move(
-        cx.listener(|workspace, e: &DragMoveEvent<DraggedSidebar>, _, cx| {
-          if workspace.previous_sidebar_drag_position != Some(e.event.position) {
-            workspace.previous_sidebar_drag_position = Some(e.event.position);
-            let new_width = e.event.position.x - e.bounds.left();
-            workspace.resize_sidebar(new_width, cx);
-          }
-        }),
-      )
   }
 }
 
@@ -1545,6 +1268,235 @@ impl Focusable for WorkspaceView {
   fn focus_handle(&self, _cx: &App) -> FocusHandle {
     self.focus_handle.clone()
   }
+}
+
+fn render_sidebar_section(
+  view: &Entity<WorkspaceView>,
+  list: FileListKind,
+  entries: &[SidebarFileEntry],
+  selected_index: Option<usize>,
+  has_root: bool,
+  theme: &ComponentTheme,
+  window: &mut Window,
+) -> Div {
+  let (title, entries_len, staged) = match list {
+    FileListKind::Changes => ("Changes", entries.len(), false),
+    FileListKind::Staged => ("Staged", entries.len(), true),
+  };
+  let header = div()
+    .px_2()
+    .py_1()
+    .flex()
+    .items_center()
+    .justify_between()
+    .when_else(staged, |this| this.mb_2(), |this| this.my_2())
+    .bg(theme.list_head)
+    .rounded_md()
+    .child(
+      div()
+        .text_sm()
+        .text_color(theme.sidebar_foreground)
+        .child(format!("{title} ({entries_len})")),
+    )
+    .when(entries_len > 0, |this| match list {
+      FileListKind::Changes => this.child(
+        Button::new("stage-all")
+          .label("Stage All")
+          .xsmall()
+          .compact()
+          .on_click(window.listener_for(view, WorkspaceView::stage_all_files)),
+      ),
+      FileListKind::Staged => this.child(
+        Button::new("unstage-all")
+          .label("Unstage All")
+          .xsmall()
+          .compact()
+          .on_click(window.listener_for(view, WorkspaceView::unstage_all_files)),
+      ),
+    });
+
+  let mut items = div().flex().flex_col();
+  for (idx, entry) in entries.iter().enumerate() {
+    let is_selected = selected_index == Some(idx);
+    items = items.child(render_sidebar_row(
+      view,
+      list,
+      idx,
+      entry,
+      is_selected,
+      theme,
+      window,
+    ));
+  }
+
+  let empty_message = match list {
+    FileListKind::Changes => {
+      if has_root {
+        "No changes."
+      } else {
+        "No repository selected."
+      }
+    }
+    FileListKind::Staged => "No staged changes.",
+  };
+
+  let body = if entries_len == 0 {
+    div()
+      .flex_1()
+      .flex()
+      .items_center()
+      .justify_center()
+      .pb_2()
+      .text_sm()
+      .text_color(theme.muted_foreground)
+      .child(empty_message)
+  } else {
+    div().flex().flex_col().child(items)
+  };
+
+  div()
+    .flex()
+    .flex_col()
+    .min_h(px(0.0))
+    .child(header)
+    .child(body)
+}
+
+fn render_sidebar_row(
+  view: &Entity<WorkspaceView>,
+  list: FileListKind,
+  idx: usize,
+  entry: &SidebarFileEntry,
+  is_selected: bool,
+  theme: &ComponentTheme,
+  window: &mut Window,
+) -> Stateful<Div> {
+  let (tag, tag_color) = status_tag(entry.status, theme);
+  let row_group = format!(
+    "file-row-{}-{}",
+    match list {
+      FileListKind::Changes => "changes",
+      FileListKind::Staged => "staged",
+    },
+    idx
+  );
+
+  let actions_bg = theme.sidebar_accent;
+  let actions_border = theme.sidebar_border;
+  let mut actions_wrap = div()
+    .flex()
+    .items_center()
+    .gap_1()
+    .px_1()
+    .py_1()
+    .bg(actions_bg)
+    .border_1()
+    .border_color(actions_border)
+    .rounded_md();
+
+  let mut actions = div()
+    .absolute()
+    .right_0()
+    .top_0()
+    .bottom_0()
+    .flex()
+    .items_center()
+    .opacity(0.0)
+    .group_hover(row_group.clone(), |style| style.opacity(1.0));
+
+  match list {
+    FileListKind::Changes => {
+      let path = entry.path.clone();
+      let discard_path = entry.path.clone();
+      let status = entry.status;
+      actions_wrap = actions_wrap
+        .child(
+          Button::new(format!("stage-file-{}", &row_group))
+            .icon(IconName::Plus)
+            .ghost()
+            .compact()
+            .xsmall()
+            .tooltip("Stage file")
+            .on_click(
+              window.listener_for(view, move |this, _: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+                this.stage_file(path.clone(), cx);
+              }),
+            ),
+        )
+        .child(
+          Button::new(format!("discard-file-{}", &row_group))
+            .icon(IconName::Delete)
+            .ghost()
+            .compact()
+            .xsmall()
+            .tooltip("Discard change")
+            .on_click(
+              window.listener_for(view, move |this, _: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+                this.discard_file_change(discard_path.clone(), status, cx);
+              }),
+            ),
+        );
+    }
+    FileListKind::Staged => {
+      let path = entry.path.clone();
+      actions_wrap = actions_wrap.child(
+        Button::new(format!("unstage-file-{}", &row_group))
+          .icon(IconName::Minus)
+          .ghost()
+          .compact()
+          .xsmall()
+          .tooltip("Unstage file")
+          .on_click(
+            window.listener_for(view, move |this, _: &ClickEvent, _window, cx| {
+              cx.stop_propagation();
+              this.unstage_file(path.clone(), cx);
+            }),
+          ),
+      );
+    }
+  }
+  actions = actions.child(actions_wrap);
+
+  div()
+    .id(idx)
+    .px_2()
+    .py_1()
+    .w_full()
+    .text_sm()
+    .text_color(theme.sidebar_foreground)
+    .cursor_pointer()
+    .on_click(
+      window.listener_for(view, move |this, _: &ClickEvent, window, cx| {
+        this.select_file(list, idx, window, cx);
+      }),
+    )
+    .relative()
+    .group(row_group.clone())
+    .rounded_md()
+    .flex()
+    .items_center()
+    .gap_2()
+    .when_else(
+      is_selected,
+      |this| {
+        this
+          .bg(theme.list_active)
+          .text_color(theme.sidebar_foreground)
+      },
+      |this| this.hover(|style| style.bg(theme.list_hover)),
+    )
+    .child(div().flex_none().text_sm().text_color(tag_color).child(tag))
+    .child(
+      div()
+        .flex_1()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis_start()
+        .child(entry.display_name.clone()),
+    )
+    .child(actions)
 }
 
 fn editor_buffer_text(editor: &Entity<Editor>, cx: &App) -> String {
@@ -1622,74 +1574,14 @@ fn bump_recent_repository(repositories: &mut Vec<RecentRepository>, path: PathBu
   }
 }
 
-fn commit_input_colors(colors: &AppColors, theme: &Theme) -> TextInputColors {
-  let selection = if theme.is_dark {
-    with_alpha(colors.button_bg, 0.6)
-  } else {
-    with_alpha(colors.text, 0.2)
-  };
-  TextInputColors::new(colors.text_muted, selection, colors.text)
-}
-
-fn with_alpha(color: Rgba, alpha: f32) -> Rgba {
-  Rgba { a: alpha, ..color }
-}
-
-fn status_tag(status: FileStatusKind) -> (&'static str, Rgba) {
+fn status_tag(status: FileStatusKind, theme: &ComponentTheme) -> (&'static str, Hsla) {
   match status {
-    FileStatusKind::Added => ("A", rgb(0x4fa86b)),
-    FileStatusKind::Untracked => ("U", rgb(0x4fa86b)),
-    FileStatusKind::Modified => ("M", rgb(0xd08c3f)),
-    FileStatusKind::Deleted => ("D", rgb(0xd26666)),
-    FileStatusKind::Renamed => ("R", rgb(0xd08c3f)),
-    FileStatusKind::Typechange => ("T", rgb(0xd08c3f)),
-    FileStatusKind::Conflicted => ("C", rgb(0xd26666)),
+    FileStatusKind::Added => ("A", theme.green),
+    FileStatusKind::Untracked => ("U", theme.green),
+    FileStatusKind::Modified => ("M", theme.yellow),
+    FileStatusKind::Deleted => ("D", theme.red),
+    FileStatusKind::Renamed => ("R", theme.yellow),
+    FileStatusKind::Typechange => ("T", theme.yellow),
+    FileStatusKind::Conflicted => ("C", theme.red),
   }
-}
-
-fn action_button(
-  id: &'static str,
-  label: &str,
-  on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-  colors: &AppColors,
-) -> impl IntoElement {
-  div()
-    .id(id)
-    .px_3()
-    .py_1()
-    .bg(colors.button_bg)
-    .text_color(colors.button_text)
-    .text_sm()
-    .border_1()
-    .border_color(colors.button_border)
-    .rounded_sm()
-    .cursor_pointer()
-    .hover(|style| style.opacity(0.9))
-    .child(label.to_string())
-    .on_click(on_click)
-}
-
-fn mini_action_button(
-  id: impl Into<ElementId>,
-  label: &str,
-  on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-  colors: &AppColors,
-) -> impl IntoElement {
-  div()
-    .id(id)
-    .w(px(18.0))
-    .h(px(18.0))
-    .flex()
-    .items_center()
-    .justify_center()
-    .bg(colors.button_bg)
-    .text_color(colors.button_text)
-    .text_sm()
-    .border_1()
-    .border_color(colors.button_border)
-    .rounded_sm()
-    .cursor_pointer()
-    .hover(|style| style.opacity(0.9))
-    .child(label.to_string())
-    .on_click(on_click)
 }
