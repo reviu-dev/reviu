@@ -1,21 +1,9 @@
 use editor::*;
+use gpui_component::Root;
+use gpui_component_assets::Assets;
 use gpui::{
   App, Application, Bounds, Focusable, KeyBinding, WindowBounds, WindowOptions, prelude::*, px,
   size,
-};
-use ui::{
-  AltLeft as InputAltLeft, AltRight as InputAltRight, Backspace as InputBackspace,
-  BackspaceAll as InputBackspaceAll, BackspaceWord as InputBackspaceWord,
-  CmdDown as InputCmdDown, CmdLeft as InputCmdLeft, CmdRight as InputCmdRight,
-  CmdUp as InputCmdUp, Copy as InputCopy, Cut as InputCut, Delete as InputDelete,
-  Down as InputDown, End as InputEnd, Home as InputHome, Left as InputLeft,
-  Paste as InputPaste, Right as InputRight, SelectAll as InputSelectAll,
-  SelectCmdDown as InputSelectCmdDown, SelectCmdLeft as InputSelectCmdLeft,
-  SelectCmdRight as InputSelectCmdRight, SelectCmdUp as InputSelectCmdUp,
-  SelectDown as InputSelectDown, SelectLeft as InputSelectLeft,
-  SelectRight as InputSelectRight, SelectUp as InputSelectUp,
-  SelectWordLeft as InputSelectWordLeft, SelectWordRight as InputSelectWordRight,
-  ShowCharacterPalette as InputShowCharacterPalette, Up as InputUp,
 };
 use workspace::{OpenRepository, SaveFile, WorkspaceView};
 
@@ -23,7 +11,8 @@ const INITIAL_WINDOW_WIDTH: f32 = 1200.0;
 const INITIAL_WINDOW_HEIGHT: f32 = 800.0;
 
 fn main() {
-  Application::new().run(|cx: &mut App| {
+  Application::new().with_assets(Assets).run(|cx: &mut App| {
+    gpui_component::init(cx);
     let bounds = Bounds::centered(
       None,
       size(px(INITIAL_WINDOW_WIDTH), px(INITIAL_WINDOW_HEIGHT)),
@@ -68,39 +57,6 @@ fn main() {
       KeyBinding::new("home", Home, Some("Editor")),
       KeyBinding::new("end", End, Some("Editor")),
       KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, Some("Editor")),
-      KeyBinding::new("backspace", InputBackspace, Some("TextInput")),
-      KeyBinding::new("alt-backspace", InputBackspaceWord, Some("TextInput")),
-      KeyBinding::new("cmd-backspace", InputBackspaceAll, Some("TextInput")),
-      KeyBinding::new("delete", InputDelete, Some("TextInput")),
-      KeyBinding::new("up", InputUp, Some("TextInput")),
-      KeyBinding::new("down", InputDown, Some("TextInput")),
-      KeyBinding::new("left", InputLeft, Some("TextInput")),
-      KeyBinding::new("alt-left", InputAltLeft, Some("TextInput")),
-      KeyBinding::new("cmd-left", InputCmdLeft, Some("TextInput")),
-      KeyBinding::new("alt-cmd-left", InputCmdLeft, Some("TextInput")),
-      KeyBinding::new("right", InputRight, Some("TextInput")),
-      KeyBinding::new("alt-right", InputAltRight, Some("TextInput")),
-      KeyBinding::new("cmd-right", InputCmdRight, Some("TextInput")),
-      KeyBinding::new("alt-cmd-right", InputCmdRight, Some("TextInput")),
-      KeyBinding::new("cmd-up", InputCmdUp, Some("TextInput")),
-      KeyBinding::new("cmd-down", InputCmdDown, Some("TextInput")),
-      KeyBinding::new("shift-up", InputSelectUp, Some("TextInput")),
-      KeyBinding::new("shift-down", InputSelectDown, Some("TextInput")),
-      KeyBinding::new("shift-cmd-up", InputSelectCmdUp, Some("TextInput")),
-      KeyBinding::new("shift-cmd-down", InputSelectCmdDown, Some("TextInput")),
-      KeyBinding::new("shift-left", InputSelectLeft, Some("TextInput")),
-      KeyBinding::new("shift-alt-left", InputSelectWordLeft, Some("TextInput")),
-      KeyBinding::new("shift-cmd-left", InputSelectCmdLeft, Some("TextInput")),
-      KeyBinding::new("shift-right", InputSelectRight, Some("TextInput")),
-      KeyBinding::new("shift-alt-right", InputSelectWordRight, Some("TextInput")),
-      KeyBinding::new("shift-cmd-right", InputSelectCmdRight, Some("TextInput")),
-      KeyBinding::new("cmd-a", InputSelectAll, Some("TextInput")),
-      KeyBinding::new("cmd-v", InputPaste, Some("TextInput")),
-      KeyBinding::new("cmd-c", InputCopy, Some("TextInput")),
-      KeyBinding::new("cmd-x", InputCut, Some("TextInput")),
-      KeyBinding::new("home", InputHome, Some("TextInput")),
-      KeyBinding::new("end", InputEnd, Some("TextInput")),
-      KeyBinding::new("ctrl-cmd-space", InputShowCharacterPalette, Some("TextInput")),
     ]);
 
     let window = cx
@@ -109,14 +65,17 @@ fn main() {
           window_bounds: Some(WindowBounds::Windowed(bounds)),
           ..Default::default()
         },
-        |_, cx| cx.new(WorkspaceView::new),
+        |window, cx| {
+          let view = cx.new(|cx| WorkspaceView::new(window, cx));
+          window.focus(&view.focus_handle(cx), cx);
+          cx.new(|cx| Root::new(view, window, cx))
+        },
       )
       .unwrap();
 
     window
-      .update(cx, |view, window, cx| {
+      .update(cx, |_, _, cx| {
         cx.activate(true);
-        window.focus(&view.focus_handle(cx), cx);
       })
       .unwrap();
 

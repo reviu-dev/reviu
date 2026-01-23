@@ -1,10 +1,12 @@
-mod button;
-mod text_input;
-
-pub use button::{ButtonColors, button};
-pub use text_input::{
-  AltLeft, AltRight, Backspace, BackspaceAll, BackspaceWord, CmdDown, CmdLeft, CmdRight, CmdUp,
-  Copy, Cut, Delete, Down, End, Home, Left, Paste, Right, SelectAll, SelectCmdDown, SelectCmdLeft,
-  SelectCmdRight, SelectCmdUp, SelectDown, SelectLeft, SelectRight, SelectUp, SelectWordLeft,
-  SelectWordRight, ShowCharacterPalette, TextInput, TextInputColors, Up,
+pub use gpui_component::{Collapsible, Sizable};
+pub use gpui_component::Disableable;
+pub use gpui_component::button::Button;
+pub use gpui_component::button::ButtonVariants;
+pub use gpui_component::{Anchor, IconName};
+pub use gpui_component::popover::Popover;
+pub use gpui_component::select::{
+  SearchableVec, Select, SelectEvent, SelectGroup, SelectItem, SelectState,
 };
+pub use gpui_component::sidebar::{Sidebar, SidebarItem};
+pub use gpui_component::resizable::{h_resizable, resizable_panel, ResizableState};
+pub use gpui_component::input::{Input, InputState};

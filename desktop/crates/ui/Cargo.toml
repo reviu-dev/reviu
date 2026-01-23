@@ -6,4 +6,4 @@ publish.workspace = true
 
 [dependencies]
 gpui = { workspace = true }
-unicode-segmentation = { workspace = true }
+gpui-component = { workspace = true }
