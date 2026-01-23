@@ -5,6 +5,7 @@ members = [
   "crates/syntax",
   "crates/editor",
   "crates/git",
+  "crates/ui",
   "crates/workspace",
   "crates/reviu",
 ]
@@ -34,4 +35,5 @@ buffer = { path = "crates/buffer" }
 syntax = { path = "crates/syntax" }
 editor = { path = "crates/editor" }
 git = { path = "crates/git" }
+ui = { path = "crates/ui" }
 workspace = { path = "crates/workspace" }

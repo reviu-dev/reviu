@@ -8,8 +8,8 @@ use crate::config::{ConfigStore, RecentRepository};
 use crate::theme::{AppColors, app_colors};
 use editor::{ChangeDirection, DiffViewMode, Editor};
 use git::{
-  FileStatusKind, RepositoryFile, discard_change, open_repository, stage_all, stage_path,
-  unstage_all, unstage_path,
+  FileStatusKind, RepositoryFile, commit_repository, discard_change, has_head_commit,
+  open_repository, stage_all, stage_path, unstage_all, unstage_path,
 };
 use gpui::{
   App, ClickEvent, Context, Div, DragMoveEvent, ElementId, Entity, FocusHandle, Focusable,
@@ -17,6 +17,7 @@ use gpui::{
   actions, deferred, div, prelude::*, px, rgb,
 };
 use syntax::Theme;
+use ui::{ButtonColors, TextInput, TextInputColors, button};
 
 const SIDEBAR_DEFAULT_WIDTH: Pixels = px(260.0);
 const SIDEBAR_MIN_WIDTH: Pixels = px(200.0);
@@ -68,6 +69,9 @@ pub struct WorkspaceView {
   repo_picker_open: bool,
   theme: Theme,
   diff_view_mode: DiffViewMode,
+  commit_input: Entity<TextInput>,
+  commit_menu_open: bool,
+  has_head_commit: bool,
   last_repo_poll: Option<Instant>,
 }
 
@@ -83,6 +87,15 @@ impl Render for DraggedSidebar {
 impl WorkspaceView {
   pub fn new(cx: &mut Context<Self>) -> Self {
     let recent_repositories = ConfigStore::load_recent_repositories();
+    let theme = Theme::dark();
+    let colors = app_colors(&theme);
+    let commit_input = cx.new(|cx| {
+      TextInput::new(
+        "Commit message...",
+        commit_input_colors(&colors, &theme),
+        cx,
+      )
+    });
     let mut view = Self {
       root_path: None,
       changes: Vec::new(),
@@ -97,8 +110,11 @@ impl WorkspaceView {
       focus_handle: cx.focus_handle(),
       recent_repositories,
       repo_picker_open: false,
-      theme: Theme::dark(),
+      theme,
       diff_view_mode: DiffViewMode::Inline,
+      commit_input,
+      commit_menu_open: false,
+      has_head_commit: false,
       last_repo_poll: None,
     };
     view.start_file_polling(cx);
@@ -121,6 +137,11 @@ impl WorkspaceView {
   fn toggle_theme(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
     self.theme.toggle();
     let theme = self.theme.clone();
+    let colors = app_colors(&theme);
+    self.commit_input.update(cx, |input, cx| {
+      input.set_colors(commit_input_colors(&colors, &theme));
+      cx.notify();
+    });
     if let Some(editor) = self.editor.as_ref() {
       editor.update(cx, |editor, cx| {
         editor.set_theme(theme.clone(), cx);
@@ -138,6 +159,54 @@ impl WorkspaceView {
       });
     }
     cx.notify();
+  }
+
+  fn toggle_commit_menu(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    if self.root_path.is_none() || (self.staged.is_empty() && !self.has_head_commit) {
+      return;
+    }
+    self.commit_menu_open = !self.commit_menu_open;
+    cx.notify();
+  }
+
+  fn commit_changes(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    self.commit_changes_with_amend(false, cx);
+  }
+
+  fn commit_amend_changes(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    self.commit_changes_with_amend(true, cx);
+  }
+
+  fn commit_changes_with_amend(&mut self, amend: bool, cx: &mut Context<Self>) {
+    let message = self.commit_input.read(cx).text();
+    if self.root_path.is_none() {
+      return;
+    }
+    if !amend && message.trim().is_empty() {
+      return;
+    }
+    if !amend && self.staged.is_empty() {
+      return;
+    }
+    if amend && !self.has_head_commit {
+      self.error = Some("Nothing to amend.".to_string());
+      cx.notify();
+      return;
+    }
+    let root_path = self.root_path.clone().unwrap();
+    if let Err(err) = commit_repository(&root_path, &message, amend) {
+      self.error = Some(format!("Failed to commit: {err}"));
+      cx.notify();
+      return;
+    }
+
+    self.error = None;
+    self.commit_input.update(cx, |input, cx| {
+      input.clear();
+      cx.notify();
+    });
+    self.commit_menu_open = false;
+    self.refresh_repository_statuses(cx);
   }
 
   fn stage_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -426,6 +495,7 @@ impl WorkspaceView {
 
     let repo_root = repository.root;
     self.root_path = Some(repo_root.clone());
+    self.has_head_commit = has_head_commit(&repo_root);
     let mut changes = repository_entries_to_files(&repo_root, repository.changes);
     let mut staged = repository_entries_to_files(&repo_root, repository.staged);
 
@@ -882,6 +952,7 @@ impl WorkspaceView {
 
   fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let colors = app_colors(&self.theme);
+    let sidebar_width = self.sidebar_width;
     let staged_section = self
       .render_file_section(FileListKind::Staged, cx)
       .flex_none();
@@ -897,6 +968,7 @@ impl WorkspaceView {
       .overflow_y_scroll()
       .child(staged_section)
       .child(changes_section);
+    let commit_bar = self.render_commit_bar(cx);
 
     let resize_handle = deferred(
       div()
@@ -915,7 +987,7 @@ impl WorkspaceView {
     );
 
     div()
-      .w(self.sidebar_width)
+      .w(sidebar_width)
       .flex_none()
       .flex()
       .flex_col()
@@ -926,7 +998,128 @@ impl WorkspaceView {
       .border_r_1()
       .border_color(colors.border)
       .child(sidebar_body)
+      .child(commit_bar)
       .child(resize_handle)
+  }
+
+  fn render_commit_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let colors = app_colors(&self.theme);
+    let input = self.commit_input.clone();
+
+    let input_field = div()
+      .w_full()
+      .min_h(px(30.0))
+      .px_2()
+      .py_1()
+      .bg(colors.header_bg)
+      .text_color(colors.text)
+      .border_1()
+      .border_color(colors.border)
+      .rounded_sm()
+      .child(div().flex().items_start().w_full().child(input));
+
+    div()
+      .flex_none()
+      .border_t_1()
+      .border_color(colors.border)
+      .bg(colors.sidebar_bg)
+      .px_2()
+      .py_2()
+      .child(
+        div()
+          .flex()
+          .flex_col()
+          .items_center()
+          .gap_2()
+          .child(input_field)
+          .child(self.render_commit_button(cx)),
+      )
+  }
+
+  fn render_commit_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let colors = app_colors(&self.theme);
+    let commit_enabled = self.root_path.is_some() && !self.staged.is_empty();
+    let amend_enabled = self.root_path.is_some() && self.has_head_commit;
+    let menu_enabled = commit_enabled || amend_enabled;
+    let show_menu = self.commit_menu_open && menu_enabled;
+    let button_colors = ButtonColors::new(colors.button_text, colors.text_muted);
+
+    let mut main_button = button("Commit", button_colors, !commit_enabled)
+      .id("commit-button-main")
+      .flex_1();
+    if commit_enabled {
+      main_button = main_button
+        .cursor_pointer()
+        .on_click(cx.listener(Self::commit_changes));
+    }
+
+    let mut menu_button = button("v", button_colors, !menu_enabled)
+      .id("commit-button-menu")
+      .px_2();
+    if menu_enabled {
+      menu_button = menu_button
+        .cursor_pointer()
+        .on_click(cx.listener(Self::toggle_commit_menu));
+    }
+
+    let mut button = div()
+      .flex()
+      .items_center()
+      .w_full()
+      .bg(colors.button_bg)
+      .text_color(colors.button_text)
+      .text_sm()
+      .border_1()
+      .border_color(colors.button_border)
+      .rounded_sm()
+      .child(main_button)
+      .child(div().w(px(1.0)).h_full().bg(colors.button_border))
+      .child(menu_button);
+    if commit_enabled {
+      button = button.hover(|style| style.opacity(0.9));
+    } else {
+      button = button.opacity(0.6);
+    }
+
+    div()
+      .relative()
+      .w_full()
+      .child(button)
+      .when(show_menu, |this| this.child(self.render_commit_menu(cx)))
+  }
+
+  fn render_commit_menu(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let colors = app_colors(&self.theme);
+    let amend_enabled = self.root_path.is_some() && self.has_head_commit;
+    div()
+      .id("commit-options-menu")
+      .absolute()
+      .right(px(0.0))
+      .bottom(px(32.0))
+      .flex()
+      .flex_col()
+      .bg(colors.menu_bg)
+      .border_1()
+      .border_color(colors.border)
+      .rounded_sm()
+      .child(
+        div()
+          .id("commit-option-amend")
+          .px_3()
+          .py_2()
+          .text_sm()
+          .text_color(if amend_enabled {
+            colors.text
+          } else {
+            colors.text_muted
+          })
+          .when(amend_enabled, |this| this.cursor_pointer())
+          .hover(|style| style.bg(colors.menu_hover_bg))
+          .child("Amend")
+          .when(amend_enabled, |this| {
+            this.on_click(cx.listener(Self::commit_amend_changes))
+          }),
+      )
   }
 
   fn render_editor_header(&mut self, cx: &mut Context<Self>) -> Div {
@@ -1370,6 +1563,19 @@ fn bump_recent_repository(repositories: &mut Vec<RecentRepository>, path: PathBu
   } else {
     repositories.insert(0, RecentRepository { path });
   }
+}
+
+fn commit_input_colors(colors: &AppColors, theme: &Theme) -> TextInputColors {
+  let selection = if theme.is_dark {
+    with_alpha(colors.button_bg, 0.6)
+  } else {
+    with_alpha(colors.text, 0.2)
+  };
+  TextInputColors::new(colors.text_muted, selection, colors.text)
+}
+
+fn with_alpha(color: Rgba, alpha: f32) -> Rgba {
+  Rgba { a: alpha, ..color }
 }
 
 fn status_tag(status: FileStatusKind) -> (&'static str, Rgba) {

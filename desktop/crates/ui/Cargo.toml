@@ -1,11 +1,9 @@
 [package]
-name = "reviu"
+name = "ui"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-editor = { workspace = true }
 gpui = { workspace = true }
-ui = { workspace = true }
-workspace = { workspace = true }
+unicode-segmentation = { workspace = true }
