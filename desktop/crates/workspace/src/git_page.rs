@@ -196,7 +196,11 @@ impl GitPage {
     } else {
       SyntaxTheme::light()
     };
-    let commit_input = cx.new(|cx| InputState::new(window, cx).placeholder("Commit message..."));
+    let commit_input = cx.new(|cx| {
+      InputState::new(window, cx)
+        .auto_grow(1, 5)
+        .placeholder("Commit message...")
+    });
     let sidebar_state = cx.new(|_| ResizableState::default());
     let mut view = Self {
       root_path: None,
@@ -1058,6 +1062,7 @@ impl GitPage {
       .bg(theme.sidebar)
       .border_t_1()
       .border_color(theme.sidebar_border)
+      .w_full()
       .child(
         div()
           .w_full()
@@ -1221,7 +1226,10 @@ impl Render for GitPage {
               theme.muted_foreground,
             )
           } else {
-            ("Select a file to view it.".to_string(), theme.muted_foreground)
+            (
+              "Select a file to view it.".to_string(),
+              theme.muted_foreground,
+            )
           };
 
           main = main.child(
