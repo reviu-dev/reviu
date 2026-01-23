@@ -1730,7 +1730,6 @@ fn collect_rope_lines_and_hashes(rope: &Rope) -> (Vec<String>, Vec<u64>) {
   let line_count = rope.len_lines();
   let ends_with_newline = rope_ends_with_newline(rope);
   let mut lines = Vec::with_capacity(line_count);
-  let mut hashes = Vec::with_capacity(line_count);
 
   for line_idx in 0..line_count {
     let line_slice = rope.line(line_idx);
@@ -1741,15 +1740,10 @@ fn collect_rope_lines_and_hashes(rope: &Rope) -> (Vec<String>, Vec<u64>) {
         owned.pop();
       }
     }
-    let is_trailing_empty_line =
-      ends_with_newline && line_idx + 1 == line_count && owned.is_empty();
-    hashes.push(hash_line_with_trailing_marker(
-      &owned,
-      is_trailing_empty_line,
-    ));
     lines.push(owned);
   }
 
+  let hashes = hash_string_lines(&lines, ends_with_newline);
   (lines, hashes)
 }
 
@@ -1769,19 +1763,55 @@ fn hash_line_with_trailing_marker(text: &str, is_trailing_empty_line: bool) -> u
   }
 }
 
+fn hash_empty_line_context(prev: Option<u64>, next: Option<u64>) -> u64 {
+  let mut hasher = DefaultHasher::new();
+  0x6f6f_656d_7074_79u64.hash(&mut hasher);
+  prev.unwrap_or(0).hash(&mut hasher);
+  next.unwrap_or(0).hash(&mut hasher);
+  hasher.finish()
+}
+
 fn hash_lines(lines: &[Arc<str>], ends_with_newline: bool) -> Vec<u64> {
   if lines.is_empty() {
     return Vec::new();
   }
   let last_idx = lines.len().saturating_sub(1);
-  lines
+  let mut hashes: Vec<u64> = lines
     .iter()
     .enumerate()
     .map(|(idx, line)| {
       let is_trailing_empty_line = ends_with_newline && idx == last_idx && line.is_empty();
       hash_line_with_trailing_marker(line, is_trailing_empty_line)
     })
-    .collect()
+    .collect();
+
+  let mut prev_non_empty: Vec<Option<u64>> = vec![None; lines.len()];
+  let mut last_seen = None;
+  for (idx, line) in lines.iter().enumerate() {
+    if !line.is_empty() {
+      last_seen = Some(hashes[idx]);
+    }
+    prev_non_empty[idx] = last_seen;
+  }
+
+  let mut next_non_empty: Vec<Option<u64>> = vec![None; lines.len()];
+  let mut next_seen = None;
+  for idx in (0..lines.len()).rev() {
+    let line = &lines[idx];
+    if !line.is_empty() {
+      next_seen = Some(hashes[idx]);
+    }
+    next_non_empty[idx] = next_seen;
+  }
+
+  for (idx, line) in lines.iter().enumerate() {
+    let is_trailing_empty_line = ends_with_newline && idx == last_idx && line.is_empty();
+    if line.is_empty() && !is_trailing_empty_line {
+      hashes[idx] = hash_empty_line_context(prev_non_empty[idx], next_non_empty[idx]);
+    }
+  }
+
+  hashes
 }
 
 fn hash_string_lines(lines: &[String], ends_with_newline: bool) -> Vec<u64> {
@@ -1789,14 +1819,42 @@ fn hash_string_lines(lines: &[String], ends_with_newline: bool) -> Vec<u64> {
     return Vec::new();
   }
   let last_idx = lines.len().saturating_sub(1);
-  lines
+  let mut hashes: Vec<u64> = lines
     .iter()
     .enumerate()
     .map(|(idx, line)| {
       let is_trailing_empty_line = ends_with_newline && idx == last_idx && line.is_empty();
       hash_line_with_trailing_marker(line, is_trailing_empty_line)
     })
-    .collect()
+    .collect();
+
+  let mut prev_non_empty: Vec<Option<u64>> = vec![None; lines.len()];
+  let mut last_seen = None;
+  for (idx, line) in lines.iter().enumerate() {
+    if !line.is_empty() {
+      last_seen = Some(hashes[idx]);
+    }
+    prev_non_empty[idx] = last_seen;
+  }
+
+  let mut next_non_empty: Vec<Option<u64>> = vec![None; lines.len()];
+  let mut next_seen = None;
+  for idx in (0..lines.len()).rev() {
+    let line = &lines[idx];
+    if !line.is_empty() {
+      next_seen = Some(hashes[idx]);
+    }
+    next_non_empty[idx] = next_seen;
+  }
+
+  for (idx, line) in lines.iter().enumerate() {
+    let is_trailing_empty_line = ends_with_newline && idx == last_idx && line.is_empty();
+    if line.is_empty() && !is_trailing_empty_line {
+      hashes[idx] = hash_empty_line_context(prev_non_empty[idx], next_non_empty[idx]);
+    }
+  }
+
+  hashes
 }
 
 fn build_line_starts(lines: &[DiffLine]) -> (Vec<usize>, usize) {
@@ -2832,6 +2890,28 @@ mod tests {
 
     assert_eq!(added_indices, vec![1]);
     assert_eq!(state.lines.last().unwrap().kind, DiffLineKind::Unchanged);
+  }
+
+  #[gpui::test]
+  fn test_diff_insert_blank_lines_with_existing_blank_line(_cx: &mut TestAppContext) {
+    let base_text = "a\n\nb\nc\n";
+    let current_text = "a\n\nb\n\n\nc\n";
+    let base_lines = split_lines_to_arcs(base_text);
+    let base_hashes = hash_lines(&base_lines, base_text.ends_with('\n'));
+    let current_lines: Vec<String> = split_lines_to_arcs(current_text)
+      .into_iter()
+      .map(|line| line.to_string())
+      .collect();
+    let current_hashes = hash_string_lines(&current_lines, current_text.ends_with('\n'));
+
+    let state = compute_diff_state(&base_lines, &base_hashes, current_lines, current_hashes);
+    let added_count = state
+      .lines
+      .iter()
+      .filter(|line| line.kind == DiffLineKind::Added)
+      .count();
+
+    assert_eq!(added_count, 2);
   }
 
   #[gpui::test]
