@@ -5,7 +5,7 @@ use gpui::{
   App, Application, Bounds, Focusable, KeyBinding, WindowBounds, WindowOptions, prelude::*, px,
   size,
 };
-use workspace::{OpenRepository, SaveFile, WorkspaceView};
+use workspace::{CommitChanges, OpenRepository, SaveFile, WorkspaceView};
 
 const INITIAL_WINDOW_WIDTH: f32 = 1200.0;
 const INITIAL_WINDOW_HEIGHT: f32 = 800.0;
@@ -54,6 +54,7 @@ fn main() {
       KeyBinding::new("cmd-z", Undo, Some("Editor")),
       KeyBinding::new("cmd-shift-z", Redo, Some("Editor")),
       KeyBinding::new("cmd-s", SaveFile, Some("Editor")),
+      KeyBinding::new("cmd-enter", CommitChanges, Some("Input")),
       KeyBinding::new("home", Home, Some("Editor")),
       KeyBinding::new("end", End, Some("Editor")),
       KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, Some("Editor")),

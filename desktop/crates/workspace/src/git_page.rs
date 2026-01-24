@@ -13,12 +13,14 @@ use git::{
   stage_path, undo_last_commit as git_undo_last_commit, unstage_all, unstage_path,
 };
 use gpui::{
-  App, ClickEvent, Context, Corner, Div, Entity, FocusHandle, Focusable, Hsla, PathPromptOptions,
-  Pixels, Render, SharedString, Stateful, Task, Window, actions, div, prelude::*, px,
+  App, ClickEvent, Context, Corner, Div, Entity, FocusHandle, Focusable, Hsla, Keystroke,
+  PathPromptOptions, Pixels, Render, SharedString, Stateful, Task, Window, actions, div,
+  prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Theme as ComponentTheme,
-  button::{ButtonGroup, ButtonRounded},
+  button::ButtonGroup,
+  kbd::Kbd,
   menu::{DropdownMenu as _, PopupMenuItem},
 };
 use syntax::Theme as SyntaxTheme;
@@ -35,7 +37,7 @@ const APP_HEADER_HEIGHT: f32 = 42.0;
 const FILE_POLL_INTERVAL_MS: u64 = 500;
 const REPO_POLL_INTERVAL_MS: u64 = 1500;
 
-actions!(workspace, [OpenRepository, SaveFile]);
+actions!(workspace, [OpenRepository, SaveFile, CommitChanges]);
 
 #[derive(Clone)]
 struct FileEntry {
@@ -730,6 +732,19 @@ impl GitPage {
     self.save_current_file(cx);
   }
 
+  fn commit_changes_action(
+    &mut self,
+    _: &CommitChanges,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let focus_handle = self.commit_input.read(cx).focus_handle(cx);
+    if !focus_handle.contains_focused(window, cx) {
+      return;
+    }
+    self.commit_changes_with_amend(false, window, cx);
+  }
+
   fn save_current_file(&mut self, cx: &mut Context<Self>) {
     let Some(selected_file) = self.selected_file else {
       return;
@@ -1119,6 +1134,7 @@ impl GitPage {
       .primary()
       .flex_1()
       .rounded_r_none()
+      .child(Kbd::new(Keystroke::parse("cmd-enter").unwrap()).ml_1())
       .disabled(!commit_enabled)
       .on_click(cx.listener(Self::commit_changes));
 
@@ -1411,6 +1427,7 @@ impl Render for GitPage {
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(Self::open_repository_action))
       .on_action(cx.listener(Self::save_file_action))
+      .on_action(cx.listener(Self::commit_changes_action))
   }
 }
 
