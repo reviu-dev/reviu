@@ -13,15 +13,19 @@ use git::{
   undo_last_commit as git_undo_last_commit, unstage_all, unstage_path,
 };
 use gpui::{
-  App, ClickEvent, Context, Div, Entity, FocusHandle, Focusable, Hsla, PathPromptOptions, Pixels,
-  Render, SharedString, Stateful, Task, Window, actions, div, prelude::*, px,
+  App, ClickEvent, Context, Corner, Div, Entity, FocusHandle, Focusable, Hsla, PathPromptOptions,
+  Pixels, Render, SharedString, Stateful, Task, Window, actions, div, prelude::*, px,
 };
-use gpui_component::{ActiveTheme as _, Theme as ComponentTheme};
+use gpui_component::{
+  ActiveTheme as _, Theme as ComponentTheme,
+  button::ButtonRounded,
+  menu::{DropdownMenu as _, PopupMenuItem},
+};
 use syntax::Theme as SyntaxTheme;
 use ui::{
-  Anchor, Button, ButtonVariants, Collapsible, Disableable, IconName, Input, InputState, Popover,
-  ResizableState, SearchableVec, Select, SelectEvent, SelectItem, SelectState, Sidebar,
-  SidebarItem, Sizable, h_resizable, resizable_panel,
+  Button, ButtonVariants, Collapsible, Disableable, IconName, Input, InputState, ResizableState,
+  SearchableVec, Select, SelectEvent, SelectItem, SelectState, Sidebar, SidebarItem, Sizable,
+  h_resizable, resizable_panel,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: Pixels = px(260.0);
@@ -1079,57 +1083,57 @@ impl GitPage {
     let amend_enabled = self.root_path.is_some() && self.has_head_commit;
     let undo_enabled = self.root_path.is_some() && self.can_undo_last_commit;
     let menu_enabled = amend_enabled || undo_enabled;
+    let view = cx.entity();
+    let amend_view = view.clone();
+    let undo_view = view.clone();
+
     let main_button = Button::new("commit-button-main")
       .label("Commit")
-      .w_full()
+      .primary()
+      .flex_1()
+      .rounded(ButtonRounded::None)
       .disabled(!commit_enabled)
       .on_click(cx.listener(Self::commit_changes));
-    let menu_button = Button::new("commit-button-menu")
-      .compact()
-      .ghost()
-      .icon(IconName::ChevronDown)
-      .disabled(!menu_enabled);
 
-    let menu = Popover::new("commit-options-popover")
-      .anchor(Anchor::BottomRight)
-      .trigger(menu_button)
-      .p_1()
-      .child(
-        div()
-          .flex()
-          .flex_col()
-          .gap_1()
-          .child(
-            Button::new("commit-option-amend")
-              .icon(IconName::Replace)
-              .label("Amend")
-              .ghost()
-              .compact()
-              .disabled(!amend_enabled)
-              .on_click(cx.listener(|this, event, window, cx| {
+    let menu_button = Button::new("commit-button-menu")
+      .icon(IconName::ChevronDown)
+      .primary()
+      .rounded(ButtonRounded::None)
+      .border_l_0()
+      .disabled(!menu_enabled)
+      .dropdown_menu_with_anchor(Corner::BottomRight, move |menu, _, _| {
+        let amend_view = amend_view.clone();
+        let undo_view = undo_view.clone();
+        let menu = menu.item(
+          PopupMenuItem::new("Amend")
+            .icon(IconName::Replace)
+            .disabled(!amend_enabled)
+            .on_click(move |event, window, cx| {
+              amend_view.update(cx, |this, cx| {
                 this.commit_amend_changes(event, window, cx);
-              })),
-          )
-          .child(
-            Button::new("commit-option-undo")
-              .icon(IconName::Undo)
-              .label("Undo last commit")
-              .ghost()
-              .compact()
-              .disabled(!undo_enabled)
-              .on_click(cx.listener(|this, event, window, cx| {
+              });
+            }),
+        );
+
+        menu.item(
+          PopupMenuItem::new("Undo last commit")
+            .icon(IconName::Undo)
+            .disabled(!undo_enabled)
+            .on_click(move |event, window, cx| {
+              undo_view.update(cx, |this, cx| {
                 this.undo_last_commit(event, window, cx);
-              })),
-          ),
-      );
+              });
+            }),
+        )
+      });
 
     div()
       .flex()
-      .items_center()
       .w_full()
-      .gap_1()
-      .child(div().flex_1().w_full().child(main_button))
-      .child(menu)
+      .overflow_hidden()
+      .rounded(cx.theme().radius)
+      .child(main_button)
+      .child(menu_button)
   }
 
   fn render_editor_header(&mut self, cx: &mut Context<Self>) -> Div {
