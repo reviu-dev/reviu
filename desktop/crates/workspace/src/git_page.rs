@@ -2213,6 +2213,9 @@ fn render_sidebar_row(
     .cursor_pointer()
     .on_click(
       window.listener_for(view, move |this, _: &ClickEvent, window, cx| {
+        if is_selected {
+          return;
+        }
         this.select_file(list, list_index, window, cx);
       }),
     )
