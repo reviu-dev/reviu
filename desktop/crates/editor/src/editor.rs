@@ -11,6 +11,7 @@ use gpui::{
   Focusable, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ShapedLine,
   UTF16Selection, Window, black, div, prelude::*, px, white,
 };
+use gpui_component::ActiveTheme as _;
 use syntax::Theme;
 
 use crate::{
@@ -1160,7 +1161,8 @@ impl Render for Editor {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let diff_split =
       self.diff_view_mode == DiffViewMode::Split && self.document.read(cx).diff_enabled();
-    let content_bg = if self.theme.is_dark { black() } else { white() };
+    let component_theme = cx.theme();
+    let content_bg = component_theme.sidebar;
     let gutter_bg = content_bg;
     let content_width = (self.viewport_width - px(GUTTER_WIDTH)).max(px(0.0));
     let max_width = content_width.max(px(1.0));
@@ -1214,7 +1216,7 @@ impl Render for Editor {
       .on_action(cx.listener(crate::actions::copy))
       .on_action(cx.listener(crate::actions::undo))
       .on_action(cx.listener(crate::actions::redo))
-      .when_else(self.theme.is_dark, |el| el.bg(black()), |el| el.bg(white()))
+      .bg(content_bg)
       .when_else(
         self.theme.is_dark,
         |el| el.text_color(white()),
