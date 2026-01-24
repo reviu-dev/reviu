@@ -8,9 +8,9 @@ use crate::config::{ConfigStore, RecentRepository};
 use crate::workspace::{WorkspacePage, WorkspaceRoute};
 use editor::{ChangeDirection, DiffViewMode, Editor};
 use git::{
-  FileStatusKind, RepositoryFile, can_undo_last_commit, commit_repository, discard_change,
-  has_head_commit, open_repository, stage_all, stage_path,
-  undo_last_commit as git_undo_last_commit, unstage_all, unstage_path,
+  BranchStatus, FileStatusKind, RepositoryFile, branch_status, can_undo_last_commit,
+  commit_repository, discard_change, has_head_commit, open_repository, push_repository, stage_all,
+  stage_path, undo_last_commit as git_undo_last_commit, unstage_all, unstage_path,
 };
 use gpui::{
   App, ClickEvent, Context, Corner, Div, Entity, FocusHandle, Focusable, Hsla, PathPromptOptions,
@@ -189,6 +189,9 @@ pub struct GitPage {
   commit_input: Entity<InputState>,
   has_head_commit: bool,
   can_undo_last_commit: bool,
+  can_push: bool,
+  can_force_push: bool,
+  branch_status: Option<BranchStatus>,
   last_repo_poll: Option<Instant>,
 }
 
@@ -224,6 +227,9 @@ impl GitPage {
       commit_input,
       has_head_commit: false,
       can_undo_last_commit: false,
+      can_push: false,
+      can_force_push: false,
+      branch_status: None,
       last_repo_poll: None,
     };
     view.start_file_polling(cx);
@@ -281,6 +287,30 @@ impl GitPage {
     }
     if let Err(err) = git_undo_last_commit(&root_path) {
       self.error = Some(format!("Failed to undo last commit: {err}"));
+      cx.notify();
+      return;
+    }
+
+    self.error = None;
+    self.refresh_repository_statuses(cx);
+  }
+
+  fn push_changes(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    self.push_changes_with_force(false, cx);
+  }
+
+  fn force_push_changes(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    self.push_changes_with_force(true, cx);
+  }
+
+  fn push_changes_with_force(&mut self, force: bool, cx: &mut Context<Self>) {
+    let Some(root_path) = self.root_path.clone() else {
+      return;
+    };
+    let result = push_repository(&root_path, force);
+    if let Err(err) = result {
+      let action = if force { "force push" } else { "push" };
+      self.error = Some(format!("Failed to {action}: {err}"));
       cx.notify();
       return;
     }
@@ -614,6 +644,18 @@ impl GitPage {
     self.root_path = Some(repo_root.clone());
     self.has_head_commit = has_head_commit(&repo_root);
     self.can_undo_last_commit = can_undo_last_commit(&repo_root);
+    match branch_status(&repo_root) {
+      Ok(status) => {
+        self.can_push = status.ahead > 0 && status.behind == 0;
+        self.can_force_push = status.ahead > 0 && status.behind > 0;
+        self.branch_status = Some(status);
+      }
+      Err(_) => {
+        self.can_push = false;
+        self.can_force_push = false;
+        self.branch_status = None;
+      }
+    }
     let mut changes = repository_entries_to_files(&repo_root, repository.changes);
     let mut staged = repository_entries_to_files(&repo_root, repository.staged);
 
@@ -735,6 +777,18 @@ impl GitPage {
         self.error = None;
         self.current_dirty = false;
         self.last_repo_poll = Some(Instant::now());
+        match branch_status(&repo_root) {
+          Ok(status) => {
+            self.can_push = status.ahead > 0 && status.behind == 0;
+            self.can_force_push = status.ahead > 0 && status.behind > 0;
+            self.branch_status = Some(status);
+          }
+          Err(_) => {
+            self.can_push = false;
+            self.can_force_push = false;
+            self.branch_status = None;
+          }
+        }
       }
       Err(err) => {
         self.root_path = Some(path);
@@ -745,6 +799,9 @@ impl GitPage {
         self.error = Some(format!("Not a git repository: {err}"));
         self.current_dirty = false;
         self.last_repo_poll = Some(Instant::now());
+        self.can_push = false;
+        self.can_force_push = false;
+        self.branch_status = None;
       }
     }
     cx.notify();
@@ -1082,10 +1139,14 @@ impl GitPage {
     let commit_enabled = self.root_path.is_some() && !self.staged.is_empty();
     let amend_enabled = self.root_path.is_some() && self.has_head_commit;
     let undo_enabled = self.root_path.is_some() && self.can_undo_last_commit;
-    let menu_enabled = amend_enabled || undo_enabled;
+    let push_enabled = self.root_path.is_some() && self.can_push;
+    let force_push_enabled = self.root_path.is_some() && self.can_force_push;
+    let menu_enabled = amend_enabled || undo_enabled || push_enabled || force_push_enabled;
     let view = cx.entity();
     let amend_view = view.clone();
     let undo_view = view.clone();
+    let push_view = view.clone();
+    let force_push_view = view.clone();
 
     let main_button = Button::new("commit-button-main")
       .label("Commit")
@@ -1104,6 +1165,8 @@ impl GitPage {
       .dropdown_menu_with_anchor(Corner::BottomRight, move |menu, _, _| {
         let amend_view = amend_view.clone();
         let undo_view = undo_view.clone();
+        let push_view = push_view.clone();
+        let force_push_view = force_push_view.clone();
         let menu = menu.item(
           PopupMenuItem::new("Amend")
             .icon(IconName::Replace)
@@ -1115,13 +1178,37 @@ impl GitPage {
             }),
         );
 
-        menu.item(
+        let menu = menu.item(
           PopupMenuItem::new("Undo last commit")
             .icon(IconName::Undo)
             .disabled(!undo_enabled)
             .on_click(move |event, window, cx| {
               undo_view.update(cx, |this, cx| {
                 this.undo_last_commit(event, window, cx);
+              });
+            }),
+        );
+
+        let menu = menu.separator();
+
+        let menu = menu.item(
+          PopupMenuItem::new("Push")
+            .icon(IconName::ArrowUp)
+            .disabled(!push_enabled)
+            .on_click(move |event, window, cx| {
+              push_view.update(cx, |this, cx| {
+                this.push_changes(event, window, cx);
+              });
+            }),
+        );
+
+        menu.item(
+          PopupMenuItem::new("Force push (with lease)")
+            .icon(IconName::TriangleAlert)
+            .disabled(!force_push_enabled)
+            .on_click(move |event, window, cx| {
+              force_push_view.update(cx, |this, cx| {
+                this.force_push_changes(event, window, cx);
               });
             }),
         )
@@ -1158,7 +1245,7 @@ impl GitPage {
     }
 
     let mut header = div()
-      .py_2()
+      .h_10()
       .px_3()
       .flex()
       .items_center()
@@ -1172,11 +1259,55 @@ impl GitPage {
       header = header.child(
         Button::new("save-file")
           .label("Save")
+          .small()
           .on_click(cx.listener(Self::save_file_clicked)),
       );
     }
 
     header
+  }
+
+  fn render_footer(&self, cx: &mut Context<Self>) -> Div {
+    if self.root_path.is_none() {
+      return div();
+    }
+
+    let theme = cx.theme().clone();
+    let (branch_name, ahead, behind) = match self.branch_status.as_ref() {
+      Some(status) => (status.name.as_str(), status.ahead, status.behind),
+      None => ("No branch", 0, 0),
+    };
+
+    let branch = div()
+      .text_sm()
+      .text_color(theme.foreground)
+      .child(branch_name.to_string());
+
+    let pull = div()
+      .flex()
+      .items_center()
+      .child(IconName::ArrowDown)
+      .child(format!("{behind}"));
+
+    let push = div()
+      .flex()
+      .items_center()
+      .child(IconName::ArrowUp)
+      .child(format!("{ahead}"));
+
+    div()
+      .px_3()
+      .py_1()
+      .flex()
+      .items_center()
+      .gap_2()
+      .border_t_1()
+      .border_color(theme.border)
+      .bg(theme.tab_bar)
+      .text_xs()
+      .text_color(theme.muted_foreground)
+      .child(branch)
+      .child(div().flex().items_center().gap_1().child(pull).child(push))
   }
 }
 
@@ -1271,6 +1402,7 @@ impl Render for GitPage {
       .bg(theme.background)
       .child(self.render_app_header(window, cx))
       .child(content)
+      .child(self.render_footer(cx))
       .key_context("Workspace")
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(Self::open_repository_action))
@@ -1299,12 +1431,12 @@ fn render_sidebar_section(
   };
   let header = div()
     .px_2()
-    .py_1()
+    .h_8()
     .flex()
     .items_center()
     .justify_between()
     .when_else(staged, |this| this.mb_2(), |this| this.my_2())
-    .bg(theme.list_head)
+    .bg(theme.sidebar_border)
     .rounded_md()
     .child(
       div()
@@ -1316,14 +1448,14 @@ fn render_sidebar_section(
       FileListKind::Changes => this.child(
         Button::new("stage-all")
           .label("Stage All")
-          .xsmall()
+          .small()
           .compact()
           .on_click(window.listener_for(view, GitPage::stage_all_files)),
       ),
       FileListKind::Staged => this.child(
         Button::new("unstage-all")
           .label("Unstage All")
-          .xsmall()
+          .small()
           .compact()
           .on_click(window.listener_for(view, GitPage::unstage_all_files)),
       ),
@@ -1406,7 +1538,7 @@ fn render_sidebar_row(
 
   let mut actions = div()
     .absolute()
-    .right_0()
+    .right_1()
     .top_0()
     .bottom_0()
     .flex()

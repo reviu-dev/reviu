@@ -2,8 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use git2::{
-  BranchType, IndexAddOption, Repository as GitRepository, ResetType, Signature, Status,
-  StatusOptions, Tree,
+  BranchType, Cred, Direction, IndexAddOption, Oid, PushOptions, ProxyOptions, RemoteCallbacks,
+  Repository as GitRepository, ResetType, Signature, Status, StatusOptions, Tree,
 };
 use git2::build::CheckoutBuilder;
 
@@ -31,6 +31,27 @@ pub struct Repository {
   pub root: PathBuf,
   pub changes: Vec<RepositoryFile>,
   pub staged: Vec<RepositoryFile>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PushStatus {
+  pub ahead: usize,
+  pub behind: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct BranchStatus {
+  pub name: String,
+  pub ahead: usize,
+  pub behind: usize,
+}
+
+struct UpstreamInfo {
+  head_ref: String,
+  upstream_ref: String,
+  remote_name: String,
+  head_oid: Oid,
+  upstream_oid: Oid,
 }
 
 pub fn open_repository(path: &Path) -> Result<Repository, git2::Error> {
@@ -384,4 +405,164 @@ fn repo_root_path(repo: &GitRepository) -> Result<PathBuf, git2::Error> {
     .workdir()
     .map(|path| path.to_path_buf())
     .ok_or_else(|| git2::Error::from_str("Repository has no working directory"))
+}
+
+fn upstream_info(repo: &GitRepository) -> Result<UpstreamInfo, git2::Error> {
+  let head = repo.head()?;
+  if !head.is_branch() {
+    return Err(git2::Error::from_str("HEAD is not a branch"));
+  }
+  let head_ref = head
+    .name()
+    .ok_or_else(|| git2::Error::from_str("HEAD has no reference name"))?
+    .to_string();
+  let head_oid = head.peel_to_commit()?.id();
+
+  let upstream_ref = repo
+    .branch_upstream_name(&head_ref)?
+    .as_str()
+    .ok_or_else(|| git2::Error::from_str("Upstream name is not valid UTF-8"))?
+    .to_string();
+  let upstream_oid = repo
+    .find_reference(&upstream_ref)?
+    .peel_to_commit()?
+    .id();
+
+  let remote_name = repo
+    .branch_upstream_remote(&head_ref)?
+    .as_str()
+    .ok_or_else(|| git2::Error::from_str("Remote name is not valid UTF-8"))?
+    .to_string();
+
+  Ok(UpstreamInfo {
+    head_ref,
+    upstream_ref,
+    remote_name,
+    head_oid,
+    upstream_oid,
+  })
+}
+
+fn push_remote_ref(info: &UpstreamInfo) -> String {
+  let prefix = format!("refs/remotes/{}/", info.remote_name);
+  if let Some(branch) = info.upstream_ref.strip_prefix(&prefix) {
+    format!("refs/heads/{}", branch)
+  } else {
+    info.head_ref.clone()
+  }
+}
+
+fn build_remote_callbacks(repo: &GitRepository) -> RemoteCallbacks<'static> {
+  let config = repo.config().ok();
+  let mut callbacks = RemoteCallbacks::new();
+  callbacks.credentials(move |url, username_from_url, allowed| {
+    if allowed.is_ssh_key() || allowed.is_ssh_interactive() {
+      let username = username_from_url.unwrap_or("git");
+      return Cred::ssh_key_from_agent(username);
+    }
+
+    if allowed.is_user_pass_plaintext() {
+      if let Some(config) = config.as_ref() {
+        if let Ok(cred) = Cred::credential_helper(config, url, username_from_url) {
+          return Ok(cred);
+        }
+      }
+    }
+
+    if allowed.is_default() {
+      return Cred::default();
+    }
+
+    if allowed.is_username() {
+      if let Some(username) = username_from_url {
+        return Cred::username(username);
+      }
+    }
+
+    Err(git2::Error::from_str(
+      "No supported authentication methods",
+    ))
+  });
+  callbacks
+}
+
+fn ensure_force_with_lease(repo: &GitRepository, info: &UpstreamInfo) -> Result<(), git2::Error> {
+  let remote_ref = push_remote_ref(info);
+  let mut remote = repo.find_remote(&info.remote_name)?;
+  let callbacks = build_remote_callbacks(repo);
+  let proxy = ProxyOptions::new();
+  let connection = remote.connect_auth(Direction::Push, Some(callbacks), Some(proxy))?;
+  let remote_oid = match connection.list() {
+    Ok(remote_heads) => {
+      let remote_head = remote_heads
+        .iter()
+        .find(|head| head.name() == remote_ref)
+        .ok_or_else(|| git2::Error::from_str("Remote branch not found"))?;
+      remote_head.oid()
+    }
+    Err(err) => return Err(err),
+  };
+  if remote_oid != info.upstream_oid {
+    return Err(git2::Error::from_str(
+      "Remote branch has moved; fetch before force pushing",
+    ));
+  }
+
+  Ok(())
+}
+
+pub fn push_status(repo_root: &Path) -> Result<PushStatus, git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  let info = upstream_info(&repo)?;
+  let (ahead, behind) = repo.graph_ahead_behind(info.head_oid, info.upstream_oid)?;
+  Ok(PushStatus { ahead, behind })
+}
+
+pub fn branch_status(repo_root: &Path) -> Result<BranchStatus, git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  let head = match repo.head() {
+    Ok(head) => head,
+    Err(_) => {
+      return Ok(BranchStatus {
+        name: "No branch".to_string(),
+        ahead: 0,
+        behind: 0,
+      });
+    }
+  };
+
+  let name = match (head.is_branch(), head.shorthand()) {
+    (true, Some(name)) => name.to_string(),
+    _ => "Detached HEAD".to_string(),
+  };
+
+  let (ahead, behind) = match upstream_info(&repo) {
+    Ok(info) => repo.graph_ahead_behind(info.head_oid, info.upstream_oid)?,
+    Err(_) => (0, 0),
+  };
+
+  Ok(BranchStatus { name, ahead, behind })
+}
+
+pub fn push_repository(repo_root: &Path, force: bool) -> Result<(), git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  let info = upstream_info(&repo)?;
+  if force {
+    ensure_force_with_lease(&repo, &info)?;
+  }
+  let remote_ref = push_remote_ref(&info);
+  let refspec = if force {
+    format!("+{}:{}", info.head_ref, remote_ref)
+  } else {
+    format!("{}:{}", info.head_ref, remote_ref)
+  };
+
+  let mut remote = repo.find_remote(&info.remote_name)?;
+  let mut options = PushOptions::new();
+  let callbacks = build_remote_callbacks(&repo);
+  let proxy = ProxyOptions::new();
+  options.remote_callbacks(callbacks);
+  options.proxy_options(proxy);
+  remote.push(&[&refspec], Some(&mut options))?;
+  Ok(())
 }
