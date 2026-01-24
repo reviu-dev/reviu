@@ -2,6 +2,8 @@ gpui examples are available at ./desktop/gpui
 
 gpui-components examples are available at ./desktop/gpui-components
 
+gpui-components use lucide icons check context7 for icons names
+
 ryuk gpui project is available for inspiration at ./desktop/ryuk
 
 use context7 if needed for documentation
