@@ -232,6 +232,9 @@ impl GitPage {
       branch_status: None,
       last_repo_poll: None,
     };
+    if let Some(repo) = view.recent_repositories.first() {
+      view.set_root_path(repo.path.clone(), cx);
+    }
     view.start_file_polling(cx);
     view
   }
