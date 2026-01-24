@@ -19,7 +19,7 @@ use git::{
 use gpui::{
   App, ClickEvent, Context, Corner, Div, Entity, FocusHandle, Focusable, Hsla, Keystroke,
   PathPromptOptions, Pixels, Render, SharedString, Stateful, Task, Window, actions, div,
-  prelude::*, px,
+  prelude::*, px, white,
 };
 use gpui_component::{
   ActiveTheme as _, Theme as ComponentTheme,
@@ -1598,7 +1598,14 @@ impl GitPage {
       .child(div().text_sm().text_color(theme.foreground).child(title));
 
     if self.current_dirty {
-      title_row = title_row.child(div().text_sm().text_color(theme.warning).child("*"));
+      title_row = title_row.child(
+        div()
+          .flex_none()
+          .w(px(6.0))
+          .h(px(6.0))
+          .rounded_full()
+          .bg(theme.primary),
+      );
     }
 
     let diff_label = match self.diff_view_mode {
@@ -2595,8 +2602,9 @@ fn staged_ranges_from_hunks(hunks: &FileDiffHunks) -> (Vec<Range<usize>>, Vec<Ra
       (hunk.old_lines > 0).then(|| hunk.old_start..(hunk.old_start + hunk.old_lines));
     let index_range =
       (hunk.new_lines > 0).then(|| hunk.new_start..(hunk.new_start + hunk.new_lines));
-    let current_range =
-      index_range.as_ref().map(|range| map_line_range(range, &hunks.index_to_workdir));
+    let current_range = index_range
+      .as_ref()
+      .map(|range| map_line_range(range, &hunks.index_to_workdir));
 
     let overlaps_index = index_range
       .as_ref()
