@@ -51,7 +51,12 @@ const SCROLL_PADDING: usize = 3;
 /// Number of spaces inserted for a tab
 pub(crate) const TAB_WHITESPACE_COUNT: usize = 2;
 /// Width of the gutter area
-pub(crate) const GUTTER_WIDTH: f32 = 70.0;
+pub const GUTTER_MARKER_WIDTH: f32 = 6.0;
+pub const GUTTER_RIGHT_PADDING: f32 = 20.0;
+pub const GUTTER_NUMBER_WIDTH: f32 = 55.0;
+pub const STAGED_DIFF_OPACITY_MULTIPLIER: f32 = 0.40;
+pub(crate) const GUTTER_WIDTH: f32 =
+  GUTTER_MARKER_WIDTH + GUTTER_NUMBER_WIDTH + GUTTER_RIGHT_PADDING;
 
 pub struct Editor {
   pub document: Entity<Document>,
@@ -89,6 +94,10 @@ pub struct Editor {
   pub theme: Theme,
   pub diff_view_mode: DiffViewMode,
   pub active_diff_panel: DiffPanelSide,
+  staged_view: bool,
+  pub hovered_change_range: Option<Range<usize>>,
+  staged_base_ranges: Vec<Range<usize>>,
+  staged_current_ranges: Vec<Range<usize>>,
 
   // Track syntax highlighting version to invalidate cache when highlights change
   pub last_highlights_version: usize,
@@ -174,6 +183,10 @@ impl Editor {
       theme,
       diff_view_mode: DiffViewMode::Inline,
       active_diff_panel: DiffPanelSide::Right,
+      staged_view: false,
+      hovered_change_range: None,
+      staged_base_ranges: Vec::new(),
+      staged_current_ranges: Vec::new(),
       last_highlights_version: 0,
       last_highlights_epoch: 0,
       last_diff_version: 0,
@@ -198,6 +211,85 @@ impl Editor {
       self.max_line_width = px(DEFAULT_MAX_LINE_WIDTH);
       self.max_line_width_left = px(DEFAULT_MAX_LINE_WIDTH);
       cx.notify();
+    }
+  }
+
+  pub fn is_staged_view(&self) -> bool {
+    self.staged_view
+  }
+
+  pub fn set_staged_view(&mut self, staged: bool, cx: &mut Context<Self>) {
+    if self.staged_view != staged {
+      self.staged_view = staged;
+      cx.notify();
+    }
+  }
+
+  pub fn set_staged_ranges(
+    &mut self,
+    base_ranges: Vec<Range<usize>>,
+    current_ranges: Vec<Range<usize>>,
+    cx: &mut Context<Self>,
+  ) {
+    self.staged_base_ranges = base_ranges;
+    self.staged_current_ranges = current_ranges;
+    cx.notify();
+  }
+
+  pub fn set_diff_base_text(&mut self, base_text: Option<&str>, cx: &mut Context<Self>) {
+    self
+      .document
+      .update(cx, |document, cx| document.set_diff_base_text(base_text, cx));
+  }
+
+  pub fn diff_line_is_staged(&self, line_idx: usize, cx: &App) -> bool {
+    let document = self.document.read(cx);
+    let Some(info) = document.diff_line_info(line_idx) else {
+      return false;
+    };
+    if let Some(base_line) = info.base_line {
+      if line_in_ranges(&self.staged_base_ranges, base_line) {
+        return true;
+      }
+    }
+    if let Some(current_line) = info.current_line {
+      if line_in_ranges(&self.staged_current_ranges, current_line) {
+        return true;
+      }
+    }
+    false
+  }
+
+  pub fn hovered_change_range(&self) -> Option<Range<usize>> {
+    self.hovered_change_range.clone()
+  }
+
+  pub(crate) fn set_hovered_change_range(
+    &mut self,
+    range: Option<Range<usize>>,
+    cx: &mut Context<Self>,
+  ) {
+    if self.hovered_change_range != range {
+      self.hovered_change_range = range;
+      cx.notify();
+    }
+  }
+
+  pub fn row_for_line(&self, line_idx: usize, cx: &App) -> Option<usize> {
+    let document = self.document.read(cx);
+    if self.diff_view_mode == DiffViewMode::Split && document.diff_enabled() {
+      let primary = self.active_diff_panel;
+      let row = document.split_row_for_line(line_idx, primary);
+      if row.is_some() {
+        return row;
+      }
+      let fallback = match primary {
+        DiffPanelSide::Left => DiffPanelSide::Right,
+        DiffPanelSide::Right => DiffPanelSide::Left,
+      };
+      document.split_row_for_line(line_idx, fallback)
+    } else {
+      Some(line_idx)
     }
   }
 
@@ -1204,6 +1296,12 @@ impl Focusable for Editor {
   fn focus_handle(&self, _: &App) -> FocusHandle {
     self.focus_handle.clone()
   }
+}
+
+fn line_in_ranges(ranges: &[Range<usize>], line: usize) -> bool {
+  ranges
+    .iter()
+    .any(|range| range.start <= line && line < range.end)
 }
 
 #[cfg(test)]

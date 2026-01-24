@@ -1,11 +1,13 @@
 use std::fs;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use git2::{
-  BranchType, Cred, Direction, IndexAddOption, Oid, PushOptions, ProxyOptions, RemoteCallbacks,
-  Repository as GitRepository, ResetType, Signature, Status, StatusOptions, Tree,
-};
 use git2::build::CheckoutBuilder;
+use git2::{
+  ApplyLocation, ApplyOptions, BranchType, Cred, DiffHunk, DiffOptions, Direction, IndexAddOption,
+  Oid, ProxyOptions, PushOptions, RemoteCallbacks, Repository as GitRepository, ResetType,
+  Signature, Status, StatusOptions, Tree,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileStatusKind {
@@ -44,6 +46,22 @@ pub struct BranchStatus {
   pub name: String,
   pub ahead: usize,
   pub behind: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct HunkRange {
+  pub base: Option<Range<usize>>,
+  pub current: Option<Range<usize>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DiffHunkInfo {
+  pub old_start: usize,
+  pub old_lines: usize,
+  pub new_start: usize,
+  pub new_lines: usize,
+  pub old_changed: Vec<Range<usize>>,
+  pub new_changed: Vec<Range<usize>>,
 }
 
 struct UpstreamInfo {
@@ -224,6 +242,91 @@ fn repo_relative_path(repo_root: &Path, path: &Path) -> PathBuf {
   }
 }
 
+fn push_line_range(ranges: &mut Vec<Range<usize>>, line: usize) {
+  if let Some(last) = ranges.last_mut() {
+    if last.end == line {
+      last.end += 1;
+      return;
+    }
+  }
+  ranges.push(line..(line + 1));
+}
+
+fn collect_diff_hunks(diff: &git2::Diff<'_>) -> Result<Vec<DiffHunkInfo>, git2::Error> {
+  let hunks = std::cell::RefCell::new(Vec::new());
+  diff.foreach(
+    &mut |_delta, _progress| true,
+    None,
+    Some(&mut |_delta, hunk| {
+      let old_start = hunk.old_start().saturating_sub(1) as usize;
+      let new_start = hunk.new_start().saturating_sub(1) as usize;
+      hunks.borrow_mut().push(DiffHunkInfo {
+        old_start,
+        old_lines: hunk.old_lines() as usize,
+        new_start,
+        new_lines: hunk.new_lines() as usize,
+        old_changed: Vec::new(),
+        new_changed: Vec::new(),
+      });
+      true
+    }),
+    Some(&mut |_delta, _hunk, line| {
+      let mut hunks = hunks.borrow_mut();
+      let Some(current) = hunks.last_mut() else {
+        return true;
+      };
+      match line.origin() {
+        '+' | '>' => {
+          if let Some(line_no) = line.new_lineno() {
+            let line_idx = line_no.saturating_sub(1) as usize;
+            push_line_range(&mut current.new_changed, line_idx);
+          }
+        }
+        '-' | '<' => {
+          if let Some(line_no) = line.old_lineno() {
+            let line_idx = line_no.saturating_sub(1) as usize;
+            push_line_range(&mut current.old_changed, line_idx);
+          }
+        }
+        _ => {}
+      }
+      true
+    }),
+  )?;
+  Ok(hunks.into_inner())
+}
+
+pub fn diff_head_to_index_hunks(
+  repo_root: &Path,
+  path: &Path,
+) -> Result<Vec<DiffHunkInfo>, git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  let rel_path = repo_relative_path(&repo_root_path(&repo)?, path);
+  let mut diff_opts = DiffOptions::new();
+  diff_opts.pathspec(&rel_path);
+  diff_opts.include_untracked(true);
+  diff_opts.context_lines(0);
+  diff_opts.interhunk_lines(0);
+  let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
+  let diff = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut diff_opts))?;
+  collect_diff_hunks(&diff)
+}
+
+pub fn diff_index_to_workdir_hunks(
+  repo_root: &Path,
+  path: &Path,
+) -> Result<Vec<DiffHunkInfo>, git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  let rel_path = repo_relative_path(&repo_root_path(&repo)?, path);
+  let mut diff_opts = DiffOptions::new();
+  diff_opts.pathspec(&rel_path);
+  diff_opts.include_untracked(true);
+  diff_opts.context_lines(0);
+  diff_opts.interhunk_lines(0);
+  let diff = repo.diff_index_to_workdir(None, Some(&mut diff_opts))?;
+  collect_diff_hunks(&diff)
+}
+
 pub fn stage_path(repo_root: &Path, path: &Path) -> Result<(), git2::Error> {
   let repo = GitRepository::discover(repo_root)?;
   let rel_path = repo_relative_path(&repo_root_path(&repo)?, path);
@@ -249,15 +352,112 @@ pub fn stage_all(repo_root: &Path) -> Result<(), git2::Error> {
 pub fn unstage_path(repo_root: &Path, path: &Path) -> Result<(), git2::Error> {
   let repo = GitRepository::discover(repo_root)?;
   let rel_path = repo_relative_path(&repo_root_path(&repo)?, path);
-  let target_commit = repo
-    .head()
-    .ok()
-    .and_then(|head| head.peel_to_commit().ok());
+  let target_commit = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
   match target_commit {
     Some(commit) => repo.reset_default(Some(commit.as_object()), &[rel_path.as_path()])?,
     None => repo.reset_default(None, &[rel_path.as_path()])?,
   }
   Ok(())
+}
+
+fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
+  left.start < right.end && right.start < left.end
+}
+
+fn hunk_matches(hunk: &DiffHunk<'_>, target: &HunkRange, reverse: bool) -> bool {
+  let old_start = hunk.old_start().saturating_sub(1) as usize;
+  let old_end = old_start + hunk.old_lines() as usize;
+  let new_start = hunk.new_start().saturating_sub(1) as usize;
+  let new_end = new_start + hunk.new_lines() as usize;
+  let old_range = old_start..old_end;
+  let new_range = new_start..new_end;
+
+  let mut matches = false;
+  let (base_range, current_range) = if reverse {
+    (&target.current, &target.base)
+  } else {
+    (&target.base, &target.current)
+  };
+  if let Some(base) = base_range.as_ref() {
+    matches |= ranges_overlap(base, &old_range);
+  }
+  if let Some(current) = current_range.as_ref() {
+    matches |= ranges_overlap(current, &new_range);
+  }
+  matches
+}
+
+fn apply_hunk_with_diff(
+  repo: &GitRepository,
+  diff: &git2::Diff<'_>,
+  rel_path: &Path,
+  target: &HunkRange,
+  location: ApplyLocation,
+  reverse: bool,
+) -> Result<(), git2::Error> {
+  let rel_path_for_delta = rel_path.to_path_buf();
+  let target_for_hunk = target.clone();
+  let mut apply_opts = ApplyOptions::new();
+  apply_opts.delta_callback(move |delta| {
+    delta
+      .and_then(|delta| delta.new_file().path().or(delta.old_file().path()))
+      .map(|delta_path| delta_path == rel_path_for_delta.as_path())
+      .unwrap_or(false)
+  });
+  apply_opts.hunk_callback(move |hunk| {
+    let Some(hunk) = hunk else {
+      return false;
+    };
+    hunk_matches(&hunk, &target_for_hunk, reverse)
+  });
+
+  repo.apply(diff, location, Some(&mut apply_opts))?;
+  Ok(())
+}
+
+fn apply_hunk(
+  repo_root: &Path,
+  path: &Path,
+  target: &HunkRange,
+  location: ApplyLocation,
+  reverse: bool,
+) -> Result<(), git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  let rel_path = repo_relative_path(&repo_root_path(&repo)?, path);
+  let mut diff_opts = DiffOptions::new();
+  diff_opts.pathspec(&rel_path);
+  diff_opts.include_untracked(true);
+  diff_opts.context_lines(0);
+  diff_opts.interhunk_lines(0);
+  if reverse {
+    diff_opts.reverse(true);
+  }
+  let diff = repo.diff_index_to_workdir(None, Some(&mut diff_opts))?;
+
+  apply_hunk_with_diff(&repo, &diff, &rel_path, target, location, reverse)
+}
+
+pub fn stage_hunk(repo_root: &Path, path: &Path, target: &HunkRange) -> Result<(), git2::Error> {
+  apply_hunk(repo_root, path, target, ApplyLocation::Index, false)
+}
+
+pub fn restore_hunk(repo_root: &Path, path: &Path, target: &HunkRange) -> Result<(), git2::Error> {
+  apply_hunk(repo_root, path, target, ApplyLocation::WorkDir, true)
+}
+
+pub fn unstage_hunk(repo_root: &Path, path: &Path, target: &HunkRange) -> Result<(), git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  let rel_path = repo_relative_path(&repo_root_path(&repo)?, path);
+  let mut diff_opts = DiffOptions::new();
+  diff_opts.pathspec(&rel_path);
+  diff_opts.include_untracked(true);
+  diff_opts.context_lines(0);
+  diff_opts.interhunk_lines(0);
+  diff_opts.reverse(true);
+  let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
+  let diff = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut diff_opts))?;
+
+  apply_hunk_with_diff(&repo, &diff, &rel_path, target, ApplyLocation::Index, true)
 }
 
 pub fn unstage_all(repo_root: &Path) -> Result<(), git2::Error> {
@@ -275,7 +475,7 @@ pub fn unstage_all(repo_root: &Path) -> Result<(), git2::Error> {
   Ok(())
 }
 
-pub fn discard_change(
+pub fn restore_change(
   repo_root: &Path,
   path: &Path,
   status: FileStatusKind,
@@ -300,11 +500,7 @@ pub fn discard_change(
   Ok(())
 }
 
-pub fn commit_repository(
-  repo_root: &Path,
-  message: &str,
-  amend: bool,
-) -> Result<(), git2::Error> {
+pub fn commit_repository(repo_root: &Path, message: &str, amend: bool) -> Result<(), git2::Error> {
   let repo = GitRepository::discover(repo_root)?;
   let message = message.trim();
   let has_message = !message.is_empty();
@@ -337,7 +533,14 @@ pub fn commit_repository(
       repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &[])?;
     }
   } else if let Some(commit) = head_commit.as_ref() {
-    repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &[commit])?;
+    repo.commit(
+      Some("HEAD"),
+      &signature,
+      &signature,
+      message,
+      &tree,
+      &[commit],
+    )?;
   } else {
     repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &[])?;
   }
@@ -423,10 +626,7 @@ fn upstream_info(repo: &GitRepository) -> Result<UpstreamInfo, git2::Error> {
     .as_str()
     .ok_or_else(|| git2::Error::from_str("Upstream name is not valid UTF-8"))?
     .to_string();
-  let upstream_oid = repo
-    .find_reference(&upstream_ref)?
-    .peel_to_commit()?
-    .id();
+  let upstream_oid = repo.find_reference(&upstream_ref)?.peel_to_commit()?.id();
 
   let remote_name = repo
     .branch_upstream_remote(&head_ref)?
@@ -479,9 +679,7 @@ fn build_remote_callbacks(repo: &GitRepository) -> RemoteCallbacks<'static> {
       }
     }
 
-    Err(git2::Error::from_str(
-      "No supported authentication methods",
-    ))
+    Err(git2::Error::from_str("No supported authentication methods"))
   });
   callbacks
 }
@@ -541,7 +739,11 @@ pub fn branch_status(repo_root: &Path) -> Result<BranchStatus, git2::Error> {
     Err(_) => (0, 0),
   };
 
-  Ok(BranchStatus { name, ahead, behind })
+  Ok(BranchStatus {
+    name,
+    ahead,
+    behind,
+  })
 }
 
 pub fn push_repository(repo_root: &Path, force: bool) -> Result<(), git2::Error> {
