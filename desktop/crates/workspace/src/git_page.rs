@@ -361,13 +361,10 @@ impl GitPage {
     cx: &mut Context<Self>,
   ) {
     let message = self.commit_input.read(cx).value().to_string();
-    if self.root_path.is_none() {
+    let Some(root_path) = self.root_path.clone() else {
       return;
-    }
+    };
     if !amend && message.trim().is_empty() {
-      return;
-    }
-    if !amend && !self.has_staged_changes {
       return;
     }
     if amend && !self.has_head_commit {
@@ -375,7 +372,17 @@ impl GitPage {
       cx.notify();
       return;
     }
-    let root_path = self.root_path.clone().unwrap();
+    if !amend && !self.has_staged_changes {
+      let has_changes = !(self.tracked.is_empty() && self.untracked.is_empty());
+      if !has_changes {
+        return;
+      }
+      if let Err(err) = stage_all(&root_path) {
+        self.error = Some(format!("Failed to stage all files: {err}"));
+        cx.notify();
+        return;
+      }
+    }
     if let Err(err) = commit_repository(&root_path, &message, amend) {
       self.error = Some(format!("Failed to commit: {err}"));
       cx.notify();
@@ -1483,7 +1490,7 @@ impl GitPage {
   }
 
   fn render_commit_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let commit_enabled = self.root_path.is_some() && self.has_staged_changes;
+    let commit_enabled = self.root_path.is_some();
     let amend_enabled = self.root_path.is_some() && self.has_head_commit;
     let undo_enabled = self.root_path.is_some() && self.can_undo_last_commit;
     let push_enabled = self.root_path.is_some() && self.can_push;
