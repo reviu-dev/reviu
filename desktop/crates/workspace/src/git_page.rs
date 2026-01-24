@@ -1601,9 +1601,9 @@ impl GitPage {
       title_row = title_row.child(
         div()
           .flex_none()
-          .w(px(6.0))
-          .h(px(6.0))
+          .size(px(6.0))
           .rounded_full()
+          .ml_1()
           .bg(theme.primary),
       );
     }
