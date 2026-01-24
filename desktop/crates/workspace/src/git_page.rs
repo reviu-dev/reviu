@@ -18,7 +18,7 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _, Theme as ComponentTheme,
-  button::ButtonRounded,
+  button::{ButtonGroup, ButtonRounded},
   menu::{DropdownMenu as _, PopupMenuItem},
 };
 use syntax::Theme as SyntaxTheme;
@@ -1396,16 +1396,12 @@ fn render_sidebar_row(
   );
 
   let actions_bg = theme.sidebar_accent;
-  let actions_border = theme.sidebar_border;
-  let mut actions_wrap = div()
-    .flex()
-    .items_center()
-    .gap_1()
-    .px_1()
-    .py_1()
+
+  let mut actions_wrap = ButtonGroup::new(format!("file-actions-{}", row_group))
+    .ghost()
+    .compact()
+    .xsmall()
     .bg(actions_bg)
-    .border_1()
-    .border_color(actions_border)
     .rounded_md();
 
   let mut actions = div()
@@ -1427,9 +1423,6 @@ fn render_sidebar_row(
         .child(
           Button::new(format!("stage-file-{}", &row_group))
             .icon(IconName::Plus)
-            .ghost()
-            .compact()
-            .xsmall()
             .tooltip("Stage file")
             .on_click(
               window.listener_for(view, move |this, _: &ClickEvent, _window, cx| {
@@ -1441,9 +1434,6 @@ fn render_sidebar_row(
         .child(
           Button::new(format!("discard-file-{}", &row_group))
             .icon(IconName::Delete)
-            .ghost()
-            .compact()
-            .xsmall()
             .tooltip("Discard change")
             .on_click(
               window.listener_for(view, move |this, _: &ClickEvent, _window, cx| {
@@ -1458,9 +1448,6 @@ fn render_sidebar_row(
       actions_wrap = actions_wrap.child(
         Button::new(format!("unstage-file-{}", &row_group))
           .icon(IconName::Minus)
-          .ghost()
-          .compact()
-          .xsmall()
           .tooltip("Unstage file")
           .on_click(
             window.listener_for(view, move |this, _: &ClickEvent, _window, cx| {
