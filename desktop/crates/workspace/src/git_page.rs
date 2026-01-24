@@ -1,5 +1,7 @@
 use std::{
+  collections::HashMap,
   fs,
+  ops::Range,
   path::{Path, PathBuf},
   time::{Duration, Instant, SystemTime},
 };
@@ -8,9 +10,11 @@ use crate::config::{ConfigStore, RecentRepository};
 use crate::workspace::{WorkspacePage, WorkspaceRoute};
 use editor::{ChangeDirection, DiffViewMode, Editor};
 use git::{
-  BranchStatus, FileStatusKind, RepositoryFile, branch_status, can_undo_last_commit,
-  commit_repository, discard_change, has_head_commit, open_repository, push_repository, stage_all,
-  stage_path, undo_last_commit as git_undo_last_commit, unstage_all, unstage_path,
+  BranchStatus, DiffHunkInfo, FileStatusKind, HunkRange, RepositoryFile, branch_status,
+  can_undo_last_commit, commit_repository, diff_head_to_index_hunks, diff_index_to_workdir_hunks,
+  has_head_commit, open_repository, push_repository, restore_change, restore_hunk, stage_all,
+  stage_hunk, stage_path, undo_last_commit as git_undo_last_commit, unstage_all, unstage_hunk,
+  unstage_path,
 };
 use gpui::{
   App, ClickEvent, Context, Corner, Div, Entity, FocusHandle, Focusable, Hsla, Keystroke,
@@ -22,6 +26,7 @@ use gpui_component::{
   button::ButtonGroup,
   kbd::Kbd,
   menu::{DropdownMenu as _, PopupMenuItem},
+  tooltip::Tooltip,
 };
 use syntax::Theme as SyntaxTheme;
 use ui::{
@@ -48,23 +53,36 @@ struct FileEntry {
   current_content: Option<String>,
   saved_content: Option<String>,
   last_modified: Option<SystemTime>,
+  stage_state: Option<StageState>,
 }
 
 #[derive(Clone)]
 struct SidebarFileEntry {
+  list: FileListKind,
+  list_index: usize,
   path: PathBuf,
   display_name: String,
   status: FileStatusKind,
+  stage_state: Option<StageState>,
 }
 
-impl From<&FileEntry> for SidebarFileEntry {
-  fn from(entry: &FileEntry) -> Self {
+impl SidebarFileEntry {
+  fn new(list: FileListKind, list_index: usize, entry: &FileEntry) -> Self {
     Self {
+      list,
+      list_index,
       path: entry.path.clone(),
       display_name: entry.display_name.clone(),
       status: entry.status,
+      stage_state: entry.stage_state,
     }
   }
+}
+
+#[derive(Clone)]
+struct FileDiffHunks {
+  head_to_index: Vec<DiffHunkInfo>,
+  index_to_workdir: Vec<DiffHunkInfo>,
 }
 
 #[derive(Clone)]
@@ -93,41 +111,48 @@ impl SelectItem for RepoSelectItem {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FileListKind {
-  Changes,
-  Staged,
+  Tracked,
+  Untracked,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SelectedFile {
-  Changes(usize),
-  Staged(usize),
+  Tracked(usize),
+  Untracked(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StageState {
+  Unstaged,
+  PartiallyStaged,
+  Staged,
 }
 
 #[derive(Clone)]
 struct WorkspaceSidebarSection {
   view: Entity<GitPage>,
-  kind: FileListKind,
   entries: Vec<SidebarFileEntry>,
-  selected_index: Option<usize>,
+  selected_path: Option<PathBuf>,
   has_root: bool,
   collapsed: bool,
+  dirty_path: Option<PathBuf>,
 }
 
 impl WorkspaceSidebarSection {
   fn new(
     view: Entity<GitPage>,
-    kind: FileListKind,
     entries: Vec<SidebarFileEntry>,
-    selected_index: Option<usize>,
+    selected_path: Option<PathBuf>,
     has_root: bool,
+    dirty_path: Option<PathBuf>,
   ) -> Self {
     Self {
       view,
-      kind,
       entries,
-      selected_index,
+      selected_path,
       has_root,
       collapsed: false,
+      dirty_path,
     }
   }
 }
@@ -153,19 +178,19 @@ impl SidebarItem for WorkspaceSidebarSection {
     let id = id.into();
     let WorkspaceSidebarSection {
       view,
-      kind,
       entries,
-      selected_index,
+      selected_path,
       has_root,
+      dirty_path,
       ..
     } = self;
 
-    render_sidebar_section(
+    render_sidebar_list(
       &view,
-      kind,
       &entries,
-      selected_index,
+      selected_path.as_deref(),
       has_root,
+      dirty_path.as_deref(),
       cx.theme(),
       window,
     )
@@ -175,10 +200,11 @@ impl SidebarItem for WorkspaceSidebarSection {
 
 pub struct GitPage {
   root_path: Option<PathBuf>,
-  changes: Vec<FileEntry>,
-  staged: Vec<FileEntry>,
+  tracked: Vec<FileEntry>,
+  untracked: Vec<FileEntry>,
   selected_file: Option<SelectedFile>,
   editor: Option<Entity<Editor>>,
+  selected_diff_hunks: Option<FileDiffHunks>,
   error: Option<String>,
   current_dirty: bool,
   poll_task: Option<Task<()>>,
@@ -191,6 +217,7 @@ pub struct GitPage {
   commit_input: Entity<InputState>,
   has_head_commit: bool,
   can_undo_last_commit: bool,
+  has_staged_changes: bool,
   can_push: bool,
   can_force_push: bool,
   branch_status: Option<BranchStatus>,
@@ -213,10 +240,11 @@ impl GitPage {
     let sidebar_state = cx.new(|_| ResizableState::default());
     let mut view = Self {
       root_path: None,
-      changes: Vec::new(),
-      staged: Vec::new(),
+      tracked: Vec::new(),
+      untracked: Vec::new(),
       selected_file: None,
       editor: None,
+      selected_diff_hunks: None,
       error: None,
       current_dirty: false,
       poll_task: None,
@@ -229,6 +257,7 @@ impl GitPage {
       commit_input,
       has_head_commit: false,
       can_undo_last_commit: false,
+      has_staged_changes: false,
       can_push: false,
       can_force_push: false,
       branch_status: None,
@@ -298,6 +327,7 @@ impl GitPage {
 
     self.error = None;
     self.refresh_repository_statuses(cx);
+    self.rebuild_editor_for_selected(cx);
   }
 
   fn push_changes(&mut self, _: &ClickEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -337,7 +367,7 @@ impl GitPage {
     if !amend && message.trim().is_empty() {
       return;
     }
-    if !amend && self.staged.is_empty() {
+    if !amend && !self.has_staged_changes {
       return;
     }
     if amend && !self.has_head_commit {
@@ -385,12 +415,12 @@ impl GitPage {
     self.refresh_repository_statuses(cx);
   }
 
-  fn discard_file_change(&mut self, path: PathBuf, status: FileStatusKind, cx: &mut Context<Self>) {
+  fn restore_file_change(&mut self, path: PathBuf, status: FileStatusKind, cx: &mut Context<Self>) {
     let Some(root_path) = self.root_path.clone() else {
       return;
     };
-    if let Err(err) = discard_change(&root_path, &path, status) {
-      self.error = Some(format!("Failed to discard change: {err}"));
+    if let Err(err) = restore_change(&root_path, &path, status) {
+      self.error = Some(format!("Failed to restore change: {err}"));
       cx.notify();
       return;
     }
@@ -422,6 +452,327 @@ impl GitPage {
     }
     self.error = None;
     self.refresh_repository_statuses(cx);
+  }
+
+  fn stage_change_block(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+    if self.current_dirty {
+      return;
+    }
+    let Some(root_path) = self.root_path.clone() else {
+      return;
+    };
+    let Some(SelectedFile::Tracked(index)) = self.selected_file else {
+      return;
+    };
+    let Some(entry) = self.tracked.get(index) else {
+      return;
+    };
+    let Some(hunk) = self.hunk_range_for_change(&range, cx) else {
+      return;
+    };
+    let Some(target_hunk) = self.find_stage_hunk(&hunk) else {
+      return;
+    };
+
+    if let Err(err) = stage_hunk(&root_path, &entry.path, &target_hunk) {
+      self.error = Some(format!("Failed to stage hunk: {err}"));
+      cx.notify();
+      return;
+    }
+
+    self.error = None;
+    self.refresh_repository_statuses(cx);
+  }
+
+  fn restore_change_block(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+    if self.current_dirty {
+      return;
+    }
+    let Some(root_path) = self.root_path.clone() else {
+      return;
+    };
+    let Some(SelectedFile::Tracked(index)) = self.selected_file else {
+      return;
+    };
+    let Some(entry) = self.tracked.get(index) else {
+      return;
+    };
+    let Some(hunk) = self.hunk_range_for_change(&range, cx) else {
+      return;
+    };
+    let Some(target_hunk) = self.find_stage_hunk(&hunk) else {
+      return;
+    };
+
+    if let Err(err) = restore_hunk(&root_path, &entry.path, &target_hunk) {
+      self.error = Some(format!("Failed to restore hunk: {err}"));
+      cx.notify();
+      return;
+    }
+
+    self.error = None;
+    self.refresh_repository_statuses(cx);
+  }
+
+  fn unstage_change_block(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+    if self.current_dirty {
+      return;
+    }
+    let Some(root_path) = self.root_path.clone() else {
+      return;
+    };
+    let Some(SelectedFile::Tracked(index)) = self.selected_file else {
+      return;
+    };
+    let Some(entry) = self.tracked.get(index) else {
+      return;
+    };
+    let Some(hunk) = self.hunk_range_for_change(&range, cx) else {
+      return;
+    };
+    let Some(target_hunk) = self.find_unstage_hunk(&hunk) else {
+      return;
+    };
+
+    if let Err(err) = unstage_hunk(&root_path, &entry.path, &target_hunk) {
+      self.error = Some(format!("Failed to unstage hunk: {err}"));
+      cx.notify();
+      return;
+    }
+
+    self.error = None;
+    self.refresh_repository_statuses(cx);
+  }
+
+  fn hunk_range_for_change(&self, range: &Range<usize>, cx: &App) -> Option<HunkRange> {
+    let editor = self.editor.as_ref()?;
+    let document = editor.read(cx).document().read(cx);
+
+    let mut base_min: Option<usize> = None;
+    let mut base_max: Option<usize> = None;
+    let mut current_min: Option<usize> = None;
+    let mut current_max: Option<usize> = None;
+
+    for line_idx in range.clone() {
+      if let Some(info) = document.diff_line_info(line_idx) {
+        if let Some(base_line) = info.base_line {
+          base_min = Some(base_min.map_or(base_line, |min| min.min(base_line)));
+          base_max = Some(base_max.map_or(base_line, |max| max.max(base_line)));
+        }
+        if let Some(current_line) = info.current_line {
+          current_min = Some(current_min.map_or(current_line, |min| min.min(current_line)));
+          current_max = Some(current_max.map_or(current_line, |max| max.max(current_line)));
+        }
+      }
+    }
+
+    if base_min.is_none() && current_min.is_none() {
+      return None;
+    }
+
+    let base = base_min.map(|min| min..(base_max.unwrap_or(min) + 1));
+    let current = current_min.map(|min| min..(current_max.unwrap_or(min) + 1));
+
+    Some(HunkRange { base, current })
+  }
+
+  fn find_stage_hunk(&self, hunk: &HunkRange) -> Option<HunkRange> {
+    let hunks_state = self.selected_diff_hunks.as_ref()?;
+    let hunks = &hunks_state.index_to_workdir;
+    if let Some(current) = hunk.current.as_ref() {
+      if let Some(found) = find_hunk_by_new_range(hunks, current) {
+        return Some(hunk_header_range(found));
+      }
+    }
+    if let Some(base) = hunk.base.as_ref() {
+      let mapped_base = map_line_range(base, &hunks_state.head_to_index);
+      if let Some(found) = find_hunk_by_old_range(hunks, &mapped_base) {
+        return Some(hunk_header_range(found));
+      }
+    }
+    None
+  }
+
+  fn find_unstage_hunk(&self, hunk: &HunkRange) -> Option<HunkRange> {
+    let hunks = self.selected_diff_hunks.as_ref()?;
+    if let Some(base) = hunk.base.as_ref() {
+      if let Some(found) = find_hunk_by_old_range(&hunks.head_to_index, base) {
+        return Some(hunk_header_range(found));
+      }
+    }
+    if let Some(current) = hunk.current.as_ref() {
+      let inverted = invert_hunks(&hunks.index_to_workdir);
+      let mapped = map_line_range(current, &inverted);
+      if let Some(found) = find_hunk_by_new_range(&hunks.head_to_index, &mapped) {
+        return Some(hunk_header_range(found));
+      }
+    }
+    None
+  }
+
+  fn stage_state_for_range(&self, range: &Range<usize>, cx: &App) -> Option<StageState> {
+    if self.selected_diff_hunks.is_none() {
+      return None;
+    }
+    let editor = self.editor.as_ref()?;
+    let editor_state = editor.read(cx);
+    let mut has_staged = false;
+    let mut has_unstaged = false;
+
+    for line_idx in range.clone() {
+      if editor_state.diff_line_is_staged(line_idx, cx) {
+        has_staged = true;
+      } else {
+        has_unstaged = true;
+      }
+      if has_staged && has_unstaged {
+        break;
+      }
+    }
+
+    match (has_staged, has_unstaged) {
+      (true, true) => Some(StageState::PartiallyStaged),
+      (true, false) => Some(StageState::Staged),
+      (false, true) => Some(StageState::Unstaged),
+      (false, false) => None,
+    }
+  }
+
+  fn rebuild_editor_for_selected(&mut self, cx: &mut Context<Self>) {
+    let Some(selected) = self.selected_file else {
+      return;
+    };
+
+    let (content, base_content, file_path) = match selected {
+      SelectedFile::Tracked(index) => self
+        .tracked
+        .get(index)
+        .map(|entry| {
+          (
+            entry.current_content.clone(),
+            entry.base_content.clone(),
+            entry.path.clone(),
+          )
+        })
+        .unwrap_or((None, None, PathBuf::new())),
+      SelectedFile::Untracked(index) => self
+        .untracked
+        .get(index)
+        .map(|entry| {
+          (
+            entry.current_content.clone(),
+            entry.base_content.clone(),
+            entry.path.clone(),
+          )
+        })
+        .unwrap_or((None, None, PathBuf::new())),
+    };
+
+    let Some(content) = content else {
+      return;
+    };
+
+    let file_ext = file_path.extension().and_then(|ext| ext.to_str());
+    let theme = self.theme.clone();
+    let editor = cx.new(|cx| Editor::new(&content, base_content.as_deref(), file_ext, theme, cx));
+    let mode = self.diff_view_mode;
+    editor.update(cx, |editor, cx| {
+      editor.set_diff_view_mode(mode, cx);
+      editor.set_staged_ranges(Vec::new(), Vec::new(), cx);
+    });
+    self.editor = Some(editor);
+    self.update_selected_diff_hunks(cx);
+    self.current_dirty = false;
+    cx.notify();
+  }
+
+  fn diff_hunks_for_path(&self, path: &Path) -> Option<FileDiffHunks> {
+    let root_path = self.root_path.as_ref()?;
+    let mut head_to_index = diff_head_to_index_hunks(root_path, path).ok()?;
+    let mut index_to_workdir = diff_index_to_workdir_hunks(root_path, path).ok()?;
+    head_to_index.sort_by_key(|hunk| hunk.old_start);
+    index_to_workdir.sort_by_key(|hunk| hunk.old_start);
+    Some(FileDiffHunks {
+      head_to_index,
+      index_to_workdir,
+    })
+  }
+
+  fn update_selected_diff_hunks(&mut self, cx: &mut Context<Self>) {
+    let Some(selected) = self.selected_file else {
+      self.selected_diff_hunks = None;
+      return;
+    };
+
+    let (path, tracked) = match selected {
+      SelectedFile::Tracked(index) => (
+        self.tracked.get(index).map(|entry| entry.path.clone()),
+        true,
+      ),
+      SelectedFile::Untracked(index) => (
+        self.untracked.get(index).map(|entry| entry.path.clone()),
+        false,
+      ),
+    };
+
+    let Some(path) = path else {
+      self.selected_diff_hunks = None;
+      return;
+    };
+
+    if !tracked {
+      self.selected_diff_hunks = None;
+      if let Some(editor) = self.editor.as_ref() {
+        editor.update(cx, |editor, cx| {
+          editor.set_staged_ranges(Vec::new(), Vec::new(), cx);
+        });
+      }
+      return;
+    }
+
+    let Some(hunks) = self.diff_hunks_for_path(&path) else {
+      self.selected_diff_hunks = None;
+      if let Some(editor) = self.editor.as_ref() {
+        editor.update(cx, |editor, cx| {
+          editor.set_staged_ranges(Vec::new(), Vec::new(), cx);
+        });
+      }
+      return;
+    };
+    let (staged_base, staged_current) = staged_ranges_from_hunks(&hunks);
+    self.selected_diff_hunks = Some(hunks);
+    if let Some(editor) = self.editor.as_ref() {
+      editor.update(cx, |editor, cx| {
+        editor.set_staged_ranges(staged_base, staged_current, cx);
+      });
+    }
+  }
+
+  fn sync_editor_diff_base(&mut self, previous_base: Option<&str>, cx: &mut Context<Self>) {
+    let Some(editor) = self.editor.as_ref() else {
+      return;
+    };
+    let Some(selected) = self.selected_file else {
+      return;
+    };
+    let new_base = match selected {
+      SelectedFile::Tracked(index) => self
+        .tracked
+        .get(index)
+        .and_then(|entry| entry.base_content.as_deref()),
+      SelectedFile::Untracked(index) => self
+        .untracked
+        .get(index)
+        .and_then(|entry| entry.base_content.as_deref()),
+    };
+
+    if previous_base == new_base {
+      return;
+    }
+
+    editor.update(cx, |editor, cx| {
+      editor.set_diff_base_text(new_base, cx);
+    });
   }
 
   fn jump_to_next_change(&mut self, _: &ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -560,14 +911,11 @@ impl GitPage {
       }
       return;
     };
-    let SelectedFile::Changes(selected_index) = selected_file else {
-      if self.current_dirty {
-        self.current_dirty = false;
-        cx.notify();
-      }
-      return;
+    let entry = match selected_file {
+      SelectedFile::Tracked(selected_index) => self.tracked.get_mut(selected_index),
+      SelectedFile::Untracked(selected_index) => self.untracked.get_mut(selected_index),
     };
-    let Some(entry) = self.changes.get_mut(selected_index) else {
+    let Some(entry) = entry else {
       return;
     };
 
@@ -625,17 +973,15 @@ impl GitPage {
     };
 
     let selected_entry = match self.selected_file {
-      Some(SelectedFile::Changes(idx)) => self.changes.get(idx).cloned(),
-      Some(SelectedFile::Staged(idx)) => self.staged.get(idx).cloned(),
+      Some(SelectedFile::Tracked(idx)) => self.tracked.get(idx).cloned(),
+      Some(SelectedFile::Untracked(idx)) => self.untracked.get(idx).cloned(),
       None => None,
     };
     let selected_path = selected_entry.as_ref().map(|entry| entry.path.clone());
-    let selected_list = match self.selected_file {
-      Some(SelectedFile::Changes(_)) => Some(FileListKind::Changes),
-      Some(SelectedFile::Staged(_)) => Some(FileListKind::Staged),
-      None => None,
-    };
     let selected_dirty = self.current_dirty;
+    let previous_base = selected_entry
+      .as_ref()
+      .and_then(|entry| entry.base_content.clone());
 
     let repository = match open_repository(&root_path) {
       Ok(repository) => repository,
@@ -661,66 +1007,60 @@ impl GitPage {
         self.branch_status = None;
       }
     }
-    let mut changes = repository_entries_to_files(&repo_root, repository.changes);
-    let mut staged = repository_entries_to_files(&repo_root, repository.staged);
+    let (mut tracked, mut untracked, has_staged_changes) =
+      repository_entries_to_lists(&repo_root, repository.changes, repository.staged);
+    self.has_staged_changes = has_staged_changes;
 
     if let Some(path) = selected_path.as_ref() {
-      match selected_list {
-        Some(FileListKind::Changes) => {
-          if let Some(index) = changes.iter().position(|entry| entry.path == *path) {
-            if let Some(existing) = selected_entry.as_ref() {
-              let entry = &mut changes[index];
-              entry.current_content = existing.current_content.clone();
-              entry.saved_content = existing.saved_content.clone();
-              entry.last_modified = existing.last_modified;
-            }
-          } else if selected_dirty {
-            if let Some(mut entry) = selected_entry {
-              entry.status = FileStatusKind::Modified;
-              changes.push(entry);
-            }
-          } else {
-            self.selected_file = None;
-            self.editor = None;
-            self.current_dirty = false;
-          }
+      if let Some(index) = tracked.iter().position(|entry| entry.path == *path) {
+        if let Some(existing) = selected_entry.as_ref() {
+          let entry = &mut tracked[index];
+          entry.current_content = existing.current_content.clone();
+          entry.saved_content = existing.saved_content.clone();
+          entry.last_modified = existing.last_modified;
         }
-        Some(FileListKind::Staged) => {
-          if let Some(index) = staged.iter().position(|entry| entry.path == *path) {
-            if let Some(existing) = selected_entry.as_ref() {
-              let entry = &mut staged[index];
-              entry.current_content = existing.current_content.clone();
-              entry.saved_content = existing.saved_content.clone();
-              entry.last_modified = existing.last_modified;
-            }
-          } else {
-            self.selected_file = None;
-            self.editor = None;
-            self.current_dirty = false;
-          }
+      } else if let Some(index) = untracked.iter().position(|entry| entry.path == *path) {
+        if let Some(existing) = selected_entry.as_ref() {
+          let entry = &mut untracked[index];
+          entry.current_content = existing.current_content.clone();
+          entry.saved_content = existing.saved_content.clone();
+          entry.last_modified = existing.last_modified;
         }
-        None => {}
+      } else if selected_dirty {
+        if let Some(mut entry) = selected_entry {
+          entry.status = FileStatusKind::Modified;
+          entry.stage_state = Some(StageState::Unstaged);
+          tracked.push(entry);
+        }
+      } else {
+        self.selected_file = None;
+        self.editor = None;
+        self.selected_diff_hunks = None;
+        self.current_dirty = false;
       }
     }
 
-    changes.sort_by(|a, b| a.path.cmp(&b.path));
-    staged.sort_by(|a, b| a.path.cmp(&b.path));
-    let next_selected = match selected_list {
-      Some(FileListKind::Changes) => selected_path
-        .as_ref()
-        .and_then(|path| changes.iter().position(|entry| entry.path == *path))
-        .map(SelectedFile::Changes),
-      Some(FileListKind::Staged) => selected_path
-        .as_ref()
-        .and_then(|path| staged.iter().position(|entry| entry.path == *path))
-        .map(SelectedFile::Staged),
-      None => None,
-    };
+    tracked.sort_by(|a, b| a.path.cmp(&b.path));
+    untracked.sort_by(|a, b| a.path.cmp(&b.path));
+    let next_selected = selected_path.as_ref().and_then(|path| {
+      tracked
+        .iter()
+        .position(|entry| entry.path == *path)
+        .map(SelectedFile::Tracked)
+        .or_else(|| {
+          untracked
+            .iter()
+            .position(|entry| entry.path == *path)
+            .map(SelectedFile::Untracked)
+        })
+    });
 
-    self.changes = changes;
-    self.staged = staged;
+    self.tracked = tracked;
+    self.untracked = untracked;
     self.selected_file = next_selected;
     self.error = None;
+    self.update_selected_diff_hunks(cx);
+    self.sync_editor_diff_base(previous_base.as_deref(), cx);
     cx.notify();
   }
 
@@ -752,10 +1092,11 @@ impl GitPage {
     let Some(editor) = self.editor.as_ref() else {
       return;
     };
-    let SelectedFile::Changes(selected_index) = selected_file else {
-      return;
+    let entry = match selected_file {
+      SelectedFile::Tracked(selected_index) => self.tracked.get_mut(selected_index),
+      SelectedFile::Untracked(selected_index) => self.untracked.get_mut(selected_index),
     };
-    let Some(entry) = self.changes.get_mut(selected_index) else {
+    let Some(entry) = entry else {
       return;
     };
 
@@ -788,10 +1129,14 @@ impl GitPage {
         self.root_path = Some(repo_root.clone());
         ConfigStore::persist_recent_repository(&repo_root);
         bump_recent_repository(&mut self.recent_repositories, repo_root.clone());
-        self.changes = repository_entries_to_files(&repo_root, repository.changes);
-        self.staged = repository_entries_to_files(&repo_root, repository.staged);
+        let (tracked, untracked, has_staged_changes) =
+          repository_entries_to_lists(&repo_root, repository.changes, repository.staged);
+        self.tracked = tracked;
+        self.untracked = untracked;
+        self.has_staged_changes = has_staged_changes;
         self.selected_file = None;
         self.editor = None;
+        self.selected_diff_hunks = None;
         self.error = None;
         self.current_dirty = false;
         self.last_repo_poll = Some(Instant::now());
@@ -810,13 +1155,15 @@ impl GitPage {
       }
       Err(err) => {
         self.root_path = Some(path);
-        self.changes = Vec::new();
-        self.staged = Vec::new();
+        self.tracked = Vec::new();
+        self.untracked = Vec::new();
         self.selected_file = None;
         self.editor = None;
+        self.selected_diff_hunks = None;
         self.error = Some(format!("Not a git repository: {err}"));
         self.current_dirty = false;
         self.last_repo_poll = Some(Instant::now());
+        self.has_staged_changes = false;
         self.can_push = false;
         self.can_force_push = false;
         self.branch_status = None;
@@ -833,7 +1180,7 @@ impl GitPage {
     cx: &mut Context<Self>,
   ) {
     let (content, base_content, file_path, display_name) = match list {
-      FileListKind::Changes => match self.changes.get_mut(index) {
+      FileListKind::Tracked => match self.tracked.get_mut(index) {
         Some(entry) => {
           refresh_entry_from_disk(entry);
           (
@@ -845,13 +1192,16 @@ impl GitPage {
         }
         None => return,
       },
-      FileListKind::Staged => match self.staged.get_mut(index) {
-        Some(entry) => (
-          entry.current_content.clone(),
-          entry.base_content.clone(),
-          entry.path.clone(),
-          entry.display_name.clone(),
-        ),
+      FileListKind::Untracked => match self.untracked.get_mut(index) {
+        Some(entry) => {
+          refresh_entry_from_disk(entry);
+          (
+            entry.current_content.clone(),
+            entry.base_content.clone(),
+            entry.path.clone(),
+            entry.display_name.clone(),
+          )
+        }
         None => return,
       },
     };
@@ -859,8 +1209,8 @@ impl GitPage {
     let Some(content) = content else {
       self.editor = None;
       self.selected_file = Some(match list {
-        FileListKind::Changes => SelectedFile::Changes(index),
-        FileListKind::Staged => SelectedFile::Staged(index),
+        FileListKind::Tracked => SelectedFile::Tracked(index),
+        FileListKind::Untracked => SelectedFile::Untracked(index),
       });
       self.error = Some(format!("File content unavailable: {display_name}"));
       cx.notify();
@@ -873,32 +1223,35 @@ impl GitPage {
     let mode = self.diff_view_mode;
     editor.update(cx, |editor, cx| {
       editor.set_diff_view_mode(mode, cx);
+      editor.set_staged_ranges(Vec::new(), Vec::new(), cx);
     });
     let focus_handle = editor.read(cx).focus_handle(cx);
 
     match list {
-      FileListKind::Changes => {
-        if let Some(entry) = self.changes.get_mut(index) {
+      FileListKind::Tracked => {
+        if let Some(entry) = self.tracked.get_mut(index) {
           if entry.saved_content.is_none() {
             entry.saved_content = Some(content.clone());
           }
           entry.last_modified = read_modified_time(&entry.path);
         }
       }
-      FileListKind::Staged => {
-        if let Some(entry) = self.staged.get_mut(index) {
+      FileListKind::Untracked => {
+        if let Some(entry) = self.untracked.get_mut(index) {
           if entry.saved_content.is_none() {
             entry.saved_content = Some(content.clone());
           }
+          entry.last_modified = read_modified_time(&entry.path);
         }
       }
     }
 
     self.editor = Some(editor);
     self.selected_file = Some(match list {
-      FileListKind::Changes => SelectedFile::Changes(index),
-      FileListKind::Staged => SelectedFile::Staged(index),
+      FileListKind::Tracked => SelectedFile::Tracked(index),
+      FileListKind::Untracked => SelectedFile::Untracked(index),
     });
+    self.update_selected_diff_hunks(cx);
     self.error = None;
     self.current_dirty = false;
 
@@ -1041,38 +1394,38 @@ impl GitPage {
   fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let view = cx.entity();
-    let staged_entries = self
-      .staged
-      .iter()
-      .map(SidebarFileEntry::from)
-      .collect::<Vec<_>>();
-    let changes_entries = self
-      .changes
-      .iter()
-      .map(SidebarFileEntry::from)
-      .collect::<Vec<_>>();
-    let selected_staged = match self.selected_file {
-      Some(SelectedFile::Staged(idx)) => Some(idx),
-      _ => None,
-    };
-    let selected_changes = match self.selected_file {
-      Some(SelectedFile::Changes(idx)) => Some(idx),
-      _ => None,
-    };
-    let staged_section: WorkspaceSidebarSection = WorkspaceSidebarSection::new(
-      view.clone(),
-      FileListKind::Staged,
-      staged_entries,
-      selected_staged,
-      self.root_path.is_some(),
+    let dirty_path = self.selected_dirty_path();
+    let mut entries = Vec::with_capacity(self.tracked.len() + self.untracked.len());
+    entries.extend(
+      self
+        .tracked
+        .iter()
+        .enumerate()
+        .map(|(idx, entry)| SidebarFileEntry::new(FileListKind::Tracked, idx, entry)),
     );
-    let changes_section = WorkspaceSidebarSection::new(
+    entries.extend(
+      self
+        .untracked
+        .iter()
+        .enumerate()
+        .map(|(idx, entry)| SidebarFileEntry::new(FileListKind::Untracked, idx, entry)),
+    );
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let selected_path = match self.selected_file {
+      Some(SelectedFile::Tracked(idx)) => self.tracked.get(idx).map(|entry| entry.path.clone()),
+      Some(SelectedFile::Untracked(idx)) => self.untracked.get(idx).map(|entry| entry.path.clone()),
+      None => None,
+    };
+
+    let list_section: WorkspaceSidebarSection = WorkspaceSidebarSection::new(
       view,
-      FileListKind::Changes,
-      changes_entries,
-      selected_changes,
+      entries,
+      selected_path,
       self.root_path.is_some(),
+      dirty_path,
     );
+    let header = render_sidebar_header(self.root_path.is_none(), &theme, cx);
     let commit_bar = self.render_commit_bar(cx);
 
     let sidebar = Sidebar::new("workspace-sidebar")
@@ -1081,16 +1434,29 @@ impl GitPage {
       .bg(theme.sidebar)
       .border_0()
       .text_color(theme.sidebar_foreground)
-      .child(staged_section)
-      .child(changes_section);
+      .child(list_section);
 
     div()
       .w_full()
       .flex()
       .flex_col()
       .bg(theme.sidebar)
+      .child(header)
       .child(sidebar)
       .child(commit_bar)
+  }
+
+  fn selected_dirty_path(&self) -> Option<PathBuf> {
+    if !self.current_dirty {
+      return None;
+    }
+    match self.selected_file {
+      Some(SelectedFile::Tracked(index)) => self.tracked.get(index).map(|entry| entry.path.clone()),
+      Some(SelectedFile::Untracked(index)) => {
+        self.untracked.get(index).map(|entry| entry.path.clone())
+      }
+      None => None,
+    }
   }
 
   fn render_commit_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1117,7 +1483,7 @@ impl GitPage {
   }
 
   fn render_commit_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let commit_enabled = self.root_path.is_some() && !self.staged.is_empty();
+    let commit_enabled = self.root_path.is_some() && self.has_staged_changes;
     let amend_enabled = self.root_path.is_some() && self.has_head_commit;
     let undo_enabled = self.root_path.is_some() && self.can_undo_last_commit;
     let push_enabled = self.root_path.is_some() && self.can_push;
@@ -1141,6 +1507,7 @@ impl GitPage {
     let menu_button = Button::new("commit-button-menu")
       .icon(IconName::ChevronDown)
       .primary()
+      .outline()
       .rounded_l_none()
       .border_l_0()
       .disabled(!menu_enabled)
@@ -1209,8 +1576,8 @@ impl GitPage {
     let title = self
       .selected_file
       .and_then(|selected| match selected {
-        SelectedFile::Changes(idx) => self.changes.get(idx),
-        SelectedFile::Staged(idx) => self.staged.get(idx),
+        SelectedFile::Tracked(idx) => self.tracked.get(idx),
+        SelectedFile::Untracked(idx) => self.untracked.get(idx),
       })
       .map(|entry| entry.display_name.clone())
       .unwrap_or_else(|| "File".to_string());
@@ -1285,6 +1652,147 @@ impl GitPage {
       .bg(theme.tab_bar)
       .child(title_row)
       .child(actions)
+  }
+
+  fn render_editor_with_overlay(
+    &mut self,
+    editor: Entity<Editor>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Div {
+    let overlay = self.render_change_block_actions(&editor, window, cx);
+    div()
+      .flex_1()
+      .min_w(px(0.0))
+      .min_h(px(0.0))
+      .relative()
+      .child(editor)
+      .when_some(overlay, |this, overlay| this.child(overlay))
+  }
+
+  fn render_change_block_actions(
+    &mut self,
+    editor: &Entity<Editor>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Option<Div> {
+    let selected = self.selected_file?;
+    if matches!(selected, SelectedFile::Untracked(_)) {
+      return None;
+    }
+    let editor_state = editor.read(cx);
+    let hovered_range = editor_state.hovered_change_range()?;
+    let stage_state = self.stage_state_for_range(&hovered_range, cx)?;
+    let line_idx = hovered_range.start;
+    let row_idx = editor_state.row_for_line(line_idx, cx)?;
+    let viewport_start = editor_state.scroll_offset_y.floor() as usize;
+    if row_idx < viewport_start {
+      return None;
+    }
+
+    let line_height = window.line_height();
+    let top = line_height * (row_idx - viewport_start) as f32 + px(3.0);
+    let file_dirty = self.current_dirty;
+    let stage_tooltip = if file_dirty {
+      "File not saved"
+    } else {
+      "Stage hunk"
+    };
+    let unstage_tooltip = if file_dirty {
+      "File not saved"
+    } else {
+      "Unstage hunk"
+    };
+    let restore_tooltip = if file_dirty {
+      "File not saved"
+    } else {
+      "Restore hunk"
+    };
+
+    let view = cx.entity();
+    let stage_range = hovered_range.clone();
+    let restore_range = hovered_range.clone();
+    let unstage_range = hovered_range.clone();
+
+    let actions = ButtonGroup::new("change-block-actions")
+      .primary()
+      .xsmall()
+      .rounded_md()
+      .disabled(file_dirty)
+      .when(
+        matches!(
+          stage_state,
+          StageState::Unstaged | StageState::PartiallyStaged
+        ),
+        |this| {
+          this.child(
+            Button::new("stage-hunk")
+              .icon(IconName::Plus)
+              .label("Stage")
+              .tooltip(stage_tooltip)
+              .disabled(file_dirty)
+              .on_click(window.listener_for(
+                &view,
+                move |this: &mut GitPage, _: &ClickEvent, _window, cx| {
+                  if file_dirty {
+                    return;
+                  }
+                  this.stage_change_block(stage_range.clone(), cx);
+                },
+              )),
+          )
+        },
+      )
+      .when(
+        matches!(
+          stage_state,
+          StageState::Staged | StageState::PartiallyStaged
+        ),
+        |this| {
+          this.child(
+            Button::new("unstage-hunk")
+              .icon(IconName::Minus)
+              .label("Unstage")
+              .tooltip(unstage_tooltip)
+              .disabled(file_dirty)
+              .on_click(window.listener_for(
+                &view,
+                move |this: &mut GitPage, _: &ClickEvent, _window, cx| {
+                  if file_dirty {
+                    return;
+                  }
+                  this.unstage_change_block(unstage_range.clone(), cx);
+                },
+              )),
+          )
+        },
+      )
+      .when(
+        matches!(
+          stage_state,
+          StageState::Unstaged | StageState::PartiallyStaged
+        ),
+        |this| {
+          this.child(
+            Button::new("restore-hunk")
+              .icon(IconName::Undo)
+              .label("Restore")
+              .tooltip(restore_tooltip)
+              .disabled(file_dirty)
+              .on_click(window.listener_for(
+                &view,
+                move |this: &mut GitPage, _: &ClickEvent, _window, cx| {
+                  if file_dirty {
+                    return;
+                  }
+                  this.restore_change_block(restore_range.clone(), cx);
+                },
+              )),
+          )
+        },
+      );
+
+    Some(div().absolute().top(top).right(px(30.0)).child(actions))
   }
 
   fn render_footer(&self, cx: &mut Context<Self>) -> Div {
@@ -1369,13 +1877,12 @@ impl Render for GitPage {
 
         if let Some(editor) = self.editor.clone() {
           let header = self.render_editor_header(cx);
-          main = main
-            .child(header)
-            .child(div().flex_1().min_w(px(0.0)).child(editor));
+          let editor_with_overlay = self.render_editor_with_overlay(editor, window, cx);
+          main = main.child(header).child(editor_with_overlay);
         } else {
           let (message, color) = if let Some(error) = &self.error {
             (error.clone(), theme.red)
-          } else if self.changes.is_empty() && self.staged.is_empty() {
+          } else if self.tracked.is_empty() && self.untracked.is_empty() {
             (
               "No changes found in this repository.".to_string(),
               theme.muted_foreground,
@@ -1437,74 +1944,34 @@ impl Focusable for GitPage {
   }
 }
 
-fn render_sidebar_section(
+fn render_sidebar_list(
   view: &Entity<GitPage>,
-  list: FileListKind,
   entries: &[SidebarFileEntry],
-  selected_index: Option<usize>,
+  selected_path: Option<&Path>,
   has_root: bool,
+  dirty_path: Option<&Path>,
   theme: &ComponentTheme,
   window: &mut Window,
 ) -> Div {
-  let (title, entries_len, staged) = match list {
-    FileListKind::Changes => ("Changes", entries.len(), false),
-    FileListKind::Staged => ("Staged", entries.len(), true),
-  };
-  let header = div()
-    .px_2()
-    .h_8()
-    .flex()
-    .items_center()
-    .justify_between()
-    .when_else(staged, |this| this.mb_2(), |this| this.my_2())
-    .bg(theme.sidebar_border)
-    .rounded_md()
-    .child(
-      div()
-        .text_sm()
-        .text_color(theme.sidebar_foreground)
-        .child(format!("{title} ({entries_len})")),
-    )
-    .when(entries_len > 0, |this| match list {
-      FileListKind::Changes => this.child(
-        Button::new("stage-all")
-          .label("Stage All")
-          .small()
-          .compact()
-          .on_click(window.listener_for(view, GitPage::stage_all_files)),
-      ),
-      FileListKind::Staged => this.child(
-        Button::new("unstage-all")
-          .label("Unstage All")
-          .small()
-          .compact()
-          .on_click(window.listener_for(view, GitPage::unstage_all_files)),
-      ),
-    });
-
+  let entries_len = entries.len();
   let mut items = div().flex().flex_col();
   for (idx, entry) in entries.iter().enumerate() {
-    let is_selected = selected_index == Some(idx);
+    let is_selected = selected_path.map_or(false, |path| path == entry.path);
     items = items.child(render_sidebar_row(
       view,
-      list,
       idx,
       entry,
       is_selected,
+      dirty_path,
       theme,
       window,
     ));
   }
 
-  let empty_message = match list {
-    FileListKind::Changes => {
-      if has_root {
-        "No changes."
-      } else {
-        "No repository selected."
-      }
-    }
-    FileListKind::Staged => "No staged changes.",
+  let empty_message = if has_root {
+    "No changes."
+  } else {
+    "No repository selected."
   };
 
   let body = if entries_len == 0 {
@@ -1521,32 +1988,80 @@ fn render_sidebar_section(
     div().flex().flex_col().child(items)
   };
 
+  div().flex().flex_col().min_h(px(0.0)).child(body)
+}
+
+fn render_sidebar_header(disabled: bool, theme: &ComponentTheme, cx: &mut Context<GitPage>) -> Div {
   div()
+    .h_10()
+    .px_3()
     .flex()
-    .flex_col()
-    .min_h(px(0.0))
-    .child(header)
-    .child(body)
+    .items_center()
+    .justify_between()
+    .border_b_1()
+    .border_color(theme.border)
+    .bg(theme.tab_bar)
+    .child(div())
+    .child(
+      div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(
+          Button::new("stage-all")
+            .label("Stage All")
+            .small()
+            .compact()
+            .disabled(disabled)
+            .on_click(cx.listener(GitPage::stage_all_files)),
+        )
+        .child(
+          Button::new("unstage-all")
+            .label("Unstage All")
+            .small()
+            .compact()
+            .disabled(disabled)
+            .on_click(cx.listener(GitPage::unstage_all_files)),
+        ),
+    )
 }
 
 fn render_sidebar_row(
   view: &Entity<GitPage>,
-  list: FileListKind,
   idx: usize,
   entry: &SidebarFileEntry,
   is_selected: bool,
+  dirty_path: Option<&Path>,
   theme: &ComponentTheme,
   window: &mut Window,
 ) -> Stateful<Div> {
   let (tag, tag_color) = status_tag(entry.status, theme);
+  let status_tooltip = status_tooltip(entry.status);
   let row_group = format!(
     "file-row-{}-{}",
-    match list {
-      FileListKind::Changes => "changes",
-      FileListKind::Staged => "staged",
+    match entry.list {
+      FileListKind::Tracked => "tracked",
+      FileListKind::Untracked => "untracked",
     },
-    idx
+    entry.list_index
   );
+  let list = entry.list;
+  let list_index = entry.list_index;
+  let status_id = format!("file-status-{}", row_group);
+  let stage_id = format!("file-stage-{}", row_group);
+  let is_dirty = dirty_path.map_or(false, |path| path == entry.path);
+  let stage_state_display = match (entry.stage_state, entry.status) {
+    (Some(stage_state), _) => Some(stage_state),
+    (None, FileStatusKind::Untracked) => Some(StageState::Unstaged),
+    (None, _) => None,
+  };
+  let (stage_icon, stage_color) = match stage_state_display {
+    Some(StageState::Staged) => (Some(IconName::CircleCheck), theme.green),
+    Some(StageState::PartiallyStaged) => (Some(IconName::CircleCheck), theme.yellow),
+    Some(StageState::Unstaged) => (Some(IconName::Dash), theme.muted_foreground),
+    None => (None, theme.muted_foreground),
+  };
+  let stage_tooltip = stage_state_display.map(stage_state_tooltip);
 
   let actions_bg = theme.sidebar_accent;
 
@@ -1555,6 +2070,7 @@ fn render_sidebar_row(
     .compact()
     .xsmall()
     .bg(actions_bg)
+    .disabled(is_dirty)
     .rounded_md();
 
   let mut actions = div()
@@ -1567,48 +2083,122 @@ fn render_sidebar_row(
     .opacity(0.0)
     .group_hover(row_group.clone(), |style| style.opacity(1.0));
 
-  match list {
-    FileListKind::Changes => {
+  match entry.list {
+    FileListKind::Tracked => {
       let path = entry.path.clone();
-      let discard_path = entry.path.clone();
+      let restore_path = entry.path.clone();
       let status = entry.status;
+      let has_staged = matches!(
+        entry.stage_state,
+        Some(StageState::Staged | StageState::PartiallyStaged)
+      );
+      let has_unstaged = matches!(
+        entry.stage_state,
+        Some(StageState::Unstaged | StageState::PartiallyStaged)
+      );
+      let can_restore = matches!(entry.stage_state, Some(StageState::Unstaged));
+      let stage_tooltip = if is_dirty {
+        "File not saved"
+      } else {
+        "Stage file"
+      };
+      let unstage_tooltip = "Unstage file";
+      let restore_tooltip = if is_dirty {
+        "File not saved"
+      } else {
+        "Restore file"
+      };
+      if has_unstaged {
+        actions_wrap = actions_wrap.child(
+          Button::new(format!("stage-file-{}", &row_group))
+            .icon(IconName::Plus)
+            .tooltip(stage_tooltip)
+            .disabled(is_dirty)
+            .on_click(
+              window.listener_for(view, move |this, _: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+                if is_dirty {
+                  return;
+                }
+                this.stage_file(path.clone(), cx);
+              }),
+            ),
+        );
+      }
+      if has_staged {
+        let path = entry.path.clone();
+        actions_wrap = actions_wrap.child(
+          Button::new(format!("unstage-file-{}", &row_group))
+            .icon(IconName::Minus)
+            .tooltip(unstage_tooltip)
+            .disabled(is_dirty)
+            .on_click(
+              window.listener_for(view, move |this, _: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+                if is_dirty {
+                  return;
+                }
+                this.unstage_file(path.clone(), cx);
+              }),
+            ),
+        );
+      }
+      if can_restore {
+        actions_wrap = actions_wrap.child(
+          Button::new(format!("restore-file-{}", &row_group))
+            .icon(IconName::Undo)
+            .tooltip(restore_tooltip)
+            .disabled(is_dirty)
+            .on_click(
+              window.listener_for(view, move |this, _: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+                this.restore_file_change(restore_path.clone(), status, cx);
+              }),
+            ),
+        );
+      }
+    }
+    FileListKind::Untracked => {
+      let path = entry.path.clone();
+      let restore_path = entry.path.clone();
+      let stage_tooltip = if is_dirty {
+        "File not saved"
+      } else {
+        "Stage file"
+      };
+      let restore_tooltip = if is_dirty {
+        "File not saved"
+      } else {
+        "Delete file"
+      };
       actions_wrap = actions_wrap
         .child(
           Button::new(format!("stage-file-{}", &row_group))
             .icon(IconName::Plus)
-            .tooltip("Stage file")
+            .tooltip(stage_tooltip)
+            .disabled(is_dirty)
             .on_click(
               window.listener_for(view, move |this, _: &ClickEvent, _window, cx| {
                 cx.stop_propagation();
+                if is_dirty {
+                  return;
+                }
                 this.stage_file(path.clone(), cx);
               }),
             ),
         )
         .child(
-          Button::new(format!("discard-file-{}", &row_group))
-            .icon(IconName::Delete)
-            .tooltip("Discard change")
+          Button::new(format!("restore-file-{}", &row_group))
+            .icon(IconName::Undo)
+            .tooltip(restore_tooltip)
+            .disabled(is_dirty)
             .on_click(
               window.listener_for(view, move |this, _: &ClickEvent, _window, cx| {
                 cx.stop_propagation();
-                this.discard_file_change(discard_path.clone(), status, cx);
+                this.restore_file_change(restore_path.clone(), FileStatusKind::Untracked, cx);
               }),
             ),
         );
-    }
-    FileListKind::Staged => {
-      let path = entry.path.clone();
-      actions_wrap = actions_wrap.child(
-        Button::new(format!("unstage-file-{}", &row_group))
-          .icon(IconName::Minus)
-          .tooltip("Unstage file")
-          .on_click(
-            window.listener_for(view, move |this, _: &ClickEvent, _window, cx| {
-              cx.stop_propagation();
-              this.unstage_file(path.clone(), cx);
-            }),
-          ),
-      );
     }
   }
   actions = actions.child(actions_wrap);
@@ -1623,7 +2213,7 @@ fn render_sidebar_row(
     .cursor_pointer()
     .on_click(
       window.listener_for(view, move |this, _: &ClickEvent, window, cx| {
-        this.select_file(list, idx, window, cx);
+        this.select_file(list, list_index, window, cx);
       }),
     )
     .relative()
@@ -1641,7 +2231,29 @@ fn render_sidebar_row(
       },
       |this| this.hover(|style| style.bg(theme.list_hover)),
     )
-    .child(div().flex_none().text_sm().text_color(tag_color).child(tag))
+    .child(
+      div()
+        .id(status_id)
+        .flex_none()
+        .text_sm()
+        .w_3()
+        .text_color(tag_color)
+        .child(tag)
+        .tooltip(move |window, cx| Tooltip::new(status_tooltip).build(window, cx)),
+    )
+    .when_some(stage_icon, |this, icon| {
+      this.child(
+        div()
+          .id(stage_id)
+          .flex_none()
+          .text_sm()
+          .text_color(stage_color)
+          .child(icon)
+          .when_some(stage_tooltip, |this, tooltip| {
+            this.tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
+          }),
+      )
+    })
     .child(
       div()
         .flex_1()
@@ -1698,25 +2310,111 @@ fn root_label(path: &Path) -> String {
     .unwrap_or_else(|| path.display().to_string())
 }
 
-fn repository_entries_to_files(repo_root: &Path, entries: Vec<RepositoryFile>) -> Vec<FileEntry> {
-  entries
-    .into_iter()
-    .map(|entry| {
-      let path = repo_root.join(&entry.path);
-      let current_content = entry.current_content;
+fn repository_entries_to_lists(
+  repo_root: &Path,
+  changes: Vec<RepositoryFile>,
+  staged: Vec<RepositoryFile>,
+) -> (Vec<FileEntry>, Vec<FileEntry>, bool) {
+  let has_staged_changes = !staged.is_empty();
+  let mut changes_map = HashMap::new();
+  let mut staged_map = HashMap::new();
+
+  for entry in changes {
+    changes_map.insert(entry.path.clone(), entry);
+  }
+  for entry in staged {
+    staged_map.insert(entry.path.clone(), entry);
+  }
+
+  let mut paths: Vec<PathBuf> = changes_map
+    .keys()
+    .chain(staged_map.keys())
+    .cloned()
+    .collect();
+  paths.sort();
+  paths.dedup();
+
+  let mut tracked = Vec::new();
+  let mut untracked = Vec::new();
+
+  for path in paths {
+    let change = changes_map.remove(&path);
+    let staged_entry = staged_map.remove(&path);
+
+    let is_untracked_only = change
+      .as_ref()
+      .map(|entry| entry.status == FileStatusKind::Untracked)
+      .unwrap_or(false)
+      && staged_entry.is_none();
+
+    if is_untracked_only {
+      let change = change.expect("untracked entry should exist");
+      let abs_path = repo_root.join(&change.path);
+      let current_content = change.current_content;
       let saved_content = current_content.clone();
-      let last_modified = read_modified_time(&path);
-      FileEntry {
-        path,
-        display_name: entry.path.to_string_lossy().to_string(),
-        status: entry.status,
-        base_content: entry.base_content,
+      let last_modified = read_modified_time(&abs_path);
+      untracked.push(FileEntry {
+        path: abs_path,
+        display_name: change.path.to_string_lossy().to_string(),
+        status: change.status,
+        base_content: change.base_content,
         current_content,
         saved_content,
         last_modified,
-      }
-    })
-    .collect()
+        stage_state: None,
+      });
+      continue;
+    }
+
+    let has_staged = staged_entry.is_some();
+    let has_unstaged = change.is_some();
+    let stage_state = match (has_staged, has_unstaged) {
+      (true, true) => StageState::PartiallyStaged,
+      (true, false) => StageState::Staged,
+      (false, true) => StageState::Unstaged,
+      (false, false) => StageState::Unstaged,
+    };
+
+    let status = match (change.as_ref(), staged_entry.as_ref()) {
+      (Some(entry), _) if entry.status != FileStatusKind::Untracked => entry.status,
+      (_, Some(entry)) => entry.status,
+      (Some(entry), None) => entry.status,
+      (None, None) => FileStatusKind::Modified,
+    };
+
+    let base_content = staged_entry
+      .as_ref()
+      .and_then(|entry| entry.base_content.clone())
+      .or_else(|| change.as_ref().and_then(|entry| entry.base_content.clone()));
+    let current_content = change
+      .as_ref()
+      .and_then(|entry| entry.current_content.clone())
+      .or_else(|| {
+        staged_entry
+          .as_ref()
+          .and_then(|entry| entry.current_content.clone())
+      });
+
+    let display_name = path.to_string_lossy().to_string();
+    let abs_path = repo_root.join(&path);
+    let last_modified = read_modified_time(&abs_path);
+
+    tracked.push(FileEntry {
+      path: abs_path,
+      display_name,
+      status,
+      base_content,
+      current_content: current_content.clone(),
+      saved_content: current_content,
+      last_modified,
+      stage_state: Some(stage_state),
+    });
+  }
+
+  tracked.sort_by(|a, b| a.path.cmp(&b.path));
+  untracked.sort_by(|a, b| a.path.cmp(&b.path));
+
+  (tracked, untracked, has_staged_changes)
 }
 
 fn bump_recent_repository(repositories: &mut Vec<RecentRepository>, path: PathBuf) {
@@ -1738,4 +2436,143 @@ fn status_tag(status: FileStatusKind, theme: &ComponentTheme) -> (&'static str, 
     FileStatusKind::Typechange => ("T", theme.yellow),
     FileStatusKind::Conflicted => ("C", theme.red),
   }
+}
+
+fn status_tooltip(status: FileStatusKind) -> &'static str {
+  match status {
+    FileStatusKind::Added => "Added",
+    FileStatusKind::Untracked => "Untracked",
+    FileStatusKind::Modified => "Modified",
+    FileStatusKind::Deleted => "Deleted",
+    FileStatusKind::Renamed => "Renamed",
+    FileStatusKind::Typechange => "Type changed",
+    FileStatusKind::Conflicted => "Conflicted",
+  }
+}
+
+fn stage_state_tooltip(stage_state: StageState) -> &'static str {
+  match stage_state {
+    StageState::Staged => "Staged",
+    StageState::PartiallyStaged => "Partially staged",
+    StageState::Unstaged => "Unstaged",
+  }
+}
+
+fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
+  left.start < right.end && right.start < left.end
+}
+
+fn range_overlaps_any(range: &Range<usize>, ranges: &[Range<usize>]) -> bool {
+  ranges
+    .iter()
+    .any(|candidate| ranges_overlap(range, candidate))
+}
+
+fn find_hunk_by_old_range<'a>(
+  hunks: &'a [DiffHunkInfo],
+  range: &Range<usize>,
+) -> Option<&'a DiffHunkInfo> {
+  hunks
+    .iter()
+    .find(|hunk| range_overlaps_any(range, &hunk.old_changed))
+}
+
+fn find_hunk_by_new_range<'a>(
+  hunks: &'a [DiffHunkInfo],
+  range: &Range<usize>,
+) -> Option<&'a DiffHunkInfo> {
+  hunks
+    .iter()
+    .find(|hunk| range_overlaps_any(range, &hunk.new_changed))
+}
+
+fn hunk_header_range(hunk: &DiffHunkInfo) -> HunkRange {
+  let base = (hunk.old_lines > 0).then(|| hunk.old_start..(hunk.old_start + hunk.old_lines));
+  let current = (hunk.new_lines > 0).then(|| hunk.new_start..(hunk.new_start + hunk.new_lines));
+  HunkRange { base, current }
+}
+
+fn invert_hunks(hunks: &[DiffHunkInfo]) -> Vec<DiffHunkInfo> {
+  let mut inverted = hunks
+    .iter()
+    .map(|hunk| DiffHunkInfo {
+      old_start: hunk.new_start,
+      old_lines: hunk.new_lines,
+      new_start: hunk.old_start,
+      new_lines: hunk.old_lines,
+      old_changed: hunk.new_changed.clone(),
+      new_changed: hunk.old_changed.clone(),
+    })
+    .collect::<Vec<_>>();
+  inverted.sort_by_key(|hunk| hunk.old_start);
+  inverted
+}
+
+fn map_line_index(line: usize, hunks: &[DiffHunkInfo]) -> usize {
+  let mut delta: isize = 0;
+  for hunk in hunks {
+    let old_start = hunk.old_start;
+    let old_end = old_start + hunk.old_lines;
+    if line < old_start {
+      break;
+    }
+    if line < old_end {
+      if hunk.new_lines == 0 {
+        return hunk.new_start;
+      }
+      let offset = line - old_start;
+      let mapped = hunk.new_start + offset.min(hunk.new_lines.saturating_sub(1));
+      return mapped;
+    }
+    delta += hunk.new_lines as isize - hunk.old_lines as isize;
+  }
+  (line as isize + delta).max(0) as usize
+}
+
+fn map_line_range(range: &Range<usize>, hunks: &[DiffHunkInfo]) -> Range<usize> {
+  if range.is_empty() {
+    return range.clone();
+  }
+  let start = map_line_index(range.start, hunks);
+  let end = map_line_index(range.end, hunks);
+  if end < start {
+    start..start
+  } else {
+    start..end
+  }
+}
+
+fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+  if ranges.is_empty() {
+    return ranges;
+  }
+  ranges.sort_by_key(|range| range.start);
+  let mut merged = Vec::new();
+  let mut current = ranges.remove(0);
+  for range in ranges {
+    if range.start <= current.end {
+      current.end = current.end.max(range.end);
+    } else {
+      merged.push(current);
+      current = range;
+    }
+  }
+  merged.push(current);
+  merged
+}
+
+fn staged_ranges_from_hunks(hunks: &FileDiffHunks) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+  let mut staged_base = Vec::new();
+  let mut staged_current = Vec::new();
+
+  for hunk in &hunks.head_to_index {
+    for range in &hunk.old_changed {
+      staged_base.push(range.clone());
+    }
+    for range in &hunk.new_changed {
+      staged_current.push(map_line_range(range, &hunks.index_to_workdir));
+    }
+  }
+
+  (merge_ranges(staged_base), merge_ranges(staged_current))
 }

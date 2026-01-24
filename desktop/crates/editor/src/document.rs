@@ -215,6 +215,41 @@ impl Document {
     cx.notify();
   }
 
+  pub fn set_diff_base_text(&mut self, base_text: Option<&str>, cx: &mut Context<Self>) {
+    let (diff_base_lines, diff_base_hashes) = if let Some(text) = base_text {
+      let lines = split_lines_to_arcs(text);
+      let ends_with_newline = text.ends_with('\n');
+      let hashes = hash_lines(&lines, ends_with_newline);
+      (Some(Arc::new(lines)), Some(Arc::new(hashes)))
+    } else {
+      (None, None)
+    };
+
+    self.diff_base_lines = diff_base_lines;
+    self.diff_base_hashes = diff_base_hashes;
+
+    let mut base_highlights = self.base_highlights.write();
+    base_highlights.clear();
+    if let Some(lines) = self.diff_base_lines.as_ref() {
+      base_highlights.resize_with(lines.len(), || None);
+    }
+    drop(base_highlights);
+
+    *self.diff_state.write() = None;
+    self.dirty_diff_lines.write().clear();
+    *self.diff_epoch.write() += 1;
+    *self.diff_version.write() += 1;
+    self
+      .viewport_diff_generation
+      .fetch_add(1, Ordering::Relaxed);
+
+    if self.diff_base_lines.is_some() {
+      self.schedule_recompute_diff(cx);
+    }
+
+    cx.notify();
+  }
+
   pub fn chars(&self) -> Box<dyn Iterator<Item = char> + '_> {
     if self.diff_base_lines.is_none() {
       Box::new(self.buffer.chars())
@@ -585,6 +620,34 @@ impl Document {
       base_line: line.base_line,
       current_line: line.current_line,
     })
+  }
+
+  pub fn diff_change_range_at_line(&self, line_idx: usize) -> Option<Range<usize>> {
+    let diff_state = self.diff_state.read();
+    let state = diff_state.as_ref()?;
+    if line_idx >= state.lines.len() {
+      return None;
+    }
+
+    let is_changed = |line: &DiffLine| {
+      line.kind != DiffLineKind::Unchanged || line.gutter != DiffGutterKind::None
+    };
+
+    if !is_changed(&state.lines[line_idx]) {
+      return None;
+    }
+
+    let mut start = line_idx;
+    while start > 0 && is_changed(&state.lines[start - 1]) {
+      start -= 1;
+    }
+
+    let mut end = line_idx + 1;
+    while end < state.lines.len() && is_changed(&state.lines[end]) {
+      end += 1;
+    }
+
+    Some(start..end)
   }
 
   pub fn diff_word_ranges(&self, line_idx: usize) -> Option<Arc<[Range<usize>]>> {
@@ -1763,20 +1826,12 @@ fn hash_line_with_trailing_marker(text: &str, is_trailing_empty_line: bool) -> u
   }
 }
 
-fn hash_empty_line_context(prev: Option<u64>, next: Option<u64>) -> u64 {
-  let mut hasher = DefaultHasher::new();
-  0x6f6f_656d_7074_79u64.hash(&mut hasher);
-  prev.unwrap_or(0).hash(&mut hasher);
-  next.unwrap_or(0).hash(&mut hasher);
-  hasher.finish()
-}
-
 fn hash_lines(lines: &[Arc<str>], ends_with_newline: bool) -> Vec<u64> {
   if lines.is_empty() {
     return Vec::new();
   }
   let last_idx = lines.len().saturating_sub(1);
-  let mut hashes: Vec<u64> = lines
+  let hashes: Vec<u64> = lines
     .iter()
     .enumerate()
     .map(|(idx, line)| {
@@ -1784,33 +1839,6 @@ fn hash_lines(lines: &[Arc<str>], ends_with_newline: bool) -> Vec<u64> {
       hash_line_with_trailing_marker(line, is_trailing_empty_line)
     })
     .collect();
-
-  let mut prev_non_empty: Vec<Option<u64>> = vec![None; lines.len()];
-  let mut last_seen = None;
-  for (idx, line) in lines.iter().enumerate() {
-    if !line.is_empty() {
-      last_seen = Some(hashes[idx]);
-    }
-    prev_non_empty[idx] = last_seen;
-  }
-
-  let mut next_non_empty: Vec<Option<u64>> = vec![None; lines.len()];
-  let mut next_seen = None;
-  for idx in (0..lines.len()).rev() {
-    let line = &lines[idx];
-    if !line.is_empty() {
-      next_seen = Some(hashes[idx]);
-    }
-    next_non_empty[idx] = next_seen;
-  }
-
-  for (idx, line) in lines.iter().enumerate() {
-    let is_trailing_empty_line = ends_with_newline && idx == last_idx && line.is_empty();
-    if line.is_empty() && !is_trailing_empty_line {
-      hashes[idx] = hash_empty_line_context(prev_non_empty[idx], next_non_empty[idx]);
-    }
-  }
-
   hashes
 }
 
@@ -1819,7 +1847,7 @@ fn hash_string_lines(lines: &[String], ends_with_newline: bool) -> Vec<u64> {
     return Vec::new();
   }
   let last_idx = lines.len().saturating_sub(1);
-  let mut hashes: Vec<u64> = lines
+  let hashes: Vec<u64> = lines
     .iter()
     .enumerate()
     .map(|(idx, line)| {
@@ -1827,33 +1855,6 @@ fn hash_string_lines(lines: &[String], ends_with_newline: bool) -> Vec<u64> {
       hash_line_with_trailing_marker(line, is_trailing_empty_line)
     })
     .collect();
-
-  let mut prev_non_empty: Vec<Option<u64>> = vec![None; lines.len()];
-  let mut last_seen = None;
-  for (idx, line) in lines.iter().enumerate() {
-    if !line.is_empty() {
-      last_seen = Some(hashes[idx]);
-    }
-    prev_non_empty[idx] = last_seen;
-  }
-
-  let mut next_non_empty: Vec<Option<u64>> = vec![None; lines.len()];
-  let mut next_seen = None;
-  for idx in (0..lines.len()).rev() {
-    let line = &lines[idx];
-    if !line.is_empty() {
-      next_seen = Some(hashes[idx]);
-    }
-    next_non_empty[idx] = next_seen;
-  }
-
-  for (idx, line) in lines.iter().enumerate() {
-    let is_trailing_empty_line = ends_with_newline && idx == last_idx && line.is_empty();
-    if line.is_empty() && !is_trailing_empty_line {
-      hashes[idx] = hash_empty_line_context(prev_non_empty[idx], next_non_empty[idx]);
-    }
-  }
-
   hashes
 }
 
@@ -2912,6 +2913,34 @@ mod tests {
       .count();
 
     assert_eq!(added_count, 2);
+  }
+
+  #[gpui::test]
+  fn test_diff_unchanged_empty_line_when_context_changes(_cx: &mut TestAppContext) {
+    let base_text = "line1\n\nline2\n";
+    let current_text = "line1 updated\n\nline2\n";
+    let base_lines = split_lines_to_arcs(base_text);
+    let base_hashes = hash_lines(&base_lines, base_text.ends_with('\n'));
+    let current_lines: Vec<String> = split_lines_to_arcs(current_text)
+      .into_iter()
+      .map(|line| line.to_string())
+      .collect();
+    let current_hashes = hash_string_lines(&current_lines, current_text.ends_with('\n'));
+
+    let state = compute_diff_state(&base_lines, &base_hashes, current_lines, current_hashes);
+    let added_count = state
+      .lines
+      .iter()
+      .filter(|line| line.kind == DiffLineKind::Added)
+      .count();
+    let deleted_count = state
+      .lines
+      .iter()
+      .filter(|line| line.kind == DiffLineKind::Deleted)
+      .count();
+
+    assert_eq!(added_count, 1);
+    assert_eq!(deleted_count, 1);
   }
 
   #[gpui::test]
