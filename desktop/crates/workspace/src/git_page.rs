@@ -1484,7 +1484,7 @@ impl GitPage {
           .flex()
           .flex_col()
           .gap_2()
-          .child(Input::new(&input))
+          .child(div().w_full().child(Input::new(&input)))
           .child(self.render_commit_button(cx)),
       )
   }
@@ -1505,6 +1505,7 @@ impl GitPage {
     let main_button = Button::new("commit-button-main")
       .label("Commit")
       .primary()
+      .outline()
       .flex_1()
       .rounded_r_none()
       .child(Kbd::new(Keystroke::parse("cmd-enter").unwrap()).ml_1())
