@@ -1126,6 +1126,7 @@ impl GitPage {
     entry.saved_content = Some(text);
     entry.last_modified = read_modified_time(&entry.path);
     self.current_dirty = false;
+    self.refresh_repository_statuses(cx);
     cx.notify();
   }
 
@@ -2576,12 +2577,45 @@ fn staged_ranges_from_hunks(hunks: &FileDiffHunks) -> (Vec<Range<usize>>, Vec<Ra
   let mut staged_base = Vec::new();
   let mut staged_current = Vec::new();
 
-  for hunk in &hunks.head_to_index {
-    for range in &hunk.old_changed {
-      staged_base.push(range.clone());
+  let mut unstaged_index = Vec::new();
+  let mut unstaged_current = Vec::new();
+  for hunk in &hunks.index_to_workdir {
+    if hunk.old_lines > 0 {
+      unstaged_index.push(hunk.old_start..(hunk.old_start + hunk.old_lines));
     }
-    for range in &hunk.new_changed {
-      staged_current.push(map_line_range(range, &hunks.index_to_workdir));
+    if hunk.new_lines > 0 {
+      unstaged_current.push(hunk.new_start..(hunk.new_start + hunk.new_lines));
+    }
+  }
+  let unstaged_index = merge_ranges(unstaged_index);
+  let unstaged_current = merge_ranges(unstaged_current);
+
+  for hunk in &hunks.head_to_index {
+    let base_range =
+      (hunk.old_lines > 0).then(|| hunk.old_start..(hunk.old_start + hunk.old_lines));
+    let index_range =
+      (hunk.new_lines > 0).then(|| hunk.new_start..(hunk.new_start + hunk.new_lines));
+    let current_range =
+      index_range.as_ref().map(|range| map_line_range(range, &hunks.index_to_workdir));
+
+    let overlaps_index = index_range
+      .as_ref()
+      .map(|range| range_overlaps_any(range, &unstaged_index))
+      .unwrap_or(false);
+    let overlaps_current = current_range
+      .as_ref()
+      .map(|range| range_overlaps_any(range, &unstaged_current))
+      .unwrap_or(false);
+
+    if overlaps_index || overlaps_current {
+      continue;
+    }
+
+    if let Some(range) = base_range {
+      staged_base.push(range);
+    }
+    if let Some(range) = current_range {
+      staged_current.push(range);
     }
   }
 
