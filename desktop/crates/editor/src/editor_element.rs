@@ -490,9 +490,9 @@ impl Element for EditorElement {
     let mut removed_bg_staged = removed_bg;
     added_bg_staged.a = (added_bg_staged.a * STAGED_DIFF_OPACITY_MULTIPLIER).min(1.0);
     removed_bg_staged.a = (removed_bg_staged.a * STAGED_DIFF_OPACITY_MULTIPLIER).min(1.0);
-    let mut left_border_color = theme.diff_removed_background();
+    let mut left_border_color = theme.diff_removed_word_background();
     left_border_color.a = 1.0;
-    let mut right_border_color = theme.diff_added_background();
+    let mut right_border_color = theme.diff_added_word_background();
     right_border_color.a = 1.0;
     let top_border_color = left_border_color;
     let bottom_border_color = right_border_color;

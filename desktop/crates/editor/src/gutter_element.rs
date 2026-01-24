@@ -262,9 +262,9 @@ impl Element for GutterElement {
     let mut removed_bg_staged = removed_bg;
     added_bg_staged.a = (added_bg_staged.a * STAGED_DIFF_OPACITY_MULTIPLIER).min(1.0);
     removed_bg_staged.a = (removed_bg_staged.a * STAGED_DIFF_OPACITY_MULTIPLIER).min(1.0);
-    let mut removed_border = editor.theme.diff_removed_background();
+    let mut removed_border = editor.theme.diff_removed_word_background();
     removed_border.a = 1.0;
-    let mut added_border = editor.theme.diff_added_background();
+    let mut added_border = editor.theme.diff_added_word_background();
     added_border.a = 1.0;
     let (top_border_color, bottom_border_color) = match self.side {
       GutterSide::Left => (removed_border, removed_border),
