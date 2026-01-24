@@ -6,6 +6,6 @@ gpui-components use lucide icons check context7 for icons names
 
 ryuk gpui project is available for inspiration at ./desktop/ryuk
 
-use context7 if needed for documentation
+Always use Context7 MCP when I need library/API documentation, code generation, setup or configuration steps without me having to explicitly ask.
 
 check cargo errors: cd ./desktop/ && cargo check
