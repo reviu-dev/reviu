@@ -934,14 +934,6 @@ impl GitPage {
 
   fn render_app_header(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
     let theme = cx.theme().clone();
-    let diff_label = match self.diff_view_mode {
-      DiffViewMode::Inline => "Split Diff",
-      DiffViewMode::Split => "Inline Diff",
-    };
-    let change_position = self
-      .editor
-      .as_ref()
-      .and_then(|editor| editor.read(cx).change_position(cx));
     let repo_select = self.render_repo_select(window, cx);
 
     let header_row = div()
@@ -970,44 +962,15 @@ impl GitPage {
           ),
       )
       .child(
-        div()
-          .flex()
-          .items_center()
-          .gap_2()
-          .child(
-            Button::new("prev-change")
-              .label("Prev Change")
-              .on_click(cx.listener(Self::jump_to_previous_change)),
-          )
-          .child(
-            Button::new("next-change")
-              .label("Next Change")
-              .on_click(cx.listener(Self::jump_to_next_change)),
-          )
-          .when_some(change_position, |this, (current, total)| {
-            this.child(
-              div()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child(format!("{}/{}", current, total)),
-            )
-          })
-          .child(
-            Button::new("diff-toggle")
-              .label(diff_label)
-              .on_click(cx.listener(Self::toggle_diff_view)),
-          )
-          .child(
-            Button::new("open-settings")
-              .icon(IconName::Settings)
-              .ghost()
-              .compact()
-              .tooltip("Settings")
-              .on_click(|_, _, cx| {
-                WorkspaceRoute::global_mut(cx).page = WorkspacePage::Settings;
-                cx.refresh_windows();
-              }),
-          ),
+        Button::new("open-settings")
+          .icon(IconName::Settings)
+          .ghost()
+          .compact()
+          .tooltip("Settings")
+          .on_click(|_, _, cx| {
+            WorkspaceRoute::global_mut(cx).page = WorkspacePage::Settings;
+            cx.refresh_windows();
+          }),
       );
 
     header_row
@@ -1155,14 +1118,14 @@ impl GitPage {
       .label("Commit")
       .primary()
       .flex_1()
-      .rounded(ButtonRounded::None)
+      .rounded_r_none()
       .disabled(!commit_enabled)
       .on_click(cx.listener(Self::commit_changes));
 
     let menu_button = Button::new("commit-button-menu")
       .icon(IconName::ChevronDown)
       .primary()
-      .rounded(ButtonRounded::None)
+      .rounded_l_none()
       .border_l_0()
       .disabled(!menu_enabled)
       .dropdown_menu_with_anchor(Corner::BottomRight, move |menu, _, _| {
@@ -1221,7 +1184,6 @@ impl GitPage {
       .flex()
       .w_full()
       .overflow_hidden()
-      .rounded(cx.theme().radius)
       .child(main_button)
       .child(menu_button)
   }
@@ -1247,7 +1209,56 @@ impl GitPage {
       title_row = title_row.child(div().text_sm().text_color(theme.warning).child("*"));
     }
 
-    let mut header = div()
+    let diff_label = match self.diff_view_mode {
+      DiffViewMode::Inline => "Split Diff",
+      DiffViewMode::Split => "Inline Diff",
+    };
+    let change_position = self
+      .editor
+      .as_ref()
+      .and_then(|editor| editor.read(cx).change_position(cx));
+
+    let actions = div()
+      .flex()
+      .items_center()
+      .gap_2()
+      .when(self.current_dirty, |this| {
+        this.child(
+          Button::new("save-file")
+            .label("Save")
+            .small()
+            .primary()
+            .on_click(cx.listener(Self::save_file_clicked)),
+        )
+      })
+      .child(
+        Button::new("prev-change")
+          .label("Prev Change")
+          .small()
+          .on_click(cx.listener(Self::jump_to_previous_change)),
+      )
+      .child(
+        Button::new("next-change")
+          .label("Next Change")
+          .small()
+          .on_click(cx.listener(Self::jump_to_next_change)),
+      )
+      .when_some(change_position, |this, (current, total)| {
+        this.child(
+          div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(format!("{}/{}", current, total)),
+        )
+      })
+      .child(
+        Button::new("diff-toggle")
+          .label(diff_label)
+          .small()
+          .on_click(cx.listener(Self::toggle_diff_view)),
+      );
+
+    div()
       .h_10()
       .px_3()
       .flex()
@@ -1256,18 +1267,8 @@ impl GitPage {
       .border_b_1()
       .border_color(theme.border)
       .bg(theme.tab_bar)
-      .child(title_row);
-
-    if self.current_dirty {
-      header = header.child(
-        Button::new("save-file")
-          .label("Save")
-          .small()
-          .on_click(cx.listener(Self::save_file_clicked)),
-      );
-    }
-
-    header
+      .child(title_row)
+      .child(actions)
   }
 
   fn render_footer(&self, cx: &mut Context<Self>) -> Div {
