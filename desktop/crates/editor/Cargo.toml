@@ -8,6 +8,7 @@ publish.workspace = true
 buffer = { workspace = true }
 syntax = { workspace = true }
 gpui = { workspace = true }
+gpui-component = { workspace = true }
 unicode-segmentation = { workspace = true }
 parking_lot = { workspace = true }
 smol = { workspace = true }

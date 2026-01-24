@@ -1483,6 +1483,7 @@ version = "0.1.0"
 dependencies = [
  "buffer",
  "gpui",
+ "gpui-component",
  "parking_lot",
  "ropey 1.6.1",
  "smol",
