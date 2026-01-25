@@ -1,10 +1,10 @@
 use editor::*;
-use gpui_component::Root;
-use gpui_component_assets::Assets;
 use gpui::{
   App, Application, Bounds, Focusable, KeyBinding, WindowBounds, WindowOptions, prelude::*, px,
   size,
 };
+use gpui_component::Root;
+use gpui_component_assets::Assets;
 use workspace::{CommitChanges, OpenRepository, SaveFile, WorkspaceView};
 
 const INITIAL_WINDOW_WIDTH: f32 = 1200.0;

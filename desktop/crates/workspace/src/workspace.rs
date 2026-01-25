@@ -1,6 +1,4 @@
-use gpui::{
-  App, Context, Entity, FocusHandle, Focusable, Global, Render, Window, prelude::*,
-};
+use gpui::{App, Context, Entity, FocusHandle, Focusable, Global, Render, Window, prelude::*};
 
 use crate::git_page::GitPage;
 use crate::settings_page::SettingsPage;
