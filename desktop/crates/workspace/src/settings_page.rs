@@ -29,9 +29,8 @@ impl SettingsPage {
     let view = cx.entity();
     let default_auto = self.auto_switch_theme;
 
-    vec![SettingPage::new("General")
-      .default_open(true)
-      .groups(vec![SettingGroup::new().title("Appearance").items(vec![
+    vec![SettingPage::new("General").default_open(true).groups(vec![
+      SettingGroup::new().title("Appearance").items(vec![
         SettingItem::new(
           "Dark Mode",
           SettingField::switch(
@@ -72,7 +71,8 @@ impl SettingsPage {
           .default_value(default_auto),
         )
         .description("Automatically switch theme based on system settings."),
-      ])])]
+      ]),
+    ])]
   }
 }
 

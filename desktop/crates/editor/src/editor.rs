@@ -240,9 +240,9 @@ impl Editor {
   }
 
   pub fn set_diff_base_text(&mut self, base_text: Option<&str>, cx: &mut Context<Self>) {
-    self
-      .document
-      .update(cx, |document, cx| document.set_diff_base_text(base_text, cx));
+    self.document.update(cx, |document, cx| {
+      document.set_diff_base_text(base_text, cx)
+    });
   }
 
   pub fn diff_line_is_staged(&self, line_idx: usize, cx: &App) -> bool {
@@ -948,21 +948,8 @@ impl EntityInputHandler for Editor {
       }
     };
 
-    let transaction_id = self.document.update(cx, |doc, cx| {
-      let buffer_range = buffer_range.clone();
-      let id = doc.buffer.transaction(Instant::now(), |buffer, tx| {
-        buffer.replace(tx, buffer_range, new_text);
-      });
-      doc.bump_edit_epoch();
-      if single_line_edit {
-        doc.apply_single_line_edit_delta(buffer_start_line, delta_chars);
-      }
-
-      // Trigger async syntax re-highlighting with debouncing
-      doc.schedule_recompute_highlights(cx);
-      if doc.diff_enabled() {
-        doc.schedule_recompute_diff(cx);
-      }
+    let (viewport_lines, staged_visible) = {
+      let doc = self.document.read(cx);
       let total_rows = if split_mode {
         doc.split_row_count()
       } else {
@@ -979,6 +966,34 @@ impl EntityInputHandler for Editor {
       } else {
         Some(viewport_rows.clone())
       };
+      let staged_visible = if doc.diff_enabled() {
+        staged_ranges_visible(
+          &doc,
+          viewport_lines.as_ref(),
+          &self.staged_base_ranges,
+          &self.staged_current_ranges,
+        )
+      } else {
+        false
+      };
+      (viewport_lines, staged_visible)
+    };
+
+    let transaction_id = self.document.update(cx, |doc, cx| {
+      let buffer_range = buffer_range.clone();
+      let id = doc.buffer.transaction(Instant::now(), |buffer, tx| {
+        buffer.replace(tx, buffer_range, new_text);
+      });
+      doc.bump_edit_epoch();
+      if single_line_edit {
+        doc.apply_single_line_edit_delta(buffer_start_line, delta_chars);
+      }
+
+      // Trigger async syntax re-highlighting with debouncing
+      doc.schedule_recompute_highlights(cx);
+      if doc.diff_enabled() && !single_line_edit && staged_visible {
+        doc.schedule_recompute_diff(cx);
+      }
       if let Some(viewport) = viewport_lines {
         doc.schedule_viewport_highlights(
           viewport.clone(),
@@ -1087,19 +1102,8 @@ impl EntityInputHandler for Editor {
       }
     };
 
-    self.document.update(cx, |doc, cx| {
-      let buffer_range = buffer_range.clone();
-      doc.buffer.transaction(Instant::now(), |buffer, tx| {
-        buffer.replace(tx, buffer_range, new_text);
-      });
-      doc.bump_edit_epoch();
-      if single_line_edit {
-        doc.apply_single_line_edit_delta(buffer_start_line, delta_chars);
-      }
-      doc.schedule_recompute_highlights(cx);
-      if doc.diff_enabled() {
-        doc.schedule_recompute_diff(cx);
-      }
+    let (viewport_lines, staged_visible) = {
+      let doc = self.document.read(cx);
       let total_rows = if split_mode {
         doc.split_row_count()
       } else {
@@ -1116,6 +1120,32 @@ impl EntityInputHandler for Editor {
       } else {
         Some(viewport_rows.clone())
       };
+      let staged_visible = if doc.diff_enabled() {
+        staged_ranges_visible(
+          &doc,
+          viewport_lines.as_ref(),
+          &self.staged_base_ranges,
+          &self.staged_current_ranges,
+        )
+      } else {
+        false
+      };
+      (viewport_lines, staged_visible)
+    };
+
+    self.document.update(cx, |doc, cx| {
+      let buffer_range = buffer_range.clone();
+      doc.buffer.transaction(Instant::now(), |buffer, tx| {
+        buffer.replace(tx, buffer_range, new_text);
+      });
+      doc.bump_edit_epoch();
+      if single_line_edit {
+        doc.apply_single_line_edit_delta(buffer_start_line, delta_chars);
+      }
+      doc.schedule_recompute_highlights(cx);
+      if doc.diff_enabled() && !single_line_edit && staged_visible {
+        doc.schedule_recompute_diff(cx);
+      }
       if let Some(viewport) = viewport_lines {
         doc.schedule_viewport_highlights(
           viewport.clone(),
@@ -1314,6 +1344,45 @@ fn line_in_ranges(ranges: &[Range<usize>], line: usize) -> bool {
   ranges
     .iter()
     .any(|range| range.start <= line && line < range.end)
+}
+
+fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
+  left.start < right.end && right.start < left.end
+}
+
+fn range_overlaps_any(range: &Range<usize>, ranges: &[Range<usize>]) -> bool {
+  ranges
+    .iter()
+    .any(|candidate| ranges_overlap(range, candidate))
+}
+
+fn staged_ranges_visible(
+  document: &Document,
+  viewport: Option<&Range<usize>>,
+  staged_base: &[Range<usize>],
+  staged_current: &[Range<usize>],
+) -> bool {
+  if staged_base.is_empty() && staged_current.is_empty() {
+    return false;
+  }
+  let Some(viewport) = viewport else {
+    return false;
+  };
+  if !staged_current.is_empty() {
+    if let Some(current_range) = document.map_view_line_range_to_current(viewport) {
+      if range_overlaps_any(&current_range, staged_current) {
+        return true;
+      }
+    }
+  }
+  if !staged_base.is_empty() {
+    if let Some(base_range) = document.map_view_line_range_to_base(viewport) {
+      if range_overlaps_any(&base_range, staged_base) {
+        return true;
+      }
+    }
+  }
+  false
 }
 
 #[cfg(test)]

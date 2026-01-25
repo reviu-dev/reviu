@@ -652,9 +652,8 @@ impl Document {
       return None;
     }
 
-    let is_changed = |line: &DiffLine| {
-      line.kind != DiffLineKind::Unchanged || line.gutter != DiffGutterKind::None
-    };
+    let is_changed =
+      |line: &DiffLine| line.kind != DiffLineKind::Unchanged || line.gutter != DiffGutterKind::None;
 
     if !is_changed(&state.lines[line_idx]) {
       return None;
@@ -744,6 +743,37 @@ impl Document {
     let min_current = min_current?;
     let max_current = max_current?;
     Some(min_current..(max_current + 1))
+  }
+
+  pub fn map_view_line_range_to_base(&self, range: &Range<usize>) -> Option<Range<usize>> {
+    let diff_state = self.diff_state.read();
+    let state = match diff_state.as_ref() {
+      Some(state) => state,
+      None => return Some(range.clone()),
+    };
+
+    if range.start >= range.end || state.lines.is_empty() {
+      return None;
+    }
+
+    let mut min_base: Option<usize> = None;
+    let mut max_base: Option<usize> = None;
+    for line_idx in range.start..range.end.min(state.lines.len()) {
+      if let Some(base_line) = state.lines[line_idx].base_line {
+        min_base = Some(match min_base {
+          Some(min) => min.min(base_line),
+          None => base_line,
+        });
+        max_base = Some(match max_base {
+          Some(max) => max.max(base_line),
+          None => base_line,
+        });
+      }
+    }
+
+    let min_base = min_base?;
+    let max_base = max_base?;
+    Some(min_base..(max_base + 1))
   }
 
   pub fn map_current_line_range_to_view(&self, range: &Range<usize>) -> Option<Range<usize>> {
@@ -2463,7 +2493,10 @@ pub fn diff_changed_line_ranges(
     }
   }
 
-  (merge_line_ranges(base_ranges), merge_line_ranges(current_ranges))
+  (
+    merge_line_ranges(base_ranges),
+    merge_line_ranges(current_ranges),
+  )
 }
 
 /// Return line-level hunks between base and current text.

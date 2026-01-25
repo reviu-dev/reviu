@@ -15,7 +15,7 @@ use std::{
 use crate::{
   document::{DiffPanelSide, Document},
   editor::{
-    DEFAULT_MAX_LINE_WIDTH, DiffViewMode, Editor, ScrollAxis, STAGED_DIFF_OPACITY_MULTIPLIER,
+    DEFAULT_MAX_LINE_WIDTH, DiffViewMode, Editor, STAGED_DIFF_OPACITY_MULTIPLIER, ScrollAxis,
   },
 };
 use syntax::{HighlightSpan, Theme};
@@ -701,7 +701,11 @@ impl Element for EditorElement {
             }
             crate::document::DiffLineKind::Deleted => {
               let y = left_bounds.top() + line_height * (line_idx - viewport.start) as f32;
-              let color = if is_staged { removed_bg_staged } else { removed_bg };
+              let color = if is_staged {
+                removed_bg_staged
+              } else {
+                removed_bg
+              };
               diff_background_quads_right.push(fill(
                 Bounds::from_corners(
                   point(bounds.left(), y),

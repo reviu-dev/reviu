@@ -5,8 +5,7 @@ use gpui::{
 use std::ops::Range;
 
 use crate::editor::{
-  DiffViewMode, Editor, GUTTER_MARKER_WIDTH, GUTTER_RIGHT_PADDING,
-  STAGED_DIFF_OPACITY_MULTIPLIER,
+  DiffViewMode, Editor, GUTTER_MARKER_WIDTH, GUTTER_RIGHT_PADDING, STAGED_DIFF_OPACITY_MULTIPLIER,
 };
 
 const STAGED_HUNK_BORDER_HEIGHT: f32 = 2.0;
@@ -291,16 +290,16 @@ impl Element for GutterElement {
       };
 
       let bg_color = match line.diff_kind {
-        Some(crate::document::DiffLineKind::Added) => {
-          Some(if line.is_staged { added_bg_staged } else { added_bg })
-        }
-        Some(crate::document::DiffLineKind::Deleted) => {
-          Some(if line.is_staged {
-            removed_bg_staged
-          } else {
-            removed_bg
-          })
-        }
+        Some(crate::document::DiffLineKind::Added) => Some(if line.is_staged {
+          added_bg_staged
+        } else {
+          added_bg
+        }),
+        Some(crate::document::DiffLineKind::Deleted) => Some(if line.is_staged {
+          removed_bg_staged
+        } else {
+          removed_bg
+        }),
         _ => None,
       };
       if let Some(color) = bg_color {

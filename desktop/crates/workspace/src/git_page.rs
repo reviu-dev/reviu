@@ -906,7 +906,12 @@ impl GitPage {
     let is_dirty = current_text != saved_text;
     let mut dirty_current_ranges = Vec::new();
     let mut saved_to_current_hunks = Vec::new();
-    if is_dirty && matches!(selected_file, SelectedFile::Tracked(_)) {
+    let has_staged_for_file = self
+      .selected_diff_hunks
+      .as_ref()
+      .map(|hunks| !hunks.head_to_index.is_empty())
+      .unwrap_or(false);
+    if is_dirty && matches!(selected_file, SelectedFile::Tracked(_)) && has_staged_for_file {
       saved_to_current_hunks = diff_line_hunks(saved_text, current_text);
       for hunk in &saved_to_current_hunks {
         if hunk.new_lines > 0 {
