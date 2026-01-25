@@ -372,12 +372,13 @@ fn hunk_matches(hunk: &DiffHunk<'_>, target: &HunkRange, reverse: bool) -> bool 
   let old_range = old_start..old_end;
   let new_range = new_start..new_end;
 
-  let mut matches = false;
   let (base_range, current_range) = if reverse {
     (&target.current, &target.base)
   } else {
     (&target.base, &target.current)
   };
+
+  let mut matches = false;
   if let Some(base) = base_range.as_ref() {
     matches |= ranges_overlap(base, &old_range);
   }
@@ -408,7 +409,9 @@ fn apply_hunk_with_diff(
     let Some(hunk) = hunk else {
       return false;
     };
-    hunk_matches(&hunk, &target_for_hunk, reverse)
+    let matches = hunk_matches(&hunk, &target_for_hunk, reverse);
+
+    matches
   });
 
   repo.apply(diff, location, Some(&mut apply_opts))?;
@@ -448,6 +451,7 @@ pub fn restore_hunk(repo_root: &Path, path: &Path, target: &HunkRange) -> Result
 pub fn unstage_hunk(repo_root: &Path, path: &Path, target: &HunkRange) -> Result<(), git2::Error> {
   let repo = GitRepository::discover(repo_root)?;
   let rel_path = repo_relative_path(&repo_root_path(&repo)?, path);
+
   let mut diff_opts = DiffOptions::new();
   diff_opts.pathspec(&rel_path);
   diff_opts.include_untracked(true);
@@ -457,7 +461,9 @@ pub fn unstage_hunk(repo_root: &Path, path: &Path, target: &HunkRange) -> Result
   let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
   let diff = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut diff_opts))?;
 
-  apply_hunk_with_diff(&repo, &diff, &rel_path, target, ApplyLocation::Index, true)
+  let result = apply_hunk_with_diff(&repo, &diff, &rel_path, target, ApplyLocation::Index, true);
+
+  result
 }
 
 pub fn unstage_all(repo_root: &Path) -> Result<(), git2::Error> {

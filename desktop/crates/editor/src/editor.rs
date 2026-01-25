@@ -97,6 +97,7 @@ pub struct Editor {
   pub active_diff_panel: DiffPanelSide,
   staged_view: bool,
   pub hovered_change_range: Option<Range<usize>>,
+  last_edit_view_range: Option<Range<usize>>,
   staged_base_ranges: Vec<Range<usize>>,
   staged_current_ranges: Vec<Range<usize>>,
 
@@ -186,6 +187,7 @@ impl Editor {
       active_diff_panel: DiffPanelSide::Right,
       staged_view: false,
       hovered_change_range: None,
+      last_edit_view_range: None,
       staged_base_ranges: Vec::new(),
       staged_current_ranges: Vec::new(),
       last_highlights_version: 0,
@@ -263,6 +265,10 @@ impl Editor {
 
   pub fn hovered_change_range(&self) -> Option<Range<usize>> {
     self.hovered_change_range.clone()
+  }
+
+  pub fn last_edit_view_range(&self) -> Option<Range<usize>> {
+    self.last_edit_view_range.clone()
   }
 
   pub(crate) fn set_hovered_change_range(
@@ -899,6 +905,7 @@ impl EntityInputHandler for Editor {
     let selection_before = self.selected_range.clone();
     let start_line = self.document.read(cx).char_to_line(range.start);
     let end_line = self.document.read(cx).char_to_line(range.end);
+    self.last_edit_view_range = Some(start_line..(end_line + 1));
     let buffer_range = self.document.read(cx).map_view_range_to_buffer(&range);
     if buffer_range.is_none() {
       if new_text.is_empty() {
@@ -946,6 +953,7 @@ impl EntityInputHandler for Editor {
       let id = doc.buffer.transaction(Instant::now(), |buffer, tx| {
         buffer.replace(tx, buffer_range, new_text);
       });
+      doc.bump_edit_epoch();
       if single_line_edit {
         doc.apply_single_line_edit_delta(buffer_start_line, delta_chars);
       }
@@ -1062,6 +1070,7 @@ impl EntityInputHandler for Editor {
     let viewport_height = self.viewport_height;
     let scroll_offset_y = self.scroll_offset_y;
     let end_line = self.document.read(cx).char_to_line(range.end);
+    self.last_edit_view_range = Some(start_line..(end_line + 1));
     let new_line_count = if has_newline {
       new_text.matches('\n').count()
     } else {
@@ -1083,6 +1092,7 @@ impl EntityInputHandler for Editor {
       doc.buffer.transaction(Instant::now(), |buffer, tx| {
         buffer.replace(tx, buffer_range, new_text);
       });
+      doc.bump_edit_epoch();
       if single_line_edit {
         doc.apply_single_line_edit_delta(buffer_start_line, delta_chars);
       }

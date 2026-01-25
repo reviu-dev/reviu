@@ -63,6 +63,14 @@ pub struct DiffLineInfo {
   pub current_line: Option<usize>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LineDiffHunk {
+  pub old_start: usize,
+  pub old_lines: usize,
+  pub new_start: usize,
+  pub new_lines: usize,
+}
+
 #[derive(Clone, Debug)]
 struct DiffLine {
   kind: DiffLineKind,
@@ -88,6 +96,7 @@ struct DiffState {
 
 pub struct Document {
   pub buffer: TextBuffer,
+  edit_epoch: usize,
 
   // Syntax highlighting support
   highlighter: Option<SyntaxHighlighter>,
@@ -153,6 +162,7 @@ impl Document {
 
     let mut doc = Self {
       buffer,
+      edit_epoch: 0,
       highlighter,
       highlights: Arc::new(RwLock::new(Vec::new())),
       base_highlights: Arc::new(RwLock::new(base_highlights)),
@@ -188,6 +198,7 @@ impl Document {
 
   pub fn replace_all_text(&mut self, text: &str, cx: &mut Context<Self>) {
     self.buffer = TextBuffer::from_text(text);
+    self.bump_edit_epoch();
 
     self.highlights.write().clear();
     self.dirty_highlight_lines.write().clear();
@@ -508,6 +519,7 @@ impl Document {
     self.buffer.transaction(Instant::now(), |buffer, tx| {
       buffer.insert(tx, offset, &ch.to_string());
     });
+    self.bump_edit_epoch();
     cx.notify();
   }
 
@@ -519,12 +531,14 @@ impl Document {
     self.buffer.transaction(Instant::now(), |buffer, tx| {
       buffer.replace(tx, buffer_range, text);
     });
+    self.bump_edit_epoch();
     cx.notify();
   }
 
   pub fn undo(&mut self, cx: &mut Context<Self>) -> Option<buffer::TransactionId> {
     let result = self.buffer.undo();
     if result.is_some() {
+      self.bump_edit_epoch();
       if self.diff_base_lines.is_some() {
         self.schedule_recompute_diff(cx);
       }
@@ -536,12 +550,21 @@ impl Document {
   pub fn redo(&mut self, cx: &mut Context<Self>) -> Option<buffer::TransactionId> {
     let result = self.buffer.redo();
     if result.is_some() {
+      self.bump_edit_epoch();
       if self.diff_base_lines.is_some() {
         self.schedule_recompute_diff(cx);
       }
       cx.notify();
     }
     result
+  }
+
+  pub fn edit_epoch(&self) -> usize {
+    self.edit_epoch
+  }
+
+  pub(crate) fn bump_edit_epoch(&mut self) {
+    self.edit_epoch = self.edit_epoch.wrapping_add(1);
   }
 
   pub fn can_undo(&self) -> bool {
@@ -721,6 +744,38 @@ impl Document {
     let min_current = min_current?;
     let max_current = max_current?;
     Some(min_current..(max_current + 1))
+  }
+
+  pub fn map_current_line_range_to_view(&self, range: &Range<usize>) -> Option<Range<usize>> {
+    let diff_state = self.diff_state.read();
+    let state = match diff_state.as_ref() {
+      Some(state) => state,
+      None => return Some(range.clone()),
+    };
+
+    if range.start >= range.end || state.current_to_view.is_empty() {
+      return None;
+    }
+
+    let mut min_view: Option<usize> = None;
+    let mut max_view: Option<usize> = None;
+    let end = range.end.min(state.current_to_view.len());
+    for current_line in range.start..end {
+      if let Some(view_line) = state.current_to_view.get(current_line).copied().flatten() {
+        min_view = Some(match min_view {
+          Some(min) => min.min(view_line),
+          None => view_line,
+        });
+        max_view = Some(match max_view {
+          Some(max) => max.max(view_line),
+          None => view_line,
+        });
+      }
+    }
+
+    let min_view = min_view?;
+    let max_view = max_view?;
+    Some(min_view..(max_view + 1))
   }
 
   pub fn is_line_editable(&self, line_idx: usize) -> bool {
@@ -2341,6 +2396,127 @@ fn diff_lines(base_hashes: &[u64], current_hashes: &[u64]) -> Vec<DiffOp> {
   );
 
   ops
+}
+
+fn merge_line_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+  if ranges.is_empty() {
+    return ranges;
+  }
+  ranges.sort_by_key(|range| range.start);
+  let mut merged = Vec::new();
+  let mut current = ranges.remove(0);
+  for range in ranges {
+    if range.start <= current.end {
+      current.end = current.end.max(range.end);
+    } else {
+      merged.push(current);
+      current = range;
+    }
+  }
+  merged.push(current);
+  merged
+}
+
+/// Return line ranges that changed between base and current text.
+pub fn diff_changed_line_ranges(
+  base_text: &str,
+  current_text: &str,
+) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+  let base_lines = split_lines_to_arcs(base_text);
+  let current_lines = split_lines_to_arcs(current_text)
+    .into_iter()
+    .map(|line| line.to_string())
+    .collect::<Vec<_>>();
+  let base_hashes = hash_lines(&base_lines, base_text.ends_with('\n'));
+  let current_hashes = hash_string_lines(&current_lines, current_text.ends_with('\n'));
+  let ops = diff_lines(&base_hashes, &current_hashes);
+
+  let base_len = base_lines.len();
+  let mut base_ranges = Vec::new();
+  let mut current_ranges = Vec::new();
+  let mut base_cursor = 0usize;
+
+  for op in ops {
+    match op {
+      DiffOp::Equal {
+        base_start,
+        current_start: _,
+        len,
+      } => {
+        base_cursor = base_start + len;
+      }
+      DiffOp::Delete { base_start, len } => {
+        if len > 0 {
+          base_ranges.push(base_start..(base_start + len));
+        }
+        base_cursor = base_start + len;
+      }
+      DiffOp::Insert { current_start, len } => {
+        if len > 0 {
+          current_ranges.push(current_start..(current_start + len));
+        }
+        if base_len > 0 {
+          let anchor = base_cursor.min(base_len.saturating_sub(1));
+          base_ranges.push(anchor..(anchor + 1));
+        }
+      }
+    }
+  }
+
+  (merge_line_ranges(base_ranges), merge_line_ranges(current_ranges))
+}
+
+/// Return line-level hunks between base and current text.
+pub fn diff_line_hunks(base_text: &str, current_text: &str) -> Vec<LineDiffHunk> {
+  let base_lines = split_lines_to_arcs(base_text);
+  let current_lines = split_lines_to_arcs(current_text)
+    .into_iter()
+    .map(|line| line.to_string())
+    .collect::<Vec<_>>();
+  let base_hashes = hash_lines(&base_lines, base_text.ends_with('\n'));
+  let current_hashes = hash_string_lines(&current_lines, current_text.ends_with('\n'));
+  let ops = diff_lines(&base_hashes, &current_hashes);
+
+  let mut hunks = Vec::new();
+  let mut base_cursor = 0usize;
+  let mut current_cursor = 0usize;
+
+  for op in ops {
+    match op {
+      DiffOp::Equal {
+        base_start,
+        current_start,
+        len,
+      } => {
+        base_cursor = base_start + len;
+        current_cursor = current_start + len;
+      }
+      DiffOp::Delete { base_start, len } => {
+        if len > 0 {
+          hunks.push(LineDiffHunk {
+            old_start: base_start,
+            old_lines: len,
+            new_start: current_cursor,
+            new_lines: 0,
+          });
+        }
+        base_cursor = base_start + len;
+      }
+      DiffOp::Insert { current_start, len } => {
+        if len > 0 {
+          hunks.push(LineDiffHunk {
+            old_start: base_cursor,
+            old_lines: 0,
+            new_start: current_start,
+            new_lines: len,
+          });
+        }
+        current_cursor = current_start + len;
+      }
+    }
+  }
+
+  hunks
 }
 
 fn append_ops(ops: &mut Vec<DiffOp>, new_ops: Vec<DiffOp>) {
