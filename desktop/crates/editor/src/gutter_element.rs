@@ -266,7 +266,7 @@ impl Element for GutterElement {
     removed_border.a = 1.0;
     let mut added_border = editor.theme.diff_added_word_background();
     added_border.a = 1.0;
-    let (top_border_color, bottom_border_color) = match self.side {
+    let (default_top_border_color, default_bottom_border_color) = match self.side {
       GutterSide::Left => (removed_border, removed_border),
       GutterSide::Right => (added_border, added_border),
       GutterSide::Inline => (removed_border, added_border),
@@ -314,6 +314,14 @@ impl Element for GutterElement {
       }
 
       if line.is_staged {
+        let (top_border_color, bottom_border_color) = match self.side {
+          GutterSide::Inline => match line.diff_kind {
+            Some(crate::document::DiffLineKind::Added) => (added_border, added_border),
+            Some(crate::document::DiffLineKind::Deleted) => (removed_border, removed_border),
+            _ => (default_top_border_color, default_bottom_border_color),
+          },
+          _ => (default_top_border_color, default_bottom_border_color),
+        };
         let border_height = px(STAGED_HUNK_BORDER_HEIGHT);
         if !prev_staged {
           window.paint_quad(fill(

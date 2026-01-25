@@ -495,7 +495,6 @@ impl Element for EditorElement {
     let mut right_border_color = theme.diff_added_word_background();
     right_border_color.a = 1.0;
     let top_border_color = left_border_color;
-    let bottom_border_color = right_border_color;
     let border_height = px(STAGED_HUNK_BORDER_HEIGHT);
 
     let mut diff_background_quads_left = Vec::new();
@@ -720,13 +719,19 @@ impl Element for EditorElement {
           let staged = editor.diff_line_is_staged(line_idx, cx);
           if staged {
             let y = bounds.top() + line_height * (line_idx - viewport.start) as f32;
+            let kind = document.diff_line_info(line_idx).map(|info| info.kind);
+            let border_color = match kind {
+              Some(crate::document::DiffLineKind::Added) => right_border_color,
+              Some(crate::document::DiffLineKind::Deleted) => left_border_color,
+              _ => top_border_color,
+            };
             if !prev_staged {
               diff_border_quads_right.push(fill(
                 Bounds::from_corners(
                   point(bounds.left(), y),
                   point(bounds.right(), y + border_height),
                 ),
-                top_border_color,
+                border_color,
               ));
             }
             let next_staged = if line_idx + 1 < line_count {
@@ -740,7 +745,7 @@ impl Element for EditorElement {
                   point(bounds.left(), y + line_height - border_height),
                   point(bounds.right(), y + line_height),
                 ),
-                bottom_border_color,
+                border_color,
               ));
             }
           }
