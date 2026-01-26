@@ -360,10 +360,6 @@ pub fn unstage_path(repo_root: &Path, path: &Path) -> Result<(), git2::Error> {
   Ok(())
 }
 
-fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
-  left.start < right.end && right.start < left.end
-}
-
 fn hunk_matches(hunk: &DiffHunk<'_>, target: &HunkRange, reverse: bool) -> bool {
   let old_start = hunk.old_start().saturating_sub(1) as usize;
   let old_end = old_start + hunk.old_lines() as usize;
@@ -378,14 +374,19 @@ fn hunk_matches(hunk: &DiffHunk<'_>, target: &HunkRange, reverse: bool) -> bool 
     (&target.base, &target.current)
   };
 
-  let mut matches = false;
-  if let Some(base) = base_range.as_ref() {
-    matches |= ranges_overlap(base, &old_range);
+  let base_match = base_range
+    .as_ref()
+    .map(|base| base.start == old_range.start && base.end == old_range.end);
+  let current_match = current_range
+    .as_ref()
+    .map(|current| current.start == new_range.start && current.end == new_range.end);
+
+  match (base_match, current_match) {
+    (Some(base), Some(current)) => base && current,
+    (Some(base), None) => base,
+    (None, Some(current)) => current,
+    (None, None) => false,
   }
-  if let Some(current) = current_range.as_ref() {
-    matches |= ranges_overlap(current, &new_range);
-  }
-  matches
 }
 
 fn apply_hunk_with_diff(
@@ -409,9 +410,7 @@ fn apply_hunk_with_diff(
     let Some(hunk) = hunk else {
       return false;
     };
-    let matches = hunk_matches(&hunk, &target_for_hunk, reverse);
-
-    matches
+    hunk_matches(&hunk, &target_for_hunk, reverse)
   });
 
   repo.apply(diff, location, Some(&mut apply_opts))?;

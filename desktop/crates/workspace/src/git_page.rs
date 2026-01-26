@@ -8,7 +8,7 @@ use std::{
 
 use crate::config::{ConfigStore, RecentRepository};
 use crate::workspace::{WorkspacePage, WorkspaceRoute};
-use editor::{ChangeDirection, DiffViewMode, Editor, LineDiffHunk, diff_line_hunks};
+use editor::{ChangeDirection, DiffViewMode, Document, Editor, LineDiffHunk, diff_line_hunks};
 use git::{
   BranchStatus, DiffHunkInfo, FileStatusKind, HunkRange, RepositoryFile, branch_status,
   can_undo_last_commit, commit_repository, diff_head_to_index_hunks, diff_index_to_workdir_hunks,
@@ -41,6 +41,7 @@ const SIDEBAR_MAX_WIDTH: Pixels = px(600.0);
 const APP_HEADER_HEIGHT: f32 = 42.0;
 const FILE_POLL_INTERVAL_MS: u64 = 500;
 const REPO_POLL_INTERVAL_MS: u64 = 1500;
+const INCREMENTAL_DIFF_CONTEXT_LINES: usize = 80;
 
 actions!(workspace, [OpenRepository, SaveFile, CommitChanges]);
 
@@ -209,6 +210,7 @@ pub struct GitPage {
   current_dirty: bool,
   buffer_dirty_current_ranges: Vec<Range<usize>>,
   buffer_saved_to_current_hunks: Vec<LineDiffHunk>,
+  saved_to_current_tracking: bool,
   document_subscription: Option<Subscription>,
   document_edit_epoch: Option<usize>,
   poll_task: Option<Task<()>>,
@@ -253,6 +255,7 @@ impl GitPage {
       current_dirty: false,
       buffer_dirty_current_ranges: Vec::new(),
       buffer_saved_to_current_hunks: Vec::new(),
+      saved_to_current_tracking: false,
       document_subscription: None,
       document_edit_epoch: None,
       poll_task: None,
@@ -694,6 +697,73 @@ impl GitPage {
     Ok(())
   }
 
+  fn update_saved_to_current_hunks_incremental(
+    &self,
+    saved_text: &str,
+    current_text: &str,
+    last_edit_view_range: &Range<usize>,
+    doc: &Document,
+  ) -> Option<Vec<LineDiffHunk>> {
+    let current_edit_range = if doc.diff_enabled() {
+      doc.map_view_line_range_to_current(last_edit_view_range)?
+    } else {
+      last_edit_view_range.clone()
+    };
+
+    let current_line_count = doc.buffer.len_lines();
+    if current_line_count == 0 {
+      return None;
+    }
+    let current_start = current_edit_range
+      .start
+      .saturating_sub(INCREMENTAL_DIFF_CONTEXT_LINES);
+    let current_end =
+      (current_edit_range.end + INCREMENTAL_DIFF_CONTEXT_LINES).min(current_line_count);
+    if current_start >= current_end {
+      return None;
+    }
+    let current_window = current_start..current_end;
+
+    let mut existing = self.buffer_saved_to_current_hunks.clone();
+    existing.sort_by_key(|hunk| hunk.old_start);
+    let inverted = invert_line_hunks(&existing);
+    let mut saved_window = map_line_range(&current_window, &inverted);
+    let saved_line_count = line_count_from_text(saved_text);
+    saved_window.start = saved_window.start.min(saved_line_count);
+    saved_window.end = saved_window.end.min(saved_line_count);
+    if saved_window.start >= saved_window.end {
+      return None;
+    }
+
+    let saved_slice = text_for_line_range(saved_text, &saved_window);
+    let current_slice = text_for_line_range(current_text, &current_window);
+    let mut local_hunks = diff_line_hunks(&saved_slice, &current_slice);
+    for hunk in &mut local_hunks {
+      hunk.old_start += saved_window.start;
+      hunk.new_start += current_window.start;
+    }
+
+    let old_mapped_end = map_line_index(saved_window.end, &existing);
+    let delta_old_end = old_mapped_end as isize - saved_window.end as isize;
+    let delta_new_end = current_window.end as isize - saved_window.end as isize;
+    let delta_diff = delta_new_end - delta_old_end;
+
+    let mut next_hunks = Vec::new();
+    for mut hunk in existing {
+      if line_hunk_overlaps_window(&hunk, &saved_window) {
+        continue;
+      }
+      if hunk.old_start >= saved_window.end {
+        hunk.new_start = ((hunk.new_start as isize) + delta_diff).max(0) as usize;
+      }
+      next_hunks.push(hunk);
+    }
+    next_hunks.extend(local_hunks);
+    next_hunks.sort_by_key(|hunk| hunk.old_start);
+
+    Some(next_hunks)
+  }
+
   fn hunk_range_for_change(&self, range: &Range<usize>, cx: &App) -> Option<HunkRange> {
     let editor = self.editor.as_ref()?;
     let document = editor.read(cx).document().read(cx);
@@ -836,6 +906,7 @@ impl GitPage {
     self.current_dirty = false;
     self.buffer_dirty_current_ranges.clear();
     self.buffer_saved_to_current_hunks.clear();
+    self.saved_to_current_tracking = false;
     cx.notify();
   }
 
@@ -911,22 +982,50 @@ impl GitPage {
       .as_ref()
       .map(|hunks| !hunks.head_to_index.is_empty())
       .unwrap_or(false);
+    if !has_staged_for_file {
+      self.saved_to_current_tracking = false;
+    }
+
+    let (last_edit_range, document) = if let Some(editor) = self.editor.as_ref() {
+      let editor_state = editor.read(cx);
+      (
+        editor_state.last_edit_view_range(),
+        Some(editor_state.document().clone()),
+      )
+    } else {
+      (None, None)
+    };
+
     if is_dirty && matches!(selected_file, SelectedFile::Tracked(_)) && has_staged_for_file {
-      saved_to_current_hunks = diff_line_hunks(saved_text, current_text);
+      let mut did_incremental = false;
+      if self.saved_to_current_tracking {
+        if let (Some(view_range), Some(document)) = (last_edit_range.as_ref(), document.as_ref()) {
+          let doc = document.read(cx);
+          if let Some(updated) = self.update_saved_to_current_hunks_incremental(
+            saved_text,
+            current_text,
+            view_range,
+            &doc,
+          ) {
+            saved_to_current_hunks = updated;
+            did_incremental = true;
+          }
+        }
+      }
+      if !did_incremental {
+        saved_to_current_hunks = diff_line_hunks(saved_text, current_text);
+      }
+      self.saved_to_current_tracking = true;
       for hunk in &saved_to_current_hunks {
         if hunk.new_lines > 0 {
           dirty_current_ranges.push(hunk.new_start..(hunk.new_start + hunk.new_lines));
         }
       }
+    } else if !is_dirty {
+      self.saved_to_current_tracking = false;
     }
-    if let Some(editor) = self.editor.as_ref() {
-      let (last_edit_range, document) = {
-        let editor_state = editor.read(cx);
-        (
-          editor_state.last_edit_view_range(),
-          editor_state.document().clone(),
-        )
-      };
+
+    if let Some(document) = document.as_ref() {
       if let Some(view_range) = last_edit_range.as_ref() {
         let doc = document.read(cx);
         for line_idx in view_range.clone() {
@@ -943,9 +1042,9 @@ impl GitPage {
       }
 
       if let (Some(view_range), Some(hunks_state)) =
-        (last_edit_range, self.selected_diff_hunks.as_ref())
+        (last_edit_range.as_ref(), self.selected_diff_hunks.as_ref())
       {
-        if let Some(edit_hunk) = self.hunk_range_for_change(&view_range, cx) {
+        if let Some(edit_hunk) = self.hunk_range_for_change(view_range, cx) {
           if let Some(target_hunk) = self.find_unstage_hunk(&edit_hunk)
             && let Some(index_range) = target_hunk.current.as_ref()
           {
@@ -1380,6 +1479,7 @@ impl GitPage {
         self.current_dirty = false;
         self.buffer_dirty_current_ranges.clear();
         self.buffer_saved_to_current_hunks.clear();
+        self.saved_to_current_tracking = false;
         self.clear_editor_observer();
       }
     }
@@ -1463,6 +1563,7 @@ impl GitPage {
     entry.saved_content = Some(text);
     entry.last_modified = read_modified_time(&entry.path);
     self.current_dirty = false;
+    self.saved_to_current_tracking = false;
     self.refresh_repository_statuses(cx);
     cx.notify();
   }
@@ -1486,6 +1587,7 @@ impl GitPage {
         self.current_dirty = false;
         self.buffer_dirty_current_ranges.clear();
         self.buffer_saved_to_current_hunks.clear();
+        self.saved_to_current_tracking = false;
         self.clear_editor_observer();
         self.last_repo_poll = Some(Instant::now());
         match branch_status(&repo_root) {
@@ -1512,6 +1614,7 @@ impl GitPage {
         self.current_dirty = false;
         self.buffer_dirty_current_ranges.clear();
         self.buffer_saved_to_current_hunks.clear();
+        self.saved_to_current_tracking = false;
         self.clear_editor_observer();
         self.last_repo_poll = Some(Instant::now());
         self.has_staged_changes = false;
@@ -1562,6 +1665,7 @@ impl GitPage {
       self.clear_editor_observer();
       self.buffer_dirty_current_ranges.clear();
       self.buffer_saved_to_current_hunks.clear();
+      self.saved_to_current_tracking = false;
       self.selected_file = Some(match list {
         FileListKind::Tracked => SelectedFile::Tracked(index),
         FileListKind::Untracked => SelectedFile::Untracked(index),
@@ -1611,6 +1715,7 @@ impl GitPage {
     self.current_dirty = false;
     self.buffer_dirty_current_ranges.clear();
     self.buffer_saved_to_current_hunks.clear();
+    self.saved_to_current_tracking = false;
 
     window.focus(&focus_handle, cx);
     cx.notify();
@@ -2075,9 +2180,10 @@ impl GitPage {
     };
 
     let view = cx.entity();
-    let stage_range = hovered_range.clone();
-    let restore_range = hovered_range.clone();
-    let unstage_range = hovered_range.clone();
+    let action_range = line_idx..(line_idx + 1);
+    let stage_range = action_range.clone();
+    let restore_range = action_range.clone();
+    let unstage_range = action_range.clone();
 
     let actions = ButtonGroup::new("change-block-actions")
       .primary()
@@ -2906,6 +3012,38 @@ fn text_for_line_range(text: &str, range: &Range<usize>) -> String {
     .collect()
 }
 
+fn line_count_from_text(text: &str) -> usize {
+  let mut count = 1usize;
+  for ch in text.chars() {
+    if ch == '\n' {
+      count += 1;
+    }
+  }
+  count
+}
+
+fn invert_line_hunks(hunks: &[LineDiffHunk]) -> Vec<LineDiffHunk> {
+  let mut inverted = hunks
+    .iter()
+    .map(|hunk| LineDiffHunk {
+      old_start: hunk.new_start,
+      old_lines: hunk.new_lines,
+      new_start: hunk.old_start,
+      new_lines: hunk.old_lines,
+    })
+    .collect::<Vec<_>>();
+  inverted.sort_by_key(|hunk| hunk.old_start);
+  inverted
+}
+
+fn line_hunk_overlaps_window(hunk: &LineDiffHunk, window: &Range<usize>) -> bool {
+  if hunk.old_lines == 0 {
+    return hunk.old_start >= window.start && hunk.old_start < window.end;
+  }
+  let old_end = hunk.old_start + hunk.old_lines;
+  old_end > window.start && hunk.old_start < window.end
+}
+
 fn invert_hunks(hunks: &[DiffHunkInfo]) -> Vec<DiffHunkInfo> {
   let mut inverted = hunks
     .iter()
@@ -2999,6 +3137,40 @@ fn map_line_range<H: LineMapHunk>(range: &Range<usize>, hunks: &[H]) -> Range<us
   }
 }
 
+fn map_index_range_to_current_ranges(
+  range: &Range<usize>,
+  hunks: &[DiffHunkInfo],
+) -> Vec<Range<usize>> {
+  if range.is_empty() {
+    return Vec::new();
+  }
+  let mut mapped = Vec::new();
+  let mut current_start: Option<usize> = None;
+  let mut last_mapped: usize = 0;
+
+  for line in range.clone() {
+    let mapped_line = map_line_index(line, hunks);
+    if let Some(start) = current_start {
+      if mapped_line == last_mapped + 1 {
+        last_mapped = mapped_line;
+      } else {
+        mapped.push(start..(last_mapped + 1));
+        current_start = Some(mapped_line);
+        last_mapped = mapped_line;
+      }
+    } else {
+      current_start = Some(mapped_line);
+      last_mapped = mapped_line;
+    }
+  }
+
+  if let Some(start) = current_start {
+    mapped.push(start..(last_mapped + 1));
+  }
+
+  mapped
+}
+
 fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
   if ranges.is_empty() {
     return ranges;
@@ -3045,29 +3217,28 @@ fn staged_ranges_from_hunks(
       (hunk.old_lines > 0).then(|| hunk.old_start..(hunk.old_start + hunk.old_lines));
     let index_range =
       (hunk.new_lines > 0).then(|| hunk.new_start..(hunk.new_start + hunk.new_lines));
-    let current_range = index_range
-      .as_ref()
-      .map(|range| map_line_range(range, &hunks.index_to_workdir));
-    let mapped_current_range = current_range.as_ref().map(|range| {
-      if let Some(workdir_to_current_hunks) = workdir_to_current_hunks {
-        map_line_range(range, workdir_to_current_hunks)
-      } else {
-        range.clone()
-      }
-    });
+    let mut current_ranges = if let Some(range) = index_range.as_ref() {
+      map_index_range_to_current_ranges(range, &hunks.index_to_workdir)
+    } else {
+      Vec::new()
+    };
+    if let Some(workdir_to_current_hunks) = workdir_to_current_hunks {
+      current_ranges = current_ranges
+        .into_iter()
+        .map(|range| map_line_range(&range, workdir_to_current_hunks))
+        .collect();
+    }
 
     let overlaps_index = index_range
       .as_ref()
       .map(|range| range_overlaps_any(range, &unstaged_index))
       .unwrap_or(false);
-    let overlaps_current = current_range
-      .as_ref()
-      .map(|range| range_overlaps_any(range, &unstaged_current))
-      .unwrap_or(false);
-    let overlaps_dirty = mapped_current_range
-      .as_ref()
-      .map(|range| range_overlaps_any(range, dirty_ranges))
-      .unwrap_or(false);
+    let overlaps_current = current_ranges
+      .iter()
+      .any(|range| range_overlaps_any(range, &unstaged_current));
+    let overlaps_dirty = current_ranges
+      .iter()
+      .any(|range| range_overlaps_any(range, dirty_ranges));
 
     if overlaps_index || overlaps_current || overlaps_dirty {
       continue;
@@ -3076,7 +3247,7 @@ fn staged_ranges_from_hunks(
     if let Some(range) = base_range {
       staged_base.push(range);
     }
-    if let Some(range) = mapped_current_range {
+    for range in current_ranges {
       staged_current.push(range);
     }
   }
