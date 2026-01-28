@@ -1,3 +1,5 @@
+mod confirm_dialog;
+
 pub use gpui_component::Disableable;
 pub use gpui_component::button::Button;
 pub use gpui_component::button::ButtonVariants;
@@ -10,3 +12,5 @@ pub use gpui_component::select::{
 pub use gpui_component::sidebar::{Sidebar, SidebarItem};
 pub use gpui_component::{Anchor, IconName};
 pub use gpui_component::{Collapsible, Sizable};
+pub use gpui_component::WindowExt;
+pub use confirm_dialog::ConfirmDialog;

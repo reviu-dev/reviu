@@ -1,9 +1,9 @@
 use std::{
-    collections::HashMap,
-    fs,
-    ops::Range,
-    path::{Path, PathBuf},
-    time::{Duration, Instant, SystemTime},
+  collections::HashMap,
+  fs,
+  ops::Range,
+  path::{Path, PathBuf},
+  time::{Duration, Instant, SystemTime},
 };
 
 use crate::config::{ConfigStore, RecentRepository};
@@ -32,9 +32,9 @@ use gpui_component::{
 };
 use syntax::Theme as SyntaxTheme;
 use ui::{
-  Button, ButtonVariants, Collapsible, Disableable, IconName, Input, InputState, ResizableState,
-  SearchableVec, Select, SelectEvent, SelectItem, SelectState, Sidebar, SidebarItem, Sizable,
-  h_resizable, resizable_panel,
+  Button, ButtonVariants, Collapsible, ConfirmDialog, Disableable, IconName, Input, InputState,
+  ResizableState, SearchableVec, Select, SelectEvent, SelectItem, SelectState, Sidebar,
+  SidebarItem, Sizable, WindowExt, h_resizable, resizable_panel,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: Pixels = px(260.0);
@@ -2770,15 +2770,42 @@ fn render_sidebar_row(
         );
       }
       if can_restore {
+        let view_for_dialog = view.clone();
+        let file_label = entry.display_name.clone();
+
         actions_wrap = actions_wrap.child(
           Button::new(format!("restore-file-{}", &row_group))
             .icon(IconName::Undo)
             .tooltip(restore_tooltip)
             .disabled(is_dirty)
             .on_click(
-              window.listener_for(view, move |this, _: &ClickEvent, _window, cx| {
+              window.listener_for(view, move |_, _: &ClickEvent, window, cx| {
                 cx.stop_propagation();
-                this.restore_file_change(restore_path.clone(), status, cx);
+                if is_dirty {
+                  return;
+                }
+                let restore_path = restore_path.clone();
+                let confirm_message: SharedString = format!(
+                  "Restore changes to \"{}\"? This will discard all unstaged changes.",
+                  file_label
+                )
+                .into();
+                let view = view_for_dialog.clone();
+                window.open_dialog(cx, move |dialog, _, _| {
+                  let confirm_message = confirm_message.clone();
+                  let view = view.clone();
+                  let restore_path = restore_path.clone();
+                  ConfirmDialog::new("Restore file?", confirm_message)
+                    .confirm_text("Restore")
+                    .destructive()
+                    .on_confirm(move |_, _, cx| {
+                      view.update(cx, |this, cx| {
+                        this.restore_file_change(restore_path.clone(), status, cx);
+                      });
+                      true
+                    })
+                    .build(dialog)
+                });
               }),
             ),
         );
@@ -2787,6 +2814,8 @@ fn render_sidebar_row(
     FileListKind::Untracked => {
       let path = entry.path.clone();
       let restore_path = entry.path.clone();
+      let view_for_dialog = view.clone();
+      let file_label = entry.display_name.clone();
       let stage_tooltip = if is_dirty {
         "File not saved"
       } else {
@@ -2819,9 +2848,39 @@ fn render_sidebar_row(
             .tooltip(restore_tooltip)
             .disabled(is_dirty)
             .on_click(
-              window.listener_for(view, move |this, _: &ClickEvent, _window, cx| {
+              window.listener_for(view, move |_, _: &ClickEvent, window, cx| {
                 cx.stop_propagation();
-                this.restore_file_change(restore_path.clone(), FileStatusKind::Untracked, cx);
+                if is_dirty {
+                  return;
+                }
+
+                let restore_path = restore_path.clone();
+                let confirm_message: SharedString = format!(
+                  "Delete untracked file \"{}\"? This will remove it from disk.",
+                  file_label
+                )
+                .into();
+                let view = view_for_dialog.clone();
+
+                window.open_dialog(cx, move |dialog, _, _| {
+                  let confirm_message = confirm_message.clone();
+                  let view = view.clone();
+                  let restore_path = restore_path.clone();
+                  ConfirmDialog::new("Delete file?", confirm_message)
+                    .confirm_text("Delete")
+                    .destructive()
+                    .on_confirm(move |_, _, cx| {
+                      view.update(cx, |this, cx| {
+                        this.restore_file_change(
+                          restore_path.clone(),
+                          FileStatusKind::Untracked,
+                          cx,
+                        );
+                      });
+                      true
+                    })
+                    .build(dialog)
+                });
               }),
             ),
         );
