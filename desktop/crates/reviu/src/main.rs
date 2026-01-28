@@ -3,6 +3,9 @@ use gpui::{
   App, Application, Bounds, Focusable, KeyBinding, WindowBounds, WindowOptions, prelude::*, px,
   size,
 };
+mod app_root;
+
+use app_root::AppRoot;
 use gpui_component::Root;
 use gpui_component_assets::Assets;
 use workspace::{CommitChanges, OpenRepository, SaveFile, WorkspaceView};
@@ -68,8 +71,9 @@ fn main() {
         },
         |window, cx| {
           let view = cx.new(|cx| WorkspaceView::new(window, cx));
-          window.focus(&view.focus_handle(cx), cx);
-          cx.new(|cx| Root::new(view, window, cx))
+          let app_root = cx.new(|cx| AppRoot::new(view, window, cx));
+          window.focus(&app_root.focus_handle(cx), cx);
+          cx.new(|cx| Root::new(app_root, window, cx))
         },
       )
       .unwrap();
