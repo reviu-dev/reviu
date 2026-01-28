@@ -1,20 +1,22 @@
 use std::{
-  collections::HashMap,
-  fs,
-  ops::Range,
-  path::{Path, PathBuf},
-  time::{Duration, Instant, SystemTime},
+    collections::HashMap,
+    fs,
+    ops::Range,
+    path::{Path, PathBuf},
+    time::{Duration, Instant, SystemTime},
 };
 
 use crate::config::{ConfigStore, RecentRepository};
 use crate::workspace::{WorkspacePage, WorkspaceRoute};
-use editor::{ChangeDirection, DiffViewMode, Document, Editor, LineDiffHunk, diff_line_hunks};
+use editor::{
+  ChangeDirection, DiffGutterKind, DiffLineKind, DiffViewMode, Document, Editor, LineDiffHunk,
+  diff_line_hunks,
+};
 use git::{
-  BranchStatus, DiffHunkInfo, FileStatusKind, HunkRange, RepositoryFile, branch_status,
-  can_undo_last_commit, commit_repository, diff_head_to_index_hunks, diff_index_to_workdir_hunks,
-  has_head_commit, open_repository, push_repository, restore_change, restore_hunk, stage_all,
-  stage_hunk, stage_path, undo_last_commit as git_undo_last_commit, unstage_all, unstage_hunk,
-  unstage_path,
+  BranchStatus, DiffHunkInfo, FileStatusKind, HunkRange, RepositoryFile, apply_patch_to_workdir,
+  branch_status, can_undo_last_commit, commit_repository, diff_buffers_for_path, has_head_commit,
+  open_repository, push_repository, restore_change, stage_all, stage_path,
+  undo_last_commit as git_undo_last_commit, unstage_all, unstage_path, write_index_content,
 };
 use gpui::{
   App, ClickEvent, Context, Corner, Div, Entity, FocusHandle, Focusable, Hsla, Keystroke,
@@ -50,11 +52,22 @@ struct FileEntry {
   path: PathBuf,
   display_name: String,
   status: FileStatusKind,
-  base_content: Option<String>,
-  current_content: Option<String>,
+  head_content: Option<String>,
+  index_content: Option<String>,
+  workdir_content: Option<String>,
   saved_content: Option<String>,
   last_modified: Option<SystemTime>,
   stage_state: Option<StageState>,
+}
+
+fn entry_diff_base(entry: &FileEntry) -> Option<&str> {
+  match entry.stage_state {
+    Some(StageState::Staged) | Some(StageState::PartiallyStaged) => entry
+      .head_content
+      .as_deref()
+      .or_else(|| entry.index_content.as_deref()),
+    _ => entry.index_content.as_deref(),
+  }
 }
 
 #[derive(Clone)]
@@ -211,6 +224,7 @@ pub struct GitPage {
   buffer_dirty_current_ranges: Vec<Range<usize>>,
   buffer_saved_to_current_hunks: Vec<LineDiffHunk>,
   saved_to_current_tracking: bool,
+  auto_unstaging: bool,
   document_subscription: Option<Subscription>,
   document_edit_epoch: Option<usize>,
   poll_task: Option<Task<()>>,
@@ -256,6 +270,7 @@ impl GitPage {
       buffer_dirty_current_ranges: Vec::new(),
       buffer_saved_to_current_hunks: Vec::new(),
       saved_to_current_tracking: false,
+      auto_unstaging: false,
       document_subscription: None,
       document_edit_epoch: None,
       poll_task: None,
@@ -485,14 +500,49 @@ impl GitPage {
     let Some(entry) = self.tracked.get(index) else {
       return;
     };
-    let Some(hunk) = self.hunk_range_for_change(&range, cx) else {
+    let Some(_editor) = self.editor.as_ref() else {
       return;
     };
-    let Some(target_hunk) = self.find_stage_hunk(&hunk) else {
+    let Some(hunks_state) = self.selected_diff_hunks.as_ref() else {
       return;
     };
-
-    if let Err(err) = stage_hunk(&root_path, &entry.path, &target_hunk) {
+    let rel_path = entry
+      .path
+      .strip_prefix(&root_path)
+      .unwrap_or(entry.path.as_path());
+    let index_text = entry.index_content.as_deref().unwrap_or("");
+    let workdir_text = entry.workdir_content.as_deref().unwrap_or("");
+    let mut targets = self.unstaged_line_hunks_from_range(
+      &range,
+      index_text,
+      workdir_text,
+      &hunks_state.head_to_index,
+      cx,
+    );
+    if targets.is_empty() {
+      return;
+    }
+    targets.sort_by(|left, right| right.old_start.cmp(&left.old_start));
+    let mut index_lines = split_text_lines(index_text);
+    let workdir_lines = split_text_lines(workdir_text);
+    for hunk in targets {
+      let (old_start, old_end) =
+        splice_range_for_hunk(hunk.old_start, hunk.old_lines, index_lines.len());
+      let new_start = hunk.new_start.min(workdir_lines.len());
+      let new_end = (hunk.new_start + hunk.new_lines).min(workdir_lines.len());
+      if old_start > old_end || new_start > new_end {
+        continue;
+      }
+      index_lines.splice(
+        old_start..old_end,
+        workdir_lines[new_start..new_end].iter().cloned(),
+      );
+    }
+    let new_index_text = index_lines.join("\n");
+    if new_index_text == index_text {
+      return;
+    }
+    if let Err(err) = write_index_content(&root_path, rel_path, &new_index_text) {
       self.error = Some(format!("Failed to stage hunk: {err}"));
       cx.notify();
       return;
@@ -515,31 +565,22 @@ impl GitPage {
     let Some(entry) = self.tracked.get(index) else {
       return;
     };
-    let entry_base_content = entry.base_content.clone();
-    let Some(hunk) = self.hunk_range_for_change(&range, cx) else {
-      return;
-    };
-    let Some(target_hunk) = self.find_stage_hunk(&hunk) else {
-      return;
-    };
-
-    if let Some(hunks_state) = self.selected_diff_hunks.clone() {
-      if target_hunk.base.is_none() || entry_base_content.is_some() {
-        if let Err(err) = self.restore_hunk_in_editor(
-          entry_base_content.as_deref(),
-          &target_hunk,
-          &hunks_state,
-          cx,
-        ) {
-          self.error = Some(format!("Failed to restore hunk: {err}"));
-          cx.notify();
-          return;
-        }
+    let index_text = entry.index_content.as_deref().unwrap_or("");
+    let workdir_text = entry.workdir_content.as_deref().unwrap_or("");
+    let diff = match diff_buffers_for_path(&root_path, &entry.path, workdir_text, index_text, 0) {
+      Ok(diff) => diff,
+      Err(err) => {
+        self.error = Some(format!("Failed to build diff: {err}"));
+        cx.notify();
         return;
       }
+    };
+    let targets = self.collect_targets_workdir_to_index(&range, cx, &diff.hunks);
+    if targets.is_empty() {
+      return;
     }
 
-    if let Err(err) = restore_hunk(&root_path, &entry.path, &target_hunk) {
+    if let Err(err) = apply_patch_to_workdir(&root_path, &entry.path, &diff.patch, &targets) {
       self.error = Some(format!("Failed to restore hunk: {err}"));
       cx.notify();
       return;
@@ -550,7 +591,16 @@ impl GitPage {
   }
 
   fn unstage_change_block(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
-    if self.current_dirty {
+    self.unstage_change_block_internal(range, false, cx);
+  }
+
+  fn unstage_change_block_internal(
+    &mut self,
+    range: Range<usize>,
+    force: bool,
+    cx: &mut Context<Self>,
+  ) {
+    if !force && self.current_dirty {
       return;
     }
     let Some(root_path) = self.root_path.clone() else {
@@ -562,29 +612,45 @@ impl GitPage {
     let Some(entry) = self.tracked.get(index) else {
       return;
     };
-    let Some(hunk) = self.hunk_range_for_change(&range, cx) else {
+    let Some(_editor) = self.editor.as_ref() else {
       return;
     };
-    let Some(target_hunk) = self.find_unstage_hunk(&hunk) else {
-      return;
-    };
-
-    if target_hunk.base.is_none() {
-      let Some(hunks_state) = self.selected_diff_hunks.clone() else {
-        return;
-      };
-      if let Err(err) = self.unstage_add_only_hunk(&root_path, entry, &target_hunk, &hunks_state) {
-        self.error = Some(format!("Failed to unstage hunk: {err}"));
-        cx.notify();
-        return;
-      }
-
-      self.error = None;
-      self.refresh_repository_statuses(cx);
+    if self.selected_diff_hunks.is_none() {
       return;
     }
-
-    if let Err(err) = unstage_hunk(&root_path, &entry.path, &target_hunk) {
+    let index_text = entry.index_content.as_deref().unwrap_or("");
+    let head_text = entry.head_content.as_deref().unwrap_or("");
+    let workdir_text = entry.workdir_content.as_deref().unwrap_or("");
+    let mut targets =
+      self.staged_line_hunks_from_range(&range, head_text, index_text, workdir_text, cx);
+    if targets.is_empty() {
+      return;
+    }
+    let rel_path = entry
+      .path
+      .strip_prefix(&root_path)
+      .unwrap_or(entry.path.as_path());
+    targets.sort_by(|left, right| right.new_start.cmp(&left.new_start));
+    let mut index_lines = split_text_lines(index_text);
+    let head_lines = split_text_lines(head_text);
+    for hunk in targets {
+      let (old_start, old_end) =
+        splice_range_for_hunk(hunk.new_start, hunk.new_lines, index_lines.len());
+      let new_start = hunk.old_start.min(head_lines.len());
+      let new_end = (hunk.old_start + hunk.old_lines).min(head_lines.len());
+      if old_start > old_end || new_start > new_end {
+        continue;
+      }
+      index_lines.splice(
+        old_start..old_end,
+        head_lines[new_start..new_end].iter().cloned(),
+      );
+    }
+    let new_index_text = index_lines.join("\n");
+    if new_index_text == index_text {
+      return;
+    }
+    if let Err(err) = write_index_content(&root_path, rel_path, &new_index_text) {
       self.error = Some(format!("Failed to unstage hunk: {err}"));
       cx.notify();
       return;
@@ -592,109 +658,6 @@ impl GitPage {
 
     self.error = None;
     self.refresh_repository_statuses(cx);
-  }
-
-  fn unstage_add_only_hunk(
-    &self,
-    root_path: &Path,
-    entry: &FileEntry,
-    target_hunk: &HunkRange,
-    hunks_state: &FileDiffHunks,
-  ) -> Result<(), String> {
-    let mut restage_targets = Vec::new();
-    for hunk in &hunks_state.head_to_index {
-      let header = hunk_header_range(hunk);
-      if header.base == target_hunk.base && header.current == target_hunk.current {
-        continue;
-      }
-      let base = (hunk.old_lines > 0).then(|| hunk.old_start..(hunk.old_start + hunk.old_lines));
-      let index_range =
-        (hunk.new_lines > 0).then(|| hunk.new_start..(hunk.new_start + hunk.new_lines));
-      let current = index_range
-        .as_ref()
-        .map(|range| map_line_range(range, &hunks_state.index_to_workdir));
-      restage_targets.push(HunkRange { base, current });
-    }
-
-    restage_targets.sort_by(|left, right| {
-      let left_key = left
-        .base
-        .as_ref()
-        .map(|range| range.start)
-        .or_else(|| left.current.as_ref().map(|range| range.start))
-        .unwrap_or(0);
-      let right_key = right
-        .base
-        .as_ref()
-        .map(|range| range.start)
-        .or_else(|| right.current.as_ref().map(|range| range.start))
-        .unwrap_or(0);
-      right_key.cmp(&left_key)
-    });
-
-    unstage_path(root_path, &entry.path).map_err(|err| err.to_string())?;
-    for target in restage_targets {
-      stage_hunk(root_path, &entry.path, &target).map_err(|err| err.to_string())?;
-    }
-
-    Ok(())
-  }
-
-  fn restore_hunk_in_editor(
-    &mut self,
-    base_content: Option<&str>,
-    target_hunk: &HunkRange,
-    hunks_state: &FileDiffHunks,
-    cx: &mut Context<Self>,
-  ) -> Result<(), String> {
-    let Some(editor) = self.editor.as_ref() else {
-      return Err("Missing editor for restore".to_string());
-    };
-
-    let current_range = if let Some(current) = target_hunk.current.as_ref() {
-      current.clone()
-    } else if let Some(base) = target_hunk.base.as_ref() {
-      map_line_range(base, &hunks_state.index_to_workdir)
-    } else {
-      return Err("Missing hunk ranges for restore".to_string());
-    };
-
-    let replacement = if let Some(base_range) = target_hunk.base.as_ref() {
-      let Some(base_text) = base_content else {
-        return Err("Missing base content for restore".to_string());
-      };
-      text_for_line_range(base_text, base_range)
-    } else {
-      String::new()
-    };
-
-    let mut did_replace = false;
-    editor.update(cx, |editor, cx| {
-      let mut replaced = false;
-      editor.document.update(cx, |doc, cx| {
-        let Some(view_range) = doc.map_current_line_range_to_view(&current_range) else {
-          return;
-        };
-        let start_char = doc.line_to_char(view_range.start);
-        let end_char = doc.line_to_char(view_range.end);
-        if start_char <= end_char {
-          doc.replace(start_char..end_char, &replacement, cx);
-          doc.schedule_recompute_highlights(cx);
-          if doc.diff_enabled() {
-            doc.schedule_recompute_diff(cx);
-          }
-          replaced = true;
-        }
-      });
-      did_replace = replaced;
-    });
-
-    if !did_replace {
-      return Err("Failed to apply restore changes".to_string());
-    }
-
-    self.save_current_file(cx);
-    Ok(())
   }
 
   fn update_saved_to_current_hunks_incremental(
@@ -796,21 +759,113 @@ impl GitPage {
     Some(HunkRange { base, current })
   }
 
-  fn find_stage_hunk(&self, hunk: &HunkRange) -> Option<HunkRange> {
-    let hunks_state = self.selected_diff_hunks.as_ref()?;
-    let hunks = &hunks_state.index_to_workdir;
-    if let Some(current) = hunk.current.as_ref() {
-      if let Some(found) = find_hunk_by_new_range(hunks, current) {
-        return Some(hunk_header_range(found));
+  fn staged_line_hunks_from_range(
+    &self,
+    range: &Range<usize>,
+    head_text: &str,
+    index_text: &str,
+    workdir_text: &str,
+    cx: &App,
+  ) -> Vec<LineDiffHunk> {
+    let Some(editor) = self.editor.as_ref() else {
+      return Vec::new();
+    };
+    let editor_state = editor.read(cx);
+    let document = editor_state.document().read(cx);
+    let head_to_index = diff_line_hunks(head_text, index_text);
+    let index_to_workdir = diff_line_hunks(index_text, workdir_text);
+    let inverted = invert_line_hunks(&index_to_workdir);
+    let mut targets = Vec::new();
+
+    for line_idx in range.clone() {
+      let Some(info) = document.diff_line_info(line_idx) else {
+        continue;
+      };
+      if !editor_state.diff_line_is_staged(line_idx, cx) {
+        continue;
+      }
+      if info.kind == DiffLineKind::Unchanged && info.gutter == DiffGutterKind::None {
+        continue;
+      }
+      if let Some(base_line) = info.base_line {
+        let base_range = base_line..(base_line + 1);
+        if let Some(found) = find_line_hunk_by_old_range(&head_to_index, &base_range) {
+          push_unique_line_hunk(&mut targets, found);
+        }
+      }
+      if let Some(current_line) = info.current_line {
+        let index_line = map_line_index(current_line, &inverted);
+        let index_range = index_line..(index_line + 1);
+        if let Some(found) = find_line_hunk_by_new_range(&head_to_index, &index_range) {
+          push_unique_line_hunk(&mut targets, found);
+        }
       }
     }
-    if let Some(base) = hunk.base.as_ref() {
-      let mapped_base = map_line_range(base, &hunks_state.head_to_index);
-      if let Some(found) = find_hunk_by_old_range(hunks, &mapped_base) {
-        return Some(hunk_header_range(found));
+
+    targets
+  }
+
+  fn range_has_staged_lines(&self, range: &Range<usize>, cx: &App) -> bool {
+    let Some(editor) = self.editor.as_ref() else {
+      return false;
+    };
+    let editor_state = editor.read(cx);
+    let document = editor_state.document().read(cx);
+    for line_idx in range.clone() {
+      if !editor_state.diff_line_is_staged(line_idx, cx) {
+        continue;
+      }
+      if let Some(info) = document.diff_line_info(line_idx) {
+        if info.kind != DiffLineKind::Unchanged || info.gutter != DiffGutterKind::None {
+          return true;
+        }
       }
     }
-    None
+    false
+  }
+
+  fn unstaged_line_hunks_from_range(
+    &self,
+    range: &Range<usize>,
+    base_text: &str,
+    current_text: &str,
+    head_to_index: &[DiffHunkInfo],
+    cx: &App,
+  ) -> Vec<LineDiffHunk> {
+    let Some(editor) = self.editor.as_ref() else {
+      return Vec::new();
+    };
+    let editor_state = editor.read(cx);
+    let document = editor_state.document().read(cx);
+    let hunks = diff_line_hunks(base_text, current_text);
+    let mut targets = Vec::new();
+
+    for line_idx in range.clone() {
+      let Some(info) = document.diff_line_info(line_idx) else {
+        continue;
+      };
+      if editor_state.diff_line_is_staged(line_idx, cx) {
+        continue;
+      }
+      if info.kind == DiffLineKind::Unchanged && info.gutter == DiffGutterKind::None {
+        continue;
+      }
+      if let Some(base_line) = info.base_line {
+        let index_line = map_line_index(base_line, head_to_index);
+        let base_range = index_line..(index_line + 1);
+        if let Some(found) = find_line_hunk_by_old_range(&hunks, &base_range) {
+          push_unique_line_hunk(&mut targets, found);
+        }
+      }
+      if let Some(current_line) = info.current_line {
+        let current_range = current_line..(current_line + 1);
+        if let Some(found) = find_line_hunk_by_new_range(&hunks, &current_range) {
+          push_unique_line_hunk(&mut targets, found);
+        }
+      }
+    }
+
+    targets
   }
 
   fn find_unstage_hunk(&self, hunk: &HunkRange) -> Option<HunkRange> {
@@ -828,6 +883,51 @@ impl GitPage {
       }
     }
     None
+  }
+
+  fn collect_targets_workdir_to_index(
+    &self,
+    range: &Range<usize>,
+    cx: &App,
+    hunks: &[DiffHunkInfo],
+  ) -> Vec<HunkRange> {
+    let Some(editor) = self.editor.as_ref() else {
+      return Vec::new();
+    };
+    let document = editor.read(cx).document().read(cx);
+    let mut targets: Vec<HunkRange> = Vec::new();
+
+    for line_idx in range.clone() {
+      let Some(info) = document.diff_line_info(line_idx) else {
+        continue;
+      };
+      if let Some(current_line) = info.current_line {
+        let old_range = current_line..(current_line + 1);
+        if let Some(found) = find_hunk_by_old_range(hunks, &old_range) {
+          let header = hunk_header_range(found);
+          if !targets
+            .iter()
+            .any(|existing| existing.base == header.base && existing.current == header.current)
+          {
+            targets.push(header);
+          }
+        }
+      }
+      if let Some(base_line) = info.base_line {
+        let new_range = base_line..(base_line + 1);
+        if let Some(found) = find_hunk_by_new_range(hunks, &new_range) {
+          let header = hunk_header_range(found);
+          if !targets
+            .iter()
+            .any(|existing| existing.base == header.base && existing.current == header.current)
+          {
+            targets.push(header);
+          }
+        }
+      }
+    }
+
+    targets
   }
 
   fn stage_state_for_range(&self, range: &Range<usize>, cx: &App) -> Option<StageState> {
@@ -869,8 +969,8 @@ impl GitPage {
         .get(index)
         .map(|entry| {
           (
-            entry.current_content.clone(),
-            entry.base_content.clone(),
+            entry.workdir_content.clone(),
+            entry_diff_base(entry).map(|text| text.to_string()),
             entry.path.clone(),
           )
         })
@@ -880,8 +980,8 @@ impl GitPage {
         .get(index)
         .map(|entry| {
           (
-            entry.current_content.clone(),
-            entry.base_content.clone(),
+            entry.workdir_content.clone(),
+            entry_diff_base(entry).map(|text| text.to_string()),
             entry.path.clone(),
           )
         })
@@ -910,10 +1010,19 @@ impl GitPage {
     cx.notify();
   }
 
-  fn diff_hunks_for_path(&self, path: &Path) -> Option<FileDiffHunks> {
+  fn diff_hunks_for_entry(&self, entry: &FileEntry) -> Option<FileDiffHunks> {
     let root_path = self.root_path.as_ref()?;
-    let mut head_to_index = diff_head_to_index_hunks(root_path, path).ok()?;
-    let mut index_to_workdir = diff_index_to_workdir_hunks(root_path, path).ok()?;
+    let head_text = entry.head_content.as_deref().unwrap_or("");
+    let index_text = entry.index_content.as_deref().unwrap_or("");
+    let workdir_text = entry.workdir_content.as_deref().unwrap_or("");
+
+    let mut head_to_index = diff_buffers_for_path(root_path, &entry.path, head_text, index_text, 0)
+      .ok()?
+      .hunks;
+    let mut index_to_workdir =
+      diff_buffers_for_path(root_path, &entry.path, index_text, workdir_text, 0)
+        .ok()?
+        .hunks;
     head_to_index.sort_by_key(|hunk| hunk.old_start);
     index_to_workdir.sort_by_key(|hunk| hunk.old_start);
     Some(FileDiffHunks {
@@ -928,18 +1037,12 @@ impl GitPage {
       return;
     };
 
-    let (path, tracked) = match selected {
-      SelectedFile::Tracked(index) => (
-        self.tracked.get(index).map(|entry| entry.path.clone()),
-        true,
-      ),
-      SelectedFile::Untracked(index) => (
-        self.untracked.get(index).map(|entry| entry.path.clone()),
-        false,
-      ),
+    let (entry, tracked) = match selected {
+      SelectedFile::Tracked(index) => (self.tracked.get(index), true),
+      SelectedFile::Untracked(index) => (self.untracked.get(index), false),
     };
 
-    let Some(path) = path else {
+    let Some(entry) = entry else {
       self.selected_diff_hunks = None;
       return;
     };
@@ -954,7 +1057,7 @@ impl GitPage {
       return;
     }
 
-    let Some(hunks) = self.diff_hunks_for_path(&path) else {
+    let Some(hunks) = self.diff_hunks_for_entry(entry) else {
       self.selected_diff_hunks = None;
       if let Some(editor) = self.editor.as_ref() {
         editor.update(cx, |editor, cx| {
@@ -1027,18 +1130,46 @@ impl GitPage {
 
     if let Some(document) = document.as_ref() {
       if let Some(view_range) = last_edit_range.as_ref() {
-        let doc = document.read(cx);
-        for line_idx in view_range.clone() {
-          if doc.diff_enabled() {
-            if let Some(info) = doc.diff_line_info(line_idx)
-              && let Some(current_line) = info.current_line
-            {
-              dirty_current_ranges.push(current_line..(current_line + 1));
+        let mut change_range = None;
+        let mut edit_dirty_ranges = Vec::new();
+        {
+          let doc = document.read(cx);
+          if is_dirty
+            && matches!(selected_file, SelectedFile::Tracked(_))
+            && has_staged_for_file
+            && !self.auto_unstaging
+          {
+            let line_idx = view_range.start.min(doc.len_lines().saturating_sub(1));
+            change_range = doc.diff_change_range_at_line(line_idx);
+          }
+          for line_idx in view_range.clone() {
+            if doc.diff_enabled() {
+              if let Some(info) = doc.diff_line_info(line_idx)
+                && let Some(current_line) = info.current_line
+              {
+                edit_dirty_ranges.push(current_line..(current_line + 1));
+              }
+            } else {
+              edit_dirty_ranges.push(line_idx..(line_idx + 1));
             }
-          } else {
-            dirty_current_ranges.push(line_idx..(line_idx + 1));
           }
         }
+
+        if is_dirty
+          && matches!(selected_file, SelectedFile::Tracked(_))
+          && has_staged_for_file
+          && !self.auto_unstaging
+        {
+          if let Some(change_range) = change_range
+            && self.range_has_staged_lines(&change_range, cx)
+          {
+            self.auto_unstaging = true;
+            self.unstage_change_block_internal(change_range.clone(), true, cx);
+            self.auto_unstaging = false;
+          }
+        }
+
+        dirty_current_ranges.extend(edit_dirty_ranges);
       }
 
       if let (Some(view_range), Some(hunks_state)) =
@@ -1162,8 +1293,39 @@ impl GitPage {
     } else {
       None
     };
-    let (staged_base, staged_current) =
-      staged_ranges_from_hunks(hunks, dirty_ranges, workdir_to_current);
+
+    let (staged_base, staged_current) = if let Some(selected) = self.selected_file {
+      let entry = match selected {
+        SelectedFile::Tracked(index) => self.tracked.get(index),
+        SelectedFile::Untracked(index) => self.untracked.get(index),
+      };
+      if let Some(entry) = entry {
+        let head_text = entry.head_content.as_deref().unwrap_or("");
+        let index_text = entry.index_content.as_deref().unwrap_or("");
+        let workdir_text = entry.workdir_content.as_deref().unwrap_or("");
+        let head_lines = line_count_from_text(head_text);
+        let index_lines = line_count_from_text(index_text);
+        let workdir_lines = line_count_from_text(workdir_text);
+        let max_lines = head_lines.max(index_lines).max(workdir_lines);
+        if max_lines <= 20000 {
+          let head_to_index = diff_line_hunks(head_text, index_text);
+          let index_to_workdir = diff_line_hunks(index_text, workdir_text);
+          staged_ranges_from_line_hunks(
+            &head_to_index,
+            &index_to_workdir,
+            dirty_ranges,
+            workdir_to_current,
+          )
+        } else {
+          staged_ranges_from_hunks(hunks, dirty_ranges, workdir_to_current)
+        }
+      } else {
+        staged_ranges_from_hunks(hunks, dirty_ranges, workdir_to_current)
+      }
+    } else {
+      staged_ranges_from_hunks(hunks, dirty_ranges, workdir_to_current)
+    };
+
     editor.update(cx, |editor, cx| {
       editor.set_staged_ranges(staged_base, staged_current, cx);
     });
@@ -1177,14 +1339,8 @@ impl GitPage {
       return;
     };
     let new_base = match selected {
-      SelectedFile::Tracked(index) => self
-        .tracked
-        .get(index)
-        .and_then(|entry| entry.base_content.as_deref()),
-      SelectedFile::Untracked(index) => self
-        .untracked
-        .get(index)
-        .and_then(|entry| entry.base_content.as_deref()),
+      SelectedFile::Tracked(index) => self.tracked.get(index).and_then(entry_diff_base),
+      SelectedFile::Untracked(index) => self.untracked.get(index).and_then(entry_diff_base),
     };
 
     if previous_base == new_base {
@@ -1364,7 +1520,7 @@ impl GitPage {
             self.untracked.get_mut(entry_index)
           };
           if let Some(entry) = entry {
-            entry.current_content = Some(disk_text.clone());
+            entry.workdir_content = Some(disk_text.clone());
             entry.saved_content = Some(disk_text.clone());
             entry.last_modified = Some(modified_time);
           }
@@ -1421,7 +1577,7 @@ impl GitPage {
     let selected_dirty = self.current_dirty;
     let previous_base = selected_entry
       .as_ref()
-      .and_then(|entry| entry.base_content.clone());
+      .and_then(|entry| entry_diff_base(entry).map(|text| text.to_string()));
 
     let repository = match open_repository(&root_path) {
       Ok(repository) => repository,
@@ -1455,14 +1611,14 @@ impl GitPage {
       if let Some(index) = tracked.iter().position(|entry| entry.path == *path) {
         if let Some(existing) = selected_entry.as_ref() {
           let entry = &mut tracked[index];
-          entry.current_content = existing.current_content.clone();
+          entry.workdir_content = existing.workdir_content.clone();
           entry.saved_content = existing.saved_content.clone();
           entry.last_modified = existing.last_modified;
         }
       } else if let Some(index) = untracked.iter().position(|entry| entry.path == *path) {
         if let Some(existing) = selected_entry.as_ref() {
           let entry = &mut untracked[index];
-          entry.current_content = existing.current_content.clone();
+          entry.workdir_content = existing.workdir_content.clone();
           entry.saved_content = existing.saved_content.clone();
           entry.last_modified = existing.last_modified;
         }
@@ -1559,7 +1715,7 @@ impl GitPage {
       return;
     }
 
-    entry.current_content = Some(text.clone());
+    entry.workdir_content = Some(text.clone());
     entry.saved_content = Some(text);
     entry.last_modified = read_modified_time(&entry.path);
     self.current_dirty = false;
@@ -1638,8 +1794,8 @@ impl GitPage {
         Some(entry) => {
           refresh_entry_from_disk(entry);
           (
-            entry.current_content.clone(),
-            entry.base_content.clone(),
+            entry.workdir_content.clone(),
+            entry_diff_base(entry).map(|text| text.to_string()),
             entry.path.clone(),
             entry.display_name.clone(),
           )
@@ -1650,8 +1806,8 @@ impl GitPage {
         Some(entry) => {
           refresh_entry_from_disk(entry);
           (
-            entry.current_content.clone(),
-            entry.base_content.clone(),
+            entry.workdir_content.clone(),
+            entry_diff_base(entry).map(|text| text.to_string()),
             entry.path.clone(),
             entry.display_name.clone(),
           )
@@ -2180,10 +2336,9 @@ impl GitPage {
     };
 
     let view = cx.entity();
-    let action_range = line_idx..(line_idx + 1);
-    let stage_range = action_range.clone();
-    let restore_range = action_range.clone();
-    let unstage_range = action_range.clone();
+    let stage_range = hovered_range.clone();
+    let restore_range = hovered_range.clone();
+    let unstage_range = hovered_range.clone();
 
     let actions = ButtonGroup::new("change-block-actions")
       .primary()
@@ -2766,7 +2921,7 @@ fn refresh_entry_from_disk(entry: &mut FileEntry) {
   if let Some(modified_time) = read_modified_time(&entry.path) {
     if entry.last_modified != Some(modified_time) {
       if let Some(disk_text) = read_disk_text(&entry.path) {
-        entry.current_content = Some(disk_text.clone());
+        entry.workdir_content = Some(disk_text.clone());
         entry.saved_content = Some(disk_text);
         entry.last_modified = Some(modified_time);
       } else {
@@ -2824,15 +2979,16 @@ fn repository_entries_to_lists(
     if is_untracked_only {
       let change = change.expect("untracked entry should exist");
       let abs_path = repo_root.join(&change.path);
-      let current_content = change.current_content;
-      let saved_content = current_content.clone();
+      let workdir_content = change.workdir_content;
+      let saved_content = workdir_content.clone();
       let last_modified = read_modified_time(&abs_path);
       untracked.push(FileEntry {
         path: abs_path,
         display_name: change.path.to_string_lossy().to_string(),
         status: change.status,
-        base_content: change.base_content,
-        current_content,
+        head_content: change.head_content,
+        index_content: change.index_content,
+        workdir_content,
         saved_content,
         last_modified,
         stage_state: None,
@@ -2856,18 +3012,28 @@ fn repository_entries_to_lists(
       (None, None) => FileStatusKind::Modified,
     };
 
-    let base_content = staged_entry
+    let head_content = staged_entry
       .as_ref()
-      .and_then(|entry| entry.base_content.clone())
-      .or_else(|| change.as_ref().and_then(|entry| entry.base_content.clone()));
-    let current_content = change
+      .and_then(|entry| entry.head_content.clone())
+      .or_else(|| change.as_ref().and_then(|entry| entry.head_content.clone()));
+    let index_content = staged_entry
       .as_ref()
-      .and_then(|entry| entry.current_content.clone())
+      .and_then(|entry| entry.index_content.clone())
+      .or_else(|| {
+        change
+          .as_ref()
+          .and_then(|entry| entry.index_content.clone())
+      })
+      .or_else(|| head_content.clone());
+    let workdir_content = change
+      .as_ref()
+      .and_then(|entry| entry.workdir_content.clone())
       .or_else(|| {
         staged_entry
           .as_ref()
-          .and_then(|entry| entry.current_content.clone())
-      });
+          .and_then(|entry| entry.workdir_content.clone())
+      })
+      .or_else(|| index_content.clone());
 
     let display_name = path.to_string_lossy().to_string();
     let abs_path = repo_root.join(&path);
@@ -2877,9 +3043,10 @@ fn repository_entries_to_lists(
       path: abs_path,
       display_name,
       status,
-      base_content,
-      current_content: current_content.clone(),
-      saved_content: current_content,
+      head_content,
+      index_content,
+      workdir_content: workdir_content.clone(),
+      saved_content: workdir_content,
       last_modified,
       stage_state: Some(stage_state),
     });
@@ -2974,6 +3141,41 @@ fn find_hunk_by_new_range<'a>(
   })
 }
 
+fn find_line_hunk_by_old_range<'a>(
+  hunks: &'a [LineDiffHunk],
+  range: &Range<usize>,
+) -> Option<&'a LineDiffHunk> {
+  hunks.iter().find(|hunk| {
+    if hunk.old_lines == 0 {
+      return false;
+    }
+    ranges_overlap(range, &(hunk.old_start..(hunk.old_start + hunk.old_lines)))
+  })
+}
+
+fn find_line_hunk_by_new_range<'a>(
+  hunks: &'a [LineDiffHunk],
+  range: &Range<usize>,
+) -> Option<&'a LineDiffHunk> {
+  hunks.iter().find(|hunk| {
+    if hunk.new_lines == 0 {
+      return false;
+    }
+    ranges_overlap(range, &(hunk.new_start..(hunk.new_start + hunk.new_lines)))
+  })
+}
+
+fn push_unique_line_hunk(targets: &mut Vec<LineDiffHunk>, hunk: &LineDiffHunk) {
+  if !targets.iter().any(|existing| {
+    existing.old_start == hunk.old_start
+      && existing.old_lines == hunk.old_lines
+      && existing.new_start == hunk.new_start
+      && existing.new_lines == hunk.new_lines
+  }) {
+    targets.push(hunk.clone());
+  }
+}
+
 fn hunk_header_range(hunk: &DiffHunkInfo) -> HunkRange {
   let base = (hunk.old_lines > 0).then(|| hunk.old_start..(hunk.old_start + hunk.old_lines));
   let current = (hunk.new_lines > 0).then(|| hunk.new_start..(hunk.new_start + hunk.new_lines));
@@ -3020,6 +3222,29 @@ fn line_count_from_text(text: &str) -> usize {
     }
   }
   count
+}
+
+fn splice_range_for_hunk(start: usize, lines: usize, max_len: usize) -> (usize, usize) {
+  let mut start = start;
+  if start > max_len {
+    start = max_len;
+  }
+  let mut end = start.saturating_add(lines);
+  if end > max_len {
+    end = max_len;
+  }
+  (start, end)
+}
+
+fn split_text_lines(text: &str) -> Vec<String> {
+  let mut lines = text
+    .split('\n')
+    .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+    .collect::<Vec<_>>();
+  if lines.is_empty() {
+    lines.push(String::new());
+  }
+  lines
 }
 
 fn invert_line_hunks(hunks: &[LineDiffHunk]) -> Vec<LineDiffHunk> {
@@ -3119,6 +3344,9 @@ fn map_line_index<H: LineMapHunk>(line: usize, hunks: &[H]) -> usize {
       let mapped = hunk.new_start() + offset.min(hunk.new_lines().saturating_sub(1));
       return mapped;
     }
+    if hunk.old_lines() == 0 && line == old_start && old_start > 0 {
+      return (line as isize + delta).max(0) as usize;
+    }
     delta += hunk.new_lines() as isize - hunk.old_lines() as isize;
   }
   (line as isize + delta).max(0) as usize
@@ -3137,9 +3365,9 @@ fn map_line_range<H: LineMapHunk>(range: &Range<usize>, hunks: &[H]) -> Range<us
   }
 }
 
-fn map_index_range_to_current_ranges(
+fn map_index_range_to_current_ranges<H: LineMapHunk>(
   range: &Range<usize>,
-  hunks: &[DiffHunkInfo],
+  hunks: &[H],
 ) -> Vec<Range<usize>> {
   if range.is_empty() {
     return Vec::new();
@@ -3212,6 +3440,7 @@ fn staged_ranges_from_hunks(
   let unstaged_current = merge_ranges(unstaged_current);
 
   let dirty_ranges = dirty_current_ranges.unwrap_or(&[]);
+
   for hunk in &hunks.head_to_index {
     let base_range =
       (hunk.old_lines > 0).then(|| hunk.old_start..(hunk.old_start + hunk.old_lines));
@@ -3239,8 +3468,9 @@ fn staged_ranges_from_hunks(
     let overlaps_dirty = current_ranges
       .iter()
       .any(|range| range_overlaps_any(range, dirty_ranges));
+    let should_stage = !overlaps_index && !overlaps_current && !overlaps_dirty;
 
-    if overlaps_index || overlaps_current || overlaps_dirty {
+    if !should_stage {
       continue;
     }
 
@@ -3252,5 +3482,77 @@ fn staged_ranges_from_hunks(
     }
   }
 
-  (merge_ranges(staged_base), merge_ranges(staged_current))
+  let staged_base = merge_ranges(staged_base);
+  let staged_current = merge_ranges(staged_current);
+  (staged_base, staged_current)
+}
+
+fn staged_ranges_from_line_hunks(
+  head_to_index: &[LineDiffHunk],
+  index_to_workdir: &[LineDiffHunk],
+  dirty_current_ranges: Option<&[Range<usize>]>,
+  workdir_to_current_hunks: Option<&[LineDiffHunk]>,
+) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+  let mut staged_base = Vec::new();
+  let mut staged_current = Vec::new();
+
+  let mut unstaged_index = Vec::new();
+  let mut unstaged_current = Vec::new();
+  for hunk in index_to_workdir {
+    if hunk.old_lines > 0 {
+      unstaged_index.push(hunk.old_start..(hunk.old_start + hunk.old_lines));
+    }
+    if hunk.new_lines > 0 {
+      unstaged_current.push(hunk.new_start..(hunk.new_start + hunk.new_lines));
+    }
+  }
+  let unstaged_index = merge_ranges(unstaged_index);
+  let unstaged_current = merge_ranges(unstaged_current);
+
+  let dirty_ranges = dirty_current_ranges.unwrap_or(&[]);
+
+  for hunk in head_to_index {
+    let base_range =
+      (hunk.old_lines > 0).then(|| hunk.old_start..(hunk.old_start + hunk.old_lines));
+    let index_range =
+      (hunk.new_lines > 0).then(|| hunk.new_start..(hunk.new_start + hunk.new_lines));
+    let mut current_ranges = if let Some(range) = index_range.as_ref() {
+      map_index_range_to_current_ranges(range, index_to_workdir)
+    } else {
+      Vec::new()
+    };
+    if let Some(workdir_to_current_hunks) = workdir_to_current_hunks {
+      current_ranges = current_ranges
+        .into_iter()
+        .map(|range| map_line_range(&range, workdir_to_current_hunks))
+        .collect();
+    }
+
+    let overlaps_index = index_range
+      .as_ref()
+      .map(|range| range_overlaps_any(range, &unstaged_index))
+      .unwrap_or(false);
+    let overlaps_current = current_ranges
+      .iter()
+      .any(|range| range_overlaps_any(range, &unstaged_current));
+    let overlaps_dirty = current_ranges
+      .iter()
+      .any(|range| range_overlaps_any(range, dirty_ranges));
+    let should_stage = !overlaps_index && !overlaps_current && !overlaps_dirty;
+
+    if !should_stage {
+      continue;
+    }
+
+    if let Some(range) = base_range {
+      staged_base.push(range);
+    }
+    for range in current_ranges {
+      staged_current.push(range);
+    }
+  }
+
+  let staged_base = merge_ranges(staged_base);
+  let staged_current = merge_ranges(staged_current);
+  (staged_base, staged_current)
 }

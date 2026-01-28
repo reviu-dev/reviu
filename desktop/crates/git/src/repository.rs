@@ -1,11 +1,12 @@
 use std::fs;
 use std::ops::Range;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use git2::build::CheckoutBuilder;
 use git2::{
   ApplyLocation, ApplyOptions, BranchType, Cred, DiffHunk, DiffOptions, Direction, IndexAddOption,
-  Oid, ProxyOptions, PushOptions, RemoteCallbacks, Repository as GitRepository, ResetType,
+  Oid, Patch, ProxyOptions, PushOptions, RemoteCallbacks, Repository as GitRepository, ResetType,
   Signature, Status, StatusOptions, Tree,
 };
 
@@ -24,8 +25,9 @@ pub enum FileStatusKind {
 pub struct RepositoryFile {
   pub path: PathBuf,
   pub status: FileStatusKind,
-  pub base_content: Option<String>,
-  pub current_content: Option<String>,
+  pub head_content: Option<String>,
+  pub index_content: Option<String>,
+  pub workdir_content: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +64,11 @@ pub struct DiffHunkInfo {
   pub new_lines: usize,
   pub old_changed: Vec<Range<usize>>,
   pub new_changed: Vec<Range<usize>>,
+}
+
+pub struct BufferDiff {
+  pub patch: String,
+  pub hunks: Vec<DiffHunkInfo>,
 }
 
 struct UpstreamInfo {
@@ -104,7 +111,7 @@ pub fn open_repository(path: &Path) -> Result<Repository, git2::Error> {
       continue;
     };
 
-    let base_content = match (head_tree.as_ref(), old_path.as_ref()) {
+    let head_content = match (head_tree.as_ref(), old_path.as_ref()) {
       (Some(tree), Some(path)) => read_head_blob(&repo, tree, path),
       _ => None,
     };
@@ -123,19 +130,20 @@ pub fn open_repository(path: &Path) -> Result<Repository, git2::Error> {
       changes.push(RepositoryFile {
         path: display_path.to_path_buf(),
         status: FileStatusKind::Conflicted,
-        base_content: base_content.clone(),
-        current_content: workdir_content.clone(),
+        head_content: head_content.clone(),
+        index_content: index_content.clone(),
+        workdir_content: workdir_content.clone(),
       });
       continue;
     }
 
     if let Some(kind) = status_to_kind_for_scope(status, StatusScope::Workdir) {
-      let base_for_changes = index_content.clone().or_else(|| base_content.clone());
       changes.push(RepositoryFile {
         path: display_path.to_path_buf(),
         status: kind,
-        base_content: base_for_changes,
-        current_content: workdir_content.clone(),
+        head_content: head_content.clone(),
+        index_content: index_content.clone(),
+        workdir_content: workdir_content.clone(),
       });
     }
 
@@ -147,8 +155,9 @@ pub fn open_repository(path: &Path) -> Result<Repository, git2::Error> {
       staged.push(RepositoryFile {
         path: display_path.to_path_buf(),
         status: kind,
-        base_content: base_content.clone(),
-        current_content: staged_content,
+        head_content: head_content.clone(),
+        index_content: staged_content,
+        workdir_content: workdir_content.clone(),
       });
     }
   }
@@ -252,6 +261,167 @@ fn push_line_range(ranges: &mut Vec<Range<usize>>, line: usize) {
   ranges.push(line..(line + 1));
 }
 
+pub fn diff_buffers_for_path(
+  repo_root: &Path,
+  path: &Path,
+  old_text: &str,
+  new_text: &str,
+  context_lines: u32,
+) -> Result<BufferDiff, git2::Error> {
+  let rel_path = repo_relative_path(repo_root, path);
+  diff_buffers_with_path(old_text, new_text, &rel_path, context_lines)
+}
+
+fn diff_buffers_with_path(
+  old_text: &str,
+  new_text: &str,
+  rel_path: &Path,
+  context_lines: u32,
+) -> Result<BufferDiff, git2::Error> {
+  let mut diff_opts = DiffOptions::new();
+  diff_opts.context_lines(context_lines);
+  diff_opts.interhunk_lines(0);
+  diff_opts.patience(true);
+  let mut patch = Patch::from_buffers(
+    old_text.as_bytes(),
+    Some(rel_path),
+    new_text.as_bytes(),
+    Some(rel_path),
+    Some(&mut diff_opts),
+  )?;
+
+  let mut hunks = Vec::new();
+  let hunk_count = patch.num_hunks();
+  for hunk_idx in 0..hunk_count {
+    let (hunk, line_count) = patch.hunk(hunk_idx)?;
+    let old_start = hunk.old_start().saturating_sub(1) as usize;
+    let new_start = hunk.new_start().saturating_sub(1) as usize;
+    let mut info = DiffHunkInfo {
+      old_start,
+      old_lines: hunk.old_lines() as usize,
+      new_start,
+      new_lines: hunk.new_lines() as usize,
+      old_changed: Vec::new(),
+      new_changed: Vec::new(),
+    };
+
+    for line_idx in 0..line_count {
+      let line = patch.line_in_hunk(hunk_idx, line_idx)?;
+      match line.origin() {
+        '+' | '>' => {
+          if let Some(line_no) = line.new_lineno() {
+            let line_idx = line_no.saturating_sub(1) as usize;
+            push_line_range(&mut info.new_changed, line_idx);
+          }
+        }
+        '-' | '<' => {
+          if let Some(line_no) = line.old_lineno() {
+            let line_idx = line_no.saturating_sub(1) as usize;
+            push_line_range(&mut info.old_changed, line_idx);
+          }
+        }
+        _ => {}
+      }
+    }
+
+    hunks.push(info);
+  }
+
+  let patch_buf = patch.to_buf()?;
+  let patch_text = String::from_utf8_lossy(patch_buf.as_ref()).to_string();
+  Ok(BufferDiff {
+    patch: patch_text,
+    hunks,
+  })
+}
+
+pub fn apply_patch_to_index(
+  repo_root: &Path,
+  path: &Path,
+  patch: &str,
+  targets: &[HunkRange],
+) -> Result<(), git2::Error> {
+  apply_patch(repo_root, path, patch, targets, ApplyLocation::Index)
+}
+
+pub fn apply_patch_to_workdir(
+  repo_root: &Path,
+  path: &Path,
+  patch: &str,
+  targets: &[HunkRange],
+) -> Result<(), git2::Error> {
+  apply_patch(repo_root, path, patch, targets, ApplyLocation::WorkDir)
+}
+
+pub fn write_index_content(
+  repo_root: &Path,
+  path: &Path,
+  content: &str,
+) -> Result<(), git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  let rel_path = repo_relative_path(&repo_root_path(&repo)?, path);
+  let mut index = repo.index()?;
+  let entry = index
+    .get_path(&rel_path, 0)
+    .ok_or_else(|| git2::Error::from_str("Index entry not found"))?;
+  let mut entry = git2::IndexEntry {
+    ctime: entry.ctime,
+    mtime: entry.mtime,
+    dev: entry.dev,
+    ino: entry.ino,
+    mode: entry.mode,
+    uid: entry.uid,
+    gid: entry.gid,
+    file_size: entry.file_size,
+    id: entry.id,
+    flags: entry.flags,
+    flags_extended: entry.flags_extended,
+    path: entry.path.clone(),
+  };
+  entry.path = rel_path.as_os_str().as_bytes().to_vec();
+  index.add_frombuffer(&entry, content.as_bytes())?;
+  index.write()?;
+  Ok(())
+}
+
+fn apply_patch(
+  repo_root: &Path,
+  path: &Path,
+  patch: &str,
+  targets: &[HunkRange],
+  location: ApplyLocation,
+) -> Result<(), git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  let rel_path = repo_relative_path(&repo_root_path(&repo)?, path);
+  let diff = git2::Diff::from_buffer(patch.as_bytes())?;
+  let targets = targets.to_vec();
+  let rel_path_for_delta = rel_path.clone();
+  let mut apply_opts = ApplyOptions::new();
+  apply_opts.delta_callback(move |delta| {
+    delta
+      .and_then(|delta| delta.new_file().path().or(delta.old_file().path()))
+      .map(|delta_path| delta_path == rel_path_for_delta.as_path())
+      .unwrap_or(false)
+  });
+  apply_opts.hunk_callback(move |hunk| {
+    let Some(hunk) = hunk else {
+      return false;
+    };
+    let old_start = hunk.old_start().saturating_sub(1) as usize;
+    let new_start = hunk.new_start().saturating_sub(1) as usize;
+    let old_range = old_start..(old_start + hunk.old_lines() as usize);
+    let new_range = new_start..(new_start + hunk.new_lines() as usize);
+    let base = (hunk.old_lines() > 0).then(|| old_range.clone());
+    let current = (hunk.new_lines() > 0).then(|| new_range.clone());
+    targets
+      .iter()
+      .any(|target| target.base == base && target.current == current)
+  });
+
+  repo.apply(&diff, location, Some(&mut apply_opts))?;
+  Ok(())
+}
+
 fn collect_diff_hunks(diff: &git2::Diff<'_>) -> Result<Vec<DiffHunkInfo>, git2::Error> {
   let hunks = std::cell::RefCell::new(Vec::new());
   diff.foreach(
@@ -307,6 +477,7 @@ pub fn diff_head_to_index_hunks(
   diff_opts.include_untracked(true);
   diff_opts.context_lines(0);
   diff_opts.interhunk_lines(0);
+  diff_opts.patience(true);
   let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
   let diff = repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut diff_opts))?;
   collect_diff_hunks(&diff)
@@ -323,6 +494,7 @@ pub fn diff_index_to_workdir_hunks(
   diff_opts.include_untracked(true);
   diff_opts.context_lines(0);
   diff_opts.interhunk_lines(0);
+  diff_opts.patience(true);
   let diff = repo.diff_index_to_workdir(None, Some(&mut diff_opts))?;
   collect_diff_hunks(&diff)
 }
@@ -551,6 +723,54 @@ pub fn commit_repository(repo_root: &Path, message: &str, amend: bool) -> Result
   }
 
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn diff_for(old: &str, new: &str) -> BufferDiff {
+    let repo_root = Path::new("/repo");
+    let path = Path::new("/repo/file.txt");
+    diff_buffers_for_path(repo_root, path, old, new, 0).expect("diff should build")
+  }
+
+  #[test]
+  fn diff_buffers_add_only() {
+    let old = "a\nb\n";
+    let new = "a\nb\n\n\n";
+    let diff = diff_for(old, new);
+    assert_eq!(diff.hunks.len(), 1);
+    let hunk = &diff.hunks[0];
+    assert_eq!(hunk.old_lines, 0);
+    assert!(hunk.new_lines >= 1);
+    assert!(!hunk.new_changed.is_empty());
+  }
+
+  #[test]
+  fn diff_buffers_delete_only() {
+    let old = "a\nb\nc\n";
+    let new = "a\nc\n";
+    let diff = diff_for(old, new);
+    assert_eq!(diff.hunks.len(), 1);
+    let hunk = &diff.hunks[0];
+    assert!(hunk.old_lines >= 1);
+    assert_eq!(hunk.new_lines, 0);
+    assert!(!hunk.old_changed.is_empty());
+  }
+
+  #[test]
+  fn diff_buffers_mixed_change() {
+    let old = "a\nb\nc\n";
+    let new = "a\nx\ny\nc\n";
+    let diff = diff_for(old, new);
+    assert_eq!(diff.hunks.len(), 1);
+    let hunk = &diff.hunks[0];
+    assert!(hunk.old_lines >= 1);
+    assert!(hunk.new_lines >= 1);
+    assert!(!hunk.old_changed.is_empty());
+    assert!(!hunk.new_changed.is_empty());
+  }
 }
 
 pub fn has_head_commit(repo_root: &Path) -> bool {
