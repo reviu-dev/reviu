@@ -3,6 +3,7 @@ use std::{
   fs,
   ops::Range,
   path::{Path, PathBuf},
+  sync::Arc,
   time::{Duration, Instant, SystemTime},
 };
 
@@ -13,9 +14,10 @@ use editor::{
   diff_line_hunks,
 };
 use git::{
-  BranchStatus, DiffHunkInfo, FileStatusKind, HunkRange, RepositoryFile, apply_patch_to_workdir,
-  branch_status, can_undo_last_commit, commit_repository, diff_buffers_for_path, has_head_commit,
-  open_repository, push_repository, restore_change, stage_all, stage_path,
+  BranchKind, BranchRef, BranchStatus, DiffHunkInfo, FileStatusKind, HunkRange, RepositoryFile,
+  apply_patch_to_workdir, branch_status, can_undo_last_commit, commit_repository, create_branch,
+  create_branch_from, diff_buffers_for_path, has_head_commit, list_branches, open_repository,
+  push_repository, restore_change, stage_all, stage_path, switch_branch,
   undo_last_commit as git_undo_last_commit, unstage_all, unstage_path, write_index_content,
 };
 use gpui::{
@@ -25,16 +27,17 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _, Theme as ComponentTheme,
-  button::ButtonGroup,
+  button::{ButtonGroup, ButtonVariant},
   kbd::Kbd,
   menu::{DropdownMenu as _, PopupMenuItem},
   tooltip::Tooltip,
 };
 use syntax::Theme as SyntaxTheme;
 use ui::{
-  Button, ButtonVariants, Collapsible, ConfirmDialog, Disableable, IconName, Input, InputState,
-  ResizableState, SearchableVec, Select, SelectEvent, SelectItem, SelectState, Sidebar,
-  SidebarItem, Sizable, WindowExt, h_resizable, resizable_panel,
+  Button, ButtonVariants, Collapsible, CommandPalette, CommandPaletteAction, CommandPaletteBranch,
+  CommandPaletteBranchKind, CommandPaletteConfig, CommandPaletteHandler, ConfirmDialog,
+  Disableable, IconName, Input, InputState, ResizableState, SearchableVec, Select, SelectEvent,
+  SelectItem, SelectState, Sidebar, SidebarItem, Sizable, WindowExt, h_resizable, resizable_panel,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: Pixels = px(260.0);
@@ -45,7 +48,10 @@ const FILE_POLL_INTERVAL_MS: u64 = 500;
 const REPO_POLL_INTERVAL_MS: u64 = 1500;
 const INCREMENTAL_DIFF_CONTEXT_LINES: usize = 80;
 
-actions!(workspace, [OpenRepository, SaveFile, CommitChanges]);
+actions!(
+  workspace,
+  [OpenRepository, SaveFile, CommitChanges, ShowCommandPalette]
+);
 
 #[derive(Clone)]
 struct FileEntry {
@@ -1393,6 +1399,71 @@ impl GitPage {
     self.start_open_repository(cx);
   }
 
+  fn show_command_palette_action(
+    &mut self,
+    _: &ShowCommandPalette,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_command_palette(window, cx);
+  }
+
+  fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(root_path) = self.root_path.clone() else {
+      self.error = Some("Select a repository to use the command palette.".to_string());
+      cx.notify();
+      return;
+    };
+
+    let branches = match list_branches(&root_path) {
+      Ok(branches) => branches,
+      Err(err) => {
+        self.error = Some(format!("Failed to list branches: {err}"));
+        cx.notify();
+        return;
+      }
+    };
+
+    let palette_branches = branches
+      .into_iter()
+      .map(|branch| CommandPaletteBranch {
+        name: branch.name.into(),
+        kind: match branch.kind {
+          BranchKind::Local => CommandPaletteBranchKind::Local,
+          BranchKind::Remote => CommandPaletteBranchKind::Remote,
+        },
+      })
+      .collect::<Vec<_>>();
+
+    let view = cx.entity();
+    let handler: CommandPaletteHandler = Arc::new(move |action, _window, cx| {
+      view.update(cx, |view, cx| {
+        view.handle_command_palette_action(action, cx)
+      })
+    });
+
+    let palette = cx.new(|cx| {
+      CommandPalette::new(
+        window,
+        cx,
+        CommandPaletteConfig::new(palette_branches, handler),
+      )
+    });
+    let palette_for_dialog = palette.clone();
+
+    window.open_dialog(cx, move |dialog, _, _| {
+      dialog
+        .p_0()
+        .border_0()
+        .min_h_0()
+        .overlay_closable(true)
+        .keyboard(true)
+        .close_button(false)
+        .keyboard(true)
+        .child(palette_for_dialog.clone())
+    });
+  }
+
   fn start_open_repository(&mut self, cx: &mut Context<Self>) {
     let receiver = cx.prompt_for_paths(PathPromptOptions {
       files: false,
@@ -1683,6 +1754,51 @@ impl GitPage {
       return;
     }
     self.commit_changes_with_amend(false, window, cx);
+  }
+
+  fn handle_command_palette_action(
+    &mut self,
+    action: CommandPaletteAction,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let Some(root_path) = self.root_path.clone() else {
+      return Err("No repository selected.".into());
+    };
+
+    let result = match action {
+      CommandPaletteAction::SwitchBranch(branch) => {
+        let branch_ref = BranchRef {
+          name: branch.name.to_string(),
+          kind: match branch.kind {
+            CommandPaletteBranchKind::Local => BranchKind::Local,
+            CommandPaletteBranchKind::Remote => BranchKind::Remote,
+          },
+        };
+        switch_branch(&root_path, &branch_ref)
+      }
+      CommandPaletteAction::CreateBranch { name } => create_branch(&root_path, &name),
+      CommandPaletteAction::CreateBranchFrom { name, base } => {
+        let branch_ref = BranchRef {
+          name: base.name.to_string(),
+          kind: match base.kind {
+            CommandPaletteBranchKind::Local => BranchKind::Local,
+            CommandPaletteBranchKind::Remote => BranchKind::Remote,
+          },
+        };
+        create_branch_from(&root_path, &name, &branch_ref)
+      }
+    };
+
+    if let Err(err) = result {
+      let message: SharedString = format!("Failed to update branches: {err}").into();
+      self.error = Some(message.to_string());
+      cx.notify();
+      return Err(message);
+    }
+
+    self.error = None;
+    self.refresh_repository_statuses(cx);
+    Ok(())
   }
 
   fn save_current_file(&mut self, cx: &mut Context<Self>) {
@@ -2115,7 +2231,7 @@ impl GitPage {
 
     let main_button = Button::new("commit-button-main")
       .label("Commit")
-      .primary()
+      .with_variant(ButtonVariant::Secondary)
       .outline()
       .flex_1()
       .rounded_r_none()
@@ -2125,7 +2241,7 @@ impl GitPage {
 
     let menu_button = Button::new("commit-button-menu")
       .icon(IconName::ChevronDown)
-      .primary()
+      .with_variant(ButtonVariant::Secondary)
       .outline()
       .rounded_l_none()
       .border_l_0()
@@ -2561,6 +2677,7 @@ impl Render for GitPage {
       .on_action(cx.listener(Self::open_repository_action))
       .on_action(cx.listener(Self::save_file_action))
       .on_action(cx.listener(Self::commit_changes_action))
+      .on_action(cx.listener(Self::show_command_palette_action))
   }
 }
 

@@ -8,7 +8,7 @@ mod app_root;
 use app_root::AppRoot;
 use gpui_component::Root;
 use gpui_component_assets::Assets;
-use workspace::{CommitChanges, OpenRepository, SaveFile, WorkspaceView};
+use workspace::{CommitChanges, OpenRepository, SaveFile, ShowCommandPalette, WorkspaceView};
 
 const INITIAL_WINDOW_WIDTH: f32 = 1200.0;
 const INITIAL_WINDOW_HEIGHT: f32 = 800.0;
@@ -57,6 +57,7 @@ fn main() {
       KeyBinding::new("cmd-z", Undo, Some("Editor")),
       KeyBinding::new("cmd-shift-z", Redo, Some("Editor")),
       KeyBinding::new("cmd-s", SaveFile, Some("Editor")),
+      KeyBinding::new("cmd-p", ShowCommandPalette, None),
       KeyBinding::new("cmd-enter", CommitChanges, Some("Input")),
       KeyBinding::new("home", Home, Some("Editor")),
       KeyBinding::new("end", End, Some("Editor")),
