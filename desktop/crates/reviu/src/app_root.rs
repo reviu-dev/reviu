@@ -1,4 +1,6 @@
-use gpui::{App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, Window, div, prelude::*};
+use gpui::{
+  App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, Window, div, prelude::*,
+};
 use gpui_component::Root;
 use workspace::WorkspaceView;
 

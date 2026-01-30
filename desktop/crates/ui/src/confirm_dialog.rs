@@ -86,6 +86,7 @@ impl ConfirmDialog {
       .title(self.title)
       .confirm()
       .child(self.message)
+      .overlay_closable(true)
       .button_props(props);
 
     if let Some(on_confirm) = self.on_confirm {

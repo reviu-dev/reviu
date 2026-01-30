@@ -50,6 +50,18 @@ pub struct BranchStatus {
   pub behind: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BranchKind {
+  Local,
+  Remote,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchRef {
+  pub name: String,
+  pub kind: BranchKind,
+}
+
 #[derive(Clone, Debug)]
 pub struct HunkRange {
   pub base: Option<Range<usize>>,
@@ -969,6 +981,123 @@ pub fn branch_status(repo_root: &Path) -> Result<BranchStatus, git2::Error> {
     ahead,
     behind,
   })
+}
+
+pub fn list_branches(repo_root: &Path) -> Result<Vec<BranchRef>, git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  let mut branches = Vec::new();
+
+  for entry in repo.branches(Some(BranchType::Local))? {
+    let (branch, _) = entry?;
+    if let Some(name) = branch.name()? {
+      branches.push(BranchRef {
+        name: name.to_string(),
+        kind: BranchKind::Local,
+      });
+    }
+  }
+
+  for entry in repo.branches(Some(BranchType::Remote))? {
+    let (branch, _) = entry?;
+    if let Some(name) = branch.name()? {
+      if name.ends_with("/HEAD") {
+        continue;
+      }
+      branches.push(BranchRef {
+        name: name.to_string(),
+        kind: BranchKind::Remote,
+      });
+    }
+  }
+
+  branches.sort_by(|a, b| match (a.kind, b.kind) {
+    (BranchKind::Local, BranchKind::Remote) => std::cmp::Ordering::Less,
+    (BranchKind::Remote, BranchKind::Local) => std::cmp::Ordering::Greater,
+    _ => a.name.cmp(&b.name),
+  });
+
+  Ok(branches)
+}
+
+pub fn switch_branch(repo_root: &Path, branch: &BranchRef) -> Result<(), git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  match branch.kind {
+    BranchKind::Local => checkout_local_branch(&repo, &branch.name),
+    BranchKind::Remote => checkout_remote_branch(&repo, &branch.name),
+  }
+}
+
+pub fn create_branch(repo_root: &Path, name: &str) -> Result<(), git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  let head_commit = repo.head()?.peel_to_commit()?;
+  repo.branch(name, &head_commit, false)?;
+  checkout_local_branch(&repo, name)
+}
+
+pub fn create_branch_from(
+  repo_root: &Path,
+  name: &str,
+  base: &BranchRef,
+) -> Result<(), git2::Error> {
+  let repo = GitRepository::discover(repo_root)?;
+  let base_commit = branch_ref_commit(&repo, base)?;
+  repo.branch(name, &base_commit, false)?;
+  if base.kind == BranchKind::Remote {
+    if let Some((remote, branch_name)) = parse_remote_branch_name(&base.name) {
+      let mut local_branch = repo.find_branch(name, BranchType::Local)?;
+      local_branch.set_upstream(Some(&format!("{}/{}", remote, branch_name)))?;
+    }
+  }
+  checkout_local_branch(&repo, name)
+}
+
+fn branch_ref_commit<'repo>(
+  repo: &'repo GitRepository,
+  branch: &BranchRef,
+) -> Result<git2::Commit<'repo>, git2::Error> {
+  match branch.kind {
+    BranchKind::Local => {
+      let branch_ref = repo.find_branch(&branch.name, BranchType::Local)?;
+      branch_ref.get().peel_to_commit()
+    }
+    BranchKind::Remote => {
+      let branch_ref = repo.find_branch(&branch.name, BranchType::Remote)?;
+      branch_ref.get().peel_to_commit()
+    }
+  }
+}
+
+fn checkout_local_branch(repo: &GitRepository, branch: &str) -> Result<(), git2::Error> {
+  let ref_name = format!("refs/heads/{}", branch);
+  repo.set_head(&ref_name)?;
+  let mut options = CheckoutBuilder::new();
+  options.safe();
+  repo.checkout_head(Some(&mut options))?;
+  Ok(())
+}
+
+fn checkout_remote_branch(repo: &GitRepository, branch: &str) -> Result<(), git2::Error> {
+  let Some((remote, branch_name)) = parse_remote_branch_name(branch) else {
+    return Err(git2::Error::from_str("Invalid remote branch name"));
+  };
+
+  if repo.find_branch(branch_name, BranchType::Local).is_ok() {
+    return checkout_local_branch(repo, branch_name);
+  }
+
+  let remote_branch = repo.find_branch(branch, BranchType::Remote)?;
+  let commit = remote_branch.get().peel_to_commit()?;
+  let mut local_branch = repo.branch(branch_name, &commit, false)?;
+  local_branch.set_upstream(Some(&format!("{}/{}", remote, branch_name)))?;
+  checkout_local_branch(repo, branch_name)
+}
+
+fn parse_remote_branch_name(name: &str) -> Option<(&str, &str)> {
+  let (remote, branch) = name.split_once('/')?;
+  if remote.is_empty() || branch.is_empty() {
+    return None;
+  }
+  Some((remote, branch))
 }
 
 pub fn push_repository(repo_root: &Path, force: bool) -> Result<(), git2::Error> {
