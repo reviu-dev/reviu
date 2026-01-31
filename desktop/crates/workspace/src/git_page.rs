@@ -1787,10 +1787,15 @@ impl GitPage {
         };
         create_branch_from(&root_path, &name, &branch_ref)
       }
+      CommandPaletteAction::MergeBranch { name } => {
+        Ok(())
+        // TODO
+        // merge_branch(&root_path, &name)
+      }
     };
 
     if let Err(err) = result {
-      let message: SharedString = format!("Failed to update branches: {err}").into();
+      let message: SharedString = format!("Action failed: {err}").into();
       self.error = Some(message.to_string());
       cx.notify();
       return Err(message);
