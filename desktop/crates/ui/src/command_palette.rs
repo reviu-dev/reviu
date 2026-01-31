@@ -78,6 +78,9 @@ pub enum CommandPaletteAction {
     name: String,
     base: CommandPaletteBranch,
   },
+  MergeBranch {
+    name: CommandPaletteBranch,
+  },
 }
 
 struct BranchesListDelegate {
@@ -364,6 +367,22 @@ impl CommandPaletteCommand {
     }
   }
 
+  pub fn create_branch() -> Self {
+    Self {
+      id: CommandPaletteCommandId::CreateBranch,
+      name: "Create branch".into(),
+      description: Some("Create a new branch".into()),
+    }
+  }
+
+  pub fn create_branch_from() -> Self {
+    Self {
+      id: CommandPaletteCommandId::CreateBranchFrom,
+      name: "Create branch from...".into(),
+      description: Some("Create a new branch from an existing branch".into()),
+    }
+  }
+
   fn matches(&self, query: &str) -> bool {
     if query.is_empty() {
       return true;
@@ -447,21 +466,13 @@ impl CommandPalette {
     branches_with_actions.insert(
       0,
       Rc::new(BranchListWithCommands::CommandPaletteCommand(
-        CommandPaletteCommand {
-          id: CommandPaletteCommandId::CreateBranch,
-          name: "Create branch".into(),
-          description: Some("Create a new branch".into()),
-        },
+        CommandPaletteCommand::create_branch(),
       )),
     );
     branches_with_actions.insert(
       1,
       Rc::new(BranchListWithCommands::CommandPaletteCommand(
-        CommandPaletteCommand {
-          id: CommandPaletteCommandId::CreateBranchFrom,
-          name: "Create branch from...".into(),
-          description: Some("Create a new branch from an existing branch".into()),
-        },
+        CommandPaletteCommand::create_branch_from(),
       )),
     );
 
@@ -540,14 +551,35 @@ impl CommandPalette {
         window,
         |command_palette, list_state, ev: &ListEvent, window, cx| {
           if let ListEvent::Confirm(ix) = ev {
-            let branch = {
-              let list = list_state.read(cx);
-              list.delegate().matched_branches.get(ix.row).cloned()
-            };
+            match command_palette.screen {
+              CommandPaletteScreen::MergeBranch => {
+                let branch = {
+                  let list = list_state.read(cx);
+                  list.delegate().matched_branches.get(ix.row).cloned()
+                };
 
-            command_palette.create_branch_base = branch.clone();
+                if let Some(branch) = branch {
+                  command_palette.trigger_action(
+                    CommandPaletteAction::MergeBranch {
+                      name: (*branch).clone(),
+                    },
+                    window,
+                    cx,
+                  );
+                }
+              }
+              CommandPaletteScreen::CreateBranchFrom => {
+                let branch = {
+                  let list = list_state.read(cx);
+                  list.delegate().matched_branches.get(ix.row).cloned()
+                };
 
-            command_palette.select_command(CommandPaletteCommandId::CreateBranch, cx, window);
+                command_palette.create_branch_base = branch.clone();
+
+                command_palette.select_command(CommandPaletteCommandId::CreateBranch, cx, window);
+              }
+              _ => {}
+            }
           }
         },
       ),
@@ -640,7 +672,11 @@ impl CommandPalette {
           state.focus(window, cx);
         });
       }
-      _ => {}
+      CommandPaletteScreen::MergeBranch => {
+        self.branches_list.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      }
     }
   }
 
@@ -780,9 +816,21 @@ impl CommandPalette {
   fn render_merge_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
-    div()
+    let count_branches = self
+      .branches_list
+      .read(cx)
+      .delegate()
+      .matched_branches
+      .len();
+
+    v_flex()
       .gap_3()
-      .child("TODO: Merge branch UI")
+      .child(self.render_search_list(
+        &self.branches_list,
+        count_branches,
+        "Search branches...",
+        cx,
+      ))
       .when(self.error.is_some(), |parent| {
         parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
       })
