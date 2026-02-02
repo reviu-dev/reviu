@@ -7,6 +7,13 @@ publish.workspace = true
 [dependencies]
 gpui.workspace = true
 tree-sitter-highlight.workspace = true
+tree-sitter.workspace = true
 tree-sitter-rust.workspace = true
 tree-sitter-typescript.workspace = true
+tree-sitter-json.workspace = true
+tree-sitter-md.workspace = true
+tree-sitter-css.workspace = true
+tree-sitter-html.workspace = true
+tree-sitter-dockerfile.workspace = true
+tree-sitter-yaml.workspace = true
 once_cell.workspace = true

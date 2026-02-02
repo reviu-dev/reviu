@@ -660,6 +660,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake3"
+version = "1.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2468ef7d57b3fb7e16b576e8377cdbde2320c60e1491e961d11da40fc4f02a2d"
+dependencies = [
+ "arrayref",
+ "arrayvec",
+ "cc",
+ "cfg-if",
+ "constant_time_eq",
+ "cpufeatures",
+]
+
+[[package]]
 name = "block"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1050,6 +1064,12 @@ dependencies = [
  "once_cell",
  "tiny-keccak",
 ]
+
+[[package]]
+name = "constant_time_eq"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "convert_case"
@@ -1481,11 +1501,12 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 name = "editor"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "buffer",
+ "git",
  "gpui",
  "gpui-component",
  "parking_lot",
- "ropey 1.6.1",
  "smol",
  "syntax",
  "unicode-segmentation",
@@ -2109,6 +2130,8 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 name = "git"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "blake3",
  "git2",
 ]
 
@@ -2315,7 +2338,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.5.0"
-source = "git+https://github.com/longbridge/gpui-component#6e5bd33028eebf91043c8d5743e4ed2bac2a29c8"
+source = "git+https://github.com/longbridge/gpui-component#023f2e85690c45c452ab2a094299ac616f663547"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -2343,7 +2366,7 @@ dependencies = [
  "smallvec",
  "smol",
  "tracing",
- "tree-sitter",
+ "tree-sitter 0.25.10",
  "tree-sitter-json",
  "unicode-segmentation",
  "uuid",
@@ -2353,7 +2376,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-assets"
 version = "0.5.0"
-source = "git+https://github.com/longbridge/gpui-component#6e5bd33028eebf91043c8d5743e4ed2bac2a29c8"
+source = "git+https://github.com/longbridge/gpui-component#023f2e85690c45c452ab2a094299ac616f663547"
 dependencies = [
  "anyhow",
  "gpui",
@@ -2363,7 +2386,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.5.0"
-source = "git+https://github.com/longbridge/gpui-component#6e5bd33028eebf91043c8d5743e4ed2bac2a29c8"
+source = "git+https://github.com/longbridge/gpui-component#023f2e85690c45c452ab2a094299ac616f663547"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5477,9 +5500,16 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "once_cell",
+ "tree-sitter 0.25.10",
+ "tree-sitter-css",
+ "tree-sitter-dockerfile",
  "tree-sitter-highlight",
+ "tree-sitter-html",
+ "tree-sitter-json",
+ "tree-sitter-md",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+ "tree-sitter-yaml",
 ]
 
 [[package]]
@@ -5843,6 +5873,16 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
+version = "0.20.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e747b1f9b7b931ed39a548c1fae149101497de3c1fc8d9e18c62c1a66c683d3d"
+dependencies = [
+ "cc",
+ "regex",
+]
+
+[[package]]
+name = "tree-sitter"
 version = "0.25.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "78f873475d258561b06f1c595d93308a7ed124d9977cb26b148c2084a4a3cc87"
@@ -5856,6 +5896,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-css"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5cbc5e18f29a2c6d6435891f42569525cf95435a3e01c2f1947abcde178686f"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-dockerfile"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba46310efcac616744ca79aa4b0e228202e388913ebcd4a1ba107072f7f4432a"
+dependencies = [
+ "cc",
+ "tree-sitter 0.20.10",
+]
+
+[[package]]
 name = "tree-sitter-highlight"
 version = "0.25.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5864,7 +5924,17 @@ dependencies = [
  "regex",
  "streaming-iterator",
  "thiserror 2.0.17",
- "tree-sitter",
+ "tree-sitter 0.25.10",
+]
+
+[[package]]
+name = "tree-sitter-html"
+version = "0.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "261b708e5d92061ede329babaaa427b819329a9d427a1d710abb0f67bbef63ee"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
 ]
 
 [[package]]
@@ -5884,6 +5954,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ae62f7eae5eb549c71b76658648b72cc6111f2d87d24a1e31fa907f4943e3ce"
 
 [[package]]
+name = "tree-sitter-md"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c96068626225a758ddb1f7cfb82c7c1fab4e093dd3bde464e2a44e8341f58f5"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-rust"
 version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5898,6 +5978,16 @@ name = "tree-sitter-typescript"
 version = "0.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c5f76ed8d947a75cc446d5fccd8b602ebf0cde64ccf2ffa434d873d7a575eff"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-yaml"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53c223db85f05e34794f065454843b0668ebc15d240ada63e2b5939f43ce7c97"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -6975,6 +7065,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "rusqlite",
+ "smol",
  "syntax",
  "ui",
 ]

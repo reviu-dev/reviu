@@ -6,5 +6,4 @@ Gpui:
 
 - Gpui examples are available at ./desktop/gpui
 - Gpui-components examples are available at ./desktop/gpui-components
-- Gpui-components use lucide icons check context7 for icons names
-- Ryuk note app gpui project is available for inspiration at ./desktop/ryuk
+- Icons use gpui-components icons
