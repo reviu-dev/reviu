@@ -271,10 +271,10 @@ impl SidebarItem for FileSidebarItem {
         this.child(
           div()
             .id(status_id)
-            .w(px(20.))
             .tooltip(move |window, cx| Tooltip::new(status_tooltip.clone()).build(window, cx))
             .child(
               div()
+                .w(px(15.))
                 .text_xs()
                 .text_color(self.status_color)
                 .child(self.status_letter.clone()),
@@ -309,8 +309,9 @@ impl SidebarItem for FileSidebarItem {
       .when(!is_collapsed && !self.disabled && has_actions, |this| {
         let mut actions = ButtonGroup::new(format!("file-actions-{}", self.label))
           .primary()
-          .xsmall()
-          .rounded_md();
+          .with_variant(ButtonVariant::Secondary)
+          .xsmall();
+
         if let Some(handler) = stage_action {
           actions = actions.child(
             Button::new(format!("stage-file-{}", self.label))
@@ -1383,7 +1384,7 @@ impl GitPage {
       return None;
     }
 
-    let top = line_height * (overlay.display_line - viewport_start) as f32 + px(3.0);
+    let top = line_height * (overlay.display_line - viewport_start) as f32;
     let file_dirty = editor_state.is_dirty;
 
     let stage_tooltip = if file_dirty {
@@ -1408,8 +1409,8 @@ impl GitPage {
 
     let mut actions = ButtonGroup::new("change-block-actions")
       .primary()
-      .xsmall()
-      .rounded_md()
+      .with_variant(ButtonVariant::Secondary)
+      .small()
       .disabled(file_dirty);
 
     match state {
@@ -1421,6 +1422,7 @@ impl GitPage {
             .icon(IconName::Plus)
             .label("Stage")
             .tooltip(stage_tooltip)
+            .rounded_t_none()
             .disabled(file_dirty)
             .on_click(move |_, _, cx| {
               let group_id = group_id.clone();
@@ -1439,6 +1441,7 @@ impl GitPage {
             .label("Unstage")
             .tooltip(unstage_tooltip)
             .disabled(file_dirty)
+            .rounded_t_none()
             .on_click(move |_, _, cx| {
               let group_id = group_id.clone();
               editor_entity.update(cx, |editor, cx| {
@@ -1456,6 +1459,7 @@ impl GitPage {
         Button::new("restore-hunk")
           .icon(IconName::Undo)
           .label("Restore")
+          .rounded_t_none()
           .tooltip(restore_tooltip)
           .disabled(file_dirty)
           .on_click(move |_, _, cx| {
@@ -1603,23 +1607,22 @@ impl GitPage {
       ("Stage all", IconName::Plus, "Stage all files")
     };
 
-    SidebarHeader::new().child(
-      div()
-        .w_full()
-        .flex()
-        .items_center()
-        .justify_between()
-        .child(
-          Button::new("stage-all-button")
-            .label(label)
-            .icon(icon)
-            .with_variant(ButtonVariant::Secondary)
-            .xsmall()
-            .disabled(!sidebar_enabled)
-            .tooltip(tooltip)
-            .on_click(cx.listener(Self::toggle_stage_all_action)),
-        ),
-    )
+    div()
+      .w_full()
+      .flex()
+      .pb_3()
+      .items_center()
+      .justify_between()
+      .child(
+        Button::new("stage-all-button")
+          .label(label)
+          .icon(icon)
+          .with_variant(ButtonVariant::Secondary)
+          .xsmall()
+          .disabled(!sidebar_enabled)
+          .tooltip(tooltip)
+          .on_click(cx.listener(Self::toggle_stage_all_action)),
+      )
   }
 
   fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -1629,7 +1632,6 @@ impl GitPage {
         .side(Side::Left)
         .w_full()
         .h_full()
-        .header(self.render_sidebar_header(cx))
         .child(SidebarGroup::new("Changes").child(placeholder))
         .into_any_element();
     } else if self.status_entries.is_empty() {
@@ -1638,7 +1640,6 @@ impl GitPage {
         .side(Side::Left)
         .w_full()
         .h_full()
-        .header(self.render_sidebar_header(cx))
         .child(SidebarGroup::new("Changes").child(placeholder))
         .into_any_element();
     } else {
@@ -1705,7 +1706,7 @@ impl GitPage {
         .h_full()
         .header(self.render_sidebar_header(cx))
         .child(SidebarGroup::new("Changes").children(items))
-        // .border_color(gpui::blue())
+        .border_0()
         .footer(self.render_commit_bar(cx))
         .into_any_element();
     }
