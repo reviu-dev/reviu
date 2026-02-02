@@ -41,6 +41,24 @@ impl Theme {
     }
   }
 
+  pub fn gutter_background(&self) -> Hsla {
+    if self.is_dark {
+      Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 0.0,
+        a: 1.0,
+      } // #000000
+    } else {
+      Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 1.0,
+        a: 1.0,
+      } // #ffffff
+    }
+  }
+
   pub fn line_number(&self) -> Hsla {
     if self.is_dark {
       Hsla {
@@ -113,40 +131,34 @@ impl Theme {
     }
   }
 
-  pub fn diff_added_word_background(&self) -> Hsla {
+  pub fn diff_removed_text(&self) -> Hsla {
     if self.is_dark {
       Hsla {
-        h: 120.0 / 360.0,
-        s: 0.55,
-        l: 0.3,
-        a: 0.85,
+        h: 0.0,
+        s: 0.75,
+        l: 0.62,
+        a: 1.0,
       }
     } else {
       Hsla {
-        h: 120.0 / 360.0,
-        s: 0.6,
-        l: 0.8,
-        a: 0.9,
+        h: 0.0,
+        s: 0.65,
+        l: 0.45,
+        a: 1.0,
       }
     }
   }
 
-  pub fn diff_removed_word_background(&self) -> Hsla {
-    if self.is_dark {
-      Hsla {
-        h: 0.0,
-        s: 0.6,
-        l: 0.3,
-        a: 0.85,
-      }
-    } else {
-      Hsla {
-        h: 0.0,
-        s: 0.6,
-        l: 0.8,
-        a: 0.9,
-      }
-    }
+  pub fn diff_added_staged_background(&self) -> Hsla {
+    let mut color = self.diff_added_background();
+    color.a = (color.a * 0.6).min(1.0);
+    color
+  }
+
+  pub fn diff_removed_staged_background(&self) -> Hsla {
+    let mut color = self.diff_removed_background();
+    color.a = (color.a * 0.6).min(1.0);
+    color
   }
 
   pub fn diff_gutter_added(&self) -> Hsla {
@@ -154,6 +166,15 @@ impl Theme {
       h: 120.0 / 360.0,
       s: 0.6,
       l: 0.45,
+      a: 1.0,
+    }
+  }
+
+  pub fn diff_gutter_removed(&self) -> Hsla {
+    Hsla {
+      h: 0.0,
+      s: 0.7,
+      l: 0.5,
       a: 1.0,
     }
   }

@@ -2,6 +2,108 @@ use crate::theme::TokenType;
 use std::ops::Range;
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
+pub const HIGHLIGHT_NAMES: &[&str] = &[
+  "keyword",
+  "keyword.control",
+  "keyword.operator.regex",
+  "function",
+  "function.definition",
+  "function.method",
+  "function.special",
+  "function.special.definition",
+  "type",
+  "type.builtin",
+  "type.interface",
+  "type.class",
+  "type.name",
+  "string",
+  "string.escape",
+  "escape",
+  "string.regex",
+  "string.special.key",
+  "number",
+  "boolean",
+  "comment",
+  "comment.doc",
+  "variable",
+  "variable.special",
+  "variable.parameter",
+  "property",
+  "property.name",
+  "constant",
+  "constant.builtin",
+  "operator",
+  "punctuation",
+  "punctuation.bracket",
+  "punctuation.delimiter",
+  "punctuation.special",
+  "attribute",
+  "lifetime",
+  "embedded",
+  "constructor",
+  "nested",
+  "text.title",
+  "text.literal",
+  "text.uri",
+  "text.reference",
+  "none",
+  "tag",
+  "tag.error",
+  "string.special",
+  "label",
+];
+
+const HIGHLIGHT_TOKEN_TYPES: &[Option<TokenType>] = &[
+  Some(TokenType::Keyword),            // keyword
+  Some(TokenType::KeywordControl),     // keyword.control
+  Some(TokenType::KeywordControl),     // keyword.operator.regex
+  Some(TokenType::Function),           // function
+  Some(TokenType::Function),           // function.definition
+  Some(TokenType::FunctionMethod),     // function.method
+  Some(TokenType::FunctionSpecial),    // function.special
+  Some(TokenType::FunctionSpecial),    // function.special.definition
+  Some(TokenType::Type),               // type
+  Some(TokenType::TypeBuiltin),        // type.builtin
+  Some(TokenType::TypeInterface),      // type.interface
+  Some(TokenType::TypeClass),          // type.class
+  Some(TokenType::Type),               // type.name
+  Some(TokenType::String),             // string
+  Some(TokenType::StringEscape),       // string.escape
+  Some(TokenType::StringEscape),       // escape
+  Some(TokenType::StringRegex),        // string.regex
+  Some(TokenType::Property),           // string.special.key
+  Some(TokenType::Number),             // number
+  Some(TokenType::Boolean),            // boolean
+  Some(TokenType::Comment),            // comment
+  Some(TokenType::CommentDoc),         // comment.doc
+  Some(TokenType::Variable),           // variable
+  Some(TokenType::VariableSpecial),    // variable.special
+  Some(TokenType::VariableParameter),  // variable.parameter
+  Some(TokenType::Property),           // property
+  Some(TokenType::Property),           // property.name
+  Some(TokenType::Constant),           // constant
+  Some(TokenType::ConstantBuiltin),    // constant.builtin
+  Some(TokenType::Operator),           // operator
+  Some(TokenType::Punctuation),        // punctuation
+  Some(TokenType::PunctuationBracket), // punctuation.bracket
+  Some(TokenType::PunctuationDelimiter), // punctuation.delimiter
+  Some(TokenType::PunctuationSpecial), // punctuation.special
+  Some(TokenType::Attribute),          // attribute
+  Some(TokenType::Lifetime),           // lifetime
+  Some(TokenType::Embedded),           // embedded
+  Some(TokenType::Type),               // constructor
+  Some(TokenType::Variable),           // nested
+  Some(TokenType::Keyword),            // text.title
+  Some(TokenType::String),             // text.literal
+  Some(TokenType::String),             // text.uri
+  Some(TokenType::Constant),           // text.reference
+  None,                                // none
+  Some(TokenType::Type),               // tag
+  Some(TokenType::VariableSpecial),    // tag.error
+  Some(TokenType::String),             // string.special
+  Some(TokenType::VariableSpecial),    // label
+];
+
 /// Highlight span with token type
 #[derive(Clone, Debug)]
 pub struct HighlightSpan {
@@ -69,13 +171,15 @@ impl SyntaxHighlighter {
     for event in events {
       match event.map_err(|e| format!("Event error: {}", e))? {
         HighlightEvent::Source { start, end } => {
-          if let Some(&highlight_idx) = highlight_stack.last()
-            && !on_span(HighlightSpan {
-              byte_range: start..end,
-              token_type: map_highlight_index_to_token_type(highlight_idx),
-            })
-          {
-            return Ok(());
+          if let Some(&highlight_idx) = highlight_stack.last() {
+            if let Some(token_type) = map_highlight_index_to_token_type(highlight_idx) {
+              if !on_span(HighlightSpan {
+                byte_range: start..end,
+                token_type,
+              }) {
+                return Ok(());
+              }
+            }
           }
           if !on_source(start..end) {
             return Ok(());
@@ -95,30 +199,8 @@ impl SyntaxHighlighter {
 }
 
 /// Map highlight index to TokenType
-fn map_highlight_index_to_token_type(idx: usize) -> TokenType {
-  // Indices correspond to the order in highlight_names of HighlightConfiguration
-  // See languages/rust.rs for the list of names
-  match idx {
-    0 => TokenType::Keyword,             // keyword
-    1 => TokenType::KeywordControl,      // keyword.control
-    2 => TokenType::Function,            // function
-    3 => TokenType::FunctionMethod,      // function.method
-    4 => TokenType::FunctionSpecial,     // function.macro
-    5 => TokenType::Type,                // type
-    6 => TokenType::TypeBuiltin,         // type.builtin
-    7 => TokenType::String,              // string
-    8 => TokenType::StringEscape,        // string.escape
-    9 => TokenType::Number,              // number
-    10 => TokenType::Comment,            // comment
-    11 => TokenType::Variable,           // variable
-    12 => TokenType::Property,           // property
-    13 => TokenType::Constant,           // constant
-    14 => TokenType::Operator,           // operator
-    15 => TokenType::PunctuationBracket, // punctuation.bracket
-    16 => TokenType::Attribute,          // attribute
-    17 => TokenType::Lifetime,           // lifetime
-    _ => TokenType::Variable,            // fallback
-  }
+fn map_highlight_index_to_token_type(idx: usize) -> Option<TokenType> {
+  HIGHLIGHT_TOKEN_TYPES.get(idx).copied().flatten()
 }
 
 #[cfg(test)]
@@ -200,9 +282,9 @@ mod tests {
   #[test]
   fn test_map_highlight_indices() {
     // Verify that all indices map correctly
-    assert_eq!(map_highlight_index_to_token_type(0), TokenType::Keyword);
-    assert_eq!(map_highlight_index_to_token_type(2), TokenType::Function);
-    assert_eq!(map_highlight_index_to_token_type(7), TokenType::String);
-    assert_eq!(map_highlight_index_to_token_type(999), TokenType::Variable); // fallback
+    assert_eq!(map_highlight_index_to_token_type(0), Some(TokenType::Keyword));
+    assert_eq!(map_highlight_index_to_token_type(3), Some(TokenType::Function));
+    assert_eq!(map_highlight_index_to_token_type(13), Some(TokenType::String));
+    assert_eq!(map_highlight_index_to_token_type(999), None);
   }
 }

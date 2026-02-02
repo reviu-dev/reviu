@@ -5,16 +5,12 @@
 
 use gpui::{ClipboardItem, Context, EntityInputHandler, Window, actions};
 
-use crate::{
-  boundaries,
-  editor::{Editor, TAB_WHITESPACE_COUNT},
-};
+use crate::{boundaries, editor::Editor};
 
 actions!(
   editor,
   [
     Enter,
-    Tab,
     Backspace,
     BackspaceWord,
     BackspaceAll,
@@ -48,6 +44,7 @@ actions!(
     Copy,
     Undo,
     Redo,
+    Save,
     Quit,
   ]
 );
@@ -59,13 +56,6 @@ pub fn enter(editor: &mut Editor, _: &Enter, window: &mut Window, cx: &mut Conte
   editor.ensure_cursor_visible(window, cx);
 }
 
-pub fn tab(editor: &mut Editor, _: &Tab, window: &mut Window, cx: &mut Context<Editor>) {
-  editor.target_column = None;
-  let tab_text = " ".repeat(TAB_WHITESPACE_COUNT);
-  editor.replace_text_in_range(None, &tab_text, window, cx);
-  editor.ensure_cursor_visible(window, cx);
-}
-
 pub fn backspace(
   editor: &mut Editor,
   _: &Backspace,
@@ -73,6 +63,12 @@ pub fn backspace(
   cx: &mut Context<Editor>,
 ) {
   editor.target_column = None;
+  if editor.selected_range.is_empty()
+    && editor.move_display_cursor_horizontal(-1, cx)
+  {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   if editor.selected_range.is_empty() {
     editor.select_to(
       boundaries::previous_boundary(editor, editor.cursor_offset(), cx),
@@ -141,6 +137,10 @@ pub fn delete(editor: &mut Editor, _: &Delete, window: &mut Window, cx: &mut Con
 }
 
 pub fn up(editor: &mut Editor, _: &Up, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.move_display_cursor_vertical(-1, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   let new_cursor = {
     let document = editor.document.read(cx);
     let cursor_offset = editor.cursor_offset();
@@ -154,8 +154,10 @@ pub fn up(editor: &mut Editor, _: &Up, window: &mut Window, cx: &mut Context<Edi
 
       let target_column = editor.target_column.unwrap();
 
-      // Calculate new position in target line
-      let target_line = current_line - 1;
+      // Calculate new position in target line (skip hidden lines)
+      let target_line = editor
+        .previous_visible_doc_line(current_line)
+        .unwrap_or(0);
       let target_start = document.line_to_char(target_line);
       let target_len = document.line_content(target_line).unwrap_or_default().len();
 
@@ -174,12 +176,17 @@ pub fn up(editor: &mut Editor, _: &Up, window: &mut Window, cx: &mut Context<Edi
 }
 
 pub fn down(editor: &mut Editor, _: &Down, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.move_display_cursor_vertical(1, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   let new_cursor = {
     let document = editor.document.read(cx);
     let cursor_offset = editor.cursor_offset();
     let current_line = document.char_to_line(cursor_offset);
+    let doc_line_count = document.len_lines();
 
-    if current_line < document.len_lines().saturating_sub(1) {
+    if current_line < doc_line_count.saturating_sub(1) {
       if editor.target_column.is_none() {
         let line_start = document.line_to_char(current_line);
         editor.target_column = Some(cursor_offset - line_start);
@@ -187,7 +194,9 @@ pub fn down(editor: &mut Editor, _: &Down, window: &mut Window, cx: &mut Context
 
       let target_column = editor.target_column.unwrap();
 
-      let target_line = current_line + 1;
+      let target_line = editor
+        .next_visible_doc_line(current_line, doc_line_count)
+        .unwrap_or(current_line);
       let target_start = document.line_to_char(target_line);
       let target_len = document.line_content(target_line).unwrap_or_default().len();
 
@@ -206,6 +215,12 @@ pub fn down(editor: &mut Editor, _: &Down, window: &mut Window, cx: &mut Context
 
 pub fn left(editor: &mut Editor, _: &Left, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
+  if editor.selected_range.is_empty()
+    && editor.move_display_cursor_horizontal(-1, cx)
+  {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   if editor.selected_range.is_empty() {
     editor.move_to(
       boundaries::previous_boundary(editor, editor.cursor_offset(), cx),
@@ -242,6 +257,12 @@ pub fn cmd_left(editor: &mut Editor, _: &CmdLeft, window: &mut Window, cx: &mut 
 
 pub fn right(editor: &mut Editor, _: &Right, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
+  if editor.selected_range.is_empty()
+    && editor.move_display_cursor_horizontal(1, cx)
+  {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   if editor.selected_range.is_empty() {
     editor.move_to(
       boundaries::next_boundary(editor, editor.selected_range.end, cx),
@@ -281,14 +302,28 @@ pub fn cmd_right(editor: &mut Editor, _: &CmdRight, window: &mut Window, cx: &mu
 
 pub fn cmd_up(editor: &mut Editor, _: &CmdUp, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
-  editor.move_to(0, cx);
+  let document = editor.document.read(cx);
+  let target_line = editor
+    .projection()
+    .and_then(|projection| projection.visible_doc_lines.first().copied())
+    .unwrap_or(0);
+  let target = document.line_to_char(target_line);
+  editor.move_to(target, cx);
   editor.ensure_cursor_visible(window, cx);
 }
 
 pub fn cmd_down(editor: &mut Editor, _: &CmdDown, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
   let document = editor.document.read(cx);
-  editor.move_to(document.len(), cx);
+  let doc_line_count = document.len_lines();
+  let target_line = editor
+    .projection()
+    .and_then(|projection| projection.visible_doc_lines.last().copied())
+    .unwrap_or_else(|| doc_line_count.saturating_sub(1));
+  let line_start = document.line_to_char(target_line);
+  let line_content = document.line_content(target_line).unwrap_or_default();
+  let line_end = line_start + line_content.len();
+  editor.move_to(line_end, cx);
   editor.ensure_cursor_visible(window, cx);
 }
 
@@ -306,6 +341,10 @@ pub fn end(editor: &mut Editor, _: &End, window: &mut Window, cx: &mut Context<E
 }
 
 pub fn select_up(editor: &mut Editor, _: &SelectUp, window: &mut Window, cx: &mut Context<Editor>) {
+  if editor.select_display_cursor_vertical(-1, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   // Keep the anchor point of the selection
   let anchor = if editor.selection_reversed {
     editor.selected_range.end
@@ -327,7 +366,9 @@ pub fn select_up(editor: &mut Editor, _: &SelectUp, window: &mut Window, cx: &mu
 
       let target_column = editor.target_column.unwrap();
 
-      let target_line = current_line - 1;
+      let target_line = editor
+        .previous_visible_doc_line(current_line)
+        .unwrap_or(0);
       let target_start = document.line_to_char(target_line);
       let target_len = document.line_content(target_line).unwrap_or_default().len();
 
@@ -347,7 +388,6 @@ pub fn select_up(editor: &mut Editor, _: &SelectUp, window: &mut Window, cx: &mu
     editor.selected_range = cursor..anchor;
     editor.selection_reversed = true;
   }
-  editor.sync_buffer_selection_from_view(cx);
   editor.ensure_cursor_visible(window, cx);
   cx.notify();
 }
@@ -358,6 +398,10 @@ pub fn select_down(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.select_display_cursor_vertical(1, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   // Keep the anchor point of the selection
   let anchor = if editor.selection_reversed {
     editor.selected_range.end
@@ -380,7 +424,9 @@ pub fn select_down(
 
       let target_column = editor.target_column.unwrap();
 
-      let target_line = current_line + 1;
+      let target_line = editor
+        .next_visible_doc_line(current_line, total_lines)
+        .unwrap_or(current_line);
       let target_start = document.line_to_char(target_line);
       let target_len = document.line_content(target_line).unwrap_or_default().len();
 
@@ -401,7 +447,6 @@ pub fn select_down(
     editor.selected_range = cursor..anchor;
     editor.selection_reversed = true;
   }
-  editor.sync_buffer_selection_from_view(cx);
   editor.ensure_cursor_visible(window, cx);
   cx.notify();
 }
@@ -492,7 +537,13 @@ pub fn select_cmd_up(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
-  editor.select_to(0, cx);
+  let document = editor.document.read(cx);
+  let target_line = editor
+    .projection()
+    .and_then(|projection| projection.visible_doc_lines.first().copied())
+    .unwrap_or(0);
+  let target = document.line_to_char(target_line);
+  editor.select_to(target, cx);
   editor.ensure_cursor_visible(window, cx);
 }
 
@@ -503,7 +554,15 @@ pub fn select_cmd_down(
   cx: &mut Context<Editor>,
 ) {
   let document = editor.document.read(cx);
-  editor.select_to(document.len(), cx);
+  let doc_line_count = document.len_lines();
+  let target_line = editor
+    .projection()
+    .and_then(|projection| projection.visible_doc_lines.last().copied())
+    .unwrap_or_else(|| doc_line_count.saturating_sub(1));
+  let line_start = document.line_to_char(target_line);
+  let line_content = document.line_content(target_line).unwrap_or_default();
+  let line_end = line_start + line_content.len();
+  editor.select_to(line_end, cx);
   editor.ensure_cursor_visible(window, cx);
 }
 
@@ -529,14 +588,7 @@ pub fn paste(editor: &mut Editor, _: &Paste, window: &mut Window, cx: &mut Conte
 }
 
 pub fn copy(editor: &mut Editor, _: &Copy, _: &mut Window, cx: &mut Context<Editor>) {
-  if !editor.selected_range.is_empty() {
-    let doc = editor.document.read(cx);
-    let text = if editor.diff_view_mode == crate::editor::DiffViewMode::Split && doc.diff_enabled()
-    {
-      doc.slice_to_string_for_side(editor.selected_range.clone(), editor.active_diff_panel)
-    } else {
-      doc.slice_to_string(editor.selected_range.clone())
-    };
+  if let Some(text) = editor.selected_text_for_copy(cx) {
     cx.write_to_clipboard(ClipboardItem::new_string(text));
   }
 }
@@ -546,14 +598,12 @@ pub fn cut(editor: &mut Editor, _: &Cut, window: &mut Window, cx: &mut Context<E
   if !editor.selected_range.is_empty() {
     let cursor = editor.cursor_offset();
     let current_line = editor.document.read(cx).char_to_line(cursor);
-    let doc = editor.document.read(cx);
-    let text = if editor.diff_view_mode == crate::editor::DiffViewMode::Split && doc.diff_enabled()
-    {
-      doc.slice_to_string_for_side(editor.selected_range.clone(), editor.active_diff_panel)
-    } else {
-      doc.slice_to_string(editor.selected_range.clone())
-    };
-    cx.write_to_clipboard(ClipboardItem::new_string(text));
+    cx.write_to_clipboard(ClipboardItem::new_string(
+      editor
+        .document
+        .read(cx)
+        .slice_to_string(editor.selected_range.clone()),
+    ));
     editor.replace_text_in_range(None, "", window, cx);
     // Invalidate cache from current line onwards since cut may affect multiple lines
     editor.invalidate_lines_from(current_line);
@@ -580,16 +630,16 @@ pub fn undo(editor: &mut Editor, _: &Undo, _window: &mut Window, cx: &mut Contex
       // Restore cursor position from before the transaction
       editor.selected_range = transaction.selection_before.clone();
       editor.selection_reversed = false;
-      editor.sync_buffer_selection_from_view(cx);
 
       // Invalidate cache (content may have changed significantly)
       editor.line_layouts.clear();
-      editor.line_layouts_left.clear();
 
       // Move transaction to redo stack
       editor.redo_stack.push_back(transaction);
+      editor.is_dirty = true;
 
       cx.notify();
+      editor.schedule_diff_recompute(cx);
     } else {
       // Buffer undo failed, push transaction back
       editor.undo_stack.push_back(transaction);
@@ -615,21 +665,25 @@ pub fn redo(editor: &mut Editor, _: &Redo, _window: &mut Window, cx: &mut Contex
       // Restore cursor position from after the transaction
       editor.selected_range = transaction.selection_after.clone();
       editor.selection_reversed = false;
-      editor.sync_buffer_selection_from_view(cx);
 
       // Invalidate cache
       editor.line_layouts.clear();
-      editor.line_layouts_left.clear();
 
       // Move transaction to undo stack
       editor.undo_stack.push_back(transaction);
+      editor.is_dirty = true;
 
       cx.notify();
+      editor.schedule_diff_recompute(cx);
     } else {
       // Buffer redo failed, push transaction back
       editor.redo_stack.push_back(transaction);
     }
   }
+}
+
+pub fn save(editor: &mut Editor, _: &Save, _window: &mut Window, cx: &mut Context<Editor>) {
+  editor.save(cx);
 }
 
 // === System Actions ===

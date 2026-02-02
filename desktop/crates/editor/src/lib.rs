@@ -5,12 +5,12 @@ mod document;
 mod editor;
 mod editor_element;
 mod gutter_element;
+mod projection;
 
 pub use actions::*;
 pub use cursor_blink::CursorBlink;
-pub use document::{
-  DiffGutterKind, DiffLineKind, Document, LineDiffHunk, diff_changed_line_ranges, diff_line_hunks,
-};
-pub use editor::{ChangeDirection, DiffViewMode, Editor};
+pub use document::Document;
+pub use editor::{Editor, HunkAction};
 pub use editor_element::{EditorElement, PositionMap};
-pub use gutter_element::{GutterElement, GutterSide};
+pub use gutter_element::GutterElement;
+pub use projection::*;

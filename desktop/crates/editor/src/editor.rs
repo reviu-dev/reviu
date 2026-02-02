@@ -1,25 +1,32 @@
 use std::{
-  collections::{HashMap, VecDeque},
+  collections::{HashMap, HashSet, VecDeque},
   ops::Range,
-  sync::Arc,
-  time::Instant,
+  path::PathBuf,
+  sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+  },
+  time::{Duration, Instant, SystemTime},
 };
 
 use buffer::TransactionId;
+use git::{ApplyLocation, DiffSet, GitFileBases, GitStore, RepoFile};
 use gpui::{
-  App, Bounds, Context, CursorStyle, DragMoveEvent, Entity, EntityInputHandler, FocusHandle,
-  Focusable, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ShapedLine,
-  UTF16Selection, Window, black, div, prelude::*, px, white,
+  App, Bounds, Context, CursorStyle, Entity, EntityInputHandler, FocusHandle, Focusable,
+  MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, ShapedLine, Task,
+  UTF16Selection, Window, black, div, point, prelude::*, px, white,
 };
 use gpui_component::ActiveTheme as _;
+use smol::unblock;
 use syntax::Theme;
 
 use crate::{
   boundaries::{line_range_at_offset, word_range_at_offset},
   cursor_blink::CursorBlink,
-  document::{DiffGutterKind, DiffLineKind, DiffPanelSide, Document},
+  document::Document,
   editor_element::{EditorElement, PositionMap},
-  gutter_element::{GutterElement, GutterSide},
+  gutter_element::GutterElement,
+  projection::{ChangeKind, DisplayLine, GapId, HunkState, NO_NEWLINE_MARKER_TEXT, Projection},
 };
 
 #[derive(Clone, Debug)]
@@ -36,52 +43,43 @@ const DEFAULT_VIEWPORT_WIDTH: f32 = 1200.0;
 /// Default maximum line width
 pub const DEFAULT_MAX_LINE_WIDTH: f32 = 800.0;
 /// Extra width added to editor content for horizontal scrolling
-pub(crate) const EXTRA_EDITOR_WIDTH: f32 = 200.0;
-/// Default width for the right diff panel in split mode
-const SPLIT_RIGHT_DEFAULT_WIDTH: f32 = 560.0;
-/// Minimum width for the right diff panel in split mode
-pub(crate) const SPLIT_RIGHT_MIN_WIDTH: f32 = 280.0;
-/// Minimum width for the left diff panel in split mode
-pub(crate) const SPLIT_LEFT_MIN_WIDTH: f32 = 100.0;
-/// Width of the split resize handle
-pub(crate) const SPLIT_RESIZE_HANDLE_WIDTH: f32 = 12.0;
+const EXTRA_EDITOR_WIDTH: f32 = 200.0;
 /// Maximum number of cached shaped lines
 const MAX_CACHE_SIZE: usize = 200;
 /// Number of lines of padding when auto-scrolling to cursor
 const SCROLL_PADDING: usize = 3;
-/// Number of spaces inserted for a tab
-pub(crate) const TAB_WHITESPACE_COUNT: usize = 2;
 /// Width of the gutter area
-pub const GUTTER_MARKER_WIDTH: f32 = 6.0;
-pub const GUTTER_RIGHT_PADDING: f32 = 20.0;
-pub const GUTTER_NUMBER_WIDTH: f32 = 55.0;
-pub const STAGED_DIFF_OPACITY_MULTIPLIER: f32 = 0.40;
-pub(crate) const GUTTER_WIDTH: f32 =
-  GUTTER_MARKER_WIDTH + GUTTER_NUMBER_WIDTH + GUTTER_RIGHT_PADDING;
+const GUTTER_WIDTH: f32 = 90.0;
+/// Diff recompute debounce (ms)
+const DIFF_DEBOUNCE_MS: u64 = 60;
+/// External change polling interval (ms)
+const POLL_INTERVAL_MS: u64 = 500;
+/// Hardcoded repo root (temporary)
+const DEFAULT_REPO_ROOT: &str = "/Users/joris/workspace/git-playground";
+/// Hardcoded file path (temporary)
+const DEFAULT_FILE_PATH: &str = "/Users/joris/workspace/git-playground/perf-100k.ts";
 
 pub struct Editor {
   pub document: Entity<Document>,
   pub focus_handle: FocusHandle,
   pub selected_range: Range<usize>,
   pub selection_reversed: bool,
+  pub display_selection: Option<DisplaySelection>,
   pub marked_range: Option<Range<usize>>,
   pub is_selecting: bool,
-  pub(crate) selected_range_buffer: Option<Range<usize>>,
 
   // Performance: cache and viewport
   pub line_layouts: HashMap<usize, Arc<ShapedLine>>,
-  pub line_layouts_left: HashMap<usize, Arc<ShapedLine>>,
+  pub virtual_line_layouts: HashMap<usize, Arc<ShapedLine>>,
 
   pub scroll_offset_y: f32, // Vertical scroll offset in lines (0.0 = top, 1.5 = 1.5 lines down)
   pub viewport_height: Pixels,
   pub viewport_width: Pixels,
   pub max_line_width: Pixels, // Maximum width of visible lines (never decreases to avoid scroll jumps)
-  pub max_line_width_left: Pixels,
-  pub scroll_offset_x_left: Pixels,
-  pub scroll_offset_x_right: Pixels,
+  pub scroll_handle: ScrollHandle, // Handle for horizontal scrolling
   pub(crate) scroll_axis_lock: Option<ScrollAxis>,
   pub(crate) last_scroll_time: Option<Instant>,
-  pub split_right_width: Pixels,
+  pub(crate) last_scroll_x: Pixels,
 
   // Cache size limit to prevent memory issues with large files
   pub(crate) max_cache_size: usize,
@@ -93,22 +91,97 @@ pub struct Editor {
   pub(crate) redo_stack: VecDeque<Transaction>,
 
   pub theme: Theme,
-  pub diff_view_mode: DiffViewMode,
-  pub active_diff_panel: DiffPanelSide,
-  staged_view: bool,
-  pub hovered_change_range: Option<Range<usize>>,
-  last_edit_view_range: Option<Range<usize>>,
-  staged_base_ranges: Vec<Range<usize>>,
-  staged_current_ranges: Vec<Range<usize>>,
+  pub projection: Option<Arc<Projection>>,
+  pub visible_groups: Vec<GroupOverlay>,
+  pub hovered_group_id: Option<Arc<str>>,
+  pub last_mouse_position: Option<Point<Pixels>>,
+  pub expanded_gaps: HashMap<GapId, usize>,
+  pub workdir_path: PathBuf,
+  pub repo_file: Option<RepoFile>,
+  pub git_store: Option<GitStore>,
+  git_state: BufferGitState,
+  pub diffs: Option<DiffSet>,
+  pub diff_task: Option<Task<()>>,
+  pub bases_task: Option<Task<()>>,
+  pub poll_task: Option<Task<()>>,
+  pub git_task: Option<Task<()>>,
+  git_jobs: VecDeque<GitJob>,
+  git_op_in_flight: bool,
+  pending_git_after_bases: bool,
+  pub diff_generation: Arc<AtomicUsize>,
+  pub file_mtime: Option<SystemTime>,
+  pub index_mtime: Option<SystemTime>,
+  pub is_dirty: bool,
+  pub save_task: Option<Task<()>>,
+  pub optimistic_unstaged_groups: HashSet<Arc<str>>,
 
   // Track syntax highlighting version to invalidate cache when highlights change
   pub last_highlights_version: usize,
   pub last_highlights_epoch: usize,
-  pub last_diff_version: usize,
-  pub last_diff_epoch: usize,
 
   // Cursor blinking
   pub cursor_blink: Entity<CursorBlink>,
+}
+
+#[derive(Clone, Debug)]
+pub struct GroupOverlay {
+  pub id: Arc<str>,
+  pub state: HunkState,
+  pub display_line: usize,
+  pub y: Pixels,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct BufferGitState {
+  pub op_id: usize,
+  pub bases: Option<GitFileBases>,
+  pub index_dirty: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum HunkAction {
+  Stage,
+  Unstage,
+  Restore,
+}
+
+#[derive(Clone, Debug)]
+struct GroupToken {
+  state: HunkState,
+  signature: Arc<str>,
+  id: Arc<str>,
+}
+
+#[derive(Clone, Debug)]
+struct GitJob {
+  token: GroupToken,
+  action: HunkAction,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DisplayCursor {
+  pub line: usize,
+  pub column: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct DisplaySelection {
+  pub start: DisplayCursor,
+  pub end: DisplayCursor,
+}
+
+impl DisplaySelection {
+  pub fn is_empty(&self) -> bool {
+    self.start == self.end
+  }
+
+  pub fn normalized(&self) -> (DisplayCursor, DisplayCursor) {
+    if (self.start.line, self.start.column) <= (self.end.line, self.end.column) {
+      (self.start, self.end)
+    } else {
+      (self.end, self.start)
+    }
+  }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -117,245 +190,804 @@ pub(crate) enum ScrollAxis {
   Vertical,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum DiffViewMode {
-  Inline,
-  Split,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ChangeDirection {
-  Next,
-  Previous,
-}
-
-impl DiffViewMode {
-  pub fn toggle(&mut self) {
-    *self = match self {
-      DiffViewMode::Inline => DiffViewMode::Split,
-      DiffViewMode::Split => DiffViewMode::Inline,
-    };
-  }
-}
-
-#[derive(Clone)]
-struct DraggedDiffSplitter;
-
-impl Render for DraggedDiffSplitter {
-  fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-    gpui::Empty
-  }
-}
-
 impl Editor {
-  pub fn new(
-    text: &str,
-    base_text: Option<&str>,
-    file_ext: Option<&str>,
-    theme: Theme,
-    cx: &mut Context<Self>,
-  ) -> Self {
-    let document = cx.new(|cx| Document::new(text, base_text, file_ext, cx));
-    let cursor_blink = cx.new(CursorBlink::new);
+  pub fn new(cx: &mut Context<Self>) -> Self {
+    Self::new_with_paths(
+      PathBuf::from(DEFAULT_REPO_ROOT),
+      PathBuf::from(DEFAULT_FILE_PATH),
+      cx,
+    )
+  }
 
-    Self {
+  pub fn new_with_paths(repo_root: PathBuf, file_path: PathBuf, cx: &mut Context<Self>) -> Self {
+    let workdir_path = file_path;
+    let file_ext = workdir_path
+      .extension()
+      .and_then(|ext| ext.to_str())
+      .map(|ext| ext.to_ascii_lowercase());
+    let file_name = workdir_path
+      .file_name()
+      .and_then(|name| name.to_str())
+      .map(|name| name.to_ascii_lowercase());
+    let mut language_hint = file_ext.as_deref().or_else(|| file_name.as_deref());
+    if let Some(name) = file_name.as_deref()
+      && name.starts_with("dockerfile")
+    {
+      language_hint = Some("dockerfile");
+    }
+    let content = std::fs::read_to_string(&workdir_path).unwrap_or_default();
+
+    let document = cx.new(|cx| Document::new(&content, language_hint, cx));
+    let cursor_blink = cx.new(CursorBlink::new);
+    let repo_file = RepoFile::new(repo_root, workdir_path.clone()).ok();
+    let git_store = repo_file
+      .as_ref()
+      .map(|repo_file| GitStore::new(repo_file.repo_root.clone()));
+    let file_mtime = std::fs::metadata(&workdir_path)
+      .and_then(|meta| meta.modified())
+      .ok();
+    let index_mtime = repo_file
+      .as_ref()
+      .and_then(|repo| std::fs::metadata(repo.repo_root.join(".git/index")).ok())
+      .and_then(|meta| meta.modified().ok());
+
+    let mut editor = Self {
       document,
       focus_handle: cx.focus_handle(),
       selected_range: 0..0,
       selection_reversed: false,
+      display_selection: None,
       marked_range: None,
       is_selecting: false,
-      selected_range_buffer: Some(0..0),
       line_layouts: HashMap::new(),
-      line_layouts_left: HashMap::new(),
+      virtual_line_layouts: HashMap::new(),
       scroll_offset_y: 0.0,
       viewport_height: px(DEFAULT_VIEWPORT_HEIGHT), // Will be updated on first render
       viewport_width: px(DEFAULT_VIEWPORT_WIDTH),   // Will be updated on first render
       max_line_width: px(DEFAULT_MAX_LINE_WIDTH),   // Will be updated on first render
-      max_line_width_left: px(DEFAULT_MAX_LINE_WIDTH),
-      scroll_offset_x_left: px(0.0),
-      scroll_offset_x_right: px(0.0),
+      scroll_handle: ScrollHandle::new(),
       scroll_axis_lock: None,
       last_scroll_time: None,
-      split_right_width: px(SPLIT_RIGHT_DEFAULT_WIDTH),
+      last_scroll_x: px(0.0),
       max_cache_size: MAX_CACHE_SIZE,
       target_column: None,
       undo_stack: VecDeque::new(),
       redo_stack: VecDeque::new(),
-      theme,
-      diff_view_mode: DiffViewMode::Inline,
-      active_diff_panel: DiffPanelSide::Right,
-      staged_view: false,
-      hovered_change_range: None,
-      last_edit_view_range: None,
-      staged_base_ranges: Vec::new(),
-      staged_current_ranges: Vec::new(),
+      theme: Theme::dark(),
+      projection: None,
+      visible_groups: Vec::new(),
+      hovered_group_id: None,
+      last_mouse_position: None,
+      expanded_gaps: HashMap::new(),
       last_highlights_version: 0,
       last_highlights_epoch: 0,
-      last_diff_version: 0,
-      last_diff_epoch: 0,
       cursor_blink,
-    }
-  }
-
-  pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
-    if self.theme.is_dark != theme.is_dark {
-      self.theme = theme;
-      cx.notify();
-    }
-  }
-
-  pub fn set_diff_view_mode(&mut self, mode: DiffViewMode, cx: &mut Context<Self>) {
-    if self.diff_view_mode != mode {
-      self.diff_view_mode = mode;
-      self.active_diff_panel = DiffPanelSide::Right;
-      self.line_layouts.clear();
-      self.line_layouts_left.clear();
-      self.max_line_width = px(DEFAULT_MAX_LINE_WIDTH);
-      self.max_line_width_left = px(DEFAULT_MAX_LINE_WIDTH);
-      cx.notify();
-    }
-  }
-
-  pub fn is_staged_view(&self) -> bool {
-    self.staged_view
-  }
-
-  pub fn set_staged_view(&mut self, staged: bool, cx: &mut Context<Self>) {
-    if self.staged_view != staged {
-      self.staged_view = staged;
-      cx.notify();
-    }
-  }
-
-  pub fn set_staged_ranges(
-    &mut self,
-    base_ranges: Vec<Range<usize>>,
-    current_ranges: Vec<Range<usize>>,
-    cx: &mut Context<Self>,
-  ) {
-    self.staged_base_ranges = base_ranges;
-    self.staged_current_ranges = current_ranges;
-    cx.notify();
-  }
-
-  pub fn set_diff_base_text(&mut self, base_text: Option<&str>, cx: &mut Context<Self>) {
-    self.document.update(cx, |document, cx| {
-      document.set_diff_base_text(base_text, cx)
-    });
-  }
-
-  pub fn diff_line_is_staged(&self, line_idx: usize, cx: &App) -> bool {
-    let document = self.document.read(cx);
-    let Some(info) = document.diff_line_info(line_idx) else {
-      return false;
+      workdir_path,
+      repo_file,
+      git_store,
+      git_state: BufferGitState::default(),
+      diffs: None,
+      diff_task: None,
+      bases_task: None,
+      poll_task: None,
+      git_task: None,
+      git_jobs: VecDeque::new(),
+      git_op_in_flight: false,
+      pending_git_after_bases: false,
+      diff_generation: Arc::new(AtomicUsize::new(0)),
+      file_mtime,
+      index_mtime,
+      is_dirty: false,
+      save_task: None,
+      optimistic_unstaged_groups: HashSet::new(),
     };
-    if let Some(base_line) = info.base_line {
-      if line_in_ranges(&self.staged_base_ranges, base_line) {
-        return true;
-      }
-    }
-    if let Some(current_line) = info.current_line {
-      if line_in_ranges(&self.staged_current_ranges, current_line) {
-        return true;
-      }
-    }
-    false
-  }
-
-  pub fn hovered_change_range(&self) -> Option<Range<usize>> {
-    self.hovered_change_range.clone()
-  }
-
-  pub fn last_edit_view_range(&self) -> Option<Range<usize>> {
-    self.last_edit_view_range.clone()
-  }
-
-  pub(crate) fn set_hovered_change_range(
-    &mut self,
-    range: Option<Range<usize>>,
-    cx: &mut Context<Self>,
-  ) {
-    if self.hovered_change_range != range {
-      self.hovered_change_range = range;
-      cx.notify();
-    }
-  }
-
-  pub fn row_for_line(&self, line_idx: usize, cx: &App) -> Option<usize> {
-    let document = self.document.read(cx);
-    if self.diff_view_mode == DiffViewMode::Split && document.diff_enabled() {
-      let primary = self.active_diff_panel;
-      let row = document.split_row_for_line(line_idx, primary);
-      if row.is_some() {
-        return row;
-      }
-      let fallback = match primary {
-        DiffPanelSide::Left => DiffPanelSide::Right,
-        DiffPanelSide::Right => DiffPanelSide::Left,
-      };
-      document.split_row_for_line(line_idx, fallback)
-    } else {
-      Some(line_idx)
-    }
-  }
-
-  pub(crate) fn resize_split_right_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
-    let total_width = (self.viewport_width - px(GUTTER_WIDTH)).max(px(1.0));
-    let min_width = px(SPLIT_RIGHT_MIN_WIDTH).min(total_width);
-    let max_width = (total_width - px(SPLIT_LEFT_MIN_WIDTH)).max(min_width);
-    let width = width.max(min_width).min(max_width).round();
-    if self.split_right_width != width {
-      self.split_right_width = width;
-      cx.notify();
-    }
-  }
-
-  pub(crate) fn clamp_scroll_x(
-    &self,
-    scroll_x: Pixels,
-    content_width: Pixels,
-    panel_width: Pixels,
-  ) -> Pixels {
-    let panel_width = panel_width.max(px(1.0));
-    let max_scroll = (panel_width - content_width).min(px(0.0));
-    scroll_x.min(px(0.0)).max(max_scroll)
+    editor.init(cx);
+    editor
   }
 
   pub fn document(&self) -> &Entity<Document> {
     &self.document
   }
 
-  pub fn reload_from_disk(&mut self, text: &str, cx: &mut Context<Self>) {
-    let cursor_offset = self.cursor_offset();
+  pub fn set_projection(&mut self, projection: Option<Projection>) {
+    self.projection = projection.map(Arc::new);
+    self.virtual_line_layouts.clear();
+  }
+
+  pub fn projection(&self) -> Option<&Projection> {
+    self.projection.as_deref()
+  }
+
+  pub fn refresh_git_state(&mut self, cx: &mut Context<Self>) {
+    self.reload_git_bases(cx);
+  }
+
+  fn maybe_optimistic_unstage_for_edit(
+    &mut self,
+    start_line: usize,
+    end_line: usize,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(projection) = self.projection.as_ref() else {
+      return;
+    };
+    if self.git_state.bases.is_none() {
+      return;
+    }
+
+    let mut group_ids = HashSet::new();
+    for doc_line in start_line..=end_line {
+      let Some(display_line) = self.doc_to_display_line(doc_line) else {
+        continue;
+      };
+      let Some(DisplayLine::Doc {
+        hunk: Some(HunkState::Staged),
+        group_id: Some(group_id),
+        ..
+      }) = projection.lines.get(display_line)
+      else {
+        continue;
+      };
+
+      group_ids.insert(group_id.clone());
+    }
+
+    for group_id in group_ids {
+      self.optimistic_unstage_group(group_id, cx);
+    }
+  }
+
+  fn optimistic_unstage_group(&mut self, group_id: Arc<str>, cx: &mut Context<Self>) {
+    if self.optimistic_unstaged_groups.contains(&group_id) {
+      return;
+    }
+    let Some(projection) = self.projection.as_ref() else {
+      return;
+    };
+    let Some(group) = projection.groups.get(group_id.as_ref()) else {
+      return;
+    };
+    if group.state != HunkState::Staged {
+      return;
+    }
+    let Some(bases) = self.git_state.bases.as_mut() else {
+      return;
+    };
+    let base_index = bases.index.as_deref().unwrap_or("");
+    let Ok(updated) = git::apply_hunk_to_text(base_index, &group.hunk, true) else {
+      return;
+    };
+    bases.index = Some(updated);
+    self.git_state.index_dirty = true;
+    self.optimistic_unstaged_groups.insert(group_id);
+    self.schedule_diff_recompute(cx);
+  }
+
+  fn init(&mut self, cx: &mut Context<Self>) {
+    if self.repo_file.is_some() {
+      self.reload_git_bases(cx);
+      self.start_polling(cx);
+    }
+  }
+
+  fn reload_git_bases(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_file) = self.repo_file.clone() else {
+      return;
+    };
+    let Some(git_store) = self.git_store.clone() else {
+      return;
+    };
+    let Ok(rel_path) = repo_file.relative_path() else {
+      return;
+    };
+    let op_id = git_store.op_id();
+
+    self.bases_task = Some(cx.spawn(async move |this, cx| {
+      let bases = unblock(move || git_store.load_bases(&rel_path)).await;
+      let Ok(bases) = bases else {
+        return;
+      };
+
+      let _ = this.update(cx, |editor, cx| {
+        let mut merged = bases;
+        if editor.git_state.index_dirty {
+          if let Some(existing) = editor
+            .git_state
+            .bases
+            .as_ref()
+            .and_then(|b| b.index.clone())
+          {
+            merged.index = Some(existing);
+          }
+        }
+        editor.git_state.bases = Some(merged);
+        editor.git_state.op_id = op_id;
+        if editor.pending_git_after_bases {
+          editor.pending_git_after_bases = false;
+          editor.git_op_in_flight = false;
+          editor.maybe_start_next_git_job(cx);
+        }
+        editor.schedule_diff_recompute(cx);
+      });
+    }));
+  }
+
+  pub fn schedule_diff_recompute(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_file) = self.repo_file.clone() else {
+      return;
+    };
+    let Some(git_store) = self.git_store.clone() else {
+      return;
+    };
+    let Some(git_bases) = self.git_state.bases.clone() else {
+      self.reload_git_bases(cx);
+      return;
+    };
+
+    if git_store.op_id() != self.git_state.op_id {
+      self.reload_git_bases(cx);
+      return;
+    }
+
+    let Ok(rel_path) = repo_file.relative_path() else {
+      return;
+    };
+
+    let buffer_text = {
+      let document = self.document.read(cx);
+      document.slice_to_string(0..document.len())
+    };
+
+    let generation = self.diff_generation.fetch_add(1, Ordering::Relaxed) + 1;
+    let diff_generation = self.diff_generation.clone();
+    self.diff_task = Some(cx.spawn(async move |this, cx| {
+      cx.background_executor()
+        .timer(Duration::from_millis(DIFF_DEBOUNCE_MS))
+        .await;
+
+      let diffs =
+        unblock(move || git::compute_buffer_diffs(&git_bases, &buffer_text, &rel_path)).await;
+      let Ok(diffs) = diffs else {
+        return;
+      };
+
+      let is_latest = diff_generation.load(Ordering::Relaxed) == generation;
+      if !is_latest {
+        return;
+      }
+
+      let _ = this.update(cx, |editor, cx| {
+        editor.apply_diffs(diffs, cx);
+      });
+    }));
+  }
+
+  fn apply_diffs(&mut self, diffs: DiffSet, cx: &mut Context<Self>) {
+    let doc_line_count = self.document.read(cx).len_lines();
+    let projection = Projection::from_diffs(
+      doc_line_count,
+      &diffs.uncommitted,
+      &diffs.unstaged,
+      &diffs.staged,
+      &self.expanded_gaps,
+    );
+    self.diffs = Some(diffs);
+    self.set_projection(Some(projection));
+
+    let total_lines = self.display_line_count(doc_line_count);
+    if total_lines == 0 {
+      self.scroll_offset_y = 0.0;
+    } else {
+      let max_scroll = (total_lines.saturating_sub(1)) as f32;
+      if self.scroll_offset_y > max_scroll {
+        self.scroll_offset_y = max_scroll;
+      }
+    }
+
+    cx.notify();
+  }
+
+  pub fn save(&mut self, cx: &mut Context<Self>) {
+    let workdir_path = self.workdir_path.clone();
+    let contents = {
+      let document = self.document.read(cx);
+      document.slice_to_string(0..document.len())
+    };
+    let repo_file = self.repo_file.clone();
+    let index_text = self
+      .git_state
+      .bases
+      .as_ref()
+      .and_then(|bases| bases.index.clone());
+    let needs_index_write = self.git_state.index_dirty;
+
+    self.save_task = Some(cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        std::fs::write(&workdir_path, contents)?;
+        let file_mtime = std::fs::metadata(&workdir_path)
+          .and_then(|meta| meta.modified())
+          .ok();
+        let mut index_mtime = None;
+        if needs_index_write {
+          if let (Some(repo_file), Some(index_text)) = (repo_file, index_text) {
+            if let Err(err) = git::write_index_content(&repo_file, &index_text) {
+              return Err(std::io::Error::new(std::io::ErrorKind::Other, err));
+            }
+            index_mtime = std::fs::metadata(repo_file.repo_root.join(".git/index"))
+              .and_then(|meta| meta.modified())
+              .ok();
+          }
+        }
+        Ok::<_, std::io::Error>((file_mtime, index_mtime))
+      })
+      .await;
+
+      let _ = this.update(cx, |editor, cx| match result {
+        Ok((file_mtime, index_mtime)) => {
+          editor.is_dirty = false;
+          editor.file_mtime = file_mtime;
+          if needs_index_write {
+            editor.git_state.index_dirty = false;
+            editor.optimistic_unstaged_groups.clear();
+            if let Some(index_mtime) = index_mtime {
+              editor.index_mtime = Some(index_mtime);
+            }
+            if let Some(store) = editor.git_store.as_ref() {
+              store.bump_op();
+              editor.git_state.op_id = store.op_id();
+            }
+          }
+          editor.reload_git_bases(cx);
+          editor.schedule_diff_recompute(cx);
+          cx.notify();
+        }
+        Err(err) => {
+          eprintln!("[editor] save failed: {:?}", err);
+        }
+      });
+    }));
+  }
+
+  pub fn selected_text_for_copy(&self, cx: &App) -> Option<String> {
+    if let Some(selection) = &self.display_selection {
+      if let Some(text) = self.display_selection_text(selection, cx) {
+        return Some(text);
+      }
+    }
+
+    if self.selected_range.is_empty() {
+      return None;
+    }
+
+    let document = self.document.read(cx);
+    Some(document.slice_to_string(self.selected_range.clone()))
+  }
+
+  fn display_selection_text(&self, selection: &DisplaySelection, cx: &App) -> Option<String> {
+    if selection.is_empty() {
+      return None;
+    }
+
+    let document = self.document.read(cx);
+    let doc_line_count = document.len_lines();
+    let total_lines = self.display_line_count(doc_line_count);
+    if total_lines == 0 {
+      return None;
+    }
+
+    let (start, end) = selection.normalized();
+    let mut end_line = end.line.min(total_lines.saturating_sub(1));
+    if end.column == 0 && end.line > start.line {
+      end_line = end_line.saturating_sub(1);
+    }
+
+    if start.line > end_line {
+      return None;
+    }
+
+    let mut lines = Vec::new();
+    for display_line in start.line..=end_line {
+      let line_text = match self.display_line(display_line, doc_line_count) {
+        Some(DisplayLine::Doc { doc_line, .. }) => document
+          .line_content(doc_line)
+          .map(|cow| cow.into_owned())
+          .unwrap_or_default(),
+        Some(DisplayLine::Removed { text, .. }) => text,
+        _ => continue,
+      };
+
+      let line_len = line_text.len();
+      let mut slice_start = 0;
+      let mut slice_end = line_len;
+
+      if display_line == start.line {
+        slice_start = start.column.min(line_len);
+      }
+
+      if display_line == end_line && display_line == end.line {
+        slice_end = end.column.min(line_len);
+      }
+
+      if slice_end < slice_start {
+        continue;
+      }
+
+      let slice = line_text
+        .get(slice_start..slice_end)
+        .unwrap_or("")
+        .to_string();
+      lines.push(slice);
+    }
+
+    if lines.is_empty() {
+      None
+    } else {
+      Some(lines.join("\n"))
+    }
+  }
+
+  fn group_token_for_id(&self, group_id: &Arc<str>) -> Option<GroupToken> {
+    let projection = self.projection.as_ref()?;
+    let group = projection.groups.get(group_id.as_ref())?;
+    Some(GroupToken {
+      state: group.state,
+      signature: group.signature.clone(),
+      id: group_id.clone(),
+    })
+  }
+
+  fn resolve_group_from_token(&self, token: &GroupToken) -> Option<(HunkState, git::DiffHunk)> {
+    let projection = self.projection.as_ref()?;
+    if let Some((_, group)) = projection
+      .groups
+      .iter()
+      .find(|(_, group)| group.state == token.state && group.signature == token.signature)
+    {
+      return Some((group.state, group.hunk.clone()));
+    }
+    let group = projection.groups.get(token.id.as_ref())?;
+    Some((group.state, group.hunk.clone()))
+  }
+
+  pub fn enqueue_group_action(
+    &mut self,
+    group_id: Arc<str>,
+    action: HunkAction,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(token) = self.group_token_for_id(&group_id) else {
+      return;
+    };
+    self.git_jobs.push_back(GitJob { token, action });
+    self.maybe_start_next_git_job(cx);
+  }
+
+  fn maybe_start_next_git_job(&mut self, cx: &mut Context<Self>) {
+    if self.git_op_in_flight {
+      return;
+    }
+    let Some(job) = self.git_jobs.pop_front() else {
+      return;
+    };
+    self.start_git_job(job, cx);
+  }
+
+  fn start_git_job(&mut self, job: GitJob, cx: &mut Context<Self>) {
+    let Some(repo_file) = self.repo_file.clone() else {
+      self.git_op_in_flight = false;
+      return;
+    };
+    let Some((state, hunk)) = self.resolve_group_from_token(&job.token) else {
+      self.git_op_in_flight = false;
+      self.maybe_start_next_git_job(cx);
+      return;
+    };
+
+    let (reverse, location) = match (state, job.action) {
+      (HunkState::Unstaged, HunkAction::Stage) => (false, ApplyLocation::Index),
+      (HunkState::Staged, HunkAction::Unstage) => (true, ApplyLocation::Index),
+      (HunkState::Unstaged, HunkAction::Restore) => (true, ApplyLocation::WorkDir),
+      (HunkState::Staged, HunkAction::Restore) => (true, ApplyLocation::Both),
+      _ => {
+        self.git_op_in_flight = false;
+        self.maybe_start_next_git_job(cx);
+        return;
+      }
+    };
+
+    let needs_index = matches!(location, ApplyLocation::Index | ApplyLocation::Both);
+    let needs_workdir = matches!(location, ApplyLocation::WorkDir | ApplyLocation::Both);
+    let mut index_text_to_write: Option<String> = None;
+    if needs_index {
+      let Some(bases) = self.git_state.bases.clone() else {
+        self.git_jobs.push_front(job);
+        self.pending_git_after_bases = true;
+        self.reload_git_bases(cx);
+        return;
+      };
+      let base_index = bases.index.as_deref().unwrap_or("");
+      match git::apply_hunk_to_text(base_index, &hunk, reverse) {
+        Ok(updated) => {
+          index_text_to_write = Some(updated);
+        }
+        Err(_err) => {
+          self.git_op_in_flight = false;
+          self.maybe_start_next_git_job(cx);
+          return;
+        }
+      }
+    }
+
+    let workdir_path = self.workdir_path.clone();
+    let git_store = self.git_store.clone();
+    if let Some(store) = &git_store {
+      store.bump_op();
+    }
+    self.git_op_in_flight = true;
+    let repo_for_index = repo_file.clone();
+    let repo_for_apply = repo_file.clone();
+    let repo_for_meta = repo_file.clone();
+    let index_text_for_write = index_text_to_write.clone();
+    let index_text_for_update = index_text_to_write.clone();
+    self.git_task = Some(cx.spawn(async move |this, cx| {
+      let index_result = if needs_index {
+        if let Some(text) = index_text_for_write.clone() {
+          unblock(move || git::write_index_content(&repo_for_index, &text)).await
+        } else {
+          Ok(())
+        }
+      } else {
+        Ok(())
+      };
+
+      if let Err(_err) = index_result {
+        let _ = this.update(cx, |editor, cx| {
+          editor.git_op_in_flight = false;
+          editor.maybe_start_next_git_job(cx);
+        });
+        return;
+      }
+
+      let workdir_result = if needs_workdir {
+        unblock(move || git::apply_hunk(&repo_for_apply, &hunk, reverse, ApplyLocation::WorkDir))
+          .await
+      } else {
+        Ok(())
+      };
+
+      if let Err(_err) = workdir_result {
+        let _ = this.update(cx, |editor, cx| {
+          editor.git_op_in_flight = false;
+          editor.maybe_start_next_git_job(cx);
+        });
+        return;
+      }
+
+      let (contents, file_mtime, index_mtime): (
+        Option<String>,
+        Option<SystemTime>,
+        Option<SystemTime>,
+      ) = unblock(move || {
+        let contents = if needs_workdir {
+          std::fs::read_to_string(&workdir_path).ok()
+        } else {
+          None
+        };
+        let file_mtime = std::fs::metadata(&workdir_path)
+          .and_then(|meta| meta.modified())
+          .ok();
+        let index_mtime = std::fs::metadata(repo_for_meta.repo_root.join(".git/index"))
+          .and_then(|meta| meta.modified())
+          .ok();
+        (contents, file_mtime, index_mtime)
+      })
+      .await;
+
+      let _ = this.update(cx, |editor, cx| {
+        if let Some(contents) = contents {
+          editor.reload_from_disk(contents, cx);
+        }
+        editor.file_mtime = file_mtime;
+        editor.index_mtime = index_mtime;
+        if let Some(index_text) = index_text_for_update {
+          if let Some(bases) = editor.git_state.bases.as_mut() {
+            bases.index = Some(index_text);
+          }
+        }
+        editor.pending_git_after_bases = true;
+        editor.reload_git_bases(cx);
+        editor.schedule_diff_recompute(cx);
+      });
+    }));
+  }
+
+  fn start_polling(&mut self, cx: &mut Context<Self>) {
+    if self.poll_task.is_some() {
+      return;
+    }
+
+    self.poll_task = Some(cx.spawn(async move |this, cx| {
+      loop {
+        cx.background_executor()
+          .timer(Duration::from_millis(POLL_INTERVAL_MS))
+          .await;
+
+        let state = this
+          .update(cx, |editor, _| {
+            (
+              editor.repo_file.clone(),
+              editor.workdir_path.clone(),
+              editor.file_mtime,
+              editor.index_mtime,
+            )
+          })
+          .ok();
+        let Some((repo_file, workdir_path, last_file_mtime, last_index_mtime)) = state else {
+          return;
+        };
+
+        let workdir_path_for_meta = workdir_path.clone();
+        let (file_mtime, index_mtime): (Option<SystemTime>, Option<SystemTime>) =
+          unblock(move || {
+            let file_mtime = std::fs::metadata(&workdir_path_for_meta)
+              .and_then(|meta| meta.modified())
+              .ok();
+            let index_mtime = repo_file
+              .as_ref()
+              .and_then(|repo| std::fs::metadata(repo.repo_root.join(".git/index")).ok())
+              .and_then(|meta| meta.modified().ok());
+            (file_mtime, index_mtime)
+          })
+          .await;
+
+        let file_changed = file_mtime.is_some() && file_mtime != last_file_mtime;
+        let index_changed = index_mtime.is_some() && index_mtime != last_index_mtime;
+
+        let new_contents = if file_changed {
+          let workdir_path = workdir_path.clone();
+          unblock(move || std::fs::read_to_string(&workdir_path))
+            .await
+            .ok()
+        } else {
+          None
+        };
+
+        if new_contents.is_some() || index_changed {
+          let _ = this.update(cx, |editor, cx| {
+            if let Some(contents) = new_contents {
+              editor.reload_from_disk(contents, cx);
+              editor.file_mtime = file_mtime;
+            }
+            if index_changed {
+              editor.index_mtime = index_mtime;
+              editor.reload_git_bases(cx);
+            } else {
+              editor.schedule_diff_recompute(cx);
+            }
+          });
+        }
+      }
+    }));
+  }
+
+  fn reload_from_disk(&mut self, contents: String, cx: &mut Context<Self>) {
     self.document.update(cx, |doc, cx| {
-      doc.replace_all_text(text, cx);
+      doc.replace_all(&contents, cx);
     });
     self.line_layouts.clear();
-    self.line_layouts_left.clear();
+    self.virtual_line_layouts.clear();
+    self.expanded_gaps.clear();
     self.undo_stack.clear();
     self.redo_stack.clear();
-    self.marked_range = None;
+    self.selected_range = 0..0;
     self.selection_reversed = false;
-    self.target_column = None;
-    let new_len = self.document.read(cx).buffer.len();
-    let new_offset = cursor_offset.min(new_len);
-    self.move_to(new_offset, cx);
+    self.display_selection = None;
+    self.marked_range = None;
+    self.hovered_group_id = None;
+    self.last_mouse_position = None;
+    self.git_jobs.clear();
+    self.git_op_in_flight = false;
+    self.pending_git_after_bases = false;
+    self.git_state.index_dirty = false;
+    self.optimistic_unstaged_groups.clear();
+    self.is_dirty = false;
+    self.last_highlights_version = 0;
+    self.last_highlights_epoch = 0;
+    self.scroll_offset_y = 0.0;
+    cx.notify();
+  }
+
+  pub fn display_line_count(&self, doc_line_count: usize) -> usize {
+    self
+      .projection
+      .as_ref()
+      .map(|projection| projection.lines.len())
+      .unwrap_or(doc_line_count)
+  }
+
+  pub fn display_line(&self, display_line: usize, doc_line_count: usize) -> Option<DisplayLine> {
+    if let Some(projection) = &self.projection {
+      projection.lines.get(display_line).cloned()
+    } else if display_line < doc_line_count {
+      Some(DisplayLine::Doc {
+        doc_line: display_line,
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      })
+    } else {
+      None
+    }
+  }
+
+  pub(crate) fn group_id_for_modified_display_line(&self, display_line: usize) -> Option<Arc<str>> {
+    let projection = self.projection.as_ref()?;
+    match projection.lines.get(display_line)? {
+      DisplayLine::Doc {
+        change: Some(ChangeKind::Added),
+        group_id: Some(id),
+        ..
+      } => Some(id.clone()),
+      DisplayLine::Removed { group_id, .. } => group_id.clone(),
+      _ => None,
+    }
+  }
+
+  pub fn display_to_doc_line(&self, display_line: usize) -> Option<usize> {
+    if let Some(projection) = &self.projection {
+      projection.display_to_doc_line(display_line)
+    } else {
+      Some(display_line)
+    }
+  }
+
+  pub fn doc_to_display_line(&self, doc_line: usize) -> Option<usize> {
+    if let Some(projection) = &self.projection {
+      projection.doc_to_display_line(doc_line)
+    } else {
+      Some(doc_line)
+    }
+  }
+
+  pub fn previous_visible_doc_line(&self, doc_line: usize) -> Option<usize> {
+    if let Some(projection) = &self.projection {
+      projection.previous_visible_doc_line(doc_line)
+    } else {
+      doc_line.checked_sub(1)
+    }
+  }
+
+  pub fn expand_gap(&mut self, gap_id: GapId, amount: usize, cx: &mut Context<Self>) {
+    let entry = self.expanded_gaps.entry(gap_id).or_insert(0);
+    *entry = entry.saturating_add(amount);
+
+    if let Some(diffs) = self.diffs.clone() {
+      self.apply_diffs(diffs, cx);
+    } else {
+      self.schedule_diff_recompute(cx);
+    }
+  }
+
+  pub fn next_visible_doc_line(&self, doc_line: usize, doc_line_count: usize) -> Option<usize> {
+    if let Some(projection) = &self.projection {
+      projection.next_visible_doc_line(doc_line)
+    } else if doc_line + 1 < doc_line_count {
+      Some(doc_line + 1)
+    } else {
+      None
+    }
   }
 
   /// Invalidate a single line in the cache
   pub(crate) fn invalidate_line(&mut self, line: usize) {
     self.line_layouts.remove(&line);
-    self.line_layouts_left.remove(&line);
   }
 
   /// Invalidate all lines from start_line onwards (for multi-line edits)
   pub(crate) fn invalidate_lines_from(&mut self, start_line: usize) {
     self
       .line_layouts
-      .retain(|&line_idx, _| line_idx < start_line);
-    self
-      .line_layouts_left
       .retain(|&line_idx, _| line_idx < start_line);
   }
 
@@ -369,12 +1001,13 @@ impl Editor {
         .line_layouts
         .retain(|&line_idx, _| line_idx >= viewport_start && line_idx < viewport_end);
     }
-    if self.line_layouts_left.len() > self.max_cache_size {
+
+    if self.virtual_line_layouts.len() > self.max_cache_size {
       let viewport_start = viewport.start.saturating_sub(50);
       let viewport_end = viewport.end + 50;
 
       self
-        .line_layouts_left
+        .virtual_line_layouts
         .retain(|&line_idx, _| line_idx >= viewport_start && line_idx < viewport_end);
     }
   }
@@ -386,23 +1019,46 @@ impl Editor {
     start_line..end_line
   }
 
+  pub(crate) fn doc_range_for_display_viewport(&self, viewport: Range<usize>) -> Range<usize> {
+    let Some(projection) = &self.projection else {
+      return viewport;
+    };
+
+    let mut min_line: Option<usize> = None;
+    let mut max_line: Option<usize> = None;
+
+    for display_line in viewport {
+      if let Some(doc_line) = projection.display_to_doc_line(display_line) {
+        min_line = Some(min_line.map_or(doc_line, |min| min.min(doc_line)));
+        max_line = Some(max_line.map_or(doc_line, |max| max.max(doc_line)));
+      }
+    }
+
+    match (min_line, max_line) {
+      (Some(min), Some(max)) => min..(max + 1),
+      _ => 0..0,
+    }
+  }
+
   pub(crate) fn ensure_cursor_visible(&mut self, window: &Window, cx: &mut Context<Self>) {
     let document = self.document.read(cx);
     let cursor_offset = self.cursor_offset();
-    let cursor_line = document.char_to_line(cursor_offset);
-    let split_mode = self.diff_view_mode == DiffViewMode::Split && document.diff_enabled();
-    let total_rows = if split_mode {
-      document.split_row_count()
+    let doc_line_count = document.len_lines();
+    let display_cursor = self.current_display_cursor(cx);
+    let (cursor_line, cursor_column, cursor_doc_line) = if let Some(display_cursor) = display_cursor
+    {
+      let doc_line = self.display_to_doc_line(display_cursor.line);
+      (display_cursor.line, display_cursor.column, doc_line)
     } else {
-      document.len_lines()
+      let cursor_doc_line = document.char_to_line(cursor_offset);
+      let Some(cursor_line) = self.doc_to_display_line(cursor_doc_line) else {
+        return;
+      };
+      let line_start = document.line_to_char(cursor_doc_line);
+      let column = cursor_offset.saturating_sub(line_start);
+      (cursor_line, column, Some(cursor_doc_line))
     };
-    let cursor_row = if split_mode {
-      document
-        .split_row_for_line(cursor_line, self.active_diff_panel)
-        .unwrap_or(cursor_line)
-    } else {
-      cursor_line
-    };
+    let total_lines = self.display_line_count(doc_line_count);
 
     // Calculate how many lines are visible in the viewport
     let line_height = window.line_height();
@@ -416,97 +1072,48 @@ impl Editor {
     let scroll_end = scroll_start + visible_lines;
 
     // Ensure cursor is within the visible range with padding (vertical)
-    if cursor_row < scroll_start + scroll_padding {
+    if cursor_line < scroll_start + scroll_padding {
       // Cursor is too close to top, scroll up
-      self.scroll_offset_y = (cursor_row.saturating_sub(scroll_padding)) as f32;
-    } else if cursor_row >= scroll_end.saturating_sub(scroll_padding) {
+      self.scroll_offset_y = (cursor_line.saturating_sub(scroll_padding)) as f32;
+    } else if cursor_line >= scroll_end.saturating_sub(scroll_padding) {
       // Cursor is too close to bottom, scroll down
-      let target_line = cursor_row + scroll_padding;
+      let target_line = cursor_line + scroll_padding;
       self.scroll_offset_y = (target_line as f32 - visible_lines as f32 + 1.0).max(0.0);
     }
 
-    let active_panel = if split_mode {
-      self.active_diff_panel
-    } else {
-      DiffPanelSide::Right
-    };
-    let total_content_width = (self.viewport_width - px(GUTTER_WIDTH)).max(px(0.0));
-    let min_right_width = px(SPLIT_RIGHT_MIN_WIDTH).min(total_content_width);
-    let max_right_width = (total_content_width - px(SPLIT_LEFT_MIN_WIDTH)).max(min_right_width);
-    let split_right_width = self
-      .split_right_width
-      .max(min_right_width)
-      .min(max_right_width);
-    let (text_area_width, current_scroll_x, max_line_width) =
-      if split_mode && active_panel == DiffPanelSide::Left {
-        let left_panel_width = (total_content_width - split_right_width).max(px(0.0));
-        (
-          left_panel_width,
-          self.scroll_offset_x_left,
-          self.max_line_width_left,
-        )
-      } else {
-        let panel_width = if split_mode {
-          split_right_width
-        } else {
-          total_content_width
-        };
-        let gutter_offset = if split_mode {
-          px(GUTTER_WIDTH + SPLIT_RESIZE_HANDLE_WIDTH)
-        } else {
-          px(0.0)
-        };
-        (
-          (panel_width - gutter_offset).max(px(0.0)),
-          self.scroll_offset_x_right,
-          self.max_line_width,
-        )
-      };
-
     // Ensure cursor is visible horizontally
-    let shaped_line = if split_mode && active_panel == DiffPanelSide::Left {
-      self.line_layouts_left.get(&cursor_line)
-    } else {
-      self.line_layouts.get(&cursor_line)
+    let shaped_line = match cursor_doc_line {
+      Some(doc_line) => self.line_layouts.get(&doc_line).cloned(),
+      None => self.virtual_line_layouts.get(&cursor_line).cloned(),
     };
+
     if let Some(shaped_line) = shaped_line {
-      let line_start = document.line_to_char(cursor_line);
-      let cursor_in_line = cursor_offset - line_start;
+      let line_len = self.display_line_len(cursor_line, cx);
+      let cursor_in_line = cursor_column.min(line_len);
       let cursor_x = shaped_line.x_for_index(cursor_in_line);
 
-      let horizontal_padding = px(EXTRA_EDITOR_WIDTH);
+      let horizontal_padding = px(GUTTER_WIDTH) + px(EXTRA_EDITOR_WIDTH);
+      let current_scroll_x = self.scroll_handle.offset().x;
 
       // Note: scroll_x is negative when scrolled right (0 = left edge, -100 = scrolled 100px right)
-      // visible area in absolute coordinates: [-current_scroll_x, -current_scroll_x + text_area_width]
+      // visible area in absolute coordinates: [-current_scroll_x, -current_scroll_x + viewport_width]
       let visible_start_x = -current_scroll_x;
-      let visible_end_x = -current_scroll_x + text_area_width;
+      let visible_end_x = -current_scroll_x + self.viewport_width;
 
       // Check if cursor is too far left
       if cursor_x < visible_start_x + horizontal_padding {
         let new_scroll_x = -(cursor_x - horizontal_padding).max(px(0.0));
-        let content_width = max_line_width + px(EXTRA_EDITOR_WIDTH);
-        let clamped = self.clamp_scroll_x(new_scroll_x, content_width, text_area_width);
-        if split_mode && active_panel == DiffPanelSide::Left {
-          self.scroll_offset_x_left = clamped;
-        } else {
-          self.scroll_offset_x_right = clamped;
-        }
+        self.scroll_handle.set_offset(point(new_scroll_x, px(0.0)));
       }
 
       // Check if cursor is too far right
       if cursor_x > visible_end_x - horizontal_padding {
-        let new_scroll_x = -(cursor_x - text_area_width + horizontal_padding);
-        let content_width = max_line_width + px(EXTRA_EDITOR_WIDTH);
-        let clamped = self.clamp_scroll_x(new_scroll_x, content_width, text_area_width);
-        if split_mode && active_panel == DiffPanelSide::Left {
-          self.scroll_offset_x_left = clamped;
-        } else {
-          self.scroll_offset_x_right = clamped;
-        }
+        let new_scroll_x = -(cursor_x - self.viewport_width + horizontal_padding);
+        self.scroll_handle.set_offset(point(new_scroll_x, px(0.0)));
       }
     }
 
-    let max_scroll = (total_rows as f32 - visible_lines as f32).max(0.0);
+    let max_scroll = (total_lines as f32 - visible_lines as f32).max(0.0);
     self.scroll_offset_y = self.scroll_offset_y.clamp(0.0, max_scroll);
   }
 
@@ -530,76 +1137,15 @@ impl Editor {
     }
   }
 
-  pub fn change_position(&self, cx: &App) -> Option<(usize, usize)> {
-    let document = self.document.read(cx);
-    if !document.diff_enabled() {
-      return None;
-    }
-    let ranges = diff_change_ranges(&document);
-    if ranges.is_empty() {
-      return None;
-    }
-    let cursor_line = document.char_to_line(self.cursor_offset());
-    let current = current_change_index(&ranges, cursor_line).unwrap_or(0);
-    Some((current, ranges.len()))
-  }
-
-  pub fn jump_to_change(
-    &mut self,
-    direction: ChangeDirection,
-    window: &Window,
-    cx: &mut Context<Self>,
-  ) {
-    let Some((target_offset, target_panel)) = ({
-      let document = self.document.read(cx);
-      if !document.diff_enabled() {
-        return;
-      }
-      let line_count = document.len_lines();
-      if line_count == 0 {
-        return;
-      }
-
-      let change_ranges = diff_change_ranges(&document);
-      let cursor_line = document.char_to_line(self.cursor_offset());
-      let Some(target_range) = select_change_range(&change_ranges, cursor_line, direction) else {
-        return;
-      };
-      let target_line = preferred_change_line(&document, target_range);
-      let target_offset = document.line_to_char(target_line);
-      let target_panel = if self.diff_view_mode == DiffViewMode::Split && document.diff_enabled() {
-        document.diff_line_info(target_line).and_then(|info| {
-          if info.current_line.is_some() {
-            Some(DiffPanelSide::Right)
-          } else if info.base_line.is_some() {
-            Some(DiffPanelSide::Left)
-          } else {
-            None
-          }
-        })
-      } else {
-        None
-      };
-      Some((target_offset, target_panel))
-    }) else {
-      return;
-    };
-
-    if let Some(panel) = target_panel {
-      self.active_diff_panel = panel;
-    }
-    self.target_column = None;
-    self.move_to(target_offset, cx);
-    self.ensure_cursor_visible(window, cx);
-  }
-
   pub(crate) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
     self.selected_range = offset..offset;
+    if !self.is_selecting {
+      self.display_selection = None;
+    }
     // Show cursor immediately on move
     self.cursor_blink.update(cx, |blink, cx| {
       blink.pause_blinking(cx);
     });
-    self.sync_buffer_selection_from_view(cx);
     cx.notify();
   }
 
@@ -617,28 +1163,306 @@ impl Editor {
     } else {
       self.selected_range.end = offset
     };
+    if !self.is_selecting {
+      self.display_selection = None;
+    }
     if self.selected_range.end < self.selected_range.start {
       self.selection_reversed = !self.selection_reversed;
       self.selected_range = self.selected_range.end..self.selected_range.start;
     }
-    self.sync_buffer_selection_from_view(cx);
     cx.notify()
   }
 
-  pub(crate) fn sync_buffer_selection_from_view(&mut self, cx: &App) {
-    let document = self.document.read(cx);
-    self.selected_range_buffer = document.map_view_range_to_buffer(&self.selected_range);
+  fn selection_anchor_offset(&self) -> usize {
+    if self.selection_reversed {
+      self.selected_range.end
+    } else {
+      self.selected_range.start
+    }
   }
 
-  pub(crate) fn sync_view_selection_from_buffer(&mut self, cx: &App) {
-    let Some(buffer_range) = self.selected_range_buffer.clone() else {
-      return;
-    };
+  fn current_display_cursor(&self, cx: &App) -> Option<DisplayCursor> {
+    if let Some(selection) = &self.display_selection {
+      Some(selection.end)
+    } else {
+      self.display_cursor_for_offset(self.cursor_offset(), cx)
+    }
+  }
+
+  fn current_display_anchor(&self, cx: &App) -> Option<DisplayCursor> {
+    if let Some(selection) = &self.display_selection {
+      Some(selection.start)
+    } else {
+      self.display_cursor_for_offset(self.selection_anchor_offset(), cx)
+    }
+  }
+
+  fn display_line_len(&self, display_line: usize, cx: &App) -> usize {
     let document = self.document.read(cx);
-    let Some(view_range) = document.map_buffer_range_to_view(&buffer_range) else {
-      return;
+    let doc_line_count = document.len_lines();
+    match self.display_line(display_line, doc_line_count) {
+      Some(DisplayLine::Doc { doc_line, .. }) => document
+        .line_content(doc_line)
+        .map(|cow| cow.len())
+        .unwrap_or(0),
+      Some(DisplayLine::Removed { text, .. }) => text.len(),
+      Some(DisplayLine::NoNewline { .. }) => NO_NEWLINE_MARKER_TEXT.len(),
+      _ => 0,
+    }
+  }
+
+  fn is_removed_display_line(&self, display_line: usize, cx: &App) -> bool {
+    let document = self.document.read(cx);
+    let doc_line_count = document.len_lines();
+    matches!(
+      self.display_line(display_line, doc_line_count),
+      Some(DisplayLine::Removed { .. })
+    )
+  }
+
+  fn is_read_only_display_cursor(&self, cx: &App) -> bool {
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return false;
     };
-    self.selected_range = view_range;
+    self.is_removed_display_line(cursor.line, cx)
+  }
+
+  fn set_display_cursor(&mut self, cursor: DisplayCursor, cx: &mut Context<Self>) {
+    self.display_selection = Some(DisplaySelection {
+      start: cursor,
+      end: cursor,
+    });
+    if let Some(offset) = self.doc_offset_for_display_cursor(cursor, cx) {
+      self.selected_range = offset..offset;
+      self.selection_reversed = false;
+    }
+    self.cursor_blink.update(cx, |blink, cx| {
+      blink.pause_blinking(cx);
+    });
+    cx.notify();
+  }
+
+  fn set_display_selection_with_anchor(
+    &mut self,
+    anchor: DisplayCursor,
+    cursor: DisplayCursor,
+    cx: &mut Context<Self>,
+  ) {
+    self.display_selection = Some(DisplaySelection {
+      start: anchor,
+      end: cursor,
+    });
+
+    let reversed =
+      cursor.line < anchor.line || (cursor.line == anchor.line && cursor.column < anchor.column);
+    self.selection_reversed = reversed;
+
+    if let (Some(anchor_offset), Some(cursor_offset)) = (
+      self.doc_offset_for_display_cursor(anchor, cx),
+      self.doc_offset_for_display_cursor(cursor, cx),
+    ) {
+      if reversed {
+        self.selected_range = cursor_offset..anchor_offset;
+      } else {
+        self.selected_range = anchor_offset..cursor_offset;
+      }
+    }
+
+    self.cursor_blink.update(cx, |blink, cx| {
+      blink.pause_blinking(cx);
+    });
+    cx.notify();
+  }
+
+  fn next_selectable_display_line(&self, start: usize, direction: i32) -> Option<usize> {
+    let projection = self.projection.as_ref()?;
+    let mut line = start as i32 + direction;
+    let max_line = projection.lines.len() as i32;
+    while line >= 0 && line < max_line {
+      if let Some(DisplayLine::Gap { .. }) = projection.lines.get(line as usize) {
+        line += direction;
+        continue;
+      }
+      return Some(line as usize);
+    }
+    None
+  }
+
+  pub(crate) fn move_display_cursor_vertical(
+    &mut self,
+    direction: i32,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    if self.projection.is_none() {
+      return false;
+    }
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return false;
+    };
+
+    if self.target_column.is_none() {
+      self.target_column = Some(cursor.column);
+    }
+    let target_column = self.target_column.unwrap_or(cursor.column);
+    let Some(target_line) = self.next_selectable_display_line(cursor.line, direction) else {
+      return true;
+    };
+
+    let line_len = self.display_line_len(target_line, cx);
+    let column = target_column.min(line_len);
+    self.set_display_cursor(
+      DisplayCursor {
+        line: target_line,
+        column,
+      },
+      cx,
+    );
+    true
+  }
+
+  pub(crate) fn select_display_cursor_vertical(
+    &mut self,
+    direction: i32,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    if self.projection.is_none() {
+      return false;
+    }
+    let Some(anchor) = self.current_display_anchor(cx) else {
+      return false;
+    };
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return false;
+    };
+
+    if self.target_column.is_none() {
+      self.target_column = Some(cursor.column);
+    }
+    let target_column = self.target_column.unwrap_or(cursor.column);
+    let Some(target_line) = self.next_selectable_display_line(cursor.line, direction) else {
+      return true;
+    };
+
+    let line_len = self.display_line_len(target_line, cx);
+    let column = target_column.min(line_len);
+    self.set_display_selection_with_anchor(
+      anchor,
+      DisplayCursor {
+        line: target_line,
+        column,
+      },
+      cx,
+    );
+    true
+  }
+
+  pub(crate) fn move_display_cursor_horizontal(
+    &mut self,
+    delta: i32,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return false;
+    };
+    if !self.is_removed_display_line(cursor.line, cx) {
+      return false;
+    }
+
+    let line_len = self.display_line_len(cursor.line, cx);
+    let mut column = cursor.column as i32 + delta;
+    column = column.clamp(0, line_len as i32);
+    let column = column as usize;
+    self.target_column = Some(column);
+    self.set_display_cursor(
+      DisplayCursor {
+        line: cursor.line,
+        column,
+      },
+      cx,
+    );
+    true
+  }
+
+  fn display_cursor_for_offset(&self, offset: usize, cx: &App) -> Option<DisplayCursor> {
+    let document = self.document.read(cx);
+    if document.is_empty() {
+      return Some(DisplayCursor { line: 0, column: 0 });
+    }
+
+    let doc_line = document.char_to_line(offset);
+    let line_start = document.line_to_char(doc_line);
+    let column = offset.saturating_sub(line_start);
+
+    let display_line = if let Some(display_line) = self.doc_to_display_line(doc_line) {
+      display_line
+    } else if let Some(projection) = &self.projection {
+      if let Some(prev) = projection
+        .previous_visible_doc_line(doc_line)
+        .and_then(|line| self.doc_to_display_line(line))
+      {
+        prev
+      } else if let Some(next) = projection
+        .next_visible_doc_line(doc_line)
+        .and_then(|line| self.doc_to_display_line(line))
+      {
+        next
+      } else {
+        return None;
+      }
+    } else {
+      doc_line
+    };
+
+    Some(DisplayCursor {
+      line: display_line,
+      column,
+    })
+  }
+
+  fn doc_offset_for_display_cursor(&self, cursor: DisplayCursor, cx: &App) -> Option<usize> {
+    let document = self.document.read(cx);
+    if document.is_empty() {
+      return Some(0);
+    }
+
+    let doc_line = if let Some(doc_line) = self.display_to_doc_line(cursor.line) {
+      doc_line
+    } else if let Some(projection) = &self.projection {
+      let mut forward = cursor.line + 1;
+      let mut backward = cursor.line;
+      let mut found = None;
+
+      while forward < projection.lines.len() || backward > 0 {
+        if forward < projection.lines.len() {
+          if let Some(doc_line) = projection.display_to_doc_line(forward) {
+            found = Some(doc_line);
+            break;
+          }
+          forward += 1;
+        }
+
+        if backward > 0 {
+          backward -= 1;
+          if let Some(doc_line) = projection.display_to_doc_line(backward) {
+            found = Some(doc_line);
+            break;
+          }
+        }
+      }
+
+      found.unwrap_or(0)
+    } else {
+      cursor.line
+    };
+
+    let doc_line = doc_line.min(document.len_lines().saturating_sub(1));
+    let line_start = document.line_to_char(doc_line);
+    let line_len = document
+      .line_content(doc_line)
+      .map(|cow| cow.len())
+      .unwrap_or(0);
+    let col = cursor.column.min(line_len);
+    Some(line_start + col)
   }
 
   pub(crate) fn offset_from_utf16(&self, offset: usize, cx: &App) -> usize {
@@ -692,8 +1516,45 @@ impl Editor {
       blink.pause_blinking(cx);
     });
 
+    if let Some(display_line) = position_map.display_line_for_position(event.position) {
+      if let Some(projection) = &position_map.projection {
+        if let Some(DisplayLine::Gap { id, .. }) = projection.lines.get(display_line) {
+          let amount = if event.modifiers.shift { 20 } else { 10 };
+          self.expand_gap(*id, amount, cx);
+          self.is_selecting = false;
+          return;
+        }
+      }
+    }
+
     let document = self.document.read(cx);
-    let Some(offset) = position_map.point_for_position(event.position, document) else {
+    let Some(display_cursor) = position_map.display_cursor_for_position(event.position) else {
+      return;
+    };
+
+    self.last_mouse_position = Some(event.position);
+
+    let anchor = if event.modifiers.shift {
+      if let Some(selection) = &self.display_selection {
+        selection.start
+      } else {
+        self
+          .display_cursor_for_offset(self.selection_anchor_offset(), cx)
+          .unwrap_or(display_cursor)
+      }
+    } else {
+      display_cursor
+    };
+
+    self.display_selection = Some(DisplaySelection {
+      start: anchor,
+      end: display_cursor,
+    });
+
+    let offset = position_map
+      .point_for_position(event.position, document)
+      .or_else(|| self.doc_offset_for_display_cursor(display_cursor, cx));
+    let Some(offset) = offset else {
       return;
     };
 
@@ -708,27 +1569,46 @@ impl Editor {
           let (word_start, word_end) = word_range_at_offset(self, offset, cx);
           self.selected_range = word_start..word_end;
           self.selection_reversed = false;
+          self.display_selection = None;
           cx.notify();
         }
         3 => {
           let (line_start, line_end) = line_range_at_offset(self, offset, cx);
           self.selected_range = line_start..line_end;
           self.selection_reversed = false;
+          self.display_selection = None;
           cx.notify();
         }
         _ => {
           let doc_len = document.len();
           self.selected_range = 0..doc_len;
           self.selection_reversed = false;
+          self.display_selection = None;
           cx.notify();
         }
       }
     }
-    self.sync_buffer_selection_from_view(cx);
   }
 
   pub fn mouse_left_up(&mut self, _: &MouseUpEvent, _window: &mut Window, _: &mut Context<Self>) {
     self.is_selecting = false;
+  }
+
+  pub fn mouse_moved(
+    &mut self,
+    event: &MouseMoveEvent,
+    position_map: &PositionMap,
+    cx: &mut Context<Self>,
+  ) {
+    self.last_mouse_position = Some(event.position);
+    let hovered = position_map
+      .display_line_for_position(event.position)
+      .and_then(|display_line| self.group_id_for_modified_display_line(display_line));
+
+    if self.hovered_group_id.as_deref() != hovered.as_deref() {
+      self.hovered_group_id = hovered;
+      cx.notify();
+    }
   }
 
   pub fn mouse_dragged(
@@ -742,92 +1622,32 @@ impl Editor {
       return;
     }
 
+    self.last_mouse_position = Some(event.position);
+
+    if let Some(display_cursor) = position_map.display_cursor_for_position(event.position) {
+      if let Some(selection) = self.display_selection.as_mut() {
+        selection.end = display_cursor;
+      } else {
+        self.display_selection = Some(DisplaySelection {
+          start: display_cursor,
+          end: display_cursor,
+        });
+      }
+    }
+
     let document = self.document.read(cx);
-    let Some(offset) = position_map.point_for_position(event.position, document) else {
-      return;
-    };
+    let offset = position_map
+      .point_for_position(event.position, document)
+      .or_else(|| {
+        position_map
+          .display_cursor_for_position(event.position)
+          .and_then(|cursor| self.doc_offset_for_display_cursor(cursor, cx))
+      });
 
-    self.select_to(offset, cx);
-  }
-}
-
-fn diff_change_ranges(document: &Document) -> Vec<Range<usize>> {
-  let line_count = document.len_lines();
-  let mut ranges = Vec::new();
-  let mut current_start: Option<usize> = None;
-  for line_idx in 0..line_count {
-    let changed = document
-      .diff_line_info(line_idx)
-      .map(|info| info.kind != DiffLineKind::Unchanged || info.gutter != DiffGutterKind::None)
-      .unwrap_or(false);
-    if changed {
-      if current_start.is_none() {
-        current_start = Some(line_idx);
-      }
-    } else if let Some(start) = current_start.take() {
-      ranges.push(start..line_idx);
+    if let Some(offset) = offset {
+      self.select_to(offset, cx);
     }
   }
-  if let Some(start) = current_start.take() {
-    ranges.push(start..line_count);
-  }
-  ranges
-}
-
-fn select_change_range<'a>(
-  ranges: &'a [Range<usize>],
-  cursor_line: usize,
-  direction: ChangeDirection,
-) -> Option<&'a Range<usize>> {
-  if ranges.is_empty() {
-    return None;
-  }
-
-  match direction {
-    ChangeDirection::Next => {
-      for (idx, range) in ranges.iter().enumerate() {
-        if cursor_line < range.start {
-          return Some(range);
-        }
-        if range.contains(&cursor_line) {
-          let next_idx = idx + 1;
-          return Some(&ranges[next_idx % ranges.len()]);
-        }
-      }
-      Some(&ranges[0])
-    }
-    ChangeDirection::Previous => {
-      for (idx, range) in ranges.iter().enumerate() {
-        if range.contains(&cursor_line) {
-          let prev_idx = idx.checked_sub(1).unwrap_or(ranges.len() - 1);
-          return Some(&ranges[prev_idx]);
-        }
-        if cursor_line < range.start {
-          let prev_idx = idx.checked_sub(1).unwrap_or(ranges.len() - 1);
-          return Some(&ranges[prev_idx]);
-        }
-      }
-      Some(&ranges[ranges.len() - 1])
-    }
-  }
-}
-
-fn current_change_index(ranges: &[Range<usize>], cursor_line: usize) -> Option<usize> {
-  ranges
-    .iter()
-    .position(|range| range.contains(&cursor_line))
-    .map(|idx| idx + 1)
-}
-
-fn preferred_change_line(document: &Document, range: &Range<usize>) -> usize {
-  for line_idx in range.clone() {
-    if let Some(info) = document.diff_line_info(line_idx)
-      && info.current_line.is_some()
-    {
-      return line_idx;
-    }
-  }
-  range.start
 }
 
 impl EntityInputHandler for Editor {
@@ -841,12 +1661,7 @@ impl EntityInputHandler for Editor {
     let doc = self.document.read(cx);
     let range = self.range_from_utf16(&range_utf16, cx);
     actual_range.replace(self.range_to_utf16(&range, cx));
-    let text = if self.diff_view_mode == DiffViewMode::Split && doc.diff_enabled() {
-      doc.slice_to_string_for_side(range, self.active_diff_panel)
-    } else {
-      doc.slice_to_string(range)
-    };
-    Some(text)
+    Some(doc.slice_to_string(range))
   }
 
   fn selected_text_range(
@@ -883,19 +1698,14 @@ impl EntityInputHandler for Editor {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let split_mode =
-      self.diff_view_mode == DiffViewMode::Split && self.document.read(cx).diff_enabled();
-    if split_mode && self.active_diff_panel == DiffPanelSide::Left {
+    if self.is_read_only_display_cursor(cx) && self.selected_range.is_empty() {
       return;
     }
     // Pause cursor blinking when typing
     self.cursor_blink.update(cx, |blink, cx| {
       blink.pause_blinking(cx);
     });
-    // Keep selection aligned with the latest diff state before mapping to buffer.
-    self.sync_view_selection_from_buffer(cx);
-    let has_newline = new_text.contains('\n');
-    let new_text_chars = new_text.chars().count();
+    self.display_selection = None;
     let range = range_utf16
       .as_ref()
       .map(|range_utf16| self.range_from_utf16(range_utf16, cx))
@@ -905,110 +1715,37 @@ impl EntityInputHandler for Editor {
     let selection_before = self.selected_range.clone();
     let start_line = self.document.read(cx).char_to_line(range.start);
     let end_line = self.document.read(cx).char_to_line(range.end);
-    self.last_edit_view_range = Some(start_line..(end_line + 1));
-    let buffer_range = self.document.read(cx).map_view_range_to_buffer(&range);
-    if buffer_range.is_none() {
-      if new_text.is_empty() {
-        self.selected_range = range.start..range.start;
-        self.selection_reversed = false;
-        self.marked_range.take();
-        self.sync_buffer_selection_from_view(cx);
-      }
-      cx.notify();
-      return;
-    }
-    let buffer_range = buffer_range.unwrap_or_else(|| range.clone());
-    let buffer_range_len = buffer_range.end - buffer_range.start;
-    let (buffer_start_line, buffer_end_line) = {
-      let doc = self.document.read(cx);
-      (
-        doc.buffer.char_to_line(buffer_range.start),
-        doc.buffer.char_to_line(buffer_range.end),
-      )
-    };
-    let single_line_edit = !has_newline && buffer_start_line == buffer_end_line;
-    let delta_chars = new_text_chars as isize - buffer_range_len as isize;
 
     let line_height = window.line_height();
-    let viewport_height = self.viewport_height;
-    let scroll_offset_y = self.scroll_offset_y;
-    let new_line_count = if has_newline {
-      new_text.matches('\n').count()
-    } else {
-      0
-    };
+    let doc_line_count = self.document.read(cx).len_lines();
+    let total_display_lines = self.display_line_count(doc_line_count);
+    let display_viewport = self.viewport_range(line_height, total_display_lines);
+    let doc_viewport = self.doc_range_for_display_viewport(display_viewport);
+    let new_line_count = new_text.matches('\n').count();
     let force_end_line = start_line.saturating_add(new_line_count).max(end_line);
     let force_range = start_line..(force_end_line + 1);
-    let force_range = {
-      let doc = self.document.read(cx);
-      if doc.diff_enabled() {
-        doc.map_view_line_range_to_current(&force_range)
-      } else {
-        Some(force_range.clone())
-      }
-    };
 
-    let (viewport_lines, staged_visible) = {
-      let doc = self.document.read(cx);
-      let total_rows = if split_mode {
-        doc.split_row_count()
-      } else {
-        doc.len_lines()
-      };
-      let visible_line_count = ((viewport_height / line_height).ceil() as usize).max(1);
-      let start_row = (scroll_offset_y.floor() as usize).min(total_rows.saturating_sub(1));
-      let end_row = (start_row + visible_line_count).min(total_rows);
-      let viewport_rows = start_row..end_row;
-      let viewport_lines = if split_mode {
-        doc
-          .split_row_range_to_line_range(viewport_rows.clone())
-          .or_else(|| Some(viewport_rows.clone()))
-      } else {
-        Some(viewport_rows.clone())
-      };
-      let staged_visible = if doc.diff_enabled() {
-        staged_ranges_visible(
-          &doc,
-          viewport_lines.as_ref(),
-          &self.staged_base_ranges,
-          &self.staged_current_ranges,
-        )
-      } else {
-        false
-      };
-      (viewport_lines, staged_visible)
-    };
+    self.maybe_optimistic_unstage_for_edit(start_line, end_line, cx);
 
     let transaction_id = self.document.update(cx, |doc, cx| {
-      let buffer_range = buffer_range.clone();
       let id = doc.buffer.transaction(Instant::now(), |buffer, tx| {
-        buffer.replace(tx, buffer_range, new_text);
+        buffer.replace(tx, range.clone(), new_text);
       });
-      doc.bump_edit_epoch();
-      if single_line_edit {
-        doc.apply_single_line_edit_delta(buffer_start_line, delta_chars);
-      }
 
       // Trigger async syntax re-highlighting with debouncing
       doc.schedule_recompute_highlights(cx);
-      if doc.diff_enabled() && !single_line_edit && staged_visible {
-        doc.schedule_recompute_diff(cx);
-      }
-      if let Some(viewport) = viewport_lines {
-        doc.schedule_viewport_highlights(
-          viewport.clone(),
-          force_range.clone(),
-          crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
-          cx,
-        );
-        if doc.diff_enabled() {
-          doc.schedule_viewport_diff(viewport, crate::document::VIEWPORT_DIFF_MARGIN_LINES, cx);
-        }
-      }
+      doc.schedule_viewport_highlights(
+        doc_viewport.clone(),
+        Some(force_range.clone()),
+        crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
+        cx,
+      );
 
       cx.notify();
       id
     });
+
+    let has_newline = new_text.contains('\n');
 
     if has_newline || start_line != end_line {
       // Multi-line edit: invalidate from start line onwards
@@ -1018,16 +1755,16 @@ impl EntityInputHandler for Editor {
       self.invalidate_line(start_line);
     }
 
-    let new_cursor_offset = buffer_range.start + new_text_chars;
-    self.selected_range = range.start + new_text_chars..range.start + new_text_chars;
-    self.selected_range_buffer = Some(new_cursor_offset..new_cursor_offset);
+    self.selected_range = range.start + new_text.len()..range.start + new_text.len();
     self.marked_range.take();
 
     let selection_after = self.selected_range.clone();
 
     self.record_transaction(transaction_id, selection_before, selection_after);
 
+    self.is_dirty = true;
     cx.notify();
+    self.schedule_diff_recompute(cx);
   }
 
   fn replace_and_mark_text_in_range(
@@ -1038,19 +1775,13 @@ impl EntityInputHandler for Editor {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let split_mode =
-      self.diff_view_mode == DiffViewMode::Split && self.document.read(cx).diff_enabled();
-    if split_mode && self.active_diff_panel == DiffPanelSide::Left {
+    if self.is_read_only_display_cursor(cx) && self.selected_range.is_empty() {
       return;
     }
     // Pause cursor blinking when typing
     self.cursor_blink.update(cx, |blink, cx| {
       blink.pause_blinking(cx);
     });
-    // Keep selection aligned with the latest diff state before mapping to buffer.
-    self.sync_view_selection_from_buffer(cx);
-    let has_newline = new_text.contains('\n');
-    let new_text_chars = new_text.chars().count();
     let range = range_utf16
       .as_ref()
       .map(|range_utf16| self.range_from_utf16(range_utf16, cx))
@@ -1058,112 +1789,35 @@ impl EntityInputHandler for Editor {
       .unwrap_or(self.selected_range.clone());
 
     let start_line = self.document.read(cx).char_to_line(range.start);
-    let buffer_range = self.document.read(cx).map_view_range_to_buffer(&range);
-    if buffer_range.is_none() {
-      if new_text.is_empty() {
-        self.selected_range = range.start..range.start;
-        self.selection_reversed = false;
-        self.marked_range.take();
-        self.sync_buffer_selection_from_view(cx);
-      }
-      cx.notify();
-      return;
-    }
-    let buffer_range = buffer_range.unwrap_or_else(|| range.clone());
-    let buffer_range_len = buffer_range.end - buffer_range.start;
-    let (buffer_start_line, buffer_end_line) = {
-      let doc = self.document.read(cx);
-      (
-        doc.buffer.char_to_line(buffer_range.start),
-        doc.buffer.char_to_line(buffer_range.end),
-      )
-    };
-    let single_line_edit = !has_newline && buffer_start_line == buffer_end_line;
-    let delta_chars = new_text_chars as isize - buffer_range_len as isize;
 
     let line_height = window.line_height();
-    let viewport_height = self.viewport_height;
-    let scroll_offset_y = self.scroll_offset_y;
+    let doc_line_count = self.document.read(cx).len_lines();
+    let total_display_lines = self.display_line_count(doc_line_count);
+    let display_viewport = self.viewport_range(line_height, total_display_lines);
+    let doc_viewport = self.doc_range_for_display_viewport(display_viewport);
     let end_line = self.document.read(cx).char_to_line(range.end);
-    self.last_edit_view_range = Some(start_line..(end_line + 1));
-    let new_line_count = if has_newline {
-      new_text.matches('\n').count()
-    } else {
-      0
-    };
+    let new_line_count = new_text.matches('\n').count();
     let force_end_line = start_line.saturating_add(new_line_count).max(end_line);
     let force_range = start_line..(force_end_line + 1);
-    let force_range = {
-      let doc = self.document.read(cx);
-      if doc.diff_enabled() {
-        doc.map_view_line_range_to_current(&force_range)
-      } else {
-        Some(force_range.clone())
-      }
-    };
 
-    let (viewport_lines, staged_visible) = {
-      let doc = self.document.read(cx);
-      let total_rows = if split_mode {
-        doc.split_row_count()
-      } else {
-        doc.len_lines()
-      };
-      let visible_line_count = ((viewport_height / line_height).ceil() as usize).max(1);
-      let start_row = (scroll_offset_y.floor() as usize).min(total_rows.saturating_sub(1));
-      let end_row = (start_row + visible_line_count).min(total_rows);
-      let viewport_rows = start_row..end_row;
-      let viewport_lines = if split_mode {
-        doc
-          .split_row_range_to_line_range(viewport_rows.clone())
-          .or_else(|| Some(viewport_rows.clone()))
-      } else {
-        Some(viewport_rows.clone())
-      };
-      let staged_visible = if doc.diff_enabled() {
-        staged_ranges_visible(
-          &doc,
-          viewport_lines.as_ref(),
-          &self.staged_base_ranges,
-          &self.staged_current_ranges,
-        )
-      } else {
-        false
-      };
-      (viewport_lines, staged_visible)
-    };
+    self.maybe_optimistic_unstage_for_edit(start_line, end_line, cx);
 
     self.document.update(cx, |doc, cx| {
-      let buffer_range = buffer_range.clone();
-      doc.buffer.transaction(Instant::now(), |buffer, tx| {
-        buffer.replace(tx, buffer_range, new_text);
-      });
-      doc.bump_edit_epoch();
-      if single_line_edit {
-        doc.apply_single_line_edit_delta(buffer_start_line, delta_chars);
-      }
+      doc.replace(range.clone(), new_text, cx);
       doc.schedule_recompute_highlights(cx);
-      if doc.diff_enabled() && !single_line_edit && staged_visible {
-        doc.schedule_recompute_diff(cx);
-      }
-      if let Some(viewport) = viewport_lines {
-        doc.schedule_viewport_highlights(
-          viewport.clone(),
-          force_range.clone(),
-          crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
-          cx,
-        );
-        if doc.diff_enabled() {
-          doc.schedule_viewport_diff(viewport, crate::document::VIEWPORT_DIFF_MARGIN_LINES, cx);
-        }
-      }
+      doc.schedule_viewport_highlights(
+        doc_viewport.clone(),
+        Some(force_range.clone()),
+        crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
+        cx,
+      );
     });
 
     // Invalidate cache for all lines from the start of the edit
     self.invalidate_lines_from(start_line);
 
     if !new_text.is_empty() {
-      self.marked_range = Some(range.start..range.start + new_text_chars);
+      self.marked_range = Some(range.start..range.start + new_text.len());
     } else {
       self.marked_range = None;
     }
@@ -1171,10 +1825,11 @@ impl EntityInputHandler for Editor {
       .as_ref()
       .map(|range_utf16| self.range_from_utf16(range_utf16, cx))
       .map(|new_range| new_range.start + range.start..new_range.end + range.end)
-      .unwrap_or_else(|| range.start + new_text_chars..range.start + new_text_chars);
-    self.sync_buffer_selection_from_view(cx);
+      .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
 
+    self.is_dirty = true;
     cx.notify();
+    self.schedule_diff_recompute(cx);
   }
 
   fn bounds_for_range(
@@ -1199,30 +1854,21 @@ impl EntityInputHandler for Editor {
 
 impl Render for Editor {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    let diff_split =
-      self.diff_view_mode == DiffViewMode::Split && self.document.read(cx).diff_enabled();
-    let component_theme = cx.theme();
-    let content_bg = component_theme.sidebar;
-    let gutter_bg = content_bg;
-    let content_width = (self.viewport_width - px(GUTTER_WIDTH)).max(px(0.0));
-    let max_width = content_width.max(px(1.0));
-    let min_width = px(SPLIT_RIGHT_MIN_WIDTH).min(max_width);
-    let max_right_width = (max_width - px(SPLIT_LEFT_MIN_WIDTH)).max(min_width);
-    let right_width = if diff_split {
-      self.split_right_width.max(min_width).min(max_right_width)
-    } else {
-      max_width
-    };
-    let panel_left = (max_width - right_width).max(px(0.0));
-    let right_gutter_width = px(GUTTER_WIDTH + SPLIT_RESIZE_HANDLE_WIDTH);
+    let is_dark = cx.theme().mode.is_dark();
+    if self.theme.is_dark != is_dark {
+      self.theme = Theme::new(is_dark);
+      self.line_layouts.clear();
+      self.virtual_line_layouts.clear();
+      self.last_highlights_version = 0;
+      self.last_highlights_epoch = 0;
+    }
 
-    let mut layout = div()
+    div()
       .key_context("Editor")
       .track_focus(&self.focus_handle(cx))
       .cursor(CursorStyle::IBeam)
       .size_full()
       .on_action(cx.listener(crate::actions::enter))
-      .on_action(cx.listener(crate::actions::tab))
       .on_action(cx.listener(crate::actions::backspace))
       .on_action(cx.listener(crate::actions::backspace_word))
       .on_action(cx.listener(crate::actions::backspace_all))
@@ -1256,81 +1902,44 @@ impl Render for Editor {
       .on_action(cx.listener(crate::actions::copy))
       .on_action(cx.listener(crate::actions::undo))
       .on_action(cx.listener(crate::actions::redo))
-      .bg(content_bg)
+      .on_action(cx.listener(crate::actions::save))
+      .when_else(self.theme.is_dark, |el| el.bg(black()), |el| el.bg(white()))
       .when_else(
         self.theme.is_dark,
         |el| el.text_color(white()),
         |el| el.text_color(black()),
       )
       .flex()
-      .flex_row();
-
-    layout = layout.child(div().w(px(GUTTER_WIDTH)).h_full().bg(gutter_bg).child(
-      GutterElement::new(
-        cx.entity().clone(),
-        if diff_split {
-          GutterSide::Left
-        } else {
-          GutterSide::Inline
-        },
-      ),
-    ));
-
-    let mut content = div()
-      .flex_1()
-      .h_full()
-      .relative()
-      .bg(content_bg)
-      .overflow_hidden()
-      .on_drag_move(
-        cx.listener(|editor, e: &DragMoveEvent<DraggedDiffSplitter>, _, cx| {
-          let inner_right = e.bounds.right();
-          let new_width = inner_right - e.event.position.x;
-          editor.resize_split_right_width(new_width, cx);
-        }),
-      )
+      .flex_col()
       .child(
         div()
-          .absolute()
-          .top(px(0.0))
-          .left(px(0.0))
-          .right(px(0.0))
-          .bottom(px(0.0))
-          .child(EditorElement::new(cx.entity().clone())),
-      );
-
-    if diff_split {
-      content = content.child(
-        div()
-          .absolute()
-          .top(px(0.0))
-          .bottom(px(0.0))
-          .left(panel_left)
-          .w(right_gutter_width)
-          .bg(gutter_bg)
-          .child(GutterElement::new(cx.entity().clone(), GutterSide::Right)),
-      );
-
-      let resize_handle = div()
-        .id("diff-split-resize-handle")
-        .absolute()
-        .top(px(0.0))
-        .bottom(px(0.0))
-        .left(panel_left)
-        .w(px(SPLIT_RESIZE_HANDLE_WIDTH))
-        .bg(self.theme.line_number().opacity(0.35))
-        .cursor_col_resize()
-        .on_drag(DraggedDiffSplitter, |drag, _, _, cx| {
-          cx.stop_propagation();
-          cx.new(|_| drag.clone())
-        })
-        .occlude();
-      content = content.child(resize_handle);
-    }
-
-    layout = layout.child(content);
-
-    layout
+          .flex_1()
+          .min_h(px(0.0))
+          .flex()
+          .flex_row()
+          .child(
+            div()
+              .w(px(GUTTER_WIDTH))
+              .h_full()
+              .bg(self.theme.gutter_background())
+              .child(GutterElement::new(cx.entity().clone())),
+          )
+          .child(
+            div()
+              .flex_1()
+              .h_full()
+              .id("editor-content")
+              .overflow_x_scroll()
+              .track_scroll(&self.scroll_handle)
+              .child(
+                div()
+                  .min_w(self.max_line_width + px(EXTRA_EDITOR_WIDTH))
+                  .h_full()
+                  .relative()
+                  .child(EditorElement::new(cx.entity().clone())),
+              ),
+          ),
+      )
   }
 }
 
@@ -1338,51 +1947,6 @@ impl Focusable for Editor {
   fn focus_handle(&self, _: &App) -> FocusHandle {
     self.focus_handle.clone()
   }
-}
-
-fn line_in_ranges(ranges: &[Range<usize>], line: usize) -> bool {
-  ranges
-    .iter()
-    .any(|range| range.start <= line && line < range.end)
-}
-
-fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
-  left.start < right.end && right.start < left.end
-}
-
-fn range_overlaps_any(range: &Range<usize>, ranges: &[Range<usize>]) -> bool {
-  ranges
-    .iter()
-    .any(|candidate| ranges_overlap(range, candidate))
-}
-
-fn staged_ranges_visible(
-  document: &Document,
-  viewport: Option<&Range<usize>>,
-  staged_base: &[Range<usize>],
-  staged_current: &[Range<usize>],
-) -> bool {
-  if staged_base.is_empty() && staged_current.is_empty() {
-    return false;
-  }
-  let Some(viewport) = viewport else {
-    return false;
-  };
-  if !staged_current.is_empty() {
-    if let Some(current_range) = document.map_view_line_range_to_current(viewport) {
-      if range_overlaps_any(&current_range, staged_current) {
-        return true;
-      }
-    }
-  }
-  if !staged_base.is_empty() {
-    if let Some(base_range) = document.map_view_line_range_to_base(viewport) {
-      if range_overlaps_any(&base_range, staged_base) {
-        return true;
-      }
-    }
-  }
-  false
 }
 
 #[cfg(test)]
@@ -1399,7 +1963,60 @@ pub mod tests {
   impl EditorTestContext {
     /// Create a test context with specific text content
     pub fn with_text(mut cx: TestAppContext, text: &str) -> Self {
-      let editor = cx.new(|cx| Editor::new(text, None, None, Theme::light(), cx));
+      let editor = cx.new(|cx| {
+        let doc = cx.new(|cx| Document::new(text, None, cx));
+        let cursor_blink = cx.new(CursorBlink::new);
+        Editor {
+          document: doc,
+          focus_handle: cx.focus_handle(),
+          selected_range: 0..0,
+          selection_reversed: false,
+          display_selection: None,
+          marked_range: None,
+          is_selecting: false,
+          line_layouts: HashMap::new(),
+          virtual_line_layouts: HashMap::new(),
+          scroll_offset_y: 0.0,
+          viewport_height: px(DEFAULT_VIEWPORT_HEIGHT),
+          viewport_width: px(DEFAULT_VIEWPORT_WIDTH),
+          max_line_width: px(DEFAULT_MAX_LINE_WIDTH),
+          scroll_handle: ScrollHandle::new(),
+          scroll_axis_lock: None,
+          last_scroll_time: None,
+          last_scroll_x: px(0.0),
+          max_cache_size: MAX_CACHE_SIZE,
+          target_column: None,
+          undo_stack: VecDeque::new(),
+          redo_stack: VecDeque::new(),
+          theme: Theme::dark(),
+          projection: None,
+          visible_groups: Vec::new(),
+          hovered_group_id: None,
+          last_mouse_position: None,
+          expanded_gaps: HashMap::new(),
+          workdir_path: PathBuf::new(),
+          repo_file: None,
+          git_store: None,
+          git_state: BufferGitState::default(),
+          diffs: None,
+          diff_task: None,
+          bases_task: None,
+          poll_task: None,
+          git_task: None,
+          git_jobs: VecDeque::new(),
+          git_op_in_flight: false,
+          pending_git_after_bases: false,
+          diff_generation: Arc::new(AtomicUsize::new(0)),
+          file_mtime: None,
+          index_mtime: None,
+          is_dirty: false,
+          save_task: None,
+          last_highlights_version: 0,
+          last_highlights_epoch: 0,
+          cursor_blink,
+          optimistic_unstaged_groups: HashSet::new(),
+        }
+      });
 
       Self { cx, editor }
     }
@@ -1439,6 +2056,7 @@ pub mod tests {
     }
 
     /// Get whether selection is reversed
+    #[allow(dead_code)]
     pub fn selection_reversed(&self) -> bool {
       self
         .editor
@@ -1454,10 +2072,10 @@ pub mod tests {
 
     /// Set selection range
     pub fn set_selection(&mut self, range: Range<usize>, reversed: bool) {
-      self.editor.update(&mut self.cx, |editor, cx| {
+      self.editor.update(&mut self.cx, |editor, _| {
         editor.selected_range = range;
         editor.selection_reversed = reversed;
-        editor.sync_buffer_selection_from_view(cx);
+        editor.display_selection = None;
       });
     }
 
@@ -2087,7 +2705,7 @@ pub mod tests {
 
   #[gpui::test]
   fn test_syntax_highlights_cached(cx: &mut TestAppContext) {
-    let editor = cx.new(|cx| Editor::new("fn main() {}", None, Some("rs"), Theme::light(), cx));
+    let editor = cx.new(Editor::new);
 
     // Wait for async highlighting to complete (it's scheduled but not immediate)
     editor.read_with(cx, |editor, cx| {
@@ -2113,7 +2731,6 @@ pub mod tests {
       editor.is_selecting = true;
       editor.selected_range = 0..doc_len;
       editor.selection_reversed = false;
-      editor.sync_buffer_selection_from_view(cx);
       cx.notify();
     });
 

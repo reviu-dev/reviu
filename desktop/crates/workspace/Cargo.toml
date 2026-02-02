@@ -13,3 +13,4 @@ ui = { workspace = true }
 dirs = { workspace = true }
 rusqlite = { workspace = true }
 syntax = { workspace = true }
+smol = { workspace = true }

@@ -1,47 +1,40 @@
 use gpui::{
-  App, Bounds, ElementId, Entity, GlobalElementId, InspectorElementId, LayoutId, Pixels, Style,
-  TextAlign, TextRun, Window, fill, point, prelude::*, px, relative,
+  App, Bounds, ElementId, Entity, GlobalElementId, InspectorElementId, LayoutId, PaintQuad, Pixels,
+  Style, TextAlign, TextRun, Window, fill, point, prelude::*, px, relative, size,
 };
-use std::ops::Range;
+use std::{collections::HashMap, ops::Range};
 
-use crate::editor::{
-  DiffViewMode, Editor, GUTTER_MARKER_WIDTH, GUTTER_RIGHT_PADDING, STAGED_DIFF_OPACITY_MULTIPLIER,
+use git::DiffLineKind;
+
+use crate::{
+  editor::Editor,
+  projection::{ChangeKind, DisplayLine, GAP_MARKER_TEXT, HunkState},
 };
-
-const STAGED_HUNK_BORDER_HEIGHT: f32 = 2.0;
-const GUTTER_LEFT_BORDER_WIDTH: f32 = 3.0;
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum GutterSide {
-  Inline,
-  Left,
-  Right,
-}
 
 pub struct GutterElement {
   editor: Entity<Editor>,
-  side: GutterSide,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GroupKind {
+  Added,
+  Removed,
+  Mixed,
 }
 
 pub struct GutterPrepaintState {
-  lines: Vec<GutterLine>,
+  line_numbers: Vec<(usize, String)>,
   viewport: Range<usize>,
   line_height: Pixels,
   line_number_color: gpui::Hsla,
-}
-
-struct GutterLine {
-  line_idx: usize,
-  line_number: String,
-  marker_color: Option<gpui::Hsla>,
-  is_changed: bool,
-  diff_kind: Option<crate::document::DiffLineKind>,
-  is_staged: bool,
+  line_backgrounds: Vec<PaintQuad>,
+  stripe_quads: Vec<PaintQuad>,
+  group_borders: Vec<PaintQuad>,
 }
 
 impl GutterElement {
-  pub fn new(editor: Entity<Editor>, side: GutterSide) -> Self {
-    Self { editor, side }
+  pub fn new(editor: Entity<Editor>) -> Self {
+    Self { editor }
   }
 }
 
@@ -88,155 +81,239 @@ impl Element for GutterElement {
     window: &mut Window,
     cx: &mut App,
   ) -> Self::PrepaintState {
-    let (viewport, lines, line_height, line_number_color) = {
+    let (
+      viewport,
+      line_numbers,
+      line_height,
+      line_number_color,
+      line_backgrounds,
+      stripe_quads,
+      group_borders,
+    ) = {
       let editor = self.editor.read(cx);
       let document = editor.document().read(cx);
       let line_height = window.line_height();
       let scroll_offset = editor.scroll_offset_y;
-      let split_mode = editor.diff_view_mode == DiffViewMode::Split && document.diff_enabled();
+      let doc_line_count = document.len_lines();
+      let total_lines = editor.display_line_count(doc_line_count);
+      let theme = editor.theme.clone();
+      let projection = editor.projection.clone();
 
       // Calculate viewport (same logic as EditorElement)
       let visible_line_count = ((bounds.size.height / line_height).ceil() as usize).max(1);
-      let total_rows = if split_mode {
-        document.split_row_count()
-      } else {
-        document.len_lines()
-      };
-      let start_line = (scroll_offset.floor() as usize).min(total_rows.saturating_sub(1));
-      let end_line = (start_line + visible_line_count).min(total_rows);
+      let start_line = (scroll_offset.floor() as usize).min(total_lines.saturating_sub(1));
+      let end_line = (start_line + visible_line_count).min(total_lines);
       let viewport = start_line..end_line;
 
-      // Format line numbers for visible lines
-      let mut lines = Vec::new();
-      for line_idx in viewport.clone() {
-        let split_row = if split_mode {
-          document.split_row(line_idx)
-        } else {
-          None
-        };
-        let row_line = if split_mode {
-          if let Some(row) = split_row {
-            match self.side {
-              GutterSide::Left => row.left_line,
-              GutterSide::Right => row.right_line,
-              GutterSide::Inline => Some(line_idx),
+      let mut group_kinds = HashMap::new();
+      let mut group_border_colors = HashMap::new();
+      if let Some(projection) = projection.as_ref() {
+        for (group_id, group) in &projection.groups {
+          let mut has_add = false;
+          let mut has_remove = false;
+          for line in &group.hunk.lines {
+            match line.kind {
+              DiffLineKind::Add => has_add = true,
+              DiffLineKind::Remove => has_remove = true,
+              DiffLineKind::Context => {}
             }
-          } else {
-            Some(line_idx)
           }
-        } else {
-          Some(line_idx)
-        };
-        let diff_info = row_line.and_then(|row_line| document.diff_line_info(row_line));
-        let hide_line_number = split_mode && split_row.is_some() && row_line.is_none();
-        let line_number = if hide_line_number {
-          String::new()
-        } else {
-          match (self.side, diff_info) {
-            (GutterSide::Inline, Some(info)) => {
-              if matches!(info.kind, crate::document::DiffLineKind::Deleted) {
-                String::new()
-              } else {
-                info
-                  .current_line
-                  .or(info.base_line)
-                  .map(|idx| format!("{}", idx + 1))
-                  .unwrap_or_default()
-              }
-            }
-            (GutterSide::Left, Some(info)) => {
-              if matches!(info.kind, crate::document::DiffLineKind::Added) {
-                String::new()
-              } else {
-                info
-                  .base_line
-                  .or(info.current_line)
-                  .map(|idx| format!("{}", idx + 1))
-                  .unwrap_or_default()
-              }
-            }
-            (GutterSide::Right, Some(info)) => {
-              if matches!(info.kind, crate::document::DiffLineKind::Deleted) {
-                String::new()
-              } else {
-                info
-                  .current_line
-                  .or(info.base_line)
-                  .map(|idx| format!("{}", idx + 1))
-                  .unwrap_or_default()
-              }
-            }
-            (_, None) => format!("{}", line_idx + 1),
-          }
-        };
 
-        let (diff_kind, is_changed) = match diff_info {
-          Some(info) => {
-            let changed = info.kind != crate::document::DiffLineKind::Unchanged
-              || info.gutter != crate::document::DiffGutterKind::None;
-            (Some(info.kind), changed)
-          }
-          None => (None, false),
-        };
+          let kind = match (has_add, has_remove) {
+            (true, false) => Some(GroupKind::Added),
+            (false, true) => Some(GroupKind::Removed),
+            (true, true) => Some(GroupKind::Mixed),
+            _ => None,
+          };
 
-        let marker_color = if split_mode && !matches!(self.side, GutterSide::Inline) {
-          None
-        } else {
-          match self.side {
-            GutterSide::Inline => diff_info.and_then(|info| match info.gutter {
-              crate::document::DiffGutterKind::Added => Some(editor.theme.diff_gutter_added()),
-              crate::document::DiffGutterKind::Modified => {
-                Some(editor.theme.diff_gutter_modified())
-              }
-              crate::document::DiffGutterKind::None => None,
-            }),
-            GutterSide::Left => diff_info.and_then(|info| {
-              if matches!(info.kind, crate::document::DiffLineKind::Deleted) {
-                Some(editor.theme.diff_gutter_modified())
-              } else {
-                None
-              }
-            }),
-            GutterSide::Right => diff_info.and_then(|info| {
-              if matches!(info.kind, crate::document::DiffLineKind::Added) {
-                match info.gutter {
-                  crate::document::DiffGutterKind::Added => Some(editor.theme.diff_gutter_added()),
-                  crate::document::DiffGutterKind::Modified => {
-                    Some(editor.theme.diff_gutter_modified())
+          if let Some(kind) = kind {
+            group_kinds.insert(group_id.clone(), kind);
+          }
+
+          if group.state == HunkState::Staged {
+            let mut first_kind: Option<DiffLineKind> = None;
+            let mut last_kind: Option<DiffLineKind> = None;
+            for line in &group.hunk.lines {
+              match line.kind {
+                DiffLineKind::Add | DiffLineKind::Remove => {
+                  if first_kind.is_none() {
+                    first_kind = Some(line.kind);
                   }
-                  crate::document::DiffGutterKind::None => None,
+                  last_kind = Some(line.kind);
                 }
-              } else {
-                None
+                DiffLineKind::Context => {}
               }
-            }),
+            }
+
+            if let (Some(first_kind), Some(last_kind)) = (first_kind, last_kind) {
+              let top_color = match first_kind {
+                DiffLineKind::Add => theme.diff_gutter_added(),
+                DiffLineKind::Remove => theme.diff_gutter_removed(),
+                DiffLineKind::Context => theme.diff_gutter_modified(),
+              };
+              let bottom_color = match last_kind {
+                DiffLineKind::Add => theme.diff_gutter_added(),
+                DiffLineKind::Remove => theme.diff_gutter_removed(),
+                DiffLineKind::Context => theme.diff_gutter_modified(),
+              };
+              group_border_colors.insert(group_id.clone(), (top_color, bottom_color));
+            }
           }
+        }
+      }
+
+      let added_bg = theme.diff_added_background();
+      let added_staged_bg = theme.diff_added_staged_background();
+      let removed_bg = theme.diff_removed_background();
+      let removed_staged_bg = theme.diff_removed_staged_background();
+      let stripe_added = theme.diff_gutter_added();
+      let stripe_removed = theme.diff_gutter_removed();
+      let stripe_modified = theme.diff_gutter_modified();
+
+      // Format line numbers for visible lines
+      let mut line_numbers = Vec::new();
+      let mut line_backgrounds = Vec::new();
+      let mut stripe_quads = Vec::new();
+      let mut group_borders = Vec::new();
+      for display_idx in viewport.clone() {
+        let display_line = editor.display_line(display_idx, doc_line_count);
+        let line_number = match display_line {
+          Some(DisplayLine::Doc { doc_line, .. }) => format!("{}", doc_line + 1),
+          Some(DisplayLine::Gap { .. }) => GAP_MARKER_TEXT.to_string(),
+          _ => String::new(),
+        };
+        line_numbers.push((display_idx, line_number));
+
+        let background = match &display_line {
+          Some(DisplayLine::Doc {
+            change: Some(ChangeKind::Added),
+            secondary,
+            ..
+          }) => Some(if *secondary {
+            added_staged_bg
+          } else {
+            added_bg
+          }),
+          Some(DisplayLine::Removed { secondary, .. }) => Some(if *secondary {
+            removed_staged_bg
+          } else {
+            removed_bg
+          }),
+          _ => None,
         };
 
-        let is_staged = row_line
-          .map(|line_idx| editor.diff_line_is_staged(line_idx, cx))
-          .unwrap_or(false);
+        if let Some(color) = background {
+          let y = bounds.top() + line_height * (display_idx - viewport.start) as f32;
+          line_backgrounds.push(fill(
+            Bounds::new(
+              point(bounds.left(), y),
+              size(bounds.size.width, line_height),
+            ),
+            color,
+          ));
+        }
 
-        lines.push(GutterLine {
-          line_idx,
-          line_number,
-          marker_color,
-          is_changed,
-          diff_kind,
-          is_staged,
-        });
+        let group_id = match &display_line {
+          Some(DisplayLine::Doc {
+            change: Some(ChangeKind::Added),
+            group_id,
+            ..
+          }) => group_id.clone(),
+          Some(DisplayLine::Removed { group_id, .. }) => group_id.clone(),
+          Some(DisplayLine::NoNewline { group_id, .. }) => group_id.clone(),
+          _ => None,
+        };
+
+        if let Some(group_id) = group_id {
+          if let Some(kind) = group_kinds.get(&group_id) {
+            let stripe_color = match kind {
+              GroupKind::Added => stripe_added,
+              GroupKind::Removed => stripe_removed,
+              GroupKind::Mixed => stripe_modified,
+            };
+            let y = bounds.top() + line_height * (display_idx - viewport.start) as f32;
+            stripe_quads.push(fill(
+              Bounds::new(point(bounds.left(), y), size(px(4.0), line_height)),
+              stripe_color,
+            ));
+          }
+
+          if let (Some(projection), Some((top_color, bottom_color))) = (
+            projection.as_ref(),
+            group_border_colors.get(&group_id),
+          ) {
+            let prev_group = display_idx
+              .checked_sub(1)
+              .and_then(|idx| projection.lines.get(idx))
+              .and_then(|line| match line {
+                DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
+                DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
+                DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
+                _ => None,
+              });
+            let next_group = projection
+              .lines
+              .get(display_idx + 1)
+              .and_then(|line| match line {
+                DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
+                DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
+                DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
+                _ => None,
+              });
+
+            let is_top = prev_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
+            let is_bottom = next_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
+            let border_thickness = px(1.0);
+            let stripe_width = px(4.0);
+            let width = if bounds.size.width > stripe_width {
+              bounds.size.width - stripe_width
+            } else {
+              px(0.0)
+            };
+            let x = bounds.left() + stripe_width;
+            let y = bounds.top() + line_height * (display_idx - viewport.start) as f32;
+
+            if is_top {
+              group_borders.push(fill(
+                Bounds::new(point(x, y), size(width, border_thickness)),
+                *top_color,
+              ));
+            }
+
+            if is_bottom {
+              group_borders.push(fill(
+                Bounds::new(
+                  point(x, y + line_height - border_thickness),
+                  size(width, border_thickness),
+                ),
+                *bottom_color,
+              ));
+            }
+          }
+        }
       }
 
       let line_number_color = editor.theme.line_number();
 
-      (viewport, lines, line_height, line_number_color)
+      (
+        viewport,
+        line_numbers,
+        line_height,
+        line_number_color,
+        line_backgrounds,
+        stripe_quads,
+        group_borders,
+      )
     };
 
     GutterPrepaintState {
-      lines,
+      line_numbers,
       viewport,
       line_height,
       line_number_color,
+      line_backgrounds,
+      stripe_quads,
+      group_borders,
     }
   }
 
@@ -254,155 +331,23 @@ impl Element for GutterElement {
     let font_size = text_style.font_size.to_pixels(window.rem_size());
     let text_color = prepaint.line_number_color;
 
-    let editor = self.editor.read(cx);
-    let added_bg = editor.theme.diff_added_background();
-    let removed_bg = editor.theme.diff_removed_background();
-    let mut added_bg_staged = added_bg;
-    let mut removed_bg_staged = removed_bg;
-    added_bg_staged.a = (added_bg_staged.a * STAGED_DIFF_OPACITY_MULTIPLIER).min(1.0);
-    removed_bg_staged.a = (removed_bg_staged.a * STAGED_DIFF_OPACITY_MULTIPLIER).min(1.0);
-    let mut removed_border = editor.theme.diff_removed_word_background();
-    removed_border.a = 1.0;
-    let mut added_border = editor.theme.diff_added_word_background();
-    added_border.a = 1.0;
-    let (default_top_border_color, default_bottom_border_color) = match self.side {
-      GutterSide::Left => (removed_border, removed_border),
-      GutterSide::Right => (added_border, added_border),
-      GutterSide::Inline => (removed_border, added_border),
-    };
-    let marker_width = px(GUTTER_MARKER_WIDTH);
+    for quad in &prepaint.line_backgrounds {
+      window.paint_quad(quad.clone());
+    }
 
-    for (idx, line) in prepaint.lines.iter().enumerate() {
-      let y =
-        bounds.top() + prepaint.line_height * (line.line_idx - prepaint.viewport.start) as f32;
-      let band_offset = if line.marker_color.is_some() {
-        marker_width
-      } else {
-        px(0.0)
-      };
-      let (prev_staged, next_staged) = if line.is_staged {
-        (
-          idx > 0 && prepaint.lines[idx - 1].is_staged,
-          idx + 1 < prepaint.lines.len() && prepaint.lines[idx + 1].is_staged,
-        )
-      } else {
-        (false, false)
-      };
+    for quad in &prepaint.stripe_quads {
+      window.paint_quad(quad.clone());
+    }
 
-      let bg_color = match line.diff_kind {
-        Some(crate::document::DiffLineKind::Added) => Some(if line.is_staged {
-          added_bg_staged
-        } else {
-          added_bg
-        }),
-        Some(crate::document::DiffLineKind::Deleted) => Some(if line.is_staged {
-          removed_bg_staged
-        } else {
-          removed_bg
-        }),
-        _ => None,
-      };
-      if let Some(color) = bg_color {
-        window.paint_quad(fill(
-          Bounds::from_corners(
-            point(bounds.left() + band_offset, y),
-            point(bounds.right(), y + prepaint.line_height),
-          ),
-          color,
-        ));
-      }
+    for quad in &prepaint.group_borders {
+      window.paint_quad(quad.clone());
+    }
 
-      if line.is_staged {
-        let (top_border_color, bottom_border_color) = match self.side {
-          GutterSide::Inline => match line.diff_kind {
-            Some(crate::document::DiffLineKind::Added) => (added_border, added_border),
-            Some(crate::document::DiffLineKind::Deleted) => (removed_border, removed_border),
-            _ => (default_top_border_color, default_bottom_border_color),
-          },
-          _ => (default_top_border_color, default_bottom_border_color),
-        };
-        let border_height = px(STAGED_HUNK_BORDER_HEIGHT);
-        if !prev_staged {
-          window.paint_quad(fill(
-            Bounds::from_corners(
-              point(bounds.left() + band_offset, y),
-              point(bounds.right(), y + border_height),
-            ),
-            top_border_color,
-          ));
-        }
-        if !next_staged {
-          window.paint_quad(fill(
-            Bounds::from_corners(
-              point(
-                bounds.left() + band_offset,
-                y + prepaint.line_height - border_height,
-              ),
-              point(bounds.right(), y + prepaint.line_height),
-            ),
-            bottom_border_color,
-          ));
-        }
-      }
-
-      if let Some(color) = line.marker_color {
-        let marker_bounds = Bounds::from_corners(
-          point(bounds.left(), y),
-          point(bounds.left() + marker_width, y + prepaint.line_height),
-        );
-        if line.is_staged {
-          let mut band_color = color;
-          band_color.a = (band_color.a * STAGED_DIFF_OPACITY_MULTIPLIER).min(1.0);
-          window.paint_quad(fill(marker_bounds, band_color));
-
-          if line.is_changed {
-            let mut band_border_color = color;
-            band_border_color.a = 1.0;
-            let border_height = px(STAGED_HUNK_BORDER_HEIGHT);
-            let left_border_width = px(GUTTER_LEFT_BORDER_WIDTH);
-            window.paint_quad(fill(
-              Bounds::from_corners(
-                point(marker_bounds.left(), y),
-                point(
-                  marker_bounds.left() + left_border_width,
-                  y + prepaint.line_height,
-                ),
-              ),
-              band_border_color,
-            ));
-            if !prev_staged {
-              window.paint_quad(fill(
-                Bounds::from_corners(
-                  point(marker_bounds.left(), y),
-                  point(marker_bounds.right(), y + border_height),
-                ),
-                band_border_color,
-              ));
-            }
-            if !next_staged {
-              window.paint_quad(fill(
-                Bounds::from_corners(
-                  point(
-                    marker_bounds.left(),
-                    y + prepaint.line_height - border_height,
-                  ),
-                  point(marker_bounds.right(), y + prepaint.line_height),
-                ),
-                band_border_color,
-              ));
-            }
-          }
-        } else {
-          window.paint_quad(fill(marker_bounds, color));
-        }
-      }
-
-      if line.line_number.is_empty() {
-        continue;
-      }
+    for (line_idx, line_number) in &prepaint.line_numbers {
+      let y = bounds.top() + prepaint.line_height * (*line_idx - prepaint.viewport.start) as f32;
 
       let runs = vec![TextRun {
-        len: line.line_number.len(),
+        len: line_number.len(),
         font: text_style.font(),
         color: text_color,
         background_color: None,
@@ -413,11 +358,11 @@ impl Element for GutterElement {
       let shaped =
         window
           .text_system()
-          .shape_line(line.line_number.clone().into(), font_size, &runs, None);
+          .shape_line(line_number.clone().into(), font_size, &runs, None);
 
       // Align to the right with padding
       let text_width = shaped.width;
-      let right_padding = px(GUTTER_RIGHT_PADDING);
+      let right_padding = px(20.0);
       let x = bounds.right() - text_width - right_padding;
 
       let line_origin = point(x, y);

@@ -116,10 +116,6 @@ impl TextBuffer {
     self.text.len_lines()
   }
 
-  pub fn snapshot(&self) -> Rope {
-    self.text.clone()
-  }
-
   /// Get line content without trailing newlines
   pub fn line_content(&self, line_idx: usize) -> Option<Cow<'_, str>> {
     if line_idx < self.len_lines() {
