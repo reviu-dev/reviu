@@ -100,6 +100,21 @@ pub fn stage_all(repo_root: &Path) -> Result<()> {
   Ok(())
 }
 
+pub fn unstage_all(repo_root: &Path) -> Result<()> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let pathspecs = [Path::new("*")];
+  let target = repo
+    .head()
+    .ok()
+    .and_then(|head| head.peel_to_commit().ok());
+  match target {
+    Some(commit) => repo.reset_default(Some(commit.as_object()), pathspecs)?,
+    None => repo.reset_default(None, pathspecs)?,
+  }
+  Ok(())
+}
+
 pub fn unstage_file(repo_root: &Path, rel_path: &Path) -> Result<()> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;

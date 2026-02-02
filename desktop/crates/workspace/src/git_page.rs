@@ -6,7 +6,7 @@ use git::{
   RepoStatusKind, amend_commit, commit_changes, create_branch, create_branch_from,
   current_branch_status, delete_untracked_file, head_commit_status, list_branches,
   list_repo_status, merge_branch, push, restore_file, stage_all, stage_file, switch_branch,
-  undo_last_commit, unstage_file,
+  undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, App, Context, Corner, Entity, FocusHandle, Focusable, InteractiveElement, Keystroke,
@@ -19,7 +19,7 @@ use gpui_component::{
   kbd::Kbd,
   menu::{DropdownMenu, PopupMenuItem},
   select::{Select, SelectEvent, SelectItem, SelectState},
-  sidebar::{Sidebar, SidebarGroup, SidebarItem},
+  sidebar::{Sidebar, SidebarGroup, SidebarHeader, SidebarItem},
   tooltip::Tooltip,
 };
 use smol::unblock;
@@ -944,6 +944,53 @@ impl GitPage {
     cx.notify();
   }
 
+  fn toggle_stage_all_action(
+    &mut self,
+    _: &gpui::ClickEvent,
+    _: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.all_changes_staged() {
+      self.unstage_all_action(cx);
+    } else {
+      self.stage_all_action(cx);
+    }
+  }
+
+  fn stage_all_action(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    let editor = self.editor.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let _ = unblock(move || stage_all(&repo_root)).await;
+      let _ = this.update(cx, |this, cx| {
+        this.reload_status(cx);
+        if let Some(editor) = editor.clone() {
+          editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
+        }
+      });
+    });
+    self.status_task = Some(task);
+  }
+
+  fn unstage_all_action(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    let editor = self.editor.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let _ = unblock(move || unstage_all(&repo_root)).await;
+      let _ = this.update(cx, |this, cx| {
+        this.reload_status(cx);
+        if let Some(editor) = editor.clone() {
+          editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
+        }
+      });
+    });
+    self.status_task = Some(task);
+  }
+
   fn stage_file_action(&mut self, rel_path: PathBuf, cx: &mut Context<Self>) {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
@@ -1100,6 +1147,14 @@ impl GitPage {
     let can_push = status.ahead > 0 && status.behind == 0;
     let can_force_push = status.ahead > 0 && status.behind > 0;
     (can_push, can_force_push)
+  }
+
+  fn all_changes_staged(&self) -> bool {
+    !self.status_entries.is_empty()
+      && self
+        .status_entries
+        .iter()
+        .all(|entry| entry.stage == RepoStage::Staged)
   }
 
   fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1539,6 +1594,34 @@ impl GitPage {
       .child(self.render_commit_button(cx))
   }
 
+  fn render_sidebar_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    let all_staged = self.all_changes_staged();
+    let sidebar_enabled = self.selected_repo.is_some() && !self.status_entries.is_empty();
+    let (label, icon, tooltip) = if all_staged {
+      ("Unstage all", IconName::Minus, "Unstage all files")
+    } else {
+      ("Stage all", IconName::Plus, "Stage all files")
+    };
+
+    SidebarHeader::new().child(
+      div()
+        .w_full()
+        .flex()
+        .items_center()
+        .justify_between()
+        .child(
+          Button::new("stage-all-button")
+            .label(label)
+            .icon(icon)
+            .with_variant(ButtonVariant::Secondary)
+            .xsmall()
+            .disabled(!sidebar_enabled)
+            .tooltip(tooltip)
+            .on_click(cx.listener(Self::toggle_stage_all_action)),
+        ),
+    )
+  }
+
   fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
     if self.selected_repo.is_none() {
       let placeholder = FileSidebarItem::placeholder("Select a repository", &cx.theme().clone());
@@ -1546,6 +1629,7 @@ impl GitPage {
         .side(Side::Left)
         .w_full()
         .h_full()
+        .header(self.render_sidebar_header(cx))
         .child(SidebarGroup::new("Changes").child(placeholder))
         .into_any_element();
     } else if self.status_entries.is_empty() {
@@ -1554,6 +1638,7 @@ impl GitPage {
         .side(Side::Left)
         .w_full()
         .h_full()
+        .header(self.render_sidebar_header(cx))
         .child(SidebarGroup::new("Changes").child(placeholder))
         .into_any_element();
     } else {
@@ -1618,6 +1703,7 @@ impl GitPage {
         .side(Side::Left)
         .w_full()
         .h_full()
+        .header(self.render_sidebar_header(cx))
         .child(SidebarGroup::new("Changes").children(items))
         // .border_color(gpui::blue())
         .footer(self.render_commit_bar(cx))
