@@ -218,6 +218,20 @@ pub fn down(editor: &mut Editor, _: &Down, window: &mut Window, cx: &mut Context
 
 pub fn left(editor: &mut Editor, _: &Left, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
+  if editor.collapse_removed_selection(true, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
+  if editor.selected_range.is_empty()
+    && editor.move_display_cursor_prev_removed_line_end_from_boundary(cx)
+  {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
+  if editor.selected_range.is_empty() && editor.move_display_cursor_prev_display_line_end(cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   if editor.selected_range.is_empty() && editor.move_display_cursor_horizontal(-1, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
@@ -235,6 +249,14 @@ pub fn left(editor: &mut Editor, _: &Left, window: &mut Window, cx: &mut Context
 
 pub fn alt_left(editor: &mut Editor, _: &AltLeft, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
+  if editor.collapse_removed_selection(true, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
+  if editor.move_display_cursor_word_horizontal(-1, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   if editor.selected_range.is_empty() {
     editor.move_to(
       boundaries::previous_word_boundary(editor, editor.cursor_offset(), cx),
@@ -248,6 +270,14 @@ pub fn alt_left(editor: &mut Editor, _: &AltLeft, window: &mut Window, cx: &mut 
 
 pub fn cmd_left(editor: &mut Editor, _: &CmdLeft, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
+  if editor.collapse_removed_selection(true, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
+  if editor.move_display_cursor_line_boundary(true, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   let document = editor.document.read(cx);
   let cursor = editor.cursor_offset();
   let line = document.char_to_line(cursor);
@@ -258,6 +288,10 @@ pub fn cmd_left(editor: &mut Editor, _: &CmdLeft, window: &mut Window, cx: &mut 
 
 pub fn right(editor: &mut Editor, _: &Right, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
+  if editor.collapse_removed_selection(false, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   if editor.selected_range.is_empty() && editor.move_display_cursor_horizontal(1, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
@@ -275,6 +309,14 @@ pub fn right(editor: &mut Editor, _: &Right, window: &mut Window, cx: &mut Conte
 
 pub fn alt_right(editor: &mut Editor, _: &AltRight, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
+  if editor.collapse_removed_selection(false, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
+  if editor.move_display_cursor_word_horizontal(1, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   if editor.selected_range.is_empty() {
     editor.move_to(
       boundaries::next_word_boundary(editor, editor.selected_range.end, cx),
@@ -288,6 +330,14 @@ pub fn alt_right(editor: &mut Editor, _: &AltRight, window: &mut Window, cx: &mu
 
 pub fn cmd_right(editor: &mut Editor, _: &CmdRight, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
+  if editor.collapse_removed_selection(false, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
+  if editor.move_display_cursor_line_boundary(false, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   let document = editor.document.read(cx);
   let cursor = editor.cursor_offset();
   let line = document.char_to_line(cursor);
@@ -450,6 +500,15 @@ pub fn select_down(
 
 pub fn select_left(editor: &mut Editor, _: &SelectLeft, _: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
+  if editor.select_display_cursor_prev_removed_line_end_from_boundary(cx) {
+    return;
+  }
+  if editor.select_display_cursor_prev_display_line_end(cx) {
+    return;
+  }
+  if editor.select_display_cursor_horizontal(-1, cx) {
+    return;
+  }
   editor.select_to(
     boundaries::previous_boundary(editor, editor.cursor_offset(), cx),
     cx,
@@ -463,6 +522,10 @@ pub fn select_word_left(
   cx: &mut Context<Editor>,
 ) {
   editor.target_column = None;
+  if editor.select_display_cursor_word_horizontal(-1, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   editor.select_to(
     boundaries::previous_word_boundary(editor, editor.cursor_offset(), cx),
     cx,
@@ -477,6 +540,10 @@ pub fn select_right(
   cx: &mut Context<Editor>,
 ) {
   editor.target_column = None;
+  if editor.select_display_cursor_horizontal(1, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   editor.select_to(
     boundaries::next_boundary(editor, editor.cursor_offset(), cx),
     cx,
@@ -491,6 +558,10 @@ pub fn select_word_right(
   cx: &mut Context<Editor>,
 ) {
   editor.target_column = None;
+  if editor.select_display_cursor_word_horizontal(1, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   editor.select_to(
     boundaries::next_word_boundary(editor, editor.cursor_offset(), cx),
     cx,
@@ -504,6 +575,10 @@ pub fn select_cmd_left(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.select_display_cursor_line_boundary(true, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   let document = editor.document.read(cx);
   let cursor = editor.cursor_offset();
   let line = document.char_to_line(cursor);
@@ -518,6 +593,10 @@ pub fn select_cmd_right(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.select_display_cursor_line_boundary(false, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   let document = editor.document.read(cx);
   let cursor = editor.cursor_offset();
   let line = document.char_to_line(cursor);
@@ -534,6 +613,10 @@ pub fn select_cmd_up(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.select_display_cursor_to_display_boundary(true, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   let document = editor.document.read(cx);
   let target_line = editor
     .projection()
@@ -550,6 +633,10 @@ pub fn select_cmd_down(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
+  if editor.select_display_cursor_to_display_boundary(false, cx) {
+    editor.ensure_cursor_visible(window, cx);
+    return;
+  }
   let document = editor.document.read(cx);
   let doc_line_count = document.len_lines();
   let target_line = editor
@@ -565,6 +652,9 @@ pub fn select_cmd_down(
 
 pub fn select_all(editor: &mut Editor, _: &SelectAll, _: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
+  if editor.select_all_display_lines(cx) {
+    return;
+  }
   let doc_len = editor.document.read(cx).len();
 
   editor.move_to(0, cx);

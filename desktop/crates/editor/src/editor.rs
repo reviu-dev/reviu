@@ -22,6 +22,7 @@ use gpui_component::{
 };
 use smol::unblock;
 use syntax::Theme;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
   boundaries::{line_range_at_offset, word_range_at_offset},
@@ -1301,6 +1302,60 @@ impl Editor {
     self.is_removed_display_line(cursor.line, cx)
   }
 
+  fn removed_line_text(&self, display_line: usize, cx: &App) -> Option<String> {
+    let document = self.document.read(cx);
+    let doc_line_count = document.len_lines();
+    match self.display_line(display_line, doc_line_count) {
+      Some(DisplayLine::Removed { text, .. }) => Some(text),
+      _ => None,
+    }
+  }
+
+  fn previous_word_boundary_in_line(text: &str, column: usize) -> usize {
+    if column == 0 {
+      return 0;
+    }
+
+    let mut last_start = 0;
+    for (idx, segment) in text.split_word_bound_indices() {
+      if segment.trim().is_empty() {
+        continue;
+      }
+      let end = idx + segment.len();
+      if idx < column && column <= end {
+        return idx;
+      }
+      if idx < column {
+        last_start = idx;
+      } else {
+        break;
+      }
+    }
+    last_start
+  }
+
+  fn next_word_boundary_in_line(text: &str, column: usize) -> usize {
+    let len = text.len();
+    if column >= len {
+      return len;
+    }
+
+    for (idx, segment) in text.split_word_bound_indices() {
+      if segment.trim().is_empty() {
+        continue;
+      }
+      let end = idx + segment.len();
+      if idx <= column && column < end {
+        return end;
+      }
+      if idx > column {
+        return end;
+      }
+    }
+
+    len
+  }
+
   fn set_display_cursor(&mut self, cursor: DisplayCursor, cx: &mut Context<Self>) {
     self.display_selection = Some(DisplaySelection {
       start: cursor,
@@ -1446,6 +1501,9 @@ impl Editor {
     let mut column = cursor.column as i32 + delta;
     column = column.clamp(0, line_len as i32);
     let column = column as usize;
+    if column == cursor.column {
+      return false;
+    }
     self.target_column = Some(column);
     self.set_display_cursor(
       DisplayCursor {
@@ -1454,6 +1512,385 @@ impl Editor {
       },
       cx,
     );
+    true
+  }
+
+  pub(crate) fn select_display_cursor_horizontal(
+    &mut self,
+    delta: i32,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(anchor) = self.current_display_anchor(cx) else {
+      return false;
+    };
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return false;
+    };
+    if !self.is_removed_display_line(cursor.line, cx) {
+      return false;
+    }
+
+    let line_len = self.display_line_len(cursor.line, cx);
+    let mut column = cursor.column as i32 + delta;
+    column = column.clamp(0, line_len as i32);
+    let column = column as usize;
+    if column == cursor.column {
+      return false;
+    }
+    self.target_column = Some(column);
+    self.set_display_selection_with_anchor(
+      anchor,
+      DisplayCursor {
+        line: cursor.line,
+        column,
+      },
+      cx,
+    );
+    true
+  }
+
+  pub(crate) fn move_display_cursor_word_horizontal(
+    &mut self,
+    direction: i32,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return false;
+    };
+    if !self.is_removed_display_line(cursor.line, cx) {
+      return false;
+    }
+    let Some(text) = self.removed_line_text(cursor.line, cx) else {
+      return false;
+    };
+    let column = cursor.column.min(text.len());
+    let column = if direction < 0 {
+      Self::previous_word_boundary_in_line(&text, column)
+    } else {
+      Self::next_word_boundary_in_line(&text, column)
+    };
+    if column == cursor.column {
+      return false;
+    }
+    self.target_column = Some(column);
+    self.set_display_cursor(
+      DisplayCursor {
+        line: cursor.line,
+        column,
+      },
+      cx,
+    );
+    true
+  }
+
+  pub(crate) fn select_display_cursor_word_horizontal(
+    &mut self,
+    direction: i32,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(anchor) = self.current_display_anchor(cx) else {
+      return false;
+    };
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return false;
+    };
+    if !self.is_removed_display_line(cursor.line, cx) {
+      return false;
+    }
+    let Some(text) = self.removed_line_text(cursor.line, cx) else {
+      return false;
+    };
+    let column = cursor.column.min(text.len());
+    let column = if direction < 0 {
+      Self::previous_word_boundary_in_line(&text, column)
+    } else {
+      Self::next_word_boundary_in_line(&text, column)
+    };
+    if column == cursor.column {
+      return false;
+    }
+    self.target_column = Some(column);
+    self.set_display_selection_with_anchor(
+      anchor,
+      DisplayCursor {
+        line: cursor.line,
+        column,
+      },
+      cx,
+    );
+    true
+  }
+
+  pub(crate) fn move_display_cursor_line_boundary(
+    &mut self,
+    to_start: bool,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return false;
+    };
+    if !self.is_removed_display_line(cursor.line, cx) {
+      return false;
+    }
+    let line_len = self.display_line_len(cursor.line, cx);
+    let column = if to_start { 0 } else { line_len };
+    self.target_column = Some(column);
+    self.set_display_cursor(
+      DisplayCursor {
+        line: cursor.line,
+        column,
+      },
+      cx,
+    );
+    true
+  }
+
+  pub(crate) fn collapse_removed_selection(
+    &mut self,
+    to_start: bool,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(selection) = &self.display_selection else {
+      return false;
+    };
+    if selection.is_empty() {
+      return false;
+    }
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return false;
+    };
+    if !self.is_removed_display_line(cursor.line, cx) {
+      return false;
+    }
+    let (start, end) = selection.normalized();
+    let target = if to_start { start } else { end };
+    self.set_display_cursor(target, cx);
+    true
+  }
+
+  pub(crate) fn move_display_cursor_prev_display_line_end(
+    &mut self,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return false;
+    };
+    if cursor.column != 0 || cursor.line == 0 {
+      return false;
+    }
+    if !self.is_removed_display_line(cursor.line, cx) {
+      return false;
+    }
+    let Some(target_line) = self.next_selectable_display_line(cursor.line, -1) else {
+      return false;
+    };
+    let column = self.display_line_len(target_line, cx);
+    self.target_column = Some(column);
+    self.set_display_cursor(
+      DisplayCursor {
+        line: target_line,
+        column,
+      },
+      cx,
+    );
+    true
+  }
+
+  pub(crate) fn select_display_cursor_prev_display_line_end(
+    &mut self,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(anchor) = self.current_display_anchor(cx) else {
+      return false;
+    };
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return false;
+    };
+    if cursor.column != 0 || cursor.line == 0 {
+      return false;
+    }
+    if !self.is_removed_display_line(cursor.line, cx) {
+      return false;
+    }
+    let Some(target_line) = self.next_selectable_display_line(cursor.line, -1) else {
+      return false;
+    };
+    let column = self.display_line_len(target_line, cx);
+    self.target_column = Some(column);
+    self.set_display_selection_with_anchor(
+      anchor,
+      DisplayCursor {
+        line: target_line,
+        column,
+      },
+      cx,
+    );
+    true
+  }
+
+  pub(crate) fn move_display_cursor_prev_removed_line_end_from_boundary(
+    &mut self,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return false;
+    };
+    if cursor.column != 0 || cursor.line == 0 {
+      return false;
+    }
+    let Some(target_line) = self.next_selectable_display_line(cursor.line, -1) else {
+      return false;
+    };
+    if !self.is_removed_display_line(target_line, cx) {
+      return false;
+    }
+    let column = self.display_line_len(target_line, cx);
+    self.target_column = Some(column);
+    self.set_display_cursor(
+      DisplayCursor {
+        line: target_line,
+        column,
+      },
+      cx,
+    );
+    true
+  }
+
+  pub(crate) fn select_display_cursor_prev_removed_line_end_from_boundary(
+    &mut self,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(anchor) = self.current_display_anchor(cx) else {
+      return false;
+    };
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return false;
+    };
+    if cursor.column != 0 || cursor.line == 0 {
+      return false;
+    }
+    let Some(target_line) = self.next_selectable_display_line(cursor.line, -1) else {
+      return false;
+    };
+    if !self.is_removed_display_line(target_line, cx) {
+      return false;
+    }
+    let column = self.display_line_len(target_line, cx);
+    self.target_column = Some(column);
+    self.set_display_selection_with_anchor(
+      anchor,
+      DisplayCursor {
+        line: target_line,
+        column,
+      },
+      cx,
+    );
+    true
+  }
+
+  pub(crate) fn select_display_cursor_line_boundary(
+    &mut self,
+    to_start: bool,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(anchor) = self.current_display_anchor(cx) else {
+      return false;
+    };
+    let Some(cursor) = self.current_display_cursor(cx) else {
+      return false;
+    };
+    if !self.is_removed_display_line(cursor.line, cx) {
+      return false;
+    }
+    let line_len = self.display_line_len(cursor.line, cx);
+    let column = if to_start { 0 } else { line_len };
+    self.target_column = Some(column);
+    self.set_display_selection_with_anchor(
+      anchor,
+      DisplayCursor {
+        line: cursor.line,
+        column,
+      },
+      cx,
+    );
+    true
+  }
+
+  fn first_selectable_display_line(&self) -> Option<usize> {
+    let projection = self.projection.as_ref()?;
+    for (idx, line) in projection.lines.iter().enumerate() {
+      if !matches!(line, DisplayLine::Gap { .. }) {
+        return Some(idx);
+      }
+    }
+    None
+  }
+
+  fn last_selectable_display_line(&self) -> Option<usize> {
+    let projection = self.projection.as_ref()?;
+    for (idx, line) in projection.lines.iter().enumerate().rev() {
+      if !matches!(line, DisplayLine::Gap { .. }) {
+        return Some(idx);
+      }
+    }
+    None
+  }
+
+  pub(crate) fn select_display_cursor_to_display_boundary(
+    &mut self,
+    to_start: bool,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(anchor) = self.current_display_anchor(cx) else {
+      return false;
+    };
+    let target_line = if to_start {
+      self.first_selectable_display_line()
+    } else {
+      self.last_selectable_display_line()
+    };
+    let Some(target_line) = target_line else {
+      return false;
+    };
+    let column = if to_start {
+      0
+    } else {
+      self.display_line_len(target_line, cx)
+    };
+    self.target_column = Some(column);
+    self.set_display_selection_with_anchor(
+      anchor,
+      DisplayCursor {
+        line: target_line,
+        column,
+      },
+      cx,
+    );
+    true
+  }
+
+  pub(crate) fn select_all_display_lines(&mut self, cx: &mut Context<Self>) -> bool {
+    let Some(start_line) = self.first_selectable_display_line() else {
+      return false;
+    };
+    let Some(end_line) = self.last_selectable_display_line() else {
+      return false;
+    };
+    let end_column = self.display_line_len(end_line, cx);
+    self.display_selection = Some(DisplaySelection {
+      start: DisplayCursor {
+        line: start_line,
+        column: 0,
+      },
+      end: DisplayCursor {
+        line: end_line,
+        column: end_column,
+      },
+    });
+    let doc_len = self.document.read(cx).len();
+    self.selected_range = 0..doc_len;
+    self.selection_reversed = false;
+    cx.notify();
     true
   }
 
