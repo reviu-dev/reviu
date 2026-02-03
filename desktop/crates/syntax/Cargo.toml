@@ -18,4 +18,5 @@ tree-sitter-dockerfile.workspace = true
 tree-sitter-xml.workspace = true
 tree-sitter-python.workspace = true
 tree-sitter-yaml.workspace = true
+tree-sitter-vue.workspace = true
 once_cell.workspace = true

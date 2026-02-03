@@ -1,3 +1,4 @@
+use crate::languages;
 use crate::theme::TokenType;
 use std::ops::Range;
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
@@ -51,6 +52,9 @@ pub const HIGHLIGHT_NAMES: &[&str] = &[
   "tag.error",
   "string.special",
   "label",
+  "character.special",
+  "tag.delimiter",
+  "tag.attribute",
 ];
 
 const HIGHLIGHT_TOKEN_TYPES: &[Option<TokenType>] = &[
@@ -98,10 +102,13 @@ const HIGHLIGHT_TOKEN_TYPES: &[Option<TokenType>] = &[
   Some(TokenType::String),               // text.uri
   Some(TokenType::Constant),             // text.reference
   None,                                  // none
-  Some(TokenType::Type),                 // tag
+  Some(TokenType::Keyword),              // tag
   Some(TokenType::VariableSpecial),      // tag.error
   Some(TokenType::String),               // string.special
   Some(TokenType::VariableSpecial),      // label
+  Some(TokenType::PunctuationSpecial),   // character.special
+  Some(TokenType::Punctuation),          // tag.delimiter
+  Some(TokenType::Attribute),            // tag.attribute
 ];
 
 /// Highlight span with token type
@@ -160,8 +167,8 @@ impl SyntaxHighlighter {
   {
     let events = self
       .highlighter
-      .highlight(&self.config.highlight_config, text.as_bytes(), None, |_| {
-        None
+      .highlight(&self.config.highlight_config, text.as_bytes(), None, |language| {
+        languages::language_config_for_name(language).map(|config| &config.highlight_config)
       })
       .map_err(|e| format!("Highlight failed: {}", e))?;
 
