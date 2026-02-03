@@ -1,8 +1,9 @@
 use gpui::{
-  App, Bounds, DispatchPhase, ElementId, ElementInputHandler, Entity, GlobalElementId, Hitbox,
-  HitboxBehavior, InspectorElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-  MouseUpEvent, PaintQuad, Pixels, Point, ScrollDelta, ScrollWheelEvent, ShapedLine, Style,
-  TextAlign, TextRun, TextStyle, Window, fill, point, prelude::*, px, relative, size,
+  App, Bounds, ContentMask, DispatchPhase, ElementId, ElementInputHandler, Entity, GlobalElementId,
+  Hitbox, HitboxBehavior, InspectorElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+  MouseUpEvent, PaintQuad, Path, PathBuilder, Pixels, Point, ScrollDelta, ScrollWheelEvent,
+  ShapedLine, Style, TextAlign, TextRun, TextStyle, Window, fill, point, prelude::*, px, relative,
+  size,
 };
 use std::{
   collections::{HashMap, HashSet},
@@ -33,6 +34,8 @@ const LINE_SCROLL_MULTIPLIER: f32 = 3.0;
 const SCROLL_AXIS_RATIO: f32 = 1.1;
 const SCROLL_AXIS_SWITCH_RATIO: f32 = 1.4;
 const SCROLL_AXIS_TIMEOUT_MS: u64 = 150;
+const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
+const DIAGONAL_STRIPE_WIDTH: f32 = 1.0;
 
 /// Encapsulates layout information for mouse position -> text offset conversion
 #[derive(Clone)]
@@ -205,14 +208,36 @@ pub(crate) fn highlights_to_text_runs(
   runs
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditorElementRole {
+  Primary,
+  Secondary,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiffElementView {
+  Inline,
+  SplitLeft,
+  SplitRight,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LineVisibility {
+  Text,
+  Blank,
+}
+
 pub struct EditorElement {
   editor: Entity<Editor>,
+  diff_view: DiffElementView,
+  role: EditorElementRole,
 }
 
 pub struct PrepaintState {
   shaped_lines: Vec<(usize, Arc<ShapedLine>)>,
   line_backgrounds: Vec<PaintQuad>,
   group_borders: Vec<PaintQuad>,
+  diag_paths: Vec<Path<Pixels>>,
   cursor_quad: Option<PaintQuad>,
   selection_quads: Vec<PaintQuad>,
   viewport: Range<usize>,
@@ -224,7 +249,31 @@ pub struct PrepaintState {
 
 impl EditorElement {
   pub fn new(editor: Entity<Editor>) -> Self {
-    Self { editor }
+    Self {
+      editor,
+      diff_view: DiffElementView::Inline,
+      role: EditorElementRole::Primary,
+    }
+  }
+
+  fn diff_view(mut self, diff_view: DiffElementView) -> Self {
+    self.diff_view = diff_view;
+    self
+  }
+
+  fn role(mut self, role: EditorElementRole) -> Self {
+    self.role = role;
+    self
+  }
+
+  pub fn split_left(editor: Entity<Editor>) -> Self {
+    Self::new(editor)
+      .diff_view(DiffElementView::SplitLeft)
+      .role(EditorElementRole::Secondary)
+  }
+
+  pub fn split_right(editor: Entity<Editor>) -> Self {
+    Self::new(editor).diff_view(DiffElementView::SplitRight)
   }
 
   fn calculate_viewport(
@@ -240,6 +289,27 @@ impl EditorElement {
     let end_line = (start_line + visible_line_count).min(total_lines);
 
     start_line..end_line
+  }
+
+  fn is_primary(&self) -> bool {
+    self.role == EditorElementRole::Primary
+  }
+
+  fn line_visibility(&self, display_line: &DisplayLine) -> LineVisibility {
+    match self.diff_view {
+      DiffElementView::Inline => LineVisibility::Text,
+      DiffElementView::SplitLeft => match display_line {
+        DisplayLine::Doc {
+          change: Some(ChangeKind::Added),
+          ..
+        } => LineVisibility::Blank,
+        _ => LineVisibility::Text,
+      },
+      DiffElementView::SplitRight => match display_line {
+        DisplayLine::Removed { .. } => LineVisibility::Blank,
+        _ => LineVisibility::Text,
+      },
+    }
   }
 }
 
@@ -287,6 +357,7 @@ impl Element for EditorElement {
     cx: &mut App,
   ) -> Self::PrepaintState {
     let scroll_hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+    let is_primary = self.is_primary();
 
     // Check if syntax highlights have been updated and invalidate cache if needed
     let (highlights_epoch, highlights_version, dirty_highlight_lines) = {
@@ -297,8 +368,10 @@ impl Element for EditorElement {
       (epoch, version, dirty)
     };
     self.editor.update(cx, |editor, _| {
-      editor.viewport_height = bounds.size.height;
-      editor.viewport_width = bounds.size.width;
+      if is_primary {
+        editor.viewport_height = bounds.size.height;
+        editor.viewport_width = bounds.size.width;
+      }
 
       if editor.scroll_axis_lock == Some(ScrollAxis::Vertical)
         && editor.scroll_handle.offset().x != editor.last_scroll_x
@@ -350,23 +423,37 @@ impl Element for EditorElement {
         };
         viewport_lines.push((display_idx, display_line.clone()));
 
-        match &display_line {
-          DisplayLine::Doc { doc_line, .. } => match editor.line_layouts.get(doc_line) {
+        let doc_line_for_layout = match &display_line {
+          DisplayLine::Doc { doc_line, .. } => Some(*doc_line),
+          DisplayLine::Modified { doc_line, .. }
+            if matches!(
+              self.diff_view,
+              DiffElementView::SplitRight | DiffElementView::Inline
+            ) =>
+          {
+            Some(*doc_line)
+          }
+          _ => None,
+        };
+
+        if let Some(doc_line) = doc_line_for_layout {
+          match editor.line_layouts.get(&doc_line) {
             Some(shaped) => {
               shaped_lines.push((display_idx, Arc::clone(shaped)));
             }
             None => {
               lines_to_shape.push((display_idx, display_line));
             }
-          },
-          _ => match editor.virtual_line_layouts.get(&display_idx) {
+          }
+        } else {
+          match editor.virtual_line_layouts.get(&display_idx) {
             Some(shaped) => {
               shaped_lines.push((display_idx, Arc::clone(shaped)));
             }
             None => {
               lines_to_shape.push((display_idx, display_line));
             }
-          },
+          }
         }
       }
 
@@ -405,6 +492,29 @@ impl Element for EditorElement {
           };
           (content, Some(*doc_line), base_color, true)
         }
+        DisplayLine::Modified {
+          old_text,
+          doc_line,
+          ..
+        } => match self.diff_view {
+          DiffElementView::SplitLeft => {
+            (old_text.clone(), None, theme.diff_removed_text(), false)
+          }
+          DiffElementView::SplitRight => {
+            let content = document
+              .line_content(*doc_line)
+              .map(|cow| cow.into_owned())
+              .unwrap_or_default();
+            (content, Some(*doc_line), style.color, true)
+          }
+          DiffElementView::Inline => {
+            let content = document
+              .line_content(*doc_line)
+              .map(|cow| cow.into_owned())
+              .unwrap_or_default();
+            (content, Some(*doc_line), style.color, true)
+          }
+        },
         DisplayLine::Removed { text, .. } => {
           let color = theme.diff_removed_text();
           (text.clone(), None, color, false)
@@ -481,12 +591,15 @@ impl Element for EditorElement {
       .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
       .unwrap_or(px(DEFAULT_MAX_LINE_WIDTH));
 
-    self.editor.update(cx, |editor, _| {
-      editor.max_line_width = editor.max_line_width.max(max_width);
-    });
+    if is_primary {
+      self.editor.update(cx, |editor, _| {
+        editor.max_line_width = editor.max_line_width.max(max_width);
+      });
+    }
 
     let mut line_backgrounds = Vec::new();
     let mut group_borders = Vec::new();
+    let mut diag_paths = Vec::new();
     let added_bg = theme.diff_added_background();
     let added_staged_bg = theme.diff_added_staged_background();
     let removed_bg = theme.diff_removed_background();
@@ -497,11 +610,21 @@ impl Element for EditorElement {
         if group.state != HunkState::Staged {
           continue;
         }
+        let mut has_add = false;
+        let mut has_remove = false;
         let mut first_kind: Option<DiffLineKind> = None;
         let mut last_kind: Option<DiffLineKind> = None;
         for line in &group.hunk.lines {
           match line.kind {
-            DiffLineKind::Add | DiffLineKind::Remove => {
+            DiffLineKind::Add => {
+              has_add = true;
+              if first_kind.is_none() {
+                first_kind = Some(line.kind);
+              }
+              last_kind = Some(line.kind);
+            }
+            DiffLineKind::Remove => {
+              has_remove = true;
               if first_kind.is_none() {
                 first_kind = Some(line.kind);
               }
@@ -510,6 +633,13 @@ impl Element for EditorElement {
             DiffLineKind::Context => {}
           }
         }
+
+        if has_add && has_remove {
+          let mixed_color = theme.diff_gutter_modified();
+          group_border_colors.insert(group_id.clone(), (mixed_color, mixed_color));
+          continue;
+        }
+
         let (Some(first_kind), Some(last_kind)) = (first_kind, last_kind) else {
           continue;
         };
@@ -527,16 +657,42 @@ impl Element for EditorElement {
       }
     }
 
+    let mut blank_line_set = HashSet::new();
+    if !matches!(self.diff_view, DiffElementView::Inline) {
+      for (display_idx, display_line) in &viewport_lines {
+        if self.line_visibility(display_line) == LineVisibility::Blank {
+          blank_line_set.insert(*display_idx);
+        }
+      }
+    }
+
     for (display_idx, display_line) in &viewport_lines {
       let background = match display_line {
         DisplayLine::Doc {
           change: Some(ChangeKind::Added),
           secondary,
           ..
-        } => Some(if *secondary { added_staged_bg } else { added_bg }),
-        DisplayLine::Removed { secondary, .. } => {
+        } if !matches!(self.diff_view, DiffElementView::SplitLeft) => {
+          Some(if *secondary { added_staged_bg } else { added_bg })
+        }
+        DisplayLine::Removed { secondary, .. }
+          if !matches!(self.diff_view, DiffElementView::SplitRight) =>
+        {
           Some(if *secondary { removed_staged_bg } else { removed_bg })
         }
+        DisplayLine::Modified { secondary, .. } => match self.diff_view {
+          DiffElementView::SplitLeft => Some(if *secondary {
+            removed_staged_bg
+          } else {
+            removed_bg
+          }),
+          DiffElementView::SplitRight => Some(if *secondary {
+            added_staged_bg
+          } else {
+            added_bg
+          }),
+          DiffElementView::Inline => None,
+        },
         _ => None,
       };
 
@@ -550,6 +706,7 @@ impl Element for EditorElement {
 
       let group_id = match display_line {
         DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
+        DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
         DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
         DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
         _ => None,
@@ -562,6 +719,7 @@ impl Element for EditorElement {
             .and_then(|idx| projection.lines.get(idx))
             .and_then(|line| match line {
               DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
+              DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
               DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
               DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
               _ => None,
@@ -571,6 +729,7 @@ impl Element for EditorElement {
             .get(display_idx + 1)
             .and_then(|line| match line {
               DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
+              DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
               DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
               DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
               _ => None,
@@ -601,9 +760,56 @@ impl Element for EditorElement {
       }
     }
 
-    let mut overlays = Vec::new();
-    let mut seen = HashSet::new();
-    for (display_idx, display_line) in &viewport_lines {
+    if !blank_line_set.is_empty() {
+      let mut blank_ranges = Vec::new();
+      let mut current_start: Option<usize> = None;
+      for (display_idx, _) in &viewport_lines {
+        if blank_line_set.contains(display_idx) {
+          if current_start.is_none() {
+            current_start = Some(*display_idx);
+          }
+        } else if let Some(start) = current_start.take() {
+          blank_ranges.push((start, display_idx.saturating_sub(1)));
+        }
+      }
+      if let Some(start) = current_start.take() {
+        if let Some((last_idx, _)) = viewport_lines.last() {
+          blank_ranges.push((start, *last_idx));
+        }
+      }
+
+      let stripe_spacing = px(DIAGONAL_STRIPE_SPACING);
+      let stripe_width = px(DIAGONAL_STRIPE_WIDTH);
+      for (start, end) in blank_ranges {
+        let y = bounds.top() + line_height * (start - viewport.start) as f32;
+        let height = line_height * (end - start + 1) as f32;
+        let top = y;
+        let bottom = y + height;
+        let left = bounds.left();
+        let right = bounds.right();
+        let mut builder = PathBuilder::stroke(stripe_width);
+        let start_n = ((left - height + bottom) / stripe_spacing).floor();
+        let mut x = start_n * stripe_spacing - bottom;
+        let end_x = right + height;
+        while x < end_x {
+          builder.move_to(point(x, bottom));
+          builder.line_to(point(x + height, top));
+          x += stripe_spacing;
+        }
+        if let Ok(path) = builder.build() {
+          diag_paths.push(path);
+        }
+      }
+    }
+
+    if !blank_line_set.is_empty() {
+      shaped_lines.retain(|(idx, _)| !blank_line_set.contains(idx));
+    }
+
+    if is_primary {
+      let mut overlays = Vec::new();
+      let mut seen = HashSet::new();
+      for (display_idx, display_line) in &viewport_lines {
       let (group_id, state) = match display_line {
         DisplayLine::Doc {
           change: Some(ChangeKind::Added),
@@ -611,6 +817,11 @@ impl Element for EditorElement {
           group_id: Some(id),
           ..
         } => (id.clone(), *state),
+        DisplayLine::Modified {
+          hunk,
+          group_id: Some(id),
+          ..
+        } => (id.clone(), *hunk),
         DisplayLine::Removed {
           hunk,
           group_id: Some(id),
@@ -619,47 +830,44 @@ impl Element for EditorElement {
         _ => continue,
       };
 
-      if !seen.insert(group_id.clone()) {
-        continue;
+        if !seen.insert(group_id.clone()) {
+          continue;
+        }
+
+        let y = bounds.top() + line_height * (*display_idx - viewport.start) as f32;
+        overlays.push(GroupOverlay {
+          id: group_id,
+          state,
+          display_line: *display_idx,
+          y,
+        });
       }
 
-      let y = bounds.top() + line_height * (*display_idx - viewport.start) as f32;
-      overlays.push(GroupOverlay {
-        id: group_id,
-        state,
-        display_line: *display_idx,
-        y,
+      self.editor.update(cx, |editor, cx| {
+        editor.visible_groups = overlays;
+
+        if !editor.is_selecting {
+          if let Some(position) = editor.last_mouse_position {
+            if bounds.contains(&position) {
+              let scroll_offset = editor.scroll_offset_y;
+              let y_offset = position.y - bounds.top();
+              let line_float = scroll_offset + (y_offset / line_height);
+              if !line_float.is_sign_negative() {
+                let mut display_line = line_float.floor() as usize;
+                if display_line >= viewport.end {
+                  display_line = viewport.end.saturating_sub(1);
+                }
+                let hovered = editor.group_id_for_modified_display_line(display_line);
+                if editor.hovered_group_id.as_deref() != hovered.as_deref() {
+                  editor.hovered_group_id = hovered;
+                  cx.notify();
+                }
+              }
+            }
+          }
+        }
       });
     }
-
-    self.editor.update(cx, |editor, cx| {
-      editor.visible_groups = overlays;
-
-      if !editor.is_selecting {
-        let scroll_offset = editor.scroll_offset_y;
-        let hovered = editor.last_mouse_position.and_then(|position| {
-          if !bounds.contains(&position) {
-            return None;
-          }
-
-          let y_offset = position.y - bounds.top();
-          let line_float = scroll_offset + (y_offset / line_height);
-          if line_float.is_sign_negative() {
-            return None;
-          }
-          let mut display_line = line_float.floor() as usize;
-          if display_line >= viewport.end {
-            display_line = viewport.end.saturating_sub(1);
-          }
-          editor.group_id_for_modified_display_line(display_line)
-        });
-
-        if editor.hovered_group_id.as_deref() != hovered.as_deref() {
-          editor.hovered_group_id = hovered;
-          cx.notify();
-        }
-      }
-    });
 
     let document = self.editor.read(cx).document().read(cx);
     let display_selection = display_selection.clone();
@@ -674,6 +882,10 @@ impl Element for EditorElement {
         .map(|(_, shaped)| shaped);
       let line_text = match self.editor.read(cx).display_line(display_cursor.line, document.len_lines()) {
         Some(DisplayLine::Doc { doc_line, .. }) => document
+          .line_content(doc_line)
+          .map(|cow| cow.into_owned())
+          .unwrap_or_default(),
+        Some(DisplayLine::Modified { doc_line, .. }) => document
           .line_content(doc_line)
           .map(|cow| cow.into_owned())
           .unwrap_or_default(),
@@ -745,6 +957,10 @@ impl Element for EditorElement {
 
         let line_text = match self.editor.read(cx).display_line(display_line, document.len_lines()) {
           Some(DisplayLine::Doc { doc_line, .. }) => document
+            .line_content(doc_line)
+            .map(|cow| cow.into_owned())
+            .unwrap_or_default(),
+          Some(DisplayLine::Modified { doc_line, .. }) => document
             .line_content(doc_line)
             .map(|cow| cow.into_owned())
             .unwrap_or_default(),
@@ -839,10 +1055,18 @@ impl Element for EditorElement {
       }
     }
 
+    let cursor_quad = if is_primary { cursor_quad } else { None };
+    let selection_quads = if is_primary {
+      selection_quads
+    } else {
+      Vec::new()
+    };
+
     PrepaintState {
       shaped_lines,
       line_backgrounds,
       group_borders,
+      diag_paths,
       cursor_quad,
       selection_quads,
       viewport,
@@ -863,6 +1087,7 @@ impl Element for EditorElement {
     window: &mut Window,
     cx: &mut App,
   ) {
+    let is_primary = self.is_primary();
     let (focus_handle, is_focused) = {
       let editor = self.editor.read(cx);
       (
@@ -871,64 +1096,66 @@ impl Element for EditorElement {
       )
     };
 
-    window.handle_input(
-      &focus_handle,
-      ElementInputHandler::new(bounds, self.editor.clone()),
-      cx,
-    );
+    if is_primary {
+      window.handle_input(
+        &focus_handle,
+        ElementInputHandler::new(bounds, self.editor.clone()),
+        cx,
+      );
 
-    // Use Rc to avoid cloning PositionMap in closures
-    let scroll_offset = self.editor.read(cx).scroll_offset_y;
-    let position_map = Rc::new(PositionMap {
-      shaped_lines: prepaint.shaped_lines.clone(),
-      bounds: prepaint.bounds,
-      line_height: prepaint.line_height,
-      viewport: prepaint.viewport.clone(),
-      scroll_offset,
-      projection: prepaint.projection.clone(),
-    });
+      // Use Rc to avoid cloning PositionMap in closures
+      let scroll_offset = self.editor.read(cx).scroll_offset_y;
+      let position_map = Rc::new(PositionMap {
+        shaped_lines: prepaint.shaped_lines.clone(),
+        bounds: prepaint.bounds,
+        line_height: prepaint.line_height,
+        viewport: prepaint.viewport.clone(),
+        scroll_offset,
+        projection: prepaint.projection.clone(),
+      });
 
-    window.on_mouse_event({
-      let editor = self.editor.clone();
-      let position_map = Rc::clone(&position_map);
-      move |event: &MouseDownEvent, phase, window, cx| {
-        if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-          editor.update(cx, |editor, cx| {
-            editor.mouse_left_down(event, &position_map, window, cx);
-          });
-        }
-      }
-    });
-
-    window.on_mouse_event({
-      let editor = self.editor.clone();
-      move |event: &MouseUpEvent, phase, window, cx| {
-        if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-          editor.update(cx, |editor, cx| {
-            editor.mouse_left_up(event, window, cx);
-          });
-        }
-      }
-    });
-
-    window.on_mouse_event({
-      let editor = self.editor.clone();
-      let position_map = Rc::clone(&position_map);
-      move |event: &MouseMoveEvent, phase, window, cx| {
-        if phase == DispatchPhase::Bubble {
-          let is_selecting = editor.read(cx).is_selecting;
-          if is_selecting {
+      window.on_mouse_event({
+        let editor = self.editor.clone();
+        let position_map = Rc::clone(&position_map);
+        move |event: &MouseDownEvent, phase, window, cx| {
+          if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
             editor.update(cx, |editor, cx| {
-              editor.mouse_dragged(event, &position_map, window, cx);
-            });
-          } else {
-            editor.update(cx, |editor, cx| {
-              editor.mouse_moved(event, &position_map, cx);
+              editor.mouse_left_down(event, &position_map, window, cx);
             });
           }
         }
-      }
-    });
+      });
+
+      window.on_mouse_event({
+        let editor = self.editor.clone();
+        move |event: &MouseUpEvent, phase, window, cx| {
+          if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
+            editor.update(cx, |editor, cx| {
+              editor.mouse_left_up(event, window, cx);
+            });
+          }
+        }
+      });
+
+      window.on_mouse_event({
+        let editor = self.editor.clone();
+        let position_map = Rc::clone(&position_map);
+        move |event: &MouseMoveEvent, phase, window, cx| {
+          if phase == DispatchPhase::Bubble {
+            let is_selecting = editor.read(cx).is_selecting;
+            if is_selecting {
+              editor.update(cx, |editor, cx| {
+                editor.mouse_dragged(event, &position_map, window, cx);
+              });
+            } else {
+              editor.update(cx, |editor, cx| {
+                editor.mouse_moved(event, &position_map, cx);
+              });
+            }
+          }
+        }
+      });
+    }
 
     // Handle mouse wheel scroll
     window.on_mouse_event({
@@ -1032,6 +1259,16 @@ impl Element for EditorElement {
       window.paint_quad(quad.clone());
     }
 
+    if !prepaint.diag_paths.is_empty() {
+      let stripe_color = cx.theme().muted_foreground.opacity(0.35);
+      let mask = ContentMask { bounds };
+      window.with_content_mask(Some(mask), |window| {
+        for path in &prepaint.diag_paths {
+          window.paint_path(path.clone(), stripe_color);
+        }
+      });
+    }
+
     // Paint staged group borders
     for quad in &prepaint.group_borders {
       window.paint_quad(quad.clone());
@@ -1059,7 +1296,8 @@ impl Element for EditorElement {
 
     // Paint cursor (if focused and visible from blink)
     let cursor_visible = self.editor.read(cx).cursor_blink.read(cx).visible();
-    if is_focused
+    if is_primary
+      && is_focused
       && cursor_visible
       && let Some(cursor_quad) = &prepaint.cursor_quad
     {

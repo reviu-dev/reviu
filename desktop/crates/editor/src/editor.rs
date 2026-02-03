@@ -16,7 +16,7 @@ use gpui::{
   MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, ShapedLine, Task,
   UTF16Selection, Window, black, div, point, prelude::*, px, white,
 };
-use gpui_component::ActiveTheme as _;
+use gpui_component::{ActiveTheme as _, resizable::{h_resizable, resizable_panel}};
 use smol::unblock;
 use syntax::Theme;
 
@@ -58,6 +58,12 @@ const POLL_INTERVAL_MS: u64 = 500;
 const DEFAULT_REPO_ROOT: &str = "/Users/joris/workspace/git-playground";
 /// Hardcoded file path (temporary)
 const DEFAULT_FILE_PATH: &str = "/Users/joris/workspace/git-playground/perf-100k.ts";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiffViewMode {
+  Inline,
+  Split,
+}
 
 pub struct Editor {
   pub document: Entity<Document>,
@@ -114,6 +120,8 @@ pub struct Editor {
   pub is_dirty: bool,
   pub save_task: Option<Task<()>>,
   pub optimistic_unstaged_groups: HashSet<Arc<str>>,
+
+  diff_view_mode: DiffViewMode,
 
   // Track syntax highlighting version to invalidate cache when highlights change
   pub last_highlights_version: usize,
@@ -280,6 +288,7 @@ impl Editor {
       is_dirty: false,
       save_task: None,
       optimistic_unstaged_groups: HashSet::new(),
+      diff_view_mode: DiffViewMode::Inline,
     };
     editor.init(cx);
     editor
@@ -296,6 +305,21 @@ impl Editor {
 
   pub fn projection(&self) -> Option<&Projection> {
     self.projection.as_deref()
+  }
+
+  pub fn diff_view_mode(&self) -> DiffViewMode {
+    self.diff_view_mode
+  }
+
+  pub fn set_diff_view_mode(&mut self, mode: DiffViewMode, cx: &mut Context<Self>) {
+    if self.diff_view_mode != mode {
+      self.diff_view_mode = mode;
+      if let Some(diffs) = self.diffs.clone() {
+        self.apply_diffs(diffs, cx);
+      } else {
+        self.virtual_line_layouts.clear();
+      }
+    }
   }
 
   pub fn refresh_git_state(&mut self, cx: &mut Context<Self>) {
@@ -320,16 +344,24 @@ impl Editor {
       let Some(display_line) = self.doc_to_display_line(doc_line) else {
         continue;
       };
-      let Some(DisplayLine::Doc {
-        hunk: Some(HunkState::Staged),
-        group_id: Some(group_id),
-        ..
-      }) = projection.lines.get(display_line)
-      else {
+      let Some(line) = projection.lines.get(display_line) else {
         continue;
       };
+      let group_id = match line {
+        DisplayLine::Doc {
+          hunk: Some(HunkState::Staged),
+          group_id: Some(group_id),
+          ..
+        } => group_id.clone(),
+        DisplayLine::Modified {
+          hunk: HunkState::Staged,
+          group_id: Some(group_id),
+          ..
+        } => group_id.clone(),
+        _ => continue,
+      };
 
-      group_ids.insert(group_id.clone());
+      group_ids.insert(group_id);
     }
 
     for group_id in group_ids {
@@ -470,6 +502,7 @@ impl Editor {
       &diffs.unstaged,
       &diffs.staged,
       &self.expanded_gaps,
+      matches!(self.diff_view_mode, DiffViewMode::Split),
     );
     self.diffs = Some(diffs);
     self.set_projection(Some(projection));
@@ -589,6 +622,10 @@ impl Editor {
     for display_line in start.line..=end_line {
       let line_text = match self.display_line(display_line, doc_line_count) {
         Some(DisplayLine::Doc { doc_line, .. }) => document
+          .line_content(doc_line)
+          .map(|cow| cow.into_owned())
+          .unwrap_or_default(),
+        Some(DisplayLine::Modified { doc_line, .. }) => document
           .line_content(doc_line)
           .map(|cow| cow.into_owned())
           .unwrap_or_default(),
@@ -911,6 +948,7 @@ impl Editor {
     } else if display_line < doc_line_count {
       Some(DisplayLine::Doc {
         doc_line: display_line,
+        old_line: Some(display_line),
         change: None,
         hunk: None,
         group_id: None,
@@ -929,6 +967,7 @@ impl Editor {
         group_id: Some(id),
         ..
       } => Some(id.clone()),
+      DisplayLine::Modified { group_id, .. } => group_id.clone(),
       DisplayLine::Removed { group_id, .. } => group_id.clone(),
       _ => None,
     }
@@ -1202,6 +1241,10 @@ impl Editor {
     let doc_line_count = document.len_lines();
     match self.display_line(display_line, doc_line_count) {
       Some(DisplayLine::Doc { doc_line, .. }) => document
+        .line_content(doc_line)
+        .map(|cow| cow.len())
+        .unwrap_or(0),
+      Some(DisplayLine::Modified { doc_line, .. }) => document
         .line_content(doc_line)
         .map(|cow| cow.len())
         .unwrap_or(0),
@@ -1863,6 +1906,100 @@ impl Render for Editor {
       self.last_highlights_epoch = 0;
     }
 
+    let editor_entity = cx.entity().clone();
+    let content = if self.diff_view_mode == DiffViewMode::Split {
+      let left_panel = div()
+        .size_full()
+        .flex()
+        .flex_row()
+        .child(
+          div()
+            .w(px(GUTTER_WIDTH))
+            .h_full()
+            .bg(self.theme.gutter_background())
+            .child(GutterElement::split_left(editor_entity.clone())),
+        )
+        .child(
+          div()
+            .flex_1()
+            .h_full()
+            .id("editor-content-left")
+            .overflow_x_scroll()
+            .track_scroll(&self.scroll_handle)
+            .child(
+              div()
+                .min_w(self.max_line_width + px(EXTRA_EDITOR_WIDTH))
+                .h_full()
+                .relative()
+                .child(EditorElement::split_left(editor_entity.clone())),
+            ),
+        );
+
+      let right_panel = div()
+        .size_full()
+        .flex()
+        .flex_row()
+        .child(
+          div()
+            .w(px(GUTTER_WIDTH))
+            .h_full()
+            .bg(self.theme.gutter_background())
+            .child(GutterElement::split_right(editor_entity.clone())),
+        )
+        .child(
+          div()
+            .flex_1()
+            .h_full()
+            .id("editor-content")
+            .overflow_x_scroll()
+            .track_scroll(&self.scroll_handle)
+            .child(
+              div()
+                .min_w(self.max_line_width + px(EXTRA_EDITOR_WIDTH))
+                .h_full()
+                .relative()
+                .child(EditorElement::split_right(editor_entity)),
+            ),
+        );
+
+      div()
+        .flex_1()
+        .min_h(px(0.0))
+        .child(
+          h_resizable("editor-diff-split")
+            .child(resizable_panel().child(left_panel))
+            .child(resizable_panel().child(right_panel)),
+        )
+    } else {
+      div()
+        .flex_1()
+        .min_h(px(0.0))
+        .flex()
+        .flex_row()
+        .child(
+          div()
+            .w(px(GUTTER_WIDTH))
+            .h_full()
+            .bg(self.theme.gutter_background())
+            .child(GutterElement::new(editor_entity.clone())),
+        )
+        .child(
+          div()
+            .flex_1()
+            .h_full()
+            .id("editor-content")
+            .overflow_x_scroll()
+            .track_scroll(&self.scroll_handle)
+            .child(
+              div()
+                .min_w(self.max_line_width + px(EXTRA_EDITOR_WIDTH))
+                .h_full()
+                .relative()
+                .child(EditorElement::new(editor_entity)),
+            ),
+        )
+    };
+
     div()
       .key_context("Editor")
       .track_focus(&self.focus_handle(cx))
@@ -1911,35 +2048,7 @@ impl Render for Editor {
       )
       .flex()
       .flex_col()
-      .child(
-        div()
-          .flex_1()
-          .min_h(px(0.0))
-          .flex()
-          .flex_row()
-          .child(
-            div()
-              .w(px(GUTTER_WIDTH))
-              .h_full()
-              .bg(self.theme.gutter_background())
-              .child(GutterElement::new(cx.entity().clone())),
-          )
-          .child(
-            div()
-              .flex_1()
-              .h_full()
-              .id("editor-content")
-              .overflow_x_scroll()
-              .track_scroll(&self.scroll_handle)
-              .child(
-                div()
-                  .min_w(self.max_line_width + px(EXTRA_EDITOR_WIDTH))
-                  .h_full()
-                  .relative()
-                  .child(EditorElement::new(cx.entity().clone())),
-              ),
-          ),
-      )
+      .child(content)
   }
 }
 
@@ -2011,6 +2120,7 @@ pub mod tests {
           index_mtime: None,
           is_dirty: false,
           save_task: None,
+          diff_view_mode: DiffViewMode::Inline,
           last_highlights_version: 0,
           last_highlights_epoch: 0,
           cursor_blink,

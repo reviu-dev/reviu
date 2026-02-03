@@ -29,14 +29,24 @@ pub struct GapId {
 pub enum DisplayLine {
   Doc {
     doc_line: usize,
+    old_line: Option<usize>,
     change: Option<ChangeKind>,
     hunk: Option<HunkState>,
+    group_id: Option<Arc<str>>,
+    secondary: bool,
+  },
+  Modified {
+    old_text: String,
+    doc_line: usize,
+    old_line: usize,
+    hunk: HunkState,
     group_id: Option<Arc<str>>,
     secondary: bool,
   },
   Removed {
     text: String,
     anchor_line: usize,
+    old_line: usize,
     hunk: HunkState,
     group_id: Option<Arc<str>>,
     secondary: bool,
@@ -90,7 +100,7 @@ struct LineOccurrenceKey {
   content: Arc<str>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct LineKeyBuilder {
   occurrences: HashMap<LineOccurrenceKey, u32>,
 }
@@ -137,6 +147,7 @@ impl Projection {
     unstaged: &FileDiff,
     staged: &FileDiff,
     expanded_gaps: &HashMap<GapId, usize>,
+    align_modified: bool,
   ) -> Self {
     let (mut groups, unstaged_line_to_group) = collect_groups(unstaged, HunkState::Unstaged);
     let (staged_groups, _) = collect_groups(staged, HunkState::Staged);
@@ -151,11 +162,12 @@ impl Projection {
     let mut hunks = Vec::new();
     let mut key_builder = LineKeyBuilder::default();
     for hunk in &uncommitted.hunks {
-      hunks.push(build_hunk_display(
-        hunk,
-        &mut key_builder,
-        &unstaged_line_to_group,
-      ));
+      let display = if align_modified {
+        build_hunk_display_split(hunk, &mut key_builder, &unstaged_line_to_group)
+      } else {
+        build_hunk_display_inline(hunk, &mut key_builder, &unstaged_line_to_group)
+      };
+      hunks.push(display);
     }
 
     if hunks.is_empty() {
@@ -168,7 +180,11 @@ impl Projection {
     let mut pending_staged = Vec::new();
     let mut last_visible_doc_line: Option<usize> = None;
 
-    let push_gap = |gap_start: usize, gap_end: usize, reveal: usize, lines: &mut Vec<DisplayLine>| {
+    let push_gap = |gap_start: usize,
+                    gap_end: usize,
+                    reveal: usize,
+                    old_offset: isize,
+                    lines: &mut Vec<DisplayLine>| {
       if gap_end <= gap_start {
         return;
       }
@@ -181,8 +197,10 @@ impl Projection {
 
       if gap_len <= GAP_THRESHOLD_LINES {
         for doc_line in gap_start..gap_end {
+          let old_line = (doc_line as isize + old_offset).max(0) as usize;
           lines.push(DisplayLine::Doc {
             doc_line,
+            old_line: Some(old_line),
             change: None,
             hunk: None,
             group_id: None,
@@ -199,8 +217,10 @@ impl Projection {
 
       if head_end >= tail_start {
         for doc_line in gap_start..gap_end {
+          let old_line = (doc_line as isize + old_offset).max(0) as usize;
           lines.push(DisplayLine::Doc {
             doc_line,
+            old_line: Some(old_line),
             change: None,
             hunk: None,
             group_id: None,
@@ -211,8 +231,10 @@ impl Projection {
       }
 
       for doc_line in gap_start..head_end {
+        let old_line = (doc_line as isize + old_offset).max(0) as usize;
         lines.push(DisplayLine::Doc {
           doc_line,
+          old_line: Some(old_line),
           change: None,
           hunk: None,
           group_id: None,
@@ -228,8 +250,10 @@ impl Projection {
         });
       } else {
         for doc_line in head_end..tail_start {
+          let old_line = (doc_line as isize + old_offset).max(0) as usize;
           lines.push(DisplayLine::Doc {
             doc_line,
+            old_line: Some(old_line),
             change: None,
             hunk: None,
             group_id: None,
@@ -239,8 +263,10 @@ impl Projection {
       }
 
       for doc_line in tail_start..gap_end {
+        let old_line = (doc_line as isize + old_offset).max(0) as usize;
         lines.push(DisplayLine::Doc {
           doc_line,
+          old_line: Some(old_line),
           change: None,
           hunk: None,
           group_id: None,
@@ -248,6 +274,8 @@ impl Projection {
         });
       }
     };
+
+    let mut old_line_offset: isize = 0;
 
     for hunk in hunks {
       let anchor_line = hunk
@@ -266,7 +294,7 @@ impl Projection {
         })
         .copied()
         .unwrap_or(0);
-      push_gap(gap_start, gap_end, reveal, &mut lines);
+      push_gap(gap_start, gap_end, reveal, old_line_offset, &mut lines);
 
       let offset = lines.len();
       for mut pending in hunk.pending_groups {
@@ -277,6 +305,8 @@ impl Projection {
       }
 
       lines.extend(hunk.lines);
+
+      old_line_offset = old_line_offset.saturating_add(hunk.delta);
 
       if let Some(last_line) = hunk.last_doc_line {
         last_visible_doc_line = Some(last_line);
@@ -295,7 +325,7 @@ impl Projection {
         })
         .copied()
         .unwrap_or(0);
-      push_gap(gap_start, gap_end, reveal, &mut lines);
+      push_gap(gap_start, gap_end, reveal, old_line_offset, &mut lines);
     }
 
     for pending in pending_staged {
@@ -340,6 +370,7 @@ impl Projection {
     for doc_line in 0..doc_line_count {
       lines.push(DisplayLine::Doc {
         doc_line,
+        old_line: Some(doc_line),
         change: None,
         hunk: None,
         group_id: None,
@@ -381,7 +412,7 @@ impl Projection {
     let mut visible_doc_lines = Vec::new();
 
     for (display_idx, line) in lines.iter().enumerate() {
-      if let DisplayLine::Doc { doc_line, .. } = line {
+      if let DisplayLine::Doc { doc_line, .. } | DisplayLine::Modified { doc_line, .. } = line {
         display_to_doc.push(Some(*doc_line));
         if *doc_line < doc_line_count && doc_to_display[*doc_line].is_none() {
           doc_to_display[*doc_line] = Some(display_idx);
@@ -409,6 +440,7 @@ struct HunkDisplay {
   start_line: usize,
   first_doc_line: Option<usize>,
   last_doc_line: Option<usize>,
+  delta: isize,
   lines: Vec<DisplayLine>,
   pending_groups: Vec<PendingStagedGroup>,
 }
@@ -531,11 +563,12 @@ fn collect_groups(
   (groups, line_to_group)
 }
 
-fn build_hunk_display(
+fn build_hunk_display_inline(
   hunk: &DiffHunk,
   key_builder: &mut LineKeyBuilder,
   unstaged_line_to_group: &HashMap<LineKey, Arc<str>>,
 ) -> HunkDisplay {
+  let (computed_old_lines, computed_new_lines) = count_hunk_line_counts(hunk);
   let mut new_line = hunk.new_start.saturating_sub(1);
   let mut old_line = hunk.old_start.saturating_sub(1);
   let mut first_doc_line = None;
@@ -570,6 +603,7 @@ fn build_hunk_display(
         let doc_line = new_line;
         lines.push(DisplayLine::Doc {
           doc_line,
+          old_line: Some(old_line),
           change: Some(ChangeKind::Context),
           hunk: None,
           group_id: None,
@@ -592,6 +626,7 @@ fn build_hunk_display(
           line_secondary = false;
           lines.push(DisplayLine::Doc {
             doc_line,
+            old_line: None,
             change: Some(ChangeKind::Added),
             hunk: line_state,
             group_id: line_group_id.clone(),
@@ -618,6 +653,7 @@ fn build_hunk_display(
           builder.display_indices.push(index);
           lines.push(DisplayLine::Doc {
             doc_line,
+            old_line: None,
             change: Some(ChangeKind::Added),
             hunk: line_state,
             group_id: None,
@@ -641,6 +677,7 @@ fn build_hunk_display(
           lines.push(DisplayLine::Removed {
             text: line.content.clone(),
             anchor_line,
+            old_line,
             hunk: HunkState::Unstaged,
             group_id: line_group_id.clone(),
             secondary: false,
@@ -667,6 +704,7 @@ fn build_hunk_display(
           lines.push(DisplayLine::Removed {
             text: line.content.clone(),
             anchor_line,
+            old_line,
             hunk: HunkState::Staged,
             group_id: None,
             secondary: true,
@@ -700,6 +738,319 @@ fn build_hunk_display(
     start_line: hunk.new_start.saturating_sub(1),
     first_doc_line,
     last_doc_line,
+    delta: computed_old_lines as isize - computed_new_lines as isize,
+    lines,
+    pending_groups,
+  }
+}
+
+fn build_hunk_display_split(
+  hunk: &DiffHunk,
+  key_builder: &mut LineKeyBuilder,
+  unstaged_line_to_group: &HashMap<LineKey, Arc<str>>,
+) -> HunkDisplay {
+  build_hunk_display_split_inner(hunk, key_builder, unstaged_line_to_group)
+}
+
+fn build_hunk_display_split_inner(
+  hunk: &DiffHunk,
+  key_builder: &mut LineKeyBuilder,
+  unstaged_line_to_group: &HashMap<LineKey, Arc<str>>,
+) -> HunkDisplay {
+  let (computed_old_lines, computed_new_lines) = count_hunk_line_counts(hunk);
+  #[derive(Clone)]
+  struct PendingLine {
+    content: String,
+    old_line: usize,
+    new_line: usize,
+    anchor_line: usize,
+    group_id: Option<Arc<str>>,
+    secondary: bool,
+    no_newline: bool,
+  }
+
+  let mut new_line = hunk.new_start.saturating_sub(1);
+  let mut old_line = hunk.old_start.saturating_sub(1);
+  let mut first_doc_line = None;
+  let mut last_doc_line = None;
+  let mut lines = Vec::new();
+  let mut pending_groups = Vec::new();
+  let mut staged_group: Option<StagedGroupBuilder> = None;
+  let mut remove_queue = std::collections::VecDeque::new();
+  let mut add_queue = std::collections::VecDeque::new();
+
+  let finalize_staged = |builder: StagedGroupBuilder,
+                         pending_groups: &mut Vec<PendingStagedGroup>| {
+    if builder.group.keys.is_empty() {
+      return;
+    }
+    let signature = group_signature_for_lines(&builder.group.lines);
+    pending_groups.push(PendingStagedGroup {
+      builder: builder.group,
+      display_indices: builder.display_indices,
+      signature,
+    });
+  };
+
+  let flush_pending = |remove_queue: &mut std::collections::VecDeque<PendingLine>,
+                           add_queue: &mut std::collections::VecDeque<PendingLine>,
+                           lines: &mut Vec<DisplayLine>,
+                           staged_group: &mut Option<StagedGroupBuilder>,
+                           first_doc_line: &mut Option<usize>,
+                           last_doc_line: &mut Option<usize>| {
+    let state_for_secondary = |secondary: bool| {
+      if secondary {
+        HunkState::Staged
+      } else {
+        HunkState::Unstaged
+      }
+    };
+
+    while let (Some(remove), Some(add)) = (remove_queue.pop_front(), add_queue.pop_front()) {
+      let secondary = remove.secondary && add.secondary;
+      let state = state_for_secondary(secondary);
+      let group_id = if !secondary {
+        if !remove.secondary {
+          remove.group_id.clone()
+        } else {
+          None
+        }
+        .or_else(|| if !add.secondary { add.group_id.clone() } else { None })
+        .or_else(|| remove.group_id.clone())
+        .or_else(|| add.group_id.clone())
+      } else {
+        remove.group_id.clone().or_else(|| add.group_id.clone())
+      };
+
+      let index = lines.len();
+      lines.push(DisplayLine::Modified {
+        old_text: remove.content.clone(),
+        doc_line: add.new_line,
+        old_line: remove.old_line,
+        hunk: state,
+        group_id: group_id.clone(),
+        secondary,
+      });
+
+      if state == HunkState::Staged {
+        if let Some(builder) = staged_group.as_mut() {
+          builder.display_indices.push(index);
+        }
+      }
+
+      first_doc_line.get_or_insert(add.new_line);
+      *last_doc_line = Some(add.new_line);
+
+      if remove.no_newline {
+        lines.push(DisplayLine::NoNewline {
+          hunk: Some(state),
+          group_id: group_id.clone(),
+          secondary,
+        });
+      }
+
+      if add.no_newline {
+        lines.push(DisplayLine::NoNewline {
+          hunk: Some(state),
+          group_id: group_id.clone(),
+          secondary,
+        });
+      }
+    }
+
+    while let Some(remove) = remove_queue.pop_front() {
+      let state = state_for_secondary(remove.secondary);
+      let group_id = remove.group_id.clone();
+      let secondary = remove.secondary;
+      let index = lines.len();
+      lines.push(DisplayLine::Removed {
+        text: remove.content.clone(),
+        anchor_line: remove.anchor_line,
+        old_line: remove.old_line,
+        hunk: state,
+        group_id: group_id.clone(),
+        secondary,
+      });
+
+      if state == HunkState::Staged {
+        if let Some(builder) = staged_group.as_mut() {
+          builder.display_indices.push(index);
+        }
+      }
+
+      if remove.no_newline {
+        lines.push(DisplayLine::NoNewline {
+          hunk: Some(state),
+          group_id: group_id.clone(),
+          secondary,
+        });
+      }
+    }
+
+    while let Some(add) = add_queue.pop_front() {
+      let state = state_for_secondary(add.secondary);
+      let group_id = add.group_id.clone();
+      let secondary = add.secondary;
+      let index = lines.len();
+      lines.push(DisplayLine::Doc {
+        doc_line: add.new_line,
+        old_line: None,
+        change: Some(ChangeKind::Added),
+        hunk: Some(state),
+        group_id: group_id.clone(),
+        secondary,
+      });
+
+      if state == HunkState::Staged {
+        if let Some(builder) = staged_group.as_mut() {
+          builder.display_indices.push(index);
+        }
+      }
+
+      first_doc_line.get_or_insert(add.new_line);
+      *last_doc_line = Some(add.new_line);
+
+      if add.no_newline {
+        lines.push(DisplayLine::NoNewline {
+          hunk: Some(state),
+          group_id: group_id.clone(),
+          secondary,
+        });
+      }
+    }
+  };
+
+  for line in &hunk.lines {
+    match line.kind {
+      DiffLineKind::Context => {
+        flush_pending(
+          &mut remove_queue,
+          &mut add_queue,
+          &mut lines,
+          &mut staged_group,
+          &mut first_doc_line,
+          &mut last_doc_line,
+        );
+
+        if let Some(builder) = staged_group.take() {
+          finalize_staged(builder, &mut pending_groups);
+        }
+
+        let doc_line = new_line;
+        lines.push(DisplayLine::Doc {
+          doc_line,
+          old_line: Some(old_line),
+          change: Some(ChangeKind::Context),
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        });
+        first_doc_line.get_or_insert(doc_line);
+        last_doc_line = Some(doc_line);
+        old_line = old_line.saturating_add(1);
+        new_line = new_line.saturating_add(1);
+      }
+      DiffLineKind::Add => {
+        let doc_line = new_line;
+        let key = key_builder.line_key(LineKeyKind::Add, doc_line, &line.content);
+        let (state, group_id, secondary) = if let Some(group_id) =
+          unstaged_line_to_group.get(&key)
+        {
+          (HunkState::Unstaged, Some(group_id.clone()), false)
+        } else {
+          (HunkState::Staged, None, true)
+        };
+
+        if state == HunkState::Staged {
+          let builder = staged_group.get_or_insert_with(|| StagedGroupBuilder {
+            group: GroupBuilder {
+              start_old_line: diff_start(old_line, hunk.old_start),
+              start_new_line: diff_start(new_line, hunk.new_start),
+              old_lines: 0,
+              new_lines: 0,
+              lines: Vec::new(),
+              keys: Vec::new(),
+            },
+            display_indices: Vec::new(),
+          });
+          builder.group.lines.push(line.clone());
+          builder.group.keys.push(key);
+          builder.group.new_lines = builder.group.new_lines.saturating_add(1);
+        }
+
+        add_queue.push_back(PendingLine {
+          content: line.content.clone(),
+          old_line,
+          new_line: doc_line,
+          anchor_line: doc_line,
+          group_id,
+          secondary,
+          no_newline: line.no_newline,
+        });
+
+        new_line = new_line.saturating_add(1);
+      }
+      DiffLineKind::Remove => {
+        let anchor_line = new_line;
+        let key = key_builder.line_key(LineKeyKind::Remove, anchor_line, &line.content);
+        let (state, group_id, secondary) = if let Some(group_id) =
+          unstaged_line_to_group.get(&key)
+        {
+          (HunkState::Unstaged, Some(group_id.clone()), false)
+        } else {
+          (HunkState::Staged, None, true)
+        };
+
+        if state == HunkState::Staged {
+          let builder = staged_group.get_or_insert_with(|| StagedGroupBuilder {
+            group: GroupBuilder {
+              start_old_line: diff_start(old_line, hunk.old_start),
+              start_new_line: diff_start(new_line, hunk.new_start),
+              old_lines: 0,
+              new_lines: 0,
+              lines: Vec::new(),
+              keys: Vec::new(),
+            },
+            display_indices: Vec::new(),
+          });
+          builder.group.lines.push(line.clone());
+          builder.group.keys.push(key);
+          builder.group.old_lines = builder.group.old_lines.saturating_add(1);
+        }
+
+        remove_queue.push_back(PendingLine {
+          content: line.content.clone(),
+          old_line,
+          new_line,
+          anchor_line,
+          group_id,
+          secondary,
+          no_newline: line.no_newline,
+        });
+
+        old_line = old_line.saturating_add(1);
+      }
+    }
+  }
+
+  flush_pending(
+    &mut remove_queue,
+    &mut add_queue,
+    &mut lines,
+    &mut staged_group,
+    &mut first_doc_line,
+    &mut last_doc_line,
+  );
+
+  if let Some(builder) = staged_group.take() {
+    finalize_staged(builder, &mut pending_groups);
+  }
+
+  HunkDisplay {
+    start_line: hunk.new_start.saturating_sub(1),
+    first_doc_line,
+    last_doc_line,
+    delta: computed_old_lines as isize - computed_new_lines as isize,
     lines,
     pending_groups,
   }
@@ -742,6 +1093,9 @@ fn assign_group_id(lines: &mut [DisplayLine], indices: &[usize], group_id: &Arc<
     if let Some(line) = lines.get_mut(*index) {
       match line {
         DisplayLine::Doc { group_id: id, .. } => {
+          *id = Some(group_id.clone());
+        }
+        DisplayLine::Modified { group_id: id, .. } => {
           *id = Some(group_id.clone());
         }
         DisplayLine::Removed { group_id: id, .. } => {
@@ -799,4 +1153,24 @@ fn diff_start(line_zero: usize, base_start: usize) -> usize {
   } else {
     line_zero.saturating_add(1)
   }
+}
+
+fn count_hunk_line_counts(hunk: &DiffHunk) -> (usize, usize) {
+  let mut old_lines: usize = 0;
+  let mut new_lines: usize = 0;
+  for line in &hunk.lines {
+    match line.kind {
+      DiffLineKind::Context => {
+        old_lines = old_lines.saturating_add(1);
+        new_lines = new_lines.saturating_add(1);
+      }
+      DiffLineKind::Add => {
+        new_lines = new_lines.saturating_add(1);
+      }
+      DiffLineKind::Remove => {
+        old_lines = old_lines.saturating_add(1);
+      }
+    }
+  }
+  (old_lines, new_lines)
 }
