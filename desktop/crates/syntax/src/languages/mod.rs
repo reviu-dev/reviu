@@ -3,22 +3,40 @@ pub mod dockerfile;
 pub mod html;
 pub mod json;
 pub mod markdown;
+pub mod python;
 pub mod rust;
 pub mod typescript;
+pub mod xml;
 pub mod yaml;
 
 use crate::highlighter::LanguageConfig;
 
+const EXTENSIONS_XML: &[&str] = &[
+  "xml", "svg", "xhtml", "xht", "xsl", "xslt", "xsd", "wsdl", "ares", "axml", "ant", "mxml",
+  "plist", "iml", "idea",
+];
+const EXTENSIONS_PYTHON: &[&str] = &["py", "pyi", "pyw"];
+const EXTENSIONS_RUST: &[&str] = &["rs"];
+const EXTENSIONS_TYPESCRIPT: &[&str] = &["ts", "tsx", "js", "jsx"];
+const EXTENSIONS_YAML: &[&str] = &["yml", "yaml"];
+const EXTENSIONS_JSON: &[&str] = &["json", "jsonc"];
+const EXTENSIONS_CSS: &[&str] = &["css"];
+const EXTENSIONS_DOCKERFILE: &[&str] = &["dockerfile"];
+const EXTENSIONS_HTML: &[&str] = &["html", "htm"];
+const EXTENSIONS_MARKDOWN: &[&str] = &["md", "markdown"];
+
 pub fn detect_language_config(extension: &str) -> Option<&'static LanguageConfig> {
   match extension {
-    "css" => Some(&*css::CSS_CONFIG),
-    "dockerfile" => Some(&*dockerfile::DOCKERFILE_CONFIG),
-    "html" | "htm" => Some(&*html::HTML_CONFIG),
-    "json" => Some(&*json::JSON_CONFIG),
-    "md" | "markdown" => Some(&*markdown::MARKDOWN_CONFIG),
-    "rs" => Some(&*rust::RUST_CONFIG),
-    "ts" | "tsx" | "js" | "jsx" => Some(&*typescript::TYPESCRIPT_CONFIG),
-    "yml" | "yaml" => Some(&*yaml::YAML_CONFIG),
+    _ if EXTENSIONS_CSS.contains(&extension) => Some(&*css::CSS_CONFIG),
+    _ if EXTENSIONS_DOCKERFILE.contains(&extension) => Some(&*dockerfile::DOCKERFILE_CONFIG),
+    _ if EXTENSIONS_HTML.contains(&extension) => Some(&*html::HTML_CONFIG),
+    _ if EXTENSIONS_JSON.contains(&extension) => Some(&*json::JSON_CONFIG),
+    _ if EXTENSIONS_MARKDOWN.contains(&extension) => Some(&*markdown::MARKDOWN_CONFIG),
+    _ if EXTENSIONS_PYTHON.contains(&extension) => Some(&*python::PYTHON_CONFIG),
+    _ if EXTENSIONS_RUST.contains(&extension) => Some(&*rust::RUST_CONFIG),
+    _ if EXTENSIONS_TYPESCRIPT.contains(&extension) => Some(&*typescript::TYPESCRIPT_CONFIG),
+    _ if EXTENSIONS_XML.contains(&extension) => Some(&*xml::XML_CONFIG),
+    _ if EXTENSIONS_YAML.contains(&extension) => Some(&*yaml::YAML_CONFIG),
     _ => None,
   }
 }
@@ -78,6 +96,18 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_python() {
+    assert!(detect_language_config("py").is_some());
+    assert!(detect_language_config("pyi").is_some());
+    assert!(detect_language_config("pyw").is_some());
+  }
+
+  #[test]
+  fn test_detect_xml() {
+    assert!(detect_language_config("xml").is_some());
+  }
+
+  #[test]
   fn test_detect_yaml() {
     assert!(detect_language_config("yaml").is_some());
     assert!(detect_language_config("yml").is_some());
@@ -93,5 +123,17 @@ mod tests {
   fn test_typescript_config_has_correct_name() {
     let config = detect_language_config("ts").unwrap();
     assert_eq!(config.name, "typescript");
+  }
+
+  #[test]
+  fn test_python_config_has_correct_name() {
+    let config = detect_language_config("py").unwrap();
+    assert_eq!(config.name, "python");
+  }
+
+  #[test]
+  fn test_xml_config_has_correct_name() {
+    let config = detect_language_config("xml").unwrap();
+    assert_eq!(config.name, "xml");
   }
 }
