@@ -25,6 +25,7 @@ fn main() {
 
       cx.bind_keys([
         KeyBinding::new("enter", Enter, None),
+        KeyBinding::new("tab", Tab, None),
         KeyBinding::new("backspace", Backspace, None),
         KeyBinding::new("alt-backspace", BackspaceWord, None),
         KeyBinding::new("cmd-backspace", BackspaceAll, None),
