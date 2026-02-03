@@ -381,7 +381,10 @@ impl Projection {
   }
 
   pub fn display_to_doc_line(&self, display_line: usize) -> Option<usize> {
-    self.display_to_doc.get(display_line).and_then(|value| *value)
+    self
+      .display_to_doc
+      .get(display_line)
+      .and_then(|value| *value)
   }
 
   pub fn doc_to_display_line(&self, doc_line: usize) -> Option<usize> {
@@ -390,8 +393,12 @@ impl Projection {
 
   pub fn previous_visible_doc_line(&self, doc_line: usize) -> Option<usize> {
     match self.visible_doc_lines.binary_search(&doc_line) {
-      Ok(idx) => idx.checked_sub(1).and_then(|i| self.visible_doc_lines.get(i).copied()),
-      Err(idx) => idx.checked_sub(1).and_then(|i| self.visible_doc_lines.get(i).copied()),
+      Ok(idx) => idx
+        .checked_sub(1)
+        .and_then(|i| self.visible_doc_lines.get(i).copied()),
+      Err(idx) => idx
+        .checked_sub(1)
+        .and_then(|i| self.visible_doc_lines.get(i).copied()),
     }
   }
 
@@ -499,9 +506,7 @@ fn collect_groups(
         continue;
       }
       let start = idx;
-      while idx < hunk.lines.len()
-        && !matches!(hunk.lines[idx].kind, DiffLineKind::Context)
-      {
+      while idx < hunk.lines.len() && !matches!(hunk.lines[idx].kind, DiffLineKind::Context) {
         idx += 1;
       }
       let end = idx.saturating_sub(1);
@@ -700,7 +705,6 @@ fn build_hunk_display_inline(
         old_line = old_line.saturating_add(1);
       }
     }
-
   }
 
   if let Some(builder) = staged_group {
@@ -765,11 +769,11 @@ fn build_hunk_display_split_inner(
   };
 
   let flush_pending = |remove_queue: &mut std::collections::VecDeque<PendingLine>,
-                           add_queue: &mut std::collections::VecDeque<PendingLine>,
-                           lines: &mut Vec<DisplayLine>,
-                           staged_group: &mut Option<StagedGroupBuilder>,
-                           first_doc_line: &mut Option<usize>,
-                           last_doc_line: &mut Option<usize>| {
+                       add_queue: &mut std::collections::VecDeque<PendingLine>,
+                       lines: &mut Vec<DisplayLine>,
+                       staged_group: &mut Option<StagedGroupBuilder>,
+                       first_doc_line: &mut Option<usize>,
+                       last_doc_line: &mut Option<usize>| {
     let state_for_secondary = |secondary: bool| {
       if secondary {
         HunkState::Staged
@@ -789,7 +793,13 @@ fn build_hunk_display_split_inner(
         } else {
           None
         }
-        .or_else(|| if !add.secondary { add.group_id.clone() } else { None })
+        .or_else(|| {
+          if !add.secondary {
+            add.group_id.clone()
+          } else {
+            None
+          }
+        })
         .or_else(|| remove.group_id.clone())
         .or_else(|| add.group_id.clone())
       } else {
@@ -814,7 +824,6 @@ fn build_hunk_display_split_inner(
 
       first_doc_line.get_or_insert(add.new_line);
       *last_doc_line = Some(add.new_line);
-
     }
 
     while let Some(remove) = remove_queue.pop_front() {
@@ -836,7 +845,6 @@ fn build_hunk_display_split_inner(
           builder.display_indices.push(index);
         }
       }
-
     }
 
     while let Some(add) = add_queue.pop_front() {
@@ -861,9 +869,7 @@ fn build_hunk_display_split_inner(
 
       first_doc_line.get_or_insert(add.new_line);
       *last_doc_line = Some(add.new_line);
-
     }
-
   };
 
   for line in &hunk.lines {
@@ -899,8 +905,7 @@ fn build_hunk_display_split_inner(
       DiffLineKind::Add => {
         let doc_line = new_line;
         let key = key_builder.line_key(LineKeyKind::Add, doc_line, &line.content);
-        let (state, group_id, secondary) = if let Some(group_id) =
-          unstaged_line_to_group.get(&key)
+        let (state, group_id, secondary) = if let Some(group_id) = unstaged_line_to_group.get(&key)
         {
           (HunkState::Unstaged, Some(group_id.clone()), false)
         } else {
@@ -938,8 +943,7 @@ fn build_hunk_display_split_inner(
       DiffLineKind::Remove => {
         let anchor_line = new_line;
         let key = key_builder.line_key(LineKeyKind::Remove, anchor_line, &line.content);
-        let (state, group_id, secondary) = if let Some(group_id) =
-          unstaged_line_to_group.get(&key)
+        let (state, group_id, secondary) = if let Some(group_id) = unstaged_line_to_group.get(&key)
         {
           (HunkState::Unstaged, Some(group_id.clone()), false)
         } else {

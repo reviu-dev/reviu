@@ -16,7 +16,10 @@ use gpui::{
   MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, ShapedLine, Task,
   UTF16Selection, Window, black, div, point, prelude::*, px, white,
 };
-use gpui_component::{ActiveTheme as _, resizable::{h_resizable, resizable_panel}};
+use gpui_component::{
+  ActiveTheme as _,
+  resizable::{h_resizable, resizable_panel},
+};
 use smol::unblock;
 use syntax::Theme;
 
@@ -1962,14 +1965,11 @@ impl Render for Editor {
             ),
         );
 
-      div()
-        .flex_1()
-        .min_h(px(0.0))
-        .child(
-          h_resizable("editor-diff-split")
-            .child(resizable_panel().child(left_panel))
-            .child(resizable_panel().child(right_panel)),
-        )
+      div().flex_1().min_h(px(0.0)).child(
+        h_resizable("editor-diff-split")
+          .child(resizable_panel().child(left_panel))
+          .child(resizable_panel().child(right_panel)),
+      )
     } else {
       div()
         .flex_1()

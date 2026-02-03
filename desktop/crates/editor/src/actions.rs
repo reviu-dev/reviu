@@ -63,9 +63,7 @@ pub fn backspace(
   cx: &mut Context<Editor>,
 ) {
   editor.target_column = None;
-  if editor.selected_range.is_empty()
-    && editor.move_display_cursor_horizontal(-1, cx)
-  {
+  if editor.selected_range.is_empty() && editor.move_display_cursor_horizontal(-1, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
   }
@@ -155,9 +153,7 @@ pub fn up(editor: &mut Editor, _: &Up, window: &mut Window, cx: &mut Context<Edi
       let target_column = editor.target_column.unwrap();
 
       // Calculate new position in target line (skip hidden lines)
-      let target_line = editor
-        .previous_visible_doc_line(current_line)
-        .unwrap_or(0);
+      let target_line = editor.previous_visible_doc_line(current_line).unwrap_or(0);
       let target_start = document.line_to_char(target_line);
       let target_len = document.line_content(target_line).unwrap_or_default().len();
 
@@ -215,9 +211,7 @@ pub fn down(editor: &mut Editor, _: &Down, window: &mut Window, cx: &mut Context
 
 pub fn left(editor: &mut Editor, _: &Left, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
-  if editor.selected_range.is_empty()
-    && editor.move_display_cursor_horizontal(-1, cx)
-  {
+  if editor.selected_range.is_empty() && editor.move_display_cursor_horizontal(-1, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
   }
@@ -257,9 +251,7 @@ pub fn cmd_left(editor: &mut Editor, _: &CmdLeft, window: &mut Window, cx: &mut 
 
 pub fn right(editor: &mut Editor, _: &Right, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
-  if editor.selected_range.is_empty()
-    && editor.move_display_cursor_horizontal(1, cx)
-  {
+  if editor.selected_range.is_empty() && editor.move_display_cursor_horizontal(1, cx) {
     editor.ensure_cursor_visible(window, cx);
     return;
   }
@@ -366,9 +358,7 @@ pub fn select_up(editor: &mut Editor, _: &SelectUp, window: &mut Window, cx: &mu
 
       let target_column = editor.target_column.unwrap();
 
-      let target_line = editor
-        .previous_visible_doc_line(current_line)
-        .unwrap_or(0);
+      let target_line = editor.previous_visible_doc_line(current_line).unwrap_or(0);
       let target_start = document.line_to_char(target_line);
       let target_len = document.line_content(target_line).unwrap_or_default().len();
 
