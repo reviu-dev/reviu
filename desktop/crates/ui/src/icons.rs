@@ -9,6 +9,8 @@ pub enum UiIconName {
   GitMerge,
 }
 
+pub const FILE_ICON_SIZE_PX: f32 = 16.0;
+
 impl IconNamed for UiIconName {
   fn path(self) -> SharedString {
     match self {
@@ -36,7 +38,7 @@ impl IconNamed for FileIcon {
   }
 }
 
-fn file_icon_path_for_name(file_name: &str) -> Option<&'static str> {
+fn file_icon_path_for_name_str(file_name: &str) -> Option<&'static str> {
   let name = file_name.to_lowercase();
 
   if name == "dockerfile" {
@@ -74,10 +76,19 @@ fn file_icon_path_for_name(file_name: &str) -> Option<&'static str> {
 }
 
 pub fn file_icon_for_name(file_name: &str) -> Option<FileIcon> {
-  file_icon_path_for_name(file_name).map(FileIcon::new)
+  file_icon_path_for_name_str(file_name).map(FileIcon::new)
 }
 
 pub fn file_icon_for_path(path: impl AsRef<Path>) -> Option<FileIcon> {
   let name = path.as_ref().file_name()?.to_str()?;
   file_icon_for_name(name)
+}
+
+pub fn file_icon_path_for_name(file_name: &str) -> Option<SharedString> {
+  file_icon_path_for_name_str(file_name).map(SharedString::from)
+}
+
+pub fn file_icon_path_for_path(path: impl AsRef<Path>) -> Option<SharedString> {
+  let name = path.as_ref().file_name()?.to_str()?;
+  file_icon_path_for_name(name)
 }

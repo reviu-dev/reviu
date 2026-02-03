@@ -1,18 +1,18 @@
 use std::{path::PathBuf, rc::Rc, sync::Arc};
 
+use crate::{FILE_ICON_SIZE_PX, file_icon_path_for_path};
 use gpui::{
-  App, Context, Div, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
-  SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
+  AnyElement, App, Context, Div, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
+  Render, SharedString, Styled, Subscription, Task, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, IndexPath, Sizable, WindowExt,
+  ActiveTheme as _, Icon, IconName, IndexPath, Sizable, StyledExt as _, WindowExt,
   button::{Button, ButtonVariants},
   h_flex,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   v_flex,
 };
-use crate::file_icon_for_path;
 
 const LIST_INPUT_HEIGHT: f32 = 35.0;
 const LIST_ITEM_HEIGHT: f32 = 32.0;
@@ -118,24 +118,57 @@ impl ListDelegate for SearchFileListDelegate {
     let base_item = list_base_item(ix, total_items, self.selected_index.clone(), &theme);
 
     self.matched_files.get(ix.row).map(|entry| {
-      let file_icon = file_icon_for_path(&entry.path)
-        .map(|icon| Icon::new(icon).size_3())
-        .unwrap_or_else(|| Icon::new(IconName::File).size_3().text_color(theme.muted_foreground));
+      let file_icon: AnyElement = file_icon_path_for_path(&entry.path)
+        .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
+        .unwrap_or_else(|| {
+          Icon::new(IconName::File)
+            .size_3()
+            .text_color(theme.muted_foreground)
+            .into_any_element()
+        });
+      let file_name: SharedString = entry
+        .path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(entry.label.as_ref())
+        .to_string()
+        .into();
+      let dir_label = entry
+        .path
+        .parent()
+        .and_then(|path| path.to_str())
+        .map(str::to_string)
+        .filter(|path| !path.is_empty() && path != ".");
 
-      base_item
-        .child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child(file_icon)
-            .child(Label::new(entry.label.clone())),
-        )
-        .suffix(|_, _| {
-          Button::new("action")
-            .ghost()
-            .small()
-            .icon(IconName::ArrowRight)
-        })
+      base_item.child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .w_full()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .min_w_0()
+              .flex_shrink()
+              .child(file_icon)
+              .child(Label::new(file_name).truncate()),
+          )
+          .when_some(dir_label, |this, dir_label| {
+            this.child(
+              div()
+                .flex_1()
+                .min_w_0()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .text_right()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis_start()
+                .child(dir_label),
+            )
+          }),
+      )
     })
   }
 
