@@ -1,13 +1,17 @@
+mod assets;
 mod command_palette;
 mod confirm_dialog;
+mod icons;
 mod search_file_palette;
 mod theme;
 
+pub use assets::AppAssets;
 pub use command_palette::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig, CommandPaletteHandler,
 };
 pub use confirm_dialog::ConfirmDialog;
+pub use icons::UiIconName;
 pub use search_file_palette::{
   SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
 };

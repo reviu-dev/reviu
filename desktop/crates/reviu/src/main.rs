@@ -5,6 +5,7 @@ use gpui::{
   size,
 };
 use gpui_component::Root;
+use ui::AppAssets;
 use workspace::{
   CommitChanges, OpenRepository, ShowCommandPalette, ShowFileSearch, WorkspaceView,
 };
@@ -15,7 +16,7 @@ const INITIAL_WINDOW_HEIGHT: f32 = 800.0;
 
 fn main() {
   Application::new()
-    .with_assets(gpui_component_assets::Assets)
+    .with_assets(AppAssets)
     .run(|cx: &mut App| {
       gpui_component::init(cx);
 
