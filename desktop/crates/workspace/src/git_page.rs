@@ -14,15 +14,14 @@ use git::{
 };
 use gpui::{
   AnyElement, App, Context, Corner, Entity, FocusHandle, Focusable, Hsla, InteractiveElement,
-  Keystroke, ParentElement, PathPromptOptions, Render, SharedString, Styled, Task,
-  UniformListScrollHandle, Window, actions, div, prelude::*, px, uniform_list,
+  Keystroke, ParentElement, PathPromptOptions, Render, SharedString, Styled, Task, Window, actions,
+  div, prelude::*, px, uniform_list,
 };
 use gpui_component::{
   ActiveTheme as _, Collapsible, Disableable, Icon, IconName, Sizable, StyledExt as _,
   button::{Button, ButtonGroup, ButtonVariant, ButtonVariants as _},
   kbd::Kbd,
   menu::{DropdownMenu, PopupMenuItem},
-  scroll::ScrollableElement,
   select::{Select, SelectEvent, SelectItem, SelectState},
   sidebar::SidebarItem,
   tooltip::Tooltip,
@@ -354,8 +353,8 @@ impl SidebarItem for FileSidebarItem {
         this.child(
           div()
             .absolute()
-            .right(px(4.0))
-            .top(px(4.0))
+            .right(px(5.0))
+            .top(px(5.0))
             .opacity(0.0)
             .group_hover(hover_group, |style| style.opacity(1.0))
             .child(actions),
@@ -414,7 +413,6 @@ pub struct GitPage {
   status_task: Option<Task<()>>,
   poll_task: Option<Task<()>>,
   commit_input: Entity<InputState>,
-  file_list_scroll_handle: UniformListScrollHandle,
 }
 
 impl GitPage {
@@ -463,7 +461,6 @@ impl GitPage {
       status_task: None,
       poll_task: None,
       commit_input,
-      file_list_scroll_handle: UniformListScrollHandle::new(),
     };
 
     view.subscribe_to_repo_select(window, cx);
@@ -1721,6 +1718,7 @@ impl GitPage {
   }
 
   fn render_sidebar_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme();
     let all_staged = self.all_changes_staged();
     let sidebar_enabled = self.selected_repo.is_some() && !self.status_entries.is_empty();
     let (label, icon, tooltip) = if all_staged {
@@ -1729,15 +1727,21 @@ impl GitPage {
       ("Stage all", IconName::Plus, "Stage all files")
     };
 
+    let group_label = div()
+      .text_sm()
+      .text_color(theme.sidebar_foreground)
+      .child("Changes");
+
     div()
       .w_full()
       .flex()
-      .px_2()
+      .px_3()
       .min_h(px(EDITOR_HEADER_HEIGHT))
       .border_b_1()
       .border_color(cx.theme().border)
       .items_center()
       .justify_between()
+      .child(group_label)
       .child(
         Button::new("stage-all-button")
           .label(label)
@@ -1848,23 +1852,14 @@ impl GitPage {
           .collect()
       }),
     )
-    .size_full()
-    .track_scroll(&self.file_list_scroll_handle);
-
-    let group_label = div()
-      .text_sm()
-      .px_3()
-      .py_2()
-      .text_color(theme.sidebar_foreground.opacity(0.7))
-      .child("Changes");
+    .size_full();
 
     let list_container = div()
       .relative()
       .flex_1()
       .min_h_0()
       .overflow_hidden()
-      .child(list)
-      .vertical_scrollbar(&self.file_list_scroll_handle);
+      .child(list);
 
     base_sidebar
       .relative()
@@ -1875,18 +1870,9 @@ impl GitPage {
           .flex_col()
           .flex_1()
           .min_h_0()
-          .child(group_label)
           .child(list_container),
       )
-      .child(
-        div()
-          .absolute()
-          .bottom_0()
-          .left_0()
-          .right_0()
-          .bg(theme.sidebar)
-          .child(self.render_commit_bar(cx)),
-      )
+      .child(self.render_commit_bar(cx))
       .into_any_element()
   }
 
