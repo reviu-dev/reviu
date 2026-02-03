@@ -635,8 +635,14 @@ impl Element for EditorElement {
         }
 
         if has_add && has_remove {
-          let mixed_color = theme.diff_gutter_modified();
-          group_border_colors.insert(group_id.clone(), (mixed_color, mixed_color));
+          let removed = theme.diff_gutter_removed();
+          let added = theme.diff_gutter_added();
+          let (top_color, bottom_color) = match self.diff_view {
+            DiffElementView::SplitLeft => (removed, removed),
+            DiffElementView::SplitRight => (added, added),
+            DiffElementView::Inline => (removed, added),
+          };
+          group_border_colors.insert(group_id.clone(), (top_color, bottom_color));
           continue;
         }
 

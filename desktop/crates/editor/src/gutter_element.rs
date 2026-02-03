@@ -174,8 +174,14 @@ impl Element for GutterElement {
 
           if group.state == HunkState::Staged {
             if has_add && has_remove {
-              let mixed_color = theme.diff_gutter_modified();
-              group_border_colors.insert(group_id.clone(), (mixed_color, mixed_color));
+              let removed = theme.diff_gutter_removed();
+              let added = theme.diff_gutter_added();
+              let (top_color, bottom_color) = match self.view {
+                GutterView::SplitLeft => (removed, removed),
+                GutterView::SplitRight => (added, added),
+                GutterView::Inline => (removed, added),
+              };
+              group_border_colors.insert(group_id.clone(), (top_color, bottom_color));
             } else {
               let mut first_kind: Option<DiffLineKind> = None;
               let mut last_kind: Option<DiffLineKind> = None;
