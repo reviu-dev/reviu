@@ -885,6 +885,7 @@ impl Render for CommandPalette {
     };
 
     div()
+      .max_h_128()
       .track_focus(&self.focus_handle)
       .child(content)
       .h_full()

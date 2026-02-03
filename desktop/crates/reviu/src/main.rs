@@ -5,7 +5,9 @@ use gpui::{
   size,
 };
 use gpui_component::Root;
-use workspace::{CommitChanges, OpenRepository, ShowCommandPalette, WorkspaceView};
+use workspace::{
+  CommitChanges, OpenRepository, ShowCommandPalette, ShowFileSearch, WorkspaceView,
+};
 
 mod app_root;
 const INITIAL_WINDOW_WIDTH: f32 = 1200.0;
@@ -59,7 +61,8 @@ fn main() {
         KeyBinding::new("cmd-s", Save, None),
         KeyBinding::new("cmd-enter", CommitChanges, None),
         KeyBinding::new("cmd-o", OpenRepository, None),
-        KeyBinding::new("cmd-p", ShowCommandPalette, None),
+        KeyBinding::new("cmd-shift-p", ShowCommandPalette, None),
+        KeyBinding::new("cmd-p", ShowFileSearch, None),
         KeyBinding::new("home", Home, None),
         KeyBinding::new("end", End, None),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, None),
