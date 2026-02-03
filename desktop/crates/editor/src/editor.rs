@@ -1356,6 +1356,20 @@ impl Editor {
     len
   }
 
+  fn word_range_in_line(text: &str, column: usize) -> (usize, usize) {
+    let column = column.min(text.len());
+    for (idx, segment) in text.split_word_bound_indices() {
+      if segment.trim().is_empty() {
+        continue;
+      }
+      let end = idx + segment.len();
+      if idx <= column && column < end {
+        return (idx, end);
+      }
+    }
+    (column, column)
+  }
+
   fn set_display_cursor(&mut self, cursor: DisplayCursor, cx: &mut Context<Self>) {
     self.display_selection = Some(DisplaySelection {
       start: cursor,
@@ -2038,7 +2052,6 @@ impl Editor {
       }
     }
 
-    let document = self.document.read(cx);
     let Some(display_cursor) = position_map.display_cursor_for_position(event.position) else {
       return;
     };
@@ -2062,9 +2075,13 @@ impl Editor {
       end: display_cursor,
     });
 
-    let offset = position_map
-      .point_for_position(event.position, document)
-      .or_else(|| self.doc_offset_for_display_cursor(display_cursor, cx));
+    let (offset, doc_len) = {
+      let document = self.document.read(cx);
+      let offset = position_map
+        .point_for_position(event.position, document)
+        .or_else(|| self.doc_offset_for_display_cursor(display_cursor, cx));
+      (offset, document.len())
+    };
     let Some(offset) = offset else {
       return;
     };
@@ -2077,6 +2094,24 @@ impl Editor {
           self.move_to(offset, cx);
         }
         2 => {
+          if self.is_removed_display_line(display_cursor.line, cx) {
+            if let Some(text) = self.removed_line_text(display_cursor.line, cx) {
+              let column = display_cursor.column.min(text.len());
+              let (start, end) = Self::word_range_in_line(&text, column);
+              self.set_display_selection_with_anchor(
+                DisplayCursor {
+                  line: display_cursor.line,
+                  column: start,
+                },
+                DisplayCursor {
+                  line: display_cursor.line,
+                  column: end,
+                },
+                cx,
+              );
+            }
+            return;
+          }
           let (word_start, word_end) = word_range_at_offset(self, offset, cx);
           self.selected_range = word_start..word_end;
           self.selection_reversed = false;
@@ -2084,6 +2119,21 @@ impl Editor {
           cx.notify();
         }
         3 => {
+          if self.is_removed_display_line(display_cursor.line, cx) {
+            let line_len = self.display_line_len(display_cursor.line, cx);
+            self.set_display_selection_with_anchor(
+              DisplayCursor {
+                line: display_cursor.line,
+                column: 0,
+              },
+              DisplayCursor {
+                line: display_cursor.line,
+                column: line_len,
+              },
+              cx,
+            );
+            return;
+          }
           let (line_start, line_end) = line_range_at_offset(self, offset, cx);
           self.selected_range = line_start..line_end;
           self.selection_reversed = false;
@@ -2091,7 +2141,9 @@ impl Editor {
           cx.notify();
         }
         _ => {
-          let doc_len = document.len();
+          if self.select_all_display_lines(cx) {
+            return;
+          }
           self.selected_range = 0..doc_len;
           self.selection_reversed = false;
           self.display_selection = None;
