@@ -35,7 +35,7 @@ use crate::{
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteConfig, CommandPaletteHandler, ConfirmDialog, Input, InputState, SearchFileEntry,
-  SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, WindowExt,
+  SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, WindowExt, file_icon_for_path,
 };
 
 const HEADER_HEIGHT: f32 = 44.0;
@@ -111,6 +111,7 @@ struct FileSidebarItem {
   stage_icon: IconName,
   stage_color: gpui::Hsla,
   stage_tooltip: Option<SharedString>,
+  file_icon: Option<Icon>,
   stage_action: Option<std::rc::Rc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>>,
   unstage_action: Option<std::rc::Rc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>>,
   restore_action: Option<std::rc::Rc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>>,
@@ -136,6 +137,7 @@ impl FileSidebarItem {
       stage_icon,
       stage_color,
       stage_tooltip,
+      file_icon: None,
       stage_action: None,
       unstage_action: None,
       restore_action: None,
@@ -156,6 +158,11 @@ impl FileSidebarItem {
       None,
     )
     .disabled(true)
+  }
+
+  fn file_icon(mut self, file_icon: Option<Icon>) -> Self {
+    self.file_icon = file_icon;
+    self
   }
 
   fn active(mut self, active: bool) -> Self {
@@ -307,6 +314,13 @@ impl SidebarItem for FileSidebarItem {
           div().child(icon).into_any_element()
         };
         icon_element
+      })
+      .when(!is_collapsed, |this| {
+        if let Some(icon) = self.file_icon.clone() {
+          this.child(icon)
+        } else {
+          this
+        }
       })
       .when(!is_collapsed, |this| {
         this.child(
@@ -1412,6 +1426,11 @@ impl GitPage {
       .items_center()
       .gap_2()
       .child(
+        file_icon_for_path(&editor_state.workdir_path)
+          .map(|icon| Icon::new(icon).size_3())
+          .unwrap_or_else(|| Icon::new(IconName::File).size_3().text_color(theme.foreground)),
+      )
+      .child(
         div()
           .text_sm()
           .font_medium()
@@ -1859,6 +1878,13 @@ impl GitPage {
             let file_label = file_label.replace(['\n', '\r'], "");
             let status_color = Self::status_color(status, &theme);
             let (stage_icon, stage_color, stage_tooltip) = Self::stage_style(entry.stage, &theme);
+            let file_icon = file_icon_for_path(&entry.path)
+              .map(|icon| Icon::new(icon).size_3())
+              .unwrap_or_else(|| {
+                Icon::new(IconName::File)
+                  .size_3()
+                  .text_color(theme.sidebar_foreground)
+              });
             let can_stage = matches!(
               entry.stage,
               RepoStage::Unstaged | RepoStage::PartiallyStaged
@@ -1874,6 +1900,7 @@ impl GitPage {
               stage_color,
               stage_tooltip,
             )
+            .file_icon(Some(file_icon))
             .active(is_active)
             .on_click(cx.listener(move |this, _, _, cx| {
               this.open_file(path_for_open.clone(), cx);

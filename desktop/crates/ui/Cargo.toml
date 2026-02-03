@@ -8,5 +8,6 @@ publish.workspace = true
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 gpui-component-assets = { workspace = true }
+rust-embed = { workspace = true }
 syntax = { workspace = true }
 anyhow = { workspace = true }
