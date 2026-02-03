@@ -667,8 +667,12 @@ impl Editor {
   }
 
   fn group_token_for_id(&self, group_id: &Arc<str>) -> Option<GroupToken> {
-    let projection = self.projection.as_ref()?;
-    let group = projection.groups.get(group_id.as_ref())?;
+    let Some(projection) = self.projection.as_ref() else {
+      return None;
+    };
+    let Some(group) = projection.groups.get(group_id.as_ref()) else {
+      return None;
+    };
     Some(GroupToken {
       state: group.state,
       signature: group.signature.clone(),
@@ -677,7 +681,9 @@ impl Editor {
   }
 
   fn resolve_group_from_token(&self, token: &GroupToken) -> Option<(HunkState, git::DiffHunk)> {
-    let projection = self.projection.as_ref()?;
+    let Some(projection) = self.projection.as_ref() else {
+      return None;
+    };
     if let Some((_, group)) = projection
       .groups
       .iter()
@@ -685,7 +691,9 @@ impl Editor {
     {
       return Some((group.state, group.hunk.clone()));
     }
-    let group = projection.groups.get(token.id.as_ref())?;
+    let Some(group) = projection.groups.get(token.id.as_ref()) else {
+      return None;
+    };
     Some((group.state, group.hunk.clone()))
   }
 
@@ -759,6 +767,9 @@ impl Editor {
     }
 
     let workdir_path = self.workdir_path.clone();
+    let workdir_path_for_fallback = workdir_path.clone();
+    let hunk_for_fallback = hunk.clone();
+    let reverse_for_fallback = reverse;
     let git_store = self.git_store.clone();
     if let Some(store) = &git_store {
       store.bump_op();
@@ -796,11 +807,26 @@ impl Editor {
       };
 
       if let Err(_err) = workdir_result {
-        let _ = this.update(cx, |editor, cx| {
-          editor.git_op_in_flight = false;
-          editor.maybe_start_next_git_job(cx);
-        });
-        return;
+        let fallback_result = if needs_workdir {
+          unblock(move || {
+            let text = std::fs::read_to_string(&workdir_path_for_fallback)?;
+            let updated = git::apply_hunk_to_text(&text, &hunk_for_fallback, reverse_for_fallback)
+              .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+            std::fs::write(&workdir_path_for_fallback, updated)?;
+            Ok::<(), std::io::Error>(())
+          })
+          .await
+        } else {
+          Ok(())
+        };
+
+        if let Err(_err) = fallback_result {
+          let _ = this.update(cx, |editor, cx| {
+            editor.git_op_in_flight = false;
+            editor.maybe_start_next_git_job(cx);
+          });
+          return;
+        }
       }
 
       let (contents, file_mtime, index_mtime): (
