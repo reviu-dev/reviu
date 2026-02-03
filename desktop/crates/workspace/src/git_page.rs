@@ -1,6 +1,6 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::{Path, PathBuf}, sync::Arc, time::Duration};
 
-use editor::{Editor, HunkAction, HunkState};
+use editor::{DiffViewMode, Editor, HunkAction, HunkState};
 use git::{
   BranchKind, BranchRef, BranchStatus, HeadCommitStatus, RepoStage, RepoStatusEntry,
   RepoStatusKind, amend_commit, commit_changes, create_branch, create_branch_from,
@@ -9,9 +9,9 @@ use git::{
   undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
-  AnyElement, App, Context, Corner, Entity, FocusHandle, Focusable, InteractiveElement, Keystroke,
-  ParentElement, PathPromptOptions, Render, SharedString, Styled, Task, Window, actions, div,
-  prelude::*, px,
+  AnyElement, App, Context, Corner, Entity, FocusHandle, Focusable, Hsla, InteractiveElement,
+  Keystroke, ParentElement, PathPromptOptions, Render, SharedString, Styled, Task, Window, actions,
+  div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Collapsible, Disableable, Icon, IconName, Side, Sizable, StyledExt as _,
@@ -19,10 +19,10 @@ use gpui_component::{
   kbd::Kbd,
   menu::{DropdownMenu, PopupMenuItem},
   select::{Select, SelectEvent, SelectItem, SelectState},
-  sidebar::{Sidebar, SidebarGroup, SidebarHeader, SidebarItem},
+  sidebar::{Sidebar, SidebarGroup, SidebarItem},
   tooltip::Tooltip,
 };
-use smol::unblock;
+use smol::{fs::File, unblock};
 
 use crate::{
   config::{ConfigStore, RecentRepository},
@@ -43,12 +43,13 @@ trait StatusThemeExt {
   fn status_orange(&self) -> gpui::Hsla;
   fn status_green(&self) -> gpui::Hsla;
   fn status_red(&self) -> gpui::Hsla;
+  fn background(&self) -> gpui::Hsla;
 }
 
 impl StatusThemeExt for gpui_component::Theme {
-  fn status_orange(&self) -> gpui::Hsla {
+  fn status_orange(&self) -> Hsla {
     if self.mode.is_dark() {
-      gpui::Hsla {
+      Hsla {
         h: 30.0 / 360.0,
         s: 0.85,
         l: 0.58,
@@ -59,9 +60,9 @@ impl StatusThemeExt for gpui_component::Theme {
     }
   }
 
-  fn status_green(&self) -> gpui::Hsla {
+  fn status_green(&self) -> Hsla {
     if self.mode.is_dark() {
-      gpui::Hsla {
+      Hsla {
         h: 135.0 / 360.0,
         s: 0.75,
         l: 0.55,
@@ -72,9 +73,9 @@ impl StatusThemeExt for gpui_component::Theme {
     }
   }
 
-  fn status_red(&self) -> gpui::Hsla {
+  fn status_red(&self) -> Hsla {
     if self.mode.is_dark() {
-      gpui::Hsla {
+      Hsla {
         h: 0.0,
         s: 0.75,
         l: 0.58,
@@ -82,6 +83,24 @@ impl StatusThemeExt for gpui_component::Theme {
       }
     } else {
       self.danger
+    }
+  }
+
+  fn background(&self) -> Hsla {
+    if self.mode.is_dark() {
+      Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 0.0,
+        a: 1.0,
+      }
+    } else {
+      Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 1.0,
+        a: 1.0,
+      }
     }
   }
 }
@@ -316,7 +335,7 @@ impl SidebarItem for FileSidebarItem {
           actions = actions.child(
             Button::new(format!("stage-file-{}", self.label))
               .icon(IconName::Plus)
-              .ghost()
+              .bg(theme.background())
               .tooltip("Stage file")
               .on_click(move |ev, window, cx| {
                 handler(ev, window, cx);
@@ -327,7 +346,7 @@ impl SidebarItem for FileSidebarItem {
           actions = actions.child(
             Button::new(format!("unstage-file-{}", self.label))
               .icon(IconName::Minus)
-              .ghost()
+              .bg(theme.background())
               .tooltip("Unstage file")
               .on_click(move |ev, window, cx| {
                 handler(ev, window, cx);
@@ -338,7 +357,7 @@ impl SidebarItem for FileSidebarItem {
           actions = actions.child(
             Button::new(format!("restore-file-{}", self.label))
               .icon(IconName::Undo)
-              .ghost()
+              .bg(theme.background())
               .tooltip("Restore file")
               .on_click(move |ev, window, cx| {
                 handler(ev, window, cx);
@@ -405,12 +424,23 @@ pub struct GitPage {
   has_staged_changes: bool,
   selected_file: Option<PathBuf>,
   editor: Option<Entity<Editor>>,
+  diff_view: DiffViewMode,
   status_task: Option<Task<()>>,
   poll_task: Option<Task<()>>,
   commit_input: Entity<InputState>,
 }
 
 impl GitPage {
+  fn split_disabled_for_path(&self, rel_path: &Path) -> bool {
+    self
+      .status_entries
+      .iter()
+      .any(|entry| {
+        entry.path == rel_path
+          && matches!(entry.status, RepoStatusKind::Untracked | RepoStatusKind::Added)
+      })
+  }
+
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     let recent = ConfigStore::load_recent_repositories();
     let items: Vec<RecentRepoItem> = recent.iter().map(RecentRepoItem::new).collect();
@@ -442,6 +472,7 @@ impl GitPage {
       has_staged_changes: false,
       selected_file: None,
       editor: None,
+      diff_view: DiffViewMode::Inline,
       status_task: None,
       poll_task: None,
       commit_input,
@@ -528,6 +559,13 @@ impl GitPage {
           if !still_present {
             this.selected_file = None;
             this.editor = None;
+          } else if this.split_disabled_for_path(selected)
+            && this.diff_view != DiffViewMode::Inline
+          {
+            this.diff_view = DiffViewMode::Inline;
+            if let Some(editor) = this.editor.clone() {
+              editor.update(cx, |editor, cx| editor.set_diff_view_mode(DiffViewMode::Inline, cx));
+            }
           }
         }
         cx.notify();
@@ -938,10 +976,39 @@ impl GitPage {
     if self.selected_file.as_ref() == Some(&rel_path) {
       return;
     }
+    let split_disabled = self.split_disabled_for_path(&rel_path);
+    if split_disabled && self.diff_view != DiffViewMode::Inline {
+      self.diff_view = DiffViewMode::Inline;
+    }
     let file_path = repo_root.join(&rel_path);
     let editor = cx.new(|cx| Editor::new_with_paths(repo_root, file_path, cx));
+    let diff_view = if split_disabled {
+      DiffViewMode::Inline
+    } else {
+      self.diff_view
+    };
+    editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
     self.editor = Some(editor);
     self.selected_file = Some(rel_path);
+    cx.notify();
+  }
+
+  fn toggle_diff_view(&mut self, cx: &mut Context<Self>) {
+    if let Some(selected) = self.selected_file.as_ref()
+      && self.split_disabled_for_path(selected)
+    {
+      return;
+    }
+    self.diff_view = match self.diff_view {
+      DiffViewMode::Inline => DiffViewMode::Split,
+      DiffViewMode::Split => DiffViewMode::Inline,
+    };
+
+    if let Some(editor) = self.editor.clone() {
+      let diff_view = self.diff_view;
+      editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
+    }
+
     cx.notify();
   }
 
@@ -1186,7 +1253,8 @@ impl GitPage {
         .px_2()
         .py_1()
         .rounded(theme.radius)
-        .bg(theme.sidebar)
+        .border_1()
+        .border_color(theme.title_bar_border)
         .child(
           div()
             .text_sm()
@@ -1264,7 +1332,7 @@ impl GitPage {
       .flex()
       .items_center()
       .justify_between()
-      .bg(theme.title_bar)
+      .bg(theme.background())
       .border_b_1()
       .border_color(theme.title_bar_border)
       .child(header_left)
@@ -1273,9 +1341,11 @@ impl GitPage {
 
   fn render_empty_state(&self, message: &str, cx: &mut Context<Self>) -> AnyElement {
     let message = message.to_string();
+    let theme = cx.theme().clone();
     div()
       .size_full()
       .flex()
+      .bg(theme.background())
       .items_center()
       .justify_center()
       .text_color(cx.theme().muted_foreground)
@@ -1324,17 +1394,51 @@ impl GitPage {
         editor_entity.update(cx, |editor, cx| editor.save(cx));
       });
 
+    let split_disabled = self
+      .selected_file
+      .as_ref()
+      .map(|path| self.split_disabled_for_path(path))
+      .unwrap_or(false);
+    let (toggle_label, toggle_icon, toggle_tooltip) = if split_disabled {
+      ("Split", IconName::PanelLeft, "Split diff unavailable for new files")
+    } else {
+      match self.diff_view {
+        DiffViewMode::Inline => ("Split", IconName::PanelLeft, "Switch to split diff"),
+        DiffViewMode::Split => ("Inline", IconName::PanelLeftClose, "Switch to inline diff"),
+      }
+    };
+    let view = cx.entity();
+    let toggle_button = Button::new("editor-diff-toggle")
+      .label(toggle_label)
+      .icon(toggle_icon)
+      .xsmall()
+      .ghost()
+      .tooltip(toggle_tooltip)
+      .disabled(split_disabled)
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.toggle_diff_view(cx);
+        });
+      });
+
     div()
       .h(px(40.0))
       .px_3()
       .flex()
       .items_center()
       .justify_between()
-      .bg(theme.title_bar)
+      .bg(theme.background())
       .border_b_1()
       .border_color(theme.title_bar_border)
       .child(title)
-      .child(save_button)
+      .child(
+        div()
+          .flex()
+          .items_center()
+          .gap_2()
+          .child(toggle_button)
+          .child(save_button),
+      )
       .into_any_element()
   }
 
@@ -1365,6 +1469,7 @@ impl GitPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Option<AnyElement> {
+    let theme = cx.theme().clone();
     let editor_state = editor.read(cx);
     let hovered_id = editor_state.hovered_group_id.as_ref()?;
     let overlay = editor_state
@@ -1408,8 +1513,8 @@ impl GitPage {
     let editor_entity = editor.clone();
 
     let mut actions = ButtonGroup::new("change-block-actions")
-      .primary()
-      .with_variant(ButtonVariant::Secondary)
+      // .primary()
+      // .with_variant(ButtonVariant::Secondary)
       .small()
       .disabled(file_dirty);
 
@@ -1423,6 +1528,7 @@ impl GitPage {
             .label("Stage")
             .tooltip(stage_tooltip)
             .rounded_t_none()
+            .bg(theme.background())
             .disabled(file_dirty)
             .on_click(move |_, _, cx| {
               let group_id = group_id.clone();
@@ -1441,6 +1547,7 @@ impl GitPage {
             .label("Unstage")
             .tooltip(unstage_tooltip)
             .disabled(file_dirty)
+            .bg(theme.background())
             .rounded_t_none()
             .on_click(move |_, _, cx| {
               let group_id = group_id.clone();
@@ -1460,6 +1567,7 @@ impl GitPage {
           .icon(IconName::Undo)
           .label("Restore")
           .rounded_t_none()
+          .bg(theme.background())
           .tooltip(restore_tooltip)
           .disabled(file_dirty)
           .on_click(move |_, _, cx| {
@@ -1626,25 +1734,26 @@ impl GitPage {
   }
 
   fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let base_sidebar: Sidebar<SidebarGroup<FileSidebarItem>> = Sidebar::new("git-sidebar")
+      .side(Side::Left)
+      .bg(theme.background())
+      .w_full()
+      .h_full();
+
     if self.selected_repo.is_none() {
       let placeholder = FileSidebarItem::placeholder("Select a repository", &cx.theme().clone());
-      return Sidebar::new("git-sidebar")
-        .side(Side::Left)
-        .w_full()
-        .h_full()
+      return base_sidebar
         .child(SidebarGroup::new("Changes").child(placeholder))
         .into_any_element();
     } else if self.status_entries.is_empty() {
       let placeholder = FileSidebarItem::placeholder("No changes", &cx.theme().clone());
-      return Sidebar::new("git-sidebar")
-        .side(Side::Left)
-        .w_full()
-        .h_full()
+      return base_sidebar
         .child(SidebarGroup::new("Changes").child(placeholder))
         .into_any_element();
     } else {
       let selected_file = self.selected_file.clone();
-      let theme = cx.theme().clone();
+
       let mut items = Vec::new();
       for entry in &self.status_entries {
         let is_active = selected_file.as_ref() == Some(&entry.path);
@@ -1700,10 +1809,7 @@ impl GitPage {
         items.push(item);
       }
 
-      return Sidebar::new("git-sidebar")
-        .side(Side::Left)
-        .w_full()
-        .h_full()
+      return base_sidebar
         .header(self.render_sidebar_header(cx))
         .child(SidebarGroup::new("Changes").children(items))
         .border_0()
