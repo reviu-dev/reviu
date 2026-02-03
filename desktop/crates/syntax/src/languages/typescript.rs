@@ -14,6 +14,5 @@ pub static TYPESCRIPT_CONFIG: Lazy<LanguageConfig> = Lazy::new(|| {
   LanguageConfig {
     name: "typescript",
     highlight_config: config,
-    extensions: &["ts", "tsx", "js", "jsx"],
   }
 });
