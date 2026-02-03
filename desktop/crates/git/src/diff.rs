@@ -165,7 +165,11 @@ pub fn apply_hunk_to_text(base_text: &str, hunk: &DiffHunk, reverse: bool) -> Re
   let (base_lines, mut trailing_newline) = split_lines(base_text);
   let mut output = Vec::new();
 
-  let base_start = if reverse { hunk.new_start } else { hunk.old_start };
+  let base_start = if reverse {
+    hunk.new_start
+  } else {
+    hunk.old_start
+  };
   let mut old_idx = if base_start == 0 {
     0
   } else {
@@ -285,10 +289,7 @@ fn compute_diff(repo: &Repository, rel_path: &Path, kind: DiffKind) -> Result<Fi
 
   let diff = match kind {
     DiffKind::Uncommitted => {
-      let head_tree = repo
-        .head()
-        .ok()
-        .and_then(|head| head.peel_to_tree().ok());
+      let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
       repo.diff_tree_to_workdir(head_tree.as_ref(), Some(&mut opts))?
     }
     DiffKind::Unstaged => {
@@ -296,10 +297,7 @@ fn compute_diff(repo: &Repository, rel_path: &Path, kind: DiffKind) -> Result<Fi
       repo.diff_index_to_workdir(Some(&index), Some(&mut opts))?
     }
     DiffKind::Staged => {
-      let head_tree = repo
-        .head()
-        .ok()
-        .and_then(|head| head.peel_to_tree().ok());
+      let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
       let index = repo.index()?;
       repo.diff_tree_to_index(head_tree.as_ref(), Some(&index), Some(&mut opts))?
     }
@@ -473,10 +471,7 @@ fn trailing_newline_change(base_text: &str, buffer_text: &str) -> Option<Trailin
   }
 }
 
-fn normalize_no_newline_hunk(
-  hunk: &mut DiffHunk,
-  trailing_change: Option<TrailingNewlineChange>,
-) {
+fn normalize_no_newline_hunk(hunk: &mut DiffHunk, trailing_change: Option<TrailingNewlineChange>) {
   let has_change = hunk
     .lines
     .iter()
@@ -666,7 +661,6 @@ fn count_hunk_line_counts(hunk: &DiffHunk) -> (usize, usize) {
   (old_lines, new_lines)
 }
 
-
 fn compute_hunk_id(hunk: &DiffHunk) -> String {
   let mut hasher = blake3::Hasher::new();
   hasher.update(
@@ -754,10 +748,26 @@ mod tests {
 }
 
 fn build_hunk_patch(rel_path: PathBuf, hunk: &DiffHunk, reverse: bool) -> String {
-  let old_start = if reverse { hunk.new_start } else { hunk.old_start };
-  let old_lines = if reverse { hunk.new_lines } else { hunk.old_lines };
-  let new_start = if reverse { hunk.old_start } else { hunk.new_start };
-  let new_lines = if reverse { hunk.old_lines } else { hunk.new_lines };
+  let old_start = if reverse {
+    hunk.new_start
+  } else {
+    hunk.old_start
+  };
+  let old_lines = if reverse {
+    hunk.new_lines
+  } else {
+    hunk.old_lines
+  };
+  let new_start = if reverse {
+    hunk.old_start
+  } else {
+    hunk.new_start
+  };
+  let new_lines = if reverse {
+    hunk.old_lines
+  } else {
+    hunk.new_lines
+  };
 
   let old_range = format_hunk_range(old_start, old_lines);
   let new_range = format_hunk_range(new_start, new_lines);

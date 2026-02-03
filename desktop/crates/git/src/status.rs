@@ -2,8 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use git2::{IndexAddOption, Repository, Status, StatusOptions};
 use git2::build::CheckoutBuilder;
+use git2::{IndexAddOption, Repository, Status, StatusOptions};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RepoStage {
@@ -104,10 +104,7 @@ pub fn unstage_all(repo_root: &Path) -> Result<()> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
   let pathspecs = [Path::new("*")];
-  let target = repo
-    .head()
-    .ok()
-    .and_then(|head| head.peel_to_commit().ok());
+  let target = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
   match target {
     Some(commit) => repo.reset_default(Some(commit.as_object()), pathspecs)?,
     None => repo.reset_default(None, pathspecs)?,
@@ -118,10 +115,7 @@ pub fn unstage_all(repo_root: &Path) -> Result<()> {
 pub fn unstage_file(repo_root: &Path, rel_path: &Path) -> Result<()> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
-  let target = repo
-    .head()
-    .ok()
-    .and_then(|head| head.peel_to_commit().ok());
+  let target = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
   match target {
     Some(commit) => repo.reset_default(Some(commit.as_object()), [rel_path])?,
     None => repo.reset_default(None, [rel_path])?,

@@ -1,9 +1,9 @@
 use gpui::{
   App, Bounds, ContentMask, DispatchPhase, ElementId, ElementInputHandler, Entity, GlobalElementId,
-  Hitbox, HitboxBehavior, InspectorElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-  MouseUpEvent, PaintQuad, Path, PathBuilder, Pixels, Point, ScrollDelta, ScrollWheelEvent,
-  ShapedLine, Style, TextAlign, TextRun, TextStyle, Window, fill, point, prelude::*, px, relative,
-  size,
+  Hitbox, HitboxBehavior, InspectorElementId, LayoutId, MouseButton, MouseDownEvent,
+  MouseMoveEvent, MouseUpEvent, PaintQuad, Path, PathBuilder, Pixels, Point, ScrollDelta,
+  ScrollWheelEvent, ShapedLine, Style, TextAlign, TextRun, TextStyle, Window, fill, point,
+  prelude::*, px, relative, size,
 };
 use std::{
   collections::{HashMap, HashSet},
@@ -22,8 +22,8 @@ use crate::{
     ChangeKind, DisplayLine, GAP_MARKER_TEXT, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
   },
 };
-use syntax::{HighlightSpan, Theme};
 use gpui_component::ActiveTheme as _;
+use syntax::{HighlightSpan, Theme};
 
 // Visual width for empty line selection indicator
 const NEWLINE_SELECTION_WIDTH: f32 = 4.0;
@@ -49,10 +49,7 @@ pub struct PositionMap {
 }
 
 impl PositionMap {
-  pub fn display_line_for_position(
-    &self,
-    position: Point<Pixels>,
-  ) -> Option<usize> {
+  pub fn display_line_for_position(&self, position: Point<Pixels>) -> Option<usize> {
     if !self.bounds.contains(&position) {
       return None;
     }
@@ -69,10 +66,7 @@ impl PositionMap {
     Some(display_line)
   }
 
-  pub fn display_cursor_for_position(
-    &self,
-    position: Point<Pixels>,
-  ) -> Option<DisplayCursor> {
+  pub fn display_cursor_for_position(&self, position: Point<Pixels>) -> Option<DisplayCursor> {
     if !self.bounds.contains(&position) {
       return None;
     }
@@ -480,7 +474,9 @@ impl Element for EditorElement {
     let mut newly_shaped = Vec::new();
     for (display_idx, display_line) in lines_to_shape {
       let (mut line_text, doc_line, base_color, allow_highlights) = match &display_line {
-        DisplayLine::Doc { doc_line, change, .. } => {
+        DisplayLine::Doc {
+          doc_line, change, ..
+        } => {
           let content = document
             .line_content(*doc_line)
             .map(|cow| cow.into_owned())
@@ -493,13 +489,9 @@ impl Element for EditorElement {
           (content, Some(*doc_line), base_color, true)
         }
         DisplayLine::Modified {
-          old_text,
-          doc_line,
-          ..
+          old_text, doc_line, ..
         } => match self.diff_view {
-          DiffElementView::SplitLeft => {
-            (old_text.clone(), None, theme.diff_removed_text(), false)
-          }
+          DiffElementView::SplitLeft => (old_text.clone(), None, theme.diff_removed_text(), false),
           DiffElementView::SplitRight => {
             let content = document
               .line_content(*doc_line)
@@ -519,9 +511,12 @@ impl Element for EditorElement {
           let color = theme.diff_removed_text();
           (text.clone(), None, color, false)
         }
-        DisplayLine::Gap { .. } => {
-          (GAP_MARKER_TEXT.to_string(), None, cx.theme().muted_foreground, false)
-        }
+        DisplayLine::Gap { .. } => (
+          GAP_MARKER_TEXT.to_string(),
+          None,
+          cx.theme().muted_foreground,
+          false,
+        ),
         DisplayLine::NoNewline { .. } => (
           NO_NEWLINE_MARKER_TEXT.to_string(),
           None,
@@ -678,13 +673,19 @@ impl Element for EditorElement {
           change: Some(ChangeKind::Added),
           secondary,
           ..
-        } if !matches!(self.diff_view, DiffElementView::SplitLeft) => {
-          Some(if *secondary { added_staged_bg } else { added_bg })
-        }
+        } if !matches!(self.diff_view, DiffElementView::SplitLeft) => Some(if *secondary {
+          added_staged_bg
+        } else {
+          added_bg
+        }),
         DisplayLine::Removed { secondary, .. }
           if !matches!(self.diff_view, DiffElementView::SplitRight) =>
         {
-          Some(if *secondary { removed_staged_bg } else { removed_bg })
+          Some(if *secondary {
+            removed_staged_bg
+          } else {
+            removed_bg
+          })
         }
         DisplayLine::Modified { secondary, .. } => match self.diff_view {
           DiffElementView::SplitLeft => Some(if *secondary {
@@ -705,7 +706,10 @@ impl Element for EditorElement {
       if let Some(color) = background {
         let y = bounds.top() + line_height * (*display_idx - viewport.start) as f32;
         line_backgrounds.push(fill(
-          Bounds::new(point(bounds.left(), y), size(bounds.size.width, line_height)),
+          Bounds::new(
+            point(bounds.left(), y),
+            size(bounds.size.width, line_height),
+          ),
           color,
         ));
       }
@@ -748,7 +752,10 @@ impl Element for EditorElement {
 
           if is_top {
             group_borders.push(fill(
-              Bounds::new(point(bounds.left(), y), size(bounds.size.width, border_thickness)),
+              Bounds::new(
+                point(bounds.left(), y),
+                size(bounds.size.width, border_thickness),
+              ),
               *top_color,
             ));
           }
@@ -816,25 +823,25 @@ impl Element for EditorElement {
       let mut overlays = Vec::new();
       let mut seen = HashSet::new();
       for (display_idx, display_line) in &viewport_lines {
-      let (group_id, state) = match display_line {
-        DisplayLine::Doc {
-          change: Some(ChangeKind::Added),
-          hunk: Some(state),
-          group_id: Some(id),
-          ..
-        } => (id.clone(), *state),
-        DisplayLine::Modified {
-          hunk,
-          group_id: Some(id),
-          ..
-        } => (id.clone(), *hunk),
-        DisplayLine::Removed {
-          hunk,
-          group_id: Some(id),
-          ..
-        } => (id.clone(), *hunk),
-        _ => continue,
-      };
+        let (group_id, state) = match display_line {
+          DisplayLine::Doc {
+            change: Some(ChangeKind::Added),
+            hunk: Some(state),
+            group_id: Some(id),
+            ..
+          } => (id.clone(), *state),
+          DisplayLine::Modified {
+            hunk,
+            group_id: Some(id),
+            ..
+          } => (id.clone(), *hunk),
+          DisplayLine::Removed {
+            hunk,
+            group_id: Some(id),
+            ..
+          } => (id.clone(), *hunk),
+          _ => continue,
+        };
 
         if !seen.insert(group_id.clone()) {
           continue;
@@ -886,7 +893,11 @@ impl Element for EditorElement {
         .iter()
         .find(|(idx, _)| *idx == display_cursor.line)
         .map(|(_, shaped)| shaped);
-      let line_text = match self.editor.read(cx).display_line(display_cursor.line, document.len_lines()) {
+      let line_text = match self
+        .editor
+        .read(cx)
+        .display_line(display_cursor.line, document.len_lines())
+      {
         Some(DisplayLine::Doc { doc_line, .. }) => document
           .line_content(doc_line)
           .map(|cow| cow.into_owned())
@@ -916,10 +927,7 @@ impl Element for EditorElement {
       }
     } else {
       let cursor_doc_line = document.char_to_line(cursor_offset);
-      let cursor_display_line = self
-        .editor
-        .read(cx)
-        .doc_to_display_line(cursor_doc_line);
+      let cursor_display_line = self.editor.read(cx).doc_to_display_line(cursor_doc_line);
       if let Some(cursor_line) = cursor_display_line
         && viewport.contains(&cursor_line)
       {
@@ -961,7 +969,11 @@ impl Element for EditorElement {
           continue;
         }
 
-        let line_text = match self.editor.read(cx).display_line(display_line, document.len_lines()) {
+        let line_text = match self
+          .editor
+          .read(cx)
+          .display_line(display_line, document.len_lines())
+        {
           Some(DisplayLine::Doc { doc_line, .. }) => document
             .line_content(doc_line)
             .map(|cow| cow.into_owned())

@@ -1,6 +1,6 @@
-mod diff;
 mod branch;
 mod commit;
+mod diff;
 mod status;
 mod store;
 

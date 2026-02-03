@@ -225,7 +225,13 @@ impl Element for GutterElement {
 
       let is_blank_for_view = |line: &DisplayLine| match self.view {
         GutterView::SplitLeft => {
-          matches!(line, DisplayLine::Doc { change: Some(ChangeKind::Added), .. })
+          matches!(
+            line,
+            DisplayLine::Doc {
+              change: Some(ChangeKind::Added),
+              ..
+            }
+          )
         }
         GutterView::SplitRight => matches!(line, DisplayLine::Removed { .. }),
         GutterView::Inline => false,
@@ -233,15 +239,15 @@ impl Element for GutterElement {
 
       let group_id_for_line = |line: &DisplayLine| -> Option<Arc<str>> {
         match line {
-        DisplayLine::Doc {
-          change: Some(ChangeKind::Added),
-          group_id,
-          ..
-        } => group_id.clone(),
-        DisplayLine::Modified { group_id, .. } => group_id.clone(),
-        DisplayLine::Removed { group_id, .. } => group_id.clone(),
-        DisplayLine::NoNewline { group_id, .. } => group_id.clone(),
-        _ => None,
+          DisplayLine::Doc {
+            change: Some(ChangeKind::Added),
+            group_id,
+            ..
+          } => group_id.clone(),
+          DisplayLine::Modified { group_id, .. } => group_id.clone(),
+          DisplayLine::Removed { group_id, .. } => group_id.clone(),
+          DisplayLine::NoNewline { group_id, .. } => group_id.clone(),
+          _ => None,
         }
       };
 
@@ -256,9 +262,9 @@ impl Element for GutterElement {
       for display_idx in viewport.clone() {
         let display_line = editor.display_line(display_idx, doc_line_count);
         let line_number = match (self.view, &display_line) {
-          (GutterView::SplitLeft, Some(DisplayLine::Doc { old_line, .. })) => {
-            old_line.map(|line| format!("{}", line + 1)).unwrap_or_default()
-          }
+          (GutterView::SplitLeft, Some(DisplayLine::Doc { old_line, .. })) => old_line
+            .map(|line| format!("{}", line + 1))
+            .unwrap_or_default(),
           (GutterView::SplitLeft, Some(DisplayLine::Modified { old_line, .. })) => {
             format!("{}", old_line + 1)
           }
@@ -283,34 +289,34 @@ impl Element for GutterElement {
           None
         } else {
           match &display_line {
-          Some(DisplayLine::Doc {
-            change: Some(ChangeKind::Added),
-            secondary,
-            ..
-          }) => Some(if *secondary {
-            added_staged_bg
-          } else {
-            added_bg
-          }),
-          Some(DisplayLine::Removed { secondary, .. }) => Some(if *secondary {
-            removed_staged_bg
-          } else {
-            removed_bg
-          }),
-          Some(DisplayLine::Modified { secondary, .. }) => match self.view {
-            GutterView::SplitLeft => Some(if *secondary {
-              removed_staged_bg
-            } else {
-              removed_bg
-            }),
-            GutterView::SplitRight => Some(if *secondary {
+            Some(DisplayLine::Doc {
+              change: Some(ChangeKind::Added),
+              secondary,
+              ..
+            }) => Some(if *secondary {
               added_staged_bg
             } else {
               added_bg
             }),
-            GutterView::Inline => None,
-          },
-          _ => None,
+            Some(DisplayLine::Removed { secondary, .. }) => Some(if *secondary {
+              removed_staged_bg
+            } else {
+              removed_bg
+            }),
+            Some(DisplayLine::Modified { secondary, .. }) => match self.view {
+              GutterView::SplitLeft => Some(if *secondary {
+                removed_staged_bg
+              } else {
+                removed_bg
+              }),
+              GutterView::SplitRight => Some(if *secondary {
+                added_staged_bg
+              } else {
+                added_bg
+              }),
+              GutterView::Inline => None,
+            },
+            _ => None,
           }
         };
 
@@ -333,8 +339,9 @@ impl Element for GutterElement {
           blank_ranges.push((start, display_idx.saturating_sub(1)));
         }
 
-        let group_id: Option<Arc<str>> =
-          display_line.as_ref().and_then(|line| group_id_for_line(line));
+        let group_id: Option<Arc<str>> = display_line
+          .as_ref()
+          .and_then(|line| group_id_for_line(line));
 
         if let Some(group_id) = group_id {
           if show_stripes {
@@ -352,10 +359,9 @@ impl Element for GutterElement {
             }
           }
 
-          if let (Some(projection), Some((top_color, bottom_color))) = (
-            projection.as_ref(),
-            group_border_colors.get(&group_id),
-          ) {
+          if let (Some(projection), Some((top_color, bottom_color))) =
+            (projection.as_ref(), group_border_colors.get(&group_id))
+          {
             let prev_group = display_idx
               .checked_sub(1)
               .and_then(|idx| projection.lines.get(idx))
