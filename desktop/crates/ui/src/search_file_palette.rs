@@ -6,9 +6,7 @@ use gpui::{
   Render, SharedString, Styled, Subscription, Task, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, IndexPath, Sizable, StyledExt as _, WindowExt,
-  button::{Button, ButtonVariants},
-  h_flex,
+  ActiveTheme as _, Icon, IconName, IndexPath, WindowExt, h_flex,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   v_flex,
