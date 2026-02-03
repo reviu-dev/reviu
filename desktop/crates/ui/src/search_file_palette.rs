@@ -12,6 +12,7 @@ use gpui_component::{
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   v_flex,
 };
+use crate::file_icon_for_path;
 
 const LIST_INPUT_HEIGHT: f32 = 35.0;
 const LIST_ITEM_HEIGHT: f32 = 32.0;
@@ -117,12 +118,16 @@ impl ListDelegate for SearchFileListDelegate {
     let base_item = list_base_item(ix, total_items, self.selected_index.clone(), &theme);
 
     self.matched_files.get(ix.row).map(|entry| {
+      let file_icon = file_icon_for_path(&entry.path)
+        .map(|icon| Icon::new(icon).size_3())
+        .unwrap_or_else(|| Icon::new(IconName::File).size_3().text_color(theme.muted_foreground));
+
       base_item
         .child(
           h_flex()
             .items_center()
             .gap_2()
-            .child(Icon::new(IconName::File))
+            .child(file_icon)
             .child(Label::new(entry.label.clone())),
         )
         .suffix(|_, _| {

@@ -43,6 +43,7 @@ smol = "2.0"
 blake3 = "1.5"
 anyhow = "1.0"
 rusqlite = { version = "0.31", features = ["bundled"] }
+rust-embed = "8.11"
 
 # Workspace member crates
 buffer = { path = "crates/buffer" }

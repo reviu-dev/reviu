@@ -11,7 +11,7 @@ pub use command_palette::{
   CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig, CommandPaletteHandler,
 };
 pub use confirm_dialog::ConfirmDialog;
-pub use icons::UiIconName;
+pub use icons::{FileIcon, UiIconName, file_icon_for_name, file_icon_for_path};
 pub use search_file_palette::{
   SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
 };
