@@ -1,5 +1,6 @@
 use std::{rc::Rc, sync::Arc};
 
+use crate::UiIconName;
 use gpui::{
   App, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
   ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
@@ -13,7 +14,6 @@ use gpui_component::{
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   v_flex,
 };
-use crate::UiIconName;
 
 const LIST_INPUT_HEIGHT: f32 = 35.0;
 const LIST_ITEM_HEIGHT: f32 = 32.0; // Height of each list item in pixels (h_8)
@@ -127,20 +127,19 @@ impl ListDelegate for BranchesListDelegate {
     let base_item = list_base_item(ix, total_items, self.selected_index.clone(), &theme);
 
     self.matched_branches.get(ix.row).map(|branch| {
-      base_item
-        .child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child(Icon::new(UiIconName::GitBranch))
-            .child(Label::new(branch.name.clone())),
-        )
-        .suffix(|_, _| {
-          Button::new("action")
-            .ghost()
-            .small()
-            .icon(IconName::ArrowRight)
-        })
+      base_item.child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(Icon::new(UiIconName::GitBranch))
+          .child(
+            div()
+              .flex_1()
+              .overflow_hidden()
+              .text_ellipsis()
+              .child(Label::new(branch.name.clone())),
+          ),
+      )
     })
   }
 
@@ -226,20 +225,19 @@ impl ListDelegate for BranchesListWithCommandsDelegate {
             .child(command.icon())
             .child(Label::new(command.name.clone())),
         ),
-        BranchListWithCommands::SwitchBranch(branch) => base_item
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(Icon::new(UiIconName::GitBranch))
-              .child(Label::new(branch.name.clone())),
-          )
-          .suffix(|_, _| {
-            Button::new("action")
-              .ghost()
-              .small()
-              .icon(IconName::ArrowRight)
-          }),
+        BranchListWithCommands::SwitchBranch(branch) => base_item.child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child(Icon::new(UiIconName::GitBranch))
+            .child(
+              div()
+                .flex_1()
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(Label::new(branch.name.clone())),
+            ),
+        ),
       })
   }
 

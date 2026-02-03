@@ -13,16 +13,17 @@ use git::{
   undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
-  AnyElement, App, Context, Corner, Entity, FocusHandle, Focusable, Hsla, InteractiveElement,
-  Keystroke, ParentElement, PathPromptOptions, Render, SharedString, Styled, Task, Window, actions,
-  div, img, prelude::*, px, uniform_list,
+  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Hsla,
+  InteractiveElement, Keystroke, ParentElement, PathPromptOptions, Render, SharedString, Styled,
+  Task, Window, actions, div, img, prelude::*, px, uniform_list,
 };
 use gpui_component::{
   ActiveTheme as _, Collapsible, Disableable, Icon, IconName, Sizable, StyledExt as _,
   button::{Button, ButtonGroup, ButtonVariant, ButtonVariants as _},
+  h_flex,
   kbd::Kbd,
   menu::{DropdownMenu, PopupMenuItem},
-  select::{Select, SelectEvent, SelectItem, SelectState},
+  select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
   sidebar::SidebarItem,
   tooltip::Tooltip,
 };
@@ -399,14 +400,16 @@ impl SidebarItem for FileSidebarItem {
 struct RecentRepoItem {
   path: PathBuf,
   label: SharedString,
+  is_selected: bool,
 }
 
 impl RecentRepoItem {
-  fn new(repo: &RecentRepository) -> Self {
+  fn new(repo: &RecentRepository, selected_repo: Option<&PathBuf>) -> Self {
     let label = repo.path.to_string_lossy().to_string();
     Self {
       path: repo.path.clone(),
       label: label.into(),
+      is_selected: selected_repo.map_or(false, |selected| selected == &repo.path),
     }
   }
 }
@@ -418,14 +421,92 @@ impl SelectItem for RecentRepoItem {
     self.label.clone()
   }
 
+  fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    let icon = Icon::new(IconName::Check)
+      .size_3()
+      .text_color(cx.theme().accent_foreground)
+      .when(!self.is_selected, |this| this.opacity(0.0));
+
+    h_flex()
+      .items_center()
+      .gap_2()
+      .child(
+        div()
+          .flex_1()
+          .overflow_hidden()
+          .text_ellipsis_start()
+          .child(self.label.clone()),
+      )
+      .child(icon)
+  }
+
   fn value(&self) -> &Self::Value {
     &self.path
+  }
+
+  fn matches(&self, query: &str) -> bool {
+    self.label.to_lowercase().contains(&query.to_lowercase())
+  }
+}
+
+#[derive(Clone)]
+struct BranchSelectItem {
+  branch: BranchRef,
+  label: SharedString,
+  is_current: bool,
+}
+
+impl BranchSelectItem {
+  fn new(branch: BranchRef, is_current: bool) -> Self {
+    let label: SharedString = branch.name.clone().into();
+    Self {
+      branch,
+      label,
+      is_current,
+    }
+  }
+}
+
+impl SelectItem for BranchSelectItem {
+  type Value = BranchRef;
+
+  fn title(&self) -> SharedString {
+    self.label.clone()
+  }
+
+  fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    let icon = Icon::new(IconName::Check)
+      .size_3()
+      .text_color(cx.theme().accent_foreground)
+      .when(!self.is_current, |this| this.opacity(0.0));
+
+    h_flex()
+      .items_center()
+      .gap_2()
+      .child(
+        div()
+          .flex_1()
+          .overflow_hidden()
+          .text_ellipsis()
+          .child(self.label.clone()),
+      )
+      .child(icon)
+  }
+
+  fn value(&self) -> &Self::Value {
+    &self.branch
+  }
+
+  fn matches(&self, query: &str) -> bool {
+    self.label.to_lowercase().contains(&query.to_lowercase())
   }
 }
 
 pub struct GitPage {
   focus_handle: FocusHandle,
-  repo_select: Entity<SelectState<Vec<RecentRepoItem>>>,
+  repo_select: Entity<SelectState<SearchableVec<RecentRepoItem>>>,
+  branch_select: Entity<SelectState<SearchableVec<BranchSelectItem>>>,
+  window_handle: AnyWindowHandle,
   selected_repo: Option<PathBuf>,
   status_entries: Vec<RepoStatusEntry>,
   branch_status: Option<BranchStatus>,
@@ -438,6 +519,7 @@ pub struct GitPage {
   editor: Option<Entity<Editor>>,
   diff_view: DiffViewMode,
   status_task: Option<Task<()>>,
+  branch_task: Option<Task<()>>,
   poll_task: Option<Task<()>>,
   commit_input: Entity<InputState>,
 }
@@ -455,9 +537,22 @@ impl GitPage {
 
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     let recent = ConfigStore::load_recent_repositories();
-    let items: Vec<RecentRepoItem> = recent.iter().map(RecentRepoItem::new).collect();
-    let repo_select = cx.new(|cx| SelectState::new(items, None, window, cx).searchable(true));
     let selected_repo = recent.first().map(|repo| repo.path.clone());
+    let items: Vec<RecentRepoItem> = recent
+      .iter()
+      .map(|repo| RecentRepoItem::new(repo, selected_repo.as_ref()))
+      .collect();
+    let repo_select = cx
+      .new(|cx| SelectState::new(SearchableVec::new(items), None, window, cx).searchable(true));
+    let branch_select = cx.new(|cx| {
+      SelectState::new(
+        SearchableVec::new(Vec::<BranchSelectItem>::new()),
+        None,
+        window,
+        cx,
+      )
+      .searchable(true)
+    });
 
     if let Some(repo) = selected_repo.as_ref() {
       repo_select.update(cx, |state, cx| {
@@ -474,6 +569,8 @@ impl GitPage {
     let mut view = Self {
       focus_handle: cx.focus_handle(),
       repo_select,
+      branch_select,
+      window_handle: window.window_handle(),
       selected_repo,
       status_entries: Vec::new(),
       branch_status: None,
@@ -486,24 +583,59 @@ impl GitPage {
       editor: None,
       diff_view: DiffViewMode::Inline,
       status_task: None,
+      branch_task: None,
       poll_task: None,
       commit_input,
     };
 
-    view.subscribe_to_repo_select(window, cx);
+    view.subscribe_to_repo_select(cx);
+    view.subscribe_to_branch_select(cx);
     view.reload_status(cx);
+    view.refresh_branches(cx);
     view.start_polling(cx);
 
     view
   }
 
-  fn subscribe_to_repo_select(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+  fn subscribe_to_repo_select(&mut self, cx: &mut Context<Self>) {
     cx.subscribe(
       &self.repo_select,
-      move |this, _state, event: &SelectEvent<Vec<RecentRepoItem>>, cx| {
+      move |this, _state, event: &SelectEvent<SearchableVec<RecentRepoItem>>, cx| {
         if let SelectEvent::Confirm(Some(repo)) = event {
           this.set_selected_repo(repo.clone(), cx);
         }
+      },
+    )
+    .detach();
+  }
+
+  fn subscribe_to_branch_select(&mut self, cx: &mut Context<Self>) {
+    cx.subscribe(
+      &self.branch_select,
+      move |this, _state, event: &SelectEvent<SearchableVec<BranchSelectItem>>, cx| {
+        let SelectEvent::Confirm(Some(branch)) = event else {
+          return;
+        };
+        let Some(repo_root) = this.selected_repo.clone() else {
+          return;
+        };
+        let branch = branch.clone();
+        let editor = this.editor.clone();
+
+        let task = cx.spawn(async move |this, cx| {
+          let result = unblock(move || switch_branch(&repo_root, &branch)).await;
+          let _ = this.update(cx, |this, cx| {
+            if result.is_ok() {
+              this.reload_status(cx);
+              this.refresh_branches(cx);
+              if let Some(editor) = editor.clone() {
+                editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
+              }
+            }
+          });
+        });
+
+        this.branch_task = Some(task);
       },
     )
     .detach();
@@ -520,7 +652,106 @@ impl GitPage {
     ConfigStore::persist_recent_repository(&repo_root);
 
     self.reload_status(cx);
+    self.refresh_branches(cx);
+    self.refresh_repo_select(cx);
     cx.notify();
+  }
+
+  fn refresh_repo_select(&mut self, cx: &mut Context<Self>) {
+    let recent = ConfigStore::load_recent_repositories();
+    let selected_repo = self.selected_repo.clone();
+    let items: Vec<RecentRepoItem> = recent
+      .iter()
+      .map(|repo| RecentRepoItem::new(repo, selected_repo.as_ref()))
+      .collect();
+    let window_handle = self.window_handle;
+
+    let select = cx.update_window(window_handle, |_, window, cx| {
+      let select =
+        cx.new(|cx| SelectState::new(SearchableVec::new(items), None, window, cx).searchable(true));
+      if let Some(repo) = selected_repo.as_ref() {
+        select.update(cx, |state, cx| {
+          state.set_selected_value(repo, window, cx);
+        });
+      }
+      select
+    });
+
+    if let Ok(select) = select {
+      self.repo_select = select;
+      self.subscribe_to_repo_select(cx);
+    }
+  }
+
+  fn refresh_branches(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      let branch_select = self.branch_select.clone();
+      let window_handle = self.window_handle;
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        branch_select.update(cx, |state, cx| {
+          state.set_items(
+            SearchableVec::new(Vec::<BranchSelectItem>::new()),
+            window,
+            cx,
+          );
+          state.set_selected_index(None, window, cx);
+        });
+      });
+      return;
+    };
+
+    let window_handle = self.window_handle;
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        let branches = list_branches(&repo_root).ok()?;
+        let current = current_branch_status(&repo_root).ok();
+        Some((branches, current))
+      })
+      .await;
+      let Some((branches, current)) = result else {
+        return;
+      };
+
+      let selected = current.and_then(|status| {
+        if status.name == "HEAD" {
+          None
+        } else {
+          Some(BranchRef {
+            name: status.name,
+            kind: BranchKind::Local,
+          })
+        }
+      });
+
+      let items = branches
+        .into_iter()
+        .map(|branch| {
+          let is_current = selected.as_ref().map_or(false, |current| current == &branch);
+          BranchSelectItem::new(branch, is_current)
+        })
+        .collect::<Vec<_>>();
+
+      let select = cx.update_window(window_handle, |_, window, cx| {
+        let select = cx.new(|cx| {
+          SelectState::new(SearchableVec::new(items), None, window, cx).searchable(true)
+        });
+        if let Some(selected) = selected.as_ref() {
+          select.update(cx, |state, cx| {
+            state.set_selected_value(selected, window, cx);
+          });
+        }
+        select
+      });
+
+      let _ = this.update(cx, |this, cx| {
+        if let Ok(select) = select {
+          this.branch_select = select;
+          this.subscribe_to_branch_select(cx);
+        }
+      });
+    });
+
+    self.branch_task = Some(task);
   }
 
   fn reload_status(&mut self, cx: &mut Context<Self>) {
@@ -677,16 +908,13 @@ impl GitPage {
     self.start_open_repository(window, cx);
   }
 
-  fn start_open_repository(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+  fn start_open_repository(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
     let receiver = cx.prompt_for_paths(PathPromptOptions {
       files: false,
       directories: true,
       multiple: false,
       prompt: Some("Select a repository".into()),
     });
-
-    let window_handle = window.window_handle();
-    let repo_select = self.repo_select.clone();
 
     cx.spawn(async move |this, cx| {
       let Ok(result) = receiver.await else {
@@ -697,16 +925,6 @@ impl GitPage {
         Ok(Some(paths)) => {
           if let Some(path) = paths.into_iter().next() {
             ConfigStore::persist_recent_repository(&path);
-            let recent = ConfigStore::load_recent_repositories();
-            let items: Vec<RecentRepoItem> = recent.iter().map(RecentRepoItem::new).collect();
-
-            let _ = cx.update_window(window_handle, |_, window, cx| {
-              repo_select.update(cx, |state, cx| {
-                state.set_items(items, window, cx);
-                state.set_selected_value(&path, window, cx);
-              });
-            });
-
             let _ = this.update(cx, |view, cx| {
               view.set_selected_repo(path, cx);
             });
@@ -818,6 +1036,7 @@ impl GitPage {
       return Err("No repository selected.".into());
     };
 
+    let mut selected_branch: Option<BranchRef> = None;
     let result = match action {
       CommandPaletteAction::SwitchBranch(branch) => {
         let branch_ref = BranchRef {
@@ -827,6 +1046,7 @@ impl GitPage {
             CommandPaletteBranchKind::Remote => BranchKind::Remote,
           },
         };
+        selected_branch = Some(branch_ref.clone());
         switch_branch(&root_path, &branch_ref)
       }
       CommandPaletteAction::CreateBranch { name } => {
@@ -834,6 +1054,7 @@ impl GitPage {
           name: name.clone(),
           kind: BranchKind::Local,
         };
+        selected_branch = Some(branch_ref.clone());
         create_branch(&root_path, &name).and_then(|_| switch_branch(&root_path, &branch_ref))
       }
       CommandPaletteAction::CreateBranchFrom { name, base } => {
@@ -848,6 +1069,7 @@ impl GitPage {
           name: name.clone(),
           kind: BranchKind::Local,
         };
+        selected_branch = Some(new_branch.clone());
         create_branch_from(&root_path, &name, &branch_ref)
           .and_then(|_| switch_branch(&root_path, &new_branch))
       }
@@ -868,7 +1090,18 @@ impl GitPage {
       return Err(message);
     }
 
+    if let Some(selected_branch) = selected_branch {
+      let branch_select = self.branch_select.clone();
+      let window_handle = self.window_handle;
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        branch_select.update(cx, |state, cx| {
+          state.set_selected_value(&selected_branch, window, cx);
+        });
+      });
+    }
+
     self.reload_status(cx);
+    self.refresh_branches(cx);
     if let Some(editor) = self.editor.clone() {
       editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
     }
@@ -1290,8 +1523,16 @@ impl GitPage {
     let theme = cx.theme().clone();
     let select = Select::new(&self.repo_select)
       .placeholder("Select repository...")
+      .search_placeholder("Search repositories...")
       .menu_width(px(360.))
       .w(px(360.));
+
+    let branch_select = Select::new(&self.branch_select)
+      .placeholder("Select branch...")
+      .search_placeholder("Search branches...")
+      .menu_width(px(300.))
+      .w(px(240.))
+      .disabled(self.selected_repo.is_none());
 
     let branch_info = self.branch_status.as_ref().map(|status| {
       let ahead = status.ahead;
@@ -1317,12 +1558,6 @@ impl GitPage {
         .bg(theme.background)
         .border_1()
         .border_color(theme.title_bar_border)
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.foreground)
-            .child(status.name.clone()),
-        )
         .child(
           div()
             .flex()
@@ -1376,6 +1611,8 @@ impl GitPage {
           .child("Repository"),
       )
       .child(select)
+      .child(div().text_sm().text_color(theme.foreground).child("Branch"))
+      .child(branch_select)
       .when_some(branch_info, |this, info| this.child(info));
 
     let settings_button = Button::new("open-settings")
