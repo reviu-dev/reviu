@@ -856,28 +856,37 @@ impl Element for EditorElement {
         });
       }
 
-      self.editor.update(cx, |editor, cx| {
+      self.editor.update(cx, |editor, _cx| {
         editor.visible_groups = overlays;
+      });
+    }
 
-        if !editor.is_selecting {
-          if let Some(position) = editor.last_mouse_position {
-            if bounds.contains(&position) {
-              let scroll_offset = editor.scroll_offset_y;
-              let y_offset = position.y - bounds.top();
-              let line_float = scroll_offset + (y_offset / line_height);
-              if !line_float.is_sign_negative() {
-                let mut display_line = line_float.floor() as usize;
-                if display_line >= viewport.end {
-                  display_line = viewport.end.saturating_sub(1);
-                }
-                let hovered = editor.group_id_for_modified_display_line(display_line);
-                if editor.hovered_group_id.as_deref() != hovered.as_deref() {
-                  editor.hovered_group_id = hovered;
-                  cx.notify();
-                }
-              }
-            }
-          }
+    let allow_hover = is_primary || matches!(self.diff_view, DiffElementView::SplitLeft);
+    if allow_hover {
+      self.editor.update(cx, |editor, cx| {
+        if editor.is_selecting {
+          return;
+        }
+        let Some(position) = editor.last_mouse_position else {
+          return;
+        };
+        if !bounds.contains(&position) {
+          return;
+        }
+        let scroll_offset = editor.scroll_offset_y;
+        let y_offset = position.y - bounds.top();
+        let line_float = scroll_offset + (y_offset / line_height);
+        if line_float.is_sign_negative() {
+          return;
+        }
+        let mut display_line = line_float.floor() as usize;
+        if display_line >= viewport.end {
+          display_line = viewport.end.saturating_sub(1);
+        }
+        let hovered = editor.group_id_for_modified_display_line(display_line);
+        if editor.hovered_group_id.as_deref() != hovered.as_deref() {
+          editor.hovered_group_id = hovered;
+          cx.notify();
         }
       });
     }
@@ -1114,23 +1123,23 @@ impl Element for EditorElement {
       )
     };
 
+    // Use Rc to avoid cloning PositionMap in closures
+    let scroll_offset = self.editor.read(cx).scroll_offset_y;
+    let position_map = Rc::new(PositionMap {
+      shaped_lines: prepaint.shaped_lines.clone(),
+      bounds: prepaint.bounds,
+      line_height: prepaint.line_height,
+      viewport: prepaint.viewport.clone(),
+      scroll_offset,
+      projection: prepaint.projection.clone(),
+    });
+
     if is_primary {
       window.handle_input(
         &focus_handle,
         ElementInputHandler::new(bounds, self.editor.clone()),
         cx,
       );
-
-      // Use Rc to avoid cloning PositionMap in closures
-      let scroll_offset = self.editor.read(cx).scroll_offset_y;
-      let position_map = Rc::new(PositionMap {
-        shaped_lines: prepaint.shaped_lines.clone(),
-        bounds: prepaint.bounds,
-        line_height: prepaint.line_height,
-        viewport: prepaint.viewport.clone(),
-        scroll_offset,
-        projection: prepaint.projection.clone(),
-      });
 
       window.on_mouse_event({
         let editor = self.editor.clone();
@@ -1154,14 +1163,17 @@ impl Element for EditorElement {
           }
         }
       });
+    }
 
+    let allow_hover = is_primary || matches!(self.diff_view, DiffElementView::SplitLeft);
+    if allow_hover {
       window.on_mouse_event({
         let editor = self.editor.clone();
         let position_map = Rc::clone(&position_map);
         move |event: &MouseMoveEvent, phase, window, cx| {
           if phase == DispatchPhase::Bubble {
             let is_selecting = editor.read(cx).is_selecting;
-            if is_selecting {
+            if is_selecting && is_primary {
               editor.update(cx, |editor, cx| {
                 editor.mouse_dragged(event, &position_map, window, cx);
               });

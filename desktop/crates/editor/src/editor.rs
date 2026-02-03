@@ -1672,6 +1672,9 @@ impl Editor {
     position_map: &PositionMap,
     cx: &mut Context<Self>,
   ) {
+    if !position_map.bounds.contains(&event.position) {
+      return;
+    }
     self.last_mouse_position = Some(event.position);
     let hovered = position_map
       .display_line_for_position(event.position)
