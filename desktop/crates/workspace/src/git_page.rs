@@ -38,7 +38,7 @@ use ui::{
 };
 
 const HEADER_HEIGHT: f32 = 44.0;
-const SIDEBAR_WIDTH: f32 = 280.0;
+const SIDEBAR_DEFAULT_WIDTH: f32 = 280.0;
 const SIDEBAR_MIN_WIDTH: f32 = 220.0;
 const SIDEBAR_MAX_WIDTH: f32 = 500.0;
 const STATUS_POLL_INTERVAL_MS: u64 = 800;
@@ -1482,6 +1482,23 @@ impl GitPage {
 
     let top = line_height * (overlay.display_line - viewport_start) as f32;
     let file_dirty = editor_state.is_dirty;
+    let restore_disabled_by_status = self
+      .selected_file
+      .as_ref()
+      .and_then(|selected| {
+        self
+          .status_entries
+          .iter()
+          .find(|entry| &entry.path == selected)
+      })
+      .map(|entry| {
+        matches!(
+          entry.status,
+          RepoStatusKind::Untracked | RepoStatusKind::Added
+        )
+      })
+      .unwrap_or(false);
+    let restore_disabled = file_dirty || restore_disabled_by_status;
 
     let stage_tooltip = if file_dirty {
       "File not saved"
@@ -1495,6 +1512,8 @@ impl GitPage {
     };
     let restore_tooltip = if file_dirty {
       "File not saved"
+    } else if restore_disabled_by_status {
+      "Restore unavailable for added/untracked files"
     } else {
       "Restore hunk"
     };
@@ -1503,9 +1522,7 @@ impl GitPage {
     let state = overlay.state;
     let editor_entity = editor.clone();
 
-    let mut actions = ButtonGroup::new("change-block-actions")
-      .small()
-      .disabled(file_dirty);
+    let mut actions = div().flex().items_center();
 
     match state {
       HunkState::Unstaged => {
@@ -1515,8 +1532,10 @@ impl GitPage {
           Button::new("stage-hunk")
             .icon(IconName::Plus)
             .label("Stage")
+            .small()
             .tooltip(stage_tooltip)
             .rounded_t_none()
+            .rounded_br_none()
             .bg(theme.background)
             .disabled(file_dirty)
             .on_click(move |_, _, cx| {
@@ -1535,6 +1554,7 @@ impl GitPage {
             .icon(IconName::Minus)
             .label("Unstage")
             .tooltip(unstage_tooltip)
+            .small()
             .disabled(file_dirty)
             .bg(theme.background)
             .rounded_t_none()
@@ -1556,9 +1576,11 @@ impl GitPage {
           .icon(IconName::Undo)
           .label("Restore")
           .rounded_t_none()
+          .rounded_bl_none()
+          .small()
           .bg(theme.background)
           .tooltip(restore_tooltip)
-          .disabled(file_dirty)
+          .disabled(restore_disabled)
           .on_click(move |_, _, cx| {
             let group_id = group_id.clone();
             editor_entity.update(cx, |editor, cx| {
@@ -1707,7 +1729,9 @@ impl GitPage {
     div()
       .w_full()
       .flex()
-      .pb_3()
+      .pb_2()
+      .border_b_1()
+      .border_color(cx.theme().border)
       .items_center()
       .justify_between()
       .child(
@@ -1828,6 +1852,7 @@ impl GitPage {
 
 impl Render for GitPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let view = cx.entity();
     div()
       .size_full()
       .flex()
@@ -1842,7 +1867,7 @@ impl Render for GitPage {
         ui::h_resizable("git-page-split")
           .child(
             ui::resizable_panel()
-              .size(px(SIDEBAR_WIDTH))
+              .size(px(SIDEBAR_DEFAULT_WIDTH))
               .size_range(px(SIDEBAR_MIN_WIDTH)..px(SIDEBAR_MAX_WIDTH))
               .child(self.render_sidebar(cx)),
           )
