@@ -94,7 +94,13 @@ impl StatusThemeExt for gpui_component::Theme {
 
 actions!(
   workspace,
-  [OpenRepository, SaveFile, ShowCommandPalette, ShowFileSearch, CommitChanges]
+  [
+    OpenRepository,
+    SaveFile,
+    ShowCommandPalette,
+    ShowFileSearch,
+    CommitChanges
+  ]
 );
 
 #[derive(Clone)]
@@ -740,7 +746,7 @@ impl GitPage {
         .overlay_closable(true)
         .keyboard(true)
         .close_button(false)
-      .child(palette_for_dialog.clone())
+        .child(palette_for_dialog.clone())
     });
   }
 
@@ -767,13 +773,8 @@ impl GitPage {
       Ok(())
     });
 
-    let palette = cx.new(|cx| {
-      SearchFilePalette::new(
-        window,
-        cx,
-        SearchFilePaletteConfig::new(entries, handler),
-      )
-    });
+    let palette = cx
+      .new(|cx| SearchFilePalette::new(window, cx, SearchFilePaletteConfig::new(entries, handler)));
     let palette_for_dialog = palette.clone();
 
     window.open_dialog(cx, move |dialog, _, _| {
@@ -1413,6 +1414,7 @@ impl GitPage {
       .child(
         div()
           .text_sm()
+          .font_medium()
           .text_color(theme.foreground)
           .child(file_name),
       )
@@ -1481,8 +1483,8 @@ impl GitPage {
           .flex()
           .items_center()
           .gap_2()
-          .child(toggle_button)
-          .child(save_button),
+          .child(save_button)
+          .child(toggle_button),
       )
       .into_any_element()
   }

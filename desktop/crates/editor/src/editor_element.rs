@@ -23,7 +23,9 @@ use crate::{
   },
 };
 use gpui_component::ActiveTheme as _;
-use syntax::{HighlightSpan, Theme};
+use syntax::HighlightSpan;
+use ui::Theme;
+use unicode_segmentation::UnicodeSegmentation;
 
 // Visual width for empty line selection indicator
 const NEWLINE_SELECTION_WIDTH: f32 = 4.0;
@@ -202,6 +204,374 @@ pub(crate) fn highlights_to_text_runs(
   runs
 }
 
+#[derive(Clone, Debug)]
+struct WordToken {
+  text: String,
+  range: Range<usize>,
+}
+
+#[derive(Clone, Debug)]
+struct WordDiffStyle {
+  ranges: Vec<Range<usize>>,
+  background: gpui::Hsla,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InlineDiffKind {
+  Added,
+  Removed,
+}
+
+fn clean_line_text(text: &str) -> String {
+  if text.contains('\n') || text.contains('\r') {
+    text.replace(['\n', '\r'], "")
+  } else {
+    text.to_string()
+  }
+}
+
+fn word_tokens(text: &str, include_whitespace: bool) -> Vec<WordToken> {
+  let mut tokens = Vec::new();
+  for (idx, segment) in text.split_word_bound_indices() {
+    if !include_whitespace && segment.trim().is_empty() {
+      continue;
+    }
+    tokens.push(WordToken {
+      text: segment.to_string(),
+      range: idx..idx + segment.len(),
+    });
+  }
+  tokens
+}
+
+fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+  ranges.sort_by_key(|range| range.start);
+  let mut merged: Vec<Range<usize>> = Vec::new();
+  for range in ranges {
+    if let Some(last) = merged.last_mut() {
+      if range.start <= last.end {
+        last.end = last.end.max(range.end);
+        continue;
+      }
+    }
+    merged.push(range);
+  }
+  merged
+}
+
+fn word_diff_ranges(old_text: &str, new_text: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+  let (removed, added) = word_diff_ranges_impl(old_text, new_text, false);
+  if removed.is_empty() && added.is_empty() && old_text != new_text {
+    return word_diff_ranges_impl(old_text, new_text, true);
+  }
+  (removed, added)
+}
+
+fn word_diff_ranges_impl(
+  old_text: &str,
+  new_text: &str,
+  include_whitespace: bool,
+) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+  let old_tokens = word_tokens(old_text, include_whitespace);
+  let new_tokens = word_tokens(new_text, include_whitespace);
+
+  let old_len = old_tokens.len();
+  let new_len = new_tokens.len();
+  if old_len == 0 && new_len == 0 {
+    return (Vec::new(), Vec::new());
+  }
+
+  let mut dp = vec![vec![0usize; new_len + 1]; old_len + 1];
+  for i in 0..old_len {
+    for j in 0..new_len {
+      if old_tokens[i].text == new_tokens[j].text {
+        dp[i + 1][j + 1] = dp[i][j] + 1;
+      } else {
+        dp[i + 1][j + 1] = dp[i][j + 1].max(dp[i + 1][j]);
+      }
+    }
+  }
+
+  let mut matched_old = vec![false; old_len];
+  let mut matched_new = vec![false; new_len];
+  let mut i = old_len;
+  let mut j = new_len;
+  while i > 0 && j > 0 {
+    if old_tokens[i - 1].text == new_tokens[j - 1].text {
+      matched_old[i - 1] = true;
+      matched_new[j - 1] = true;
+      i -= 1;
+      j -= 1;
+    } else if dp[i - 1][j] >= dp[i][j - 1] {
+      i -= 1;
+    } else {
+      j -= 1;
+    }
+  }
+
+  let mut removed = Vec::new();
+  for (idx, token) in old_tokens.iter().enumerate() {
+    if !matched_old[idx] {
+      removed.push(token.range.clone());
+    }
+  }
+
+  let mut added = Vec::new();
+  for (idx, token) in new_tokens.iter().enumerate() {
+    if !matched_new[idx] {
+      added.push(token.range.clone());
+    }
+  }
+
+  (merge_ranges(removed), merge_ranges(added))
+}
+
+fn apply_background_ranges(
+  runs: Vec<TextRun>,
+  ranges: &[Range<usize>],
+  background: gpui::Hsla,
+) -> Vec<TextRun> {
+  if ranges.is_empty() {
+    return runs;
+  }
+
+  let ranges = merge_ranges(ranges.to_vec());
+  let mut result = Vec::new();
+  let mut range_index = 0;
+  let mut current_range = ranges.get(range_index);
+  let mut pos = 0;
+
+  for run in runs {
+    let run_start = pos;
+    let run_end = pos + run.len;
+    let mut cursor = run_start;
+
+    while let Some(range) = current_range {
+      if range.end <= run_start {
+        range_index += 1;
+        current_range = ranges.get(range_index);
+        continue;
+      }
+      if range.start >= run_end {
+        break;
+      }
+
+      let overlap_start = range.start.max(run_start);
+      let overlap_end = range.end.min(run_end);
+
+      if overlap_start > cursor {
+        result.push(TextRun {
+          len: overlap_start - cursor,
+          font: run.font.clone(),
+          color: run.color,
+          background_color: run.background_color,
+          underline: run.underline,
+          strikethrough: run.strikethrough,
+        });
+      }
+
+      if overlap_end > overlap_start {
+        result.push(TextRun {
+          len: overlap_end - overlap_start,
+          font: run.font.clone(),
+          color: run.color,
+          background_color: Some(background),
+          underline: run.underline,
+          strikethrough: run.strikethrough,
+        });
+      }
+
+      cursor = overlap_end;
+
+      if range.end <= run_end {
+        range_index += 1;
+        current_range = ranges.get(range_index);
+      } else {
+        break;
+      }
+    }
+
+    if cursor < run_end {
+      result.push(TextRun {
+        len: run_end - cursor,
+        font: run.font.clone(),
+        color: run.color,
+        background_color: run.background_color,
+        underline: run.underline,
+        strikethrough: run.strikethrough,
+      });
+    }
+
+    pos = run_end;
+  }
+
+  result
+}
+
+fn inline_diff_key(line: &DisplayLine) -> Option<HunkState> {
+  match line {
+    DisplayLine::Removed { hunk, .. } => Some(*hunk),
+    DisplayLine::Doc {
+      change: Some(ChangeKind::Added),
+      hunk: Some(hunk),
+      ..
+    } => Some(*hunk),
+    _ => None,
+  }
+}
+
+fn inline_diff_kind(line: &DisplayLine) -> Option<InlineDiffKind> {
+  match line {
+    DisplayLine::Removed { .. } => Some(InlineDiffKind::Removed),
+    DisplayLine::Doc {
+      change: Some(ChangeKind::Added),
+      ..
+    } => Some(InlineDiffKind::Added),
+    _ => None,
+  }
+}
+
+fn inline_word_diff_style(
+  display_idx: usize,
+  display_line: &DisplayLine,
+  projection: &Projection,
+  document: &Document,
+  theme: &Theme,
+) -> Option<WordDiffStyle> {
+  let key = inline_diff_key(display_line)?;
+  let kind = inline_diff_kind(display_line)?;
+
+  let mut start = display_idx;
+  while start > 0 {
+    let prev = projection.lines.get(start - 1)?;
+    if inline_diff_key(prev) != Some(key) {
+      break;
+    }
+    if inline_diff_kind(prev).is_none() {
+      break;
+    }
+    start = start.saturating_sub(1);
+  }
+
+  let mut end = display_idx;
+  while end + 1 < projection.lines.len() {
+    let next = projection.lines.get(end + 1)?;
+    if inline_diff_key(next) != Some(key) {
+      break;
+    }
+    if inline_diff_kind(next).is_none() {
+      break;
+    }
+    end += 1;
+  }
+
+  let mut removed_indices = Vec::new();
+  let mut added_indices = Vec::new();
+  for idx in start..=end {
+    let line = projection.lines.get(idx)?;
+    match inline_diff_kind(line) {
+      Some(InlineDiffKind::Removed) => removed_indices.push(idx),
+      Some(InlineDiffKind::Added) => added_indices.push(idx),
+      None => {}
+    }
+  }
+
+  let pair_count = removed_indices.len().min(added_indices.len());
+  if pair_count == 0 {
+    return None;
+  }
+
+  let pair_index = match kind {
+    InlineDiffKind::Removed => removed_indices.iter().position(|idx| *idx == display_idx)?,
+    InlineDiffKind::Added => added_indices.iter().position(|idx| *idx == display_idx)?,
+  };
+
+  if pair_index >= pair_count {
+    return None;
+  }
+
+  let removed_idx = removed_indices[pair_index];
+  let added_idx = added_indices[pair_index];
+
+  let removed_text = match projection.lines.get(removed_idx)? {
+    DisplayLine::Removed { text, .. } => clean_line_text(text),
+    _ => return None,
+  };
+
+  let added_text = match projection.lines.get(added_idx)? {
+    DisplayLine::Doc { doc_line, .. } => document
+      .line_content(*doc_line)
+      .map(|cow| clean_line_text(&cow))
+      .unwrap_or_default(),
+    _ => return None,
+  };
+
+  let (removed_ranges, added_ranges) = word_diff_ranges(&removed_text, &added_text);
+  let (ranges, background) = match kind {
+    InlineDiffKind::Removed => (removed_ranges, theme.diff_word_removed_background()),
+    InlineDiffKind::Added => (added_ranges, theme.diff_word_added_background()),
+  };
+
+  if ranges.is_empty() {
+    return None;
+  }
+
+  Some(WordDiffStyle { ranges, background })
+}
+
+fn modified_word_diff_style(
+  old_text: &str,
+  new_text: &str,
+  diff_view: DiffElementView,
+  theme: &Theme,
+) -> Option<WordDiffStyle> {
+  let (removed_ranges, added_ranges) = word_diff_ranges(old_text, new_text);
+  let (ranges, background) = match diff_view {
+    DiffElementView::SplitLeft => (removed_ranges, theme.diff_word_removed_background()),
+    DiffElementView::SplitRight => (added_ranges, theme.diff_word_added_background()),
+    DiffElementView::Inline => return None,
+  };
+
+  if ranges.is_empty() {
+    return None;
+  }
+
+  Some(WordDiffStyle { ranges, background })
+}
+
+fn word_diff_for_line(
+  display_idx: usize,
+  display_line: &DisplayLine,
+  diff_view: DiffElementView,
+  projection: Option<&Projection>,
+  document: &Document,
+  theme: &Theme,
+) -> Option<WordDiffStyle> {
+  match display_line {
+    DisplayLine::Modified { old_text, doc_line, .. } => {
+      if matches!(diff_view, DiffElementView::Inline) {
+        return None;
+      }
+      let old_text = clean_line_text(old_text);
+      let new_text = document
+        .line_content(*doc_line)
+        .map(|cow| clean_line_text(&cow))
+        .unwrap_or_default();
+      modified_word_diff_style(&old_text, &new_text, diff_view, theme)
+    }
+    DisplayLine::Removed { .. }
+    | DisplayLine::Doc {
+        change: Some(ChangeKind::Added),
+        ..
+      } if matches!(diff_view, DiffElementView::Inline) => {
+      projection.and_then(|projection| {
+        inline_word_diff_style(display_idx, display_line, projection, document, theme)
+      })
+    }
+    _ => None,
+  }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EditorElementRole {
   Primary,
@@ -230,6 +600,7 @@ pub struct EditorElement {
 pub struct PrepaintState {
   shaped_lines: Vec<(usize, Arc<ShapedLine>)>,
   line_backgrounds: Vec<PaintQuad>,
+  word_diff_quads: Vec<PaintQuad>,
   group_borders: Vec<PaintQuad>,
   diag_paths: Vec<Path<Pixels>>,
   cursor_quad: Option<PaintQuad>,
@@ -470,69 +841,123 @@ impl Element for EditorElement {
     // Get theme for syntax highlighting colors
     let theme = self.editor.read(cx).theme.clone();
 
-    let document = self.editor.read(cx).document().read(cx);
+    let document_entity = self.editor.read(cx).document().clone();
     let mut newly_shaped = Vec::new();
-    for (display_idx, display_line) in lines_to_shape {
-      let (mut line_text, doc_line, base_color, allow_highlights) = match &display_line {
-        DisplayLine::Doc {
-          doc_line, change, ..
-        } => {
-          let content = document
-            .line_content(*doc_line)
-            .map(|cow| cow.into_owned())
-            .unwrap_or_default();
-          let base_color = if matches!(change, Some(ChangeKind::Added)) {
-            style.color
-          } else {
-            style.color
-          };
-          (content, Some(*doc_line), base_color, true)
-        }
-        DisplayLine::Modified {
-          old_text, doc_line, ..
-        } => match self.diff_view {
-          DiffElementView::SplitLeft => (old_text.clone(), None, theme.diff_removed_text(), false),
-          DiffElementView::SplitRight => {
+    {
+      let document = document_entity.read(cx);
+      for (display_idx, display_line) in lines_to_shape {
+        let (line_text, doc_line, base_color, allow_highlights, word_diff) =
+          match &display_line {
+          DisplayLine::Doc {
+            doc_line, change, ..
+          } => {
             let content = document
               .line_content(*doc_line)
-              .map(|cow| cow.into_owned())
+              .map(|cow| clean_line_text(&cow))
               .unwrap_or_default();
-            (content, Some(*doc_line), style.color, true)
+            let base_color = if matches!(change, Some(ChangeKind::Added)) {
+              style.color
+            } else {
+              style.color
+            };
+            let word_diff = if matches!(self.diff_view, DiffElementView::Inline)
+              && matches!(change, Some(ChangeKind::Added))
+            {
+              projection
+                .as_deref()
+                .and_then(|projection| {
+                  inline_word_diff_style(
+                    display_idx,
+                    &display_line,
+                    projection,
+                    &document,
+                    &theme,
+                  )
+                })
+            } else {
+              None
+            };
+            (content, Some(*doc_line), base_color, true, word_diff)
           }
-          DiffElementView::Inline => {
-            let content = document
-              .line_content(*doc_line)
-              .map(|cow| cow.into_owned())
-              .unwrap_or_default();
-            (content, Some(*doc_line), style.color, true)
+          DisplayLine::Modified {
+            old_text, doc_line, ..
+          } => match self.diff_view {
+            DiffElementView::SplitLeft => {
+              let old_text = clean_line_text(old_text);
+              let new_text = document
+                .line_content(*doc_line)
+                .map(|cow| clean_line_text(&cow))
+                .unwrap_or_default();
+              let word_diff = modified_word_diff_style(&old_text, &new_text, self.diff_view, &theme);
+              (old_text, None, theme.diff_removed_text(), false, word_diff)
+            }
+            DiffElementView::SplitRight => {
+              let old_text = clean_line_text(old_text);
+              let content = document
+                .line_content(*doc_line)
+                .map(|cow| clean_line_text(&cow))
+                .unwrap_or_default();
+              let word_diff = modified_word_diff_style(&old_text, &content, self.diff_view, &theme);
+              (content, Some(*doc_line), style.color, true, word_diff)
+            }
+            DiffElementView::Inline => {
+              let content = document
+                .line_content(*doc_line)
+                .map(|cow| clean_line_text(&cow))
+                .unwrap_or_default();
+              (content, Some(*doc_line), style.color, true, None)
+            }
+          },
+          DisplayLine::Removed { text, .. } => {
+            let color = theme.diff_removed_text();
+            let word_diff = if matches!(self.diff_view, DiffElementView::Inline) {
+              projection
+                .as_deref()
+                .and_then(|projection| {
+                  inline_word_diff_style(
+                    display_idx,
+                    &display_line,
+                    projection,
+                    &document,
+                    &theme,
+                  )
+                })
+            } else {
+              None
+            };
+            (clean_line_text(text), None, color, false, word_diff)
           }
-        },
-        DisplayLine::Removed { text, .. } => {
-          let color = theme.diff_removed_text();
-          (text.clone(), None, color, false)
-        }
-        DisplayLine::Gap { .. } => (
-          GAP_MARKER_TEXT.to_string(),
-          None,
-          cx.theme().muted_foreground,
-          false,
-        ),
-        DisplayLine::NoNewline { .. } => (
-          NO_NEWLINE_MARKER_TEXT.to_string(),
-          None,
-          cx.theme().muted_foreground,
-          false,
-        ),
-      };
-      if line_text.contains('\n') || line_text.contains('\r') {
-        line_text = line_text.replace(['\n', '\r'], "");
-      }
+          DisplayLine::Gap { .. } => (
+            GAP_MARKER_TEXT.to_string(),
+            None,
+            cx.theme().muted_foreground,
+            false,
+            None,
+          ),
+          DisplayLine::NoNewline { .. } => (
+            NO_NEWLINE_MARKER_TEXT.to_string(),
+            None,
+            cx.theme().muted_foreground,
+            false,
+            None,
+          ),
+        };
 
-      let runs = if allow_highlights {
-        if let Some(doc_line) = doc_line
-          && let Some(highlights) = document.get_highlights_for_line(doc_line)
-        {
-          highlights_to_text_runs(highlights.as_ref(), &line_text, &theme, &style)
+        let runs = if allow_highlights {
+          if let Some(doc_line) = doc_line
+            && let Some(highlights) = document.get_highlights_for_line(doc_line)
+          {
+            highlights_to_text_runs(highlights.as_ref(), &line_text, &theme, &style)
+          } else {
+            vec![TextRun {
+              len: line_text.len(),
+              font: style.font(),
+              color: base_color,
+              background_color: None,
+              underline: None,
+              strikethrough: None,
+            }]
+          }
         } else {
           vec![TextRun {
             len: line_text.len(),
@@ -542,22 +967,19 @@ impl Element for EditorElement {
             underline: None,
             strikethrough: None,
           }]
-        }
-      } else {
-        vec![TextRun {
-          len: line_text.len(),
-          font: style.font(),
-          color: base_color,
-          background_color: None,
-          underline: None,
-          strikethrough: None,
-        }]
-      };
+        };
 
-      let shaped = window
-        .text_system()
-        .shape_line(line_text.into(), font_size, &runs, None);
-      newly_shaped.push((display_idx, doc_line, shaped));
+        let runs = if let Some(word_diff) = word_diff {
+          apply_background_ranges(runs, &word_diff.ranges, word_diff.background)
+        } else {
+          runs
+        };
+
+        let shaped = window
+          .text_system()
+          .shape_line(line_text.into(), font_size, &runs, None);
+        newly_shaped.push((display_idx, doc_line, shaped));
+      }
     }
 
     if !newly_shaped.is_empty() {
@@ -592,7 +1014,9 @@ impl Element for EditorElement {
       });
     }
 
+    let document = document_entity.read(cx);
     let mut line_backgrounds = Vec::new();
+    let mut word_diff_quads = Vec::new();
     let mut group_borders = Vec::new();
     let mut diag_paths = Vec::new();
     let added_bg = theme.diff_added_background();
@@ -712,6 +1136,39 @@ impl Element for EditorElement {
           ),
           color,
         ));
+      }
+
+      if let Some(word_diff) = word_diff_for_line(
+        *display_idx,
+        display_line,
+        self.diff_view,
+        projection.as_deref(),
+        &document,
+        &theme,
+      ) {
+        if let Some((_, shaped)) = shaped_lines
+          .iter()
+          .find(|(idx, _)| *idx == *display_idx)
+        {
+          let y = bounds.top() + line_height * (*display_idx - viewport.start) as f32;
+          for range in word_diff.ranges {
+            if range.start >= range.end {
+              continue;
+            }
+            let x_start = shaped.x_for_index(range.start);
+            let x_end = shaped.x_for_index(range.end);
+            if x_end <= x_start {
+              continue;
+            }
+            word_diff_quads.push(fill(
+              Bounds::from_corners(
+                point(bounds.left() + x_start, y),
+                point(bounds.left() + x_end, y + line_height),
+              ),
+              word_diff.background,
+            ));
+          }
+        }
       }
 
       let group_id = match display_line {
@@ -1092,6 +1549,7 @@ impl Element for EditorElement {
     PrepaintState {
       shaped_lines,
       line_backgrounds,
+      word_diff_quads,
       group_borders,
       diag_paths,
       cursor_quad,
@@ -1286,6 +1744,11 @@ impl Element for EditorElement {
 
     // Paint line backgrounds (diff highlights)
     for quad in &prepaint.line_backgrounds {
+      window.paint_quad(quad.clone());
+    }
+
+    // Paint word diff highlights
+    for quad in &prepaint.word_diff_quads {
       window.paint_quad(quad.clone());
     }
 

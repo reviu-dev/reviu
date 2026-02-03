@@ -7,6 +7,7 @@ publish.workspace = true
 [dependencies]
 buffer = { workspace = true }
 syntax = { workspace = true }
+ui = { workspace = true }
 gpui = { workspace = true }
 unicode-segmentation = { workspace = true }
 parking_lot = { workspace = true }
