@@ -1509,6 +1509,7 @@ dependencies = [
  "parking_lot",
  "smol",
  "syntax",
+ "ui",
  "unicode-segmentation",
 ]
 
@@ -6085,6 +6086,7 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "gpui-component",
+ "syntax",
 ]
 
 [[package]]

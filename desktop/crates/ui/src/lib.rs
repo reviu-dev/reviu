@@ -1,6 +1,7 @@
 mod command_palette;
 mod confirm_dialog;
 mod search_file_palette;
+mod theme;
 
 pub use command_palette::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
@@ -10,6 +11,7 @@ pub use confirm_dialog::ConfirmDialog;
 pub use search_file_palette::{
   SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
 };
+pub use theme::Theme;
 pub use gpui_component::Disableable;
 pub use gpui_component::WindowExt;
 pub use gpui_component::button::Button;

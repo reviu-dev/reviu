@@ -21,7 +21,7 @@ use gpui_component::{
   resizable::{h_resizable, resizable_panel},
 };
 use smol::unblock;
-use syntax::Theme;
+use ui::Theme;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
