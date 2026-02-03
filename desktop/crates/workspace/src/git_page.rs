@@ -14,16 +14,17 @@ use git::{
 };
 use gpui::{
   AnyElement, App, Context, Corner, Entity, FocusHandle, Focusable, Hsla, InteractiveElement,
-  Keystroke, ParentElement, PathPromptOptions, Render, SharedString, Styled, Task, Window, actions,
-  div, prelude::*, px,
+  Keystroke, ParentElement, PathPromptOptions, Render, SharedString, Styled, Task,
+  UniformListScrollHandle, Window, actions, div, prelude::*, px, uniform_list,
 };
 use gpui_component::{
-  ActiveTheme as _, Collapsible, Disableable, Icon, IconName, Side, Sizable, StyledExt as _,
+  ActiveTheme as _, Collapsible, Disableable, Icon, IconName, Sizable, StyledExt as _,
   button::{Button, ButtonGroup, ButtonVariant, ButtonVariants as _},
   kbd::Kbd,
   menu::{DropdownMenu, PopupMenuItem},
+  scroll::ScrollableElement,
   select::{Select, SelectEvent, SelectItem, SelectState},
-  sidebar::{Sidebar, SidebarGroup, SidebarItem},
+  sidebar::SidebarItem,
   tooltip::Tooltip,
 };
 use smol::unblock;
@@ -42,6 +43,7 @@ const SIDEBAR_DEFAULT_WIDTH: f32 = 280.0;
 const SIDEBAR_MIN_WIDTH: f32 = 220.0;
 const SIDEBAR_MAX_WIDTH: f32 = 500.0;
 const STATUS_POLL_INTERVAL_MS: u64 = 800;
+const EDITOR_HEADER_HEIGHT: f32 = 40.0;
 
 trait StatusThemeExt {
   fn status_orange(&self) -> gpui::Hsla;
@@ -248,8 +250,7 @@ impl SidebarItem for FileSidebarItem {
       .flex()
       .items_center()
       .gap_2()
-      .p_2()
-      .rounded(theme.radius)
+      .p_4()
       .group(hover_group.clone())
       .when(is_hoverable, |this| {
         this.hover(|this| {
@@ -413,6 +414,7 @@ pub struct GitPage {
   status_task: Option<Task<()>>,
   poll_task: Option<Task<()>>,
   commit_input: Entity<InputState>,
+  file_list_scroll_handle: UniformListScrollHandle,
 }
 
 impl GitPage {
@@ -461,6 +463,7 @@ impl GitPage {
       status_task: None,
       poll_task: None,
       commit_input,
+      file_list_scroll_handle: UniformListScrollHandle::new(),
     };
 
     view.subscribe_to_repo_select(window, cx);
@@ -1413,7 +1416,7 @@ impl GitPage {
       });
 
     div()
-      .h(px(40.0))
+      .h(px(EDITOR_HEADER_HEIGHT))
       .px_3()
       .flex()
       .items_center()
@@ -1709,7 +1712,7 @@ impl GitPage {
       .w_full()
       .flex()
       .flex_col()
-      .pt_2()
+      .p_2()
       .gap_2()
       .border_t_1()
       .border_color(theme.border)
@@ -1729,7 +1732,8 @@ impl GitPage {
     div()
       .w_full()
       .flex()
-      .pb_2()
+      .px_2()
+      .min_h(px(EDITOR_HEADER_HEIGHT))
       .border_b_1()
       .border_color(cx.theme().border)
       .items_center()
@@ -1746,89 +1750,144 @@ impl GitPage {
       )
   }
 
-  fn render_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+  fn render_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
-    let base_sidebar: Sidebar<SidebarGroup<FileSidebarItem>> = Sidebar::new("git-sidebar")
-      .side(Side::Left)
-      .bg(theme.sidebar)
+    let base_sidebar = div()
+      .id("git-sidebar")
       .w_full()
-      .h_full();
+      .h_full()
+      .flex()
+      .flex_col()
+      .bg(theme.sidebar)
+      .text_color(theme.sidebar_foreground);
 
     if self.selected_repo.is_none() {
       let placeholder = FileSidebarItem::placeholder("Select a repository", &cx.theme().clone());
       return base_sidebar
-        .child(SidebarGroup::new("Changes").child(placeholder))
+        .child(
+          placeholder
+            .render("git-sidebar-placeholder", window, cx)
+            .into_any_element(),
+        )
         .into_any_element();
     } else if self.status_entries.is_empty() {
       let placeholder = FileSidebarItem::placeholder("No changes", &cx.theme().clone());
       return base_sidebar
-        .child(SidebarGroup::new("Changes").child(placeholder))
-        .into_any_element();
-    } else {
-      let selected_file = self.selected_file.clone();
-
-      let mut items = Vec::new();
-      for entry in &self.status_entries {
-        let is_active = selected_file.as_ref() == Some(&entry.path);
-        let path = entry.path.clone();
-        let path_for_open = path.clone();
-        let status = entry.status;
-        let status_letter = status.short_code();
-        let file_label = entry.path.to_string_lossy();
-        let file_label = file_label.replace(['\n', '\r'], "");
-        let status_color = Self::status_color(status, &theme);
-        let (stage_icon, stage_color, stage_tooltip) = Self::stage_style(entry.stage, &theme);
-        let can_stage = matches!(
-          entry.stage,
-          RepoStage::Unstaged | RepoStage::PartiallyStaged
-        );
-        let can_unstage = matches!(entry.stage, RepoStage::Staged | RepoStage::PartiallyStaged);
-        let can_restore = matches!(entry.stage, RepoStage::Unstaged);
-
-        let mut item = FileSidebarItem::new(
-          file_label,
-          status_letter,
-          status_color,
-          stage_icon,
-          stage_color,
-          stage_tooltip,
+        .child(
+          placeholder
+            .render("git-sidebar-placeholder", window, cx)
+            .into_any_element(),
         )
-        .active(is_active)
-        .on_click(cx.listener(move |this, _, _, cx| {
-          this.open_file(path_for_open.clone(), cx);
-        }));
-
-        if can_stage {
-          let path = path.clone();
-          item = item.on_stage(cx.listener(move |this, _, _, cx| {
-            this.stage_file_action(path.clone(), cx);
-          }));
-        }
-
-        if can_unstage {
-          let path = path.clone();
-          item = item.on_unstage(cx.listener(move |this, _, _, cx| {
-            this.unstage_file_action(path.clone(), cx);
-          }));
-        }
-
-        if can_restore {
-          let path = path.clone();
-          let status = status;
-          item = item.on_restore(cx.listener(move |this, _, window, cx| {
-            this.confirm_restore_file_action(window, path.clone(), status, cx);
-          }));
-        }
-        items.push(item);
-      }
-
-      return base_sidebar
-        .header(self.render_sidebar_header(cx))
-        .child(SidebarGroup::new("Changes").children(items))
-        .border_0()
-        .footer(self.render_commit_bar(cx))
         .into_any_element();
     }
+
+    let list = uniform_list(
+      "git-sidebar-list",
+      self.status_entries.len(),
+      cx.processor(|this, range: std::ops::Range<usize>, window, cx| {
+        let theme = cx.theme().clone();
+        let selected_file = this.selected_file.clone();
+        range
+          .map(|ix| {
+            let entry = &this.status_entries[ix];
+            let is_active = selected_file.as_ref() == Some(&entry.path);
+            let path = entry.path.clone();
+            let path_for_open = path.clone();
+            let status = entry.status;
+            let status_letter = status.short_code();
+            let file_label = entry.path.to_string_lossy();
+            let file_label = file_label.replace(['\n', '\r'], "");
+            let status_color = Self::status_color(status, &theme);
+            let (stage_icon, stage_color, stage_tooltip) = Self::stage_style(entry.stage, &theme);
+            let can_stage = matches!(
+              entry.stage,
+              RepoStage::Unstaged | RepoStage::PartiallyStaged
+            );
+            let can_unstage = matches!(entry.stage, RepoStage::Staged | RepoStage::PartiallyStaged);
+            let can_restore = matches!(entry.stage, RepoStage::Unstaged);
+
+            let mut item = FileSidebarItem::new(
+              file_label,
+              status_letter,
+              status_color,
+              stage_icon,
+              stage_color,
+              stage_tooltip,
+            )
+            .active(is_active)
+            .on_click(cx.listener(move |this, _, _, cx| {
+              this.open_file(path_for_open.clone(), cx);
+            }));
+
+            if can_stage {
+              let path = path.clone();
+              item = item.on_stage(cx.listener(move |this, _, _, cx| {
+                this.stage_file_action(path.clone(), cx);
+              }));
+            }
+
+            if can_unstage {
+              let path = path.clone();
+              item = item.on_unstage(cx.listener(move |this, _, _, cx| {
+                this.unstage_file_action(path.clone(), cx);
+              }));
+            }
+
+            if can_restore {
+              let path = path.clone();
+              let status = status;
+              item = item.on_restore(cx.listener(move |this, _, window, cx| {
+                this.confirm_restore_file_action(window, path.clone(), status, cx);
+              }));
+            }
+
+            item
+              .render(format!("git-sidebar-item-{}", ix), window, cx)
+              .into_any_element()
+          })
+          .collect()
+      }),
+    )
+    .size_full()
+    .track_scroll(&self.file_list_scroll_handle);
+
+    let group_label = div()
+      .text_sm()
+      .px_3()
+      .py_2()
+      .text_color(theme.sidebar_foreground.opacity(0.7))
+      .child("Changes");
+
+    let list_container = div()
+      .relative()
+      .flex_1()
+      .min_h_0()
+      .overflow_hidden()
+      .child(list)
+      .vertical_scrollbar(&self.file_list_scroll_handle);
+
+    base_sidebar
+      .relative()
+      .child(self.render_sidebar_header(cx))
+      .child(
+        div()
+          .flex()
+          .flex_col()
+          .flex_1()
+          .min_h_0()
+          .child(group_label)
+          .child(list_container),
+      )
+      .child(
+        div()
+          .absolute()
+          .bottom_0()
+          .left_0()
+          .right_0()
+          .bg(theme.sidebar)
+          .child(self.render_commit_bar(cx)),
+      )
+      .into_any_element()
   }
 
   fn render_editor_area(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -1852,7 +1911,6 @@ impl GitPage {
 
 impl Render for GitPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    let view = cx.entity();
     div()
       .size_full()
       .flex()
@@ -1869,7 +1927,7 @@ impl Render for GitPage {
             ui::resizable_panel()
               .size(px(SIDEBAR_DEFAULT_WIDTH))
               .size_range(px(SIDEBAR_MIN_WIDTH)..px(SIDEBAR_MAX_WIDTH))
-              .child(self.render_sidebar(cx)),
+              .child(self.render_sidebar(window, cx)),
           )
           .child(ui::resizable_panel().child(self.render_editor_area(window, cx))),
       )
