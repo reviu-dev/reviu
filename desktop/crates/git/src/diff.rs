@@ -1,5 +1,6 @@
 use std::{
   cell::RefCell,
+  fs,
   path::{Path, PathBuf},
 };
 
@@ -272,6 +273,7 @@ pub fn write_index_content(repo_file: &RepoFile, content: &str) -> Result<()> {
 }
 
 fn compute_diff(repo: &Repository, rel_path: &Path, kind: DiffKind) -> Result<FileDiff> {
+  let trailing_change = trailing_newline_change_for_diff(kind, repo, rel_path)?;
   let mut opts = DiffOptions::new();
   opts
     .pathspec(rel_path)
@@ -311,6 +313,7 @@ fn compute_diff(repo: &Repository, rel_path: &Path, kind: DiffKind) -> Result<Fi
     None,
     Some(&mut |_file, hunk| {
       if let Some(mut hunk) = current.borrow_mut().take() {
+        normalize_no_newline_hunk(&mut hunk, trailing_change);
         hunk.id = compute_hunk_id(&hunk);
         hunks.borrow_mut().push(hunk);
       }
@@ -328,6 +331,9 @@ fn compute_diff(repo: &Repository, rel_path: &Path, kind: DiffKind) -> Result<Fi
     }),
     Some(&mut |_file, _hunk, line| {
       if let Some(hunk) = current.borrow_mut().as_mut() {
+        if apply_no_newline_marker(&line, hunk) {
+          return true;
+        }
         if let Some(diff_line) = DiffLine::from_git_line(line) {
           hunk.lines.push(diff_line);
         }
@@ -339,6 +345,7 @@ fn compute_diff(repo: &Repository, rel_path: &Path, kind: DiffKind) -> Result<Fi
 
   let mut current = current.into_inner();
   if let Some(mut hunk) = current.take() {
+    normalize_no_newline_hunk(&mut hunk, trailing_change);
     hunk.id = compute_hunk_id(&hunk);
     hunks.borrow_mut().push(hunk);
   }
@@ -374,6 +381,7 @@ fn compute_buffer_diff(
   opts.context_lines(3).patience(true).indent_heuristic(true);
 
   let base_text = base.unwrap_or("");
+  let trailing_change = trailing_newline_change(base_text, buffer_text);
   let patch = Patch::from_buffers(
     base_text.as_bytes(),
     Some(rel_path),
@@ -396,11 +404,15 @@ fn compute_buffer_diff(
 
     for line_idx in 0..line_count {
       let line = patch.line_in_hunk(hunk_idx, line_idx)?;
+      if apply_no_newline_marker(&line, &mut diff_hunk) {
+        continue;
+      }
       if let Some(diff_line) = DiffLine::from_git_line(line) {
         diff_hunk.lines.push(diff_line);
       }
     }
 
+    normalize_no_newline_hunk(&mut diff_hunk, trailing_change);
     diff_hunk.id = compute_hunk_id(&diff_hunk);
     hunks.push(diff_hunk);
   }
@@ -414,9 +426,9 @@ impl DiffLine {
       DiffLineType::Context => (DiffLineKind::Context, false),
       DiffLineType::Addition => (DiffLineKind::Add, false),
       DiffLineType::Deletion => (DiffLineKind::Remove, false),
-      DiffLineType::ContextEOFNL => (DiffLineKind::Context, true),
-      DiffLineType::AddEOFNL => (DiffLineKind::Add, true),
-      DiffLineType::DeleteEOFNL => (DiffLineKind::Remove, true),
+      DiffLineType::ContextEOFNL | DiffLineType::AddEOFNL | DiffLineType::DeleteEOFNL => {
+        return None;
+      }
       _ => return None,
     };
 
@@ -432,6 +444,228 @@ impl DiffLine {
     })
   }
 }
+
+fn apply_no_newline_marker(line: &git2::DiffLine, hunk: &mut DiffHunk) -> bool {
+  match line.origin_value() {
+    DiffLineType::ContextEOFNL | DiffLineType::AddEOFNL | DiffLineType::DeleteEOFNL => {
+      if let Some(last) = hunk.lines.last_mut() {
+        last.no_newline = true;
+      }
+      true
+    }
+    _ => false,
+  }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TrailingNewlineChange {
+  Added,
+  Removed,
+}
+
+fn trailing_newline_change(base_text: &str, buffer_text: &str) -> Option<TrailingNewlineChange> {
+  let base_has_newline = base_text.ends_with('\n');
+  let buffer_has_newline = buffer_text.ends_with('\n');
+  match (base_has_newline, buffer_has_newline) {
+    (false, true) => Some(TrailingNewlineChange::Added),
+    (true, false) => Some(TrailingNewlineChange::Removed),
+    _ => None,
+  }
+}
+
+fn normalize_no_newline_hunk(
+  hunk: &mut DiffHunk,
+  trailing_change: Option<TrailingNewlineChange>,
+) {
+  let has_change = hunk
+    .lines
+    .iter()
+    .any(|line| !matches!(line.kind, DiffLineKind::Context));
+  if !has_change {
+    if let Some(change) = trailing_change {
+      let mut normalized = hunk.lines.clone();
+      normalized.push(DiffLine {
+        kind: match change {
+          TrailingNewlineChange::Added => DiffLineKind::Add,
+          TrailingNewlineChange::Removed => DiffLineKind::Remove,
+        },
+        content: String::new(),
+        no_newline: false,
+      });
+      hunk.lines = normalized;
+      let (old_lines, new_lines) = count_hunk_line_counts(hunk);
+      hunk.old_lines = old_lines;
+      hunk.new_lines = new_lines;
+    }
+    return;
+  }
+
+  let mut normalized = Vec::new();
+  let mut idx = 0;
+  let mut changed = false;
+  let last_change_idx = hunk
+    .lines
+    .iter()
+    .rposition(|line| !matches!(line.kind, DiffLineKind::Context));
+  while idx < hunk.lines.len() {
+    if idx + 1 < hunk.lines.len() {
+      let remove = &hunk.lines[idx];
+      let add = &hunk.lines[idx + 1];
+      let pair_is_last_change = last_change_idx == Some(idx + 1);
+      let content_matches = remove.content == add.content;
+      let no_newline_diff = remove.no_newline != add.no_newline;
+      let should_normalize = remove.kind == DiffLineKind::Remove
+        && add.kind == DiffLineKind::Add
+        && content_matches
+        && (no_newline_diff || (pair_is_last_change && trailing_change.is_some()));
+      if should_normalize {
+        changed = true;
+        normalized.push(DiffLine {
+          kind: DiffLineKind::Context,
+          content: remove.content.clone(),
+          no_newline: false,
+        });
+
+        let change = if no_newline_diff {
+          if remove.no_newline && !add.no_newline {
+            Some(TrailingNewlineChange::Added)
+          } else {
+            Some(TrailingNewlineChange::Removed)
+          }
+        } else {
+          trailing_change
+        };
+
+        if let Some(change) = change {
+          match change {
+            TrailingNewlineChange::Added => {
+              normalized.push(DiffLine {
+                kind: DiffLineKind::Add,
+                content: String::new(),
+                no_newline: false,
+              });
+            }
+            TrailingNewlineChange::Removed => {
+              normalized.push(DiffLine {
+                kind: DiffLineKind::Remove,
+                content: String::new(),
+                no_newline: false,
+              });
+            }
+          }
+        }
+
+        idx += 2;
+        continue;
+      }
+    }
+
+    normalized.push(hunk.lines[idx].clone());
+    idx += 1;
+  }
+
+  if changed {
+    hunk.lines = normalized;
+  }
+
+  let (old_lines, new_lines) = count_hunk_line_counts(hunk);
+  hunk.old_lines = old_lines;
+  hunk.new_lines = new_lines;
+}
+
+fn trailing_newline_change_for_diff(
+  kind: DiffKind,
+  repo: &Repository,
+  rel_path: &Path,
+) -> Result<Option<TrailingNewlineChange>> {
+  let (old_text, new_text) = match kind {
+    DiffKind::Uncommitted => (
+      read_head_content(repo, rel_path)?,
+      read_workdir_content(repo, rel_path)?,
+    ),
+    DiffKind::Unstaged => (
+      read_index_content(repo, rel_path)?,
+      read_workdir_content(repo, rel_path)?,
+    ),
+    DiffKind::Staged => (
+      read_head_content(repo, rel_path)?,
+      read_index_content(repo, rel_path)?,
+    ),
+  };
+
+  let (Some(old_text), Some(new_text)) = (old_text, new_text) else {
+    return Ok(None);
+  };
+  Ok(trailing_newline_change(&old_text, &new_text))
+}
+
+fn read_head_content(repo: &Repository, rel_path: &Path) -> Result<Option<String>> {
+  let head = match repo.head() {
+    Ok(head) => head,
+    Err(_) => return Ok(None),
+  };
+  let tree = match head.peel_to_tree() {
+    Ok(tree) => tree,
+    Err(_) => return Ok(None),
+  };
+  read_tree_content(repo, &tree, rel_path)
+}
+
+fn read_index_content(repo: &Repository, rel_path: &Path) -> Result<Option<String>> {
+  let index = repo.index()?;
+  let entry = match index.get_path(rel_path, 0) {
+    Some(entry) => entry,
+    None => return Ok(None),
+  };
+  let blob = repo.find_blob(entry.id)?;
+  Ok(Some(String::from_utf8_lossy(blob.content()).into_owned()))
+}
+
+fn read_workdir_content(repo: &Repository, rel_path: &Path) -> Result<Option<String>> {
+  let Some(workdir) = repo.workdir() else {
+    return Ok(None);
+  };
+  let path = workdir.join(rel_path);
+  match fs::read(&path) {
+    Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+    Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+    Err(err) => Err(err.into()),
+  }
+}
+
+fn read_tree_content(
+  repo: &Repository,
+  tree: &git2::Tree,
+  rel_path: &Path,
+) -> Result<Option<String>> {
+  let entry = match tree.get_path(rel_path) {
+    Ok(entry) => entry,
+    Err(_) => return Ok(None),
+  };
+  let blob = repo.find_blob(entry.id())?;
+  Ok(Some(String::from_utf8_lossy(blob.content()).into_owned()))
+}
+
+fn count_hunk_line_counts(hunk: &DiffHunk) -> (usize, usize) {
+  let mut old_lines: usize = 0;
+  let mut new_lines: usize = 0;
+  for line in &hunk.lines {
+    match line.kind {
+      DiffLineKind::Context => {
+        old_lines = old_lines.saturating_add(1);
+        new_lines = new_lines.saturating_add(1);
+      }
+      DiffLineKind::Add => {
+        new_lines = new_lines.saturating_add(1);
+      }
+      DiffLineKind::Remove => {
+        old_lines = old_lines.saturating_add(1);
+      }
+    }
+  }
+  (old_lines, new_lines)
+}
+
 
 fn compute_hunk_id(hunk: &DiffHunk) -> String {
   let mut hasher = blake3::Hasher::new();
@@ -458,6 +692,65 @@ fn compute_hunk_id(hunk: &DiffHunk) -> String {
   }
 
   hasher.finalize().to_hex().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::path::Path;
+
+  fn diff_kinds(lines: &[DiffLine]) -> Vec<(DiffLineKind, String)> {
+    lines
+      .iter()
+      .map(|line| (line.kind, line.content.clone()))
+      .collect()
+  }
+
+  #[test]
+  fn newline_added_at_eof_is_empty_add_line() {
+    let base = "line";
+    let buffer = "line\n";
+    let diff = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.txt"),
+    )
+    .expect("diff");
+
+    assert_eq!(diff.hunks.len(), 1);
+    let lines = diff_kinds(&diff.hunks[0].lines);
+    assert_eq!(
+      lines,
+      vec![
+        (DiffLineKind::Context, "line".to_string()),
+        (DiffLineKind::Add, String::new()),
+      ]
+    );
+  }
+
+  #[test]
+  fn newline_removed_at_eof_is_empty_remove_line() {
+    let base = "line\n";
+    let buffer = "line";
+    let diff = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.txt"),
+    )
+    .expect("diff");
+
+    assert_eq!(diff.hunks.len(), 1);
+    let lines = diff_kinds(&diff.hunks[0].lines);
+    assert_eq!(
+      lines,
+      vec![
+        (DiffLineKind::Context, "line".to_string()),
+        (DiffLineKind::Remove, String::new()),
+      ]
+    );
+  }
 }
 
 fn build_hunk_patch(rel_path: PathBuf, hunk: &DiffHunk, reverse: bool) -> String {

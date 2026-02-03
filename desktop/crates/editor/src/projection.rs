@@ -591,9 +591,6 @@ fn build_hunk_display_inline(
   };
 
   for line in &hunk.lines {
-    let mut line_state: Option<HunkState> = None;
-    let mut line_group_id: Option<Arc<str>> = None;
-    let mut line_secondary = false;
     match line.kind {
       DiffLineKind::Context => {
         if let Some(builder) = staged_group.take() {
@@ -621,15 +618,12 @@ fn build_hunk_display_inline(
           if let Some(builder) = staged_group.take() {
             finalize_staged(builder, &mut pending_groups);
           }
-          line_state = Some(HunkState::Unstaged);
-          line_group_id = Some(group_id.clone());
-          line_secondary = false;
           lines.push(DisplayLine::Doc {
             doc_line,
             old_line: None,
             change: Some(ChangeKind::Added),
-            hunk: line_state,
-            group_id: line_group_id.clone(),
+            hunk: Some(HunkState::Unstaged),
+            group_id: Some(group_id.clone()),
             secondary: false,
           });
         } else {
@@ -647,15 +641,13 @@ fn build_hunk_display_inline(
           builder.group.lines.push(line.clone());
           builder.group.keys.push(key);
           builder.group.new_lines = builder.group.new_lines.saturating_add(1);
-          line_state = Some(HunkState::Staged);
-          line_secondary = true;
           let index = lines.len();
           builder.display_indices.push(index);
           lines.push(DisplayLine::Doc {
             doc_line,
             old_line: None,
             change: Some(ChangeKind::Added),
-            hunk: line_state,
+            hunk: Some(HunkState::Staged),
             group_id: None,
             secondary: true,
           });
@@ -671,15 +663,12 @@ fn build_hunk_display_inline(
           if let Some(builder) = staged_group.take() {
             finalize_staged(builder, &mut pending_groups);
           }
-          line_state = Some(HunkState::Unstaged);
-          line_group_id = Some(group_id.clone());
-          line_secondary = false;
           lines.push(DisplayLine::Removed {
             text: line.content.clone(),
             anchor_line,
             old_line,
             hunk: HunkState::Unstaged,
-            group_id: line_group_id.clone(),
+            group_id: Some(group_id.clone()),
             secondary: false,
           });
         } else {
@@ -697,8 +686,6 @@ fn build_hunk_display_inline(
           builder.group.lines.push(line.clone());
           builder.group.keys.push(key);
           builder.group.old_lines = builder.group.old_lines.saturating_add(1);
-          line_state = Some(HunkState::Staged);
-          line_secondary = true;
           let index = lines.len();
           builder.display_indices.push(index);
           lines.push(DisplayLine::Removed {
@@ -711,20 +698,6 @@ fn build_hunk_display_inline(
           });
         }
         old_line = old_line.saturating_add(1);
-      }
-    }
-
-    if line.no_newline {
-      let index = lines.len();
-      lines.push(DisplayLine::NoNewline {
-        hunk: line_state,
-        group_id: line_group_id.clone(),
-        secondary: line_secondary,
-      });
-      if line_state == Some(HunkState::Staged) {
-        if let Some(builder) = staged_group.as_mut() {
-          builder.display_indices.push(index);
-        }
       }
     }
 
@@ -766,7 +739,6 @@ fn build_hunk_display_split_inner(
     anchor_line: usize,
     group_id: Option<Arc<str>>,
     secondary: bool,
-    no_newline: bool,
   }
 
   let mut new_line = hunk.new_start.saturating_sub(1);
@@ -806,7 +778,9 @@ fn build_hunk_display_split_inner(
       }
     };
 
-    while let (Some(remove), Some(add)) = (remove_queue.pop_front(), add_queue.pop_front()) {
+    while remove_queue.front().is_some() && add_queue.front().is_some() {
+      let remove = remove_queue.pop_front().expect("remove line");
+      let add = add_queue.pop_front().expect("add line");
       let secondary = remove.secondary && add.secondary;
       let state = state_for_secondary(secondary);
       let group_id = if !secondary {
@@ -841,21 +815,6 @@ fn build_hunk_display_split_inner(
       first_doc_line.get_or_insert(add.new_line);
       *last_doc_line = Some(add.new_line);
 
-      if remove.no_newline {
-        lines.push(DisplayLine::NoNewline {
-          hunk: Some(state),
-          group_id: group_id.clone(),
-          secondary,
-        });
-      }
-
-      if add.no_newline {
-        lines.push(DisplayLine::NoNewline {
-          hunk: Some(state),
-          group_id: group_id.clone(),
-          secondary,
-        });
-      }
     }
 
     while let Some(remove) = remove_queue.pop_front() {
@@ -878,13 +837,6 @@ fn build_hunk_display_split_inner(
         }
       }
 
-      if remove.no_newline {
-        lines.push(DisplayLine::NoNewline {
-          hunk: Some(state),
-          group_id: group_id.clone(),
-          secondary,
-        });
-      }
     }
 
     while let Some(add) = add_queue.pop_front() {
@@ -910,14 +862,8 @@ fn build_hunk_display_split_inner(
       first_doc_line.get_or_insert(add.new_line);
       *last_doc_line = Some(add.new_line);
 
-      if add.no_newline {
-        lines.push(DisplayLine::NoNewline {
-          hunk: Some(state),
-          group_id: group_id.clone(),
-          secondary,
-        });
-      }
     }
+
   };
 
   for line in &hunk.lines {
@@ -985,7 +931,6 @@ fn build_hunk_display_split_inner(
           anchor_line: doc_line,
           group_id,
           secondary,
-          no_newline: line.no_newline,
         });
 
         new_line = new_line.saturating_add(1);
@@ -1025,7 +970,6 @@ fn build_hunk_display_split_inner(
           anchor_line,
           group_id,
           secondary,
-          no_newline: line.no_newline,
         });
 
         old_line = old_line.saturating_add(1);
@@ -1173,4 +1117,74 @@ fn count_hunk_line_counts(hunk: &DiffHunk) -> (usize, usize) {
     }
   }
   (old_lines, new_lines)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use git::{GitFileBases, compute_buffer_diffs};
+  use std::{collections::HashMap, path::Path};
+
+  fn diffs_from(base: &str, buffer: &str) -> git::DiffSet {
+    let bases = GitFileBases {
+      head: Some(base.to_string()),
+      index: Some(base.to_string()),
+    };
+    compute_buffer_diffs(&bases, buffer, Path::new("test.txt")).expect("diffs")
+  }
+
+  fn projection_from(base: &str, buffer: &str, align_modified: bool) -> Projection {
+    let diffs = diffs_from(base, buffer);
+    let doc_line_count = buffer.split('\n').count();
+    Projection::from_diffs(
+      doc_line_count,
+      &diffs.uncommitted,
+      &diffs.unstaged,
+      &diffs.staged,
+      &HashMap::new(),
+      align_modified,
+    )
+  }
+
+  #[test]
+  fn split_trailing_newline_removed_keeps_doc_lines_contiguous() {
+    let base = "/// ref\n\n\nwsdasdasd\n";
+    let buffer = "/// ref\n\n\nwsdasdasd";
+    let projection = projection_from(base, buffer, true);
+
+    let doc_lines: Vec<usize> = projection
+      .lines
+      .iter()
+      .filter_map(|line| match line {
+        DisplayLine::Doc { doc_line, .. } => Some(*doc_line),
+        DisplayLine::Modified { doc_line, .. } => Some(*doc_line),
+        _ => None,
+      })
+      .collect();
+
+    assert_eq!(doc_lines, vec![0, 1, 2, 3]);
+
+    let last = projection.lines.last().expect("last line");
+    assert!(matches!(
+      last,
+      DisplayLine::Removed { text, .. } if text.is_empty()
+    ));
+  }
+
+  #[test]
+  fn split_trailing_newline_added_is_added_empty_line() {
+    let base = "/// ref\n\n\nwsdasdasd";
+    let buffer = "/// ref\n\n\nwsdasdasd\n";
+    let projection = projection_from(base, buffer, true);
+
+    let last = projection.lines.last().expect("last line");
+    assert!(matches!(
+      last,
+      DisplayLine::Doc {
+        change: Some(ChangeKind::Added),
+        old_line: None,
+        ..
+      }
+    ));
+  }
 }
