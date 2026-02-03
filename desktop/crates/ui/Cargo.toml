@@ -7,4 +7,6 @@ publish.workspace = true
 [dependencies]
 gpui = { workspace = true }
 gpui-component = { workspace = true }
+gpui-component-assets = { workspace = true }
 syntax = { workspace = true }
+anyhow = { workspace = true }
