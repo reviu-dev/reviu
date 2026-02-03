@@ -6,15 +6,13 @@ pub static HTML_CONFIG: Lazy<LanguageConfig> = Lazy::new(|| {
   let language = tree_sitter_html::LANGUAGE.into();
   let query_source = include_str!("../tree-sitter-queries/html-highlights.scm");
 
-  let mut config =
-    HighlightConfiguration::new(language, "html", query_source, "", "")
-      .expect("Failed to create HTML highlight config");
+  let mut config = HighlightConfiguration::new(language, "html", query_source, "", "")
+    .expect("Failed to create HTML highlight config");
 
   config.configure(HIGHLIGHT_NAMES);
 
   LanguageConfig {
     name: "html",
     highlight_config: config,
-    extensions: &["html", "htm"],
   }
 });

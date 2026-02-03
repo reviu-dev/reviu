@@ -54,54 +54,54 @@ pub const HIGHLIGHT_NAMES: &[&str] = &[
 ];
 
 const HIGHLIGHT_TOKEN_TYPES: &[Option<TokenType>] = &[
-  Some(TokenType::Keyword),            // keyword
-  Some(TokenType::KeywordControl),     // keyword.control
-  Some(TokenType::KeywordControl),     // keyword.operator.regex
-  Some(TokenType::Function),           // function
-  Some(TokenType::Function),           // function.definition
-  Some(TokenType::FunctionMethod),     // function.method
-  Some(TokenType::FunctionSpecial),    // function.special
-  Some(TokenType::FunctionSpecial),    // function.special.definition
-  Some(TokenType::Type),               // type
-  Some(TokenType::TypeBuiltin),        // type.builtin
-  Some(TokenType::TypeInterface),      // type.interface
-  Some(TokenType::TypeClass),          // type.class
-  Some(TokenType::Type),               // type.name
-  Some(TokenType::String),             // string
-  Some(TokenType::StringEscape),       // string.escape
-  Some(TokenType::StringEscape),       // escape
-  Some(TokenType::StringRegex),        // string.regex
-  Some(TokenType::Property),           // string.special.key
-  Some(TokenType::Number),             // number
-  Some(TokenType::Boolean),            // boolean
-  Some(TokenType::Comment),            // comment
-  Some(TokenType::CommentDoc),         // comment.doc
-  Some(TokenType::Variable),           // variable
-  Some(TokenType::VariableSpecial),    // variable.special
-  Some(TokenType::VariableParameter),  // variable.parameter
-  Some(TokenType::Property),           // property
-  Some(TokenType::Property),           // property.name
-  Some(TokenType::Constant),           // constant
-  Some(TokenType::ConstantBuiltin),    // constant.builtin
-  Some(TokenType::Operator),           // operator
-  Some(TokenType::Punctuation),        // punctuation
-  Some(TokenType::PunctuationBracket), // punctuation.bracket
+  Some(TokenType::Keyword),              // keyword
+  Some(TokenType::KeywordControl),       // keyword.control
+  Some(TokenType::KeywordControl),       // keyword.operator.regex
+  Some(TokenType::Function),             // function
+  Some(TokenType::Function),             // function.definition
+  Some(TokenType::FunctionMethod),       // function.method
+  Some(TokenType::FunctionSpecial),      // function.special
+  Some(TokenType::FunctionSpecial),      // function.special.definition
+  Some(TokenType::Type),                 // type
+  Some(TokenType::TypeBuiltin),          // type.builtin
+  Some(TokenType::TypeInterface),        // type.interface
+  Some(TokenType::TypeClass),            // type.class
+  Some(TokenType::Type),                 // type.name
+  Some(TokenType::String),               // string
+  Some(TokenType::StringEscape),         // string.escape
+  Some(TokenType::StringEscape),         // escape
+  Some(TokenType::StringRegex),          // string.regex
+  Some(TokenType::Property),             // string.special.key
+  Some(TokenType::Number),               // number
+  Some(TokenType::Boolean),              // boolean
+  Some(TokenType::Comment),              // comment
+  Some(TokenType::CommentDoc),           // comment.doc
+  Some(TokenType::Variable),             // variable
+  Some(TokenType::VariableSpecial),      // variable.special
+  Some(TokenType::VariableParameter),    // variable.parameter
+  Some(TokenType::Property),             // property
+  Some(TokenType::Property),             // property.name
+  Some(TokenType::Constant),             // constant
+  Some(TokenType::ConstantBuiltin),      // constant.builtin
+  Some(TokenType::Operator),             // operator
+  Some(TokenType::Punctuation),          // punctuation
+  Some(TokenType::PunctuationBracket),   // punctuation.bracket
   Some(TokenType::PunctuationDelimiter), // punctuation.delimiter
-  Some(TokenType::PunctuationSpecial), // punctuation.special
-  Some(TokenType::Attribute),          // attribute
-  Some(TokenType::Lifetime),           // lifetime
-  Some(TokenType::Embedded),           // embedded
-  Some(TokenType::Type),               // constructor
-  Some(TokenType::Variable),           // nested
-  Some(TokenType::Keyword),            // text.title
-  Some(TokenType::String),             // text.literal
-  Some(TokenType::String),             // text.uri
-  Some(TokenType::Constant),           // text.reference
-  None,                                // none
-  Some(TokenType::Type),               // tag
-  Some(TokenType::VariableSpecial),    // tag.error
-  Some(TokenType::String),             // string.special
-  Some(TokenType::VariableSpecial),    // label
+  Some(TokenType::PunctuationSpecial),   // punctuation.special
+  Some(TokenType::Attribute),            // attribute
+  Some(TokenType::Lifetime),             // lifetime
+  Some(TokenType::Embedded),             // embedded
+  Some(TokenType::Type),                 // constructor
+  Some(TokenType::Variable),             // nested
+  Some(TokenType::Keyword),              // text.title
+  Some(TokenType::String),               // text.literal
+  Some(TokenType::String),               // text.uri
+  Some(TokenType::Constant),             // text.reference
+  None,                                  // none
+  Some(TokenType::Type),                 // tag
+  Some(TokenType::VariableSpecial),      // tag.error
+  Some(TokenType::String),               // string.special
+  Some(TokenType::VariableSpecial),      // label
 ];
 
 /// Highlight span with token type
@@ -115,7 +115,6 @@ pub struct HighlightSpan {
 pub struct LanguageConfig {
   pub name: &'static str,
   pub highlight_config: HighlightConfiguration,
-  pub extensions: &'static [&'static str],
 }
 
 /// Syntax highlighting manager
@@ -282,9 +281,18 @@ mod tests {
   #[test]
   fn test_map_highlight_indices() {
     // Verify that all indices map correctly
-    assert_eq!(map_highlight_index_to_token_type(0), Some(TokenType::Keyword));
-    assert_eq!(map_highlight_index_to_token_type(3), Some(TokenType::Function));
-    assert_eq!(map_highlight_index_to_token_type(13), Some(TokenType::String));
+    assert_eq!(
+      map_highlight_index_to_token_type(0),
+      Some(TokenType::Keyword)
+    );
+    assert_eq!(
+      map_highlight_index_to_token_type(3),
+      Some(TokenType::Function)
+    );
+    assert_eq!(
+      map_highlight_index_to_token_type(13),
+      Some(TokenType::String)
+    );
     assert_eq!(map_highlight_index_to_token_type(999), None);
   }
 }

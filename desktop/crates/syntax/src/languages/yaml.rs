@@ -11,15 +11,13 @@ pub static YAML_CONFIG: Lazy<LanguageConfig> = Lazy::new(|| {
   let language = unsafe { tree_sitter_yaml() };
   let query_source = include_str!("../tree-sitter-queries/yaml-highlights.scm");
 
-  let mut config =
-    HighlightConfiguration::new(language, "yaml", query_source, "", "")
-      .expect("Failed to create YAML highlight config");
+  let mut config = HighlightConfiguration::new(language, "yaml", query_source, "", "")
+    .expect("Failed to create YAML highlight config");
 
   config.configure(HIGHLIGHT_NAMES);
 
   LanguageConfig {
     name: "yaml",
     highlight_config: config,
-    extensions: &["yml", "yaml"],
   }
 });

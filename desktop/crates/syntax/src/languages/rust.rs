@@ -20,6 +20,5 @@ pub static RUST_CONFIG: Lazy<LanguageConfig> = Lazy::new(|| {
   LanguageConfig {
     name: "rust",
     highlight_config: config,
-    extensions: &["rs"],
   }
 });

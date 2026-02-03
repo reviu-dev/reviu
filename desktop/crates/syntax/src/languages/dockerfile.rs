@@ -20,6 +20,5 @@ pub static DOCKERFILE_CONFIG: Lazy<LanguageConfig> = Lazy::new(|| {
   LanguageConfig {
     name: "dockerfile",
     highlight_config: config,
-    extensions: &["dockerfile"],
   }
 });
