@@ -11,6 +11,7 @@ actions!(
   editor,
   [
     Enter,
+    Tab,
     Backspace,
     BackspaceWord,
     BackspaceAll,
@@ -54,6 +55,12 @@ pub fn enter(editor: &mut Editor, _: &Enter, window: &mut Window, cx: &mut Conte
   editor.replace_text_in_range(None, "\n", window, cx);
 
   editor.ensure_cursor_visible(window, cx);
+}
+
+pub fn tab(editor: &mut Editor, _: &Tab, window: &mut Window, cx: &mut Context<Editor>) {
+  editor.target_column = None;
+  let spaces = " ".repeat(crate::editor::TAB_SPACES);
+  editor.replace_text_in_range(None, &spaces, window, cx);
 }
 
 pub fn backspace(
