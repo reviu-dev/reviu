@@ -6,6 +6,7 @@ pub mod markdown;
 pub mod python;
 pub mod rust;
 pub mod typescript;
+pub mod vue;
 pub mod xml;
 pub mod yaml;
 
@@ -24,6 +25,7 @@ const EXTENSIONS_CSS: &[&str] = &["css"];
 const EXTENSIONS_DOCKERFILE: &[&str] = &["dockerfile"];
 const EXTENSIONS_HTML: &[&str] = &["html", "htm"];
 const EXTENSIONS_MARKDOWN: &[&str] = &["md", "markdown"];
+const EXTENSIONS_VUE: &[&str] = &["vue"];
 
 pub fn detect_language_config(extension: &str) -> Option<&'static LanguageConfig> {
   match extension {
@@ -35,8 +37,23 @@ pub fn detect_language_config(extension: &str) -> Option<&'static LanguageConfig
     _ if EXTENSIONS_PYTHON.contains(&extension) => Some(&*python::PYTHON_CONFIG),
     _ if EXTENSIONS_RUST.contains(&extension) => Some(&*rust::RUST_CONFIG),
     _ if EXTENSIONS_TYPESCRIPT.contains(&extension) => Some(&*typescript::TYPESCRIPT_CONFIG),
+    _ if EXTENSIONS_VUE.contains(&extension) => Some(&*vue::VUE_CONFIG),
     _ if EXTENSIONS_XML.contains(&extension) => Some(&*xml::XML_CONFIG),
     _ if EXTENSIONS_YAML.contains(&extension) => Some(&*yaml::YAML_CONFIG),
+    _ => None,
+  }
+}
+
+pub fn language_config_for_name(name: &str) -> Option<&'static LanguageConfig> {
+  let name = name.to_ascii_lowercase();
+  match name.as_str() {
+    "css" | "scss" | "sass" | "less" | "postcss" => Some(&*css::CSS_CONFIG),
+    "html" => Some(&*html::HTML_CONFIG),
+    "javascript" | "js" | "typescript" | "ts" | "tsx" | "jsx" => {
+      Some(&*typescript::TYPESCRIPT_CONFIG)
+    }
+    "json" => Some(&*json::JSON_CONFIG),
+    "vue" => Some(&*vue::VUE_CONFIG),
     _ => None,
   }
 }
@@ -114,6 +131,11 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_vue() {
+    assert!(detect_language_config("vue").is_some());
+  }
+
+  #[test]
   fn test_rust_config_has_correct_name() {
     let config = detect_language_config("rs").unwrap();
     assert_eq!(config.name, "rust");
@@ -135,5 +157,11 @@ mod tests {
   fn test_xml_config_has_correct_name() {
     let config = detect_language_config("xml").unwrap();
     assert_eq!(config.name, "xml");
+  }
+
+  #[test]
+  fn test_vue_config_has_correct_name() {
+    let config = detect_language_config("vue").unwrap();
+    assert_eq!(config.name, "vue");
   }
 }

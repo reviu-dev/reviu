@@ -35,6 +35,7 @@ tree-sitter-dockerfile = "0.2"
 tree-sitter-yaml = "0.7"
 tree-sitter-xml = "0.7"
 tree-sitter-python = "0.25"
+tree-sitter-vue = { path = "tree-sitter-vue" }
 once_cell = "1.20"
 git2 = "0.20.1"
 parking_lot = "0.12"
