@@ -34,7 +34,8 @@ use crate::{
 };
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
-  CommandPaletteConfig, CommandPaletteHandler, ConfirmDialog, Input, InputState, WindowExt,
+  CommandPaletteConfig, CommandPaletteHandler, ConfirmDialog, Input, InputState, SearchFileEntry,
+  SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, WindowExt,
 };
 
 const HEADER_HEIGHT: f32 = 44.0;
@@ -93,7 +94,7 @@ impl StatusThemeExt for gpui_component::Theme {
 
 actions!(
   workspace,
-  [OpenRepository, SaveFile, ShowCommandPalette, CommitChanges]
+  [OpenRepository, SaveFile, ShowCommandPalette, ShowFileSearch, CommitChanges]
 );
 
 #[derive(Clone)]
@@ -632,6 +633,15 @@ impl GitPage {
     self.open_command_palette(window, cx);
   }
 
+  fn show_file_search_action(
+    &mut self,
+    _: &ShowFileSearch,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_file_search_palette(window, cx);
+  }
+
   fn open_repository_action(
     &mut self,
     _: &OpenRepository,
@@ -718,6 +728,50 @@ impl GitPage {
         window,
         cx,
         CommandPaletteConfig::new(palette_branches, handler),
+      )
+    });
+    let palette_for_dialog = palette.clone();
+
+    window.open_dialog(cx, move |dialog, _, _| {
+      dialog
+        .p_0()
+        .border_0()
+        .min_h_0()
+        .overlay_closable(true)
+        .keyboard(true)
+        .close_button(false)
+      .child(palette_for_dialog.clone())
+    });
+  }
+
+  fn open_file_search_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.selected_repo.is_none() || self.status_entries.is_empty() {
+      return;
+    }
+
+    let entries = self
+      .status_entries
+      .iter()
+      .map(|entry| {
+        let file_label = entry.path.to_string_lossy();
+        let file_label = file_label.replace(['\n', '\r'], "");
+        SearchFileEntry::new(entry.path.clone(), file_label)
+      })
+      .collect::<Vec<_>>();
+
+    let view = cx.entity();
+    let handler: SearchFileHandler = Arc::new(move |path, _window, cx| {
+      view.update(cx, |view, cx| {
+        view.open_file(path, cx);
+      });
+      Ok(())
+    });
+
+    let palette = cx.new(|cx| {
+      SearchFilePalette::new(
+        window,
+        cx,
+        SearchFilePaletteConfig::new(entries, handler),
       )
     });
     let palette_for_dialog = palette.clone();
@@ -1904,6 +1958,7 @@ impl Render for GitPage {
       .bg(cx.theme().background)
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GitPage::show_command_palette_action))
+      .on_action(cx.listener(GitPage::show_file_search_action))
       .on_action(cx.listener(GitPage::open_repository_action))
       .on_action(cx.listener(GitPage::commit_changes_action))
       .child(self.render_header(cx))
