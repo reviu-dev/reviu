@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use git2::build::CheckoutBuilder;
-use git2::{IndexAddOption, Repository, Status, StatusOptions};
+use git2::{ErrorCode, IndexAddOption, Repository, Status, StatusOptions};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RepoStage {
@@ -86,7 +86,16 @@ pub fn stage_file(repo_root: &Path, rel_path: &Path) -> Result<()> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
   let mut index = repo.index()?;
-  index.add_path(rel_path)?;
+  let workdir_path = repo_root.join(rel_path);
+  if workdir_path.exists() {
+    index.add_path(rel_path)?;
+  } else {
+    if let Err(err) = index.remove_path(rel_path) {
+      if err.code() != ErrorCode::NotFound {
+        return Err(err.into());
+      }
+    }
+  }
   index.write()?;
   Ok(())
 }
