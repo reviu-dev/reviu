@@ -229,7 +229,13 @@ impl Editor {
     {
       language_hint = Some("dockerfile");
     }
-    let content = std::fs::read_to_string(&workdir_path).unwrap_or_default();
+    let content = match std::fs::read_to_string(&workdir_path) {
+      Ok(content) => content,
+      Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+        Self::deleted_file_content(&repo_root, &workdir_path).unwrap_or_default()
+      }
+      Err(_) => String::new(),
+    };
 
     let document = cx.new(|cx| Document::new(&content, language_hint, cx));
     let cursor_blink = cx.new(CursorBlink::new);
@@ -302,6 +308,16 @@ impl Editor {
 
   pub fn document(&self) -> &Entity<Document> {
     &self.document
+  }
+
+  fn deleted_file_content(
+    repo_root: &std::path::Path,
+    workdir_path: &std::path::Path,
+  ) -> Option<String> {
+    let rel_path = workdir_path.strip_prefix(repo_root).ok()?;
+    let store = GitStore::new(repo_root.to_path_buf());
+    let bases = store.load_bases(rel_path).ok()?;
+    bases.index.or(bases.head)
   }
 
   pub fn set_projection(&mut self, projection: Option<Projection>) {
