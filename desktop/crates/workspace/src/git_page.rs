@@ -37,7 +37,7 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteConfig, CommandPaletteHandler, ConfirmDialog, FILE_ICON_SIZE_PX, Input, InputState,
   SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, WindowExt,
-  file_icon_path_for_path,
+  file_icon_path_for_path_with_theme,
 };
 
 const HEADER_HEIGHT: f32 = 44.0;
@@ -1677,7 +1677,7 @@ impl GitPage {
       .items_center()
       .gap_2()
       .child(
-        file_icon_path_for_path(&editor_state.workdir_path)
+        file_icon_path_for_path_with_theme(&editor_state.workdir_path, &theme)
           .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
           .unwrap_or_else(|| {
             Icon::new(IconName::File)
@@ -2135,7 +2135,7 @@ impl GitPage {
             let status_color = Self::status_color(status, &theme);
             let is_deleted = status == RepoStatusKind::Deleted;
             let (stage_icon, stage_color, stage_tooltip) = Self::stage_style(entry.stage, &theme);
-            let file_icon_path = file_icon_path_for_path(&entry.path);
+            let file_icon_path = file_icon_path_for_path_with_theme(&entry.path, &theme);
             let can_stage = matches!(
               entry.stage,
               RepoStage::Unstaged | RepoStage::PartiallyStaged

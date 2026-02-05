@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use gpui::SharedString;
-use gpui_component::IconNamed;
+use gpui_component::{IconNamed, Theme};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiIconName {
@@ -38,25 +38,34 @@ impl IconNamed for FileIcon {
   }
 }
 
-fn file_icon_path_for_name_str(file_name: &str) -> Option<&'static str> {
+fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'static str> {
   let name = file_name.to_lowercase();
 
   if name == "dockerfile" {
     return Some("file-icons/docker.svg");
   }
 
+  if name == "tiltfile" {
+    return Some("file-icons/tilt.svg");
+  }
+
   if name.starts_with("vite.config.") {
     return Some("file-icons/vite.svg");
   }
 
+  if name.starts_with("tsconfig.") {
+    return Some("file-icons/tsconfig.svg");
+  }
+
   if name.ends_with(".d.ts") {
-    return Some("file-icons/typescript.svg");
+    return Some("file-icons/typescript-def.svg");
   }
 
   let ext = Path::new(&name).extension()?.to_str()?;
 
   match ext {
     "vue" => Some("file-icons/vue.svg"),
+    "astro" => Some("file-icons/astro.svg"),
     "ts" | "tsx" | "mts" | "cts" => Some("file-icons/typescript.svg"),
     "js" | "jsx" | "mjs" | "cjs" => Some("file-icons/javascript.svg"),
     "go" => Some("file-icons/go.svg"),
@@ -71,12 +80,17 @@ fn file_icon_path_for_name_str(file_name: &str) -> Option<&'static str> {
     "svg" => Some("file-icons/svg.svg"),
     "py" => Some("file-icons/python.svg"),
     "rb" => Some("file-icons/ruby.svg"),
+    "toml" => Some(if is_dark {
+      "file-icons/toml/dark.svg"
+    } else {
+      "file-icons/toml/light.svg"
+    }),
     _ => None,
   }
 }
 
 pub fn file_icon_for_name(file_name: &str) -> Option<FileIcon> {
-  file_icon_path_for_name_str(file_name).map(FileIcon::new)
+  file_icon_path_for_name_str(file_name, false).map(FileIcon::new)
 }
 
 pub fn file_icon_for_path(path: impl AsRef<Path>) -> Option<FileIcon> {
@@ -85,10 +99,25 @@ pub fn file_icon_for_path(path: impl AsRef<Path>) -> Option<FileIcon> {
 }
 
 pub fn file_icon_path_for_name(file_name: &str) -> Option<SharedString> {
-  file_icon_path_for_name_str(file_name).map(SharedString::from)
+  file_icon_path_for_name_str(file_name, false).map(SharedString::from)
 }
 
 pub fn file_icon_path_for_path(path: impl AsRef<Path>) -> Option<SharedString> {
   let name = path.as_ref().file_name()?.to_str()?;
   file_icon_path_for_name(name)
+}
+
+pub fn file_icon_path_for_name_with_theme(
+  file_name: &str,
+  theme: &Theme,
+) -> Option<SharedString> {
+  file_icon_path_for_name_str(file_name, theme.mode.is_dark()).map(SharedString::from)
+}
+
+pub fn file_icon_path_for_path_with_theme(
+  path: impl AsRef<Path>,
+  theme: &Theme,
+) -> Option<SharedString> {
+  let name = path.as_ref().file_name()?.to_str()?;
+  file_icon_path_for_name_with_theme(name, theme)
 }
