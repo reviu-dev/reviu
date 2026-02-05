@@ -542,7 +542,7 @@ impl GitPage {
       entry.path == rel_path
         && matches!(
           entry.status,
-          RepoStatusKind::Untracked | RepoStatusKind::Added
+          RepoStatusKind::Untracked | RepoStatusKind::Added | RepoStatusKind::Deleted
         )
     })
   }
@@ -1731,15 +1731,15 @@ impl GitPage {
       .map(|path| self.split_disabled_for_path(path))
       .unwrap_or(false);
     let (toggle_label, toggle_icon, toggle_tooltip) = if split_disabled {
-      (
-        "Split",
-        IconName::PanelLeft,
-        "Split diff unavailable for new files",
-      )
+      ("Split", IconName::PanelLeft, None)
     } else {
       match self.diff_view {
-        DiffViewMode::Inline => ("Split", IconName::PanelLeft, "Switch to split diff"),
-        DiffViewMode::Split => ("Inline", IconName::PanelLeftClose, "Switch to inline diff"),
+        DiffViewMode::Inline => ("Split", IconName::PanelLeft, Some("Switch to split diff")),
+        DiffViewMode::Split => (
+          "Inline",
+          IconName::PanelLeftClose,
+          Some("Switch to inline diff"),
+        ),
       }
     };
     let view = cx.entity();
@@ -1748,7 +1748,7 @@ impl GitPage {
       .icon(toggle_icon)
       .xsmall()
       .ghost()
-      .tooltip(toggle_tooltip)
+      .when_some(toggle_tooltip, |this, tooltip| this.tooltip(tooltip))
       .disabled(split_disabled)
       .on_click(move |_, _, cx| {
         view.update(cx, |this, cx| {
