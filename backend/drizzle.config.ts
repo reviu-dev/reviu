@@ -1,4 +1,5 @@
 import { defineConfig } from 'drizzle-kit'
+// @ts-expect-error .js error import
 import { env } from './src/lib/env'
 import 'dotenv/config'
 

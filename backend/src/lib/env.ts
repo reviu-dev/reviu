@@ -4,6 +4,7 @@ import 'dotenv/config'
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production']),
+  BASE_URL: z.string(),
   PG_USER: z.string(),
   PG_PASSWORD: z.string(),
   PG_HOST: z.string(),
