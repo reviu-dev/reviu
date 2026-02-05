@@ -17,7 +17,9 @@ use git::DiffLineKind;
 
 use crate::{
   document::Document,
-  editor::{DEFAULT_MAX_LINE_WIDTH, DisplayCursor, Editor, GroupOverlay, ScrollAxis},
+  editor::{
+    DEFAULT_MAX_LINE_WIDTH, DisplayCursor, Editor, GroupOverlay, SCROLL_PADDING, ScrollAxis,
+  },
   projection::{
     ChangeKind, DisplayLine, GAP_MARKER_TEXT, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
   },
@@ -548,7 +550,9 @@ fn word_diff_for_line(
   theme: &Theme,
 ) -> Option<WordDiffStyle> {
   match display_line {
-    DisplayLine::Modified { old_text, doc_line, .. } => {
+    DisplayLine::Modified {
+      old_text, doc_line, ..
+    } => {
       if matches!(diff_view, DiffElementView::Inline) {
         return None;
       }
@@ -561,13 +565,11 @@ fn word_diff_for_line(
     }
     DisplayLine::Removed { .. }
     | DisplayLine::Doc {
-        change: Some(ChangeKind::Added),
-        ..
-      } if matches!(diff_view, DiffElementView::Inline) => {
-      projection.and_then(|projection| {
-        inline_word_diff_style(display_idx, display_line, projection, document, theme)
-      })
-    }
+      change: Some(ChangeKind::Added),
+      ..
+    } if matches!(diff_view, DiffElementView::Inline) => projection.and_then(|projection| {
+      inline_word_diff_style(display_idx, display_line, projection, document, theme)
+    }),
     _ => None,
   }
 }
@@ -846,8 +848,7 @@ impl Element for EditorElement {
     {
       let document = document_entity.read(cx);
       for (display_idx, display_line) in lines_to_shape {
-        let (line_text, doc_line, base_color, allow_highlights, word_diff) =
-          match &display_line {
+        let (line_text, doc_line, base_color, allow_highlights, word_diff) = match &display_line {
           DisplayLine::Doc {
             doc_line, change, ..
           } => {
@@ -863,17 +864,9 @@ impl Element for EditorElement {
             let word_diff = if matches!(self.diff_view, DiffElementView::Inline)
               && matches!(change, Some(ChangeKind::Added))
             {
-              projection
-                .as_deref()
-                .and_then(|projection| {
-                  inline_word_diff_style(
-                    display_idx,
-                    &display_line,
-                    projection,
-                    &document,
-                    &theme,
-                  )
-                })
+              projection.as_deref().and_then(|projection| {
+                inline_word_diff_style(display_idx, &display_line, projection, &document, &theme)
+              })
             } else {
               None
             };
@@ -888,7 +881,8 @@ impl Element for EditorElement {
                 .line_content(*doc_line)
                 .map(|cow| clean_line_text(&cow))
                 .unwrap_or_default();
-              let word_diff = modified_word_diff_style(&old_text, &new_text, self.diff_view, &theme);
+              let word_diff =
+                modified_word_diff_style(&old_text, &new_text, self.diff_view, &theme);
               (old_text, None, theme.diff_removed_text(), false, word_diff)
             }
             DiffElementView::SplitRight => {
@@ -911,17 +905,9 @@ impl Element for EditorElement {
           DisplayLine::Removed { text, .. } => {
             let color = theme.diff_removed_text();
             let word_diff = if matches!(self.diff_view, DiffElementView::Inline) {
-              projection
-                .as_deref()
-                .and_then(|projection| {
-                  inline_word_diff_style(
-                    display_idx,
-                    &display_line,
-                    projection,
-                    &document,
-                    &theme,
-                  )
-                })
+              projection.as_deref().and_then(|projection| {
+                inline_word_diff_style(display_idx, &display_line, projection, &document, &theme)
+              })
             } else {
               None
             };
@@ -1146,10 +1132,7 @@ impl Element for EditorElement {
         &document,
         &theme,
       ) {
-        if let Some((_, shaped)) = shaped_lines
-          .iter()
-          .find(|(idx, _)| *idx == *display_idx)
-        {
+        if let Some((_, shaped)) = shaped_lines.iter().find(|(idx, _)| *idx == *display_idx) {
           let y = bounds.top() + line_height * (*display_idx - viewport.start) as f32;
           for range in word_diff.ranges {
             if range.start >= range.end {
@@ -1715,9 +1698,11 @@ impl Element for EditorElement {
               return;
             }
 
-            let new_scroll = (editor.scroll_offset_y + delta_y)
-              .max(0.0)
-              .min((total_lines.saturating_sub(1)) as f32);
+            let viewport_lines = (bounds.size.height / window.line_height()).max(1.0);
+            let max_padding = (viewport_lines - 1.0).max(0.0);
+            let scroll_padding = (SCROLL_PADDING as f32).min(max_padding);
+            let max_scroll = (total_lines as f32 - viewport_lines + scroll_padding).max(0.0);
+            let new_scroll = (editor.scroll_offset_y + delta_y).max(0.0).min(max_scroll);
 
             editor.scroll_offset_y = new_scroll;
             if editor.scroll_handle.offset().x != editor.last_scroll_x {

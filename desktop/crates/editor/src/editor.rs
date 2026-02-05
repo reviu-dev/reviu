@@ -53,7 +53,7 @@ pub(crate) const TAB_SPACES: usize = 4;
 /// Maximum number of cached shaped lines
 const MAX_CACHE_SIZE: usize = 200;
 /// Number of lines of padding when auto-scrolling to cursor
-const SCROLL_PADDING: usize = 3;
+pub(crate) const SCROLL_PADDING: usize = 3;
 /// Width of the gutter area
 const GUTTER_WIDTH: f32 = 90.0;
 /// Diff recompute debounce (ms)
@@ -1156,23 +1156,23 @@ impl Editor {
 
     // Calculate how many lines are visible in the viewport
     let line_height = window.line_height();
-    let visible_lines = (self.viewport_height / line_height).floor() as usize;
+    let viewport_lines = (self.viewport_height / line_height).max(1.0);
+    let max_padding = (viewport_lines - 1.0).max(0.0);
+    let scroll_padding = (SCROLL_PADDING as f32).min(max_padding);
 
-    // Offset for context padding when scrolling
-    let scroll_padding = SCROLL_PADDING;
+    let cursor_line_f = cursor_line as f32;
+    let cursor_top = cursor_line_f;
+    let cursor_bottom = cursor_line_f + 1.0;
+    let view_top = self.scroll_offset_y;
+    let view_bottom = view_top + viewport_lines;
+    let padded_top = view_top + scroll_padding;
+    let padded_bottom = view_bottom - scroll_padding;
 
-    // Calculate the visible range with padding
-    let scroll_start = self.scroll_offset_y as usize;
-    let scroll_end = scroll_start + visible_lines;
-
-    // Ensure cursor is within the visible range with padding (vertical)
-    if cursor_line < scroll_start + scroll_padding {
-      // Cursor is too close to top, scroll up
-      self.scroll_offset_y = (cursor_line.saturating_sub(scroll_padding)) as f32;
-    } else if cursor_line >= scroll_end.saturating_sub(scroll_padding) {
-      // Cursor is too close to bottom, scroll down
-      let target_line = cursor_line + scroll_padding;
-      self.scroll_offset_y = (target_line as f32 - visible_lines as f32 + 1.0).max(0.0);
+    // Keep the cursor inside the padded viewport.
+    if cursor_top < padded_top {
+      self.scroll_offset_y = (cursor_top - scroll_padding).max(0.0);
+    } else if cursor_bottom > padded_bottom {
+      self.scroll_offset_y = (cursor_bottom + scroll_padding - viewport_lines).max(0.0);
     }
 
     // Ensure cursor is visible horizontally
@@ -1207,7 +1207,7 @@ impl Editor {
       }
     }
 
-    let max_scroll = (total_lines as f32 - visible_lines as f32).max(0.0);
+    let max_scroll = (total_lines as f32 - viewport_lines + scroll_padding).max(0.0);
     self.scroll_offset_y = self.scroll_offset_y.clamp(0.0, max_scroll);
   }
 
@@ -2355,6 +2355,7 @@ impl EntityInputHandler for Editor {
     self.record_transaction(transaction_id, selection_before, selection_after);
 
     self.is_dirty = true;
+    self.ensure_cursor_visible(window, cx);
     cx.notify();
     self.schedule_diff_recompute(cx);
   }
@@ -2423,6 +2424,7 @@ impl EntityInputHandler for Editor {
       .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
 
     self.is_dirty = true;
+    self.ensure_cursor_visible(window, cx);
     cx.notify();
     self.schedule_diff_recompute(cx);
   }
