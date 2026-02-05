@@ -63,7 +63,12 @@ impl StatusThemeExt for gpui_component::Theme {
         a: 1.0,
       }
     } else {
-      self.warning
+      Hsla {
+        h: 28.0 / 360.0,
+        s: 0.9,
+        l: 0.45,
+        a: 1.0,
+      }
     }
   }
 
@@ -76,7 +81,12 @@ impl StatusThemeExt for gpui_component::Theme {
         a: 1.0,
       }
     } else {
-      self.success
+      Hsla {
+        h: 140.0 / 360.0,
+        s: 0.7,
+        l: 0.4,
+        a: 1.0,
+      }
     }
   }
 
