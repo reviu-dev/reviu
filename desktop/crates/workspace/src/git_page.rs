@@ -30,6 +30,7 @@ use gpui_component::{
 use smol::unblock;
 
 use crate::{
+  api::{ApiClient, User},
   config::{ConfigStore, RecentRepository},
   workspace::{WorkspacePage, WorkspaceRoute},
 };
@@ -524,8 +525,16 @@ impl SelectItem for BranchSelectItem {
   }
 }
 
+#[derive(Clone, Debug)]
+enum AuthState {
+  Unknown,
+  Authenticated(User),
+  Unauthenticated,
+}
+
 pub struct GitPage {
   focus_handle: FocusHandle,
+  api: ApiClient,
   repo_select: Entity<SelectState<SearchableVec<RecentRepoItem>>>,
   branch_select: Entity<SelectState<SearchableVec<BranchSelectItem>>>,
   window_handle: AnyWindowHandle,
@@ -540,6 +549,8 @@ pub struct GitPage {
   selected_file: Option<PathBuf>,
   editor: Option<Entity<Editor>>,
   diff_view: DiffViewMode,
+  auth_state: AuthState,
+  auth_task: Option<Task<()>>,
   status_task: Option<Task<()>>,
   branch_task: Option<Task<()>>,
   poll_task: Option<Task<()>>,
@@ -555,6 +566,23 @@ impl GitPage {
           RepoStatusKind::Untracked | RepoStatusKind::Added | RepoStatusKind::Deleted
         )
     })
+  }
+
+  fn refresh_auth_state(&mut self, cx: &mut Context<Self>) {
+    let api = self.api.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.fetch_me()).await;
+      let _ = this.update(cx, |this, cx| {
+        this.auth_state = match result {
+          Ok(Some(user)) => AuthState::Authenticated(user),
+          Ok(None) => AuthState::Unauthenticated,
+          Err(_) => AuthState::Unauthenticated,
+        };
+        cx.notify();
+      });
+    });
+
+    self.auth_task = Some(task);
   }
 
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -590,6 +618,7 @@ impl GitPage {
 
     let mut view = Self {
       focus_handle: cx.focus_handle(),
+      api: ApiClient::new(),
       repo_select,
       branch_select,
       window_handle: window.window_handle(),
@@ -604,6 +633,8 @@ impl GitPage {
       selected_file: None,
       editor: None,
       diff_view: DiffViewMode::Inline,
+      auth_state: AuthState::Unknown,
+      auth_task: None,
       status_task: None,
       branch_task: None,
       poll_task: None,
@@ -615,6 +646,7 @@ impl GitPage {
     view.reload_status(cx);
     view.refresh_branches(cx);
     view.start_polling(cx);
+    view.refresh_auth_state(cx);
 
     view
   }
@@ -1646,6 +1678,35 @@ impl GitPage {
       .child(branch_select)
       .when_some(branch_info, |this, info| this.child(info));
 
+    let auth_control = match &self.auth_state {
+      AuthState::Authenticated(user) => {
+        let display_name = if user.name.trim().is_empty() {
+          user.email.clone()
+        } else {
+          user.name.clone()
+        };
+        Some(
+          div()
+            .text_sm()
+            .font_medium()
+            .text_color(theme.foreground)
+            .child(display_name)
+            .into_any_element(),
+        )
+      }
+      AuthState::Unauthenticated => Some(
+        Button::new("auth-login")
+          .label("Login")
+          .ghost()
+          .compact()
+          .on_click(|_, _, _| {
+            // TODO: open login flow
+          })
+          .into_any_element(),
+      ),
+      AuthState::Unknown => None,
+    };
+
     let settings_button = Button::new("open-settings")
       .icon(IconName::Settings2)
       .ghost()
@@ -1655,6 +1716,12 @@ impl GitPage {
         WorkspaceRoute::global_mut(cx).page = WorkspacePage::Settings;
         cx.refresh_windows();
       });
+
+    let header_right = h_flex()
+      .items_center()
+      .gap_2()
+      .when_some(auth_control, |this, control| this.child(control))
+      .child(settings_button);
 
     div()
       .h(px(HEADER_HEIGHT))
@@ -1666,7 +1733,7 @@ impl GitPage {
       .border_b_1()
       .border_color(theme.title_bar_border)
       .child(header_left)
-      .child(settings_button)
+      .child(header_right)
   }
 
   fn render_empty_state(&self, message: &str, cx: &mut Context<Self>) -> AnyElement {

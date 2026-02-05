@@ -14,3 +14,6 @@ dirs = { workspace = true }
 rusqlite = { workspace = true }
 syntax = { workspace = true }
 smol = { workspace = true }
+anyhow = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
