@@ -833,7 +833,7 @@ impl CommandPalette {
       .len();
 
     v_flex()
-      .gap_3()
+      .h_full()
       .child(self.render_search_list(
         &self.branches_list,
         count_branches,
@@ -856,7 +856,7 @@ impl CommandPalette {
       .len();
 
     v_flex()
-      .gap_3()
+      .h_full()
       .child(self.render_search_list(
         &self.branches_list,
         count_branches,
