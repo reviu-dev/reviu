@@ -128,6 +128,7 @@ pub struct Editor {
   pub optimistic_unstaged_groups: HashSet<Arc<str>>,
 
   diff_view_mode: DiffViewMode,
+  pub is_read_only: bool,
 
   // Track syntax highlighting version to invalidate cache when highlights change
   pub last_highlights_version: usize,
@@ -229,12 +230,13 @@ impl Editor {
     {
       language_hint = Some("dockerfile");
     }
-    let content = match std::fs::read_to_string(&workdir_path) {
-      Ok(content) => content,
-      Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-        Self::deleted_file_content(&repo_root, &workdir_path).unwrap_or_default()
-      }
-      Err(_) => String::new(),
+    let (content, is_read_only) = match std::fs::read_to_string(&workdir_path) {
+      Ok(content) => (content, false),
+      Err(err) if err.kind() == std::io::ErrorKind::NotFound => (
+        Self::deleted_file_content(&repo_root, &workdir_path).unwrap_or_default(),
+        true,
+      ),
+      Err(_) => (String::new(), false),
     };
 
     let document = cx.new(|cx| Document::new(&content, language_hint, cx));
@@ -301,6 +303,7 @@ impl Editor {
       save_task: None,
       optimistic_unstaged_groups: HashSet::new(),
       diff_view_mode: DiffViewMode::Inline,
+      is_read_only,
     };
     editor.init(cx);
     editor
@@ -543,6 +546,9 @@ impl Editor {
   }
 
   pub fn save(&mut self, cx: &mut Context<Self>) {
+    if self.is_read_only {
+      return;
+    }
     let workdir_path = self.workdir_path.clone();
     let contents = {
       let document = self.document.read(cx);
@@ -956,6 +962,7 @@ impl Editor {
   }
 
   fn reload_from_disk(&mut self, contents: String, cx: &mut Context<Self>) {
+    self.is_read_only = false;
     self.document.update(cx, |doc, cx| {
       doc.replace_all(&contents, cx);
     });
@@ -2280,6 +2287,9 @@ impl EntityInputHandler for Editor {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    if self.is_read_only {
+      return;
+    }
     if self.is_read_only_display_cursor(cx) && self.selected_range.is_empty() {
       return;
     }
@@ -2357,6 +2367,9 @@ impl EntityInputHandler for Editor {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    if self.is_read_only {
+      return;
+    }
     if self.is_read_only_display_cursor(cx) && self.selected_range.is_empty() {
       return;
     }
@@ -2658,6 +2671,7 @@ pub mod tests {
           is_dirty: false,
           save_task: None,
           diff_view_mode: DiffViewMode::Inline,
+          is_read_only: false,
           last_highlights_version: 0,
           last_highlights_epoch: 0,
           cursor_blink,
