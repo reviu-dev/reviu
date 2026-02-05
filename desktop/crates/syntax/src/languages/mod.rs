@@ -6,6 +6,7 @@ pub mod markdown;
 pub mod python;
 pub mod rust;
 pub mod scss;
+pub mod toml;
 pub mod typescript;
 pub mod vue;
 pub mod xml;
@@ -24,6 +25,7 @@ const EXTENSIONS_YAML: &[&str] = &["yml", "yaml"];
 const EXTENSIONS_JSON: &[&str] = &["json", "jsonc"];
 const EXTENSIONS_CSS: &[&str] = &["css"];
 const EXTENSIONS_SCSS: &[&str] = &["scss"];
+const EXTENSIONS_TOML: &[&str] = &["toml"];
 const EXTENSIONS_DOCKERFILE: &[&str] = &["dockerfile"];
 const EXTENSIONS_HTML: &[&str] = &["html", "htm"];
 const EXTENSIONS_MARKDOWN: &[&str] = &["md", "markdown"];
@@ -33,6 +35,7 @@ pub fn detect_language_config(extension: &str) -> Option<&'static LanguageConfig
   match extension {
     _ if EXTENSIONS_CSS.contains(&extension) => Some(&*css::CSS_CONFIG),
     _ if EXTENSIONS_SCSS.contains(&extension) => Some(&*scss::SCSS_CONFIG),
+    _ if EXTENSIONS_TOML.contains(&extension) => Some(&*toml::TOML_CONFIG),
     _ if EXTENSIONS_DOCKERFILE.contains(&extension) => Some(&*dockerfile::DOCKERFILE_CONFIG),
     _ if EXTENSIONS_HTML.contains(&extension) => Some(&*html::HTML_CONFIG),
     _ if EXTENSIONS_JSON.contains(&extension) => Some(&*json::JSON_CONFIG),
@@ -52,6 +55,7 @@ pub fn language_config_for_name(name: &str) -> Option<&'static LanguageConfig> {
   match name.as_str() {
     "css" => Some(&*css::CSS_CONFIG),
     "scss" => Some(&*scss::SCSS_CONFIG),
+    "toml" => Some(&*toml::TOML_CONFIG),
     "sass" | "less" | "postcss" => Some(&*css::CSS_CONFIG),
     "html" => Some(&*html::HTML_CONFIG),
     "javascript" | "js" | "typescript" | "ts" | "tsx" | "jsx" => {
@@ -115,6 +119,11 @@ mod tests {
   #[test]
   fn test_detect_scss() {
     assert!(detect_language_config("scss").is_some());
+  }
+
+  #[test]
+  fn test_detect_toml() {
+    assert!(detect_language_config("toml").is_some());
   }
 
   #[test]
