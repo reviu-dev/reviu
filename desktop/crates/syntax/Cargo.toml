@@ -13,6 +13,7 @@ tree-sitter-typescript.workspace = true
 tree-sitter-json.workspace = true
 tree-sitter-md.workspace = true
 tree-sitter-css.workspace = true
+tree-sitter-scss.workspace = true
 tree-sitter-html.workspace = true
 tree-sitter-dockerfile.workspace = true
 tree-sitter-xml.workspace = true
