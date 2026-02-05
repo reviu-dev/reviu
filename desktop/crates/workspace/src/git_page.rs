@@ -327,7 +327,11 @@ impl SidebarItem for FileSidebarItem {
       })
       .when(!is_collapsed, |this| {
         if let Some(path) = file_icon_path {
-          this.child(img(path).size(px(FILE_ICON_SIZE_PX)))
+          this.child(
+            img(path)
+              .min_w(px(FILE_ICON_SIZE_PX))
+              .size(px(FILE_ICON_SIZE_PX)),
+          )
         } else {
           this.child(
             Icon::new(IconName::File)
@@ -550,8 +554,8 @@ impl GitPage {
       .iter()
       .map(|repo| RecentRepoItem::new(repo, selected_repo.as_ref()))
       .collect();
-    let repo_select = cx
-      .new(|cx| SelectState::new(SearchableVec::new(items), None, window, cx).searchable(true));
+    let repo_select =
+      cx.new(|cx| SelectState::new(SearchableVec::new(items), None, window, cx).searchable(true));
     let branch_select = cx.new(|cx| {
       SelectState::new(
         SearchableVec::new(Vec::<BranchSelectItem>::new()),
@@ -734,15 +738,16 @@ impl GitPage {
       let items = branches
         .into_iter()
         .map(|branch| {
-          let is_current = selected.as_ref().map_or(false, |current| current == &branch);
+          let is_current = selected
+            .as_ref()
+            .map_or(false, |current| current == &branch);
           BranchSelectItem::new(branch, is_current)
         })
         .collect::<Vec<_>>();
 
       let select = cx.update_window(window_handle, |_, window, cx| {
-        let select = cx.new(|cx| {
-          SelectState::new(SearchableVec::new(items), None, window, cx).searchable(true)
-        });
+        let select = cx
+          .new(|cx| SelectState::new(SearchableVec::new(items), None, window, cx).searchable(true));
         if let Some(selected) = selected.as_ref() {
           select.update(cx, |state, cx| {
             state.set_selected_value(selected, window, cx);
@@ -1012,10 +1017,18 @@ impl GitPage {
       .collect::<Vec<_>>();
 
     let view = cx.entity();
-    let handler: SearchFileHandler = Arc::new(move |path, _window, cx| {
+    let handler: SearchFileHandler = Arc::new(move |path, window, cx| {
       view.update(cx, |view, cx| {
         view.open_file(path, cx);
       });
+
+      if let Some(editor) = view.read(cx).editor.clone() {
+        let focus_handle: FocusHandle = editor.read(cx).focus_handle(cx);
+        window.focus(&focus_handle, cx);
+      } else {
+        let focus_handle = view.read(cx).focus_handle(cx);
+        window.focus(&focus_handle, cx);
+      }
       Ok(())
     });
 
