@@ -120,6 +120,7 @@ struct FileSidebarItem {
   active: bool,
   collapsed: bool,
   disabled: bool,
+  deleted: bool,
   handler: std::rc::Rc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>,
 }
 
@@ -146,6 +147,7 @@ impl FileSidebarItem {
       active: false,
       collapsed: false,
       disabled: false,
+      deleted: false,
       handler: std::rc::Rc::new(|_, _, _| {}),
     }
   }
@@ -174,6 +176,11 @@ impl FileSidebarItem {
 
   fn disabled(mut self, disabled: bool) -> Self {
     self.disabled = disabled;
+    self
+  }
+
+  fn deleted(mut self, deleted: bool) -> Self {
+    self.deleted = deleted;
     self
   }
 
@@ -335,6 +342,7 @@ impl SidebarItem for FileSidebarItem {
             .w_full()
             .overflow_hidden()
             .text_ellipsis_start()
+            .when(self.deleted, |this| this.line_through())
             .child(self.label.clone()),
         )
       })
@@ -2125,6 +2133,7 @@ impl GitPage {
             let file_label = entry.path.to_string_lossy();
             let file_label = file_label.replace(['\n', '\r'], "");
             let status_color = Self::status_color(status, &theme);
+            let is_deleted = status == RepoStatusKind::Deleted;
             let (stage_icon, stage_color, stage_tooltip) = Self::stage_style(entry.stage, &theme);
             let file_icon_path = file_icon_path_for_path(&entry.path);
             let can_stage = matches!(
@@ -2144,6 +2153,7 @@ impl GitPage {
             )
             .file_icon_path(file_icon_path)
             .active(is_active)
+            .deleted(is_deleted)
             .on_click(cx.listener(move |this, _, _, cx| {
               this.open_file(path_for_open.clone(), cx);
             }));
