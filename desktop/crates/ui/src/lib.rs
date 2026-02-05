@@ -13,7 +13,8 @@ pub use command_palette::{
 pub use confirm_dialog::ConfirmDialog;
 pub use icons::{
   FileIcon, UiIconName, FILE_ICON_SIZE_PX, file_icon_for_name, file_icon_for_path,
-  file_icon_path_for_name, file_icon_path_for_path,
+  file_icon_path_for_name, file_icon_path_for_name_with_theme, file_icon_path_for_path,
+  file_icon_path_for_path_with_theme,
 };
 pub use search_file_palette::{
   SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,

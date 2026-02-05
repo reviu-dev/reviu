@@ -1,6 +1,6 @@
 use std::{path::PathBuf, rc::Rc, sync::Arc};
 
-use crate::{FILE_ICON_SIZE_PX, file_icon_path_for_path};
+use crate::{FILE_ICON_SIZE_PX, file_icon_path_for_path_with_theme};
 use gpui::{
   AnyElement, App, Context, Div, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
   Render, SharedString, Styled, Subscription, Task, Window, div, img, prelude::*, px,
@@ -116,7 +116,7 @@ impl ListDelegate for SearchFileListDelegate {
     let base_item = list_base_item(ix, total_items, self.selected_index.clone(), &theme);
 
     self.matched_files.get(ix.row).map(|entry| {
-      let file_icon: AnyElement = file_icon_path_for_path(&entry.path)
+      let file_icon: AnyElement = file_icon_path_for_path_with_theme(&entry.path, &theme)
         .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
         .unwrap_or_else(|| {
           Icon::new(IconName::File)
