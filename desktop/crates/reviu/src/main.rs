@@ -5,7 +5,8 @@ use gpui::{
   size,
 };
 use gpui_component::Root;
-use std::sync::mpsc;
+use reqwest_client::ReqwestClient;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use ui::AppAssets;
 use workspace::{
@@ -30,6 +31,8 @@ fn main() {
 
   app.run(move |cx: &mut App| {
     gpui_component::init(cx);
+    let http_client = ReqwestClient::user_agent("reviu").expect("Failed to create HTTP client");
+    cx.set_http_client(Arc::new(http_client));
 
     let bounds = Bounds::centered(
       None,
