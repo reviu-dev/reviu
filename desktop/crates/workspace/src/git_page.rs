@@ -19,6 +19,7 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _, Collapsible, Disableable, Icon, IconName, Sizable, StyledExt as _,
+  avatar::Avatar,
   button::{Button, ButtonGroup, ButtonVariant, ButtonVariants as _},
   h_flex,
   kbd::Kbd,
@@ -592,16 +593,62 @@ impl GitPage {
 
   fn handle_auth_code(&mut self, code: String, cx: &mut Context<Self>) {
     let api = self.api.clone();
+    let service = self.api.keychain_service().to_string();
+    let username = self.api.keychain_username().to_string();
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || api.exchange_code_for_token(&code)).await;
-      let _ = this.update(cx, |this, cx| {
-        if let Ok(token) = result {
-          this.api.set_bearer_token(token);
-          this.refresh_auth_state(cx);
-        } else {
-          this.auth_state = AuthState::Unauthenticated;
-          cx.notify();
+      match result {
+        Ok(token) => {
+          let secret = token.clone().into_bytes();
+          let write_task = cx.update(|cx| cx.write_credentials(&service, &username, &secret));
+          let _ = write_task.await;
+          let _ = this.update(cx, |this, cx| {
+            this.api.set_bearer_token(token);
+            this.refresh_auth_state(cx);
+          });
         }
+        Err(_) => {
+          let _ = this.update(cx, |this, cx| {
+            this.auth_state = AuthState::Unauthenticated;
+            cx.notify();
+          });
+        }
+      }
+    });
+
+    self.auth_task = Some(task);
+  }
+
+  fn logout(&mut self, cx: &mut Context<Self>) {
+    let api = self.api.clone();
+    let service = self.api.keychain_service().to_string();
+    let task = cx.spawn(async move |this, cx| {
+      let _ = unblock(move || api.sign_out()).await;
+      let delete_task = cx.update(|cx| cx.delete_credentials(&service));
+      let _ = delete_task.await;
+      let _ = this.update(cx, |this, cx| {
+        this.auth_state = AuthState::Unauthenticated;
+        cx.notify();
+      });
+    });
+
+    self.auth_task = Some(task);
+  }
+
+  fn load_bearer_from_keychain(&mut self, cx: &mut Context<Self>) {
+    let service = self.api.keychain_service().to_string();
+    let task = cx.spawn(async move |this, cx| {
+      let read_result = cx.update(|cx| cx.read_credentials(&service)).await;
+      let _ = this.update(cx, |this, cx| {
+        if let Ok(Some((_username, secret))) = read_result {
+          if let Ok(token) = String::from_utf8(secret) {
+            this.api.set_bearer_token(token);
+            this.refresh_auth_state(cx);
+            return;
+          }
+        }
+        this.auth_state = AuthState::Unauthenticated;
+        cx.notify();
       });
     });
 
@@ -630,7 +677,6 @@ impl GitPage {
     let task = cx.spawn(async move |_, cx| {
       let result = unblock(move || api.sign_in_with_github()).await;
       if let Ok(Some(url)) = result {
-        // println!("Opening URL: {}", url);
         let _ = cx.update(|cx| cx.open_url(&url));
       }
     });
@@ -699,7 +745,7 @@ impl GitPage {
     view.reload_status(cx);
     view.refresh_branches(cx);
     view.start_polling(cx);
-    view.refresh_auth_state(cx);
+    view.load_bearer_from_keychain(cx);
     AuthCallbackTarget::register_git_page(cx);
 
     view
@@ -1733,6 +1779,16 @@ impl GitPage {
       .child(branch_select)
       .when_some(branch_info, |this, info| this.child(info));
 
+    let settings_button = Button::new("open-settings")
+      .icon(IconName::Settings2)
+      .ghost()
+      .compact()
+      .tooltip("Settings")
+      .on_click(|_, _, cx| {
+        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Settings;
+        cx.refresh_windows();
+      });
+
     let auth_control = match &self.auth_state {
       AuthState::Authenticated(user) => {
         let display_name = if user.name.trim().is_empty() {
@@ -1740,12 +1796,41 @@ impl GitPage {
         } else {
           user.name.clone()
         };
+        let avatar = Avatar::new()
+          .name(display_name.clone())
+          .when_some(user.image.clone(), |this, image| this.src(image))
+          .small();
+        let settings_view = view.clone();
+        let logout_view = view.clone();
         Some(
-          div()
-            .text_sm()
-            .font_medium()
-            .text_color(theme.foreground)
-            .child(display_name)
+          Button::new("auth-menu")
+            .ghost()
+            .compact()
+            .child(avatar)
+            .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+              let settings_view = settings_view.clone();
+              let logout_view = logout_view.clone();
+              let menu = menu.item(
+                PopupMenuItem::new("Settings")
+                  .icon(IconName::Settings2)
+                  .on_click(move |event, _, cx| {
+                    let _ = event;
+                    let _ = settings_view.update(cx, |_, cx| {
+                      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Settings;
+                      cx.refresh_windows();
+                    });
+                  }),
+              );
+
+              menu.separator().item(
+                PopupMenuItem::new("Sign out")
+                  .icon(IconName::ArrowRight)
+                  .on_click(move |event, _, cx| {
+                    let _ = event;
+                    let _ = logout_view.update(cx, |this, cx| this.logout(cx));
+                  }),
+              )
+            })
             .into_any_element(),
         )
       }
@@ -1765,21 +1850,14 @@ impl GitPage {
       AuthState::Unknown => None,
     };
 
-    let settings_button = Button::new("open-settings")
-      .icon(IconName::Settings2)
-      .ghost()
-      .compact()
-      .tooltip("Settings")
-      .on_click(|_, _, cx| {
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Settings;
-        cx.refresh_windows();
-      });
-
     let header_right = h_flex()
       .items_center()
       .gap_2()
       .when_some(auth_control, |this, control| this.child(control))
-      .child(settings_button);
+      .when(
+        !matches!(self.auth_state, AuthState::Authenticated(_)),
+        |this| this.child(settings_button),
+      );
 
     div()
       .h(px(HEADER_HEIGHT))

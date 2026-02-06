@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
 const DEFAULT_API_BASE_URL: &str = "http://localhost:3000";
+const KEYCHAIN_SERVICE: &str = "reviu_auth";
+const KEYCHAIN_USERNAME: &str = "bearer";
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -64,6 +66,9 @@ struct ExchangeCodeResponse {
   token: String,
 }
 
+#[derive(Debug, Serialize)]
+struct EmptyRequest {}
+
 impl ApiClient {
   pub fn new() -> Self {
     let base_url =
@@ -82,6 +87,14 @@ impl ApiClient {
 
   fn get_api_url(&self, path: &str) -> String {
     format!("{}/{}", self.base_url, path.trim_start_matches('/'))
+  }
+
+  pub fn keychain_service(&self) -> &str {
+    KEYCHAIN_SERVICE
+  }
+
+  pub fn keychain_username(&self) -> &'static str {
+    KEYCHAIN_USERNAME
   }
 
   pub fn authed_request(
@@ -125,9 +138,28 @@ impl ApiClient {
     Ok(payload.token)
   }
 
+  pub fn sign_out(&self) -> Result<()> {
+    let response = self
+      .authed_request(Method::POST, "/api/auth/sign-out")
+      .json(&EmptyRequest {})
+      .send()?;
+    if !response.status().is_success() {
+      self.clear_bearer_token();
+      anyhow::bail!("unexpected status: {}", response.status());
+    }
+    self.clear_bearer_token();
+    Ok(())
+  }
+
   pub fn set_bearer_token(&self, token: String) {
     if let Ok(mut guard) = self.bearer_token.lock() {
       *guard = Some(token);
+    }
+  }
+
+  pub fn clear_bearer_token(&self) {
+    if let Ok(mut guard) = self.bearer_token.lock() {
+      *guard = None;
     }
   }
 
