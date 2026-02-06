@@ -4,5 +4,7 @@ mod api;
 mod settings_page;
 mod workspace;
 
-pub use git_page::{CommitChanges, OpenRepository, SaveFile, ShowCommandPalette, ShowFileSearch};
+pub use git_page::{
+  AuthCallbackTarget, CommitChanges, OpenRepository, SaveFile, ShowCommandPalette, ShowFileSearch,
+};
 pub use workspace::WorkspaceView;

@@ -13,9 +13,9 @@ use git::{
   undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Hsla,
+  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global, Hsla,
   InteractiveElement, Keystroke, ParentElement, PathPromptOptions, Render, SharedString, Styled,
-  Task, Window, actions, div, img, prelude::*, px, uniform_list,
+  Task, WeakEntity, Window, actions, div, img, prelude::*, px, uniform_list,
 };
 use gpui_component::{
   ActiveTheme as _, Collapsible, Disableable, Icon, IconName, Sizable, StyledExt as _,
@@ -532,6 +532,28 @@ enum AuthState {
   Unauthenticated,
 }
 
+#[derive(Clone, Default)]
+pub struct AuthCallbackTarget {
+  git_page: Option<WeakEntity<GitPage>>,
+}
+
+impl Global for AuthCallbackTarget {}
+
+impl AuthCallbackTarget {
+  pub fn register_git_page(cx: &mut Context<GitPage>) {
+    cx.set_global(Self {
+      git_page: Some(cx.entity().downgrade()),
+    });
+  }
+
+  pub fn handle_auth_code(code: String, cx: &mut App) {
+    let Some(weak) = cx.global::<Self>().git_page.clone() else {
+      return;
+    };
+    let _ = weak.update(cx, |this, cx| this.handle_auth_code(code, cx));
+  }
+}
+
 pub struct GitPage {
   focus_handle: FocusHandle,
   api: ApiClient,
@@ -568,6 +590,24 @@ impl GitPage {
     })
   }
 
+  fn handle_auth_code(&mut self, code: String, cx: &mut Context<Self>) {
+    let api = self.api.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.exchange_code_for_token(&code)).await;
+      let _ = this.update(cx, |this, cx| {
+        if let Ok(token) = result {
+          this.api.set_bearer_token(token);
+          this.refresh_auth_state(cx);
+        } else {
+          this.auth_state = AuthState::Unauthenticated;
+          cx.notify();
+        }
+      });
+    });
+
+    self.auth_task = Some(task);
+  }
+
   fn refresh_auth_state(&mut self, cx: &mut Context<Self>) {
     let api = self.api.clone();
     let task = cx.spawn(async move |this, cx| {
@@ -580,6 +620,19 @@ impl GitPage {
         };
         cx.notify();
       });
+    });
+
+    self.auth_task = Some(task);
+  }
+
+  fn start_github_sign_in(&mut self, cx: &mut Context<Self>) {
+    let api = self.api.clone();
+    let task = cx.spawn(async move |_, cx| {
+      let result = unblock(move || api.sign_in_with_github()).await;
+      if let Ok(Some(url)) = result {
+        // println!("Opening URL: {}", url);
+        let _ = cx.update(|cx| cx.open_url(&url));
+      }
     });
 
     self.auth_task = Some(task);
@@ -647,6 +700,7 @@ impl GitPage {
     view.refresh_branches(cx);
     view.start_polling(cx);
     view.refresh_auth_state(cx);
+    AuthCallbackTarget::register_git_page(cx);
 
     view
   }
@@ -1584,6 +1638,7 @@ impl GitPage {
 
   fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let view = cx.entity().downgrade();
     let select = Select::new(&self.repo_select)
       .placeholder("Select repository...")
       .search_placeholder("Search repositories...")
@@ -1694,16 +1749,19 @@ impl GitPage {
             .into_any_element(),
         )
       }
-      AuthState::Unauthenticated => Some(
+      AuthState::Unauthenticated => Some({
+        let view = view.clone();
         Button::new("auth-login")
-          .label("Login")
+          .icon(IconName::GitHub)
+          .label("Sign in with GitHub")
           .ghost()
-          .compact()
-          .on_click(|_, _, _| {
-            // TODO: open login flow
+          .gap_2()
+          .small()
+          .on_click(move |_, _, cx| {
+            let _ = view.update(cx, |this, cx| this.start_github_sign_in(cx));
           })
-          .into_any_element(),
-      ),
+          .into_any_element()
+      }),
       AuthState::Unknown => None,
     };
 

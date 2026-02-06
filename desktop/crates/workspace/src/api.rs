@@ -1,7 +1,8 @@
 use anyhow::Result;
-use reqwest::StatusCode;
+use reqwest::{Method, StatusCode};
 use reqwest::blocking::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 
 const DEFAULT_API_BASE_URL: &str = "http://localhost:3000";
 
@@ -28,6 +29,39 @@ pub struct User {
 pub struct ApiClient {
   base_url: String,
   client: Client,
+  bearer_token: Arc<Mutex<Option<String>>>,
+}
+
+#[derive(Debug, Serialize)]
+struct SocialSignInRequest<'a> {
+  provider: &'a str,
+  #[serde(rename = "disableRedirect")]
+  disable_redirect: bool,
+  #[serde(rename = "callbackURL")]
+  callback_url: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct SocialSignInResponse {
+  #[serde(default)]
+  url: Option<String>,
+  #[serde(default)]
+  redirect: Option<bool>,
+  #[serde(default)]
+  token: Option<String>,
+  #[serde(default)]
+  user: Option<User>,
+}
+
+#[derive(Debug, Serialize)]
+struct ExchangeCodeRequest<'a> {
+  code: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExchangeCodeResponse {
+  token: String,
 }
 
 impl ApiClient {
@@ -42,6 +76,7 @@ impl ApiClient {
     Self {
       base_url: base_url.trim_end_matches('/').to_string(),
       client,
+      bearer_token: Arc::new(Mutex::new(None)),
     }
   }
 
@@ -49,9 +84,65 @@ impl ApiClient {
     format!("{}/{}", self.base_url, path.trim_start_matches('/'))
   }
 
+  pub fn authed_request(
+    &self,
+    method: Method,
+    path: &str,
+  ) -> reqwest::blocking::RequestBuilder {
+    let mut request = self.client.request(method, self.get_api_url(path));
+    if let Some(token) = self.bearer_token() {
+      request = request.bearer_auth(token);
+    }
+    request
+  }
+
+  pub fn sign_in_with_github(&self) -> Result<Option<String>> {
+    let request = SocialSignInRequest {
+      provider: "github",
+      disable_redirect: true,
+      callback_url: "/auth/callback",
+    };
+    let url = self.get_api_url("/api/auth/sign-in/social");
+    let response = self.client.post(url).json(&request).send()?;
+    if !response.status().is_success() {
+      anyhow::bail!("unexpected status: {}", response.status());
+    }
+    let payload = response.json::<SocialSignInResponse>()?;
+    Ok(payload.url)
+  }
+
+  pub fn exchange_code_for_token(&self, code: &str) -> Result<String> {
+    let url = self.get_api_url("/auth/exchange");
+    let response = self
+      .client
+      .post(url)
+      .json(&ExchangeCodeRequest { code })
+      .send()?;
+    if !response.status().is_success() {
+      anyhow::bail!("unexpected status: {}", response.status());
+    }
+    let payload = response.json::<ExchangeCodeResponse>()?;
+    Ok(payload.token)
+  }
+
+  pub fn set_bearer_token(&self, token: String) {
+    if let Ok(mut guard) = self.bearer_token.lock() {
+      *guard = Some(token);
+    }
+  }
+
+  fn bearer_token(&self) -> Option<String> {
+    self
+      .bearer_token
+      .lock()
+      .ok()
+      .and_then(|guard| guard.clone())
+  }
+
   pub fn fetch_me(&self) -> Result<Option<User>> {
-    let url = self.get_api_url("/users/me");
-    let response = self.client.get(url).send()?;
+    let response = self
+      .authed_request(Method::GET, "/users/me")
+      .send()?;
     if response.status() == StatusCode::UNAUTHORIZED {
       return Ok(None);
     }
