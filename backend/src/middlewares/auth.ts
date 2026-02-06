@@ -1,7 +1,5 @@
 import type { AuthType } from '../lib/auth.js'
-
 import { createMiddleware } from 'hono/factory'
-
 import { auth } from '../lib/auth.js'
 
 export const authMiddleware = createMiddleware(async (c, next) => {
@@ -13,7 +11,14 @@ export const authMiddleware = createMiddleware(async (c, next) => {
     return c.json({ error: 'Unauthorized' }, 401)
   }
 
-  c.set('user', user)
+  const ghAccessToken = await auth.api.getAccessToken({
+    body: {
+      providerId: 'github',
+    },
+    headers: c.req.raw.headers,
+  })
+
+  c.set('user', { ...user, ...ghAccessToken })
 
   await next()
 })

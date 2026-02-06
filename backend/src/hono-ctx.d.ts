@@ -1,7 +1,7 @@
-import type { AuthType } from './lib/auth.ts'
+import type { UserContext } from './lib/auth.ts'
 
 declare module 'hono' {
   interface ContextVariableMap {
-    user?: NonNullable<AuthType['user']>
+    user?: UserContext
   }
 }

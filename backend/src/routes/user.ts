@@ -1,6 +1,6 @@
 import { pick } from 'es-toolkit'
 import { Hono } from 'hono'
-import { authMiddleware } from '../middlewares/user.js'
+import { authMiddleware } from '../middlewares/auth.js'
 
 const userRouter = new Hono()
 

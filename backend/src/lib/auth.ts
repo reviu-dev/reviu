@@ -1,7 +1,7 @@
-import type { Merge } from 'type-fest'
+import type { AsyncReturnType, Merge } from 'type-fest'
 import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
-import { admin, openAPI } from 'better-auth/plugins'
+import { admin, bearer, openAPI } from 'better-auth/plugins'
 import { db } from '../db/index.js'
 import { env } from './env.js'
 
@@ -11,6 +11,9 @@ export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: 'pg',
   }),
+  account: {
+    skipStateCookieCheck: true,
+  },
   baseURL: env.BASE_URL,
   trustedOrigins: getTrustedOrigins(),
   secret: env.AUTH_SECRET,
@@ -21,6 +24,7 @@ export const auth = betterAuth({
     },
   },
   plugins: [
+    bearer(),
     admin(),
     openAPI(),
   ],
@@ -30,3 +34,7 @@ export interface AuthType {
   user: (Merge<typeof auth.$Infer.Session.user, { role: 'user' | 'admin' }>) | null
   session: typeof auth.$Infer.Session.session | null
 }
+
+type AccessTokenType = AsyncReturnType<typeof auth.api.getAccessToken>
+
+export type UserContext = Merge<NonNullable<AuthType['user']>, AccessTokenType>
