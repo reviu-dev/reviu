@@ -1164,13 +1164,16 @@ impl GitPage {
         view.open_file(path, cx);
       });
 
-      if let Some(editor) = view.read(cx).editor.clone() {
-        let focus_handle: FocusHandle = editor.read(cx).focus_handle(cx);
-        window.focus(&focus_handle, cx);
-      } else {
-        let focus_handle = view.read(cx).focus_handle(cx);
-        window.focus(&focus_handle, cx);
-      }
+      let view_for_focus = view.clone();
+      window.on_next_frame(move |window, cx| {
+        if let Some(editor) = view_for_focus.read(cx).editor.clone() {
+          let focus_handle: FocusHandle = editor.read(cx).focus_handle(cx);
+          window.focus(&focus_handle, cx);
+        } else {
+          let focus_handle = view_for_focus.read(cx).focus_handle(cx);
+          window.focus(&focus_handle, cx);
+        }
+      });
       Ok(())
     });
 
