@@ -897,7 +897,7 @@ impl GithubPrDetailsPage {
     };
 
     let content = v_flex()
-      .max_w(px(900.0))
+      .w(px(900.0))
       .gap_4()
       .child(
         v_flex()
