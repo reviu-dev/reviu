@@ -374,6 +374,7 @@ impl GithubPage {
     div()
       .h(px(HEADER_HEIGHT))
       .max_h(px(HEADER_HEIGHT))
+      .w_full()
       .px_4()
       .flex()
       .items_center()
@@ -413,7 +414,9 @@ impl Render for GithubPage {
       .child(self.render_header(cx))
       .child(
         v_flex()
-          .flex_1()
+          .w(px(900.0))
+          .mx_auto()
+          .h_full()
           .gap_3()
           .p_4()
           .when_some(self.error.clone(), |this, error| {
