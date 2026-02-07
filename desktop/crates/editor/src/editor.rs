@@ -388,6 +388,34 @@ impl Editor {
     }
   }
 
+  pub fn reset_selection(&mut self, cx: &mut Context<Self>) {
+    self.selected_range = 0..0;
+    self.selection_reversed = false;
+    self.display_selection = None;
+    self.marked_range = None;
+    cx.notify();
+  }
+
+  pub fn reset_after_replace(&mut self) {
+    self.line_layouts.clear();
+    self.virtual_line_layouts.clear();
+    self.expanded_gaps.clear();
+    self.hovered_group_id = None;
+    self.last_mouse_position = None;
+    self.scroll_offset_y = 0.0;
+  }
+
+  pub fn set_diffs(&mut self, diffs: Option<DiffSet>, cx: &mut Context<Self>) {
+    if let Some(diffs) = diffs {
+      self.apply_diffs(diffs, cx);
+    } else {
+      self.diffs = None;
+      self.set_projection(None);
+      self.virtual_line_layouts.clear();
+      cx.notify();
+    }
+  }
+
   pub fn refresh_git_state(&mut self, cx: &mut Context<Self>) {
     self.reload_git_bases(cx);
   }

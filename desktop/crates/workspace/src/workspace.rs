@@ -3,12 +3,14 @@ use gpui::{App, Context, Entity, FocusHandle, Focusable, Global, Render, Window,
 use crate::api::ApiClient;
 use crate::git_page::GitPage;
 use crate::github_page::GithubPage;
+use crate::github_pr_details_page::GithubPrDetailsPage;
 use crate::settings_page::SettingsPage;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspacePage {
   Git,
   Github,
+  GithubPrDetails,
   Settings,
 }
 
@@ -59,6 +61,7 @@ impl WorkspaceApi {
 pub struct WorkspaceView {
   git_page: Entity<GitPage>,
   github_page: Entity<GithubPage>,
+  github_pr_details_page: Entity<GithubPrDetailsPage>,
   settings_page: Entity<SettingsPage>,
 }
 
@@ -68,11 +71,13 @@ impl WorkspaceView {
     cx.set_global(WorkspaceApi::new());
     let git_page = cx.new(|cx| GitPage::new(window, cx));
     let github_page = cx.new(|cx| GithubPage::new(window, cx));
+    let github_pr_details_page = cx.new(|cx| GithubPrDetailsPage::new(window, cx));
     let settings_page = cx.new(|cx| SettingsPage::new(window, cx));
 
     Self {
       git_page,
       github_page,
+      github_pr_details_page,
       settings_page,
     }
   }
@@ -83,6 +88,7 @@ impl Render for WorkspaceView {
     match WorkspaceRoute::global(cx).page {
       WorkspacePage::Git => self.git_page.clone().into_any_element(),
       WorkspacePage::Github => self.github_page.clone().into_any_element(),
+      WorkspacePage::GithubPrDetails => self.github_pr_details_page.clone().into_any_element(),
       WorkspacePage::Settings => self.settings_page.clone().into_any_element(),
     }
   }
@@ -93,6 +99,7 @@ impl Focusable for WorkspaceView {
     match WorkspaceRoute::global(cx).page {
       WorkspacePage::Git => self.git_page.read(cx).focus_handle(cx),
       WorkspacePage::Github => self.github_page.read(cx).focus_handle(cx),
+      WorkspacePage::GithubPrDetails => self.github_pr_details_page.read(cx).focus_handle(cx),
       WorkspacePage::Settings => self.settings_page.read(cx).focus_handle(cx),
     }
   }

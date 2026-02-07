@@ -13,7 +13,7 @@ use git::{
   undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global, Hsla,
+  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
   InteractiveElement, Keystroke, ParentElement, PathPromptOptions, Render, SharedString, Styled,
   Task, WeakEntity, Window, actions, div, img, prelude::*, px, uniform_list,
 };
@@ -40,7 +40,7 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteConfig, CommandPaletteHandler, ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT,
   Input, InputState, SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
-  WindowExt, file_icon_path_for_path_with_theme,
+  StatusThemeExt, WindowExt, file_icon_path_for_path_with_theme,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 280.0;
@@ -48,63 +48,6 @@ const SIDEBAR_MIN_WIDTH: f32 = 220.0;
 const SIDEBAR_MAX_WIDTH: f32 = 500.0;
 const STATUS_POLL_INTERVAL_MS: u64 = 800;
 const EDITOR_HEADER_HEIGHT: f32 = 40.0;
-
-trait StatusThemeExt {
-  fn status_orange(&self) -> gpui::Hsla;
-  fn status_green(&self) -> gpui::Hsla;
-  fn status_red(&self) -> gpui::Hsla;
-}
-
-impl StatusThemeExt for gpui_component::Theme {
-  fn status_orange(&self) -> Hsla {
-    if self.mode.is_dark() {
-      Hsla {
-        h: 30.0 / 360.0,
-        s: 0.85,
-        l: 0.58,
-        a: 1.0,
-      }
-    } else {
-      Hsla {
-        h: 28.0 / 360.0,
-        s: 0.9,
-        l: 0.45,
-        a: 1.0,
-      }
-    }
-  }
-
-  fn status_green(&self) -> Hsla {
-    if self.mode.is_dark() {
-      Hsla {
-        h: 135.0 / 360.0,
-        s: 0.75,
-        l: 0.55,
-        a: 1.0,
-      }
-    } else {
-      Hsla {
-        h: 140.0 / 360.0,
-        s: 0.7,
-        l: 0.4,
-        a: 1.0,
-      }
-    }
-  }
-
-  fn status_red(&self) -> Hsla {
-    if self.mode.is_dark() {
-      Hsla {
-        h: 0.0,
-        s: 0.75,
-        l: 0.58,
-        a: 1.0,
-      }
-    } else {
-      self.danger
-    }
-  }
-}
 
 actions!(
   workspace,

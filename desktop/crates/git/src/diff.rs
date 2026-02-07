@@ -369,7 +369,7 @@ fn split_lines(text: &str) -> (Vec<String>, bool) {
   (lines, trailing_newline)
 }
 
-fn compute_buffer_diff(
+pub fn compute_buffer_diff(
   kind: DiffKind,
   base: Option<&str>,
   buffer_text: &str,
@@ -416,6 +416,75 @@ fn compute_buffer_diff(
   }
 
   Ok(FileDiff { kind, hunks })
+}
+
+/// Build a diff set from a unified patch for a single file.
+pub fn diff_set_from_patch(patch: &str) -> Result<DiffSet> {
+  let uncommitted = file_diff_from_patch(patch, DiffKind::Uncommitted)?;
+  Ok(DiffSet {
+    uncommitted,
+    unstaged: FileDiff {
+      kind: DiffKind::Unstaged,
+      hunks: Vec::new(),
+    },
+    staged: FileDiff {
+      kind: DiffKind::Staged,
+      hunks: Vec::new(),
+    },
+  })
+}
+
+fn file_diff_from_patch(patch: &str, kind: DiffKind) -> Result<FileDiff> {
+  let diff = Diff::from_buffer(patch.as_bytes())?;
+  let hunks: RefCell<Vec<DiffHunk>> = RefCell::new(Vec::new());
+  let current: RefCell<Option<DiffHunk>> = RefCell::new(None);
+
+  diff.foreach(
+    &mut |_file, _progress| true,
+    None,
+    Some(&mut |_file, hunk| {
+      if let Some(mut hunk) = current.borrow_mut().take() {
+        normalize_no_newline_hunk(&mut hunk, None);
+        hunk.id = compute_hunk_id(&hunk);
+        hunks.borrow_mut().push(hunk);
+      }
+
+      *current.borrow_mut() = Some(DiffHunk {
+        id: String::new(),
+        old_start: hunk.old_start() as usize,
+        old_lines: hunk.old_lines() as usize,
+        new_start: hunk.new_start() as usize,
+        new_lines: hunk.new_lines() as usize,
+        lines: Vec::new(),
+      });
+
+      true
+    }),
+    Some(&mut |_file, _hunk, line| {
+      if let Some(hunk) = current.borrow_mut().as_mut() {
+        if apply_no_newline_marker(&line, hunk) {
+          return true;
+        }
+        if let Some(diff_line) = DiffLine::from_git_line(line) {
+          hunk.lines.push(diff_line);
+        }
+      }
+
+      true
+    }),
+  )?;
+
+  let mut current = current.into_inner();
+  if let Some(mut hunk) = current.take() {
+    normalize_no_newline_hunk(&mut hunk, None);
+    hunk.id = compute_hunk_id(&hunk);
+    hunks.borrow_mut().push(hunk);
+  }
+
+  Ok(FileDiff {
+    kind,
+    hunks: hunks.into_inner(),
+  })
 }
 
 impl DiffLine {
@@ -742,6 +811,162 @@ mod tests {
       vec![
         (DiffLineKind::Context, "line".to_string()),
         (DiffLineKind::Remove, String::new()),
+      ]
+    );
+  }
+
+  #[test]
+  fn diff_set_from_patch_parses_single_hunk() {
+    let patch = r#"diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+ line1
+-line2
++line2b
+ line3
+"#;
+
+    let diff_set = diff_set_from_patch(patch).expect("diff set");
+    assert_eq!(diff_set.unstaged.hunks.len(), 0);
+    assert_eq!(diff_set.staged.hunks.len(), 0);
+    assert_eq!(diff_set.uncommitted.hunks.len(), 1);
+
+    let hunk = &diff_set.uncommitted.hunks[0];
+    assert!(!hunk.id.is_empty());
+    let lines = diff_kinds(&hunk.lines);
+    assert_eq!(
+      lines,
+      vec![
+        (DiffLineKind::Context, "line1".to_string()),
+        (DiffLineKind::Remove, "line2".to_string()),
+        (DiffLineKind::Add, "line2b".to_string()),
+        (DiffLineKind::Context, "line3".to_string()),
+      ]
+    );
+  }
+
+  #[test]
+  fn file_diff_from_patch_parses_multiple_hunks() {
+    let patch = r#"diff --git a/file.txt b/file.txt
+index 1111111..2222222 100644
+--- a/file.txt
++++ b/file.txt
+@@ -1,3 +1,3 @@
+ line1
+-line2
++line2b
+ line3
+@@ -5,2 +5,3 @@
+ line5
+ line6
++line7
+"#;
+
+    let diff = file_diff_from_patch(patch, DiffKind::Uncommitted).expect("diff");
+    assert_eq!(diff.hunks.len(), 2);
+    assert!(!diff.hunks[0].id.is_empty());
+    assert!(!diff.hunks[1].id.is_empty());
+  }
+
+  #[test]
+  fn file_diff_from_patch_marks_no_newline() {
+    let patch = r#"diff --git a/file.txt b/file.txt
+index 1111111..2222222 100644
+--- a/file.txt
++++ b/file.txt
+@@ -1 +1 @@
+-line1
++line1 modified
+\ No newline at end of file
+"#;
+
+    let diff = file_diff_from_patch(patch, DiffKind::Uncommitted).expect("diff");
+    let has_no_newline = diff
+      .hunks
+      .iter()
+      .flat_map(|hunk| hunk.lines.iter())
+      .any(|line| line.no_newline);
+    assert!(has_no_newline);
+  }
+
+  #[test]
+  fn diff_set_from_patch_rejects_invalid_input() {
+    let err = diff_set_from_patch("not a diff").err();
+    assert!(err.is_some());
+  }
+
+  #[test]
+  fn diff_set_from_patch_parses_multiple_files() {
+    let patch = r#"diff --git a/packages/server/src/router/github.ts b/packages/server/src/router/github.ts
+index f33cea64..15f46e24 100644
+--- a/packages/server/src/router/github.ts
++++ b/packages/server/src/router/github.ts
+@@ -1,6 +1,13 @@
+-import { request } from '@octokit/request'
+-import { authProcedure, router } from '../lib/trpc.js'
+-
+-export const githubRouter = router(
+-  {
+-    getPullRequests: authProcedure.query(async ({ ctx: { session } }) => {
++import type { PullRequest } from '../types/github.js'
++import { request } from '@octokit/request'
++import z from 'zod'
++import { authProcedure, router } from '../lib/trpc.js'
++
++const getPullRequestsSchema = z.object({
++  owner: z.string(),
++  repo: z.string(),
++})
++
++export const githubRouter = router(
++  {
++    getPullRequests: authProcedure.input(getPullRequestsSchema).query(async ({ ctx: { ghAccessToken }, input }) => {
+diff --git a/packages/server/src/types/github.ts b/packages/server/src/types/github.ts
+new file mode 100644
+index 00000000..17ef03df
+--- /dev/null
++++ b/packages/server/src/types/github.ts
+@@ -0,0 +1,4 @@
++import type { Endpoints } from '@octokit/types'
++
++export type PullRequest = Endpoints['GET /repos/{owner}/{repo}/pulls']['response']['data'][number]
++export type PullRequestDetails = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['response']['data']
+diff --git a/packages/server/src/types/index.ts b/packages/server/src/types/index.ts
+new file mode 100644
+index 00000000..eac8680b
+--- /dev/null
++++ b/packages/server/src/types/index.ts
+@@ -0,0 +1 @@
++export * from './github.js'
+"#;
+
+    let diff_set = diff_set_from_patch(patch).expect("diff set");
+    assert_eq!(diff_set.uncommitted.hunks.len(), 3);
+    assert!(diff_set.uncommitted.hunks.iter().all(|hunk| !hunk.id.is_empty()));
+  }
+
+  #[test]
+  fn file_diff_from_patch_parses_deleted_file() {
+    let patch = r#"diff --git a/old.txt b/old.txt
+deleted file mode 100644
+index 1111111..0000000
+--- a/old.txt
++++ /dev/null
+@@ -1,2 +0,0 @@
+-line1
+-line2
+"#;
+
+    let diff = file_diff_from_patch(patch, DiffKind::Uncommitted).expect("diff");
+    assert_eq!(diff.hunks.len(), 1);
+    let lines = diff_kinds(&diff.hunks[0].lines);
+    assert_eq!(
+      lines,
+      vec![
+        (DiffLineKind::Remove, "line1".to_string()),
+        (DiffLineKind::Remove, "line2".to_string()),
       ]
     );
   }

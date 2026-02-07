@@ -1,15 +1,15 @@
 use std::rc::Rc;
 
 use gpui::{
-  App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, SharedString, Styled, Task,
-  Window, div, prelude::*, px,
+  App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, SharedString, Styled,
+  Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _,
   button::{Button, ButtonVariants as _},
   h_flex,
   label::Label,
-  list::{List, ListDelegate, ListItem, ListState},
+  list::{List, ListDelegate, ListEvent, ListItem, ListState},
   tag::Tag,
   v_flex,
 };
@@ -18,6 +18,7 @@ use ui::HEADER_HEIGHT;
 
 use crate::{
   api::{ApiClient, GithubPullRequest},
+  github_pr_details_page::GithubPrDetailsPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 
@@ -234,6 +235,8 @@ pub struct GithubPage {
   pull_requests: Entity<ListState<GithubPullRequestListDelegate>>,
   load_task: Option<Task<()>>,
   error: Option<SharedString>,
+  focus_on_next_render: bool,
+  _subscriptions: Vec<Subscription>,
 }
 
 #[derive(Clone, Default)]
@@ -254,7 +257,20 @@ impl GithubPageHandle {
     let Some(weak) = cx.global::<Self>().github_page.clone() else {
       return;
     };
-    let _ = weak.update(cx, |this, cx| this.refresh_pull_requests(cx));
+    let _ = weak.update(cx, |this, cx| {
+      this.focus_on_next_render = true;
+      this.refresh_pull_requests(cx);
+    });
+  }
+
+  pub fn request_focus(cx: &mut App) {
+    let Some(weak) = cx.global::<Self>().github_page.clone() else {
+      return;
+    };
+    let _ = weak.update(cx, |this, cx| {
+      this.focus_on_next_render = true;
+      cx.notify();
+    });
   }
 }
 
@@ -269,11 +285,14 @@ impl GithubPage {
       pull_requests,
       load_task: None,
       error: None,
+      focus_on_next_render: true,
+      _subscriptions: Vec::new(),
     };
 
-    GithubPageHandle::register(cx);
+    let mut view = view;
+    view.subscribe_to_list(cx);
 
-    cx.on_next_frame(window, |this, window, cx| this.focus_search(window, cx));
+    GithubPageHandle::register(cx);
 
     view
   }
@@ -282,6 +301,27 @@ impl GithubPage {
     self.pull_requests.update(cx, |state, cx| {
       state.focus(window, cx);
     });
+  }
+
+  fn subscribe_to_list(&mut self, cx: &mut Context<Self>) {
+    let subscription = cx.subscribe(
+      &self.pull_requests,
+      move |_this, state, event: &ListEvent, cx| {
+        if let ListEvent::Confirm(ix) = event {
+          let row = state.read(cx).delegate().matched_rows.get(ix.row).cloned();
+          if let Some(row) = row {
+            GithubPrDetailsPageHandle::show(
+              row.owner.clone(),
+              row.repo.clone(),
+              row.pr.number,
+              cx,
+            );
+          }
+        }
+      },
+    );
+
+    self._subscriptions.push(subscription);
   }
 
   fn refresh_pull_requests(&mut self, cx: &mut Context<Self>) {
@@ -361,8 +401,13 @@ impl GithubPage {
 }
 
 impl Render for GithubPage {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
+
+    if self.focus_on_next_render {
+      self.focus_on_next_render = false;
+      cx.on_next_frame(window, |this, window, cx| this.focus_search(window, cx));
+    }
 
     let list = List::new(&self.pull_requests)
       .search_placeholder("Search pull requests...")
