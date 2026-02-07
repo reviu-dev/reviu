@@ -21,7 +21,7 @@ use crate::{
     DEFAULT_MAX_LINE_WIDTH, DisplayCursor, Editor, GroupOverlay, SCROLL_PADDING, ScrollAxis,
   },
   projection::{
-    ChangeKind, DisplayLine, GAP_MARKER_TEXT, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
+    ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
   },
 };
 use gpui_component::ActiveTheme as _;
@@ -602,6 +602,7 @@ pub struct EditorElement {
 pub struct PrepaintState {
   shaped_lines: Vec<(usize, Arc<ShapedLine>)>,
   line_backgrounds: Vec<PaintQuad>,
+  gap_separators: Vec<PaintQuad>,
   word_diff_quads: Vec<PaintQuad>,
   group_borders: Vec<PaintQuad>,
   diag_paths: Vec<Path<Pixels>>,
@@ -914,7 +915,7 @@ impl Element for EditorElement {
             (clean_line_text(text), None, color, false, word_diff)
           }
           DisplayLine::Gap { .. } => (
-            GAP_MARKER_TEXT.to_string(),
+            String::new(),
             None,
             cx.theme().muted_foreground,
             false,
@@ -1001,7 +1002,9 @@ impl Element for EditorElement {
     }
 
     let document = document_entity.read(cx);
+    let doc_line_count = document.len_lines();
     let mut line_backgrounds = Vec::new();
+    let mut gap_separators = Vec::new();
     let mut word_diff_quads = Vec::new();
     let mut group_borders = Vec::new();
     let mut diag_paths = Vec::new();
@@ -1078,6 +1081,20 @@ impl Element for EditorElement {
     }
 
     for (display_idx, display_line) in &viewport_lines {
+      if let DisplayLine::Gap { id, .. } = display_line {
+        let is_start_gap = id.start == 0;
+        let is_end_gap = id.end == doc_line_count;
+        if !is_start_gap && !is_end_gap {
+          let y = bounds.top()
+            + line_height * (*display_idx - viewport.start) as f32
+            + line_height * 0.5;
+          gap_separators.push(fill(
+            Bounds::new(point(bounds.left(), y), size(bounds.size.width, px(1.0))),
+            cx.theme().muted_foreground.opacity(0.35),
+          ));
+        }
+      }
+
       let background = match display_line {
         DisplayLine::Doc {
           change: Some(ChangeKind::Added),
@@ -1532,6 +1549,7 @@ impl Element for EditorElement {
     PrepaintState {
       shaped_lines,
       line_backgrounds,
+      gap_separators,
       word_diff_quads,
       group_borders,
       diag_paths,
@@ -1729,6 +1747,11 @@ impl Element for EditorElement {
 
     // Paint line backgrounds (diff highlights)
     for quad in &prepaint.line_backgrounds {
+      window.paint_quad(quad.clone());
+    }
+
+    // Paint gap separators
+    for quad in &prepaint.gap_separators {
       window.paint_quad(quad.clone());
     }
 

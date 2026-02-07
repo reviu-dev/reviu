@@ -11,7 +11,7 @@ use git::DiffLineKind;
 
 use crate::{
   editor::{Editor, ScrollAxis},
-  projection::{ChangeKind, DisplayLine, GAP_MARKER_TEXT, HunkState},
+  projection::{ChangeKind, DisplayLine, HunkState},
 };
 
 const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
@@ -47,6 +47,7 @@ pub struct GutterPrepaintState {
   line_height: Pixels,
   line_number_color: gpui::Hsla,
   line_backgrounds: Vec<PaintQuad>,
+  gap_separators: Vec<PaintQuad>,
   stripe_quads: Vec<PaintQuad>,
   diag_paths: Vec<Path<Pixels>>,
   group_borders: Vec<PaintQuad>,
@@ -125,6 +126,7 @@ impl Element for GutterElement {
       line_height,
       line_number_color,
       line_backgrounds,
+      gap_separators,
       stripe_quads,
       diag_paths,
       group_borders,
@@ -254,6 +256,7 @@ impl Element for GutterElement {
       // Format line numbers for visible lines
       let mut line_numbers = Vec::new();
       let mut line_backgrounds = Vec::new();
+      let mut gap_separators = Vec::new();
       let mut stripe_quads = Vec::new();
       let mut diag_paths = Vec::new();
       let mut group_borders = Vec::new();
@@ -261,6 +264,20 @@ impl Element for GutterElement {
       let mut current_blank_start: Option<usize> = None;
       for display_idx in viewport.clone() {
         let display_line = editor.display_line(display_idx, doc_line_count);
+        if let Some(DisplayLine::Gap { id, .. }) = display_line.as_ref() {
+          let is_start_gap = id.start == 0;
+          let is_end_gap = id.end == doc_line_count;
+          if !is_start_gap && !is_end_gap {
+            let y = bounds.top()
+              + line_height * (display_idx - viewport.start) as f32
+              + line_height * 0.5;
+            gap_separators.push(fill(
+              Bounds::new(point(bounds.left(), y), size(bounds.size.width, px(1.0))),
+              cx.theme().muted_foreground.opacity(0.35),
+            ));
+          }
+        }
+
         let line_number = match (self.view, &display_line) {
           (GutterView::SplitLeft, Some(DisplayLine::Doc { old_line, .. })) => old_line
             .map(|line| format!("{}", line + 1))
@@ -275,7 +292,7 @@ impl Element for GutterElement {
             format!("{}", doc_line + 1)
           }
           (_, Some(DisplayLine::Doc { doc_line, .. })) => format!("{}", doc_line + 1),
-          (_, Some(DisplayLine::Gap { .. })) => GAP_MARKER_TEXT.to_string(),
+          (_, Some(DisplayLine::Gap { .. })) => String::new(),
           _ => String::new(),
         };
         line_numbers.push((display_idx, line_number));
@@ -442,6 +459,7 @@ impl Element for GutterElement {
         line_height,
         line_number_color,
         line_backgrounds,
+        gap_separators,
         stripe_quads,
         diag_paths,
         group_borders,
@@ -455,6 +473,7 @@ impl Element for GutterElement {
       line_height,
       line_number_color,
       line_backgrounds,
+      gap_separators,
       stripe_quads,
       diag_paths,
       group_borders,
@@ -477,6 +496,10 @@ impl Element for GutterElement {
     let text_color = prepaint.line_number_color;
 
     for quad in &prepaint.line_backgrounds {
+      window.paint_quad(quad.clone());
+    }
+
+    for quad in &prepaint.gap_separators {
       window.paint_quad(quad.clone());
     }
 
