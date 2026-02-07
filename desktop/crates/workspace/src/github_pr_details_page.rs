@@ -41,6 +41,7 @@ use crate::{
 const SIDEBAR_DEFAULT_WIDTH: f32 = 350.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
 const SIDEBAR_MAX_WIDTH: f32 = 600.0;
+const DIFF_HEADER_HEIGHT: f32 = 40.0;
 
 fn format_datetime(value: &str) -> SharedString {
   let Some((date, time)) = value.split_once('T') else {
@@ -1082,7 +1083,7 @@ impl GithubPrDetailsPage {
           ),
       );
 
-    v_flex().items_center().child(content)
+    v_flex().items_center().py_4().child(content)
   }
 
   fn render_files_sidebar(
@@ -1111,12 +1112,15 @@ impl GithubPrDetailsPage {
 
     let header = div()
       .px_3()
-      .py_1()
+      .flex()
+      .items_center()
+      .h(px(DIFF_HEADER_HEIGHT))
       .border_b_1()
       .border_color(theme.border)
       .child(
         h_flex()
           .items_center()
+          .w_full()
           .justify_between()
           .child(div().text_sm().text_color(theme.foreground).child("Files"))
           .child(
@@ -1230,73 +1234,63 @@ impl GithubPrDetailsPage {
       .child(div().flex_1().min_h_0().child(list))
   }
 
-  fn render_diff_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_diff_header(
+    &self,
+    file: &GithubPrFileDiff,
+    cx: &mut Context<Self>,
+  ) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let path = Path::new(file.path.as_ref());
+    let file_name = path
+      .file_name()
+      .and_then(|name| name.to_str())
+      .unwrap_or(file.path.as_ref())
+      .to_string();
+    let dir_path = path
+      .parent()
+      .and_then(|parent| parent.to_str())
+      .unwrap_or("")
+      .to_string();
+    let icon = file_icon_path_for_name_with_theme(&file_name, &theme)
+      .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
+      .unwrap_or_else(|| {
+        Icon::new(IconName::File)
+          .size_3()
+          .text_color(theme.muted_foreground)
+          .into_any_element()
+      });
 
-    if let Some(file) = self.selected_file.as_ref() {
-      let path = Path::new(file.path.as_ref());
-      let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(file.path.as_ref())
-        .to_string();
-      let dir_path = path
-        .parent()
-        .and_then(|parent| parent.to_str())
-        .unwrap_or("")
-        .to_string();
-      let icon = file_icon_path_for_name_with_theme(&file_name, &theme)
-        .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
-        .unwrap_or_else(|| {
-          Icon::new(IconName::File)
-            .size_3()
-            .text_color(theme.muted_foreground)
-            .into_any_element()
-        });
-
-      let status_letter = status_letter(file.status);
-      let status_color = status_color(file.status, &theme);
-
-      return div()
-        .h(px(36.))
-        .px_3()
-        .flex()
-        .items_center()
-        .justify_between()
-        .border_b_1()
-        .border_color(theme.border)
-        .child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child(
-              div()
-                .w(px(15.))
-                .text_xs()
-                .text_color(status_color)
-                .child(status_letter),
-            )
-            .child(icon)
-            .child({
-              let mut label = Label::new(file_name);
-              if !dir_path.is_empty() {
-                label = label.secondary(format!("- {}", dir_path));
-              }
-              label.truncate()
-            }),
-        );
-    }
+    let status_letter = status_letter(file.status);
+    let status_color = status_color(file.status, &theme);
 
     div()
-      .h(px(36.))
+      .h(px(DIFF_HEADER_HEIGHT))
       .px_3()
       .flex()
       .items_center()
+      .justify_between()
       .border_b_1()
       .border_color(theme.border)
-      .text_sm()
-      .text_color(theme.muted_foreground)
-      .child("Select a file to view diff")
+      .child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(
+            div()
+              .w(px(15.))
+              .text_xs()
+              .text_color(status_color)
+              .child(status_letter),
+          )
+          .child(icon)
+          .child({
+            let mut label = Label::new(file_name);
+            if !dir_path.is_empty() {
+              label = label.secondary(format!("- {}", dir_path));
+            }
+            label.truncate()
+          }),
+      )
   }
 
   fn render_changes_tab(
@@ -1366,7 +1360,9 @@ impl GithubPrDetailsPage {
 
     let editor_panel = v_flex()
       .size_full()
-      .child(self.render_diff_header(cx))
+      .when_some(self.selected_file.as_ref(), |this, file| {
+        this.child(self.render_diff_header(file, cx))
+      })
       .child(editor_content);
 
     h_resizable("github-pr-changes")
@@ -1403,6 +1399,7 @@ impl Render for GithubPrDetailsPage {
 
     let tab_bar = TabBar::new("pr-details-tabs")
       .w_full()
+      .px_6()
       .underline()
       .selected_index(self.active_tab_ix)
       .on_click(cx.listener(|this, ix: &usize, window, cx| {
@@ -1427,8 +1424,6 @@ impl Render for GithubPrDetailsPage {
       .child(
         v_flex()
           .flex_1()
-          .gap_3()
-          .p_4()
           .child(tab_bar)
           .child(div().flex_1().child(content)),
       )
