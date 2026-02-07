@@ -37,7 +37,7 @@ use crate::{
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 
-const SIDEBAR_DEFAULT_WIDTH: f32 = 300.0;
+const SIDEBAR_DEFAULT_WIDTH: f32 = 350.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
 const SIDEBAR_MAX_WIDTH: f32 = 600.0;
 
