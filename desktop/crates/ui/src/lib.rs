@@ -14,16 +14,6 @@ pub use command_palette::{
   CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig, CommandPaletteHandler,
 };
 pub use confirm_dialog::ConfirmDialog;
-pub use icons::{
-  FileIcon, UiIconName, FILE_ICON_SIZE_PX, file_icon_for_name, file_icon_for_path,
-  file_icon_path_for_name, file_icon_path_for_name_with_theme, file_icon_path_for_path,
-  file_icon_path_for_path_with_theme,
-};
-pub use search_file_palette::{
-  SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
-};
-pub use status_theme_ext::StatusThemeExt;
-pub use theme::Theme;
 pub use gpui_component::Disableable;
 pub use gpui_component::WindowExt;
 pub use gpui_component::button::Button;
@@ -37,3 +27,13 @@ pub use gpui_component::select::{
 pub use gpui_component::sidebar::{Sidebar, SidebarItem};
 pub use gpui_component::{Anchor, IconName};
 pub use gpui_component::{Collapsible, Sizable};
+pub use icons::{
+  FILE_ICON_SIZE_PX, FileIcon, UiIconName, file_icon_for_name, file_icon_for_path,
+  file_icon_path_for_name, file_icon_path_for_name_with_theme, file_icon_path_for_path,
+  file_icon_path_for_path_with_theme,
+};
+pub use search_file_palette::{
+  SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
+};
+pub use status_theme_ext::StatusThemeExt;
+pub use theme::Theme;

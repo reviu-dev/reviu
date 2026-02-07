@@ -20,9 +20,7 @@ use crate::{
   editor::{
     DEFAULT_MAX_LINE_WIDTH, DisplayCursor, Editor, GroupOverlay, SCROLL_PADDING, ScrollAxis,
   },
-  projection::{
-    ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
-  },
+  projection::{ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection},
 };
 use gpui_component::ActiveTheme as _;
 use syntax::HighlightSpan;
@@ -1085,9 +1083,8 @@ impl Element for EditorElement {
         let is_start_gap = id.start == 0;
         let is_end_gap = id.end == doc_line_count;
         if !is_start_gap && !is_end_gap {
-          let y = bounds.top()
-            + line_height * (*display_idx - viewport.start) as f32
-            + line_height * 0.5;
+          let y =
+            bounds.top() + line_height * (*display_idx - viewport.start) as f32 + line_height * 0.5;
           gap_separators.push(fill(
             Bounds::new(point(bounds.left(), y), size(bounds.size.width, px(1.0))),
             cx.theme().muted_foreground.opacity(0.35),

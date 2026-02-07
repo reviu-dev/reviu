@@ -107,10 +107,7 @@ pub fn file_icon_path_for_path(path: impl AsRef<Path>) -> Option<SharedString> {
   file_icon_path_for_name(name)
 }
 
-pub fn file_icon_path_for_name_with_theme(
-  file_name: &str,
-  theme: &Theme,
-) -> Option<SharedString> {
+pub fn file_icon_path_for_name_with_theme(file_name: &str, theme: &Theme) -> Option<SharedString> {
   file_icon_path_for_name_str(file_name, theme.mode.is_dark()).map(SharedString::from)
 }
 

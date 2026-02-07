@@ -944,7 +944,13 @@ index 00000000..eac8680b
 
     let diff_set = diff_set_from_patch(patch).expect("diff set");
     assert_eq!(diff_set.uncommitted.hunks.len(), 3);
-    assert!(diff_set.uncommitted.hunks.iter().all(|hunk| !hunk.id.is_empty()));
+    assert!(
+      diff_set
+        .uncommitted
+        .hunks
+        .iter()
+        .all(|hunk| !hunk.id.is_empty())
+    );
   }
 
   #[test]

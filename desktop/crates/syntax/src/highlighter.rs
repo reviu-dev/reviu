@@ -167,9 +167,14 @@ impl SyntaxHighlighter {
   {
     let events = self
       .highlighter
-      .highlight(&self.config.highlight_config, text.as_bytes(), None, |language| {
-        languages::language_config_for_name(language).map(|config| &config.highlight_config)
-      })
+      .highlight(
+        &self.config.highlight_config,
+        text.as_bytes(),
+        None,
+        |language| {
+          languages::language_config_for_name(language).map(|config| &config.highlight_config)
+        },
+      )
       .map_err(|e| format!("Highlight failed: {}", e))?;
 
     let mut highlight_stack = Vec::new();
