@@ -72,6 +72,10 @@ pub struct GithubPullRequestDetails {
   pub base_sha: String,
   #[serde(rename = "headSha")]
   pub head_sha: String,
+  #[serde(rename = "baseRefName")]
+  pub base_ref_name: String,
+  #[serde(rename = "headRefName")]
+  pub head_ref_name: String,
   pub body: Option<String>,
   pub author: GithubPullRequestAuthor,
   pub comments: u64,

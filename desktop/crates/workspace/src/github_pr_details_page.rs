@@ -11,10 +11,10 @@ use gpui::{
   Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, Sizable as _, Size, StyledExt,
+  ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
-  description_list::{DescriptionItem, DescriptionList},
+  clipboard::Clipboard,
   h_flex,
   label::Label,
   list::ListItem,
@@ -47,14 +47,8 @@ fn format_datetime(value: &str) -> SharedString {
     return value.to_string().into();
   };
 
-  let time = time.split('Z').next().unwrap_or(time);
-  let time = if time.len() >= 5 { &time[..5] } else { time };
-
-  if time.is_empty() {
-    date.to_string().into()
-  } else {
-    format!("{} {}", date, time).into()
-  }
+  let _ = time;
+  date.to_string().into()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -829,7 +823,14 @@ impl GithubPrDetailsPage {
   ) -> impl IntoElement {
     let theme = cx.theme().clone();
     let status_tag = if pr.merged_at.is_some() {
-      Tag::info().small().rounded_full().child("Merged")
+      Tag::custom(
+        theme.status_violet(),
+        theme.primary_foreground,
+        theme.status_violet(),
+      )
+      .small()
+      .rounded_full()
+      .child("Merged")
     } else if pr.state == "open" {
       Tag::success().small().rounded_full().child("Open")
     } else {
@@ -837,14 +838,13 @@ impl GithubPrDetailsPage {
     };
 
     let repo_label = format!("{}/{}", pr.repository.owner, pr.repository.repo);
+    let pr_url = format!(
+      "https://github.com/{}/{}/pull/{}",
+      pr.repository.owner, pr.repository.repo, pr.number
+    );
     let updated_at = format_datetime(&pr.updated_at);
     let created_at = format_datetime(&pr.created_at);
     let merged_at = pr.merged_at.as_deref().map(format_datetime);
-
-    let author_avatar = Avatar::new()
-      .name(pr.author.login.clone())
-      .when_some(pr.author.avatar_url.clone(), |this, url| this.src(url))
-      .small();
 
     let body = pr
       .body
@@ -852,119 +852,216 @@ impl GithubPrDetailsPage {
       .filter(|value| !value.trim().is_empty())
       .unwrap_or_else(|| "No description provided.".to_string());
 
-    let description_list = DescriptionList::new()
-      .columns(2)
-      .bordered(true)
-      .children([
-        DescriptionItem::new("Repository")
-          .value(Label::new(repo_label.clone()).into_any_element())
-          .span(1),
-        DescriptionItem::new("Author")
-          .value(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(author_avatar)
-              .child(Label::new(pr.author.login.clone()))
-              .into_any_element(),
-          )
-          .span(1),
-        DescriptionItem::new("Created")
-          .value(Label::new(created_at).into_any_element())
-          .span(1),
-        DescriptionItem::new("Updated")
-          .value(Label::new(updated_at).into_any_element())
-          .span(1),
-        DescriptionItem::new("Merged")
-          .value(
-            Label::new(
-              merged_at
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            )
-            .into_any_element(),
-          )
-          .span(1),
-        DescriptionItem::new("Comments")
-          .value(Label::new(pr.comments.to_string()).into_any_element())
-          .span(1),
-        DescriptionItem::new("Review Comments")
-          .value(Label::new(pr.review_comments.to_string()).into_any_element())
-          .span(1),
-        DescriptionItem::new("Commits")
-          .value(Label::new(pr.commits.to_string()).into_any_element())
-          .span(1),
-        DescriptionItem::new("Files Changed")
-          .value(Label::new(pr.changed_files.to_string()).into_any_element())
-          .span(1),
-        DescriptionItem::new("Additions")
-          .value(Label::new(pr.additions.to_string()).into_any_element())
-          .span(1),
-        DescriptionItem::new("Deletions")
-          .value(Label::new(pr.deletions.to_string()).into_any_element())
-          .span(1),
-      ])
-      .with_size(Size::Small);
+    let stats_badges = h_flex().gap_2().flex_wrap().children([
+      Tag::info()
+        .small()
+        .rounded_full()
+        .child(format!("Commits {}", pr.commits)),
+      Tag::success()
+        .small()
+        .rounded_full()
+        .child(format!("Additions +{}", pr.additions)),
+      Tag::danger()
+        .small()
+        .rounded_full()
+        .child(format!("Deletions -{}", pr.deletions)),
+      Tag::warning()
+        .small()
+        .rounded_full()
+        .child(format!("Files changed {}", pr.changed_files)),
+      Tag::secondary()
+        .small()
+        .rounded_full()
+        .child(format!("Comments {}", pr.comments)),
+      Tag::secondary()
+        .small()
+        .rounded_full()
+        .child(format!("Review comments {}", pr.review_comments)),
+    ]);
 
-    v_flex()
+    let labels_row = if pr.labels.is_empty() {
+      None
+    } else {
+      Some(
+        h_flex()
+          .gap_1()
+          .flex_wrap()
+          .children(pr.labels.iter().map(|label| {
+            Tag::secondary()
+              .small()
+              .rounded_full()
+              .child(label.name.clone())
+          })),
+      )
+    };
+
+    let content = v_flex()
+      .max_w(px(900.0))
       .gap_4()
       .child(
         v_flex()
           .gap_2()
+          .child(
+            h_flex().items_center().gap_2().child(
+              div()
+                .flex_1()
+                .text_lg()
+                .font_medium()
+                .text_color(theme.foreground)
+                .child(pr.title.clone()),
+            ),
+          )
+          .child(
+            h_flex()
+              .gap_2()
+              .items_center()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child(status_tag)
+              .child(format!("#{}", pr.number))
+              .child(repo_label)
+              .child(
+                Button::new("open-pr-on-github")
+                  .icon(IconName::ExternalLink)
+                  .ghost()
+                  .small()
+                  .label("View on GitHub")
+                  .compact()
+                  .on_click({
+                    let pr_url = pr_url.clone();
+                    move |_, _, cx| {
+                      let _ = cx.open_url(&pr_url);
+                    }
+                  }),
+              ),
+          ),
+      )
+      .child(
+        h_flex()
+          .gap_6()
+          .flex_wrap()
+          .items_center()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child(
+                Avatar::new()
+                  .name(pr.author.login.clone())
+                  .when_some(pr.author.avatar_url.clone(), |this, url| this.src(url))
+                  .small(),
+              )
+              .child(
+                div()
+                  .text_sm()
+                  .text_color(theme.foreground)
+                  .child(pr.author.login.clone()),
+              ),
+          )
           .child(
             h_flex()
               .items_center()
               .gap_2()
               .child(
                 div()
-                  .flex_1()
-                  .text_lg()
-                  .font_medium()
-                  .text_color(theme.foreground)
-                  .child(pr.title.clone()),
+                  .text_sm()
+                  .text_color(theme.muted_foreground)
+                  .child("Created"),
               )
-              .child(status_tag),
+              .child(
+                div()
+                  .text_sm()
+                  .text_color(theme.foreground)
+                  .child(created_at),
+              ),
           )
           .child(
             h_flex()
-              .gap_2()
               .items_center()
-              .text_sm()
-              .text_color(theme.muted_foreground)
-              .child(format!("#{}", pr.number))
-              .child(repo_label),
-          ),
-      )
-      .child(description_list)
-      .child(
-        v_flex()
-          .gap_2()
-          .child(
-            div()
-              .text_sm()
-              .font_medium()
-              .text_color(theme.foreground)
-              .child("Labels"),
+              .gap_2()
+              .child(
+                div()
+                  .text_sm()
+                  .text_color(theme.muted_foreground)
+                  .child("Updated"),
+              )
+              .child(
+                div()
+                  .text_sm()
+                  .text_color(theme.foreground)
+                  .child(updated_at),
+              ),
           )
-          .child(if pr.labels.is_empty() {
-            div()
-              .text_sm()
-              .text_color(theme.muted_foreground)
-              .child("No labels")
-              .into_any_element()
-          } else {
-            h_flex()
-              .gap_1()
-              .flex_wrap()
-              .children(pr.labels.iter().map(|label| {
-                Tag::secondary()
-                  .small()
-                  .rounded_full()
-                  .child(label.name.clone())
-              }))
-              .into_any_element()
+          .when_some(merged_at.clone(), |this, merged| {
+            this.child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("Merged"),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(merged.to_string()),
+                ),
+            )
           }),
       )
+      .child(
+        h_flex().items_center().gap_2().child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child(
+              h_flex()
+                .items_center()
+                .gap_1()
+                .child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Source"),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(pr.head_ref_name.clone()),
+                )
+                .child(Clipboard::new("copy-pr-branch-source").value(pr.head_ref_name.clone())),
+            )
+            .child(
+              Icon::new(IconName::ArrowRight)
+                .size_3()
+                .text_color(theme.muted_foreground),
+            )
+            .child(
+              h_flex()
+                .items_center()
+                .gap_1()
+                .child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Target"),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(pr.base_ref_name.clone()),
+                )
+                .child(Clipboard::new("copy-pr-branch-target").value(pr.base_ref_name.clone())),
+            ),
+        ),
+      )
+      .child(stats_badges)
+      .when_some(labels_row, |this, labels| this.child(labels))
       .child(
         v_flex()
           .gap_2()
@@ -983,7 +1080,9 @@ impl GithubPrDetailsPage {
               .p_3()
               .child(TextView::markdown("pr-body", body).selectable(true)),
           ),
-      )
+      );
+
+    v_flex().items_center().child(content)
   }
 
   fn render_files_sidebar(

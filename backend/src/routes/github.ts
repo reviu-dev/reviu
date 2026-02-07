@@ -47,6 +47,8 @@ interface GithubPullRequestDetails {
   mergedAt: string | null
   baseSha: string
   headSha: string
+  baseRefName: string
+  headRefName: string
   body: string | null
   author: GithubPullRequestDetailsAuthor
   comments: number
@@ -182,6 +184,8 @@ githubRouter.get('/pr/:id', authMiddleware, async (ctx) => {
       mergedAt: data.merged_at,
       baseSha: data.base?.sha ?? '',
       headSha: data.head?.sha ?? '',
+      baseRefName: data.base?.ref ?? '',
+      headRefName: data.head?.ref ?? '',
       body: data.body ?? null,
       author,
       comments: data.comments,
