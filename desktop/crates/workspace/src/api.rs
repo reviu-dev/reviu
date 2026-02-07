@@ -50,6 +50,42 @@ pub struct GithubPullRequest {
   pub repository: GithubRepository,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubPullRequestAuthor {
+  pub login: String,
+  #[serde(rename = "avatarUrl")]
+  pub avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubPullRequestDetails {
+  pub number: u64,
+  pub title: String,
+  pub state: String,
+  #[serde(rename = "createdAt")]
+  pub created_at: String,
+  #[serde(rename = "updatedAt")]
+  pub updated_at: String,
+  #[serde(rename = "mergedAt")]
+  pub merged_at: Option<String>,
+  #[serde(rename = "baseSha")]
+  pub base_sha: String,
+  #[serde(rename = "headSha")]
+  pub head_sha: String,
+  pub body: Option<String>,
+  pub author: GithubPullRequestAuthor,
+  pub comments: u64,
+  #[serde(rename = "reviewComments")]
+  pub review_comments: u64,
+  pub commits: u64,
+  pub additions: u64,
+  pub deletions: u64,
+  #[serde(rename = "changedFiles")]
+  pub changed_files: u64,
+  pub labels: Vec<GithubPullRequestLabel>,
+  pub repository: GithubRepository,
+}
+
 #[derive(Clone)]
 pub struct ApiClient {
   base_url: String,
@@ -96,6 +132,22 @@ struct EmptyRequest {}
 struct GithubPullRequestsResponse {
   #[serde(rename = "pullRequests")]
   pull_requests: Vec<GithubPullRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestDetailsResponse {
+  #[serde(rename = "pullRequest")]
+  pull_request: GithubPullRequestDetails,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestDiffResponse {
+  diff: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubFileContentResponse {
+  content: Option<String>,
 }
 
 impl ApiClient {
@@ -231,5 +283,71 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestsResponse>()?;
     Ok(payload.pull_requests)
+  }
+
+  pub fn fetch_pull_request_details(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+  ) -> Result<GithubPullRequestDetails> {
+    let response = self
+      .authed_request(Method::GET, &format!("/github/pr/{number}"))
+      .query(&[("org", owner), ("repo", repo)])
+      .send()?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !response.status().is_success() {
+      anyhow::bail!("unexpected status: {}", response.status());
+    }
+    let payload = response.json::<GithubPullRequestDetailsResponse>()?;
+    Ok(payload.pull_request)
+  }
+
+  pub fn fetch_pull_request_diff(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+  ) -> Result<String> {
+    let response = self
+      .authed_request(Method::GET, &format!("/github/pr/{number}/diff"))
+      .query(&[("org", owner), ("repo", repo)])
+      .send()?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !response.status().is_success() {
+      anyhow::bail!("unexpected status: {}", response.status());
+    }
+    let payload = response.json::<GithubPullRequestDiffResponse>()?;
+    Ok(payload.diff)
+  }
+
+  pub fn fetch_github_file_content(
+    &self,
+    owner: &str,
+    repo: &str,
+    path: &str,
+    reference: &str,
+  ) -> Result<Option<String>> {
+    let response = self
+      .authed_request(Method::GET, "/github/file")
+      .query(&[
+        ("org", owner),
+        ("repo", repo),
+        ("path", path),
+        ("ref", reference),
+      ])
+      .send()?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !response.status().is_success() {
+      anyhow::bail!("unexpected status: {}", response.status());
+    }
+    let payload = response.json::<GithubFileContentResponse>()?;
+    Ok(payload.content)
   }
 }

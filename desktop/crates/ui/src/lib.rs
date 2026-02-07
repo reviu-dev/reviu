@@ -3,6 +3,7 @@ mod command_palette;
 mod confirm_dialog;
 mod icons;
 mod search_file_palette;
+mod status_theme_ext;
 mod theme;
 
 pub const HEADER_HEIGHT: f32 = 50.0;
@@ -21,6 +22,7 @@ pub use icons::{
 pub use search_file_palette::{
   SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
 };
+pub use status_theme_ext::StatusThemeExt;
 pub use theme::Theme;
 pub use gpui_component::Disableable;
 pub use gpui_component::WindowExt;

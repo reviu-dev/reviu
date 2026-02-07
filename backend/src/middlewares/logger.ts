@@ -7,10 +7,10 @@ export const loggerMiddleware = createMiddleware(async (c, next) => {
   await next()
 
   const method = c.req.method
-  const pathname = new URL(c.req.url).pathname
+  const url = new URL(c.req.url)
   const durationMs = Date.now() - start
 
-  const log = `${method} ${pathname} - ${durationMs}ms`
+  const log = `${method} ${url.pathname}${url.search} - ${durationMs}ms`
 
   logger.info(log)
 })

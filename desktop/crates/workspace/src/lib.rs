@@ -1,6 +1,7 @@
 mod config;
 mod git_page;
 mod github_page;
+mod github_pr_details_page;
 mod api;
 mod settings_page;
 mod workspace;
