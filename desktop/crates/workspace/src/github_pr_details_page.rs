@@ -18,6 +18,7 @@ use gpui_component::{
   h_flex,
   label::Label,
   list::ListItem,
+  spinner::Spinner,
   tab::{Tab, TabBar},
   tag::Tag,
   text::TextView,
@@ -446,6 +447,12 @@ impl GithubPrDetailsPage {
   }
 
   fn set_selected_file(&mut self, selected: Option<Rc<GithubPrFileDiff>>, cx: &mut Context<Self>) {
+    let current_id = self.selected_file.as_ref().map(|file| file.path.clone());
+    let next_id = selected.as_ref().map(|file| file.path.clone());
+    if current_id == next_id {
+      return;
+    }
+
     self.selected_file = selected.clone();
     self.selected_tree_id = selected.as_ref().map(|file| file.path.to_string());
 
@@ -804,9 +811,15 @@ impl GithubPrDetailsPage {
       .flex_1()
       .items_center()
       .justify_center()
-      .text_sm()
-      .text_color(theme.muted_foreground)
-      .child("Loading pull request details...")
+      .mt_12()
+      .gap_2()
+      .child(Spinner::new().small())
+      .child(
+        div()
+          .text_sm()
+          .text_color(theme.muted_foreground)
+          .child("Loading pull request details..."),
+      )
   }
 
   fn render_details(
@@ -1204,13 +1217,18 @@ impl GithubPrDetailsPage {
         .child("Loading diff...")
         .into_any_element()
     } else if self.file_loading {
-      div()
+      v_flex()
         .flex_1()
         .items_center()
         .justify_center()
-        .text_sm()
-        .text_color(theme.muted_foreground)
-        .child("Loading file contents...")
+        .gap_2()
+        .child(Spinner::new().small())
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading file contents..."),
+        )
         .into_any_element()
     } else if self.file_error.is_some() {
       div()
