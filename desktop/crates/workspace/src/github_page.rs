@@ -25,17 +25,8 @@ use crate::{
 const DEFAULT_ORG: &str = "joris-gallot";
 const DEFAULT_REPO: &str = "guit";
 
-fn list_base_item(
-  ix: IndexPath,
-  total_items: usize,
-  selected_index: Option<IndexPath>,
-  theme: &gpui_component::Theme,
-) -> ListItem {
-  let is_last_item = ix.row + 1 == total_items;
-
-  ListItem::new(ix)
-    .when(is_last_item, |item| item.rounded_b(theme.radius))
-    .selected(Some(ix) == selected_index)
+fn list_base_item(ix: IndexPath, selected_index: Option<IndexPath>) -> ListItem {
+  ListItem::new(ix).selected(Some(ix) == selected_index)
 }
 
 fn update_selected_index<D: ListDelegate>(
@@ -135,9 +126,8 @@ impl ListDelegate for GithubPullRequestListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let total_items = self.matched_rows.len();
     let theme = cx.theme().clone();
-    let base_item = list_base_item(ix, total_items, self.selected_index.clone(), &theme);
+    let base_item = list_base_item(ix, self.selected_index.clone());
 
     let row = self.matched_rows.get(ix.row)?;
     let status_tag = if row.pr.state == "open" {
@@ -310,12 +300,7 @@ impl GithubPage {
         if let ListEvent::Confirm(ix) = event {
           let row = state.read(cx).delegate().matched_rows.get(ix.row).cloned();
           if let Some(row) = row {
-            GithubPrDetailsPageHandle::show(
-              row.owner.clone(),
-              row.repo.clone(),
-              row.pr.number,
-              cx,
-            );
+            GithubPrDetailsPageHandle::show(row.owner.clone(), row.repo.clone(), row.pr.number, cx);
           }
         }
       },
@@ -336,7 +321,8 @@ impl GithubPage {
     });
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.fetch_latest_pull_requests(&owner, &repo)).await
+      let result = unblock(move || api.fetch_latest_pull_requests(&owner, &repo))
+        .await
         .map_err(|error| error.to_string());
 
       let _ = this.update(cx, |this, cx| {
