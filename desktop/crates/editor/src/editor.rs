@@ -17,9 +17,7 @@ use gpui::{
   UTF16Selection, Window, black, div, point, prelude::*, px, white,
 };
 use gpui_component::{
-  ActiveTheme as _,
-  IconName,
-  Sizable,
+  ActiveTheme as _, IconName, Sizable,
   button::{Button, ButtonVariants as _},
   resizable::{h_resizable, resizable_panel},
 };
@@ -2203,7 +2201,10 @@ impl Editor {
 
     if let Some(display_line) = position_map.display_line_for_position(event.position) {
       if let Some(projection) = &position_map.projection {
-        if matches!(projection.lines.get(display_line), Some(DisplayLine::Gap { .. })) {
+        if matches!(
+          projection.lines.get(display_line),
+          Some(DisplayLine::Gap { .. })
+        ) {
           self.is_selecting = false;
           return;
         }
@@ -2603,9 +2604,7 @@ impl Render for Editor {
     let gap_controls = self.gap_controls();
 
     let build_gutter =
-      |gutter_element: GutterElement,
-       view_suffix: &'static str,
-       editor_entity: Entity<Editor>| {
+      |gutter_element: GutterElement, view_suffix: &'static str, editor_entity: Entity<Editor>| {
         let mut gutter = div()
           .w(px(GUTTER_WIDTH))
           .h_full()
@@ -2665,13 +2664,11 @@ impl Render for Editor {
         .size_full()
         .flex()
         .flex_row()
-        .child(
-          build_gutter(
-            GutterElement::split_left(editor_entity.clone()),
-            "left",
-            editor_entity.clone(),
-          ),
-        )
+        .child(build_gutter(
+          GutterElement::split_left(editor_entity.clone()),
+          "left",
+          editor_entity.clone(),
+        ))
         .child(
           div()
             .flex_1()
@@ -2692,13 +2689,11 @@ impl Render for Editor {
         .size_full()
         .flex()
         .flex_row()
-        .child(
-          build_gutter(
-            GutterElement::split_right(editor_entity.clone()),
-            "right",
-            editor_entity.clone(),
-          ),
-        )
+        .child(build_gutter(
+          GutterElement::split_right(editor_entity.clone()),
+          "right",
+          editor_entity.clone(),
+        ))
         .child(
           div()
             .flex_1()
@@ -2726,13 +2721,11 @@ impl Render for Editor {
         .min_h(px(0.0))
         .flex()
         .flex_row()
-        .child(
-          build_gutter(
-            GutterElement::new(editor_entity.clone()),
-            "inline",
-            editor_entity.clone(),
-          ),
-        )
+        .child(build_gutter(
+          GutterElement::new(editor_entity.clone()),
+          "inline",
+          editor_entity.clone(),
+        ))
         .child(
           div()
             .flex_1()

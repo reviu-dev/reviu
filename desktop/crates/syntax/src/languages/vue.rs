@@ -12,14 +12,9 @@ pub static VUE_CONFIG: Lazy<LanguageConfig> = Lazy::new(|| {
   let vue_injections = include_str!("../tree-sitter-queries/vue/injections.scm");
   let injections_query = format!("{}\n{}", html_tags_injections, vue_injections);
 
-  let mut config = HighlightConfiguration::new(
-    language,
-    "vue",
-    &highlights_query,
-    &injections_query,
-    "",
-  )
-  .expect("Failed to create Vue highlight config");
+  let mut config =
+    HighlightConfiguration::new(language, "vue", &highlights_query, &injections_query, "")
+      .expect("Failed to create Vue highlight config");
 
   config.configure(HIGHLIGHT_NAMES);
 

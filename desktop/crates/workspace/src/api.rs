@@ -1,6 +1,6 @@
 use anyhow::Result;
-use reqwest::{Method, StatusCode};
 use reqwest::blocking::Client;
+use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
@@ -182,11 +182,7 @@ impl ApiClient {
     KEYCHAIN_USERNAME
   }
 
-  pub fn authed_request(
-    &self,
-    method: Method,
-    path: &str,
-  ) -> reqwest::blocking::RequestBuilder {
+  pub fn authed_request(&self, method: Method, path: &str) -> reqwest::blocking::RequestBuilder {
     let mut request = self.client.request(method, self.get_api_url(path));
     if let Some(token) = self.bearer_token() {
       request = request.bearer_auth(token);
@@ -257,9 +253,7 @@ impl ApiClient {
   }
 
   pub fn fetch_me(&self) -> Result<Option<User>> {
-    let response = self
-      .authed_request(Method::GET, "/users/me")
-      .send()?;
+    let response = self.authed_request(Method::GET, "/users/me").send()?;
     if response.status() == StatusCode::UNAUTHORIZED {
       return Ok(None);
     }
@@ -309,12 +303,7 @@ impl ApiClient {
     Ok(payload.pull_request)
   }
 
-  pub fn fetch_pull_request_diff(
-    &self,
-    owner: &str,
-    repo: &str,
-    number: u64,
-  ) -> Result<String> {
+  pub fn fetch_pull_request_diff(&self, owner: &str, repo: &str, number: u64) -> Result<String> {
     let response = self
       .authed_request(Method::GET, &format!("/github/pr/{number}/diff"))
       .query(&[("org", owner), ("repo", repo)])
