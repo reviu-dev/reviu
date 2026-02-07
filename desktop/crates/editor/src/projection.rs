@@ -25,6 +25,12 @@ pub struct GapId {
   pub end: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GapReveal {
+  pub head: usize,
+  pub tail: usize,
+}
+
 #[derive(Clone, Debug)]
 pub enum DisplayLine {
   Doc {
@@ -68,6 +74,8 @@ pub struct Projection {
   pub display_to_doc: Vec<Option<usize>>,
   pub doc_to_display: Vec<Option<usize>>,
   pub visible_doc_lines: Vec<usize>,
+  pub start_gap: Option<GapId>,
+  pub end_gap: Option<GapId>,
   pub groups: HashMap<Arc<str>, ChangeGroup>,
 }
 
@@ -146,7 +154,7 @@ impl Projection {
     uncommitted: &FileDiff,
     unstaged: &FileDiff,
     staged: &FileDiff,
-    expanded_gaps: &HashMap<GapId, usize>,
+    expanded_gaps: &HashMap<GapId, GapReveal>,
     align_modified: bool,
   ) -> Self {
     let (mut groups, unstaged_line_to_group) = collect_groups(unstaged, HunkState::Unstaged);
@@ -179,12 +187,14 @@ impl Projection {
     let mut lines = Vec::new();
     let mut pending_staged = Vec::new();
     let mut last_visible_doc_line: Option<usize> = None;
+    let mut start_gap: Option<GapId> = None;
+    let mut end_gap: Option<GapId> = None;
 
-    let push_gap = |gap_start: usize,
-                    gap_end: usize,
-                    reveal: usize,
-                    old_offset: isize,
-                    lines: &mut Vec<DisplayLine>| {
+    let mut push_gap = |gap_start: usize,
+                        gap_end: usize,
+                        reveal: GapReveal,
+                        old_offset: isize,
+                        lines: &mut Vec<DisplayLine>| {
       if gap_end <= gap_start {
         return;
       }
@@ -194,6 +204,7 @@ impl Projection {
         start: gap_start,
         end: gap_end,
       };
+      let skip_marker = gap_start == 0 || gap_end == doc_line_count;
 
       if gap_len <= GAP_THRESHOLD_LINES {
         for doc_line in gap_start..gap_end {
@@ -210,8 +221,8 @@ impl Projection {
         return;
       }
 
-      let head = reveal.min(gap_len);
-      let tail = reveal.min(gap_len.saturating_sub(head));
+      let head = reveal.head.min(gap_len);
+      let tail = reveal.tail.min(gap_len.saturating_sub(head));
       let head_end = gap_start.saturating_add(head).min(gap_end);
       let tail_start = gap_end.saturating_sub(tail);
 
@@ -244,10 +255,19 @@ impl Projection {
 
       let remaining = tail_start.saturating_sub(head_end);
       if remaining > GAP_THRESHOLD_LINES {
-        lines.push(DisplayLine::Gap {
-          id: gap_id,
-          hidden_range: head_end..tail_start,
-        });
+        if skip_marker {
+          if gap_start == 0 {
+            start_gap = Some(gap_id);
+          }
+          if gap_end == doc_line_count {
+            end_gap = Some(gap_id);
+          }
+        } else {
+          lines.push(DisplayLine::Gap {
+            id: gap_id,
+            hidden_range: head_end..tail_start,
+          });
+        }
       } else {
         for doc_line in head_end..tail_start {
           let old_line = (doc_line as isize + old_offset).max(0) as usize;
@@ -293,7 +313,7 @@ impl Projection {
           end: gap_end,
         })
         .copied()
-        .unwrap_or(0);
+        .unwrap_or_default();
       push_gap(gap_start, gap_end, reveal, old_line_offset, &mut lines);
 
       let offset = lines.len();
@@ -324,7 +344,7 @@ impl Projection {
           end: gap_end,
         })
         .copied()
-        .unwrap_or(0);
+        .unwrap_or_default();
       push_gap(gap_start, gap_end, reveal, old_line_offset, &mut lines);
     }
 
@@ -362,7 +382,7 @@ impl Projection {
       assign_group_id(&mut lines, &pending.display_indices, &group_id);
     }
 
-    Projection::from_lines(doc_line_count, lines, groups)
+    Projection::from_lines(doc_line_count, lines, groups, start_gap, end_gap)
   }
 
   pub fn full(doc_line_count: usize) -> Self {
@@ -377,7 +397,7 @@ impl Projection {
         secondary: false,
       });
     }
-    Projection::from_lines(doc_line_count, lines, HashMap::new())
+    Projection::from_lines(doc_line_count, lines, HashMap::new(), None, None)
   }
 
   pub fn display_to_doc_line(&self, display_line: usize) -> Option<usize> {
@@ -413,6 +433,8 @@ impl Projection {
     doc_line_count: usize,
     lines: Vec<DisplayLine>,
     groups: HashMap<Arc<str>, ChangeGroup>,
+    start_gap: Option<GapId>,
+    end_gap: Option<GapId>,
   ) -> Self {
     let mut display_to_doc = Vec::with_capacity(lines.len());
     let mut doc_to_display = vec![None; doc_line_count];
@@ -438,6 +460,8 @@ impl Projection {
       display_to_doc,
       doc_to_display,
       visible_doc_lines,
+      start_gap,
+      end_gap,
       groups,
     }
   }

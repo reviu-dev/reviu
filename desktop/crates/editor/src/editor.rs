@@ -18,6 +18,9 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _,
+  IconName,
+  Sizable,
+  button::{Button, ButtonVariants as _},
   resizable::{h_resizable, resizable_panel},
 };
 use smol::unblock;
@@ -30,7 +33,9 @@ use crate::{
   document::Document,
   editor_element::{EditorElement, PositionMap},
   gutter_element::GutterElement,
-  projection::{ChangeKind, DisplayLine, GapId, HunkState, NO_NEWLINE_MARKER_TEXT, Projection},
+  projection::{
+    ChangeKind, DisplayLine, GapId, GapReveal, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
+  },
 };
 
 #[derive(Clone, Debug)]
@@ -107,7 +112,7 @@ pub struct Editor {
   pub visible_groups: Vec<GroupOverlay>,
   pub hovered_group_id: Option<Arc<str>>,
   pub last_mouse_position: Option<Point<Pixels>>,
-  pub expanded_gaps: HashMap<GapId, usize>,
+  pub expanded_gaps: HashMap<GapId, GapReveal>,
   pub workdir_path: PathBuf,
   pub repo_file: Option<RepoFile>,
   pub git_store: Option<GitStore>,
@@ -197,6 +202,42 @@ impl DisplaySelection {
       (self.end, self.start)
     }
   }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GapExpandDirection {
+  Up,
+  Down,
+}
+
+impl GapExpandDirection {
+  fn icon(self) -> IconName {
+    match self {
+      GapExpandDirection::Up => IconName::ArrowUp,
+      GapExpandDirection::Down => IconName::ArrowDown,
+    }
+  }
+
+  fn id_suffix(self) -> &'static str {
+    match self {
+      GapExpandDirection::Up => "up",
+      GapExpandDirection::Down => "down",
+    }
+  }
+
+  fn tooltip(self) -> &'static str {
+    match self {
+      GapExpandDirection::Up => "Expand 5 lines up",
+      GapExpandDirection::Down => "Expand 5 lines down",
+    }
+  }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GapControl {
+  display_line: usize,
+  gap_id: GapId,
+  direction: GapExpandDirection,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1052,15 +1093,34 @@ impl Editor {
     }
   }
 
-  pub fn expand_gap(&mut self, gap_id: GapId, amount: usize, cx: &mut Context<Self>) {
-    let entry = self.expanded_gaps.entry(gap_id).or_insert(0);
-    *entry = entry.saturating_add(amount);
+  fn expand_gap_with(
+    &mut self,
+    gap_id: GapId,
+    head_amount: usize,
+    tail_amount: usize,
+    cx: &mut Context<Self>,
+  ) {
+    let entry = self.expanded_gaps.entry(gap_id).or_default();
+    entry.head = entry.head.saturating_add(head_amount);
+    entry.tail = entry.tail.saturating_add(tail_amount);
 
     if let Some(diffs) = self.diffs.clone() {
       self.apply_diffs(diffs, cx);
     } else {
       self.schedule_diff_recompute(cx);
     }
+  }
+
+  pub fn expand_gap(&mut self, gap_id: GapId, amount: usize, cx: &mut Context<Self>) {
+    self.expand_gap_with(gap_id, amount, amount, cx);
+  }
+
+  pub fn expand_gap_down(&mut self, gap_id: GapId, amount: usize, cx: &mut Context<Self>) {
+    self.expand_gap_with(gap_id, amount, 0, cx);
+  }
+
+  pub fn expand_gap_up(&mut self, gap_id: GapId, amount: usize, cx: &mut Context<Self>) {
+    self.expand_gap_with(gap_id, 0, amount, cx);
   }
 
   pub fn next_visible_doc_line(&self, doc_line: usize, doc_line_count: usize) -> Option<usize> {
@@ -1071,6 +1131,55 @@ impl Editor {
     } else {
       None
     }
+  }
+
+  fn gap_controls(&self) -> Vec<GapControl> {
+    let Some(projection) = self.projection.as_ref() else {
+      return Vec::new();
+    };
+
+    let mut controls = Vec::new();
+    for (display_idx, line) in projection.lines.iter().enumerate() {
+      let DisplayLine::Gap { id, .. } = line else {
+        continue;
+      };
+
+      if display_idx > 0 {
+        controls.push(GapControl {
+          display_line: display_idx.saturating_sub(1),
+          gap_id: *id,
+          direction: GapExpandDirection::Down,
+        });
+      }
+
+      if display_idx + 1 < projection.lines.len() {
+        controls.push(GapControl {
+          display_line: display_idx + 1,
+          gap_id: *id,
+          direction: GapExpandDirection::Up,
+        });
+      }
+    }
+
+    if !projection.lines.is_empty() {
+      if let Some(gap_id) = projection.start_gap {
+        controls.push(GapControl {
+          display_line: 0,
+          gap_id,
+          direction: GapExpandDirection::Up,
+        });
+      }
+
+      if let Some(gap_id) = projection.end_gap {
+        controls.push(GapControl {
+          display_line: projection.lines.len().saturating_sub(1),
+          gap_id,
+          direction: GapExpandDirection::Down,
+        });
+      }
+    }
+
+    controls
   }
 
   /// Invalidate a single line in the cache
@@ -2066,9 +2175,7 @@ impl Editor {
 
     if let Some(display_line) = position_map.display_line_for_position(event.position) {
       if let Some(projection) = &position_map.projection {
-        if let Some(DisplayLine::Gap { id, .. }) = projection.lines.get(display_line) {
-          let amount = if event.modifiers.shift { 20 } else { 10 };
-          self.expand_gap(*id, amount, cx);
+        if matches!(projection.lines.get(display_line), Some(DisplayLine::Gap { .. })) {
           self.is_selecting = false;
           return;
         }
@@ -2450,7 +2557,7 @@ impl EntityInputHandler for Editor {
 }
 
 impl Render for Editor {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let is_dark = cx.theme().mode.is_dark();
     if self.theme.is_dark != is_dark {
       self.theme = Theme::new(is_dark);
@@ -2461,17 +2568,81 @@ impl Render for Editor {
     }
 
     let editor_entity = cx.entity().clone();
+    let line_height = window.line_height();
+    let doc_line_count = self.document.read(cx).len_lines();
+    let total_lines = self.display_line_count(doc_line_count);
+    let viewport = self.viewport_range(line_height, total_lines);
+    let gap_controls = self.gap_controls();
+
+    let build_gutter =
+      |gutter_element: GutterElement,
+       view_suffix: &'static str,
+       editor_entity: Entity<Editor>| {
+        let mut gutter = div()
+          .w(px(GUTTER_WIDTH))
+          .h_full()
+          .bg(self.theme.gutter_background())
+          .relative()
+          .child(gutter_element);
+
+        for control in gap_controls.iter() {
+          if !viewport.contains(&control.display_line) {
+            continue;
+          }
+
+          let y = line_height * (control.display_line - viewport.start) as f32;
+          let button_id = format!(
+            "gap-expand-{}-{}-{}-{}",
+            view_suffix,
+            control.direction.id_suffix(),
+            control.gap_id.start,
+            control.gap_id.end
+          );
+          let gap_id = control.gap_id;
+          let direction = control.direction;
+          let editor_entity = editor_entity.clone();
+
+          let button = Button::new(button_id)
+            .icon(direction.icon())
+            .ghost()
+            .xsmall()
+            .compact()
+            .tooltip(direction.tooltip())
+            .on_click(move |_, _, cx| {
+              editor_entity.update(cx, |editor, cx| match direction {
+                GapExpandDirection::Up => editor.expand_gap_up(gap_id, 5, cx),
+                GapExpandDirection::Down => editor.expand_gap_down(gap_id, 5, cx),
+              });
+            });
+
+          gutter = gutter.child(
+            div()
+              .absolute()
+              .left(px(6.0))
+              .top(y)
+              .h(line_height)
+              .w(px(20.0))
+              .flex()
+              .items_center()
+              .justify_center()
+              .child(button),
+          );
+        }
+
+        gutter
+      };
+
     let content = if self.diff_view_mode == DiffViewMode::Split {
       let left_panel = div()
         .size_full()
         .flex()
         .flex_row()
         .child(
-          div()
-            .w(px(GUTTER_WIDTH))
-            .h_full()
-            .bg(self.theme.gutter_background())
-            .child(GutterElement::split_left(editor_entity.clone())),
+          build_gutter(
+            GutterElement::split_left(editor_entity.clone()),
+            "left",
+            editor_entity.clone(),
+          ),
         )
         .child(
           div()
@@ -2494,11 +2665,11 @@ impl Render for Editor {
         .flex()
         .flex_row()
         .child(
-          div()
-            .w(px(GUTTER_WIDTH))
-            .h_full()
-            .bg(self.theme.gutter_background())
-            .child(GutterElement::split_right(editor_entity.clone())),
+          build_gutter(
+            GutterElement::split_right(editor_entity.clone()),
+            "right",
+            editor_entity.clone(),
+          ),
         )
         .child(
           div()
@@ -2528,11 +2699,11 @@ impl Render for Editor {
         .flex()
         .flex_row()
         .child(
-          div()
-            .w(px(GUTTER_WIDTH))
-            .h_full()
-            .bg(self.theme.gutter_background())
-            .child(GutterElement::new(editor_entity.clone())),
+          build_gutter(
+            GutterElement::new(editor_entity.clone()),
+            "inline",
+            editor_entity.clone(),
+          ),
         )
         .child(
           div()
