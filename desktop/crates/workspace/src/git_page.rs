@@ -1900,16 +1900,12 @@ impl GitPage {
       .as_ref()
       .map(|path| self.split_disabled_for_path(path))
       .unwrap_or(false);
-    let (toggle_label, toggle_icon, toggle_tooltip) = if split_disabled {
-      ("Split", IconName::PanelLeft, None)
+    let (toggle_label, toggle_icon) = if split_disabled {
+      ("Split", IconName::PanelLeft)
     } else {
       match self.diff_view {
-        DiffViewMode::Inline => ("Split", IconName::PanelLeft, Some("Switch to split diff")),
-        DiffViewMode::Split => (
-          "Inline",
-          IconName::PanelLeftClose,
-          Some("Switch to inline diff"),
-        ),
+        DiffViewMode::Inline => ("Split", IconName::PanelLeft),
+        DiffViewMode::Split => ("Inline", IconName::PanelLeftClose),
       }
     };
     let view = cx.entity();
@@ -1918,7 +1914,6 @@ impl GitPage {
       .icon(toggle_icon)
       .xsmall()
       .ghost()
-      .when_some(toggle_tooltip, |this, tooltip| this.tooltip(tooltip))
       .disabled(split_disabled)
       .on_click(move |_, _, cx| {
         view.update(cx, |this, cx| {
