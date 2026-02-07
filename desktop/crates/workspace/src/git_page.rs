@@ -1803,6 +1803,7 @@ impl GitPage {
           .name(display_name.clone())
           .when_some(user.image.clone(), |this, image| this.src(image))
           .small();
+        let email = user.email.clone();
         let settings_view = view.clone();
         let logout_view = view.clone();
         Some(
@@ -1813,6 +1814,12 @@ impl GitPage {
             .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
               let settings_view = settings_view.clone();
               let logout_view = logout_view.clone();
+              let menu = menu.item(
+                PopupMenuItem::new(email.clone())
+                  .icon(IconName::User)
+                  .disabled(true),
+              );
+
               let menu = menu.item(
                 PopupMenuItem::new("Settings")
                   .icon(IconName::Settings2)
@@ -1825,14 +1832,16 @@ impl GitPage {
                   }),
               );
 
-              menu.separator().item(
+              let menu = menu.separator().item(
                 PopupMenuItem::new("Sign out")
                   .icon(IconName::ArrowRight)
                   .on_click(move |event, _, cx| {
                     let _ = event;
                     let _ = logout_view.update(cx, |this, cx| this.logout(cx));
                   }),
-              )
+              );
+
+              menu
             })
             .into_any_element(),
         )
