@@ -27,6 +27,29 @@ pub struct User {
   pub role: UserRole,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubPullRequestLabel {
+  pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubRepository {
+  pub owner: String,
+  pub repo: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubPullRequest {
+  pub number: u64,
+  pub title: String,
+  pub state: String,
+  #[serde(rename = "updatedAt")]
+  pub updated_at: String,
+  pub comments: u64,
+  pub labels: Vec<GithubPullRequestLabel>,
+  pub repository: GithubRepository,
+}
+
 #[derive(Clone)]
 pub struct ApiClient {
   base_url: String,
@@ -68,6 +91,12 @@ struct ExchangeCodeResponse {
 
 #[derive(Debug, Serialize)]
 struct EmptyRequest {}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestsResponse {
+  #[serde(rename = "pullRequests")]
+  pull_requests: Vec<GithubPullRequest>,
+}
 
 impl ApiClient {
   pub fn new() -> Self {
@@ -183,5 +212,24 @@ impl ApiClient {
     }
     let user = response.json::<User>()?;
     Ok(Some(user))
+  }
+
+  pub fn fetch_latest_pull_requests(
+    &self,
+    owner: &str,
+    repo: &str,
+  ) -> Result<Vec<GithubPullRequest>> {
+    let response = self
+      .authed_request(Method::GET, "/github/pr/latest")
+      .query(&[("org", owner), ("repo", repo)])
+      .send()?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !response.status().is_success() {
+      anyhow::bail!("unexpected status: {}", response.status());
+    }
+    let payload = response.json::<GithubPullRequestsResponse>()?;
+    Ok(payload.pull_requests)
   }
 }

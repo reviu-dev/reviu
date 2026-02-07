@@ -33,16 +33,16 @@ use smol::unblock;
 use crate::{
   api::{ApiClient, User},
   config::{ConfigStore, RecentRepository},
-  workspace::{WorkspacePage, WorkspaceRoute},
+  github_page::GithubPageHandle,
+  workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
-  CommandPaletteConfig, CommandPaletteHandler, ConfirmDialog, FILE_ICON_SIZE_PX, Input, InputState,
-  SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, WindowExt,
-  file_icon_path_for_path_with_theme,
+  CommandPaletteConfig, CommandPaletteHandler, ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT,
+  Input, InputState, SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
+  WindowExt, file_icon_path_for_path_with_theme,
 };
 
-const HEADER_HEIGHT: f32 = 44.0;
 const SIDEBAR_DEFAULT_WIDTH: f32 = 280.0;
 const SIDEBAR_MIN_WIDTH: f32 = 220.0;
 const SIDEBAR_MAX_WIDTH: f32 = 500.0;
@@ -717,7 +717,7 @@ impl GitPage {
 
     let mut view = Self {
       focus_handle: cx.focus_handle(),
-      api: ApiClient::new(),
+      api: WorkspaceApi::global(cx).api.clone(),
       repo_select,
       branch_select,
       window_handle: window.window_handle(),
@@ -1792,6 +1792,17 @@ impl GitPage {
         cx.refresh_windows();
       });
 
+    let github_button = Button::new("open-github")
+      .icon(IconName::GitHub)
+      .label("GitHub")
+      .ghost()
+      .compact()
+      .on_click(|_, _, cx| {
+        GithubPageHandle::refresh(cx);
+        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+        cx.refresh_windows();
+      });
+
     let auth_control = match &self.auth_state {
       AuthState::Authenticated(user) => {
         let display_name = if user.name.trim().is_empty() {
@@ -1865,6 +1876,10 @@ impl GitPage {
     let header_right = h_flex()
       .items_center()
       .gap_2()
+      .when(
+        matches!(self.auth_state, AuthState::Authenticated(_)),
+        |this| this.child(github_button),
+      )
       .when_some(auth_control, |this, control| this.child(control))
       .when(
         !matches!(self.auth_state, AuthState::Authenticated(_)),
@@ -1873,6 +1888,7 @@ impl GitPage {
 
     div()
       .h(px(HEADER_HEIGHT))
+      .max_h(px(HEADER_HEIGHT))
       .px_4()
       .flex()
       .items_center()
