@@ -1,5 +1,6 @@
 use std::{
   path::{Path, PathBuf},
+  rc::Rc,
   sync::Arc,
   time::Duration,
 };
@@ -15,17 +16,18 @@ use git::{
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
   InteractiveElement, Keystroke, ParentElement, PathPromptOptions, Render, SharedString, Styled,
-  Task, WeakEntity, Window, actions, div, img, prelude::*, px, uniform_list,
+  Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Collapsible, Disableable, Icon, IconName, Sizable, StyledExt as _,
+  ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Sizable,
   avatar::Avatar,
-  button::{Button, ButtonGroup, ButtonVariant, ButtonVariants as _},
+  button::{Button, ButtonVariant, ButtonVariants as _},
   h_flex,
   kbd::Kbd,
+  label::Label,
+  list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{DropdownMenu, PopupMenuItem},
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
-  sidebar::SidebarItem,
   tooltip::Tooltip,
 };
 use smol::unblock;
@@ -39,13 +41,13 @@ use crate::{
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteConfig, CommandPaletteHandler, ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT,
-  Input, InputState, SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
-  StatusThemeExt, WindowExt, file_icon_path_for_path_with_theme,
+  Input, InputState, SearchFileEntry, SearchFileHandler, SearchFilePalette,
+  SearchFilePaletteConfig, StatusThemeExt, WindowExt, file_icon_path_for_path_with_theme,
 };
 
-const SIDEBAR_DEFAULT_WIDTH: f32 = 280.0;
-const SIDEBAR_MIN_WIDTH: f32 = 220.0;
-const SIDEBAR_MAX_WIDTH: f32 = 500.0;
+const SIDEBAR_DEFAULT_WIDTH: f32 = 300.0;
+const SIDEBAR_MIN_WIDTH: f32 = 250.0;
+const SIDEBAR_MAX_WIDTH: f32 = 600.0;
 const STATUS_POLL_INTERVAL_MS: u64 = 800;
 const EDITOR_HEADER_HEIGHT: f32 = 40.0;
 
@@ -60,306 +62,162 @@ actions!(
   ]
 );
 
-#[derive(Clone)]
-struct FileSidebarItem {
+#[derive(Clone, Debug)]
+struct GitFileRow {
+  entry: RepoStatusEntry,
   label: SharedString,
-  status_letter: SharedString,
-  status_color: gpui::Hsla,
-  stage_icon: IconName,
-  stage_color: gpui::Hsla,
-  stage_tooltip: Option<SharedString>,
-  file_icon_path: Option<SharedString>,
-  stage_action: Option<std::rc::Rc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>>,
-  unstage_action: Option<std::rc::Rc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>>,
-  restore_action: Option<std::rc::Rc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>>,
-  active: bool,
-  collapsed: bool,
-  disabled: bool,
-  deleted: bool,
-  handler: std::rc::Rc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App)>,
 }
 
-impl FileSidebarItem {
-  fn new(
-    label: impl Into<SharedString>,
-    status_letter: impl Into<SharedString>,
-    status_color: gpui::Hsla,
-    stage_icon: IconName,
-    stage_color: gpui::Hsla,
-    stage_tooltip: Option<SharedString>,
-  ) -> Self {
+impl GitFileRow {
+  fn new(entry: RepoStatusEntry) -> Self {
+    let label = entry
+      .path
+      .to_string_lossy()
+      .replace(['\n', '\r'], "")
+      .into();
+    Self { entry, label }
+  }
+}
+
+struct GitFileListDelegate {
+  rows: Vec<Rc<GitFileRow>>,
+  selected_index: Option<IndexPath>,
+  opened_path: Option<PathBuf>,
+}
+
+impl GitFileListDelegate {
+  fn new() -> Self {
     Self {
-      label: label.into(),
-      status_letter: status_letter.into(),
-      status_color,
-      stage_icon,
-      stage_color,
-      stage_tooltip,
-      file_icon_path: None,
-      stage_action: None,
-      unstage_action: None,
-      restore_action: None,
-      active: false,
-      collapsed: false,
-      disabled: false,
-      deleted: false,
-      handler: std::rc::Rc::new(|_, _, _| {}),
+      rows: Vec::new(),
+      selected_index: None,
+      opened_path: None,
     }
   }
 
-  fn placeholder(label: impl Into<SharedString>, theme: &gpui_component::Theme) -> Self {
-    Self::new(
-      label,
-      "",
-      theme.muted_foreground,
-      IconName::Minus,
-      theme.muted_foreground,
-      None,
-    )
-    .disabled(true)
+  fn set_rows(&mut self, entries: Vec<RepoStatusEntry>) {
+    self.rows = entries
+      .into_iter()
+      .map(|entry| Rc::new(GitFileRow::new(entry)))
+      .collect();
   }
 
-  fn file_icon_path(mut self, file_icon_path: Option<SharedString>) -> Self {
-    self.file_icon_path = file_icon_path;
-    self
+  fn row_at(&self, ix: IndexPath) -> Option<Rc<GitFileRow>> {
+    self.rows.get(ix.row).cloned()
   }
 
-  fn active(mut self, active: bool) -> Self {
-    self.active = active;
-    self
-  }
-
-  fn disabled(mut self, disabled: bool) -> Self {
-    self.disabled = disabled;
-    self
-  }
-
-  fn deleted(mut self, deleted: bool) -> Self {
-    self.deleted = deleted;
-    self
-  }
-
-  fn on_stage(
-    mut self,
-    handler: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
-  ) -> Self {
-    self.stage_action = Some(std::rc::Rc::new(handler));
-    self
-  }
-
-  fn on_unstage(
-    mut self,
-    handler: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
-  ) -> Self {
-    self.unstage_action = Some(std::rc::Rc::new(handler));
-    self
-  }
-
-  fn on_restore(
-    mut self,
-    handler: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
-  ) -> Self {
-    self.restore_action = Some(std::rc::Rc::new(handler));
-    self
-  }
-
-  fn on_click(
-    mut self,
-    handler: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
-  ) -> Self {
-    self.handler = std::rc::Rc::new(handler);
-    self
-  }
-
-  fn status_tooltip(&self) -> SharedString {
-    if self.status_letter.is_empty() {
-      return "".into();
-    }
-    match self.status_letter.as_ref() {
-      "M" => "Modified",
-      "A" => "Added",
-      "D" => "Deleted",
-      "R" => "Renamed",
-      "T" => "Type change",
-      "U" => "Untracked",
-      _ => "Unknown",
-    }
-    .into()
+  fn set_opened_path(&mut self, path: Option<PathBuf>) {
+    self.opened_path = path;
   }
 }
 
-impl Collapsible for FileSidebarItem {
-  fn is_collapsed(&self) -> bool {
-    self.collapsed
-  }
-
-  fn collapsed(mut self, collapsed: bool) -> Self {
-    self.collapsed = collapsed;
-    self
-  }
+fn file_list_base_item(ix: IndexPath, selected_index: Option<IndexPath>) -> ListItem {
+  ListItem::new(ix).selected(
+    selected_index
+      .map(|selected| selected.eq_row(ix))
+      .unwrap_or(false),
+  )
 }
 
-impl SidebarItem for FileSidebarItem {
-  fn render(
-    self,
-    id: impl Into<gpui::ElementId>,
+impl ListDelegate for GitFileListDelegate {
+  type Item = ListItem;
+
+  fn items_count(&self, _section: usize, _cx: &App) -> usize {
+    self.rows.len()
+  }
+
+  fn render_item(
+    &mut self,
+    ix: IndexPath,
     _window: &mut Window,
-    cx: &mut App,
-  ) -> impl IntoElement {
-    let id = id.into();
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
-    let handler = self.handler.clone();
-    let is_hoverable = !self.active && !self.disabled;
-    let is_collapsed = self.collapsed;
-    let has_status = !self.status_letter.is_empty();
-    let has_actions =
-      self.stage_action.is_some() || self.unstage_action.is_some() || self.restore_action.is_some();
-    let stage_action = self.stage_action.clone();
-    let unstage_action = self.unstage_action.clone();
-    let restore_action = self.restore_action.clone();
-    let hover_group: SharedString = format!("sidebar-item-{}", self.label).into();
-    let status_tooltip = self.status_tooltip();
-    let file_icon_path = self.file_icon_path.clone();
+    let mut base_item = file_list_base_item(ix, self.selected_index);
+    let row = self.rows.get(ix.row)?;
+    let is_opened = self
+      .opened_path
+      .as_ref()
+      .map(|path| path == &row.entry.path)
+      .unwrap_or(false);
 
-    div()
-      .id(id)
-      .w_full()
-      .relative()
-      .flex()
-      .items_center()
-      .gap_2()
-      .p_4()
-      .group(hover_group.clone())
-      .when(is_hoverable, |this| {
-        this.hover(|this| {
-          this
-            .bg(theme.sidebar_accent.opacity(0.8))
-            .text_color(theme.sidebar_accent_foreground)
-        })
-      })
-      .when(self.active, |this| {
-        this
-          .font_medium()
-          .bg(theme.sidebar_accent)
-          .text_color(theme.sidebar_accent_foreground)
-      })
-      .when(self.disabled, |this| {
-        this.text_color(theme.muted_foreground)
-      })
-      .when(!is_collapsed, |this| this.h_7())
-      .when(is_collapsed, |this| this.justify_center())
-      .when(has_status, |this| {
-        let status_tooltip = status_tooltip.clone();
-        let status_id = format!("status-letter-{}", self.label);
-        this.child(
-          div()
-            .id(status_id)
-            .tooltip(move |window, cx| Tooltip::new(status_tooltip.clone()).build(window, cx))
-            .child(
-              div()
-                .w(px(15.))
-                .text_xs()
-                .text_color(self.status_color)
-                .child(self.status_letter.clone()),
-            ),
-        )
-      })
-      .child({
-        let icon = Icon::new(self.stage_icon)
+    if is_opened {
+      base_item = base_item.bg(theme.sidebar_accent.opacity(0.35));
+    }
+
+    let status_letter = row.entry.status.short_code();
+    let status_color = GitPage::status_color(row.entry.status, &theme);
+    let (stage_icon, stage_color, stage_tooltip) = GitPage::stage_style(row.entry.stage, &theme);
+    let file_icon = file_icon_path_for_path_with_theme(&row.entry.path, &theme)
+      .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
+      .unwrap_or_else(|| {
+        Icon::new(IconName::File)
           .size_3()
-          .text_color(self.stage_color);
-        let icon_element: AnyElement = if let Some(tooltip) = self.stage_tooltip.clone() {
-          let tooltip_id = format!("stage-icon-{}", self.label);
-          div()
-            .id(tooltip_id)
-            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-            .child(icon)
-            .into_any_element()
-        } else {
-          div().child(icon).into_any_element()
-        };
-        icon_element
-      })
-      .when(!is_collapsed, |this| {
-        if let Some(path) = file_icon_path {
-          this.child(
-            img(path)
-              .min_w(px(FILE_ICON_SIZE_PX))
-              .size(px(FILE_ICON_SIZE_PX)),
-          )
-        } else {
-          this.child(
-            Icon::new(IconName::File)
-              .size_3()
-              .text_color(theme.sidebar_foreground),
-          )
-        }
-      })
-      .when(!is_collapsed, |this| {
-        this.child(
-          div()
-            .w_full()
-            .overflow_hidden()
-            .text_ellipsis_start()
-            .when(self.deleted, |this| this.line_through())
-            .child(self.label.clone()),
-        )
-      })
-      .when(!is_collapsed && !self.disabled && has_actions, |this| {
-        let mut actions = ButtonGroup::new(format!("file-actions-{}", self.label))
-          .primary()
-          .with_variant(ButtonVariant::Secondary)
-          .xsmall();
+          .text_color(theme.sidebar_foreground)
+          .into_any_element()
+      });
 
-        if let Some(handler) = stage_action {
-          actions = actions.child(
-            Button::new(format!("stage-file-{}", self.label))
-              .icon(IconName::Plus)
-              .bg(theme.background)
-              .tooltip("Stage file")
-              .on_click(move |ev, window, cx| {
-                handler(ev, window, cx);
-              }),
-          );
-        }
-        if let Some(handler) = unstage_action {
-          actions = actions.child(
-            Button::new(format!("unstage-file-{}", self.label))
-              .icon(IconName::Minus)
-              .bg(theme.background)
-              .tooltip("Unstage file")
-              .on_click(move |ev, window, cx| {
-                handler(ev, window, cx);
-              }),
-          );
-        }
-        if let Some(handler) = restore_action {
-          actions = actions.child(
-            Button::new(format!("restore-file-{}", self.label))
-              .icon(IconName::Undo)
-              .bg(theme.background)
-              .tooltip("Restore file")
-              .on_click(move |ev, window, cx| {
-                handler(ev, window, cx);
-              }),
-          );
-        }
+    let stage_icon = Icon::new(stage_icon).size_3().text_color(stage_color);
+    let stage_element: AnyElement = if let Some(tooltip) = stage_tooltip {
+      let tooltip_id = format!("git-stage-icon-{}", ix.row);
+      div()
+        .id(tooltip_id)
+        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        .child(stage_icon)
+        .into_any_element()
+    } else {
+      div().child(stage_icon).into_any_element()
+    };
 
-        this.child(
-          div()
-            .absolute()
-            .right(px(5.0))
-            .top(px(5.0))
-            .opacity(0.0)
-            .group_hover(hover_group, |style| style.opacity(1.0))
-            .child(actions),
-        )
-      })
-      .when(!self.disabled, |this| {
-        this.on_click(move |ev, window, cx| {
-          handler(ev, window, cx);
-        })
-      })
+    Some(
+      base_item.px_2().py_1().child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(
+            div()
+              .w(px(15.))
+              .text_xs()
+              .text_color(status_color)
+              .child(status_letter),
+          )
+          .child(stage_element)
+          .child(file_icon)
+          .child(
+            div()
+              .flex_1()
+              .overflow_hidden()
+              .text_ellipsis_start()
+              .when(row.entry.status == RepoStatusKind::Deleted, |this| {
+                this.line_through()
+              })
+              .child(row.label.clone()),
+          ),
+      ),
+    )
+  }
+
+  fn render_empty(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> impl IntoElement {
+    div()
+      .size_full()
+      .items_center()
+      .justify_center()
+      .text_sm()
+      .text_color(cx.theme().muted_foreground)
+      .child("No changes")
+  }
+
+  fn set_selected_index(
+    &mut self,
+    ix: Option<IndexPath>,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) {
+    self.selected_index = ix;
+    cx.notify();
   }
 }
 
@@ -503,6 +361,7 @@ pub struct GitPage {
   api: ApiClient,
   repo_select: Entity<SelectState<SearchableVec<RecentRepoItem>>>,
   branch_select: Entity<SelectState<SearchableVec<BranchSelectItem>>>,
+  file_list: Entity<ListState<GitFileListDelegate>>,
   window_handle: AnyWindowHandle,
   selected_repo: Option<PathBuf>,
   status_entries: Vec<RepoStatusEntry>,
@@ -513,6 +372,7 @@ pub struct GitPage {
   can_force_push: bool,
   has_staged_changes: bool,
   selected_file: Option<PathBuf>,
+  force_list_selection: bool,
   editor: Option<Entity<Editor>>,
   diff_view: DiffViewMode,
   auth_state: AuthState,
@@ -532,6 +392,46 @@ impl GitPage {
           RepoStatusKind::Untracked | RepoStatusKind::Added | RepoStatusKind::Deleted
         )
     })
+  }
+
+  fn selected_file_index(&self) -> Option<IndexPath> {
+    let selected = self.selected_file.as_ref()?;
+    let index = self
+      .status_entries
+      .iter()
+      .position(|entry| &entry.path == selected)?;
+    Some(IndexPath::new(index))
+  }
+
+  fn set_file_list_selected_index(&self, index: Option<IndexPath>, cx: &mut Context<Self>) {
+    let file_list = self.file_list.clone();
+    let window_handle = self.window_handle;
+    let _ = cx.update_window(window_handle, move |_, window, cx| {
+      file_list.update(cx, |state, cx| {
+        state.set_selected_index(index, window, cx);
+      });
+    });
+  }
+
+  fn refresh_file_list(&mut self, cx: &mut Context<Self>) {
+    let rows = self.status_entries.clone();
+    let current_index = self.file_list.read(cx).selected_index();
+    let opened_path = self.selected_file.clone();
+    self.file_list.update(cx, |state, cx| {
+      state.delegate_mut().set_rows(rows.clone());
+      state.delegate_mut().set_opened_path(opened_path);
+      cx.notify();
+    });
+
+    let selected_index = if self.force_list_selection {
+      self.force_list_selection = false;
+      self.selected_file_index()
+    } else {
+      current_index
+        .and_then(|ix| (ix.row < rows.len()).then_some(IndexPath::new(ix.row)))
+        .or_else(|| self.selected_file_index())
+    };
+    self.set_file_list_selected_index(selected_index, cx);
   }
 
   fn handle_auth_code(&mut self, code: String, cx: &mut Context<Self>) {
@@ -645,6 +545,7 @@ impl GitPage {
       )
       .searchable(true)
     });
+    let file_list = cx.new(|cx| ListState::new(GitFileListDelegate::new(), window, cx));
 
     if let Some(repo) = selected_repo.as_ref() {
       repo_select.update(cx, |state, cx| {
@@ -663,6 +564,7 @@ impl GitPage {
       api: WorkspaceApi::global(cx).api.clone(),
       repo_select,
       branch_select,
+      file_list,
       window_handle: window.window_handle(),
       selected_repo,
       status_entries: Vec::new(),
@@ -673,6 +575,7 @@ impl GitPage {
       can_force_push: false,
       has_staged_changes: false,
       selected_file: None,
+      force_list_selection: false,
       editor: None,
       diff_view: DiffViewMode::Inline,
       auth_state: AuthState::Unknown,
@@ -685,6 +588,7 @@ impl GitPage {
 
     view.subscribe_to_repo_select(cx);
     view.subscribe_to_branch_select(cx);
+    view.subscribe_to_file_list(cx);
     view.reload_status(cx);
     view.refresh_branches(cx);
     view.start_polling(cx);
@@ -733,6 +637,22 @@ impl GitPage {
         });
 
         this.branch_task = Some(task);
+      },
+    )
+    .detach();
+  }
+
+  fn subscribe_to_file_list(&mut self, cx: &mut Context<Self>) {
+    cx.subscribe(
+      &self.file_list,
+      move |this, state, event: &ListEvent, cx| match event {
+        ListEvent::Select(ix) | ListEvent::Confirm(ix) => {
+          let row = state.read(cx).delegate().row_at(*ix);
+          if let Some(row) = row {
+            this.open_file(row.entry.path.clone(), cx);
+          }
+        }
+        ListEvent::Cancel => {}
       },
     )
     .detach();
@@ -855,6 +775,7 @@ impl GitPage {
   fn reload_status(&mut self, cx: &mut Context<Self>) {
     let Some(repo_root) = self.selected_repo.clone() else {
       self.status_entries.clear();
+      self.refresh_file_list(cx);
       self.branch_status = None;
       self.has_head_commit = false;
       self.can_undo_last_commit = false;
@@ -910,6 +831,7 @@ impl GitPage {
             }
           }
         }
+        this.refresh_file_list(cx);
         cx.notify();
       });
     });
@@ -973,6 +895,7 @@ impl GitPage {
               this.editor = None;
             }
           }
+          this.refresh_file_list(cx);
           cx.notify();
         });
       }
@@ -1393,6 +1316,14 @@ impl GitPage {
     editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
     self.editor = Some(editor);
     self.selected_file = Some(rel_path);
+    self.force_list_selection = true;
+    let opened_path = self.selected_file.clone();
+    self.file_list.update(cx, |state, cx| {
+      state.delegate_mut().set_opened_path(opened_path);
+      cx.notify();
+    });
+    let selected_index = self.selected_file_index();
+    self.set_file_list_selected_index(selected_index, cx);
     cx.notify();
   }
 
@@ -1860,19 +1791,62 @@ impl GitPage {
   fn render_editor_header(&self, editor: &Entity<Editor>, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let editor_state = editor.read(cx);
-    let file_name = editor_state
-      .workdir_path
-      .file_name()
-      .and_then(|name| name.to_str())
-      .unwrap_or("Untitled")
-      .to_string();
+    let (file_name, dir_path) = if let Some(rel_path) = self.selected_file.as_ref() {
+      let file_name = rel_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Untitled")
+        .to_string();
+      let dir_path = rel_path
+        .parent()
+        .and_then(|parent| parent.to_str())
+        .unwrap_or("")
+        .to_string();
+      (file_name, dir_path)
+    } else {
+      let file_name = editor_state
+        .workdir_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Untitled")
+        .to_string();
+      let dir_path = editor_state
+        .workdir_path
+        .parent()
+        .and_then(|parent| parent.to_str())
+        .unwrap_or("")
+        .to_string();
+      (file_name, dir_path)
+    };
     let file_dirty = editor_state.is_dirty;
     let editor_entity = editor.clone();
+    let selected_entry = self
+      .selected_file
+      .as_ref()
+      .and_then(|path| self.status_entries.iter().find(|entry| &entry.path == path))
+      .cloned();
+    let status_letter = selected_entry
+      .as_ref()
+      .map(|entry| entry.status.short_code());
+    let status_color = selected_entry
+      .as_ref()
+      .map(|entry| Self::status_color(entry.status, &theme))
+      .unwrap_or(theme.muted_foreground);
 
-    let title = div()
-      .flex()
+    let title = h_flex()
       .items_center()
       .gap_2()
+      .min_w_0()
+      .flex_1()
+      .when_some(status_letter, |this, letter| {
+        this.child(
+          div()
+            .w(px(15.))
+            .text_xs()
+            .text_color(status_color)
+            .child(letter),
+        )
+      })
       .child(
         file_icon_path_for_path_with_theme(&editor_state.workdir_path, &theme)
           .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
@@ -1884,11 +1858,23 @@ impl GitPage {
           }),
       )
       .child(
-        div()
-          .text_sm()
-          .font_medium()
-          .text_color(theme.foreground)
-          .child(file_name),
+        h_flex()
+          .min_w_0()
+          .flex_1()
+          .items_center()
+          .gap_2()
+          .child(div().min_w_0().child(Label::new(file_name).truncate()))
+          .when(!dir_path.is_empty(), |this| {
+            this.child(
+              div()
+                .min_w_0()
+                .flex_1()
+                .overflow_hidden()
+                .text_ellipsis_start()
+                .text_color(theme.muted_foreground)
+                .child(format!("- {}", dir_path)),
+            )
+          }),
       )
       .when(file_dirty, |this| {
         this.child(
@@ -1940,12 +1926,79 @@ impl GitPage {
         });
       });
 
+    let (can_stage, can_unstage, can_restore, file_path, file_status) =
+      if let Some(entry) = selected_entry {
+        (
+          matches!(
+            entry.stage,
+            RepoStage::Unstaged | RepoStage::PartiallyStaged
+          ),
+          matches!(entry.stage, RepoStage::Staged | RepoStage::PartiallyStaged),
+          matches!(entry.stage, RepoStage::Unstaged),
+          Some(entry.path.clone()),
+          Some(entry.status),
+        )
+      } else {
+        (false, false, false, None, None)
+      };
+
+    let file_path_stage = file_path.clone();
+    let file_path_unstage = file_path.clone();
+    let file_path_restore = file_path.clone();
+
+    let view = cx.entity();
+    let stage_button = Button::new("editor-stage-file")
+      .label("Stage")
+      .icon(IconName::Plus)
+      .xsmall()
+      .ghost()
+      .disabled(!can_stage)
+      .on_click(move |_, _, cx| {
+        if let Some(path) = file_path_stage.clone() {
+          view.update(cx, |this, cx| {
+            this.stage_file_action(path.clone(), cx);
+          });
+        }
+      });
+
+    let view = cx.entity();
+    let unstage_button = Button::new("editor-unstage-file")
+      .label("Unstage")
+      .icon(IconName::Minus)
+      .xsmall()
+      .ghost()
+      .disabled(!can_unstage)
+      .on_click(move |_, _, cx| {
+        if let Some(path) = file_path_unstage.clone() {
+          view.update(cx, |this, cx| {
+            this.unstage_file_action(path.clone(), cx);
+          });
+        }
+      });
+
+    let view = cx.entity();
+    let file_status_for_restore = file_status;
+    let restore_button = Button::new("editor-restore-file")
+      .label("Restore")
+      .icon(IconName::Undo)
+      .xsmall()
+      .ghost()
+      .disabled(!can_restore)
+      .on_click(move |_, window, cx| {
+        if let (Some(path), Some(status)) = (file_path_restore.clone(), file_status_for_restore) {
+          view.update(cx, |this, cx| {
+            this.confirm_restore_file_action(window, path.clone(), status, cx);
+          });
+        }
+      });
+
     div()
       .h(px(EDITOR_HEADER_HEIGHT))
       .px_3()
       .flex()
       .items_center()
       .justify_between()
+      .gap_2()
       .bg(theme.sidebar)
       .border_b_1()
       .border_color(theme.title_bar_border)
@@ -1955,6 +2008,10 @@ impl GitPage {
           .flex()
           .items_center()
           .gap_2()
+          .flex_shrink_0()
+          .child(stage_button)
+          .child(unstage_button)
+          .child(restore_button)
           .child(save_button)
           .child(toggle_button),
       )
@@ -2282,7 +2339,7 @@ impl GitPage {
       )
   }
 
-  fn render_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+  fn render_sidebar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let base_sidebar = div()
       .id("git-sidebar")
@@ -2294,104 +2351,24 @@ impl GitPage {
       .text_color(theme.sidebar_foreground);
 
     if self.selected_repo.is_none() {
-      let placeholder = FileSidebarItem::placeholder("Select a repository", &cx.theme().clone());
       return base_sidebar
         .child(
-          placeholder
-            .render("git-sidebar-placeholder", window, cx)
-            .into_any_element(),
-        )
-        .into_any_element();
-    } else if self.status_entries.is_empty() {
-      let placeholder = FileSidebarItem::placeholder("No changes", &cx.theme().clone());
-      return base_sidebar
-        .child(
-          placeholder
-            .render("git-sidebar-placeholder", window, cx)
-            .into_any_element(),
+          div()
+            .p_4()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Select a repository"),
         )
         .into_any_element();
     }
 
-    let list = uniform_list(
-      "git-sidebar-list",
-      self.status_entries.len(),
-      cx.processor(|this, range: std::ops::Range<usize>, window, cx| {
-        let theme = cx.theme().clone();
-        let selected_file = this.selected_file.clone();
-        range
-          .map(|ix| {
-            let entry = &this.status_entries[ix];
-            let is_active = selected_file.as_ref() == Some(&entry.path);
-            let path = entry.path.clone();
-            let path_for_open = path.clone();
-            let status = entry.status;
-            let status_letter = status.short_code();
-            let file_label = entry.path.to_string_lossy();
-            let file_label = file_label.replace(['\n', '\r'], "");
-            let status_color = Self::status_color(status, &theme);
-            let is_deleted = status == RepoStatusKind::Deleted;
-            let (stage_icon, stage_color, stage_tooltip) = Self::stage_style(entry.stage, &theme);
-            let file_icon_path = file_icon_path_for_path_with_theme(&entry.path, &theme);
-            let can_stage = matches!(
-              entry.stage,
-              RepoStage::Unstaged | RepoStage::PartiallyStaged
-            );
-            let can_unstage = matches!(entry.stage, RepoStage::Staged | RepoStage::PartiallyStaged);
-            let can_restore = matches!(entry.stage, RepoStage::Unstaged);
-
-            let mut item = FileSidebarItem::new(
-              file_label,
-              status_letter,
-              status_color,
-              stage_icon,
-              stage_color,
-              stage_tooltip,
-            )
-            .file_icon_path(file_icon_path)
-            .active(is_active)
-            .deleted(is_deleted)
-            .on_click(cx.listener(move |this, _, _, cx| {
-              this.open_file(path_for_open.clone(), cx);
-            }));
-
-            if can_stage {
-              let path = path.clone();
-              item = item.on_stage(cx.listener(move |this, _, _, cx| {
-                this.stage_file_action(path.clone(), cx);
-              }));
-            }
-
-            if can_unstage {
-              let path = path.clone();
-              item = item.on_unstage(cx.listener(move |this, _, _, cx| {
-                this.unstage_file_action(path.clone(), cx);
-              }));
-            }
-
-            if can_restore {
-              let path = path.clone();
-              let status = status;
-              item = item.on_restore(cx.listener(move |this, _, window, cx| {
-                this.confirm_restore_file_action(window, path.clone(), status, cx);
-              }));
-            }
-
-            item
-              .render(format!("git-sidebar-item-{}", ix), window, cx)
-              .into_any_element()
-          })
-          .collect()
-      }),
-    )
-    .size_full();
-
-    let list_container = div()
-      .relative()
-      .flex_1()
-      .min_h_0()
-      .overflow_hidden()
-      .child(list);
+    let list_container = div().relative().flex_1().min_h_0().overflow_hidden().child(
+      List::new(&self.file_list)
+        .flex_1()
+        .w_full()
+        .min_h_0()
+        .p(px(6.)),
+    );
 
     base_sidebar
       .relative()
