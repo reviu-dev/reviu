@@ -13,6 +13,7 @@
   "dependencies": {
     "@hono/node-server": "^1.19.9",
     "@hono/zod-validator": "^0.7.6",
+    "@octokit/request": "^10.0.7",
     "better-auth": "^1.4.18",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.1",
@@ -25,6 +26,7 @@
   },
   "devDependencies": {
     "@antfu/eslint-config": "^7.2.0",
+    "@octokit/types": "^16.0.0",
     "@types/node": "^20.19.32",
     "@types/pg": "^8.16.0",
     "drizzle-kit": "^0.31.8",

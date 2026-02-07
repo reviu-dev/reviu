@@ -6,9 +6,9 @@ use gpui_component::{
   setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings},
 };
 
-use crate::workspace::{WorkspacePage, WorkspaceRoute};
+use ui::HEADER_HEIGHT;
 
-const SETTINGS_HEADER_HEIGHT: f32 = 42.0;
+use crate::workspace::{WorkspacePage, WorkspaceRoute};
 
 pub struct SettingsPage {
   focus_handle: FocusHandle,
@@ -81,8 +81,9 @@ impl Render for SettingsPage {
     let theme = cx.theme().clone();
 
     let header = div()
-      .h(px(SETTINGS_HEADER_HEIGHT))
-      .px_3()
+      .h(px(HEADER_HEIGHT))
+      .max_h(px(HEADER_HEIGHT))
+      .px_4()
       .flex()
       .items_center()
       .justify_between()

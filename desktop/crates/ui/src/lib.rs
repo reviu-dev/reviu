@@ -5,6 +5,8 @@ mod icons;
 mod search_file_palette;
 mod theme;
 
+pub const HEADER_HEIGHT: f32 = 50.0;
+
 pub use assets::AppAssets;
 pub use command_palette::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,

@@ -1,5 +1,6 @@
 mod config;
 mod git_page;
+mod github_page;
 mod api;
 mod settings_page;
 mod workspace;
