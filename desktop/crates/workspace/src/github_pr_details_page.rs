@@ -29,14 +29,13 @@ use smol::unblock;
 
 use ui::{
   FILE_ICON_SIZE_PX, StatusThemeExt, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser,
-  file_icon_path_for_name_with_theme, h_resizable, resizable_panel, user_menu,
+  file_icon_path_for_name_with_theme, h_resizable, pr_status_tag, resizable_panel, user_menu,
 };
 
 use crate::{
   AuthCallbackTarget,
   api::{ApiClient, GithubPullRequestDetails},
   auth_state::{AuthState, AuthStateStore},
-  github_page::GithubPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 
@@ -861,17 +860,6 @@ impl GithubPrDetailsPage {
   fn render_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
-    let back_button = Button::new("back-github")
-      .icon(IconName::ArrowRight)
-      .label("Back")
-      .ghost()
-      .compact()
-      .on_click(|_, _, cx| {
-        GithubPageHandle::request_focus(cx);
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
-        cx.refresh_windows();
-      });
-
     let menu_state = match AuthStateStore::get(cx) {
       AuthState::Unknown => UserMenuState::Unknown,
       AuthState::Unauthenticated => UserMenuState::Unauthenticated,
@@ -933,20 +921,12 @@ impl GithubPrDetailsPage {
       .child(Tab::new().label("Changes"));
 
     let left_area = if let Some(pr) = self.pull_request.as_ref() {
-      let status_tag = if pr.merged_at.is_some() {
-        Tag::custom(
-          theme.status_violet(),
-          theme.primary_foreground,
-          theme.status_violet(),
-        )
-        .small()
-        .rounded_full()
-        .child("Merged")
-      } else if pr.state == "open" {
-        Tag::success().small().rounded_full().child("Open")
-      } else {
-        Tag::secondary().small().rounded_full().child("Closed")
-      };
+      let status_tag = pr_status_tag(
+        &theme,
+        &pr.state,
+        pr.draft,
+        pr.merged_at.as_deref(),
+      );
 
       let title = div()
         .min_w_0()
@@ -970,12 +950,6 @@ impl GithubPrDetailsPage {
       div().flex_1().min_w_0().child("")
     };
 
-    let right_area = h_flex()
-      .items_center()
-      .gap_2()
-      .child(back_button)
-      .when_some(auth_control, |this, control| this.child(control));
-
     div()
       .px_3()
       .py_2()
@@ -991,7 +965,7 @@ impl GithubPrDetailsPage {
           .items_center()
           .justify_between()
           .child(left_area)
-          .child(right_area),
+          .when_some(auth_control, |this, control| this.child(control)),
       )
       .child(tab_bar)
   }

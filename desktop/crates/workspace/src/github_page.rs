@@ -5,16 +5,14 @@ use gpui::{
   Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _,
-  button::{Button, ButtonVariants as _},
-  h_flex,
+  ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _, h_flex,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   tag::Tag,
   v_flex,
 };
 use smol::unblock;
-use ui::HEADER_HEIGHT;
+use ui::{HEADER_HEIGHT, pr_status_tag};
 
 use crate::{
   AuthCallbackTarget,
@@ -133,11 +131,12 @@ impl ListDelegate for GithubPullRequestListDelegate {
     let base_item = list_base_item(ix, self.selected_index.clone());
 
     let row = self.matched_rows.get(ix.row)?;
-    let status_tag = if row.pr.state == "open" {
-      Tag::success().small().rounded_full().child("Open")
-    } else {
-      Tag::secondary().small().rounded_full().child("Closed")
-    };
+    let status_tag = pr_status_tag(
+      &theme,
+      &row.pr.state,
+      row.pr.draft,
+      row.pr.merged_at.as_deref(),
+    );
 
     let updated_at = format_updated_at(&row.pr.updated_at);
     let repo_name = format!("{}/{}", row.owner, row.repo);
@@ -173,8 +172,7 @@ impl ListDelegate for GithubPullRequestListDelegate {
               .text_color(theme.muted_foreground)
               .child(format!("#{}", row.pr.number))
               .child(repo_name)
-              .child(format!("Updated {}", updated_at))
-              .child(format!("Comments {}", row.pr.comments)),
+              .child(format!("Updated {}", updated_at)),
           )
           .when(!row.pr.labels.is_empty(), |this| {
             this.child(h_flex().gap_1().flex_wrap().children(label_tags))
@@ -253,16 +251,6 @@ impl GithubPageHandle {
     let _ = weak.update(cx, |this, cx| {
       this.focus_on_next_render = true;
       this.refresh_pull_requests(cx);
-    });
-  }
-
-  pub fn request_focus(cx: &mut App) {
-    let Some(weak) = cx.global::<Self>().github_page.clone() else {
-      return;
-    };
-    let _ = weak.update(cx, |this, cx| {
-      this.focus_on_next_render = true;
-      cx.notify();
     });
   }
 }
@@ -364,16 +352,6 @@ impl GithubPage {
   fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
-    let back_button = Button::new("open-git")
-      .icon(IconName::ArrowRight)
-      .label("Git")
-      .ghost()
-      .compact()
-      .on_click(|_, _, cx| {
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
-        cx.refresh_windows();
-      });
-
     let menu_state = match AuthStateStore::get(cx) {
       AuthState::Unknown => UserMenuState::Unknown,
       AuthState::Unauthenticated => UserMenuState::Unauthenticated,
@@ -436,13 +414,7 @@ impl GithubPage {
       .border_b_1()
       .border_color(theme.title_bar_border)
       .child(div().text_sm().text_color(theme.foreground).child("GitHub"))
-      .child(
-        h_flex()
-          .items_center()
-          .gap_2()
-          .child(back_button)
-          .when_some(auth_control, |this, control| this.child(control)),
-      )
+      .when_some(auth_control, |this, control| this.child(control))
   }
 }
 

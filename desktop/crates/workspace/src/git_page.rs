@@ -44,8 +44,7 @@ use ui::{
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteHandler, ConfirmDialog,
   FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState, SearchFileEntry, SearchFileHandler,
   SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UserMenuConfig, UserMenuPage,
-  UserMenuState, UserMenuUser, WindowExt, user_menu,
-  file_icon_path_for_path_with_theme,
+  UserMenuState, UserMenuUser, WindowExt, file_icon_path_for_path_with_theme, user_menu,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 300.0;
@@ -1732,17 +1731,6 @@ impl GitPage {
         cx.refresh_windows();
       });
 
-    let github_button = Button::new("open-github")
-      .icon(IconName::GitHub)
-      .label("GitHub")
-      .ghost()
-      .compact()
-      .on_click(|_, _, cx| {
-        GithubPageHandle::refresh(cx);
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
-        cx.refresh_windows();
-      });
-
     let menu_state = match &self.auth_state {
       AuthState::Unknown => UserMenuState::Unknown,
       AuthState::Unauthenticated => UserMenuState::Unauthenticated,
@@ -1799,10 +1787,6 @@ impl GitPage {
     let header_right = h_flex()
       .items_center()
       .gap_2()
-      .when(
-        matches!(self.auth_state, AuthState::Authenticated(_)),
-        |this| this.child(github_button),
-      )
       .when_some(auth_control, |this, control| this.child(control))
       .when(
         !matches!(self.auth_state, AuthState::Authenticated(_)),
