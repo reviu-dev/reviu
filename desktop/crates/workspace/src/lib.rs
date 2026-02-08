@@ -1,4 +1,5 @@
 mod api;
+mod auth_state;
 mod config;
 mod git_page;
 mod github_page;

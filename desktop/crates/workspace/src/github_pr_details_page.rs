@@ -28,12 +28,14 @@ use gpui_component::{
 use smol::unblock;
 
 use ui::{
-  FILE_ICON_SIZE_PX, StatusThemeExt, file_icon_path_for_name_with_theme, h_resizable,
-  resizable_panel,
+  FILE_ICON_SIZE_PX, StatusThemeExt, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser,
+  file_icon_path_for_name_with_theme, h_resizable, resizable_panel, user_menu,
 };
 
 use crate::{
+  AuthCallbackTarget,
   api::{ApiClient, GithubPullRequestDetails},
+  auth_state::{AuthState, AuthStateStore},
   github_page::GithubPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
@@ -870,6 +872,56 @@ impl GithubPrDetailsPage {
         cx.refresh_windows();
       });
 
+    let menu_state = match AuthStateStore::get(cx) {
+      AuthState::Unknown => UserMenuState::Unknown,
+      AuthState::Unauthenticated => UserMenuState::Unauthenticated,
+      AuthState::Authenticated(user) => {
+        let display_name = if user.name.trim().is_empty() {
+          user.email.clone()
+        } else {
+          user.name.clone()
+        };
+        UserMenuState::Authenticated(UserMenuUser {
+          name: display_name.into(),
+          email: user.email.into(),
+          image: user.image.map(Into::into),
+        })
+      }
+    };
+
+    let open_git = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
+      cx.refresh_windows();
+    });
+    let open_github = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+      cx.refresh_windows();
+    });
+    let open_settings = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::open_settings(cx);
+      cx.refresh_windows();
+    });
+    let sign_in = Rc::new(|_window: &mut Window, cx: &mut App| {
+      AuthCallbackTarget::start_sign_in(cx);
+    });
+    let sign_out = Rc::new(|_window: &mut Window, cx: &mut App| {
+      AuthCallbackTarget::sign_out(cx);
+    });
+
+    let auth_control = user_menu(UserMenuConfig {
+      id: "auth-menu".into(),
+      state: menu_state,
+      current_page: UserMenuPage::GithubPrDetails,
+      on_open_git: Some(open_git),
+      on_open_github: Some(open_github),
+      on_open_settings: Some(open_settings),
+      on_sign_in: Some(sign_in),
+      on_sign_out: Some(sign_out),
+    });
+
     let tab_bar = TabBar::new("pr-details-tabs")
       .w_full()
       .segmented()
@@ -918,8 +970,14 @@ impl GithubPrDetailsPage {
       div().flex_1().min_w_0().child("")
     };
 
+    let right_area = h_flex()
+      .items_center()
+      .gap_2()
+      .child(back_button)
+      .when_some(auth_control, |this, control| this.child(control));
+
     div()
-      .px_4()
+      .px_3()
       .py_2()
       .flex()
       .flex_col()
@@ -933,7 +991,7 @@ impl GithubPrDetailsPage {
           .items_center()
           .justify_between()
           .child(left_area)
-          .child(back_button),
+          .child(right_area),
       )
       .child(tab_bar)
   }

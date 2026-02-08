@@ -5,6 +5,7 @@ mod icons;
 mod search_file_palette;
 mod status_theme_ext;
 mod theme;
+mod user_menu;
 
 pub const HEADER_HEIGHT: f32 = 50.0;
 
@@ -37,3 +38,4 @@ pub use search_file_palette::{
 };
 pub use status_theme_ext::StatusThemeExt;
 pub use theme::Theme;
+pub use user_menu::{UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, user_menu};

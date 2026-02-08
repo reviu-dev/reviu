@@ -17,10 +17,13 @@ use smol::unblock;
 use ui::HEADER_HEIGHT;
 
 use crate::{
+  AuthCallbackTarget,
   api::{ApiClient, GithubPullRequest},
+  auth_state::{AuthState, AuthStateStore},
   github_pr_details_page::GithubPrDetailsPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
+use ui::{UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, user_menu};
 
 const DEFAULT_ORG: &str = "joris-gallot";
 const DEFAULT_REPO: &str = "guit";
@@ -371,11 +374,61 @@ impl GithubPage {
         cx.refresh_windows();
       });
 
+    let menu_state = match AuthStateStore::get(cx) {
+      AuthState::Unknown => UserMenuState::Unknown,
+      AuthState::Unauthenticated => UserMenuState::Unauthenticated,
+      AuthState::Authenticated(user) => {
+        let display_name = if user.name.trim().is_empty() {
+          user.email.clone()
+        } else {
+          user.name.clone()
+        };
+        UserMenuState::Authenticated(UserMenuUser {
+          name: display_name.into(),
+          email: user.email.into(),
+          image: user.image.map(Into::into),
+        })
+      }
+    };
+
+    let open_git = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
+      cx.refresh_windows();
+    });
+    let open_github = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+      cx.refresh_windows();
+    });
+    let open_settings = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::open_settings(cx);
+      cx.refresh_windows();
+    });
+    let sign_in = Rc::new(|_window: &mut Window, cx: &mut App| {
+      AuthCallbackTarget::start_sign_in(cx);
+    });
+    let sign_out = Rc::new(|_window: &mut Window, cx: &mut App| {
+      AuthCallbackTarget::sign_out(cx);
+    });
+
+    let auth_control = user_menu(UserMenuConfig {
+      id: "auth-menu".into(),
+      state: menu_state,
+      current_page: UserMenuPage::Github,
+      on_open_git: Some(open_git),
+      on_open_github: Some(open_github),
+      on_open_settings: Some(open_settings),
+      on_sign_in: Some(sign_in),
+      on_sign_out: Some(sign_out),
+    });
+
     div()
       .h(px(HEADER_HEIGHT))
       .max_h(px(HEADER_HEIGHT))
       .w_full()
-      .px_4()
+      .px_3()
       .flex()
       .items_center()
       .justify_between()
@@ -383,7 +436,13 @@ impl GithubPage {
       .border_b_1()
       .border_color(theme.title_bar_border)
       .child(div().text_sm().text_color(theme.foreground).child("GitHub"))
-      .child(back_button)
+      .child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(back_button)
+          .when_some(auth_control, |this, control| this.child(control)),
+      )
   }
 }
 

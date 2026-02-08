@@ -7,6 +7,8 @@ use gpui_component::{IconNamed, Theme};
 pub enum UiIconName {
   GitBranch,
   GitMerge,
+  ArrowUpFromLine,
+  ArrowDownFromLine,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -16,6 +18,8 @@ impl IconNamed for UiIconName {
     match self {
       UiIconName::GitBranch => "icons/git-branch.svg",
       UiIconName::GitMerge => "icons/git-merge.svg",
+      UiIconName::ArrowUpFromLine => "icons/arrow-up-from-line.svg",
+      UiIconName::ArrowDownFromLine => "icons/arrow-down-from-line.svg",
     }
     .into()
   }
