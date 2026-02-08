@@ -87,7 +87,7 @@ impl Render for SettingsPage {
       .flex()
       .items_center()
       .justify_between()
-      .bg(theme.title_bar)
+      .bg(theme.sidebar)
       .border_b_1()
       .border_color(theme.title_bar_border)
       .child(
