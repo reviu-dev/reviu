@@ -1,4 +1,8 @@
-use gpui::{App, Context, FocusHandle, Focusable, Render, Window, div, prelude::*, px};
+use std::sync::Arc;
+
+use gpui::{
+  App, Context, FocusHandle, Focusable, Render, SharedString, Window, div, prelude::*, px,
+};
 
 use gpui_component::{
   ActiveTheme as _, IconName, Sizable, Size, Theme, ThemeMode,
@@ -6,9 +10,17 @@ use gpui_component::{
   setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings},
 };
 
-use ui::HEADER_HEIGHT;
+use ui::{
+  CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
+  CommandPaletteHandler, CommandPalettePage, HEADER_HEIGHT, WindowExt,
+};
 
-use crate::workspace::WorkspaceRoute;
+use crate::{
+  github_page::GithubPageHandle,
+  auth_state::{AuthState, AuthStateStore},
+  ShowCommandPalette,
+  workspace::{WorkspacePage, WorkspaceRoute},
+};
 
 pub struct SettingsPage {
   focus_handle: FocusHandle,
@@ -74,6 +86,67 @@ impl SettingsPage {
       ]),
     ])]
   }
+
+  fn show_command_palette_action(
+    &mut self,
+    _: &ShowCommandPalette,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_command_palette(window, cx);
+  }
+
+  fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
+    let commands = CommandPaletteCommand::default_global_commands(
+      CommandPalettePage::Settings,
+      include_github,
+    );
+
+    let view = cx.entity();
+    let handler: CommandPaletteHandler = Arc::new(move |action, _window, cx| {
+      view.update(cx, |view, cx| {
+        view.handle_command_palette_action(action, cx)
+      })
+    });
+
+    let config = CommandPaletteConfig::new(Vec::new(), commands, handler);
+    let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
+    let palette_for_dialog = palette.clone();
+
+    window.open_dialog(cx, move |dialog, _, _| {
+      dialog
+        .p_0()
+        .border_0()
+        .min_h_0()
+        .overlay_closable(true)
+        .keyboard(true)
+        .close_button(false)
+        .child(palette_for_dialog.clone())
+    });
+  }
+
+  fn handle_command_palette_action(
+    &mut self,
+    action: CommandPaletteAction,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    match action {
+      CommandPaletteAction::OpenGitPage => {
+        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubPage => {
+        GithubPageHandle::refresh(cx);
+        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenSettingsPage => Ok(()),
+      _ => Err("Command not available.".into()),
+    }
+  }
 }
 
 impl Render for SettingsPage {
@@ -114,6 +187,7 @@ impl Render for SettingsPage {
       .flex_col()
       .bg(theme.background)
       .track_focus(&self.focus_handle(cx))
+      .on_action(cx.listener(SettingsPage::show_command_palette_action))
       .child(header)
       .child(
         Settings::new("app-settings")
