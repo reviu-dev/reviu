@@ -9,6 +9,8 @@ const githubRouter = new Hono()
 const DEFAULT_PER_PAGE = 20
 
 type ListPullsParams = Endpoints['GET /repos/{owner}/{repo}/pulls']['parameters']
+type CompareParams
+  = Endpoints['GET /repos/{owner}/{repo}/compare/{basehead}']['parameters']
 
 type PullRequestParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
@@ -46,6 +48,7 @@ interface GithubPullRequestDetails {
   createdAt: string
   updatedAt: string
   mergedAt: string | null
+  mergeBaseSha: string
   baseSha: string
   headSha: string
   baseRefName: string
@@ -179,6 +182,36 @@ githubRouter.get('/pr/:id', authMiddleware, async (ctx) => {
       avatarUrl: data.user?.avatar_url ?? null,
     }
 
+    let mergeBaseSha = data.base?.sha ?? ''
+    const baseRef = data.base?.ref
+    const headRef = data.head?.ref
+    const headOwner = data.head?.repo?.owner?.login
+    if (baseRef && headRef && headOwner) {
+      try {
+        const compareParams: CompareParams = {
+          owner: org,
+          repo,
+          basehead: `${baseRef}...${headOwner}:${headRef}`,
+        }
+        const { data: compare } = await request(
+          'GET /repos/{owner}/{repo}/compare/{basehead}',
+          {
+            ...compareParams,
+            headers: {
+              authorization: `Bearer ${token}`,
+            },
+          },
+        )
+
+        if (compare.merge_base_commit?.sha) {
+          mergeBaseSha = compare.merge_base_commit.sha
+        }
+      }
+      catch {
+        mergeBaseSha = data.base?.sha ?? ''
+      }
+    }
+
     const pullRequest: GithubPullRequestDetails = {
       number: data.number,
       title: data.title,
@@ -187,6 +220,7 @@ githubRouter.get('/pr/:id', authMiddleware, async (ctx) => {
       createdAt: data.created_at,
       updatedAt: data.updated_at,
       mergedAt: data.merged_at,
+      mergeBaseSha,
       baseSha: data.base?.sha ?? '',
       headSha: data.head?.sha ?? '',
       baseRefName: data.base?.ref ?? '',

@@ -71,6 +71,8 @@ pub struct GithubPullRequestDetails {
   pub updated_at: String,
   #[serde(rename = "mergedAt")]
   pub merged_at: Option<String>,
+  #[serde(rename = "mergeBaseSha")]
+  pub merge_base_sha: String,
   #[serde(rename = "baseSha")]
   pub base_sha: String,
   #[serde(rename = "headSha")]
