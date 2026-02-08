@@ -7,8 +7,8 @@ use std::{
 use editor::Editor;
 use git::{DiffKind, DiffLineKind, DiffSet, FileDiff, compute_buffer_diff, diff_set_from_patch};
 use gpui::{
-  App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, SharedString, Styled, Task,
-  Window, div, img, prelude::*, px,
+  App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, SharedString,
+  StatefulInteractiveElement, Styled, Task, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt,
@@ -1380,7 +1380,7 @@ impl Render for GithubPrDetailsPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
-    let overview_content: gpui::AnyElement = if let Some(pr) = self.pull_request.as_ref() {
+    let overview_inner: gpui::AnyElement = if let Some(pr) = self.pull_request.as_ref() {
       self.render_details(pr, cx).into_any_element()
     } else if self.error.is_some() {
       div()
@@ -1395,7 +1395,20 @@ impl Render for GithubPrDetailsPage {
       self.render_loading(cx).into_any_element()
     };
 
-    let changes_content = self.render_changes_tab(window, cx).into_any_element();
+    let overview_content = div()
+      .id("overview-tab")
+      .flex_1()
+      .min_h_0()
+      .overflow_y_scroll()
+      .child(overview_inner)
+      .into_any_element();
+
+    let changes_content = div()
+      .id("changes-tab")
+      .flex_1()
+      .min_h_0()
+      .child(self.render_changes_tab(window, cx))
+      .into_any_element();
 
     let tab_bar = TabBar::new("pr-details-tabs")
       .w_full()
@@ -1421,12 +1434,7 @@ impl Render for GithubPrDetailsPage {
       .bg(theme.background)
       .track_focus(&self.focus_handle(cx))
       .child(self.render_header(cx))
-      .child(
-        v_flex()
-          .flex_1()
-          .child(tab_bar)
-          .child(div().flex_1().child(content)),
-      )
+      .child(v_flex().flex_1().min_h_0().child(tab_bar).child(content))
   }
 }
 
