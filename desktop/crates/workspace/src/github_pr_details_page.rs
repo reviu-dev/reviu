@@ -681,6 +681,16 @@ impl GithubPrDetailsPage {
 
     let owner = pull_request.repository.owner.clone();
     let repo = pull_request.repository.repo.clone();
+    let head_owner = pull_request
+      .head_repository
+      .as_ref()
+      .map(|repo| repo.owner.clone())
+      .unwrap_or_else(|| owner.clone());
+    let head_repo = pull_request
+      .head_repository
+      .as_ref()
+      .map(|repo| repo.repo.clone())
+      .unwrap_or_else(|| repo.clone());
     let base_sha = pull_request.base_sha.clone();
     let head_sha = pull_request.head_sha.clone();
 
@@ -712,8 +722,8 @@ impl GithubPrDetailsPage {
 
       let head_result = if let Some(path) = head_path.clone() {
         let api = api.clone();
-        let owner = owner.clone();
-        let repo = repo.clone();
+        let owner = head_owner.clone();
+        let repo = head_repo.clone();
         let head_sha = head_sha.clone();
         unblock(move || api.fetch_github_file_content(&owner, &repo, &path, &head_sha)).await
       } else {
