@@ -1,7 +1,7 @@
 import type { Endpoints } from '@octokit/types'
+import { Buffer } from 'node:buffer'
 import { request } from '@octokit/request'
 import { Hono } from 'hono'
-
 import { authMiddleware } from '../middlewares/auth.js'
 
 const githubRouter = new Hono()
@@ -100,7 +100,7 @@ export const githubRoutes = githubRouter.get('/pr/latest', authMiddleware, async
   }
 
   const user = ctx.get('user')!
-  const token = user.accessToken
+  const token = user.github.accessToken
 
   try {
     const { data: viewer } = await request('GET /user', {
@@ -154,7 +154,7 @@ githubRouter.get('/pr/:id', authMiddleware, async (ctx) => {
   }
 
   const user = ctx.get('user')!
-  const token = user.accessToken
+  const token = user.github.accessToken
 
   try {
     const params: PullRequestParams = {
@@ -218,7 +218,7 @@ githubRouter.get('/file', authMiddleware, async (ctx) => {
   }
 
   const user = ctx.get('user')!
-  const token = user.accessToken
+  const token = user.github.accessToken
 
   try {
     const params: GetContentParams = {
@@ -272,7 +272,7 @@ githubRouter.get('/pr/:id/diff', authMiddleware, async (ctx) => {
   }
 
   const user = ctx.get('user')!
-  const token = user.accessToken
+  const token = user.github.accessToken
 
   try {
     const params: PullRequestParams = {

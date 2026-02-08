@@ -38,4 +38,4 @@ export interface AuthType {
 
 type AccessTokenType = AsyncReturnType<typeof auth.api.getAccessToken>
 
-export type UserContext = Merge<NonNullable<AuthType['user']>, AccessTokenType>
+export type UserContext = Merge<NonNullable<AuthType['user']>, { github: AccessTokenType }>

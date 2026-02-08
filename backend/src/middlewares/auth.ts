@@ -18,7 +18,7 @@ export const authMiddleware = createMiddleware(async (c, next) => {
     headers: c.req.raw.headers,
   })
 
-  c.set('user', { ...user, ...ghAccessToken })
+  c.set('user', { ...user, github: ghAccessToken })
 
   await next()
 })
