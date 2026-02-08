@@ -675,7 +675,13 @@ impl GithubPrDetailsPage {
     let Some(pull_request) = self.pull_request.as_ref() else {
       return;
     };
-    if pull_request.base_sha.is_empty() || pull_request.head_sha.is_empty() {
+    let base_sha_for_diff = if !pull_request.merge_base_sha.is_empty() {
+      pull_request.merge_base_sha.clone()
+    } else {
+      pull_request.base_sha.clone()
+    };
+
+    if base_sha_for_diff.is_empty() || pull_request.head_sha.is_empty() {
       return;
     }
 
@@ -691,7 +697,7 @@ impl GithubPrDetailsPage {
       .as_ref()
       .map(|repo| repo.repo.clone())
       .unwrap_or_else(|| repo.clone());
-    let base_sha = pull_request.base_sha.clone();
+    let base_sha = base_sha_for_diff;
     let head_sha = pull_request.head_sha.clone();
 
     let base_path = match file.status {
