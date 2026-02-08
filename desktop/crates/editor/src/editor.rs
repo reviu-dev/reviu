@@ -2191,6 +2191,10 @@ impl Editor {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    if !position_map.bounds.contains(&event.position) {
+      return;
+    }
+
     self.target_column = None;
     self.is_selecting = true;
 
@@ -2323,6 +2327,10 @@ impl Editor {
     cx: &mut Context<Self>,
   ) {
     if !position_map.bounds.contains(&event.position) {
+      if self.hovered_group_id.is_some() {
+        self.hovered_group_id = None;
+        cx.notify();
+      }
       return;
     }
     self.last_mouse_position = Some(event.position);

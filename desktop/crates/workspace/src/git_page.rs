@@ -19,7 +19,7 @@ use gpui::{
   Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Sizable,
+  ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable,
   avatar::Avatar,
   button::{Button, ButtonVariant, ButtonVariants as _},
   h_flex,
@@ -28,6 +28,7 @@ use gpui_component::{
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{DropdownMenu, PopupMenuItem},
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
+  text::TextView,
   tooltip::Tooltip,
 };
 use smol::unblock;
@@ -376,6 +377,7 @@ pub struct GitPage {
   force_list_selection: bool,
   editor: Option<Entity<Editor>>,
   diff_view: DiffViewMode,
+  show_markdown_preview: bool,
   auth_state: AuthState,
   auth_task: Option<Task<()>>,
   status_task: Option<Task<()>>,
@@ -393,6 +395,25 @@ impl GitPage {
           RepoStatusKind::Untracked | RepoStatusKind::Added | RepoStatusKind::Deleted
         )
     })
+  }
+
+  fn is_markdown_path(path: &Path) -> bool {
+    matches!(
+      path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref(),
+      Some("md" | "markdown" | "mdx")
+    )
+  }
+
+  fn selected_file_is_markdown(&self) -> bool {
+    self
+      .selected_file
+      .as_ref()
+      .map(|path| Self::is_markdown_path(path))
+      .unwrap_or(false)
   }
 
   fn selected_file_index(&self) -> Option<IndexPath> {
@@ -579,6 +600,7 @@ impl GitPage {
       force_list_selection: false,
       editor: None,
       diff_view: DiffViewMode::Inline,
+      show_markdown_preview: false,
       auth_state: AuthState::Unknown,
       auth_task: None,
       status_task: None,
@@ -991,7 +1013,9 @@ impl GitPage {
 
     let mut config = CommandPaletteConfig::new(palette_branches, handler);
     if let AuthState::Authenticated(_) = &self.auth_state {
-      config.commands.push(CommandPaletteCommand::open_github_page());
+      config
+        .commands
+        .push(CommandPaletteCommand::open_github_page());
     }
 
     let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
@@ -1308,17 +1332,25 @@ impl GitPage {
     if self.selected_file.as_ref() == Some(&rel_path) {
       return;
     }
+    let is_markdown = Self::is_markdown_path(&rel_path);
+    if !is_markdown {
+      self.show_markdown_preview = false;
+    }
     let split_disabled = self.split_disabled_for_path(&rel_path);
     if split_disabled && self.diff_view != DiffViewMode::Inline {
       self.diff_view = DiffViewMode::Inline;
     }
     let file_path = repo_root.join(&rel_path);
     let editor = cx.new(|cx| Editor::new_with_paths(repo_root, file_path, cx));
-    let diff_view = if split_disabled {
+    let mut diff_view = if split_disabled {
       DiffViewMode::Inline
     } else {
       self.diff_view
     };
+    if self.show_markdown_preview && is_markdown {
+      self.diff_view = DiffViewMode::Inline;
+      diff_view = DiffViewMode::Inline;
+    }
     editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
     self.editor = Some(editor);
     self.selected_file = Some(rel_path);
@@ -1339,6 +1371,9 @@ impl GitPage {
     {
       return;
     }
+    if self.show_markdown_preview {
+      self.show_markdown_preview = false;
+    }
     self.diff_view = match self.diff_view {
       DiffViewMode::Inline => DiffViewMode::Split,
       DiffViewMode::Split => DiffViewMode::Inline,
@@ -1347,6 +1382,26 @@ impl GitPage {
     if let Some(editor) = self.editor.clone() {
       let diff_view = self.diff_view;
       editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
+    }
+
+    cx.notify();
+  }
+
+  fn toggle_markdown_preview(&mut self, cx: &mut Context<Self>) {
+    if !self.selected_file_is_markdown() {
+      self.show_markdown_preview = false;
+      cx.notify();
+      return;
+    }
+
+    self.show_markdown_preview = !self.show_markdown_preview;
+    if self.show_markdown_preview && self.diff_view != DiffViewMode::Inline {
+      self.diff_view = DiffViewMode::Inline;
+      if let Some(editor) = self.editor.clone() {
+        editor.update(cx, |editor, cx| {
+          editor.set_diff_view_mode(DiffViewMode::Inline, cx);
+        });
+      }
     }
 
     cx.notify();
@@ -1869,7 +1924,22 @@ impl GitPage {
           .flex_1()
           .items_center()
           .gap_2()
-          .child(div().min_w_0().child(Label::new(file_name).truncate()))
+          .child(
+            h_flex()
+              .min_w_0()
+              .items_center()
+              .gap_2()
+              .child(div().min_w_0().child(Label::new(file_name).truncate()))
+              .when(file_dirty, |this| {
+                this.child(
+                  div()
+                    .size_2()
+                    .rounded_full()
+                    .bg(theme.foreground)
+                    .flex_shrink_0(),
+                )
+              }),
+          )
           .when(!dir_path.is_empty(), |this| {
             this.child(
               div()
@@ -1881,16 +1951,7 @@ impl GitPage {
                 .child(format!("- {}", dir_path)),
             )
           }),
-      )
-      .when(file_dirty, |this| {
-        this.child(
-          div()
-            .size_2()
-            .rounded_full()
-            .bg(theme.foreground)
-            .flex_shrink_0(),
-        )
-      });
+      );
 
     let save_button = Button::new("editor-save")
       .label("Save")
@@ -1901,11 +1962,14 @@ impl GitPage {
         editor_entity.update(cx, |editor, cx| editor.save(cx));
       });
 
+    let is_markdown = self.selected_file_is_markdown();
+    let preview_active = is_markdown && self.show_markdown_preview;
     let split_disabled = self
       .selected_file
       .as_ref()
       .map(|path| self.split_disabled_for_path(path))
-      .unwrap_or(false);
+      .unwrap_or(false)
+      || preview_active;
     let (toggle_label, toggle_icon) = if split_disabled {
       ("Split", IconName::PanelLeft)
     } else {
@@ -1924,6 +1988,23 @@ impl GitPage {
       .on_click(move |_, _, cx| {
         view.update(cx, |this, cx| {
           this.toggle_diff_view(cx);
+        });
+      });
+
+    let view = cx.entity();
+    let preview_button = Button::new("editor-markdown-preview")
+      .label("Preview")
+      .icon(if preview_active {
+        IconName::EyeOff
+      } else {
+        IconName::Eye
+      })
+      .xsmall()
+      .ghost()
+      .selected(preview_active)
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.toggle_markdown_preview(cx);
         });
       });
 
@@ -1994,6 +2075,7 @@ impl GitPage {
       });
 
     div()
+      .min_h(px(EDITOR_HEADER_HEIGHT))
       .h(px(EDITOR_HEADER_HEIGHT))
       .px_3()
       .flex()
@@ -2014,6 +2096,7 @@ impl GitPage {
           .child(unstage_button)
           .child(restore_button)
           .child(save_button)
+          .when(is_markdown, |this| this.child(preview_button))
           .child(toggle_button),
       )
       .into_any_element()
@@ -2397,13 +2480,45 @@ impl GitPage {
       return self.render_empty_state("Select a repository to view changes", cx);
     }
 
+    let theme = cx.theme().clone();
     if let Some(editor) = self.editor.clone() {
+      let editor_view = self.render_editor_with_overlay(editor.clone(), window, cx);
+      if self.show_markdown_preview && self.selected_file_is_markdown() {
+        let markdown = editor.read(cx).document().read(cx);
+        let markdown = markdown.slice_to_string(0..markdown.len());
+        let preview = div()
+          .flex_1()
+          .min_h_0()
+          .min_w(px(0.0))
+          .bg(theme.background)
+          .occlude()
+          .child(
+            TextView::markdown("markdown-preview", markdown)
+              .selectable(true)
+              .scrollable(true)
+              .pb_4()
+              .px_4(),
+          );
+
+        return div()
+          .size_full()
+          .flex()
+          .flex_col()
+          .child(self.render_editor_header(&editor, cx))
+          .child(
+            ui::h_resizable("git-page-markdown-preview")
+              .child(ui::resizable_panel().child(editor_view))
+              .child(ui::resizable_panel().child(preview)),
+          )
+          .into_any_element();
+      }
+
       return div()
         .size_full()
         .flex()
         .flex_col()
         .child(self.render_editor_header(&editor, cx))
-        .child(self.render_editor_with_overlay(editor, window, cx))
+        .child(editor_view)
         .into_any_element();
     }
 
