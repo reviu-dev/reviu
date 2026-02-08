@@ -28,8 +28,8 @@ use gpui_component::{
 use smol::unblock;
 
 use ui::{
-  FILE_ICON_SIZE_PX, HEADER_HEIGHT, StatusThemeExt, file_icon_path_for_name_with_theme,
-  h_resizable, resizable_panel,
+  FILE_ICON_SIZE_PX, StatusThemeExt, file_icon_path_for_name_with_theme, h_resizable,
+  resizable_panel,
 };
 
 use crate::{
@@ -40,7 +40,7 @@ use crate::{
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 350.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
-const SIDEBAR_MAX_WIDTH: f32 = 600.0;
+const SIDEBAR_MAX_WIDTH: f32 = 700.0;
 const DIFF_HEADER_HEIGHT: f32 = 40.0;
 
 fn format_datetime(value: &str) -> SharedString {
@@ -856,7 +856,7 @@ impl GithubPrDetailsPage {
     self.diff_task = Some(diff_task);
   }
 
-  fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
     let back_button = Button::new("back-github")
@@ -870,23 +870,72 @@ impl GithubPrDetailsPage {
         cx.refresh_windows();
       });
 
+    let tab_bar = TabBar::new("pr-details-tabs")
+      .w_full()
+      .segmented()
+      .selected_index(self.active_tab_ix)
+      .on_click(cx.listener(|this, ix: &usize, window, cx| {
+        this.set_active_tab(*ix, window, cx);
+      }))
+      .child(Tab::new().label("Overview"))
+      .child(Tab::new().label("Changes"));
+
+    let left_area = if let Some(pr) = self.pull_request.as_ref() {
+      let status_tag = if pr.merged_at.is_some() {
+        Tag::custom(
+          theme.status_violet(),
+          theme.primary_foreground,
+          theme.status_violet(),
+        )
+        .small()
+        .rounded_full()
+        .child("Merged")
+      } else if pr.state == "open" {
+        Tag::success().small().rounded_full().child("Open")
+      } else {
+        Tag::secondary().small().rounded_full().child("Closed")
+      };
+
+      let title = div()
+        .min_w_0()
+        .text_sm()
+        .font_medium()
+        .text_color(theme.foreground)
+        .overflow_hidden()
+        .text_ellipsis_start()
+        .child(pr.title.clone());
+
+      let meta = h_flex()
+        .items_center()
+        .gap_2()
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child(status_tag)
+        .child(format!("#{}", pr.number));
+
+      div().flex().items_center().gap_3().child(title).child(meta)
+    } else {
+      div().flex_1().min_w_0().child("")
+    };
+
     div()
-      .h(px(HEADER_HEIGHT))
-      .max_h(px(HEADER_HEIGHT))
       .px_4()
+      .py_2()
       .flex()
-      .items_center()
-      .justify_between()
+      .flex_col()
+      .gap_1()
       .bg(theme.sidebar)
       .border_b_1()
       .border_color(theme.title_bar_border)
       .child(
         div()
-          .text_sm()
-          .text_color(theme.foreground)
-          .child("Pull Request"),
+          .flex()
+          .items_center()
+          .justify_between()
+          .child(left_area)
+          .child(back_button),
       )
-      .child(back_button)
+      .child(tab_bar)
   }
 
   fn render_loading(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -912,21 +961,6 @@ impl GithubPrDetailsPage {
     cx: &mut Context<Self>,
   ) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let status_tag = if pr.merged_at.is_some() {
-      Tag::custom(
-        theme.status_violet(),
-        theme.primary_foreground,
-        theme.status_violet(),
-      )
-      .small()
-      .rounded_full()
-      .child("Merged")
-    } else if pr.state == "open" {
-      Tag::success().small().rounded_full().child("Open")
-    } else {
-      Tag::secondary().small().rounded_full().child("Closed")
-    };
-
     let repo_label = format!("{}/{}", pr.repository.owner, pr.repository.repo);
     let pr_url = format!(
       "https://github.com/{}/{}/pull/{}",
@@ -989,48 +1023,11 @@ impl GithubPrDetailsPage {
       .w(px(900.0))
       .gap_4()
       .child(
-        v_flex()
-          .gap_2()
-          .child(
-            h_flex().items_center().gap_2().child(
-              div()
-                .flex_1()
-                .text_lg()
-                .font_medium()
-                .text_color(theme.foreground)
-                .child(pr.title.clone()),
-            ),
-          )
-          .child(
-            h_flex()
-              .gap_2()
-              .items_center()
-              .text_sm()
-              .text_color(theme.muted_foreground)
-              .child(status_tag)
-              .child(format!("#{}", pr.number))
-              .child(repo_label)
-              .child(
-                Button::new("open-pr-on-github")
-                  .icon(IconName::ExternalLink)
-                  .ghost()
-                  .small()
-                  .label("View on GitHub")
-                  .compact()
-                  .on_click({
-                    let pr_url = pr_url.clone();
-                    move |_, _, cx| {
-                      let _ = cx.open_url(&pr_url);
-                    }
-                  }),
-              ),
-          ),
-      )
-      .child(
         h_flex()
-          .gap_6()
-          .flex_wrap()
+          .gap_2()
           .items_center()
+          .text_sm()
+          .text_color(theme.muted_foreground)
           .child(
             h_flex()
               .items_center()
@@ -1048,6 +1045,27 @@ impl GithubPrDetailsPage {
                   .child(pr.author.login.clone()),
               ),
           )
+          .child(repo_label)
+          .child(
+            Button::new("open-pr-on-github")
+              .icon(IconName::ExternalLink)
+              .ghost()
+              .small()
+              .label("View on GitHub")
+              .compact()
+              .on_click({
+                let pr_url = pr_url.clone();
+                move |_, _, cx| {
+                  let _ = cx.open_url(&pr_url);
+                }
+              }),
+          ),
+      )
+      .child(
+        h_flex()
+          .gap_6()
+          .flex_wrap()
+          .items_center()
           .child(
             h_flex()
               .items_center()
@@ -1576,17 +1594,6 @@ impl Render for GithubPrDetailsPage {
       .child(self.render_changes_tab(window, cx))
       .into_any_element();
 
-    let tab_bar = TabBar::new("pr-details-tabs")
-      .w_full()
-      .px_6()
-      .underline()
-      .selected_index(self.active_tab_ix)
-      .on_click(cx.listener(|this, ix: &usize, window, cx| {
-        this.set_active_tab(*ix, window, cx);
-      }))
-      .child(Tab::new().label("Overview"))
-      .child(Tab::new().label("Changes"));
-
     let content = if self.active_tab_ix == 0 {
       overview_content
     } else {
@@ -1600,7 +1607,7 @@ impl Render for GithubPrDetailsPage {
       .bg(theme.background)
       .track_focus(&self.focus_handle(cx))
       .child(self.render_header(cx))
-      .child(v_flex().flex_1().min_h_0().child(tab_bar).child(content))
+      .child(v_flex().flex_1().min_h_0().child(content))
   }
 }
 
