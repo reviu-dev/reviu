@@ -5,6 +5,7 @@ pub trait StatusThemeExt {
   fn status_green(&self) -> Hsla;
   fn status_red(&self) -> Hsla;
   fn status_violet(&self) -> Hsla;
+  fn status_gray(&self) -> Hsla;
 }
 
 impl StatusThemeExt for gpui_component::Theme {
@@ -70,6 +71,24 @@ impl StatusThemeExt for gpui_component::Theme {
         h: 265.0 / 360.0,
         s: 0.6,
         l: 0.45,
+        a: 1.0,
+      }
+    }
+  }
+
+  fn status_gray(&self) -> Hsla {
+    if self.mode.is_dark() {
+      Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 0.55,
+        a: 1.0,
+      }
+    } else {
+      Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 0.4,
         a: 1.0,
       }
     }

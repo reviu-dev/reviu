@@ -8,9 +8,8 @@ const githubRouter = new Hono()
 
 const DEFAULT_PER_PAGE = 20
 
-type SearchIssuesParams = Endpoints['GET /search/issues']['parameters']
-type SearchIssuesResponse = Endpoints['GET /search/issues']['response']['data']
-type SearchIssue = SearchIssuesResponse['items'][number]
+type ListPullsParams = Endpoints['GET /repos/{owner}/{repo}/pulls']['parameters']
+
 type PullRequestParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
 type GetContentParams
@@ -24,8 +23,9 @@ interface GithubPullRequest {
   number: number
   title: string
   state: string
+  mergedAt: string | null
+  draft: boolean
   updatedAt: string
-  comments: number
   labels: GithubPullRequestLabel[]
   repository: {
     owner: string
@@ -42,6 +42,7 @@ interface GithubPullRequestDetails {
   number: number
   title: string
   state: string
+  draft: boolean
   createdAt: string
   updatedAt: string
   mergedAt: string | null
@@ -72,7 +73,9 @@ interface GithubFileContent {
   content: string | null
 }
 
-function mapLabel(label: SearchIssue['labels'][number]): GithubPullRequestLabel | null {
+type GithubLabel = { name?: string | null } | string | null | undefined
+
+function mapLabel(label: GithubLabel): GithubPullRequestLabel | null {
   if (!label) {
     return null
   }
@@ -103,33 +106,30 @@ export const githubRoutes = githubRouter.get('/pr/latest', authMiddleware, async
   const token = user.github.accessToken
 
   try {
-    const { data: viewer } = await request('GET /user', {
-      headers: {
-        authorization: `Bearer ${token}`,
-      },
-    })
-
-    const params: SearchIssuesParams = {
-      q: `repo:${org}/${repo} is:pr involves:${viewer.login}`,
+    const params: ListPullsParams = {
+      owner: org,
+      repo,
+      state: 'all',
       sort: 'updated',
-      order: 'desc',
+      direction: 'desc',
       per_page: DEFAULT_PER_PAGE,
     }
 
-    const { data } = await request('GET /search/issues', {
+    const { data } = await request('GET /repos/{owner}/{repo}/pulls', {
       ...params,
       headers: {
         authorization: `Bearer ${token}`,
       },
     })
 
-    const pullRequests: GithubPullRequest[] = data.items.map(item => ({
-      number: item.number,
-      title: item.title,
-      state: item.state,
-      updatedAt: item.updated_at,
-      comments: item.comments,
-      labels: (item.labels ?? [])
+    const pullRequests: GithubPullRequest[] = data.map(pull => ({
+      number: pull.number,
+      title: pull.title,
+      state: pull.state,
+      draft: Boolean(pull.draft),
+      mergedAt: pull.merged_at ?? null,
+      updatedAt: pull.updated_at,
+      labels: (pull.labels ?? [])
         .map(mapLabel)
         .filter((label): label is GithubPullRequestLabel => Boolean(label)),
       repository: {
@@ -179,6 +179,7 @@ githubRouter.get('/pr/:id', authMiddleware, async (ctx) => {
       number: data.number,
       title: data.title,
       state: data.state,
+      draft: Boolean(data.draft),
       createdAt: data.created_at,
       updatedAt: data.updated_at,
       mergedAt: data.merged_at,

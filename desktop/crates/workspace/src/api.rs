@@ -43,9 +43,11 @@ pub struct GithubPullRequest {
   pub number: u64,
   pub title: String,
   pub state: String,
+  #[serde(rename = "mergedAt")]
+  pub merged_at: Option<String>,
+  pub draft: bool,
   #[serde(rename = "updatedAt")]
   pub updated_at: String,
-  pub comments: u64,
   pub labels: Vec<GithubPullRequestLabel>,
   pub repository: GithubRepository,
 }
@@ -62,6 +64,7 @@ pub struct GithubPullRequestDetails {
   pub number: u64,
   pub title: String,
   pub state: String,
+  pub draft: bool,
   #[serde(rename = "createdAt")]
   pub created_at: String,
   #[serde(rename = "updatedAt")]
