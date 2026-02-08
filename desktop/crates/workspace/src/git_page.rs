@@ -15,8 +15,8 @@ use git::{
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
-  InteractiveElement, Keystroke, ParentElement, PathPromptOptions, Render, SharedString, Styled,
-  Task, WeakEntity, Window, actions, div, img, prelude::*, px,
+  InteractiveElement, Keystroke, ParentElement, PathPromptOptions, Render, RenderImage,
+  SharedString, Styled, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable,
@@ -386,6 +386,9 @@ pub struct GitPage {
   editor: Option<Entity<Editor>>,
   diff_view: DiffViewMode,
   show_markdown_preview: bool,
+  svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
+  svg_preview_source: Option<SharedString>,
+  svg_preview_task: Option<Task<()>>,
   auth_state: AuthState,
   auth_task: Option<Task<()>>,
   status_task: Option<Task<()>>,
@@ -416,6 +419,17 @@ impl GitPage {
     )
   }
 
+  fn is_svg_path(path: &Path) -> bool {
+    matches!(
+      path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref(),
+      Some("svg")
+    )
+  }
+
   fn selected_file_is_markdown(&self) -> bool {
     self
       .selected_file
@@ -424,8 +438,18 @@ impl GitPage {
       .unwrap_or(false)
   }
 
+  fn selected_file_is_svg(&self) -> bool {
+    self
+      .selected_file
+      .as_ref()
+      .map(|path| Self::is_svg_path(path))
+      .unwrap_or(false)
+  }
+
   fn effective_diff_view_for_path(&self, path: &Path) -> DiffViewMode {
-    if self.show_markdown_preview && Self::is_markdown_path(path) {
+    if self.show_markdown_preview
+      && (Self::is_markdown_path(path) || Self::is_svg_path(path))
+    {
       return DiffViewMode::Inline;
     }
 
@@ -637,6 +661,9 @@ impl GitPage {
       editor: None,
       diff_view: DiffViewMode::Inline,
       show_markdown_preview: false,
+      svg_preview: None,
+      svg_preview_source: None,
+      svg_preview_task: None,
       auth_state: AuthState::Unknown,
       auth_task: None,
       status_task: None,
@@ -1373,7 +1400,7 @@ impl GitPage {
       return;
     }
     let is_markdown = Self::is_markdown_path(&rel_path);
-    if !is_markdown {
+    if !is_markdown && !Self::is_svg_path(&rel_path) {
       self.show_markdown_preview = false;
     }
     let file_path = repo_root.join(&rel_path);
@@ -1382,6 +1409,8 @@ impl GitPage {
     editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
     self.editor = Some(editor);
     self.selected_file = Some(rel_path);
+    self.svg_preview = None;
+    self.svg_preview_source = None;
     self.force_list_selection = true;
     let opened_path = self.selected_file.clone();
     self.file_list.update(cx, |state, cx| {
@@ -1411,7 +1440,7 @@ impl GitPage {
   }
 
   fn toggle_markdown_preview(&mut self, cx: &mut Context<Self>) {
-    if !self.selected_file_is_markdown() {
+    if !self.selected_file_is_markdown() && !self.selected_file_is_svg() {
       self.show_markdown_preview = false;
       self.sync_diff_view(cx);
       cx.notify();
@@ -1421,6 +1450,44 @@ impl GitPage {
     self.show_markdown_preview = !self.show_markdown_preview;
     self.sync_diff_view(cx);
     cx.notify();
+  }
+
+  fn update_svg_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if !self.show_markdown_preview || !self.selected_file_is_svg() {
+      return;
+    }
+
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+
+    let document = editor.read(cx).document().read(cx);
+    let svg_source = document.slice_to_string(0..document.len());
+    let svg_source: SharedString = svg_source.into();
+
+    if self.svg_preview_source.as_ref() == Some(&svg_source) {
+      return;
+    }
+
+    self.svg_preview_source = Some(svg_source.clone());
+    let renderer = cx.svg_renderer();
+    let svg_bytes = svg_source.as_ref().as_bytes().to_vec();
+    let background = cx.background_spawn(async move {
+      renderer.render_single_frame(svg_bytes.as_slice(), 1.0, true)
+    });
+
+    let task = cx.spawn_in(window, async move |this, cx| {
+      let result = background.await;
+      let _ = this.update_in(cx, |this, window, cx| {
+        if let Some(Ok(image)) = this.svg_preview.take() {
+          let _ = window.drop_image(image);
+        }
+        this.svg_preview = Some(result.map_err(|err| err.to_string().into()));
+        cx.notify();
+      });
+    });
+
+    self.svg_preview_task = Some(task);
   }
 
   fn toggle_stage_all_action(
@@ -1946,7 +2013,8 @@ impl GitPage {
       });
 
     let is_markdown = self.selected_file_is_markdown();
-    let preview_active = is_markdown && self.show_markdown_preview;
+    let is_svg = self.selected_file_is_svg();
+    let preview_active = (is_markdown || is_svg) && self.show_markdown_preview;
     let split_disabled = self
       .selected_file
       .as_ref()
@@ -2079,7 +2147,7 @@ impl GitPage {
           .child(unstage_button)
           .child(restore_button)
           .child(save_button)
-          .when(is_markdown, |this| this.child(preview_button))
+          .when(is_markdown || is_svg, |this| this.child(preview_button))
           .child(toggle_button),
       )
       .into_any_element()
@@ -2466,22 +2534,62 @@ impl GitPage {
     let theme = cx.theme().clone();
     if let Some(editor) = self.editor.clone() {
       let editor_view = self.render_editor_with_overlay(editor.clone(), window, cx);
-      if self.show_markdown_preview && self.selected_file_is_markdown() {
-        let markdown = editor.read(cx).document().read(cx);
-        let markdown = markdown.slice_to_string(0..markdown.len());
-        let preview = div()
-          .flex_1()
-          .min_h_0()
-          .min_w(px(0.0))
-          .bg(theme.background)
-          .occlude()
-          .child(
-            TextView::markdown("markdown-preview", markdown)
-              .selectable(true)
-              .scrollable(true)
-              .pb_4()
-              .px_4(),
-          );
+      if self.show_markdown_preview
+        && (self.selected_file_is_markdown() || self.selected_file_is_svg())
+      {
+        let preview_content = if self.selected_file_is_svg() {
+          self.update_svg_preview(window, cx);
+          let preview = match self.svg_preview.clone() {
+            Some(Ok(image)) => img(image)
+              .max_w_full()
+              .max_h_full()
+              .into_any_element(),
+            Some(Err(error)) => div()
+              .text_sm()
+              .text_color(theme.danger)
+              .child(error)
+              .into_any_element(),
+            None => div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child("Rendering SVG preview...")
+              .into_any_element(),
+          };
+          div()
+            .flex_1()
+            .min_h_0()
+            .min_w(px(0.0))
+            .bg(theme.background)
+            .occlude()
+            .child(
+              div()
+                .flex_1()
+                .min_h_0()
+                .min_w(px(0.0))
+                .p_4()
+                .items_center()
+                .justify_center()
+                .child(preview),
+            )
+            .into_any_element()
+        } else {
+          let markdown = editor.read(cx).document().read(cx);
+          let markdown = markdown.slice_to_string(0..markdown.len());
+          div()
+            .flex_1()
+            .min_h_0()
+            .min_w(px(0.0))
+            .bg(theme.background)
+            .occlude()
+            .child(
+              TextView::markdown("markdown-preview", markdown)
+                .selectable(true)
+                .scrollable(true)
+                .pb_4()
+                .px_4(),
+            )
+            .into_any_element()
+        };
 
         return div()
           .size_full()
@@ -2491,7 +2599,7 @@ impl GitPage {
           .child(
             ui::h_resizable("git-page-markdown-preview")
               .child(ui::resizable_panel().child(editor_view))
-              .child(ui::resizable_panel().child(preview)),
+              .child(ui::resizable_panel().child(preview_content)),
           )
           .into_any_element();
       }
