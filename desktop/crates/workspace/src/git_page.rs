@@ -416,6 +416,30 @@ impl GitPage {
       .unwrap_or(false)
   }
 
+  fn effective_diff_view_for_path(&self, path: &Path) -> DiffViewMode {
+    if self.show_markdown_preview && Self::is_markdown_path(path) {
+      return DiffViewMode::Inline;
+    }
+
+    if self.split_disabled_for_path(path) {
+      return DiffViewMode::Inline;
+    }
+
+    self.diff_view
+  }
+
+  fn sync_diff_view(&mut self, cx: &mut Context<Self>) {
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+    let diff_view = if let Some(path) = self.selected_file.as_ref() {
+      self.effective_diff_view_for_path(path)
+    } else {
+      self.diff_view
+    };
+    editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
+  }
+
   fn selected_file_index(&self) -> Option<IndexPath> {
     let selected = self.selected_file.as_ref()?;
     let index = self
@@ -844,14 +868,8 @@ impl GitPage {
           if !still_present {
             this.selected_file = None;
             this.editor = None;
-          } else if this.split_disabled_for_path(selected) && this.diff_view != DiffViewMode::Inline
-          {
-            this.diff_view = DiffViewMode::Inline;
-            if let Some(editor) = this.editor.clone() {
-              editor.update(cx, |editor, cx| {
-                editor.set_diff_view_mode(DiffViewMode::Inline, cx)
-              });
-            }
+          } else {
+            this.sync_diff_view(cx);
           }
         }
         this.refresh_file_list(cx);
@@ -1336,21 +1354,9 @@ impl GitPage {
     if !is_markdown {
       self.show_markdown_preview = false;
     }
-    let split_disabled = self.split_disabled_for_path(&rel_path);
-    if split_disabled && self.diff_view != DiffViewMode::Inline {
-      self.diff_view = DiffViewMode::Inline;
-    }
     let file_path = repo_root.join(&rel_path);
     let editor = cx.new(|cx| Editor::new_with_paths(repo_root, file_path, cx));
-    let mut diff_view = if split_disabled {
-      DiffViewMode::Inline
-    } else {
-      self.diff_view
-    };
-    if self.show_markdown_preview && is_markdown {
-      self.diff_view = DiffViewMode::Inline;
-      diff_view = DiffViewMode::Inline;
-    }
+    let diff_view = self.effective_diff_view_for_path(&rel_path);
     editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
     self.editor = Some(editor);
     self.selected_file = Some(rel_path);
@@ -1378,32 +1384,20 @@ impl GitPage {
       DiffViewMode::Inline => DiffViewMode::Split,
       DiffViewMode::Split => DiffViewMode::Inline,
     };
-
-    if let Some(editor) = self.editor.clone() {
-      let diff_view = self.diff_view;
-      editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
-    }
-
+    self.sync_diff_view(cx);
     cx.notify();
   }
 
   fn toggle_markdown_preview(&mut self, cx: &mut Context<Self>) {
     if !self.selected_file_is_markdown() {
       self.show_markdown_preview = false;
+      self.sync_diff_view(cx);
       cx.notify();
       return;
     }
 
     self.show_markdown_preview = !self.show_markdown_preview;
-    if self.show_markdown_preview && self.diff_view != DiffViewMode::Inline {
-      self.diff_view = DiffViewMode::Inline;
-      if let Some(editor) = self.editor.clone() {
-        editor.update(cx, |editor, cx| {
-          editor.set_diff_view_mode(DiffViewMode::Inline, cx);
-        });
-      }
-    }
-
+    self.sync_diff_view(cx);
     cx.notify();
   }
 

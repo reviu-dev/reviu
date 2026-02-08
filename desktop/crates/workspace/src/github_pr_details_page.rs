@@ -4,14 +4,14 @@ use std::{
   rc::Rc,
 };
 
-use editor::Editor;
+use editor::{DiffViewMode, Editor};
 use git::{DiffKind, DiffLineKind, DiffSet, FileDiff, compute_buffer_diff, diff_set_from_patch};
 use gpui::{
   App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, SharedString,
   StatefulInteractiveElement, Styled, Task, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt,
+  ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable as _, StyledExt,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   clipboard::Clipboard,
@@ -367,6 +367,8 @@ pub struct GithubPrDetailsPage {
   selected_file: Option<Rc<GithubPrFileDiff>>,
   selected_tree_id: Option<String>,
   diff_editor: Entity<Editor>,
+  diff_view: DiffViewMode,
+  show_markdown_preview: bool,
   active_tab_ix: usize,
   pull_request: Option<GithubPullRequestDetails>,
   error: Option<SharedString>,
@@ -428,6 +430,8 @@ impl GithubPrDetailsPage {
         editor.is_read_only = true;
         editor
       }),
+      diff_view: DiffViewMode::Inline,
+      show_markdown_preview: false,
       active_tab_ix: 0,
       pull_request: None,
       error: None,
@@ -450,9 +454,13 @@ impl GithubPrDetailsPage {
 
     self.selected_file = selected.clone();
     self.selected_tree_id = selected.as_ref().map(|file| file.path.to_string());
+    if !self.selected_file_is_markdown() {
+      self.show_markdown_preview = false;
+    }
 
     if let Some(file) = selected {
       self.ensure_diff_editor_for_path(file.path.as_ref(), cx);
+      self.sync_diff_view(cx);
       let key = file.path.to_string();
       let cached = self.file_contents.contains_key(&key);
       let in_flight = self.file_content_tasks.contains_key(&key);
@@ -513,6 +521,84 @@ impl GithubPrDetailsPage {
     });
   }
 
+  fn split_disabled_for_file(&self, file: &GithubPrFileDiff) -> bool {
+    matches!(
+      file.status,
+      GithubPrFileStatus::Added | GithubPrFileStatus::Deleted
+    )
+  }
+
+  fn split_disabled_for_selected_file(&self) -> bool {
+    self
+      .selected_file
+      .as_ref()
+      .is_some_and(|file| self.split_disabled_for_file(file))
+  }
+
+  fn is_markdown_path(path: &Path) -> bool {
+    matches!(
+      path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref(),
+      Some("md" | "markdown" | "mdx")
+    )
+  }
+
+  fn selected_file_is_markdown(&self) -> bool {
+    self
+      .selected_file
+      .as_ref()
+      .map(|file| Self::is_markdown_path(Path::new(file.path.as_ref())))
+      .unwrap_or(false)
+  }
+
+  fn effective_diff_view(&self) -> DiffViewMode {
+    if self.show_markdown_preview && self.selected_file_is_markdown() {
+      return DiffViewMode::Inline;
+    }
+
+    if self.split_disabled_for_selected_file() {
+      return DiffViewMode::Inline;
+    }
+
+    self.diff_view
+  }
+
+  fn sync_diff_view(&mut self, cx: &mut Context<Self>) {
+    let diff_view = self.effective_diff_view();
+    self
+      .diff_editor
+      .update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
+  }
+
+  fn toggle_diff_view(&mut self, cx: &mut Context<Self>) {
+    if self.split_disabled_for_selected_file() {
+      return;
+    }
+    if self.show_markdown_preview && self.selected_file_is_markdown() {
+      return;
+    }
+
+    self.diff_view = match self.diff_view {
+      DiffViewMode::Inline => DiffViewMode::Split,
+      DiffViewMode::Split => DiffViewMode::Inline,
+    };
+    self.sync_diff_view(cx);
+    cx.notify();
+  }
+
+  fn toggle_markdown_preview(&mut self, cx: &mut Context<Self>) {
+    if !self.selected_file_is_markdown() {
+      return;
+    }
+
+    self.show_markdown_preview = !self.show_markdown_preview;
+    self.sync_diff_view(cx);
+    cx.notify();
+  }
+
   fn apply_full_diff(
     &mut self,
     file: &GithubPrFileDiff,
@@ -569,6 +655,7 @@ impl GithubPrDetailsPage {
       editor.set_diffs(diff_set, cx);
       editor.is_read_only = true;
     });
+    self.sync_diff_view(cx);
   }
 
   fn maybe_fetch_selected_file_contents(&mut self, cx: &mut Context<Self>) {
@@ -696,6 +783,8 @@ impl GithubPrDetailsPage {
     self.file_content_tasks.clear();
     self.selected_tree_id = None;
     self.set_selected_file(None, cx);
+    self.diff_view = DiffViewMode::Inline;
+    self.show_markdown_preview = false;
     self.diff_editor.update(cx, |editor, cx| {
       editor.document().update(cx, |doc, cx| {
         doc.replace_all("", cx);
@@ -1229,6 +1318,7 @@ impl GithubPrDetailsPage {
     };
 
     v_flex()
+      .bg(theme.sidebar)
       .size_full()
       .child(header)
       .child(div().flex_1().min_h_0().child(list))
@@ -1262,9 +1352,51 @@ impl GithubPrDetailsPage {
 
     let status_letter = status_letter(file.status);
     let status_color = status_color(file.status, &theme);
+    let is_markdown = Self::is_markdown_path(path);
+    let preview_active = is_markdown && self.show_markdown_preview;
+    let file_loading = self.file_loading;
+    let split_disabled = self.split_disabled_for_file(file) || preview_active;
+    let (toggle_label, toggle_icon) = if split_disabled {
+      ("Split", IconName::PanelLeft)
+    } else {
+      match self.diff_view {
+        DiffViewMode::Inline => ("Split", IconName::PanelLeft),
+        DiffViewMode::Split => ("Inline", IconName::PanelLeftClose),
+      }
+    };
+    let view = cx.entity();
+    let toggle_button = Button::new("pr-diff-toggle")
+      .label(toggle_label)
+      .icon(toggle_icon)
+      .xsmall()
+      .ghost()
+      .disabled(split_disabled || file_loading)
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.toggle_diff_view(cx);
+        });
+      });
+    let view = cx.entity();
+    let preview_button = Button::new("pr-markdown-preview")
+      .label("Preview")
+      .icon(if preview_active {
+        IconName::EyeOff
+      } else {
+        IconName::Eye
+      })
+      .xsmall()
+      .ghost()
+      .selected(preview_active)
+      .disabled(file_loading)
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.toggle_markdown_preview(cx);
+        });
+      });
 
     div()
       .h(px(DIFF_HEADER_HEIGHT))
+      .bg(theme.sidebar)
       .px_3()
       .flex()
       .items_center()
@@ -1291,6 +1423,13 @@ impl GithubPrDetailsPage {
             label.truncate()
           }),
       )
+      .child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(toggle_button)
+          .when(is_markdown, |this| this.child(preview_button)),
+      )
   }
 
   fn render_changes_tab(
@@ -1299,6 +1438,7 @@ impl GithubPrDetailsPage {
     cx: &mut Context<Self>,
   ) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let preview_active = self.show_markdown_preview && self.selected_file_is_markdown();
 
     let editor_content: gpui::AnyElement = if self.diff_loading {
       div()
@@ -1342,11 +1482,37 @@ impl GithubPrDetailsPage {
         .child(self.diff_error.clone().unwrap_or_default())
         .into_any_element()
     } else if self.selected_file.is_some() {
-      div()
-        .flex_1()
-        .min_h_0()
-        .child(self.diff_editor.clone())
-        .into_any_element()
+      if preview_active {
+        let markdown = self.diff_editor.read(cx).document().read(cx);
+        let markdown = markdown.slice_to_string(0..markdown.len());
+        let preview = div()
+          .flex_1()
+          .min_h_0()
+          .min_w(px(0.0))
+          .bg(theme.background)
+          .child(
+            TextView::markdown("pr-markdown-preview", markdown)
+              .selectable(true)
+              .scrollable(true)
+              .pb_4()
+              .px_4(),
+          );
+        div()
+          .flex_1()
+          .min_h_0()
+          .child(
+            h_resizable("github-pr-markdown-preview")
+              .child(resizable_panel().child(self.diff_editor.clone()))
+              .child(resizable_panel().child(preview)),
+          )
+          .into_any_element()
+      } else {
+        div()
+          .flex_1()
+          .min_h_0()
+          .child(self.diff_editor.clone())
+          .into_any_element()
+      }
     } else {
       div()
         .flex_1()
