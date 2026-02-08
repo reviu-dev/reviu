@@ -2068,7 +2068,7 @@ impl GitPage {
 
     let top = line_height * (overlay.display_line - viewport_start) as f32;
     let file_dirty = editor_state.is_dirty;
-    let restore_disabled_by_status = self
+    let selected_status = self
       .selected_file
       .as_ref()
       .and_then(|selected| {
@@ -2077,13 +2077,19 @@ impl GitPage {
           .iter()
           .find(|entry| &entry.path == selected)
       })
-      .map(|entry| {
-        matches!(
-          entry.status,
-          RepoStatusKind::Untracked | RepoStatusKind::Added
-        )
-      })
-      .unwrap_or(false);
+      .map(|entry| entry.status);
+
+    if matches!(
+      selected_status,
+      Some(RepoStatusKind::Untracked | RepoStatusKind::Added)
+    ) {
+      return None;
+    }
+
+    let restore_disabled_by_status = matches!(
+      selected_status,
+      Some(RepoStatusKind::Untracked | RepoStatusKind::Added)
+    );
     let restore_disabled = file_dirty || restore_disabled_by_status;
 
     let stage_tooltip = if file_dirty {
