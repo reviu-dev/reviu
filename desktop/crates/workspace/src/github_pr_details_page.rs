@@ -19,6 +19,7 @@ use gpui_component::{
   h_flex,
   label::Label,
   list::ListItem,
+  skeleton::Skeleton,
   spinner::Spinner,
   tab::{Tab, TabBar},
   tag::Tag,
@@ -1012,6 +1013,17 @@ impl GithubPrDetailsPage {
       .child(Tab::new().label("Overview"))
       .child(Tab::new().label("Changes"));
 
+    let back_button = || {
+      Button::new("pr-back")
+        .icon(IconName::ArrowLeft)
+        .ghost()
+        .compact()
+        .on_click(|_, _, cx| {
+          WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+          cx.refresh_windows();
+        })
+    };
+
     let left_area = if let Some(pr) = self.pull_request.as_ref() {
       let status_tag = pr_status_tag(
         &theme,
@@ -1037,9 +1049,26 @@ impl GithubPrDetailsPage {
         .child(status_tag)
         .child(format!("#{}", pr.number));
 
-      div().flex().items_center().gap_3().child(title).child(meta)
+      h_flex()
+        .items_center()
+        .gap_2()
+        .child(back_button())
+        .child(div().flex().items_center().gap_3().child(title).child(meta))
     } else {
-      div().flex_1().min_w_0().child("")
+      let title_skeleton = Skeleton::new().w(px(220.)).h_4().rounded_md();
+      let meta_skeleton = Skeleton::new().w(px(110.)).h_4().rounded_md().secondary();
+      h_flex()
+        .items_center()
+        .gap_2()
+        .child(back_button())
+        .child(
+          div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(title_skeleton)
+            .child(meta_skeleton),
+        )
     };
 
     div()
