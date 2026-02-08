@@ -41,7 +41,8 @@ use crate::{
 };
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
-  CommandPaletteCommand, CommandPaletteConfig, CommandPaletteHandler, ConfirmDialog,
+  CommandPaletteCommand, CommandPaletteConfig, CommandPaletteHandler, CommandPalettePage,
+  ConfirmDialog,
   FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState, SearchFileEntry, SearchFileHandler,
   SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UserMenuConfig, UserMenuPage,
   UserMenuState, UserMenuUser, WindowExt, file_icon_path_for_path_with_theme, user_menu,
@@ -1040,12 +1041,12 @@ impl GitPage {
       })
     });
 
-    let mut config = CommandPaletteConfig::new(palette_branches, handler);
-    if let AuthState::Authenticated(_) = &self.auth_state {
-      config
-        .commands
-        .push(CommandPaletteCommand::open_github_page());
-    }
+    let include_github = matches!(self.auth_state, AuthState::Authenticated(_));
+    let mut commands =
+      CommandPaletteCommand::default_global_commands(CommandPalettePage::Git, include_github);
+    commands.push(CommandPaletteCommand::switch_branch());
+    commands.push(CommandPaletteCommand::merge_branch());
+    let config = CommandPaletteConfig::new(palette_branches, commands, handler);
 
     let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
     let palette_for_dialog = palette.clone();
@@ -1123,9 +1124,19 @@ impl GitPage {
 
     let mut selected_branch: Option<BranchRef> = None;
     let result = match action {
+      CommandPaletteAction::OpenGitPage => {
+        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
+        cx.refresh_windows();
+        Ok(())
+      }
       CommandPaletteAction::OpenGithubPage => {
         GithubPageHandle::refresh(cx);
         WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenSettingsPage => {
+        WorkspaceRoute::open_settings(cx);
         cx.refresh_windows();
         Ok(())
       }
