@@ -91,6 +91,8 @@ pub struct GithubPullRequestDetails {
   pub changed_files: u64,
   pub labels: Vec<GithubPullRequestLabel>,
   pub repository: GithubRepository,
+  #[serde(rename = "headRepository")]
+  pub head_repository: Option<GithubRepository>,
 }
 
 #[derive(Clone)]

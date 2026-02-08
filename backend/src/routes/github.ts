@@ -63,6 +63,10 @@ interface GithubPullRequestDetails {
     owner: string
     repo: string
   }
+  headRepository: {
+    owner: string
+    repo: string
+  } | null
 }
 
 interface GithubPullRequestDiff {
@@ -202,6 +206,12 @@ githubRouter.get('/pr/:id', authMiddleware, async (ctx) => {
         owner: org,
         repo,
       },
+      headRepository: data.head?.repo
+        ? {
+            owner: data.head.repo.owner?.login ?? org,
+            repo: data.head.repo.name ?? repo,
+          }
+        : null,
     }
 
     return ctx.json({ pullRequest }, 200)
