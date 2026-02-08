@@ -17,12 +17,12 @@ use gpui::{
   UTF16Selection, Window, black, div, point, prelude::*, px, white,
 };
 use gpui_component::{
-  ActiveTheme as _, IconName, Sizable,
+  ActiveTheme as _, Sizable,
   button::{Button, ButtonVariants as _},
   resizable::{h_resizable, resizable_panel},
 };
 use smol::unblock;
-use ui::Theme;
+use ui::{Theme, UiIconName};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
@@ -209,10 +209,10 @@ enum GapExpandDirection {
 }
 
 impl GapExpandDirection {
-  fn icon(self) -> IconName {
+  fn icon(self) -> UiIconName {
     match self {
-      GapExpandDirection::Up => IconName::ArrowUp,
-      GapExpandDirection::Down => IconName::ArrowDown,
+      GapExpandDirection::Up => UiIconName::ArrowUpFromLine,
+      GapExpandDirection::Down => UiIconName::ArrowDownFromLine,
     }
   }
 

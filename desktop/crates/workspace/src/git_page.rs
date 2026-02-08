@@ -20,7 +20,6 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable,
-  avatar::Avatar,
   button::{Button, ButtonVariant, ButtonVariants as _},
   h_flex,
   kbd::Kbd,
@@ -34,7 +33,8 @@ use gpui_component::{
 use smol::unblock;
 
 use crate::{
-  api::{ApiClient, User},
+  api::ApiClient,
+  auth_state::{AuthState, AuthStateStore},
   config::{ConfigStore, RecentRepository},
   github_page::GithubPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
@@ -43,7 +43,8 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteHandler, ConfirmDialog,
   FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState, SearchFileEntry, SearchFileHandler,
-  SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, WindowExt,
+  SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UserMenuConfig, UserMenuPage,
+  UserMenuState, UserMenuUser, WindowExt, user_menu,
   file_icon_path_for_path_with_theme,
 };
 
@@ -329,13 +330,6 @@ impl SelectItem for BranchSelectItem {
   }
 }
 
-#[derive(Clone, Debug)]
-enum AuthState {
-  Unknown,
-  Authenticated(User),
-  Unauthenticated,
-}
-
 #[derive(Clone, Default)]
 pub struct AuthCallbackTarget {
   git_page: Option<WeakEntity<GitPage>>,
@@ -355,6 +349,20 @@ impl AuthCallbackTarget {
       return;
     };
     let _ = weak.update(cx, |this, cx| this.handle_auth_code(code, cx));
+  }
+
+  pub fn start_sign_in(cx: &mut App) {
+    let Some(weak) = cx.global::<Self>().git_page.clone() else {
+      return;
+    };
+    let _ = weak.update(cx, |this, cx| this.start_github_sign_in(cx));
+  }
+
+  pub fn sign_out(cx: &mut App) {
+    let Some(weak) = cx.global::<Self>().git_page.clone() else {
+      return;
+    };
+    let _ = weak.update(cx, |this, cx| this.logout(cx));
   }
 }
 
@@ -498,8 +506,7 @@ impl GitPage {
         }
         Err(_) => {
           let _ = this.update(cx, |this, cx| {
-            this.auth_state = AuthState::Unauthenticated;
-            cx.notify();
+            this.set_auth_state(AuthState::Unauthenticated, cx);
           });
         }
       }
@@ -516,8 +523,7 @@ impl GitPage {
       let delete_task = cx.update(|cx| cx.delete_credentials(&service));
       let _ = delete_task.await;
       let _ = this.update(cx, |this, cx| {
-        this.auth_state = AuthState::Unauthenticated;
-        cx.notify();
+        this.set_auth_state(AuthState::Unauthenticated, cx);
       });
     });
 
@@ -536,8 +542,7 @@ impl GitPage {
             return;
           }
         }
-        this.auth_state = AuthState::Unauthenticated;
-        cx.notify();
+        this.set_auth_state(AuthState::Unauthenticated, cx);
       });
     });
 
@@ -549,12 +554,12 @@ impl GitPage {
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || api.fetch_me()).await;
       let _ = this.update(cx, |this, cx| {
-        this.auth_state = match result {
+        let state = match result {
           Ok(Some(user)) => AuthState::Authenticated(user),
           Ok(None) => AuthState::Unauthenticated,
           Err(_) => AuthState::Unauthenticated,
         };
-        cx.notify();
+        this.set_auth_state(state, cx);
       });
     });
 
@@ -571,6 +576,13 @@ impl GitPage {
     });
 
     self.auth_task = Some(task);
+  }
+
+  fn set_auth_state(&mut self, state: AuthState, cx: &mut Context<Self>) {
+    self.auth_state = state.clone();
+    AuthStateStore::set(cx, state);
+    cx.refresh_windows();
+    cx.notify();
   }
 
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -1616,7 +1628,6 @@ impl GitPage {
 
   fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let view = cx.entity().downgrade();
     let select = Select::new(&self.repo_select)
       .placeholder("Select repository...")
       .search_placeholder("Search repositories...")
@@ -1717,7 +1728,7 @@ impl GitPage {
       .compact()
       .tooltip("Settings")
       .on_click(|_, _, cx| {
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Settings;
+        WorkspaceRoute::open_settings(cx);
         cx.refresh_windows();
       });
 
@@ -1732,75 +1743,58 @@ impl GitPage {
         cx.refresh_windows();
       });
 
-    let auth_control = match &self.auth_state {
+    let menu_state = match &self.auth_state {
+      AuthState::Unknown => UserMenuState::Unknown,
+      AuthState::Unauthenticated => UserMenuState::Unauthenticated,
       AuthState::Authenticated(user) => {
         let display_name = if user.name.trim().is_empty() {
           user.email.clone()
         } else {
           user.name.clone()
         };
-        let avatar = Avatar::new()
-          .name(display_name.clone())
-          .when_some(user.image.clone(), |this, image| this.src(image))
-          .small();
-        let email = user.email.clone();
-        let settings_view = view.clone();
-        let logout_view = view.clone();
-        Some(
-          Button::new("auth-menu")
-            .ghost()
-            .compact()
-            .child(avatar)
-            .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
-              let settings_view = settings_view.clone();
-              let logout_view = logout_view.clone();
-              let menu = menu.item(
-                PopupMenuItem::new(email.clone())
-                  .icon(IconName::User)
-                  .disabled(true),
-              );
-
-              let menu = menu.item(
-                PopupMenuItem::new("Settings")
-                  .icon(IconName::Settings2)
-                  .on_click(move |event, _, cx| {
-                    let _ = event;
-                    let _ = settings_view.update(cx, |_, cx| {
-                      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Settings;
-                      cx.refresh_windows();
-                    });
-                  }),
-              );
-
-              let menu = menu.separator().item(
-                PopupMenuItem::new("Sign out")
-                  .icon(IconName::ArrowRight)
-                  .on_click(move |event, _, cx| {
-                    let _ = event;
-                    let _ = logout_view.update(cx, |this, cx| this.logout(cx));
-                  }),
-              );
-
-              menu
-            })
-            .into_any_element(),
-        )
+        UserMenuState::Authenticated(UserMenuUser {
+          name: display_name.into(),
+          email: user.email.clone().into(),
+          image: user.image.clone().map(Into::into),
+        })
       }
-      AuthState::Unauthenticated => Some({
-        let view = view.clone();
-        Button::new("auth-login")
-          .icon(IconName::GitHub)
-          .label("Sign in with GitHub")
-          .ghost()
-          .gap_2()
-          .small()
-          .on_click(move |_, _, cx| {
-            let _ = view.update(cx, |this, cx| this.start_github_sign_in(cx));
-          })
-          .into_any_element()
-      }),
-      AuthState::Unknown => None,
     };
+
+    let view = cx.entity();
+    let open_git = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
+      cx.refresh_windows();
+    });
+    let open_github = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      GithubPageHandle::refresh(cx);
+      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+      cx.refresh_windows();
+    });
+    let open_settings = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::open_settings(cx);
+      cx.refresh_windows();
+    });
+    let sign_in = Rc::new(move |_window: &mut Window, cx: &mut App| {
+      let _ = view.update(cx, |this, cx| this.start_github_sign_in(cx));
+    });
+    let view = cx.entity();
+    let sign_out = Rc::new(move |_window: &mut Window, cx: &mut App| {
+      let _ = view.update(cx, |this, cx| this.logout(cx));
+    });
+
+    let auth_control = user_menu(UserMenuConfig {
+      id: "auth-menu".into(),
+      state: menu_state,
+      current_page: UserMenuPage::Git,
+      on_open_git: Some(open_git),
+      on_open_github: Some(open_github),
+      on_open_settings: Some(open_settings),
+      on_sign_in: Some(sign_in),
+      on_sign_out: Some(sign_out),
+    });
 
     let header_right = h_flex()
       .items_center()
@@ -1818,7 +1812,7 @@ impl GitPage {
     div()
       .h(px(HEADER_HEIGHT))
       .max_h(px(HEADER_HEIGHT))
-      .px_4()
+      .px_3()
       .flex()
       .items_center()
       .justify_between()

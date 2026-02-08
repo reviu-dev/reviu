@@ -8,7 +8,7 @@ use gpui_component::{
 
 use ui::HEADER_HEIGHT;
 
-use crate::workspace::{WorkspacePage, WorkspaceRoute};
+use crate::workspace::WorkspaceRoute;
 
 pub struct SettingsPage {
   focus_handle: FocusHandle,
@@ -83,7 +83,7 @@ impl Render for SettingsPage {
     let header = div()
       .h(px(HEADER_HEIGHT))
       .max_h(px(HEADER_HEIGHT))
-      .px_4()
+      .px_3()
       .flex()
       .items_center()
       .justify_between()
@@ -103,7 +103,7 @@ impl Render for SettingsPage {
           .compact()
           .tooltip("Close settings")
           .on_click(|_, _, cx| {
-            WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
+            WorkspaceRoute::close_settings(cx);
             cx.refresh_windows();
           }),
       );

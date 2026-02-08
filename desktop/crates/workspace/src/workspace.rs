@@ -1,6 +1,7 @@
 use gpui::{App, Context, Entity, FocusHandle, Focusable, Global, Render, Window, prelude::*};
 
 use crate::api::ApiClient;
+use crate::auth_state::AuthStateStore;
 use crate::git_page::GitPage;
 use crate::github_page::GithubPage;
 use crate::github_pr_details_page::GithubPrDetailsPage;
@@ -17,12 +18,14 @@ pub enum WorkspacePage {
 #[derive(Clone)]
 pub(crate) struct WorkspaceRoute {
   pub page: WorkspacePage,
+  pub settings_return: Option<WorkspacePage>,
 }
 
 impl Default for WorkspaceRoute {
   fn default() -> Self {
     Self {
       page: WorkspacePage::Git,
+      settings_return: None,
     }
   }
 }
@@ -36,6 +39,21 @@ impl WorkspaceRoute {
 
   pub fn global_mut(cx: &mut App) -> &mut Self {
     cx.global_mut::<Self>()
+  }
+
+  pub fn open_settings(cx: &mut App) {
+    let current = cx.global::<Self>().page;
+    let route = cx.global_mut::<Self>();
+    if route.page != WorkspacePage::Settings {
+      route.settings_return = Some(current);
+    }
+    route.page = WorkspacePage::Settings;
+  }
+
+  pub fn close_settings(cx: &mut App) {
+    let route = cx.global_mut::<Self>();
+    let target = route.settings_return.take().unwrap_or(WorkspacePage::Git);
+    route.page = target;
   }
 }
 
@@ -69,6 +87,7 @@ impl WorkspaceView {
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     cx.set_global(WorkspaceRoute::default());
     cx.set_global(WorkspaceApi::new());
+    cx.set_global(AuthStateStore::default());
     let git_page = cx.new(|cx| GitPage::new(window, cx));
     let github_page = cx.new(|cx| GithubPage::new(window, cx));
     let github_pr_details_page = cx.new(|cx| GithubPrDetailsPage::new(window, cx));
