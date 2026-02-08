@@ -82,6 +82,7 @@ pub enum CommandPaletteAction {
   MergeBranch {
     name: CommandPaletteBranch,
   },
+  OpenGithubPage,
 }
 
 struct BranchesListDelegate {
@@ -347,6 +348,7 @@ pub enum CommandPaletteCommandId {
   CreateBranch,
   CreateBranchFrom,
   MergeBranch,
+  OpenGithubPage,
 }
 
 impl CommandPaletteCommand {
@@ -382,6 +384,14 @@ impl CommandPaletteCommand {
     }
   }
 
+  pub fn open_github_page() -> Self {
+    Self {
+      id: CommandPaletteCommandId::OpenGithubPage,
+      name: "Open GitHub page".into(),
+      description: Some("Go to the GitHub page".into()),
+    }
+  }
+
   fn icon(&self) -> Icon {
     match self.id {
       CommandPaletteCommandId::SwitchBranch => Icon::new(UiIconName::GitBranch),
@@ -389,6 +399,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
       }
+      CommandPaletteCommandId::OpenGithubPage => Icon::new(IconName::GitHub),
     }
   }
 
@@ -726,6 +737,9 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::CreateBranchFrom => {
         self.set_screen(CommandPaletteScreen::CreateBranchFrom, cx, window);
+      }
+      CommandPaletteCommandId::OpenGithubPage => {
+        self.trigger_action(CommandPaletteAction::OpenGithubPage, window, cx);
       }
     }
   }
