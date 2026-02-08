@@ -81,6 +81,7 @@ pub struct WorkspaceView {
   github_page: Entity<GithubPage>,
   github_pr_details_page: Entity<GithubPrDetailsPage>,
   settings_page: Entity<SettingsPage>,
+  last_page: Option<WorkspacePage>,
 }
 
 impl WorkspaceView {
@@ -98,13 +99,21 @@ impl WorkspaceView {
       github_page,
       github_pr_details_page,
       settings_page,
+      last_page: None,
     }
   }
 }
 
 impl Render for WorkspaceView {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    match WorkspaceRoute::global(cx).page {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let page = WorkspaceRoute::global(cx).page;
+    if self.last_page != Some(page) {
+      self.last_page = Some(page);
+      let focus_handle = self.focus_handle(cx);
+      window.focus(&focus_handle, cx);
+    }
+
+    match page {
       WorkspacePage::Git => self.git_page.clone().into_any_element(),
       WorkspacePage::Github => self.github_page.clone().into_any_element(),
       WorkspacePage::GithubPrDetails => self.github_pr_details_page.clone().into_any_element(),

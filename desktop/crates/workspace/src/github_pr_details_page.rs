@@ -2,6 +2,7 @@ use std::{
   collections::{BTreeMap, HashMap},
   path::{Path, PathBuf},
   rc::Rc,
+  sync::Arc,
 };
 
 use editor::{DiffViewMode, Editor};
@@ -28,12 +29,14 @@ use gpui_component::{
 use smol::unblock;
 
 use ui::{
-  FILE_ICON_SIZE_PX, StatusThemeExt, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser,
+  FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
+  StatusThemeExt, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
   file_icon_path_for_name_with_theme, h_resizable, pr_status_tag, resizable_panel, user_menu,
 };
 
 use crate::{
   AuthCallbackTarget,
+  ShowFileSearch,
   api::{ApiClient, GithubPullRequestDetails},
   auth_state::{AuthState, AuthStateStore},
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
@@ -441,8 +444,12 @@ impl GithubPrDetailsPage {
     view
   }
 
-  fn set_active_tab(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) {
+  fn set_active_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
     self.active_tab_ix = ix;
+    if ix == 1 {
+      self.sync_tree_selection(cx);
+      window.focus(&self.focus_handle, cx);
+    }
     cx.notify();
   }
 
@@ -462,6 +469,7 @@ impl GithubPrDetailsPage {
     if let Some(file) = selected {
       self.ensure_diff_editor_for_path(file.path.as_ref(), cx);
       self.sync_diff_view(cx);
+      self.sync_tree_selection(cx);
       let key = file.path.to_string();
       let cached = self.file_contents.contains_key(&key);
       let in_flight = self.file_content_tasks.contains_key(&key);
@@ -1498,6 +1506,99 @@ impl GithubPrDetailsPage {
       )
   }
 
+  fn show_file_search_action(
+    &mut self,
+    _: &ShowFileSearch,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix != 1 {
+      return;
+    }
+
+    self.open_file_search_palette(window, cx);
+  }
+
+  fn open_file_search_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.file_lookup.is_empty() {
+      return;
+    }
+
+    let mut entries = self
+      .file_lookup
+      .values()
+      .map(|file| {
+        let path = PathBuf::from(file.path.as_ref());
+        let label = file.path.as_ref().replace(['\n', '\r'], "");
+        SearchFileEntry::new(path, label)
+      })
+      .collect::<Vec<_>>();
+    entries.sort_by(|a, b| a.label.cmp(&b.label));
+
+    let view = cx.entity();
+    let handler: SearchFileHandler = Arc::new(move |path, window, cx| {
+      view.update(cx, |view, cx| {
+        view.select_file_from_palette(&path, cx);
+      });
+
+      let view_for_focus = view.clone();
+      window.on_next_frame(move |window, cx| {
+        let focus_handle = view_for_focus.read(cx).diff_editor.read(cx).focus_handle(cx);
+        window.focus(&focus_handle, cx);
+      });
+
+      Ok(())
+    });
+
+    let palette = cx.new(|cx| {
+      SearchFilePalette::new(window, cx, SearchFilePaletteConfig::new(entries, handler))
+    });
+    let palette_for_dialog = palette.clone();
+
+    window.open_dialog(cx, move |dialog, _, _| {
+      dialog
+        .p_0()
+        .border_0()
+        .min_h_0()
+        .overlay_closable(true)
+        .keyboard(true)
+        .close_button(false)
+        .child(palette_for_dialog.clone())
+    });
+  }
+
+  fn select_file_from_palette(&mut self, path: &Path, cx: &mut Context<Self>) {
+    let key = path.to_string_lossy().to_string();
+    let Some(file) = self.file_lookup.get(&key).cloned() else {
+      return;
+    };
+
+    let tree_item = TreeItem::new(key.clone(), key.clone());
+    self.tree_state.update(cx, |state, cx| {
+      state.set_selected_item(Some(&tree_item), cx);
+      if let Some(ix) = state.selected_index() {
+        state.scroll_to_item(ix, gpui::ScrollStrategy::Top);
+      }
+    });
+
+    self.set_selected_file(Some(file), cx);
+  }
+
+  fn sync_tree_selection(&mut self, cx: &mut Context<Self>) {
+    let Some(file) = self.selected_file.as_ref() else {
+      return;
+    };
+
+    let key = file.path.as_ref().to_string();
+    let tree_item = TreeItem::new(key.clone(), key.clone());
+    self.tree_state.update(cx, |state, cx| {
+      state.set_selected_item(Some(&tree_item), cx);
+      if let Some(ix) = state.selected_index() {
+        state.scroll_to_item(ix, gpui::ScrollStrategy::Top);
+      }
+    });
+  }
+
   fn render_changes_tab(
     &mut self,
     window: &mut Window,
@@ -1654,6 +1755,7 @@ impl Render for GithubPrDetailsPage {
       .flex_col()
       .bg(theme.background)
       .track_focus(&self.focus_handle(cx))
+      .on_action(cx.listener(GithubPrDetailsPage::show_file_search_action))
       .child(self.render_header(cx))
       .child(v_flex().flex_1().min_h_0().child(content))
   }
