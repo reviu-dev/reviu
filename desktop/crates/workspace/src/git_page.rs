@@ -40,9 +40,10 @@ use crate::{
 };
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
-  CommandPaletteConfig, CommandPaletteHandler, ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT,
-  Input, InputState, SearchFileEntry, SearchFileHandler, SearchFilePalette,
-  SearchFilePaletteConfig, StatusThemeExt, WindowExt, file_icon_path_for_path_with_theme,
+  CommandPaletteCommand, CommandPaletteConfig, CommandPaletteHandler, ConfirmDialog,
+  FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState, SearchFileEntry, SearchFileHandler,
+  SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, WindowExt,
+  file_icon_path_for_path_with_theme,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 300.0;
@@ -988,13 +989,12 @@ impl GitPage {
       })
     });
 
-    let palette = cx.new(|cx| {
-      CommandPalette::new(
-        window,
-        cx,
-        CommandPaletteConfig::new(palette_branches, handler),
-      )
-    });
+    let mut config = CommandPaletteConfig::new(palette_branches, handler);
+    if let AuthState::Authenticated(_) = &self.auth_state {
+      config.commands.push(CommandPaletteCommand::open_github_page());
+    }
+
+    let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
     let palette_for_dialog = palette.clone();
 
     window.open_dialog(cx, move |dialog, _, _| {
@@ -1070,6 +1070,12 @@ impl GitPage {
 
     let mut selected_branch: Option<BranchRef> = None;
     let result = match action {
+      CommandPaletteAction::OpenGithubPage => {
+        GithubPageHandle::refresh(cx);
+        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+        cx.refresh_windows();
+        Ok(())
+      }
       CommandPaletteAction::SwitchBranch(branch) => {
         let branch_ref = BranchRef {
           name: branch.name.to_string(),
