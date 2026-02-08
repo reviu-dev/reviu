@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use gpui::{
   App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, SharedString, Styled,
@@ -12,10 +12,14 @@ use gpui_component::{
   v_flex,
 };
 use smol::unblock;
-use ui::{HEADER_HEIGHT, pr_status_tag};
+use ui::{
+  CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
+  CommandPaletteHandler, CommandPalettePage, HEADER_HEIGHT, WindowExt, pr_status_tag,
+};
 
 use crate::{
   AuthCallbackTarget,
+  ShowCommandPalette,
   api::{ApiClient, GithubPullRequest},
   auth_state::{AuthState, AuthStateStore},
   github_pr_details_page::GithubPrDetailsPageHandle,
@@ -349,6 +353,69 @@ impl GithubPage {
     self.load_task = Some(task);
   }
 
+  fn show_command_palette_action(
+    &mut self,
+    _: &ShowCommandPalette,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_command_palette(window, cx);
+  }
+
+  fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
+    let commands =
+      CommandPaletteCommand::default_global_commands(CommandPalettePage::Github, include_github);
+
+    let view = cx.entity();
+    let handler: CommandPaletteHandler = Arc::new(move |action, _window, cx| {
+      view.update(cx, |view, cx| {
+        view.handle_command_palette_action(action, cx)
+      })
+    });
+
+    let config = CommandPaletteConfig::new(Vec::new(), commands, handler);
+    let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
+    let palette_for_dialog = palette.clone();
+
+    window.open_dialog(cx, move |dialog, _, _| {
+      dialog
+        .p_0()
+        .border_0()
+        .min_h_0()
+        .overlay_closable(true)
+        .keyboard(true)
+        .close_button(false)
+        .child(palette_for_dialog.clone())
+    });
+  }
+
+  fn handle_command_palette_action(
+    &mut self,
+    action: CommandPaletteAction,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    match action {
+      CommandPaletteAction::OpenGitPage => {
+        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubPage => {
+        GithubPageHandle::refresh(cx);
+        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenSettingsPage => {
+        WorkspaceRoute::open_settings(cx);
+        cx.refresh_windows();
+        Ok(())
+      }
+      _ => Err("Command not available.".into()),
+    }
+  }
+
   fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
@@ -442,6 +509,7 @@ impl Render for GithubPage {
       .flex_col()
       .bg(theme.background)
       .track_focus(&self.focus_handle(cx))
+      .on_action(cx.listener(GithubPage::show_command_palette_action))
       .child(self.render_header(cx))
       .child(
         v_flex()

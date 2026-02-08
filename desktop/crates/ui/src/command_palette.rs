@@ -49,6 +49,14 @@ pub struct CommandPaletteCommand {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandPalettePage {
+  Git,
+  Github,
+  GithubPrDetails,
+  Settings,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandPaletteBranchKind {
   Local,
   Remote,
@@ -82,7 +90,9 @@ pub enum CommandPaletteAction {
   MergeBranch {
     name: CommandPaletteBranch,
   },
+  OpenGitPage,
   OpenGithubPage,
+  OpenSettingsPage,
 }
 
 struct BranchesListDelegate {
@@ -348,7 +358,9 @@ pub enum CommandPaletteCommandId {
   CreateBranch,
   CreateBranchFrom,
   MergeBranch,
+  OpenGitPage,
   OpenGithubPage,
+  OpenSettingsPage,
 }
 
 impl CommandPaletteCommand {
@@ -392,6 +404,43 @@ impl CommandPaletteCommand {
     }
   }
 
+  pub fn open_git_page() -> Self {
+    Self {
+      id: CommandPaletteCommandId::OpenGitPage,
+      name: "Open Git page".into(),
+      description: Some("Go to the Git page".into()),
+    }
+  }
+
+  pub fn open_settings_page() -> Self {
+    Self {
+      id: CommandPaletteCommandId::OpenSettingsPage,
+      name: "Open Settings".into(),
+      description: Some("Go to Settings".into()),
+    }
+  }
+
+  pub fn default_global_commands(
+    current_page: CommandPalettePage,
+    include_github: bool,
+  ) -> Vec<Self> {
+    let mut commands = Vec::new();
+
+    if current_page != CommandPalettePage::Git {
+      commands.push(Self::open_git_page());
+    }
+
+    if include_github && current_page != CommandPalettePage::Github {
+      commands.push(Self::open_github_page());
+    }
+
+    if current_page != CommandPalettePage::Settings {
+      commands.push(Self::open_settings_page());
+    }
+
+    commands
+  }
+
   fn icon(&self) -> Icon {
     match self.id {
       CommandPaletteCommandId::SwitchBranch => Icon::new(UiIconName::GitBranch),
@@ -399,7 +448,9 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
       }
+      CommandPaletteCommandId::OpenGitPage => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::OpenGithubPage => Icon::new(IconName::GitHub),
+      CommandPaletteCommandId::OpenSettingsPage => Icon::new(IconName::Settings2),
     }
   }
 
@@ -426,13 +477,14 @@ pub struct CommandPaletteConfig {
 }
 
 impl CommandPaletteConfig {
-  pub fn new(branches: Vec<CommandPaletteBranch>, on_action: CommandPaletteHandler) -> Self {
+  pub fn new(
+    branches: Vec<CommandPaletteBranch>,
+    commands: Vec<CommandPaletteCommand>,
+    on_action: CommandPaletteHandler,
+  ) -> Self {
     Self {
       branches,
-      commands: vec![
-        CommandPaletteCommand::switch_branch(),
-        CommandPaletteCommand::merge_branch(),
-      ],
+      commands,
       on_action,
     }
   }
@@ -738,8 +790,14 @@ impl CommandPalette {
       CommandPaletteCommandId::CreateBranchFrom => {
         self.set_screen(CommandPaletteScreen::CreateBranchFrom, cx, window);
       }
+      CommandPaletteCommandId::OpenGitPage => {
+        self.trigger_action(CommandPaletteAction::OpenGitPage, window, cx);
+      }
       CommandPaletteCommandId::OpenGithubPage => {
         self.trigger_action(CommandPaletteAction::OpenGithubPage, window, cx);
+      }
+      CommandPaletteCommandId::OpenSettingsPage => {
+        self.trigger_action(CommandPaletteAction::OpenSettingsPage, window, cx);
       }
     }
   }

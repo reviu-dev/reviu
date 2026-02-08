@@ -29,16 +29,19 @@ use gpui_component::{
 use smol::unblock;
 
 use ui::{
-  FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
-  StatusThemeExt, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
-  file_icon_path_for_name_with_theme, h_resizable, pr_status_tag, resizable_panel, user_menu,
+  CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
+  CommandPaletteHandler, CommandPalettePage, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler,
+  SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UserMenuConfig, UserMenuPage,
+  UserMenuState, UserMenuUser, WindowExt, file_icon_path_for_name_with_theme, h_resizable,
+  pr_status_tag, resizable_panel, user_menu,
 };
 
 use crate::{
   AuthCallbackTarget,
-  ShowFileSearch,
+  ShowCommandPalette, ShowFileSearch,
   api::{ApiClient, GithubPullRequestDetails},
   auth_state::{AuthState, AuthStateStore},
+  github_page::GithubPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 
@@ -1519,6 +1522,71 @@ impl GithubPrDetailsPage {
     self.open_file_search_palette(window, cx);
   }
 
+  fn show_command_palette_action(
+    &mut self,
+    _: &ShowCommandPalette,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_command_palette(window, cx);
+  }
+
+  fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
+    let commands = CommandPaletteCommand::default_global_commands(
+      CommandPalettePage::GithubPrDetails,
+      include_github,
+    );
+
+    let view = cx.entity();
+    let handler: CommandPaletteHandler = Arc::new(move |action, _window, cx| {
+      view.update(cx, |view, cx| {
+        view.handle_command_palette_action(action, cx)
+      })
+    });
+
+    let config = CommandPaletteConfig::new(Vec::new(), commands, handler);
+    let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
+    let palette_for_dialog = palette.clone();
+
+    window.open_dialog(cx, move |dialog, _, _| {
+      dialog
+        .p_0()
+        .border_0()
+        .min_h_0()
+        .overlay_closable(true)
+        .keyboard(true)
+        .close_button(false)
+        .child(palette_for_dialog.clone())
+    });
+  }
+
+  fn handle_command_palette_action(
+    &mut self,
+    action: CommandPaletteAction,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    match action {
+      CommandPaletteAction::OpenGitPage => {
+        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubPage => {
+        GithubPageHandle::refresh(cx);
+        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenSettingsPage => {
+        WorkspaceRoute::open_settings(cx);
+        cx.refresh_windows();
+        Ok(())
+      }
+      _ => Err("Command not available.".into()),
+    }
+  }
+
   fn open_file_search_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if self.file_lookup.is_empty() {
       return;
@@ -1755,6 +1823,7 @@ impl Render for GithubPrDetailsPage {
       .flex_col()
       .bg(theme.background)
       .track_focus(&self.focus_handle(cx))
+      .on_action(cx.listener(GithubPrDetailsPage::show_command_palette_action))
       .on_action(cx.listener(GithubPrDetailsPage::show_file_search_action))
       .child(self.render_header(cx))
       .child(v_flex().flex_1().min_h_0().child(content))

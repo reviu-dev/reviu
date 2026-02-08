@@ -14,6 +14,7 @@ pub use assets::AppAssets;
 pub use command_palette::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig, CommandPaletteHandler,
+  CommandPalettePage,
 };
 pub use confirm_dialog::ConfirmDialog;
 pub use github_pr_badge::pr_status_tag;
