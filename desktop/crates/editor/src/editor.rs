@@ -3117,6 +3117,8 @@ pub mod tests {
         let cursor_blink = cx.new(CursorBlink::new);
 
         Editor {
+          collapsed_review_comments: HashSet::new(),
+          review_comments: Vec::new(),
           document: doc,
           focus_handle: cx.focus_handle(),
           selected_range: 0..0,

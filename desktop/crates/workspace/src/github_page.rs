@@ -14,12 +14,12 @@ use gpui_component::{
 use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, HEADER_HEIGHT, WindowExt, pr_status_tag,
+  CommandPaletteHandler, CommandPalettePage, HEADER_HEIGHT, StatusThemeExt, WindowExt,
+  pr_status_tag,
 };
 
 use crate::{
-  AuthCallbackTarget,
-  ShowCommandPalette,
+  AuthCallbackTarget, ShowCommandPalette,
   api::{ApiClient, GithubPullRequest},
   auth_state::{AuthState, AuthStateStore},
   github_pr_details_page::GithubPrDetailsPageHandle,
@@ -519,7 +519,7 @@ impl Render for GithubPage {
           .gap_3()
           .p_4()
           .when_some(self.error.clone(), |this, error| {
-            this.child(div().text_sm().text_color(theme.danger).child(error))
+            this.child(div().text_sm().text_color(theme.status_red()).child(error))
           })
           .child(list),
       )
