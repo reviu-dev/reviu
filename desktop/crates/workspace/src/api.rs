@@ -60,6 +60,48 @@ pub struct GithubPullRequestAuthor {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct GithubPullRequestReviewCommentUser {
+  pub login: String,
+  #[serde(rename = "avatarUrl")]
+  pub avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubPullRequestReviewComment {
+  pub id: u64,
+  #[serde(rename = "pullRequestReviewId")]
+  pub pull_request_review_id: Option<u64>,
+  #[serde(rename = "diffHunk")]
+  pub diff_hunk: String,
+  pub path: String,
+  pub position: Option<i64>,
+  #[serde(rename = "originalPosition")]
+  pub original_position: Option<i64>,
+  #[serde(rename = "commitId")]
+  pub commit_id: String,
+  #[serde(rename = "originalCommitId")]
+  pub original_commit_id: String,
+  #[serde(rename = "inReplyToId")]
+  pub in_reply_to_id: Option<u64>,
+  pub user: GithubPullRequestReviewCommentUser,
+  pub body: String,
+  #[serde(rename = "createdAt")]
+  pub created_at: String,
+  #[serde(rename = "updatedAt")]
+  pub updated_at: String,
+  #[serde(rename = "startLine")]
+  pub start_line: Option<i64>,
+  #[serde(rename = "originalStartLine")]
+  pub original_start_line: Option<i64>,
+  #[serde(rename = "startSide")]
+  pub start_side: Option<String>,
+  pub line: Option<i64>,
+  #[serde(rename = "originalLine")]
+  pub original_line: Option<i64>,
+  pub side: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestDetails {
   pub number: u64,
   pub title: String,
@@ -154,6 +196,11 @@ struct GithubPullRequestDetailsResponse {
 #[derive(Debug, Deserialize)]
 struct GithubPullRequestDiffResponse {
   diff: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestCommentsResponse {
+  comments: Vec<GithubPullRequestReviewComment>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -323,6 +370,26 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestDiffResponse>()?;
     Ok(payload.diff)
+  }
+
+  pub fn fetch_pull_request_review_comments(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+  ) -> Result<Vec<GithubPullRequestReviewComment>> {
+    let response = self
+      .authed_request(Method::GET, &format!("/github/pr/{number}/comments"))
+      .query(&[("org", owner), ("repo", repo)])
+      .send()?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !response.status().is_success() {
+      anyhow::bail!("unexpected status: {}", response.status());
+    }
+    let payload = response.json::<GithubPullRequestCommentsResponse>()?;
+    Ok(payload.comments)
   }
 
   pub fn fetch_github_file_content(

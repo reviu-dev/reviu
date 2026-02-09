@@ -5,11 +5,11 @@ use std::{
   sync::Arc,
 };
 
-use editor::{DiffViewMode, Editor};
+use editor::{DiffViewMode, Editor, ReviewComment, ReviewCommentSide};
 use git::{DiffKind, DiffLineKind, DiffSet, FileDiff, compute_buffer_diff, diff_set_from_patch};
 use gpui::{
   App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, RenderImage, SharedString,
-  StatefulInteractiveElement, Styled, Task, Window, div, img, prelude::*, px,
+  Styled, Task, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable as _, StyledExt,
@@ -19,6 +19,7 @@ use gpui_component::{
   h_flex,
   label::Label,
   list::ListItem,
+  scroll::ScrollableElement,
   skeleton::Skeleton,
   spinner::Spinner,
   tab::{Tab, TabBar},
@@ -32,15 +33,14 @@ use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler,
-  SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UserMenuConfig, UserMenuPage,
-  UserMenuState, UserMenuUser, WindowExt, file_icon_path_for_name_with_theme, h_resizable,
-  pr_status_tag, resizable_panel, user_menu,
+  SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UiIconName, UserMenuConfig,
+  UserMenuPage, UserMenuState, UserMenuUser, WindowExt, file_icon_path_for_name_with_theme,
+  h_resizable, pr_status_tag, resizable_panel, user_menu,
 };
 
 use crate::{
-  AuthCallbackTarget,
-  ShowCommandPalette, ShowFileSearch,
-  api::{ApiClient, GithubPullRequestDetails},
+  AuthCallbackTarget, ShowCommandPalette, ShowFileSearch,
+  api::{ApiClient, GithubPullRequestDetails, GithubPullRequestReviewComment},
   auth_state::{AuthState, AuthStateStore},
   github_page::GithubPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
@@ -366,6 +366,10 @@ pub struct GithubPrDetailsPage {
   diff_task: Option<Task<()>>,
   diff_loading: bool,
   diff_error: Option<SharedString>,
+  review_comments_task: Option<Task<()>>,
+  review_comments_loading: bool,
+  review_comments_error: Option<SharedString>,
+  review_comments: Vec<GithubPullRequestReviewComment>,
   file_loading: bool,
   file_error: Option<SharedString>,
   tree_state: Entity<TreeState>,
@@ -428,6 +432,10 @@ impl GithubPrDetailsPage {
       diff_task: None,
       diff_loading: false,
       diff_error: None,
+      review_comments_task: None,
+      review_comments_loading: false,
+      review_comments_error: None,
+      review_comments: Vec::new(),
       file_loading: false,
       file_error: None,
       tree_state,
@@ -508,6 +516,7 @@ impl GithubPrDetailsPage {
       self.clear_diff_editor(cx);
     }
 
+    self.sync_review_comments(cx);
     cx.notify();
   }
 
@@ -594,6 +603,76 @@ impl GithubPrDetailsPage {
       .unwrap_or(false)
   }
 
+  fn review_comments_for_selected_file(&self) -> Vec<ReviewComment> {
+    let Some(file) = self.selected_file.as_ref() else {
+      return Vec::new();
+    };
+
+    self
+      .review_comments
+      .iter()
+      .filter(|comment| comment.path == file.path)
+      .filter_map(|comment| {
+        let line = comment.line.or(comment.start_line).and_then(|value| {
+          if value > 0 {
+            Some(value as usize)
+          } else {
+            None
+          }
+        })?;
+        let side = match comment.side.as_deref().or(comment.start_side.as_deref()) {
+          Some("LEFT") => ReviewCommentSide::Left,
+          _ => ReviewCommentSide::Right,
+        };
+
+        let side_label = comment
+          .side
+          .as_deref()
+          .or(comment.start_side.as_deref())
+          .unwrap_or("");
+        let line_label = {
+          let line_label = if let Some(start) = comment.start_line
+            && let Some(end) = comment.line
+            && start != end
+          {
+            Some(
+              format!("L{}-{} {}", start, end, side_label)
+                .trim()
+                .to_string(),
+            )
+          } else {
+            comment
+              .line
+              .map(|value| format!("L{} {}", value, side_label).trim().to_string())
+          };
+          line_label.map(|label| Arc::from(label.as_str()))
+        };
+
+        Some(ReviewComment {
+          id: comment.id,
+          line: line.saturating_sub(1),
+          side,
+          author: Arc::from(comment.user.login.as_str()),
+          avatar_url: comment
+            .user
+            .avatar_url
+            .as_deref()
+            .map(|value| Arc::from(value)),
+          line_label,
+          body: Arc::from(comment.body.as_str()),
+          created_at: Arc::from(format_datetime(&comment.created_at).to_string()),
+        })
+      })
+      .collect()
+  }
+
+  fn sync_review_comments(&mut self, cx: &mut Context<Self>) {
+    let comments = self.review_comments_for_selected_file();
+    self
+      .diff_editor
+      .update(cx, |editor, cx| editor.set_review_comments(comments, cx));
+  }
+
   fn effective_diff_view(&self) -> DiffViewMode {
     if self.show_markdown_preview
       && (self.selected_file_is_markdown() || self.selected_file_is_svg())
@@ -659,9 +738,10 @@ impl GithubPrDetailsPage {
     self.svg_preview_source = Some(svg_source.clone());
     let renderer = cx.svg_renderer();
     let svg_bytes = svg_source.as_ref().as_bytes().to_vec();
-    let background = cx.background_spawn(async move {
-      renderer.render_single_frame(svg_bytes.as_slice(), 1.0, true)
-    });
+    let background =
+      cx.background_spawn(
+        async move { renderer.render_single_frame(svg_bytes.as_slice(), 1.0, true) },
+      );
 
     let task = cx.spawn_in(window, async move |this, cx| {
       let result = background.await;
@@ -867,6 +947,9 @@ impl GithubPrDetailsPage {
     self.pull_request = None;
     self.diff_loading = true;
     self.diff_error = None;
+    self.review_comments_loading = true;
+    self.review_comments_error = None;
+    self.review_comments.clear();
     self.file_loading = false;
     self.file_error = None;
     self.tree_state.update(cx, |state, cx| {
@@ -879,6 +962,8 @@ impl GithubPrDetailsPage {
     self.set_selected_file(None, cx);
     self.diff_view = DiffViewMode::Inline;
     self.show_markdown_preview = false;
+    self.svg_preview = None;
+    self.svg_preview_source = None;
     self.diff_editor.update(cx, |editor, cx| {
       editor.document().update(cx, |doc, cx| {
         doc.replace_all("", cx);
@@ -905,6 +990,33 @@ impl GithubPrDetailsPage {
           Err(error) => {
             this.pull_request = None;
             this.error = Some(error.to_string().into());
+          }
+        }
+        cx.notify();
+      });
+    });
+
+    let comments_api = self.api.clone();
+    let comments_owner = owner.clone();
+    let comments_repo = repo.clone();
+    let comments_task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        comments_api.fetch_pull_request_review_comments(&comments_owner, &comments_repo, number)
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(comments) => {
+            this.review_comments = comments;
+            this.review_comments_loading = false;
+            this.review_comments_error = None;
+            this.sync_review_comments(cx);
+          }
+          Err(error) => {
+            this.review_comments_loading = false;
+            this.review_comments_error = Some(error.to_string().into());
+            this.sync_review_comments(cx);
           }
         }
         cx.notify();
@@ -947,6 +1059,7 @@ impl GithubPrDetailsPage {
     });
 
     self.details_task = Some(details_task);
+    self.review_comments_task = Some(comments_task);
     self.diff_task = Some(diff_task);
   }
 
@@ -1025,12 +1138,7 @@ impl GithubPrDetailsPage {
     };
 
     let left_area = if let Some(pr) = self.pull_request.as_ref() {
-      let status_tag = pr_status_tag(
-        &theme,
-        &pr.state,
-        pr.draft,
-        pr.merged_at.as_deref(),
-      );
+      let status_tag = pr_status_tag(&theme, &pr.state, pr.draft, pr.merged_at.as_deref());
 
       let title = div()
         .min_w_0()
@@ -1057,18 +1165,14 @@ impl GithubPrDetailsPage {
     } else {
       let title_skeleton = Skeleton::new().w(px(220.)).h_4().rounded_md();
       let meta_skeleton = Skeleton::new().w(px(110.)).h_4().rounded_md().secondary();
-      h_flex()
-        .items_center()
-        .gap_2()
-        .child(back_button())
-        .child(
-          div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .child(title_skeleton)
-            .child(meta_skeleton),
-        )
+      h_flex().items_center().gap_2().child(back_button()).child(
+        div()
+          .flex()
+          .items_center()
+          .gap_3()
+          .child(title_skeleton)
+          .child(meta_skeleton),
+      )
     };
 
     div()
@@ -1391,9 +1495,32 @@ impl GithubPrDetailsPage {
           ),
       );
 
-    let list = if count == 0 {
-      div()
+    let mut comment_counts = HashMap::new();
+    if !self.review_comments.is_empty() {
+      for comment in &self.review_comments {
+        *comment_counts.entry(comment.path.clone()).or_insert(0) += 1;
+      }
+    }
+
+    let list = if self.diff_loading {
+      v_flex()
         .flex_1()
+        .h_full()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(Spinner::new().small())
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading files..."),
+        )
+        .into_any_element()
+    } else if count == 0 {
+      v_flex()
+        .flex_1()
+        .h_full()
         .items_center()
         .justify_center()
         .text_sm()
@@ -1421,6 +1548,11 @@ impl GithubPrDetailsPage {
             let status_color = status
               .map(|status| status_color(status, &theme))
               .unwrap_or(theme.muted_foreground);
+            let comment_count = if is_folder {
+              0
+            } else {
+              comment_counts.get(item.id.as_ref()).copied().unwrap_or(0)
+            };
             let icon = if is_folder {
               if entry.is_expanded() {
                 Icon::new(IconName::FolderOpen)
@@ -1467,7 +1599,23 @@ impl GithubPrDetailsPage {
                       .overflow_hidden()
                       .text_ellipsis_start()
                       .child(item.label.clone()),
-                  ),
+                  )
+                  .when(comment_count > 0, |this| {
+                    this.child(
+                      h_flex()
+                        .items_center()
+                        .gap_1()
+                        .text_xs()
+                        .pr_2()
+                        .text_color(theme.muted_foreground)
+                        .child(
+                          Icon::new(UiIconName::MessageCircle)
+                            .size_3()
+                            .text_color(theme.muted_foreground),
+                        )
+                        .child(comment_count.to_string()),
+                    )
+                  }),
               );
 
             if !is_folder && this.file_lookup.contains_key(item.id.as_ref()) {
@@ -1706,16 +1854,19 @@ impl GithubPrDetailsPage {
 
       let view_for_focus = view.clone();
       window.on_next_frame(move |window, cx| {
-        let focus_handle = view_for_focus.read(cx).diff_editor.read(cx).focus_handle(cx);
+        let focus_handle = view_for_focus
+          .read(cx)
+          .diff_editor
+          .read(cx)
+          .focus_handle(cx);
         window.focus(&focus_handle, cx);
       });
 
       Ok(())
     });
 
-    let palette = cx.new(|cx| {
-      SearchFilePalette::new(window, cx, SearchFilePaletteConfig::new(entries, handler))
-    });
+    let palette = cx
+      .new(|cx| SearchFilePalette::new(window, cx, SearchFilePaletteConfig::new(entries, handler)));
     let palette_for_dialog = palette.clone();
 
     window.open_dialog(cx, move |dialog, _, _| {
@@ -1773,13 +1924,18 @@ impl GithubPrDetailsPage {
     let preview_active = self.show_markdown_preview && (is_markdown || is_svg);
 
     let editor_content: gpui::AnyElement = if self.diff_loading {
-      div()
+      v_flex()
         .flex_1()
         .items_center()
         .justify_center()
-        .text_sm()
-        .text_color(theme.muted_foreground)
-        .child("Loading diff...")
+        .gap_2()
+        .child(Spinner::new().small())
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading diff..."),
+        )
         .into_any_element()
     } else if self.file_loading {
       v_flex()
@@ -1796,7 +1952,7 @@ impl GithubPrDetailsPage {
         )
         .into_any_element()
     } else if self.file_error.is_some() {
-      div()
+      v_flex()
         .flex_1()
         .items_center()
         .justify_center()
@@ -1805,7 +1961,7 @@ impl GithubPrDetailsPage {
         .child(self.file_error.clone().unwrap_or_default())
         .into_any_element()
     } else if self.diff_error.is_some() {
-      div()
+      v_flex()
         .flex_1()
         .items_center()
         .justify_center()
@@ -1818,10 +1974,7 @@ impl GithubPrDetailsPage {
         let preview_panel = if is_svg {
           self.update_svg_preview(window, cx);
           let preview = match self.svg_preview.clone() {
-            Some(Ok(image)) => img(image)
-              .max_w_full()
-              .max_h_full()
-              .into_any_element(),
+            Some(Ok(image)) => img(image).max_w_full().max_h_full().into_any_element(),
             Some(Err(error)) => div()
               .text_sm()
               .text_color(theme.danger)
@@ -1934,7 +2087,7 @@ impl Render for GithubPrDetailsPage {
       .id("overview-tab")
       .flex_1()
       .min_h_0()
-      .overflow_y_scroll()
+      .overflow_y_scrollbar()
       .child(overview_inner)
       .into_any_element();
 
