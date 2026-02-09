@@ -9,6 +9,7 @@ pub enum UiIconName {
   GitMerge,
   ArrowUpFromLine,
   ArrowDownFromLine,
+  MessageCircle,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -20,6 +21,7 @@ impl IconNamed for UiIconName {
       UiIconName::GitMerge => "icons/git-merge.svg",
       UiIconName::ArrowUpFromLine => "icons/arrow-up-from-line.svg",
       UiIconName::ArrowDownFromLine => "icons/arrow-down-from-line.svg",
+      UiIconName::MessageCircle => "icons/message-circle.svg",
     }
     .into()
   }

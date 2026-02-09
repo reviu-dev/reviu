@@ -14,6 +14,10 @@ type CompareParams
 
 type PullRequestParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
+type PullRequestCommentsParams
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
+type PullRequestCommentsResponse
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data']
 type GetContentParams
   = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['parameters']
 
@@ -38,6 +42,33 @@ interface GithubPullRequest {
 interface GithubPullRequestDetailsAuthor {
   login: string
   avatarUrl: string | null
+}
+
+interface GithubPullRequestReviewCommentUser {
+  login: string
+  avatarUrl: string | null
+}
+
+interface GithubPullRequestReviewComment {
+  id: number
+  pullRequestReviewId: number | null
+  diffHunk: string
+  path: string
+  position: number | null
+  originalPosition: number | null
+  commitId: string
+  originalCommitId: string
+  inReplyToId: number | null
+  user: GithubPullRequestReviewCommentUser
+  body: string
+  createdAt: string
+  updatedAt: string
+  startLine: number | null
+  originalStartLine: number | null
+  startSide: string | null
+  line: number | null
+  originalLine: number | null
+  side: string | null
 }
 
 interface GithubPullRequestDetails {
@@ -249,6 +280,64 @@ githubRouter.get('/pr/:id', authMiddleware, async (ctx) => {
     }
 
     return ctx.json({ pullRequest }, 200)
+  }
+  catch (error) {
+    return ctx.json({ error: (error as Error).message }, 502)
+  }
+})
+
+githubRouter.get('/pr/:id/comments', authMiddleware, async (ctx) => {
+  const { org, repo } = ctx.req.query()
+  const pullNumber = Number(ctx.req.param('id'))
+
+  if (!org || !repo || Number.isNaN(pullNumber)) {
+    return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+  }
+
+  const user = ctx.get('user')!
+  const token = user.github.accessToken
+
+  try {
+    const params: PullRequestCommentsParams = {
+      owner: org,
+      repo,
+      pull_number: pullNumber,
+      per_page: 100,
+    }
+
+    const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
+      ...params,
+      headers: {
+        authorization: `Bearer ${token}`,
+      },
+    }) as { data: PullRequestCommentsResponse }
+
+    const comments: GithubPullRequestReviewComment[] = data.map((comment) => ({
+      id: comment.id,
+      pullRequestReviewId: comment.pull_request_review_id ?? null,
+      diffHunk: comment.diff_hunk ?? '',
+      path: comment.path,
+      position: comment.position ?? null,
+      originalPosition: comment.original_position ?? null,
+      commitId: comment.commit_id ?? '',
+      originalCommitId: comment.original_commit_id ?? '',
+      inReplyToId: comment.in_reply_to_id ?? null,
+      user: {
+        login: comment.user?.login ?? 'unknown',
+        avatarUrl: comment.user?.avatar_url ?? null,
+      },
+      body: comment.body ?? '',
+      createdAt: comment.created_at,
+      updatedAt: comment.updated_at,
+      startLine: comment.start_line ?? null,
+      originalStartLine: comment.original_start_line ?? null,
+      startSide: comment.start_side ?? null,
+      line: comment.line ?? null,
+      originalLine: comment.original_line ?? null,
+      side: comment.side ?? null,
+    }))
+
+    return ctx.json({ comments }, 200)
   }
   catch (error) {
     return ctx.json({ error: (error as Error).message }, 502)

@@ -20,7 +20,10 @@ use crate::{
   editor::{
     DEFAULT_MAX_LINE_WIDTH, DisplayCursor, Editor, GroupOverlay, SCROLL_PADDING, ScrollAxis,
   },
-  projection::{ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection},
+  projection::{
+    ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection, ReviewCommentBackground,
+    ReviewCommentSide,
+  },
 };
 use gpui_component::ActiveTheme as _;
 use syntax::HighlightSpan;
@@ -669,10 +672,18 @@ impl EditorElement {
           change: Some(ChangeKind::Added),
           ..
         } => LineVisibility::Blank,
+        DisplayLine::ReviewComment {
+          side: ReviewCommentSide::Right,
+          ..
+        } => LineVisibility::Blank,
         _ => LineVisibility::Text,
       },
       DiffElementView::SplitRight => match display_line {
         DisplayLine::Removed { .. } => LineVisibility::Blank,
+        DisplayLine::ReviewComment {
+          side: ReviewCommentSide::Left,
+          ..
+        } => LineVisibility::Blank,
         _ => LineVisibility::Text,
       },
     }
@@ -926,6 +937,13 @@ impl Element for EditorElement {
             false,
             None,
           ),
+          DisplayLine::ReviewComment { .. } => (
+            String::new(),
+            None,
+            cx.theme().muted_foreground,
+            false,
+            None,
+          ),
         };
 
         let runs = if allow_highlights {
@@ -1124,6 +1142,24 @@ impl Element for EditorElement {
           }),
           DiffElementView::Inline => None,
         },
+        DisplayLine::ReviewComment {
+          background: Some(ReviewCommentBackground::Added),
+          secondary,
+          ..
+        } if !matches!(self.diff_view, DiffElementView::SplitLeft) => Some(if *secondary {
+          added_staged_bg
+        } else {
+          added_bg
+        }),
+        DisplayLine::ReviewComment {
+          background: Some(ReviewCommentBackground::Removed),
+          secondary,
+          ..
+        } if !matches!(self.diff_view, DiffElementView::SplitRight) => Some(if *secondary {
+          removed_staged_bg
+        } else {
+          removed_bg
+        }),
         _ => None,
       };
 
@@ -1173,6 +1209,7 @@ impl Element for EditorElement {
         DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
         DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
         DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
+        DisplayLine::ReviewComment { group_id, .. } => group_id.as_ref(),
         _ => None,
       };
 
@@ -1186,6 +1223,7 @@ impl Element for EditorElement {
               DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
               DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
               DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
+              DisplayLine::ReviewComment { group_id, .. } => group_id.as_ref(),
               _ => None,
             });
           let next_group = projection
@@ -1196,6 +1234,7 @@ impl Element for EditorElement {
               DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
               DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
               DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
+              DisplayLine::ReviewComment { group_id, .. } => group_id.as_ref(),
               _ => None,
             });
 

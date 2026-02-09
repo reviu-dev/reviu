@@ -17,9 +17,13 @@ use gpui::{
   UTF16Selection, Window, black, div, point, prelude::*, px, white,
 };
 use gpui_component::{
-  ActiveTheme as _, Sizable,
+  ActiveTheme as _, IconName, Sizable,
+  avatar::Avatar,
   button::{Button, ButtonVariants as _},
+  h_flex,
   resizable::{h_resizable, resizable_panel},
+  text::TextView,
+  v_flex,
 };
 use smol::unblock;
 use ui::{Theme, UiIconName};
@@ -33,6 +37,7 @@ use crate::{
   gutter_element::GutterElement,
   projection::{
     ChangeKind, DisplayLine, GapId, GapReveal, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
+    ReviewComment, ReviewCommentSide,
   },
 };
 
@@ -116,6 +121,8 @@ pub struct Editor {
   pub git_store: Option<GitStore>,
   git_state: BufferGitState,
   pub diffs: Option<DiffSet>,
+  review_comments: Vec<ReviewComment>,
+  collapsed_review_comments: HashSet<u64>,
   pub diff_task: Option<Task<()>>,
   pub bases_task: Option<Task<()>>,
   pub poll_task: Option<Task<()>>,
@@ -147,6 +154,19 @@ pub struct GroupOverlay {
   pub state: HunkState,
   pub display_line: usize,
   pub y: Pixels,
+}
+
+struct ReviewCommentLayout {
+  id: u64,
+  line: usize,
+  top: Pixels,
+  height: Pixels,
+  author: Arc<str>,
+  avatar_url: Option<Arc<str>>,
+  line_label: Option<Arc<str>>,
+  body: Arc<str>,
+  created_at: Arc<str>,
+  collapsed: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -328,6 +348,8 @@ impl Editor {
       git_store,
       git_state: BufferGitState::default(),
       diffs: None,
+      review_comments: Vec::new(),
+      collapsed_review_comments: HashSet::new(),
       diff_task: None,
       bases_task: None,
       poll_task: None,
@@ -378,8 +400,8 @@ impl Editor {
   pub fn set_diff_view_mode(&mut self, mode: DiffViewMode, cx: &mut Context<Self>) {
     if self.diff_view_mode != mode {
       self.diff_view_mode = mode;
-      if let Some(diffs) = self.diffs.clone() {
-        self.apply_diffs(diffs, cx);
+      if self.diffs.is_some() {
+        self.rebuild_projection(cx);
       } else {
         self.virtual_line_layouts.clear();
       }
@@ -408,10 +430,231 @@ impl Editor {
       self.apply_diffs(diffs, cx);
     } else {
       self.diffs = None;
+      self.review_comments.clear();
+      self.collapsed_review_comments.clear();
       self.set_projection(None);
       self.virtual_line_layouts.clear();
       cx.notify();
     }
+  }
+
+  pub fn set_review_comments(&mut self, comments: Vec<ReviewComment>, cx: &mut Context<Self>) {
+    self.review_comments = comments;
+    self
+      .collapsed_review_comments
+      .retain(|id| self.review_comments.iter().any(|comment| comment.id == *id));
+
+    if self.diffs.is_some() {
+      self.rebuild_projection(cx);
+    }
+  }
+
+  pub fn toggle_review_comment(&mut self, id: u64, cx: &mut Context<Self>) {
+    if !self.collapsed_review_comments.insert(id) {
+      self.collapsed_review_comments.remove(&id);
+    }
+
+    if self.diffs.is_some() {
+      self.rebuild_projection(cx);
+    }
+  }
+
+  fn review_comment_layouts(
+    &self,
+    side_filter: Option<ReviewCommentSide>,
+    line_height: Pixels,
+  ) -> Vec<ReviewCommentLayout> {
+    let Some(projection) = self.projection.as_ref() else {
+      return Vec::new();
+    };
+    if self.review_comments.is_empty() {
+      return Vec::new();
+    }
+
+    let total_lines = projection.lines.len();
+    let viewport = self.viewport_range(line_height, total_lines);
+
+    let mut first_line: HashMap<u64, usize> = HashMap::new();
+    let mut line_counts: HashMap<u64, usize> = HashMap::new();
+
+    for (idx, line) in projection.lines.iter().enumerate() {
+      let DisplayLine::ReviewComment { id, side, .. } = line else {
+        continue;
+      };
+      if let Some(filter) = side_filter {
+        if *side != filter {
+          continue;
+        }
+      }
+      let entry = first_line.entry(*id).or_insert(idx);
+      if idx < *entry {
+        *entry = idx;
+      }
+      *line_counts.entry(*id).or_insert(0) += 1;
+    }
+
+    if first_line.is_empty() {
+      return Vec::new();
+    }
+
+    let mut layouts = Vec::new();
+    for comment in &self.review_comments {
+      if let Some(filter) = side_filter {
+        if comment.side != filter {
+          continue;
+        }
+      }
+
+      let Some(first) = first_line.get(&comment.id).copied() else {
+        continue;
+      };
+      let count = line_counts.get(&comment.id).copied().unwrap_or(0);
+      if count == 0 {
+        continue;
+      }
+
+      let end = first.saturating_add(count);
+      if end < viewport.start || first > viewport.end {
+        continue;
+      }
+
+      let top = line_height * (first as f32 - viewport.start as f32);
+      let height = line_height * count as f32;
+
+      layouts.push(ReviewCommentLayout {
+        id: comment.id,
+        line: comment.line,
+        top,
+        height,
+        author: comment.author.clone(),
+        avatar_url: comment.avatar_url.clone(),
+        line_label: comment.line_label.clone(),
+        body: comment.body.clone(),
+        created_at: comment.created_at.clone(),
+        collapsed: self.collapsed_review_comments.contains(&comment.id),
+      });
+    }
+
+    layouts
+  }
+
+  fn render_review_comments_overlay(
+    &self,
+    editor_entity: Entity<Editor>,
+    side_filter: Option<ReviewCommentSide>,
+    line_height: Pixels,
+    cx: &mut Context<Self>,
+  ) -> Option<gpui::AnyElement> {
+    let layouts = self.review_comment_layouts(side_filter, line_height);
+    if layouts.is_empty() {
+      return None;
+    }
+
+    let theme = cx.theme().clone();
+    let mut overlay = div()
+      .absolute()
+      .top(px(0.0))
+      .left(px(0.0))
+      .right(px(0.0))
+      .bottom(px(0.0));
+
+    for layout in layouts {
+      let id = layout.id;
+      let editor = editor_entity.clone();
+      let is_collapsed = layout.collapsed;
+      let toggle_icon = if is_collapsed {
+        IconName::ChevronRight
+      } else {
+        IconName::ChevronDown
+      };
+      let toggle_button = Button::new(format!("review-comment-toggle-{}", id))
+        .icon(toggle_icon)
+        .ghost()
+        .xsmall()
+        .compact()
+        .on_click(move |_, _, cx| {
+          editor.update(cx, |editor, cx| editor.toggle_review_comment(id, cx));
+        });
+
+      let line_label = layout
+        .line_label
+        .clone()
+        .or_else(|| Some(Arc::from(format!("L{}", layout.line + 1))));
+
+      let meta = h_flex()
+        .items_center()
+        .gap_2()
+        .child(
+          Avatar::new()
+            .name(layout.author.to_string())
+            .when_some(layout.avatar_url.clone(), |this, url| {
+              this.src(url.as_ref().to_string())
+            })
+            .small(),
+        )
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.foreground)
+            .child(layout.author.to_string()),
+        )
+        .when_some(line_label, |this, label| {
+          this.child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(label.as_ref().to_string()),
+          )
+        })
+        .child(
+          div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(layout.created_at.as_ref().to_string()),
+        );
+
+      let header = h_flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .child(meta)
+        .child(toggle_button);
+
+      let body = TextView::markdown(
+        format!("pr-comment-inline-{}", layout.id),
+        layout.body.as_ref().to_string(),
+      )
+      .selectable(true);
+
+      let card = div()
+        .size_full()
+        .bg(theme.sidebar)
+        .border_1()
+        .border_color(theme.border)
+        .rounded_md()
+        .overflow_hidden()
+        .block_mouse_except_scroll()
+        .child(
+          v_flex()
+            .gap_1()
+            .p_2()
+            .child(header)
+            .when(!is_collapsed, |this| this.child(body)),
+        );
+
+      overlay = overlay.child(
+        div()
+          .absolute()
+          .top(layout.top)
+          .left(px(0.0))
+          .right(px(0.0))
+          .h(layout.height)
+          .pr_2()
+          .child(card),
+      );
+    }
+
+    Some(overlay.into_any_element())
   }
 
   pub fn refresh_git_state(&mut self, cx: &mut Context<Self>) {
@@ -587,7 +830,19 @@ impl Editor {
   }
 
   fn apply_diffs(&mut self, diffs: DiffSet, cx: &mut Context<Self>) {
+    self.diffs = Some(diffs);
+    self.rebuild_projection(cx);
+  }
+
+  fn rebuild_projection(&mut self, cx: &mut Context<Self>) {
     let doc_line_count = self.document.read(cx).len_lines();
+    let Some(diffs) = self.diffs.as_ref() else {
+      self.set_projection(None);
+      self.virtual_line_layouts.clear();
+      cx.notify();
+      return;
+    };
+
     let projection = Projection::from_diffs(
       doc_line_count,
       &diffs.uncommitted,
@@ -595,8 +850,9 @@ impl Editor {
       &diffs.staged,
       &self.expanded_gaps,
       matches!(self.diff_view_mode, DiffViewMode::Split),
-    );
-    self.diffs = Some(diffs);
+    )
+    .with_review_comments(&self.review_comments, &self.collapsed_review_comments);
+
     self.set_projection(Some(projection));
 
     let total_lines = self.display_line_count(doc_line_count);
@@ -1439,6 +1695,7 @@ impl Editor {
         .map(|cow| cow.len())
         .unwrap_or(0),
       Some(DisplayLine::Removed { text, .. }) => text.len(),
+      Some(DisplayLine::ReviewComment { .. }) => 0,
       Some(DisplayLine::NoNewline { .. }) => NO_NEWLINE_MARKER_TEXT.len(),
       _ => 0,
     }
@@ -2205,6 +2462,16 @@ impl Editor {
 
     if let Some(display_line) = position_map.display_line_for_position(event.position) {
       if let Some(projection) = &position_map.projection {
+        if let Some(DisplayLine::ReviewComment { id, is_header, .. }) =
+          projection.lines.get(display_line)
+        {
+          if *is_header {
+            self.toggle_review_comment(*id, cx);
+          }
+          self.is_selecting = false;
+          return;
+        }
+
         if matches!(
           projection.lines.get(display_line),
           Some(DisplayLine::Gap { .. })
@@ -2668,6 +2935,19 @@ impl Render for Editor {
       };
 
     let content = if self.diff_view_mode == DiffViewMode::Split {
+      let left_overlay = self.render_review_comments_overlay(
+        editor_entity.clone(),
+        Some(ReviewCommentSide::Left),
+        line_height,
+        cx,
+      );
+      let right_overlay = self.render_review_comments_overlay(
+        editor_entity.clone(),
+        Some(ReviewCommentSide::Right),
+        line_height,
+        cx,
+      );
+
       let left_panel = div()
         .size_full()
         .flex()
@@ -2689,7 +2969,9 @@ impl Render for Editor {
                 .min_w(self.max_line_width + px(EXTRA_EDITOR_WIDTH))
                 .h_full()
                 .relative()
-                .child(EditorElement::split_left(editor_entity.clone())),
+                .overflow_hidden()
+                .child(EditorElement::split_left(editor_entity.clone()))
+                .when_some(left_overlay, |this, overlay| this.child(overlay)),
             ),
         );
 
@@ -2714,7 +2996,9 @@ impl Render for Editor {
                 .min_w(self.max_line_width + px(EXTRA_EDITOR_WIDTH))
                 .h_full()
                 .relative()
-                .child(EditorElement::split_right(editor_entity)),
+                .overflow_hidden()
+                .child(EditorElement::split_right(editor_entity.clone()))
+                .when_some(right_overlay, |this, overlay| this.child(overlay)),
             ),
         );
 
@@ -2724,6 +3008,8 @@ impl Render for Editor {
           .child(resizable_panel().child(right_panel)),
       )
     } else {
+      let inline_overlay =
+        self.render_review_comments_overlay(editor_entity.clone(), None, line_height, cx);
       div()
         .flex_1()
         .min_h(px(0.0))
@@ -2746,7 +3032,9 @@ impl Render for Editor {
                 .min_w(self.max_line_width + px(EXTRA_EDITOR_WIDTH))
                 .h_full()
                 .relative()
-                .child(EditorElement::new(editor_entity)),
+                .overflow_hidden()
+                .child(EditorElement::new(editor_entity))
+                .when_some(inline_overlay, |this, overlay| this.child(overlay)),
             ),
         )
     };
@@ -2827,6 +3115,7 @@ pub mod tests {
       let editor = cx.new(|cx| {
         let doc = cx.new(|cx| Document::new(text, None, cx));
         let cursor_blink = cx.new(CursorBlink::new);
+
         Editor {
           document: doc,
           focus_handle: cx.focus_handle(),

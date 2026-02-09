@@ -11,7 +11,9 @@ use git::DiffLineKind;
 
 use crate::{
   editor::{Editor, ScrollAxis},
-  projection::{ChangeKind, DisplayLine, HunkState},
+  projection::{
+    ChangeKind, DisplayLine, HunkState, ReviewCommentBackground, ReviewCommentSide,
+  },
 };
 
 const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
@@ -233,9 +235,24 @@ impl Element for GutterElement {
               change: Some(ChangeKind::Added),
               ..
             }
+          ) || matches!(
+            line,
+            DisplayLine::ReviewComment {
+              side: ReviewCommentSide::Right,
+              ..
+            }
           )
         }
-        GutterView::SplitRight => matches!(line, DisplayLine::Removed { .. }),
+        GutterView::SplitRight => {
+          matches!(line, DisplayLine::Removed { .. })
+            || matches!(
+              line,
+              DisplayLine::ReviewComment {
+                side: ReviewCommentSide::Left,
+                ..
+              }
+            )
+        }
         GutterView::Inline => false,
       };
 
@@ -249,6 +266,7 @@ impl Element for GutterElement {
           DisplayLine::Modified { group_id, .. } => group_id.clone(),
           DisplayLine::Removed { group_id, .. } => group_id.clone(),
           DisplayLine::NoNewline { group_id, .. } => group_id.clone(),
+          DisplayLine::ReviewComment { group_id, .. } => group_id.clone(),
           _ => None,
         }
       };
@@ -333,6 +351,24 @@ impl Element for GutterElement {
               }),
               GutterView::Inline => None,
             },
+            Some(DisplayLine::ReviewComment {
+              background: Some(ReviewCommentBackground::Added),
+              secondary,
+              ..
+            }) => Some(if *secondary {
+              added_staged_bg
+            } else {
+              added_bg
+            }),
+            Some(DisplayLine::ReviewComment {
+              background: Some(ReviewCommentBackground::Removed),
+              secondary,
+              ..
+            }) => Some(if *secondary {
+              removed_staged_bg
+            } else {
+              removed_bg
+            }),
             _ => None,
           }
         };

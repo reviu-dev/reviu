@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Range, sync::Arc};
+use std::{collections::{HashMap, HashSet}, ops::Range, sync::Arc};
 
 use blake3::Hasher;
 use git::{DiffHunk, DiffLine, DiffLineKind, FileDiff};
@@ -6,6 +6,8 @@ use git::{DiffHunk, DiffLine, DiffLineKind, FileDiff};
 const GAP_THRESHOLD_LINES: usize = 6;
 pub const GAP_MARKER_TEXT: &str = "…";
 pub const NO_NEWLINE_MARKER_TEXT: &str = "\\ No newline at end of file";
+const REVIEW_COMMENT_HEADER_LINES: usize = 1;
+const REVIEW_COMMENT_PADDING_LINES: usize = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HunkState {
@@ -17,6 +19,30 @@ pub enum HunkState {
 pub enum ChangeKind {
   Context,
   Added,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReviewCommentSide {
+  Left,
+  Right,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReviewCommentBackground {
+  Added,
+  Removed,
+}
+
+#[derive(Clone, Debug)]
+pub struct ReviewComment {
+  pub id: u64,
+  pub line: usize,
+  pub side: ReviewCommentSide,
+  pub author: Arc<str>,
+  pub avatar_url: Option<Arc<str>>,
+  pub line_label: Option<Arc<str>>,
+  pub body: Arc<str>,
+  pub created_at: Arc<str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -65,6 +91,15 @@ pub enum DisplayLine {
     hunk: Option<HunkState>,
     group_id: Option<Arc<str>>,
     secondary: bool,
+  },
+  ReviewComment {
+    id: u64,
+    side: ReviewCommentSide,
+    group_id: Option<Arc<str>>,
+    background: Option<ReviewCommentBackground>,
+    secondary: bool,
+    text: Arc<str>,
+    is_header: bool,
   },
 }
 
@@ -465,6 +500,199 @@ impl Projection {
       groups,
     }
   }
+
+  pub fn with_review_comments(
+    self,
+    comments: &[ReviewComment],
+    collapsed: &HashSet<u64>,
+  ) -> Self {
+    if comments.is_empty() {
+      return self;
+    }
+
+    let doc_line_count = self.doc_to_display.len();
+    let lines = insert_review_comments(self.lines, comments, collapsed);
+    Projection::from_lines(doc_line_count, lines, self.groups, self.start_gap, self.end_gap)
+  }
+}
+
+fn insert_review_comments(
+  lines: Vec<DisplayLine>,
+  comments: &[ReviewComment],
+  collapsed: &HashSet<u64>,
+) -> Vec<DisplayLine> {
+  if comments.is_empty() {
+    return lines;
+  }
+
+  let mut new_line_to_display: HashMap<usize, usize> = HashMap::new();
+  let mut old_line_to_display: HashMap<usize, usize> = HashMap::new();
+
+  for (idx, line) in lines.iter().enumerate() {
+    match line {
+      DisplayLine::Doc { doc_line, old_line, .. } => {
+        new_line_to_display.entry(*doc_line).or_insert(idx);
+        if let Some(old_line) = old_line {
+          old_line_to_display.entry(*old_line).or_insert(idx);
+        }
+      }
+      DisplayLine::Modified { doc_line, old_line, .. } => {
+        new_line_to_display.entry(*doc_line).or_insert(idx);
+        old_line_to_display.entry(*old_line).or_insert(idx);
+      }
+      DisplayLine::Removed { old_line, .. } => {
+        old_line_to_display.entry(*old_line).or_insert(idx);
+      }
+      _ => {}
+    }
+  }
+
+  let mut comments_by_display: HashMap<usize, Vec<&ReviewComment>> = HashMap::new();
+  for comment in comments {
+    let target = match comment.side {
+      ReviewCommentSide::Left => old_line_to_display.get(&comment.line),
+      ReviewCommentSide::Right => new_line_to_display.get(&comment.line),
+    };
+    if let Some(&display_idx) = target {
+      comments_by_display
+        .entry(display_idx)
+        .or_default()
+        .push(comment);
+    }
+  }
+
+  if comments_by_display.is_empty() {
+    return lines;
+  }
+
+  let mut result = Vec::with_capacity(lines.len() + comments.len().saturating_mul(2));
+  for (idx, line) in lines.into_iter().enumerate() {
+    result.push(line);
+
+    let Some(entries) = comments_by_display.get(&idx) else {
+      continue;
+    };
+
+    let (group_id, secondary, background) = match result.last() {
+      Some(DisplayLine::Doc {
+        change,
+        group_id,
+        secondary,
+        ..
+      }) => (
+        group_id.clone(),
+        *secondary,
+        match change {
+          Some(ChangeKind::Added) => Some(ReviewCommentBackground::Added),
+          _ => None,
+        },
+      ),
+      Some(DisplayLine::Modified { group_id, secondary, .. }) => (
+        group_id.clone(),
+        *secondary,
+        Some(ReviewCommentBackground::Added),
+      ),
+      Some(DisplayLine::Removed { group_id, secondary, .. }) => (
+        group_id.clone(),
+        *secondary,
+        Some(ReviewCommentBackground::Removed),
+      ),
+      Some(DisplayLine::NoNewline { group_id, secondary, .. }) => (group_id.clone(), *secondary, None),
+      _ => (None, false, None),
+    };
+
+    for comment in entries {
+      let is_collapsed = collapsed.contains(&comment.id);
+      let background = match (comment.side, background) {
+        (ReviewCommentSide::Left, Some(ReviewCommentBackground::Added)) => {
+          Some(ReviewCommentBackground::Removed)
+        }
+        (ReviewCommentSide::Right, Some(ReviewCommentBackground::Removed)) => {
+          Some(ReviewCommentBackground::Added)
+        }
+        (_, value) => value,
+      };
+
+      for _ in 0..REVIEW_COMMENT_PADDING_LINES / 2 {
+        result.push(DisplayLine::ReviewComment {
+          id: comment.id,
+          side: comment.side,
+          group_id: group_id.clone(),
+          background,
+          secondary,
+          text: Arc::from(""),
+          is_header: false,
+        });
+      }
+      let line_label = comment
+        .line_label
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+      let header = if line_label.is_empty() {
+        format!("{} {}", comment.author, comment.created_at)
+      } else {
+        format!("{} {} {}", comment.author, line_label, comment.created_at)
+      };
+
+      for line_idx in 0..REVIEW_COMMENT_HEADER_LINES {
+        result.push(DisplayLine::ReviewComment {
+          id: comment.id,
+          side: comment.side,
+          group_id: group_id.clone(),
+          background,
+          secondary,
+          text: Arc::from(if line_idx == 0 { header.as_str() } else { "" }),
+          is_header: line_idx == 0,
+        });
+      }
+
+      if is_collapsed {
+        for _ in 0..REVIEW_COMMENT_PADDING_LINES - (REVIEW_COMMENT_PADDING_LINES / 2) {
+          result.push(DisplayLine::ReviewComment {
+            id: comment.id,
+            side: comment.side,
+            group_id: group_id.clone(),
+            background,
+            secondary,
+            text: Arc::from(""),
+            is_header: false,
+          });
+        }
+        continue;
+      }
+
+      let body_lines: Vec<&str> = comment.body.lines().collect();
+      let body_count = body_lines.len().max(1);
+      for idx in 0..body_count {
+        let text = body_lines.get(idx).copied().unwrap_or("");
+        result.push(DisplayLine::ReviewComment {
+          id: comment.id,
+          side: comment.side,
+          group_id: group_id.clone(),
+          background,
+          secondary,
+          text: Arc::from(text),
+          is_header: false,
+        });
+      }
+
+      for _ in 0..REVIEW_COMMENT_PADDING_LINES - (REVIEW_COMMENT_PADDING_LINES / 2) {
+        result.push(DisplayLine::ReviewComment {
+          id: comment.id,
+          side: comment.side,
+          group_id: group_id.clone(),
+          background,
+          secondary,
+          text: Arc::from(""),
+          is_header: false,
+        });
+      }
+    }
+  }
+
+  result
 }
 
 struct HunkDisplay {
