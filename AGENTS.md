@@ -9,7 +9,7 @@ For icons use gpui-components icons
 
 Gpui tips:
 
-- For on_click div need and id
+- For on_click and overflow div need and id
 
 Gpui examples:
 
