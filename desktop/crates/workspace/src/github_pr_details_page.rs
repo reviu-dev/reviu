@@ -1195,23 +1195,6 @@ impl GithubPrDetailsPage {
       .child(tab_bar)
   }
 
-  fn render_loading(&self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-    v_flex()
-      .flex_1()
-      .items_center()
-      .justify_center()
-      .mt_12()
-      .gap_2()
-      .child(Spinner::new().small())
-      .child(
-        div()
-          .text_sm()
-          .text_color(theme.muted_foreground)
-          .child("Loading pull request details..."),
-      )
-  }
-
   fn render_details(
     &self,
     pr: &GithubPullRequestDetails,
@@ -1516,6 +1499,16 @@ impl GithubPrDetailsPage {
             .text_color(theme.muted_foreground)
             .child("Loading files..."),
         )
+        .into_any_element()
+    } else if self.diff_error.is_some() {
+      v_flex()
+        .flex_1()
+        .h_full()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(theme.status_red())
+        .child(self.diff_error.clone().unwrap_or_default())
         .into_any_element()
     } else if count == 0 {
       v_flex()
@@ -1957,7 +1950,7 @@ impl GithubPrDetailsPage {
         .items_center()
         .justify_center()
         .text_sm()
-        .text_color(theme.danger)
+        .text_color(theme.status_red())
         .child(self.file_error.clone().unwrap_or_default())
         .into_any_element()
     } else if self.diff_error.is_some() {
@@ -1966,7 +1959,7 @@ impl GithubPrDetailsPage {
         .items_center()
         .justify_center()
         .text_sm()
-        .text_color(theme.danger)
+        .text_color(theme.status_red())
         .child(self.diff_error.clone().unwrap_or_default())
         .into_any_element()
     } else if self.selected_file.is_some() {
@@ -1977,7 +1970,7 @@ impl GithubPrDetailsPage {
             Some(Ok(image)) => img(image).max_w_full().max_h_full().into_any_element(),
             Some(Err(error)) => div()
               .text_sm()
-              .text_color(theme.danger)
+              .text_color(theme.status_red())
               .child(error)
               .into_any_element(),
             None => div()
@@ -2071,16 +2064,30 @@ impl Render for GithubPrDetailsPage {
     let overview_inner: gpui::AnyElement = if let Some(pr) = self.pull_request.as_ref() {
       self.render_details(pr, cx).into_any_element()
     } else if self.error.is_some() {
-      div()
+      v_flex()
         .flex_1()
+        .h_full()
         .items_center()
         .justify_center()
         .text_sm()
-        .text_color(theme.danger)
+        .text_color(theme.status_red())
         .child(self.error.clone().unwrap_or_default())
         .into_any_element()
     } else {
-      self.render_loading(cx).into_any_element()
+      v_flex()
+        .flex_1()
+        .h_full()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(Spinner::new().small())
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading pull request details..."),
+        )
+        .into_any_element()
     };
 
     let overview_content = div()

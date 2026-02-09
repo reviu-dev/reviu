@@ -42,10 +42,10 @@ use crate::{
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteHandler, CommandPalettePage,
-  ConfirmDialog,
-  FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState, SearchFileEntry, SearchFileHandler,
-  SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UserMenuConfig, UserMenuPage,
-  UserMenuState, UserMenuUser, WindowExt, file_icon_path_for_path_with_theme, user_menu,
+  ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState, SearchFileEntry,
+  SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UserMenuConfig,
+  UserMenuPage, UserMenuState, UserMenuUser, WindowExt, file_icon_path_for_path_with_theme,
+  user_menu,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 300.0;
@@ -447,9 +447,7 @@ impl GitPage {
   }
 
   fn effective_diff_view_for_path(&self, path: &Path) -> DiffViewMode {
-    if self.show_markdown_preview
-      && (Self::is_markdown_path(path) || Self::is_svg_path(path))
-    {
+    if self.show_markdown_preview && (Self::is_markdown_path(path) || Self::is_svg_path(path)) {
       return DiffViewMode::Inline;
     }
 
@@ -1472,9 +1470,10 @@ impl GitPage {
     self.svg_preview_source = Some(svg_source.clone());
     let renderer = cx.svg_renderer();
     let svg_bytes = svg_source.as_ref().as_bytes().to_vec();
-    let background = cx.background_spawn(async move {
-      renderer.render_single_frame(svg_bytes.as_slice(), 1.0, true)
-    });
+    let background =
+      cx.background_spawn(
+        async move { renderer.render_single_frame(svg_bytes.as_slice(), 1.0, true) },
+      );
 
     let task = cx.spawn_in(window, async move |this, cx| {
       let result = background.await;
@@ -2540,13 +2539,10 @@ impl GitPage {
         let preview_content = if self.selected_file_is_svg() {
           self.update_svg_preview(window, cx);
           let preview = match self.svg_preview.clone() {
-            Some(Ok(image)) => img(image)
-              .max_w_full()
-              .max_h_full()
-              .into_any_element(),
+            Some(Ok(image)) => img(image).max_w_full().max_h_full().into_any_element(),
             Some(Err(error)) => div()
               .text_sm()
-              .text_color(theme.danger)
+              .text_color(theme.status_red())
               .child(error)
               .into_any_element(),
             None => div()
