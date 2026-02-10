@@ -293,9 +293,9 @@ pub struct GithubPrDetailsPage {
   focus_handle: FocusHandle,
   api: ApiClient,
   details_task: Option<Task<()>>,
-  diff_task: Option<Task<()>>,
-  diff_loading: bool,
-  diff_error: Option<SharedString>,
+  files_task: Option<Task<()>>,
+  files_loading: bool,
+  files_error: Option<SharedString>,
   review_comments_task: Option<Task<()>>,
   review_comments_loading: bool,
   review_comments_error: Option<SharedString>,
@@ -359,9 +359,9 @@ impl GithubPrDetailsPage {
       focus_handle: cx.focus_handle(),
       api: WorkspaceApi::global(cx).api.clone(),
       details_task: None,
-      diff_task: None,
-      diff_loading: false,
-      diff_error: None,
+      files_task: None,
+      files_loading: false,
+      files_error: None,
       review_comments_task: None,
       review_comments_loading: false,
       review_comments_error: None,
@@ -875,8 +875,8 @@ impl GithubPrDetailsPage {
     self.active_tab_ix = 0;
     self.error = None;
     self.pull_request = None;
-    self.diff_loading = true;
-    self.diff_error = None;
+    self.files_loading = true;
+    self.files_error = None;
     self.review_comments_loading = true;
     self.review_comments_error = None;
     self.review_comments.clear();
@@ -929,7 +929,7 @@ impl GithubPrDetailsPage {
     let comments_api = self.api.clone();
     let comments_owner = owner.clone();
     let comments_repo = repo.clone();
-    let comments_task = cx.spawn(async move |this, cx| {
+    let review_comments_task = cx.spawn(async move |this, cx| {
       let result = unblock(move || {
         comments_api.fetch_pull_request_review_comments(&comments_owner, &comments_repo, number)
       })
@@ -953,15 +953,15 @@ impl GithubPrDetailsPage {
       });
     });
 
-    let diff_api = self.api.clone();
-    let diff_task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || diff_api.fetch_pull_request_files(&owner, &repo, number)).await;
+    let files_api = self.api.clone();
+    let files_task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || files_api.fetch_pull_request_files(&owner, &repo, number)).await;
 
       let _ = this.update(cx, |this, cx| {
         match result {
           Ok(files) => {
-            this.diff_loading = false;
-            this.diff_error = None;
+            this.files_loading = false;
+            this.files_error = None;
             let files = files_from_api(files);
             let (items, lookup, selected_index, selected_id) = build_tree_items(&files);
             this.file_lookup = lookup;
@@ -974,8 +974,8 @@ impl GithubPrDetailsPage {
             this.set_selected_file(selected, cx);
           }
           Err(error) => {
-            this.diff_loading = false;
-            this.diff_error = Some(error.to_string().into());
+            this.files_loading = false;
+            this.files_error = Some(error.to_string().into());
             this.tree_state.update(cx, |state, cx| {
               state.set_items(Vec::new(), cx);
             });
@@ -989,8 +989,8 @@ impl GithubPrDetailsPage {
     });
 
     self.details_task = Some(details_task);
-    self.review_comments_task = Some(comments_task);
-    self.diff_task = Some(diff_task);
+    self.review_comments_task = Some(review_comments_task);
+    self.files_task = Some(files_task);
   }
 
   fn render_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1420,7 +1420,7 @@ impl GithubPrDetailsPage {
       }
     }
 
-    let list = if self.diff_loading {
+    let list = if self.files_loading {
       v_flex()
         .flex_1()
         .h_full()
@@ -1435,7 +1435,7 @@ impl GithubPrDetailsPage {
             .child("Loading files..."),
         )
         .into_any_element()
-    } else if self.diff_error.is_some() {
+    } else if self.files_error.is_some() {
       v_flex()
         .flex_1()
         .h_full()
@@ -1443,7 +1443,7 @@ impl GithubPrDetailsPage {
         .justify_center()
         .text_sm()
         .text_color(theme.status_red())
-        .child(self.diff_error.clone().unwrap_or_default())
+        .child(self.files_error.clone().unwrap_or_default())
         .into_any_element()
     } else if count == 0 {
       v_flex()
@@ -1851,7 +1851,7 @@ impl GithubPrDetailsPage {
     let is_svg = self.selected_file_is_svg();
     let preview_active = self.show_markdown_preview && (is_markdown || is_svg);
 
-    let editor_content: gpui::AnyElement = if self.diff_loading {
+    let editor_content: gpui::AnyElement = if self.files_loading {
       v_flex()
         .flex_1()
         .items_center()
@@ -1888,14 +1888,14 @@ impl GithubPrDetailsPage {
         .text_color(theme.status_red())
         .child(self.file_error.clone().unwrap_or_default())
         .into_any_element()
-    } else if self.diff_error.is_some() {
+    } else if self.files_error.is_some() {
       v_flex()
         .flex_1()
         .items_center()
         .justify_center()
         .text_sm()
         .text_color(theme.status_red())
-        .child(self.diff_error.clone().unwrap_or_default())
+        .child(self.files_error.clone().unwrap_or_default())
         .into_any_element()
     } else if self.selected_file.is_some() {
       if preview_active {

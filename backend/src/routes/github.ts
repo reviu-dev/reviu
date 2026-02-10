@@ -388,6 +388,7 @@ export const githubRoutes = githubRouter
       })
 
       let content: string | null = null
+
       if (typeof data === 'string') {
         content = data
       }
