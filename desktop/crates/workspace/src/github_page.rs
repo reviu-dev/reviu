@@ -19,7 +19,7 @@ use ui::{
 
 use crate::{
   AuthCallbackTarget, ShowCommandPalette,
-  api::{ApiClient, GithubPullRequest},
+  api::{ApiClient, GithubNotification, GithubPullRequest},
   auth_state::{AuthState, AuthStateStore},
   github_pr_details_page::GithubPrDetailsPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
@@ -75,6 +75,172 @@ impl GithubPullRequestRow {
       || format!("{}/{}", self.owner, self.repo)
         .to_lowercase()
         .contains(&q)
+  }
+}
+
+#[derive(Clone, Debug)]
+struct GithubNotificationRow {
+  notification: Rc<GithubNotification>,
+}
+
+impl GithubNotificationRow {
+  fn matches(&self, query: &str) -> bool {
+    if query.is_empty() {
+      return true;
+    }
+
+    let q = query.to_lowercase();
+    self.notification.subject.title.to_lowercase().contains(&q)
+      || self
+        .notification
+        .repository
+        .full_name
+        .to_lowercase()
+        .contains(&q)
+      || self.notification.reason.to_lowercase().contains(&q)
+  }
+}
+
+struct GithubNotificationListDelegate {
+  all_rows: Vec<Rc<GithubNotificationRow>>,
+  matched_rows: Vec<Rc<GithubNotificationRow>>,
+  selected_index: Option<IndexPath>,
+  query: SharedString,
+  loading: bool,
+}
+
+impl GithubNotificationListDelegate {
+  fn new() -> Self {
+    Self {
+      all_rows: Vec::new(),
+      matched_rows: Vec::new(),
+      selected_index: Some(IndexPath::default()),
+      query: "".into(),
+      loading: false,
+    }
+  }
+
+  fn set_rows(&mut self, rows: Vec<Rc<GithubNotificationRow>>) {
+    self.all_rows = rows;
+    self.prepare(self.query.clone());
+  }
+
+  fn prepare(&mut self, query: impl Into<SharedString>) {
+    self.query = query.into();
+    let q = self.query.as_ref();
+
+    let rows: Vec<Rc<GithubNotificationRow>> = self
+      .all_rows
+      .iter()
+      .filter(|row| row.matches(q))
+      .cloned()
+      .collect();
+
+    self.matched_rows = rows;
+  }
+
+  fn unread_count(&self) -> usize {
+    self
+      .all_rows
+      .iter()
+      .filter(|row| row.notification.unread)
+      .count()
+  }
+}
+
+impl ListDelegate for GithubNotificationListDelegate {
+  type Item = ListItem;
+
+  fn items_count(&self, _section: usize, _cx: &App) -> usize {
+    self.matched_rows.len()
+  }
+
+  fn render_item(
+    &mut self,
+    ix: IndexPath,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<Self::Item> {
+    let theme = cx.theme().clone();
+    let base_item = list_base_item(ix, self.selected_index.clone());
+    let row = self.matched_rows.get(ix.row)?;
+    let notification = &row.notification;
+    let updated_at = format_updated_at(&notification.updated_at);
+    let repo_name = notification.repository.full_name.clone();
+    let subject = notification.subject.title.clone();
+    let reason_tag = Tag::secondary()
+      .small()
+      .rounded_full()
+      .child(notification.reason.clone());
+
+    Some(
+      base_item.px_2().py_2().child(
+        v_flex()
+          .gap_1()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child(
+                div()
+                  .min_w_0()
+                  .flex_1()
+                  .child(Label::new(subject).truncate()),
+              )
+              .when(notification.unread, |this| {
+                this.child(div().size(px(6.)).rounded_full().bg(theme.status_violet()))
+              }),
+          )
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(repo_name)
+              .child(format!("Updated {}", updated_at))
+              .child(reason_tag),
+          ),
+      ),
+    )
+  }
+
+  fn render_empty(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> impl IntoElement {
+    v_flex()
+      .size_full()
+      .items_center()
+      .justify_center()
+      .gap_2()
+      .text_color(cx.theme().muted_foreground)
+      .child(Icon::new(IconName::Inbox).size_6())
+      .child("No notifications")
+  }
+
+  fn set_selected_index(
+    &mut self,
+    ix: Option<IndexPath>,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) {
+    update_selected_index(&mut self.selected_index, ix, cx);
+  }
+
+  fn perform_search(
+    &mut self,
+    query: &str,
+    _: &mut Window,
+    _: &mut Context<ListState<Self>>,
+  ) -> Task<()> {
+    self.prepare(query.to_owned());
+    Task::ready(())
+  }
+
+  fn loading(&self, _: &App) -> bool {
+    self.loading
   }
 }
 
@@ -222,8 +388,11 @@ impl ListDelegate for GithubPullRequestListDelegate {
 pub struct GithubPage {
   focus_handle: FocusHandle,
   api: ApiClient,
+  notifications: Entity<ListState<GithubNotificationListDelegate>>,
   pull_requests: Entity<ListState<GithubPullRequestListDelegate>>,
   load_task: Option<Task<()>>,
+  notifications_task: Option<Task<()>>,
+  notifications_error: Option<SharedString>,
   error: Option<SharedString>,
   focus_on_next_render: bool,
   _subscriptions: Vec<Subscription>,
@@ -256,14 +425,19 @@ impl GithubPageHandle {
 
 impl GithubPage {
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    let notifications = cx
+      .new(|cx| ListState::new(GithubNotificationListDelegate::new(), window, cx).searchable(true));
     let pull_requests = cx
       .new(|cx| ListState::new(GithubPullRequestListDelegate::new(), window, cx).searchable(true));
 
     let view = Self {
       focus_handle: cx.focus_handle(),
       api: WorkspaceApi::global(cx).api.clone(),
+      notifications,
       pull_requests,
       load_task: None,
+      notifications_task: None,
+      notifications_error: None,
       error: None,
       focus_on_next_render: true,
       _subscriptions: Vec::new(),
@@ -346,6 +520,50 @@ impl GithubPage {
     });
 
     self.load_task = Some(task);
+    self.refresh_notifications(cx);
+  }
+
+  fn refresh_notifications(&mut self, cx: &mut Context<Self>) {
+    let api = self.api.clone();
+    self.notifications_error = None;
+    self.notifications.update(cx, |state, cx| {
+      state.delegate_mut().loading = true;
+      cx.notify();
+    });
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.fetch_github_notifications())
+        .await
+        .map_err(|error| error.to_string());
+
+      let _ = this.update(cx, |this, cx| {
+        let (rows, error) = match result {
+          Ok(notifications) => (
+            notifications
+              .into_iter()
+              .map(|notification| {
+                Rc::new(GithubNotificationRow {
+                  notification: Rc::new(notification),
+                })
+              })
+              .collect::<Vec<_>>(),
+            None,
+          ),
+          Err(error) => (Vec::new(), Some(error.into())),
+        };
+
+        this.notifications_error = error;
+        this.notifications.update(cx, |state, cx| {
+          state.delegate_mut().loading = false;
+          state.delegate_mut().set_rows(rows);
+          cx.notify();
+        });
+
+        cx.notify();
+      });
+    });
+
+    self.notifications_task = Some(task);
   }
 
   fn show_command_palette_action(
@@ -495,8 +713,59 @@ impl Render for GithubPage {
       .border_color(theme.border)
       .rounded(theme.radius)
       .flex_1()
-      .w_full()
+      .min_w(px(0.0))
+      .min_h_0()
       .p(px(8.));
+
+    let unread_count = self.notifications.read(cx).delegate().unread_count();
+
+    let notifications_list = List::new(&self.notifications)
+      .search_placeholder("Search notifications...")
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius)
+      .flex_1()
+      .min_h_0()
+      .p(px(8.));
+
+    let notifications_panel = v_flex()
+      .gap_2()
+      .w(px(600.0))
+      .h_full()
+      .min_h_0()
+      .child(
+        h_flex()
+          .items_center()
+          .justify_between()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child(Icon::new(IconName::Inbox).size_4())
+              .child("Notifications"),
+          )
+          .when(unread_count > 0, |this| {
+            this.child(
+              Tag::secondary()
+                .small()
+                .rounded_full()
+                .child(format!("{} unread", unread_count)),
+            )
+          }),
+      )
+      .when_some(self.notifications_error.clone(), |this, error| {
+        this.child(div().text_sm().text_color(theme.status_red()).child(error))
+      })
+      .child(notifications_list);
+
+    let pr_panel = v_flex()
+      .gap_2()
+      .flex_1()
+      .min_w_0()
+      .h_full()
+      .min_h_0()
+      .child("Latest Pull Requests")
+      .child(list);
 
     div()
       .size_full()
@@ -508,15 +777,24 @@ impl Render for GithubPage {
       .child(self.render_header(cx))
       .child(
         v_flex()
-          .w(px(900.0))
+          .w_full()
           .mx_auto()
           .h_full()
+          .min_h_0()
           .gap_3()
           .p_4()
           .when_some(self.error.clone(), |this, error| {
             this.child(div().text_sm().text_color(theme.status_red()).child(error))
           })
-          .child(list),
+          .child(
+            h_flex()
+              .h_full()
+              .gap_3()
+              .min_h_0()
+              .items_start()
+              .child(notifications_panel)
+              .child(pr_panel),
+          ),
       )
   }
 }
