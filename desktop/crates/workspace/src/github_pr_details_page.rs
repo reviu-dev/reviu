@@ -6,7 +6,7 @@ use std::{
 };
 
 use editor::{DiffViewMode, Editor, ReviewComment, ReviewCommentSide};
-use git::{DiffKind, DiffLineKind, DiffSet, FileDiff, compute_buffer_diff, diff_set_from_patch};
+use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
 use gpui::{
   App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, RenderImage, SharedString,
   Styled, Task, Window, div, img, prelude::*, px,
@@ -41,7 +41,8 @@ use ui::{
 use crate::{
   AuthCallbackTarget, ShowCommandPalette, ShowFileSearch,
   api::{
-    ApiClient, GithubPullRequestDetails, GithubPullRequestReviewComment, GithubPullRequestStatus,
+    ApiClient, GithubPullRequestDetails, GithubPullRequestFile, GithubPullRequestReviewComment,
+    GithubPullRequestStatus,
   },
   auth_state::{AuthState, AuthStateStore},
   github_page::GithubPageHandle,
@@ -125,145 +126,40 @@ struct GithubPrFileDiff {
   path: SharedString,
   old_path: Option<SharedString>,
   status: GithubPrFileStatus,
-  diff: String,
-  diff_set: Option<DiffSet>,
-  document: String,
 }
 
-fn parse_github_diff(diff: &str) -> Vec<Rc<GithubPrFileDiff>> {
-  let mut files: Vec<Rc<GithubPrFileDiff>> = Vec::new();
-  let mut current: Option<GithubPrFileDiff> = None;
+fn map_file_status(status: &str) -> GithubPrFileStatus {
+  match status {
+    "added" => GithubPrFileStatus::Added,
+    "removed" | "deleted" => GithubPrFileStatus::Deleted,
+    "renamed" => GithubPrFileStatus::Renamed,
+    _ => GithubPrFileStatus::Modified,
+  }
+}
 
-  for line in diff.lines() {
-    if line.starts_with("diff --git ") || line.starts_with("diff --cc ") {
-      if let Some(file) = current.take() {
-        files.push(Rc::new(finalize_diff(file)));
-      }
-
-      let parts: Vec<&str> = line.split_whitespace().collect();
-      let mut old_path = if parts.len() >= 3 {
-        Some(parts[2].trim_start_matches("a/").to_string())
+fn files_from_api(files: Vec<GithubPullRequestFile>) -> Vec<Rc<GithubPrFileDiff>> {
+  files
+    .into_iter()
+    .map(|file| {
+      let status = map_file_status(file.status.as_str());
+      let path = if file.filename.is_empty() {
+        "unknown".to_string()
+      } else {
+        file.filename
+      };
+      let old_path = if status == GithubPrFileStatus::Renamed {
+        file.previous_filename
       } else {
         None
       };
-      let mut path = if parts.len() >= 4 {
-        parts[3].trim_start_matches("b/").to_string()
-      } else if parts.len() >= 3 {
-        parts[2].trim_start_matches("b/").to_string()
-      } else {
-        "unknown".to_string()
-      };
 
-      if path == "/dev/null" {
-        path = parts
-          .get(2)
-          .map(|value| value.trim_start_matches("a/").to_string())
-          .unwrap_or_else(|| "unknown".to_string());
-      }
-      if old_path.as_deref() == Some("/dev/null") {
-        old_path = None;
-      }
-
-      current = Some(GithubPrFileDiff {
+      Rc::new(GithubPrFileDiff {
         path: path.into(),
         old_path: old_path.map(Into::into),
-        status: GithubPrFileStatus::Modified,
-        diff: String::new(),
-        diff_set: None,
-        document: String::new(),
-      });
-    }
-
-    if let Some(file) = current.as_mut() {
-      file.diff.push_str(line);
-      file.diff.push('\n');
-
-      if line.starts_with("new file mode") || line.starts_with("--- /dev/null") {
-        file.status = GithubPrFileStatus::Added;
-      } else if line.starts_with("deleted file mode") || line.starts_with("+++ /dev/null") {
-        file.status = GithubPrFileStatus::Deleted;
-      } else if line.starts_with("rename from ") || line.starts_with("rename to ") {
-        file.status = GithubPrFileStatus::Renamed;
-        if let Some(rename_to) = line.strip_prefix("rename to ") {
-          file.path = rename_to.to_string().into();
-        } else if let Some(rename_from) = line.strip_prefix("rename from ") {
-          file.old_path = Some(rename_from.to_string().into());
-        }
-      } else if let Some(path) = line.strip_prefix("+++ b/") {
-        if file.path.as_ref() == "unknown" {
-          file.path = path.to_string().into();
-        }
-      } else if let Some(path) = line.strip_prefix("--- a/") {
-        if file.path.as_ref() == "unknown" {
-          file.path = path.to_string().into();
-        }
-        if file.old_path.is_none() {
-          file.old_path = Some(path.to_string().into());
-        }
-      }
-    }
-  }
-
-  if let Some(file) = current.take() {
-    files.push(Rc::new(finalize_diff(file)));
-  }
-
-  files
-}
-
-fn finalize_diff(mut file: GithubPrFileDiff) -> GithubPrFileDiff {
-  if let Ok(diff_set) = diff_set_from_patch(&file.diff) {
-    if !diff_set.uncommitted.hunks.is_empty() {
-      file.document = build_document_from_diff(&diff_set.uncommitted);
-      file.diff_set = Some(diff_set);
-      return file;
-    }
-  }
-
-  file.document = file.diff.clone();
-  file.diff_set = None;
-  file
-}
-
-fn build_document_from_diff(file_diff: &git::FileDiff) -> String {
-  let mut max_line = 0usize;
-  for hunk in &file_diff.hunks {
-    if hunk.new_lines > 0 {
-      let end = hunk
-        .new_start
-        .saturating_add(hunk.new_lines)
-        .saturating_sub(1);
-      if end > max_line {
-        max_line = end;
-      }
-    }
-  }
-
-  if max_line == 0 {
-    return String::new();
-  }
-
-  let mut lines = vec![String::new(); max_line];
-  for hunk in &file_diff.hunks {
-    if hunk.new_lines == 0 {
-      continue;
-    }
-
-    let mut line_index = hunk.new_start.saturating_sub(1);
-    for line in &hunk.lines {
-      match line.kind {
-        DiffLineKind::Context | DiffLineKind::Add => {
-          if line_index < lines.len() {
-            lines[line_index] = line.content.clone();
-          }
-          line_index = line_index.saturating_add(1);
-        }
-        DiffLineKind::Remove => {}
-      }
-    }
-  }
-
-  lines.join("\n")
+        status,
+      })
+    })
+    .collect()
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1059,14 +955,14 @@ impl GithubPrDetailsPage {
 
     let diff_api = self.api.clone();
     let diff_task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || diff_api.fetch_pull_request_diff(&owner, &repo, number)).await;
+      let result = unblock(move || diff_api.fetch_pull_request_files(&owner, &repo, number)).await;
 
       let _ = this.update(cx, |this, cx| {
         match result {
-          Ok(diff) => {
+          Ok(files) => {
             this.diff_loading = false;
             this.diff_error = None;
-            let files = parse_github_diff(&diff);
+            let files = files_from_api(files);
             let (items, lookup, selected_index, selected_id) = build_tree_items(&files);
             this.file_lookup = lookup;
             this.selected_tree_id = selected_id.clone();

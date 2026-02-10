@@ -1,5 +1,4 @@
 use anyhow::Result;
-use gpui_component::tag::Tag;
 use reqwest::blocking::Client;
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -112,6 +111,15 @@ pub struct GithubPullRequestReviewComment {
   #[serde(rename = "originalLine")]
   pub original_line: Option<i64>,
   pub side: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubPullRequestFile {
+  pub filename: String,
+  pub status: String,
+  pub patch: Option<String>,
+  #[serde(rename = "previous_filename")]
+  pub previous_filename: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -242,8 +250,8 @@ struct GithubPullRequestDetailsResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct GithubPullRequestDiffResponse {
-  diff: String,
+struct GithubPullRequestFilesResponse {
+  files: Vec<GithubPullRequestFile>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -405,9 +413,14 @@ impl ApiClient {
     Ok(payload.pull_request)
   }
 
-  pub fn fetch_pull_request_diff(&self, owner: &str, repo: &str, number: u64) -> Result<String> {
+  pub fn fetch_pull_request_files(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+  ) -> Result<Vec<GithubPullRequestFile>> {
     let response = self
-      .authed_request(Method::GET, &format!("/github/pr/{number}/diff"))
+      .authed_request(Method::GET, &format!("/github/pr/{number}/files"))
       .query(&[("org", owner), ("repo", repo)])
       .send()?;
     if response.status() == StatusCode::UNAUTHORIZED {
@@ -416,8 +429,8 @@ impl ApiClient {
     if !response.status().is_success() {
       anyhow::bail!("unexpected status: {}", response.status());
     }
-    let payload = response.json::<GithubPullRequestDiffResponse>()?;
-    Ok(payload.diff)
+    let payload = response.json::<GithubPullRequestFilesResponse>()?;
+    Ok(payload.files)
   }
 
   pub fn fetch_pull_request_review_comments(
