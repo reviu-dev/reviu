@@ -9,6 +9,52 @@ const KEYCHAIN_SERVICE: &str = "reviu_auth";
 const KEYCHAIN_USERNAME: &str = "bearer";
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct GithubNotificationRepositoryOwner {
+  pub login: String,
+  #[serde(rename = "avatarUrl")]
+  pub avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubNotificationRepository {
+  pub name: String,
+  #[serde(rename = "fullName")]
+  pub full_name: String,
+  pub owner: Option<GithubNotificationRepositoryOwner>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubNotificationSubject {
+  pub title: String,
+  #[serde(rename = "type")]
+  pub subject_type: String,
+  pub url: Option<String>,
+  #[serde(rename = "latestCommentUrl")]
+  pub latest_comment_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubNotification {
+  pub id: String,
+  pub repository: GithubNotificationRepository,
+  pub subject: GithubNotificationSubject,
+  pub reason: String,
+  pub unread: bool,
+  #[serde(rename = "updatedAt")]
+  pub updated_at: String,
+  #[serde(rename = "lastReadAt")]
+  pub last_read_at: Option<String>,
+  pub url: String,
+  #[serde(rename = "subscriptionUrl")]
+  pub subscription_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubNotificationsResponse {
+  notifications: Vec<GithubNotification>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum UserRole {
   User,
@@ -431,6 +477,20 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestFilesResponse>()?;
     Ok(payload.files)
+  }
+
+  pub fn fetch_github_notifications(&self) -> Result<Vec<GithubNotification>> {
+    let response = self
+      .authed_request(Method::GET, "/github/notifications")
+      .send()?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !response.status().is_success() {
+      anyhow::bail!("unexpected status: {}", response.status());
+    }
+    let payload = response.json::<GithubNotificationsResponse>()?;
+    Ok(payload.notifications)
   }
 
   pub fn fetch_pull_request_review_comments(

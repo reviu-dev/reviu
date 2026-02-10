@@ -18,6 +18,8 @@ type PullRequestFilesParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['parameters']
 type PullRequestFileResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['response']['data'][number]
+type NotificationsParams = Endpoints['GET /notifications']['parameters']
+type NotificationResponse = Endpoints['GET /notifications']['response']['data'][number]
 
 type GetContentParams
   = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['parameters']
@@ -28,7 +30,7 @@ type PullRequestDetailsResponse
 type PullRequestResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls']['response']['data'][number]
 
-interface GithubPullRepository {
+interface GithubRepository {
   owner: string
   repo: string
 }
@@ -41,17 +43,17 @@ interface GithubPullRequest {
   mergedAt: PullRequestResponse['merged_at']
   updatedAt: PullRequestResponse['updated_at']
   labels: PullRequestResponse['labels']
-  repository: GithubPullRepository
+  repository: GithubRepository
 }
 
 interface GithubPullRequestDetailsAuthor {
-  login: string
-  avatarUrl: string
+  login: PullRequestDetailsResponse['user']['login']
+  avatarUrl: PullRequestDetailsResponse['user']['avatar_url']
 }
 
 interface GithubPullRequestReviewCommentUser {
-  login: string
-  avatarUrl: string
+  login: PullRequestCommentResponse['user']['login']
+  avatarUrl: PullRequestCommentResponse['user']['avatar_url']
 }
 
 interface GithubPullRequestReviewComment {
@@ -98,8 +100,38 @@ interface GithubPullRequestDetails {
   deletions: PullRequestDetailsResponse['deletions']
   changedFiles: PullRequestDetailsResponse['changed_files']
   labels: PullRequestDetailsResponse['labels']
-  repository: GithubPullRepository
-  headRepository: GithubPullRepository
+  repository: GithubRepository
+  headRepository: GithubRepository
+}
+
+interface GithubNotificationRepositoryOwner {
+  login: NotificationResponse['repository']['owner']['login']
+  avatarUrl: NotificationResponse['repository']['owner']['avatar_url']
+}
+
+interface GithubNotificationRepository {
+  name: NotificationResponse['repository']['name']
+  fullName: NotificationResponse['repository']['full_name']
+  owner: GithubNotificationRepositoryOwner
+}
+
+interface GithubNotificationSubject {
+  title: NotificationResponse['subject']['title']
+  type: NotificationResponse['subject']['type']
+  url: NotificationResponse['subject']['url']
+  latestCommentUrl: NotificationResponse['subject']['latest_comment_url']
+}
+
+interface GithubNotification {
+  id: NotificationResponse['id']
+  repository: GithubNotificationRepository
+  subject: GithubNotificationSubject
+  reason: NotificationResponse['reason']
+  unread: NotificationResponse['unread']
+  updatedAt: NotificationResponse['updated_at']
+  lastReadAt: NotificationResponse['last_read_at']
+  url: NotificationResponse['url']
+  subscriptionUrl: NotificationResponse['subscription_url']
 }
 
 interface GithubFileContent {
@@ -111,6 +143,53 @@ const githubRouter = new Hono()
 githubRouter.use('*', authMiddleware)
 
 export const githubRoutes = githubRouter
+  .get('/notifications', async (ctx) => {
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: NotificationsParams = {
+        per_page: 50,
+        all: false,
+      }
+
+      const { data } = await request('GET /notifications', {
+        ...params,
+        headers: {
+          authorization: `Bearer ${githubToken}`,
+        },
+      })
+
+      const notifications: GithubNotification[] = data.map(notification => ({
+        id: notification.id,
+        repository: {
+          name: notification.repository.name,
+          fullName: notification.repository.full_name,
+          owner: {
+            login: notification.repository.owner.login,
+            avatarUrl: notification.repository.owner.avatar_url,
+          },
+        },
+        subject: {
+          title: notification.subject.title,
+          type: notification.subject.type,
+          url: notification.subject.url,
+          latestCommentUrl: notification.subject.latest_comment_url,
+        },
+        reason: notification.reason,
+        unread: notification.unread,
+        updatedAt: notification.updated_at,
+        lastReadAt: notification.last_read_at,
+        url: notification.url,
+        subscriptionUrl: notification.subscription_url,
+      }))
+
+      return ctx.json({ notifications }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
   .get('/pr/latest', async (ctx) => {
     const { org, repo } = ctx.req.query()
 
