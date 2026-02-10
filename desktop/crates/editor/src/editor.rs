@@ -13,8 +13,8 @@ use buffer::TransactionId;
 use git::{ApplyLocation, DiffSet, GitFileBases, GitStore, RepoFile};
 use gpui::{
   App, Bounds, Context, CursorStyle, Entity, EntityInputHandler, FocusHandle, Focusable,
-  MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, ShapedLine, Task,
-  UTF16Selection, Window, black, div, point, prelude::*, px, white,
+  MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
+  ShapedLine, Task, UTF16Selection, Window, black, div, point, prelude::*, px, white,
 };
 use gpui_component::{
   ActiveTheme as _, IconName, Sizable,
@@ -573,8 +573,14 @@ impl Editor {
         .xsmall()
         .compact()
         .on_click(move |_, _, cx| {
+          cx.stop_propagation();
           editor.update(cx, |editor, cx| editor.toggle_review_comment(id, cx));
         });
+      let toggle_button = div()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+          cx.stop_propagation();
+        })
+        .child(toggle_button);
 
       let line_label = layout
         .line_label
@@ -613,10 +619,14 @@ impl Editor {
             .child(layout.created_at.as_ref().to_string()),
         );
 
+      let header_editor = editor_entity.clone();
       let header = h_flex()
         .items_center()
         .justify_between()
         .gap_2()
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+          header_editor.update(cx, |editor, cx| editor.toggle_review_comment(id, cx));
+        })
         .child(meta)
         .child(toggle_button);
 
@@ -634,6 +644,9 @@ impl Editor {
         .rounded_md()
         .overflow_hidden()
         .block_mouse_except_scroll()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+          cx.stop_propagation();
+        })
         .child(
           v_flex()
             .gap_1()
@@ -2465,9 +2478,6 @@ impl Editor {
         if let Some(DisplayLine::ReviewComment { id, is_header, .. }) =
           projection.lines.get(display_line)
         {
-          if *is_header {
-            self.toggle_review_comment(*id, cx);
-          }
           self.is_selecting = false;
           return;
         }
