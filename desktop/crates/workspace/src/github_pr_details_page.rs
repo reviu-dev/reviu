@@ -42,7 +42,6 @@ use crate::{
   AuthCallbackTarget, ShowCommandPalette, ShowFileSearch,
   api::{
     ApiClient, GithubPullRequestDetails, GithubPullRequestFile, GithubPullRequestReviewComment,
-    GithubPullRequestStatus,
   },
   auth_state::{AuthState, AuthStateStore},
   github_page::GithubPageHandle,
@@ -61,38 +60,6 @@ fn format_datetime(value: &str) -> SharedString {
 
   let _ = time;
   date.to_string().into()
-}
-
-impl GithubPullRequestStatus {
-  pub fn tag(&self, theme: &gpui_component::Theme) -> Tag {
-    match self {
-      GithubPullRequestStatus::Open => Tag::success().small().rounded_full().child("Open"),
-      GithubPullRequestStatus::Closed => Tag::custom(
-        theme.status_red(),
-        theme.primary_foreground,
-        theme.status_red(),
-      )
-      .small()
-      .rounded_full()
-      .child("Closed"),
-      GithubPullRequestStatus::Merged => Tag::custom(
-        theme.status_violet(),
-        theme.primary_foreground,
-        theme.status_violet(),
-      )
-      .small()
-      .rounded_full()
-      .child("Merged"),
-      GithubPullRequestStatus::Draft => Tag::custom(
-        theme.status_gray(),
-        theme.primary_foreground,
-        theme.status_gray(),
-      )
-      .small()
-      .rounded_full()
-      .child("Draft"),
-    }
-  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

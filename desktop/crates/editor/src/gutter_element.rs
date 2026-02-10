@@ -570,7 +570,7 @@ impl Element for GutterElement {
         }
         editor.update(cx, |editor, cx| {
           let hovered = {
-            let scroll_offset = editor.scroll_offset_y;
+            let scroll_offset = editor.scroll_offset_y.floor();
             let y_offset = event.position.y - bounds.top();
             let line_float = scroll_offset + (y_offset / line_height);
             if line_float.is_sign_negative() {

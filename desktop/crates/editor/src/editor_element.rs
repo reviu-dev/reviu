@@ -60,7 +60,8 @@ impl PositionMap {
     }
 
     let y_offset = position.y - self.bounds.top();
-    let line_float = self.scroll_offset + (y_offset / self.line_height);
+    let scroll_offset = self.scroll_offset.floor();
+    let line_float = scroll_offset + (y_offset / self.line_height);
     if line_float.is_sign_negative() {
       return None;
     }
@@ -77,7 +78,8 @@ impl PositionMap {
     }
 
     let y_offset = position.y - self.bounds.top();
-    let line_float = self.scroll_offset + (y_offset / self.line_height);
+    let scroll_offset = self.scroll_offset.floor();
+    let line_float = scroll_offset + (y_offset / self.line_height);
     if line_float.is_sign_negative() {
       return None;
     }
@@ -110,7 +112,8 @@ impl PositionMap {
     }
 
     let y_offset = position.y - self.bounds.top();
-    let line_float = self.scroll_offset + (y_offset / self.line_height);
+    let scroll_offset = self.scroll_offset.floor();
+    let line_float = scroll_offset + (y_offset / self.line_height);
     if line_float.is_sign_negative() {
       return None;
     }
@@ -1366,7 +1369,7 @@ impl Element for EditorElement {
         if !bounds.contains(&position) {
           return;
         }
-        let scroll_offset = editor.scroll_offset_y;
+        let scroll_offset = editor.scroll_offset_y.floor();
         let y_offset = position.y - bounds.top();
         let line_float = scroll_offset + (y_offset / line_height);
         if line_float.is_sign_negative() {

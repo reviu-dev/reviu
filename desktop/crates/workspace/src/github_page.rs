@@ -19,7 +19,7 @@ use ui::{
 
 use crate::{
   AuthCallbackTarget, ShowCommandPalette,
-  api::{ApiClient, GithubNotification, GithubPullRequest},
+  api::{ApiClient, GithubNotification, GithubPullRequest, GithubPullRequestStatus},
   auth_state::{AuthState, AuthStateStore},
   github_pr_details_page::GithubPrDetailsPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
@@ -28,6 +28,38 @@ use ui::{UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, user_menu};
 
 const DEFAULT_ORG: &str = "joris-gallot";
 const DEFAULT_REPO: &str = "guit";
+
+impl GithubPullRequestStatus {
+  pub fn tag(&self, theme: &gpui_component::Theme) -> Tag {
+    match self {
+      GithubPullRequestStatus::Open => Tag::success().small().rounded_full().child("Open"),
+      GithubPullRequestStatus::Closed => Tag::custom(
+        theme.status_red(),
+        theme.primary_foreground,
+        theme.status_red(),
+      )
+      .small()
+      .rounded_full()
+      .child("Closed"),
+      GithubPullRequestStatus::Merged => Tag::custom(
+        theme.status_violet(),
+        theme.primary_foreground,
+        theme.status_violet(),
+      )
+      .small()
+      .rounded_full()
+      .child("Merged"),
+      GithubPullRequestStatus::Draft => Tag::custom(
+        theme.status_gray(),
+        theme.primary_foreground,
+        theme.status_gray(),
+      )
+      .small()
+      .rounded_full()
+      .child("Draft"),
+    }
+  }
+}
 
 fn list_base_item(ix: IndexPath, selected_index: Option<IndexPath>) -> ListItem {
   ListItem::new(ix).selected(Some(ix) == selected_index)
