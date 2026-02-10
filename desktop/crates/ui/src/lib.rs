@@ -1,7 +1,7 @@
 mod assets;
 mod command_palette;
 mod confirm_dialog;
-mod github_pr_badge;
+
 mod icons;
 mod search_file_palette;
 mod status_theme_ext;
@@ -17,7 +17,6 @@ pub use command_palette::{
   CommandPalettePage,
 };
 pub use confirm_dialog::ConfirmDialog;
-pub use github_pr_badge::pr_status_tag;
 pub use gpui_component::Disableable;
 pub use gpui_component::WindowExt;
 pub use gpui_component::button::Button;
