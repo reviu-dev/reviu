@@ -15,7 +15,6 @@ use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, HEADER_HEIGHT, StatusThemeExt, WindowExt,
-  pr_status_tag,
 };
 
 use crate::{
@@ -135,12 +134,8 @@ impl ListDelegate for GithubPullRequestListDelegate {
     let base_item = list_base_item(ix, self.selected_index.clone());
 
     let row = self.matched_rows.get(ix.row)?;
-    let status_tag = pr_status_tag(
-      &theme,
-      &row.pr.state,
-      row.pr.draft,
-      row.pr.merged_at.as_deref(),
-    );
+
+    let status_tag = row.pr.status().tag(&theme);
 
     let updated_at = format_updated_at(&row.pr.updated_at);
     let repo_name = format!("{}/{}", row.owner, row.repo);

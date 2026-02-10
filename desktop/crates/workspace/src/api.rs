@@ -1,4 +1,5 @@
 use anyhow::Result;
+use gpui_component::tag::Tag;
 use reqwest::blocking::Client;
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -42,7 +43,7 @@ pub struct GithubRepository {
 pub struct GithubPullRequest {
   pub number: u64,
   pub title: String,
-  pub state: String,
+  pub state: GithubPullRequestState,
   #[serde(rename = "mergedAt")]
   pub merged_at: Option<String>,
   pub draft: bool,
@@ -50,6 +51,18 @@ pub struct GithubPullRequest {
   pub updated_at: String,
   pub labels: Vec<GithubPullRequestLabel>,
   pub repository: GithubRepository,
+}
+
+impl GithubPullRequest {
+  pub fn status(&self) -> GithubPullRequestStatus {
+    if self.merged_at.is_some() {
+      GithubPullRequestStatus::Merged
+    } else if self.draft {
+      GithubPullRequestStatus::Draft
+    } else {
+      self.state.as_status()
+    }
+  }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -102,10 +115,33 @@ pub struct GithubPullRequestReviewComment {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GithubPullRequestState {
+  Open,
+  Closed,
+}
+
+impl GithubPullRequestState {
+  pub fn as_status(&self) -> GithubPullRequestStatus {
+    match self {
+      GithubPullRequestState::Open => GithubPullRequestStatus::Open,
+      GithubPullRequestState::Closed => GithubPullRequestStatus::Closed,
+    }
+  }
+}
+
+pub enum GithubPullRequestStatus {
+  Open,
+  Closed,
+  Merged,
+  Draft,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestDetails {
   pub number: u64,
   pub title: String,
-  pub state: String,
+  pub state: GithubPullRequestState,
   pub draft: bool,
   #[serde(rename = "createdAt")]
   pub created_at: String,
@@ -137,6 +173,18 @@ pub struct GithubPullRequestDetails {
   pub repository: GithubRepository,
   #[serde(rename = "headRepository")]
   pub head_repository: Option<GithubRepository>,
+}
+
+impl GithubPullRequestDetails {
+  pub fn status(&self) -> GithubPullRequestStatus {
+    if self.merged_at.is_some() {
+      GithubPullRequestStatus::Merged
+    } else if self.draft {
+      GithubPullRequestStatus::Draft
+    } else {
+      self.state.as_status()
+    }
+  }
 }
 
 #[derive(Clone)]

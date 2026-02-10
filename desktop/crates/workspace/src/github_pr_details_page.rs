@@ -35,12 +35,14 @@ use ui::{
   CommandPaletteHandler, CommandPalettePage, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler,
   SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UiIconName, UserMenuConfig,
   UserMenuPage, UserMenuState, UserMenuUser, WindowExt, file_icon_path_for_name_with_theme,
-  h_resizable, pr_status_tag, resizable_panel, user_menu,
+  h_resizable, resizable_panel, user_menu,
 };
 
 use crate::{
   AuthCallbackTarget, ShowCommandPalette, ShowFileSearch,
-  api::{ApiClient, GithubPullRequestDetails, GithubPullRequestReviewComment},
+  api::{
+    ApiClient, GithubPullRequestDetails, GithubPullRequestReviewComment, GithubPullRequestStatus,
+  },
   auth_state::{AuthState, AuthStateStore},
   github_page::GithubPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
@@ -58,6 +60,38 @@ fn format_datetime(value: &str) -> SharedString {
 
   let _ = time;
   date.to_string().into()
+}
+
+impl GithubPullRequestStatus {
+  pub fn tag(&self, theme: &gpui_component::Theme) -> Tag {
+    match self {
+      GithubPullRequestStatus::Open => Tag::success().small().rounded_full().child("Open"),
+      GithubPullRequestStatus::Closed => Tag::custom(
+        theme.status_red(),
+        theme.primary_foreground,
+        theme.status_red(),
+      )
+      .small()
+      .rounded_full()
+      .child("Closed"),
+      GithubPullRequestStatus::Merged => Tag::custom(
+        theme.status_violet(),
+        theme.primary_foreground,
+        theme.status_violet(),
+      )
+      .small()
+      .rounded_full()
+      .child("Merged"),
+      GithubPullRequestStatus::Draft => Tag::custom(
+        theme.status_gray(),
+        theme.primary_foreground,
+        theme.status_gray(),
+      )
+      .small()
+      .rounded_full()
+      .child("Draft"),
+    }
+  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1138,7 +1172,7 @@ impl GithubPrDetailsPage {
     };
 
     let left_area = if let Some(pr) = self.pull_request.as_ref() {
-      let status_tag = pr_status_tag(&theme, &pr.state, pr.draft, pr.merged_at.as_deref());
+      let status_tag = pr.status().tag(&theme);
 
       let title = div()
         .min_w_0()
@@ -1430,7 +1464,12 @@ impl GithubPrDetailsPage {
           ),
       );
 
-    v_flex().items_center().py_4().child(content)
+    v_flex()
+      .items_center()
+      .py_4()
+      .id("ad")
+      .overflow_y_scrollbar()
+      .child(content)
   }
 
   fn render_files_sidebar(
@@ -2094,7 +2133,6 @@ impl Render for GithubPrDetailsPage {
       .id("overview-tab")
       .flex_1()
       .min_h_0()
-      .overflow_y_scrollbar()
       .child(overview_inner)
       .into_any_element();
 
