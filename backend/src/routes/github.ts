@@ -14,6 +14,10 @@ type PullRequestCommentsParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
 type PullRequestCommentResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data'][number]
+type PullRequestFilesParams
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['parameters']
+type PullRequestFileResponse
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['response']['data'][number]
 
 type GetContentParams
   = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['parameters']
@@ -96,10 +100,6 @@ interface GithubPullRequestDetails {
   labels: PullRequestDetailsResponse['labels']
   repository: GithubPullRepository
   headRepository: GithubPullRepository
-}
-
-interface GithubPullRequestDiff {
-  diff: string
 }
 
 interface GithubFileContent {
@@ -199,6 +199,7 @@ export const githubRoutes = githubRouter
           repo,
           basehead: `${baseRef}...${headOwner}:${headRef}`,
         }
+
         const { data: compare } = await request(
           'GET /repos/{owner}/{repo}/compare/{basehead}',
           {
@@ -209,9 +210,7 @@ export const githubRoutes = githubRouter
           },
         )
 
-        if (compare.merge_base_commit.sha) {
-          mergeBaseSha = compare.merge_base_commit.sha
-        }
+        mergeBaseSha = compare.merge_base_commit.sha
       }
       catch {
         mergeBaseSha = data.base.sha
@@ -255,8 +254,7 @@ export const githubRoutes = githubRouter
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })
-  // TODO: remove this endpoint and fetch files changes from the details endpoint
-  .get('/pr/:id/diff', async (ctx) => {
+  .get('/pr/:id/files', async (ctx) => {
     const { org, repo } = ctx.req.query()
     const pullNumber = Number(ctx.req.param('id'))
 
@@ -268,24 +266,39 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const params: PullRequestParams = {
-        owner: org,
-        repo,
-        pull_number: pullNumber,
+      const files: PullRequestFileResponse[] = []
+      const perPage = 100
+      let page = 1
+
+      // Fetch all pages of files (GitHub max is 100 per page).
+      while (true) {
+        const params: PullRequestFilesParams = {
+          owner: org,
+          repo,
+          pull_number: pullNumber,
+          per_page: perPage,
+          page,
+        }
+
+        const { data } = await request(
+          'GET /repos/{owner}/{repo}/pulls/{pull_number}/files',
+          {
+            ...params,
+            headers: {
+              authorization: `Bearer ${githubToken}`,
+            },
+          },
+        )
+
+        files.push(...data)
+
+        if (data.length < perPage) {
+          break
+        }
+        page += 1
       }
 
-      const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
-        ...params,
-        headers: {
-          authorization: `Bearer ${githubToken}`,
-          accept: 'application/vnd.github.v3.diff',
-        },
-      })
-
-      const diff = typeof data === 'string' ? data : JSON.stringify(data)
-      const payload: GithubPullRequestDiff = { diff }
-
-      return ctx.json(payload, 200)
+      return ctx.json({ files }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
