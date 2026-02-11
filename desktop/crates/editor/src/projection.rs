@@ -36,6 +36,7 @@ pub enum ReviewCommentBackground {
 #[derive(Clone, Debug)]
 pub struct ReviewComment {
   pub id: u64,
+  pub in_reply_to_id: Option<u64>,
   pub line: usize,
   pub side: ReviewCommentSide,
   pub author: Arc<str>,
