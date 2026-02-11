@@ -22,9 +22,9 @@ use gpui_component::{
   button::{Button, ButtonVariants as _},
   h_flex,
   resizable::{h_resizable, resizable_panel},
-  text::TextView,
   v_flex,
 };
+use gfm_markdown_viewer::{LinkAction, MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use smol::unblock;
 use ui::{Theme, UiIconName};
 use unicode_segmentation::UnicodeSegmentation;
@@ -122,6 +122,8 @@ pub struct Editor {
   git_state: BufferGitState,
   pub diffs: Option<DiffSet>,
   review_comments: Vec<ReviewComment>,
+  review_comment_markdown_states: HashMap<u64, MarkdownRenderState>,
+  review_comment_pr_number: Option<u64>,
   collapsed_review_comments: HashSet<u64>,
   pub diff_task: Option<Task<()>>,
   pub bases_task: Option<Task<()>>,
@@ -349,6 +351,8 @@ impl Editor {
       git_state: BufferGitState::default(),
       diffs: None,
       review_comments: Vec::new(),
+      review_comment_markdown_states: HashMap::new(),
+      review_comment_pr_number: None,
       collapsed_review_comments: HashSet::new(),
       diff_task: None,
       bases_task: None,
@@ -431,6 +435,8 @@ impl Editor {
     } else {
       self.diffs = None;
       self.review_comments.clear();
+      self.review_comment_markdown_states.clear();
+      self.review_comment_pr_number = None;
       self.collapsed_review_comments.clear();
       self.set_projection(None);
       self.virtual_line_layouts.clear();
@@ -443,9 +449,25 @@ impl Editor {
     self
       .collapsed_review_comments
       .retain(|id| self.review_comments.iter().any(|comment| comment.id == *id));
+    self
+      .review_comment_markdown_states
+      .retain(|id, _| self.review_comments.iter().any(|comment| comment.id == *id));
+    for comment in &self.review_comments {
+      self
+        .review_comment_markdown_states
+        .entry(comment.id)
+        .or_insert_with(MarkdownRenderState::new);
+    }
 
     if self.diffs.is_some() {
       self.rebuild_projection(cx);
+    }
+  }
+
+  pub fn set_review_comment_pr_number(&mut self, pr_number: Option<u64>, cx: &mut Context<Self>) {
+    if self.review_comment_pr_number != pr_number {
+      self.review_comment_pr_number = pr_number;
+      cx.notify();
     }
   }
 
@@ -457,6 +479,36 @@ impl Editor {
     if self.diffs.is_some() {
       self.rebuild_projection(cx);
     }
+  }
+
+  pub fn scroll_to_review_comment(
+    &mut self,
+    comment_id: u64,
+    line_height: Pixels,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(projection) = self.projection.as_ref() else {
+      return false;
+    };
+
+    let Some(display_line) = projection
+      .lines
+      .iter()
+      .position(|line| matches!(line, DisplayLine::ReviewComment { id, .. } if *id == comment_id))
+    else {
+      return false;
+    };
+
+    let total_lines = projection.lines.len();
+    let viewport_lines = (self.viewport_height / line_height).max(1.0);
+    let max_padding = (viewport_lines - 1.0).max(0.0);
+    let scroll_padding = (SCROLL_PADDING as f32).min(max_padding);
+    let max_scroll = (total_lines as f32 - viewport_lines + scroll_padding).max(0.0);
+
+    let target = (display_line as f32 - scroll_padding).max(0.0);
+    self.scroll_offset_y = target.min(max_scroll);
+    cx.notify();
+    true
   }
 
   fn review_comment_layouts(
@@ -630,11 +682,43 @@ impl Editor {
         .child(meta)
         .child(toggle_button);
 
-      let body = TextView::markdown(
-        format!("pr-comment-inline-{}", layout.id),
-        layout.body.as_ref().to_string(),
-      )
-      .selectable(true);
+      let link_handler = {
+        let editor = editor_entity.clone();
+        let line_height = line_height;
+        Arc::new(move |url: &str, _window: &mut Window, cx: &mut App| {
+          let handled = editor.update(cx, |editor, cx| {
+            let Some((pr_number, comment_id)) = parse_github_pr_comment_link(url) else {
+              return false;
+            };
+            if editor.review_comment_pr_number != Some(pr_number) {
+              return false;
+            }
+            if !editor
+              .review_comments
+              .iter()
+              .any(|comment| comment.id == comment_id)
+            {
+              return false;
+            }
+            editor.scroll_to_review_comment(comment_id, line_height, cx)
+          });
+          if handled {
+            LinkAction::Handled
+          } else {
+            LinkAction::Open
+          }
+        })
+      };
+      let state = self
+        .review_comment_markdown_states
+        .get(&layout.id)
+        .cloned()
+        .unwrap_or_else(MarkdownRenderState::new);
+      let body = render_markdown(
+        layout.body.as_ref(),
+        &MarkdownRenderOptions::with_on_link(link_handler).with_state(state),
+        cx,
+      );
 
       let card = div()
         .size_full()
@@ -2475,9 +2559,7 @@ impl Editor {
 
     if let Some(display_line) = position_map.display_line_for_position(event.position) {
       if let Some(projection) = &position_map.projection {
-        if let Some(DisplayLine::ReviewComment { id, is_header, .. }) =
-          projection.lines.get(display_line)
-        {
+        if let Some(DisplayLine::ReviewComment { .. }) = projection.lines.get(display_line) {
           self.is_selecting = false;
           return;
         }
@@ -2870,6 +2952,27 @@ impl EntityInputHandler for Editor {
   }
 }
 
+fn parse_github_pr_comment_link(url: &str) -> Option<(u64, u64)> {
+  let url = url
+    .strip_prefix("https://github.com/")
+    .or_else(|| url.strip_prefix("http://github.com/"))?;
+  let (_, tail) = url.split_once("/pull/")?;
+  let (pr_part, fragment) = tail.split_once('#')?;
+  let pr_number = pr_part.split('/').next()?.parse().ok()?;
+  let fragment = fragment
+    .strip_prefix("discussion_r")
+    .or_else(|| fragment.strip_prefix('r'))?;
+  let comment_digits: String = fragment
+    .chars()
+    .take_while(|c| c.is_ascii_digit())
+    .collect();
+  if comment_digits.is_empty() {
+    return None;
+  }
+  let comment_id = comment_digits.parse().ok()?;
+  Some((pr_number, comment_id))
+}
+
 impl Render for Editor {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let is_dark = cx.theme().mode.is_dark();
@@ -3127,6 +3230,7 @@ pub mod tests {
         let cursor_blink = cx.new(CursorBlink::new);
 
         Editor {
+          review_comment_pr_number: None,
           collapsed_review_comments: HashSet::new(),
           review_comments: Vec::new(),
           document: doc,

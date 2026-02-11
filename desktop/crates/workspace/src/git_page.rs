@@ -27,9 +27,9 @@ use gpui_component::{
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{DropdownMenu, PopupMenuItem},
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
-  text::TextView,
   tooltip::Tooltip,
 };
+use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use smol::unblock;
 
 use crate::{
@@ -386,6 +386,7 @@ pub struct GitPage {
   editor: Option<Entity<Editor>>,
   diff_view: DiffViewMode,
   show_markdown_preview: bool,
+  markdown_preview_state: MarkdownRenderState,
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
   svg_preview_source: Option<SharedString>,
   svg_preview_task: Option<Task<()>>,
@@ -659,6 +660,7 @@ impl GitPage {
       editor: None,
       diff_view: DiffViewMode::Inline,
       show_markdown_preview: false,
+      markdown_preview_state: MarkdownRenderState::new(),
       svg_preview: None,
       svg_preview_source: None,
       svg_preview_task: None,
@@ -2578,11 +2580,15 @@ impl GitPage {
             .bg(theme.background)
             .occlude()
             .child(
-              TextView::markdown("markdown-preview", markdown)
-                .selectable(true)
-                .scrollable(true)
+              div()
+                .size_full()
                 .pb_4()
-                .px_4(),
+                .px_4()
+                .child(render_markdown(
+                  &markdown,
+                  &MarkdownRenderOptions::default().with_state(self.markdown_preview_state.clone()),
+                  cx,
+                )),
             )
             .into_any_element()
         };

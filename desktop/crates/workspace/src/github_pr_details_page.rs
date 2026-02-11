@@ -24,10 +24,10 @@ use gpui_component::{
   spinner::Spinner,
   tab::{Tab, TabBar},
   tag::Tag,
-  text::TextView,
   tree::{TreeItem, TreeState, tree},
   v_flex,
 };
+use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use smol::unblock;
 
 use ui::{
@@ -278,6 +278,8 @@ pub struct GithubPrDetailsPage {
   diff_editor: Entity<Editor>,
   diff_view: DiffViewMode,
   show_markdown_preview: bool,
+  description_markdown_state: MarkdownRenderState,
+  preview_markdown_state: MarkdownRenderState,
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
   svg_preview_source: Option<SharedString>,
   svg_preview_task: Option<Task<()>>,
@@ -348,6 +350,8 @@ impl GithubPrDetailsPage {
       }),
       diff_view: DiffViewMode::Inline,
       show_markdown_preview: false,
+      description_markdown_state: MarkdownRenderState::new(),
+      preview_markdown_state: MarkdownRenderState::new(),
       svg_preview: None,
       svg_preview_source: None,
       svg_preview_task: None,
@@ -565,6 +569,10 @@ impl GithubPrDetailsPage {
 
   fn sync_review_comments(&mut self, cx: &mut Context<Self>) {
     let comments = self.review_comments_for_selected_file();
+    let pr_number = self.pull_request.as_ref().map(|pr| pr.number);
+    self
+      .diff_editor
+      .update(cx, |editor, cx| editor.set_review_comment_pr_number(pr_number, cx));
     self
       .diff_editor
       .update(cx, |editor, cx| editor.set_review_comments(comments, cx));
@@ -882,11 +890,13 @@ impl GithubPrDetailsPage {
           Ok(pull_request) => {
             this.pull_request = Some(pull_request);
             this.error = None;
+            this.sync_review_comments(cx);
             this.maybe_fetch_selected_file_contents(cx);
           }
           Err(error) => {
             this.pull_request = None;
             this.error = Some(error.to_string().into());
+            this.sync_review_comments(cx);
           }
         }
         cx.notify();
@@ -1323,7 +1333,12 @@ impl GithubPrDetailsPage {
               .border_color(theme.border)
               .rounded(theme.radius)
               .p_3()
-              .child(TextView::markdown("pr-body", body).selectable(true)),
+              .child(render_markdown(
+                body.as_str(),
+                &MarkdownRenderOptions::default()
+                  .with_state(self.description_markdown_state.clone()),
+                cx,
+              )),
           ),
       );
 
@@ -1906,11 +1921,15 @@ impl GithubPrDetailsPage {
             .min_w(px(0.0))
             .bg(theme.background)
             .child(
-              TextView::markdown("pr-markdown-preview", markdown)
-                .selectable(true)
-                .scrollable(true)
+              div()
+                .size_full()
                 .pb_4()
-                .px_4(),
+                .px_4()
+                .child(render_markdown(
+                  &markdown,
+                  &MarkdownRenderOptions::default().with_state(self.preview_markdown_state.clone()),
+                  cx,
+                )),
             )
             .into_any_element()
         };
