@@ -27,7 +27,7 @@ use gpui_component::{
   resizable::{h_resizable, resizable_panel},
   v_flex,
 };
-use smol::unblock;
+use smol::{Timer, unblock};
 use ui::{Theme, UiIconName};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -75,9 +75,16 @@ const DEFAULT_REPO_ROOT: &str = "/Users/joris/workspace/git-playground";
 /// Hardcoded file path (temporary)
 const DEFAULT_FILE_PATH: &str = "/Users/joris/workspace/git-playground/perf-100k.ts";
 const FRACTIONAL_SCROLL_EPSILON: f32 = 0.001;
+const REVIEW_COMMENT_SCROLL_DURATION: Duration = Duration::from_millis(260);
+const REVIEW_COMMENT_SCROLL_TICK: Duration = Duration::from_millis(16);
+const REVIEW_COMMENT_SCROLL_MIN_DELTA: f32 = 0.01;
 
 fn has_fractional_scroll(scroll_offset: f32) -> bool {
   (scroll_offset - scroll_offset.floor()) > FRACTIONAL_SCROLL_EPSILON
+}
+
+fn ease_out_cubic(t: f32) -> f32 {
+  1.0 - (1.0 - t).powi(3)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +139,7 @@ pub struct Editor {
   review_comment_markdown_states: HashMap<u64, MarkdownRenderState>,
   review_comment_pr_number: Option<u64>,
   collapsed_review_comments: HashSet<u64>,
+  review_comment_scroll_epoch: usize,
   pub diff_task: Option<Task<()>>,
   pub bases_task: Option<Task<()>>,
   pub poll_task: Option<Task<()>>,
@@ -361,6 +369,7 @@ impl Editor {
       review_comment_markdown_states: HashMap::new(),
       review_comment_pr_number: None,
       collapsed_review_comments: HashSet::new(),
+      review_comment_scroll_epoch: 0,
       diff_task: None,
       bases_task: None,
       poll_task: None,
@@ -513,8 +522,44 @@ impl Editor {
     let max_scroll = (total_lines as f32 - viewport_lines + scroll_padding).max(0.0);
 
     let target = (display_line as f32 - scroll_padding).max(0.0);
-    self.scroll_offset_y = target.min(max_scroll);
-    cx.notify();
+    let target = target.min(max_scroll);
+    let start = self.scroll_offset_y;
+    let delta = target - start;
+    if delta.abs() <= REVIEW_COMMENT_SCROLL_MIN_DELTA {
+      self.scroll_offset_y = target;
+      cx.notify();
+      return true;
+    }
+
+    self.review_comment_scroll_epoch = self.review_comment_scroll_epoch.saturating_add(1);
+    let scroll_epoch = self.review_comment_scroll_epoch;
+    cx.spawn(async move |this, cx| {
+      let started_at = Instant::now();
+      loop {
+        Timer::after(REVIEW_COMMENT_SCROLL_TICK).await;
+        let progress =
+          (started_at.elapsed().as_secs_f32() / REVIEW_COMMENT_SCROLL_DURATION.as_secs_f32())
+            .min(1.0);
+        let eased = ease_out_cubic(progress);
+        let next_scroll = start + delta * eased;
+        let done = progress >= 1.0;
+        let should_continue = this
+          .update(cx, |editor, cx| {
+            if editor.review_comment_scroll_epoch != scroll_epoch {
+              return false;
+            }
+            editor.scroll_offset_y = if done { target } else { next_scroll };
+            cx.notify();
+            !done
+          })
+          .unwrap_or(false);
+        if !should_continue {
+          break;
+        }
+      }
+    })
+    .detach();
+
     true
   }
 
@@ -3266,6 +3311,7 @@ pub mod tests {
           review_comment_markdown_states: HashMap::new(),
           review_comment_pr_number: None,
           collapsed_review_comments: HashSet::new(),
+          review_comment_scroll_epoch: 0,
           review_comments: Vec::new(),
           document: doc,
           focus_handle: cx.focus_handle(),
