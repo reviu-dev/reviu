@@ -9,6 +9,7 @@ const KEYCHAIN_SERVICE: &str = "reviu_auth";
 const KEYCHAIN_USERNAME: &str = "bearer";
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct GithubNotificationRepositoryOwner {
   pub login: String,
   #[serde(rename = "avatarUrl")]
@@ -16,6 +17,7 @@ pub struct GithubNotificationRepositoryOwner {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct GithubNotificationRepository {
   pub name: String,
   #[serde(rename = "fullName")]
@@ -24,6 +26,7 @@ pub struct GithubNotificationRepository {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct GithubNotificationSubject {
   pub title: String,
   #[serde(rename = "type")]
@@ -34,6 +37,7 @@ pub struct GithubNotificationSubject {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct GithubNotification {
   pub id: String,
   pub repository: GithubNotificationRepository,
@@ -125,6 +129,7 @@ pub struct GithubPullRequestReviewCommentUser {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct GithubPullRequestReviewComment {
   pub id: u64,
   #[serde(rename = "pullRequestReviewId")]
@@ -160,6 +165,7 @@ pub struct GithubPullRequestReviewComment {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct GithubPullRequestFile {
   pub filename: String,
   pub status: String,
