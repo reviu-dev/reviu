@@ -5,7 +5,7 @@ use gpui::{
   prelude::*, px, relative, size,
 };
 use gpui_component::ActiveTheme as _;
-use std::{collections::HashMap, ops::Range, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use git::DiffLineKind;
 
@@ -20,9 +20,23 @@ const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
 const DIAGONAL_STRIPE_WIDTH: f32 = 1.0;
 const PIXEL_SCROLL_DIVISOR: f32 = 20.0;
 const LINE_SCROLL_MULTIPLIER: f32 = 3.0;
+const FRACTIONAL_SCROLL_EPSILON: f32 = 0.001;
 const SCROLL_AXIS_RATIO: f32 = 1.1;
 const SCROLL_AXIS_SWITCH_RATIO: f32 = 1.4;
 const SCROLL_AXIS_TIMEOUT_MS: u64 = 150;
+
+fn has_fractional_scroll(scroll_offset: f32) -> bool {
+  (scroll_offset - scroll_offset.floor()) > FRACTIONAL_SCROLL_EPSILON
+}
+
+fn line_y(
+  bounds_top: Pixels,
+  line_height: Pixels,
+  display_line: usize,
+  scroll_offset: f32,
+) -> Pixels {
+  bounds_top + line_height * (display_line as f32 - scroll_offset)
+}
 
 pub struct GutterElement {
   editor: Entity<Editor>,
@@ -45,8 +59,8 @@ enum GutterView {
 
 pub struct GutterPrepaintState {
   line_numbers: Vec<(usize, String)>,
-  viewport: Range<usize>,
   line_height: Pixels,
+  scroll_offset: f32,
   line_number_color: gpui::Hsla,
   line_backgrounds: Vec<PaintQuad>,
   gap_separators: Vec<PaintQuad>,
@@ -123,9 +137,9 @@ impl Element for GutterElement {
     cx: &mut App,
   ) -> Self::PrepaintState {
     let (
-      viewport,
       line_numbers,
       line_height,
+      scroll_offset,
       line_number_color,
       line_backgrounds,
       gap_separators,
@@ -146,7 +160,10 @@ impl Element for GutterElement {
       let scroll_hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
 
       // Calculate viewport (same logic as EditorElement)
-      let visible_line_count = ((bounds.size.height / line_height).ceil() as usize).max(1);
+      let mut visible_line_count = ((bounds.size.height / line_height).ceil() as usize).max(1);
+      if has_fractional_scroll(scroll_offset) {
+        visible_line_count += 1;
+      }
       let start_line = (scroll_offset.floor() as usize).min(total_lines.saturating_sub(1));
       let end_line = (start_line + visible_line_count).min(total_lines);
       let viewport = start_line..end_line;
@@ -286,9 +303,7 @@ impl Element for GutterElement {
           let is_start_gap = id.start == 0;
           let is_end_gap = id.end == doc_line_count;
           if !is_start_gap && !is_end_gap {
-            let y = bounds.top()
-              + line_height * (display_idx - viewport.start) as f32
-              + line_height * 0.5;
+            let y = line_y(bounds.top(), line_height, display_idx, scroll_offset) + line_height * 0.5;
             gap_separators.push(fill(
               Bounds::new(point(bounds.left(), y), size(bounds.size.width, px(1.0))),
               cx.theme().muted_foreground.opacity(0.35),
@@ -374,7 +389,7 @@ impl Element for GutterElement {
         };
 
         if let Some(color) = background {
-          let y = bounds.top() + line_height * (display_idx - viewport.start) as f32;
+          let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
           line_backgrounds.push(fill(
             Bounds::new(
               point(bounds.left(), y),
@@ -404,7 +419,7 @@ impl Element for GutterElement {
                 GroupKind::Removed => stripe_removed,
                 GroupKind::Mixed => stripe_modified,
               };
-              let y = bounds.top() + line_height * (display_idx - viewport.start) as f32;
+              let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
               stripe_quads.push(fill(
                 Bounds::new(point(bounds.left(), y), size(px(4.0), line_height)),
                 stripe_color,
@@ -434,7 +449,7 @@ impl Element for GutterElement {
               px(0.0)
             };
             let x = bounds.left() + stripe_width;
-            let y = bounds.top() + line_height * (display_idx - viewport.start) as f32;
+            let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
 
             if is_top {
               group_borders.push(fill(
@@ -466,7 +481,7 @@ impl Element for GutterElement {
         let stripe_spacing = px(DIAGONAL_STRIPE_SPACING);
         let stripe_width = px(DIAGONAL_STRIPE_WIDTH);
         for (start, end) in blank_ranges {
-          let y = bounds.top() + line_height * (start - viewport.start) as f32;
+          let y = line_y(bounds.top(), line_height, start, scroll_offset);
           let height = line_height * (end - start + 1) as f32;
           let top = y;
           let bottom = y + height;
@@ -490,9 +505,9 @@ impl Element for GutterElement {
       let line_number_color = editor.theme.line_number();
 
       (
-        viewport,
         line_numbers,
         line_height,
+        scroll_offset,
         line_number_color,
         line_backgrounds,
         gap_separators,
@@ -505,8 +520,8 @@ impl Element for GutterElement {
 
     GutterPrepaintState {
       line_numbers,
-      viewport,
       line_height,
+      scroll_offset,
       line_number_color,
       line_backgrounds,
       gap_separators,
@@ -570,9 +585,8 @@ impl Element for GutterElement {
         }
         editor.update(cx, |editor, cx| {
           let hovered = {
-            let scroll_offset = editor.scroll_offset_y.floor();
             let y_offset = event.position.y - bounds.top();
-            let line_float = scroll_offset + (y_offset / line_height);
+            let line_float = editor.scroll_offset_y + (y_offset / line_height);
             if line_float.is_sign_negative() {
               None
             } else {
@@ -694,7 +708,12 @@ impl Element for GutterElement {
     });
 
     for (line_idx, line_number) in &prepaint.line_numbers {
-      let y = bounds.top() + prepaint.line_height * (*line_idx - prepaint.viewport.start) as f32;
+      let y = line_y(
+        bounds.top(),
+        prepaint.line_height,
+        *line_idx,
+        prepaint.scroll_offset,
+      );
 
       let runs = vec![TextRun {
         len: line_number.len(),

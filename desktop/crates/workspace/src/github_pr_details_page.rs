@@ -1962,6 +1962,7 @@ impl GithubPrDetailsPage {
 
     let editor_panel = v_flex()
       .size_full()
+      .overflow_hidden()
       .when_some(self.selected_file.as_ref(), |this, file| {
         this.child(self.render_diff_header(file, cx))
       })

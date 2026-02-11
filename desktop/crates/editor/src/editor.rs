@@ -72,6 +72,11 @@ const POLL_INTERVAL_MS: u64 = 500;
 const DEFAULT_REPO_ROOT: &str = "/Users/joris/workspace/git-playground";
 /// Hardcoded file path (temporary)
 const DEFAULT_FILE_PATH: &str = "/Users/joris/workspace/git-playground/perf-100k.ts";
+const FRACTIONAL_SCROLL_EPSILON: f32 = 0.001;
+
+fn has_fractional_scroll(scroll_offset: f32) -> bool {
+  (scroll_offset - scroll_offset.floor()) > FRACTIONAL_SCROLL_EPSILON
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffViewMode {
@@ -570,7 +575,7 @@ impl Editor {
         continue;
       }
 
-      let top = line_height * (first as f32 - viewport.start as f32);
+      let top = line_height * (first as f32 - self.scroll_offset_y);
       let height = line_height * count as f32;
 
       layouts.push(ReviewCommentLayout {
@@ -1448,6 +1453,25 @@ impl Editor {
     }
   }
 
+  pub fn first_display_line_for_group(&self, group_id: &Arc<str>) -> Option<usize> {
+    let projection = self.projection.as_ref()?;
+    projection.lines.iter().position(|line| match line {
+      DisplayLine::Doc {
+        group_id: Some(id), ..
+      }
+      | DisplayLine::Modified {
+        group_id: Some(id), ..
+      }
+      | DisplayLine::Removed {
+        group_id: Some(id), ..
+      }
+      | DisplayLine::NoNewline {
+        group_id: Some(id), ..
+      } => id.as_ref() == group_id.as_ref(),
+      _ => false,
+    })
+  }
+
   pub fn display_to_doc_line(&self, display_line: usize) -> Option<usize> {
     if let Some(projection) = &self.projection {
       projection.display_to_doc_line(display_line)
@@ -1595,7 +1619,13 @@ impl Editor {
   }
 
   pub(crate) fn viewport_range(&self, line_height: Pixels, total_lines: usize) -> Range<usize> {
-    let visible_line_count = ((self.viewport_height / line_height).ceil() as usize).max(1);
+    if total_lines == 0 {
+      return 0..0;
+    }
+    let mut visible_line_count = ((self.viewport_height / line_height).ceil() as usize).max(1);
+    if has_fractional_scroll(self.scroll_offset_y) {
+      visible_line_count += 1;
+    }
     let start_line = (self.scroll_offset_y.floor() as usize).min(total_lines.saturating_sub(1));
     let end_line = (start_line + visible_line_count).min(total_lines);
     start_line..end_line
@@ -3005,7 +3035,7 @@ impl Render for Editor {
             continue;
           }
 
-          let y = line_height * (control.display_line - viewport.start) as f32;
+          let y = line_height * (control.display_line as f32 - self.scroll_offset_y);
           let button_id = format!(
             "gap-expand-{}-{}-{}-{}",
             view_suffix,
@@ -3157,6 +3187,7 @@ impl Render for Editor {
       .track_focus(&self.focus_handle(cx))
       .cursor(CursorStyle::IBeam)
       .size_full()
+      .overflow_hidden()
       .on_action(cx.listener(crate::actions::enter))
       .on_action(cx.listener(crate::actions::tab))
       .on_action(cx.listener(crate::actions::backspace))
