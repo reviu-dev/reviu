@@ -36,11 +36,25 @@ const NEWLINE_SELECTION_WIDTH: f32 = 4.0;
 const PIXEL_SCROLL_DIVISOR: f32 = 20.0;
 // Scroll sensitivity for line-based scrolling (mouse wheel)
 const LINE_SCROLL_MULTIPLIER: f32 = 3.0;
+const FRACTIONAL_SCROLL_EPSILON: f32 = 0.001;
 const SCROLL_AXIS_RATIO: f32 = 1.1;
 const SCROLL_AXIS_SWITCH_RATIO: f32 = 1.4;
 const SCROLL_AXIS_TIMEOUT_MS: u64 = 150;
 const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
 const DIAGONAL_STRIPE_WIDTH: f32 = 1.0;
+
+fn has_fractional_scroll(scroll_offset: f32) -> bool {
+  (scroll_offset - scroll_offset.floor()) > FRACTIONAL_SCROLL_EPSILON
+}
+
+fn line_y(
+  bounds_top: Pixels,
+  line_height: Pixels,
+  display_line: usize,
+  scroll_offset: f32,
+) -> Pixels {
+  bounds_top + line_height * (display_line as f32 - scroll_offset)
+}
 
 /// Encapsulates layout information for mouse position -> text offset conversion
 #[derive(Clone)]
@@ -60,8 +74,7 @@ impl PositionMap {
     }
 
     let y_offset = position.y - self.bounds.top();
-    let scroll_offset = self.scroll_offset.floor();
-    let line_float = scroll_offset + (y_offset / self.line_height);
+    let line_float = self.scroll_offset + (y_offset / self.line_height);
     if line_float.is_sign_negative() {
       return None;
     }
@@ -78,8 +91,7 @@ impl PositionMap {
     }
 
     let y_offset = position.y - self.bounds.top();
-    let scroll_offset = self.scroll_offset.floor();
-    let line_float = scroll_offset + (y_offset / self.line_height);
+    let line_float = self.scroll_offset + (y_offset / self.line_height);
     if line_float.is_sign_negative() {
       return None;
     }
@@ -112,8 +124,7 @@ impl PositionMap {
     }
 
     let y_offset = position.y - self.bounds.top();
-    let scroll_offset = self.scroll_offset.floor();
-    let line_float = scroll_offset + (y_offset / self.line_height);
+    let line_float = self.scroll_offset + (y_offset / self.line_height);
     if line_float.is_sign_negative() {
       return None;
     }
@@ -615,6 +626,7 @@ pub struct PrepaintState {
   viewport: Range<usize>,
   bounds: Bounds<Pixels>,
   line_height: Pixels,
+  scroll_offset: f32,
   scroll_hitbox: Hitbox,
   projection: Option<Arc<Projection>>,
 }
@@ -655,7 +667,14 @@ impl EditorElement {
     scroll_offset: f32,
     total_lines: usize,
   ) -> Range<usize> {
-    let visible_line_count = ((bounds.size.height / line_height).ceil() as usize).max(1);
+    if total_lines == 0 {
+      return 0..0;
+    }
+
+    let mut visible_line_count = ((bounds.size.height / line_height).ceil() as usize).max(1);
+    if has_fractional_scroll(scroll_offset) {
+      visible_line_count += 1;
+    }
 
     let start_line = (scroll_offset.floor() as usize).min(total_lines.saturating_sub(1));
     let end_line = (start_line + visible_line_count).min(total_lines);
@@ -778,6 +797,7 @@ impl Element for EditorElement {
       selected_range,
       display_selection,
       cursor_offset,
+      scroll_offset,
       mut shaped_lines,
       lines_to_shape,
       viewport_lines,
@@ -842,6 +862,7 @@ impl Element for EditorElement {
         editor.selected_range.clone(),
         editor.display_selection.clone(),
         editor.cursor_offset(),
+        scroll_offset,
         shaped_lines,
         lines_to_shape,
         viewport_lines,
@@ -1104,8 +1125,7 @@ impl Element for EditorElement {
         let is_start_gap = id.start == 0;
         let is_end_gap = id.end == doc_line_count;
         if !is_start_gap && !is_end_gap {
-          let y =
-            bounds.top() + line_height * (*display_idx - viewport.start) as f32 + line_height * 0.5;
+          let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset) + line_height * 0.5;
           gap_separators.push(fill(
             Bounds::new(point(bounds.left(), y), size(bounds.size.width, px(1.0))),
             cx.theme().muted_foreground.opacity(0.35),
@@ -1167,7 +1187,7 @@ impl Element for EditorElement {
       };
 
       if let Some(color) = background {
-        let y = bounds.top() + line_height * (*display_idx - viewport.start) as f32;
+        let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
         line_backgrounds.push(fill(
           Bounds::new(
             point(bounds.left(), y),
@@ -1186,7 +1206,7 @@ impl Element for EditorElement {
         &theme,
       ) {
         if let Some((_, shaped)) = shaped_lines.iter().find(|(idx, _)| *idx == *display_idx) {
-          let y = bounds.top() + line_height * (*display_idx - viewport.start) as f32;
+          let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
           for range in word_diff.ranges {
             if range.start >= range.end {
               continue;
@@ -1244,7 +1264,7 @@ impl Element for EditorElement {
           let is_top = prev_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
           let is_bottom = next_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
           let border_thickness = px(1.0);
-          let y = bounds.top() + line_height * (*display_idx - viewport.start) as f32;
+          let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
 
           if is_top {
             group_borders.push(fill(
@@ -1290,7 +1310,7 @@ impl Element for EditorElement {
       let stripe_spacing = px(DIAGONAL_STRIPE_SPACING);
       let stripe_width = px(DIAGONAL_STRIPE_WIDTH);
       for (start, end) in blank_ranges {
-        let y = bounds.top() + line_height * (start - viewport.start) as f32;
+        let y = line_y(bounds.top(), line_height, start, scroll_offset);
         let height = line_height * (end - start + 1) as f32;
         let top = y;
         let bottom = y + height;
@@ -1343,7 +1363,7 @@ impl Element for EditorElement {
           continue;
         }
 
-        let y = bounds.top() + line_height * (*display_idx - viewport.start) as f32;
+        let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
         overlays.push(GroupOverlay {
           id: group_id,
           state,
@@ -1369,9 +1389,8 @@ impl Element for EditorElement {
         if !bounds.contains(&position) {
           return;
         }
-        let scroll_offset = editor.scroll_offset_y.floor();
         let y_offset = position.y - bounds.top();
-        let line_float = scroll_offset + (y_offset / line_height);
+        let line_float = editor.scroll_offset_y + (y_offset / line_height);
         if line_float.is_sign_negative() {
           return;
         }
@@ -1419,7 +1438,7 @@ impl Element for EditorElement {
         let line_len = line_text.len();
         let cursor_in_line = display_cursor.column.min(line_len);
         let cursor_x = shaped.x_for_index(cursor_in_line);
-        let y = bounds.top() + line_height * (display_cursor.line - viewport.start) as f32;
+        let y = line_y(bounds.top(), line_height, display_cursor.line, scroll_offset);
         Some(fill(
           Bounds::new(
             point(bounds.left() + cursor_x, y),
@@ -1444,7 +1463,7 @@ impl Element for EditorElement {
           let line_start = document.line_to_char(cursor_doc_line);
           let cursor_in_line = cursor_offset - line_start;
           let cursor_x = shaped.x_for_index(cursor_in_line);
-          let y = bounds.top() + line_height * (cursor_line - viewport.start) as f32;
+          let y = line_y(bounds.top(), line_height, cursor_line, scroll_offset);
           Some(fill(
             Bounds::new(
               point(bounds.left() + cursor_x, y),
@@ -1511,7 +1530,7 @@ impl Element for EditorElement {
 
           let x_start = shaped.x_for_index(line_start);
           let x_end = shaped.x_for_index(line_end);
-          let y = bounds.top() + line_height * (display_line - viewport.start) as f32;
+          let y = line_y(bounds.top(), line_height, display_line, scroll_offset);
 
           let is_selecting_newline = display_line < end_line && x_start == x_end;
           let visual_x_end = if is_selecting_newline {
@@ -1556,7 +1575,7 @@ impl Element for EditorElement {
           let sel_line_end = sel_end.min(line_end) - line_start;
           let x_start = shaped.x_for_index(sel_line_start);
           let x_end = shaped.x_for_index(sel_line_end);
-          let y = bounds.top() + line_height * (display_line - viewport.start) as f32;
+          let y = line_y(bounds.top(), line_height, display_line, scroll_offset);
 
           // If selection is empty on this line (selecting just the newline),
           // Only add width if we're actually selecting the newline character
@@ -1597,6 +1616,7 @@ impl Element for EditorElement {
       viewport,
       bounds,
       line_height,
+      scroll_offset,
       scroll_hitbox,
       projection,
     }
@@ -1821,7 +1841,12 @@ impl Element for EditorElement {
 
     // Paint text lines
     for (line_idx, shaped_line) in &prepaint.shaped_lines {
-      let y = bounds.top() + prepaint.line_height * (*line_idx - prepaint.viewport.start) as f32;
+      let y = line_y(
+        bounds.top(),
+        prepaint.line_height,
+        *line_idx,
+        prepaint.scroll_offset,
+      );
       shaped_line
         .paint(
           point(bounds.left(), y),
@@ -1934,8 +1959,8 @@ mod tests {
 
     let viewport = element.calculate_viewport(bounds, line_height, scroll_offset, total_lines);
 
-    // Should floor scroll_offset
-    assert_eq!(viewport, 5..25);
+    // Include one extra line when scroll is fractional to avoid gaps.
+    assert_eq!(viewport, 5..26);
   }
 
   #[gpui::test]

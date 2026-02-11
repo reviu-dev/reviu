@@ -2166,6 +2166,7 @@ impl GitPage {
       .min_w(px(0.0))
       .min_h(px(0.0))
       .relative()
+      .overflow_hidden()
       .child(editor);
 
     if let Some(overlay) = overlay {
@@ -2189,19 +2190,17 @@ impl GitPage {
       .iter()
       .find(|overlay| overlay.id.as_ref() == hovered_id.as_ref())?;
 
-    let viewport_start = editor_state.scroll_offset_y.floor() as usize;
-    if overlay.display_line < viewport_start {
-      return None;
-    }
-
     let line_height = window.line_height();
-    let visible_lines = ((editor_state.viewport_height / line_height).ceil() as usize).max(1);
-    let viewport_end = viewport_start + visible_lines;
-    if overlay.display_line >= viewport_end {
+    let anchor_display_line = editor_state
+      .first_display_line_for_group(hovered_id)
+      .unwrap_or(overlay.display_line);
+    let mut top = line_height * (anchor_display_line as f32 - editor_state.scroll_offset_y);
+    if top >= editor_state.viewport_height {
       return None;
     }
-
-    let top = line_height * (overlay.display_line - viewport_start) as f32;
+    if top < px(0.0) {
+      top = px(0.0);
+    }
     let file_dirty = editor_state.is_dirty;
     let selected_status = self
       .selected_file
