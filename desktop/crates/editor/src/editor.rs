@@ -10,6 +10,9 @@ use std::{
 };
 
 use buffer::TransactionId;
+use gfm_markdown_viewer::{
+  LinkAction, MarkdownRenderOptions, MarkdownRenderState, render_markdown,
+};
 use git::{ApplyLocation, DiffSet, GitFileBases, GitStore, RepoFile};
 use gpui::{
   App, Bounds, Context, CursorStyle, Entity, EntityInputHandler, FocusHandle, Focusable,
@@ -24,7 +27,6 @@ use gpui_component::{
   resizable::{h_resizable, resizable_panel},
   v_flex,
 };
-use gfm_markdown_viewer::{LinkAction, MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use smol::unblock;
 use ui::{Theme, UiIconName};
 use unicode_segmentation::UnicodeSegmentation;
@@ -3261,6 +3263,7 @@ pub mod tests {
         let cursor_blink = cx.new(CursorBlink::new);
 
         Editor {
+          review_comment_markdown_states: HashMap::new(),
           review_comment_pr_number: None,
           collapsed_review_comments: HashSet::new(),
           review_comments: Vec::new(),
