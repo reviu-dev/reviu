@@ -509,28 +509,59 @@ impl GithubPrDetailsPage {
       return Vec::new();
     };
 
+    let comments_for_file: Vec<&GithubPullRequestReviewComment> = self
+      .review_comments
+      .iter()
+      .filter(|comment| comment.path == file.path)
+      .collect();
+    let comments_by_id: HashMap<u64, &GithubPullRequestReviewComment> = comments_for_file
+      .iter()
+      .map(|comment| (comment.id, *comment))
+      .collect();
+
     self
       .review_comments
       .iter()
       .filter(|comment| comment.path == file.path)
       .filter_map(|comment| {
-        let line = comment.line.or(comment.start_line).and_then(|value| {
+        let mut resolved_line = comment.line.or(comment.start_line);
+        let mut resolved_side = comment.side.as_deref().or(comment.start_side.as_deref());
+        let mut current = Some(comment);
+        for _ in 0..32 {
+          if resolved_line.is_some() && resolved_side.is_some() {
+            break;
+          }
+
+          let Some(parent_id) = current.and_then(|value| value.in_reply_to_id) else {
+            break;
+          };
+
+          current = comments_by_id.get(&parent_id).copied();
+          let Some(parent) = current else {
+            break;
+          };
+
+          if resolved_line.is_none() {
+            resolved_line = parent.line.or(parent.start_line);
+          }
+          if resolved_side.is_none() {
+            resolved_side = parent.side.as_deref().or(parent.start_side.as_deref());
+          }
+        }
+
+        let line = resolved_line.and_then(|value| {
           if value > 0 {
             Some(value as usize)
           } else {
             None
           }
         })?;
-        let side = match comment.side.as_deref().or(comment.start_side.as_deref()) {
+        let side = match resolved_side {
           Some("LEFT") => ReviewCommentSide::Left,
           _ => ReviewCommentSide::Right,
         };
 
-        let side_label = comment
-          .side
-          .as_deref()
-          .or(comment.start_side.as_deref())
-          .unwrap_or("");
+        let side_label = resolved_side.unwrap_or("");
         let line_label = {
           let line_label = if let Some(start) = comment.start_line
             && let Some(end) = comment.line
@@ -544,6 +575,8 @@ impl GithubPrDetailsPage {
           } else {
             comment
               .line
+              .or(comment.start_line)
+              .or(resolved_line)
               .map(|value| format!("L{} {}", value, side_label).trim().to_string())
           };
           line_label.map(|label| Arc::from(label.as_str()))
@@ -551,6 +584,7 @@ impl GithubPrDetailsPage {
 
         Some(ReviewComment {
           id: comment.id,
+          in_reply_to_id: comment.in_reply_to_id,
           line: line.saturating_sub(1),
           side,
           author: Arc::from(comment.user.login.as_str()),

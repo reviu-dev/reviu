@@ -136,6 +136,9 @@ pub struct Editor {
   git_state: BufferGitState,
   pub diffs: Option<DiffSet>,
   review_comments: Vec<ReviewComment>,
+  review_comment_thread_roots: HashMap<u64, u64>,
+  review_comment_threads: HashMap<u64, Vec<u64>>,
+  review_comment_thread_order: Vec<u64>,
   review_comment_markdown_states: HashMap<u64, MarkdownRenderState>,
   review_comment_pr_number: Option<u64>,
   collapsed_review_comments: HashSet<u64>,
@@ -175,15 +178,20 @@ pub struct GroupOverlay {
 
 struct ReviewCommentLayout {
   id: u64,
-  line: usize,
   top: Pixels,
   height: Pixels,
+  messages: Vec<ReviewCommentMessageLayout>,
+  collapsed: bool,
+}
+
+struct ReviewCommentMessageLayout {
+  id: u64,
+  line: usize,
   author: Arc<str>,
   avatar_url: Option<Arc<str>>,
   line_label: Option<Arc<str>>,
   body: Arc<str>,
   created_at: Arc<str>,
-  collapsed: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -366,6 +374,9 @@ impl Editor {
       git_state: BufferGitState::default(),
       diffs: None,
       review_comments: Vec::new(),
+      review_comment_thread_roots: HashMap::new(),
+      review_comment_threads: HashMap::new(),
+      review_comment_thread_order: Vec::new(),
       review_comment_markdown_states: HashMap::new(),
       review_comment_pr_number: None,
       collapsed_review_comments: HashSet::new(),
@@ -451,6 +462,9 @@ impl Editor {
     } else {
       self.diffs = None;
       self.review_comments.clear();
+      self.review_comment_thread_roots.clear();
+      self.review_comment_threads.clear();
+      self.review_comment_thread_order.clear();
       self.review_comment_markdown_states.clear();
       self.review_comment_pr_number = None;
       self.collapsed_review_comments.clear();
@@ -462,6 +476,30 @@ impl Editor {
 
   pub fn set_review_comments(&mut self, comments: Vec<ReviewComment>, cx: &mut Context<Self>) {
     self.review_comments = comments;
+
+    let comments_by_id: HashMap<u64, &ReviewComment> = self
+      .review_comments
+      .iter()
+      .map(|comment| (comment.id, comment))
+      .collect();
+    self.review_comment_thread_roots.clear();
+    self.review_comment_threads.clear();
+    self.review_comment_thread_order.clear();
+
+    for comment in &self.review_comments {
+      let root_id = Self::resolve_review_comment_thread_root(comment, &comments_by_id);
+      self.review_comment_thread_roots.insert(comment.id, root_id);
+      let is_new_thread = !self.review_comment_threads.contains_key(&root_id);
+      self
+        .review_comment_threads
+        .entry(root_id)
+        .or_default()
+        .push(comment.id);
+      if is_new_thread {
+        self.review_comment_thread_order.push(root_id);
+      }
+    }
+
     self
       .collapsed_review_comments
       .retain(|id| self.review_comments.iter().any(|comment| comment.id == *id));
@@ -487,14 +525,60 @@ impl Editor {
     }
   }
 
-  pub fn toggle_review_comment(&mut self, id: u64, cx: &mut Context<Self>) {
-    if !self.collapsed_review_comments.insert(id) {
-      self.collapsed_review_comments.remove(&id);
+  fn resolve_review_comment_thread_root(
+    comment: &ReviewComment,
+    comments_by_id: &HashMap<u64, &ReviewComment>,
+  ) -> u64 {
+    let mut root_id = comment.id;
+    let mut parent = comment.in_reply_to_id;
+    for _ in 0..64 {
+      let Some(parent_id) = parent else {
+        break;
+      };
+      if parent_id == root_id {
+        break;
+      }
+      root_id = parent_id;
+      parent = comments_by_id
+        .get(&parent_id)
+        .and_then(|value| value.in_reply_to_id);
+    }
+    root_id
+  }
+
+  fn thread_id_for_comment(&self, comment_id: u64) -> u64 {
+    self
+      .review_comment_thread_roots
+      .get(&comment_id)
+      .copied()
+      .unwrap_or(comment_id)
+  }
+
+  fn toggle_review_comment_thread(&mut self, thread_id: u64, cx: &mut Context<Self>) {
+    let ids = self
+      .review_comment_threads
+      .get(&thread_id)
+      .cloned()
+      .unwrap_or_else(|| vec![thread_id]);
+    let should_collapse = ids
+      .iter()
+      .any(|id| !self.collapsed_review_comments.contains(id));
+
+    for id in ids {
+      if should_collapse {
+        self.collapsed_review_comments.insert(id);
+      } else {
+        self.collapsed_review_comments.remove(&id);
+      }
     }
 
     if self.diffs.is_some() {
       self.rebuild_projection(cx);
     }
+  }
+
+  pub fn toggle_review_comment(&mut self, id: u64, cx: &mut Context<Self>) {
+    self.toggle_review_comment_thread(self.thread_id_for_comment(id), cx);
   }
 
   pub fn scroll_to_review_comment(
@@ -507,11 +591,16 @@ impl Editor {
       return false;
     };
 
-    let Some(display_line) = projection
-      .lines
-      .iter()
-      .position(|line| matches!(line, DisplayLine::ReviewComment { id, .. } if *id == comment_id))
-    else {
+    let display_line_for_comment = |id: u64| {
+      projection.lines.iter().position(
+        |line| matches!(line, DisplayLine::ReviewComment { id: line_id, .. } if *line_id == id),
+      )
+    };
+
+    let Some(display_line) = display_line_for_comment(comment_id).or_else(|| {
+      let thread_id = self.thread_id_for_comment(comment_id);
+      display_line_for_comment(thread_id)
+    }) else {
       return false;
     };
 
@@ -537,9 +626,9 @@ impl Editor {
       let started_at = Instant::now();
       loop {
         Timer::after(REVIEW_COMMENT_SCROLL_TICK).await;
-        let progress =
-          (started_at.elapsed().as_secs_f32() / REVIEW_COMMENT_SCROLL_DURATION.as_secs_f32())
-            .min(1.0);
+        let progress = (started_at.elapsed().as_secs_f32()
+          / REVIEW_COMMENT_SCROLL_DURATION.as_secs_f32())
+        .min(1.0);
         let eased = ease_out_cubic(progress);
         let next_scroll = start + delta * eased;
         let done = progress >= 1.0;
@@ -578,8 +667,7 @@ impl Editor {
     let total_lines = projection.lines.len();
     let viewport = self.viewport_range(line_height, total_lines);
 
-    let mut first_line: HashMap<u64, usize> = HashMap::new();
-    let mut line_counts: HashMap<u64, usize> = HashMap::new();
+    let mut spans_by_comment: HashMap<u64, (usize, usize)> = HashMap::new();
 
     for (idx, line) in projection.lines.iter().enumerate() {
       let DisplayLine::ReviewComment { id, side, .. } = line else {
@@ -590,53 +678,127 @@ impl Editor {
           continue;
         }
       }
-      let entry = first_line.entry(*id).or_insert(idx);
-      if idx < *entry {
-        *entry = idx;
+      let entry = spans_by_comment.entry(*id).or_insert((idx, 0));
+      if idx < entry.0 {
+        entry.0 = idx;
       }
-      *line_counts.entry(*id).or_insert(0) += 1;
+      entry.1 = entry.1.saturating_add(1);
     }
 
-    if first_line.is_empty() {
+    if spans_by_comment.is_empty() {
       return Vec::new();
     }
 
-    let mut layouts = Vec::new();
-    for comment in &self.review_comments {
-      if let Some(filter) = side_filter {
-        if comment.side != filter {
-          continue;
-        }
-      }
+    let comments_by_id: HashMap<u64, &ReviewComment> = self
+      .review_comments
+      .iter()
+      .map(|comment| (comment.id, comment))
+      .collect();
 
-      let Some(first) = first_line.get(&comment.id).copied() else {
+    let mut layouts = Vec::new();
+    let mut seen_threads = HashSet::new();
+    for thread_id in &self.review_comment_thread_order {
+      let Some(comment_ids) = self.review_comment_threads.get(thread_id) else {
         continue;
       };
-      let count = line_counts.get(&comment.id).copied().unwrap_or(0);
-      if count == 0 {
-        continue;
+
+      let mut messages = Vec::new();
+      let mut visible_comment_ids = Vec::new();
+      let mut start_line: Option<usize> = None;
+      let mut end_line = 0usize;
+
+      for comment_id in comment_ids {
+        let Some(comment) = comments_by_id.get(comment_id).copied() else {
+          continue;
+        };
+        if let Some(filter) = side_filter
+          && comment.side != filter
+        {
+          continue;
+        }
+        let Some((first, count)) = spans_by_comment.get(comment_id).copied() else {
+          continue;
+        };
+        if count == 0 {
+          continue;
+        }
+
+        let end = first.saturating_add(count);
+        start_line = Some(start_line.map_or(first, |existing| existing.min(first)));
+        end_line = end_line.max(end);
+        visible_comment_ids.push(*comment_id);
+        messages.push(ReviewCommentMessageLayout {
+          id: comment.id,
+          line: comment.line,
+          author: comment.author.clone(),
+          avatar_url: comment.avatar_url.clone(),
+          line_label: comment.line_label.clone(),
+          body: comment.body.clone(),
+          created_at: comment.created_at.clone(),
+        });
       }
 
-      let end = first.saturating_add(count);
-      if end < viewport.start || first > viewport.end {
+      let Some(first) = start_line else {
+        continue;
+      };
+      if end_line <= viewport.start || first >= viewport.end {
         continue;
       }
 
       let top = line_height * (first as f32 - self.scroll_offset_y);
-      let height = line_height * count as f32;
+      let height = line_height * end_line.saturating_sub(first) as f32;
+      let collapsed = !visible_comment_ids.is_empty()
+        && visible_comment_ids
+          .iter()
+          .all(|id| self.collapsed_review_comments.contains(id));
 
       layouts.push(ReviewCommentLayout {
-        id: comment.id,
-        line: comment.line,
+        id: *thread_id,
         top,
         height,
-        author: comment.author.clone(),
-        avatar_url: comment.avatar_url.clone(),
-        line_label: comment.line_label.clone(),
-        body: comment.body.clone(),
-        created_at: comment.created_at.clone(),
+        messages,
+        collapsed,
+      });
+      seen_threads.insert(*thread_id);
+    }
+
+    for comment in &self.review_comments {
+      let thread_id = self.thread_id_for_comment(comment.id);
+      if seen_threads.contains(&thread_id) {
+        continue;
+      }
+      if let Some(filter) = side_filter
+        && comment.side != filter
+      {
+        continue;
+      }
+      let Some((first, count)) = spans_by_comment.get(&comment.id).copied() else {
+        continue;
+      };
+      if count == 0 {
+        continue;
+      }
+      let end = first.saturating_add(count);
+      if end <= viewport.start || first >= viewport.end {
+        continue;
+      }
+
+      layouts.push(ReviewCommentLayout {
+        id: thread_id,
+        top: line_height * (first as f32 - self.scroll_offset_y),
+        height: line_height * count as f32,
+        messages: vec![ReviewCommentMessageLayout {
+          id: comment.id,
+          line: comment.line,
+          author: comment.author.clone(),
+          avatar_url: comment.avatar_url.clone(),
+          line_label: comment.line_label.clone(),
+          body: comment.body.clone(),
+          created_at: comment.created_at.clone(),
+        }],
         collapsed: self.collapsed_review_comments.contains(&comment.id),
       });
+      seen_threads.insert(thread_id);
     }
 
     layouts
@@ -663,7 +825,10 @@ impl Editor {
       .bottom(px(0.0));
 
     for layout in layouts {
-      let id = layout.id;
+      let thread_id = layout.id;
+      let Some(first_message) = layout.messages.first() else {
+        continue;
+      };
       let editor = editor_entity.clone();
       let is_collapsed = layout.collapsed;
       let toggle_icon = if is_collapsed {
@@ -671,14 +836,16 @@ impl Editor {
       } else {
         IconName::ChevronDown
       };
-      let toggle_button = Button::new(format!("review-comment-toggle-{}", id))
+      let toggle_button = Button::new(format!("review-comment-toggle-{}", thread_id))
         .icon(toggle_icon)
         .ghost()
         .xsmall()
         .compact()
         .on_click(move |_, _, cx| {
           cx.stop_propagation();
-          editor.update(cx, |editor, cx| editor.toggle_review_comment(id, cx));
+          editor.update(cx, |editor, cx| {
+            editor.toggle_review_comment_thread(thread_id, cx)
+          });
         });
       let toggle_button = div()
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
@@ -686,18 +853,18 @@ impl Editor {
         })
         .child(toggle_button);
 
-      let line_label = layout
+      let line_label = first_message
         .line_label
         .clone()
-        .or_else(|| Some(Arc::from(format!("L{}", layout.line + 1))));
+        .or_else(|| Some(Arc::from(format!("L{}", first_message.line + 1))));
 
       let meta = h_flex()
         .items_center()
         .gap_2()
         .child(
           Avatar::new()
-            .name(layout.author.to_string())
-            .when_some(layout.avatar_url.clone(), |this, url| {
+            .name(first_message.author.to_string())
+            .when_some(first_message.avatar_url.clone(), |this, url| {
               this.src(url.as_ref().to_string())
             })
             .small(),
@@ -706,7 +873,7 @@ impl Editor {
           div()
             .text_sm()
             .text_color(theme.foreground)
-            .child(layout.author.to_string()),
+            .child(first_message.author.to_string()),
         )
         .when_some(line_label, |this, label| {
           this.child(
@@ -720,7 +887,7 @@ impl Editor {
           div()
             .text_xs()
             .text_color(theme.muted_foreground)
-            .child(layout.created_at.as_ref().to_string()),
+            .child(first_message.created_at.as_ref().to_string()),
         );
 
       let header_editor = editor_entity.clone();
@@ -729,7 +896,9 @@ impl Editor {
         .justify_between()
         .gap_2()
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-          header_editor.update(cx, |editor, cx| editor.toggle_review_comment(id, cx));
+          header_editor.update(cx, |editor, cx| {
+            editor.toggle_review_comment_thread(thread_id, cx)
+          });
         })
         .child(meta)
         .child(toggle_button);
@@ -761,16 +930,69 @@ impl Editor {
           }
         })
       };
-      let state = self
-        .review_comment_markdown_states
-        .get(&layout.id)
-        .cloned()
-        .unwrap_or_else(MarkdownRenderState::new);
-      let body = render_markdown(
-        layout.body.as_ref(),
-        &MarkdownRenderOptions::with_on_link(link_handler).with_state(state),
-        cx,
-      );
+
+      let mut thread_messages = v_flex().gap_2();
+      for (index, message) in layout.messages.iter().enumerate() {
+        let state = self
+          .review_comment_markdown_states
+          .get(&message.id)
+          .cloned()
+          .unwrap_or_else(MarkdownRenderState::new);
+        let body = render_markdown(
+          message.body.as_ref(),
+          &MarkdownRenderOptions::with_on_link(link_handler.clone()).with_state(state),
+          cx,
+        );
+
+        let message_block = if index == 0 {
+          v_flex().child(body)
+        } else {
+          let message_line_label = message
+            .line_label
+            .clone()
+            .or_else(|| Some(Arc::from(format!("L{}", message.line + 1))));
+          v_flex()
+            .gap_1()
+            .pt_2()
+            .border_t_1()
+            .border_color(theme.border)
+            .child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                  Avatar::new()
+                    .name(message.author.to_string())
+                    .when_some(message.avatar_url.clone(), |this, url| {
+                      this.src(url.as_ref().to_string())
+                    })
+                    .small(),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(message.author.to_string()),
+                )
+                .when_some(message_line_label, |this, label| {
+                  this.child(
+                    div()
+                      .text_xs()
+                      .text_color(theme.muted_foreground)
+                      .child(label.as_ref().to_string()),
+                  )
+                })
+                .child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(message.created_at.as_ref().to_string()),
+                ),
+            )
+            .child(body)
+        };
+        thread_messages = thread_messages.child(message_block);
+      }
 
       let card = div()
         .size_full()
@@ -788,7 +1010,7 @@ impl Editor {
             .gap_1()
             .p_2()
             .child(header)
-            .when(!is_collapsed, |this| this.child(body)),
+            .when(!is_collapsed, |this| this.child(thread_messages)),
         );
 
       overlay = overlay.child(
@@ -3308,6 +3530,9 @@ pub mod tests {
         let cursor_blink = cx.new(CursorBlink::new);
 
         Editor {
+          review_comment_thread_roots: HashMap::new(),
+          review_comment_threads: HashMap::new(),
+          review_comment_thread_order: Vec::new(),
           review_comment_markdown_states: HashMap::new(),
           review_comment_pr_number: None,
           collapsed_review_comments: HashSet::new(),
