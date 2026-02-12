@@ -92,6 +92,11 @@ pub enum CommandPaletteAction {
   },
   OpenGitPage,
   OpenGithubPage,
+  OpenGithubPrDetails {
+    owner: String,
+    repo: String,
+    number: u64,
+  },
   OpenSettingsPage,
 }
 
@@ -360,6 +365,7 @@ pub enum CommandPaletteCommandId {
   MergeBranch,
   OpenGitPage,
   OpenGithubPage,
+  OpenGithubPrFromUrl,
   OpenSettingsPage,
 }
 
@@ -412,6 +418,14 @@ impl CommandPaletteCommand {
     }
   }
 
+  pub fn open_github_pr_from_url() -> Self {
+    Self {
+      id: CommandPaletteCommandId::OpenGithubPrFromUrl,
+      name: "Open GitHub PR from URL".into(),
+      description: Some("Open a pull request details page from a GitHub URL".into()),
+    }
+  }
+
   pub fn open_settings_page() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenSettingsPage,
@@ -434,6 +448,10 @@ impl CommandPaletteCommand {
       commands.push(Self::open_github_page());
     }
 
+    if include_github {
+      commands.push(Self::open_github_pr_from_url());
+    }
+
     if current_page != CommandPalettePage::Settings {
       commands.push(Self::open_settings_page());
     }
@@ -450,11 +468,18 @@ impl CommandPaletteCommand {
       }
       CommandPaletteCommandId::OpenGitPage => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::OpenGithubPage => Icon::new(IconName::GitHub),
+      CommandPaletteCommandId::OpenGithubPrFromUrl => Icon::new(IconName::GitHub),
       CommandPaletteCommandId::OpenSettingsPage => Icon::new(IconName::Settings2),
     }
   }
 
   fn matches(&self, query: &str) -> bool {
+    if self.id == CommandPaletteCommandId::OpenGithubPrFromUrl
+      && CommandPalette::parse_github_pull_request_url(query).is_some()
+    {
+      return true;
+    }
+
     if query.is_empty() {
       return true;
     }
@@ -497,6 +522,7 @@ enum CommandPaletteScreen {
   CreateBranch,
   CreateBranchFrom,
   MergeBranch,
+  OpenGithubPrFromUrl,
 }
 
 pub struct CommandPalette {
@@ -506,6 +532,7 @@ pub struct CommandPalette {
   branches_list: Entity<ListState<BranchesListDelegate>>,
   branches_with_commands_list: Entity<ListState<BranchesListWithCommandsDelegate>>,
   create_branch_input: Entity<InputState>,
+  open_github_pr_input: Entity<InputState>,
   create_branch_base: Option<Rc<CommandPaletteBranch>>,
   error: Option<SharedString>,
   on_action: Option<CommandPaletteHandler>,
@@ -513,9 +540,41 @@ pub struct CommandPalette {
 }
 
 impl CommandPalette {
+  fn parse_github_pull_request_url(url: &str) -> Option<(String, String, u64)> {
+    let url = url.trim();
+    let tail = url
+      .strip_prefix("https://github.com/")
+      .or_else(|| url.strip_prefix("http://github.com/"))
+      .or_else(|| url.strip_prefix("github.com/"))?;
+
+    let mut parts = tail.split('/');
+    let owner = parts.next()?.trim();
+    let repo = parts.next()?.trim();
+    if owner.is_empty() || repo.is_empty() {
+      return None;
+    }
+    if parts.next()? != "pull" {
+      return None;
+    }
+
+    let number_part = parts.next()?;
+    let number_part = number_part
+      .split('#')
+      .next()
+      .unwrap_or(number_part)
+      .split('?')
+      .next()
+      .unwrap_or(number_part);
+    let number: u64 = number_part.parse().ok()?;
+
+    Some((owner.to_string(), repo.to_string(), number))
+  }
+
   pub fn new(window: &mut Window, cx: &mut Context<Self>, config: CommandPaletteConfig) -> Self {
     let create_branch_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Enter branch name..."));
+    let open_github_pr_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Paste GitHub pull request URL..."));
 
     let default_branches: Vec<Rc<CommandPaletteBranch>> =
       config.branches.iter().cloned().map(Rc::new).collect();
@@ -656,6 +715,11 @@ impl CommandPalette {
         },
       ),
       cx.subscribe_in(&create_branch_input, window, Self::on_input_event),
+      cx.subscribe_in(
+        &open_github_pr_input,
+        window,
+        Self::on_open_github_pr_input_event,
+      ),
     ];
 
     cx.on_next_frame(window, |this, window, cx| {
@@ -670,6 +734,7 @@ impl CommandPalette {
       commands_list,
       branches_list,
       branches_with_commands_list,
+      open_github_pr_input,
       error: None,
       on_action: Some(config.on_action),
       _subscriptions,
@@ -722,6 +787,41 @@ impl CommandPalette {
     };
   }
 
+  fn on_open_github_pr_input_event(
+    &mut self,
+    state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !matches!(event, InputEvent::PressEnter { .. }) {
+      return;
+    }
+
+    let url = state.read(cx).value().to_string();
+    if url.trim().is_empty() {
+      self.error = Some("GitHub pull request URL cannot be empty".into());
+      cx.notify();
+      return;
+    }
+
+    let Some((owner, repo, number)) = Self::parse_github_pull_request_url(&url) else {
+      self.error = Some("Invalid GitHub pull request URL".into());
+      cx.notify();
+      return;
+    };
+
+    self.trigger_action(
+      CommandPaletteAction::OpenGithubPrDetails {
+        owner,
+        repo,
+        number,
+      },
+      window,
+      cx,
+    );
+  }
+
   pub fn focus_screen_input(&self, window: &mut Window, cx: &mut Context<Self>) {
     match self.screen {
       CommandPaletteScreen::SwitchBranch => {
@@ -736,6 +836,11 @@ impl CommandPalette {
       }
       CommandPaletteScreen::CreateBranch => {
         self.create_branch_input.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      }
+      CommandPaletteScreen::OpenGithubPrFromUrl => {
+        self.open_github_pr_input.update(cx, |state, cx| {
           state.focus(window, cx);
         });
       }
@@ -795,6 +900,25 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::OpenGithubPage => {
         self.trigger_action(CommandPaletteAction::OpenGithubPage, window, cx);
+      }
+      CommandPaletteCommandId::OpenGithubPrFromUrl => {
+        let query = self.commands_list.read(cx).delegate().query.to_string();
+        if let Some((owner, repo, number)) = Self::parse_github_pull_request_url(&query) {
+          self.trigger_action(
+            CommandPaletteAction::OpenGithubPrDetails {
+              owner,
+              repo,
+              number,
+            },
+            window,
+            cx,
+          );
+        } else {
+          self.open_github_pr_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+          });
+          self.set_screen(CommandPaletteScreen::OpenGithubPrFromUrl, cx, window);
+        }
       }
       CommandPaletteCommandId::OpenSettingsPage => {
         self.trigger_action(CommandPaletteAction::OpenSettingsPage, window, cx);
@@ -917,6 +1041,17 @@ impl CommandPalette {
       })
   }
 
+  fn render_open_github_pr_from_url(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .gap_3()
+      .child(Input::new(&self.open_github_pr_input).border_color(theme.border))
+      .when(self.error.is_some(), |parent| {
+        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
+      })
+  }
+
   fn render_create_branch_from(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
@@ -959,6 +1094,9 @@ impl Render for CommandPalette {
       CommandPaletteScreen::Root => self.render_root(cx).into_any_element(),
       CommandPaletteScreen::SwitchBranch => self.render_switch_branch(cx).into_any_element(),
       CommandPaletteScreen::CreateBranch => self.render_create_branch(cx).into_any_element(),
+      CommandPaletteScreen::OpenGithubPrFromUrl => {
+        self.render_open_github_pr_from_url(cx).into_any_element()
+      }
       CommandPaletteScreen::CreateBranchFrom => {
         self.render_create_branch_from(cx).into_any_element()
       }
@@ -971,5 +1109,40 @@ impl Render for CommandPalette {
       .child(content)
       .h_full()
       .text_color(theme.foreground)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::CommandPalette;
+
+  #[test]
+  fn parse_github_pull_request_url_accepts_standard_url() {
+    let parsed =
+      CommandPalette::parse_github_pull_request_url("https://github.com/joris-gallot/guit/pull/23");
+    assert_eq!(parsed, Some(("joris-gallot".into(), "guit".into(), 23)));
+  }
+
+  #[test]
+  fn parse_github_pull_request_url_rejects_non_pull_url() {
+    let parsed =
+      CommandPalette::parse_github_pull_request_url("https://github.com/joris-gallot/guit/issues/23");
+    assert_eq!(parsed, None);
+  }
+
+  #[test]
+  fn parse_github_pull_request_url_accepts_changes_fragment_url() {
+    let parsed = CommandPalette::parse_github_pull_request_url(
+      "https://github.com/joris-gallot/guit/pull/4/changes#diff-914ffa9e8939125aa8bba06dbe2ac48755c94e58e2e6c24aa81d52cfafea0709",
+    );
+    assert_eq!(parsed, Some(("joris-gallot".into(), "guit".into(), 4)));
+  }
+
+  #[test]
+  fn parse_github_pull_request_url_accepts_query_params() {
+    let parsed = CommandPalette::parse_github_pull_request_url(
+      "https://github.com/joris-gallot/guit/pull/4?notification_referrer_id=NT_kwDOAAABBBCCC",
+    );
+    assert_eq!(parsed, Some(("joris-gallot".into(), "guit".into(), 4)));
   }
 }

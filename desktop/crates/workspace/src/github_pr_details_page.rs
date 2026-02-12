@@ -1765,6 +1765,14 @@ impl GithubPrDetailsPage {
         cx.refresh_windows();
         Ok(())
       }
+      CommandPaletteAction::OpenGithubPrDetails {
+        owner,
+        repo,
+        number,
+      } => {
+        GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
+        Ok(())
+      }
       CommandPaletteAction::OpenSettingsPage => {
         WorkspaceRoute::open_settings(cx);
         cx.refresh_windows();
