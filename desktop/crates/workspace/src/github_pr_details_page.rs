@@ -1039,6 +1039,11 @@ impl GithubPrDetailsPage {
       WorkspaceRoute::open_settings(cx);
       cx.refresh_windows();
     });
+    let open_git_config = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::open_git_config(cx);
+      cx.refresh_windows();
+    });
     let sign_in = Rc::new(|_window: &mut Window, cx: &mut App| {
       AuthCallbackTarget::start_sign_in(cx);
     });
@@ -1052,6 +1057,7 @@ impl GithubPrDetailsPage {
       current_page: UserMenuPage::GithubPrDetails,
       on_open_git: Some(open_git),
       on_open_github: Some(open_github),
+      on_open_git_config: Some(open_git_config),
       on_open_settings: Some(open_settings),
       on_sign_in: Some(sign_in),
       on_sign_out: Some(sign_out),
@@ -1775,6 +1781,11 @@ impl GithubPrDetailsPage {
       }
       CommandPaletteAction::OpenSettingsPage => {
         WorkspaceRoute::open_settings(cx);
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenGitConfigPage => {
+        WorkspaceRoute::open_git_config(cx);
         cx.refresh_windows();
         Ok(())
       }

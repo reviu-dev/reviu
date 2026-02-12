@@ -16,6 +16,7 @@ pub enum UserMenuPage {
   Git,
   Github,
   GithubPrDetails,
+  GitConfig,
   Settings,
 }
 
@@ -39,6 +40,7 @@ pub struct UserMenuConfig {
   pub current_page: UserMenuPage,
   pub on_open_git: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
   pub on_open_github: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+  pub on_open_git_config: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
   pub on_open_settings: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
   pub on_sign_in: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
   pub on_sign_out: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
@@ -71,6 +73,7 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
       let current_page = config.current_page;
       let on_open_git = config.on_open_git.clone();
       let on_open_github = config.on_open_github.clone();
+      let on_open_git_config = config.on_open_git_config.clone();
       let on_open_settings = config.on_open_settings.clone();
       let on_sign_out = config.on_sign_out.clone();
 
@@ -116,6 +119,18 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
                 menu = menu.item(
                   PopupMenuItem::new("Settings")
                     .icon(IconName::Settings2)
+                    .on_click(move |_, window, cx| {
+                      handler(window, cx);
+                  }),
+                );
+              }
+            }
+
+            if current_page != UserMenuPage::GitConfig {
+              if let Some(handler) = on_open_git_config.clone() {
+                menu = menu.item(
+                  PopupMenuItem::new("Git Config")
+                    .icon(IconName::File)
                     .on_click(move |_, window, cx| {
                       handler(window, cx);
                     }),

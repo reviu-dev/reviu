@@ -1040,27 +1040,7 @@ impl GitPage {
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(root_path) = self.selected_repo.clone() else {
-      return;
-    };
-
-    let branches = match list_branches(&root_path) {
-      Ok(branches) => branches,
-      Err(_) => {
-        return;
-      }
-    };
-
-    let palette_branches = branches
-      .into_iter()
-      .map(|branch| CommandPaletteBranch {
-        name: branch.name.into(),
-        kind: match branch.kind {
-          BranchKind::Local => CommandPaletteBranchKind::Local,
-          BranchKind::Remote => CommandPaletteBranchKind::Remote,
-        },
-      })
-      .collect::<Vec<_>>();
+    let mut palette_branches = Vec::new();
 
     let view = cx.entity();
     let handler: CommandPaletteHandler = Arc::new(move |action, _window, cx| {
@@ -1072,8 +1052,24 @@ impl GitPage {
     let include_github = matches!(self.auth_state, AuthState::Authenticated(_));
     let mut commands =
       CommandPaletteCommand::default_global_commands(CommandPalettePage::Git, include_github);
-    commands.push(CommandPaletteCommand::switch_branch());
-    commands.push(CommandPaletteCommand::merge_branch());
+
+    if let Some(root_path) = self.selected_repo.clone()
+      && let Ok(branches) = list_branches(&root_path)
+    {
+      palette_branches = branches
+        .into_iter()
+        .map(|branch| CommandPaletteBranch {
+          name: branch.name.into(),
+          kind: match branch.kind {
+            BranchKind::Local => CommandPaletteBranchKind::Local,
+            BranchKind::Remote => CommandPaletteBranchKind::Remote,
+          },
+        })
+        .collect::<Vec<_>>();
+      commands.push(CommandPaletteCommand::switch_branch());
+      commands.push(CommandPaletteCommand::merge_branch());
+    }
+
     let config = CommandPaletteConfig::new(palette_branches, commands, handler);
 
     let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
@@ -1146,10 +1142,6 @@ impl GitPage {
     action: CommandPaletteAction,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    let Some(root_path) = self.selected_repo.clone() else {
-      return Err("No repository selected.".into());
-    };
-
     let mut selected_branch: Option<BranchRef> = None;
     let result = match action {
       CommandPaletteAction::OpenGitPage => {
@@ -1176,7 +1168,15 @@ impl GitPage {
         cx.refresh_windows();
         Ok(())
       }
+      CommandPaletteAction::OpenGitConfigPage => {
+        WorkspaceRoute::open_git_config(cx);
+        cx.refresh_windows();
+        Ok(())
+      }
       CommandPaletteAction::SwitchBranch(branch) => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
         let branch_ref = BranchRef {
           name: branch.name.to_string(),
           kind: match branch.kind {
@@ -1188,6 +1188,9 @@ impl GitPage {
         switch_branch(&root_path, &branch_ref)
       }
       CommandPaletteAction::CreateBranch { name } => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
         let branch_ref = BranchRef {
           name: name.clone(),
           kind: BranchKind::Local,
@@ -1196,6 +1199,9 @@ impl GitPage {
         create_branch(&root_path, &name).and_then(|_| switch_branch(&root_path, &branch_ref))
       }
       CommandPaletteAction::CreateBranchFrom { name, base } => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
         let branch_ref = BranchRef {
           name: base.name.to_string(),
           kind: match base.kind {
@@ -1212,6 +1218,9 @@ impl GitPage {
           .and_then(|_| switch_branch(&root_path, &new_branch))
       }
       CommandPaletteAction::MergeBranch { name } => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
         let branch_ref = BranchRef {
           name: name.name.to_string(),
           kind: match name.kind {
@@ -1853,6 +1862,11 @@ impl GitPage {
       WorkspaceRoute::open_settings(cx);
       cx.refresh_windows();
     });
+    let open_git_config = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::open_git_config(cx);
+      cx.refresh_windows();
+    });
     let sign_in = Rc::new(move |_window: &mut Window, cx: &mut App| {
       let _ = view.update(cx, |this, cx| this.start_github_sign_in(cx));
     });
@@ -1867,6 +1881,7 @@ impl GitPage {
       current_page: UserMenuPage::Git,
       on_open_git: Some(open_git),
       on_open_github: Some(open_github),
+      on_open_git_config: Some(open_git_config),
       on_open_settings: Some(open_settings),
       on_sign_in: Some(sign_in),
       on_sign_out: Some(sign_out),

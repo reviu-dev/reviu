@@ -2,6 +2,7 @@ mod api;
 mod auth_state;
 mod config;
 mod git_page;
+mod git_config_page;
 mod github_page;
 mod github_pr_details_page;
 mod settings_page;
