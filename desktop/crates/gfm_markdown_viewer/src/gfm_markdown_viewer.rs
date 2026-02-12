@@ -275,6 +275,11 @@ enum Segment {
   },
 }
 
+#[derive(Clone)]
+pub struct ParsedMarkdown {
+  blocks: Arc<Vec<Block>>,
+}
+
 pub fn parse_gfm(source: &str) -> Vec<Block> {
   let mut blocks = Vec::new();
   for segment in split_details_segments(source) {
@@ -298,14 +303,37 @@ pub fn parse_gfm(source: &str) -> Vec<Block> {
   blocks
 }
 
+pub fn parse_markdown(source: &str) -> ParsedMarkdown {
+  ParsedMarkdown {
+    blocks: Arc::new(parse_gfm(source)),
+  }
+}
+
+pub fn render_parsed_markdown(
+  parsed: &ParsedMarkdown,
+  options: &MarkdownRenderOptions,
+  cx: &App,
+) -> AnyElement {
+  let mut ctx = RenderContext::new();
+  render_blocks(parsed.blocks.as_ref(), options, 0, cx, &mut ctx)
+}
+
 pub fn estimate_markdown_height_px(
   source: &str,
   wrap_columns: usize,
   line_height_px: f32,
 ) -> f32 {
-  let blocks = parse_gfm(source);
+  let parsed = parse_markdown(source);
+  estimate_parsed_markdown_height_px(&parsed, wrap_columns, line_height_px)
+}
+
+pub fn estimate_parsed_markdown_height_px(
+  parsed: &ParsedMarkdown,
+  wrap_columns: usize,
+  line_height_px: f32,
+) -> f32 {
   estimate_blocks_height_px(
-    &blocks,
+    parsed.blocks.as_ref(),
     wrap_columns.max(MARKDOWN_MIN_WRAP_COLUMNS),
     line_height_px.max(1.0),
     0,
@@ -744,9 +772,8 @@ fn find_last_details_close_end(lower: &str) -> Option<usize> {
 }
 
 pub fn render_markdown(source: &str, options: &MarkdownRenderOptions, cx: &App) -> AnyElement {
-  let blocks = parse_gfm(source);
-  let mut ctx = RenderContext::new();
-  render_blocks(&blocks, options, 0, cx, &mut ctx)
+  let parsed = parse_markdown(source);
+  render_parsed_markdown(&parsed, options, cx)
 }
 
 struct RenderContext {
