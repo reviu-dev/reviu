@@ -318,11 +318,7 @@ pub fn render_parsed_markdown(
   render_blocks(parsed.blocks.as_ref(), options, 0, cx, &mut ctx)
 }
 
-pub fn estimate_markdown_height_px(
-  source: &str,
-  wrap_columns: usize,
-  line_height_px: f32,
-) -> f32 {
+pub fn estimate_markdown_height_px(source: &str, wrap_columns: usize, line_height_px: f32) -> f32 {
   let parsed = parse_markdown(source);
   estimate_parsed_markdown_height_px(&parsed, wrap_columns, line_height_px)
 }
@@ -394,7 +390,9 @@ fn estimate_block_height_px(
     }
     Block::ThematicBreak => 1.0,
     Block::Table(table) => estimate_table_height_px(table, line_height_px),
-    Block::Details(details) => estimate_details_height_px(details, wrap_columns, line_height_px, indent),
+    Block::Details(details) => {
+      estimate_details_height_px(details, wrap_columns, line_height_px, indent)
+    }
   }
 }
 
@@ -408,8 +406,8 @@ fn estimate_list_height_px(
     return line_height_px;
   }
 
-  let indent_cols = ((LIST_LEFT_PADDING_PX + LIST_MARKER_GAP_PX + 14.0) / MARKDOWN_CHAR_WIDTH_PX)
-    .ceil() as usize;
+  let indent_cols =
+    ((LIST_LEFT_PADDING_PX + LIST_MARKER_GAP_PX + 14.0) / MARKDOWN_CHAR_WIDTH_PX).ceil() as usize;
   let item_wrap_columns = wrap_columns_for_indent(wrap_columns, indent)
     .saturating_sub(indent_cols)
     .max(MARKDOWN_MIN_WRAP_COLUMNS);
@@ -434,8 +432,8 @@ fn estimate_details_height_px(
   let summary_cols = wrap_columns_for_indent(wrap_columns, indent)
     .saturating_sub(3)
     .max(MARKDOWN_MIN_WRAP_COLUMNS);
-  let summary_height = estimate_inline_lines(&details.summary, summary_cols).max(1) as f32
-    * line_height_px;
+  let summary_height =
+    estimate_inline_lines(&details.summary, summary_cols).max(1) as f32 * line_height_px;
 
   if !details.open {
     return summary_height;
@@ -469,8 +467,8 @@ fn estimate_table_row_content_height_px(cells: &[Vec<Inline>], line_height_px: f
 }
 
 fn wrap_columns_for_indent(base_wrap_columns: usize, indent: usize) -> usize {
-  let indent_columns = ((indent as f32 * MARKDOWN_INDENT_PER_LEVEL_PX) / MARKDOWN_CHAR_WIDTH_PX)
-    .ceil() as usize;
+  let indent_columns =
+    ((indent as f32 * MARKDOWN_INDENT_PER_LEVEL_PX) / MARKDOWN_CHAR_WIDTH_PX).ceil() as usize;
   base_wrap_columns
     .saturating_sub(indent_columns)
     .max(MARKDOWN_MIN_WRAP_COLUMNS)

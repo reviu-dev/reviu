@@ -569,15 +569,14 @@ impl Editor {
     body: &str,
   ) -> &mut ReviewCommentMarkdownCacheEntry {
     let body_hash = Self::review_comment_body_hash(body);
-    let entry =
-      self
-        .review_comment_markdown_cache
-        .entry(comment_id)
-        .or_insert_with(|| ReviewCommentMarkdownCacheEntry {
-          body_hash,
-          parsed: parse_markdown(body),
-          estimated_heights_px: HashMap::new(),
-        });
+    let entry = self
+      .review_comment_markdown_cache
+      .entry(comment_id)
+      .or_insert_with(|| ReviewCommentMarkdownCacheEntry {
+        body_hash,
+        parsed: parse_markdown(body),
+        estimated_heights_px: HashMap::new(),
+      });
 
     if entry.body_hash != body_hash {
       entry.body_hash = body_hash;
@@ -2127,15 +2126,15 @@ impl Editor {
 
       // Check if cursor is too far left
       if cursor_x < visible_start_x + horizontal_padding {
-        let new_scroll_x = self.clamp_horizontal_scroll_x(
-          -(cursor_x - horizontal_padding).max(px(0.0)),
-        );
+        let new_scroll_x =
+          self.clamp_horizontal_scroll_x(-(cursor_x - horizontal_padding).max(px(0.0)));
         self.scroll_handle.set_offset(point(new_scroll_x, px(0.0)));
       }
 
       // Check if cursor is too far right
       if cursor_x > visible_end_x - horizontal_padding {
-        let new_scroll_x = self.clamp_horizontal_scroll_x(-(cursor_x - viewport_width + horizontal_padding));
+        let new_scroll_x =
+          self.clamp_horizontal_scroll_x(-(cursor_x - viewport_width + horizontal_padding));
         self.scroll_handle.set_offset(point(new_scroll_x, px(0.0)));
       }
     }

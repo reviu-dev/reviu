@@ -1125,8 +1125,9 @@ mod tests {
 
   #[test]
   fn parse_github_pull_request_url_rejects_non_pull_url() {
-    let parsed =
-      CommandPalette::parse_github_pull_request_url("https://github.com/joris-gallot/guit/issues/23");
+    let parsed = CommandPalette::parse_github_pull_request_url(
+      "https://github.com/joris-gallot/guit/issues/23",
+    );
     assert_eq!(parsed, None);
   }
 

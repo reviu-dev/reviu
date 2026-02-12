@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
-use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window};
 use gpui::prelude::FluentBuilder as _;
+use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window};
 use gpui_component::{
   Icon, IconName, Sizable as _,
   avatar::Avatar,
