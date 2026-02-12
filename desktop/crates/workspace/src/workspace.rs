@@ -1,7 +1,11 @@
-use gpui::{App, Context, Entity, FocusHandle, Focusable, Global, Render, Window, prelude::*};
+use gpui::{
+  App, Context, Entity, FocusHandle, Focusable, Global, Render, Subscription, Window, prelude::*,
+};
+use gpui_component::{ActiveTheme as _, Theme, ThemeMode};
 
 use crate::api::ApiClient;
 use crate::auth_state::AuthStateStore;
+use crate::config::{AppSettings as PersistedSettings, ConfigStore};
 use crate::git_page::GitPage;
 use crate::github_page::GithubPage;
 use crate::github_pr_details_page::GithubPrDetailsPage;
@@ -82,6 +86,7 @@ pub struct WorkspaceView {
   github_pr_details_page: Entity<GithubPrDetailsPage>,
   settings_page: Entity<SettingsPage>,
   last_page: Option<WorkspacePage>,
+  _subscriptions: Vec<Subscription>,
 }
 
 impl WorkspaceView {
@@ -89,18 +94,52 @@ impl WorkspaceView {
     cx.set_global(WorkspaceRoute::default());
     cx.set_global(WorkspaceApi::new());
     cx.set_global(AuthStateStore::default());
+
+    let settings = ConfigStore::load_app_settings();
+    if settings.auto_switch_theme {
+      Theme::sync_system_appearance(Some(window), cx);
+    } else {
+      let mode = if settings.dark_mode {
+        ThemeMode::Dark
+      } else {
+        ThemeMode::Light
+      };
+      Theme::change(mode, Some(window), cx);
+    }
+
     let git_page = cx.new(|cx| GitPage::new(window, cx));
     let github_page = cx.new(|cx| GithubPage::new(window, cx));
     let github_pr_details_page = cx.new(|cx| GithubPrDetailsPage::new(window, cx));
-    let settings_page = cx.new(|cx| SettingsPage::new(window, cx));
+    let settings_page = cx.new(|cx| SettingsPage::new(window, cx, settings));
 
-    Self {
+    let view = Self {
       git_page,
       github_page,
       github_pr_details_page,
       settings_page,
       last_page: None,
+      _subscriptions: Vec::new(),
+    };
+
+    let mut view = view;
+    let subscription = cx.observe_window_appearance(window, |this, window, cx| {
+      this.on_window_appearance_changed(window, cx);
+    });
+    view._subscriptions.push(subscription);
+
+    view
+  }
+
+  fn on_window_appearance_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if !self.settings_page.read(cx).auto_switch_theme_enabled() {
+      return;
     }
+
+    Theme::sync_system_appearance(Some(window), cx);
+    ConfigStore::persist_app_settings(PersistedSettings {
+      auto_switch_theme: true,
+      dark_mode: cx.theme().mode.is_dark(),
+    });
   }
 }
 

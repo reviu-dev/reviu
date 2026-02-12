@@ -21,7 +21,13 @@ const RECENT_REPOS_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS recent_repositories (path TEXT PRIMARY KEY, last_opened INTEGER NOT NULL)",
 };
 
-const CONFIG_TABLES: [ConfigTable; 1] = [RECENT_REPOS_TABLE];
+const SETTINGS_TABLE: ConfigTable = ConfigTable {
+  name: "settings",
+  create_sql:
+    "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), auto_switch_theme INTEGER NOT NULL DEFAULT 1, dark_mode INTEGER NOT NULL DEFAULT 0)",
+};
+
+const CONFIG_TABLES: [ConfigTable; 2] = [RECENT_REPOS_TABLE, SETTINGS_TABLE];
 
 pub struct ConfigStore {
   conn: Connection,
@@ -30,6 +36,21 @@ pub struct ConfigStore {
 #[derive(Clone)]
 pub struct RecentRepository {
   pub path: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AppSettings {
+  pub auto_switch_theme: bool,
+  pub dark_mode: bool,
+}
+
+impl Default for AppSettings {
+  fn default() -> Self {
+    Self {
+      auto_switch_theme: true,
+      dark_mode: false,
+    }
+  }
 }
 
 impl ConfigStore {
@@ -69,6 +90,10 @@ impl ConfigStore {
       eprintln!("Failed to initialize config tables: {}", err);
       return None;
     }
+    if let Err(err) = store.ensure_default_rows() {
+      eprintln!("Failed to initialize default config values: {}", err);
+      return None;
+    }
     Some(store)
   }
 
@@ -76,6 +101,18 @@ impl ConfigStore {
     for table in CONFIG_TABLES {
       self.conn.execute(table.create_sql, [])?;
     }
+    Ok(())
+  }
+
+  fn ensure_default_rows(&self) -> rusqlite::Result<()> {
+    self.conn.execute(
+      &format!(
+        "INSERT INTO {} (id) VALUES (1)
+         ON CONFLICT(id) DO NOTHING",
+        SETTINGS_TABLE.name
+      ),
+      [],
+    )?;
     Ok(())
   }
 
@@ -142,6 +179,65 @@ impl ConfigStore {
       params![path_string, last_opened],
     ) {
       eprintln!("Failed to persist recent repository: {}", err);
+    }
+  }
+
+  pub fn load_app_settings() -> AppSettings {
+    let Some(store) = Self::open_with_tables() else {
+      return AppSettings::default();
+    };
+    store.load_app_settings_inner()
+  }
+
+  fn load_app_settings_inner(&self) -> AppSettings {
+    let settings = self.conn.query_row(
+      &format!(
+        "SELECT auto_switch_theme, dark_mode FROM {} WHERE id = 1",
+        SETTINGS_TABLE.name
+      ),
+      [],
+      |row| {
+        let auto_switch_theme: i64 = row.get(0)?;
+        let dark_mode: i64 = row.get(1)?;
+        Ok(AppSettings {
+          auto_switch_theme: auto_switch_theme != 0,
+          dark_mode: dark_mode != 0,
+        })
+      },
+    );
+
+    match settings {
+      Ok(settings) => settings,
+      Err(err) => {
+        eprintln!("Failed to load app settings: {}", err);
+        AppSettings::default()
+      }
+    }
+  }
+
+  pub fn persist_app_settings(settings: AppSettings) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    store.persist_app_settings_inner(settings);
+  }
+
+  fn persist_app_settings_inner(&self, settings: AppSettings) {
+    if let Err(err) = self.conn.execute(
+      &format!(
+        "INSERT INTO {} (id, auto_switch_theme, dark_mode)
+         VALUES (1, ?1, ?2)
+         ON CONFLICT(id) DO UPDATE
+         SET auto_switch_theme = excluded.auto_switch_theme,
+             dark_mode = excluded.dark_mode",
+        SETTINGS_TABLE.name
+      ),
+      params![
+        if settings.auto_switch_theme { 1_i64 } else { 0_i64 },
+        if settings.dark_mode { 1_i64 } else { 0_i64 }
+      ],
+    ) {
+      eprintln!("Failed to persist app settings: {}", err);
     }
   }
 }
