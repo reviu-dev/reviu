@@ -2479,6 +2479,45 @@ impl Editor {
     true
   }
 
+  fn step_display_cursor_horizontal(
+    &self,
+    mut cursor: DisplayCursor,
+    delta: i32,
+    cx: &App,
+  ) -> Option<DisplayCursor> {
+    if delta == 0 {
+      return Some(cursor);
+    }
+
+    let direction = delta.signum();
+    let steps = delta.unsigned_abs() as usize;
+
+    for _ in 0..steps {
+      if direction < 0 {
+        if cursor.column > 0 {
+          cursor.column = cursor.column.saturating_sub(1);
+          continue;
+        }
+
+        let previous_line = self.next_selectable_display_line(cursor.line, -1)?;
+        cursor.line = previous_line;
+        cursor.column = self.display_line_len(previous_line, cx);
+      } else {
+        let line_len = self.display_line_len(cursor.line, cx);
+        if cursor.column < line_len {
+          cursor.column = cursor.column.saturating_add(1);
+          continue;
+        }
+
+        let next_line = self.next_selectable_display_line(cursor.line, 1)?;
+        cursor.line = next_line;
+        cursor.column = 0;
+      }
+    }
+
+    Some(cursor)
+  }
+
   pub(crate) fn select_display_cursor_horizontal(
     &mut self,
     delta: i32,
@@ -2490,6 +2529,21 @@ impl Editor {
     let Some(cursor) = self.current_display_cursor(cx) else {
       return false;
     };
+
+    if self.display_selection.is_some() && !self.selected_range.is_empty() {
+      let Some(next_cursor) = self.step_display_cursor_horizontal(cursor, delta, cx) else {
+        // Keep display-based selection mode at boundaries instead of
+        // falling back to doc-only selection (which drops removed lines).
+        return true;
+      };
+      if next_cursor == cursor {
+        return true;
+      }
+      self.target_column = Some(next_cursor.column);
+      self.set_display_selection_with_anchor(anchor, next_cursor, cx);
+      return true;
+    }
+
     if !self.is_removed_display_line(cursor.line, cx) {
       return false;
     }
@@ -2763,6 +2817,27 @@ impl Editor {
     let Some(cursor) = self.current_display_cursor(cx) else {
       return false;
     };
+
+    if self.display_selection.is_some() && !self.selected_range.is_empty() {
+      let line_len = self.display_line_len(cursor.line, cx);
+      let column = if to_start { 0 } else { line_len };
+      if cursor.column == column {
+        // Keep display-based selection mode at boundaries instead of
+        // falling back to doc-only selection (which drops removed lines).
+        return true;
+      }
+      self.target_column = Some(column);
+      self.set_display_selection_with_anchor(
+        anchor,
+        DisplayCursor {
+          line: cursor.line,
+          column,
+        },
+        cx,
+      );
+      return true;
+    }
+
     if !self.is_removed_display_line(cursor.line, cx) {
       return false;
     }
@@ -3825,6 +3900,43 @@ pub mod tests {
     }
   }
 
+  fn projection_with_removed_middle_line() -> Arc<Projection> {
+    Arc::new(Projection {
+      lines: vec![
+        DisplayLine::Doc {
+          doc_line: 0,
+          old_line: Some(0),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::Removed {
+          text: "removed".to_string(),
+          anchor_line: 0,
+          old_line: 0,
+          hunk: HunkState::Unstaged,
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::Doc {
+          doc_line: 1,
+          old_line: Some(1),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+      ],
+      display_to_doc: vec![Some(0), None, Some(1)],
+      doc_to_display: vec![Some(0), Some(2)],
+      visible_doc_lines: vec![0, 1],
+      start_gap: None,
+      end_gap: None,
+      groups: HashMap::new(),
+    })
+  }
+
   // ============================================================================
   // Cache Management Tests
   // ============================================================================
@@ -4432,6 +4544,110 @@ pub mod tests {
     });
 
     assert_eq!(ctx.selection(), 3..10);
+  }
+
+  #[gpui::test]
+  fn test_select_all_display_selection_keeps_removed_line_on_shift_left(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.projection = Some(projection_with_removed_middle_line());
+      assert!(editor.select_all_display_lines(cx));
+
+      assert!(editor.select_display_cursor_horizontal(-1, cx));
+
+      let selection = editor
+        .display_selection
+        .as_ref()
+        .expect("display selection should stay active");
+      let (start, end) = selection.normalized();
+      assert_eq!(
+        (start, end),
+        (
+          DisplayCursor { line: 0, column: 0 },
+          DisplayCursor { line: 2, column: 0 }
+        )
+      );
+      assert!(editor.display_to_doc_line(1).is_none());
+      assert_eq!(editor.selected_range, 0..2);
+    });
+  }
+
+  #[gpui::test]
+  fn test_select_all_display_selection_keeps_mode_on_right_boundary(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.projection = Some(projection_with_removed_middle_line());
+      assert!(editor.select_all_display_lines(cx));
+
+      let before = editor
+        .display_selection
+        .clone()
+        .expect("display selection should exist after select all");
+      assert!(editor.select_display_cursor_horizontal(1, cx));
+      let after = editor
+        .display_selection
+        .as_ref()
+        .expect("display selection should remain active");
+      assert_eq!(after.start, before.start);
+      assert_eq!(after.end, before.end);
+      assert_eq!(editor.selected_range, 0..editor.document.read(cx).len());
+    });
+  }
+
+  #[gpui::test]
+  fn test_select_all_display_selection_keeps_removed_line_on_cmd_shift_left(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.projection = Some(projection_with_removed_middle_line());
+      assert!(editor.select_all_display_lines(cx));
+
+      assert!(editor.select_display_cursor_line_boundary(true, cx));
+
+      let selection = editor
+        .display_selection
+        .as_ref()
+        .expect("display selection should stay active");
+      let (start, end) = selection.normalized();
+      assert_eq!(
+        (start, end),
+        (
+          DisplayCursor { line: 0, column: 0 },
+          DisplayCursor { line: 2, column: 0 }
+        )
+      );
+      assert!(editor.display_to_doc_line(1).is_none());
+      assert_eq!(editor.selected_range, 0..2);
+    });
+  }
+
+  #[gpui::test]
+  fn test_select_all_display_selection_keeps_mode_on_cmd_shift_right_boundary(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.projection = Some(projection_with_removed_middle_line());
+      assert!(editor.select_all_display_lines(cx));
+
+      let before = editor
+        .display_selection
+        .clone()
+        .expect("display selection should exist after select all");
+      assert!(editor.select_display_cursor_line_boundary(false, cx));
+      let after = editor
+        .display_selection
+        .as_ref()
+        .expect("display selection should remain active");
+      assert_eq!(after.start, before.start);
+      assert_eq!(after.end, before.end);
+      assert_eq!(editor.selected_range, 0..editor.document.read(cx).len());
+    });
   }
 
   #[gpui::test]
