@@ -11,9 +11,7 @@ use git::DiffLineKind;
 
 use crate::{
   editor::{Editor, ScrollAxis},
-  projection::{
-    ChangeKind, DisplayLine, HunkState, ReviewCommentBackground, ReviewCommentSide,
-  },
+  projection::{ChangeKind, DisplayLine, HunkState, ReviewCommentBackground, ReviewCommentSide},
 };
 
 const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
@@ -303,7 +301,8 @@ impl Element for GutterElement {
           let is_start_gap = id.start == 0;
           let is_end_gap = id.end == doc_line_count;
           if !is_start_gap && !is_end_gap {
-            let y = line_y(bounds.top(), line_height, display_idx, scroll_offset) + line_height * 0.5;
+            let y =
+              line_y(bounds.top(), line_height, display_idx, scroll_offset) + line_height * 0.5;
             gap_separators.push(fill(
               Bounds::new(point(bounds.left(), y), size(bounds.size.width, px(1.0))),
               cx.theme().muted_foreground.opacity(0.35),

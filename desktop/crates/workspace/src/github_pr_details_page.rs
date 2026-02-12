@@ -6,6 +6,7 @@ use std::{
 };
 
 use editor::{DiffViewMode, Editor, ReviewComment, ReviewCommentSide};
+use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
 use gpui::{
   App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, RenderImage, SharedString,
@@ -27,7 +28,6 @@ use gpui_component::{
   tree::{TreeItem, TreeState, tree},
   v_flex,
 };
-use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use smol::unblock;
 
 use ui::{
@@ -604,9 +604,9 @@ impl GithubPrDetailsPage {
   fn sync_review_comments(&mut self, cx: &mut Context<Self>) {
     let comments = self.review_comments_for_selected_file();
     let pr_number = self.pull_request.as_ref().map(|pr| pr.number);
-    self
-      .diff_editor
-      .update(cx, |editor, cx| editor.set_review_comment_pr_number(pr_number, cx));
+    self.diff_editor.update(cx, |editor, cx| {
+      editor.set_review_comment_pr_number(pr_number, cx)
+    });
     self
       .diff_editor
       .update(cx, |editor, cx| editor.set_review_comments(comments, cx));
@@ -1962,17 +1962,11 @@ impl GithubPrDetailsPage {
             .min_h_0()
             .min_w(px(0.0))
             .bg(theme.background)
-            .child(
-              div()
-                .size_full()
-                .pb_4()
-                .px_4()
-                .child(render_markdown(
-                  &markdown,
-                  &MarkdownRenderOptions::default().with_state(self.preview_markdown_state.clone()),
-                  cx,
-                )),
-            )
+            .child(div().size_full().pb_4().px_4().child(render_markdown(
+              &markdown,
+              &MarkdownRenderOptions::default().with_state(self.preview_markdown_state.clone()),
+              cx,
+            )))
             .into_any_element()
         };
         div()

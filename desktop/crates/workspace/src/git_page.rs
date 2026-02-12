@@ -6,6 +6,7 @@ use std::{
 };
 
 use editor::{DiffViewMode, Editor, HunkAction, HunkState};
+use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use git::{
   BranchKind, BranchRef, BranchStatus, HeadCommitStatus, RepoStage, RepoStatusEntry,
   RepoStatusKind, amend_commit, commit_changes, create_branch, create_branch_from,
@@ -29,15 +30,14 @@ use gpui_component::{
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
   tooltip::Tooltip,
 };
-use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use smol::unblock;
 
 use crate::{
   api::ApiClient,
   auth_state::{AuthState, AuthStateStore},
   config::{ConfigStore, RecentRepository},
-  github_pr_details_page::GithubPrDetailsPageHandle,
   github_page::GithubPageHandle,
+  github_pr_details_page::GithubPrDetailsPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 use ui::{
@@ -2587,17 +2587,11 @@ impl GitPage {
             .min_w(px(0.0))
             .bg(theme.background)
             .occlude()
-            .child(
-              div()
-                .size_full()
-                .pb_4()
-                .px_4()
-                .child(render_markdown(
-                  &markdown,
-                  &MarkdownRenderOptions::default().with_state(self.markdown_preview_state.clone()),
-                  cx,
-                )),
-            )
+            .child(div().size_full().pb_4().px_4().child(render_markdown(
+              &markdown,
+              &MarkdownRenderOptions::default().with_state(self.markdown_preview_state.clone()),
+              cx,
+            )))
             .into_any_element()
         };
 

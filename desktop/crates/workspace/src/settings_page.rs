@@ -16,10 +16,10 @@ use ui::{
 };
 
 use crate::{
+  ShowCommandPalette,
   auth_state::{AuthState, AuthStateStore},
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
-  ShowCommandPalette,
   workspace::{WorkspacePage, WorkspaceRoute},
 };
 
@@ -99,10 +99,8 @@ impl SettingsPage {
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
-    let commands = CommandPaletteCommand::default_global_commands(
-      CommandPalettePage::Settings,
-      include_github,
-    );
+    let commands =
+      CommandPaletteCommand::default_global_commands(CommandPalettePage::Settings, include_github);
 
     let view = cx.entity();
     let handler: CommandPaletteHandler = Arc::new(move |action, _window, cx| {

@@ -1563,7 +1563,9 @@ mod tests {
     projection
       .lines
       .iter()
-      .filter(|line| matches!(line, DisplayLine::ReviewComment { id: line_id, .. } if *line_id == id))
+      .filter(
+        |line| matches!(line, DisplayLine::ReviewComment { id: line_id, .. } if *line_id == id),
+      )
       .count()
   }
 
