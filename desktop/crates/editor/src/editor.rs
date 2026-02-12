@@ -1013,7 +1013,11 @@ impl Editor {
       let link_handler = {
         let editor = editor_entity.clone();
         let line_height = line_height;
-        Arc::new(move |url: &str, _window: &mut Window, cx: &mut App| {
+        Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
+          if window.modifiers().secondary() {
+            return LinkAction::Open;
+          }
+
           let handled = editor.update(cx, |editor, cx| {
             let Some((pr_number, comment_id)) = parse_github_pr_comment_link(url) else {
               return false;
