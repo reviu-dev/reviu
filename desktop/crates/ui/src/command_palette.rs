@@ -53,6 +53,7 @@ pub enum CommandPalettePage {
   Git,
   Github,
   GithubPrDetails,
+  GitConfig,
   Settings,
 }
 
@@ -97,6 +98,7 @@ pub enum CommandPaletteAction {
     repo: String,
     number: u64,
   },
+  OpenGitConfigPage,
   OpenSettingsPage,
 }
 
@@ -366,6 +368,7 @@ pub enum CommandPaletteCommandId {
   OpenGitPage,
   OpenGithubPage,
   OpenGithubPrFromUrl,
+  OpenGitConfigPage,
   OpenSettingsPage,
 }
 
@@ -434,6 +437,14 @@ impl CommandPaletteCommand {
     }
   }
 
+  pub fn open_git_config_page() -> Self {
+    Self {
+      id: CommandPaletteCommandId::OpenGitConfigPage,
+      name: "Open Git Config".into(),
+      description: Some("Edit ~/.gitconfig".into()),
+    }
+  }
+
   pub fn default_global_commands(
     current_page: CommandPalettePage,
     include_github: bool,
@@ -450,6 +461,10 @@ impl CommandPaletteCommand {
 
     if include_github {
       commands.push(Self::open_github_pr_from_url());
+    }
+
+    if current_page != CommandPalettePage::GitConfig {
+      commands.push(Self::open_git_config_page());
     }
 
     if current_page != CommandPalettePage::Settings {
@@ -469,6 +484,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::OpenGitPage => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::OpenGithubPage => Icon::new(IconName::GitHub),
       CommandPaletteCommandId::OpenGithubPrFromUrl => Icon::new(IconName::GitHub),
+      CommandPaletteCommandId::OpenGitConfigPage => Icon::new(IconName::File),
       CommandPaletteCommandId::OpenSettingsPage => Icon::new(IconName::Settings2),
     }
   }
@@ -919,6 +935,9 @@ impl CommandPalette {
           });
           self.set_screen(CommandPaletteScreen::OpenGithubPrFromUrl, cx, window);
         }
+      }
+      CommandPaletteCommandId::OpenGitConfigPage => {
+        self.trigger_action(CommandPaletteAction::OpenGitConfigPage, window, cx);
       }
       CommandPaletteCommandId::OpenSettingsPage => {
         self.trigger_action(CommandPaletteAction::OpenSettingsPage, window, cx);

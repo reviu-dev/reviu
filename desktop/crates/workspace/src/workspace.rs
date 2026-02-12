@@ -7,6 +7,7 @@ use crate::api::ApiClient;
 use crate::auth_state::AuthStateStore;
 use crate::config::{AppSettings as PersistedSettings, ConfigStore};
 use crate::git_page::GitPage;
+use crate::git_config_page::GitConfigPage;
 use crate::github_page::GithubPage;
 use crate::github_pr_details_page::GithubPrDetailsPage;
 use crate::settings_page::SettingsPage;
@@ -16,6 +17,7 @@ pub enum WorkspacePage {
   Git,
   Github,
   GithubPrDetails,
+  GitConfig,
   Settings,
 }
 
@@ -23,6 +25,7 @@ pub enum WorkspacePage {
 pub(crate) struct WorkspaceRoute {
   pub page: WorkspacePage,
   pub settings_return: Option<WorkspacePage>,
+  pub git_config_return: Option<WorkspacePage>,
 }
 
 impl Default for WorkspaceRoute {
@@ -30,6 +33,7 @@ impl Default for WorkspaceRoute {
     Self {
       page: WorkspacePage::Git,
       settings_return: None,
+      git_config_return: None,
     }
   }
 }
@@ -59,6 +63,21 @@ impl WorkspaceRoute {
     let target = route.settings_return.take().unwrap_or(WorkspacePage::Git);
     route.page = target;
   }
+
+  pub fn open_git_config(cx: &mut App) {
+    let current = cx.global::<Self>().page;
+    let route = cx.global_mut::<Self>();
+    if route.page != WorkspacePage::GitConfig {
+      route.git_config_return = Some(current);
+    }
+    route.page = WorkspacePage::GitConfig;
+  }
+
+  pub fn close_git_config(cx: &mut App) {
+    let route = cx.global_mut::<Self>();
+    let target = route.git_config_return.take().unwrap_or(WorkspacePage::Git);
+    route.page = target;
+  }
 }
 
 #[derive(Clone)]
@@ -82,6 +101,7 @@ impl WorkspaceApi {
 
 pub struct WorkspaceView {
   git_page: Entity<GitPage>,
+  git_config_page: Entity<GitConfigPage>,
   github_page: Entity<GithubPage>,
   github_pr_details_page: Entity<GithubPrDetailsPage>,
   settings_page: Entity<SettingsPage>,
@@ -108,12 +128,14 @@ impl WorkspaceView {
     }
 
     let git_page = cx.new(|cx| GitPage::new(window, cx));
+    let git_config_page = cx.new(|cx| GitConfigPage::new(window, cx));
     let github_page = cx.new(|cx| GithubPage::new(window, cx));
     let github_pr_details_page = cx.new(|cx| GithubPrDetailsPage::new(window, cx));
     let settings_page = cx.new(|cx| SettingsPage::new(window, cx, settings));
 
     let view = Self {
       git_page,
+      git_config_page,
       github_page,
       github_pr_details_page,
       settings_page,
@@ -156,6 +178,7 @@ impl Render for WorkspaceView {
       WorkspacePage::Git => self.git_page.clone().into_any_element(),
       WorkspacePage::Github => self.github_page.clone().into_any_element(),
       WorkspacePage::GithubPrDetails => self.github_pr_details_page.clone().into_any_element(),
+      WorkspacePage::GitConfig => self.git_config_page.clone().into_any_element(),
       WorkspacePage::Settings => self.settings_page.clone().into_any_element(),
     }
   }
@@ -167,6 +190,7 @@ impl Focusable for WorkspaceView {
       WorkspacePage::Git => self.git_page.read(cx).focus_handle(cx),
       WorkspacePage::Github => self.github_page.read(cx).focus_handle(cx),
       WorkspacePage::GithubPrDetails => self.github_pr_details_page.read(cx).focus_handle(cx),
+      WorkspacePage::GitConfig => self.git_config_page.read(cx).focus_handle(cx),
       WorkspacePage::Settings => self.settings_page.read(cx).focus_handle(cx),
     }
   }

@@ -171,6 +171,11 @@ impl SettingsPage {
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => Ok(()),
+      CommandPaletteAction::OpenGitConfigPage => {
+        WorkspaceRoute::open_git_config(cx);
+        cx.refresh_windows();
+        Ok(())
+      }
       _ => Err("Command not available.".into()),
     }
   }
