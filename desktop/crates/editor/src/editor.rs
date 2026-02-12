@@ -39,6 +39,10 @@ use crate::{
   gutter_element::GutterElement,
   projection::{
     ChangeKind, DisplayLine, GapId, GapReveal, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
+    REVIEW_COMMENT_CARD_BORDER_PX, REVIEW_COMMENT_CARD_CONTENT_GAP_PX,
+    REVIEW_COMMENT_CARD_PADDING_X_PX, REVIEW_COMMENT_FIRST_MESSAGE_BOTTOM_PADDING_PX,
+    REVIEW_COMMENT_HEADER_HEIGHT_LINES, REVIEW_COMMENT_REPLY_BORDER_TOP_PX,
+    REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX, REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX,
     ReviewComment, ReviewCommentSide,
   },
 };
@@ -78,6 +82,15 @@ const FRACTIONAL_SCROLL_EPSILON: f32 = 0.001;
 const REVIEW_COMMENT_SCROLL_DURATION: Duration = Duration::from_millis(260);
 const REVIEW_COMMENT_SCROLL_TICK: Duration = Duration::from_millis(16);
 const REVIEW_COMMENT_SCROLL_MIN_DELTA: f32 = 0.01;
+const REVIEW_COMMENT_DEFAULT_WRAP_COLUMNS: usize = 72;
+const REVIEW_COMMENT_MIN_WRAP_COLUMNS: usize = 28;
+const REVIEW_COMMENT_MAX_WRAP_COLUMNS: usize = 180;
+const REVIEW_COMMENT_CHAR_WIDTH_PX: f32 = 7.8;
+const REVIEW_COMMENT_HORIZONTAL_PADDING_PX: f32 =
+  REVIEW_COMMENT_CARD_PADDING_X_PX * 2.0 + REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
+const REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX: f32 = 20.0;
+const REVIEW_COMMENT_MARKDOWN_LINE_HEIGHT_SCALE: f32 = 0.8;
+const REVIEW_COMMENT_FIXED_WIDTH_PX: f32 = 800.0;
 
 fn has_fractional_scroll(scroll_offset: f32) -> bool {
   (scroll_offset - scroll_offset.floor()) > FRACTIONAL_SCROLL_EPSILON
@@ -139,6 +152,8 @@ pub struct Editor {
   review_comment_thread_roots: HashMap<u64, u64>,
   review_comment_threads: HashMap<u64, Vec<u64>>,
   review_comment_thread_order: Vec<u64>,
+  review_comment_wrap_columns: usize,
+  review_comment_line_height_px: f32,
   review_comment_markdown_states: HashMap<u64, MarkdownRenderState>,
   review_comment_pr_number: Option<u64>,
   collapsed_review_comments: HashSet<u64>,
@@ -377,6 +392,8 @@ impl Editor {
       review_comment_thread_roots: HashMap::new(),
       review_comment_threads: HashMap::new(),
       review_comment_thread_order: Vec::new(),
+      review_comment_wrap_columns: REVIEW_COMMENT_DEFAULT_WRAP_COLUMNS,
+      review_comment_line_height_px: REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX,
       review_comment_markdown_states: HashMap::new(),
       review_comment_pr_number: None,
       collapsed_review_comments: HashSet::new(),
@@ -499,10 +516,7 @@ impl Editor {
         self.review_comment_thread_order.push(root_id);
       }
     }
-
-    self
-      .collapsed_review_comments
-      .retain(|id| self.review_comments.iter().any(|comment| comment.id == *id));
+    self.collapsed_review_comments.clear();
     self
       .review_comment_markdown_states
       .retain(|id, _| self.review_comments.iter().any(|comment| comment.id == *id));
@@ -516,6 +530,16 @@ impl Editor {
     if self.diffs.is_some() {
       self.rebuild_projection(cx);
     }
+  }
+
+  fn computed_review_comment_wrap_columns(&self) -> usize {
+    let available_px = (REVIEW_COMMENT_FIXED_WIDTH_PX - REVIEW_COMMENT_HORIZONTAL_PADDING_PX)
+      .max(REVIEW_COMMENT_CHAR_WIDTH_PX);
+    let columns = (available_px / REVIEW_COMMENT_CHAR_WIDTH_PX).floor() as usize;
+    columns.clamp(
+      REVIEW_COMMENT_MIN_WRAP_COLUMNS,
+      REVIEW_COMMENT_MAX_WRAP_COLUMNS,
+    )
   }
 
   pub fn set_review_comment_pr_number(&mut self, pr_number: Option<u64>, cx: &mut Context<Self>) {
@@ -664,9 +688,6 @@ impl Editor {
       return Vec::new();
     }
 
-    let total_lines = projection.lines.len();
-    let viewport = self.viewport_range(line_height, total_lines);
-
     let mut spans_by_comment: HashMap<u64, (usize, usize)> = HashMap::new();
 
     for (idx, line) in projection.lines.iter().enumerate() {
@@ -688,6 +709,8 @@ impl Editor {
     if spans_by_comment.is_empty() {
       return Vec::new();
     }
+    let total_display_lines = projection.lines.len();
+    let display_viewport = self.viewport_range(line_height, total_display_lines);
 
     let comments_by_id: HashMap<u64, &ReviewComment> = self
       .review_comments
@@ -704,8 +727,8 @@ impl Editor {
 
       let mut messages = Vec::new();
       let mut visible_comment_ids = Vec::new();
-      let mut start_line: Option<usize> = None;
-      let mut end_line = 0usize;
+      let mut thread_first_line = usize::MAX;
+      let mut thread_last_line = 0usize;
 
       for comment_id in comment_ids {
         let Some(comment) = comments_by_id.get(comment_id).copied() else {
@@ -716,16 +739,12 @@ impl Editor {
         {
           continue;
         }
-        let Some((first, count)) = spans_by_comment.get(comment_id).copied() else {
-          continue;
-        };
-        if count == 0 {
-          continue;
+        if let Some((first, count)) = spans_by_comment.get(comment_id).copied()
+          && count > 0
+        {
+          thread_first_line = thread_first_line.min(first);
+          thread_last_line = thread_last_line.max(first + count - 1);
         }
-
-        let end = first.saturating_add(count);
-        start_line = Some(start_line.map_or(first, |existing| existing.min(first)));
-        end_line = end_line.max(end);
         visible_comment_ids.push(*comment_id);
         messages.push(ReviewCommentMessageLayout {
           id: comment.id,
@@ -738,15 +757,20 @@ impl Editor {
         });
       }
 
-      let Some(first) = start_line else {
+      if visible_comment_ids.is_empty() {
         continue;
-      };
-      if end_line <= viewport.start || first >= viewport.end {
+      }
+      if thread_first_line == usize::MAX {
+        continue;
+      }
+      if thread_last_line < display_viewport.start || thread_first_line >= display_viewport.end {
         continue;
       }
 
-      let top = line_height * (first as f32 - self.scroll_offset_y);
-      let height = line_height * end_line.saturating_sub(first) as f32;
+      let span_count = thread_last_line - thread_first_line + 1;
+
+      let top = line_height * (thread_first_line as f32 - self.scroll_offset_y);
+      let height = line_height * span_count as f32;
       let collapsed = !visible_comment_ids.is_empty()
         && visible_comment_ids
           .iter()
@@ -778,8 +802,8 @@ impl Editor {
       if count == 0 {
         continue;
       }
-      let end = first.saturating_add(count);
-      if end <= viewport.start || first >= viewport.end {
+      let last = first + count - 1;
+      if last < display_viewport.start || first >= display_viewport.end {
         continue;
       }
 
@@ -805,18 +829,24 @@ impl Editor {
   }
 
   fn render_review_comments_overlay(
-    &self,
+    &mut self,
     editor_entity: Entity<Editor>,
     side_filter: Option<ReviewCommentSide>,
     line_height: Pixels,
     cx: &mut Context<Self>,
   ) -> Option<gpui::AnyElement> {
-    let layouts = self.review_comment_layouts(side_filter, line_height);
+    let mut layouts = self.review_comment_layouts(side_filter, line_height);
     if layouts.is_empty() {
       return None;
     }
+    layouts.sort_by(|a, b| {
+      (a.top / px(1.0))
+        .partial_cmp(&(b.top / px(1.0)))
+        .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let theme = cx.theme().clone();
+    let review_comment_header_height = line_height * REVIEW_COMMENT_HEADER_HEIGHT_LINES;
     let mut overlay = div()
       .absolute()
       .top(px(0.0))
@@ -824,7 +854,7 @@ impl Editor {
       .right(px(0.0))
       .bottom(px(0.0));
 
-    for layout in layouts {
+    for layout in layouts.into_iter().rev() {
       let thread_id = layout.id;
       let Some(first_message) = layout.messages.first() else {
         continue;
@@ -867,7 +897,7 @@ impl Editor {
             .when_some(first_message.avatar_url.clone(), |this, url| {
               this.src(url.as_ref().to_string())
             })
-            .small(),
+            .xsmall(),
         )
         .child(
           div()
@@ -893,6 +923,7 @@ impl Editor {
       let header_editor = editor_entity.clone();
       let header = h_flex()
         .items_center()
+        .h(review_comment_header_height)
         .justify_between()
         .gap_2()
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -931,7 +962,7 @@ impl Editor {
         })
       };
 
-      let mut thread_messages = v_flex().gap_2();
+      let mut thread_messages = v_flex();
       for (index, message) in layout.messages.iter().enumerate() {
         let state = self
           .review_comment_markdown_states
@@ -945,16 +976,19 @@ impl Editor {
         );
 
         let message_block = if index == 0 {
-          v_flex().child(body)
+          v_flex()
+            .pb(px(REVIEW_COMMENT_FIRST_MESSAGE_BOTTOM_PADDING_PX))
+            .child(body)
         } else {
           let message_line_label = message
             .line_label
             .clone()
             .or_else(|| Some(Arc::from(format!("L{}", message.line + 1))));
           v_flex()
-            .gap_1()
-            .pt_2()
-            .border_t_1()
+            .pt(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
+            .pb(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
+            .gap(px(REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX))
+            .border_t(px(REVIEW_COMMENT_REPLY_BORDER_TOP_PX))
             .border_color(theme.border)
             .child(
               h_flex()
@@ -966,7 +1000,7 @@ impl Editor {
                     .when_some(message.avatar_url.clone(), |this, url| {
                       this.src(url.as_ref().to_string())
                     })
-                    .small(),
+                    .xsmall(),
                 )
                 .child(
                   div()
@@ -995,20 +1029,19 @@ impl Editor {
       }
 
       let card = div()
-        .size_full()
+        .w(px(REVIEW_COMMENT_FIXED_WIDTH_PX))
         .bg(theme.sidebar)
-        .border_1()
+        .border(px(REVIEW_COMMENT_CARD_BORDER_PX))
         .border_color(theme.border)
         .rounded_md()
-        .overflow_hidden()
-        .block_mouse_except_scroll()
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
           cx.stop_propagation();
         })
         .child(
           v_flex()
-            .gap_1()
-            .p_2()
+            .pl(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
+            .pr(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
+            .gap(px(REVIEW_COMMENT_CARD_CONTENT_GAP_PX))
             .child(header)
             .when(!is_collapsed, |this| this.child(thread_messages)),
         );
@@ -1017,8 +1050,8 @@ impl Editor {
         div()
           .absolute()
           .top(layout.top)
-          .left(px(0.0))
-          .right(px(0.0))
+          .left_0()
+          .right_0()
           .h(layout.height)
           .pr_2()
           .child(card),
@@ -1222,7 +1255,13 @@ impl Editor {
       &self.expanded_gaps,
       matches!(self.diff_view_mode, DiffViewMode::Split),
     )
-    .with_review_comments(&self.review_comments, &self.collapsed_review_comments);
+    .with_review_comments(
+      &self.review_comments,
+      &self.collapsed_review_comments,
+      self.review_comment_wrap_columns,
+      self.review_comment_line_height_px,
+      self.review_comment_line_height_px * REVIEW_COMMENT_MARKDOWN_LINE_HEIGHT_SCALE,
+    );
 
     self.set_projection(Some(projection));
 
@@ -3285,17 +3324,33 @@ impl Render for Editor {
 
     let editor_entity = cx.entity().clone();
     let line_height = window.line_height();
+    let line_height_px = (line_height / px(1.0)).max(1.0);
+    if (line_height_px - self.review_comment_line_height_px).abs() > 0.05 {
+      self.review_comment_line_height_px = line_height_px;
+      if self.diffs.is_some() {
+        self.rebuild_projection(cx);
+      }
+    }
+    let wrap_columns = self.computed_review_comment_wrap_columns();
+    if wrap_columns != self.review_comment_wrap_columns {
+      self.review_comment_wrap_columns = wrap_columns;
+      if self.diffs.is_some() {
+        self.rebuild_projection(cx);
+      }
+    }
     let doc_line_count = self.document.read(cx).len_lines();
     let total_lines = self.display_line_count(doc_line_count);
     let viewport = self.viewport_range(line_height, total_lines);
     let gap_controls = self.gap_controls();
+    let gutter_background = self.theme.gutter_background();
+    let scroll_offset_y = self.scroll_offset_y;
 
     let build_gutter =
       |gutter_element: GutterElement, view_suffix: &'static str, editor_entity: Entity<Editor>| {
         let mut gutter = div()
           .w(px(GUTTER_WIDTH))
           .h_full()
-          .bg(self.theme.gutter_background())
+          .bg(gutter_background)
           .relative()
           .child(gutter_element);
 
@@ -3304,7 +3359,7 @@ impl Render for Editor {
             continue;
           }
 
-          let y = line_height * (control.display_line as f32 - self.scroll_offset_y);
+          let y = line_height * (control.display_line as f32 - scroll_offset_y);
           let button_id = format!(
             "gap-expand-{}-{}-{}-{}",
             view_suffix,
@@ -3533,6 +3588,8 @@ pub mod tests {
           review_comment_thread_roots: HashMap::new(),
           review_comment_threads: HashMap::new(),
           review_comment_thread_order: Vec::new(),
+          review_comment_wrap_columns: REVIEW_COMMENT_DEFAULT_WRAP_COLUMNS,
+          review_comment_line_height_px: REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX,
           review_comment_markdown_states: HashMap::new(),
           review_comment_pr_number: None,
           collapsed_review_comments: HashSet::new(),
