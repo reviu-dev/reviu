@@ -1,13 +1,24 @@
-use std::{collections::{HashMap, HashSet}, ops::Range, sync::Arc};
+use std::{
+  collections::{HashMap, HashSet},
+  ops::Range,
+  sync::Arc,
+};
 
 use blake3::Hasher;
+use gfm_markdown_viewer::estimate_markdown_height_px;
 use git::{DiffHunk, DiffLine, DiffLineKind, FileDiff};
 
 const GAP_THRESHOLD_LINES: usize = 6;
-pub const GAP_MARKER_TEXT: &str = "…";
 pub const NO_NEWLINE_MARKER_TEXT: &str = "\\ No newline at end of file";
-const REVIEW_COMMENT_HEADER_LINES: usize = 1;
-const REVIEW_COMMENT_PADDING_LINES: usize = 1;
+const REVIEW_COMMENT_COLLAPSED_LINES: usize = 2;
+pub const REVIEW_COMMENT_HEADER_HEIGHT_LINES: f32 = 2.0;
+pub const REVIEW_COMMENT_CARD_BORDER_PX: f32 = 1.0;
+pub const REVIEW_COMMENT_CARD_PADDING_X_PX: f32 = 12.0;
+pub const REVIEW_COMMENT_CARD_CONTENT_GAP_PX: f32 = 4.0;
+pub const REVIEW_COMMENT_FIRST_MESSAGE_BOTTOM_PADDING_PX: f32 = 8.0;
+pub const REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX: f32 = 16.0;
+pub const REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX: f32 = 4.0;
+pub const REVIEW_COMMENT_REPLY_BORDER_TOP_PX: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HunkState {
@@ -506,22 +517,123 @@ impl Projection {
     self,
     comments: &[ReviewComment],
     collapsed: &HashSet<u64>,
+    wrap_columns: usize,
+    editor_line_height_px: f32,
+    markdown_line_height_px: f32,
   ) -> Self {
     if comments.is_empty() {
       return self;
     }
 
     let doc_line_count = self.doc_to_display.len();
-    let lines = insert_review_comments(self.lines, comments, collapsed);
-    Projection::from_lines(doc_line_count, lines, self.groups, self.start_gap, self.end_gap)
+    let lines = insert_review_comments(
+      self.lines,
+      comments,
+      collapsed,
+      wrap_columns,
+      editor_line_height_px,
+      markdown_line_height_px,
+    );
+    Projection::from_lines(
+      doc_line_count,
+      lines,
+      self.groups,
+      self.start_gap,
+      self.end_gap,
+    )
   }
+}
+
+fn resolve_review_comment_thread_root(
+  comment: &ReviewComment,
+  comments_by_id: &HashMap<u64, &ReviewComment>,
+) -> u64 {
+  let mut root_id = comment.id;
+  let mut parent = comment.in_reply_to_id;
+  for _ in 0..64 {
+    let Some(parent_id) = parent else {
+      break;
+    };
+    if parent_id == root_id {
+      break;
+    }
+    root_id = parent_id;
+    parent = comments_by_id
+      .get(&parent_id)
+      .and_then(|value| value.in_reply_to_id);
+  }
+  root_id
+}
+
+fn review_comment_header_text(comment: &ReviewComment) -> String {
+  let line_label = comment
+    .line_label
+    .as_deref()
+    .unwrap_or("")
+    .trim()
+    .to_string();
+  if line_label.is_empty() {
+    format!("{} {}", comment.author, comment.created_at)
+  } else {
+    format!("{} {} {}", comment.author, line_label, comment.created_at)
+  }
+}
+
+fn required_extra_lines(extra_px: f32, line_height_px: f32) -> usize {
+  if extra_px <= 0.0 || line_height_px <= 0.0 {
+    return 0;
+  }
+  (extra_px / line_height_px).ceil() as usize
+}
+
+fn estimated_expanded_thread_height_px(
+  thread_comments: &[&ReviewComment],
+  wrap_columns: usize,
+  editor_line_height_px: f32,
+  markdown_line_height_px: f32,
+) -> f32 {
+  if thread_comments.is_empty() {
+    return editor_line_height_px * REVIEW_COMMENT_HEADER_HEIGHT_LINES
+      + REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
+  }
+
+  let mut total_px = REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
+  total_px += editor_line_height_px * REVIEW_COMMENT_HEADER_HEIGHT_LINES;
+  total_px += REVIEW_COMMENT_CARD_CONTENT_GAP_PX;
+
+  let first_message = thread_comments[0];
+  total_px += estimate_markdown_height_px(
+    &first_message.body,
+    wrap_columns,
+    markdown_line_height_px,
+  );
+  total_px += REVIEW_COMMENT_FIRST_MESSAGE_BOTTOM_PADDING_PX;
+
+  for reply in thread_comments.iter().skip(1) {
+    total_px += REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX;
+    total_px += REVIEW_COMMENT_REPLY_BORDER_TOP_PX;
+    total_px += REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX;
+    total_px += editor_line_height_px;
+    total_px += estimate_markdown_height_px(&reply.body, wrap_columns, markdown_line_height_px);
+  }
+
+  total_px
 }
 
 fn insert_review_comments(
   lines: Vec<DisplayLine>,
   comments: &[ReviewComment],
   collapsed: &HashSet<u64>,
+  wrap_columns: usize,
+  editor_line_height_px: f32,
+  markdown_line_height_px: f32,
 ) -> Vec<DisplayLine> {
+  #[derive(Clone)]
+  struct ThreadInsertion<'a> {
+    thread_id: u64,
+    comments: Vec<&'a ReviewComment>,
+  }
+
   if comments.is_empty() {
     return lines;
   }
@@ -531,13 +643,17 @@ fn insert_review_comments(
 
   for (idx, line) in lines.iter().enumerate() {
     match line {
-      DisplayLine::Doc { doc_line, old_line, .. } => {
+      DisplayLine::Doc {
+        doc_line, old_line, ..
+      } => {
         new_line_to_display.entry(*doc_line).or_insert(idx);
         if let Some(old_line) = old_line {
           old_line_to_display.entry(*old_line).or_insert(idx);
         }
       }
-      DisplayLine::Modified { doc_line, old_line, .. } => {
+      DisplayLine::Modified {
+        doc_line, old_line, ..
+      } => {
         new_line_to_display.entry(*doc_line).or_insert(idx);
         old_line_to_display.entry(*old_line).or_insert(idx);
       }
@@ -548,29 +664,73 @@ fn insert_review_comments(
     }
   }
 
-  let mut comments_by_display: HashMap<usize, Vec<&ReviewComment>> = HashMap::new();
+  let comments_by_id: HashMap<u64, &ReviewComment> = comments
+    .iter()
+    .map(|comment| (comment.id, comment))
+    .collect();
+  let mut comment_targets: HashMap<u64, usize> = HashMap::new();
   for comment in comments {
     let target = match comment.side {
       ReviewCommentSide::Left => old_line_to_display.get(&comment.line),
       ReviewCommentSide::Right => new_line_to_display.get(&comment.line),
     };
     if let Some(&display_idx) = target {
-      comments_by_display
-        .entry(display_idx)
-        .or_default()
-        .push(comment);
+      comment_targets.insert(comment.id, display_idx);
     }
   }
 
-  if comments_by_display.is_empty() {
+  if comment_targets.is_empty() {
     return lines;
   }
+
+  let mut thread_order = Vec::new();
+  let mut comments_by_thread: HashMap<u64, Vec<&ReviewComment>> = HashMap::new();
+  for comment in comments {
+    let root_id = resolve_review_comment_thread_root(comment, &comments_by_id);
+    if !comments_by_thread.contains_key(&root_id) {
+      thread_order.push(root_id);
+    }
+    comments_by_thread.entry(root_id).or_default().push(comment);
+  }
+
+  let mut threads_by_display: HashMap<usize, Vec<ThreadInsertion<'_>>> = HashMap::new();
+  for thread_id in thread_order {
+    let Some(thread_comments) = comments_by_thread.get(&thread_id) else {
+      continue;
+    };
+    let root_target = thread_comments
+      .iter()
+      .find(|comment| comment.id == thread_id)
+      .and_then(|comment| comment_targets.get(&comment.id).copied());
+    let target = root_target.or_else(|| {
+      thread_comments
+        .iter()
+        .find_map(|comment| comment_targets.get(&comment.id).copied())
+    });
+    let Some(display_idx) = target else {
+      continue;
+    };
+    threads_by_display
+      .entry(display_idx)
+      .or_default()
+      .push(ThreadInsertion {
+        thread_id,
+        comments: thread_comments.clone(),
+      });
+  }
+
+  if threads_by_display.is_empty() {
+    return lines;
+  }
+  let editor_line_height_px = editor_line_height_px.max(1.0);
+  let markdown_line_height_px = markdown_line_height_px.max(1.0);
+  let effective_wrap_columns = wrap_columns.max(1);
 
   let mut result = Vec::with_capacity(lines.len() + comments.len().saturating_mul(2));
   for (idx, line) in lines.into_iter().enumerate() {
     result.push(line);
 
-    let Some(entries) = comments_by_display.get(&idx) else {
+    let Some(threads) = threads_by_display.get(&idx) else {
       continue;
     };
 
@@ -588,23 +748,49 @@ fn insert_review_comments(
           _ => None,
         },
       ),
-      Some(DisplayLine::Modified { group_id, secondary, .. }) => (
+      Some(DisplayLine::Modified {
+        group_id,
+        secondary,
+        ..
+      }) => (
         group_id.clone(),
         *secondary,
         Some(ReviewCommentBackground::Added),
       ),
-      Some(DisplayLine::Removed { group_id, secondary, .. }) => (
+      Some(DisplayLine::Removed {
+        group_id,
+        secondary,
+        ..
+      }) => (
         group_id.clone(),
         *secondary,
         Some(ReviewCommentBackground::Removed),
       ),
-      Some(DisplayLine::NoNewline { group_id, secondary, .. }) => (group_id.clone(), *secondary, None),
+      Some(DisplayLine::NoNewline {
+        group_id,
+        secondary,
+        ..
+      }) => (group_id.clone(), *secondary, None),
       _ => (None, false, None),
     };
 
-    for comment in entries {
-      let is_collapsed = collapsed.contains(&comment.id);
-      let background = match (comment.side, background) {
+    for thread in threads {
+      let Some(first_comment) = thread.comments.first().copied() else {
+        continue;
+      };
+      let header_comment = thread
+        .comments
+        .iter()
+        .find(|comment| comment.id == thread.thread_id)
+        .copied()
+        .unwrap_or(first_comment);
+      let thread_is_collapsed = !thread.comments.is_empty()
+        && thread
+          .comments
+          .iter()
+          .all(|comment| collapsed.contains(&comment.id));
+
+      let comment_background = match (header_comment.side, background) {
         (ReviewCommentSide::Left, Some(ReviewCommentBackground::Added)) => {
           Some(ReviewCommentBackground::Removed)
         }
@@ -613,81 +799,30 @@ fn insert_review_comments(
         }
         (_, value) => value,
       };
-
-      for _ in 0..REVIEW_COMMENT_PADDING_LINES / 2 {
-        result.push(DisplayLine::ReviewComment {
-          id: comment.id,
-          side: comment.side,
-          group_id: group_id.clone(),
-          background,
-          secondary,
-          text: Arc::from(""),
-          is_header: false,
-        });
-      }
-      let line_label = comment
-        .line_label
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_string();
-      let header = if line_label.is_empty() {
-        format!("{} {}", comment.author, comment.created_at)
+      let reserved_lines = if thread_is_collapsed {
+        REVIEW_COMMENT_COLLAPSED_LINES
       } else {
-        format!("{} {} {}", comment.author, line_label, comment.created_at)
-      };
+        let expanded_height_px = estimated_expanded_thread_height_px(
+          &thread.comments,
+          effective_wrap_columns,
+          editor_line_height_px,
+          markdown_line_height_px,
+        );
+        required_extra_lines(expanded_height_px, editor_line_height_px)
+          .max(REVIEW_COMMENT_COLLAPSED_LINES)
+      }
+      .max(1);
 
-      for line_idx in 0..REVIEW_COMMENT_HEADER_LINES {
+      let header = review_comment_header_text(header_comment);
+      for line_idx in 0..reserved_lines {
         result.push(DisplayLine::ReviewComment {
-          id: comment.id,
-          side: comment.side,
+          id: header_comment.id,
+          side: header_comment.side,
           group_id: group_id.clone(),
-          background,
+          background: comment_background,
           secondary,
           text: Arc::from(if line_idx == 0 { header.as_str() } else { "" }),
           is_header: line_idx == 0,
-        });
-      }
-
-      if is_collapsed {
-        for _ in 0..REVIEW_COMMENT_PADDING_LINES - (REVIEW_COMMENT_PADDING_LINES / 2) {
-          result.push(DisplayLine::ReviewComment {
-            id: comment.id,
-            side: comment.side,
-            group_id: group_id.clone(),
-            background,
-            secondary,
-            text: Arc::from(""),
-            is_header: false,
-          });
-        }
-        continue;
-      }
-
-      let body_lines: Vec<&str> = comment.body.lines().collect();
-      let body_count = body_lines.len().max(1);
-      for idx in 0..body_count {
-        let text = body_lines.get(idx).copied().unwrap_or("");
-        result.push(DisplayLine::ReviewComment {
-          id: comment.id,
-          side: comment.side,
-          group_id: group_id.clone(),
-          background,
-          secondary,
-          text: Arc::from(text),
-          is_header: false,
-        });
-      }
-
-      for _ in 0..REVIEW_COMMENT_PADDING_LINES - (REVIEW_COMMENT_PADDING_LINES / 2) {
-        result.push(DisplayLine::ReviewComment {
-          id: comment.id,
-          side: comment.side,
-          group_id: group_id.clone(),
-          background,
-          secondary,
-          text: Arc::from(""),
-          is_header: false,
         });
       }
     }
@@ -1380,7 +1515,11 @@ fn count_hunk_line_counts(hunk: &DiffHunk) -> (usize, usize) {
 mod tests {
   use super::*;
   use git::{GitFileBases, compute_buffer_diffs};
-  use std::{collections::HashMap, path::Path};
+  use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    sync::Arc,
+  };
 
   fn diffs_from(base: &str, buffer: &str) -> git::DiffSet {
     let bases = GitFileBases {
@@ -1401,6 +1540,28 @@ mod tests {
       &HashMap::new(),
       align_modified,
     )
+  }
+
+  fn review_comment(id: u64, body: &str) -> ReviewComment {
+    ReviewComment {
+      id,
+      in_reply_to_id: None,
+      line: 0,
+      side: ReviewCommentSide::Right,
+      author: Arc::from("joris"),
+      avatar_url: None,
+      line_label: Some(Arc::from("L1")),
+      body: Arc::from(body.to_string()),
+      created_at: Arc::from("2026-02-12"),
+    }
+  }
+
+  fn count_review_comment_lines(projection: &Projection, id: u64) -> usize {
+    projection
+      .lines
+      .iter()
+      .filter(|line| matches!(line, DisplayLine::ReviewComment { id: line_id, .. } if *line_id == id))
+      .count()
   }
 
   #[test]
@@ -1443,5 +1604,48 @@ mod tests {
         ..
       }
     ));
+  }
+
+  #[test]
+  fn review_comment_collapsed_reserves_fixed_collapsed_lines() {
+    let projection = projection_from("line 1\nline 2", "line 1\nline 2", false);
+    let comment = review_comment(42, "short");
+    let comments = vec![comment.clone()];
+    let collapsed = HashSet::from([comment.id]);
+
+    let projection =
+      projection.with_review_comments(&comments, &collapsed, 80, 20.0, 20.0);
+    let reserved = count_review_comment_lines(&projection, comment.id);
+
+    assert_eq!(reserved, REVIEW_COMMENT_COLLAPSED_LINES);
+  }
+
+  #[test]
+  fn review_comment_expanded_reservation_grows_with_body_height() {
+    let base_projection = projection_from("line 1\nline 2", "line 1\nline 2", false);
+
+    let short_comment = review_comment(43, "short");
+    let short_projection = base_projection.clone().with_review_comments(
+      std::slice::from_ref(&short_comment),
+      &HashSet::new(),
+      80,
+      20.0,
+      20.0,
+    );
+
+    let long_body = "long paragraph ".repeat(80);
+    let long_comment = review_comment(44, &long_body);
+    let long_projection = base_projection.with_review_comments(
+      std::slice::from_ref(&long_comment),
+      &HashSet::new(),
+      80,
+      20.0,
+      20.0,
+    );
+
+    let short_reserved = count_review_comment_lines(&short_projection, short_comment.id);
+    let long_reserved = count_review_comment_lines(&long_projection, long_comment.id);
+
+    assert!(long_reserved > short_reserved);
   }
 }
