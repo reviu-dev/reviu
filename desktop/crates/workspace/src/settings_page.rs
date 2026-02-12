@@ -18,6 +18,7 @@ use ui::{
 use crate::{
   ShowCommandPalette,
   auth_state::{AuthState, AuthStateStore},
+  config::{AppSettings as PersistedSettings, ConfigStore},
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
   workspace::{WorkspacePage, WorkspaceRoute},
@@ -30,12 +31,16 @@ pub struct SettingsPage {
 }
 
 impl SettingsPage {
-  pub fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
+  pub fn new(_: &mut Window, cx: &mut Context<Self>, settings: PersistedSettings) -> Self {
     Self {
       focus_handle: cx.focus_handle(),
-      auto_switch_theme: false,
+      auto_switch_theme: settings.auto_switch_theme,
       size: Size::default(),
     }
+  }
+
+  pub(crate) fn auto_switch_theme_enabled(&self) -> bool {
+    self.auto_switch_theme
   }
 
   fn setting_pages(&self, _: &mut Window, cx: &mut Context<Self>) -> Vec<SettingPage> {
@@ -48,14 +53,23 @@ impl SettingsPage {
           "Dark Mode",
           SettingField::switch(
             |cx: &App| cx.theme().mode.is_dark(),
-            |val: bool, cx: &mut App| {
-              let mode = if val {
-                ThemeMode::Dark
-              } else {
-                ThemeMode::Light
-              };
-              Theme::change(mode, None, cx);
-              cx.refresh_windows();
+            {
+              let view = view.clone();
+              move |val: bool, cx: &mut App| {
+                let auto_switch_theme = view.read(cx).auto_switch_theme;
+                ConfigStore::persist_app_settings(PersistedSettings {
+                  auto_switch_theme,
+                  dark_mode: val,
+                });
+
+                let mode = if val {
+                  ThemeMode::Dark
+                } else {
+                  ThemeMode::Light
+                };
+                Theme::change(mode, None, cx);
+                cx.refresh_windows();
+              }
             },
           )
           .default_value(false),
@@ -77,6 +91,12 @@ impl SettingsPage {
                 if val {
                   Theme::sync_system_appearance(None, cx);
                 }
+
+                ConfigStore::persist_app_settings(PersistedSettings {
+                  auto_switch_theme: val,
+                  dark_mode: cx.theme().mode.is_dark(),
+                });
+
                 cx.refresh_windows();
               }
             },
