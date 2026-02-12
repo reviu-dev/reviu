@@ -16,8 +16,9 @@ use ui::{
 };
 
 use crate::{
-  github_page::GithubPageHandle,
   auth_state::{AuthState, AuthStateStore},
+  github_page::GithubPageHandle,
+  github_pr_details_page::GithubPrDetailsPageHandle,
   ShowCommandPalette,
   workspace::{WorkspacePage, WorkspaceRoute},
 };
@@ -141,6 +142,14 @@ impl SettingsPage {
         GithubPageHandle::refresh(cx);
         WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
         cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubPrDetails {
+        owner,
+        repo,
+        number,
+      } => {
+        GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => Ok(()),

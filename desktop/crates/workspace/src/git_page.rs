@@ -36,6 +36,7 @@ use crate::{
   api::ApiClient,
   auth_state::{AuthState, AuthStateStore},
   config::{ConfigStore, RecentRepository},
+  github_pr_details_page::GithubPrDetailsPageHandle,
   github_page::GithubPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
@@ -1160,6 +1161,14 @@ impl GitPage {
         GithubPageHandle::refresh(cx);
         WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
         cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubPrDetails {
+        owner,
+        repo,
+        number,
+      } => {
+        GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
