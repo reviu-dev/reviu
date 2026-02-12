@@ -773,8 +773,9 @@ impl Element for EditorElement {
       }
 
       if editor.scroll_axis_lock == Some(ScrollAxis::Vertical)
-        && editor.scroll_handle.offset().x != editor.last_scroll_x
+        && editor.scroll_handle.offset().x != editor.clamp_horizontal_scroll_x(editor.last_scroll_x)
       {
+        editor.last_scroll_x = editor.clamp_horizontal_scroll_x(editor.last_scroll_x);
         editor
           .scroll_handle
           .set_offset(point(editor.last_scroll_x, px(0.0)));
@@ -1766,7 +1767,8 @@ impl Element for EditorElement {
             };
 
             if axis == ScrollAxis::Horizontal {
-              let new_scroll_x = editor.scroll_handle.offset().x + delta_x_px;
+              let new_scroll_x =
+                editor.clamp_horizontal_scroll_x(editor.scroll_handle.offset().x + delta_x_px);
               editor
                 .scroll_handle
                 .set_offset(point(new_scroll_x, px(0.0)));
@@ -1782,11 +1784,13 @@ impl Element for EditorElement {
             let new_scroll = (editor.scroll_offset_y + delta_y).max(0.0).min(max_scroll);
 
             editor.scroll_offset_y = new_scroll;
-            if editor.scroll_handle.offset().x != editor.last_scroll_x {
+            let clamped_scroll_x = editor.clamp_horizontal_scroll_x(editor.last_scroll_x);
+            if editor.scroll_handle.offset().x != clamped_scroll_x {
               editor
                 .scroll_handle
-                .set_offset(point(editor.last_scroll_x, px(0.0)));
+                .set_offset(point(clamped_scroll_x, px(0.0)));
             }
+            editor.last_scroll_x = clamped_scroll_x;
             let viewport = editor.viewport_range(window.line_height(), total_lines);
             let doc_viewport = editor.doc_range_for_display_viewport(viewport.clone());
             editor.document.update(cx, |doc, cx| {
