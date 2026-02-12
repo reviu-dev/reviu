@@ -25,7 +25,7 @@ use ui::{
 };
 
 use crate::{
-  ShowCommandPalette,
+  CloseWorkspacePage, ShowCommandPalette,
   auth_state::{AuthState, AuthStateStore},
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
@@ -103,6 +103,16 @@ impl GitConfigPage {
     cx: &mut Context<Self>,
   ) {
     self.open_command_palette(window, cx);
+  }
+
+  fn close_workspace_page_action(
+    &mut self,
+    _: &CloseWorkspacePage,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    WorkspaceRoute::close_git_config(cx);
+    cx.refresh_windows();
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -340,6 +350,7 @@ impl Render for GitConfigPage {
       .size_full()
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GitConfigPage::show_command_palette_action))
+      .on_action(cx.listener(GitConfigPage::close_workspace_page_action))
       .child(body)
   }
 }

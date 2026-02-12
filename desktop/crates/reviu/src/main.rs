@@ -10,8 +10,8 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use ui::AppAssets;
 use workspace::{
-  AuthCallbackTarget, CommitChanges, OpenRepository, ShowCommandPalette, ShowFileSearch,
-  WorkspaceView,
+  AuthCallbackTarget, CloseWorkspacePage, CommitChanges, OpenRepository, ShowCommandPalette,
+  ShowFileSearch, WorkspaceView,
 };
 
 mod app_root;
@@ -78,6 +78,7 @@ fn main() {
       KeyBinding::new("cmd-o", OpenRepository, None),
       KeyBinding::new("cmd-shift-p", ShowCommandPalette, None),
       KeyBinding::new("cmd-p", ShowFileSearch, None),
+      KeyBinding::new("cmd-w", CloseWorkspacePage, None),
       KeyBinding::new("home", Home, None),
       KeyBinding::new("end", End, None),
       KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, None),

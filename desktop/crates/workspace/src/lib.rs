@@ -1,3 +1,7 @@
+use gpui::actions;
+
+actions!(workspace, [CloseWorkspacePage]);
+
 mod api;
 mod auth_state;
 mod config;
