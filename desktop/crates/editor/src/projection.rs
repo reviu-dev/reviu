@@ -5,7 +5,6 @@ use std::{
 };
 
 use blake3::Hasher;
-use gfm_markdown_viewer::estimate_markdown_height_px;
 use git::{DiffHunk, DiffLine, DiffLineKind, FileDiff};
 
 const GAP_THRESHOLD_LINES: usize = 6;
@@ -517,9 +516,10 @@ impl Projection {
     self,
     comments: &[ReviewComment],
     collapsed: &HashSet<u64>,
-    wrap_columns: usize,
+    _wrap_columns: usize,
     editor_line_height_px: f32,
     markdown_line_height_px: f32,
+    comment_body_heights_px: &HashMap<u64, f32>,
   ) -> Self {
     if comments.is_empty() {
       return self;
@@ -530,9 +530,10 @@ impl Projection {
       self.lines,
       comments,
       collapsed,
-      wrap_columns,
+      _wrap_columns,
       editor_line_height_px,
       markdown_line_height_px,
+      comment_body_heights_px,
     );
     Projection::from_lines(
       doc_line_count,
@@ -588,9 +589,9 @@ fn required_extra_lines(extra_px: f32, line_height_px: f32) -> usize {
 
 fn estimated_expanded_thread_height_px(
   thread_comments: &[&ReviewComment],
-  wrap_columns: usize,
   editor_line_height_px: f32,
-  markdown_line_height_px: f32,
+  comment_body_heights_px: &HashMap<u64, f32>,
+  fallback_markdown_height_px: f32,
 ) -> f32 {
   if thread_comments.is_empty() {
     return editor_line_height_px * REVIEW_COMMENT_HEADER_HEIGHT_LINES
@@ -602,11 +603,10 @@ fn estimated_expanded_thread_height_px(
   total_px += REVIEW_COMMENT_CARD_CONTENT_GAP_PX;
 
   let first_message = thread_comments[0];
-  total_px += estimate_markdown_height_px(
-    &first_message.body,
-    wrap_columns,
-    markdown_line_height_px,
-  );
+  total_px += comment_body_heights_px
+    .get(&first_message.id)
+    .copied()
+    .unwrap_or(fallback_markdown_height_px);
   total_px += REVIEW_COMMENT_FIRST_MESSAGE_BOTTOM_PADDING_PX;
 
   for reply in thread_comments.iter().skip(1) {
@@ -614,7 +614,10 @@ fn estimated_expanded_thread_height_px(
     total_px += REVIEW_COMMENT_REPLY_BORDER_TOP_PX;
     total_px += REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX;
     total_px += editor_line_height_px;
-    total_px += estimate_markdown_height_px(&reply.body, wrap_columns, markdown_line_height_px);
+    total_px += comment_body_heights_px
+      .get(&reply.id)
+      .copied()
+      .unwrap_or(fallback_markdown_height_px);
   }
 
   total_px
@@ -624,9 +627,10 @@ fn insert_review_comments(
   lines: Vec<DisplayLine>,
   comments: &[ReviewComment],
   collapsed: &HashSet<u64>,
-  wrap_columns: usize,
+  _wrap_columns: usize,
   editor_line_height_px: f32,
   markdown_line_height_px: f32,
+  comment_body_heights_px: &HashMap<u64, f32>,
 ) -> Vec<DisplayLine> {
   #[derive(Clone)]
   struct ThreadInsertion<'a> {
@@ -724,7 +728,6 @@ fn insert_review_comments(
   }
   let editor_line_height_px = editor_line_height_px.max(1.0);
   let markdown_line_height_px = markdown_line_height_px.max(1.0);
-  let effective_wrap_columns = wrap_columns.max(1);
 
   let mut result = Vec::with_capacity(lines.len() + comments.len().saturating_mul(2));
   for (idx, line) in lines.into_iter().enumerate() {
@@ -804,8 +807,8 @@ fn insert_review_comments(
       } else {
         let expanded_height_px = estimated_expanded_thread_height_px(
           &thread.comments,
-          effective_wrap_columns,
           editor_line_height_px,
+          comment_body_heights_px,
           markdown_line_height_px,
         );
         required_extra_lines(expanded_height_px, editor_line_height_px)
@@ -1612,9 +1615,10 @@ mod tests {
     let comment = review_comment(42, "short");
     let comments = vec![comment.clone()];
     let collapsed = HashSet::from([comment.id]);
+    let body_heights = HashMap::from([(comment.id, 20.0f32)]);
 
     let projection =
-      projection.with_review_comments(&comments, &collapsed, 80, 20.0, 20.0);
+      projection.with_review_comments(&comments, &collapsed, 80, 20.0, 20.0, &body_heights);
     let reserved = count_review_comment_lines(&projection, comment.id);
 
     assert_eq!(reserved, REVIEW_COMMENT_COLLAPSED_LINES);
@@ -1625,22 +1629,26 @@ mod tests {
     let base_projection = projection_from("line 1\nline 2", "line 1\nline 2", false);
 
     let short_comment = review_comment(43, "short");
+    let short_body_heights = HashMap::from([(short_comment.id, 20.0f32)]);
     let short_projection = base_projection.clone().with_review_comments(
       std::slice::from_ref(&short_comment),
       &HashSet::new(),
       80,
       20.0,
       20.0,
+      &short_body_heights,
     );
 
     let long_body = "long paragraph ".repeat(80);
     let long_comment = review_comment(44, &long_body);
+    let long_body_heights = HashMap::from([(long_comment.id, 120.0f32)]);
     let long_projection = base_projection.with_review_comments(
       std::slice::from_ref(&long_comment),
       &HashSet::new(),
       80,
       20.0,
       20.0,
+      &long_body_heights,
     );
 
     let short_reserved = count_review_comment_lines(&short_projection, short_comment.id);

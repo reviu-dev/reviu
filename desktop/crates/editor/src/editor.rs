@@ -1,5 +1,6 @@
 use std::{
-  collections::{HashMap, HashSet, VecDeque},
+  collections::{HashMap, HashSet, VecDeque, hash_map::DefaultHasher},
+  hash::{Hash, Hasher},
   ops::Range,
   path::PathBuf,
   sync::{
@@ -11,7 +12,8 @@ use std::{
 
 use buffer::TransactionId;
 use gfm_markdown_viewer::{
-  LinkAction, MarkdownRenderOptions, MarkdownRenderState, render_markdown,
+  LinkAction, MarkdownRenderOptions, MarkdownRenderState, ParsedMarkdown,
+  estimate_parsed_markdown_height_px, parse_markdown, render_parsed_markdown,
 };
 use git::{ApplyLocation, DiffSet, GitFileBases, GitStore, RepoFile};
 use gpui::{
@@ -155,6 +157,7 @@ pub struct Editor {
   review_comment_wrap_columns: usize,
   review_comment_line_height_px: f32,
   review_comment_markdown_states: HashMap<u64, MarkdownRenderState>,
+  review_comment_markdown_cache: HashMap<u64, ReviewCommentMarkdownCacheEntry>,
   review_comment_pr_number: Option<u64>,
   collapsed_review_comments: HashSet<u64>,
   review_comment_scroll_epoch: usize,
@@ -207,6 +210,13 @@ struct ReviewCommentMessageLayout {
   line_label: Option<Arc<str>>,
   body: Arc<str>,
   created_at: Arc<str>,
+}
+
+#[derive(Clone)]
+struct ReviewCommentMarkdownCacheEntry {
+  body_hash: u64,
+  parsed: ParsedMarkdown,
+  estimated_heights_px: HashMap<(usize, u32), f32>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -395,6 +405,7 @@ impl Editor {
       review_comment_wrap_columns: REVIEW_COMMENT_DEFAULT_WRAP_COLUMNS,
       review_comment_line_height_px: REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX,
       review_comment_markdown_states: HashMap::new(),
+      review_comment_markdown_cache: HashMap::new(),
       review_comment_pr_number: None,
       collapsed_review_comments: HashSet::new(),
       review_comment_scroll_epoch: 0,
@@ -483,6 +494,7 @@ impl Editor {
       self.review_comment_threads.clear();
       self.review_comment_thread_order.clear();
       self.review_comment_markdown_states.clear();
+      self.review_comment_markdown_cache.clear();
       self.review_comment_pr_number = None;
       self.collapsed_review_comments.clear();
       self.set_projection(None);
@@ -520,6 +532,9 @@ impl Editor {
     self
       .review_comment_markdown_states
       .retain(|id, _| self.review_comments.iter().any(|comment| comment.id == *id));
+    self
+      .review_comment_markdown_cache
+      .retain(|id, _| self.review_comments.iter().any(|comment| comment.id == *id));
     for comment in &self.review_comments {
       self
         .review_comment_markdown_states
@@ -540,6 +555,67 @@ impl Editor {
       REVIEW_COMMENT_MIN_WRAP_COLUMNS,
       REVIEW_COMMENT_MAX_WRAP_COLUMNS,
     )
+  }
+
+  fn review_comment_body_hash(body: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    body.hash(&mut hasher);
+    hasher.finish()
+  }
+
+  fn ensure_review_comment_markdown_cache_entry(
+    &mut self,
+    comment_id: u64,
+    body: &str,
+  ) -> &mut ReviewCommentMarkdownCacheEntry {
+    let body_hash = Self::review_comment_body_hash(body);
+    let entry =
+      self
+        .review_comment_markdown_cache
+        .entry(comment_id)
+        .or_insert_with(|| ReviewCommentMarkdownCacheEntry {
+          body_hash,
+          parsed: parse_markdown(body),
+          estimated_heights_px: HashMap::new(),
+        });
+
+    if entry.body_hash != body_hash {
+      entry.body_hash = body_hash;
+      entry.parsed = parse_markdown(body);
+      entry.estimated_heights_px.clear();
+    }
+
+    entry
+  }
+
+  fn cached_parsed_review_comment_markdown(
+    &mut self,
+    comment_id: u64,
+    body: &str,
+  ) -> ParsedMarkdown {
+    self
+      .ensure_review_comment_markdown_cache_entry(comment_id, body)
+      .parsed
+      .clone()
+  }
+
+  fn cached_review_comment_body_height_px(
+    &mut self,
+    comment_id: u64,
+    body: &str,
+    wrap_columns: usize,
+    markdown_line_height_px: f32,
+  ) -> f32 {
+    let entry = self.ensure_review_comment_markdown_cache_entry(comment_id, body);
+    let key = (wrap_columns, markdown_line_height_px.to_bits());
+    if let Some(height) = entry.estimated_heights_px.get(&key) {
+      return *height;
+    }
+
+    let estimated =
+      estimate_parsed_markdown_height_px(&entry.parsed, wrap_columns, markdown_line_height_px);
+    entry.estimated_heights_px.insert(key, estimated);
+    estimated
   }
 
   pub fn set_review_comment_pr_number(&mut self, pr_number: Option<u64>, cx: &mut Context<Self>) {
@@ -969,8 +1045,9 @@ impl Editor {
           .get(&message.id)
           .cloned()
           .unwrap_or_else(MarkdownRenderState::new);
-        let body = render_markdown(
-          message.body.as_ref(),
+        let parsed = self.cached_parsed_review_comment_markdown(message.id, message.body.as_ref());
+        let body = render_parsed_markdown(
+          &parsed,
           &MarkdownRenderOptions::with_on_link(link_handler.clone()).with_state(state),
           cx,
         );
@@ -1240,12 +1317,34 @@ impl Editor {
 
   fn rebuild_projection(&mut self, cx: &mut Context<Self>) {
     let doc_line_count = self.document.read(cx).len_lines();
-    let Some(diffs) = self.diffs.as_ref() else {
+    if self.diffs.is_none() {
       self.set_projection(None);
       self.virtual_line_layouts.clear();
       cx.notify();
       return;
-    };
+    }
+
+    let markdown_line_height_px =
+      self.review_comment_line_height_px * REVIEW_COMMENT_MARKDOWN_LINE_HEIGHT_SCALE;
+    let wrap_columns = self.review_comment_wrap_columns;
+    let mut review_comment_body_heights_px = HashMap::new();
+    for index in 0..self.review_comments.len() {
+      let (comment_id, body) = {
+        let comment = &self.review_comments[index];
+        (comment.id, comment.body.clone())
+      };
+      let estimated_height = self.cached_review_comment_body_height_px(
+        comment_id,
+        body.as_ref(),
+        wrap_columns,
+        markdown_line_height_px,
+      );
+      review_comment_body_heights_px.insert(comment_id, estimated_height);
+    }
+    let diffs = self
+      .diffs
+      .as_ref()
+      .expect("diffs should be present when rebuilding projection");
 
     let projection = Projection::from_diffs(
       doc_line_count,
@@ -1260,7 +1359,8 @@ impl Editor {
       &self.collapsed_review_comments,
       self.review_comment_wrap_columns,
       self.review_comment_line_height_px,
-      self.review_comment_line_height_px * REVIEW_COMMENT_MARKDOWN_LINE_HEIGHT_SCALE,
+      markdown_line_height_px,
+      &review_comment_body_heights_px,
     );
 
     self.set_projection(Some(projection));
@@ -3591,6 +3691,7 @@ pub mod tests {
           review_comment_wrap_columns: REVIEW_COMMENT_DEFAULT_WRAP_COLUMNS,
           review_comment_line_height_px: REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX,
           review_comment_markdown_states: HashMap::new(),
+          review_comment_markdown_cache: HashMap::new(),
           review_comment_pr_number: None,
           collapsed_review_comments: HashSet::new(),
           review_comment_scroll_epoch: 0,
