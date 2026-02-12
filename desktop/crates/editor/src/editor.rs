@@ -2114,27 +2114,47 @@ impl Editor {
 
       let horizontal_padding = px(GUTTER_WIDTH) + px(EXTRA_EDITOR_WIDTH);
       let current_scroll_x = self.scroll_handle.offset().x;
+      let viewport_width = self.horizontal_viewport_width();
 
       // Note: scroll_x is negative when scrolled right (0 = left edge, -100 = scrolled 100px right)
       // visible area in absolute coordinates: [-current_scroll_x, -current_scroll_x + viewport_width]
       let visible_start_x = -current_scroll_x;
-      let visible_end_x = -current_scroll_x + self.viewport_width;
+      let visible_end_x = -current_scroll_x + viewport_width;
 
       // Check if cursor is too far left
       if cursor_x < visible_start_x + horizontal_padding {
-        let new_scroll_x = -(cursor_x - horizontal_padding).max(px(0.0));
+        let new_scroll_x = self.clamp_horizontal_scroll_x(
+          -(cursor_x - horizontal_padding).max(px(0.0)),
+        );
         self.scroll_handle.set_offset(point(new_scroll_x, px(0.0)));
       }
 
       // Check if cursor is too far right
       if cursor_x > visible_end_x - horizontal_padding {
-        let new_scroll_x = -(cursor_x - self.viewport_width + horizontal_padding);
+        let new_scroll_x = self.clamp_horizontal_scroll_x(-(cursor_x - viewport_width + horizontal_padding));
         self.scroll_handle.set_offset(point(new_scroll_x, px(0.0)));
       }
     }
 
     let max_scroll = (total_lines as f32 - viewport_lines + scroll_padding).max(0.0);
     self.scroll_offset_y = self.scroll_offset_y.clamp(0.0, max_scroll);
+  }
+
+  pub(crate) fn horizontal_viewport_width(&self) -> Pixels {
+    let width = self.scroll_handle.bounds().size.width;
+    if width > px(0.0) {
+      width
+    } else {
+      self.viewport_width
+    }
+  }
+
+  pub(crate) fn clamp_horizontal_scroll_x(&self, scroll_x: Pixels) -> Pixels {
+    let content_width = self.max_line_width + px(EXTRA_EDITOR_WIDTH);
+    let viewport_width = self.horizontal_viewport_width();
+    let max_right_scroll = (content_width - viewport_width).max(px(0.0));
+    let min_scroll_x = -max_right_scroll;
+    scroll_x.max(min_scroll_x).min(px(0.0))
   }
 
   pub(crate) fn record_transaction(
@@ -4544,6 +4564,20 @@ pub mod tests {
     });
 
     assert_eq!(ctx.selection(), 3..10);
+  }
+
+  #[gpui::test]
+  fn test_clamp_horizontal_scroll_x(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "hello");
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.max_line_width = px(300.0);
+      editor.viewport_width = px(100.0);
+
+      assert_eq!(editor.clamp_horizontal_scroll_x(px(48.0)), px(0.0));
+      assert_eq!(editor.clamp_horizontal_scroll_x(px(-200.0)), px(-200.0));
+      assert_eq!(editor.clamp_horizontal_scroll_x(px(-460.0)), px(-400.0));
+    });
   }
 
   #[gpui::test]
