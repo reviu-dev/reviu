@@ -5,7 +5,7 @@ use std::{
   time::Duration,
 };
 
-use editor::{DiffViewMode, Editor, HunkAction, HunkState};
+use editor::{CloseFind, DiffViewMode, Editor, Find, HunkAction, HunkState};
 use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use git::{
   BranchKind, BranchRef, BranchStatus, HeadCommitStatus, RepoStage, RepoStatusEntry,
@@ -999,6 +999,31 @@ impl GitPage {
     cx: &mut Context<Self>,
   ) {
     self.open_file_search_palette(window, cx);
+  }
+
+  fn find_action(&mut self, action: &Find, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+
+    editor.update(cx, |editor, cx| {
+      editor::find(editor, action, window, cx);
+    });
+  }
+
+  fn close_find_action(
+    &mut self,
+    action: &CloseFind,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+
+    editor.update(cx, |editor, cx| {
+      editor::close_find(editor, action, window, cx);
+    });
   }
 
   fn open_repository_action(
@@ -2649,6 +2674,8 @@ impl Render for GitPage {
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GitPage::show_command_palette_action))
       .on_action(cx.listener(GitPage::show_file_search_action))
+      .on_action(cx.listener(GitPage::find_action))
+      .on_action(cx.listener(GitPage::close_find_action))
       .on_action(cx.listener(GitPage::open_repository_action))
       .on_action(cx.listener(GitPage::commit_changes_action))
       .child(self.render_header(cx))

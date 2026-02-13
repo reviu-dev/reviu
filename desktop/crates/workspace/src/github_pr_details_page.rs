@@ -5,7 +5,7 @@ use std::{
   sync::Arc,
 };
 
-use editor::{DiffViewMode, Editor, ReviewComment, ReviewCommentSide};
+use editor::{CloseFind, DiffViewMode, Editor, Find, ReviewComment, ReviewCommentSide};
 use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
 use gpui::{
@@ -1724,6 +1724,31 @@ impl GithubPrDetailsPage {
     self.open_command_palette(window, cx);
   }
 
+  fn find_action(&mut self, action: &Find, window: &mut Window, cx: &mut Context<Self>) {
+    if self.active_tab_ix != 1 {
+      return;
+    }
+
+    self.diff_editor.update(cx, |editor, cx| {
+      editor::find(editor, action, window, cx);
+    });
+  }
+
+  fn close_find_action(
+    &mut self,
+    action: &CloseFind,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix != 1 {
+      return;
+    }
+
+    self.diff_editor.update(cx, |editor, cx| {
+      editor::close_find(editor, action, window, cx);
+    });
+  }
+
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
     let commands = CommandPaletteCommand::default_global_commands(
@@ -2087,6 +2112,8 @@ impl Render for GithubPrDetailsPage {
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GithubPrDetailsPage::show_command_palette_action))
       .on_action(cx.listener(GithubPrDetailsPage::show_file_search_action))
+      .on_action(cx.listener(GithubPrDetailsPage::find_action))
+      .on_action(cx.listener(GithubPrDetailsPage::close_find_action))
       .child(self.render_header(cx))
       .child(v_flex().flex_1().min_h_0().child(content))
   }
