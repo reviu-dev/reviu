@@ -74,6 +74,8 @@ fn main() {
       KeyBinding::new("cmd-z", Undo, None),
       KeyBinding::new("cmd-shift-z", Redo, None),
       KeyBinding::new("cmd-s", Save, None),
+      KeyBinding::new("cmd-f", Find, None),
+      KeyBinding::new("escape", CloseFind, Some("Editor")),
       KeyBinding::new("cmd-enter", CommitChanges, None),
       KeyBinding::new("cmd-o", OpenRepository, None),
       KeyBinding::new("cmd-shift-p", ShowCommandPalette, None),

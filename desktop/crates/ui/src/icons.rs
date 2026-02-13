@@ -13,6 +13,14 @@ pub enum UiIconName {
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
+const GIT_FILES: &[&str] = &[
+  ".git",
+  ".gitattributes",
+  ".gitignore",
+  ".gitmodules",
+  ".gitkeep",
+  ".gitconfig",
+];
 
 impl IconNamed for UiIconName {
   fn path(self) -> SharedString {
@@ -65,6 +73,10 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
 
   if name.ends_with(".d.ts") {
     return Some("file-icons/typescript-def.svg");
+  }
+
+  if GIT_FILES.contains(&name.as_str()) {
+    return Some("file-icons/git.svg");
   }
 
   let ext = Path::new(&name).extension()?.to_str()?;

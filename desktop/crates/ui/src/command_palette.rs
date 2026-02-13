@@ -1,6 +1,6 @@
 use std::{rc::Rc, sync::Arc};
 
-use crate::UiIconName;
+use crate::{UiIconName, file_icon_path_for_name};
 use gpui::{
   App, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
   ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
@@ -373,6 +373,13 @@ pub enum CommandPaletteCommandId {
 }
 
 impl CommandPaletteCommand {
+  fn git_config_icon() -> Icon {
+    file_icon_path_for_name(".gitconfig").map_or_else(
+      || Icon::new(IconName::File),
+      |path| Icon::empty().path(path),
+    )
+  }
+
   pub fn switch_branch() -> Self {
     Self {
       id: CommandPaletteCommandId::SwitchBranch,
@@ -484,7 +491,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::OpenGitPage => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::OpenGithubPage => Icon::new(IconName::GitHub),
       CommandPaletteCommandId::OpenGithubPrFromUrl => Icon::new(IconName::GitHub),
-      CommandPaletteCommandId::OpenGitConfigPage => Icon::new(IconName::File),
+      CommandPaletteCommandId::OpenGitConfigPage => Self::git_config_icon(),
       CommandPaletteCommandId::OpenSettingsPage => Icon::new(IconName::Settings2),
     }
   }
