@@ -3974,11 +3974,18 @@ impl EntityInputHandler for Editor {
 
 fn parse_github_pr_comment_link(url: &str) -> Option<(u64, u64)> {
   let url = url
+    .trim()
     .strip_prefix("https://github.com/")
     .or_else(|| url.strip_prefix("http://github.com/"))?;
   let (_, tail) = url.split_once("/pull/")?;
   let (pr_part, fragment) = tail.split_once('#')?;
-  let pr_number = pr_part.split('/').next()?.parse().ok()?;
+  let pr_number = pr_part
+    .split('/')
+    .next()?
+    .split('?')
+    .next()?
+    .parse()
+    .ok()?;
   let fragment = fragment
     .strip_prefix("discussion_r")
     .or_else(|| fragment.strip_prefix('r'))?;
@@ -4260,6 +4267,41 @@ impl Focusable for Editor {
 pub mod tests {
   use super::*;
   use gpui::TestAppContext;
+
+  #[test]
+  fn parse_github_pr_comment_link_accepts_standard_discussion_fragment() {
+    let parsed = parse_github_pr_comment_link("https://github.com/wooorm/markdown-rs/pull/197#discussion_r123456");
+    assert_eq!(parsed, Some((197, 123456)));
+  }
+
+  #[test]
+  fn parse_github_pr_comment_link_accepts_short_r_fragment() {
+    let parsed = parse_github_pr_comment_link("https://github.com/wooorm/markdown-rs/pull/197#r98765");
+    assert_eq!(parsed, Some((197, 98765)));
+  }
+
+  #[test]
+  fn parse_github_pr_comment_link_accepts_changes_path() {
+    let parsed = parse_github_pr_comment_link(
+      "https://github.com/wooorm/markdown-rs/pull/197/changes#discussion_r55",
+    );
+    assert_eq!(parsed, Some((197, 55)));
+  }
+
+  #[test]
+  fn parse_github_pr_comment_link_accepts_query_params() {
+    let parsed = parse_github_pr_comment_link(
+      "https://github.com/wooorm/markdown-rs/pull/197?notification_referrer_id=NT_kwDOAAABBBCCC#discussion_r42",
+    );
+    assert_eq!(parsed, Some((197, 42)));
+  }
+
+  #[test]
+  fn parse_github_pr_comment_link_rejects_url_without_comment_fragment() {
+    let parsed =
+      parse_github_pr_comment_link("https://github.com/wooorm/markdown-rs/pull/197/changes");
+    assert_eq!(parsed, None);
+  }
 
   /// Helper context for testing Editor
   pub struct EditorTestContext {
