@@ -50,7 +50,7 @@ use crate::{
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 350.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
-const SIDEBAR_MAX_WIDTH: f32 = 1000.0;
+const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const DIFF_HEADER_HEIGHT: f32 = 40.0;
 
 fn format_datetime(value: &str) -> SharedString {
