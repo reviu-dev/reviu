@@ -1801,7 +1801,9 @@ impl GithubPrDetailsPage {
         repo,
         number,
       } => {
-        GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
+        self.load_pull_request(owner.to_string(), repo.to_string(), number, cx);
+        WorkspaceRoute::global_mut(cx).page = WorkspacePage::GithubPrDetails;
+        cx.refresh_windows();
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
