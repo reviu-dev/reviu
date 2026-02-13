@@ -7,8 +7,8 @@ use std::{
 use editor::Editor;
 use git::find_global_config_path;
 use gpui::{
-  AnyElement, App, Context, Entity, FocusHandle, Focusable, Render, SharedString, Window, div,
-  img, prelude::*, px,
+  AnyElement, App, Context, Entity, FocusHandle, Focusable, Render, SharedString, Window, div, img,
+  prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Sizable as _,
@@ -20,8 +20,7 @@ use gpui_component::{
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, FILE_ICON_SIZE_PX, HEADER_HEIGHT, StatusThemeExt,
-  WindowExt,
-  file_icon_path_for_path_with_theme,
+  WindowExt, file_icon_path_for_path_with_theme,
 };
 
 use crate::{
@@ -276,7 +275,13 @@ impl GitConfigPage {
               }),
           ),
       )
-      .child(h_flex().items_center().gap_2().child(save_button).child(close_button))
+      .child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(save_button)
+          .child(close_button),
+      )
       .into_any_element()
   }
 }
@@ -322,7 +327,12 @@ impl Render for GitConfigPage {
             .bg(theme.sidebar)
             .border_b_1()
             .border_color(theme.title_bar_border)
-            .child(div().text_sm().text_color(theme.foreground).child("Git Config"))
+            .child(
+              div()
+                .text_sm()
+                .text_color(theme.foreground)
+                .child("Git Config"),
+            )
             .child(
               Button::new("git-config-close")
                 .icon(IconName::Close)

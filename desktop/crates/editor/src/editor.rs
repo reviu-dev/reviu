@@ -19,13 +19,14 @@ use git::{ApplyLocation, DiffSet, GitFileBases, GitStore, RepoFile};
 use gpui::{
   App, Bounds, Context, CursorStyle, Entity, EntityInputHandler, FocusHandle, Focusable,
   MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
-  ShapedLine, Task, UTF16Selection, Window, black, div, point, prelude::*, px, white,
+  ShapedLine, Subscription, Task, UTF16Selection, Window, black, div, point, prelude::*, px, white,
 };
 use gpui_component::{
-  ActiveTheme as _, IconName, Sizable,
+  ActiveTheme as _, Disableable as _, IconName, Sizable,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   h_flex,
+  input::{Input, InputEvent, InputState},
   resizable::{h_resizable, resizable_panel},
   v_flex,
 };
@@ -84,6 +85,10 @@ const FRACTIONAL_SCROLL_EPSILON: f32 = 0.001;
 const REVIEW_COMMENT_SCROLL_DURATION: Duration = Duration::from_millis(260);
 const REVIEW_COMMENT_SCROLL_TICK: Duration = Duration::from_millis(16);
 const REVIEW_COMMENT_SCROLL_MIN_DELTA: f32 = 0.01;
+const FIND_SCROLL_DURATION: Duration = Duration::from_millis(260);
+const FIND_SCROLL_TICK: Duration = Duration::from_millis(16);
+const FIND_SCROLL_MIN_DELTA: f32 = 0.01;
+const FIND_PANEL_OCCLUDED_VISIBLE_LINES: usize = 3;
 const REVIEW_COMMENT_DEFAULT_WRAP_COLUMNS: usize = 72;
 const REVIEW_COMMENT_MIN_WRAP_COLUMNS: usize = 28;
 const REVIEW_COMMENT_MAX_WRAP_COLUMNS: usize = 180;
@@ -161,6 +166,13 @@ pub struct Editor {
   review_comment_pr_number: Option<u64>,
   collapsed_review_comments: HashSet<u64>,
   review_comment_scroll_epoch: usize,
+  find_panel_open: bool,
+  find_input: Option<Entity<InputState>>,
+  find_input_subscription: Option<Subscription>,
+  find_query: String,
+  find_matches: Vec<FindMatch>,
+  find_active_match: Option<usize>,
+  find_scroll_epoch: usize,
   pub diff_task: Option<Task<()>>,
   pub bases_task: Option<Task<()>>,
   pub poll_task: Option<Task<()>>,
@@ -200,6 +212,14 @@ struct ReviewCommentLayout {
   height: Pixels,
   messages: Vec<ReviewCommentMessageLayout>,
   collapsed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FindMatch {
+  display_line: usize,
+  column_start: usize,
+  column_end: usize,
+  doc_range: Range<usize>,
 }
 
 struct ReviewCommentMessageLayout {
@@ -409,6 +429,13 @@ impl Editor {
       review_comment_pr_number: None,
       collapsed_review_comments: HashSet::new(),
       review_comment_scroll_epoch: 0,
+      find_panel_open: false,
+      find_input: None,
+      find_input_subscription: None,
+      find_query: String::new(),
+      find_matches: Vec::new(),
+      find_active_match: None,
+      find_scroll_epoch: 0,
       diff_task: None,
       bases_task: None,
       poll_task: None,
@@ -678,6 +705,463 @@ impl Editor {
 
   pub fn toggle_review_comment(&mut self, id: u64, cx: &mut Context<Self>) {
     self.toggle_review_comment_thread(self.thread_id_for_comment(id), cx);
+  }
+
+  fn ensure_find_input(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<InputState> {
+    if let Some(input) = self.find_input.clone() {
+      return input;
+    }
+
+    let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in file..."));
+    let subscription = cx.subscribe_in(&input, window, Self::on_find_input_event);
+    self.find_input = Some(input.clone());
+    self.find_input_subscription = Some(subscription);
+    input
+  }
+
+  fn focus_find_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(input) = self.find_input.clone() {
+      input.update(cx, |state, cx| {
+        state.focus(window, cx);
+      });
+    }
+  }
+
+  fn is_find_input_focused(&self, window: &Window, cx: &App) -> bool {
+    if !self.find_panel_open {
+      return false;
+    }
+
+    self
+      .find_input
+      .as_ref()
+      .map(|input| input.read(cx).focus_handle(cx).is_focused(window))
+      .unwrap_or(false)
+  }
+
+  fn on_find_input_event(
+    &mut self,
+    state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    match event {
+      InputEvent::Change => {
+        self.find_query = state.read(cx).value().to_string();
+        self.refresh_find_matches(window.line_height(), true, cx);
+      }
+      InputEvent::PressEnter { secondary } => {
+        if *secondary {
+          self.find_previous_match(window, cx);
+        } else {
+          self.find_next_match(window, cx);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn collect_find_matches(&self, query: &str, cx: &App) -> Vec<FindMatch> {
+    if query.is_empty() {
+      return Vec::new();
+    }
+
+    let document = self.document.read(cx);
+    let doc_line_count = document.len_lines();
+    let total_display_lines = self.display_line_count(doc_line_count);
+    let mut matches = Vec::new();
+
+    for display_line in 0..total_display_lines {
+      let Some(doc_line) = (match self.display_line(display_line, doc_line_count) {
+        Some(DisplayLine::Doc { doc_line, .. }) | Some(DisplayLine::Modified { doc_line, .. }) => {
+          Some(doc_line)
+        }
+        _ => None,
+      }) else {
+        continue;
+      };
+
+      let Some(line_content) = document.line_content(doc_line) else {
+        continue;
+      };
+
+      let line_text = line_content.as_ref();
+      if line_text.is_empty() {
+        continue;
+      }
+
+      let line_start_offset = document.line_to_char(doc_line);
+      let mut search_start = 0usize;
+      while search_start <= line_text.len() {
+        let Some(found) = line_text[search_start..].find(query) else {
+          break;
+        };
+        let byte_start = search_start + found;
+        let byte_end = byte_start + query.len();
+        let column_start = line_text[..byte_start].chars().count();
+        let column_end = line_text[..byte_end].chars().count();
+        let range_start = line_start_offset + column_start;
+        let range_end = line_start_offset + column_end;
+        matches.push(FindMatch {
+          display_line,
+          column_start,
+          column_end,
+          doc_range: range_start..range_end,
+        });
+        search_start = byte_end.max(byte_start.saturating_add(1));
+      }
+    }
+
+    matches
+  }
+
+  fn scroll_to_find_match(
+    &mut self,
+    display_line: usize,
+    line_height: Pixels,
+    smooth: bool,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let total_lines = self.display_line_count(self.document.read(cx).len_lines());
+    if total_lines == 0 {
+      return false;
+    }
+
+    let viewport_lines = (self.viewport_height / line_height).max(1.0);
+    let max_padding = (viewport_lines - 1.0).max(0.0);
+    let scroll_padding = (SCROLL_PADDING as f32).min(max_padding);
+    let max_scroll = (total_lines as f32 - viewport_lines + scroll_padding).max(0.0);
+    let target = (display_line as f32 - scroll_padding).clamp(0.0, max_scroll);
+    let start = self.scroll_offset_y;
+    let delta = target - start;
+
+    if !smooth || delta.abs() <= FIND_SCROLL_MIN_DELTA {
+      self.scroll_offset_y = target;
+      cx.notify();
+      return true;
+    }
+
+    self.find_scroll_epoch = self.find_scroll_epoch.saturating_add(1);
+    let scroll_epoch = self.find_scroll_epoch;
+    cx.spawn(async move |this, cx| {
+      let started_at = Instant::now();
+      loop {
+        Timer::after(FIND_SCROLL_TICK).await;
+        let progress =
+          (started_at.elapsed().as_secs_f32() / FIND_SCROLL_DURATION.as_secs_f32()).min(1.0);
+        let eased = ease_out_cubic(progress);
+        let next_scroll = start + delta * eased;
+        let done = progress >= 1.0;
+        let should_continue = this
+          .update(cx, |editor, cx| {
+            if editor.find_scroll_epoch != scroll_epoch {
+              return false;
+            }
+            editor.scroll_offset_y = if done { target } else { next_scroll };
+            cx.notify();
+            !done
+          })
+          .unwrap_or(false);
+        if !should_continue {
+          break;
+        }
+      }
+    })
+    .detach();
+
+    true
+  }
+
+  fn select_find_match(
+    &mut self,
+    index: usize,
+    line_height: Pixels,
+    smooth_scroll: bool,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(found) = self.find_matches.get(index).cloned() else {
+      self.find_active_match = None;
+      cx.notify();
+      return;
+    };
+
+    self.find_active_match = Some(index);
+    self.selected_range = found.doc_range.clone();
+    self.selection_reversed = false;
+    self.display_selection = None;
+    self.target_column = Some(found.column_end);
+    self.cursor_blink.update(cx, |blink, cx| {
+      blink.pause_blinking(cx);
+    });
+    self.scroll_to_find_match(found.display_line, line_height, smooth_scroll, cx);
+    cx.notify();
+  }
+
+  fn refresh_find_matches(
+    &mut self,
+    line_height: Pixels,
+    smooth_scroll: bool,
+    cx: &mut Context<Self>,
+  ) {
+    if self.find_query.is_empty() {
+      self.find_matches.clear();
+      self.find_active_match = None;
+      cx.notify();
+      return;
+    }
+
+    let previous_active_match = self
+      .find_active_match
+      .and_then(|index| self.find_matches.get(index).cloned());
+    self.find_matches = self.collect_find_matches(&self.find_query, cx);
+
+    if self.find_matches.is_empty() {
+      self.find_active_match = None;
+      cx.notify();
+      return;
+    }
+
+    let next_active = previous_active_match
+      .and_then(|previous| {
+        self
+          .find_matches
+          .iter()
+          .position(|candidate| *candidate == previous)
+      })
+      .unwrap_or(0);
+    self.select_find_match(next_active, line_height, smooth_scroll, cx);
+  }
+
+  fn find_next_match_with_line_height(&mut self, line_height: Pixels, cx: &mut Context<Self>) {
+    if self.find_matches.is_empty() {
+      return;
+    }
+
+    let next_index = self
+      .find_active_match
+      .map(|index| (index + 1) % self.find_matches.len())
+      .unwrap_or(0);
+    self.select_find_match(next_index, line_height, true, cx);
+  }
+
+  fn find_previous_match_with_line_height(&mut self, line_height: Pixels, cx: &mut Context<Self>) {
+    if self.find_matches.is_empty() {
+      return;
+    }
+
+    let previous_index = self
+      .find_active_match
+      .map(|index| {
+        if index == 0 {
+          self.find_matches.len() - 1
+        } else {
+          index - 1
+        }
+      })
+      .unwrap_or_else(|| self.find_matches.len() - 1);
+    self.select_find_match(previous_index, line_height, true, cx);
+  }
+
+  pub fn find_panel_occludes_display_line(&self, display_line: usize) -> bool {
+    if !self.find_panel_open {
+      return false;
+    }
+
+    let first_visible_line = self.scroll_offset_y.floor().max(0.0) as usize;
+    display_line < first_visible_line.saturating_add(FIND_PANEL_OCCLUDED_VISIBLE_LINES)
+  }
+
+  fn reset_find_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.find_query.clear();
+    self.find_matches.clear();
+    self.find_active_match = None;
+    self.find_scroll_epoch = self.find_scroll_epoch.saturating_add(1);
+
+    if let Some(input) = self.find_input.clone() {
+      input.update(cx, |state, cx| {
+        state.set_value(String::new(), window, cx);
+      });
+    }
+  }
+
+  pub(crate) fn open_find_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.find_panel_open = true;
+    let input = self.ensure_find_input(window, cx);
+    let input_value = input.read(cx).value().to_string();
+    let query = self
+      .find_query_from_selection(cx)
+      .filter(|selection| !selection.is_empty())
+      .unwrap_or(input_value);
+    input.update(cx, |state, cx| {
+      state.set_value(query.clone(), window, cx);
+    });
+    self.find_query = query;
+    self.refresh_find_matches(window.line_height(), false, cx);
+    cx.on_next_frame(window, |this, window, cx| {
+      this.focus_find_input(window, cx);
+    });
+    cx.notify();
+  }
+
+  pub(crate) fn close_find_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if !self.find_panel_open {
+      return;
+    }
+
+    self.find_panel_open = false;
+    self.reset_find_input(window, cx);
+    window.focus(&self.focus_handle, cx);
+    cx.notify();
+  }
+
+  pub(crate) fn find_next_match(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.find_next_match_with_line_height(window.line_height(), cx);
+  }
+
+  pub(crate) fn find_previous_match(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.find_previous_match_with_line_height(window.line_height(), cx);
+  }
+
+  fn find_query_from_selection(&self, cx: &App) -> Option<String> {
+    let selected = self.selected_text_for_copy(cx)?;
+    let selected = selected.replace('\r', "");
+    let first_line = selected.split('\n').next().unwrap_or_default().to_string();
+    if first_line.is_empty() {
+      None
+    } else {
+      Some(first_line)
+    }
+  }
+
+  fn clear_hovered_hunk_for_overlay(&mut self, cx: &mut Context<Self>) {
+    let had_hover = self.hovered_group_id.take().is_some();
+    self.last_mouse_position = None;
+    if had_hover {
+      cx.notify();
+    }
+  }
+
+  fn render_find_panel(
+    &mut self,
+    editor_entity: Entity<Editor>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Option<gpui::AnyElement> {
+    if !self.find_panel_open {
+      return None;
+    }
+
+    let input = self.ensure_find_input(window, cx);
+    let theme = cx.theme().clone();
+    let total_matches = self.find_matches.len();
+    let current_match = self
+      .find_active_match
+      .map(|index| index + 1)
+      .unwrap_or(0)
+      .min(total_matches);
+    let has_matches = total_matches > 0;
+
+    let previous_editor = editor_entity.clone();
+    let next_editor = editor_entity.clone();
+    let close_editor = editor_entity.clone();
+    let mouse_down_editor = editor_entity.clone();
+    let mouse_move_editor = editor_entity.clone();
+    let mouse_up_editor = editor_entity.clone();
+
+    Some(
+      div()
+        .absolute()
+        .top(px(8.0))
+        .right(px(12.0))
+        .w(px(360.0))
+        .p_2()
+        .occlude()
+        .flex()
+        .items_center()
+        .gap_2()
+        .bg(theme.background)
+        .border_1()
+        .border_color(theme.border)
+        .rounded(theme.radius)
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+          mouse_down_editor.update(cx, |editor, cx| {
+            editor.clear_hovered_hunk_for_overlay(cx);
+          });
+          cx.stop_propagation();
+        })
+        .on_mouse_move(move |_, _, cx| {
+          mouse_move_editor.update(cx, |editor, cx| {
+            editor.clear_hovered_hunk_for_overlay(cx);
+          });
+          cx.stop_propagation();
+        })
+        .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+          mouse_up_editor.update(cx, |editor, cx| {
+            editor.clear_hovered_hunk_for_overlay(cx);
+          });
+          cx.stop_propagation();
+        })
+        .child(
+          div()
+            .flex_1()
+            .min_w(px(0.0))
+            .child(Input::new(&input).small().border_color(theme.border)),
+        )
+        .child(
+          div()
+            .w(px(52.0))
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(format!("{}/{}", current_match, total_matches)),
+        )
+        .child(
+          Button::new("editor-find-prev")
+            .icon(IconName::ArrowUp)
+            .ghost()
+            .xsmall()
+            .compact()
+            .tooltip("Previous match")
+            .disabled(!has_matches)
+            .on_click(move |_, window, cx| {
+              previous_editor.update(cx, |editor, cx| {
+                editor.find_previous_match(window, cx);
+              });
+            }),
+        )
+        .child(
+          Button::new("editor-find-next")
+            .icon(IconName::ArrowDown)
+            .ghost()
+            .xsmall()
+            .compact()
+            .tooltip("Next match")
+            .disabled(!has_matches)
+            .on_click(move |_, window, cx| {
+              next_editor.update(cx, |editor, cx| {
+                editor.find_next_match(window, cx);
+              });
+            }),
+        )
+        .child(
+          Button::new("editor-find-close")
+            .icon(IconName::Close)
+            .ghost()
+            .xsmall()
+            .compact()
+            .tooltip("Close find")
+            .on_click(move |_, window, cx| {
+              close_editor.update(cx, |editor, cx| {
+                editor.close_find_panel(window, cx);
+              });
+            }),
+        )
+        .into_any_element(),
+    )
   }
 
   pub fn scroll_to_review_comment(
@@ -3542,6 +4026,8 @@ impl Render for Editor {
     let gap_controls = self.gap_controls();
     let gutter_background = self.theme.gutter_background();
     let scroll_offset_y = self.scroll_offset_y;
+    let find_panel = self.render_find_panel(editor_entity.clone(), window, cx);
+    let editor_actions_enabled = !self.is_find_input_focused(window, cx);
 
     let build_gutter =
       |gutter_element: GutterElement, view_suffix: &'static str, editor_entity: Entity<Editor>| {
@@ -3709,43 +4195,48 @@ impl Render for Editor {
       .track_focus(&self.focus_handle(cx))
       .cursor(CursorStyle::IBeam)
       .size_full()
+      .relative()
       .overflow_hidden()
-      .on_action(cx.listener(crate::actions::enter))
-      .on_action(cx.listener(crate::actions::tab))
-      .on_action(cx.listener(crate::actions::backspace))
-      .on_action(cx.listener(crate::actions::backspace_word))
-      .on_action(cx.listener(crate::actions::backspace_all))
-      .on_action(cx.listener(crate::actions::delete))
-      .on_action(cx.listener(crate::actions::up))
-      .on_action(cx.listener(crate::actions::down))
-      .on_action(cx.listener(crate::actions::left))
-      .on_action(cx.listener(crate::actions::alt_left))
-      .on_action(cx.listener(crate::actions::cmd_left))
-      .on_action(cx.listener(crate::actions::right))
-      .on_action(cx.listener(crate::actions::alt_right))
-      .on_action(cx.listener(crate::actions::cmd_right))
-      .on_action(cx.listener(crate::actions::cmd_up))
-      .on_action(cx.listener(crate::actions::cmd_down))
-      .on_action(cx.listener(crate::actions::select_cmd_left))
-      .on_action(cx.listener(crate::actions::select_cmd_right))
-      .on_action(cx.listener(crate::actions::select_cmd_up))
-      .on_action(cx.listener(crate::actions::select_cmd_down))
-      .on_action(cx.listener(crate::actions::select_up))
-      .on_action(cx.listener(crate::actions::select_down))
-      .on_action(cx.listener(crate::actions::select_left))
-      .on_action(cx.listener(crate::actions::select_word_left))
-      .on_action(cx.listener(crate::actions::select_right))
-      .on_action(cx.listener(crate::actions::select_word_right))
-      .on_action(cx.listener(crate::actions::select_all))
-      .on_action(cx.listener(crate::actions::home))
-      .on_action(cx.listener(crate::actions::end))
-      .on_action(cx.listener(crate::actions::show_character_palette))
-      .on_action(cx.listener(crate::actions::paste))
-      .on_action(cx.listener(crate::actions::cut))
-      .on_action(cx.listener(crate::actions::copy))
-      .on_action(cx.listener(crate::actions::undo))
-      .on_action(cx.listener(crate::actions::redo))
-      .on_action(cx.listener(crate::actions::save))
+      .when(editor_actions_enabled, |el| {
+        el.on_action(cx.listener(crate::actions::enter))
+          .on_action(cx.listener(crate::actions::tab))
+          .on_action(cx.listener(crate::actions::backspace))
+          .on_action(cx.listener(crate::actions::backspace_word))
+          .on_action(cx.listener(crate::actions::backspace_all))
+          .on_action(cx.listener(crate::actions::delete))
+          .on_action(cx.listener(crate::actions::up))
+          .on_action(cx.listener(crate::actions::down))
+          .on_action(cx.listener(crate::actions::left))
+          .on_action(cx.listener(crate::actions::alt_left))
+          .on_action(cx.listener(crate::actions::cmd_left))
+          .on_action(cx.listener(crate::actions::right))
+          .on_action(cx.listener(crate::actions::alt_right))
+          .on_action(cx.listener(crate::actions::cmd_right))
+          .on_action(cx.listener(crate::actions::cmd_up))
+          .on_action(cx.listener(crate::actions::cmd_down))
+          .on_action(cx.listener(crate::actions::select_cmd_left))
+          .on_action(cx.listener(crate::actions::select_cmd_right))
+          .on_action(cx.listener(crate::actions::select_cmd_up))
+          .on_action(cx.listener(crate::actions::select_cmd_down))
+          .on_action(cx.listener(crate::actions::select_up))
+          .on_action(cx.listener(crate::actions::select_down))
+          .on_action(cx.listener(crate::actions::select_left))
+          .on_action(cx.listener(crate::actions::select_word_left))
+          .on_action(cx.listener(crate::actions::select_right))
+          .on_action(cx.listener(crate::actions::select_word_right))
+          .on_action(cx.listener(crate::actions::select_all))
+          .on_action(cx.listener(crate::actions::home))
+          .on_action(cx.listener(crate::actions::end))
+          .on_action(cx.listener(crate::actions::show_character_palette))
+          .on_action(cx.listener(crate::actions::paste))
+          .on_action(cx.listener(crate::actions::cut))
+          .on_action(cx.listener(crate::actions::copy))
+          .on_action(cx.listener(crate::actions::undo))
+          .on_action(cx.listener(crate::actions::redo))
+          .on_action(cx.listener(crate::actions::save))
+          .on_action(cx.listener(crate::actions::find))
+      })
+      .on_action(cx.listener(crate::actions::close_find))
       .when_else(self.theme.is_dark, |el| el.bg(black()), |el| el.bg(white()))
       .when_else(
         self.theme.is_dark,
@@ -3755,6 +4246,7 @@ impl Render for Editor {
       .flex()
       .flex_col()
       .child(content)
+      .when_some(find_panel, |el, panel| el.child(panel))
   }
 }
 
@@ -3793,6 +4285,13 @@ pub mod tests {
           review_comment_pr_number: None,
           collapsed_review_comments: HashSet::new(),
           review_comment_scroll_epoch: 0,
+          find_panel_open: false,
+          find_input: None,
+          find_input_subscription: None,
+          find_query: String::new(),
+          find_matches: Vec::new(),
+          find_active_match: None,
+          find_scroll_epoch: 0,
           review_comments: Vec::new(),
           document: doc,
           focus_handle: cx.focus_handle(),
@@ -4684,6 +5183,55 @@ pub mod tests {
       assert_eq!(after.start, before.start);
       assert_eq!(after.end, before.end);
       assert_eq!(editor.selected_range, 0..editor.document.read(cx).len());
+    });
+  }
+
+  #[gpui::test]
+  fn test_find_refresh_selects_first_match(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "foo bar\nfoo baz");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.find_query = "foo".to_string();
+      editor.refresh_find_matches(px(20.0), false, cx);
+
+      assert_eq!(editor.find_matches.len(), 2);
+      assert_eq!(editor.find_active_match, Some(0));
+      assert_eq!(editor.selected_range, 0..3);
+    });
+  }
+
+  #[gpui::test]
+  fn test_find_next_previous_wrap(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "foo bar\nfoo baz");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.find_query = "foo".to_string();
+      editor.refresh_find_matches(px(20.0), false, cx);
+
+      editor.find_next_match_with_line_height(px(20.0), cx);
+      assert_eq!(editor.find_active_match, Some(1));
+      assert_eq!(editor.selected_range, 8..11);
+
+      editor.find_next_match_with_line_height(px(20.0), cx);
+      assert_eq!(editor.find_active_match, Some(0));
+      assert_eq!(editor.selected_range, 0..3);
+
+      editor.find_previous_match_with_line_height(px(20.0), cx);
+      assert_eq!(editor.find_active_match, Some(1));
+      assert_eq!(editor.selected_range, 8..11);
+    });
+  }
+
+  #[gpui::test]
+  fn test_find_refresh_with_no_results(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "foo bar\nfoo baz");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.find_query = "zzz".to_string();
+      editor.refresh_find_matches(px(20.0), false, cx);
+
+      assert!(editor.find_matches.is_empty());
+      assert_eq!(editor.find_active_match, None);
     });
   }
 

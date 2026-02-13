@@ -9,7 +9,14 @@ use gpui_component::{
   menu::{DropdownMenu, PopupMenu, PopupMenuItem},
 };
 
-use crate::UiIconName;
+use crate::{UiIconName, file_icon_path_for_name};
+
+fn git_config_icon() -> Icon {
+  file_icon_path_for_name(".gitconfig").map_or_else(
+    || Icon::new(IconName::File),
+    |path| Icon::empty().path(path),
+  )
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UserMenuPage {
@@ -121,7 +128,7 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
                     .icon(IconName::Settings2)
                     .on_click(move |_, window, cx| {
                       handler(window, cx);
-                  }),
+                    }),
                 );
               }
             }
@@ -130,7 +137,7 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
               if let Some(handler) = on_open_git_config.clone() {
                 menu = menu.item(
                   PopupMenuItem::new("Git Config")
-                    .icon(IconName::File)
+                    .icon(git_config_icon())
                     .on_click(move |_, window, cx| {
                       handler(window, cx);
                     }),

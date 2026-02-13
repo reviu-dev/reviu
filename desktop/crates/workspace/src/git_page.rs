@@ -2218,6 +2218,9 @@ impl GitPage {
     let anchor_display_line = editor_state
       .first_display_line_for_group(hovered_id)
       .unwrap_or(overlay.display_line);
+    if editor_state.find_panel_occludes_display_line(anchor_display_line) {
+      return None;
+    }
     let mut top = line_height * (anchor_display_line as f32 - editor_state.scroll_offset_y);
     if top >= editor_state.viewport_height {
       return None;

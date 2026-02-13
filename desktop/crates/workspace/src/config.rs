@@ -23,8 +23,7 @@ const RECENT_REPOS_TABLE: ConfigTable = ConfigTable {
 
 const SETTINGS_TABLE: ConfigTable = ConfigTable {
   name: "settings",
-  create_sql:
-    "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), auto_switch_theme INTEGER NOT NULL DEFAULT 1, dark_mode INTEGER NOT NULL DEFAULT 0)",
+  create_sql: "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), auto_switch_theme INTEGER NOT NULL DEFAULT 1, dark_mode INTEGER NOT NULL DEFAULT 0)",
 };
 
 const CONFIG_TABLES: [ConfigTable; 2] = [RECENT_REPOS_TABLE, SETTINGS_TABLE];
@@ -233,7 +232,11 @@ impl ConfigStore {
         SETTINGS_TABLE.name
       ),
       params![
-        if settings.auto_switch_theme { 1_i64 } else { 0_i64 },
+        if settings.auto_switch_theme {
+          1_i64
+        } else {
+          0_i64
+        },
         if settings.dark_mode { 1_i64 } else { 0_i64 }
       ],
     ) {

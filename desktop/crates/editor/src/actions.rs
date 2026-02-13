@@ -46,6 +46,8 @@ actions!(
     Undo,
     Redo,
     Save,
+    Find,
+    CloseFind,
     Quit,
   ]
 );
@@ -771,6 +773,19 @@ pub fn redo(editor: &mut Editor, _: &Redo, _window: &mut Window, cx: &mut Contex
 
 pub fn save(editor: &mut Editor, _: &Save, _window: &mut Window, cx: &mut Context<Editor>) {
   editor.save(cx);
+}
+
+pub fn find(editor: &mut Editor, _: &Find, window: &mut Window, cx: &mut Context<Editor>) {
+  editor.open_find_panel(window, cx);
+}
+
+pub fn close_find(
+  editor: &mut Editor,
+  _: &CloseFind,
+  window: &mut Window,
+  cx: &mut Context<Editor>,
+) {
+  editor.close_find_panel(window, cx);
 }
 
 // === System Actions ===
