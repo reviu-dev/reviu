@@ -50,7 +50,7 @@ use crate::{
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 350.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
-const SIDEBAR_MAX_WIDTH: f32 = 700.0;
+const SIDEBAR_MAX_WIDTH: f32 = 1000.0;
 const DIFF_HEADER_HEIGHT: f32 = 40.0;
 
 fn format_datetime(value: &str) -> SharedString {
@@ -1734,12 +1734,7 @@ impl GithubPrDetailsPage {
     });
   }
 
-  fn close_find_action(
-    &mut self,
-    action: &CloseFind,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
+  fn close_find_action(&mut self, action: &CloseFind, window: &mut Window, cx: &mut Context<Self>) {
     if self.active_tab_ix != 1 {
       return;
     }
