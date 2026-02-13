@@ -1,4 +1,5 @@
 use std::{
+  collections::{HashMap, HashSet},
   path::{Path, PathBuf},
   rc::Rc,
   sync::Arc,
@@ -8,16 +9,18 @@ use std::{
 use editor::{CloseFind, DiffViewMode, Editor, Find, HunkAction, HunkState};
 use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use git::{
-  BranchKind, BranchRef, BranchStatus, HeadCommitStatus, RepoStage, RepoStatusEntry,
-  RepoStatusKind, amend_commit, commit_changes, create_branch, create_branch_from,
+  BranchKind, BranchRef, BranchStatus, CommitGraphNode, HeadCommitStatus, RepoStage,
+  RepoStatusEntry, RepoStatusKind, amend_commit, commit_changes, create_branch, create_branch_from,
   current_branch_status, delete_untracked_file, head_commit_status, list_branches,
-  list_repo_status, merge_branch, push, restore_file, stage_all, stage_file, switch_branch,
-  undo_last_commit, unstage_all, unstage_file,
+  list_commit_graph, list_repo_status, merge_branch, push, restore_file, stage_all, stage_file,
+  switch_branch, undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
-  InteractiveElement, Keystroke, ParentElement, PathPromptOptions, Render, RenderImage,
-  SharedString, Styled, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
+  AnyElement, AnyWindowHandle, App, Bounds, Context, Corner, Element, ElementId, Entity,
+  FocusHandle, Focusable, Global, GlobalElementId, InspectorElementId, InteractiveElement,
+  Keystroke, LayoutId, PaintQuad, ParentElement, Path as GpuiPath, PathBuilder, PathPromptOptions,
+  Pixels, Render, RenderImage, SharedString, Style, Styled, Task, WeakEntity, Window, actions, div,
+  fill, img, point, prelude::*, px, size,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable,
@@ -27,7 +30,9 @@ use gpui_component::{
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{DropdownMenu, PopupMenuItem},
+  scroll::ScrollableElement,
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
+  spinner::Spinner,
   tooltip::Tooltip,
 };
 use smol::unblock;
@@ -49,11 +54,20 @@ use ui::{
   user_menu,
 };
 
-const SIDEBAR_DEFAULT_WIDTH: f32 = 300.0;
+const SIDEBAR_DEFAULT_WIDTH: f32 = 350.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
-const SIDEBAR_MAX_WIDTH: f32 = 700.0;
+const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const STATUS_POLL_INTERVAL_MS: u64 = 800;
 const EDITOR_HEADER_HEIGHT: f32 = 40.0;
+const GRAPH_MAX_COMMITS: usize = 200;
+const GRAPH_ROW_HEIGHT: f32 = 30.0;
+const GRAPH_LANE_WIDTH: f32 = 14.0;
+const GRAPH_LINE_WIDTH: f32 = 2.0;
+const GRAPH_DOT_SIZE: f32 = 10.0;
+const GRAPH_DOT_SIZE_LATEST: f32 = 14.0;
+const GRAPH_BRANCH_BADGE_MAX_WIDTH: f32 = 190.0;
+const GRAPH_AUTHOR_MAX_WIDTH: f32 = 180.0;
+const GRAPH_POLL_EVERY_TICKS: u32 = 6;
 
 actions!(
   workspace,
@@ -206,6 +220,8 @@ impl ListDelegate for GitFileListDelegate {
     cx: &mut Context<ListState<Self>>,
   ) -> impl IntoElement {
     div()
+      .flex()
+      .flex_col()
       .size_full()
       .items_center()
       .justify_center()
@@ -222,6 +238,399 @@ impl ListDelegate for GitFileListDelegate {
   ) {
     self.selected_index = ix;
     cx.notify();
+  }
+}
+
+struct GitGraphListDelegate {
+  rows: Vec<Rc<GraphRenderRow>>,
+}
+
+impl GitGraphListDelegate {
+  fn new() -> Self {
+    Self { rows: Vec::new() }
+  }
+
+  fn set_rows(&mut self, rows: Vec<GraphRenderRow>) {
+    self.rows = rows.into_iter().map(Rc::new).collect();
+  }
+}
+
+impl ListDelegate for GitGraphListDelegate {
+  type Item = ListItem;
+
+  fn items_count(&self, _section: usize, _cx: &App) -> usize {
+    self.rows.len()
+  }
+
+  fn render_item(
+    &mut self,
+    ix: IndexPath,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<Self::Item> {
+    let row = self.rows.get(ix.row)?;
+    let theme = cx.theme().clone();
+    Some(
+      ListItem::new(ix)
+        .pl_0()
+        .pr_1()
+        .py_0()
+        .child(GitPage::render_graph_row(ix.row, row.as_ref(), &theme)),
+    )
+  }
+
+  fn render_empty(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> impl IntoElement {
+    div()
+      .id("git-graph-empty-state")
+      .size_full()
+      .items_center()
+      .justify_center()
+      .text_sm()
+      .text_color(cx.theme().muted_foreground)
+      .child("No commits to display")
+  }
+
+  fn set_selected_index(
+    &mut self,
+    _: Option<IndexPath>,
+    _window: &mut Window,
+    _cx: &mut Context<ListState<Self>>,
+  ) {
+  }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GitSidebarMode {
+  Changes,
+  Graph,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct GraphLaneSegment {
+  up: bool,
+  down: bool,
+}
+
+#[derive(Clone, Debug)]
+struct GraphRenderRow {
+  commit: CommitGraphNode,
+  segments: Vec<GraphLaneSegment>,
+  commit_lane: usize,
+  merge_parent_lanes: Vec<usize>,
+  branch_child_lanes: Vec<usize>,
+  branch_pre_stubs: Vec<usize>,
+  commit_lane_has_up: bool,
+}
+
+struct GraphPaintPath {
+  path: GpuiPath<Pixels>,
+  color: gpui::Hsla,
+}
+
+struct GraphLanesPrepaintState {
+  paths: Vec<GraphPaintPath>,
+  dot: PaintQuad,
+}
+
+struct GraphLanesElement {
+  id: ElementId,
+  segments: Vec<GraphLaneSegment>,
+  commit_lane: usize,
+  merge_parent_lanes: Vec<usize>,
+  branch_child_lanes: Vec<usize>,
+  branch_pre_stubs: Vec<usize>,
+  commit_lane_has_up: bool,
+  is_latest_commit: bool,
+  latest_dot_background: gpui::Hsla,
+  lane_colors: Vec<gpui::Hsla>,
+  dot_color: gpui::Hsla,
+}
+
+impl GraphLanesElement {
+  fn new(row_index: usize, row: &GraphRenderRow, theme: &gpui_component::Theme) -> Self {
+    let lane_count = row.segments.len().max(1);
+    let lane_colors = (0..lane_count)
+      .map(|lane_ix| Self::lane_color_for(lane_ix, theme))
+      .collect::<Vec<_>>();
+    let dot_color = lane_colors
+      .get(row.commit_lane % lane_count)
+      .cloned()
+      .unwrap_or(theme.sidebar_foreground);
+
+    Self {
+      id: ("git-graph-lanes", row_index).into(),
+      segments: row.segments.clone(),
+      commit_lane: row.commit_lane,
+      merge_parent_lanes: row.merge_parent_lanes.clone(),
+      branch_child_lanes: row.branch_child_lanes.clone(),
+      branch_pre_stubs: row.branch_pre_stubs.clone(),
+      commit_lane_has_up: row.commit_lane_has_up,
+      is_latest_commit: row_index == 0,
+      latest_dot_background: theme.sidebar,
+      lane_colors,
+      dot_color,
+    }
+  }
+
+  fn lane_color_for(lane_ix: usize, theme: &gpui_component::Theme) -> gpui::Hsla {
+    let palette = [
+      theme.status_blue().opacity(0.95),
+      theme.status_yellow().opacity(0.95),
+      theme.status_green().opacity(0.95),
+      theme.status_red().opacity(0.95),
+      theme.status_violet().opacity(0.92),
+      theme.status_orange().opacity(0.90),
+    ];
+    palette[lane_ix % palette.len()]
+  }
+
+  fn lane_color(&self, lane_ix: usize) -> gpui::Hsla {
+    self
+      .lane_colors
+      .get(lane_ix)
+      .cloned()
+      .unwrap_or(self.dot_color)
+  }
+
+  fn lane_center_x(lane_ix: usize, bounds: Bounds<Pixels>) -> Pixels {
+    bounds.left() + px(lane_ix as f32 * GRAPH_LANE_WIDTH + (GRAPH_LANE_WIDTH / 2.0))
+  }
+
+  fn lane_center_x_for(&self, lane_ix: usize, bounds: Bounds<Pixels>) -> Pixels {
+    Self::lane_center_x(lane_ix, bounds)
+  }
+}
+
+impl IntoElement for GraphLanesElement {
+  type Element = Self;
+
+  fn into_element(self) -> Self::Element {
+    self
+  }
+}
+
+impl Element for GraphLanesElement {
+  type RequestLayoutState = ();
+  type PrepaintState = GraphLanesPrepaintState;
+
+  fn id(&self) -> Option<ElementId> {
+    Some(self.id.clone())
+  }
+
+  fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+    None
+  }
+
+  fn request_layout(
+    &mut self,
+    _id: Option<&GlobalElementId>,
+    _inspector_id: Option<&InspectorElementId>,
+    window: &mut Window,
+    cx: &mut App,
+  ) -> (LayoutId, Self::RequestLayoutState) {
+    let lane_count = self.segments.len().max(1);
+    let mut style = Style::default();
+    style.size.width = px(lane_count as f32 * GRAPH_LANE_WIDTH).into();
+    style.size.height = px(GRAPH_ROW_HEIGHT).into();
+    (window.request_layout(style, [], cx), ())
+  }
+
+  fn prepaint(
+    &mut self,
+    _id: Option<&GlobalElementId>,
+    _inspector_id: Option<&InspectorElementId>,
+    bounds: Bounds<Pixels>,
+    _request_layout: &mut Self::RequestLayoutState,
+    _window: &mut Window,
+    _cx: &mut App,
+  ) -> Self::PrepaintState {
+    let mut paths = Vec::with_capacity(self.segments.len() + self.merge_parent_lanes.len() + 1);
+    let middle_y = bounds.top() + bounds.size.height / 2.0;
+
+    for (lane_ix, segment) in self.segments.iter().enumerate() {
+      if !segment.up && !segment.down {
+        continue;
+      }
+      if lane_ix != self.commit_lane && self.merge_parent_lanes.contains(&lane_ix) && !segment.up {
+        // Merge parent lane will be represented by the merge curve itself.
+        continue;
+      }
+
+      let lane_has_up = if lane_ix == self.commit_lane {
+        segment.up && self.commit_lane_has_up
+      } else {
+        segment.up
+      };
+      let top_y = if lane_has_up { bounds.top() } else { middle_y };
+      let bottom_y = if segment.down {
+        bounds.bottom()
+      } else {
+        middle_y
+      };
+      if bottom_y <= top_y {
+        continue;
+      }
+
+      let mut builder = PathBuilder::stroke(px(GRAPH_LINE_WIDTH));
+      let lane_x = self.lane_center_x_for(lane_ix, bounds);
+      builder.move_to(point(lane_x, top_y));
+      builder.line_to(point(lane_x, bottom_y));
+
+      if let Ok(path) = builder.build() {
+        paths.push(GraphPaintPath {
+          path,
+          color: self.lane_color(lane_ix),
+        });
+      }
+    }
+
+    let commit_x = self.lane_center_x_for(self.commit_lane, bounds);
+    for parent_lane in self.merge_parent_lanes.iter().copied() {
+      if parent_lane == self.commit_lane {
+        continue;
+      }
+
+      let from_x: f32 = self.lane_center_x_for(parent_lane, bounds).into();
+      let to_x: f32 = commit_x.into();
+      let dx = to_x - from_x;
+      if dx.abs() < 0.1 {
+        continue;
+      }
+
+      let mut builder = PathBuilder::stroke(px(GRAPH_LINE_WIDTH));
+      let start_y: f32 = bounds.bottom().into();
+      let end_y: f32 = middle_y.into();
+      let horizontal_gap = dx.abs();
+      let vertical_span = (start_y - end_y).abs();
+      let depth =
+        (vertical_span * 0.85 + horizontal_gap * 0.10).clamp(4.0, GRAPH_ROW_HEIGHT * 0.65);
+      let ctrl_a_x = from_x;
+      let ctrl_b_x = to_x - dx * 0.22;
+      let ctrl_a_y = start_y - depth;
+      let ctrl_b_y = end_y;
+      let right_lane = parent_lane.max(self.commit_lane);
+
+      builder.move_to(point(px(from_x), px(start_y)));
+      builder.cubic_bezier_to(
+        point(px(to_x), px(end_y)),
+        point(px(ctrl_a_x), px(ctrl_a_y)),
+        point(px(ctrl_b_x), px(ctrl_b_y)),
+      );
+
+      if let Ok(path) = builder.build() {
+        paths.push(GraphPaintPath {
+          path,
+          color: self.lane_color(right_lane),
+        });
+      }
+    }
+
+    let split_stub_len = bounds.size.height / 2.0;
+    for lane in self.branch_pre_stubs.iter().copied() {
+      let lane_x = self.lane_center_x_for(lane, bounds);
+      let mut stub_builder = PathBuilder::stroke(px(GRAPH_LINE_WIDTH));
+      let stub_start = bounds.bottom() - split_stub_len;
+      stub_builder.move_to(point(lane_x, stub_start));
+      stub_builder.line_to(point(lane_x, bounds.bottom()));
+      if let Ok(path) = stub_builder.build() {
+        paths.push(GraphPaintPath {
+          path,
+          color: self.lane_color(lane),
+        });
+      }
+    }
+
+    for child_lane in self
+      .branch_child_lanes
+      .iter()
+      .copied()
+      .filter(|lane| *lane != self.commit_lane)
+    {
+      let from_x: f32 = commit_x.into();
+      let to_x: f32 = self.lane_center_x_for(child_lane, bounds).into();
+      let dx = to_x - from_x;
+      if dx.abs() < 0.1 {
+        continue;
+      }
+
+      // Branch creation is the inverse of merge: start from this commit (middle)
+      // and connect to the upper part of the child lane on the right.
+      let target_y = bounds.top();
+
+      let mut builder = PathBuilder::stroke(px(GRAPH_LINE_WIDTH));
+      let start_y: f32 = middle_y.into();
+      let end_y: f32 = target_y.into();
+      let horizontal_gap = dx.abs();
+      let vertical_span = (start_y - end_y).abs();
+      let depth =
+        (vertical_span * 0.85 + horizontal_gap * 0.10).clamp(4.0, GRAPH_ROW_HEIGHT * 0.65);
+      // Mirror of merge geometry:
+      // - start tangent mostly horizontal to the right
+      // - end tangent vertical upward into the right lane
+      let ctrl_a_x = from_x + dx * 0.22;
+      let ctrl_b_x = to_x;
+      let ctrl_a_y = start_y;
+      let ctrl_b_y = end_y + depth;
+
+      builder.move_to(point(px(from_x), px(start_y)));
+      builder.cubic_bezier_to(
+        point(px(to_x), target_y),
+        point(px(ctrl_a_x), px(ctrl_a_y)),
+        point(px(ctrl_b_x), px(ctrl_b_y)),
+      );
+
+      if let Ok(path) = builder.build() {
+        paths.push(GraphPaintPath {
+          path,
+          color: self.lane_color(child_lane),
+        });
+      }
+    }
+
+    let dot_center = point(commit_x, middle_y);
+    let dot_diameter = if self.is_latest_commit {
+      GRAPH_DOT_SIZE_LATEST
+    } else {
+      GRAPH_DOT_SIZE
+    };
+    let dot_radius = px(dot_diameter / 2.0);
+    let dot_bounds = Bounds::new(
+      point(dot_center.x - dot_radius, dot_center.y - dot_radius),
+      size(px(dot_diameter), px(dot_diameter)),
+    );
+    let dot_background = if self.is_latest_commit {
+      self.latest_dot_background
+    } else {
+      self.dot_color
+    };
+    let mut dot = fill(dot_bounds, dot_background).corner_radii(dot_radius);
+    if self.is_latest_commit {
+      dot = dot
+        .border_widths(px(GRAPH_LINE_WIDTH))
+        .border_color(self.dot_color);
+    }
+
+    GraphLanesPrepaintState { paths, dot }
+  }
+
+  fn paint(
+    &mut self,
+    _id: Option<&GlobalElementId>,
+    _inspector_id: Option<&InspectorElementId>,
+    _bounds: Bounds<Pixels>,
+    _request_layout: &mut Self::RequestLayoutState,
+    prepaint: &mut Self::PrepaintState,
+    window: &mut Window,
+    _cx: &mut App,
+  ) {
+    for path in &prepaint.paths {
+      window.paint_path(path.path.clone(), path.color);
+    }
+    window.paint_quad(prepaint.dot.clone());
   }
 }
 
@@ -373,6 +782,7 @@ pub struct GitPage {
   repo_select: Entity<SelectState<SearchableVec<RecentRepoItem>>>,
   branch_select: Entity<SelectState<SearchableVec<BranchSelectItem>>>,
   file_list: Entity<ListState<GitFileListDelegate>>,
+  graph_list: Entity<ListState<GitGraphListDelegate>>,
   window_handle: AnyWindowHandle,
   selected_repo: Option<PathBuf>,
   status_entries: Vec<RepoStatusEntry>,
@@ -382,6 +792,9 @@ pub struct GitPage {
   can_push: bool,
   can_force_push: bool,
   has_staged_changes: bool,
+  sidebar_mode: GitSidebarMode,
+  graph_commits: Vec<CommitGraphNode>,
+  graph_loading: bool,
   selected_file: Option<PathBuf>,
   force_list_selection: bool,
   editor: Option<Entity<Editor>>,
@@ -394,6 +807,7 @@ pub struct GitPage {
   auth_state: AuthState,
   auth_task: Option<Task<()>>,
   status_task: Option<Task<()>>,
+  graph_task: Option<Task<()>>,
   branch_task: Option<Task<()>>,
   poll_task: Option<Task<()>>,
   commit_input: Entity<InputState>,
@@ -512,6 +926,14 @@ impl GitPage {
     self.set_file_list_selected_index(selected_index, cx);
   }
 
+  fn refresh_graph_list(&mut self, cx: &mut Context<Self>) {
+    let rows = Self::build_graph_rows(&self.graph_commits);
+    self.graph_list.update(cx, move |state, cx| {
+      state.delegate_mut().set_rows(rows);
+      cx.notify();
+    });
+  }
+
   fn handle_auth_code(&mut self, code: String, cx: &mut Context<Self>) {
     let api = self.api.clone();
     let service = self.api.keychain_service().to_string();
@@ -628,6 +1050,8 @@ impl GitPage {
       .searchable(true)
     });
     let file_list = cx.new(|cx| ListState::new(GitFileListDelegate::new(), window, cx));
+    let graph_list =
+      cx.new(|cx| ListState::new(GitGraphListDelegate::new(), window, cx).selectable(false));
 
     if let Some(repo) = selected_repo.as_ref() {
       repo_select.update(cx, |state, cx| {
@@ -647,6 +1071,7 @@ impl GitPage {
       repo_select,
       branch_select,
       file_list,
+      graph_list,
       window_handle: window.window_handle(),
       selected_repo,
       status_entries: Vec::new(),
@@ -656,6 +1081,9 @@ impl GitPage {
       can_push: false,
       can_force_push: false,
       has_staged_changes: false,
+      sidebar_mode: GitSidebarMode::Changes,
+      graph_commits: Vec::new(),
+      graph_loading: false,
       selected_file: None,
       force_list_selection: false,
       editor: None,
@@ -668,6 +1096,7 @@ impl GitPage {
       auth_state: AuthState::Unknown,
       auth_task: None,
       status_task: None,
+      graph_task: None,
       branch_task: None,
       poll_task: None,
       commit_input,
@@ -753,6 +1182,8 @@ impl GitPage {
     self.selected_repo = Some(repo_root.clone());
     self.selected_file = None;
     self.editor = None;
+    self.graph_commits.clear();
+    self.graph_loading = self.sidebar_mode == GitSidebarMode::Graph;
     ConfigStore::persist_recent_repository(&repo_root);
 
     self.reload_status(cx);
@@ -859,6 +1290,37 @@ impl GitPage {
     self.branch_task = Some(task);
   }
 
+  fn refresh_graph(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      self.graph_commits.clear();
+      self.graph_loading = false;
+      self.refresh_graph_list(cx);
+      cx.notify();
+      return;
+    };
+
+    if self.graph_commits.is_empty() {
+      self.graph_loading = true;
+      cx.notify();
+    }
+
+    let task = cx.spawn(async move |this, cx| {
+      let requested_repo = repo_root.clone();
+      let graph = unblock(move || list_commit_graph(&repo_root, GRAPH_MAX_COMMITS)).await;
+      let _ = this.update(cx, |this, cx| {
+        if this.selected_repo.as_ref() != Some(&requested_repo) {
+          return;
+        }
+        this.graph_commits = graph.unwrap_or_default();
+        this.graph_loading = false;
+        this.refresh_graph_list(cx);
+        cx.notify();
+      });
+    });
+
+    self.graph_task = Some(task);
+  }
+
   fn reload_status(&mut self, cx: &mut Context<Self>) {
     let Some(repo_root) = self.selected_repo.clone() else {
       self.status_entries.clear();
@@ -869,22 +1331,49 @@ impl GitPage {
       self.can_push = false;
       self.can_force_push = false;
       self.has_staged_changes = false;
+      self.graph_commits.clear();
+      self.graph_loading = false;
+      self.refresh_graph_list(cx);
+      cx.notify();
       return;
     };
+    let include_graph = self.sidebar_mode == GitSidebarMode::Graph;
+    if include_graph && self.graph_commits.is_empty() {
+      self.graph_loading = true;
+      cx.notify();
+    }
 
     let task = cx.spawn(async move |this, cx| {
+      let requested_repo = repo_root.clone();
       let status = unblock(move || {
         let entries = list_repo_status(&repo_root).ok()?;
         let branch = current_branch_status(&repo_root).ok();
         let head_status = head_commit_status(&repo_root).ok();
-        Some((entries, branch, head_status))
+        let graph = if include_graph {
+          list_commit_graph(&repo_root, GRAPH_MAX_COMMITS).ok()
+        } else {
+          None
+        };
+        Some((entries, branch, head_status, graph))
       })
       .await;
-      let Some((entries, branch_status, head_status)) = status else {
+      let Some((entries, branch_status, head_status, graph)) = status else {
+        let _ = this.update(cx, |this, cx| {
+          if this.selected_repo.as_ref() != Some(&requested_repo) {
+            return;
+          }
+          if include_graph && this.graph_loading {
+            this.graph_loading = false;
+            cx.notify();
+          }
+        });
         return;
       };
 
       let _ = this.update(cx, |this, cx| {
+        if this.selected_repo.as_ref() != Some(&requested_repo) {
+          return;
+        }
         this.status_entries = entries;
         this.branch_status = branch_status;
         this.has_staged_changes = this
@@ -897,6 +1386,11 @@ impl GitPage {
         });
         this.has_head_commit = head_status.has_head_commit;
         this.can_undo_last_commit = head_status.can_undo_last_commit;
+        if include_graph {
+          this.graph_commits = graph.unwrap_or_default();
+          this.graph_loading = false;
+          this.refresh_graph_list(cx);
+        }
         let (can_push, can_force_push) = Self::push_flags(this.branch_status.as_ref());
         this.can_push = can_push;
         this.can_force_push = can_force_push;
@@ -926,6 +1420,7 @@ impl GitPage {
     }
 
     self.poll_task = Some(cx.spawn(async move |this, cx| {
+      let mut graph_poll_tick: u32 = 0;
       loop {
         cx.background_executor()
           .timer(Duration::from_millis(STATUS_POLL_INTERVAL_MS))
@@ -935,22 +1430,45 @@ impl GitPage {
           Ok(value) => value,
           Err(_) => return,
         };
+        let include_graph =
+          match this.update(cx, |this, _| this.sidebar_mode == GitSidebarMode::Graph) {
+            Ok(value) => value,
+            Err(_) => return,
+          };
+        if include_graph {
+          graph_poll_tick = graph_poll_tick.saturating_add(1);
+        } else {
+          graph_poll_tick = 0;
+        }
+        let poll_graph_now = include_graph && graph_poll_tick >= GRAPH_POLL_EVERY_TICKS;
+        if poll_graph_now {
+          graph_poll_tick = 0;
+        }
         let Some(repo_root) = repo_root else {
           continue;
         };
+        let requested_repo = repo_root.clone();
 
         let status = unblock(move || {
           let entries = list_repo_status(&repo_root).ok()?;
           let branch = current_branch_status(&repo_root).ok();
           let head_status = head_commit_status(&repo_root).ok();
-          Some((entries, branch, head_status))
+          let graph = if poll_graph_now {
+            list_commit_graph(&repo_root, GRAPH_MAX_COMMITS).ok()
+          } else {
+            None
+          };
+          Some((entries, branch, head_status, graph))
         })
         .await;
-        let Some((entries, branch_status, head_status)) = status else {
+        let Some((entries, branch_status, head_status, graph)) = status else {
           continue;
         };
 
         let _ = this.update(cx, |this, cx| {
+          if this.selected_repo.as_ref() != Some(&requested_repo) {
+            return;
+          }
           this.status_entries = entries;
           this.branch_status = branch_status;
           this.has_staged_changes = this
@@ -963,6 +1481,11 @@ impl GitPage {
           });
           this.has_head_commit = head_status.has_head_commit;
           this.can_undo_last_commit = head_status.can_undo_last_commit;
+          if poll_graph_now {
+            this.graph_commits = graph.unwrap_or_default();
+            this.graph_loading = false;
+            this.refresh_graph_list(cx);
+          }
           let (can_push, can_force_push) = Self::push_flags(this.branch_status.as_ref());
           this.can_push = can_push;
           this.can_force_push = can_force_push;
@@ -976,7 +1499,9 @@ impl GitPage {
               this.editor = None;
             }
           }
-          this.refresh_file_list(cx);
+          if this.sidebar_mode == GitSidebarMode::Changes {
+            this.refresh_file_list(cx);
+          }
           cx.notify();
         });
       }
@@ -1011,12 +1536,7 @@ impl GitPage {
     });
   }
 
-  fn close_find_action(
-    &mut self,
-    action: &CloseFind,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
+  fn close_find_action(&mut self, action: &CloseFind, window: &mut Window, cx: &mut Context<Self>) {
     let Some(editor) = self.editor.clone() else {
       return;
     };
@@ -1534,6 +2054,25 @@ impl GitPage {
     self.svg_preview_task = Some(task);
   }
 
+  fn toggle_sidebar_mode_action(
+    &mut self,
+    _: &gpui::ClickEvent,
+    _: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.sidebar_mode = match self.sidebar_mode {
+      GitSidebarMode::Changes => GitSidebarMode::Graph,
+      GitSidebarMode::Graph => GitSidebarMode::Changes,
+    };
+
+    if self.sidebar_mode == GitSidebarMode::Graph {
+      self.refresh_graph(cx);
+    } else {
+      self.refresh_file_list(cx);
+      cx.notify();
+    }
+  }
+
   fn toggle_stage_all_action(
     &mut self,
     _: &gpui::ClickEvent,
@@ -1717,11 +2256,11 @@ impl GitPage {
 
   fn status_color(kind: RepoStatusKind, theme: &gpui_component::Theme) -> gpui::Hsla {
     match kind {
-      RepoStatusKind::Modified => theme.status_orange(),
+      RepoStatusKind::Modified => theme.status_yellow(),
       RepoStatusKind::Added => theme.status_green(),
       RepoStatusKind::Deleted => theme.status_red(),
-      RepoStatusKind::Renamed => theme.info,
-      RepoStatusKind::TypeChange => theme.info,
+      RepoStatusKind::Renamed => theme.status_blue(),
+      RepoStatusKind::TypeChange => theme.status_blue(),
       RepoStatusKind::Untracked => theme.status_green(),
       RepoStatusKind::Conflicted => theme.status_red(),
     }
@@ -1745,6 +2284,408 @@ impl GitPage {
         .status_entries
         .iter()
         .all(|entry| entry.stage == RepoStage::Staged)
+  }
+
+  fn build_graph_rows(commits: &[CommitGraphNode]) -> Vec<GraphRenderRow> {
+    let commits_by_oid = commits
+      .iter()
+      .map(|commit| (commit.oid.as_str(), commit))
+      .collect::<HashMap<_, _>>();
+    let mut mainline_oids = HashSet::new();
+    if let Some(head) = commits.first() {
+      let mut cursor = Some(head.oid.as_str());
+      while let Some(oid) = cursor {
+        if !mainline_oids.insert(oid.to_string()) {
+          break;
+        }
+        cursor = commits_by_oid
+          .get(oid)
+          .and_then(|commit| commit.parent_oids.first())
+          .map(String::as_str);
+      }
+    }
+
+    let mut rows = Vec::with_capacity(commits.len());
+    let mut active_lanes: Vec<Option<String>> = Vec::new();
+
+    let trim_trailing_empty = |lanes: &mut Vec<Option<String>>| {
+      while lanes.last().map(|lane| lane.is_none()).unwrap_or(false) {
+        lanes.pop();
+      }
+    };
+
+    for commit in commits {
+      let is_mainline_commit = mainline_oids.contains(commit.oid.as_str());
+      let mut commit_lane_has_up = true;
+      let mut commit_lane = if let Some(ix) = active_lanes
+        .iter()
+        .position(|oid| oid.as_deref() == Some(commit.oid.as_str()))
+      {
+        ix
+      } else {
+        commit_lane_has_up = false;
+        active_lanes.push(Some(commit.oid.clone()));
+        active_lanes.len() - 1
+      };
+      if is_mainline_commit && commit_lane != 0 {
+        active_lanes.swap(0, commit_lane);
+        commit_lane = 0;
+      }
+
+      let lanes_before = active_lanes.clone();
+      let mut lanes_after = lanes_before.clone();
+      let mut parent_lanes = Vec::new();
+      let mut first_parent_lane = None;
+      lanes_after[commit_lane] = None;
+      let mut lock_commit_lane_empty = false;
+
+      if let Some(first_parent) = commit.parent_oids.first() {
+        if let Some(existing_idx) = lanes_after
+          .iter()
+          .position(|oid| oid.as_deref() == Some(first_parent.as_str()))
+        {
+          if existing_idx == commit_lane || is_mainline_commit {
+            lanes_after[commit_lane] = Some(first_parent.clone());
+            if existing_idx != commit_lane {
+              lanes_after[existing_idx] = None;
+            }
+            if !parent_lanes.contains(&commit_lane) {
+              parent_lanes.push(commit_lane);
+            }
+            first_parent_lane = Some(commit_lane);
+          } else {
+            if !parent_lanes.contains(&existing_idx) {
+              parent_lanes.push(existing_idx);
+            }
+            first_parent_lane = Some(existing_idx);
+            if existing_idx != commit_lane {
+              lock_commit_lane_empty = true;
+            }
+          }
+        } else {
+          lanes_after[commit_lane] = Some(first_parent.clone());
+          parent_lanes.push(commit_lane);
+          first_parent_lane = Some(commit_lane);
+        }
+      } else {
+        lock_commit_lane_empty = true;
+      }
+
+      let mut preferred_lane = commit_lane + 1;
+      for parent in commit.parent_oids.iter().skip(1) {
+        if let Some(existing_idx) = lanes_after
+          .iter()
+          .position(|oid| oid.as_deref() == Some(parent.as_str()))
+        {
+          if !parent_lanes.contains(&existing_idx) {
+            parent_lanes.push(existing_idx);
+          }
+          preferred_lane = existing_idx + 1;
+          continue;
+        }
+
+        let insert_at = lanes_after
+          .iter()
+          .enumerate()
+          .skip(preferred_lane)
+          .find_map(|(ix, lane)| {
+            if lane.is_none() && (!lock_commit_lane_empty || ix != commit_lane) {
+              Some(ix)
+            } else {
+              None
+            }
+          })
+          .unwrap_or(lanes_after.len());
+
+        if insert_at == lanes_after.len() {
+          lanes_after.push(Some(parent.clone()));
+        } else {
+          lanes_after[insert_at] = Some(parent.clone());
+        }
+        parent_lanes.push(insert_at);
+        preferred_lane = insert_at + 1;
+      }
+
+      trim_trailing_empty(&mut lanes_after);
+
+      let lane_count = lanes_before
+        .len()
+        .max(lanes_after.len())
+        .max(commit_lane + 1);
+
+      let segments = (0..lane_count)
+        .map(|lane| GraphLaneSegment {
+          up: lanes_before
+            .get(lane)
+            .and_then(|lane| lane.as_ref())
+            .is_some(),
+          down: lanes_after
+            .get(lane)
+            .and_then(|lane| lane.as_ref())
+            .is_some(),
+        })
+        .collect::<Vec<_>>();
+
+      let merge_parent_lanes = if commit.parent_oids.len() > 1 {
+        parent_lanes
+          .iter()
+          .copied()
+          .filter(|lane| Some(*lane) != first_parent_lane)
+          .collect::<Vec<_>>()
+      } else {
+        Vec::new()
+      };
+      rows.push(GraphRenderRow {
+        commit: commit.clone(),
+        segments,
+        commit_lane,
+        merge_parent_lanes,
+        branch_child_lanes: Vec::new(),
+        branch_pre_stubs: Vec::new(),
+        commit_lane_has_up,
+      });
+      active_lanes = lanes_after;
+      trim_trailing_empty(&mut active_lanes);
+    }
+
+    let max_lane_count = rows.iter().map(|row| row.segments.len()).max().unwrap_or(0);
+    if max_lane_count > 0 {
+      for row in &mut rows {
+        row
+          .segments
+          .resize(max_lane_count, GraphLaneSegment::default());
+      }
+    }
+
+    let row_index_by_oid = rows
+      .iter()
+      .enumerate()
+      .map(|(index, row)| (row.commit.oid.clone(), index))
+      .collect::<HashMap<_, _>>();
+    let mut branch_child_lanes_by_row = HashMap::<usize, Vec<usize>>::new();
+    let mut branch_pre_stubs_by_row = HashMap::<usize, Vec<usize>>::new();
+
+    for child_row in &rows {
+      if child_row.commit.parent_oids.len() != 1 {
+        continue;
+      }
+      let Some(parent_row_index) = child_row
+        .commit
+        .parent_oids
+        .first()
+        .and_then(|parent_oid| row_index_by_oid.get(parent_oid))
+        .copied()
+      else {
+        continue;
+      };
+
+      let parent_lane = rows[parent_row_index].commit_lane;
+      let child_lane = child_row.commit_lane;
+      if child_lane > parent_lane {
+        branch_child_lanes_by_row
+          .entry(parent_row_index)
+          .or_default()
+          .push(child_lane);
+
+        let parent_has_up = rows[parent_row_index]
+          .segments
+          .get(child_lane)
+          .map(|segment| segment.up)
+          .unwrap_or(false);
+        if !parent_has_up && parent_row_index > 0 {
+          branch_pre_stubs_by_row
+            .entry(parent_row_index - 1)
+            .or_default()
+            .push(child_lane);
+        }
+      }
+    }
+
+    for (row_index, mut lanes) in branch_child_lanes_by_row {
+      lanes.sort_unstable();
+      lanes.dedup();
+      if let Some(row) = rows.get_mut(row_index) {
+        row.branch_child_lanes = lanes;
+      }
+    }
+
+    for (row_index, mut lanes) in branch_pre_stubs_by_row {
+      lanes.sort_unstable();
+      lanes.dedup();
+      if let Some(row) = rows.get_mut(row_index) {
+        row.branch_pre_stubs = lanes;
+      }
+    }
+
+    rows
+  }
+
+  fn primary_branch_label(refs: &[String]) -> Option<(String, bool)> {
+    if let Some(head_ref) = refs.iter().find(|label| label.starts_with("HEAD")) {
+      let label = head_ref
+        .strip_prefix("HEAD -> ")
+        .filter(|name| !name.is_empty())
+        .unwrap_or(head_ref.as_str())
+        .to_string();
+      return Some((label, true));
+    }
+
+    refs.first().cloned().map(|label| (label, false))
+  }
+
+  fn render_graph_row(
+    row_index: usize,
+    row: &GraphRenderRow,
+    theme: &gpui_component::Theme,
+  ) -> AnyElement {
+    let lane_count = row.segments.len().max(1);
+    let graph_width = lane_count as f32 * GRAPH_LANE_WIDTH;
+
+    let summary = if row.commit.summary.trim().is_empty() {
+      "No commit message".to_string()
+    } else {
+      row.commit.summary.clone()
+    };
+    let branch_badge = Self::primary_branch_label(&row.commit.refs).map(|(label, is_head)| {
+      let bg_color = if is_head {
+        theme.accent
+      } else {
+        theme.title_bar_border.opacity(0.9)
+      };
+      let text_color = if is_head {
+        theme.accent_foreground
+      } else {
+        theme.sidebar_foreground
+      };
+      div()
+        .id(format!("git-graph-branch-badge-{row_index}"))
+        .px_1()
+        .py(px(1.))
+        .rounded(px(4.))
+        .max_w(px(GRAPH_BRANCH_BADGE_MAX_WIDTH))
+        .overflow_hidden()
+        .text_ellipsis()
+        .text_xs()
+        .bg(bg_color)
+        .text_color(text_color)
+        .child(label)
+        .into_any_element()
+    });
+
+    div()
+      .id(format!("git-graph-row-{row_index}"))
+      .w_full()
+      .h(px(GRAPH_ROW_HEIGHT))
+      .min_h(px(GRAPH_ROW_HEIGHT))
+      .px_2()
+      .flex()
+      .items_center()
+      .gap_2()
+      .child(
+        div()
+          .id(format!("git-graph-canvas-{row_index}"))
+          .relative()
+          .h(px(GRAPH_ROW_HEIGHT))
+          .w(px(graph_width))
+          .flex_shrink_0()
+          .child(GraphLanesElement::new(row_index, row, theme)),
+      )
+      .child(
+        div()
+          .min_w_0()
+          .flex_1()
+          .flex()
+          .items_center()
+          .gap_2()
+          .overflow_hidden()
+          .child(
+            div()
+              .min_w_0()
+              .flex_1()
+              .overflow_hidden()
+              .text_ellipsis()
+              .text_xs()
+              .child(summary),
+          )
+          .child(
+            div()
+              .min_w_0()
+              .max_w(px(GRAPH_AUTHOR_MAX_WIDTH))
+              .overflow_hidden()
+              .text_ellipsis()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(row.commit.author.clone()),
+          ),
+      )
+      .when_some(branch_badge, |this, badge| this.child(badge))
+      .into_any_element()
+  }
+
+  fn render_graph_sidebar_content(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    // self.graph_loading && self.graph_commits.is_empty()
+    if self.graph_loading {
+      return div()
+        .id("git-graph-loading-container")
+        .flex()
+        .flex_col()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .child(
+          div()
+            .id("git-graph-loading-content")
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_2()
+            .child(Spinner::new().small())
+            .child(
+              div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child("Loading graph..."),
+            ),
+        )
+        .into_any_element();
+    }
+
+    if self.graph_commits.is_empty() {
+      return div()
+        .id("git-graph-empty-container")
+        .flex()
+        .flex_col()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("No commits to display"),
+        )
+        .into_any_element();
+    }
+
+    div()
+      .id("git-graph-scroll-container")
+      .flex_1()
+      .min_h_0()
+      .child(
+        div()
+          .id("git-graph-scroll")
+          .size_full()
+          .overflow_y_scrollbar()
+          .child(
+            List::new(&self.graph_list)
+              .w_full()
+              .min_h_0()
+              .h_full()
+              .p_0(),
+          ),
+      )
+      .into_any_element()
   }
 
   fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1941,11 +2882,12 @@ impl GitPage {
     div()
       .size_full()
       .flex()
+      .px_2()
       .bg(theme.background)
       .items_center()
       .justify_center()
       .text_color(cx.theme().muted_foreground)
-      .child(message)
+      .child(div().truncate().child(message))
       .into_any_element()
   }
 
@@ -2499,16 +3441,49 @@ impl GitPage {
     let theme = cx.theme();
     let all_staged = self.all_changes_staged();
     let sidebar_enabled = self.selected_repo.is_some() && !self.status_entries.is_empty();
+    let changed_files_count = self.status_entries.len();
     let (label, icon, tooltip) = if all_staged {
       ("Unstage all", IconName::Minus, "Unstage all files")
     } else {
       ("Stage all", IconName::Plus, "Stage all files")
     };
+    let is_graph_mode = self.sidebar_mode == GitSidebarMode::Graph;
+    let (mode_label, mode_icon, mode_tooltip) = if is_graph_mode {
+      ("Changes", IconName::File, "Show changes list")
+    } else {
+      ("Graph", IconName::ArrowUp, "Show commit graph")
+    };
 
-    let group_label = div()
-      .text_sm()
-      .text_color(theme.sidebar_foreground)
-      .child("Changes");
+    let group_label = if is_graph_mode {
+      div()
+        .text_sm()
+        .text_color(theme.sidebar_foreground)
+        .child("Graph")
+        .into_any_element()
+    } else {
+      h_flex()
+        .items_center()
+        .gap_2()
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.sidebar_foreground)
+            .child("Changes"),
+        )
+        .when(changed_files_count > 0, |this| {
+          this.child(
+            div()
+              .px_1()
+              .py(px(1.))
+              .rounded(theme.radius)
+              .text_xs()
+              .bg(theme.status_red().opacity(0.40))
+              .text_color(theme.status_red())
+              .child(changed_files_count.to_string()),
+          )
+        })
+        .into_any_element()
+    };
 
     div()
       .w_full()
@@ -2521,14 +3496,32 @@ impl GitPage {
       .justify_between()
       .child(group_label)
       .child(
-        Button::new("stage-all-button")
-          .label(label)
-          .icon(icon)
-          .with_variant(ButtonVariant::Secondary)
-          .xsmall()
-          .disabled(!sidebar_enabled)
-          .tooltip(tooltip)
-          .on_click(cx.listener(Self::toggle_stage_all_action)),
+        h_flex()
+          .items_center()
+          .gap_2()
+          .when(!is_graph_mode, |this| {
+            this.child(
+              Button::new("stage-all-button")
+                .label(label)
+                .icon(icon)
+                .with_variant(ButtonVariant::Secondary)
+                .xsmall()
+                .disabled(!sidebar_enabled)
+                .tooltip(tooltip)
+                .on_click(cx.listener(Self::toggle_stage_all_action)),
+            )
+          })
+          .child(
+            Button::new("sidebar-mode-toggle-button")
+              .label(mode_label)
+              .icon(mode_icon)
+              .with_variant(ButtonVariant::Secondary)
+              .xsmall()
+              .selected(is_graph_mode)
+              .disabled(self.selected_repo.is_none())
+              .tooltip(mode_tooltip)
+              .on_click(cx.listener(Self::toggle_sidebar_mode_action)),
+          ),
       )
   }
 
@@ -2555,13 +3548,27 @@ impl GitPage {
         .into_any_element();
     }
 
-    let list_container = div().relative().flex_1().min_h_0().overflow_hidden().child(
-      List::new(&self.file_list)
-        .flex_1()
-        .w_full()
-        .min_h_0()
-        .p(px(6.)),
-    );
+    if self.sidebar_mode == GitSidebarMode::Graph {
+      return base_sidebar
+        .relative()
+        .child(self.render_sidebar_header(cx))
+        .child(self.render_graph_sidebar_content(cx))
+        .into_any_element();
+    }
+
+    let list_container = div()
+      .id("git-sidebar-file-list-container")
+      .relative()
+      .flex_1()
+      .min_h_0()
+      .overflow_hidden()
+      .child(
+        List::new(&self.file_list)
+          .flex_1()
+          .w_full()
+          .min_h_0()
+          .p(px(6.)),
+      );
 
     base_sidebar
       .relative()
@@ -2695,5 +3702,226 @@ impl Render for GitPage {
 impl Focusable for GitPage {
   fn focus_handle(&self, _cx: &App) -> FocusHandle {
     self.focus_handle.clone()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn make_commit(oid: &str, parents: &[&str]) -> CommitGraphNode {
+    CommitGraphNode {
+      oid: oid.to_string(),
+      short_oid: oid.chars().take(7).collect(),
+      summary: format!("commit-{oid}"),
+      author: "author".to_string(),
+      parent_oids: parents.iter().map(|parent| parent.to_string()).collect(),
+      refs: Vec::new(),
+    }
+  }
+
+  fn make_commit_with_refs(oid: &str, parents: &[&str], refs: &[&str]) -> CommitGraphNode {
+    CommitGraphNode {
+      oid: oid.to_string(),
+      short_oid: oid.chars().take(7).collect(),
+      summary: format!("commit-{oid}"),
+      author: "author".to_string(),
+      parent_oids: parents.iter().map(|parent| parent.to_string()).collect(),
+      refs: refs.iter().map(|label| label.to_string()).collect(),
+    }
+  }
+
+  #[test]
+  fn build_graph_rows_linear_history_stays_on_single_lane() {
+    let commits = vec![
+      make_commit("c3", &["c2"]),
+      make_commit("c2", &["c1"]),
+      make_commit("c1", &[]),
+    ];
+
+    let rows = GitPage::build_graph_rows(&commits);
+    assert_eq!(rows.len(), 3);
+
+    assert_eq!(rows[0].commit_lane, 0);
+    assert!(rows[0].branch_child_lanes.is_empty());
+    assert_eq!(rows[0].segments.len(), 1);
+    assert!(rows[0].segments[0].up);
+    assert!(rows[0].segments[0].down);
+
+    assert_eq!(rows[2].commit_lane, 0);
+    assert!(rows[2].segments[0].up);
+    assert!(!rows[2].segments[0].down);
+  }
+
+  #[test]
+  fn build_graph_rows_merge_keeps_cross_lane_connection() {
+    let commits = vec![
+      make_commit("m", &["a", "b"]),
+      make_commit("a", &["p"]),
+      make_commit("b", &["p"]),
+      make_commit("p", &[]),
+    ];
+
+    let rows = GitPage::build_graph_rows(&commits);
+    assert_eq!(rows.len(), 4);
+
+    assert_eq!(rows[0].commit_lane, 0);
+    assert_eq!(rows[0].segments.len(), 2);
+    assert_eq!(rows[0].merge_parent_lanes, vec![1]);
+
+    assert_eq!(rows[2].commit_lane, 1);
+    assert!(rows[2].branch_child_lanes.is_empty());
+  }
+
+  #[test]
+  fn build_graph_rows_new_lane_starts_without_up_segment() {
+    let commits = vec![
+      make_commit("a", &["p"]),
+      make_commit("x", &["y"]),
+      make_commit("p", &[]),
+      make_commit("y", &[]),
+    ];
+
+    let rows = GitPage::build_graph_rows(&commits);
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[1].commit_lane, 1);
+    assert!(!rows[1].commit_lane_has_up);
+    assert!(rows[1].segments[1].up);
+    assert!(rows[1].segments[1].down);
+  }
+
+  #[test]
+  fn build_graph_rows_keeps_lane_order_stable_when_gap_exists() {
+    let commits = vec![
+      make_commit("m", &["a", "b", "c"]),
+      make_commit("a", &["p"]),
+      make_commit("b", &["p"]),
+      make_commit("d", &["q"]),
+      make_commit("c", &["p"]),
+      make_commit("p", &[]),
+      make_commit("q", &[]),
+    ];
+
+    let rows = GitPage::build_graph_rows(&commits);
+    assert_eq!(rows.len(), 7);
+
+    assert_eq!(rows[2].commit_lane, 1);
+    assert_eq!(rows[3].commit_lane, 3);
+    assert!(!rows[3].commit_lane_has_up);
+    assert_eq!(rows[4].commit_lane, 2);
+  }
+
+  #[test]
+  fn build_graph_rows_is_deterministic_for_same_input() {
+    let commits = vec![
+      make_commit("m", &["a", "b"]),
+      make_commit("a", &["p"]),
+      make_commit("b", &["p"]),
+      make_commit("p", &[]),
+    ];
+
+    let rows_a = GitPage::build_graph_rows(&commits);
+    let rows_b = GitPage::build_graph_rows(&commits);
+
+    let lanes_a = rows_a
+      .iter()
+      .map(|row| {
+        let mut merge_parent_lanes = row.merge_parent_lanes.clone();
+        merge_parent_lanes.sort_unstable();
+        let mut branch_child_lanes = row.branch_child_lanes.clone();
+        branch_child_lanes.sort_unstable();
+        (
+          row.commit_lane,
+          merge_parent_lanes,
+          branch_child_lanes,
+          row.commit_lane_has_up,
+        )
+      })
+      .collect::<Vec<_>>();
+    let lanes_b = rows_b
+      .iter()
+      .map(|row| {
+        let mut merge_parent_lanes = row.merge_parent_lanes.clone();
+        merge_parent_lanes.sort_unstable();
+        let mut branch_child_lanes = row.branch_child_lanes.clone();
+        branch_child_lanes.sort_unstable();
+        (
+          row.commit_lane,
+          merge_parent_lanes,
+          branch_child_lanes,
+          row.commit_lane_has_up,
+        )
+      })
+      .collect::<Vec<_>>();
+
+    assert_eq!(lanes_a, lanes_b);
+  }
+
+  #[test]
+  fn build_graph_rows_prefers_head_first_parent_chain_as_anchor_lane() {
+    let commits = vec![
+      make_commit("merge", &["f2", "m2"]),
+      make_commit("f2", &["f1"]),
+      make_commit_with_refs("m2", &["m1"], &["origin/trunk"]),
+      make_commit("f1", &["base"]),
+      make_commit("m1", &["base"]),
+      make_commit("base", &[]),
+    ];
+
+    let rows = GitPage::build_graph_rows(&commits);
+    let lane_by_oid = rows
+      .iter()
+      .map(|row| (row.commit.oid.as_str(), row.commit_lane))
+      .collect::<std::collections::HashMap<_, _>>();
+
+    assert_eq!(lane_by_oid.get("f2"), Some(&0));
+    assert_eq!(lane_by_oid.get("f1"), Some(&0));
+  }
+
+  #[test]
+  fn build_graph_rows_marks_branch_creation_from_left_parent_to_right_lane() {
+    let commits = vec![
+      make_commit("tip", &["left"]),
+      make_commit("right", &["left"]),
+      make_commit("left", &[]),
+    ];
+
+    let rows = GitPage::build_graph_rows(&commits);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[2].commit_lane, 0);
+    assert_eq!(rows[2].branch_child_lanes, vec![1]);
+  }
+
+  #[test]
+  fn build_graph_rows_branch_creation_adds_pre_stub_on_previous_row() {
+    let commits = vec![
+      make_commit("tip", &["left"]),
+      make_commit("right", &["left"]),
+      make_commit("left", &[]),
+    ];
+
+    let rows = GitPage::build_graph_rows(&commits);
+    assert_eq!(rows.len(), 3);
+    // Split curve metadata lives on parent row.
+    assert_eq!(rows[2].branch_child_lanes, vec![1]);
+    // The pre-stub is painted on the row just before that parent row.
+    assert_eq!(rows[1].branch_pre_stubs, vec![1]);
+    assert!(rows[2].branch_pre_stubs.is_empty());
+  }
+
+  #[test]
+  fn build_graph_rows_merge_row_has_merge_curve_without_split_metadata() {
+    let commits = vec![
+      make_commit("m", &["a", "b"]),
+      make_commit("a", &["p"]),
+      make_commit("b", &["p"]),
+      make_commit("p", &[]),
+    ];
+
+    let rows = GitPage::build_graph_rows(&commits);
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[0].merge_parent_lanes, vec![1]);
+    assert!(rows[0].branch_child_lanes.is_empty());
+    assert!(rows[0].branch_pre_stubs.is_empty());
   }
 }
