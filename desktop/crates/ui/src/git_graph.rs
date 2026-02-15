@@ -154,6 +154,22 @@ impl GitGraphLanes {
     bounds.left() + px(lane_ix as f32 * self.style.lane_width + (self.style.lane_width / 2.0))
   }
 
+  fn commit_dot_diameter(layout: &GitGraphLanesLayout, style: &GitGraphLanesStyle) -> f32 {
+    if layout.is_latest_commit {
+      style.dot_size_latest
+    } else {
+      style.dot_size
+    }
+  }
+
+  fn commit_dot_origin(layout: &GitGraphLanesLayout, style: &GitGraphLanesStyle) -> (f32, f32) {
+    let diameter = Self::commit_dot_diameter(layout, style);
+    let left =
+      layout.commit_lane as f32 * style.lane_width + (style.lane_width - diameter) / 2.0;
+    let top = (style.commit_row_height - diameter) / 2.0;
+    (left, top)
+  }
+
   fn merge_transition_targets(
     lane_transitions: &[(usize, usize, usize)],
     merge_parent_lane_branches: &[(usize, usize)],
@@ -568,11 +584,7 @@ impl Element for GitGraphLanes {
     }
 
     let dot_center = point(commit_x, middle_y);
-    let dot_diameter = if self.layout.is_latest_commit {
-      self.style.dot_size_latest
-    } else {
-      self.style.dot_size
-    };
+    let dot_diameter = Self::commit_dot_diameter(&self.layout, &self.style);
     let dot_radius = px(dot_diameter / 2.0);
     let dot_bounds = Bounds::new(
       point(dot_center.x - dot_radius, dot_center.y - dot_radius),
@@ -583,12 +595,7 @@ impl Element for GitGraphLanes {
     } else {
       self.dot_color
     };
-    let mut dot = fill(dot_bounds, dot_background).corner_radii(dot_radius);
-    if self.layout.is_latest_commit {
-      dot = dot
-        .border_widths(px(self.style.line_width))
-        .border_color(self.dot_color);
-    }
+    let dot = fill(dot_bounds, dot_background).corner_radii(dot_radius);
 
     GitGraphLanesPrepaintState { paths, dot }
   }
@@ -698,9 +705,17 @@ impl RenderOnce for GitGraphRow {
   fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
     let theme = cx.theme().clone();
     let row_hover_bg = theme.title_bar_border.opacity(0.26);
+    let row_hover_group = SharedString::from(format!("git-graph-row-hover-{}", self.row_index));
     let lane_count = self.lanes_layout.segments.len().max(1);
     let graph_width = lane_count as f32 * self.lanes_style.lane_width;
     let total_height = self.lanes_layout.row_height;
+    let (dot_left, dot_top) = GitGraphLanes::commit_dot_origin(&self.lanes_layout, &self.lanes_style);
+    let dot_diameter = GitGraphLanes::commit_dot_diameter(&self.lanes_layout, &self.lanes_style);
+    let dot_border_hover_color = GitGraphLanes::branch_color_for(
+      self.lanes_layout.commit_branch_id,
+      &GitGraphLanes::branch_palette(&theme),
+    )
+    .unwrap_or(theme.sidebar_foreground);
 
     let mut line_hits: Vec<AnyElement> = vec![
       div()
@@ -930,6 +945,7 @@ impl RenderOnce for GitGraphRow {
 
     div()
       .id(format!("git-graph-row-{}", self.row_index))
+      .group(row_hover_group.clone())
       .relative()
       .w_full()
       .h(px(total_height))
@@ -957,7 +973,20 @@ impl RenderOnce for GitGraphRow {
                 self.lanes_layout,
                 self.lanes_style,
                 &theme,
-              )),
+              ))
+              .child(
+                div()
+                  .id(format!("git-graph-dot-border-{}", self.row_index))
+                  .absolute()
+                  .top(px(dot_top))
+                  .left(px(dot_left))
+                  .w(px(dot_diameter))
+                  .h(px(dot_diameter))
+                  .rounded(px(dot_diameter / 2.0))
+                  .border_1()
+                  .border_color(theme.sidebar)
+                  .group_hover(row_hover_group, |this| this.border_color(dot_border_hover_color)),
+              ),
           )
           .child(
             div()
@@ -976,6 +1005,34 @@ impl RenderOnce for GitGraphRow {
 #[cfg(test)]
 mod tests {
   use super::{GitGraphLanes, MergeTransitionTarget};
+
+  fn test_style() -> super::GitGraphLanesStyle {
+    super::GitGraphLanesStyle {
+      lane_width: 16.0,
+      line_width: 1.0,
+      commit_row_height: 32.0,
+      curve_stub_height: 6.0,
+      dot_size: 10.0,
+      dot_size_latest: 14.0,
+    }
+  }
+
+  fn test_layout(is_latest_commit: bool, commit_lane: usize) -> super::GitGraphLanesLayout {
+    super::GitGraphLanesLayout {
+      segments: vec![super::GitGraphLaneSegment::default(); 4],
+      lane_branch_ids: vec![Some(0), Some(1), Some(2), Some(3)],
+      commit_lane,
+      commit_branch_id: 1,
+      lane_transitions: Vec::new(),
+      merge_parent_lanes: Vec::new(),
+      merge_parent_lane_branches: Vec::new(),
+      branch_child_lane_branches: Vec::new(),
+      branch_pre_stub_lane_branches: Vec::new(),
+      commit_lane_has_up: true,
+      is_latest_commit,
+      row_height: 32.0,
+    }
+  }
 
   #[test]
   fn merge_transition_targets_keep_merged_branch_id_on_target_lane() {
@@ -1018,5 +1075,31 @@ mod tests {
         curve_branch_id: 7,
       })
     );
+  }
+
+  #[test]
+  fn commit_dot_diameter_uses_latest_size_for_latest_commit() {
+    let style = test_style();
+    let latest_layout = test_layout(true, 2);
+    let normal_layout = test_layout(false, 2);
+
+    assert_eq!(
+      GitGraphLanes::commit_dot_diameter(&latest_layout, &style),
+      style.dot_size_latest
+    );
+    assert_eq!(
+      GitGraphLanes::commit_dot_diameter(&normal_layout, &style),
+      style.dot_size
+    );
+  }
+
+  #[test]
+  fn commit_dot_origin_centers_dot_on_commit_lane() {
+    let style = test_style();
+    let layout = test_layout(false, 2);
+    let (left, top) = GitGraphLanes::commit_dot_origin(&layout, &style);
+
+    assert_eq!(left, 35.0);
+    assert_eq!(top, 11.0);
   }
 }
