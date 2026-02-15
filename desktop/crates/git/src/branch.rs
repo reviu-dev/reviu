@@ -200,7 +200,7 @@ pub fn merge_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
     reference.set_target(target_commit.id(), "Fast-Forward")?;
     repo.set_head(reference.name().unwrap())?;
     let mut checkout = CheckoutBuilder::new();
-    checkout.safe();
+    checkout.force();
     repo.checkout_head(Some(&mut checkout))?;
     return Ok(());
   }
@@ -238,6 +238,7 @@ pub fn merge_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use git2::build::CheckoutBuilder;
   use git2::RemoteCallbacks;
   use std::{
     path::PathBuf,
@@ -358,6 +359,15 @@ mod tests {
       .expect("push branch");
   }
 
+  fn force_checkout_head(repo_root: &Path) {
+    let repo = Repository::open(repo_root).expect("open repo");
+    let mut checkout = CheckoutBuilder::new();
+    checkout.force();
+    repo
+      .checkout_head(Some(&mut checkout))
+      .expect("force checkout head");
+  }
+
   #[test]
   fn create_branch_creates_local_branch() {
     let repo = TempRepo::init("branch-create");
@@ -471,6 +481,176 @@ mod tests {
       status.behind >= 1,
       "expected behind >= 1, got {}",
       status.behind
+    );
+  }
+
+  #[test]
+  fn merge_branch_fast_forward_moves_head_to_target_commit() {
+    let repo = TempRepo::init("branch-merge-fast-forward");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let feature_commit = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "v2-feature\n",
+      "feature change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    force_checkout_head(&repo.path);
+
+    merge_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("fast-forward merge");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head");
+    assert_eq!(head.id(), feature_commit);
+    assert_eq!(head.parent_count(), 1);
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read merged file"),
+      "v2-feature\n"
+    );
+  }
+
+  #[test]
+  fn merge_branch_normal_creates_merge_commit_with_two_parents() {
+    let repo = TempRepo::init("branch-merge-normal");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let _ = commit_text_file(&repo.path, Path::new("main.txt"), "base-main\n", "base main");
+    let _ = commit_text_file(&repo.path, Path::new("feature.txt"), "base-feature\n", "base feature");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let _ = commit_text_file(&repo.path, Path::new("main.txt"), "main\n", "main change");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("feature.txt"),
+      "feature\n",
+      "feature change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    force_checkout_head(&repo.path);
+
+    merge_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("normal merge");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head");
+    assert_eq!(head.parent_count(), 2);
+    assert_eq!(head.message().unwrap_or_default(), "Merge branch 'feature'");
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("main.txt")).expect("read main side file"),
+      "main\n"
+    );
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("feature.txt")).expect("read feature side file"),
+      "feature\n"
+    );
+  }
+
+  #[test]
+  fn merge_branch_returns_error_on_conflicts() {
+    let repo = TempRepo::init("branch-merge-conflict");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "base\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "main change\n",
+      "main change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "feature change\n",
+      "feature change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    force_checkout_head(&repo.path);
+
+    let error = merge_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect_err("merge should fail with conflicts");
+
+    assert!(
+      error.to_string().contains("merge has conflicts"),
+      "unexpected error: {error:?}"
     );
   }
 
