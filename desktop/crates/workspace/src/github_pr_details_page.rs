@@ -25,6 +25,7 @@ use gpui_component::{
   spinner::Spinner,
   tab::{Tab, TabBar},
   tag::Tag,
+  text::TextView,
   tree::{TreeItem, TreeState, tree},
   v_flex,
 };
@@ -279,7 +280,6 @@ pub struct GithubPrDetailsPage {
   diff_view: DiffViewMode,
   show_markdown_preview: bool,
   description_markdown_state: MarkdownRenderState,
-  preview_markdown_state: MarkdownRenderState,
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
   svg_preview_source: Option<SharedString>,
   svg_preview_task: Option<Task<()>>,
@@ -351,7 +351,6 @@ impl GithubPrDetailsPage {
       diff_view: DiffViewMode::Inline,
       show_markdown_preview: false,
       description_markdown_state: MarkdownRenderState::new(),
-      preview_markdown_state: MarkdownRenderState::new(),
       svg_preview: None,
       svg_preview_source: None,
       svg_preview_task: None,
@@ -1995,11 +1994,14 @@ impl GithubPrDetailsPage {
             .min_h_0()
             .min_w(px(0.0))
             .bg(theme.background)
-            .child(div().size_full().pb_4().px_4().child(render_markdown(
-              &markdown,
-              &MarkdownRenderOptions::default().with_state(self.preview_markdown_state.clone()),
-              cx,
-            )))
+            .child(
+              div().size_full().pb_4().px_4().child(
+                TextView::markdown("github-pr-markdown-preview-text", markdown)
+                  .size_full()
+                  .selectable(true)
+                  .scrollable(true),
+              ),
+            )
             .into_any_element()
         };
         div()
