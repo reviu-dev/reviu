@@ -950,10 +950,9 @@ mod tests {
     cx: &mut gpui::VisualTestContext,
   ) {
     loop {
-      let (load_task, notifications_task) =
-        github_page.update_in(cx, |this, _window, _| {
-          (this.load_task.take(), this.notifications_task.take())
-        });
+      let (load_task, notifications_task) = github_page.update_in(cx, |this, _window, _| {
+        (this.load_task.take(), this.notifications_task.take())
+      });
 
       let mut had_task = false;
       if let Some(task) = load_task {
@@ -1067,48 +1066,54 @@ mod tests {
   #[gpui::test]
   async fn refresh_pull_requests_sets_unauthorized_errors(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    let (base_url, handle) = start_sequence_response_server(vec![
-      ("401 Unauthorized", "{}"),
-      ("401 Unauthorized", "{}"),
-    ]);
+    let (base_url, handle) =
+      start_sequence_response_server(vec![("401 Unauthorized", "{}"), ("401 Unauthorized", "{}")]);
     let api = ApiClient::new_with_base_url(base_url);
-    let (github_page, cx) = cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
+    let (github_page, cx) =
+      cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
     cx.executor().allow_parking();
 
     let (load_task, notifications_task) = github_page.update_in(cx, |this, _window, cx| {
       this.refresh_pull_requests(cx);
       (
         this.load_task.take().expect("pull request load task"),
-        this
-          .notifications_task
-          .take()
-          .expect("notifications task"),
+        this.notifications_task.take().expect("notifications task"),
       )
     });
     load_task.await;
     notifications_task.await;
     await_github_page_background_tasks(github_page.clone(), cx).await;
 
-    let (error, notifications_error, pr_count, notifications_count, pr_loading, notifications_loading) =
-      github_page.read_with(cx, |this, cx| {
-        let pull_requests = this.pull_requests.read(cx);
-        let notifications = this.notifications.read(cx);
-        (
-          this.error.clone(),
-          this.notifications_error.clone(),
-          pull_requests.delegate().matched_rows.len(),
-          notifications.delegate().matched_rows.len(),
-          pull_requests.delegate().loading,
-          notifications.delegate().loading,
-        )
-      });
+    let (
+      error,
+      notifications_error,
+      pr_count,
+      notifications_count,
+      pr_loading,
+      notifications_loading,
+    ) = github_page.read_with(cx, |this, cx| {
+      let pull_requests = this.pull_requests.read(cx);
+      let notifications = this.notifications.read(cx);
+      (
+        this.error.clone(),
+        this.notifications_error.clone(),
+        pull_requests.delegate().matched_rows.len(),
+        notifications.delegate().matched_rows.len(),
+        pull_requests.delegate().loading,
+        notifications.delegate().loading,
+      )
+    });
 
-    assert!(error
-      .as_ref()
-      .is_some_and(|value| value.as_ref().contains("unauthorized")));
-    assert!(notifications_error
-      .as_ref()
-      .is_some_and(|value| value.as_ref().contains("unauthorized")));
+    assert!(
+      error
+        .as_ref()
+        .is_some_and(|value| value.as_ref().contains("unauthorized"))
+    );
+    assert!(
+      notifications_error
+        .as_ref()
+        .is_some_and(|value| value.as_ref().contains("unauthorized"))
+    );
     assert_eq!(pr_count, 0);
     assert_eq!(notifications_count, 0);
     assert!(!pr_loading);
@@ -1129,25 +1134,23 @@ mod tests {
       ("200 OK", notifications_body),
     ]);
     let api = ApiClient::new_with_base_url(base_url);
-    let (github_page, cx) = cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
+    let (github_page, cx) =
+      cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
     cx.executor().allow_parking();
 
     let (load_task, notifications_task) = github_page.update_in(cx, |this, _window, cx| {
       this.refresh_pull_requests(cx);
       (
         this.load_task.take().expect("pull request load task"),
-        this
-          .notifications_task
-          .take()
-          .expect("notifications task"),
+        this.notifications_task.take().expect("notifications task"),
       )
     });
     load_task.await;
     notifications_task.await;
     await_github_page_background_tasks(github_page.clone(), cx).await;
 
-    let (error, notifications_error, pr_titles, notification_titles, unread_count) =
-      github_page.read_with(cx, |this, cx| {
+    let (error, notifications_error, pr_titles, notification_titles, unread_count) = github_page
+      .read_with(cx, |this, cx| {
         let pull_requests = this.pull_requests.read(cx);
         let notifications = this.notifications.read(cx);
         (

@@ -406,24 +406,21 @@ impl Element for GutterElement {
           blank_ranges.push((start, display_idx.saturating_sub(1)));
         }
 
-        let group_id: Option<Arc<str>> = display_line
-          .as_ref()
-          .and_then(&group_id_for_line);
+        let group_id: Option<Arc<str>> = display_line.as_ref().and_then(&group_id_for_line);
 
         if let Some(group_id) = group_id {
-          if show_stripes
-            && let Some(kind) = group_kinds.get(&group_id) {
-              let stripe_color = match kind {
-                GroupKind::Added => stripe_added,
-                GroupKind::Removed => stripe_removed,
-                GroupKind::Mixed => stripe_modified,
-              };
-              let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
-              stripe_quads.push(fill(
-                Bounds::new(point(bounds.left(), y), size(px(4.0), line_height)),
-                stripe_color,
-              ));
-            }
+          if show_stripes && let Some(kind) = group_kinds.get(&group_id) {
+            let stripe_color = match kind {
+              GroupKind::Added => stripe_added,
+              GroupKind::Removed => stripe_removed,
+              GroupKind::Mixed => stripe_modified,
+            };
+            let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
+            stripe_quads.push(fill(
+              Bounds::new(point(bounds.left(), y), size(px(4.0), line_height)),
+              stripe_color,
+            ));
+          }
 
           if let (Some(projection), Some((top_color, bottom_color))) =
             (projection.as_ref(), group_border_colors.get(&group_id))
@@ -470,9 +467,10 @@ impl Element for GutterElement {
       }
 
       if let Some(start) = current_blank_start.take()
-        && viewport.start < viewport.end {
-          blank_ranges.push((start, viewport.end.saturating_sub(1)));
-        }
+        && viewport.start < viewport.end
+      {
+        blank_ranges.push((start, viewport.end.saturating_sub(1)));
+      }
 
       if !blank_ranges.is_empty() {
         let stripe_spacing = px(DIAGONAL_STRIPE_SPACING);

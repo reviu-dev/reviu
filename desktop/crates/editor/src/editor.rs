@@ -1263,9 +1263,10 @@ impl Editor {
         continue;
       };
       if let Some(filter) = side_filter
-        && *side != filter {
-          continue;
-        }
+        && *side != filter
+      {
+        continue;
+      }
       let entry = spans_by_comment.entry(*id).or_insert((idx, 0));
       if idx < entry.0 {
         entry.0 = idx;
@@ -1738,9 +1739,9 @@ impl Editor {
             .bases
             .as_ref()
             .and_then(|b| b.index.clone())
-          {
-            merged.index = Some(existing);
-          }
+        {
+          merged.index = Some(existing);
+        }
         editor.git_state.bases = Some(merged);
         editor.git_state.op_id = op_id;
         if editor.pending_git_after_bases {
@@ -1895,15 +1896,14 @@ impl Editor {
           .and_then(|meta| meta.modified())
           .ok();
         let mut index_mtime = None;
-        if needs_index_write
-          && let (Some(repo_file), Some(index_text)) = (repo_file, index_text) {
-            if let Err(err) = git::write_index_content(&repo_file, &index_text) {
-              return Err(std::io::Error::other(err));
-            }
-            index_mtime = std::fs::metadata(repo_file.repo_root.join(".git/index"))
-              .and_then(|meta| meta.modified())
-              .ok();
+        if needs_index_write && let (Some(repo_file), Some(index_text)) = (repo_file, index_text) {
+          if let Err(err) = git::write_index_content(&repo_file, &index_text) {
+            return Err(std::io::Error::other(err));
           }
+          index_mtime = std::fs::metadata(repo_file.repo_root.join(".git/index"))
+            .and_then(|meta| meta.modified())
+            .ok();
+        }
         Ok::<_, std::io::Error>((file_mtime, index_mtime))
       })
       .await;
@@ -1936,9 +1936,10 @@ impl Editor {
 
   pub fn selected_text_for_copy(&self, cx: &App) -> Option<String> {
     if let Some(selection) = &self.display_selection
-      && let Some(text) = self.display_selection_text(selection, cx) {
-        return Some(text);
-      }
+      && let Some(text) = self.display_selection_text(selection, cx)
+    {
+      return Some(text);
+    }
 
     if self.selected_range.is_empty() {
       return None;
@@ -2197,9 +2198,10 @@ impl Editor {
         editor.file_mtime = file_mtime;
         editor.index_mtime = index_mtime;
         if let Some(index_text) = index_text_for_update
-          && let Some(bases) = editor.git_state.bases.as_mut() {
-            bases.index = Some(index_text);
-          }
+          && let Some(bases) = editor.git_state.bases.as_mut()
+        {
+          bases.index = Some(index_text);
+        }
         editor.pending_git_after_bases = true;
         editor.reload_git_bases(cx);
         editor.schedule_diff_recompute(cx);
@@ -3575,20 +3577,21 @@ impl Editor {
     });
 
     if let Some(display_line) = position_map.display_line_for_position(event.position)
-      && let Some(projection) = &position_map.projection {
-        if let Some(DisplayLine::ReviewComment { .. }) = projection.lines.get(display_line) {
-          self.is_selecting = false;
-          return;
-        }
-
-        if matches!(
-          projection.lines.get(display_line),
-          Some(DisplayLine::Gap { .. })
-        ) {
-          self.is_selecting = false;
-          return;
-        }
+      && let Some(projection) = &position_map.projection
+    {
+      if let Some(DisplayLine::ReviewComment { .. }) = projection.lines.get(display_line) {
+        self.is_selecting = false;
+        return;
       }
+
+      if matches!(
+        projection.lines.get(display_line),
+        Some(DisplayLine::Gap { .. })
+      ) {
+        self.is_selecting = false;
+        return;
+      }
+    }
 
     let Some(display_cursor) = position_map.display_cursor_for_position(event.position) else {
       return;
@@ -5282,10 +5285,7 @@ pub mod tests {
       std::process::id()
     ));
     std::fs::write(&file_path, "const value = 1;\n").expect("write temp editor file");
-    let repo_root = file_path
-      .parent()
-      .expect("temp file parent")
-      .to_path_buf();
+    let repo_root = file_path.parent().expect("temp file parent").to_path_buf();
     let editor = cx.new(|cx| Editor::new_with_paths(repo_root, file_path.clone(), cx));
 
     // Wait for async highlighting to complete (it's scheduled but not immediate)

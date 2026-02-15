@@ -94,7 +94,7 @@ pub fn stage_file(repo_root: &Path, rel_path: &Path) -> Result<()> {
     && err.code() != ErrorCode::NotFound
   {
     return Err(err.into());
-    }
+  }
   index.write()?;
   Ok(())
 }

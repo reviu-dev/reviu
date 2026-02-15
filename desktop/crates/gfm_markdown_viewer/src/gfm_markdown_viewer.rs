@@ -557,7 +557,9 @@ fn split_details_segments(source: &str) -> Vec<Segment> {
     .or_else(|| lines.next().map(|line| line.to_string()))
   {
     update_fence_state(&line, &mut fence);
-    if fence.is_none() && let Some(start_idx) = find_details_start(&line) {
+    if fence.is_none()
+      && let Some(start_idx) = find_details_start(&line)
+    {
       let (prefix, rest) = line.split_at(start_idx);
       if !prefix.is_empty() {
         buffer.push_str(prefix);

@@ -49,7 +49,7 @@ use crate::{
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 
-const SIDEBAR_DEFAULT_WIDTH: f32 = 350.0;
+const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
 const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const DIFF_HEADER_HEIGHT: f32 = 40.0;
@@ -166,9 +166,7 @@ type FileTreeBuildResult = (
   Option<String>,
 );
 
-fn build_tree_items(
-  files: &[Rc<GithubPrFileDiff>],
-) -> FileTreeBuildResult {
+fn build_tree_items(files: &[Rc<GithubPrFileDiff>]) -> FileTreeBuildResult {
   fn insert_node(
     map: &mut BTreeMap<String, FileTreeNode>,
     parts: &[&str],
@@ -325,8 +323,6 @@ impl GithubPrDetailsPage {
     GithubPrDetailsPageHandle::register(cx);
 
     let tree_state = cx.new(|cx| TreeState::new(cx));
-
-    
 
     Self {
       focus_handle: cx.focus_handle(),
@@ -589,11 +585,7 @@ impl GithubPrDetailsPage {
           line: line.saturating_sub(1),
           side,
           author: Arc::from(comment.user.login.as_str()),
-          avatar_url: comment
-            .user
-            .avatar_url
-            .as_deref()
-            .map(Arc::from),
+          avatar_url: comment.user.avatar_url.as_deref().map(Arc::from),
           line_label,
           body: Arc::from(comment.body.as_str()),
           created_at: Arc::from(format_datetime(&comment.created_at).to_string()),
@@ -863,10 +855,11 @@ impl GithubPrDetailsPage {
 
         if this.selected_tree_id.as_deref() == Some(key_for_task.as_str())
           && let Some(file) = this.file_lookup.get(&key_for_task).cloned()
-            && let Some(contents) = this.file_contents.get(&key_for_task).cloned() {
-              this.apply_full_diff(&file, &contents, cx);
-              cx.notify();
-            }
+          && let Some(contents) = this.file_contents.get(&key_for_task).cloned()
+        {
+          this.apply_full_diff(&file, &contents, cx);
+          cx.notify();
+        }
       });
     });
 
@@ -1403,13 +1396,13 @@ impl GithubPrDetailsPage {
       .selected_entry()
       .map(|entry| entry.item().id.to_string())
       && Some(selected_id.as_str()) != self.selected_tree_id.as_deref()
-        && let Some(file) = self.file_lookup.get(&selected_id).cloned()
-      {
-        self.selected_tree_id = Some(selected_id.clone());
-        cx.on_next_frame(window, move |this, _, cx| {
-          this.set_selected_file(Some(file), cx);
-        });
-      }
+      && let Some(file) = self.file_lookup.get(&selected_id).cloned()
+    {
+      self.selected_tree_id = Some(selected_id.clone());
+      cx.on_next_frame(window, move |this, _, cx| {
+        this.set_selected_file(Some(file), cx);
+      });
+    }
 
     let header = div()
       .px_3()
