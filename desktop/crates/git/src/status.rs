@@ -40,6 +40,7 @@ impl RepoStatusKind {
 #[derive(Clone, Debug)]
 pub struct RepoStatusEntry {
   pub path: PathBuf,
+  pub old_path: Option<PathBuf>,
   pub status: RepoStatusKind,
   pub stage: RepoStage,
 }
@@ -64,15 +65,15 @@ pub fn list_repo_status(repo_root: &Path) -> Result<Vec<RepoStatusEntry>> {
       continue;
     }
 
-    let Some(path) = entry.path() else {
+    let stage = stage_from_status(status);
+    let kind = kind_from_status(status);
+    let Some((path, old_path)) = entry_paths(&entry, kind) else {
       continue;
     };
 
-    let stage = stage_from_status(status);
-    let kind = kind_from_status(status);
-
     entries.push(RepoStatusEntry {
-      path: PathBuf::from(path),
+      path,
+      old_path,
       status: kind,
       stage,
     });
@@ -217,4 +218,31 @@ fn kind_from_status(status: Status) -> RepoStatusKind {
   }
 
   RepoStatusKind::Modified
+}
+
+fn entry_paths(
+  entry: &git2::StatusEntry<'_>,
+  kind: RepoStatusKind,
+) -> Option<(PathBuf, Option<PathBuf>)> {
+  let delta = entry.index_to_workdir().or_else(|| entry.head_to_index());
+
+  let (path, old_path) = if let Some(delta) = delta {
+    let old_path = delta.old_file().path().map(Path::to_path_buf);
+    let new_path = delta.new_file().path().map(Path::to_path_buf);
+    let path = if kind == RepoStatusKind::Deleted {
+      old_path.clone().or(new_path.clone())
+    } else {
+      new_path.clone().or(old_path.clone())
+    }?;
+    let old_path = if kind == RepoStatusKind::Renamed {
+      old_path.filter(|old| old != &path)
+    } else {
+      None
+    };
+    (path, old_path)
+  } else {
+    (PathBuf::from(entry.path()?), None)
+  };
+
+  Some((path, old_path))
 }
