@@ -10,6 +10,8 @@ pub enum UiIconName {
   ArrowUpFromLine,
   ArrowDownFromLine,
   MessageCircle,
+  History,
+  FileCode,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -22,6 +24,8 @@ impl IconNamed for UiIconName {
       UiIconName::ArrowUpFromLine => "icons/arrow-up-from-line.svg",
       UiIconName::ArrowDownFromLine => "icons/arrow-down-from-line.svg",
       UiIconName::MessageCircle => "icons/message-circle.svg",
+      UiIconName::History => "icons/history.svg",
+      UiIconName::FileCode => "icons/file-code.svg",
     }
     .into()
   }
