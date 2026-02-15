@@ -40,6 +40,7 @@ use crate::{
   document::Document,
   editor_element::{EditorElement, PositionMap},
   gutter_element::GutterElement,
+  text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
   projection::{
     ChangeKind, DisplayLine, GapId, GapReveal, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
     REVIEW_COMMENT_CARD_BORDER_PX, REVIEW_COMMENT_CARD_CONTENT_GAP_PX,
@@ -807,11 +808,21 @@ impl Editor {
       let line_start_offset = document.line_to_char(doc_line);
       let mut search_start = 0usize;
       while search_start <= line_text.len() {
-        let Some(found) = line_text[search_start..].find(query) else {
+        let Some(search_slice) = line_text.get(search_start..) else {
+          break;
+        };
+        let Some(found) = search_slice.find(query) else {
           break;
         };
         let byte_start = search_start + found;
         let byte_end = byte_start + query.len();
+        if !line_text.is_char_boundary(byte_start) || !line_text.is_char_boundary(byte_end) {
+          search_start = search_start.saturating_add(1).min(line_text.len());
+          while search_start < line_text.len() && !line_text.is_char_boundary(search_start) {
+            search_start += 1;
+          }
+          continue;
+        }
         let column_start = line_text[..byte_start].chars().count();
         let column_end = line_text[..byte_end].chars().count();
         let range_start = line_start_offset + column_start;
@@ -822,7 +833,11 @@ impl Editor {
           column_end,
           doc_range: range_start..range_end,
         });
-        search_start = byte_end.max(byte_start.saturating_add(1));
+        let next_char_boundary = line_text
+          .get(byte_start..)
+          .and_then(|slice| slice.chars().next().map(|ch| byte_start + ch.len_utf8()))
+          .unwrap_or(line_text.len());
+        search_start = byte_end.max(next_char_boundary);
       }
     }
 
@@ -1946,7 +1961,12 @@ impl Editor {
     }
 
     let document = self.document.read(cx);
-    Some(document.slice_to_string(self.selected_range.clone()))
+    let range = Self::clamp_range_to_len(self.selected_range.clone(), document.len());
+    if range.is_empty() {
+      None
+    } else {
+      Some(document.slice_to_string(range))
+    }
   }
 
   fn display_selection_text(&self, selection: &DisplaySelection, cx: &App) -> Option<String> {
@@ -1986,7 +2006,7 @@ impl Editor {
         _ => continue,
       };
 
-      let line_len = line_text.len();
+      let line_len = line_text.chars().count();
       let mut slice_start = 0;
       let mut slice_end = line_len;
 
@@ -2002,6 +2022,8 @@ impl Editor {
         continue;
       }
 
+      let slice_start = char_offset_to_byte_offset(&line_text, slice_start);
+      let slice_end = char_offset_to_byte_offset(&line_text, slice_end);
       let slice = line_text
         .get(slice_start..slice_end)
         .unwrap_or("")
@@ -2594,31 +2616,39 @@ impl Editor {
     };
 
     if let Some(shaped_line) = shaped_line {
-      let line_len = self.display_line_len(cursor_line, cx);
-      let cursor_in_line = cursor_column.min(line_len);
-      let cursor_x = shaped_line.x_for_index(cursor_in_line);
+      let line_text = match cursor_doc_line {
+        Some(doc_line) => document.line_content(doc_line).map(|cow| cow.into_owned()),
+        None => self.display_line_text(cursor_line, cx),
+      };
 
-      let horizontal_padding = px(GUTTER_WIDTH) + px(EXTRA_EDITOR_WIDTH);
-      let current_scroll_x = self.scroll_handle.offset().x;
-      let viewport_width = self.horizontal_viewport_width();
+      if let Some(line_text) = line_text {
+        let line_len = line_text.chars().count();
+        let cursor_in_line = cursor_column.min(line_len);
+        let cursor_byte = char_offset_to_byte_offset(&line_text, cursor_in_line);
+        let cursor_x = shaped_line.x_for_index(cursor_byte);
 
-      // Note: scroll_x is negative when scrolled right (0 = left edge, -100 = scrolled 100px right)
-      // visible area in absolute coordinates: [-current_scroll_x, -current_scroll_x + viewport_width]
-      let visible_start_x = -current_scroll_x;
-      let visible_end_x = -current_scroll_x + viewport_width;
+        let horizontal_padding = px(GUTTER_WIDTH) + px(EXTRA_EDITOR_WIDTH);
+        let current_scroll_x = self.scroll_handle.offset().x;
+        let viewport_width = self.horizontal_viewport_width();
 
-      // Check if cursor is too far left
-      if cursor_x < visible_start_x + horizontal_padding {
-        let new_scroll_x =
-          self.clamp_horizontal_scroll_x(-(cursor_x - horizontal_padding).max(px(0.0)));
-        self.scroll_handle.set_offset(point(new_scroll_x, px(0.0)));
-      }
+        // Note: scroll_x is negative when scrolled right (0 = left edge, -100 = scrolled 100px right)
+        // visible area in absolute coordinates: [-current_scroll_x, -current_scroll_x + viewport_width]
+        let visible_start_x = -current_scroll_x;
+        let visible_end_x = -current_scroll_x + viewport_width;
 
-      // Check if cursor is too far right
-      if cursor_x > visible_end_x - horizontal_padding {
-        let new_scroll_x =
-          self.clamp_horizontal_scroll_x(-(cursor_x - viewport_width + horizontal_padding));
-        self.scroll_handle.set_offset(point(new_scroll_x, px(0.0)));
+        // Check if cursor is too far left
+        if cursor_x < visible_start_x + horizontal_padding {
+          let new_scroll_x =
+            self.clamp_horizontal_scroll_x(-(cursor_x - horizontal_padding).max(px(0.0)));
+          self.scroll_handle.set_offset(point(new_scroll_x, px(0.0)));
+        }
+
+        // Check if cursor is too far right
+        if cursor_x > visible_end_x - horizontal_padding {
+          let new_scroll_x =
+            self.clamp_horizontal_scroll_x(-(cursor_x - viewport_width + horizontal_padding));
+          self.scroll_handle.set_offset(point(new_scroll_x, px(0.0)));
+        }
       }
     }
 
@@ -2664,6 +2694,7 @@ impl Editor {
   }
 
   pub(crate) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    let offset = self.clamp_offset_to_doc_len(offset, cx);
     self.selected_range = offset..offset;
     if !self.is_selecting {
       self.display_selection = None;
@@ -2684,6 +2715,7 @@ impl Editor {
   }
 
   pub(crate) fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    let offset = self.clamp_offset_to_doc_len(offset, cx);
     if self.selection_reversed {
       self.selected_range.start = offset
     } else {
@@ -2729,17 +2761,55 @@ impl Editor {
     match self.display_line(display_line, doc_line_count) {
       Some(DisplayLine::Doc { doc_line, .. }) => document
         .line_content(doc_line)
-        .map(|cow| cow.len())
+        .map(|cow| cow.chars().count())
         .unwrap_or(0),
       Some(DisplayLine::Modified { doc_line, .. }) => document
         .line_content(doc_line)
-        .map(|cow| cow.len())
+        .map(|cow| cow.chars().count())
         .unwrap_or(0),
-      Some(DisplayLine::Removed { text, .. }) => text.len(),
+      Some(DisplayLine::Removed { text, .. }) => text.chars().count(),
       Some(DisplayLine::ReviewComment { .. }) => 0,
-      Some(DisplayLine::NoNewline { .. }) => NO_NEWLINE_MARKER_TEXT.len(),
+      Some(DisplayLine::NoNewline { .. }) => NO_NEWLINE_MARKER_TEXT.chars().count(),
       _ => 0,
     }
+  }
+
+  fn display_line_text(&self, display_line: usize, cx: &App) -> Option<String> {
+    let document = self.document.read(cx);
+    let doc_line_count = document.len_lines();
+    match self.display_line(display_line, doc_line_count) {
+      Some(DisplayLine::Doc { doc_line, .. }) => Some(
+        document
+          .line_content(doc_line)
+          .map(|cow| cow.into_owned())
+          .unwrap_or_default(),
+      ),
+      Some(DisplayLine::Modified { doc_line, .. }) => Some(
+        document
+          .line_content(doc_line)
+          .map(|cow| cow.into_owned())
+          .unwrap_or_default(),
+      ),
+      Some(DisplayLine::Removed { text, .. }) => Some(text),
+      Some(DisplayLine::NoNewline { .. }) => Some(NO_NEWLINE_MARKER_TEXT.to_string()),
+      _ => None,
+    }
+  }
+
+  fn clamp_range_to_len(range: Range<usize>, len: usize) -> Range<usize> {
+    let start = range.start.min(len);
+    let end = range.end.min(len);
+    if start <= end { start..end } else { end..start }
+  }
+
+  fn clamp_offset_to_doc_len(&self, offset: usize, cx: &App) -> usize {
+    let doc_len = self.document.read(cx).len();
+    offset.min(doc_len)
+  }
+
+  fn clamp_range_to_doc_len(&self, range: Range<usize>, cx: &App) -> Range<usize> {
+    let doc_len = self.document.read(cx).len();
+    Self::clamp_range_to_len(range, doc_len)
   }
 
   fn is_removed_display_line(&self, display_line: usize, cx: &App) -> bool {
@@ -2772,40 +2842,43 @@ impl Editor {
       return 0;
     }
 
+    let column = column.min(text.chars().count());
+    let column_byte = char_offset_to_byte_offset(text, column);
     let mut last_start = 0;
     for (idx, segment) in text.split_word_bound_indices() {
       if segment.trim().is_empty() {
         continue;
       }
       let end = idx + segment.len();
-      if idx < column && column <= end {
-        return idx;
+      if idx < column_byte && column_byte <= end {
+        return byte_offset_to_char_offset(text, idx);
       }
-      if idx < column {
+      if idx < column_byte {
         last_start = idx;
       } else {
         break;
       }
     }
-    last_start
+    byte_offset_to_char_offset(text, last_start)
   }
 
   fn next_word_boundary_in_line(text: &str, column: usize) -> usize {
-    let len = text.len();
+    let len = text.chars().count();
     if column >= len {
       return len;
     }
 
+    let column_byte = char_offset_to_byte_offset(text, column);
     for (idx, segment) in text.split_word_bound_indices() {
       if segment.trim().is_empty() {
         continue;
       }
       let end = idx + segment.len();
-      if idx <= column && column < end {
-        return end;
+      if idx <= column_byte && column_byte < end {
+        return byte_offset_to_char_offset(text, end);
       }
-      if idx > column {
-        return end;
+      if idx > column_byte {
+        return byte_offset_to_char_offset(text, end);
       }
     }
 
@@ -2813,14 +2886,18 @@ impl Editor {
   }
 
   fn word_range_in_line(text: &str, column: usize) -> (usize, usize) {
-    let column = column.min(text.len());
+    let column = column.min(text.chars().count());
+    let column_byte = char_offset_to_byte_offset(text, column);
     for (idx, segment) in text.split_word_bound_indices() {
       if segment.trim().is_empty() {
         continue;
       }
       let end = idx + segment.len();
-      if idx <= column && column < end {
-        return (idx, end);
+      if idx <= column_byte && column_byte < end {
+        return (
+          byte_offset_to_char_offset(text, idx),
+          byte_offset_to_char_offset(text, end),
+        );
       }
     }
     (column, column)
@@ -3087,7 +3164,7 @@ impl Editor {
     let Some(text) = self.removed_line_text(cursor.line, cx) else {
       return false;
     };
-    let column = cursor.column.min(text.len());
+    let column = cursor.column.min(text.chars().count());
     let column = if direction < 0 {
       Self::previous_word_boundary_in_line(&text, column)
     } else {
@@ -3124,7 +3201,7 @@ impl Editor {
     let Some(text) = self.removed_line_text(cursor.line, cx) else {
       return false;
     };
-    let column = cursor.column.min(text.len());
+    let column = cursor.column.min(text.chars().count());
     let column = if direction < 0 {
       Self::previous_word_boundary_in_line(&text, column)
     } else {
@@ -3515,7 +3592,7 @@ impl Editor {
     let line_start = document.line_to_char(doc_line);
     let line_len = document
       .line_content(doc_line)
-      .map(|cow| cow.len())
+      .map(|cow| cow.chars().count())
       .unwrap_or(0);
     let col = cursor.column.min(line_len);
     Some(line_start + col)
@@ -3555,6 +3632,23 @@ impl Editor {
 
   pub(crate) fn range_from_utf16(&self, range_utf16: &Range<usize>, cx: &App) -> Range<usize> {
     self.offset_from_utf16(range_utf16.start, cx)..self.offset_from_utf16(range_utf16.end, cx)
+  }
+
+  fn utf16_offset_to_char_offset_in_text(text: &str, utf16_offset: usize) -> usize {
+    let mut utf16_count = 0usize;
+    for (char_offset, ch) in text.chars().enumerate() {
+      if utf16_count >= utf16_offset {
+        return char_offset;
+      }
+      utf16_count += ch.len_utf16();
+    }
+    text.chars().count()
+  }
+
+  fn utf16_range_to_char_range_in_text(text: &str, range_utf16: &Range<usize>) -> Range<usize> {
+    let start = Self::utf16_offset_to_char_offset_in_text(text, range_utf16.start);
+    let end = Self::utf16_offset_to_char_offset_in_text(text, range_utf16.end);
+    if start <= end { start..end } else { end..start }
   }
 
   pub fn mouse_left_down(
@@ -3637,7 +3731,7 @@ impl Editor {
         2 => {
           if self.is_removed_display_line(display_cursor.line, cx) {
             if let Some(text) = self.removed_line_text(display_cursor.line, cx) {
-              let column = display_cursor.column.min(text.len());
+              let column = display_cursor.column.min(text.chars().count());
               let (start, end) = Self::word_range_in_line(&text, column);
               self.set_display_selection_with_anchor(
                 DisplayCursor {
@@ -3770,7 +3864,7 @@ impl EntityInputHandler for Editor {
     cx: &mut Context<Self>,
   ) -> Option<String> {
     let doc = self.document.read(cx);
-    let range = self.range_from_utf16(&range_utf16, cx);
+    let range = Self::clamp_range_to_len(self.range_from_utf16(&range_utf16, cx), doc.len());
     actual_range.replace(self.range_to_utf16(&range, cx));
     Some(doc.slice_to_string(range))
   }
@@ -3781,8 +3875,9 @@ impl EntityInputHandler for Editor {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Option<UTF16Selection> {
+    let selected_range = self.clamp_range_to_doc_len(self.selected_range.clone(), cx);
     Some(UTF16Selection {
-      range: self.range_to_utf16(&self.selected_range, cx),
+      range: self.range_to_utf16(&selected_range, cx),
       reversed: self.selection_reversed,
     })
   }
@@ -3795,7 +3890,8 @@ impl EntityInputHandler for Editor {
     self
       .marked_range
       .as_ref()
-      .map(|range| self.range_to_utf16(range, cx))
+      .map(|range| self.clamp_range_to_doc_len(range.clone(), cx))
+      .map(|range| self.range_to_utf16(&range, cx))
   }
 
   fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -3825,8 +3921,10 @@ impl EntityInputHandler for Editor {
       .map(|range_utf16| self.range_from_utf16(range_utf16, cx))
       .or(self.marked_range.clone())
       .unwrap_or(self.selected_range.clone());
+    let range = self.clamp_range_to_doc_len(range, cx);
+    let range = self.clamp_range_to_doc_len(range, cx);
 
-    let selection_before = self.selected_range.clone();
+    let selection_before = self.clamp_range_to_doc_len(self.selected_range.clone(), cx);
     let start_line = self.document.read(cx).char_to_line(range.start);
     let end_line = self.document.read(cx).char_to_line(range.end);
 
@@ -3869,7 +3967,10 @@ impl EntityInputHandler for Editor {
       self.invalidate_line(start_line);
     }
 
-    self.selected_range = range.start + new_text.len()..range.start + new_text.len();
+    let new_text_chars = new_text.chars().count();
+    let doc_len_after = self.document.read(cx).len();
+    let new_cursor = (range.start + new_text_chars).min(doc_len_after);
+    self.selected_range = new_cursor..new_cursor;
     self.marked_range.take();
 
     let selection_after = self.selected_range.clone();
@@ -3905,6 +4006,7 @@ impl EntityInputHandler for Editor {
       .map(|range_utf16| self.range_from_utf16(range_utf16, cx))
       .or(self.marked_range.clone())
       .unwrap_or(self.selected_range.clone());
+    let range = self.clamp_range_to_doc_len(range, cx);
 
     let start_line = self.document.read(cx).char_to_line(range.start);
 
@@ -3934,16 +4036,22 @@ impl EntityInputHandler for Editor {
     // Invalidate cache for all lines from the start of the edit
     self.invalidate_lines_from(start_line);
 
+    let new_text_chars = new_text.chars().count();
+    let doc_len_after = self.document.read(cx).len();
     if !new_text.is_empty() {
-      self.marked_range = Some(range.start..range.start + new_text.len());
+      self.marked_range = Some(Self::clamp_range_to_len(
+        range.start..range.start + new_text_chars,
+        doc_len_after,
+      ));
     } else {
       self.marked_range = None;
     }
-    self.selected_range = new_selected_range_utf16
+    let selected_range = new_selected_range_utf16
       .as_ref()
-      .map(|range_utf16| self.range_from_utf16(range_utf16, cx))
-      .map(|new_range| new_range.start + range.start..new_range.end + range.end)
-      .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+      .map(|range_utf16| Self::utf16_range_to_char_range_in_text(new_text, range_utf16))
+      .map(|new_range| new_range.start + range.start..new_range.end + range.start)
+      .unwrap_or_else(|| range.start + new_text_chars..range.start + new_text_chars);
+    self.selected_range = Self::clamp_range_to_len(selected_range, doc_len_after);
 
     self.is_dirty = true;
     self.ensure_cursor_visible(window, cx);
@@ -4835,6 +4943,43 @@ pub mod tests {
   }
 
   #[gpui::test]
+  fn test_insert_emoji_at_cursor_advances_by_one_char(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "abc");
+
+    ctx.set_cursor(3);
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let range = editor.selected_range.clone();
+      let new_text = "😎";
+      editor.document.update(cx, |doc, cx| {
+        doc.replace(range.clone(), new_text, cx);
+      });
+      let new_offset = range.start + new_text.chars().count();
+      editor.move_to(new_offset, cx);
+    });
+
+    assert_eq!(ctx.text(), "abc😎");
+    assert_eq!(ctx.cursor_offset(), 4);
+  }
+
+  #[gpui::test]
+  fn test_insert_emoji_and_backticks_at_end(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let range = editor.selected_range.clone();
+      let new_text = "😎````";
+      editor.document.update(cx, |doc, cx| {
+        doc.replace(range.clone(), new_text, cx);
+      });
+      let new_offset = range.start + new_text.chars().count();
+      editor.move_to(new_offset, cx);
+    });
+
+    assert_eq!(ctx.text(), "😎````");
+    assert_eq!(ctx.cursor_offset(), 5);
+  }
+
+  #[gpui::test]
   fn test_unicode_editing(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "hello 👋 world");
 
@@ -4848,6 +4993,75 @@ pub mod tests {
 
     ctx.set_cursor(7); // After emoji
     assert_eq!(ctx.cursor_offset(), 7);
+  }
+
+  #[gpui::test]
+  fn test_display_cursor_columns_map_to_char_offsets_with_emojis(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "🤓😎 Branches");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.set_display_cursor(DisplayCursor { line: 0, column: 0 }, cx);
+      assert_eq!(editor.cursor_offset(), 0);
+
+      editor.set_display_cursor(DisplayCursor { line: 0, column: 1 }, cx);
+      assert_eq!(editor.cursor_offset(), 1);
+
+      editor.set_display_cursor(DisplayCursor { line: 0, column: 2 }, cx);
+      assert_eq!(editor.cursor_offset(), 2);
+    });
+  }
+
+  #[gpui::test]
+  fn test_display_selection_copy_handles_emoji_char_boundaries(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "🤓 Branches principales");
+
+    let copied = ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.set_display_selection_with_anchor(
+        DisplayCursor { line: 0, column: 0 },
+        DisplayCursor { line: 0, column: 1 },
+        cx,
+      );
+      editor.selected_text_for_copy(cx)
+    });
+    assert_eq!(copied.as_deref(), Some("🤓"));
+  }
+
+  #[test]
+  fn test_word_boundaries_in_line_handle_emoji_char_offsets() {
+    let text = "🤓 Branches";
+    assert_eq!(Editor::previous_word_boundary_in_line(text, 1), 0);
+    assert_eq!(Editor::next_word_boundary_in_line(text, 0), 1);
+    assert_eq!(Editor::word_range_in_line(text, 0), (0, 1));
+  }
+
+  #[test]
+  fn test_clamp_range_to_len_normalizes_and_clamps() {
+    assert_eq!(Editor::clamp_range_to_len(2..5, 10), 2..5);
+    assert_eq!(Editor::clamp_range_to_len(2..50, 10), 2..10);
+    assert_eq!(Editor::clamp_range_to_len(50..2, 10), 2..10);
+  }
+
+  #[gpui::test]
+  fn test_move_to_clamps_out_of_bounds_offset(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "abc");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.move_to(99, cx);
+    });
+
+    assert_eq!(ctx.cursor_offset(), 3);
+    assert_eq!(ctx.selection(), 3..3);
+  }
+
+  #[gpui::test]
+  fn test_selected_text_for_copy_with_stale_range_is_safe(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "abc");
+
+    let copied = ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.selected_range = 999..1000;
+      editor.selected_text_for_copy(cx)
+    });
+    assert_eq!(copied, None);
   }
 
   #[gpui::test]
@@ -5027,6 +5241,18 @@ pub mod tests {
         offset
       );
     }
+  }
+
+  #[test]
+  fn test_utf16_range_to_char_range_in_text_handles_astral_emoji() {
+    let range = Editor::utf16_range_to_char_range_in_text("😎abc", &(2..3));
+    assert_eq!(range, 1..2);
+  }
+
+  #[test]
+  fn test_utf16_range_to_char_range_in_text_clamps_and_normalizes() {
+    let range = Editor::utf16_range_to_char_range_in_text("✅ab", &(10..1));
+    assert_eq!(range, 1..3);
   }
 
   // ============================================================================

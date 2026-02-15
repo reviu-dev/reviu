@@ -201,6 +201,14 @@ struct ActiveSelection {
   dragging: bool,
 }
 
+fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
+  let mut index = index.min(text.len());
+  while index > 0 && !text.is_char_boundary(index) {
+    index -= 1;
+  }
+  index
+}
+
 #[derive(Clone, Default)]
 pub struct MarkdownRenderOptions {
   pub on_link: Option<Arc<LinkHandlerFn>>,
@@ -1674,7 +1682,7 @@ impl Element for SelectableText {
     window: &mut Window,
     cx: &mut App,
   ) -> (LayoutId, Self::RequestLayoutState) {
-    let selection_range = selection_for_text(&self.render_state, self.text_id, self.text.len());
+    let selection_range = selection_for_text(&self.render_state, self.text_id, &self.text);
     let runs = build_runs(&self.spans, selection_range.clone(), window, cx);
     self.styled_text = StyledText::new(self.text.clone()).with_runs(runs);
     self.last_selection = selection_range;
@@ -1693,7 +1701,7 @@ impl Element for SelectableText {
     window: &mut Window,
     cx: &mut App,
   ) -> Self::PrepaintState {
-    let selection_range = selection_for_text(&self.render_state, self.text_id, self.text.len());
+    let selection_range = selection_for_text(&self.render_state, self.text_id, &self.text);
     if selection_range != self.last_selection {
       let runs = build_runs(&self.spans, selection_range.clone(), window, cx);
       self.styled_text = StyledText::new(self.text.clone()).with_runs(runs);
@@ -1729,15 +1737,22 @@ impl Element for SelectableText {
     let text_id = self.text_id;
     let text_len = self.text.len();
     let text_for_selection = self.text.clone();
+    let text_for_hover = self.text.clone();
+    let text_for_down = self.text.clone();
+    let text_for_move = self.text.clone();
+    let text_for_up = self.text.clone();
     let layout_for_down = text_layout.clone();
     let layout_for_move = text_layout.clone();
     let layout_for_up = text_layout.clone();
 
     if hitbox.is_hovered(window) && {
-      let index = text_layout
+      let index = clamp_to_char_boundary(
+        text_for_hover.as_ref(),
+        text_layout
         .index_for_position(window.mouse_position())
         .unwrap_or_else(|ix| ix)
-        .min(text_len);
+        .min(text_len),
+      );
       link_ranges.iter().any(|range| range.range.contains(&index))
     } {
       window.set_cursor_style(CursorStyle::PointingHand, hitbox);
@@ -1754,10 +1769,13 @@ impl Element for SelectableText {
           return;
         }
 
-        let index = layout_for_down
-          .index_for_position(event.position)
-          .unwrap_or_else(|ix| ix)
-          .min(text_len);
+        let index = clamp_to_char_boundary(
+          text_for_down.as_ref(),
+          layout_for_down
+            .index_for_position(event.position)
+            .unwrap_or_else(|ix| ix)
+            .min(text_len),
+        );
         update_selection_state(&render_state, text_id, index, index, true);
         window.refresh();
         cx.stop_propagation();
@@ -1773,10 +1791,13 @@ impl Element for SelectableText {
         }
         let current = selection_state_for(&render_state, text_id);
         if current.dragging {
-          let index = layout_for_move
-            .index_for_position(event.position)
-            .unwrap_or_else(|ix| ix)
-            .min(text_len);
+          let index = clamp_to_char_boundary(
+            text_for_move.as_ref(),
+            layout_for_move
+              .index_for_position(event.position)
+              .unwrap_or_else(|ix| ix)
+              .min(text_len),
+          );
           let anchor = current.anchor.unwrap_or(index);
           update_selection_state(&render_state, text_id, anchor, index, true);
           window.refresh();
@@ -1801,10 +1822,13 @@ impl Element for SelectableText {
           return;
         }
 
-        let index = layout_for_up
-          .index_for_position(event.position)
-          .unwrap_or_else(|ix| ix)
-          .min(text_len);
+        let index = clamp_to_char_boundary(
+          text_for_up.as_ref(),
+          layout_for_up
+            .index_for_position(event.position)
+            .unwrap_or_else(|ix| ix)
+            .min(text_len),
+        );
         let current = selection_state_for(&render_state, text_id);
         if !current.dragging {
           return;
@@ -1892,8 +1916,10 @@ fn update_selection_state(
 fn selection_for_text(
   state: &MarkdownRenderState,
   text_id: usize,
-  text_len: usize,
+  text: &SharedString,
 ) -> Option<Range<usize>> {
+  let text = text.as_ref();
+  let text_len = text.len();
   let selection = state.selection.lock().unwrap();
   let active = selection.as_ref()?;
   if active.text_id != text_id || active.anchor == active.head {
@@ -1904,8 +1930,8 @@ fn selection_for_text(
     end: active.head,
   }
   .normalized();
-  range.start = range.start.min(text_len);
-  range.end = range.end.min(text_len);
+  range.start = clamp_to_char_boundary(text, range.start.min(text_len));
+  range.end = clamp_to_char_boundary(text, range.end.min(text_len));
   if range.start >= range.end {
     None
   } else {
@@ -1918,7 +1944,7 @@ fn selection_text(
   text_id: usize,
   text: &SharedString,
 ) -> Option<String> {
-  let selection = selection_for_text(state, text_id, text.len())?;
+  let selection = selection_for_text(state, text_id, text)?;
   text.as_ref().get(selection).map(|value| value.to_string())
 }
 
@@ -2710,5 +2736,18 @@ Apres"#,
     let wide = estimate_markdown_height_px(source, 96, 20.0);
     let narrow = estimate_markdown_height_px(source, 32, 20.0);
     assert!(narrow > wide);
+  }
+
+  #[test]
+  fn selection_for_text_clamps_non_char_boundary_indices() {
+    let state = MarkdownRenderState::new();
+    let text = SharedString::from("✅ **Branches parallèles** (API + notifications)");
+
+    update_selection_state(&state, 42, 1, text.len(), false);
+    let selection = selection_for_text(&state, 42, &text).expect("selection should exist");
+
+    assert_eq!(selection.start, 0);
+    assert!(text.is_char_boundary(selection.start));
+    assert!(text.is_char_boundary(selection.end));
   }
 }

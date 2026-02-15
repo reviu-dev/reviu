@@ -1,16 +1,68 @@
 use gpui::Context;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::editor::Editor;
+use crate::{
+  editor::Editor,
+  text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
+};
+
+fn previous_grapheme_boundary_in_text(text: &str, byte_offset: usize) -> usize {
+  if byte_offset == 0 {
+    return 0;
+  }
+
+  let mut boundaries: Vec<usize> = text.grapheme_indices(true).map(|(idx, _)| idx).collect();
+  if boundaries.is_empty() || boundaries[0] != 0 {
+    boundaries.insert(0, 0);
+  }
+  boundaries.push(text.len());
+
+  let boundary_idx = match boundaries.binary_search(&byte_offset) {
+    Ok(i) => i.saturating_sub(1),
+    Err(i) => i.saturating_sub(1),
+  };
+  boundaries[boundary_idx]
+}
+
+fn next_grapheme_boundary_in_text(text: &str, byte_offset: usize) -> usize {
+  if byte_offset >= text.len() {
+    return text.len();
+  }
+
+  let mut boundaries: Vec<usize> = text.grapheme_indices(true).map(|(idx, _)| idx).collect();
+  if boundaries.is_empty() || boundaries[0] != 0 {
+    boundaries.insert(0, 0);
+  }
+  boundaries.push(text.len());
+
+  let boundary_idx = match boundaries.binary_search(&byte_offset) {
+    Ok(i) => i.saturating_add(1),
+    Err(i) => i,
+  };
+  boundaries.get(boundary_idx).copied().unwrap_or(text.len())
+}
 
 /// Move to the previous character boundary
-pub fn previous_boundary(_editor: &Editor, offset: usize, _cx: &Context<Editor>) -> usize {
+pub fn previous_boundary(editor: &Editor, offset: usize, cx: &Context<Editor>) -> usize {
   if offset == 0 {
     return 0;
   }
 
-  // Simply move back one char - Ropey handles char boundaries correctly
-  offset.saturating_sub(1)
+  let doc = editor.document.read(cx);
+  let doc_len = doc.len();
+  let offset = offset.min(doc_len);
+  if offset == 0 {
+    return 0;
+  }
+
+  // Use grapheme boundaries so a single left keypress crosses an emoji sequence.
+  let start = offset.saturating_sub(4096);
+  let end = (offset + 4096).min(doc_len);
+  let slice = doc.slice_to_string(start..end);
+  let relative_offset = offset.saturating_sub(start).min(slice.chars().count());
+  let relative_byte_offset = char_offset_to_byte_offset(&slice, relative_offset);
+  let previous_byte = previous_grapheme_boundary_in_text(&slice, relative_byte_offset);
+  start + byte_offset_to_char_offset(&slice, previous_byte)
 }
 
 /// Move to the next character boundary
@@ -22,8 +74,14 @@ pub fn next_boundary(editor: &Editor, offset: usize, cx: &Context<Editor>) -> us
     return doc_len;
   }
 
-  // Simply move forward one char - Ropey handles char boundaries correctly
-  (offset + 1).min(doc_len)
+  // Use grapheme boundaries so a single right keypress crosses an emoji sequence.
+  let start = offset.saturating_sub(4096);
+  let end = (offset + 4096).min(doc_len);
+  let slice = doc.slice_to_string(start..end);
+  let relative_offset = offset.saturating_sub(start).min(slice.chars().count());
+  let relative_byte_offset = char_offset_to_byte_offset(&slice, relative_offset);
+  let next_byte = next_grapheme_boundary_in_text(&slice, relative_byte_offset);
+  (start + byte_offset_to_char_offset(&slice, next_byte)).min(doc_len)
 }
 
 /// Move to the previous word boundary (start of current or previous word/token)
@@ -41,12 +99,13 @@ pub fn previous_word_boundary(editor: &Editor, offset: usize, cx: &Context<Edito
   let start = offset.saturating_sub(1000);
   let end = (offset + 100).min(doc_len);
   let slice = doc.slice_to_string(start..end);
-  let relative_offset = offset - start;
+  let relative_offset = offset.saturating_sub(start).min(slice.chars().count());
+  let relative_byte_offset = char_offset_to_byte_offset(&slice, relative_offset);
 
   // Find the last newline before cursor to detect line boundaries
   let mut last_newline_pos = None;
   for (idx, ch) in slice.char_indices() {
-    if ch == '\n' && idx < relative_offset {
+    if ch == '\n' && idx < relative_byte_offset {
       last_newline_pos = Some(idx);
     }
   }
@@ -58,7 +117,8 @@ pub fn previous_word_boundary(editor: &Editor, offset: usize, cx: &Context<Edito
 
   let mut first_non_space_on_line = None;
   // Check up to and including cursor position
-  let check_range_end = (relative_offset + 1).min(slice.len());
+  let check_range_end =
+    char_offset_to_byte_offset(&slice, (relative_offset + 1).min(slice.chars().count()));
   for (idx, ch) in slice[line_start..check_range_end].char_indices() {
     if !ch.is_whitespace() {
       first_non_space_on_line = Some(line_start + idx);
@@ -71,7 +131,7 @@ pub fn previous_word_boundary(editor: &Editor, offset: usize, cx: &Context<Edito
   let should_stay_on_line = if let Some(first_non_space) = first_non_space_on_line {
     // We have non-whitespace on this line before or at cursor
     // Check if there's indentation (spaces between line_start and first_non_space)
-    first_non_space > line_start && relative_offset >= first_non_space
+    first_non_space > line_start && relative_byte_offset >= first_non_space
   } else {
     false
   };
@@ -89,33 +149,33 @@ pub fn previous_word_boundary(editor: &Editor, offset: usize, cx: &Context<Edito
     }
 
     // Track segments on the current line
-    if idx >= line_start && idx < relative_offset {
+    if idx >= line_start && idx < relative_byte_offset {
       last_segment_on_current_line = idx;
     }
 
     // If we're exactly at the start of this segment, go to previous segment
-    if idx == relative_offset {
+    if idx == relative_byte_offset {
       continue;
     }
 
     // If we're inside this segment, go to its start
-    if idx < relative_offset && relative_offset <= segment_end {
-      return start + idx;
+    if idx < relative_byte_offset && relative_byte_offset <= segment_end {
+      return start + byte_offset_to_char_offset(&slice, idx);
     }
 
     // Track this as a potential previous segment
-    if idx < relative_offset {
+    if idx < relative_byte_offset {
       last_segment_start = idx;
     }
   }
 
   // If we should stay on the current line, return the last segment on this line
   if should_stay_on_line && last_segment_on_current_line >= line_start {
-    return start + last_segment_on_current_line;
+    return start + byte_offset_to_char_offset(&slice, last_segment_on_current_line);
   }
 
   // Otherwise, go to the previous segment (may cross lines)
-  start + last_segment_start
+  start + byte_offset_to_char_offset(&slice, last_segment_start)
 }
 
 /// Move to the next word boundary (end of current or next word/token)
@@ -133,7 +193,8 @@ pub fn next_word_boundary(editor: &Editor, offset: usize, cx: &Context<Editor>) 
   let start = offset.saturating_sub(100);
   let end = (offset + 1000).min(doc_len);
   let slice = doc.slice_to_string(start..end);
-  let relative_offset = offset - start;
+  let relative_offset = offset.saturating_sub(start).min(slice.chars().count());
+  let relative_byte_offset = char_offset_to_byte_offset(&slice, relative_offset);
 
   // Find all segments and their ends using split_word_bound_indices
   for (idx, segment) in slice.split_word_bound_indices() {
@@ -145,13 +206,13 @@ pub fn next_word_boundary(editor: &Editor, offset: usize, cx: &Context<Editor>) 
     }
 
     // If we're before or at the start of this segment, go to its end
-    if relative_offset <= idx {
-      return start + segment_end;
+    if relative_byte_offset <= idx {
+      return start + byte_offset_to_char_offset(&slice, segment_end);
     }
 
     // If we're inside this segment, go to its end
-    if relative_offset < segment_end {
-      return start + segment_end;
+    if relative_byte_offset < segment_end {
+      return start + byte_offset_to_char_offset(&slice, segment_end);
     }
   }
 
@@ -175,7 +236,8 @@ pub fn word_range_at_offset(
   let start = offset.saturating_sub(500);
   let end = (offset + 500).min(doc_len);
   let slice = doc.slice_to_string(start..end);
-  let relative_offset = offset - start;
+  let relative_offset = offset.saturating_sub(start).min(slice.chars().count());
+  let relative_byte_offset = char_offset_to_byte_offset(&slice, relative_offset);
 
   // Find the segment containing the cursor
   for (idx, segment) in slice.split_word_bound_indices() {
@@ -187,8 +249,11 @@ pub fn word_range_at_offset(
     }
 
     // Check if cursor is within this segment
-    if idx <= relative_offset && relative_offset < segment_end {
-      return (start + idx, start + segment_end);
+    if idx <= relative_byte_offset && relative_byte_offset < segment_end {
+      return (
+        start + byte_offset_to_char_offset(&slice, idx),
+        start + byte_offset_to_char_offset(&slice, segment_end),
+      );
     }
   }
 
@@ -348,6 +413,44 @@ mod tests {
       .editor
       .update(&mut ctx.cx, |editor, cx| next_word_boundary(editor, 0, cx));
     assert_eq!(next, 5); // End of "hello"
+  }
+
+  #[gpui::test]
+  fn test_word_boundary_emoji_prefix(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "😎 Feature branches");
+
+    // Offset 1 is after the emoji (char offsets, not bytes).
+    let prev = ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      previous_word_boundary(editor, 1, cx)
+    });
+    assert_eq!(prev, 0);
+
+    // Moving forward from the emoji should land after the emoji.
+    let next = ctx
+      .editor
+      .update(&mut ctx.cx, |editor, cx| next_word_boundary(editor, 0, cx));
+    assert_eq!(next, 1);
+  }
+
+  #[gpui::test]
+  fn test_previous_word_boundary_multiple_emojis(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "😎🚀 notes");
+
+    // Offset 2 is after the second emoji.
+    let boundary = ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      previous_word_boundary(editor, 2, cx)
+    });
+    assert_eq!(boundary, 1);
+  }
+
+  #[gpui::test]
+  fn test_word_range_at_offset_emoji_uses_char_offsets(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "😎 Feature");
+
+    let range = ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      word_range_at_offset(editor, 0, cx)
+    });
+    assert_eq!(range, (0, 1));
   }
 
   #[gpui::test]
@@ -541,6 +644,28 @@ mod tests {
       .editor
       .update(&mut ctx.cx, |editor, cx| next_boundary(editor, 4, cx));
     assert_eq!(boundary, 4);
+  }
+
+  #[gpui::test]
+  fn test_previous_boundary_handles_emoji_grapheme_cluster(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "👍🏽a");
+
+    // Cursor after the emoji grapheme cluster should jump to its start in one move.
+    let boundary = ctx
+      .editor
+      .update(&mut ctx.cx, |editor, cx| previous_boundary(editor, 2, cx));
+    assert_eq!(boundary, 0);
+  }
+
+  #[gpui::test]
+  fn test_next_boundary_handles_emoji_grapheme_cluster(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "✅\u{fe0f}a");
+
+    // Cursor before the emoji grapheme cluster should jump after it in one move.
+    let boundary = ctx
+      .editor
+      .update(&mut ctx.cx, |editor, cx| next_boundary(editor, 0, cx));
+    assert_eq!(boundary, 2);
   }
 
   #[gpui::test]
