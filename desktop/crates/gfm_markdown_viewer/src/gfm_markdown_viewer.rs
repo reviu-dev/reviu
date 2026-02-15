@@ -2083,7 +2083,9 @@ fn blocks_from_node<'a>(node: &'a AstNode<'a>) -> Vec<Block> {
     NodeValue::Table(_) => vec![Block::Table(table_from_node(node))],
     NodeValue::Item(_) => node.children().flat_map(blocks_from_node).collect(),
     NodeValue::HtmlBlock(html) => {
-      if let Some(details) = parse_details_html(&html.literal) {
+      if is_html_comment_only_block(&html.literal) {
+        Vec::new()
+      } else if let Some(details) = parse_details_html(&html.literal) {
         vec![Block::Details(details)]
       } else {
         vec![Block::Paragraph(vec![Inline::Text(html.literal.clone())])]
@@ -2126,6 +2128,27 @@ fn parse_details_html(html: &str) -> Option<Details> {
     blocks,
     open,
   })
+}
+
+fn is_html_comment_only_block(html: &str) -> bool {
+  let mut rest = html.trim();
+  if rest.is_empty() {
+    return false;
+  }
+
+  while !rest.is_empty() {
+    if !rest.starts_with("<!--") {
+      return false;
+    }
+
+    let Some(end) = rest.find("-->") else {
+      return false;
+    };
+
+    rest = rest[end + 3..].trim_start();
+  }
+
+  true
 }
 
 fn extract_summary(inner: &str) -> (Option<String>, String) {
@@ -2641,6 +2664,39 @@ publish body
     assert_eq!(inline_to_plain_text(&nested[1].summary), "Cargo Publish");
     assert!(!nested[0].blocks.is_empty());
     assert!(!nested[1].blocks.is_empty());
+  }
+
+  #[test]
+  fn ignores_comment_only_html_blocks() {
+    let blocks = parse_gfm(
+      r#"<!--
+Ceci est un commentaire je devrais pas le voir, il faut pas le rendre
+-->"#,
+    );
+    assert!(blocks.is_empty());
+  }
+
+  #[test]
+  fn ignores_comment_block_between_paragraphs() {
+    let blocks = parse_gfm(
+      r#"Avant
+
+<!--
+Commentaire cache
+-->
+
+Apres"#,
+    );
+
+    assert_eq!(blocks.len(), 2);
+    match &blocks[0] {
+      Block::Paragraph(inlines) => assert_eq!(inline_to_plain_text(inlines), "Avant"),
+      _ => panic!("expected paragraph"),
+    }
+    match &blocks[1] {
+      Block::Paragraph(inlines) => assert_eq!(inline_to_plain_text(inlines), "Apres"),
+      _ => panic!("expected paragraph"),
+    }
   }
 
   #[test]
