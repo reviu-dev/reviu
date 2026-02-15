@@ -155,8 +155,10 @@ impl ListDelegate for GitFileListDelegate {
       base_item = base_item.bg(theme.sidebar_accent.opacity(0.35));
     }
 
-    let status_letter = row.entry.status.short_code();
-    let status_color = GitPage::status_color(row.entry.status, &theme);
+    let status_kind = row.entry.status;
+    let status_letter = status_kind.short_code();
+    let status_color = GitPage::status_color(status_kind, &theme);
+    let status_tooltip = GitPage::status_tooltip(status_kind);
     let (stage_icon, stage_color, stage_tooltip) = GitPage::stage_style(row.entry.stage, &theme);
     let file_icon = file_icon_path_for_path_with_theme(&row.entry.path, &theme)
       .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
@@ -179,18 +181,20 @@ impl ListDelegate for GitFileListDelegate {
       div().child(stage_icon).into_any_element()
     };
 
+    let status_element = div()
+      .id(format!("git-status-letter-{}", ix.row))
+      .w(px(15.))
+      .text_xs()
+      .text_color(status_color)
+      .tooltip(move |window, cx| Tooltip::new(status_tooltip.clone()).build(window, cx))
+      .child(status_letter);
+
     Some(
       base_item.px_2().py_1().child(
         h_flex()
           .items_center()
           .gap_2()
-          .child(
-            div()
-              .w(px(15.))
-              .text_xs()
-              .text_color(status_color)
-              .child(status_letter),
-          )
+          .child(status_element)
           .child(stage_element)
           .child(file_icon)
           .child(
@@ -2299,6 +2303,18 @@ impl GitPage {
       RepoStatusKind::TypeChange => theme.status_blue(),
       RepoStatusKind::Untracked => theme.status_green(),
       RepoStatusKind::Conflicted => theme.status_red(),
+    }
+  }
+
+  fn status_tooltip(kind: RepoStatusKind) -> SharedString {
+    match kind {
+      RepoStatusKind::Modified => "Modified".into(),
+      RepoStatusKind::Added => "Added".into(),
+      RepoStatusKind::Deleted => "Deleted".into(),
+      RepoStatusKind::Renamed => "Renamed".into(),
+      RepoStatusKind::TypeChange => "Type changed".into(),
+      RepoStatusKind::Untracked => "Untracked".into(),
+      RepoStatusKind::Conflicted => "Conflicted".into(),
     }
   }
 
