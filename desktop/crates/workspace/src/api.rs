@@ -545,3 +545,194 @@ impl ApiClient {
     Ok(payload.content)
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use reqwest::blocking::Client;
+  use std::{
+    io::{Read, Write},
+    net::TcpListener,
+    sync::{Arc, Mutex},
+    thread,
+  };
+
+  fn make_test_api_client(base_url: String) -> ApiClient {
+    ApiClient {
+      base_url,
+      client: Client::builder()
+        .cookie_store(true)
+        .build()
+        .expect("build client"),
+      bearer_token: Arc::new(Mutex::new(None)),
+    }
+  }
+
+  fn start_single_response_server(status: &str, body: &str) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+    let address = format!("http://{}", listener.local_addr().expect("local addr"));
+    let status = status.to_string();
+    let body = body.to_string();
+
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().expect("accept connection");
+      let mut request_buffer = [0u8; 2048];
+      let _ = stream.read(&mut request_buffer);
+
+      let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+        body.as_bytes().len(),
+        body
+      );
+      stream
+        .write_all(response.as_bytes())
+        .expect("write response");
+      stream.flush().expect("flush response");
+    });
+
+    (address, handle)
+  }
+
+  fn make_pull_request(
+    state: GithubPullRequestState,
+    draft: bool,
+    merged_at: Option<&str>,
+  ) -> GithubPullRequest {
+    GithubPullRequest {
+      number: 42,
+      title: "Test PR".to_string(),
+      state,
+      merged_at: merged_at.map(str::to_string),
+      draft,
+      updated_at: "2026-02-15T12:00:00Z".to_string(),
+      labels: vec![GithubPullRequestLabel {
+        name: "bug".to_string(),
+      }],
+      repository: GithubRepository {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+      },
+    }
+  }
+
+  fn make_pull_request_details(
+    state: GithubPullRequestState,
+    draft: bool,
+    merged_at: Option<&str>,
+  ) -> GithubPullRequestDetails {
+    GithubPullRequestDetails {
+      number: 42,
+      title: "Test PR".to_string(),
+      state,
+      draft,
+      created_at: "2026-02-10T09:00:00Z".to_string(),
+      updated_at: "2026-02-15T12:00:00Z".to_string(),
+      merged_at: merged_at.map(str::to_string),
+      merge_base_sha: "abc123".to_string(),
+      base_sha: "base123".to_string(),
+      head_sha: "head123".to_string(),
+      base_ref_name: "main".to_string(),
+      head_ref_name: "feature".to_string(),
+      body: Some("body".to_string()),
+      author: GithubPullRequestAuthor {
+        login: "octocat".to_string(),
+        avatar_url: None,
+      },
+      comments: 0,
+      review_comments: 0,
+      commits: 1,
+      additions: 1,
+      deletions: 0,
+      changed_files: 1,
+      labels: vec![GithubPullRequestLabel {
+        name: "bug".to_string(),
+      }],
+      repository: GithubRepository {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+      },
+      head_repository: None,
+    }
+  }
+
+  #[test]
+  fn pull_request_status_prioritizes_merged_then_draft_then_state() {
+    let merged = make_pull_request(
+      GithubPullRequestState::Open,
+      true,
+      Some("2026-02-15T12:00:00Z"),
+    );
+    assert!(matches!(merged.status(), GithubPullRequestStatus::Merged));
+
+    let draft = make_pull_request(GithubPullRequestState::Closed, true, None);
+    assert!(matches!(draft.status(), GithubPullRequestStatus::Draft));
+
+    let closed = make_pull_request(GithubPullRequestState::Closed, false, None);
+    assert!(matches!(closed.status(), GithubPullRequestStatus::Closed));
+  }
+
+  #[test]
+  fn pull_request_details_status_prioritizes_merged_then_draft_then_state() {
+    let merged = make_pull_request_details(
+      GithubPullRequestState::Open,
+      true,
+      Some("2026-02-15T12:00:00Z"),
+    );
+    assert!(matches!(merged.status(), GithubPullRequestStatus::Merged));
+
+    let draft = make_pull_request_details(GithubPullRequestState::Open, true, None);
+    assert!(matches!(draft.status(), GithubPullRequestStatus::Draft));
+
+    let open = make_pull_request_details(GithubPullRequestState::Open, false, None);
+    assert!(matches!(open.status(), GithubPullRequestStatus::Open));
+  }
+
+  #[test]
+  fn fetch_me_returns_none_on_unauthorized() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let me = api.fetch_me().expect("fetch_me should not fail on 401");
+    assert!(me.is_none());
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_me_returns_error_on_non_success_status() {
+    let (base_url, handle) = start_single_response_server("500 Internal Server Error", "{}");
+    let api = make_test_api_client(base_url);
+
+    let err = api.fetch_me().err();
+    assert!(err.is_some());
+    assert!(
+      err
+        .expect("error")
+        .to_string()
+        .contains("unexpected status")
+    );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_latest_pull_requests_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api.fetch_latest_pull_requests("acme", "widget").err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn sign_out_clears_bearer_token_when_request_fails() {
+    let (base_url, handle) = start_single_response_server("500 Internal Server Error", "{}");
+    let api = make_test_api_client(base_url);
+    api.set_bearer_token("token".to_string());
+
+    let err = api.sign_out().err();
+    assert!(err.is_some());
+    assert_eq!(api.bearer_token(), None);
+    handle.join().expect("join server thread");
+  }
+}

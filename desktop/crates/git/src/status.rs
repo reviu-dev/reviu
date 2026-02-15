@@ -246,3 +246,248 @@ fn entry_paths(
 
   Some((path, old_path))
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use git2::{Repository, Signature, Status};
+  use std::{
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+  };
+
+  struct TempDir {
+    path: PathBuf,
+  }
+
+  impl TempDir {
+    fn new(prefix: &str) -> Self {
+      let mut path = std::env::temp_dir();
+      let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+      path.push(format!("reviu-{prefix}-{}-{nanos}", std::process::id()));
+      std::fs::create_dir_all(&path).expect("create temp dir");
+      Self { path }
+    }
+  }
+
+  impl Drop for TempDir {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.path);
+    }
+  }
+
+  fn init_repo(path: &Path) {
+    Repository::init(path).expect("init git repository");
+  }
+
+  fn commit_file(repo_root: &Path, rel_path: &Path, contents: &str, message: &str) {
+    let repo = Repository::open(repo_root).expect("open repo");
+    std::fs::write(repo_root.join(rel_path), contents).expect("write worktree file");
+
+    let mut index = repo.index().expect("open index");
+    index.add_path(rel_path).expect("stage file");
+    index.write().expect("write index");
+    let tree_id = index.write_tree().expect("write tree");
+    let tree = repo.find_tree(tree_id).expect("find tree");
+    let signature = Signature::now("Reviu Tests", "tests@reviu.local").expect("signature");
+    let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+
+    match parent {
+      Some(parent) => {
+        repo
+          .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &[&parent],
+          )
+          .expect("commit with parent");
+      }
+      None => {
+        repo
+          .commit(Some("HEAD"), &signature, &signature, message, &tree, &[])
+          .expect("initial commit");
+      }
+    }
+  }
+
+  #[test]
+  fn maps_untracked_worktree_status() {
+    let status = Status::WT_NEW;
+    assert_eq!(stage_from_status(status), RepoStage::Unstaged);
+    assert_eq!(kind_from_status(status), RepoStatusKind::Untracked);
+  }
+
+  #[test]
+  fn maps_partially_staged_modified_status() {
+    let status = Status::INDEX_MODIFIED | Status::WT_MODIFIED;
+    assert_eq!(stage_from_status(status), RepoStage::PartiallyStaged);
+    assert_eq!(kind_from_status(status), RepoStatusKind::Modified);
+  }
+
+  #[test]
+  fn maps_conflicted_status() {
+    let status = Status::CONFLICTED;
+    assert_eq!(kind_from_status(status), RepoStatusKind::Conflicted);
+  }
+
+  #[test]
+  fn maps_renamed_status() {
+    let status = Status::INDEX_RENAMED;
+    assert_eq!(stage_from_status(status), RepoStage::Staged);
+    assert_eq!(kind_from_status(status), RepoStatusKind::Renamed);
+  }
+
+  #[test]
+  fn delete_untracked_file_removes_file() {
+    let temp = TempDir::new("status-file");
+    let rel_path = Path::new("note.txt");
+    let absolute = temp.path.join(rel_path);
+    std::fs::write(&absolute, "hello").expect("write file");
+
+    delete_untracked_file(&temp.path, rel_path).expect("delete file");
+    assert!(!absolute.exists());
+  }
+
+  #[test]
+  fn delete_untracked_file_removes_directory() {
+    let temp = TempDir::new("status-dir");
+    let rel_path = Path::new("folder");
+    let absolute = temp.path.join(rel_path);
+    std::fs::create_dir_all(absolute.join("nested")).expect("create directory");
+
+    delete_untracked_file(&temp.path, rel_path).expect("delete directory");
+    assert!(!absolute.exists());
+  }
+
+  #[test]
+  fn delete_untracked_file_returns_error_for_missing_path() {
+    let temp = TempDir::new("status-missing");
+    let err = delete_untracked_file(&temp.path, Path::new("missing.txt")).err();
+    assert!(err.is_some());
+  }
+
+  #[test]
+  fn stage_file_marks_modified_file_as_staged() {
+    let temp = TempDir::new("status-stage-file");
+    init_repo(&temp.path);
+    let rel_path = Path::new("README.md");
+    commit_file(&temp.path, rel_path, "v1\n", "initial");
+    std::fs::write(temp.path.join(rel_path), "v2\n").expect("modify file");
+
+    stage_file(&temp.path, rel_path).expect("stage file");
+
+    let entries = list_repo_status(&temp.path).expect("list status");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].path, rel_path);
+    assert_eq!(entries[0].status, RepoStatusKind::Modified);
+    assert_eq!(entries[0].stage, RepoStage::Staged);
+  }
+
+  #[test]
+  fn unstage_file_moves_change_back_to_unstaged() {
+    let temp = TempDir::new("status-unstage-file");
+    init_repo(&temp.path);
+    let rel_path = Path::new("README.md");
+    commit_file(&temp.path, rel_path, "v1\n", "initial");
+    std::fs::write(temp.path.join(rel_path), "v2\n").expect("modify file");
+    stage_file(&temp.path, rel_path).expect("stage file");
+
+    unstage_file(&temp.path, rel_path).expect("unstage file");
+
+    let entries = list_repo_status(&temp.path).expect("list status");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].path, rel_path);
+    assert_eq!(entries[0].status, RepoStatusKind::Modified);
+    assert_eq!(entries[0].stage, RepoStage::Unstaged);
+  }
+
+  #[test]
+  fn restore_file_reverts_worktree_to_head() {
+    let temp = TempDir::new("status-restore-file");
+    init_repo(&temp.path);
+    let rel_path = Path::new("README.md");
+    commit_file(&temp.path, rel_path, "v1\n", "initial");
+    std::fs::write(temp.path.join(rel_path), "v2\n").expect("modify file");
+
+    restore_file(&temp.path, rel_path).expect("restore file");
+
+    let contents = std::fs::read_to_string(temp.path.join(rel_path)).expect("read restored file");
+    assert_eq!(contents, "v1\n");
+    let entries = list_repo_status(&temp.path).expect("list status");
+    assert!(entries.is_empty());
+  }
+
+  #[test]
+  fn stage_all_marks_all_modified_files_as_staged() {
+    let temp = TempDir::new("status-stage-all");
+    init_repo(&temp.path);
+    let first = Path::new("a.txt");
+    let second = Path::new("b.txt");
+    commit_file(&temp.path, first, "a1\n", "initial");
+    commit_file(&temp.path, second, "b1\n", "second");
+    std::fs::write(temp.path.join(first), "a2\n").expect("modify first file");
+    std::fs::write(temp.path.join(second), "b2\n").expect("modify second file");
+
+    stage_all(&temp.path).expect("stage all");
+
+    let entries = list_repo_status(&temp.path).expect("list status");
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().all(|entry| entry.stage == RepoStage::Staged));
+    assert!(
+      entries
+        .iter()
+        .all(|entry| entry.status == RepoStatusKind::Modified)
+    );
+  }
+
+  #[test]
+  fn unstage_all_moves_staged_changes_back_to_unstaged() {
+    let temp = TempDir::new("status-unstage-all");
+    init_repo(&temp.path);
+    let first = Path::new("a.txt");
+    let second = Path::new("b.txt");
+    commit_file(&temp.path, first, "a1\n", "initial");
+    commit_file(&temp.path, second, "b1\n", "second");
+    std::fs::write(temp.path.join(first), "a2\n").expect("modify first file");
+    std::fs::write(temp.path.join(second), "b2\n").expect("modify second file");
+    stage_all(&temp.path).expect("stage all");
+
+    unstage_all(&temp.path).expect("unstage all");
+
+    let entries = list_repo_status(&temp.path).expect("list status");
+    assert_eq!(entries.len(), 2);
+    assert!(
+      entries
+        .iter()
+        .all(|entry| entry.stage == RepoStage::Unstaged)
+    );
+    assert!(
+      entries
+        .iter()
+        .all(|entry| entry.status == RepoStatusKind::Modified)
+    );
+  }
+
+  #[test]
+  fn stage_file_marks_deleted_file_as_staged_deletion() {
+    let temp = TempDir::new("status-stage-delete");
+    init_repo(&temp.path);
+    let rel_path = Path::new("delete.txt");
+    commit_file(&temp.path, rel_path, "to delete\n", "initial");
+    std::fs::remove_file(temp.path.join(rel_path)).expect("remove file from worktree");
+
+    stage_file(&temp.path, rel_path).expect("stage deleted file");
+
+    let entries = list_repo_status(&temp.path).expect("list status");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].path, rel_path);
+    assert_eq!(entries[0].status, RepoStatusKind::Deleted);
+    assert_eq!(entries[0].stage, RepoStage::Staged);
+  }
+}

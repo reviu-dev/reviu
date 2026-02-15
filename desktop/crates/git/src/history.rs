@@ -324,3 +324,196 @@ fn load_commit_file_content(
 fn normalize_path(path: &Path) -> String {
   path.to_string_lossy().replace('\\', "/")
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use git2::Signature;
+  use std::{
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+  };
+
+  struct TempRepo {
+    path: PathBuf,
+  }
+
+  impl TempRepo {
+    fn init(prefix: &str) -> Self {
+      let mut path = std::env::temp_dir();
+      let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+      path.push(format!("reviu-{prefix}-{}-{nanos}", std::process::id()));
+      std::fs::create_dir_all(&path).expect("create temp dir");
+      Repository::init(&path).expect("init git repository");
+      Self { path }
+    }
+  }
+
+  impl Drop for TempRepo {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.path);
+    }
+  }
+
+  fn commit_text_file(repo_root: &Path, rel_path: &Path, contents: &str, message: &str) -> String {
+    let repo = Repository::open(repo_root).expect("open repo");
+    std::fs::write(repo_root.join(rel_path), contents).expect("write worktree file");
+
+    let mut index = repo.index().expect("open index");
+    index.add_path(rel_path).expect("stage file");
+    index.write().expect("write index");
+    let tree_id = index.write_tree().expect("write tree");
+    let tree = repo.find_tree(tree_id).expect("find tree");
+    let sig = Signature::now("Reviu Tests", "tests@reviu.local").expect("signature");
+    let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+
+    let oid = match parent {
+      Some(parent) => repo
+        .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])
+        .expect("commit with parent"),
+      None => repo
+        .commit(Some("HEAD"), &sig, &sig, message, &tree, &[])
+        .expect("initial commit"),
+    };
+
+    oid.to_string()
+  }
+
+  fn rename_file_and_commit(
+    repo_root: &Path,
+    old_path: &Path,
+    new_path: &Path,
+    message: &str,
+  ) -> String {
+    let repo = Repository::open(repo_root).expect("open repo");
+    std::fs::rename(repo_root.join(old_path), repo_root.join(new_path)).expect("rename file");
+
+    let mut index = repo.index().expect("open index");
+    let _ = index.remove_path(old_path);
+    index.add_path(new_path).expect("stage renamed file");
+    index.write().expect("write index");
+
+    let tree_id = index.write_tree().expect("write tree");
+    let tree = repo.find_tree(tree_id).expect("find tree");
+    let sig = Signature::now("Reviu Tests", "tests@reviu.local").expect("signature");
+    let parent = repo
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("parent commit");
+    repo
+      .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])
+      .expect("rename commit")
+      .to_string()
+  }
+
+  fn delete_file_and_commit(repo_root: &Path, rel_path: &Path, message: &str) -> String {
+    let repo = Repository::open(repo_root).expect("open repo");
+    std::fs::remove_file(repo_root.join(rel_path)).expect("delete worktree file");
+
+    let mut index = repo.index().expect("open index");
+    index.remove_path(rel_path).expect("remove from index");
+    index.write().expect("write index");
+
+    let tree_id = index.write_tree().expect("write tree");
+    let tree = repo.find_tree(tree_id).expect("find tree");
+    let sig = Signature::now("Reviu Tests", "tests@reviu.local").expect("signature");
+    let parent = repo
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("parent commit");
+    repo
+      .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])
+      .expect("delete commit")
+      .to_string()
+  }
+
+  #[test]
+  fn list_commit_history_returns_empty_when_limit_is_zero() {
+    let repo = TempRepo::init("history-limit-zero");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
+
+    let history = list_commit_history(&repo.path, 0).expect("list history");
+    assert!(history.is_empty());
+  }
+
+  #[test]
+  fn list_commit_history_returns_empty_for_repo_without_commits() {
+    let repo = TempRepo::init("history-empty");
+    let history = list_commit_history(&repo.path, 20).expect("list history");
+    assert!(history.is_empty());
+  }
+
+  #[test]
+  fn current_history_revision_is_empty_for_repo_without_commits() {
+    let repo = TempRepo::init("history-revision-empty");
+    let revision = current_history_revision(&repo.path).expect("history revision");
+    assert_eq!(revision.head_oid, None);
+    assert_eq!(revision.head_label, None);
+    assert!(revision.refs.is_empty());
+  }
+
+  #[test]
+  fn list_commit_changed_files_reports_modified_file() {
+    let repo = TempRepo::init("history-modified");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+    let commit_oid = commit_text_file(&repo.path, rel_path, "v2\n", "update");
+
+    let files = list_commit_changed_files(&repo.path, &commit_oid).expect("changed files");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, rel_path);
+    assert_eq!(files[0].kind, CommitFileChangeKind::Modified);
+  }
+
+  #[test]
+  fn list_commit_changed_files_reports_renamed_file() {
+    let repo = TempRepo::init("history-renamed");
+    let old_path = Path::new("old.txt");
+    let new_path = Path::new("new.txt");
+    let _ = commit_text_file(&repo.path, old_path, "same content\n", "initial");
+    let rename_commit = rename_file_and_commit(&repo.path, old_path, new_path, "rename");
+
+    let files = list_commit_changed_files(&repo.path, &rename_commit).expect("changed files");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, new_path);
+    assert_eq!(files[0].old_path.as_deref(), Some(old_path));
+    assert_eq!(files[0].kind, CommitFileChangeKind::Renamed);
+  }
+
+  #[test]
+  fn load_commit_file_diff_returns_renamed_file_content() {
+    let repo = TempRepo::init("history-rename-diff");
+    let old_path = Path::new("old.txt");
+    let new_path = Path::new("new.txt");
+    let _ = commit_text_file(&repo.path, old_path, "same content\n", "initial");
+    let rename_commit = rename_file_and_commit(&repo.path, old_path, new_path, "rename");
+
+    let diff =
+      load_commit_file_diff(&repo.path, &rename_commit, new_path).expect("load renamed file diff");
+    assert_eq!(diff.file.kind, CommitFileChangeKind::Renamed);
+    assert_eq!(diff.file.path, new_path);
+    assert_eq!(diff.file.old_path.as_deref(), Some(old_path));
+    assert_eq!(diff.content, "same content\n");
+  }
+
+  #[test]
+  fn load_commit_file_diff_returns_empty_content_for_deleted_file() {
+    let repo = TempRepo::init("history-delete-diff");
+    let rel_path = Path::new("delete-me.txt");
+    let _ = commit_text_file(&repo.path, rel_path, "gone\n", "initial");
+    let delete_commit = delete_file_and_commit(&repo.path, rel_path, "delete");
+
+    let diff =
+      load_commit_file_diff(&repo.path, &delete_commit, rel_path).expect("load deleted file diff");
+    assert_eq!(diff.file.kind, CommitFileChangeKind::Deleted);
+    assert_eq!(diff.file.path, rel_path);
+    assert_eq!(diff.content, "");
+    assert!(
+      diff.patch.contains("deleted file mode")
+        || (diff.patch.contains("delete-me.txt") && diff.patch.contains("/dev/null"))
+    );
+  }
+}

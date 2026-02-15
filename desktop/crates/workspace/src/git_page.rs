@@ -536,6 +536,12 @@ pub struct GitPage {
   commit_input: Entity<InputState>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SelectedFileUpdate {
+  clear_selection: bool,
+  sync_diff_view: bool,
+}
+
 impl GitPage {
   fn should_refresh_file_list(sidebar_mode: GitSidebarMode) -> bool {
     sidebar_mode == GitSidebarMode::Changes
@@ -558,6 +564,84 @@ impl GitPage {
       Some(polled_revision) => Some(polled_revision) != cached_revision,
       None => false,
     }
+  }
+
+  fn branch_name_changed(previous: Option<&BranchStatus>, next: Option<&BranchStatus>) -> bool {
+    previous.map(|status| status.name.as_str()) != next.map(|status| status.name.as_str())
+  }
+
+  fn has_staged_changes(entries: &[RepoStatusEntry]) -> bool {
+    entries
+      .iter()
+      .any(|entry| matches!(entry.stage, RepoStage::Staged | RepoStage::PartiallyStaged))
+  }
+
+  fn selected_file_update(
+    selected_file: Option<&Path>,
+    status_entries: &[RepoStatusEntry],
+    has_history_file_selection: bool,
+    sync_diff_when_selected_retained: bool,
+  ) -> SelectedFileUpdate {
+    if has_history_file_selection {
+      return SelectedFileUpdate::default();
+    }
+
+    let Some(selected_file) = selected_file else {
+      return SelectedFileUpdate::default();
+    };
+
+    let is_selected_file_present = status_entries
+      .iter()
+      .any(|entry| entry.path.as_path() == selected_file);
+    if !is_selected_file_present {
+      return SelectedFileUpdate {
+        clear_selection: true,
+        sync_diff_view: false,
+      };
+    }
+
+    SelectedFileUpdate {
+      clear_selection: false,
+      sync_diff_view: sync_diff_when_selected_retained,
+    }
+  }
+
+  fn apply_status_snapshot(
+    &mut self,
+    entries: Vec<RepoStatusEntry>,
+    branch_status: Option<BranchStatus>,
+    head_status: Option<HeadCommitStatus>,
+    sync_diff_when_selected_retained: bool,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    self.status_entries = entries;
+    let branch_changed = Self::branch_name_changed(self.branch_status.as_ref(), branch_status.as_ref());
+    self.branch_status = branch_status;
+    self.has_staged_changes = Self::has_staged_changes(&self.status_entries);
+    let head_status = head_status.unwrap_or(HeadCommitStatus {
+      has_head_commit: false,
+      can_undo_last_commit: false,
+    });
+    self.has_head_commit = head_status.has_head_commit;
+    self.can_undo_last_commit = head_status.can_undo_last_commit;
+    let (can_push, can_force_push) = Self::push_flags(self.branch_status.as_ref());
+    self.can_push = can_push;
+    self.can_force_push = can_force_push;
+
+    let selected_file_update = Self::selected_file_update(
+      self.selected_file.as_deref(),
+      &self.status_entries,
+      self.history_opened_commit_file.is_some(),
+      sync_diff_when_selected_retained,
+    );
+    if selected_file_update.clear_selection {
+      self.selected_file = None;
+      self.editor = None;
+    } else if selected_file_update.sync_diff_view {
+      self.sync_diff_view(cx);
+    }
+
+    branch_changed
   }
 
   fn history_file_status_kind(&self, commit_oid: &str, rel_path: &Path) -> Option<RepoStatusKind> {
@@ -1290,23 +1374,7 @@ impl GitPage {
         if this.selected_repo.as_ref() != Some(&requested_repo) {
           return;
         }
-        this.status_entries = entries;
-        let branch_changed = this
-          .branch_status
-          .as_ref()
-          .map(|status| status.name.as_str())
-          != branch_status.as_ref().map(|status| status.name.as_str());
-        this.branch_status = branch_status;
-        this.has_staged_changes = this
-          .status_entries
-          .iter()
-          .any(|entry| matches!(entry.stage, RepoStage::Staged | RepoStage::PartiallyStaged));
-        let head_status = head_status.unwrap_or(HeadCommitStatus {
-          has_head_commit: false,
-          can_undo_last_commit: false,
-        });
-        this.has_head_commit = head_status.has_head_commit;
-        this.can_undo_last_commit = head_status.can_undo_last_commit;
+        let branch_changed = this.apply_status_snapshot(entries, branch_status, head_status, true, cx);
         if include_history {
           if let Some(history) = history {
             this.history_commits = history;
@@ -1318,25 +1386,8 @@ impl GitPage {
           }
           this.history_loading = false;
         }
-        let (can_push, can_force_push) = Self::push_flags(this.branch_status.as_ref());
-        this.can_push = can_push;
-        this.can_force_push = can_force_push;
         if branch_changed {
           this.refresh_branches(cx);
-        }
-        if this.history_opened_commit_file.is_none() {
-          if let Some(selected) = this.selected_file.as_ref() {
-            let still_present = this
-              .status_entries
-              .iter()
-              .any(|entry| &entry.path == selected);
-            if !still_present {
-              this.selected_file = None;
-              this.editor = None;
-            } else {
-              this.sync_diff_view(cx);
-            }
-          }
         }
         if Self::should_refresh_file_list(this.sidebar_mode) {
           this.refresh_file_list(cx);
@@ -1422,23 +1473,8 @@ impl GitPage {
           if this.selected_repo.as_ref() != Some(&requested_repo) {
             return;
           }
-          this.status_entries = entries;
-          let branch_changed = this
-            .branch_status
-            .as_ref()
-            .map(|status| status.name.as_str())
-            != branch_status.as_ref().map(|status| status.name.as_str());
-          this.branch_status = branch_status;
-          this.has_staged_changes = this
-            .status_entries
-            .iter()
-            .any(|entry| matches!(entry.stage, RepoStage::Staged | RepoStage::PartiallyStaged));
-          let head_status = head_status.unwrap_or(HeadCommitStatus {
-            has_head_commit: false,
-            can_undo_last_commit: false,
-          });
-          this.has_head_commit = head_status.has_head_commit;
-          this.can_undo_last_commit = head_status.can_undo_last_commit;
+          let branch_changed =
+            this.apply_status_snapshot(entries, branch_status, head_status, false, cx);
           if include_history {
             if let Some(history) = history {
               this.history_commits = history;
@@ -1457,25 +1493,10 @@ impl GitPage {
               this.history_loading = false;
             }
           }
-          let (can_push, can_force_push) = Self::push_flags(this.branch_status.as_ref());
-          this.can_push = can_push;
-          this.can_force_push = can_force_push;
           if branch_changed {
             this.refresh_branches(cx);
           }
-          if this.history_opened_commit_file.is_none() {
-            if let Some(selected) = this.selected_file.as_ref() {
-              let still_present = this
-                .status_entries
-                .iter()
-                .any(|entry| &entry.path == selected);
-              if !still_present {
-                this.selected_file = None;
-                this.editor = None;
-              }
-            }
-          }
-          if this.sidebar_mode == GitSidebarMode::Changes {
+          if Self::should_refresh_file_list(this.sidebar_mode) {
             this.refresh_file_list(cx);
           }
           cx.notify();
@@ -2880,8 +2901,7 @@ impl GitPage {
       .items_center()
       .gap_2()
       .when(is_unauthenticated, |this| this.child(sign_in_button))
-      .when_some(auth_control, |this, control| this.child(control))
-      ;
+      .when_some(auth_control, |this, control| this.child(control));
 
     div()
       .h(px(HEADER_HEIGHT))
@@ -3766,6 +3786,20 @@ mod tests {
     }
   }
 
+  fn make_branch_status(
+    name: &str,
+    ahead: usize,
+    behind: usize,
+    has_upstream: bool,
+  ) -> BranchStatus {
+    BranchStatus {
+      name: name.to_string(),
+      ahead,
+      behind,
+      has_upstream,
+    }
+  }
+
   #[test]
   fn build_history_tree_items_marks_selected_commit_expanded() {
     let commits = vec![
@@ -3907,5 +3941,165 @@ mod tests {
       Some(&cached),
       Some(&current)
     ));
+  }
+
+  #[test]
+  fn should_not_refresh_history_for_poll_when_history_not_included() {
+    assert!(!GitPage::should_refresh_history_for_poll(
+      false,
+      true,
+      Some(&make_history_revision("a")),
+      Some(&make_history_revision("b"))
+    ));
+  }
+
+  #[test]
+  fn should_not_refresh_history_for_poll_when_revision_unavailable() {
+    assert!(!GitPage::should_refresh_history_for_poll(
+      true,
+      false,
+      Some(&make_history_revision("a")),
+      None
+    ));
+  }
+
+  #[test]
+  fn branch_name_changed_detects_name_transitions() {
+    let main = make_branch_status("main", 0, 0, true);
+    let feature = make_branch_status("feature", 0, 0, true);
+
+    assert!(GitPage::branch_name_changed(None, Some(&main)));
+    assert!(GitPage::branch_name_changed(Some(&main), Some(&feature)));
+    assert!(GitPage::branch_name_changed(Some(&main), None));
+    assert!(!GitPage::branch_name_changed(None, None));
+    assert!(!GitPage::branch_name_changed(Some(&main), Some(&main)));
+  }
+
+  #[test]
+  fn push_flags_respect_upstream_and_divergence() {
+    let no_upstream = make_branch_status("main", 3, 0, false);
+    assert_eq!(GitPage::push_flags(Some(&no_upstream)), (false, false));
+
+    let clean_ahead = make_branch_status("main", 2, 0, true);
+    assert_eq!(GitPage::push_flags(Some(&clean_ahead)), (true, false));
+
+    let diverged = make_branch_status("main", 1, 2, true);
+    assert_eq!(GitPage::push_flags(Some(&diverged)), (false, true));
+
+    let behind_only = make_branch_status("main", 0, 2, true);
+    assert_eq!(GitPage::push_flags(Some(&behind_only)), (false, false));
+  }
+
+  fn make_status_entry(path: &str, stage: RepoStage) -> RepoStatusEntry {
+    RepoStatusEntry {
+      path: PathBuf::from(path),
+      old_path: None,
+      status: RepoStatusKind::Modified,
+      stage,
+    }
+  }
+
+  #[test]
+  fn has_staged_changes_detects_staged_and_partial_entries() {
+    assert!(!GitPage::has_staged_changes(&[
+      make_status_entry("src/a.rs", RepoStage::Unstaged),
+      make_status_entry("src/b.rs", RepoStage::Unstaged),
+    ]));
+    assert!(GitPage::has_staged_changes(&[
+      make_status_entry("src/a.rs", RepoStage::Staged),
+      make_status_entry("src/b.rs", RepoStage::Unstaged),
+    ]));
+    assert!(GitPage::has_staged_changes(&[make_status_entry(
+      "src/a.rs",
+      RepoStage::PartiallyStaged
+    )]));
+  }
+
+  #[test]
+  fn selected_file_update_clears_missing_selection_without_history_file() {
+    let update = GitPage::selected_file_update(
+      Some(Path::new("src/missing.rs")),
+      &[make_status_entry("src/exists.rs", RepoStage::Unstaged)],
+      false,
+      true,
+    );
+    assert_eq!(
+      update,
+      SelectedFileUpdate {
+        clear_selection: true,
+        sync_diff_view: false,
+      }
+    );
+  }
+
+  #[test]
+  fn selected_file_update_keeps_selection_and_syncs_when_present() {
+    let update = GitPage::selected_file_update(
+      Some(Path::new("src/main.rs")),
+      &[make_status_entry("src/main.rs", RepoStage::Unstaged)],
+      false,
+      true,
+    );
+    assert_eq!(
+      update,
+      SelectedFileUpdate {
+        clear_selection: false,
+        sync_diff_view: true,
+      }
+    );
+  }
+
+  #[test]
+  fn selected_file_update_never_clears_when_history_file_is_open() {
+    let update = GitPage::selected_file_update(
+      Some(Path::new("src/main.rs")),
+      &[make_status_entry("src/other.rs", RepoStage::Unstaged)],
+      true,
+      true,
+    );
+    assert_eq!(update, SelectedFileUpdate::default());
+  }
+
+  #[test]
+  fn selected_file_update_is_noop_without_selection() {
+    let update = GitPage::selected_file_update(
+      None,
+      &[make_status_entry("src/main.rs", RepoStage::Unstaged)],
+      false,
+      true,
+    );
+    assert_eq!(update, SelectedFileUpdate::default());
+  }
+
+  #[test]
+  fn history_change_kind_mapping_covers_all_variants() {
+    assert_eq!(
+      GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Added),
+      RepoStatusKind::Added
+    );
+    assert_eq!(
+      GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Deleted),
+      RepoStatusKind::Deleted
+    );
+    assert_eq!(
+      GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Modified),
+      RepoStatusKind::Modified
+    );
+    assert_eq!(
+      GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Renamed),
+      RepoStatusKind::Renamed
+    );
+    assert_eq!(
+      GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Copied),
+      RepoStatusKind::Renamed
+    );
+    assert_eq!(
+      GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Typechange),
+      RepoStatusKind::TypeChange
+    );
+    assert_eq!(
+      GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Conflicted),
+      RepoStatusKind::Conflicted
+    );
   }
 }

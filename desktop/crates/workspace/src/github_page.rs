@@ -855,3 +855,131 @@ impl Focusable for GithubPage {
     self.focus_handle.clone()
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::api::{
+    GithubNotificationRepository, GithubNotificationSubject, GithubPullRequestLabel,
+    GithubPullRequestState, GithubRepository,
+  };
+
+  fn make_pull_request_row(title: &str, owner: &str, repo: &str) -> GithubPullRequestRow {
+    GithubPullRequestRow {
+      pr: Rc::new(GithubPullRequest {
+        number: 1,
+        title: title.to_string(),
+        state: GithubPullRequestState::Open,
+        merged_at: None,
+        draft: false,
+        updated_at: "2026-02-15T12:00:00Z".to_string(),
+        labels: vec![GithubPullRequestLabel {
+          name: "test".to_string(),
+        }],
+        repository: GithubRepository {
+          owner: owner.to_string(),
+          repo: repo.to_string(),
+        },
+      }),
+      owner: owner.to_string().into(),
+      repo: repo.to_string().into(),
+    }
+  }
+
+  fn make_notification_row(
+    title: &str,
+    full_name: &str,
+    reason: &str,
+    unread: bool,
+  ) -> GithubNotificationRow {
+    GithubNotificationRow {
+      notification: Rc::new(GithubNotification {
+        id: "1".to_string(),
+        repository: GithubNotificationRepository {
+          name: full_name
+            .split('/')
+            .next_back()
+            .unwrap_or(full_name)
+            .to_string(),
+          full_name: full_name.to_string(),
+          owner: None,
+        },
+        subject: GithubNotificationSubject {
+          title: title.to_string(),
+          subject_type: "PullRequest".to_string(),
+          url: None,
+          latest_comment_url: None,
+        },
+        reason: reason.to_string(),
+        unread,
+        updated_at: "2026-02-15T12:00:00Z".to_string(),
+        last_read_at: None,
+        url: "https://api.github.test/notif/1".to_string(),
+        subscription_url: "https://api.github.test/sub/1".to_string(),
+      }),
+    }
+  }
+
+  #[test]
+  fn format_updated_at_formats_date_and_time() {
+    assert_eq!(
+      format_updated_at("2026-02-15T12:34:56Z").as_ref(),
+      "2026-02-15 12:34"
+    );
+    assert_eq!(
+      format_updated_at("2026-02-15T12:34:56+02:00").as_ref(),
+      "2026-02-15 12:34"
+    );
+  }
+
+  #[test]
+  fn format_updated_at_preserves_non_iso_inputs() {
+    assert_eq!(format_updated_at("2026-02-15").as_ref(), "2026-02-15");
+  }
+
+  #[test]
+  fn pull_request_row_matches_title_or_repo_case_insensitive() {
+    let row = make_pull_request_row("Fix Login Bug", "Acme", "Portal");
+    assert!(row.matches("login"));
+    assert!(row.matches("acme/portal"));
+    assert!(!row.matches("missing"));
+  }
+
+  #[test]
+  fn notification_row_matches_title_repo_or_reason() {
+    let row = make_notification_row("Review request", "acme/portal", "mention", true);
+    assert!(row.matches("review"));
+    assert!(row.matches("ACME/PORTAL"));
+    assert!(row.matches("MENTION"));
+    assert!(!row.matches("missing"));
+  }
+
+  #[test]
+  fn notification_delegate_prepare_filters_and_counts_unread() {
+    let mut delegate = GithubNotificationListDelegate::new();
+    delegate.set_rows(vec![
+      Rc::new(make_notification_row(
+        "Review request",
+        "acme/portal",
+        "mention",
+        true,
+      )),
+      Rc::new(make_notification_row(
+        "Dependency update",
+        "acme/backend",
+        "subscribed",
+        false,
+      )),
+    ]);
+
+    assert_eq!(delegate.unread_count(), 1);
+    assert_eq!(delegate.matched_rows.len(), 2);
+
+    delegate.prepare("backend");
+    assert_eq!(delegate.matched_rows.len(), 1);
+    assert_eq!(
+      delegate.matched_rows[0].notification.repository.full_name,
+      "acme/backend"
+    );
+  }
+}

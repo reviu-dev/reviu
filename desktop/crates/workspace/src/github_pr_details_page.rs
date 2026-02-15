@@ -97,7 +97,7 @@ struct GithubPrFileDiff {
 }
 
 fn map_file_status(status: &str) -> GithubPrFileStatus {
-  match status {
+  match status.trim().to_ascii_lowercase().as_str() {
     "added" => GithubPrFileStatus::Added,
     "removed" | "deleted" => GithubPrFileStatus::Deleted,
     "renamed" => GithubPrFileStatus::Renamed,
@@ -2121,5 +2121,138 @@ impl Render for GithubPrDetailsPage {
 impl Focusable for GithubPrDetailsPage {
   fn focus_handle(&self, _cx: &App) -> FocusHandle {
     self.focus_handle.clone()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::api::GithubPullRequestFile;
+
+  fn make_api_file(
+    filename: &str,
+    status: &str,
+    previous_filename: Option<&str>,
+  ) -> GithubPullRequestFile {
+    GithubPullRequestFile {
+      filename: filename.to_string(),
+      status: status.to_string(),
+      patch: None,
+      previous_filename: previous_filename.map(str::to_string),
+    }
+  }
+
+  #[test]
+  fn format_datetime_returns_date_component_for_iso_values() {
+    assert_eq!(
+      format_datetime("2026-02-15T12:34:56Z").as_ref(),
+      "2026-02-15"
+    );
+    assert_eq!(format_datetime("2026-02-15").as_ref(), "2026-02-15");
+  }
+
+  #[test]
+  fn status_letter_covers_all_file_statuses() {
+    assert_eq!(status_letter(GithubPrFileStatus::Added), "A");
+    assert_eq!(status_letter(GithubPrFileStatus::Modified), "M");
+    assert_eq!(status_letter(GithubPrFileStatus::Deleted), "D");
+    assert_eq!(status_letter(GithubPrFileStatus::Renamed), "R");
+  }
+
+  #[test]
+  fn map_file_status_handles_known_and_unknown_values() {
+    assert_eq!(map_file_status("added"), GithubPrFileStatus::Added);
+    assert_eq!(map_file_status("removed"), GithubPrFileStatus::Deleted);
+    assert_eq!(map_file_status("deleted"), GithubPrFileStatus::Deleted);
+    assert_eq!(map_file_status("renamed"), GithubPrFileStatus::Renamed);
+    assert_eq!(map_file_status("changed"), GithubPrFileStatus::Modified);
+    assert_eq!(map_file_status("ADDED"), GithubPrFileStatus::Added);
+    assert_eq!(map_file_status(" deleted "), GithubPrFileStatus::Deleted);
+  }
+
+  #[test]
+  fn markdown_path_detection_is_case_insensitive_and_extension_based() {
+    assert!(GithubPrDetailsPage::is_markdown_path(Path::new(
+      "README.md"
+    )));
+    assert!(GithubPrDetailsPage::is_markdown_path(Path::new(
+      "docs/GUIDE.MD"
+    )));
+    assert!(GithubPrDetailsPage::is_markdown_path(Path::new(
+      "notes.markdown"
+    )));
+    assert!(GithubPrDetailsPage::is_markdown_path(Path::new("post.MdX")));
+
+    assert!(!GithubPrDetailsPage::is_markdown_path(Path::new("README")));
+    assert!(!GithubPrDetailsPage::is_markdown_path(Path::new(
+      "icon.svg"
+    )));
+    assert!(!GithubPrDetailsPage::is_markdown_path(Path::new(
+      "note.md.txt"
+    )));
+  }
+
+  #[test]
+  fn svg_path_detection_is_case_insensitive_and_extension_based() {
+    assert!(GithubPrDetailsPage::is_svg_path(Path::new("icon.svg")));
+    assert!(GithubPrDetailsPage::is_svg_path(Path::new("ICON.SVG")));
+
+    assert!(!GithubPrDetailsPage::is_svg_path(Path::new("icon.svgz")));
+    assert!(!GithubPrDetailsPage::is_svg_path(Path::new("README.md")));
+    assert!(!GithubPrDetailsPage::is_svg_path(Path::new("icon")));
+  }
+
+  #[test]
+  fn files_from_api_sets_unknown_filename_and_rename_old_path() {
+    let files = files_from_api(vec![
+      make_api_file("", "added", None),
+      make_api_file("src/new.rs", "renamed", Some("src/old.rs")),
+      make_api_file("src/main.rs", "modified", Some("src/very_old.rs")),
+    ]);
+
+    assert_eq!(files[0].path.as_ref(), "unknown");
+    assert_eq!(files[0].old_path, None);
+
+    assert_eq!(files[1].status, GithubPrFileStatus::Renamed);
+    assert_eq!(files[1].path.as_ref(), "src/new.rs");
+    assert_eq!(
+      files[1].old_path.as_ref().map(|v| v.as_ref()),
+      Some("src/old.rs")
+    );
+
+    assert_eq!(files[2].status, GithubPrFileStatus::Modified);
+    assert_eq!(files[2].old_path, None);
+  }
+
+  #[test]
+  fn build_tree_items_prefers_folder_and_selects_first_file() {
+    let files = files_from_api(vec![
+      make_api_file("README.md", "modified", None),
+      make_api_file("src/lib.rs", "modified", None),
+      make_api_file("src/main.rs", "modified", None),
+    ]);
+
+    let (items, lookup, selected_index, selected_id) = build_tree_items(&files);
+
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].label.as_ref(), "src");
+    assert_eq!(items[0].children.len(), 2);
+    assert_eq!(items[0].children[0].label.as_ref(), "lib.rs");
+    assert_eq!(items[0].children[1].label.as_ref(), "main.rs");
+    assert_eq!(items[1].label.as_ref(), "README.md");
+
+    assert_eq!(selected_id.as_deref(), Some("src/lib.rs"));
+    assert_eq!(selected_index, Some(0));
+    assert!(lookup.contains_key("src/lib.rs"));
+    assert!(lookup.contains_key("README.md"));
+  }
+
+  #[test]
+  fn build_tree_items_empty_input_has_no_selection() {
+    let (items, lookup, selected_index, selected_id) = build_tree_items(&[]);
+    assert!(items.is_empty());
+    assert!(lookup.is_empty());
+    assert_eq!(selected_index, None);
+    assert_eq!(selected_id, None);
   }
 }

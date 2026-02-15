@@ -182,3 +182,187 @@ fn upstream_info(repo: &Repository) -> Result<Option<UpstreamInfo>> {
     local_branch: local_name.to_string(),
   }))
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::{
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+  };
+
+  struct TempRepo {
+    path: PathBuf,
+  }
+
+  impl TempRepo {
+    fn init(prefix: &str) -> Self {
+      let mut path = std::env::temp_dir();
+      let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+      path.push(format!("reviu-{prefix}-{}-{nanos}", std::process::id()));
+      std::fs::create_dir_all(&path).expect("create temp dir");
+      Repository::init(&path).expect("init git repository");
+      Self { path }
+    }
+  }
+
+  impl Drop for TempRepo {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.path);
+    }
+  }
+
+  fn commit_text_file(repo_root: &Path, rel_path: &Path, contents: &str, message: &str) {
+    let repo = Repository::open(repo_root).expect("open repo");
+    std::fs::write(repo_root.join(rel_path), contents).expect("write worktree file");
+
+    let mut index = repo.index().expect("open index");
+    index.add_path(rel_path).expect("stage file");
+    index.write().expect("write index");
+
+    let tree_id = index.write_tree().expect("write tree");
+    let tree = repo.find_tree(tree_id).expect("find tree");
+    let sig = Signature::now("Reviu Tests", "tests@reviu.local").expect("signature");
+    let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+
+    match parent {
+      Some(parent) => {
+        repo
+          .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])
+          .expect("commit with parent");
+      }
+      None => {
+        repo
+          .commit(Some("HEAD"), &sig, &sig, message, &tree, &[])
+          .expect("initial commit");
+      }
+    }
+  }
+
+  #[test]
+  fn commit_changes_rejects_empty_message() {
+    let repo = TempRepo::init("commit-empty");
+    let err = commit_changes(&repo.path, "   ").err();
+    assert!(err.is_some());
+    assert!(
+      err
+        .expect("error")
+        .to_string()
+        .contains("commit message is empty")
+    );
+  }
+
+  #[test]
+  fn head_commit_status_is_false_for_repo_without_commits() {
+    let repo = TempRepo::init("commit-head-empty");
+    let status = head_commit_status(&repo.path).expect("head status");
+    assert!(!status.has_head_commit);
+    assert!(!status.can_undo_last_commit);
+  }
+
+  #[test]
+  fn push_fails_without_upstream_configuration() {
+    let repo = TempRepo::init("commit-push-upstream");
+    commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
+
+    let err = push(&repo.path, false).err();
+    assert!(err.is_some());
+    assert!(
+      err
+        .expect("push error")
+        .to_string()
+        .contains("no upstream configured")
+    );
+  }
+
+  #[test]
+  fn amend_commit_keeps_message_when_none_and_updates_tree() {
+    let repo = TempRepo::init("commit-amend-none");
+    let rel_path = Path::new("README.md");
+    commit_text_file(&repo.path, rel_path, "hello\n", "initial message");
+
+    std::fs::write(repo.path.join(rel_path), "hello v2\n").expect("update file");
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let mut index = repo_handle.index().expect("open index");
+    index.add_path(rel_path).expect("stage updated file");
+    index.write().expect("write index");
+
+    amend_commit(&repo.path, None).expect("amend commit");
+
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head commit");
+    assert_eq!(head.summary(), Some("initial message"));
+
+    let tree = head.tree().expect("head tree");
+    let entry = tree.get_path(rel_path).expect("entry in tree");
+    let blob = repo_handle.find_blob(entry.id()).expect("blob");
+    assert_eq!(
+      String::from_utf8_lossy(blob.content()).as_ref(),
+      "hello v2\n"
+    );
+  }
+
+  #[test]
+  fn amend_commit_trims_and_replaces_message() {
+    let repo = TempRepo::init("commit-amend-message");
+    let rel_path = Path::new("README.md");
+    commit_text_file(&repo.path, rel_path, "hello\n", "initial message");
+
+    amend_commit(&repo.path, Some("  updated message  ")).expect("amend commit");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head commit");
+    assert_eq!(head.summary(), Some("updated message"));
+  }
+
+  #[test]
+  fn undo_last_commit_fails_when_head_has_no_parent() {
+    let repo = TempRepo::init("commit-undo-one");
+    commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "hello\n",
+      "initial message",
+    );
+
+    let err = undo_last_commit(&repo.path).err();
+    assert!(err.is_some());
+    assert!(
+      err
+        .expect("undo error")
+        .to_string()
+        .contains("HEAD has no parent")
+    );
+  }
+
+  #[test]
+  fn undo_last_commit_moves_head_to_parent() {
+    let repo = TempRepo::init("commit-undo-parent");
+    let rel_path = Path::new("README.md");
+    commit_text_file(&repo.path, rel_path, "v1\n", "first");
+    commit_text_file(&repo.path, rel_path, "v2\n", "second");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head_before = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("head before");
+    let parent_oid = head_before.parent(0).expect("parent").id();
+
+    undo_last_commit(&repo.path).expect("undo commit");
+
+    let head_after = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("head after");
+    assert_eq!(head_after.id(), parent_oid);
+  }
+}

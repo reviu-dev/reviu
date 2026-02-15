@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.gitignore'
+      - renovate.json
+
+jobs:
+  desktop:
+    name: Desktop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cargo check
+        working-directory: desktop
+        run: cargo check
+
+      - name: Clippy
+        working-directory: desktop
+        run: cargo clippy -- -D warnings
+
+      - name: Cargo fmt
+        working-directory: desktop
+        run: cargo fmt -- --check
+
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: backend/package.json
+          cache: true
+
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: backend/package.json
+          cache: pnpm
+          cache-dependency-path: backend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: backend
+        run: pnpm typecheck
+
+      - name: Eslint
+        working-directory: backend
+        run: pnpm lint
