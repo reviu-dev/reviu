@@ -8,7 +8,10 @@ I have a repo git-playground, I use it to test the git related features: /Users/
 
 ## GPUI Desktop app
 
+Framework: Gpui
+
 Always run cargo check for errors: cd ./desktop/ && cargo check
+Add tests when finishing a feature or fix
 For icons use gpui-components icons
 
 Gpui tips:
