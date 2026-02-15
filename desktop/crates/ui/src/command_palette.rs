@@ -98,6 +98,8 @@ pub enum CommandPaletteAction {
     repo: String,
     number: u64,
   },
+  OpenGitHistorySidebar,
+  OpenGitChangesSidebar,
   OpenGitConfigPage,
   OpenSettingsPage,
 }
@@ -368,6 +370,8 @@ pub enum CommandPaletteCommandId {
   OpenGitPage,
   OpenGithubPage,
   OpenGithubPrFromUrl,
+  OpenGitHistorySidebar,
+  OpenGitChangesSidebar,
   OpenGitConfigPage,
   OpenSettingsPage,
 }
@@ -436,6 +440,22 @@ impl CommandPaletteCommand {
     }
   }
 
+  pub fn open_git_history_sidebar() -> Self {
+    Self {
+      id: CommandPaletteCommandId::OpenGitHistorySidebar,
+      name: "Open History in sidebar".into(),
+      description: Some("Switch Git sidebar to History".into()),
+    }
+  }
+
+  pub fn open_git_changes_sidebar() -> Self {
+    Self {
+      id: CommandPaletteCommandId::OpenGitChangesSidebar,
+      name: "Open Changes in sidebar".into(),
+      description: Some("Switch Git sidebar to Changes".into()),
+    }
+  }
+
   pub fn open_settings_page() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenSettingsPage,
@@ -478,6 +498,11 @@ impl CommandPaletteCommand {
       commands.push(Self::open_settings_page());
     }
 
+    if current_page == CommandPalettePage::Git {
+      commands.push(Self::open_git_history_sidebar());
+      commands.push(Self::open_git_changes_sidebar());
+    }
+
     commands
   }
 
@@ -491,6 +516,8 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::OpenGitPage => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::OpenGithubPage => Icon::new(IconName::GitHub),
       CommandPaletteCommandId::OpenGithubPrFromUrl => Icon::new(IconName::GitHub),
+      CommandPaletteCommandId::OpenGitHistorySidebar => Icon::new(UiIconName::History),
+      CommandPaletteCommandId::OpenGitChangesSidebar => Icon::new(UiIconName::FileCode),
       CommandPaletteCommandId::OpenGitConfigPage => Self::git_config_icon(),
       CommandPaletteCommandId::OpenSettingsPage => Icon::new(IconName::Settings2),
     }
@@ -948,6 +975,12 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::OpenSettingsPage => {
         self.trigger_action(CommandPaletteAction::OpenSettingsPage, window, cx);
+      }
+      CommandPaletteCommandId::OpenGitHistorySidebar => {
+        self.trigger_action(CommandPaletteAction::OpenGitHistorySidebar, window, cx);
+      }
+      CommandPaletteCommandId::OpenGitChangesSidebar => {
+        self.trigger_action(CommandPaletteAction::OpenGitChangesSidebar, window, cx);
       }
     }
   }

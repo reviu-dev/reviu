@@ -1678,6 +1678,14 @@ impl GitPage {
         cx.refresh_windows();
         Ok(())
       }
+      CommandPaletteAction::OpenGitHistorySidebar => {
+        self.set_sidebar_mode(GitSidebarMode::History, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenGitChangesSidebar => {
+        self.set_sidebar_mode(GitSidebarMode::Changes, cx);
+        Ok(())
+      }
       CommandPaletteAction::SwitchBranch(branch) => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
@@ -2150,10 +2158,15 @@ impl GitPage {
     _: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.sidebar_mode = match self.sidebar_mode {
+    let next_mode = match self.sidebar_mode {
       GitSidebarMode::Changes => GitSidebarMode::History,
       GitSidebarMode::History => GitSidebarMode::Changes,
     };
+    self.set_sidebar_mode(next_mode, cx);
+  }
+
+  fn set_sidebar_mode(&mut self, mode: GitSidebarMode, cx: &mut Context<Self>) {
+    self.sidebar_mode = mode;
 
     if self.sidebar_mode == GitSidebarMode::History {
       self.refresh_history(cx);
