@@ -265,12 +265,11 @@ fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
   ranges.sort_by_key(|range| range.start);
   let mut merged: Vec<Range<usize>> = Vec::new();
   for range in ranges {
-    if let Some(last) = merged.last_mut() {
-      if range.start <= last.end {
+    if let Some(last) = merged.last_mut()
+      && range.start <= last.end {
         last.end = last.end.max(range.end);
         continue;
       }
-    }
     merged.push(range);
   }
   merged
@@ -891,16 +890,12 @@ impl Element for EditorElement {
               .line_content(*doc_line)
               .map(|cow| clean_line_text(&cow))
               .unwrap_or_default();
-            let base_color = if matches!(change, Some(ChangeKind::Added)) {
-              style.color
-            } else {
-              style.color
-            };
+            let base_color = style.color;
             let word_diff = if matches!(self.diff_view, DiffElementView::Inline)
               && matches!(change, Some(ChangeKind::Added))
             {
               projection.as_deref().and_then(|projection| {
-                inline_word_diff_style(display_idx, &display_line, projection, &document, &theme)
+                inline_word_diff_style(display_idx, &display_line, projection, document, &theme)
               })
             } else {
               None
@@ -941,7 +936,7 @@ impl Element for EditorElement {
             let color = theme.diff_removed_text();
             let word_diff = if matches!(self.diff_view, DiffElementView::Inline) {
               projection.as_deref().and_then(|projection| {
-                inline_word_diff_style(display_idx, &display_line, projection, &document, &theme)
+                inline_word_diff_style(display_idx, &display_line, projection, document, &theme)
               })
             } else {
               None
@@ -1204,10 +1199,10 @@ impl Element for EditorElement {
         display_line,
         self.diff_view,
         projection.as_deref(),
-        &document,
+        document,
         &theme,
-      ) {
-        if let Some((_, shaped)) = shaped_lines.iter().find(|(idx, _)| *idx == *display_idx) {
+      )
+        && let Some((_, shaped)) = shaped_lines.iter().find(|(idx, _)| *idx == *display_idx) {
           let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
           for range in word_diff.ranges {
             if range.start >= range.end {
@@ -1227,7 +1222,6 @@ impl Element for EditorElement {
             ));
           }
         }
-      }
 
       let group_id = match display_line {
         DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
@@ -1238,8 +1232,8 @@ impl Element for EditorElement {
         _ => None,
       };
 
-      if let (Some(projection), Some(group_id)) = (projection.as_ref(), group_id) {
-        if let Some((top_color, bottom_color)) = group_border_colors.get(group_id.as_ref()) {
+      if let (Some(projection), Some(group_id)) = (projection.as_ref(), group_id)
+        && let Some((top_color, bottom_color)) = group_border_colors.get(group_id.as_ref()) {
           let prev_group = display_idx
             .checked_sub(1)
             .and_then(|idx| projection.lines.get(idx))
@@ -1288,7 +1282,6 @@ impl Element for EditorElement {
             ));
           }
         }
-      }
     }
 
     if !blank_line_set.is_empty() {
@@ -1303,11 +1296,10 @@ impl Element for EditorElement {
           blank_ranges.push((start, display_idx.saturating_sub(1)));
         }
       }
-      if let Some(start) = current_start.take() {
-        if let Some((last_idx, _)) = viewport_lines.last() {
+      if let Some(start) = current_start.take()
+        && let Some((last_idx, _)) = viewport_lines.last() {
           blank_ranges.push((start, *last_idx));
         }
-      }
 
       let stripe_spacing = px(DIAGONAL_STRIPE_SPACING);
       let stripe_width = px(DIAGONAL_STRIPE_WIDTH);

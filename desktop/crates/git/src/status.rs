@@ -90,13 +90,11 @@ pub fn stage_file(repo_root: &Path, rel_path: &Path) -> Result<()> {
   let workdir_path = repo_root.join(rel_path);
   if workdir_path.exists() {
     index.add_path(rel_path)?;
-  } else {
-    if let Err(err) = index.remove_path(rel_path) {
-      if err.code() != ErrorCode::NotFound {
-        return Err(err.into());
-      }
+  } else if let Err(err) = index.remove_path(rel_path)
+    && err.code() != ErrorCode::NotFound
+  {
+    return Err(err.into());
     }
-  }
   index.write()?;
   Ok(())
 }

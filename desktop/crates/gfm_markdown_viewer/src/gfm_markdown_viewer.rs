@@ -29,6 +29,15 @@ use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_f
 use once_cell::sync::Lazy;
 use reqwest::header::CONTENT_TYPE;
 
+type BlockRenderFn = dyn Fn(AnyElement, &App) -> AnyElement + Send + Sync;
+type HeadingRenderFn = dyn Fn(u8, AnyElement, &App) -> AnyElement + Send + Sync;
+type CodeBlockRenderFn = dyn Fn(&CodeBlock, &App) -> AnyElement + Send + Sync;
+type ListItemRenderFn = dyn Fn(ListItemView, &App) -> AnyElement + Send + Sync;
+type ThematicBreakRenderFn = dyn Fn(&App) -> AnyElement + Send + Sync;
+type TableRenderFn = dyn Fn(&Table, &App) -> AnyElement + Send + Sync;
+type LinkHandlerFn = dyn Fn(&str, &mut Window, &mut App) -> LinkAction + Send + Sync;
+
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
   Paragraph(Vec<Inline>),
@@ -123,14 +132,14 @@ pub enum LinkAction {
 
 #[derive(Clone, Default)]
 pub struct RenderOverrides {
-  pub paragraph: Option<Arc<dyn Fn(AnyElement, &App) -> AnyElement + Send + Sync>>,
-  pub heading: Option<Arc<dyn Fn(u8, AnyElement, &App) -> AnyElement + Send + Sync>>,
-  pub code_block: Option<Arc<dyn Fn(&CodeBlock, &App) -> AnyElement + Send + Sync>>,
-  pub list: Option<Arc<dyn Fn(AnyElement, &App) -> AnyElement + Send + Sync>>,
-  pub list_item: Option<Arc<dyn Fn(ListItemView, &App) -> AnyElement + Send + Sync>>,
-  pub block_quote: Option<Arc<dyn Fn(AnyElement, &App) -> AnyElement + Send + Sync>>,
-  pub thematic_break: Option<Arc<dyn Fn(&App) -> AnyElement + Send + Sync>>,
-  pub table: Option<Arc<dyn Fn(&Table, &App) -> AnyElement + Send + Sync>>,
+  pub paragraph: Option<Arc<BlockRenderFn>>,
+  pub heading: Option<Arc<HeadingRenderFn>>,
+  pub code_block: Option<Arc<CodeBlockRenderFn>>,
+  pub list: Option<Arc<BlockRenderFn>>,
+  pub list_item: Option<Arc<ListItemRenderFn>>,
+  pub block_quote: Option<Arc<BlockRenderFn>>,
+  pub thematic_break: Option<Arc<ThematicBreakRenderFn>>,
+  pub table: Option<Arc<TableRenderFn>>,
 }
 
 #[derive(Clone)]
@@ -177,21 +186,11 @@ impl SelectionRange {
   }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct SelectionState {
   anchor: Option<usize>,
   range: SelectionRange,
   dragging: bool,
-}
-
-impl Default for SelectionState {
-  fn default() -> Self {
-    Self {
-      anchor: None,
-      range: SelectionRange::default(),
-      dragging: false,
-    }
-  }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -204,15 +203,13 @@ struct ActiveSelection {
 
 #[derive(Clone, Default)]
 pub struct MarkdownRenderOptions {
-  pub on_link: Option<Arc<dyn Fn(&str, &mut Window, &mut App) -> LinkAction + Send + Sync>>,
+  pub on_link: Option<Arc<LinkHandlerFn>>,
   pub overrides: RenderOverrides,
   pub state: MarkdownRenderState,
 }
 
 impl MarkdownRenderOptions {
-  pub fn with_on_link(
-    handler: Arc<dyn Fn(&str, &mut Window, &mut App) -> LinkAction + Send + Sync>,
-  ) -> Self {
+  pub fn with_on_link(handler: Arc<LinkHandlerFn>) -> Self {
     Self {
       on_link: Some(handler),
       ..Default::default()
@@ -560,67 +557,65 @@ fn split_details_segments(source: &str) -> Vec<Segment> {
     .or_else(|| lines.next().map(|line| line.to_string()))
   {
     update_fence_state(&line, &mut fence);
-    if fence.is_none() {
-      if let Some(start_idx) = find_details_start(&line) {
-        let (prefix, rest) = line.split_at(start_idx);
-        if !prefix.is_empty() {
-          buffer.push_str(prefix);
-          buffer.push('\n');
-        }
-
-        if !buffer.is_empty() {
-          segments.push(Segment::Markdown(buffer));
-          buffer = String::new();
-        }
-
-        let open = has_open_attribute(rest);
-        let mut details_lines = Vec::new();
-        let mut details_fence: Option<(char, usize)> = None;
-        let mut depth = 0isize;
-
-        let (first_part, trailing, new_depth) = split_details_line(rest, depth);
-        depth = new_depth;
-        details_lines.push(first_part);
-        if depth == 0 {
-          if let Some(trailing) = trailing {
-            pending_line = Some(trailing);
-          }
-        } else {
-          while depth > 0 {
-            let Some(next_line) = lines.next() else {
-              break;
-            };
-            let next_line = next_line.to_string();
-            update_fence_state(&next_line, &mut details_fence);
-            if details_fence.is_some() {
-              details_lines.push(next_line);
-              continue;
-            }
-
-            let (part, trailing, new_depth) = split_details_line(&next_line, depth);
-            depth = new_depth;
-            details_lines.push(part);
-            if depth == 0 {
-              if let Some(trailing) = trailing {
-                pending_line = Some(trailing);
-              }
-              break;
-            }
-          }
-        }
-
-        let details_source = details_lines.join("\n");
-        if let Some((summary, body)) = parse_details_block(&details_source) {
-          segments.push(Segment::Details {
-            summary,
-            body,
-            open,
-          });
-        } else {
-          segments.push(Segment::Markdown(details_source));
-        }
-        continue;
+    if fence.is_none() && let Some(start_idx) = find_details_start(&line) {
+      let (prefix, rest) = line.split_at(start_idx);
+      if !prefix.is_empty() {
+        buffer.push_str(prefix);
+        buffer.push('\n');
       }
+
+      if !buffer.is_empty() {
+        segments.push(Segment::Markdown(buffer));
+        buffer = String::new();
+      }
+
+      let open = has_open_attribute(rest);
+      let mut details_lines = Vec::new();
+      let mut details_fence: Option<(char, usize)> = None;
+      let mut depth = 0isize;
+
+      let (first_part, trailing, new_depth) = split_details_line(rest, depth);
+      depth = new_depth;
+      details_lines.push(first_part);
+      if depth == 0 {
+        if let Some(trailing) = trailing {
+          pending_line = Some(trailing);
+        }
+      } else {
+        while depth > 0 {
+          let Some(next_line) = lines.next() else {
+            break;
+          };
+          let next_line = next_line.to_string();
+          update_fence_state(&next_line, &mut details_fence);
+          if details_fence.is_some() {
+            details_lines.push(next_line);
+            continue;
+          }
+
+          let (part, trailing, new_depth) = split_details_line(&next_line, depth);
+          depth = new_depth;
+          details_lines.push(part);
+          if depth == 0 {
+            if let Some(trailing) = trailing {
+              pending_line = Some(trailing);
+            }
+            break;
+          }
+        }
+      }
+
+      let details_source = details_lines.join("\n");
+      if let Some((summary, body)) = parse_details_block(&details_source) {
+        segments.push(Segment::Details {
+          summary,
+          body,
+          open,
+        });
+      } else {
+        segments.push(Segment::Markdown(details_source));
+      }
+      continue;
     }
 
     buffer.push_str(&line);
@@ -983,14 +978,14 @@ fn render_table(
   let column_widths = table_column_widths(table, column_count);
 
   let mut header_row = h_flex().bg(theme.muted);
-  for column in 0..column_count {
+  for (column, width) in column_widths.iter().enumerate().take(column_count) {
     let cell = table
       .headers
       .get(column)
       .map_or(&[][..], |cell| cell.as_slice());
     header_row = header_row.child(
       div()
-        .w(px(column_widths[column]))
+        .w(px(*width))
         .px_3()
         .py_2()
         .when(column + 1 < column_count, |this| {
@@ -1010,11 +1005,11 @@ fn render_table(
   let mut body = v_flex();
   for row in &table.rows {
     let mut row_el = h_flex().border_t_1().border_color(theme.border);
-    for column in 0..column_count {
+    for (column, width) in column_widths.iter().enumerate().take(column_count) {
       let cell = row.get(column).map_or(&[][..], |cell| cell.as_slice());
       row_el = row_el.child(
         div()
-          .w(px(column_widths[column]))
+          .w(px(*width))
           .px_3()
           .py_2()
           .when(column + 1 < column_count, |this| {
@@ -1048,14 +1043,14 @@ fn render_table(
 fn table_column_widths(table: &Table, column_count: usize) -> Vec<f32> {
   let mut widths = vec![TABLE_CELL_MIN_WIDTH_PX; column_count];
 
-  for column in 0..column_count {
+  for (column, width) in widths.iter_mut().enumerate().take(column_count) {
     if let Some(cell) = table.headers.get(column) {
-      widths[column] = widths[column].max(table_cell_width(cell));
+      *width = (*width).max(table_cell_width(cell));
     }
 
     for row in &table.rows {
       if let Some(cell) = row.get(column) {
-        widths[column] = widths[column].max(table_cell_width(cell));
+        *width = (*width).max(table_cell_width(cell));
       }
     }
   }
@@ -1575,11 +1570,12 @@ impl SpanBuilder {
     self.text.push_str(value);
     let end = self.text.len();
 
-    if let Some(last) = self.spans.last_mut() {
-      if last.style == style && last.link == link {
-        last.range.end = end;
-        return;
-      }
+    if let Some(last) = self.spans.last_mut()
+      && last.style == style
+      && last.link == link
+    {
+      last.range.end = end;
+      return;
     }
 
     self.spans.push(InlineSpan {
@@ -1625,7 +1621,7 @@ struct SelectableText {
   spans: Vec<InlineSpan>,
   link_ranges: Vec<LinkRange>,
   render_state: MarkdownRenderState,
-  on_link: Option<Arc<dyn Fn(&str, &mut Window, &mut App) -> LinkAction + Send + Sync>>,
+  on_link: Option<Arc<LinkHandlerFn>>,
   text_id: usize,
   interactive: bool,
   styled_text: StyledText,
@@ -1638,7 +1634,7 @@ impl SelectableText {
     spans: Vec<InlineSpan>,
     link_ranges: Vec<LinkRange>,
     render_state: MarkdownRenderState,
-    on_link: Option<Arc<dyn Fn(&str, &mut Window, &mut App) -> LinkAction + Send + Sync>>,
+    on_link: Option<Arc<LinkHandlerFn>>,
     text_id: usize,
     interactive: bool,
   ) -> Self {
@@ -1860,17 +1856,17 @@ impl IntoElement for SelectableText {
 
 fn selection_state_for(state: &MarkdownRenderState, text_id: usize) -> SelectionState {
   let selection = state.selection.lock().unwrap();
-  if let Some(active) = selection.as_ref() {
-    if active.text_id == text_id {
-      return SelectionState {
-        anchor: Some(active.anchor),
-        range: SelectionRange {
-          start: active.anchor,
-          end: active.head,
-        },
-        dragging: active.dragging,
-      };
-    }
+  if let Some(active) = selection.as_ref()
+    && active.text_id == text_id
+  {
+    return SelectionState {
+      anchor: Some(active.anchor),
+      range: SelectionRange {
+        start: active.anchor,
+        end: active.head,
+      },
+      dragging: active.dragging,
+    };
   }
   SelectionState::default()
 }
@@ -1897,9 +1893,7 @@ fn selection_for_text(
   text_len: usize,
 ) -> Option<Range<usize>> {
   let selection = state.selection.lock().unwrap();
-  let Some(active) = selection.as_ref() else {
-    return None;
-  };
+  let active = selection.as_ref()?;
   if active.text_id != text_id || active.anchor == active.head {
     return None;
   }
@@ -2056,7 +2050,7 @@ fn blocks_from_node<'a>(node: &'a AstNode<'a>) -> Vec<Block> {
   match &node.data.borrow().value {
     NodeValue::Paragraph => vec![Block::Paragraph(inlines_from_nodes(node.children()))],
     NodeValue::Heading(heading) => vec![Block::Heading {
-      level: heading.level as u8,
+      level: heading.level,
       content: inlines_from_nodes(node.children()),
     }],
     NodeValue::List(list) => vec![Block::List(List {

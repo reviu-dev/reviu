@@ -113,7 +113,7 @@ impl ListDelegate for SearchFileListDelegate {
     let total_items = self.matched_files.len();
     let theme = cx.theme().clone();
 
-    let base_item = list_base_item(ix, total_items, self.selected_index.clone(), &theme);
+    let base_item = list_base_item(ix, total_items, self.selected_index, &theme);
 
     self.matched_files.get(ix.row).map(|entry| {
       let file_icon: AnyElement = file_icon_path_for_path_with_theme(&entry.path, &theme)
