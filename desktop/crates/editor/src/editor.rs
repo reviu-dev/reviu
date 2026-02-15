@@ -530,6 +530,27 @@ impl Editor {
     }
   }
 
+  pub fn load_readonly_snapshot(
+    &mut self,
+    contents: String,
+    diffs: Option<DiffSet>,
+    cx: &mut Context<Self>,
+  ) {
+    self.reload_from_disk(contents, cx);
+
+    // Freeze editor into detached readonly mode so polling/diff recomputation cannot overwrite
+    // commit snapshot content while browsing history.
+    self.repo_file = None;
+    self.git_store = None;
+    self.file_mtime = None;
+    self.index_mtime = None;
+    self.git_state = BufferGitState::default();
+    self.diff_generation.fetch_add(1, Ordering::Relaxed);
+    self.is_read_only = true;
+
+    self.set_diffs(diffs, cx);
+  }
+
   pub fn set_review_comments(&mut self, comments: Vec<ReviewComment>, cx: &mut Context<Self>) {
     self.review_comments = comments;
 
@@ -2236,6 +2257,9 @@ impl Editor {
         let Some((repo_file, workdir_path, last_file_mtime, last_index_mtime)) = state else {
           return;
         };
+        let Some(repo_file) = repo_file else {
+          continue;
+        };
 
         let workdir_path_for_meta = workdir_path.clone();
         let (file_mtime, index_mtime): (Option<SystemTime>, Option<SystemTime>) =
@@ -2243,9 +2267,8 @@ impl Editor {
             let file_mtime = std::fs::metadata(&workdir_path_for_meta)
               .and_then(|meta| meta.modified())
               .ok();
-            let index_mtime = repo_file
-              .as_ref()
-              .and_then(|repo| std::fs::metadata(repo.repo_root.join(".git/index")).ok())
+            let index_mtime = std::fs::metadata(repo_file.repo_root.join(".git/index"))
+              .ok()
               .and_then(|meta| meta.modified().ok());
             (file_mtime, index_mtime)
           })
@@ -3979,13 +4002,7 @@ fn parse_github_pr_comment_link(url: &str) -> Option<(u64, u64)> {
     .or_else(|| url.strip_prefix("http://github.com/"))?;
   let (_, tail) = url.split_once("/pull/")?;
   let (pr_part, fragment) = tail.split_once('#')?;
-  let pr_number = pr_part
-    .split('/')
-    .next()?
-    .split('?')
-    .next()?
-    .parse()
-    .ok()?;
+  let pr_number = pr_part.split('/').next()?.split('?').next()?.parse().ok()?;
   let fragment = fragment
     .strip_prefix("discussion_r")
     .or_else(|| fragment.strip_prefix('r'))?;
@@ -4270,13 +4287,16 @@ pub mod tests {
 
   #[test]
   fn parse_github_pr_comment_link_accepts_standard_discussion_fragment() {
-    let parsed = parse_github_pr_comment_link("https://github.com/wooorm/markdown-rs/pull/197#discussion_r123456");
+    let parsed = parse_github_pr_comment_link(
+      "https://github.com/wooorm/markdown-rs/pull/197#discussion_r123456",
+    );
     assert_eq!(parsed, Some((197, 123456)));
   }
 
   #[test]
   fn parse_github_pr_comment_link_accepts_short_r_fragment() {
-    let parsed = parse_github_pr_comment_link("https://github.com/wooorm/markdown-rs/pull/197#r98765");
+    let parsed =
+      parse_github_pr_comment_link("https://github.com/wooorm/markdown-rs/pull/197#r98765");
     assert_eq!(parsed, Some((197, 98765)));
   }
 
