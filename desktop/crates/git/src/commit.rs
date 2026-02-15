@@ -215,6 +215,56 @@ mod tests {
     }
   }
 
+  struct TempBareRepo {
+    path: PathBuf,
+  }
+
+  impl TempBareRepo {
+    fn init(prefix: &str) -> Self {
+      let mut path = std::env::temp_dir();
+      let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+      path.push(format!(
+        "reviu-{prefix}-bare-{}-{nanos}",
+        std::process::id()
+      ));
+      std::fs::create_dir_all(&path).expect("create temp dir");
+      Repository::init_bare(&path).expect("init bare git repository");
+      Self { path }
+    }
+  }
+
+  impl Drop for TempBareRepo {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.path);
+    }
+  }
+
+  struct TempDir {
+    path: PathBuf,
+  }
+
+  impl TempDir {
+    fn new(prefix: &str) -> Self {
+      let mut path = std::env::temp_dir();
+      let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+      path.push(format!("reviu-{prefix}-dir-{}-{nanos}", std::process::id()));
+      std::fs::create_dir_all(&path).expect("create temp dir");
+      Self { path }
+    }
+  }
+
+  impl Drop for TempDir {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.path);
+    }
+  }
+
   fn commit_text_file(repo_root: &Path, rel_path: &Path, contents: &str, message: &str) {
     let repo = Repository::open(repo_root).expect("open repo");
     std::fs::write(repo_root.join(rel_path), contents).expect("write worktree file");
@@ -242,6 +292,72 @@ mod tests {
     }
   }
 
+  fn stage_text_file(repo_root: &Path, rel_path: &Path, contents: &str) {
+    let repo = Repository::open(repo_root).expect("open repo");
+    std::fs::write(repo_root.join(rel_path), contents).expect("write worktree file");
+
+    let mut index = repo.index().expect("open index");
+    index.add_path(rel_path).expect("stage file");
+    index.write().expect("write index");
+  }
+
+  fn branch_name(repo_root: &Path) -> String {
+    Repository::open(repo_root)
+      .expect("open repo")
+      .head()
+      .ok()
+      .and_then(|head| head.shorthand().map(ToString::to_string))
+      .unwrap_or_else(|| "HEAD".to_string())
+  }
+
+  fn head_oid(repo_root: &Path) -> git2::Oid {
+    Repository::open(repo_root)
+      .expect("open repo")
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head commit")
+      .id()
+  }
+
+  fn remote_branch_oid(repo_root: &Path, branch_name: &str) -> git2::Oid {
+    let refname = format!("refs/heads/{branch_name}");
+    Repository::open(repo_root)
+      .expect("open repo")
+      .refname_to_id(&refname)
+      .expect("read remote branch oid")
+  }
+
+  fn push_branch_to_remote(repo_root: &Path, branch_name: &str, remote_name: &str) {
+    let repo = Repository::open(repo_root).expect("open repo");
+    let mut remote = repo.find_remote(remote_name).expect("find remote");
+    let refspec = format!("refs/heads/{branch_name}:refs/heads/{branch_name}");
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(|_, _, _| Cred::default());
+    let mut options = PushOptions::new();
+    options.remote_callbacks(callbacks);
+    remote
+      .push(&[refspec], Some(&mut options))
+      .expect("push branch");
+  }
+
+  fn set_upstream(repo_root: &Path, local_branch: &str, upstream_branch: &str) {
+    let repo = Repository::open(repo_root).expect("open repo");
+    let mut branch = repo
+      .find_branch(local_branch, BranchType::Local)
+      .expect("find local branch");
+    branch
+      .set_upstream(Some(upstream_branch))
+      .expect("set upstream");
+  }
+
+  fn set_remote_head(remote_root: &Path, branch_name: &str) {
+    let refname = format!("refs/heads/{branch_name}");
+    Repository::open(remote_root)
+      .expect("open remote")
+      .set_head(&refname)
+      .expect("set remote HEAD");
+  }
+
   #[test]
   fn commit_changes_rejects_empty_message() {
     let repo = TempRepo::init("commit-empty");
@@ -251,8 +367,44 @@ mod tests {
       err
         .expect("error")
         .to_string()
-        .contains("commit message is empty")
+      .contains("commit message is empty")
     );
+  }
+
+  #[test]
+  fn commit_changes_creates_initial_commit_with_trimmed_message() {
+    let repo = TempRepo::init("commit-success-initial");
+    let rel_path = Path::new("README.md");
+    stage_text_file(&repo.path, rel_path, "hello\n");
+
+    commit_changes(&repo.path, "  initial message  ").expect("commit changes");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head");
+    assert_eq!(head.summary(), Some("initial message"));
+    assert_eq!(head.parent_count(), 0);
+  }
+
+  #[test]
+  fn commit_changes_creates_commit_with_parent_when_head_exists() {
+    let repo = TempRepo::init("commit-success-parent");
+    let rel_path = Path::new("README.md");
+    commit_text_file(&repo.path, rel_path, "v1\n", "first");
+
+    stage_text_file(&repo.path, rel_path, "v2\n");
+    commit_changes(&repo.path, "second").expect("commit changes");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head");
+    assert_eq!(head.summary(), Some("second"));
+    assert_eq!(head.parent_count(), 1);
+    assert_eq!(head.parent(0).expect("parent").summary(), Some("first"));
   }
 
   #[test]
@@ -261,6 +413,22 @@ mod tests {
     let status = head_commit_status(&repo.path).expect("head status");
     assert!(!status.has_head_commit);
     assert!(!status.can_undo_last_commit);
+  }
+
+  #[test]
+  fn head_commit_status_tracks_undo_availability() {
+    let repo = TempRepo::init("commit-head-status");
+    let rel_path = Path::new("README.md");
+    commit_text_file(&repo.path, rel_path, "v1\n", "first");
+
+    let single = head_commit_status(&repo.path).expect("head status after first");
+    assert!(single.has_head_commit);
+    assert!(!single.can_undo_last_commit);
+
+    commit_text_file(&repo.path, rel_path, "v2\n", "second");
+    let double = head_commit_status(&repo.path).expect("head status after second");
+    assert!(double.has_head_commit);
+    assert!(double.can_undo_last_commit);
   }
 
   #[test]
@@ -276,6 +444,78 @@ mod tests {
         .to_string()
         .contains("no upstream configured")
     );
+  }
+
+  #[test]
+  fn push_updates_remote_when_upstream_exists() {
+    let local = TempRepo::init("commit-push-success-local");
+    let remote = TempBareRepo::init("commit-push-success-remote");
+    let rel_path = Path::new("README.md");
+
+    commit_text_file(&local.path, rel_path, "v1\n", "initial");
+
+    let local_repo = Repository::open(&local.path).expect("open local");
+    local_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin");
+
+    let local_branch = branch_name(&local.path);
+    push_branch_to_remote(&local.path, &local_branch, "origin");
+    set_upstream(
+      &local.path,
+      &local_branch,
+      &format!("origin/{local_branch}"),
+    );
+    set_remote_head(&remote.path, &local_branch);
+
+    commit_text_file(&local.path, rel_path, "v2-local\n", "local change");
+    let expected_head = head_oid(&local.path);
+
+    push(&local.path, false).expect("push without force");
+
+    assert_eq!(remote_branch_oid(&remote.path, &local_branch), expected_head);
+  }
+
+  #[test]
+  fn push_force_overwrites_remote_after_non_fast_forward_rejection() {
+    let source = TempRepo::init("commit-push-force-source");
+    let remote = TempBareRepo::init("commit-push-force-remote");
+    let peer_dir = TempDir::new("commit-push-force-peer");
+    let rel_path = Path::new("README.md");
+
+    commit_text_file(&source.path, rel_path, "v1\n", "initial");
+
+    let source_repo = Repository::open(&source.path).expect("open source");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin");
+
+    let local_branch = branch_name(&source.path);
+    push_branch_to_remote(&source.path, &local_branch, "origin");
+    set_upstream(
+      &source.path,
+      &local_branch,
+      &format!("origin/{local_branch}"),
+    );
+    set_remote_head(&remote.path, &local_branch);
+
+    let _peer_repo = Repository::clone(
+      remote.path.to_str().expect("remote path utf8"),
+      &peer_dir.path,
+    )
+    .expect("clone remote into peer");
+
+    commit_text_file(&source.path, rel_path, "v2-source\n", "source change");
+    let source_head = head_oid(&source.path);
+
+    commit_text_file(&peer_dir.path, rel_path, "v2-peer\n", "peer change");
+    push_branch_to_remote(&peer_dir.path, &local_branch, "origin");
+
+    let err = push(&source.path, false).err();
+    assert!(err.is_some(), "non-fast-forward push should fail without force");
+
+    push(&source.path, true).expect("force push");
+    assert_eq!(remote_branch_oid(&remote.path, &local_branch), source_head);
   }
 
   #[test]

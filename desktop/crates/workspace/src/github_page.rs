@@ -457,6 +457,11 @@ impl GithubPageHandle {
 
 impl GithubPage {
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    let api = WorkspaceApi::global(cx).api.clone();
+    Self::new_with_api(api, window, cx)
+  }
+
+  fn new_with_api(api: ApiClient, window: &mut Window, cx: &mut Context<Self>) -> Self {
     let notifications = cx
       .new(|cx| ListState::new(GithubNotificationListDelegate::new(), window, cx).searchable(true));
     let pull_requests = cx
@@ -464,7 +469,7 @@ impl GithubPage {
 
     let view = Self {
       focus_handle: cx.focus_handle(),
-      api: WorkspaceApi::global(cx).api.clone(),
+      api,
       notifications,
       pull_requests,
       load_task: None,
@@ -481,6 +486,11 @@ impl GithubPage {
     GithubPageHandle::register(cx);
 
     view
+  }
+
+  #[cfg(test)]
+  fn new_for_test(api: ApiClient, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    Self::new_with_api(api, window, cx)
   }
 
   fn focus_search(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -860,8 +870,14 @@ impl Focusable for GithubPage {
 mod tests {
   use super::*;
   use crate::api::{
-    GithubNotificationRepository, GithubNotificationSubject, GithubPullRequestLabel,
+    ApiClient, GithubNotificationRepository, GithubNotificationSubject, GithubPullRequestLabel,
     GithubPullRequestState, GithubRepository,
+  };
+  use gpui::{Entity, TestAppContext};
+  use std::{
+    io::{Read, Write},
+    net::TcpListener,
+    thread,
   };
 
   fn make_pull_request_row(title: &str, owner: &str, repo: &str) -> GithubPullRequestRow {
@@ -918,6 +934,71 @@ mod tests {
         subscription_url: "https://api.github.test/sub/1".to_string(),
       }),
     }
+  }
+
+  fn init_gpui_test(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      gpui_component::init(cx);
+      if cx.try_global::<AuthStateStore>().is_none() {
+        cx.set_global(AuthStateStore::default());
+      }
+    });
+  }
+
+  async fn await_github_page_background_tasks(
+    github_page: Entity<GithubPage>,
+    cx: &mut gpui::VisualTestContext,
+  ) {
+    loop {
+      let (load_task, notifications_task) =
+        github_page.update_in(cx, |this, _window, _| {
+          (this.load_task.take(), this.notifications_task.take())
+        });
+
+      let mut had_task = false;
+      if let Some(task) = load_task {
+        had_task = true;
+        task.await;
+      }
+      if let Some(task) = notifications_task {
+        had_task = true;
+        task.await;
+      }
+
+      if !had_task {
+        break;
+      }
+    }
+  }
+
+  fn start_sequence_response_server(
+    responses: Vec<(&str, &str)>,
+  ) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+    let address = format!("http://{}", listener.local_addr().expect("local addr"));
+    let responses = responses
+      .into_iter()
+      .map(|(status, body)| (status.to_string(), body.to_string()))
+      .collect::<Vec<_>>();
+
+    let handle = thread::spawn(move || {
+      for (status, body) in responses {
+        let (mut stream, _) = listener.accept().expect("accept connection");
+        let mut request_buffer = [0u8; 4096];
+        let _ = stream.read(&mut request_buffer);
+
+        let response = format!(
+          "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+          body.as_bytes().len(),
+          body
+        );
+        stream
+          .write_all(response.as_bytes())
+          .expect("write response");
+      }
+    });
+
+    (address, handle)
   }
 
   #[test]
@@ -981,5 +1062,119 @@ mod tests {
       delegate.matched_rows[0].notification.repository.full_name,
       "acme/backend"
     );
+  }
+
+  #[gpui::test]
+  async fn refresh_pull_requests_sets_unauthorized_errors(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (base_url, handle) = start_sequence_response_server(vec![
+      ("401 Unauthorized", "{}"),
+      ("401 Unauthorized", "{}"),
+    ]);
+    let api = ApiClient::new_with_base_url(base_url);
+    let (github_page, cx) = cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
+    cx.executor().allow_parking();
+
+    let (load_task, notifications_task) = github_page.update_in(cx, |this, _window, cx| {
+      this.refresh_pull_requests(cx);
+      (
+        this.load_task.take().expect("pull request load task"),
+        this
+          .notifications_task
+          .take()
+          .expect("notifications task"),
+      )
+    });
+    load_task.await;
+    notifications_task.await;
+    await_github_page_background_tasks(github_page.clone(), cx).await;
+
+    let (error, notifications_error, pr_count, notifications_count, pr_loading, notifications_loading) =
+      github_page.read_with(cx, |this, cx| {
+        let pull_requests = this.pull_requests.read(cx);
+        let notifications = this.notifications.read(cx);
+        (
+          this.error.clone(),
+          this.notifications_error.clone(),
+          pull_requests.delegate().matched_rows.len(),
+          notifications.delegate().matched_rows.len(),
+          pull_requests.delegate().loading,
+          notifications.delegate().loading,
+        )
+      });
+
+    assert!(error
+      .as_ref()
+      .is_some_and(|value| value.as_ref().contains("unauthorized")));
+    assert!(notifications_error
+      .as_ref()
+      .is_some_and(|value| value.as_ref().contains("unauthorized")));
+    assert_eq!(pr_count, 0);
+    assert_eq!(notifications_count, 0);
+    assert!(!pr_loading);
+    assert!(!notifications_loading);
+
+    handle.join().expect("join server thread");
+  }
+
+  #[gpui::test]
+  async fn refresh_pull_requests_populates_pull_requests_and_notifications_on_success(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let pull_requests_body = r#"{"pullRequests":[{"number":42,"title":"Fix login","state":"open","mergedAt":null,"draft":false,"updatedAt":"2026-02-15T12:00:00Z","labels":[{"name":"bug"}],"repository":{"owner":"acme","repo":"portal"}}]}"#;
+    let notifications_body = r#"{"notifications":[{"id":"n1","repository":{"name":"portal","fullName":"acme/portal","owner":null},"subject":{"title":"Please review","type":"PullRequest","url":null,"latestCommentUrl":null},"reason":"mention","unread":true,"updatedAt":"2026-02-15T12:10:00Z","lastReadAt":null,"url":"https://api.github.test/notif/1","subscriptionUrl":"https://api.github.test/sub/1"}]}"#;
+    let (base_url, handle) = start_sequence_response_server(vec![
+      ("200 OK", pull_requests_body),
+      ("200 OK", notifications_body),
+    ]);
+    let api = ApiClient::new_with_base_url(base_url);
+    let (github_page, cx) = cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
+    cx.executor().allow_parking();
+
+    let (load_task, notifications_task) = github_page.update_in(cx, |this, _window, cx| {
+      this.refresh_pull_requests(cx);
+      (
+        this.load_task.take().expect("pull request load task"),
+        this
+          .notifications_task
+          .take()
+          .expect("notifications task"),
+      )
+    });
+    load_task.await;
+    notifications_task.await;
+    await_github_page_background_tasks(github_page.clone(), cx).await;
+
+    let (error, notifications_error, pr_titles, notification_titles, unread_count) =
+      github_page.read_with(cx, |this, cx| {
+        let pull_requests = this.pull_requests.read(cx);
+        let notifications = this.notifications.read(cx);
+        (
+          this.error.clone(),
+          this.notifications_error.clone(),
+          pull_requests
+            .delegate()
+            .matched_rows
+            .iter()
+            .map(|row| row.pr.title.clone())
+            .collect::<Vec<_>>(),
+          notifications
+            .delegate()
+            .matched_rows
+            .iter()
+            .map(|row| row.notification.subject.title.clone())
+            .collect::<Vec<_>>(),
+          notifications.delegate().unread_count(),
+        )
+      });
+
+    assert!(error.is_none());
+    assert!(notifications_error.is_none());
+    assert_eq!(pr_titles, vec!["Fix login".to_string()]);
+    assert_eq!(notification_titles, vec!["Please review".to_string()]);
+    assert_eq!(unread_count, 1);
+
+    handle.join().expect("join server thread");
   }
 }
