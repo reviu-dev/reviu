@@ -8358,6 +8358,7 @@ dependencies = [
  "editor",
  "gfm_markdown_viewer",
  "git",
+ "git2",
  "gpui",
  "gpui-component",
  "reqwest",

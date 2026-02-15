@@ -532,6 +532,7 @@ pub struct GitPage {
   history_files_task: Option<Task<()>>,
   history_open_file_task: Option<Task<()>>,
   branch_task: Option<Task<()>>,
+  branch_refresh_generation: u64,
   poll_task: Option<Task<()>>,
   commit_input: Entity<InputState>,
 }
@@ -604,6 +605,53 @@ impl GitPage {
       clear_selection: false,
       sync_diff_view: sync_diff_when_selected_retained,
     }
+  }
+
+  fn selected_branch_from_status(current: Option<BranchStatus>) -> Option<BranchRef> {
+    current.and_then(|status| {
+      if status.name == "HEAD" {
+        None
+      } else {
+        Some(BranchRef {
+          name: status.name,
+          kind: BranchKind::Local,
+        })
+      }
+    })
+  }
+
+  fn branch_select_items(
+    branches: Vec<BranchRef>,
+    selected: Option<&BranchRef>,
+  ) -> Vec<BranchSelectItem> {
+    branches
+      .into_iter()
+      .map(|branch| {
+        let is_current = selected.map_or(false, |current| current == &branch);
+        BranchSelectItem::new(branch, is_current)
+      })
+      .collect()
+  }
+
+  fn should_apply_branch_refresh(
+    selected_repo: Option<&Path>,
+    requested_repo: &Path,
+    current_generation: u64,
+    refresh_generation: u64,
+  ) -> bool {
+    selected_repo == Some(requested_repo) && current_generation == refresh_generation
+  }
+
+  fn should_refresh_editor_for_path(selected_file: Option<&Path>, rel_path: &Path) -> bool {
+    selected_file == Some(rel_path)
+  }
+
+  fn restore_uses_delete(status: RepoStatusKind) -> bool {
+    status == RepoStatusKind::Untracked
+  }
+
+  fn all_entries_staged(entries: &[RepoStatusEntry]) -> bool {
+    !entries.is_empty() && entries.iter().all(|entry| entry.stage == RepoStage::Staged)
   }
 
   fn apply_status_snapshot(
@@ -1061,6 +1109,7 @@ impl GitPage {
       history_files_task: None,
       history_open_file_task: None,
       branch_task: None,
+      branch_refresh_generation: 0,
       poll_task: None,
       commit_input,
     };
@@ -1204,6 +1253,9 @@ impl GitPage {
       return;
     };
 
+    self.branch_refresh_generation = self.branch_refresh_generation.wrapping_add(1);
+    let refresh_generation = self.branch_refresh_generation;
+    let requested_repo = repo_root.clone();
     let window_handle = self.window_handle;
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || {
@@ -1216,26 +1268,8 @@ impl GitPage {
         return;
       };
 
-      let selected = current.and_then(|status| {
-        if status.name == "HEAD" {
-          None
-        } else {
-          Some(BranchRef {
-            name: status.name,
-            kind: BranchKind::Local,
-          })
-        }
-      });
-
-      let items = branches
-        .into_iter()
-        .map(|branch| {
-          let is_current = selected
-            .as_ref()
-            .map_or(false, |current| current == &branch);
-          BranchSelectItem::new(branch, is_current)
-        })
-        .collect::<Vec<_>>();
+      let selected = Self::selected_branch_from_status(current);
+      let items = Self::branch_select_items(branches, selected.as_ref());
 
       let select = cx.update_window(window_handle, |_, window, cx| {
         let select = cx
@@ -1249,6 +1283,14 @@ impl GitPage {
       });
 
       let _ = this.update(cx, |this, cx| {
+        if !Self::should_apply_branch_refresh(
+          this.selected_repo.as_deref(),
+          requested_repo.as_path(),
+          this.branch_refresh_generation,
+          refresh_generation,
+        ) {
+          return;
+        }
         if let Ok(select) = select {
           this.branch_select = select;
           this.subscribe_to_branch_select(cx);
@@ -2269,7 +2311,7 @@ impl GitPage {
       let _ = unblock(move || stage_file(&repo_root, &rel_path_for_job)).await;
       let _ = this.update(cx, |this, cx| {
         this.reload_status(cx);
-        if this.selected_file.as_ref() == Some(&rel_path)
+        if Self::should_refresh_editor_for_path(this.selected_file.as_deref(), &rel_path)
           && let Some(editor) = this.editor.clone()
         {
           editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
@@ -2288,7 +2330,7 @@ impl GitPage {
       let _ = unblock(move || unstage_file(&repo_root, &rel_path_for_job)).await;
       let _ = this.update(cx, |this, cx| {
         this.reload_status(cx);
-        if this.selected_file.as_ref() == Some(&rel_path)
+        if Self::should_refresh_editor_for_path(this.selected_file.as_deref(), &rel_path)
           && let Some(editor) = this.editor.clone()
         {
           editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
@@ -2308,9 +2350,10 @@ impl GitPage {
       return;
     };
     let rel_path_for_job = rel_path.clone();
+    let should_delete = Self::restore_uses_delete(status);
     let task = cx.spawn(async move |this, cx| {
       let _ = unblock(move || {
-        if status == RepoStatusKind::Untracked {
+        if should_delete {
           delete_untracked_file(&repo_root, &rel_path_for_job)
         } else {
           restore_file(&repo_root, &rel_path_for_job)
@@ -2319,7 +2362,7 @@ impl GitPage {
       .await;
       let _ = this.update(cx, |this, cx| {
         this.reload_status(cx);
-        if this.selected_file.as_ref() == Some(&rel_path)
+        if Self::should_refresh_editor_for_path(this.selected_file.as_deref(), &rel_path)
           && let Some(editor) = this.editor.clone()
         {
           editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
@@ -2431,11 +2474,7 @@ impl GitPage {
   }
 
   fn all_changes_staged(&self) -> bool {
-    !self.status_entries.is_empty()
-      && self
-        .status_entries
-        .iter()
-        .all(|entry| entry.stage == RepoStage::Staged)
+    Self::all_entries_staged(&self.status_entries)
   }
 
   fn build_history_rows(commits: &[HistoryCommitNode]) -> Vec<HistoryRenderRow> {
@@ -3758,6 +3797,61 @@ impl Focusable for GitPage {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use git2::{Repository, Signature};
+  use std::time::{SystemTime, UNIX_EPOCH};
+
+  struct TempRepo {
+    path: PathBuf,
+  }
+
+  impl TempRepo {
+    fn init(prefix: &str) -> Self {
+      let mut path = std::env::temp_dir();
+      let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+      path.push(format!("reviu-{prefix}-{}-{nanos}", std::process::id()));
+      std::fs::create_dir_all(&path).expect("create temp dir");
+      Repository::init(&path).expect("init git repository");
+      Self { path }
+    }
+  }
+
+  impl Drop for TempRepo {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.path);
+    }
+  }
+
+  fn commit_text_file(repo_root: &Path, rel_path: &Path, contents: &str, message: &str) -> git2::Oid {
+    let repo = Repository::open(repo_root).expect("open repo");
+    std::fs::write(repo_root.join(rel_path), contents).expect("write worktree file");
+
+    let mut index = repo.index().expect("open index");
+    index.add_path(rel_path).expect("stage file");
+    index.write().expect("write index");
+    let tree_id = index.write_tree().expect("write tree");
+    let tree = repo.find_tree(tree_id).expect("find tree");
+    let signature = Signature::now("Reviu Tests", "tests@reviu.local").expect("signature");
+    let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+
+    match parent {
+      Some(parent) => repo
+        .commit(
+          Some("HEAD"),
+          &signature,
+          &signature,
+          message,
+          &tree,
+          &[&parent],
+        )
+        .expect("commit with parent"),
+      None => repo
+        .commit(Some("HEAD"), &signature, &signature, message, &tree, &[])
+        .expect("initial commit"),
+    }
+  }
 
   fn make_commit(oid: &str, parents: &[&str]) -> HistoryCommitNode {
     HistoryCommitNode {
@@ -4069,6 +4163,223 @@ mod tests {
       true,
     );
     assert_eq!(update, SelectedFileUpdate::default());
+  }
+
+  #[test]
+  fn selected_branch_from_status_maps_detached_head_to_none() {
+    let detached = make_branch_status("HEAD", 0, 0, false);
+    assert_eq!(GitPage::selected_branch_from_status(Some(detached)), None);
+  }
+
+  #[test]
+  fn selected_branch_from_status_maps_named_head_to_local_branch() {
+    let main = make_branch_status("main", 0, 0, true);
+    assert_eq!(
+      GitPage::selected_branch_from_status(Some(main)),
+      Some(BranchRef {
+        name: "main".to_string(),
+        kind: BranchKind::Local,
+      })
+    );
+  }
+
+  #[test]
+  fn branch_select_items_marks_only_selected_branch() {
+    let selected = BranchRef {
+      name: "main".to_string(),
+      kind: BranchKind::Local,
+    };
+    let items = GitPage::branch_select_items(
+      vec![
+        BranchRef {
+          name: "main".to_string(),
+          kind: BranchKind::Local,
+        },
+        BranchRef {
+          name: "feature".to_string(),
+          kind: BranchKind::Local,
+        },
+      ],
+      Some(&selected),
+    );
+
+    assert_eq!(items.len(), 2);
+    assert!(items[0].is_current);
+    assert!(!items[1].is_current);
+  }
+
+  #[test]
+  fn external_branch_switch_updates_branch_status_and_branch_select_model() {
+    let repo = TempRepo::init("git-page-external-switch");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let initial_status = current_branch_status(&repo.path).expect("read initial branch");
+    let initial_branch_name = initial_status.name.clone();
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    repo_handle
+      .set_head("refs/heads/feature")
+      .expect("set HEAD to feature");
+
+    let switched_status = current_branch_status(&repo.path).expect("read switched branch");
+    assert_eq!(switched_status.name, "feature");
+    assert!(GitPage::branch_name_changed(
+      Some(&initial_status),
+      Some(&switched_status)
+    ));
+
+    let branches = list_branches(&repo.path).expect("list branches");
+    let selected = GitPage::selected_branch_from_status(Some(switched_status));
+    let items = GitPage::branch_select_items(branches, selected.as_ref());
+
+    assert_eq!(items.iter().filter(|item| item.is_current).count(), 1);
+    assert!(
+      items
+        .iter()
+        .any(|item| item.branch.kind == BranchKind::Local && item.branch.name == "feature" && item.is_current)
+    );
+    if initial_branch_name != "feature" {
+      assert!(!items.iter().any(|item| {
+        item.branch.kind == BranchKind::Local
+          && item.branch.name == initial_branch_name
+          && item.is_current
+      }));
+    }
+  }
+
+  #[test]
+  fn external_detached_head_clears_selected_branch_in_branch_select_model() {
+    let repo = TempRepo::init("git-page-external-detach");
+    let oid = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let initial_status = current_branch_status(&repo.path).expect("read initial branch");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    repo_handle.set_head_detached(oid).expect("detach HEAD");
+
+    let detached_status = current_branch_status(&repo.path).expect("read detached status");
+    assert_eq!(detached_status.name, "HEAD");
+    assert!(GitPage::branch_name_changed(
+      Some(&initial_status),
+      Some(&detached_status)
+    ));
+
+    let branches = list_branches(&repo.path).expect("list branches");
+    let selected = GitPage::selected_branch_from_status(Some(detached_status));
+    assert!(selected.is_none());
+    let items = GitPage::branch_select_items(branches, selected.as_ref());
+    assert!(items.iter().all(|item| !item.is_current));
+  }
+
+  #[test]
+  fn should_apply_branch_refresh_rejects_stale_generation_or_repo_mismatch() {
+    let repo = Path::new("/tmp/repo");
+    let other_repo = Path::new("/tmp/other");
+
+    assert!(GitPage::should_apply_branch_refresh(Some(repo), repo, 3, 3));
+    assert!(!GitPage::should_apply_branch_refresh(Some(repo), repo, 4, 3));
+    assert!(!GitPage::should_apply_branch_refresh(
+      Some(other_repo),
+      repo,
+      3,
+      3
+    ));
+    assert!(!GitPage::should_apply_branch_refresh(None, repo, 3, 3));
+  }
+
+  #[test]
+  fn branch_refresh_guard_ignores_stale_result_after_repo_switch() {
+    let repo_a = TempRepo::init("git-page-refresh-stale-a");
+    commit_text_file(&repo_a.path, Path::new("README.md"), "a1\n", "initial");
+    create_branch(&repo_a.path, "alpha").expect("create alpha branch");
+    Repository::open(&repo_a.path)
+      .expect("open repo a")
+      .set_head("refs/heads/alpha")
+      .expect("set HEAD to alpha");
+
+    let repo_b = TempRepo::init("git-page-refresh-stale-b");
+    commit_text_file(&repo_b.path, Path::new("README.md"), "b1\n", "initial");
+
+    let repo_a_status = current_branch_status(&repo_a.path).expect("read repo a status");
+    let repo_a_items = GitPage::branch_select_items(
+      list_branches(&repo_a.path).expect("list repo a branches"),
+      GitPage::selected_branch_from_status(Some(repo_a_status.clone())).as_ref(),
+    );
+    assert!(
+      repo_a_items
+        .iter()
+        .any(|item| item.branch.name == "alpha" && item.is_current)
+    );
+
+    // Simulate two in-flight refreshes:
+    // 1) old refresh requested for repo A at generation 1
+    // 2) user switches repo, new refresh requested for repo B at generation 2
+    let stale_request_generation = 1;
+    let active_generation = 2;
+    assert!(!GitPage::should_apply_branch_refresh(
+      Some(repo_b.path.as_path()),
+      repo_a.path.as_path(),
+      active_generation,
+      stale_request_generation
+    ));
+    assert!(GitPage::should_apply_branch_refresh(
+      Some(repo_b.path.as_path()),
+      repo_b.path.as_path(),
+      active_generation,
+      active_generation
+    ));
+
+    let repo_b_status = current_branch_status(&repo_b.path).expect("read repo b status");
+    let repo_b_items = GitPage::branch_select_items(
+      list_branches(&repo_b.path).expect("list repo b branches"),
+      GitPage::selected_branch_from_status(Some(repo_b_status.clone())).as_ref(),
+    );
+    assert_eq!(repo_b_items.iter().filter(|item| item.is_current).count(), 1);
+    assert!(
+      repo_b_items
+        .iter()
+        .any(|item| item.branch.name == repo_b_status.name && item.is_current)
+    );
+    assert!(!repo_b_items
+      .iter()
+      .any(|item| item.branch.name == "alpha" && item.is_current));
+  }
+
+  #[test]
+  fn should_refresh_editor_for_path_only_when_selected_matches() {
+    let selected = Path::new("src/main.rs");
+    let other = Path::new("src/lib.rs");
+
+    assert!(GitPage::should_refresh_editor_for_path(Some(selected), selected));
+    assert!(!GitPage::should_refresh_editor_for_path(Some(selected), other));
+    assert!(!GitPage::should_refresh_editor_for_path(None, selected));
+  }
+
+  #[test]
+  fn restore_uses_delete_only_for_untracked_entries() {
+    assert!(GitPage::restore_uses_delete(RepoStatusKind::Untracked));
+    assert!(!GitPage::restore_uses_delete(RepoStatusKind::Modified));
+    assert!(!GitPage::restore_uses_delete(RepoStatusKind::Added));
+    assert!(!GitPage::restore_uses_delete(RepoStatusKind::Deleted));
+  }
+
+  #[test]
+  fn all_changes_staged_requires_non_empty_and_only_staged_entries() {
+    assert!(!GitPage::all_entries_staged(&[]));
+
+    let all_staged = vec![
+      make_status_entry("src/a.rs", RepoStage::Staged),
+      make_status_entry("src/b.rs", RepoStage::Staged),
+    ];
+    assert!(GitPage::all_entries_staged(&all_staged));
+
+    let mixed = vec![
+      make_status_entry("src/a.rs", RepoStage::Staged),
+      make_status_entry("src/b.rs", RepoStage::Unstaged),
+    ];
+    assert!(!GitPage::all_entries_staged(&mixed));
+
+    let partial = vec![make_status_entry("src/a.rs", RepoStage::PartiallyStaged)];
+    assert!(!GitPage::all_entries_staged(&partial));
   }
 
   #[test]
