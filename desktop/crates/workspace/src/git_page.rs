@@ -77,6 +77,7 @@ actions!(
 struct GitFileRow {
   entry: RepoStatusEntry,
   label: SharedString,
+  old_label: Option<SharedString>,
 }
 
 impl GitFileRow {
@@ -86,7 +87,15 @@ impl GitFileRow {
       .to_string_lossy()
       .replace(['\n', '\r'], "")
       .into();
-    Self { entry, label }
+    let old_label = entry
+      .old_path
+      .as_ref()
+      .map(|path| path.to_string_lossy().replace(['\n', '\r'], "").into());
+    Self {
+      entry,
+      label,
+      old_label,
+    }
   }
 }
 
@@ -189,6 +198,58 @@ impl ListDelegate for GitFileListDelegate {
       .tooltip(move |window, cx| Tooltip::new(status_tooltip.clone()).build(window, cx))
       .child(status_letter);
 
+    let file_label = if row.entry.status == RepoStatusKind::Renamed {
+      if let Some(old_label) = row.old_label.clone() {
+        h_flex()
+          .min_w_0()
+          .flex_1()
+          .items_center()
+          .gap_1()
+          .child(
+            div()
+              .min_w_0()
+              .overflow_hidden()
+              .text_ellipsis_start()
+              .text_color(theme.muted_foreground)
+              .line_through()
+              .child(old_label),
+          )
+          .child(
+            Icon::new(IconName::ArrowRight)
+              .size_3()
+              .text_color(theme.muted_foreground),
+          )
+          .child(
+            div()
+              .min_w_0()
+              .flex_1()
+              .overflow_hidden()
+              .text_ellipsis_start()
+              .child(row.label.clone()),
+          )
+          .into_any_element()
+      } else {
+        div()
+          .min_w_0()
+          .flex_1()
+          .overflow_hidden()
+          .text_ellipsis_start()
+          .child(row.label.clone())
+          .into_any_element()
+      }
+    } else {
+      div()
+        .min_w_0()
+        .flex_1()
+        .overflow_hidden()
+        .text_ellipsis_start()
+        .when(row.entry.status == RepoStatusKind::Deleted, |this| {
+          this.line_through()
+        })
+        .child(row.label.clone())
+        .into_any_element()
+    };
+
     Some(
       base_item.px_2().py_1().child(
         h_flex()
@@ -197,16 +258,7 @@ impl ListDelegate for GitFileListDelegate {
           .child(status_element)
           .child(stage_element)
           .child(file_icon)
-          .child(
-            div()
-              .flex_1()
-              .overflow_hidden()
-              .text_ellipsis_start()
-              .when(row.entry.status == RepoStatusKind::Deleted, |this| {
-                this.line_through()
-              })
-              .child(row.label.clone()),
-          ),
+          .child(file_label),
       ),
     )
   }
