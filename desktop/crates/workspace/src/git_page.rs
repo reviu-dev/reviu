@@ -10,7 +10,7 @@ use editor::{CloseFind, DiffViewMode, Editor, Find, HunkAction, HunkState};
 use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
   HistoryCommitNode, HistoryRevision, RepoStage, RepoStatusEntry, RepoStatusKind, amend_commit,
-  commit_changes, create_branch, create_branch_from, current_branch_status,
+  cherry_pick_commits, commit_changes, create_branch, create_branch_from, current_branch_status,
   current_history_revision, delete_untracked_file, diff_set_from_patch, head_commit_status,
   list_branches, list_commit_changed_files, list_commit_history, list_repo_status,
   load_commit_file_diff, merge_branch, push, restore_file, stage_all, stage_file, switch_branch,
@@ -54,7 +54,7 @@ use ui::{
   file_icon_path_for_path_with_theme, user_menu,
 };
 
-const SIDEBAR_DEFAULT_WIDTH: f32 = 350.0;
+const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
 const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const STATUS_POLL_INTERVAL_MS: u64 = 800;
@@ -663,7 +663,8 @@ impl GitPage {
     cx: &mut Context<Self>,
   ) -> bool {
     self.status_entries = entries;
-    let branch_changed = Self::branch_name_changed(self.branch_status.as_ref(), branch_status.as_ref());
+    let branch_changed =
+      Self::branch_name_changed(self.branch_status.as_ref(), branch_status.as_ref());
     self.branch_status = branch_status;
     self.has_staged_changes = Self::has_staged_changes(&self.status_entries);
     let head_status = head_status.unwrap_or(HeadCommitStatus {
@@ -985,11 +986,12 @@ impl GitPage {
       let read_result = cx.update(|cx| cx.read_credentials(&service)).await;
       let _ = this.update(cx, |this, cx| {
         if let Ok(Some((_username, secret))) = read_result
-          && let Ok(token) = String::from_utf8(secret) {
-            this.api.set_bearer_token(token);
-            this.refresh_auth_state(cx);
-            return;
-          }
+          && let Ok(token) = String::from_utf8(secret)
+        {
+          this.api.set_bearer_token(token);
+          this.refresh_auth_state(cx);
+          return;
+        }
         this.set_auth_state(AuthState::Unauthenticated, cx);
       });
     });
@@ -1127,8 +1129,14 @@ impl GitPage {
 
   #[cfg(test)]
   fn new_for_test(window: &mut Window, cx: &mut Context<Self>) -> Self {
-    let repo_select =
-      cx.new(|cx| SelectState::new(SearchableVec::new(Vec::<RecentRepoItem>::new()), None, window, cx));
+    let repo_select = cx.new(|cx| {
+      SelectState::new(
+        SearchableVec::new(Vec::<RecentRepoItem>::new()),
+        None,
+        window,
+        cx,
+      )
+    });
     let branch_select = cx.new(|cx| {
       SelectState::new(
         SearchableVec::new(Vec::<BranchSelectItem>::new()),
@@ -1516,7 +1524,8 @@ impl GitPage {
         if this.selected_repo.as_ref() != Some(&requested_repo) {
           return;
         }
-        let branch_changed = this.apply_status_snapshot(entries, branch_status, head_status, true, cx);
+        let branch_changed =
+          this.apply_status_snapshot(entries, branch_status, head_status, true, cx);
         if include_history {
           if let Some(history) = history {
             this.history_commits = history;
@@ -1705,7 +1714,8 @@ impl GitPage {
         if this.selected_repo.as_ref() != Some(&requested_repo) {
           return;
         }
-        let branch_changed = this.apply_status_snapshot(entries, branch_status, head_status, false, cx);
+        let branch_changed =
+          this.apply_status_snapshot(entries, branch_status, head_status, false, cx);
         if include_history {
           if let Some(history) = history {
             this.history_commits = history;
@@ -1825,6 +1835,10 @@ impl GitPage {
     let include_github = matches!(self.auth_state, AuthState::Authenticated(_));
     let mut commands =
       CommandPaletteCommand::default_global_commands(CommandPalettePage::Git, include_github);
+
+    if self.selected_repo.is_some() {
+      commands.push(CommandPaletteCommand::cherry_pick());
+    }
 
     if let Some(root_path) = self.selected_repo.clone()
       && let Ok(branches) = list_branches(&root_path)
@@ -2010,6 +2024,12 @@ impl GitPage {
           },
         };
         merge_branch(&root_path, &branch_ref)
+      }
+      CommandPaletteAction::CherryPick { commit_hashes } => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
+        cherry_pick_commits(&root_path, &commit_hashes)
       }
     };
 
@@ -2743,20 +2763,20 @@ impl GitPage {
       .map(|entry| entry.item().id.to_string())
       && let Some(HistoryTreeNode::File { commit_oid, file }) =
         self.history_tree_nodes.get(selected_id.as_str()).cloned()
-      {
-        let already_opened = self
-          .history_opened_commit_file
-          .as_ref()
-          .map(|(opened_oid, opened_path)| opened_oid == &commit_oid && opened_path == &file.path)
-          .unwrap_or(false);
-        if !already_opened {
-          let open_commit_oid = commit_oid.clone();
-          let open_path = file.path.clone();
-          cx.on_next_frame(window, move |this, _, cx| {
-            this.open_history_commit_file(open_commit_oid.clone(), open_path.clone(), cx);
-          });
-        }
+    {
+      let already_opened = self
+        .history_opened_commit_file
+        .as_ref()
+        .map(|(opened_oid, opened_path)| opened_oid == &commit_oid && opened_path == &file.path)
+        .unwrap_or(false);
+      if !already_opened {
+        let open_commit_oid = commit_oid.clone();
+        let open_path = file.path.clone();
+        cx.on_next_frame(window, move |this, _, cx| {
+          this.open_history_commit_file(open_commit_oid.clone(), open_path.clone(), cx);
+        });
       }
+    }
 
     let view = cx.entity();
     let tree_view = tree(
@@ -3984,9 +4004,9 @@ impl Focusable for GitPage {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use gpui::TestAppContext;
   use git2::build::CheckoutBuilder;
   use git2::{BranchType, Cred, PushOptions, RemoteCallbacks, Repository, Signature};
+  use gpui::TestAppContext;
   use std::time::{SystemTime, UNIX_EPOCH};
 
   struct TempRepo {
@@ -4063,7 +4083,12 @@ mod tests {
     }
   }
 
-  fn commit_text_file(repo_root: &Path, rel_path: &Path, contents: &str, message: &str) -> git2::Oid {
+  fn commit_text_file(
+    repo_root: &Path,
+    rel_path: &Path,
+    contents: &str,
+    message: &str,
+  ) -> git2::Oid {
     let repo = Repository::open(repo_root).expect("open repo");
     std::fs::write(repo_root.join(rel_path), contents).expect("write worktree file");
 
@@ -4602,13 +4627,16 @@ mod tests {
 
     let status = current_branch_status(&repo.path).expect("read status");
     assert_eq!(status.name, "feature");
-    assert!(list_branches(&repo.path)
-      .expect("list branches")
-      .iter()
-      .any(|branch| branch.kind == BranchKind::Local && branch.name == "feature"));
+    assert!(
+      list_branches(&repo.path)
+        .expect("list branches")
+        .iter()
+        .any(|branch| branch.kind == BranchKind::Local && branch.name == "feature")
+    );
 
-    let selected_branch =
-      git_page.read_with(cx, |this, cx| this.branch_select.read(cx).selected_value().cloned());
+    let selected_branch = git_page.read_with(cx, |this, cx| {
+      this.branch_select.read(cx).selected_value().cloned()
+    });
     assert_eq!(
       selected_branch,
       Some(BranchRef {
@@ -4619,15 +4647,11 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn command_palette_create_branch_returns_error_when_branch_exists(
-    cx: &mut TestAppContext,
-  ) {
+  async fn command_palette_create_branch_returns_error_when_branch_exists(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-create-branch-existing");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let base_branch = current_branch_status(&repo.path)
-      .expect("base status")
-      .name;
+    let base_branch = current_branch_status(&repo.path).expect("base status").name;
     create_branch(&repo.path, "feature").expect("create existing target branch");
 
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
@@ -4644,7 +4668,9 @@ mod tests {
     let error = result.expect_err("create branch should fail when branch already exists");
     assert!(error.as_ref().starts_with("Action failed:"));
     assert_eq!(
-      current_branch_status(&repo.path).expect("status after failed create").name,
+      current_branch_status(&repo.path)
+        .expect("status after failed create")
+        .name,
       base_branch
     );
     let feature_count = list_branches(&repo.path)
@@ -4742,9 +4768,7 @@ mod tests {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-create-from-existing");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let base_branch = current_branch_status(&repo.path)
-      .expect("base status")
-      .name;
+    let base_branch = current_branch_status(&repo.path).expect("base status").name;
     create_branch(&repo.path, "feature").expect("create feature branch");
     create_branch(&repo.path, "feature-copy").expect("create existing target branch");
 
@@ -4864,9 +4888,7 @@ mod tests {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-switch-remote-missing");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let base_branch = current_branch_status(&repo.path)
-      .expect("base status")
-      .name;
+    let base_branch = current_branch_status(&repo.path).expect("base status").name;
 
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
     let result = git_page.update_in(cx, |this, _window, cx| {
@@ -4965,9 +4987,7 @@ mod tests {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-create-from-remote-missing");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let base_branch = current_branch_status(&repo.path)
-      .expect("base status")
-      .name;
+    let base_branch = current_branch_status(&repo.path).expect("base status").name;
 
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
     let result = git_page.update_in(cx, |this, _window, cx| {
@@ -5006,9 +5026,7 @@ mod tests {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-merge");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let base_branch = current_branch_status(&repo.path)
-      .expect("base status")
-      .name;
+    let base_branch = current_branch_status(&repo.path).expect("base status").name;
     create_branch(&repo.path, "feature").expect("create feature branch");
     switch_branch(
       &repo.path,
@@ -5064,7 +5082,106 @@ mod tests {
       "v2-feature\n"
     );
     assert_eq!(
-      current_branch_status(&repo.path).expect("status after merge").name,
+      current_branch_status(&repo.path)
+        .expect("status after merge")
+        .name,
+      base_branch
+    );
+  }
+
+  #[gpui::test]
+  async fn command_palette_cherry_pick_applies_multiple_commits(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-cherry-pick");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let base_branch = current_branch_status(&repo.path).expect("base status").name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+
+    let first = commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "feature 1");
+    let second = commit_text_file(&repo.path, Path::new("extra.txt"), "extra\n", "feature 2");
+
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base");
+    force_checkout_head(&repo.path);
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+    let result = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.handle_command_palette_action(
+        CommandPaletteAction::CherryPick {
+          commit_hashes: vec![first.to_string(), second.to_string()],
+        },
+        cx,
+      )
+    });
+    assert!(result.is_ok());
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head");
+    assert_eq!(head.message().unwrap_or_default(), "feature 2");
+    let parent = head.parent(0).expect("head parent");
+    assert_eq!(parent.message().unwrap_or_default(), "feature 1");
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read cherry-picked README"),
+      "v2\n"
+    );
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("extra.txt")).expect("read cherry-picked extra file"),
+      "extra\n"
+    );
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("status after cherry-pick")
+        .name,
+      base_branch
+    );
+  }
+
+  #[gpui::test]
+  async fn command_palette_cherry_pick_returns_error_for_invalid_commit(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-cherry-pick-invalid");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let base_branch = current_branch_status(&repo.path).expect("base status").name;
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let result = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.handle_command_palette_action(
+        CommandPaletteAction::CherryPick {
+          commit_hashes: vec!["deadbeef".to_string()],
+        },
+        cx,
+      )
+    });
+
+    let error = result.expect_err("cherry-pick should fail for missing commit");
+    assert!(error.as_ref().starts_with("Action failed:"));
+    assert!(error.as_ref().contains("resolve commit"));
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("status after failed cherry-pick")
+        .name,
       base_branch
     );
   }
@@ -5094,6 +5211,9 @@ mod tests {
           name: "feature".into(),
           kind: CommandPaletteBranchKind::Local,
         },
+      },
+      CommandPaletteAction::CherryPick {
+        commit_hashes: vec!["deadbeef".to_string()],
       },
     ];
 
@@ -5189,7 +5309,8 @@ mod tests {
     let task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.load_history_commit_files(commit_oid.clone(), cx);
-      this.history_files_task
+      this
+        .history_files_task
         .take()
         .expect("history files task should exist")
     });
@@ -5199,7 +5320,9 @@ mod tests {
     let (rows, still_loading) = git_page.read_with(cx, |this, _| {
       (
         this.history_commit_files.get(commit_oid.as_str()).cloned(),
-        this.history_commit_files_loading.contains(commit_oid.as_str()),
+        this
+          .history_commit_files_loading
+          .contains(commit_oid.as_str()),
       )
     });
     let rows = rows.expect("loaded history rows for commit");
@@ -5223,7 +5346,8 @@ mod tests {
     let task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.open_history_commit_file(old_commit_oid.clone(), rel_path.to_path_buf(), cx);
-      this.history_open_file_task
+      this
+        .history_open_file_task
         .take()
         .expect("history open file task should exist")
     });
@@ -5267,7 +5391,8 @@ mod tests {
     let open_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.open_history_commit_file(old_commit_oid, rel_path.to_path_buf(), cx);
-      this.history_open_file_task
+      this
+        .history_open_file_task
         .take()
         .expect("history open file task should exist")
     });
@@ -5294,9 +5419,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn open_file_replaces_history_snapshot_when_same_path_is_selected(
-    cx: &mut TestAppContext,
-  ) {
+  async fn open_file_replaces_history_snapshot_when_same_path_is_selected(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-open-file-after-history");
     let rel_path = Path::new("README.md");
@@ -5309,7 +5432,8 @@ mod tests {
     let history_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.open_history_commit_file(old_commit_oid.clone(), rel_path.to_path_buf(), cx);
-      this.history_open_file_task
+      this
+        .history_open_file_task
         .take()
         .expect("history open file task should exist")
     });
@@ -5364,20 +5488,37 @@ mod tests {
       let cached_oid = "cached-oid".to_string();
       this.history_commit_files.insert(
         cached_oid.clone(),
-        vec![make_history_file("README.md", CommitFileChangeKind::Modified)],
+        vec![make_history_file(
+          "README.md",
+          CommitFileChangeKind::Modified,
+        )],
       );
       this.queue_history_commit_files_load(cached_oid.clone(), window, cx);
-      assert!(!this.pending_history_file_loads.contains(cached_oid.as_str()));
+      assert!(
+        !this
+          .pending_history_file_loads
+          .contains(cached_oid.as_str())
+      );
 
       let loading_oid = "loading-oid".to_string();
-      this.history_commit_files_loading.insert(loading_oid.clone());
+      this
+        .history_commit_files_loading
+        .insert(loading_oid.clone());
       this.queue_history_commit_files_load(loading_oid.clone(), window, cx);
-      assert!(!this.pending_history_file_loads.contains(loading_oid.as_str()));
+      assert!(
+        !this
+          .pending_history_file_loads
+          .contains(loading_oid.as_str())
+      );
 
       let pending_oid = "pending-oid".to_string();
       this.pending_history_file_loads.insert(pending_oid.clone());
       this.queue_history_commit_files_load(pending_oid.clone(), window, cx);
-      assert!(this.pending_history_file_loads.contains(pending_oid.as_str()));
+      assert!(
+        this
+          .pending_history_file_loads
+          .contains(pending_oid.as_str())
+      );
       assert_eq!(this.pending_history_file_loads.len(), 1);
     });
   }
@@ -5398,10 +5539,14 @@ mod tests {
       this.selected_repo = Some(repo.path.clone());
       this.history_commit_files.insert(
         invalid_oid.clone(),
-        vec![make_history_file("README.md", CommitFileChangeKind::Modified)],
+        vec![make_history_file(
+          "README.md",
+          CommitFileChangeKind::Modified,
+        )],
       );
       this.load_history_commit_files(invalid_oid.clone(), cx);
-      this.history_files_task
+      this
+        .history_files_task
         .take()
         .expect("history files task should exist")
     });
@@ -5411,7 +5556,9 @@ mod tests {
     let (rows, loading) = git_page.read_with(cx, |this, _| {
       (
         this.history_commit_files.get(invalid_oid.as_str()).cloned(),
-        this.history_commit_files_loading.contains(invalid_oid.as_str()),
+        this
+          .history_commit_files_loading
+          .contains(invalid_oid.as_str()),
       )
     });
     assert!(rows.is_none());
@@ -5446,7 +5593,9 @@ mod tests {
     assert!(
       items
         .iter()
-        .any(|item| item.branch.kind == BranchKind::Local && item.branch.name == "feature" && item.is_current)
+        .any(|item| item.branch.kind == BranchKind::Local
+          && item.branch.name == "feature"
+          && item.is_current)
     );
     if initial_branch_name != "feature" {
       assert!(!items.iter().any(|item| {
@@ -5487,7 +5636,8 @@ mod tests {
 
     git_page.update_in(cx, |this, window, cx| {
       this.status_entries = vec![make_status_entry("README.md", RepoStage::Unstaged)];
-      this.commit_input
+      this
+        .commit_input
         .update(cx, |input, cx| input.set_value("feat: message", window, cx));
 
       this.commit_changes_inner(window, cx);
@@ -5597,11 +5747,7 @@ mod tests {
       .expect("source branch status")
       .name;
     push_branch_to_remote(&source.path, &branch_name, "origin");
-    set_upstream(
-      &source.path,
-      &branch_name,
-      &format!("origin/{branch_name}"),
-    );
+    set_upstream(&source.path, &branch_name, &format!("origin/{branch_name}"));
     set_remote_head(&remote.path, &branch_name);
 
     let _ = commit_text_file(&source.path, rel_path, "v2-source\n", "source change");
@@ -5649,18 +5795,11 @@ mod tests {
       .expect("source branch status")
       .name;
     push_branch_to_remote(&source.path, &branch_name, "origin");
-    set_upstream(
-      &source.path,
-      &branch_name,
-      &format!("origin/{branch_name}"),
-    );
+    set_upstream(&source.path, &branch_name, &format!("origin/{branch_name}"));
     set_remote_head(&remote.path, &branch_name);
 
-    let _ = Repository::clone(
-      remote.path.to_str().expect("remote path utf8"),
-      &peer.path,
-    )
-    .expect("clone remote into peer");
+    let _ = Repository::clone(remote.path.to_str().expect("remote path utf8"), &peer.path)
+      .expect("clone remote into peer");
 
     let _ = commit_text_file(&source.path, rel_path, "v2-source\n", "source change");
     let expected_head = head_oid(&source.path);
@@ -5709,11 +5848,7 @@ mod tests {
       this.unstage_file_action(PathBuf::from("README.md"), cx);
       assert!(this.status_task.is_none());
 
-      this.restore_file_action(
-        PathBuf::from("README.md"),
-        RepoStatusKind::Modified,
-        cx,
-      );
+      this.restore_file_action(PathBuf::from("README.md"), RepoStatusKind::Modified, cx);
       assert!(this.status_task.is_none());
     });
   }
@@ -5776,15 +5911,17 @@ mod tests {
 
     let entries = list_repo_status(&repo.path).expect("list status after unstage all");
     assert_eq!(entries.len(), 2);
-    assert!(entries.iter().all(|entry| entry.stage == RepoStage::Unstaged));
+    assert!(
+      entries
+        .iter()
+        .all(|entry| entry.stage == RepoStage::Unstaged)
+    );
     let has_staged = git_page.read_with(cx, |this, _| this.has_staged_changes);
     assert!(!has_staged);
   }
 
   #[gpui::test]
-  async fn toggle_stage_all_action_unstages_when_all_entries_are_staged(
-    cx: &mut TestAppContext,
-  ) {
+  async fn toggle_stage_all_action_unstages_when_all_entries_are_staged(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-toggle-stage-all-to-unstage");
     let rel_path = Path::new("README.md");
@@ -5792,7 +5929,11 @@ mod tests {
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("modify file");
     stage_all(&repo.path).expect("stage all before toggle action");
     let staged_entries = list_repo_status(&repo.path).expect("list staged status");
-    assert!(staged_entries.iter().all(|entry| entry.stage == RepoStage::Staged));
+    assert!(
+      staged_entries
+        .iter()
+        .all(|entry| entry.stage == RepoStage::Staged)
+    );
 
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
     cx.executor().allow_parking();
@@ -5820,9 +5961,11 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("modify file");
     let unstaged_entries = list_repo_status(&repo.path).expect("list unstaged status");
-    assert!(unstaged_entries
-      .iter()
-      .all(|entry| entry.stage == RepoStage::Unstaged));
+    assert!(
+      unstaged_entries
+        .iter()
+        .all(|entry| entry.stage == RepoStage::Unstaged)
+    );
 
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
     cx.executor().allow_parking();
@@ -5979,7 +6122,11 @@ mod tests {
 
     let contents = std::fs::read_to_string(repo.path.join(rel_path)).expect("read restored file");
     assert_eq!(contents, "v1\n");
-    assert!(list_repo_status(&repo.path).expect("status after restore").is_empty());
+    assert!(
+      list_repo_status(&repo.path)
+        .expect("status after restore")
+        .is_empty()
+    );
   }
 
   #[gpui::test]
@@ -6031,7 +6178,11 @@ mod tests {
     }
 
     assert!(!absolute.exists());
-    assert!(list_repo_status(&repo.path).expect("status after delete").is_empty());
+    assert!(
+      list_repo_status(&repo.path)
+        .expect("status after delete")
+        .is_empty()
+    );
   }
 
   #[gpui::test]
@@ -6062,7 +6213,11 @@ mod tests {
     assert!(absolute.exists());
     let contents = std::fs::read_to_string(&absolute).expect("read restored tracked file");
     assert_eq!(contents, "v1\n");
-    assert!(list_repo_status(&repo.path).expect("status after deleted restore").is_empty());
+    assert!(
+      list_repo_status(&repo.path)
+        .expect("status after deleted restore")
+        .is_empty()
+    );
   }
 
   #[gpui::test]
@@ -6082,9 +6237,9 @@ mod tests {
       this.selected_repo = Some(repo.path.clone());
       this.status_entries = entries.clone();
       this.has_staged_changes = false;
-      this
-        .commit_input
-        .update(cx, |input, cx| input.set_value("  feat: update readme  ", window, cx));
+      this.commit_input.update(cx, |input, cx| {
+        input.set_value("  feat: update readme  ", window, cx)
+      });
 
       this.commit_changes_inner(window, cx);
       this.status_task.take().expect("commit task")
@@ -6101,9 +6256,15 @@ mod tests {
       .and_then(|head| head.peel_to_commit())
       .expect("read head");
     assert_eq!(head.summary(), Some("feat: update readme"));
-    assert!(list_repo_status(&repo.path).expect("status after commit").is_empty());
+    assert!(
+      list_repo_status(&repo.path)
+        .expect("status after commit")
+        .is_empty()
+    );
 
-    let input_value = git_page.read_with(cx, |this, cx| this.commit_input.read(cx).value().to_string());
+    let input_value = git_page.read_with(cx, |this, cx| {
+      this.commit_input.read(cx).value().to_string()
+    });
     assert!(input_value.is_empty());
   }
 
@@ -6180,8 +6341,12 @@ mod tests {
       this.status_task.take().expect("poll status task")
     });
     status_task.await;
-    let branch_name =
-      git_page.read_with(cx, |this, _| this.branch_status.as_ref().map(|status| status.name.clone()));
+    let branch_name = git_page.read_with(cx, |this, _| {
+      this
+        .branch_status
+        .as_ref()
+        .map(|status| status.name.clone())
+    });
     assert_eq!(branch_name.as_deref(), Some("feature"));
   }
 
@@ -6213,7 +6378,10 @@ mod tests {
 
     let (branch_name, selected_branch) = git_page.read_with(cx, |this, cx| {
       (
-        this.branch_status.as_ref().map(|status| status.name.clone()),
+        this
+          .branch_status
+          .as_ref()
+          .map(|status| status.name.clone()),
         this.branch_select.read(cx).selected_value().cloned(),
       )
     });
@@ -6257,7 +6425,9 @@ mod tests {
     });
     branch_task.await;
 
-    let selected_branch = git_page.read_with(cx, |this, cx| this.branch_select.read(cx).selected_value().cloned());
+    let selected_branch = git_page.read_with(cx, |this, cx| {
+      this.branch_select.read(cx).selected_value().cloned()
+    });
     assert_eq!(
       selected_branch,
       Some(BranchRef {
@@ -6342,7 +6512,12 @@ mod tests {
     let other_repo = Path::new("/tmp/other");
 
     assert!(GitPage::should_apply_branch_refresh(Some(repo), repo, 3, 3));
-    assert!(!GitPage::should_apply_branch_refresh(Some(repo), repo, 4, 3));
+    assert!(!GitPage::should_apply_branch_refresh(
+      Some(repo),
+      repo,
+      4,
+      3
+    ));
     assert!(!GitPage::should_apply_branch_refresh(
       Some(other_repo),
       repo,
@@ -6399,15 +6574,20 @@ mod tests {
       list_branches(&repo_b.path).expect("list repo b branches"),
       GitPage::selected_branch_from_status(Some(repo_b_status.clone())).as_ref(),
     );
-    assert_eq!(repo_b_items.iter().filter(|item| item.is_current).count(), 1);
+    assert_eq!(
+      repo_b_items.iter().filter(|item| item.is_current).count(),
+      1
+    );
     assert!(
       repo_b_items
         .iter()
         .any(|item| item.branch.name == repo_b_status.name && item.is_current)
     );
-    assert!(!repo_b_items
-      .iter()
-      .any(|item| item.branch.name == "alpha" && item.is_current));
+    assert!(
+      !repo_b_items
+        .iter()
+        .any(|item| item.branch.name == "alpha" && item.is_current)
+    );
   }
 
   #[test]
@@ -6415,8 +6595,14 @@ mod tests {
     let selected = Path::new("src/main.rs");
     let other = Path::new("src/lib.rs");
 
-    assert!(GitPage::should_refresh_editor_for_path(Some(selected), selected));
-    assert!(!GitPage::should_refresh_editor_for_path(Some(selected), other));
+    assert!(GitPage::should_refresh_editor_for_path(
+      Some(selected),
+      selected
+    ));
+    assert!(!GitPage::should_refresh_editor_for_path(
+      Some(selected),
+      other
+    ));
     assert!(!GitPage::should_refresh_editor_for_path(None, selected));
   }
 

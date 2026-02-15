@@ -554,8 +554,8 @@ impl ApiClient {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use reqwest::header::AUTHORIZATION;
   use reqwest::blocking::Client;
+  use reqwest::header::AUTHORIZATION;
   use std::{
     io::{Read, Write},
     net::TcpListener,
@@ -819,7 +819,10 @@ mod tests {
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].filename, "src/main.rs");
     assert_eq!(files[0].status, "renamed");
-    assert_eq!(files[0].previous_filename.as_deref(), Some("src/old_main.rs"));
+    assert_eq!(
+      files[0].previous_filename.as_deref(),
+      Some("src/old_main.rs")
+    );
     handle.join().expect("join server thread");
   }
 
@@ -1047,10 +1050,12 @@ mod tests {
       .fetch_github_file_content("acme", "widget", "README.md", "main")
       .err();
     assert!(err.is_some());
-    assert!(err
-      .expect("error")
-      .to_string()
-      .contains("unexpected status"));
+    assert!(
+      err
+        .expect("error")
+        .to_string()
+        .contains("unexpected status")
+    );
     handle.join().expect("join server thread");
   }
 

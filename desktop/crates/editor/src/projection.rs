@@ -401,11 +401,12 @@ impl Projection {
       }
 
       if let Some(group_id) = matched_group_id
-        && let Some(group) = staged_groups.get(&group_id) {
-          groups.insert(group_id.clone(), group.clone());
-          assign_group_id(&mut lines, &pending.display_indices, &group_id);
-          continue;
-        }
+        && let Some(group) = staged_groups.get(&group_id)
+      {
+        groups.insert(group_id.clone(), group.clone());
+        assign_group_id(&mut lines, &pending.display_indices, &group_id);
+        continue;
+      }
 
       let group_id = group_id_for_keys(&pending.builder.keys);
       let signature = pending.signature.clone();
@@ -1212,9 +1213,10 @@ fn build_hunk_display_split_inner(
       });
 
       if state == HunkState::Staged
-        && let Some(builder) = staged_group.as_mut() {
-          builder.display_indices.push(index);
-        }
+        && let Some(builder) = staged_group.as_mut()
+      {
+        builder.display_indices.push(index);
+      }
 
       first_doc_line.get_or_insert(add.new_line);
       *last_doc_line = Some(add.new_line);
@@ -1235,9 +1237,10 @@ fn build_hunk_display_split_inner(
       });
 
       if state == HunkState::Staged
-        && let Some(builder) = staged_group.as_mut() {
-          builder.display_indices.push(index);
-        }
+        && let Some(builder) = staged_group.as_mut()
+      {
+        builder.display_indices.push(index);
+      }
     }
 
     while let Some(add) = add_queue.pop_front() {
@@ -1255,9 +1258,10 @@ fn build_hunk_display_split_inner(
       });
 
       if state == HunkState::Staged
-        && let Some(builder) = staged_group.as_mut() {
-          builder.display_indices.push(index);
-        }
+        && let Some(builder) = staged_group.as_mut()
+      {
+        builder.display_indices.push(index);
+      }
 
       first_doc_line.get_or_insert(add.new_line);
       *last_doc_line = Some(add.new_line);

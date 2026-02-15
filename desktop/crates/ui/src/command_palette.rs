@@ -91,6 +91,9 @@ pub enum CommandPaletteAction {
   MergeBranch {
     name: CommandPaletteBranch,
   },
+  CherryPick {
+    commit_hashes: Vec<String>,
+  },
   OpenGitPage,
   OpenGithubPage,
   OpenGithubPrDetails {
@@ -367,6 +370,7 @@ pub enum CommandPaletteCommandId {
   CreateBranch,
   CreateBranchFrom,
   MergeBranch,
+  CherryPick,
   OpenGitPage,
   OpenGithubPage,
   OpenGithubPrFromUrl,
@@ -413,6 +417,14 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::CreateBranchFrom,
       name: "Create branch from...".into(),
       description: Some("Create a new branch from an existing branch".into()),
+    }
+  }
+
+  pub fn cherry_pick() -> Self {
+    Self {
+      id: CommandPaletteCommandId::CherryPick,
+      name: "Cherry pick".into(),
+      description: Some("Apply one or more commits to the current branch".into()),
     }
   }
 
@@ -510,6 +522,7 @@ impl CommandPaletteCommand {
     match self.id {
       CommandPaletteCommandId::SwitchBranch => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::MergeBranch => Icon::new(UiIconName::GitMerge),
+      CommandPaletteCommandId::CherryPick => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
       }
@@ -572,6 +585,7 @@ enum CommandPaletteScreen {
   CreateBranch,
   CreateBranchFrom,
   MergeBranch,
+  CherryPick,
   OpenGithubPrFromUrl,
 }
 
@@ -582,6 +596,7 @@ pub struct CommandPalette {
   branches_list: Entity<ListState<BranchesListDelegate>>,
   branches_with_commands_list: Entity<ListState<BranchesListWithCommandsDelegate>>,
   create_branch_input: Entity<InputState>,
+  cherry_pick_input: Entity<InputState>,
   open_github_pr_input: Entity<InputState>,
   create_branch_base: Option<Rc<CommandPaletteBranch>>,
   error: Option<SharedString>,
@@ -620,9 +635,26 @@ impl CommandPalette {
     Some((owner.to_string(), repo.to_string(), number))
   }
 
+  fn parse_cherry_pick_commit_hashes(value: &str) -> Option<Vec<String>> {
+    let commits = value
+      .split_whitespace()
+      .map(ToString::to_string)
+      .collect::<Vec<_>>();
+
+    if commits.is_empty() {
+      None
+    } else {
+      Some(commits)
+    }
+  }
+
   pub fn new(window: &mut Window, cx: &mut Context<Self>, config: CommandPaletteConfig) -> Self {
     let create_branch_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Enter branch name..."));
+    let cherry_pick_input = cx.new(|cx| {
+      InputState::new(window, cx)
+        .placeholder("Enter one or more commit hashes (space-separated)...")
+    });
     let open_github_pr_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Paste GitHub pull request URL..."));
 
@@ -764,6 +796,7 @@ impl CommandPalette {
         },
       ),
       cx.subscribe_in(&create_branch_input, window, Self::on_input_event),
+      cx.subscribe_in(&cherry_pick_input, window, Self::on_cherry_pick_input_event),
       cx.subscribe_in(
         &open_github_pr_input,
         window,
@@ -778,6 +811,7 @@ impl CommandPalette {
     Self {
       focus_handle: cx.focus_handle(),
       create_branch_input,
+      cherry_pick_input,
       create_branch_base: None,
       screen: CommandPaletteScreen::Root,
       commands_list,
@@ -865,6 +899,31 @@ impl CommandPalette {
     );
   }
 
+  fn on_cherry_pick_input_event(
+    &mut self,
+    state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !matches!(event, InputEvent::PressEnter { .. }) {
+      return;
+    }
+
+    let input = state.read(cx).value().to_string();
+    let Some(commit_hashes) = Self::parse_cherry_pick_commit_hashes(&input) else {
+      self.error = Some("Commit hash list cannot be empty".into());
+      cx.notify();
+      return;
+    };
+
+    self.trigger_action(
+      CommandPaletteAction::CherryPick { commit_hashes },
+      window,
+      cx,
+    );
+  }
+
   pub fn focus_screen_input(&self, window: &mut Window, cx: &mut Context<Self>) {
     match self.screen {
       CommandPaletteScreen::SwitchBranch => {
@@ -879,6 +938,11 @@ impl CommandPalette {
       }
       CommandPaletteScreen::CreateBranch => {
         self.create_branch_input.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      }
+      CommandPaletteScreen::CherryPick => {
+        self.cherry_pick_input.update(cx, |state, cx| {
           state.focus(window, cx);
         });
       }
@@ -934,6 +998,12 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::CreateBranch => {
         self.set_screen(CommandPaletteScreen::CreateBranch, cx, window);
+      }
+      CommandPaletteCommandId::CherryPick => {
+        self.cherry_pick_input.update(cx, |input, cx| {
+          input.set_value("", window, cx);
+        });
+        self.set_screen(CommandPaletteScreen::CherryPick, cx, window);
       }
       CommandPaletteCommandId::CreateBranchFrom => {
         self.set_screen(CommandPaletteScreen::CreateBranchFrom, cx, window);
@@ -1070,6 +1140,17 @@ impl CommandPalette {
       })
   }
 
+  fn render_cherry_pick(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .gap_3()
+      .child(Input::new(&self.cherry_pick_input).border_color(theme.border))
+      .when(self.error.is_some(), |parent| {
+        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
+      })
+  }
+
   fn render_merge_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
@@ -1146,6 +1227,7 @@ impl Render for CommandPalette {
       CommandPaletteScreen::Root => self.render_root(cx).into_any_element(),
       CommandPaletteScreen::SwitchBranch => self.render_switch_branch(cx).into_any_element(),
       CommandPaletteScreen::CreateBranch => self.render_create_branch(cx).into_any_element(),
+      CommandPaletteScreen::CherryPick => self.render_cherry_pick(cx).into_any_element(),
       CommandPaletteScreen::OpenGithubPrFromUrl => {
         self.render_open_github_pr_from_url(cx).into_any_element()
       }
@@ -1197,5 +1279,30 @@ mod tests {
       "https://github.com/joris-gallot/guit/pull/4?notification_referrer_id=NT_kwDOAAABBBCCC",
     );
     assert_eq!(parsed, Some(("joris-gallot".into(), "guit".into(), 4)));
+  }
+
+  #[test]
+  fn parse_cherry_pick_commit_hashes_accepts_single_hash() {
+    let parsed = CommandPalette::parse_cherry_pick_commit_hashes("abc1234");
+    assert_eq!(parsed, Some(vec!["abc1234".to_string()]));
+  }
+
+  #[test]
+  fn parse_cherry_pick_commit_hashes_accepts_multiple_hashes() {
+    let parsed = CommandPalette::parse_cherry_pick_commit_hashes(" abc1234   def5678\t1234abcd ");
+    assert_eq!(
+      parsed,
+      Some(vec![
+        "abc1234".to_string(),
+        "def5678".to_string(),
+        "1234abcd".to_string()
+      ])
+    );
+  }
+
+  #[test]
+  fn parse_cherry_pick_commit_hashes_rejects_empty_input() {
+    let parsed = CommandPalette::parse_cherry_pick_commit_hashes("   \n\t  ");
+    assert_eq!(parsed, None);
   }
 }

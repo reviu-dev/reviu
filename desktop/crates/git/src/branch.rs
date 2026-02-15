@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
-use git2::{BranchType, Repository, Signature};
+use git2::{BranchType, CherrypickOptions, Repository, Signature};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BranchKind {
@@ -233,11 +233,73 @@ pub fn merge_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
   bail!("unsupported merge analysis")
 }
 
+pub fn cherry_pick_commits(repo_root: &Path, commit_hashes: &[String]) -> Result<()> {
+  if commit_hashes.is_empty() {
+    bail!("no commits provided for cherry-pick");
+  }
+
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+
+  for commit_hash in commit_hashes {
+    let commit_hash = commit_hash.trim();
+    if commit_hash.is_empty() {
+      bail!("empty commit hash");
+    }
+
+    let object = repo
+      .revparse_single(commit_hash)
+      .with_context(|| format!("resolve commit {commit_hash:?}"))?;
+    let commit = object
+      .peel_to_commit()
+      .with_context(|| format!("resolve commit {commit_hash:?}"))?;
+    let head = repo
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .context("read HEAD commit")?;
+
+    let mut options = CherrypickOptions::new();
+    repo
+      .cherrypick(&commit, Some(&mut options))
+      .with_context(|| format!("cherry-pick commit {commit_hash:?}"))?;
+
+    let mut index = repo.index()?;
+    if index.has_conflicts() {
+      bail!("cherry-pick has conflicts for {commit_hash}");
+    }
+
+    let tree_id = index.write_tree()?;
+    let tree = repo.find_tree(tree_id)?;
+    let signature = repo
+      .signature()
+      .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
+    let message = commit
+      .message()
+      .map(str::trim)
+      .filter(|msg| !msg.is_empty());
+    let message = message.unwrap_or("cherry-pick");
+
+    repo
+      .commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        message,
+        &tree,
+        &[&head],
+      )
+      .with_context(|| format!("create cherry-pick commit for {commit_hash:?}"))?;
+    repo.cleanup_state().context("cleanup cherry-pick state")?;
+  }
+
+  Ok(())
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
-  use git2::build::CheckoutBuilder;
   use git2::RemoteCallbacks;
+  use git2::build::CheckoutBuilder;
   use std::{
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
@@ -540,8 +602,18 @@ mod tests {
   fn merge_branch_normal_creates_merge_commit_with_two_parents() {
     let repo = TempRepo::init("branch-merge-normal");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let _ = commit_text_file(&repo.path, Path::new("main.txt"), "base-main\n", "base main");
-    let _ = commit_text_file(&repo.path, Path::new("feature.txt"), "base-feature\n", "base feature");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("main.txt"),
+      "base-main\n",
+      "base main",
+    );
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("feature.txt"),
+      "base-feature\n",
+      "base feature",
+    );
     let base_branch = current_branch_status(&repo.path)
       .expect("read base branch")
       .name;
@@ -682,6 +754,130 @@ mod tests {
       .expect("head after merge")
       .id();
     assert_eq!(head_after, head_before);
+  }
+
+  #[test]
+  fn cherry_pick_commits_applies_single_commit() {
+    let repo = TempRepo::init("branch-cherry-pick-single");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let feature_commit = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "v2-feature\n",
+      "feature change",
+    );
+
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    force_checkout_head(&repo.path);
+
+    cherry_pick_commits(&repo.path, &[feature_commit.to_string()]).expect("cherry-pick commit");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head");
+    assert_eq!(head.message().unwrap_or_default(), "feature change");
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read cherry-picked file"),
+      "v2-feature\n"
+    );
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("status after cherry-pick")
+        .name,
+      base_branch
+    );
+  }
+
+  #[test]
+  fn cherry_pick_commits_applies_multiple_commits_in_order() {
+    let repo = TempRepo::init("branch-cherry-pick-multiple");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let first = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "v2-feature\n",
+      "feature 1",
+    );
+    let second = commit_text_file(&repo.path, Path::new("extra.txt"), "extra\n", "feature 2");
+
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    force_checkout_head(&repo.path);
+
+    cherry_pick_commits(&repo.path, &[first.to_string(), second.to_string()])
+      .expect("cherry-pick commits");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head");
+    assert_eq!(head.message().unwrap_or_default(), "feature 2");
+    let parent = head.parent(0).expect("head parent");
+    assert_eq!(parent.message().unwrap_or_default(), "feature 1");
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read cherry-picked README"),
+      "v2-feature\n"
+    );
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("extra.txt")).expect("read cherry-picked extra file"),
+      "extra\n"
+    );
+  }
+
+  #[test]
+  fn cherry_pick_commits_returns_error_when_commit_is_missing() {
+    let repo = TempRepo::init("branch-cherry-pick-missing");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let error = cherry_pick_commits(&repo.path, &[String::from("deadbeef")])
+      .expect_err("missing commit should fail");
+    let message = error.to_string();
+    assert!(
+      message.contains("resolve commit"),
+      "unexpected error message: {message}"
+    );
   }
 
   #[test]

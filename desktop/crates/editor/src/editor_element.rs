@@ -266,10 +266,11 @@ fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
   let mut merged: Vec<Range<usize>> = Vec::new();
   for range in ranges {
     if let Some(last) = merged.last_mut()
-      && range.start <= last.end {
-        last.end = last.end.max(range.end);
-        continue;
-      }
+      && range.start <= last.end
+    {
+      last.end = last.end.max(range.end);
+      continue;
+    }
     merged.push(range);
   }
   merged
@@ -1201,27 +1202,27 @@ impl Element for EditorElement {
         projection.as_deref(),
         document,
         &theme,
-      )
-        && let Some((_, shaped)) = shaped_lines.iter().find(|(idx, _)| *idx == *display_idx) {
-          let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
-          for range in word_diff.ranges {
-            if range.start >= range.end {
-              continue;
-            }
-            let x_start = shaped.x_for_index(range.start);
-            let x_end = shaped.x_for_index(range.end);
-            if x_end <= x_start {
-              continue;
-            }
-            word_diff_quads.push(fill(
-              Bounds::from_corners(
-                point(bounds.left() + x_start, y),
-                point(bounds.left() + x_end, y + line_height),
-              ),
-              word_diff.background,
-            ));
+      ) && let Some((_, shaped)) = shaped_lines.iter().find(|(idx, _)| *idx == *display_idx)
+      {
+        let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
+        for range in word_diff.ranges {
+          if range.start >= range.end {
+            continue;
           }
+          let x_start = shaped.x_for_index(range.start);
+          let x_end = shaped.x_for_index(range.end);
+          if x_end <= x_start {
+            continue;
+          }
+          word_diff_quads.push(fill(
+            Bounds::from_corners(
+              point(bounds.left() + x_start, y),
+              point(bounds.left() + x_end, y + line_height),
+            ),
+            word_diff.background,
+          ));
         }
+      }
 
       let group_id = match display_line {
         DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
@@ -1233,55 +1234,56 @@ impl Element for EditorElement {
       };
 
       if let (Some(projection), Some(group_id)) = (projection.as_ref(), group_id)
-        && let Some((top_color, bottom_color)) = group_border_colors.get(group_id.as_ref()) {
-          let prev_group = display_idx
-            .checked_sub(1)
-            .and_then(|idx| projection.lines.get(idx))
-            .and_then(|line| match line {
-              DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
-              DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
-              DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
-              DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
-              DisplayLine::ReviewComment { group_id, .. } => group_id.as_ref(),
-              _ => None,
-            });
-          let next_group = projection
-            .lines
-            .get(display_idx + 1)
-            .and_then(|line| match line {
-              DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
-              DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
-              DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
-              DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
-              DisplayLine::ReviewComment { group_id, .. } => group_id.as_ref(),
-              _ => None,
-            });
+        && let Some((top_color, bottom_color)) = group_border_colors.get(group_id.as_ref())
+      {
+        let prev_group = display_idx
+          .checked_sub(1)
+          .and_then(|idx| projection.lines.get(idx))
+          .and_then(|line| match line {
+            DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
+            DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
+            DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
+            DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
+            DisplayLine::ReviewComment { group_id, .. } => group_id.as_ref(),
+            _ => None,
+          });
+        let next_group = projection
+          .lines
+          .get(display_idx + 1)
+          .and_then(|line| match line {
+            DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
+            DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
+            DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
+            DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
+            DisplayLine::ReviewComment { group_id, .. } => group_id.as_ref(),
+            _ => None,
+          });
 
-          let is_top = prev_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
-          let is_bottom = next_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
-          let border_thickness = px(1.0);
-          let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
+        let is_top = prev_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
+        let is_bottom = next_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
+        let border_thickness = px(1.0);
+        let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
 
-          if is_top {
-            group_borders.push(fill(
-              Bounds::new(
-                point(bounds.left(), y),
-                size(bounds.size.width, border_thickness),
-              ),
-              *top_color,
-            ));
-          }
-
-          if is_bottom {
-            group_borders.push(fill(
-              Bounds::new(
-                point(bounds.left(), y + line_height - border_thickness),
-                size(bounds.size.width, border_thickness),
-              ),
-              *bottom_color,
-            ));
-          }
+        if is_top {
+          group_borders.push(fill(
+            Bounds::new(
+              point(bounds.left(), y),
+              size(bounds.size.width, border_thickness),
+            ),
+            *top_color,
+          ));
         }
+
+        if is_bottom {
+          group_borders.push(fill(
+            Bounds::new(
+              point(bounds.left(), y + line_height - border_thickness),
+              size(bounds.size.width, border_thickness),
+            ),
+            *bottom_color,
+          ));
+        }
+      }
     }
 
     if !blank_line_set.is_empty() {
@@ -1297,9 +1299,10 @@ impl Element for EditorElement {
         }
       }
       if let Some(start) = current_start.take()
-        && let Some((last_idx, _)) = viewport_lines.last() {
-          blank_ranges.push((start, *last_idx));
-        }
+        && let Some((last_idx, _)) = viewport_lines.last()
+      {
+        blank_ranges.push((start, *last_idx));
+      }
 
       let stripe_spacing = px(DIAGONAL_STRIPE_SPACING);
       let stripe_width = px(DIAGONAL_STRIPE_WIDTH);

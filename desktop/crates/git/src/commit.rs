@@ -367,7 +367,7 @@ mod tests {
       err
         .expect("error")
         .to_string()
-      .contains("commit message is empty")
+        .contains("commit message is empty")
     );
   }
 
@@ -473,7 +473,10 @@ mod tests {
 
     push(&local.path, false).expect("push without force");
 
-    assert_eq!(remote_branch_oid(&remote.path, &local_branch), expected_head);
+    assert_eq!(
+      remote_branch_oid(&remote.path, &local_branch),
+      expected_head
+    );
   }
 
   #[test]
@@ -512,7 +515,10 @@ mod tests {
     push_branch_to_remote(&peer_dir.path, &local_branch, "origin");
 
     let err = push(&source.path, false).err();
-    assert!(err.is_some(), "non-fast-forward push should fail without force");
+    assert!(
+      err.is_some(),
+      "non-fast-forward push should fail without force"
+    );
 
     push(&source.path, true).expect("force push");
     assert_eq!(remote_branch_oid(&remote.path, &local_branch), source_head);
