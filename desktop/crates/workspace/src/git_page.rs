@@ -1291,6 +1291,11 @@ impl GitPage {
           return;
         }
         this.status_entries = entries;
+        let branch_changed = this
+          .branch_status
+          .as_ref()
+          .map(|status| status.name.as_str())
+          != branch_status.as_ref().map(|status| status.name.as_str());
         this.branch_status = branch_status;
         this.has_staged_changes = this
           .status_entries
@@ -1316,6 +1321,9 @@ impl GitPage {
         let (can_push, can_force_push) = Self::push_flags(this.branch_status.as_ref());
         this.can_push = can_push;
         this.can_force_push = can_force_push;
+        if branch_changed {
+          this.refresh_branches(cx);
+        }
         if this.history_opened_commit_file.is_none() {
           if let Some(selected) = this.selected_file.as_ref() {
             let still_present = this
@@ -1415,6 +1423,11 @@ impl GitPage {
             return;
           }
           this.status_entries = entries;
+          let branch_changed = this
+            .branch_status
+            .as_ref()
+            .map(|status| status.name.as_str())
+            != branch_status.as_ref().map(|status| status.name.as_str());
           this.branch_status = branch_status;
           this.has_staged_changes = this
             .status_entries
@@ -1447,6 +1460,9 @@ impl GitPage {
           let (can_push, can_force_push) = Self::push_flags(this.branch_status.as_ref());
           this.can_push = can_push;
           this.can_force_push = can_force_push;
+          if branch_changed {
+            this.refresh_branches(cx);
+          }
           if this.history_opened_commit_file.is_none() {
             if let Some(selected) = this.selected_file.as_ref() {
               let still_present = this
