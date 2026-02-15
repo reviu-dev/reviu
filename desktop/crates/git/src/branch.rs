@@ -234,3 +234,359 @@ pub fn merge_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
 
   bail!("unsupported merge analysis")
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use git2::RemoteCallbacks;
+  use std::{
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+  };
+
+  struct TempRepo {
+    path: PathBuf,
+  }
+
+  impl TempRepo {
+    fn init(prefix: &str) -> Self {
+      let mut path = std::env::temp_dir();
+      let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+      path.push(format!("reviu-{prefix}-{}-{nanos}", std::process::id()));
+      std::fs::create_dir_all(&path).expect("create temp dir");
+      Repository::init(&path).expect("init git repository");
+      Self { path }
+    }
+  }
+
+  impl Drop for TempRepo {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.path);
+    }
+  }
+
+  struct TempDir {
+    path: PathBuf,
+  }
+
+  impl TempDir {
+    fn new(prefix: &str) -> Self {
+      let mut path = std::env::temp_dir();
+      let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+      path.push(format!("reviu-{prefix}-dir-{}-{nanos}", std::process::id()));
+      std::fs::create_dir_all(&path).expect("create temp dir");
+      Self { path }
+    }
+  }
+
+  impl Drop for TempDir {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.path);
+    }
+  }
+
+  struct TempBareRepo {
+    path: PathBuf,
+  }
+
+  impl TempBareRepo {
+    fn init(prefix: &str) -> Self {
+      let mut path = std::env::temp_dir();
+      let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+      path.push(format!(
+        "reviu-{prefix}-bare-{}-{nanos}",
+        std::process::id()
+      ));
+      std::fs::create_dir_all(&path).expect("create temp dir");
+      Repository::init_bare(&path).expect("init bare git repository");
+      Self { path }
+    }
+  }
+
+  impl Drop for TempBareRepo {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.path);
+    }
+  }
+
+  fn commit_text_file(
+    repo_root: &Path,
+    rel_path: &Path,
+    contents: &str,
+    message: &str,
+  ) -> git2::Oid {
+    let repo = Repository::open(repo_root).expect("open repo");
+    std::fs::write(repo_root.join(rel_path), contents).expect("write worktree file");
+
+    let mut index = repo.index().expect("open index");
+    index.add_path(rel_path).expect("stage file");
+    index.write().expect("write index");
+    let tree_id = index.write_tree().expect("write tree");
+    let tree = repo.find_tree(tree_id).expect("find tree");
+    let sig = Signature::now("Reviu Tests", "tests@reviu.local").expect("signature");
+    let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+
+    match parent {
+      Some(parent) => repo
+        .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])
+        .expect("commit with parent"),
+      None => repo
+        .commit(Some("HEAD"), &sig, &sig, message, &tree, &[])
+        .expect("initial commit"),
+    }
+  }
+
+  fn push_branch_to_remote(repo_root: &Path, branch_name: &str, remote_name: &str) {
+    let repo = Repository::open(repo_root).expect("open repo");
+    let mut remote = repo.find_remote(remote_name).expect("find remote");
+    let refspec = format!("refs/heads/{branch_name}:refs/heads/{branch_name}");
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(|_, _, _| git2::Cred::default());
+    let mut push_options = git2::PushOptions::new();
+    push_options.remote_callbacks(callbacks);
+    remote
+      .push(&[refspec], Some(&mut push_options))
+      .expect("push branch");
+  }
+
+  #[test]
+  fn create_branch_creates_local_branch() {
+    let repo = TempRepo::init("branch-create");
+    commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
+
+    create_branch(&repo.path, "feature").expect("create branch");
+    let branches = list_branches(&repo.path).expect("list branches");
+    assert!(
+      branches
+        .iter()
+        .any(|branch| branch.kind == BranchKind::Local && branch.name == "feature")
+    );
+  }
+
+  #[test]
+  fn switch_branch_updates_current_branch() {
+    let repo = TempRepo::init("branch-switch");
+    commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
+    create_branch(&repo.path, "feature").expect("create branch");
+
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch branch");
+
+    let status = current_branch_status(&repo.path).expect("branch status");
+    assert_eq!(status.name, "feature");
+  }
+
+  #[test]
+  fn current_branch_status_uses_head_label_for_detached_head() {
+    let repo = TempRepo::init("branch-detached");
+    let oid = commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    repo_handle.set_head_detached(oid).expect("detach head");
+
+    let status = current_branch_status(&repo.path).expect("branch status");
+    assert_eq!(status.name, "HEAD");
+  }
+
+  #[test]
+  fn current_branch_status_reports_ahead_and_behind_with_upstream() {
+    let remote = TempBareRepo::init("branch-upstream-remote");
+    let local = TempRepo::init("branch-upstream-local");
+    let peer = TempDir::new("branch-upstream-peer");
+
+    let _ = commit_text_file(&local.path, Path::new("README.md"), "v1\n", "initial");
+    let local_repo = Repository::open(&local.path).expect("open local repo");
+    local_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin remote");
+    let branch_name = current_branch_status(&local.path)
+      .expect("read local branch status")
+      .name;
+
+    push_branch_to_remote(&local.path, &branch_name, "origin");
+    let mut local_branch = local_repo
+      .find_branch(&branch_name, BranchType::Local)
+      .expect("find local branch");
+    local_branch
+      .set_upstream(Some(&format!("origin/{branch_name}")))
+      .expect("set upstream");
+
+    let _ = commit_text_file(
+      &local.path,
+      Path::new("README.md"),
+      "v2-local\n",
+      "local change",
+    );
+
+    let peer_repo = Repository::clone(remote.path.to_str().expect("remote path utf8"), &peer.path)
+      .expect("clone remote in peer");
+    std::fs::write(peer.path.join("README.md"), "v2-peer\n").expect("update peer file");
+    let mut index = peer_repo.index().expect("open peer index");
+    index
+      .add_path(Path::new("README.md"))
+      .expect("stage peer file");
+    index.write().expect("write peer index");
+    let tree_id = index.write_tree().expect("write peer tree");
+    let tree = peer_repo.find_tree(tree_id).expect("find peer tree");
+    let sig = Signature::now("Reviu Tests", "tests@reviu.local").expect("peer signature");
+    let parent = peer_repo
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("peer parent");
+    peer_repo
+      .commit(Some("HEAD"), &sig, &sig, "peer change", &tree, &[&parent])
+      .expect("peer commit");
+    push_branch_to_remote(&peer.path, &branch_name, "origin");
+
+    {
+      let mut remote = local_repo.find_remote("origin").expect("find origin");
+      remote
+        .fetch(&["refs/heads/*:refs/remotes/origin/*"], None, None)
+        .expect("fetch remote updates");
+    }
+
+    let status = current_branch_status(&local.path).expect("branch status");
+    assert_eq!(status.name, branch_name);
+    assert!(status.has_upstream);
+    assert!(
+      status.ahead >= 1,
+      "expected ahead >= 1, got {}",
+      status.ahead
+    );
+    assert!(
+      status.behind >= 1,
+      "expected behind >= 1, got {}",
+      status.behind
+    );
+  }
+
+  #[test]
+  fn switch_branch_remote_creates_local_branch_and_sets_upstream() {
+    let remote = TempBareRepo::init("branch-switch-remote-origin");
+    let source = TempRepo::init("branch-switch-remote-source");
+    let clone_dir = TempDir::new("branch-switch-remote-clone");
+
+    let _ = commit_text_file(&source.path, Path::new("README.md"), "v1\n", "initial");
+    let source_repo = Repository::open(&source.path).expect("open source repo");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add source origin");
+
+    let base_branch = current_branch_status(&source.path)
+      .expect("read source branch status")
+      .name;
+    push_branch_to_remote(&source.path, &base_branch, "origin");
+
+    create_branch(&source.path, "feature").expect("create source feature branch");
+    switch_branch(
+      &source.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch source to feature");
+    let _ = commit_text_file(
+      &source.path,
+      Path::new("README.md"),
+      "v2-feature\n",
+      "feature change",
+    );
+    push_branch_to_remote(&source.path, "feature", "origin");
+
+    let _clone_repo = Repository::clone(
+      remote.path.to_str().expect("remote path utf8"),
+      &clone_dir.path,
+    )
+    .expect("clone remote");
+
+    switch_branch(
+      &clone_dir.path,
+      &BranchRef {
+        name: "origin/feature".to_string(),
+        kind: BranchKind::Remote,
+      },
+    )
+    .expect("switch to remote feature branch");
+
+    let status = current_branch_status(&clone_dir.path).expect("branch status after switch");
+    assert_eq!(status.name, "feature");
+    assert!(status.has_upstream);
+
+    let clone_repo = Repository::open(&clone_dir.path).expect("open clone repo");
+    let local_feature = clone_repo
+      .find_branch("feature", BranchType::Local)
+      .expect("find local feature branch");
+    let upstream = local_feature
+      .upstream()
+      .expect("feature branch upstream")
+      .name()
+      .expect("upstream name")
+      .expect("non-empty upstream")
+      .to_string();
+    assert_eq!(upstream, "origin/feature");
+  }
+
+  #[test]
+  fn create_branch_from_remote_creates_branch_with_upstream() {
+    let remote = TempBareRepo::init("branch-create-from-remote-origin");
+    let source = TempRepo::init("branch-create-from-remote-source");
+    let clone_dir = TempDir::new("branch-create-from-remote-clone");
+
+    let _ = commit_text_file(&source.path, Path::new("README.md"), "v1\n", "initial");
+    let source_repo = Repository::open(&source.path).expect("open source repo");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add source origin");
+    let base_branch = current_branch_status(&source.path)
+      .expect("read source branch status")
+      .name;
+    push_branch_to_remote(&source.path, &base_branch, "origin");
+
+    create_branch(&source.path, "feature").expect("create source feature branch");
+    push_branch_to_remote(&source.path, "feature", "origin");
+
+    let _clone_repo = Repository::clone(
+      remote.path.to_str().expect("remote path utf8"),
+      &clone_dir.path,
+    )
+    .expect("clone remote");
+
+    create_branch_from(
+      &clone_dir.path,
+      "my-feature",
+      &BranchRef {
+        name: "origin/feature".to_string(),
+        kind: BranchKind::Remote,
+      },
+    )
+    .expect("create local branch from remote");
+
+    let clone_repo = Repository::open(&clone_dir.path).expect("open clone repo");
+    let local_branch = clone_repo
+      .find_branch("my-feature", BranchType::Local)
+      .expect("find created local branch");
+    let upstream = local_branch
+      .upstream()
+      .expect("branch upstream")
+      .name()
+      .expect("upstream name")
+      .expect("non-empty upstream")
+      .to_string();
+    assert_eq!(upstream, "origin/feature");
+  }
+}
