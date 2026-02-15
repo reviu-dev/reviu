@@ -1,8 +1,6 @@
 mod assets;
 mod command_palette;
 mod confirm_dialog;
-
-mod git_graph;
 mod icons;
 mod search_file_palette;
 mod status_theme_ext;
@@ -18,11 +16,6 @@ pub use command_palette::{
   CommandPalettePage,
 };
 pub use confirm_dialog::ConfirmDialog;
-pub use git_graph::{
-  GitGraphExpandedFileRow, GitGraphExpandedState, GitGraphLaneSegment, GitGraphLanes,
-  GitGraphLanesLayout, GitGraphLanesStyle, GitGraphRow, GitGraphRowOpenFileHandler,
-  GitGraphRowStyle, GitGraphRowToggleHandler,
-};
 pub use gpui_component::Disableable;
 pub use gpui_component::WindowExt;
 pub use gpui_component::button::Button;

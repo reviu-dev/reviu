@@ -9,11 +9,11 @@ use std::{
 use editor::{CloseFind, DiffViewMode, Editor, Find, HunkAction, HunkState};
 use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use git::{
-  BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, CommitGraphNode,
-  CommitGraphRow, HeadCommitStatus, RepoStage, RepoStatusEntry, RepoStatusKind, amend_commit,
-  build_commit_graph_rows, commit_changes, create_branch, create_branch_from,
-  current_branch_status, delete_untracked_file, diff_set_from_patch, head_commit_status,
-  list_branches, list_commit_changed_files, list_commit_graph, list_repo_status,
+  BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
+  HistoryCommitNode, HistoryRevision, RepoStage, RepoStatusEntry, RepoStatusKind, amend_commit,
+  commit_changes, create_branch, create_branch_from, current_branch_status,
+  current_history_revision, delete_untracked_file, diff_set_from_patch, head_commit_status,
+  list_branches, list_commit_changed_files, list_commit_history, list_repo_status,
   load_commit_file_diff, merge_branch, push, restore_file, stage_all, stage_file, switch_branch,
   undo_last_commit, unstage_all, unstage_file,
 };
@@ -30,10 +30,10 @@ use gpui_component::{
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{DropdownMenu, PopupMenuItem},
-  scroll::ScrollableElement,
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
   spinner::Spinner,
   tooltip::Tooltip,
+  tree::{TreeItem, TreeState, tree},
 };
 use smol::unblock;
 
@@ -48,11 +48,9 @@ use crate::{
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteHandler, CommandPalettePage,
-  ConfirmDialog, FILE_ICON_SIZE_PX, GitGraphExpandedFileRow, GitGraphExpandedState,
-  GitGraphLaneSegment, GitGraphLanes, GitGraphLanesLayout, GitGraphLanesStyle, GitGraphRow,
-  GitGraphRowOpenFileHandler, GitGraphRowStyle, GitGraphRowToggleHandler, HEADER_HEIGHT, Input,
-  InputState, SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
-  StatusThemeExt, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
+  ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState, SearchFileEntry,
+  SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UiIconName,
+  UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
   file_icon_path_for_path_with_theme, user_menu,
 };
 
@@ -61,17 +59,8 @@ const SIDEBAR_MIN_WIDTH: f32 = 250.0;
 const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const STATUS_POLL_INTERVAL_MS: u64 = 800;
 const EDITOR_HEADER_HEIGHT: f32 = 40.0;
-const GRAPH_MAX_COMMITS: usize = 200;
-const GRAPH_ROW_HEIGHT: f32 = 30.0;
-const GRAPH_EXPANDED_FILE_ROW_HEIGHT: f32 = 24.0;
-const GRAPH_LANE_WIDTH: f32 = 14.0;
-const GRAPH_LINE_WIDTH: f32 = 2.0;
-const GRAPH_CURVE_STUB_HEIGHT: f32 = 10.0;
-const GRAPH_DOT_SIZE: f32 = 10.0;
-const GRAPH_DOT_SIZE_LATEST: f32 = 14.0;
-const GRAPH_BRANCH_BADGE_MAX_WIDTH: f32 = 190.0;
-const GRAPH_AUTHOR_MAX_WIDTH: f32 = 180.0;
-const GRAPH_POLL_EVERY_TICKS: u32 = 6;
+const HISTORY_MAX_COMMITS: usize = 200;
+const HISTORY_AUTHOR_MAX_WIDTH: f32 = 180.0;
 
 actions!(
   workspace,
@@ -248,17 +237,17 @@ impl ListDelegate for GitFileListDelegate {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GitSidebarMode {
   Changes,
-  Graph,
+  History,
 }
 
 #[derive(Clone, Debug)]
-struct GraphCommitFileRow {
+struct HistoryCommitFileRow {
   path: PathBuf,
   kind: CommitFileChangeKind,
   label: SharedString,
 }
 
-impl GraphCommitFileRow {
+impl HistoryCommitFileRow {
   fn from_commit_file(file: CommitChangedFile) -> Self {
     let path_label = file.path.to_string_lossy().replace(['\n', '\r'], "");
     let label = file
@@ -278,71 +267,29 @@ impl GraphCommitFileRow {
 }
 
 #[derive(Clone, Debug)]
-struct GraphRenderRow {
-  commit: CommitGraphNode,
-  segments: Vec<GitGraphLaneSegment>,
-  lane_branch_ids: Vec<Option<usize>>,
-  commit_lane: usize,
-  commit_branch_id: usize,
-  lane_transitions: Vec<(usize, usize, usize)>,
-  merge_parent_lanes: Vec<usize>,
-  merge_parent_lane_branches: Vec<(usize, usize)>,
-  #[allow(dead_code)]
-  branch_child_lanes: Vec<usize>,
-  branch_child_lane_branches: Vec<(usize, usize)>,
-  #[allow(dead_code)]
-  branch_pre_stubs: Vec<usize>,
-  branch_pre_stub_lane_branches: Vec<(usize, usize)>,
-  commit_lane_has_up: bool,
-  expanded: bool,
-  expanded_loading: bool,
-  expanded_files: Vec<GraphCommitFileRow>,
-  selected_expanded_file: Option<PathBuf>,
+struct HistoryRenderRow {
+  commit: HistoryCommitNode,
 }
 
-impl GraphRenderRow {
-  fn from_layout(layout: CommitGraphRow) -> Self {
-    Self {
-      commit: layout.commit,
-      segments: layout
-        .segments
-        .into_iter()
-        .map(|segment| GitGraphLaneSegment {
-          up: segment.up,
-          down: segment.down,
-        })
-        .collect(),
-      lane_branch_ids: layout.lane_branch_ids,
-      commit_lane: layout.commit_lane,
-      commit_branch_id: layout.commit_branch_id,
-      lane_transitions: layout.lane_transitions,
-      merge_parent_lanes: layout.merge_parent_lanes,
-      merge_parent_lane_branches: layout.merge_parent_lane_branches,
-      branch_child_lanes: layout.branch_child_lanes,
-      branch_child_lane_branches: layout.branch_child_lane_branches,
-      branch_pre_stubs: layout.branch_pre_stubs,
-      branch_pre_stub_lane_branches: layout.branch_pre_stub_lane_branches,
-      commit_lane_has_up: layout.commit_lane_has_up,
-      expanded: false,
-      expanded_loading: false,
-      expanded_files: Vec::new(),
-      selected_expanded_file: None,
-    }
+impl HistoryRenderRow {
+  fn from_commit(commit: HistoryCommitNode) -> Self {
+    Self { commit }
   }
+}
 
-  fn expanded_rows_count(&self) -> usize {
-    if !self.expanded {
-      return 0;
-    }
-    if self.expanded_loading || self.expanded_files.is_empty() {
-      return 1;
-    }
-    self.expanded_files.len()
-  }
-
-  fn total_height(&self) -> f32 {
-    GRAPH_ROW_HEIGHT + self.expanded_rows_count() as f32 * GRAPH_EXPANDED_FILE_ROW_HEIGHT
-  }
+#[derive(Clone, Debug)]
+enum HistoryTreeNode {
+  Commit {
+    oid: String,
+  },
+  File {
+    commit_oid: String,
+    file: HistoryCommitFileRow,
+  },
+  LoadHint {
+    oid: String,
+  },
+  Placeholder,
 }
 
 #[derive(Clone)]
@@ -493,6 +440,7 @@ pub struct GitPage {
   repo_select: Entity<SelectState<SearchableVec<RecentRepoItem>>>,
   branch_select: Entity<SelectState<SearchableVec<BranchSelectItem>>>,
   file_list: Entity<ListState<GitFileListDelegate>>,
+  history_tree: Entity<TreeState>,
   window_handle: AnyWindowHandle,
   selected_repo: Option<PathBuf>,
   status_entries: Vec<RepoStatusEntry>,
@@ -503,12 +451,16 @@ pub struct GitPage {
   can_force_push: bool,
   has_staged_changes: bool,
   sidebar_mode: GitSidebarMode,
-  graph_commits: Vec<CommitGraphNode>,
-  graph_loading: bool,
-  graph_expanded_commit_oid: Option<String>,
-  graph_commit_files: HashMap<String, Vec<GraphCommitFileRow>>,
-  graph_commit_files_loading: HashSet<String>,
-  graph_opened_commit_file: Option<(String, PathBuf)>,
+  history_commits: Vec<HistoryCommitNode>,
+  history_revision: Option<HistoryRevision>,
+  history_loading: bool,
+  history_expanded_commit_oids: HashSet<String>,
+  history_commit_files: HashMap<String, Vec<HistoryCommitFileRow>>,
+  history_commit_files_loading: HashSet<String>,
+  pending_history_file_loads: HashSet<String>,
+  history_opened_commit_file: Option<(String, PathBuf)>,
+  history_rows_cache: Vec<HistoryRenderRow>,
+  history_tree_nodes: HashMap<String, HistoryTreeNode>,
   selected_file: Option<PathBuf>,
   force_list_selection: bool,
   editor: Option<Entity<Editor>>,
@@ -521,27 +473,50 @@ pub struct GitPage {
   auth_state: AuthState,
   auth_task: Option<Task<()>>,
   status_task: Option<Task<()>>,
-  graph_task: Option<Task<()>>,
-  graph_files_task: Option<Task<()>>,
-  graph_open_file_task: Option<Task<()>>,
+  history_task: Option<Task<()>>,
+  history_files_task: Option<Task<()>>,
+  history_open_file_task: Option<Task<()>>,
   branch_task: Option<Task<()>>,
   poll_task: Option<Task<()>>,
   commit_input: Entity<InputState>,
 }
 
 impl GitPage {
-  fn graph_file_status_kind(&self, commit_oid: &str, rel_path: &Path) -> Option<RepoStatusKind> {
+  fn should_refresh_file_list(sidebar_mode: GitSidebarMode) -> bool {
+    sidebar_mode == GitSidebarMode::Changes
+  }
+
+  fn should_refresh_history_for_poll(
+    include_history: bool,
+    history_empty: bool,
+    cached_revision: Option<&HistoryRevision>,
+    polled_revision: Option<&HistoryRevision>,
+  ) -> bool {
+    if !include_history {
+      return false;
+    }
+    if history_empty {
+      return true;
+    }
+
+    match polled_revision {
+      Some(polled_revision) => Some(polled_revision) != cached_revision,
+      None => false,
+    }
+  }
+
+  fn history_file_status_kind(&self, commit_oid: &str, rel_path: &Path) -> Option<RepoStatusKind> {
     self
-      .graph_commit_files
+      .history_commit_files
       .get(commit_oid)
       .and_then(|files| files.iter().find(|file| file.path == rel_path))
-      .map(|file| Self::graph_change_kind_to_repo_status(file.kind))
+      .map(|file| Self::history_change_kind_to_repo_status(file.kind))
   }
 
   fn split_disabled_for_path(&self, rel_path: &Path) -> bool {
-    if let Some((commit_oid, selected_path)) = self.graph_opened_commit_file.as_ref()
+    if let Some((commit_oid, selected_path)) = self.history_opened_commit_file.as_ref()
       && selected_path == rel_path
-      && let Some(status) = self.graph_file_status_kind(commit_oid, rel_path)
+      && let Some(status) = self.history_file_status_kind(commit_oid, rel_path)
     {
       return matches!(
         status,
@@ -660,77 +635,118 @@ impl GitPage {
     self.set_file_list_selected_index(selected_index, cx);
   }
 
-  fn refresh_graph_list(&mut self, cx: &mut Context<Self>) {
+  fn refresh_history_list(&mut self, cx: &mut Context<Self>) {
+    self.history_rows_cache = Self::build_history_rows(&self.history_commits);
+    self.sync_history_tree_state(cx);
+  }
+
+  fn sync_history_tree_state(&mut self, cx: &mut Context<Self>) {
+    let selected_id = self
+      .history_tree
+      .read(cx)
+      .selected_entry()
+      .map(|entry| entry.item().id.to_string());
+    let (items, nodes) = Self::build_history_tree_items(
+      &self.history_rows_cache,
+      &self.history_commit_files,
+      &self.history_commit_files_loading,
+      &self.history_expanded_commit_oids,
+    );
+    self.history_tree_nodes = nodes;
+    self.history_tree.update(cx, |state, cx| {
+      state.set_items(items, cx);
+      if let Some(selected_id) = selected_id.as_ref() {
+        let selected_item = TreeItem::new(selected_id.clone(), selected_id.clone());
+        state.set_selected_item(Some(&selected_item), cx);
+      }
+    });
     cx.notify();
   }
 
-  fn build_graph_rows_with_expansion(&self) -> Vec<GraphRenderRow> {
-    let mut rows = Self::build_graph_rows(&self.graph_commits);
-    Self::decorate_graph_rows_for_expansion(
-      &mut rows,
-      self.graph_expanded_commit_oid.as_deref(),
-      &self.graph_commit_files,
-      &self.graph_commit_files_loading,
-      self
-        .graph_opened_commit_file
-        .as_ref()
-        .map(|(commit_oid, path)| (commit_oid.as_str(), path.as_path())),
-    );
-
-    rows
-  }
-
-  fn decorate_graph_rows_for_expansion(
-    rows: &mut [GraphRenderRow],
-    expanded_commit: Option<&str>,
-    files_by_commit: &HashMap<String, Vec<GraphCommitFileRow>>,
+  fn build_history_tree_items(
+    rows: &[HistoryRenderRow],
+    files_by_commit: &HashMap<String, Vec<HistoryCommitFileRow>>,
     loading_commits: &HashSet<String>,
-    selected_graph_file: Option<(&str, &Path)>,
-  ) {
-    for row in rows.iter_mut() {
-      let is_expanded = expanded_commit == Some(row.commit.oid.as_str());
-      row.expanded = is_expanded;
-      row.expanded_loading = false;
-      row.expanded_files.clear();
-      row.selected_expanded_file = None;
+    expanded_commits: &HashSet<String>,
+  ) -> (Vec<TreeItem>, HashMap<String, HistoryTreeNode>) {
+    let mut items = Vec::with_capacity(rows.len());
+    let mut nodes = HashMap::new();
 
-      if !is_expanded {
-        continue;
+    for row in rows {
+      let commit_id = format!("history-commit:{}", row.commit.oid);
+      nodes.insert(
+        commit_id.clone(),
+        HistoryTreeNode::Commit {
+          oid: row.commit.oid.clone(),
+        },
+      );
+      let mut children = Vec::new();
+      if loading_commits.contains(row.commit.oid.as_str()) {
+        let loading_id = format!("history-loading:{}", row.commit.oid);
+        nodes.insert(loading_id.clone(), HistoryTreeNode::Placeholder);
+        children.push(TreeItem::new(loading_id, "Loading files..."));
+      } else if let Some(files) = files_by_commit.get(row.commit.oid.as_str()) {
+        if files.is_empty() {
+          let empty_id = format!("history-empty:{}", row.commit.oid);
+          nodes.insert(empty_id.clone(), HistoryTreeNode::Placeholder);
+          children.push(TreeItem::new(empty_id, "No files changed"));
+        } else {
+          for (file_index, file) in files.iter().enumerate() {
+            let file_id = format!("history-file:{}:{}", row.commit.oid, file_index);
+            nodes.insert(
+              file_id.clone(),
+              HistoryTreeNode::File {
+                commit_oid: row.commit.oid.clone(),
+                file: file.clone(),
+              },
+            );
+            children.push(TreeItem::new(file_id, file.label.clone()));
+          }
+        }
+      } else {
+        let hint_id = format!("history-hint:{}", row.commit.oid);
+        nodes.insert(
+          hint_id.clone(),
+          HistoryTreeNode::LoadHint {
+            oid: row.commit.oid.clone(),
+          },
+        );
+        children.push(TreeItem::new(hint_id, "Load files..."));
       }
 
-      row.expanded_loading = loading_commits.contains(row.commit.oid.as_str());
-      row.expanded_files = files_by_commit
-        .get(row.commit.oid.as_str())
-        .cloned()
-        .unwrap_or_default();
-      row.selected_expanded_file = selected_graph_file.and_then(|(commit_oid, path)| {
-        (commit_oid == row.commit.oid.as_str()).then(|| path.to_path_buf())
-      });
+      let is_expanded = expanded_commits.contains(row.commit.oid.as_str());
+      items.push(
+        TreeItem::new(commit_id, row.commit.summary.clone())
+          .children(children)
+          .expanded(is_expanded),
+      );
     }
+
+    (items, nodes)
   }
 
-  fn sync_graph_cache_with_commits(&mut self) {
+  fn sync_history_cache_with_commits(&mut self) {
     let known_oids = self
-      .graph_commits
+      .history_commits
       .iter()
       .map(|commit| commit.oid.clone())
       .collect::<HashSet<_>>();
     self
-      .graph_commit_files
+      .history_commit_files
       .retain(|oid, _| known_oids.contains(oid));
     self
-      .graph_commit_files_loading
+      .history_commit_files_loading
       .retain(|oid| known_oids.contains(oid));
-    if let Some(expanded_oid) = self.graph_expanded_commit_oid.as_ref()
-      && !known_oids.contains(expanded_oid)
-    {
-      self.graph_expanded_commit_oid = None;
-      self.graph_opened_commit_file = None;
-    }
-    if let Some((commit_oid, _)) = self.graph_opened_commit_file.as_ref()
+    self
+      .pending_history_file_loads
+      .retain(|oid| known_oids.contains(oid));
+    self
+      .history_expanded_commit_oids
+      .retain(|oid| known_oids.contains(oid));
+    if let Some((commit_oid, _)) = self.history_opened_commit_file.as_ref()
       && !known_oids.contains(commit_oid)
     {
-      self.graph_opened_commit_file = None;
+      self.history_opened_commit_file = None;
     }
   }
 
@@ -850,6 +866,7 @@ impl GitPage {
       .searchable(true)
     });
     let file_list = cx.new(|cx| ListState::new(GitFileListDelegate::new(), window, cx));
+    let history_tree = cx.new(|cx| TreeState::new(cx));
 
     if let Some(repo) = selected_repo.as_ref() {
       repo_select.update(cx, |state, cx| {
@@ -869,6 +886,7 @@ impl GitPage {
       repo_select,
       branch_select,
       file_list,
+      history_tree,
       window_handle: window.window_handle(),
       selected_repo,
       status_entries: Vec::new(),
@@ -879,12 +897,16 @@ impl GitPage {
       can_force_push: false,
       has_staged_changes: false,
       sidebar_mode: GitSidebarMode::Changes,
-      graph_commits: Vec::new(),
-      graph_loading: false,
-      graph_expanded_commit_oid: None,
-      graph_commit_files: HashMap::new(),
-      graph_commit_files_loading: HashSet::new(),
-      graph_opened_commit_file: None,
+      history_commits: Vec::new(),
+      history_revision: None,
+      history_loading: false,
+      history_expanded_commit_oids: HashSet::new(),
+      history_commit_files: HashMap::new(),
+      history_commit_files_loading: HashSet::new(),
+      pending_history_file_loads: HashSet::new(),
+      history_opened_commit_file: None,
+      history_rows_cache: Vec::new(),
+      history_tree_nodes: HashMap::new(),
       selected_file: None,
       force_list_selection: false,
       editor: None,
@@ -897,9 +919,9 @@ impl GitPage {
       auth_state: AuthState::Unknown,
       auth_task: None,
       status_task: None,
-      graph_task: None,
-      graph_files_task: None,
-      graph_open_file_task: None,
+      history_task: None,
+      history_files_task: None,
+      history_open_file_task: None,
       branch_task: None,
       poll_task: None,
       commit_input,
@@ -985,12 +1007,14 @@ impl GitPage {
     self.selected_repo = Some(repo_root.clone());
     self.selected_file = None;
     self.editor = None;
-    self.graph_commits.clear();
-    self.graph_loading = self.sidebar_mode == GitSidebarMode::Graph;
-    self.graph_expanded_commit_oid = None;
-    self.graph_commit_files.clear();
-    self.graph_commit_files_loading.clear();
-    self.graph_opened_commit_file = None;
+    self.history_commits.clear();
+    self.history_revision = None;
+    self.history_loading = self.sidebar_mode == GitSidebarMode::History;
+    self.history_expanded_commit_oids.clear();
+    self.history_commit_files.clear();
+    self.history_commit_files_loading.clear();
+    self.pending_history_file_loads.clear();
+    self.history_opened_commit_file = None;
     ConfigStore::persist_recent_repository(&repo_root);
 
     self.reload_status(cx);
@@ -1097,65 +1121,82 @@ impl GitPage {
     self.branch_task = Some(task);
   }
 
-  fn refresh_graph(&mut self, cx: &mut Context<Self>) {
+  fn refresh_history(&mut self, cx: &mut Context<Self>) {
     let Some(repo_root) = self.selected_repo.clone() else {
-      self.graph_commits.clear();
-      self.graph_loading = false;
-      self.graph_expanded_commit_oid = None;
-      self.graph_commit_files.clear();
-      self.graph_commit_files_loading.clear();
-      self.graph_opened_commit_file = None;
-      self.refresh_graph_list(cx);
+      self.history_commits.clear();
+      self.history_revision = None;
+      self.history_loading = false;
+      self.history_expanded_commit_oids.clear();
+      self.history_commit_files.clear();
+      self.history_commit_files_loading.clear();
+      self.pending_history_file_loads.clear();
+      self.history_opened_commit_file = None;
+      self.refresh_history_list(cx);
       cx.notify();
       return;
     };
 
-    if self.graph_commits.is_empty() {
-      self.graph_loading = true;
+    if self.history_commits.is_empty() {
+      self.history_loading = true;
       cx.notify();
     }
 
     let task = cx.spawn(async move |this, cx| {
       let requested_repo = repo_root.clone();
-      let graph = unblock(move || list_commit_graph(&repo_root, GRAPH_MAX_COMMITS)).await;
+      let (history, revision) = unblock(move || {
+        (
+          list_commit_history(&repo_root, HISTORY_MAX_COMMITS),
+          current_history_revision(&repo_root).ok(),
+        )
+      })
+      .await;
       let _ = this.update(cx, |this, cx| {
         if this.selected_repo.as_ref() != Some(&requested_repo) {
           return;
         }
-        this.graph_commits = graph.unwrap_or_default();
-        this.sync_graph_cache_with_commits();
-        this.graph_loading = false;
-        this.refresh_graph_list(cx);
+        if let Ok(history) = history {
+          this.history_commits = history;
+          this.sync_history_cache_with_commits();
+          if let Some(revision) = revision {
+            this.history_revision = Some(revision);
+          }
+          this.refresh_history_list(cx);
+        }
+        this.history_loading = false;
         cx.notify();
       });
     });
 
-    self.graph_task = Some(task);
+    self.history_task = Some(task);
   }
 
   fn reload_status(&mut self, cx: &mut Context<Self>) {
     let Some(repo_root) = self.selected_repo.clone() else {
       self.status_entries.clear();
-      self.refresh_file_list(cx);
+      if Self::should_refresh_file_list(self.sidebar_mode) {
+        self.refresh_file_list(cx);
+      }
       self.branch_status = None;
       self.has_head_commit = false;
       self.can_undo_last_commit = false;
       self.can_push = false;
       self.can_force_push = false;
       self.has_staged_changes = false;
-      self.graph_commits.clear();
-      self.graph_loading = false;
-      self.graph_expanded_commit_oid = None;
-      self.graph_commit_files.clear();
-      self.graph_commit_files_loading.clear();
-      self.graph_opened_commit_file = None;
-      self.refresh_graph_list(cx);
+      self.history_commits.clear();
+      self.history_revision = None;
+      self.history_loading = false;
+      self.history_expanded_commit_oids.clear();
+      self.history_commit_files.clear();
+      self.history_commit_files_loading.clear();
+      self.pending_history_file_loads.clear();
+      self.history_opened_commit_file = None;
+      self.refresh_history_list(cx);
       cx.notify();
       return;
     };
-    let include_graph = self.sidebar_mode == GitSidebarMode::Graph;
-    if include_graph && self.graph_commits.is_empty() {
-      self.graph_loading = true;
+    let include_history = self.sidebar_mode == GitSidebarMode::History;
+    if include_history && self.history_commits.is_empty() {
+      self.history_loading = true;
       cx.notify();
     }
 
@@ -1165,21 +1206,26 @@ impl GitPage {
         let entries = list_repo_status(&repo_root).ok()?;
         let branch = current_branch_status(&repo_root).ok();
         let head_status = head_commit_status(&repo_root).ok();
-        let graph = if include_graph {
-          list_commit_graph(&repo_root, GRAPH_MAX_COMMITS).ok()
+        let history = if include_history {
+          list_commit_history(&repo_root, HISTORY_MAX_COMMITS).ok()
         } else {
           None
         };
-        Some((entries, branch, head_status, graph))
+        let history_revision = if include_history {
+          current_history_revision(&repo_root).ok()
+        } else {
+          None
+        };
+        Some((entries, branch, head_status, history, history_revision))
       })
       .await;
-      let Some((entries, branch_status, head_status, graph)) = status else {
+      let Some((entries, branch_status, head_status, history, history_revision)) = status else {
         let _ = this.update(cx, |this, cx| {
           if this.selected_repo.as_ref() != Some(&requested_repo) {
             return;
           }
-          if include_graph && this.graph_loading {
-            this.graph_loading = false;
+          if include_history && this.history_loading {
+            this.history_loading = false;
             cx.notify();
           }
         });
@@ -1202,16 +1248,21 @@ impl GitPage {
         });
         this.has_head_commit = head_status.has_head_commit;
         this.can_undo_last_commit = head_status.can_undo_last_commit;
-        if include_graph {
-          this.graph_commits = graph.unwrap_or_default();
-          this.sync_graph_cache_with_commits();
-          this.graph_loading = false;
-          this.refresh_graph_list(cx);
+        if include_history {
+          if let Some(history) = history {
+            this.history_commits = history;
+            this.sync_history_cache_with_commits();
+            if let Some(history_revision) = history_revision {
+              this.history_revision = Some(history_revision);
+            }
+            this.refresh_history_list(cx);
+          }
+          this.history_loading = false;
         }
         let (can_push, can_force_push) = Self::push_flags(this.branch_status.as_ref());
         this.can_push = can_push;
         this.can_force_push = can_force_push;
-        if this.graph_opened_commit_file.is_none() {
+        if this.history_opened_commit_file.is_none() {
           if let Some(selected) = this.selected_file.as_ref() {
             let still_present = this
               .status_entries
@@ -1225,7 +1276,9 @@ impl GitPage {
             }
           }
         }
-        this.refresh_file_list(cx);
+        if Self::should_refresh_file_list(this.sidebar_mode) {
+          this.refresh_file_list(cx);
+        }
         cx.notify();
       });
     });
@@ -1239,30 +1292,23 @@ impl GitPage {
     }
 
     self.poll_task = Some(cx.spawn(async move |this, cx| {
-      let mut graph_poll_tick: u32 = 0;
       loop {
         cx.background_executor()
           .timer(Duration::from_millis(STATUS_POLL_INTERVAL_MS))
           .await;
 
-        let repo_root = match this.update(cx, |this, _| this.selected_repo.clone()) {
+        let poll_state = match this.update(cx, |this, _| {
+          (
+            this.selected_repo.clone(),
+            this.sidebar_mode == GitSidebarMode::History,
+            this.history_revision.clone(),
+            this.history_commits.is_empty(),
+          )
+        }) {
           Ok(value) => value,
           Err(_) => return,
         };
-        let include_graph =
-          match this.update(cx, |this, _| this.sidebar_mode == GitSidebarMode::Graph) {
-            Ok(value) => value,
-            Err(_) => return,
-          };
-        if include_graph {
-          graph_poll_tick = graph_poll_tick.saturating_add(1);
-        } else {
-          graph_poll_tick = 0;
-        }
-        let poll_graph_now = include_graph && graph_poll_tick >= GRAPH_POLL_EVERY_TICKS;
-        if poll_graph_now {
-          graph_poll_tick = 0;
-        }
+        let (repo_root, include_history, cached_history_revision, history_empty) = poll_state;
         let Some(repo_root) = repo_root else {
           continue;
         };
@@ -1272,15 +1318,41 @@ impl GitPage {
           let entries = list_repo_status(&repo_root).ok()?;
           let branch = current_branch_status(&repo_root).ok();
           let head_status = head_commit_status(&repo_root).ok();
-          let graph = if poll_graph_now {
-            list_commit_graph(&repo_root, GRAPH_MAX_COMMITS).ok()
+          let polled_history_revision = if include_history {
+            current_history_revision(&repo_root).ok()
           } else {
             None
           };
-          Some((entries, branch, head_status, graph))
+          let should_refresh_history = Self::should_refresh_history_for_poll(
+            include_history,
+            history_empty,
+            cached_history_revision.as_ref(),
+            polled_history_revision.as_ref(),
+          );
+          let history = if should_refresh_history {
+            list_commit_history(&repo_root, HISTORY_MAX_COMMITS).ok()
+          } else {
+            None
+          };
+          Some((
+            entries,
+            branch,
+            head_status,
+            polled_history_revision,
+            should_refresh_history,
+            history,
+          ))
         })
         .await;
-        let Some((entries, branch_status, head_status, graph)) = status else {
+        let Some((
+          entries,
+          branch_status,
+          head_status,
+          polled_history_revision,
+          should_refresh_history,
+          history,
+        )) = status
+        else {
           continue;
         };
 
@@ -1300,16 +1372,28 @@ impl GitPage {
           });
           this.has_head_commit = head_status.has_head_commit;
           this.can_undo_last_commit = head_status.can_undo_last_commit;
-          if poll_graph_now {
-            this.graph_commits = graph.unwrap_or_default();
-            this.sync_graph_cache_with_commits();
-            this.graph_loading = false;
-            this.refresh_graph_list(cx);
+          if include_history {
+            if let Some(history) = history {
+              this.history_commits = history;
+              this.sync_history_cache_with_commits();
+              this.history_loading = false;
+              if let Some(history_revision) = polled_history_revision {
+                this.history_revision = Some(history_revision);
+              }
+              this.refresh_history_list(cx);
+            } else if !should_refresh_history {
+              if let Some(history_revision) = polled_history_revision {
+                this.history_revision = Some(history_revision);
+              }
+            } else if this.history_loading {
+              // Preserve last known history on transient failures.
+              this.history_loading = false;
+            }
           }
           let (can_push, can_force_push) = Self::push_flags(this.branch_status.as_ref());
           this.can_push = can_push;
           this.can_force_push = can_force_push;
-          if this.graph_opened_commit_file.is_none() {
+          if this.history_opened_commit_file.is_none() {
             if let Some(selected) = this.selected_file.as_ref() {
               let still_present = this
                 .status_entries
@@ -1793,7 +1877,8 @@ impl GitPage {
     let diff_view = self.effective_diff_view_for_path(&rel_path);
     editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
     self.editor = Some(editor);
-    self.graph_opened_commit_file = None;
+    let had_history_file_selection = self.history_opened_commit_file.is_some();
+    self.history_opened_commit_file = None;
     self.selected_file = Some(rel_path);
     self.svg_preview = None;
     self.svg_preview_source = None;
@@ -1805,37 +1890,43 @@ impl GitPage {
     });
     let selected_index = self.selected_file_index();
     self.set_file_list_selected_index(selected_index, cx);
+    if had_history_file_selection {
+      self.refresh_history_list(cx);
+    }
     cx.notify();
   }
 
-  fn toggle_graph_commit_expanded(&mut self, commit_oid: String, cx: &mut Context<Self>) {
-    if self.graph_expanded_commit_oid.as_ref() == Some(&commit_oid) {
-      self.graph_expanded_commit_oid = None;
-      self.refresh_graph_list(cx);
-      cx.notify();
-      return;
-    }
-
-    self.graph_expanded_commit_oid = Some(commit_oid.clone());
-    self.refresh_graph_list(cx);
-    cx.notify();
-
-    if self.graph_commit_files.contains_key(commit_oid.as_str())
+  fn queue_history_commit_files_load(
+    &mut self,
+    commit_oid: String,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.history_commit_files.contains_key(commit_oid.as_str())
       || self
-        .graph_commit_files_loading
+        .history_commit_files_loading
+        .contains(commit_oid.as_str())
+      || self
+        .pending_history_file_loads
         .contains(commit_oid.as_str())
     {
       return;
     }
-    self.load_graph_commit_files(commit_oid, cx);
+
+    self.pending_history_file_loads.insert(commit_oid.clone());
+    cx.on_next_frame(window, move |this, _, cx| {
+      this.pending_history_file_loads.remove(commit_oid.as_str());
+      this.load_history_commit_files(commit_oid.clone(), cx);
+    });
   }
 
-  fn load_graph_commit_files(&mut self, commit_oid: String, cx: &mut Context<Self>) {
+  fn load_history_commit_files(&mut self, commit_oid: String, cx: &mut Context<Self>) {
+    self.pending_history_file_loads.remove(commit_oid.as_str());
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
     };
-    self.graph_commit_files_loading.insert(commit_oid.clone());
-    self.refresh_graph_list(cx);
+    self.history_commit_files_loading.insert(commit_oid.clone());
+    self.refresh_history_list(cx);
     cx.notify();
 
     let task = cx.spawn(async move |this, cx| {
@@ -1847,25 +1938,27 @@ impl GitPage {
         if this.selected_repo.as_ref() != Some(&repo_root) {
           return;
         }
-        this.graph_commit_files_loading.remove(commit_oid.as_str());
+        this
+          .history_commit_files_loading
+          .remove(commit_oid.as_str());
         if let Ok(files) = files {
           let rows = files
             .into_iter()
-            .map(GraphCommitFileRow::from_commit_file)
+            .map(HistoryCommitFileRow::from_commit_file)
             .collect::<Vec<_>>();
-          this.graph_commit_files.insert(commit_oid.clone(), rows);
+          this.history_commit_files.insert(commit_oid.clone(), rows);
         } else {
-          this.graph_commit_files.remove(commit_oid.as_str());
+          this.history_commit_files.remove(commit_oid.as_str());
         }
-        this.refresh_graph_list(cx);
+        this.refresh_history_list(cx);
         cx.notify();
       });
     });
 
-    self.graph_files_task = Some(task);
+    self.history_files_task = Some(task);
   }
 
-  fn open_graph_commit_file(
+  fn open_history_commit_file(
     &mut self,
     commit_oid: String,
     rel_path: PathBuf,
@@ -1874,9 +1967,9 @@ impl GitPage {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
     };
-    self.graph_opened_commit_file = Some((commit_oid.clone(), rel_path.clone()));
+    self.history_opened_commit_file = Some((commit_oid.clone(), rel_path.clone()));
     self.selected_file = Some(rel_path.clone());
-    self.refresh_graph_list(cx);
+    self.refresh_history_list(cx);
     cx.notify();
 
     let task = cx.spawn(async move |this, cx| {
@@ -1911,15 +2004,15 @@ impl GitPage {
         this.clear_markdown_preview_if_not_previewable(&rel_path);
         this.editor = Some(editor);
         this.selected_file = Some(rel_path.clone());
-        this.graph_opened_commit_file = Some((commit_oid.clone(), rel_path.clone()));
+        this.history_opened_commit_file = Some((commit_oid.clone(), rel_path.clone()));
         this.svg_preview = None;
         this.svg_preview_source = None;
-        this.refresh_graph_list(cx);
+        this.refresh_history_list(cx);
         cx.notify();
       });
     });
 
-    self.graph_open_file_task = Some(task);
+    self.history_open_file_task = Some(task);
   }
 
   fn clear_markdown_preview_if_not_previewable(&mut self, rel_path: &Path) {
@@ -2004,12 +2097,12 @@ impl GitPage {
     cx: &mut Context<Self>,
   ) {
     self.sidebar_mode = match self.sidebar_mode {
-      GitSidebarMode::Changes => GitSidebarMode::Graph,
-      GitSidebarMode::Graph => GitSidebarMode::Changes,
+      GitSidebarMode::Changes => GitSidebarMode::History,
+      GitSidebarMode::History => GitSidebarMode::Changes,
     };
 
-    if self.sidebar_mode == GitSidebarMode::Graph {
-      self.refresh_graph(cx);
+    if self.sidebar_mode == GitSidebarMode::History {
+      self.refresh_history(cx);
     } else {
       self.refresh_file_list(cx);
       cx.notify();
@@ -2229,27 +2322,15 @@ impl GitPage {
         .all(|entry| entry.stage == RepoStage::Staged)
   }
 
-  fn build_graph_rows(commits: &[CommitGraphNode]) -> Vec<GraphRenderRow> {
-    build_commit_graph_rows(commits)
-      .into_iter()
-      .map(GraphRenderRow::from_layout)
+  fn build_history_rows(commits: &[HistoryCommitNode]) -> Vec<HistoryRenderRow> {
+    commits
+      .iter()
+      .cloned()
+      .map(HistoryRenderRow::from_commit)
       .collect()
   }
 
-  fn primary_branch_label(refs: &[String]) -> Option<(String, bool)> {
-    if let Some(head_ref) = refs.iter().find(|label| label.starts_with("HEAD")) {
-      let label = head_ref
-        .strip_prefix("HEAD -> ")
-        .filter(|name| !name.is_empty())
-        .unwrap_or(head_ref.as_str())
-        .to_string();
-      return Some((label, true));
-    }
-
-    refs.first().cloned().map(|label| (label, false))
-  }
-
-  fn graph_change_kind_to_repo_status(kind: CommitFileChangeKind) -> RepoStatusKind {
+  fn history_change_kind_to_repo_status(kind: CommitFileChangeKind) -> RepoStatusKind {
     match kind {
       CommitFileChangeKind::Added => RepoStatusKind::Added,
       CommitFileChangeKind::Deleted => RepoStatusKind::Deleted,
@@ -2262,109 +2343,15 @@ impl GitPage {
     }
   }
 
-  fn render_graph_row(
-    row_index: usize,
-    row: &GraphRenderRow,
-    theme: &gpui_component::Theme,
-    view: &WeakEntity<GitPage>,
+  fn render_history_sidebar_content(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
   ) -> AnyElement {
-    let summary: SharedString = if row.commit.summary.trim().is_empty() {
-      "No commit message".into()
-    } else {
-      row.commit.summary.clone().into()
-    };
-    let branch_palette = GitGraphLanes::branch_palette(theme);
-    let branch_color = GitGraphLanes::branch_color_for(row.commit_branch_id, &branch_palette)
-      .unwrap_or(theme.accent);
-    let branch_label = Self::primary_branch_label(&row.commit.refs).map(|(label, _)| label.into());
-
-    let toggle_view = view.clone();
-    let commit_oid = row.commit.oid.clone();
-    let toggle_handler: GitGraphRowToggleHandler = Arc::new(move |_, cx| {
-      let _ = toggle_view.update(cx, |this, cx| {
-        this.toggle_graph_commit_expanded(commit_oid.clone(), cx);
-      });
-    });
-
-    let open_view = view.clone();
-    let open_commit_oid = row.commit.oid.clone();
-    let open_file_handler: GitGraphRowOpenFileHandler = Arc::new(move |rel_path, _, cx| {
-      let _ = open_view.update(cx, |this, cx| {
-        this.open_graph_commit_file(open_commit_oid.clone(), rel_path.clone(), cx);
-      });
-    });
-
-    let expanded_state = if !row.expanded {
-      GitGraphExpandedState::Collapsed
-    } else if row.expanded_loading {
-      GitGraphExpandedState::Loading
-    } else if row.expanded_files.is_empty() {
-      GitGraphExpandedState::Empty
-    } else {
-      GitGraphExpandedState::Files(
-        row
-          .expanded_files
-          .iter()
-          .map(|file| {
-            let status_kind = Self::graph_change_kind_to_repo_status(file.kind);
-            GitGraphExpandedFileRow {
-              path: file.path.clone(),
-              label: file.label.clone(),
-              status_code: status_kind.short_code().into(),
-              status_color: Self::status_color(status_kind, theme),
-              selected: row.selected_expanded_file.as_ref() == Some(&file.path),
-            }
-          })
-          .collect::<Vec<_>>(),
-      )
-    };
-
-    GitGraphRow::new(
-      row_index,
-      GitGraphLanesLayout {
-        segments: row.segments.clone(),
-        lane_branch_ids: row.lane_branch_ids.clone(),
-        commit_lane: row.commit_lane,
-        commit_branch_id: row.commit_branch_id,
-        lane_transitions: row.lane_transitions.clone(),
-        merge_parent_lanes: row.merge_parent_lanes.clone(),
-        merge_parent_lane_branches: row.merge_parent_lane_branches.clone(),
-        branch_child_lane_branches: row.branch_child_lane_branches.clone(),
-        branch_pre_stub_lane_branches: row.branch_pre_stub_lane_branches.clone(),
-        commit_lane_has_up: row.commit_lane_has_up,
-        is_latest_commit: row_index == 0,
-        row_height: row.total_height(),
-      },
-      GitGraphLanesStyle {
-        lane_width: GRAPH_LANE_WIDTH,
-        line_width: GRAPH_LINE_WIDTH,
-        commit_row_height: GRAPH_ROW_HEIGHT,
-        curve_stub_height: GRAPH_CURVE_STUB_HEIGHT,
-        dot_size: GRAPH_DOT_SIZE,
-        dot_size_latest: GRAPH_DOT_SIZE_LATEST,
-      },
-      GitGraphRowStyle {
-        expanded_row_height: GRAPH_EXPANDED_FILE_ROW_HEIGHT,
-        branch_badge_max_width: GRAPH_BRANCH_BADGE_MAX_WIDTH,
-        author_max_width: GRAPH_AUTHOR_MAX_WIDTH,
-      },
-      summary,
-      row.commit.author.clone(),
-      branch_label,
-      branch_color,
-      theme.secondary,
-      expanded_state,
-    )
-    .on_toggle(toggle_handler)
-    .on_open_file(open_file_handler)
-    .into_any_element()
-  }
-
-  fn render_graph_sidebar_content(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
-    if self.graph_loading {
+    if self.history_loading {
       return div()
-        .id("git-graph-loading-container")
+        .id("git-history-loading-container")
         .flex()
         .flex_col()
         .size_full()
@@ -2372,7 +2359,7 @@ impl GitPage {
         .justify_center()
         .child(
           div()
-            .id("git-graph-loading-content")
+            .id("git-history-loading-content")
             .flex()
             .flex_col()
             .items_center()
@@ -2382,15 +2369,15 @@ impl GitPage {
               div()
                 .text_sm()
                 .text_color(theme.muted_foreground)
-                .child("Loading graph..."),
+                .child("Loading history..."),
             ),
         )
         .into_any_element();
     }
 
-    if self.graph_commits.is_empty() {
+    if self.history_commits.is_empty() {
       return div()
-        .id("git-graph-empty-container")
+        .id("git-history-empty-container")
         .flex()
         .flex_col()
         .size_full()
@@ -2405,33 +2392,225 @@ impl GitPage {
         .into_any_element();
     }
 
-    let graph_rows = self.build_graph_rows_with_expansion();
-    let view = cx.entity().downgrade();
+    if let Some(selected_id) = self
+      .history_tree
+      .read(cx)
+      .selected_entry()
+      .map(|entry| entry.item().id.to_string())
+    {
+      if let Some(HistoryTreeNode::File { commit_oid, file }) =
+        self.history_tree_nodes.get(selected_id.as_str()).cloned()
+      {
+        let already_opened = self
+          .history_opened_commit_file
+          .as_ref()
+          .map(|(opened_oid, opened_path)| opened_oid == &commit_oid && opened_path == &file.path)
+          .unwrap_or(false);
+        if !already_opened {
+          let open_commit_oid = commit_oid.clone();
+          let open_path = file.path.clone();
+          cx.on_next_frame(window, move |this, _, cx| {
+            this.open_history_commit_file(open_commit_oid.clone(), open_path.clone(), cx);
+          });
+        }
+      }
+    }
+
+    let view = cx.entity();
+    let tree_view = tree(
+      &self.history_tree,
+      move |ix, entry, selected, window, cx| {
+        view.update(cx, |this, cx| {
+          let theme = cx.theme().clone();
+          let item = entry.item();
+          let indent = px(12.) + px(16.) * entry.depth();
+          let node = this.history_tree_nodes.get(item.id.as_ref()).cloned();
+
+          match node {
+            Some(HistoryTreeNode::Commit { oid }) => {
+              let row = this
+                .history_rows_cache
+                .iter()
+                .find(|row| row.commit.oid == oid)
+                .cloned();
+
+              let Some(row) = row else {
+                return ListItem::new(ix)
+                  .w_full()
+                  .px_2()
+                  .pl(indent)
+                  .child(item.label.clone());
+              };
+
+              let summary: SharedString = if row.commit.summary.trim().is_empty() {
+                "No commit message".into()
+              } else {
+                row.commit.summary.clone().into()
+              };
+
+              let is_expanded = entry.is_expanded();
+              if selected {
+                if is_expanded {
+                  this
+                    .history_expanded_commit_oids
+                    .insert(row.commit.oid.clone());
+                } else {
+                  this
+                    .history_expanded_commit_oids
+                    .remove(row.commit.oid.as_str());
+                }
+              }
+              if is_expanded
+                && !this
+                  .history_commit_files
+                  .contains_key(row.commit.oid.as_str())
+                && !this
+                  .history_commit_files_loading
+                  .contains(row.commit.oid.as_str())
+              {
+                this.queue_history_commit_files_load(row.commit.oid.clone(), window, cx);
+              }
+              let chevron = if is_expanded {
+                IconName::ChevronDown
+              } else {
+                IconName::ChevronRight
+              };
+
+              ListItem::new(ix)
+                .w_full()
+                .rounded(theme.radius)
+                .pl_2()
+                .pr_3()
+                .pl(indent)
+                .child(
+                  h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                      h_flex()
+                        .min_w_0()
+                        .flex_1()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                          Icon::new(chevron)
+                            .size_3()
+                            .text_color(theme.muted_foreground),
+                        )
+                        .child(
+                          div()
+                            .min_w_0()
+                            .flex_1()
+                            .overflow_hidden()
+                            .text_sm()
+                            .text_ellipsis()
+                            .child(summary),
+                        ),
+                    )
+                    .child(
+                      div()
+                        .max_w(px(HISTORY_AUTHOR_MAX_WIDTH))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(row.commit.author.clone()),
+                    ),
+                )
+            }
+            Some(HistoryTreeNode::File { commit_oid, file }) => {
+              let status_kind = Self::history_change_kind_to_repo_status(file.kind);
+              let status_color = Self::status_color(status_kind, &theme);
+              let file_icon = file_icon_path_for_path_with_theme(&file.path, &theme)
+                .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
+                .unwrap_or_else(|| {
+                  Icon::new(IconName::File)
+                    .size_3()
+                    .text_color(theme.sidebar_foreground)
+                    .into_any_element()
+                });
+              let selected = this
+                .history_opened_commit_file
+                .as_ref()
+                .map(|(selected_oid, selected_path)| {
+                  selected_oid == &commit_oid && selected_path == &file.path
+                })
+                .unwrap_or(false);
+              let path = file.path.clone();
+              let open_commit_oid = commit_oid.clone();
+
+              ListItem::new(ix)
+                .selected(selected)
+                .w_full()
+                .rounded(theme.radius)
+                .px_2()
+                .pl(indent)
+                .child(
+                  h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                      div()
+                        .w(px(15.))
+                        .text_xs()
+                        .text_color(status_color)
+                        .child(status_kind.short_code()),
+                    )
+                    .child(file_icon)
+                    .child(
+                      div()
+                        .min_w_0()
+                        .flex_1()
+                        .overflow_hidden()
+                        .text_ellipsis_start()
+                        .text_xs()
+                        .child(file.label.clone()),
+                    ),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                  this.open_history_commit_file(open_commit_oid.clone(), path.clone(), cx);
+                }))
+            }
+            Some(HistoryTreeNode::LoadHint { oid }) => {
+              let load_oid = oid.clone();
+              ListItem::new(ix)
+                .w_full()
+                .rounded(theme.radius)
+                .px_2()
+                .pl(indent)
+                .child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Load files..."),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                  this.queue_history_commit_files_load(load_oid.clone(), window, cx);
+                }))
+            }
+            _ => ListItem::new(ix)
+              .w_full()
+              .rounded(theme.radius)
+              .px_2()
+              .pl(indent)
+              .child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child(item.label.clone()),
+              ),
+          }
+        })
+      },
+    );
 
     div()
-      .id("git-graph-scroll-container")
+      .id("git-history-scroll-container")
       .flex_1()
       .min_h_0()
-      .child(
-        div()
-          .id("git-graph-scroll")
-          .size_full()
-          .overflow_y_scrollbar()
-          .child(
-            div()
-              .id("git-graph-rows")
-              .size_full()
-              .flex()
-              .flex_col()
-              .children(
-                graph_rows
-                  .iter()
-                  .enumerate()
-                  .map(|(row_index, row)| Self::render_graph_row(row_index, row, &theme, &view))
-                  .collect::<Vec<_>>(),
-              ),
-          ),
-      )
+      .child(tree_view.flex_1().w_full())
       .into_any_element()
   }
 
@@ -2611,6 +2790,7 @@ impl GitPage {
 
     div()
       .h(px(HEADER_HEIGHT))
+      .min_h(px(HEADER_HEIGHT))
       .max_h(px(HEADER_HEIGHT))
       .px_3()
       .flex()
@@ -2641,7 +2821,7 @@ impl GitPage {
   fn render_editor_header(&self, editor: &Entity<Editor>, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let editor_state = editor.read(cx);
-    let is_graph_commit_file = self.graph_opened_commit_file.is_some();
+    let is_history_commit_file = self.history_opened_commit_file.is_some();
     let (file_name, dir_path) = if let Some(rel_path) = self.selected_file.as_ref() {
       let file_name = rel_path
         .file_name()
@@ -2747,7 +2927,7 @@ impl GitPage {
       .label("Save")
       .xsmall()
       .ghost()
-      .disabled(!file_dirty || is_graph_commit_file || editor_state.is_read_only)
+      .disabled(!file_dirty || is_history_commit_file || editor_state.is_read_only)
       .on_click(move |_, _, cx| {
         editor_entity.update(cx, |editor, cx| editor.save(cx));
       });
@@ -2799,7 +2979,7 @@ impl GitPage {
         });
       });
 
-    let (can_stage, can_unstage, can_restore, file_path, file_status) = if is_graph_commit_file {
+    let (can_stage, can_unstage, can_restore, file_path, file_status) = if is_history_commit_file {
       (false, false, false, None, None)
     } else if let Some(entry) = selected_entry {
       (
@@ -2924,7 +3104,7 @@ impl GitPage {
   ) -> Option<AnyElement> {
     let theme = cx.theme().clone();
     let editor_state = editor.read(cx);
-    if self.graph_opened_commit_file.is_some() || editor_state.is_read_only {
+    if self.history_opened_commit_file.is_some() || editor_state.is_read_only {
       return None;
     }
     let hovered_id = editor_state.hovered_group_id.as_ref()?;
@@ -3199,18 +3379,18 @@ impl GitPage {
     } else {
       ("Stage all", IconName::Plus, "Stage all files")
     };
-    let is_graph_mode = self.sidebar_mode == GitSidebarMode::Graph;
-    let (mode_label, mode_icon, mode_tooltip) = if is_graph_mode {
-      ("Changes", IconName::File, "Show changes list")
+    let is_history_mode = self.sidebar_mode == GitSidebarMode::History;
+    let (mode_label, mode_icon, mode_tooltip) = if is_history_mode {
+      ("Changes", UiIconName::FileCode, "Show changes list")
     } else {
-      ("Graph", IconName::ArrowUp, "Show commit graph")
+      ("History", UiIconName::History, "Show commit history")
     };
 
-    let group_label = if is_graph_mode {
+    let group_label = if is_history_mode {
       div()
         .text_sm()
         .text_color(theme.sidebar_foreground)
-        .child("Graph")
+        .child("History")
         .into_any_element()
     } else {
       h_flex()
@@ -3229,8 +3409,8 @@ impl GitPage {
               .py(px(1.))
               .rounded(theme.radius)
               .text_xs()
-              .bg(theme.status_red().opacity(0.40))
-              .text_color(theme.status_red())
+              .bg(theme.secondary)
+              .text_color(theme.sidebar_foreground)
               .child(changed_files_count.to_string()),
           )
         })
@@ -3251,7 +3431,7 @@ impl GitPage {
         h_flex()
           .items_center()
           .gap_2()
-          .when(!is_graph_mode, |this| {
+          .when(!is_history_mode, |this| {
             this.child(
               Button::new("stage-all-button")
                 .label(label)
@@ -3269,7 +3449,7 @@ impl GitPage {
               .icon(mode_icon)
               .with_variant(ButtonVariant::Secondary)
               .xsmall()
-              .selected(is_graph_mode)
+              .selected(is_history_mode)
               .disabled(self.selected_repo.is_none())
               .tooltip(mode_tooltip)
               .on_click(cx.listener(Self::toggle_sidebar_mode_action)),
@@ -3300,11 +3480,11 @@ impl GitPage {
         .into_any_element();
     }
 
-    if self.sidebar_mode == GitSidebarMode::Graph {
+    if self.sidebar_mode == GitSidebarMode::History {
       return base_sidebar
         .relative()
         .child(self.render_sidebar_header(cx))
-        .child(self.render_graph_sidebar_content(cx))
+        .child(self.render_history_sidebar_content(_window, cx))
         .into_any_element();
     }
 
@@ -3461,8 +3641,8 @@ impl Focusable for GitPage {
 mod tests {
   use super::*;
 
-  fn make_commit(oid: &str, parents: &[&str]) -> CommitGraphNode {
-    CommitGraphNode {
+  fn make_commit(oid: &str, parents: &[&str]) -> HistoryCommitNode {
+    HistoryCommitNode {
       oid: oid.to_string(),
       short_oid: oid.chars().take(7).collect(),
       summary: format!("commit-{oid}"),
@@ -3472,135 +3652,162 @@ mod tests {
     }
   }
 
-  fn make_graph_file(path: &str, kind: CommitFileChangeKind) -> GraphCommitFileRow {
-    GraphCommitFileRow::from_commit_file(CommitChangedFile {
+  fn make_history_file(path: &str, kind: CommitFileChangeKind) -> HistoryCommitFileRow {
+    HistoryCommitFileRow::from_commit_file(CommitChangedFile {
       path: PathBuf::from(path),
       old_path: None,
       kind,
     })
   }
 
+  fn make_history_revision(tag: &str) -> HistoryRevision {
+    HistoryRevision {
+      head_oid: Some(format!("head-{tag}")),
+      head_label: Some(format!("HEAD -> {tag}")),
+      refs: vec![format!("{tag}@oid-{tag}")],
+    }
+  }
+
   #[test]
-  fn decorate_graph_rows_for_expansion_keeps_single_expanded_row() {
+  fn build_history_tree_items_marks_selected_commit_expanded() {
     let commits = vec![
       make_commit("c3", &["c2"]),
       make_commit("c2", &["c1"]),
       make_commit("c1", &[]),
     ];
-    let mut rows = GitPage::build_graph_rows(&commits);
+    let rows = GitPage::build_history_rows(&commits);
 
     let mut files_by_commit = HashMap::new();
     files_by_commit.insert(
       "c2".to_string(),
-      vec![make_graph_file("src/c2.rs", CommitFileChangeKind::Modified)],
+      vec![make_history_file(
+        "src/c2.rs",
+        CommitFileChangeKind::Modified,
+      )],
     );
     files_by_commit.insert(
       "c1".to_string(),
-      vec![make_graph_file("src/c1.rs", CommitFileChangeKind::Added)],
+      vec![make_history_file("src/c1.rs", CommitFileChangeKind::Added)],
     );
 
-    let loading = HashSet::from(["c1".to_string()]);
-    GitPage::decorate_graph_rows_for_expansion(
-      &mut rows,
-      Some("c2"),
-      &files_by_commit,
-      &loading,
-      Some(("c2", Path::new("src/c2.rs"))),
-    );
+    let loading = HashSet::new();
+    let expanded = HashSet::from(["c2".to_string()]);
+    let (items, _) =
+      GitPage::build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
 
-    assert!(!rows[0].expanded);
-    assert!(rows[1].expanded);
-    assert!(!rows[1].expanded_loading);
-    assert_eq!(rows[1].expanded_files.len(), 1);
-    assert_eq!(
-      rows[1]
-        .selected_expanded_file
-        .as_ref()
-        .map(|path| path.to_string_lossy().to_string()),
-      Some("src/c2.rs".to_string())
-    );
-    assert!(!rows[2].expanded);
-    assert!(rows[2].expanded_files.is_empty());
+    assert!(!items[0].is_expanded());
+    assert!(items[1].is_expanded());
+    assert!(!items[2].is_expanded());
   }
 
   #[test]
-  fn graph_render_row_height_uses_expanded_loading_and_file_count() {
-    let commits = vec![make_commit("c1", &[])];
-    let mut row = GitPage::build_graph_rows(&commits).remove(0);
-    assert_eq!(row.total_height(), GRAPH_ROW_HEIGHT);
-
-    row.expanded = true;
-    row.expanded_loading = true;
-    assert_eq!(
-      row.total_height(),
-      GRAPH_ROW_HEIGHT + GRAPH_EXPANDED_FILE_ROW_HEIGHT
-    );
-
-    row.expanded_loading = false;
-    row.expanded_files = vec![
-      make_graph_file("src/a.rs", CommitFileChangeKind::Modified),
-      make_graph_file("src/b.rs", CommitFileChangeKind::Added),
+  fn build_history_tree_items_supports_multiple_expanded_commits() {
+    let commits = vec![
+      make_commit("c3", &["c2"]),
+      make_commit("c2", &["c1"]),
+      make_commit("c1", &[]),
     ];
-    assert_eq!(
-      row.total_height(),
-      GRAPH_ROW_HEIGHT + 2.0 * GRAPH_EXPANDED_FILE_ROW_HEIGHT
-    );
+    let rows = GitPage::build_history_rows(&commits);
+    let files_by_commit = HashMap::new();
+    let loading = HashSet::new();
+    let expanded = HashSet::from(["c3".to_string(), "c1".to_string()]);
 
-    row.expanded_files.clear();
-    assert_eq!(
-      row.total_height(),
-      GRAPH_ROW_HEIGHT + GRAPH_EXPANDED_FILE_ROW_HEIGHT
-    );
+    let (items, _) =
+      GitPage::build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
+
+    assert!(items[0].is_expanded());
+    assert!(!items[1].is_expanded());
+    assert!(items[2].is_expanded());
   }
 
   #[test]
-  #[ignore]
-  fn debug_real_playground_dashboard_auth_rows() {
-    let commits =
-      list_commit_graph(Path::new("/Users/joris/workspace/git-playground"), GRAPH_MAX_COMMITS)
-        .unwrap();
-    let rows = GitPage::build_graph_rows(&commits);
-    for (i, row) in rows.iter().enumerate() {
-      if (22..=31).contains(&i) {
-        println!(
-          "[window] {i:>3} lane={} bid={} summary={}",
-          row.commit_lane, row.commit_branch_id, row.commit.summary
-        );
-        println!(
-          "    split={:?} merge={:?} trans={:?}",
-          row.branch_child_lane_branches, row.merge_parent_lane_branches, row.lane_transitions
-        );
-        let segments = row
-          .segments
-          .iter()
-          .enumerate()
-          .map(|(lane, segment)| {
-            format!(
-              "{lane}:{}{}",
-              if segment.up { "u" } else { "-" },
-              if segment.down { "d" } else { "-" }
-            )
-          })
-          .collect::<Vec<_>>();
-        println!("    seg={segments:?}");
-        println!("    ids={:?}", row.lane_branch_ids);
-      }
-      let s = row.commit.summary.as_str();
-      if s.contains("dashboard")
-        || s.contains("authentication")
-        || s.contains("release")
-        || s.contains("Merge feature/notifications")
-      {
-        println!(
-          "{i:>3} lane={} bid={} summary={}",
-          row.commit_lane, row.commit_branch_id, row.commit.summary
-        );
-        println!(
-          "    split={:?} merge={:?} trans={:?}",
-          row.branch_child_lane_branches, row.merge_parent_lane_branches, row.lane_transitions
-        );
-        println!("    ids={:?}", row.lane_branch_ids);
-      }
-    }
+  fn build_history_tree_items_includes_commit_and_file_nodes() {
+    let commits = vec![make_commit("c2", &["c1"]), make_commit("c1", &[])];
+    let rows = GitPage::build_history_rows(&commits);
+    let mut files_by_commit = HashMap::new();
+    files_by_commit.insert(
+      "c2".to_string(),
+      vec![make_history_file(
+        "src/main.rs",
+        CommitFileChangeKind::Modified,
+      )],
+    );
+    let loading = HashSet::new();
+    let expanded = HashSet::from(["c2".to_string()]);
+
+    let (items, nodes) =
+      GitPage::build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].children.len(), 1);
+    assert_eq!(items[0].children[0].label.as_ref(), "src/main.rs");
+
+    let commit_id = format!("history-commit:{}", rows[0].commit.oid);
+    assert!(matches!(
+      nodes.get(&commit_id),
+      Some(HistoryTreeNode::Commit { oid }) if oid == "c2"
+    ));
+
+    let file_id = format!("history-file:{}:{}", rows[0].commit.oid, 0);
+    assert!(matches!(
+      nodes.get(&file_id),
+      Some(HistoryTreeNode::File { commit_oid, .. }) if commit_oid == "c2"
+    ));
+  }
+
+  #[test]
+  fn build_history_tree_items_uses_loading_placeholder() {
+    let commits = vec![make_commit("c1", &[])];
+    let rows = GitPage::build_history_rows(&commits);
+    let files_by_commit = HashMap::new();
+    let loading = HashSet::from(["c1".to_string()]);
+    let expanded = HashSet::from(["c1".to_string()]);
+
+    let (items, nodes) =
+      GitPage::build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
+    assert_eq!(items[0].children.len(), 1);
+    assert_eq!(items[0].children[0].label.as_ref(), "Loading files...");
+    assert!(matches!(
+      nodes.get("history-loading:c1"),
+      Some(HistoryTreeNode::Placeholder)
+    ));
+  }
+
+  #[test]
+  fn should_refresh_file_list_only_in_changes_mode() {
+    assert!(GitPage::should_refresh_file_list(GitSidebarMode::Changes));
+    assert!(!GitPage::should_refresh_file_list(GitSidebarMode::History));
+  }
+
+  #[test]
+  fn should_refresh_history_for_poll_when_history_empty() {
+    assert!(GitPage::should_refresh_history_for_poll(
+      true,
+      true,
+      Some(&make_history_revision("a")),
+      Some(&make_history_revision("a"))
+    ));
+  }
+
+  #[test]
+  fn should_not_refresh_history_for_poll_when_revision_unchanged() {
+    let revision = make_history_revision("a");
+    assert!(!GitPage::should_refresh_history_for_poll(
+      true,
+      false,
+      Some(&revision),
+      Some(&revision)
+    ));
+  }
+
+  #[test]
+  fn should_refresh_history_for_poll_when_revision_changed() {
+    let cached = make_history_revision("a");
+    let current = make_history_revision("b");
+    assert!(GitPage::should_refresh_history_for_poll(
+      true,
+      false,
+      Some(&cached),
+      Some(&current)
+    ));
   }
 }
