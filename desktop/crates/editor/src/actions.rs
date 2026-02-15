@@ -3,7 +3,7 @@
 //! This module contains all the action handlers for the editor,
 //! including text editing, cursor movement, and selection operations.
 
-use gpui::{ClipboardItem, Context, EntityInputHandler, Window, actions};
+use gpui::{actions, ClipboardItem, Context, EntityInputHandler, Window};
 
 use crate::{boundaries, editor::Editor};
 
@@ -164,7 +164,10 @@ pub fn up(editor: &mut Editor, _: &Up, window: &mut Window, cx: &mut Context<Edi
       // Calculate new position in target line (skip hidden lines)
       let target_line = editor.previous_visible_doc_line(current_line).unwrap_or(0);
       let target_start = document.line_to_char(target_line);
-      let target_len = document.line_content(target_line).unwrap_or_default().len();
+      let target_len = document
+        .line_content(target_line)
+        .map(|line| line.chars().count())
+        .unwrap_or(0);
 
       Some(target_start + target_column.min(target_len))
     } else {
@@ -203,7 +206,10 @@ pub fn down(editor: &mut Editor, _: &Down, window: &mut Window, cx: &mut Context
         .next_visible_doc_line(current_line, doc_line_count)
         .unwrap_or(current_line);
       let target_start = document.line_to_char(target_line);
-      let target_len = document.line_content(target_line).unwrap_or_default().len();
+      let target_len = document
+        .line_content(target_line)
+        .map(|line| line.chars().count())
+        .unwrap_or(0);
 
       Some(target_start + target_column.min(target_len))
     } else {
@@ -346,7 +352,7 @@ pub fn cmd_right(editor: &mut Editor, _: &CmdRight, window: &mut Window, cx: &mu
   let line_range = document.line_range(line).unwrap_or(0..0);
   // Go to end of line content (before the newline)
   let line_content = document.line_content(line).unwrap_or_default();
-  let line_end = line_range.start + line_content.len();
+  let line_end = line_range.start + line_content.chars().count();
   editor.move_to(line_end, cx);
   editor.ensure_cursor_visible(window, cx);
 }
@@ -373,7 +379,7 @@ pub fn cmd_down(editor: &mut Editor, _: &CmdDown, window: &mut Window, cx: &mut 
     .unwrap_or_else(|| doc_line_count.saturating_sub(1));
   let line_start = document.line_to_char(target_line);
   let line_content = document.line_content(target_line).unwrap_or_default();
-  let line_end = line_start + line_content.len();
+  let line_end = line_start + line_content.chars().count();
   editor.move_to(line_end, cx);
   editor.ensure_cursor_visible(window, cx);
 }
@@ -419,7 +425,10 @@ pub fn select_up(editor: &mut Editor, _: &SelectUp, window: &mut Window, cx: &mu
 
       let target_line = editor.previous_visible_doc_line(current_line).unwrap_or(0);
       let target_start = document.line_to_char(target_line);
-      let target_len = document.line_content(target_line).unwrap_or_default().len();
+      let target_len = document
+        .line_content(target_line)
+        .map(|line| line.chars().count())
+        .unwrap_or(0);
 
       Some(target_start + target_column.min(target_len))
     } else {
@@ -477,7 +486,10 @@ pub fn select_down(
         .next_visible_doc_line(current_line, total_lines)
         .unwrap_or(current_line);
       let target_start = document.line_to_char(target_line);
-      let target_len = document.line_content(target_line).unwrap_or_default().len();
+      let target_len = document
+        .line_content(target_line)
+        .map(|line| line.chars().count())
+        .unwrap_or(0);
 
       Some(target_start + target_column.min(target_len))
     } else {
@@ -604,7 +616,7 @@ pub fn select_cmd_right(
   let line = document.char_to_line(cursor);
   let line_range = document.line_range(line).unwrap_or(0..0);
   let line_content = document.line_content(line).unwrap_or_default();
-  let line_end = line_range.start + line_content.len();
+  let line_end = line_range.start + line_content.chars().count();
   editor.select_to(line_end, cx);
   editor.ensure_cursor_visible(window, cx);
 }
@@ -647,7 +659,7 @@ pub fn select_cmd_down(
     .unwrap_or_else(|| doc_line_count.saturating_sub(1));
   let line_start = document.line_to_char(target_line);
   let line_content = document.line_content(target_line).unwrap_or_default();
-  let line_end = line_start + line_content.len();
+  let line_end = line_start + line_content.chars().count();
   editor.select_to(line_end, cx);
   editor.ensure_cursor_visible(window, cx);
 }

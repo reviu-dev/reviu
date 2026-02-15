@@ -6,6 +6,7 @@ mod editor;
 mod editor_element;
 mod gutter_element;
 mod projection;
+mod text_offsets;
 
 pub use actions::*;
 pub use cursor_blink::CursorBlink;

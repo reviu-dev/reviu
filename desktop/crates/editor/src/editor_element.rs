@@ -24,6 +24,7 @@ use crate::{
     ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
     ReviewCommentBackground, ReviewCommentSide,
   },
+  text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
 };
 use gpui_component::ActiveTheme as _;
 use syntax::HighlightSpan;
@@ -43,6 +44,14 @@ const SCROLL_AXIS_TIMEOUT_MS: u64 = 150;
 const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
 const DIAGONAL_STRIPE_WIDTH: f32 = 1.0;
 
+fn clamp_to_char_boundary(text: &str, byte_offset: usize) -> usize {
+  let mut byte_offset = byte_offset.min(text.len());
+  while byte_offset > 0 && !text.is_char_boundary(byte_offset) {
+    byte_offset -= 1;
+  }
+  byte_offset
+}
+
 fn has_fractional_scroll(scroll_offset: f32) -> bool {
   (scroll_offset - scroll_offset.floor()) > FRACTIONAL_SCROLL_EPSILON
 }
@@ -60,6 +69,7 @@ fn line_y(
 #[derive(Clone)]
 pub struct PositionMap {
   pub shaped_lines: Vec<(usize, Arc<ShapedLine>)>,
+  pub line_texts: HashMap<usize, String>,
   pub bounds: Bounds<Pixels>,
   pub line_height: Pixels,
   pub viewport: Range<usize>,
@@ -101,12 +111,17 @@ impl PositionMap {
     }
 
     let x_offset = position.x - self.bounds.left();
-    let column = self
+    let byte_column = self
       .shaped_lines
       .iter()
       .find(|(idx, _)| *idx == actual_row)
       .map(|(_, shaped)| shaped.closest_index_for_x(x_offset))
       .unwrap_or(0);
+    let column = self
+      .line_texts
+      .get(&actual_row)
+      .map(|text| byte_offset_to_char_offset(text, byte_column))
+      .unwrap_or(byte_column);
 
     Some(DisplayCursor {
       line: actual_row,
@@ -150,7 +165,11 @@ impl PositionMap {
       .map(|(_, s)| s)?;
 
     let x_offset = position.x - self.bounds.left();
-    let column = shaped.closest_index_for_x(x_offset);
+    let byte_column = shaped.closest_index_for_x(x_offset);
+    let column = document
+      .line_content(doc_line)
+      .map(|line| byte_offset_to_char_offset(line.as_ref(), byte_column))
+      .unwrap_or(byte_column);
 
     let line_start = document.line_to_char(doc_line);
     Some(line_start + column)
@@ -172,8 +191,8 @@ pub(crate) fn highlights_to_text_runs(
   let mut line_highlights: Vec<_> = highlights
     .iter()
     .filter_map(|h| {
-      let start = h.byte_range.start.min(line_len);
-      let end = h.byte_range.end.min(line_len);
+      let start = clamp_to_char_boundary(line_text, h.byte_range.start.min(line_len));
+      let end = clamp_to_char_boundary(line_text, h.byte_range.end.min(line_len));
       (end > start).then_some((start..end, h.token_type))
     })
     .collect();
@@ -616,6 +635,7 @@ pub struct EditorElement {
 
 pub struct PrepaintState {
   shaped_lines: Vec<(usize, Arc<ShapedLine>)>,
+  line_texts: HashMap<usize, String>,
   line_backgrounds: Vec<PaintQuad>,
   gap_separators: Vec<PaintQuad>,
   word_diff_quads: Vec<PaintQuad>,
@@ -1025,6 +1045,24 @@ impl Element for EditorElement {
       });
     }
 
+    let line_texts = {
+      let document = document_entity.read(cx);
+      let mut line_texts = HashMap::new();
+      for (display_idx, display_line) in &viewport_lines {
+        let text = match display_line {
+          DisplayLine::Doc { doc_line, .. } | DisplayLine::Modified { doc_line, .. } => document
+            .line_content(*doc_line)
+            .map(|cow| clean_line_text(&cow))
+            .unwrap_or_default(),
+          DisplayLine::Removed { text, .. } => clean_line_text(text),
+          DisplayLine::NoNewline { .. } => NO_NEWLINE_MARKER_TEXT.to_string(),
+          _ => String::new(),
+        };
+        line_texts.insert(*display_idx, text);
+      }
+      line_texts
+    };
+
     // Calculate maximum line width for horizontal scrolling
     let max_width = shaped_lines
       .iter()
@@ -1414,27 +1452,15 @@ impl Element for EditorElement {
         .iter()
         .find(|(idx, _)| *idx == display_cursor.line)
         .map(|(_, shaped)| shaped);
-      let line_text = match self
-        .editor
-        .read(cx)
-        .display_line(display_cursor.line, document.len_lines())
-      {
-        Some(DisplayLine::Doc { doc_line, .. }) => document
-          .line_content(doc_line)
-          .map(|cow| cow.into_owned())
-          .unwrap_or_default(),
-        Some(DisplayLine::Modified { doc_line, .. }) => document
-          .line_content(doc_line)
-          .map(|cow| cow.into_owned())
-          .unwrap_or_default(),
-        Some(DisplayLine::Removed { text, .. }) => text,
-        Some(DisplayLine::NoNewline { .. }) => NO_NEWLINE_MARKER_TEXT.to_string(),
-        _ => String::new(),
-      };
+      let line_text = line_texts
+        .get(&display_cursor.line)
+        .cloned()
+        .unwrap_or_default();
       if let Some(shaped) = shaped_opt {
-        let line_len = line_text.len();
+        let line_len = line_text.chars().count();
         let cursor_in_line = display_cursor.column.min(line_len);
-        let cursor_x = shaped.x_for_index(cursor_in_line);
+        let cursor_byte = char_offset_to_byte_offset(&line_text, cursor_in_line);
+        let cursor_x = shaped.x_for_index(cursor_byte);
         let y = line_y(
           bounds.top(),
           line_height,
@@ -1464,7 +1490,9 @@ impl Element for EditorElement {
         if let Some(shaped) = shaped_opt {
           let line_start = document.line_to_char(cursor_doc_line);
           let cursor_in_line = cursor_offset - line_start;
-          let cursor_x = shaped.x_for_index(cursor_in_line);
+          let line_text = line_texts.get(&cursor_line).cloned().unwrap_or_default();
+          let cursor_byte = char_offset_to_byte_offset(&line_text, cursor_in_line);
+          let cursor_x = shaped.x_for_index(cursor_byte);
           let y = line_y(bounds.top(), line_height, cursor_line, scroll_offset);
           Some(fill(
             Bounds::new(
@@ -1495,21 +1523,8 @@ impl Element for EditorElement {
           continue;
         }
 
-        let line_text = match self
-          .editor
-          .read(cx)
-          .display_line(display_line, document.len_lines())
-        {
-          Some(DisplayLine::Doc { doc_line, .. }) => document
-            .line_content(doc_line)
-            .map(|cow| cow.into_owned())
-            .unwrap_or_default(),
-          Some(DisplayLine::Modified { doc_line, .. }) => document
-            .line_content(doc_line)
-            .map(|cow| cow.into_owned())
-            .unwrap_or_default(),
-          Some(DisplayLine::Removed { text, .. }) => text,
-          _ => continue,
+        let Some(line_text) = line_texts.get(&display_line).cloned() else {
+          continue;
         };
 
         let shaped_opt = shaped_lines
@@ -1518,7 +1533,7 @@ impl Element for EditorElement {
           .map(|(_, shaped)| shaped);
 
         if let Some(shaped) = shaped_opt {
-          let line_len = line_text.len();
+          let line_len = line_text.chars().count();
           let line_start = if display_line == start.line {
             start.column.min(line_len)
           } else {
@@ -1530,8 +1545,8 @@ impl Element for EditorElement {
             line_len
           };
 
-          let x_start = shaped.x_for_index(line_start);
-          let x_end = shaped.x_for_index(line_end);
+          let x_start = shaped.x_for_index(char_offset_to_byte_offset(&line_text, line_start));
+          let x_end = shaped.x_for_index(char_offset_to_byte_offset(&line_text, line_end));
           let y = line_y(bounds.top(), line_height, display_line, scroll_offset);
 
           let is_selecting_newline = display_line < end_line && x_start == x_end;
@@ -1575,8 +1590,9 @@ impl Element for EditorElement {
           let line_end = line_range.end;
           let sel_line_start = sel_start.max(line_start) - line_start;
           let sel_line_end = sel_end.min(line_end) - line_start;
-          let x_start = shaped.x_for_index(sel_line_start);
-          let x_end = shaped.x_for_index(sel_line_end);
+          let line_text = line_texts.get(&display_line).cloned().unwrap_or_default();
+          let x_start = shaped.x_for_index(char_offset_to_byte_offset(&line_text, sel_line_start));
+          let x_end = shaped.x_for_index(char_offset_to_byte_offset(&line_text, sel_line_end));
           let y = line_y(bounds.top(), line_height, display_line, scroll_offset);
 
           // If selection is empty on this line (selecting just the newline),
@@ -1608,6 +1624,7 @@ impl Element for EditorElement {
 
     PrepaintState {
       shaped_lines,
+      line_texts,
       line_backgrounds,
       gap_separators,
       word_diff_quads,
@@ -1647,6 +1664,7 @@ impl Element for EditorElement {
     let scroll_offset = self.editor.read(cx).scroll_offset_y;
     let position_map = Rc::new(PositionMap {
       shaped_lines: prepaint.shaped_lines.clone(),
+      line_texts: prepaint.line_texts.clone(),
       bounds: prepaint.bounds,
       line_height: prepaint.line_height,
       viewport: prepaint.viewport.clone(),
@@ -1879,11 +1897,17 @@ impl Element for EditorElement {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::editor::tests::EditorTestContext;
   use gpui::{TestAppContext, px, size};
+  use syntax::TokenType;
 
   // Helper to create test bounds
   fn test_bounds(width: f32, height: f32) -> Bounds<Pixels> {
     Bounds::new(Point::default(), size(px(width), px(height)))
+  }
+
+  fn test_editor(cx: &mut TestAppContext) -> Entity<Editor> {
+    EditorTestContext::with_text(cx.clone(), "").editor
   }
 
   // ============================================================================
@@ -1892,7 +1916,7 @@ mod tests {
 
   #[gpui::test]
   fn test_calculate_viewport_simple(cx: &mut TestAppContext) {
-    let editor = cx.new(crate::editor::Editor::new);
+    let editor = test_editor(cx);
     let element = EditorElement::new(editor);
 
     // 400px height, 20px line height = 20 visible lines
@@ -1908,7 +1932,7 @@ mod tests {
 
   #[gpui::test]
   fn test_calculate_viewport_with_scroll(cx: &mut TestAppContext) {
-    let editor = cx.new(crate::editor::Editor::new);
+    let editor = test_editor(cx);
     let element = EditorElement::new(editor);
 
     let bounds = test_bounds(800.0, 400.0);
@@ -1923,7 +1947,7 @@ mod tests {
 
   #[gpui::test]
   fn test_calculate_viewport_at_end(cx: &mut TestAppContext) {
-    let editor = cx.new(crate::editor::Editor::new);
+    let editor = test_editor(cx);
     let element = EditorElement::new(editor);
 
     let bounds = test_bounds(800.0, 400.0);
@@ -1939,7 +1963,7 @@ mod tests {
 
   #[gpui::test]
   fn test_calculate_viewport_short_document(cx: &mut TestAppContext) {
-    let editor = cx.new(crate::editor::Editor::new);
+    let editor = test_editor(cx);
     let element = EditorElement::new(editor);
 
     let bounds = test_bounds(800.0, 400.0);
@@ -1954,7 +1978,7 @@ mod tests {
 
   #[gpui::test]
   fn test_calculate_viewport_fractional_scroll(cx: &mut TestAppContext) {
-    let editor = cx.new(crate::editor::Editor::new);
+    let editor = test_editor(cx);
     let element = EditorElement::new(editor);
 
     let bounds = test_bounds(800.0, 400.0);
@@ -1970,7 +1994,7 @@ mod tests {
 
   #[gpui::test]
   fn test_calculate_viewport_scroll_past_end(cx: &mut TestAppContext) {
-    let editor = cx.new(crate::editor::Editor::new);
+    let editor = test_editor(cx);
     let element = EditorElement::new(editor);
 
     let bounds = test_bounds(800.0, 400.0);
@@ -1986,7 +2010,7 @@ mod tests {
 
   #[gpui::test]
   fn test_calculate_viewport_minimum_one_line(cx: &mut TestAppContext) {
-    let editor = cx.new(crate::editor::Editor::new);
+    let editor = test_editor(cx);
     let element = EditorElement::new(editor);
 
     let bounds = test_bounds(800.0, 10.0); // Very small height
@@ -2002,7 +2026,7 @@ mod tests {
 
   #[gpui::test]
   fn test_calculate_viewport_large_line_height(cx: &mut TestAppContext) {
-    let editor = cx.new(crate::editor::Editor::new);
+    let editor = test_editor(cx);
     let element = EditorElement::new(editor);
 
     let bounds = test_bounds(800.0, 400.0);
@@ -2018,7 +2042,7 @@ mod tests {
 
   #[gpui::test]
   fn test_calculate_viewport_single_line_document(cx: &mut TestAppContext) {
-    let editor = cx.new(crate::editor::Editor::new);
+    let editor = test_editor(cx);
     let element = EditorElement::new(editor);
 
     let bounds = test_bounds(800.0, 400.0);
@@ -2033,7 +2057,7 @@ mod tests {
 
   #[gpui::test]
   fn test_calculate_viewport_empty_document(cx: &mut TestAppContext) {
-    let editor = cx.new(crate::editor::Editor::new);
+    let editor = test_editor(cx);
     let element = EditorElement::new(editor);
 
     let bounds = test_bounds(800.0, 400.0);
@@ -2046,5 +2070,40 @@ mod tests {
     // Empty document edge case - start_line gets clamped to 0
     // This creates a 0..0 range which is valid but empty
     assert!(viewport.is_empty());
+  }
+
+  #[test]
+  fn test_char_byte_offset_helpers_handle_emoji() {
+    let text = "🤓 Branches principales";
+    assert_eq!(char_offset_to_byte_offset(text, 0), 0);
+    assert_eq!(char_offset_to_byte_offset(text, 1), 4);
+    assert_eq!(byte_offset_to_char_offset(text, 1), 0);
+    assert_eq!(byte_offset_to_char_offset(text, 4), 1);
+  }
+
+  #[test]
+  fn test_highlights_to_text_runs_clamps_non_char_boundary_spans() {
+    let line = "✅ **Branches parallèles** (API + notifications fusionnées dans develop)";
+    let highlights = vec![
+      HighlightSpan {
+        byte_range: 1..4,
+        token_type: TokenType::Keyword,
+      },
+      HighlightSpan {
+        byte_range: 7..20,
+        token_type: TokenType::String,
+      },
+    ];
+
+    let base_style = TextStyle::default();
+    let theme = Theme::dark();
+    let runs = highlights_to_text_runs(&highlights, line, &theme, &base_style);
+
+    let mut offset = 0usize;
+    for run in runs {
+      offset += run.len;
+      assert!(line.is_char_boundary(offset));
+    }
+    assert_eq!(offset, line.len());
   }
 }
