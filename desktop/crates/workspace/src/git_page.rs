@@ -7,7 +7,6 @@ use std::{
 };
 
 use editor::{CloseFind, DiffViewMode, Editor, Find, HunkAction, HunkState};
-use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
   HistoryCommitNode, HistoryRevision, RepoStage, RepoStatusEntry, RepoStatusKind, amend_commit,
@@ -32,6 +31,7 @@ use gpui_component::{
   menu::{DropdownMenu, PopupMenuItem},
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
   spinner::Spinner,
+  text::TextView,
   tooltip::Tooltip,
   tree::{TreeItem, TreeState, tree},
 };
@@ -522,7 +522,6 @@ pub struct GitPage {
   editor: Option<Entity<Editor>>,
   diff_view: DiffViewMode,
   show_markdown_preview: bool,
-  markdown_preview_state: MarkdownRenderState,
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
   svg_preview_source: Option<SharedString>,
   svg_preview_task: Option<Task<()>>,
@@ -968,7 +967,6 @@ impl GitPage {
       editor: None,
       diff_view: DiffViewMode::Inline,
       show_markdown_preview: false,
-      markdown_preview_state: MarkdownRenderState::new(),
       svg_preview: None,
       svg_preview_source: None,
       svg_preview_task: None,
@@ -3637,11 +3635,14 @@ impl GitPage {
             .min_w(px(0.0))
             .bg(theme.background)
             .occlude()
-            .child(div().size_full().pb_4().px_4().child(render_markdown(
-              &markdown,
-              &MarkdownRenderOptions::default().with_state(self.markdown_preview_state.clone()),
-              cx,
-            )))
+            .child(
+              div().size_full().pb_4().px_4().child(
+                TextView::markdown("git-markdown-preview-text", markdown)
+                  .size_full()
+                  .selectable(true)
+                  .scrollable(true),
+              ),
+            )
             .into_any_element()
         };
 
