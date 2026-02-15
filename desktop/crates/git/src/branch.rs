@@ -655,6 +655,38 @@ mod tests {
   }
 
   #[test]
+  fn merge_branch_up_to_date_is_noop() {
+    let repo = TempRepo::init("branch-merge-up-to-date");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head_before = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("head before merge")
+      .id();
+
+    merge_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("up-to-date merge");
+
+    let head_after = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("head after merge")
+      .id();
+    assert_eq!(head_after, head_before);
+  }
+
+  #[test]
   fn switch_branch_remote_creates_local_branch_and_sets_upstream() {
     let remote = TempBareRepo::init("branch-switch-remote-origin");
     let source = TempRepo::init("branch-switch-remote-source");
@@ -768,5 +800,43 @@ mod tests {
       .expect("non-empty upstream")
       .to_string();
     assert_eq!(upstream, "origin/feature");
+  }
+
+  #[test]
+  fn create_branch_from_local_creates_branch_without_upstream() {
+    let repo = TempRepo::init("branch-create-from-local");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let feature_head = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "v2-feature\n",
+      "feature change",
+    );
+
+    create_branch_from(
+      &repo.path,
+      "feature-copy",
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("create from local branch");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let copy = repo_handle
+      .find_branch("feature-copy", BranchType::Local)
+      .expect("find copied branch");
+    assert_eq!(copy.get().target(), Some(feature_head));
+    assert!(copy.upstream().is_err());
   }
 }

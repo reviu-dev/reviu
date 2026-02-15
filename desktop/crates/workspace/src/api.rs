@@ -320,6 +320,11 @@ impl ApiClient {
   pub fn new() -> Self {
     let base_url =
       std::env::var("API_BASE_URL").unwrap_or_else(|_| DEFAULT_API_BASE_URL.to_string());
+    Self::new_with_base_url(base_url)
+  }
+
+  pub(crate) fn new_with_base_url(base_url: impl Into<String>) -> Self {
+    let base_url = base_url.into();
     let client = Client::builder()
       .cookie_store(true)
       .build()
@@ -549,6 +554,7 @@ impl ApiClient {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use reqwest::header::AUTHORIZATION;
   use reqwest::blocking::Client;
   use std::{
     io::{Read, Write},
@@ -688,6 +694,229 @@ mod tests {
   }
 
   #[test]
+  fn authed_request_sets_authorization_header_when_token_present() {
+    let api = make_test_api_client("http://localhost:3999".to_string());
+
+    let request_without_token = api
+      .authed_request(Method::GET, "/users/me")
+      .build()
+      .expect("build request without token");
+    assert!(request_without_token.headers().get(AUTHORIZATION).is_none());
+
+    api.set_bearer_token("secret-token".to_string());
+    let request_with_token = api
+      .authed_request(Method::GET, "/users/me")
+      .build()
+      .expect("build request with token");
+
+    let authorization = request_with_token
+      .headers()
+      .get(AUTHORIZATION)
+      .and_then(|value| value.to_str().ok());
+    assert_eq!(authorization, Some("Bearer secret-token"));
+  }
+
+  #[test]
+  fn fetch_latest_pull_requests_parses_success_payload() {
+    let body = r#"{
+      "pullRequests": [
+        {
+          "number": 7,
+          "title": "Fix login issue",
+          "state": "open",
+          "mergedAt": null,
+          "draft": false,
+          "updatedAt": "2026-02-15T12:00:00Z",
+          "labels": [{ "name": "bug" }],
+          "repository": { "owner": "acme", "repo": "widget" }
+        }
+      ]
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let prs = api
+      .fetch_latest_pull_requests("acme", "widget")
+      .expect("fetch pull requests");
+    assert_eq!(prs.len(), 1);
+    assert_eq!(prs[0].number, 7);
+    assert_eq!(prs[0].title, "Fix login issue");
+    assert!(matches!(prs[0].state, GithubPullRequestState::Open));
+    assert_eq!(prs[0].repository.owner, "acme");
+    assert_eq!(prs[0].repository.repo, "widget");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_details_parses_success_payload() {
+    let body = r#"{
+      "pullRequest": {
+        "number": 42,
+        "title": "Improve parser",
+        "state": "open",
+        "draft": false,
+        "createdAt": "2026-02-10T09:00:00Z",
+        "updatedAt": "2026-02-15T12:00:00Z",
+        "mergedAt": null,
+        "mergeBaseSha": "abc123",
+        "baseSha": "base123",
+        "headSha": "head123",
+        "baseRefName": "main",
+        "headRefName": "feature/parser",
+        "body": "PR body",
+        "author": { "login": "octocat", "avatarUrl": null },
+        "comments": 2,
+        "reviewComments": 3,
+        "commits": 4,
+        "additions": 10,
+        "deletions": 5,
+        "changedFiles": 2,
+        "labels": [{ "name": "enhancement" }],
+        "repository": { "owner": "acme", "repo": "widget" },
+        "headRepository": { "owner": "acme", "repo": "widget-fork" }
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let details = api
+      .fetch_pull_request_details("acme", "widget", 42)
+      .expect("fetch pull request details");
+    assert_eq!(details.number, 42);
+    assert_eq!(details.head_ref_name, "feature/parser");
+    assert_eq!(details.comments, 2);
+    assert_eq!(details.review_comments, 3);
+    assert_eq!(
+      details
+        .head_repository
+        .as_ref()
+        .expect("head repo")
+        .repo
+        .as_str(),
+      "widget-fork"
+    );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_files_parses_success_payload() {
+    let body = r#"{
+      "files": [
+        {
+          "filename": "src/main.rs",
+          "status": "renamed",
+          "patch": "@@ -1 +1 @@",
+          "previous_filename": "src/old_main.rs"
+        }
+      ]
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let files = api
+      .fetch_pull_request_files("acme", "widget", 42)
+      .expect("fetch pull request files");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].filename, "src/main.rs");
+    assert_eq!(files[0].status, "renamed");
+    assert_eq!(files[0].previous_filename.as_deref(), Some("src/old_main.rs"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_review_comments_parses_success_payload() {
+    let body = r#"{
+      "comments": [
+        {
+          "id": 1,
+          "pullRequestReviewId": 12,
+          "diffHunk": "@@ -1 +1 @@",
+          "path": "src/main.rs",
+          "position": 1,
+          "originalPosition": 1,
+          "commitId": "head123",
+          "originalCommitId": "base123",
+          "inReplyToId": null,
+          "user": { "login": "octocat", "avatarUrl": null },
+          "body": "Looks good",
+          "createdAt": "2026-02-15T12:00:00Z",
+          "updatedAt": "2026-02-15T12:01:00Z",
+          "startLine": null,
+          "originalStartLine": null,
+          "startSide": null,
+          "line": 1,
+          "originalLine": 1,
+          "side": "RIGHT"
+        }
+      ]
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let comments = api
+      .fetch_pull_request_review_comments("acme", "widget", 42)
+      .expect("fetch review comments");
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].id, 1);
+    assert_eq!(comments[0].path, "src/main.rs");
+    assert_eq!(comments[0].user.login, "octocat");
+    assert_eq!(comments[0].side.as_deref(), Some("RIGHT"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_notifications_parses_success_payload() {
+    let body = r#"{
+      "notifications": [
+        {
+          "id": "1",
+          "repository": {
+            "name": "widget",
+            "fullName": "acme/widget",
+            "owner": {
+              "login": "acme",
+              "avatarUrl": "https://example.com/avatar.png"
+            }
+          },
+          "subject": {
+            "title": "Review requested",
+            "type": "PullRequest",
+            "url": "https://api.github.test/subject/1",
+            "latestCommentUrl": null
+          },
+          "reason": "review_requested",
+          "unread": true,
+          "updatedAt": "2026-02-15T12:00:00Z",
+          "lastReadAt": null,
+          "url": "https://api.github.test/notif/1",
+          "subscriptionUrl": "https://api.github.test/sub/1"
+        }
+      ]
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let notifications = api
+      .fetch_github_notifications()
+      .expect("fetch notifications");
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].repository.full_name, "acme/widget");
+    assert_eq!(notifications[0].subject.title, "Review requested");
+    assert_eq!(
+      notifications[0]
+        .repository
+        .owner
+        .as_ref()
+        .expect("owner")
+        .login
+        .as_str(),
+      "acme"
+    );
+    assert!(notifications[0].unread);
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
   fn fetch_me_returns_none_on_unauthorized() {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
     let api = make_test_api_client(base_url);
@@ -725,6 +954,107 @@ mod tests {
   }
 
   #[test]
+  fn fetch_pull_request_details_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api.fetch_pull_request_details("acme", "widget", 42).err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_files_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api.fetch_pull_request_files("acme", "widget", 42).err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_review_comments_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .fetch_pull_request_review_comments("acme", "widget", 42)
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_notifications_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api.fetch_github_notifications().err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_file_content_returns_content_on_success() {
+    let body = r##"{"content":"# Hello\n"}"##;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let content = api
+      .fetch_github_file_content("acme", "widget", "README.md", "main")
+      .expect("fetch content");
+    assert_eq!(content.as_deref(), Some("# Hello\n"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_file_content_returns_none_when_content_is_null() {
+    let body = r#"{"content":null}"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let content = api
+      .fetch_github_file_content("acme", "widget", "README.md", "main")
+      .expect("fetch content");
+    assert_eq!(content, None);
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_file_content_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "{}");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .fetch_github_file_content("acme", "widget", "README.md", "main")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_file_content_returns_error_on_non_success_status() {
+    let (base_url, handle) = start_single_response_server("500 Internal Server Error", "{}");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .fetch_github_file_content("acme", "widget", "README.md", "main")
+      .err();
+    assert!(err.is_some());
+    assert!(err
+      .expect("error")
+      .to_string()
+      .contains("unexpected status"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
   fn sign_out_clears_bearer_token_when_request_fails() {
     let (base_url, handle) = start_single_response_server("500 Internal Server Error", "{}");
     let api = make_test_api_client(base_url);
@@ -732,6 +1062,18 @@ mod tests {
 
     let err = api.sign_out().err();
     assert!(err.is_some());
+    assert_eq!(api.bearer_token(), None);
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn sign_out_clears_bearer_token_on_success() {
+    let (base_url, handle) = start_single_response_server("200 OK", "{}");
+    let api = make_test_api_client(base_url);
+    api.set_bearer_token("token".to_string());
+
+    api.sign_out().expect("sign out success");
+
     assert_eq!(api.bearer_token(), None);
     handle.join().expect("join server thread");
   }
