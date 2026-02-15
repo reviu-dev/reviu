@@ -12,6 +12,7 @@ pub enum UiIconName {
   MessageCircle,
   History,
   FileCode,
+  EllipsisVertical,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -26,6 +27,7 @@ impl IconNamed for UiIconName {
       UiIconName::MessageCircle => "icons/message-circle.svg",
       UiIconName::History => "icons/history.svg",
       UiIconName::FileCode => "icons/file-code.svg",
+      UiIconName::EllipsisVertical => "icons/ellipsis-vertical.svg",
     }
     .into()
   }

@@ -57,16 +57,48 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
   match config.state {
     UserMenuState::Unknown => None,
     UserMenuState::Unauthenticated => {
-      let handler = config.on_sign_in?;
+      let current_page = config.current_page;
+      let on_open_git_config = config.on_open_git_config.clone();
+      let on_open_settings = config.on_open_settings.clone();
+
+      if on_open_git_config.is_none() && on_open_settings.is_none() {
+        return None;
+      }
+
       Some(
         Button::new(config.id)
-          .icon(IconName::GitHub)
-          .label("Sign in with GitHub")
           .ghost()
-          .gap_2()
+          .compact()
           .small()
-          .on_click(move |_, window, cx| {
-            handler(window, cx);
+          .child(Icon::new(UiIconName::EllipsisVertical).size_4())
+          .dropdown_menu_with_anchor(gpui::Corner::TopRight, move |menu: PopupMenu, _, _| {
+            let mut menu = menu;
+
+            if current_page != UserMenuPage::GitConfig {
+              if let Some(handler) = on_open_git_config.clone() {
+                menu = menu.item(
+                  PopupMenuItem::new("Git Config")
+                    .icon(git_config_icon())
+                    .on_click(move |_, window, cx| {
+                      handler(window, cx);
+                    }),
+                );
+              }
+            }
+
+            if current_page != UserMenuPage::Settings {
+              if let Some(handler) = on_open_settings.clone() {
+                menu = menu.item(
+                  PopupMenuItem::new("Settings")
+                    .icon(IconName::Settings2)
+                    .on_click(move |_, window, cx| {
+                      handler(window, cx);
+                    }),
+                );
+              }
+            }
+
+            menu
           })
           .into_any_element(),
       )
