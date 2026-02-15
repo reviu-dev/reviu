@@ -1126,6 +1126,80 @@ impl GitPage {
     view
   }
 
+  #[cfg(test)]
+  fn new_for_test(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    let repo_select =
+      cx.new(|cx| SelectState::new(SearchableVec::new(Vec::<RecentRepoItem>::new()), None, window, cx));
+    let branch_select = cx.new(|cx| {
+      SelectState::new(
+        SearchableVec::new(Vec::<BranchSelectItem>::new()),
+        None,
+        window,
+        cx,
+      )
+      .searchable(true)
+    });
+    let file_list = cx.new(|cx| ListState::new(GitFileListDelegate::new(), window, cx));
+    let history_tree = cx.new(|cx| TreeState::new(cx));
+    let commit_input = cx.new(|cx| {
+      InputState::new(window, cx)
+        .auto_grow(1, 5)
+        .placeholder("Commit message...")
+    });
+
+    let mut view = Self {
+      focus_handle: cx.focus_handle(),
+      api: ApiClient::new(),
+      repo_select,
+      branch_select,
+      file_list,
+      history_tree,
+      window_handle: window.window_handle(),
+      selected_repo: None,
+      status_entries: Vec::new(),
+      branch_status: None,
+      has_head_commit: false,
+      can_undo_last_commit: false,
+      can_push: false,
+      can_force_push: false,
+      has_staged_changes: false,
+      sidebar_mode: GitSidebarMode::Changes,
+      history_commits: Vec::new(),
+      history_revision: None,
+      history_loading: false,
+      history_expanded_commit_oids: HashSet::new(),
+      history_commit_files: HashMap::new(),
+      history_commit_files_loading: HashSet::new(),
+      pending_history_file_loads: HashSet::new(),
+      history_opened_commit_file: None,
+      history_rows_cache: Vec::new(),
+      history_tree_nodes: HashMap::new(),
+      selected_file: None,
+      force_list_selection: false,
+      editor: None,
+      diff_view: DiffViewMode::Inline,
+      show_markdown_preview: false,
+      svg_preview: None,
+      svg_preview_source: None,
+      svg_preview_task: None,
+      auth_state: AuthState::Unknown,
+      auth_task: None,
+      status_task: None,
+      history_task: None,
+      history_files_task: None,
+      history_open_file_task: None,
+      branch_task: None,
+      branch_refresh_generation: 0,
+      poll_task: None,
+      commit_input,
+    };
+
+    view.subscribe_to_repo_select(cx);
+    view.subscribe_to_branch_select(cx);
+    view.subscribe_to_file_list(cx);
+    view
+  }
+
   fn subscribe_to_repo_select(&mut self, cx: &mut Context<Self>) {
     cx.subscribe(
       &self.repo_select,
@@ -1545,6 +1619,95 @@ impl GitPage {
         });
       }
     }));
+  }
+
+  #[cfg(test)]
+  fn poll_once_for_test(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+
+    let include_history = self.sidebar_mode == GitSidebarMode::History;
+    let cached_history_revision = self.history_revision.clone();
+    let history_empty = self.history_commits.is_empty();
+    let requested_repo = repo_root.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let status = unblock(move || {
+        let entries = list_repo_status(&repo_root).ok()?;
+        let branch = current_branch_status(&repo_root).ok();
+        let head_status = head_commit_status(&repo_root).ok();
+        let polled_history_revision = if include_history {
+          current_history_revision(&repo_root).ok()
+        } else {
+          None
+        };
+        let should_refresh_history = Self::should_refresh_history_for_poll(
+          include_history,
+          history_empty,
+          cached_history_revision.as_ref(),
+          polled_history_revision.as_ref(),
+        );
+        let history = if should_refresh_history {
+          list_commit_history(&repo_root, HISTORY_MAX_COMMITS).ok()
+        } else {
+          None
+        };
+        Some((
+          entries,
+          branch,
+          head_status,
+          polled_history_revision,
+          should_refresh_history,
+          history,
+        ))
+      })
+      .await;
+
+      let Some((
+        entries,
+        branch_status,
+        head_status,
+        polled_history_revision,
+        should_refresh_history,
+        history,
+      )) = status
+      else {
+        return;
+      };
+
+      let _ = this.update(cx, |this, cx| {
+        if this.selected_repo.as_ref() != Some(&requested_repo) {
+          return;
+        }
+        let branch_changed = this.apply_status_snapshot(entries, branch_status, head_status, false, cx);
+        if include_history {
+          if let Some(history) = history {
+            this.history_commits = history;
+            this.sync_history_cache_with_commits();
+            this.history_loading = false;
+            if let Some(history_revision) = polled_history_revision {
+              this.history_revision = Some(history_revision);
+            }
+            this.refresh_history_list(cx);
+          } else if !should_refresh_history {
+            if let Some(history_revision) = polled_history_revision {
+              this.history_revision = Some(history_revision);
+            }
+          } else if this.history_loading {
+            this.history_loading = false;
+          }
+        }
+        if branch_changed {
+          this.refresh_branches(cx);
+        }
+        if Self::should_refresh_file_list(this.sidebar_mode) {
+          this.refresh_file_list(cx);
+        }
+        cx.notify();
+      });
+    });
+
+    self.status_task = Some(task);
   }
 
   fn show_command_palette_action(
@@ -3797,6 +3960,7 @@ impl Focusable for GitPage {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use gpui::TestAppContext;
   use git2::{Repository, Signature};
   use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -3892,6 +4056,36 @@ mod tests {
       behind,
       has_upstream,
     }
+  }
+
+  fn init_gpui_test(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      gpui_component::init(cx);
+    });
+  }
+
+  fn seed_repo_branch_state(this: &mut GitPage, repo_root: &Path, cx: &mut Context<GitPage>) {
+    this.selected_repo = Some(repo_root.to_path_buf());
+    let branch_status = current_branch_status(repo_root).expect("read initial branch status");
+    let selected = GitPage::selected_branch_from_status(Some(branch_status.clone()));
+    let items = GitPage::branch_select_items(
+      list_branches(repo_root).expect("list branches"),
+      selected.as_ref(),
+    );
+    this.branch_status = Some(branch_status);
+
+    let branch_select = this.branch_select.clone();
+    let window_handle = this.window_handle;
+    let _ = cx.update_window(window_handle, move |_, window, cx| {
+      branch_select.update(cx, |state, cx| {
+        state.set_items(SearchableVec::new(items), window, cx);
+        if let Some(selected) = selected.as_ref() {
+          state.set_selected_value(selected, window, cx);
+        } else {
+          state.set_selected_index(None, window, cx);
+        }
+      });
+    });
   }
 
   #[test]
@@ -4268,6 +4462,126 @@ mod tests {
     assert!(selected.is_none());
     let items = GitPage::branch_select_items(branches, selected.as_ref());
     assert!(items.iter().all(|item| !item.is_current));
+  }
+
+  #[gpui::test]
+  async fn poll_once_updates_branch_status_after_external_branch_switch(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-poll-once-switch");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+    git_page.update_in(cx, |this, _window, cx| {
+      seed_repo_branch_state(this, &repo.path, cx);
+    });
+
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("read branch after switch")
+        .name,
+      "feature"
+    );
+
+    let status_task = git_page.update_in(cx, |this, _window, cx| {
+      this.poll_once_for_test(cx);
+      this.status_task.take().expect("poll status task")
+    });
+    status_task.await;
+    let branch_name =
+      git_page.read_with(cx, |this, _| this.branch_status.as_ref().map(|status| status.name.clone()));
+    assert_eq!(branch_name.as_deref(), Some("feature"));
+  }
+
+  #[gpui::test]
+  async fn poll_once_clears_branch_select_on_external_detached_head(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-poll-once-detached");
+    let oid = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+    git_page.update_in(cx, |this, _window, cx| {
+      seed_repo_branch_state(this, &repo.path, cx);
+    });
+
+    Repository::open(&repo.path)
+      .expect("open repo")
+      .set_head_detached(oid)
+      .expect("detach HEAD");
+
+    let status_task = git_page.update_in(cx, |this, _window, cx| {
+      this.poll_once_for_test(cx);
+      this.status_task.take().expect("poll status task")
+    });
+    status_task.await;
+    if let Some(branch_task) = git_page.update_in(cx, |this, _window, _| this.branch_task.take()) {
+      branch_task.await;
+    }
+
+    let (branch_name, selected_branch) = git_page.read_with(cx, |this, cx| {
+      (
+        this.branch_status.as_ref().map(|status| status.name.clone()),
+        this.branch_select.read(cx).selected_value().cloned(),
+      )
+    });
+    assert_eq!(branch_name.as_deref(), Some("HEAD"));
+    assert_eq!(selected_branch, None);
+  }
+
+  #[gpui::test]
+  async fn refresh_branches_updates_branch_select_after_external_branch_switch(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-refresh-branches-switch");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+    git_page.update_in(cx, |this, _window, cx| {
+      seed_repo_branch_state(this, &repo.path, cx);
+    });
+
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("read branch after switch")
+        .name,
+      "feature"
+    );
+
+    let branch_task = git_page.update_in(cx, |this, _window, cx| {
+      this.refresh_branches(cx);
+      this.branch_task.take().expect("refresh branches task")
+    });
+    branch_task.await;
+
+    let selected_branch = git_page.read_with(cx, |this, cx| this.branch_select.read(cx).selected_value().cloned());
+    assert_eq!(
+      selected_branch,
+      Some(BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      })
+    );
   }
 
   #[test]

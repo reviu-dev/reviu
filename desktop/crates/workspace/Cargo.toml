@@ -21,3 +21,4 @@ serde = { workspace = true }
 
 [dev-dependencies]
 git2 = { workspace = true }
+gpui = { workspace = true, features = ["test-support"] }
