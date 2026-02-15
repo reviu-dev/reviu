@@ -1826,9 +1826,9 @@ impl GitPage {
     let mut palette_branches = Vec::new();
 
     let view = cx.entity();
-    let handler: CommandPaletteHandler = Arc::new(move |action, _window, cx| {
+    let handler: CommandPaletteHandler = Arc::new(move |action, window, cx| {
       view.update(cx, |view, cx| {
-        view.handle_command_palette_action(action, cx)
+        view.handle_command_palette_action(action, window, cx)
       })
     });
 
@@ -1927,6 +1927,7 @@ impl GitPage {
   fn handle_command_palette_action(
     &mut self,
     action: CommandPaletteAction,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     let mut selected_branch: Option<BranchRef> = None;
@@ -1961,11 +1962,11 @@ impl GitPage {
         Ok(())
       }
       CommandPaletteAction::OpenGitHistorySidebar => {
-        self.set_sidebar_mode(GitSidebarMode::History, cx);
+        self.set_sidebar_mode(GitSidebarMode::History, window, cx);
         Ok(())
       }
       CommandPaletteAction::OpenGitChangesSidebar => {
-        self.set_sidebar_mode(GitSidebarMode::Changes, cx);
+        self.set_sidebar_mode(GitSidebarMode::Changes, window, cx);
         Ok(())
       }
       CommandPaletteAction::SwitchBranch(branch) => {
@@ -2443,17 +2444,41 @@ impl GitPage {
   fn toggle_sidebar_mode_action(
     &mut self,
     _: &gpui::ClickEvent,
-    _: &mut Window,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     let next_mode = match self.sidebar_mode {
       GitSidebarMode::Changes => GitSidebarMode::History,
       GitSidebarMode::History => GitSidebarMode::Changes,
     };
-    self.set_sidebar_mode(next_mode, cx);
+    self.set_sidebar_mode(next_mode, window, cx);
   }
 
-  fn set_sidebar_mode(&mut self, mode: GitSidebarMode, cx: &mut Context<Self>) {
+  fn focus_changes_sidebar_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.file_list.read(cx).selected_index().is_none() && !self.status_entries.is_empty() {
+      self.file_list.update(cx, |state, cx| {
+        state.set_selected_index(Some(IndexPath::new(0)), window, cx);
+      });
+    }
+
+    self.file_list.update(cx, |state, cx| {
+      state.focus(window, cx);
+    });
+  }
+
+  fn focus_sidebar_on_next_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.sidebar_mode != GitSidebarMode::Changes {
+      return;
+    }
+
+    cx.on_next_frame(window, |this, window, cx| {
+      if this.sidebar_mode == GitSidebarMode::Changes {
+        this.focus_changes_sidebar_list(window, cx);
+      }
+    });
+  }
+
+  fn set_sidebar_mode(&mut self, mode: GitSidebarMode, window: &mut Window, cx: &mut Context<Self>) {
     self.sidebar_mode = mode;
 
     if self.sidebar_mode == GitSidebarMode::History {
@@ -2462,6 +2487,8 @@ impl GitPage {
       self.refresh_file_list(cx);
       cx.notify();
     }
+
+    self.focus_sidebar_on_next_frame(window, cx);
   }
 
   fn toggle_stage_all_action(
@@ -4504,6 +4531,24 @@ mod tests {
     )]));
   }
 
+  #[gpui::test]
+  fn focus_changes_sidebar_list_selects_first_entry_when_unselected(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    git_page.update_in(cx, |this, window, cx| {
+      this.status_entries = vec![
+        make_status_entry("src/main.rs", RepoStage::Unstaged),
+        make_status_entry("src/lib.rs", RepoStage::Unstaged),
+      ];
+      this.refresh_file_list(cx);
+      assert_eq!(this.file_list.read(cx).selected_index(), None);
+
+      this.focus_changes_sidebar_list(window, cx);
+      assert_eq!(this.file_list.read(cx).selected_index(), Some(IndexPath::new(0)));
+    });
+  }
+
   #[test]
   fn selected_file_update_clears_missing_selection_without_history_file() {
     let update = GitPage::selected_file_update(
@@ -4618,6 +4663,7 @@ mod tests {
         CommandPaletteAction::CreateBranch {
           name: "feature".to_string(),
         },
+        _window,
         cx,
       )
     });
@@ -4661,6 +4707,7 @@ mod tests {
         CommandPaletteAction::CreateBranch {
           name: "feature".to_string(),
         },
+        _window,
         cx,
       )
     });
@@ -4698,6 +4745,7 @@ mod tests {
           name: "feature".into(),
           kind: CommandPaletteBranchKind::Local,
         }),
+        _window,
         cx,
       )
     });
@@ -4743,6 +4791,7 @@ mod tests {
             kind: CommandPaletteBranchKind::Local,
           },
         },
+        _window,
         cx,
       )
     });
@@ -4783,6 +4832,7 @@ mod tests {
             kind: CommandPaletteBranchKind::Local,
           },
         },
+        _window,
         cx,
       )
     });
@@ -4856,6 +4906,7 @@ mod tests {
           name: "origin/feature".into(),
           kind: CommandPaletteBranchKind::Remote,
         }),
+        _window,
         cx,
       )
     });
@@ -4898,6 +4949,7 @@ mod tests {
           name: "origin/missing".into(),
           kind: CommandPaletteBranchKind::Remote,
         }),
+        _window,
         cx,
       )
     });
@@ -4955,6 +5007,7 @@ mod tests {
             kind: CommandPaletteBranchKind::Remote,
           },
         },
+        _window,
         cx,
       )
     });
@@ -5000,6 +5053,7 @@ mod tests {
             kind: CommandPaletteBranchKind::Remote,
           },
         },
+        _window,
         cx,
       )
     });
@@ -5064,6 +5118,7 @@ mod tests {
             kind: CommandPaletteBranchKind::Local,
           },
         },
+        _window,
         cx,
       )
     });
@@ -5126,6 +5181,7 @@ mod tests {
         CommandPaletteAction::CherryPick {
           commit_hashes: vec![first.to_string(), second.to_string()],
         },
+        _window,
         cx,
       )
     });
@@ -5171,6 +5227,7 @@ mod tests {
         CommandPaletteAction::CherryPick {
           commit_hashes: vec!["deadbeef".to_string()],
         },
+        _window,
         cx,
       )
     });
@@ -5220,7 +5277,7 @@ mod tests {
     for action in actions {
       let result = git_page.update_in(cx, |this, _window, cx| {
         this.selected_repo = None;
-        this.handle_command_palette_action(action.clone(), cx)
+        this.handle_command_palette_action(action.clone(), _window, cx)
       });
       let error = result.expect_err("action should fail without selected repo");
       assert_eq!(error.as_ref(), "No repository selected.");
@@ -5276,6 +5333,7 @@ mod tests {
             kind: CommandPaletteBranchKind::Local,
           },
         },
+        _window,
         cx,
       )
     });
