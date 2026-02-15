@@ -2467,15 +2467,17 @@ impl GitPage {
   }
 
   fn focus_sidebar_on_next_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if self.sidebar_mode != GitSidebarMode::Changes {
+    if self.sidebar_mode == GitSidebarMode::Changes {
+      cx.on_next_frame(window, |this, window, cx| {
+        if this.sidebar_mode == GitSidebarMode::Changes {
+          this.focus_changes_sidebar_list(window, cx);
+        }
+      });
       return;
     }
 
-    cx.on_next_frame(window, |this, window, cx| {
-      if this.sidebar_mode == GitSidebarMode::Changes {
-        this.focus_changes_sidebar_list(window, cx);
-      }
-    });
+    // Keep page-level shortcuts active in History mode without focusing the tree.
+    window.focus(&self.focus_handle, cx);
   }
 
   fn set_sidebar_mode(&mut self, mode: GitSidebarMode, window: &mut Window, cx: &mut Context<Self>) {
@@ -4546,6 +4548,17 @@ mod tests {
 
       this.focus_changes_sidebar_list(window, cx);
       assert_eq!(this.file_list.read(cx).selected_index(), Some(IndexPath::new(0)));
+    });
+  }
+
+  #[gpui::test]
+  fn set_sidebar_mode_history_keeps_page_focus_for_shortcuts(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    git_page.update_in(cx, |this, window, cx| {
+      this.set_sidebar_mode(GitSidebarMode::History, window, cx);
+      assert!(this.focus_handle.contains_focused(window, cx));
     });
   }
 
