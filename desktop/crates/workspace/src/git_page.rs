@@ -2776,16 +2776,6 @@ impl GitPage {
       .child(branch_select)
       .when_some(branch_info, |this, info| this.child(info));
 
-    let settings_button = Button::new("open-settings")
-      .icon(IconName::Settings2)
-      .ghost()
-      .compact()
-      .tooltip("Settings")
-      .on_click(|_, _, cx| {
-        WorkspaceRoute::open_settings(cx);
-        cx.refresh_windows();
-      });
-
     let menu_state = match &self.auth_state {
       AuthState::Unknown => UserMenuState::Unknown,
       AuthState::Unauthenticated => UserMenuState::Unauthenticated,
@@ -2802,8 +2792,9 @@ impl GitPage {
         })
       }
     };
+    let is_unauthenticated = matches!(self.auth_state, AuthState::Unauthenticated);
 
-    let view = cx.entity();
+    let sign_in_view = cx.entity();
     let open_git = Rc::new(|_window: &mut Window, cx: &mut App| {
       let cx = &mut *cx;
       WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
@@ -2826,11 +2817,11 @@ impl GitPage {
       cx.refresh_windows();
     });
     let sign_in = Rc::new(move |_window: &mut Window, cx: &mut App| {
-      let _ = view.update(cx, |this, cx| this.start_github_sign_in(cx));
+      let _ = sign_in_view.update(cx, |this, cx| this.start_github_sign_in(cx));
     });
-    let view = cx.entity();
+    let sign_out_view = cx.entity();
     let sign_out = Rc::new(move |_window: &mut Window, cx: &mut App| {
-      let _ = view.update(cx, |this, cx| this.logout(cx));
+      let _ = sign_out_view.update(cx, |this, cx| this.logout(cx));
     });
 
     let auth_control = user_menu(UserMenuConfig {
@@ -2845,14 +2836,23 @@ impl GitPage {
       on_sign_out: Some(sign_out),
     });
 
+    let sign_in_button_view = cx.entity();
+    let sign_in_button = Button::new("git-sign-in")
+      .icon(IconName::GitHub)
+      .label("Sign in with GitHub")
+      .ghost()
+      .gap_2()
+      .small()
+      .on_click(move |_, _, cx| {
+        let _ = sign_in_button_view.update(cx, |this, cx| this.start_github_sign_in(cx));
+      });
+
     let header_right = h_flex()
       .items_center()
       .gap_2()
+      .when(is_unauthenticated, |this| this.child(sign_in_button))
       .when_some(auth_control, |this, control| this.child(control))
-      .when(
-        !matches!(self.auth_state, AuthState::Authenticated(_)),
-        |this| this.child(settings_button),
-      );
+      ;
 
     div()
       .h(px(HEADER_HEIGHT))
