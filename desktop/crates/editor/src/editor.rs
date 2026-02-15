@@ -77,10 +77,6 @@ const GUTTER_WIDTH: f32 = 90.0;
 const DIFF_DEBOUNCE_MS: u64 = 60;
 /// External change polling interval (ms)
 const POLL_INTERVAL_MS: u64 = 500;
-/// Hardcoded repo root (temporary)
-const DEFAULT_REPO_ROOT: &str = "/Users/joris/workspace/git-playground";
-/// Hardcoded file path (temporary)
-const DEFAULT_FILE_PATH: &str = "/Users/joris/workspace/git-playground/perf-100k.ts";
 const FRACTIONAL_SCROLL_EPSILON: f32 = 0.001;
 const REVIEW_COMMENT_SCROLL_DURATION: Duration = Duration::from_millis(260);
 const REVIEW_COMMENT_SCROLL_TICK: Duration = Duration::from_millis(16);
@@ -335,14 +331,6 @@ pub(crate) enum ScrollAxis {
 }
 
 impl Editor {
-  pub fn new(cx: &mut Context<Self>) -> Self {
-    Self::new_with_paths(
-      PathBuf::from(DEFAULT_REPO_ROOT),
-      PathBuf::from(DEFAULT_FILE_PATH),
-      cx,
-    )
-  }
-
   pub fn new_with_paths(repo_root: PathBuf, file_path: PathBuf, cx: &mut Context<Self>) -> Self {
     let workdir_path = file_path;
     let file_ext = workdir_path
@@ -5299,7 +5287,21 @@ pub mod tests {
 
   #[gpui::test]
   fn test_syntax_highlights_cached(cx: &mut TestAppContext) {
-    let editor = cx.new(Editor::new);
+    let mut file_path = std::env::temp_dir();
+    let nanos = SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .expect("system time before unix epoch")
+      .as_nanos();
+    file_path.push(format!(
+      "reviu-editor-syntax-{}-{nanos}.ts",
+      std::process::id()
+    ));
+    std::fs::write(&file_path, "const value = 1;\n").expect("write temp editor file");
+    let repo_root = file_path
+      .parent()
+      .expect("temp file parent")
+      .to_path_buf();
+    let editor = cx.new(|cx| Editor::new_with_paths(repo_root, file_path.clone(), cx));
 
     // Wait for async highlighting to complete (it's scheduled but not immediate)
     editor.read_with(cx, |editor, cx| {
@@ -5310,6 +5312,8 @@ pub mod tests {
       assert!(doc.len() > 0);
       assert!(doc.len_lines() > 0);
     });
+
+    let _ = std::fs::remove_file(file_path);
   }
 
   #[gpui::test]
