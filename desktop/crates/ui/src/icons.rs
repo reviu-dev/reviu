@@ -98,6 +98,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "yml" | "yaml" => Some("file-icons/yaml.svg"),
     "svg" => Some("file-icons/svg.svg"),
     "py" => Some("file-icons/python.svg"),
+    "sql" => Some("file-icons/sql.svg"),
     "rb" => Some("file-icons/ruby.svg"),
     "toml" => Some(if is_dark {
       "file-icons/toml/dark.svg"
