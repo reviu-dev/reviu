@@ -400,13 +400,12 @@ impl Projection {
         matched_group_id = ids.pop();
       }
 
-      if let Some(group_id) = matched_group_id {
-        if let Some(group) = staged_groups.get(&group_id) {
+      if let Some(group_id) = matched_group_id
+        && let Some(group) = staged_groups.get(&group_id) {
           groups.insert(group_id.clone(), group.clone());
           assign_group_id(&mut lines, &pending.display_indices, &group_id);
           continue;
         }
-      }
 
       let group_id = group_id_for_keys(&pending.builder.keys);
       let signature = pending.signature.clone();
@@ -925,8 +924,13 @@ fn collect_groups(
         keys: Vec::new(),
       };
 
-      for line_idx in include_start..=include_end {
-        let line = &hunk.lines[line_idx];
+      for (line_idx, line) in hunk
+        .lines
+        .iter()
+        .enumerate()
+        .take(include_end + 1)
+        .skip(include_start)
+      {
         builder.lines.push(line.clone());
         match line.kind {
           DiffLineKind::Context => {
@@ -1207,11 +1211,10 @@ fn build_hunk_display_split_inner(
         secondary,
       });
 
-      if state == HunkState::Staged {
-        if let Some(builder) = staged_group.as_mut() {
+      if state == HunkState::Staged
+        && let Some(builder) = staged_group.as_mut() {
           builder.display_indices.push(index);
         }
-      }
 
       first_doc_line.get_or_insert(add.new_line);
       *last_doc_line = Some(add.new_line);
@@ -1231,11 +1234,10 @@ fn build_hunk_display_split_inner(
         secondary,
       });
 
-      if state == HunkState::Staged {
-        if let Some(builder) = staged_group.as_mut() {
+      if state == HunkState::Staged
+        && let Some(builder) = staged_group.as_mut() {
           builder.display_indices.push(index);
         }
-      }
     }
 
     while let Some(add) = add_queue.pop_front() {
@@ -1252,11 +1254,10 @@ fn build_hunk_display_split_inner(
         secondary,
       });
 
-      if state == HunkState::Staged {
-        if let Some(builder) = staged_group.as_mut() {
+      if state == HunkState::Staged
+        && let Some(builder) = staged_group.as_mut() {
           builder.display_indices.push(index);
         }
-      }
 
       first_doc_line.get_or_insert(add.new_line);
       *last_doc_line = Some(add.new_line);

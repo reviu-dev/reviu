@@ -68,18 +68,16 @@ pub fn current_branch_status(repo_root: &Path) -> Result<BranchStatus> {
   let mut behind = 0;
   let mut has_upstream = false;
 
-  if head.is_branch() {
-    if let Ok(branch) = repo.find_branch(&name, BranchType::Local) {
-      if let Ok(upstream) = branch.upstream() {
-        has_upstream = true;
-        if let (Some(local_oid), Some(upstream_oid)) =
-          (branch.get().target(), upstream.get().target())
-        {
-          let (a, b) = repo.graph_ahead_behind(local_oid, upstream_oid)?;
-          ahead = a;
-          behind = b;
-        }
-      }
+  if head.is_branch()
+    && let Ok(branch) = repo.find_branch(&name, BranchType::Local)
+    && let Ok(upstream) = branch.upstream()
+  {
+    has_upstream = true;
+    if let (Some(local_oid), Some(upstream_oid)) = (branch.get().target(), upstream.get().target())
+    {
+      let (a, b) = repo.graph_ahead_behind(local_oid, upstream_oid)?;
+      ahead = a;
+      behind = b;
     }
   }
 
@@ -110,7 +108,7 @@ pub fn switch_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
       let local_name = branch
         .name
         .split('/')
-        .last()
+        .next_back()
         .unwrap_or(&branch.name)
         .to_string();
       if repo.find_branch(&local_name, BranchType::Local).is_err() {
@@ -160,10 +158,10 @@ pub fn create_branch_from(repo_root: &Path, name: &str, base: &BranchRef) -> Res
     .with_context(|| format!("resolve branch {:?}", base.name))?;
   let commit = repo.find_commit(oid)?;
   repo.branch(name, &commit, false)?;
-  if base.kind == BranchKind::Remote {
-    if let Ok(mut local_branch) = repo.find_branch(name, BranchType::Local) {
-      let _ = local_branch.set_upstream(Some(&base.name));
-    }
+  if base.kind == BranchKind::Remote
+    && let Ok(mut local_branch) = repo.find_branch(name, BranchType::Local)
+  {
+    let _ = local_branch.set_upstream(Some(&base.name));
   }
   Ok(())
 }

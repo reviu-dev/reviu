@@ -194,7 +194,7 @@ impl ListDelegate for GithubNotificationListDelegate {
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
-    let base_item = list_base_item(ix, self.selected_index.clone());
+    let base_item = list_base_item(ix, self.selected_index);
     let row = self.matched_rows.get(ix.row)?;
     let notification = &row.notification;
     let updated_at = format_updated_at(&notification.updated_at);
@@ -329,7 +329,7 @@ impl ListDelegate for GithubPullRequestListDelegate {
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
-    let base_item = list_base_item(ix, self.selected_index.clone());
+    let base_item = list_base_item(ix, self.selected_index);
 
     let row = self.matched_rows.get(ix.row)?;
 

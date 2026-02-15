@@ -361,7 +361,7 @@ impl RecentRepoItem {
     Self {
       path: repo.path.clone(),
       label: label.into(),
-      is_selected: selected_repo.map_or(false, |selected| selected == &repo.path),
+      is_selected: selected_repo == Some(&repo.path),
     }
   }
 }
@@ -627,7 +627,7 @@ impl GitPage {
     branches
       .into_iter()
       .map(|branch| {
-        let is_current = selected.map_or(false, |current| current == &branch);
+        let is_current = selected == Some(&branch);
         BranchSelectItem::new(branch, is_current)
       })
       .collect()
@@ -984,13 +984,12 @@ impl GitPage {
     let task = cx.spawn(async move |this, cx| {
       let read_result = cx.update(|cx| cx.read_credentials(&service)).await;
       let _ = this.update(cx, |this, cx| {
-        if let Ok(Some((_username, secret))) = read_result {
-          if let Ok(token) = String::from_utf8(secret) {
+        if let Ok(Some((_username, secret))) = read_result
+          && let Ok(token) = String::from_utf8(secret) {
             this.api.set_bearer_token(token);
             this.refresh_auth_state(cx);
             return;
           }
-        }
         this.set_auth_state(AuthState::Unauthenticated, cx);
       });
     });
@@ -1020,7 +1019,7 @@ impl GitPage {
     let task = cx.spawn(async move |_, cx| {
       let result = unblock(move || api.sign_in_with_github()).await;
       if let Ok(Some(url)) = result {
-        let _ = cx.update(|cx| cx.open_url(&url));
+        cx.update(|cx| cx.open_url(&url));
       }
     });
 
@@ -2742,8 +2741,7 @@ impl GitPage {
       .read(cx)
       .selected_entry()
       .map(|entry| entry.item().id.to_string())
-    {
-      if let Some(HistoryTreeNode::File { commit_oid, file }) =
+      && let Some(HistoryTreeNode::File { commit_oid, file }) =
         self.history_tree_nodes.get(selected_id.as_str()).cloned()
       {
         let already_opened = self
@@ -2759,7 +2757,6 @@ impl GitPage {
           });
         }
       }
-    }
 
     let view = cx.entity();
     let tree_view = tree(
@@ -3096,11 +3093,11 @@ impl GitPage {
       cx.refresh_windows();
     });
     let sign_in = Rc::new(move |_window: &mut Window, cx: &mut App| {
-      let _ = sign_in_view.update(cx, |this, cx| this.start_github_sign_in(cx));
+      sign_in_view.update(cx, |this, cx| this.start_github_sign_in(cx));
     });
     let sign_out_view = cx.entity();
     let sign_out = Rc::new(move |_window: &mut Window, cx: &mut App| {
-      let _ = sign_out_view.update(cx, |this, cx| this.logout(cx));
+      sign_out_view.update(cx, |this, cx| this.logout(cx));
     });
 
     let auth_control = user_menu(UserMenuConfig {
@@ -3123,7 +3120,7 @@ impl GitPage {
       .gap_2()
       .small()
       .on_click(move |_, _, cx| {
-        let _ = sign_in_button_view.update(cx, |this, cx| this.start_github_sign_in(cx));
+        sign_in_button_view.update(cx, |this, cx| this.start_github_sign_in(cx));
       });
 
     let header_right = h_flex()

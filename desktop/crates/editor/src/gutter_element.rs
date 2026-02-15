@@ -331,7 +331,7 @@ impl Element for GutterElement {
 
         let is_blank = display_line
           .as_ref()
-          .map(|line| is_blank_for_view(line))
+          .map(&is_blank_for_view)
           .unwrap_or(false);
 
         let background = if is_blank {
@@ -408,11 +408,11 @@ impl Element for GutterElement {
 
         let group_id: Option<Arc<str>> = display_line
           .as_ref()
-          .and_then(|line| group_id_for_line(line));
+          .and_then(&group_id_for_line);
 
         if let Some(group_id) = group_id {
-          if show_stripes {
-            if let Some(kind) = group_kinds.get(&group_id) {
+          if show_stripes
+            && let Some(kind) = group_kinds.get(&group_id) {
               let stripe_color = match kind {
                 GroupKind::Added => stripe_added,
                 GroupKind::Removed => stripe_removed,
@@ -424,7 +424,6 @@ impl Element for GutterElement {
                 stripe_color,
               ));
             }
-          }
 
           if let (Some(projection), Some((top_color, bottom_color))) =
             (projection.as_ref(), group_border_colors.get(&group_id))
@@ -432,11 +431,11 @@ impl Element for GutterElement {
             let prev_group = display_idx
               .checked_sub(1)
               .and_then(|idx| projection.lines.get(idx))
-              .and_then(|line| group_id_for_line(line));
+              .and_then(&group_id_for_line);
             let next_group = projection
               .lines
               .get(display_idx + 1)
-              .and_then(|line| group_id_for_line(line));
+              .and_then(&group_id_for_line);
 
             let is_top = prev_group.as_deref() != Some(group_id.as_ref());
             let is_bottom = next_group.as_deref() != Some(group_id.as_ref());
@@ -470,11 +469,10 @@ impl Element for GutterElement {
         }
       }
 
-      if let Some(start) = current_blank_start.take() {
-        if viewport.start < viewport.end {
+      if let Some(start) = current_blank_start.take()
+        && viewport.start < viewport.end {
           blank_ranges.push((start, viewport.end.saturating_sub(1)));
         }
-      }
 
       if !blank_ranges.is_empty() {
         let stripe_spacing = px(DIAGONAL_STRIPE_SPACING);
@@ -574,7 +572,6 @@ impl Element for GutterElement {
     window.on_mouse_event({
       let editor = self.editor.clone();
       let line_height = prepaint.line_height;
-      let bounds = bounds;
       move |event: &MouseMoveEvent, phase, _window, cx| {
         if phase != DispatchPhase::Bubble {
           return;

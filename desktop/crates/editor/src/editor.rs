@@ -341,7 +341,7 @@ impl Editor {
       .file_name()
       .and_then(|name| name.to_str())
       .map(|name| name.to_ascii_lowercase());
-    let mut language_hint = file_ext.as_deref().or_else(|| file_name.as_deref());
+    let mut language_hint = file_ext.as_deref().or(file_name.as_deref());
     if let Some(name) = file_name.as_deref()
       && name.starts_with("dockerfile")
     {
@@ -575,7 +575,7 @@ impl Editor {
       self
         .review_comment_markdown_states
         .entry(comment.id)
-        .or_insert_with(MarkdownRenderState::new);
+        .or_default();
     }
 
     if self.diffs.is_some() {
@@ -1262,11 +1262,10 @@ impl Editor {
       let DisplayLine::ReviewComment { id, side, .. } = line else {
         continue;
       };
-      if let Some(filter) = side_filter {
-        if *side != filter {
+      if let Some(filter) = side_filter
+        && *side != filter {
           continue;
         }
-      }
       let entry = spans_by_comment.entry(*id).or_insert((idx, 0));
       if idx < entry.0 {
         entry.0 = idx;
@@ -1504,7 +1503,6 @@ impl Editor {
 
       let link_handler = {
         let editor = editor_entity.clone();
-        let line_height = line_height;
         Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
           if window.modifiers().secondary() {
             return LinkAction::Open;
@@ -1734,8 +1732,8 @@ impl Editor {
 
       let _ = this.update(cx, |editor, cx| {
         let mut merged = bases;
-        if editor.git_state.index_dirty {
-          if let Some(existing) = editor
+        if editor.git_state.index_dirty
+          && let Some(existing) = editor
             .git_state
             .bases
             .as_ref()
@@ -1743,7 +1741,6 @@ impl Editor {
           {
             merged.index = Some(existing);
           }
-        }
         editor.git_state.bases = Some(merged);
         editor.git_state.op_id = op_id;
         if editor.pending_git_after_bases {
@@ -1898,16 +1895,15 @@ impl Editor {
           .and_then(|meta| meta.modified())
           .ok();
         let mut index_mtime = None;
-        if needs_index_write {
-          if let (Some(repo_file), Some(index_text)) = (repo_file, index_text) {
+        if needs_index_write
+          && let (Some(repo_file), Some(index_text)) = (repo_file, index_text) {
             if let Err(err) = git::write_index_content(&repo_file, &index_text) {
-              return Err(std::io::Error::new(std::io::ErrorKind::Other, err));
+              return Err(std::io::Error::other(err));
             }
             index_mtime = std::fs::metadata(repo_file.repo_root.join(".git/index"))
               .and_then(|meta| meta.modified())
               .ok();
           }
-        }
         Ok::<_, std::io::Error>((file_mtime, index_mtime))
       })
       .await;
@@ -1939,11 +1935,10 @@ impl Editor {
   }
 
   pub fn selected_text_for_copy(&self, cx: &App) -> Option<String> {
-    if let Some(selection) = &self.display_selection {
-      if let Some(text) = self.display_selection_text(selection, cx) {
+    if let Some(selection) = &self.display_selection
+      && let Some(text) = self.display_selection_text(selection, cx) {
         return Some(text);
       }
-    }
 
     if self.selected_range.is_empty() {
       return None;
@@ -2021,12 +2016,8 @@ impl Editor {
   }
 
   fn group_token_for_id(&self, group_id: &Arc<str>) -> Option<GroupToken> {
-    let Some(projection) = self.projection.as_ref() else {
-      return None;
-    };
-    let Some(group) = projection.groups.get(group_id.as_ref()) else {
-      return None;
-    };
+    let projection = self.projection.as_ref()?;
+    let group = projection.groups.get(group_id.as_ref())?;
     Some(GroupToken {
       state: group.state,
       signature: group.signature.clone(),
@@ -2035,9 +2026,7 @@ impl Editor {
   }
 
   fn resolve_group_from_token(&self, token: &GroupToken) -> Option<(HunkState, git::DiffHunk)> {
-    let Some(projection) = self.projection.as_ref() else {
-      return None;
-    };
+    let projection = self.projection.as_ref()?;
     if let Some((_, group)) = projection
       .groups
       .iter()
@@ -2045,9 +2034,7 @@ impl Editor {
     {
       return Some((group.state, group.hunk.clone()));
     }
-    let Some(group) = projection.groups.get(token.id.as_ref()) else {
-      return None;
-    };
+    let group = projection.groups.get(token.id.as_ref())?;
     Some((group.state, group.hunk.clone()))
   }
 
@@ -2165,7 +2152,7 @@ impl Editor {
           unblock(move || {
             let text = std::fs::read_to_string(&workdir_path_for_fallback)?;
             let updated = git::apply_hunk_to_text(&text, &hunk_for_fallback, reverse_for_fallback)
-              .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+              .map_err(std::io::Error::other)?;
             std::fs::write(&workdir_path_for_fallback, updated)?;
             Ok::<(), std::io::Error>(())
           })
@@ -2209,11 +2196,10 @@ impl Editor {
         }
         editor.file_mtime = file_mtime;
         editor.index_mtime = index_mtime;
-        if let Some(index_text) = index_text_for_update {
-          if let Some(bases) = editor.git_state.bases.as_mut() {
+        if let Some(index_text) = index_text_for_update
+          && let Some(bases) = editor.git_state.bases.as_mut() {
             bases.index = Some(index_text);
           }
-        }
         editor.pending_git_after_bases = true;
         editor.reload_git_bases(cx);
         editor.schedule_diff_recompute(cx);
@@ -3588,8 +3574,8 @@ impl Editor {
       blink.pause_blinking(cx);
     });
 
-    if let Some(display_line) = position_map.display_line_for_position(event.position) {
-      if let Some(projection) = &position_map.projection {
+    if let Some(display_line) = position_map.display_line_for_position(event.position)
+      && let Some(projection) = &position_map.projection {
         if let Some(DisplayLine::ReviewComment { .. }) = projection.lines.get(display_line) {
           self.is_selecting = false;
           return;
@@ -3603,7 +3589,6 @@ impl Editor {
           return;
         }
       }
-    }
 
     let Some(display_cursor) = position_map.display_cursor_for_position(event.position) else {
       return;

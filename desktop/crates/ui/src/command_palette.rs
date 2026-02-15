@@ -144,7 +144,7 @@ impl ListDelegate for BranchesListDelegate {
     let total_items = self.matched_branches.len();
     let theme = cx.theme().clone();
 
-    let base_item = list_base_item(ix, total_items, self.selected_index.clone(), &theme);
+    let base_item = list_base_item(ix, total_items, self.selected_index, &theme);
 
     self.matched_branches.get(ix.row).map(|branch| {
       base_item.child(
@@ -232,7 +232,7 @@ impl ListDelegate for BranchesListWithCommandsDelegate {
     let total_items = self.matched_branches_and_commands.len();
     let theme = cx.theme().clone();
 
-    let base_item = list_base_item(ix, total_items, self.selected_index.clone(), &theme);
+    let base_item = list_base_item(ix, total_items, self.selected_index, &theme);
 
     self
       .matched_branches_and_commands
@@ -320,7 +320,7 @@ impl ListDelegate for CommandListDelegate {
     let theme = cx.theme().clone();
 
     self.matched_commands.get(ix.row).map(|command| {
-      list_base_item(ix, total_items, self.selected_index.clone(), &theme)
+      list_base_item(ix, total_items, self.selected_index, &theme)
         .child(
           h_flex()
             .items_center()
@@ -687,13 +687,12 @@ impl CommandPalette {
       cx.subscribe_in(
         &commands_list,
         window,
-        |command_palette, list_state, ev: &ListEvent, window, cx| match ev {
-          ListEvent::Confirm(ix) => {
-            if let Some(command) = list_state.read(cx).delegate().matched_commands.get(ix.row) {
-              command_palette.select_command(command.id, cx, window);
-            }
+        |command_palette, list_state, ev: &ListEvent, window, cx| {
+          if let ListEvent::Confirm(ix) = ev
+            && let Some(command) = list_state.read(cx).delegate().matched_commands.get(ix.row)
+          {
+            command_palette.select_command(command.id, cx, window);
           }
-          _ => {}
         },
       ),
       cx.subscribe_in(
@@ -798,43 +797,37 @@ impl CommandPalette {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    match event {
-      InputEvent::PressEnter { secondary: _ } => {
-        let branch_name = state.read(cx).value().to_string();
-        if branch_name.is_empty() {
-          self.error = Some("Branch name cannot be empty".into());
-          cx.notify();
-          return;
-        }
+    if let InputEvent::PressEnter { secondary: _ } = event {
+      let branch_name = state.read(cx).value().to_string();
+      if branch_name.is_empty() {
+        self.error = Some("Branch name cannot be empty".into());
+        cx.notify();
+        return;
+      }
 
-        match self.screen {
-          CommandPaletteScreen::CreateBranch => {
-            if let Some(base_branch) = self.create_branch_base.as_ref() {
-              let base = base_branch.as_ref().clone();
+      if self.screen == CommandPaletteScreen::CreateBranch {
+        if let Some(base_branch) = self.create_branch_base.as_ref() {
+          let base = base_branch.as_ref().clone();
 
-              self.trigger_action(
-                CommandPaletteAction::CreateBranchFrom {
-                  name: branch_name,
-                  base,
-                },
-                window,
-                cx,
-              );
-            } else {
-              self.trigger_action(
-                CommandPaletteAction::CreateBranch {
-                  name: branch_name.clone(),
-                },
-                window,
-                cx,
-              );
-            }
-          }
-          _ => {}
+          self.trigger_action(
+            CommandPaletteAction::CreateBranchFrom {
+              name: branch_name,
+              base,
+            },
+            window,
+            cx,
+          );
+        } else {
+          self.trigger_action(
+            CommandPaletteAction::CreateBranch {
+              name: branch_name.clone(),
+            },
+            window,
+            cx,
+          );
         }
       }
-      _ => {}
-    };
+    }
   }
 
   fn on_open_github_pr_input_event(

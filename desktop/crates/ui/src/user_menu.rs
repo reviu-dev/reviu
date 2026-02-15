@@ -11,6 +11,8 @@ use gpui_component::{
 
 use crate::{UiIconName, file_icon_path_for_name};
 
+type UserMenuHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
 fn git_config_icon() -> Icon {
   file_icon_path_for_name(".gitconfig").map_or_else(
     || Icon::new(IconName::File),
@@ -45,12 +47,12 @@ pub struct UserMenuConfig {
   pub id: SharedString,
   pub state: UserMenuState,
   pub current_page: UserMenuPage,
-  pub on_open_git: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
-  pub on_open_github: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
-  pub on_open_git_config: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
-  pub on_open_settings: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
-  pub on_sign_in: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
-  pub on_sign_out: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+  pub on_open_git: Option<UserMenuHandler>,
+  pub on_open_github: Option<UserMenuHandler>,
+  pub on_open_git_config: Option<UserMenuHandler>,
+  pub on_open_settings: Option<UserMenuHandler>,
+  pub on_sign_in: Option<UserMenuHandler>,
+  pub on_sign_out: Option<UserMenuHandler>,
 }
 
 pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
@@ -74,28 +76,28 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
           .dropdown_menu_with_anchor(gpui::Corner::TopRight, move |menu: PopupMenu, _, _| {
             let mut menu = menu;
 
-            if current_page != UserMenuPage::GitConfig {
-              if let Some(handler) = on_open_git_config.clone() {
-                menu = menu.item(
-                  PopupMenuItem::new("Git Config")
-                    .icon(git_config_icon())
-                    .on_click(move |_, window, cx| {
-                      handler(window, cx);
-                    }),
-                );
-              }
+            if current_page != UserMenuPage::GitConfig
+              && let Some(handler) = on_open_git_config.clone()
+            {
+              menu = menu.item(
+                PopupMenuItem::new("Git Config")
+                  .icon(git_config_icon())
+                  .on_click(move |_, window, cx| {
+                    handler(window, cx);
+                  }),
+              );
             }
 
-            if current_page != UserMenuPage::Settings {
-              if let Some(handler) = on_open_settings.clone() {
-                menu = menu.item(
-                  PopupMenuItem::new("Settings")
-                    .icon(IconName::Settings2)
-                    .on_click(move |_, window, cx| {
-                      handler(window, cx);
-                    }),
-                );
-              }
+            if current_page != UserMenuPage::Settings
+              && let Some(handler) = on_open_settings.clone()
+            {
+              menu = menu.item(
+                PopupMenuItem::new("Settings")
+                  .icon(IconName::Settings2)
+                  .on_click(move |_, window, cx| {
+                    handler(window, cx);
+                  }),
+              );
             }
 
             menu
@@ -129,52 +131,52 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
             );
             menu = menu.separator();
 
-            if current_page != UserMenuPage::Git {
-              if let Some(handler) = on_open_git.clone() {
-                menu = menu.item(
-                  PopupMenuItem::new("Git")
-                    .icon(Icon::new(UiIconName::GitBranch))
-                    .on_click(move |_, window, cx| {
-                      handler(window, cx);
-                    }),
-                );
-              }
+            if current_page != UserMenuPage::Git
+              && let Some(handler) = on_open_git.clone()
+            {
+              menu = menu.item(
+                PopupMenuItem::new("Git")
+                  .icon(Icon::new(UiIconName::GitBranch))
+                  .on_click(move |_, window, cx| {
+                    handler(window, cx);
+                  }),
+              );
             }
 
-            if current_page != UserMenuPage::Github {
-              if let Some(handler) = on_open_github.clone() {
-                menu = menu.item(
-                  PopupMenuItem::new("GitHub")
-                    .icon(IconName::GitHub)
-                    .on_click(move |_, window, cx| {
-                      handler(window, cx);
-                    }),
-                );
-              }
+            if current_page != UserMenuPage::Github
+              && let Some(handler) = on_open_github.clone()
+            {
+              menu = menu.item(
+                PopupMenuItem::new("GitHub")
+                  .icon(IconName::GitHub)
+                  .on_click(move |_, window, cx| {
+                    handler(window, cx);
+                  }),
+              );
             }
 
-            if current_page != UserMenuPage::Settings {
-              if let Some(handler) = on_open_settings.clone() {
-                menu = menu.item(
-                  PopupMenuItem::new("Settings")
-                    .icon(IconName::Settings2)
-                    .on_click(move |_, window, cx| {
-                      handler(window, cx);
-                    }),
-                );
-              }
+            if current_page != UserMenuPage::Settings
+              && let Some(handler) = on_open_settings.clone()
+            {
+              menu = menu.item(
+                PopupMenuItem::new("Settings")
+                  .icon(IconName::Settings2)
+                  .on_click(move |_, window, cx| {
+                    handler(window, cx);
+                  }),
+              );
             }
 
-            if current_page != UserMenuPage::GitConfig {
-              if let Some(handler) = on_open_git_config.clone() {
-                menu = menu.item(
-                  PopupMenuItem::new("Git Config")
-                    .icon(git_config_icon())
-                    .on_click(move |_, window, cx| {
-                      handler(window, cx);
-                    }),
-                );
-              }
+            if current_page != UserMenuPage::GitConfig
+              && let Some(handler) = on_open_git_config.clone()
+            {
+              menu = menu.item(
+                PopupMenuItem::new("Git Config")
+                  .icon(git_config_icon())
+                  .on_click(move |_, window, cx| {
+                    handler(window, cx);
+                  }),
+              );
             }
 
             if let Some(handler) = on_sign_out.clone() {

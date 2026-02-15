@@ -2,6 +2,8 @@ use gpui::{AnyElement, App, ClickEvent, IntoElement, ParentElement, SharedString
 use gpui_component::button::ButtonVariant;
 use gpui_component::dialog::{Dialog, DialogButtonProps};
 
+type ConfirmDialogHandler = dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool;
+
 pub struct ConfirmDialog {
   title: SharedString,
   message: AnyElement,
@@ -9,8 +11,8 @@ pub struct ConfirmDialog {
   cancel_text: Option<SharedString>,
   confirm_variant: Option<ButtonVariant>,
   cancel_variant: Option<ButtonVariant>,
-  on_confirm: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool>>,
-  on_cancel: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool>>,
+  on_confirm: Option<Box<ConfirmDialogHandler>>,
+  on_cancel: Option<Box<ConfirmDialogHandler>>,
 }
 
 impl ConfirmDialog {

@@ -108,7 +108,7 @@ fn main() {
       })
       .unwrap();
 
-    let _ = cx.register_url_scheme(REVIU_URL_SCHEME);
+    std::mem::drop(cx.register_url_scheme(REVIU_URL_SCHEME));
     cx.spawn(async move |cx| {
       loop {
         cx.background_executor()
@@ -124,7 +124,7 @@ fn main() {
           if codes.is_empty() {
             continue;
           }
-          let _ = cx.update(|cx| {
+          cx.update(|cx| {
             for code in codes {
               AuthCallbackTarget::handle_auth_code(code, cx);
             }

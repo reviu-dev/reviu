@@ -63,8 +63,8 @@ impl ConfigStore {
 
   fn open() -> Option<Self> {
     let path = Self::db_path();
-    if let Some(parent) = path.parent() {
-      if let Err(err) = fs::create_dir_all(parent) {
+    if let Some(parent) = path.parent()
+      && let Err(err) = fs::create_dir_all(parent) {
         eprintln!(
           "Failed to create config directory {}: {}",
           parent.display(),
@@ -72,7 +72,6 @@ impl ConfigStore {
         );
         return None;
       }
-    }
 
     match Connection::open(&path) {
       Ok(conn) => Some(Self { conn }),
