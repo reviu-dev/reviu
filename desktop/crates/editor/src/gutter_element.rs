@@ -134,6 +134,7 @@ impl Element for GutterElement {
     window: &mut Window,
     cx: &mut App,
   ) -> Self::PrepaintState {
+    let measured_line_height = window.line_height();
     let (
       line_numbers,
       line_height,
@@ -148,7 +149,7 @@ impl Element for GutterElement {
     ) = {
       let editor = self.editor.read(cx);
       let document = editor.document().read(cx);
-      let line_height = window.line_height();
+      let line_height = measured_line_height;
       let scroll_offset = editor.scroll_offset_y;
       let doc_line_count = document.len_lines();
       let total_lines = editor.display_line_count(doc_line_count);
@@ -513,6 +514,10 @@ impl Element for GutterElement {
       )
     };
 
+    self.editor.update(cx, |editor, _| {
+      editor.editor_line_height = measured_line_height;
+    });
+
     GutterPrepaintState {
       line_numbers,
       line_height,
@@ -606,6 +611,7 @@ impl Element for GutterElement {
     window.on_mouse_event({
       let editor = self.editor.clone();
       let scroll_hitbox = prepaint.scroll_hitbox.clone();
+      let line_height = prepaint.line_height;
       move |event: &ScrollWheelEvent, phase, window, cx| {
         if phase != DispatchPhase::Bubble || !scroll_hitbox.should_handle_scroll(window) {
           return;
@@ -628,7 +634,7 @@ impl Element for GutterElement {
           }
           editor.last_scroll_time = Some(now);
 
-          let pixel_delta = event.delta.pixel_delta(window.line_height());
+          let pixel_delta = event.delta.pixel_delta(line_height);
           let delta_x_px = pixel_delta.x;
           let delta_y_px = -pixel_delta.y;
           let delta_y = match event.delta {
@@ -687,7 +693,7 @@ impl Element for GutterElement {
               .set_offset(point(clamped_scroll_x, px(0.0)));
           }
           editor.last_scroll_x = clamped_scroll_x;
-          let viewport = editor.viewport_range(window.line_height(), total_lines);
+          let viewport = editor.viewport_range(line_height, total_lines);
           let doc_viewport = editor.doc_range_for_display_viewport(viewport.clone());
           editor.document.update(cx, |doc, cx| {
             doc.schedule_viewport_highlights(

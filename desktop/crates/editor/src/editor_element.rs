@@ -24,6 +24,7 @@ use crate::{
     ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
     ReviewCommentBackground, ReviewCommentSide,
   },
+  settings::indent_rainbow_enabled,
   text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
 };
 use gpui_component::ActiveTheme as _;
@@ -43,6 +44,8 @@ const SCROLL_AXIS_SWITCH_RATIO: f32 = 1.4;
 const SCROLL_AXIS_TIMEOUT_MS: u64 = 150;
 const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
 const DIAGONAL_STRIPE_WIDTH: f32 = 1.0;
+const INDENT_GUIDE_BORDER_WIDTH: f32 = 1.0;
+const INDENT_RAINBOW_BLOCK_COLUMNS: usize = 2;
 
 fn clamp_to_char_boundary(text: &str, byte_offset: usize) -> usize {
   let mut byte_offset = byte_offset.min(text.len());
@@ -54,6 +57,52 @@ fn clamp_to_char_boundary(text: &str, byte_offset: usize) -> usize {
 
 fn has_fractional_scroll(scroll_offset: f32) -> bool {
   (scroll_offset - scroll_offset.floor()) > FRACTIONAL_SCROLL_EPSILON
+}
+
+fn indent_guide_byte_ranges(text: &str, tab_spaces: usize) -> Vec<Range<usize>> {
+  if tab_spaces == 0 {
+    return Vec::new();
+  }
+
+  let mut columns = 0usize;
+  let mut ranges = Vec::new();
+  let mut previous_boundary = 0usize;
+  for (idx, ch) in text.char_indices() {
+    match ch {
+      ' ' => {
+        columns += 1;
+        if columns % tab_spaces == 0 {
+          let boundary = idx + 1;
+          if boundary > previous_boundary {
+            ranges.push(previous_boundary..boundary);
+            previous_boundary = boundary;
+          }
+        }
+      }
+      '\t' => {
+        let next_tab_stop = ((columns / tab_spaces) + 1) * tab_spaces;
+        while columns < next_tab_stop {
+          columns += 1;
+          if columns % tab_spaces == 0 {
+            let boundary = idx + 1;
+            if boundary > previous_boundary {
+              ranges.push(previous_boundary..boundary);
+              previous_boundary = boundary;
+            }
+          }
+        }
+      }
+      _ => break,
+    }
+  }
+
+  ranges
+}
+
+fn indent_guide_border_color(fill_color: gpui::Hsla) -> gpui::Hsla {
+  let mut color = fill_color;
+  color.a = (fill_color.a + 0.06).min(0.28);
+  color
 }
 
 fn line_y(
@@ -636,6 +685,7 @@ pub struct EditorElement {
 pub struct PrepaintState {
   shaped_lines: Vec<(usize, Arc<ShapedLine>)>,
   line_texts: HashMap<usize, String>,
+  indent_guides: Vec<PaintQuad>,
   line_backgrounds: Vec<PaintQuad>,
   gap_separators: Vec<PaintQuad>,
   word_diff_quads: Vec<PaintQuad>,
@@ -775,6 +825,7 @@ impl Element for EditorElement {
     window: &mut Window,
     cx: &mut App,
   ) -> Self::PrepaintState {
+    let measured_line_height = window.line_height();
     let scroll_hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
     let is_primary = self.is_primary();
 
@@ -787,6 +838,7 @@ impl Element for EditorElement {
       (epoch, version, dirty)
     };
     self.editor.update(cx, |editor, _| {
+      editor.editor_line_height = measured_line_height;
       if is_primary {
         editor.viewport_height = bounds.size.height;
         editor.viewport_width = bounds.size.width;
@@ -826,7 +878,7 @@ impl Element for EditorElement {
     ) = {
       let editor = self.editor.read(cx);
       let document = editor.document().read(cx);
-      let line_height = window.line_height();
+      let line_height = measured_line_height;
       let scroll_offset = editor.scroll_offset_y;
       let doc_line_count = document.len_lines();
       let total_lines = editor.display_line_count(doc_line_count);
@@ -893,7 +945,7 @@ impl Element for EditorElement {
 
     let style = window.text_style();
     let font_size = style.font_size.to_pixels(window.rem_size());
-    let line_height = window.line_height();
+    let line_height = measured_line_height;
 
     // Get theme for syntax highlighting colors
     let theme = self.editor.read(cx).theme.clone();
@@ -1062,6 +1114,50 @@ impl Element for EditorElement {
       }
       line_texts
     };
+
+    let mut indent_guides = Vec::new();
+    if indent_rainbow_enabled() {
+      let rainbow = theme.indent_rainbow_colors();
+      let border_width = px(INDENT_GUIDE_BORDER_WIDTH);
+      for (display_idx, display_line) in &viewport_lines {
+        if self.line_visibility(display_line) != LineVisibility::Text {
+          continue;
+        }
+        let Some(text) = line_texts.get(display_idx) else {
+          continue;
+        };
+        let Some((_, shaped)) = shaped_lines.iter().find(|(idx, _)| idx == display_idx) else {
+          continue;
+        };
+        let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
+        for (depth, byte_range) in indent_guide_byte_ranges(text, INDENT_RAINBOW_BLOCK_COLUMNS)
+          .into_iter()
+          .enumerate()
+        {
+          let x_start = shaped.x_for_index(byte_range.start);
+          let x_end = shaped.x_for_index(byte_range.end);
+          if x_end <= x_start {
+            continue;
+          }
+          let color = rainbow[depth % rainbow.len()];
+          let border_color = indent_guide_border_color(color);
+          indent_guides.push(fill(
+            Bounds::from_corners(
+              point(bounds.left() + x_start, y),
+              point(bounds.left() + x_end, y + line_height),
+            ),
+            color,
+          ));
+          indent_guides.push(fill(
+            Bounds::from_corners(
+              point(bounds.left() + x_start, y),
+              point(bounds.left() + x_start + border_width, y + line_height),
+            ),
+            border_color,
+          ));
+        }
+      }
+    }
 
     // Calculate maximum line width for horizontal scrolling
     let max_width = shaped_lines
@@ -1398,12 +1494,10 @@ impl Element for EditorElement {
           continue;
         }
 
-        let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
         overlays.push(GroupOverlay {
           id: group_id,
           state,
           display_line: *display_idx,
-          y,
         });
       }
 
@@ -1625,6 +1719,7 @@ impl Element for EditorElement {
     PrepaintState {
       shaped_lines,
       line_texts,
+      indent_guides,
       line_backgrounds,
       gap_separators,
       word_diff_quads,
@@ -1729,6 +1824,7 @@ impl Element for EditorElement {
     window.on_mouse_event({
       let editor = self.editor.clone();
       let scroll_hitbox = prepaint.scroll_hitbox.clone();
+      let line_height = prepaint.line_height;
       move |event: &ScrollWheelEvent, phase, window, cx| {
         if phase == DispatchPhase::Bubble && scroll_hitbox.should_handle_scroll(window) {
           editor.update(cx, |editor, cx| {
@@ -1748,7 +1844,7 @@ impl Element for EditorElement {
 
             // Extract scroll delta (handle both pixel and line scrolling)
             // Note: Negative delta because scrolling down should increase scroll_offset
-            let pixel_delta = event.delta.pixel_delta(window.line_height());
+            let pixel_delta = event.delta.pixel_delta(line_height);
             let delta_x_px = pixel_delta.x;
             let delta_y_px = -pixel_delta.y;
             let delta_y = match event.delta {
@@ -1796,7 +1892,7 @@ impl Element for EditorElement {
               return;
             }
 
-            let viewport_lines = (bounds.size.height / window.line_height()).max(1.0);
+            let viewport_lines = (bounds.size.height / line_height).max(1.0);
             let max_padding = (viewport_lines - 1.0).max(0.0);
             let scroll_padding = (SCROLL_PADDING as f32).min(max_padding);
             let max_scroll = (total_lines as f32 - viewport_lines + scroll_padding).max(0.0);
@@ -1810,7 +1906,7 @@ impl Element for EditorElement {
                 .set_offset(point(clamped_scroll_x, px(0.0)));
             }
             editor.last_scroll_x = clamped_scroll_x;
-            let viewport = editor.viewport_range(window.line_height(), total_lines);
+            let viewport = editor.viewport_range(line_height, total_lines);
             let doc_viewport = editor.doc_range_for_display_viewport(viewport.clone());
             editor.document.update(cx, |doc, cx| {
               doc.schedule_viewport_highlights(
@@ -1854,6 +1950,11 @@ impl Element for EditorElement {
 
     // Paint staged group borders
     for quad in &prepaint.group_borders {
+      window.paint_quad(quad.clone());
+    }
+
+    // Paint indent guides
+    for quad in &prepaint.indent_guides {
       window.paint_quad(quad.clone());
     }
 
@@ -2079,6 +2180,56 @@ mod tests {
     assert_eq!(char_offset_to_byte_offset(text, 1), 4);
     assert_eq!(byte_offset_to_char_offset(text, 1), 0);
     assert_eq!(byte_offset_to_char_offset(text, 4), 1);
+  }
+
+  #[test]
+  fn test_indent_guide_byte_ranges_with_spaces() {
+    assert_eq!(
+      indent_guide_byte_ranges("        let x = 1;", 4),
+      vec![0..4, 4..8]
+    );
+  }
+
+  #[test]
+  fn test_indent_guide_byte_ranges_with_two_space_blocks() {
+    assert_eq!(
+      indent_guide_byte_ranges("      let x = 1;", 2),
+      vec![0..2, 2..4, 4..6]
+    );
+  }
+
+  #[test]
+  fn test_indent_guide_byte_ranges_with_tabs_and_spaces() {
+    assert_eq!(indent_guide_byte_ranges("  \t\tvalue", 4), vec![0..3, 3..4]);
+  }
+
+  #[test]
+  fn test_indent_guide_byte_ranges_with_single_tab() {
+    assert_eq!(indent_guide_byte_ranges("\tvalue", 4), vec![0..1]);
+  }
+
+  #[test]
+  fn test_indent_guide_byte_ranges_ignores_partial_indent_level() {
+    assert_eq!(
+      indent_guide_byte_ranges("  value", 4),
+      Vec::<Range<usize>>::new()
+    );
+  }
+
+  #[test]
+  fn test_indent_guide_border_color_is_subtle_but_visible() {
+    let fill_color = gpui::Hsla {
+      h: 212.0 / 360.0,
+      s: 0.64,
+      l: 0.46,
+      a: 0.09,
+    };
+    let border = indent_guide_border_color(fill_color);
+    assert_eq!(border.h, fill_color.h);
+    assert_eq!(border.s, fill_color.s);
+    assert_eq!(border.l, fill_color.l);
+    assert!(border.a > fill_color.a);
+    assert!(border.a <= 0.28);
   }
 
   #[test]

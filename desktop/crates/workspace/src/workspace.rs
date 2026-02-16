@@ -1,3 +1,4 @@
+use editor::set_indent_rainbow_enabled;
 use gpui::{
   App, Context, Entity, FocusHandle, Focusable, Global, Render, Subscription, Window, prelude::*,
 };
@@ -116,6 +117,7 @@ impl WorkspaceView {
     cx.set_global(AuthStateStore::default());
 
     let settings = ConfigStore::load_app_settings();
+    set_indent_rainbow_enabled(settings.indent_rainbow);
     if settings.auto_switch_theme {
       Theme::sync_system_appearance(Some(window), cx);
     } else {
@@ -161,6 +163,7 @@ impl WorkspaceView {
     ConfigStore::persist_app_settings(PersistedSettings {
       auto_switch_theme: true,
       dark_mode: cx.theme().mode.is_dark(),
+      indent_rainbow: self.settings_page.read(cx).indent_rainbow_enabled(),
     });
   }
 }

@@ -96,6 +96,88 @@ impl Theme {
     }
   }
 
+  pub fn indent_rainbow_colors(&self) -> [Hsla; 6] {
+    if self.is_dark {
+      [
+        Hsla {
+          h: 212.0 / 360.0, // blue
+          s: 0.62,
+          l: 0.62,
+          a: 0.14,
+        },
+        Hsla {
+          h: 48.0 / 360.0, // yellow
+          s: 0.66,
+          l: 0.64,
+          a: 0.14,
+        },
+        Hsla {
+          h: 198.0 / 360.0, // cyan
+          s: 0.60,
+          l: 0.60,
+          a: 0.14,
+        },
+        Hsla {
+          h: 246.0 / 360.0, // indigo
+          s: 0.58,
+          l: 0.63,
+          a: 0.14,
+        },
+        Hsla {
+          h: 268.0 / 360.0, // violet
+          s: 0.60,
+          l: 0.64,
+          a: 0.14,
+        },
+        Hsla {
+          h: 286.0 / 360.0, // purple
+          s: 0.58,
+          l: 0.63,
+          a: 0.14,
+        },
+      ]
+    } else {
+      [
+        Hsla {
+          h: 212.0 / 360.0, // blue
+          s: 0.64,
+          l: 0.46,
+          a: 0.09,
+        },
+        Hsla {
+          h: 48.0 / 360.0, // yellow
+          s: 0.72,
+          l: 0.44,
+          a: 0.09,
+        },
+        Hsla {
+          h: 198.0 / 360.0, // cyan
+          s: 0.62,
+          l: 0.44,
+          a: 0.09,
+        },
+        Hsla {
+          h: 246.0 / 360.0, // indigo
+          s: 0.60,
+          l: 0.45,
+          a: 0.09,
+        },
+        Hsla {
+          h: 268.0 / 360.0, // violet
+          s: 0.62,
+          l: 0.45,
+          a: 0.09,
+        },
+        Hsla {
+          h: 286.0 / 360.0, // purple
+          s: 0.60,
+          l: 0.45,
+          a: 0.09,
+        },
+      ]
+    }
+  }
+
   pub fn diff_added_background(&self) -> Hsla {
     if self.is_dark {
       Hsla {
