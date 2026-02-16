@@ -27,7 +27,6 @@ use gpui_component::{
   button::{Button, ButtonVariant, ButtonVariants as _},
   h_flex,
   kbd::Kbd,
-  label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{DropdownMenu, PopupMenuItem},
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
@@ -74,6 +73,73 @@ actions!(
   ]
 );
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GitFileLabelFormat {
+  FullPath,
+  FileName,
+}
+
+fn format_git_file_label(path: &Path, format: GitFileLabelFormat) -> SharedString {
+  match format {
+    GitFileLabelFormat::FullPath => path.to_string_lossy().replace(['\n', '\r'], "").into(),
+    GitFileLabelFormat::FileName => path
+      .file_name()
+      .and_then(|name| name.to_str())
+      .unwrap_or("Untitled")
+      .replace(['\n', '\r'], "")
+      .into(),
+  }
+}
+
+fn render_repo_status_label(
+  theme: &gpui_component::Theme,
+  status: Option<RepoStatusKind>,
+  label: SharedString,
+  old_label: Option<SharedString>,
+) -> AnyElement {
+  if status == Some(RepoStatusKind::Renamed)
+    && let Some(old_label) = old_label
+  {
+    return h_flex()
+      .min_w_0()
+      .flex_1()
+      .items_center()
+      .gap_1()
+      .child(
+        div()
+          .min_w_0()
+          .overflow_hidden()
+          .text_ellipsis_start()
+          .text_color(theme.muted_foreground)
+          .line_through()
+          .child(old_label),
+      )
+      .child(
+        Icon::new(IconName::ArrowRight)
+          .size_3()
+          .text_color(theme.muted_foreground),
+      )
+      .child(
+        div()
+          .min_w_0()
+          .flex_1()
+          .overflow_hidden()
+          .text_ellipsis_start()
+          .child(label),
+      )
+      .into_any_element();
+  }
+
+  div()
+    .min_w_0()
+    .flex_1()
+    .overflow_hidden()
+    .text_ellipsis_start()
+    .when(status == Some(RepoStatusKind::Deleted), |this| this.line_through())
+    .child(label)
+    .into_any_element()
+}
+
 #[derive(Clone, Debug)]
 struct GitFileRow {
   entry: RepoStatusEntry,
@@ -83,15 +149,11 @@ struct GitFileRow {
 
 impl GitFileRow {
   fn new(entry: RepoStatusEntry) -> Self {
-    let label = entry
-      .path
-      .to_string_lossy()
-      .replace(['\n', '\r'], "")
-      .into();
+    let label = format_git_file_label(&entry.path, GitFileLabelFormat::FullPath);
     let old_label = entry
       .old_path
       .as_ref()
-      .map(|path| path.to_string_lossy().replace(['\n', '\r'], "").into());
+      .map(|path| format_git_file_label(path, GitFileLabelFormat::FullPath));
     Self {
       entry,
       label,
@@ -199,57 +261,12 @@ impl ListDelegate for GitFileListDelegate {
       .tooltip(move |window, cx| Tooltip::new(status_tooltip.clone()).build(window, cx))
       .child(status_letter);
 
-    let file_label = if row.entry.status == RepoStatusKind::Renamed {
-      if let Some(old_label) = row.old_label.clone() {
-        h_flex()
-          .min_w_0()
-          .flex_1()
-          .items_center()
-          .gap_1()
-          .child(
-            div()
-              .min_w_0()
-              .overflow_hidden()
-              .text_ellipsis_start()
-              .text_color(theme.muted_foreground)
-              .line_through()
-              .child(old_label),
-          )
-          .child(
-            Icon::new(IconName::ArrowRight)
-              .size_3()
-              .text_color(theme.muted_foreground),
-          )
-          .child(
-            div()
-              .min_w_0()
-              .flex_1()
-              .overflow_hidden()
-              .text_ellipsis_start()
-              .child(row.label.clone()),
-          )
-          .into_any_element()
-      } else {
-        div()
-          .min_w_0()
-          .flex_1()
-          .overflow_hidden()
-          .text_ellipsis_start()
-          .child(row.label.clone())
-          .into_any_element()
-      }
-    } else {
-      div()
-        .min_w_0()
-        .flex_1()
-        .overflow_hidden()
-        .text_ellipsis_start()
-        .when(row.entry.status == RepoStatusKind::Deleted, |this| {
-          this.line_through()
-        })
-        .child(row.label.clone())
-        .into_any_element()
-    };
+    let file_label = render_repo_status_label(
+      &theme,
+      Some(row.entry.status),
+      row.label.clone(),
+      row.old_label.clone(),
+    );
 
     Some(
       base_item.px_2().py_1().child(
@@ -3232,46 +3249,32 @@ impl GitPage {
     let theme = cx.theme().clone();
     let editor_state = editor.read(cx);
     let is_history_commit_file = self.history_opened_commit_file.is_some();
-    let (file_name, dir_path) = if let Some(rel_path) = self.selected_file.as_ref() {
-      let file_name = rel_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("Untitled")
-        .to_string();
-      let dir_path = rel_path
-        .parent()
-        .and_then(|parent| parent.to_str())
-        .unwrap_or("")
-        .to_string();
-      (file_name, dir_path)
-    } else {
-      let file_name = editor_state
-        .workdir_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("Untitled")
-        .to_string();
-      let dir_path = editor_state
-        .workdir_path
-        .parent()
-        .and_then(|parent| parent.to_str())
-        .unwrap_or("")
-        .to_string();
-      (file_name, dir_path)
-    };
-    let file_dirty = editor_state.is_dirty;
-    let editor_entity = editor.clone();
     let selected_entry = self
       .selected_file
       .as_ref()
       .and_then(|path| self.status_entries.iter().find(|entry| &entry.path == path))
       .cloned();
-    let status_letter = selected_entry
+    let display_path = selected_entry
       .as_ref()
-      .map(|entry| entry.status.short_code());
-    let status_color = selected_entry
+      .map(|entry| entry.path.as_path())
+      .or(self.selected_file.as_deref())
+      .unwrap_or(editor_state.workdir_path.as_path());
+    let file_name = format_git_file_label(display_path, GitFileLabelFormat::FileName);
+    let old_file_name = selected_entry
       .as_ref()
-      .map(|entry| Self::status_color(entry.status, &theme))
+      .and_then(|entry| entry.old_path.as_ref())
+      .map(|path| format_git_file_label(path, GitFileLabelFormat::FileName));
+    let dir_path = display_path
+      .parent()
+      .and_then(|parent| parent.to_str())
+      .unwrap_or("")
+      .to_string();
+    let file_dirty = editor_state.is_dirty;
+    let editor_entity = editor.clone();
+    let status_kind = selected_entry.as_ref().map(|entry| entry.status);
+    let status_letter = status_kind.map(|status| status.short_code());
+    let status_color = status_kind
+      .map(|status| Self::status_color(status, &theme))
       .unwrap_or(theme.muted_foreground);
 
     let title = h_flex()
@@ -3309,7 +3312,12 @@ impl GitPage {
               .min_w_0()
               .items_center()
               .gap_2()
-              .child(div().min_w_0().child(Label::new(file_name).truncate()))
+              .child(render_repo_status_label(
+                &theme,
+                status_kind,
+                file_name,
+                old_file_name,
+              ))
               .when(file_dirty, |this| {
                 this.child(
                   div()
@@ -4068,6 +4076,34 @@ mod tests {
   use git2::{BranchType, Cred, PushOptions, RemoteCallbacks, Repository, Signature};
   use gpui::TestAppContext;
   use std::time::{SystemTime, UNIX_EPOCH};
+
+  #[test]
+  fn format_git_file_label_supports_full_path_and_file_name() {
+    let path = Path::new("src/features/renamed_file.rs");
+
+    assert_eq!(
+      format_git_file_label(path, GitFileLabelFormat::FullPath).as_ref(),
+      "src/features/renamed_file.rs"
+    );
+    assert_eq!(
+      format_git_file_label(path, GitFileLabelFormat::FileName).as_ref(),
+      "renamed_file.rs"
+    );
+  }
+
+  #[test]
+  fn format_git_file_label_strips_newlines() {
+    let path = Path::new("src/renamed\n_file.rs");
+
+    assert_eq!(
+      format_git_file_label(path, GitFileLabelFormat::FullPath).as_ref(),
+      "src/renamed_file.rs"
+    );
+    assert_eq!(
+      format_git_file_label(path, GitFileLabelFormat::FileName).as_ref(),
+      "renamed_file.rs"
+    );
+  }
 
   struct TempRepo {
     path: PathBuf,
