@@ -36,7 +36,7 @@ use ui::{Theme, UiIconName};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
-  boundaries::{line_range_at_offset, word_range_at_offset},
+  boundaries::{line_range_at_offset, word_range_at_offset, word_range_in_text},
   cursor_blink::CursorBlink,
   document::Document,
   editor_element::{EditorElement, PositionMap},
@@ -2904,21 +2904,7 @@ impl Editor {
   }
 
   fn word_range_in_line(text: &str, column: usize) -> (usize, usize) {
-    let column = column.min(text.chars().count());
-    let column_byte = char_offset_to_byte_offset(text, column);
-    for (idx, segment) in text.split_word_bound_indices() {
-      if segment.trim().is_empty() {
-        continue;
-      }
-      let end = idx + segment.len();
-      if idx <= column_byte && column_byte < end {
-        return (
-          byte_offset_to_char_offset(text, idx),
-          byte_offset_to_char_offset(text, end),
-        );
-      }
-    }
-    (column, column)
+    word_range_in_text(text, column)
   }
 
   fn set_display_cursor(&mut self, cursor: DisplayCursor, cx: &mut Context<Self>) {
