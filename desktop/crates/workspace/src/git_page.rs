@@ -2480,7 +2480,12 @@ impl GitPage {
     window.focus(&self.focus_handle, cx);
   }
 
-  fn set_sidebar_mode(&mut self, mode: GitSidebarMode, window: &mut Window, cx: &mut Context<Self>) {
+  fn set_sidebar_mode(
+    &mut self,
+    mode: GitSidebarMode,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     self.sidebar_mode = mode;
 
     if self.sidebar_mode == GitSidebarMode::History {
@@ -3489,7 +3494,7 @@ impl GitPage {
   fn render_change_block_actions(
     &mut self,
     editor: &Entity<Editor>,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Option<AnyElement> {
     let theme = cx.theme().clone();
@@ -3503,14 +3508,17 @@ impl GitPage {
       .iter()
       .find(|overlay| overlay.id.as_ref() == hovered_id.as_ref())?;
 
-    let line_height = window.line_height();
     let anchor_display_line = editor_state
       .first_display_line_for_group(hovered_id)
       .unwrap_or(overlay.display_line);
     if editor_state.find_panel_occludes_display_line(anchor_display_line) {
       return None;
     }
-    let mut top = line_height * (anchor_display_line as f32 - editor_state.scroll_offset_y);
+    let mut top = Self::hunk_action_top(
+      editor_state.measured_editor_line_height(),
+      anchor_display_line,
+      editor_state.scroll_offset_y,
+    );
     if top >= editor_state.viewport_height {
       return None;
     }
@@ -3640,6 +3648,14 @@ impl GitPage {
         .child(actions)
         .into_any_element(),
     )
+  }
+
+  fn hunk_action_top(
+    line_height: gpui::Pixels,
+    display_line: usize,
+    scroll_offset: f32,
+  ) -> gpui::Pixels {
+    line_height * (display_line as f32 - scroll_offset)
   }
 
   fn render_commit_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -4547,7 +4563,10 @@ mod tests {
       assert_eq!(this.file_list.read(cx).selected_index(), None);
 
       this.focus_changes_sidebar_list(window, cx);
-      assert_eq!(this.file_list.read(cx).selected_index(), Some(IndexPath::new(0)));
+      assert_eq!(
+        this.file_list.read(cx).selected_index(),
+        Some(IndexPath::new(0))
+      );
     });
   }
 
@@ -6735,5 +6754,17 @@ mod tests {
       GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Conflicted),
       RepoStatusKind::Conflicted
     );
+  }
+
+  #[test]
+  fn hunk_action_top_uses_local_display_line_position() {
+    let top = GitPage::hunk_action_top(gpui::px(20.0), 110, 109.0);
+    assert_eq!(top, gpui::px(20.0));
+  }
+
+  #[test]
+  fn hunk_action_top_handles_fractional_scroll_offset() {
+    let top = GitPage::hunk_action_top(gpui::px(18.0), 10, 9.5);
+    assert_eq!(top, gpui::px(9.0));
   }
 }

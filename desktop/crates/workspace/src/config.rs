@@ -23,7 +23,7 @@ const RECENT_REPOS_TABLE: ConfigTable = ConfigTable {
 
 const SETTINGS_TABLE: ConfigTable = ConfigTable {
   name: "settings",
-  create_sql: "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), auto_switch_theme INTEGER NOT NULL DEFAULT 1, dark_mode INTEGER NOT NULL DEFAULT 0)",
+  create_sql: "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), auto_switch_theme INTEGER NOT NULL DEFAULT 1, dark_mode INTEGER NOT NULL DEFAULT 0, indent_rainbow INTEGER NOT NULL DEFAULT 0)",
 };
 
 const CONFIG_TABLES: [ConfigTable; 2] = [RECENT_REPOS_TABLE, SETTINGS_TABLE];
@@ -41,6 +41,7 @@ pub struct RecentRepository {
 pub struct AppSettings {
   pub auto_switch_theme: bool,
   pub dark_mode: bool,
+  pub indent_rainbow: bool,
 }
 
 impl Default for AppSettings {
@@ -48,6 +49,7 @@ impl Default for AppSettings {
     Self {
       auto_switch_theme: true,
       dark_mode: false,
+      indent_rainbow: false,
     }
   }
 }
@@ -93,6 +95,10 @@ impl ConfigStore {
       eprintln!("Failed to initialize default config values: {}", err);
       return None;
     }
+    if let Err(err) = store.ensure_settings_columns() {
+      eprintln!("Failed to initialize settings schema: {}", err);
+      return None;
+    }
     Some(store)
   }
 
@@ -112,6 +118,33 @@ impl ConfigStore {
       ),
       [],
     )?;
+    Ok(())
+  }
+
+  fn ensure_settings_columns(&self) -> rusqlite::Result<()> {
+    let mut has_indent_rainbow = false;
+    let mut stmt = self
+      .conn
+      .prepare(&format!("PRAGMA table_info({})", SETTINGS_TABLE.name))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+      let column = row?;
+      if column == "indent_rainbow" {
+        has_indent_rainbow = true;
+        break;
+      }
+    }
+
+    if !has_indent_rainbow {
+      self.conn.execute(
+        &format!(
+          "ALTER TABLE {} ADD COLUMN indent_rainbow INTEGER NOT NULL DEFAULT 0",
+          SETTINGS_TABLE.name
+        ),
+        [],
+      )?;
+    }
+
     Ok(())
   }
 
@@ -191,16 +224,18 @@ impl ConfigStore {
   fn load_app_settings_inner(&self) -> AppSettings {
     let settings = self.conn.query_row(
       &format!(
-        "SELECT auto_switch_theme, dark_mode FROM {} WHERE id = 1",
+        "SELECT auto_switch_theme, dark_mode, indent_rainbow FROM {} WHERE id = 1",
         SETTINGS_TABLE.name
       ),
       [],
       |row| {
         let auto_switch_theme: i64 = row.get(0)?;
         let dark_mode: i64 = row.get(1)?;
+        let indent_rainbow: i64 = row.get(2)?;
         Ok(AppSettings {
           auto_switch_theme: auto_switch_theme != 0,
           dark_mode: dark_mode != 0,
+          indent_rainbow: indent_rainbow != 0,
         })
       },
     );
@@ -224,11 +259,12 @@ impl ConfigStore {
   fn persist_app_settings_inner(&self, settings: AppSettings) {
     if let Err(err) = self.conn.execute(
       &format!(
-        "INSERT INTO {} (id, auto_switch_theme, dark_mode)
-         VALUES (1, ?1, ?2)
+        "INSERT INTO {} (id, auto_switch_theme, dark_mode, indent_rainbow)
+         VALUES (1, ?1, ?2, ?3)
          ON CONFLICT(id) DO UPDATE
          SET auto_switch_theme = excluded.auto_switch_theme,
-             dark_mode = excluded.dark_mode",
+             dark_mode = excluded.dark_mode,
+             indent_rainbow = excluded.indent_rainbow",
         SETTINGS_TABLE.name
       ),
       params![
@@ -237,7 +273,12 @@ impl ConfigStore {
         } else {
           0_i64
         },
-        if settings.dark_mode { 1_i64 } else { 0_i64 }
+        if settings.dark_mode { 1_i64 } else { 0_i64 },
+        if settings.indent_rainbow {
+          1_i64
+        } else {
+          0_i64
+        }
       ],
     ) {
       eprintln!("Failed to persist app settings: {}", err);

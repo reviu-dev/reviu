@@ -19,7 +19,8 @@ use git::{ApplyLocation, DiffSet, GitFileBases, GitStore, RepoFile};
 use gpui::{
   App, Bounds, Context, CursorStyle, Entity, EntityInputHandler, FocusHandle, Focusable,
   MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
-  ShapedLine, Subscription, Task, UTF16Selection, Window, black, div, point, prelude::*, px, white,
+  ShapedLine, SharedString, Subscription, Task, UTF16Selection, Window, black, div, point,
+  prelude::*, px, white,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, IconName, Sizable,
@@ -40,7 +41,6 @@ use crate::{
   document::Document,
   editor_element::{EditorElement, PositionMap},
   gutter_element::GutterElement,
-  text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
   projection::{
     ChangeKind, DisplayLine, GapId, GapReveal, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
     REVIEW_COMMENT_CARD_BORDER_PX, REVIEW_COMMENT_CARD_CONTENT_GAP_PX,
@@ -49,6 +49,7 @@ use crate::{
     REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX, REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX,
     ReviewComment, ReviewCommentSide,
   },
+  text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
 };
 
 #[derive(Clone, Debug)]
@@ -74,6 +75,8 @@ const MAX_CACHE_SIZE: usize = 200;
 pub(crate) const SCROLL_PADDING: usize = 3;
 /// Width of the gutter area
 const GUTTER_WIDTH: f32 = 90.0;
+/// Default editor line height before first render/prepaint measurement
+const DEFAULT_EDITOR_LINE_HEIGHT: f32 = 20.0;
 /// Diff recompute debounce (ms)
 const DIFF_DEBOUNCE_MS: u64 = 60;
 /// External change polling interval (ms)
@@ -104,6 +107,10 @@ fn ease_out_cubic(t: f32) -> f32 {
   1.0 - (1.0 - t).powi(3)
 }
 
+fn editor_code_font_family(cx: &App) -> SharedString {
+  cx.theme().mono_font_family.clone()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffViewMode {
   Inline,
@@ -124,6 +131,7 @@ pub struct Editor {
   pub virtual_line_layouts: HashMap<usize, Arc<ShapedLine>>,
 
   pub scroll_offset_y: f32, // Vertical scroll offset in lines (0.0 = top, 1.5 = 1.5 lines down)
+  pub editor_line_height: Pixels,
   pub viewport_height: Pixels,
   pub viewport_width: Pixels,
   pub max_line_width: Pixels, // Maximum width of visible lines (never decreases to avoid scroll jumps)
@@ -200,7 +208,6 @@ pub struct GroupOverlay {
   pub id: Arc<str>,
   pub state: HunkState,
   pub display_line: usize,
-  pub y: Pixels,
 }
 
 struct ReviewCommentLayout {
@@ -382,6 +389,7 @@ impl Editor {
       line_layouts: HashMap::new(),
       virtual_line_layouts: HashMap::new(),
       scroll_offset_y: 0.0,
+      editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
       viewport_height: px(DEFAULT_VIEWPORT_HEIGHT), // Will be updated on first render
       viewport_width: px(DEFAULT_VIEWPORT_WIDTH),   // Will be updated on first render
       max_line_width: px(DEFAULT_MAX_LINE_WIDTH),   // Will be updated on first render
@@ -447,6 +455,14 @@ impl Editor {
 
   pub fn document(&self) -> &Entity<Document> {
     &self.document
+  }
+
+  pub fn measured_editor_line_height(&self) -> Pixels {
+    if self.editor_line_height > px(0.0) {
+      self.editor_line_height
+    } else {
+      px(DEFAULT_EDITOR_LINE_HEIGHT)
+    }
   }
 
   fn deleted_file_content(
@@ -763,7 +779,7 @@ impl Editor {
     match event {
       InputEvent::Change => {
         self.find_query = state.read(cx).value().to_string();
-        self.refresh_find_matches(window.line_height(), true, cx);
+        self.refresh_find_matches(self.measured_editor_line_height(), true, cx);
       }
       InputEvent::PressEnter { secondary } => {
         if *secondary {
@@ -1025,7 +1041,7 @@ impl Editor {
       state.set_value(query.clone(), window, cx);
     });
     self.find_query = query;
-    self.refresh_find_matches(window.line_height(), false, cx);
+    self.refresh_find_matches(self.measured_editor_line_height(), false, cx);
     cx.on_next_frame(window, |this, window, cx| {
       this.focus_find_input(window, cx);
     });
@@ -1044,11 +1060,13 @@ impl Editor {
   }
 
   pub(crate) fn find_next_match(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    self.find_next_match_with_line_height(window.line_height(), cx);
+    let _ = window;
+    self.find_next_match_with_line_height(self.measured_editor_line_height(), cx);
   }
 
   pub(crate) fn find_previous_match(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    self.find_previous_match_with_line_height(window.line_height(), cx);
+    let _ = window;
+    self.find_previous_match_with_line_height(self.measured_editor_line_height(), cx);
   }
 
   fn find_query_from_selection(&self, cx: &App) -> Option<String> {
@@ -2568,7 +2586,7 @@ impl Editor {
     }
   }
 
-  pub(crate) fn ensure_cursor_visible(&mut self, window: &Window, cx: &mut Context<Self>) {
+  pub(crate) fn ensure_cursor_visible(&mut self, _window: &Window, cx: &mut Context<Self>) {
     let document = self.document.read(cx);
     let cursor_offset = self.cursor_offset();
     let doc_line_count = document.len_lines();
@@ -2589,7 +2607,7 @@ impl Editor {
     let total_lines = self.display_line_count(doc_line_count);
 
     // Calculate how many lines are visible in the viewport
-    let line_height = window.line_height();
+    let line_height = self.measured_editor_line_height();
     let viewport_lines = (self.viewport_height / line_height).max(1.0);
     let max_padding = (viewport_lines - 1.0).max(0.0);
     let scroll_padding = (SCROLL_PADDING as f32).min(max_padding);
@@ -3928,7 +3946,7 @@ impl EntityInputHandler for Editor {
     let start_line = self.document.read(cx).char_to_line(range.start);
     let end_line = self.document.read(cx).char_to_line(range.end);
 
-    let line_height = window.line_height();
+    let line_height = self.measured_editor_line_height();
     let doc_line_count = self.document.read(cx).len_lines();
     let total_display_lines = self.display_line_count(doc_line_count);
     let display_viewport = self.viewport_range(line_height, total_display_lines);
@@ -4010,7 +4028,7 @@ impl EntityInputHandler for Editor {
 
     let start_line = self.document.read(cx).char_to_line(range.start);
 
-    let line_height = window.line_height();
+    let line_height = self.measured_editor_line_height();
     let doc_line_count = self.document.read(cx).len_lines();
     let total_display_lines = self.display_line_count(doc_line_count);
     let display_viewport = self.viewport_range(line_height, total_display_lines);
@@ -4113,7 +4131,8 @@ impl Render for Editor {
     }
 
     let editor_entity = cx.entity().clone();
-    let line_height = window.line_height();
+    let line_height = self.measured_editor_line_height();
+    self.editor_line_height = line_height;
     let line_height_px = (line_height / px(1.0)).max(1.0);
     if (line_height_px - self.review_comment_line_height_px).abs() > 0.05 {
       self.review_comment_line_height_px = line_height_px;
@@ -4297,6 +4316,7 @@ impl Render for Editor {
             ),
         )
     };
+    let content = content.font_family(editor_code_font_family(cx)).text_sm();
 
     div()
       .key_context("Editor")
@@ -4407,6 +4427,31 @@ pub mod tests {
     assert_eq!(parsed, None);
   }
 
+  #[gpui::test]
+  fn test_editor_code_font_family_matches_theme_mono_font(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let (expected, actual) = cx.update(|cx| {
+      (
+        cx.theme().mono_font_family.clone(),
+        editor_code_font_family(cx),
+      )
+    });
+    assert_eq!(actual, expected);
+  }
+
+  #[gpui::test]
+  fn test_measured_editor_line_height_uses_cached_value(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "line");
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.editor_line_height = px(17.0);
+    });
+
+    let measured = ctx
+      .editor
+      .read_with(&ctx.cx, |editor, _| editor.measured_editor_line_height());
+    assert_eq!(measured, px(17.0));
+  }
+
   /// Helper context for testing Editor
   pub struct EditorTestContext {
     pub cx: TestAppContext,
@@ -4449,6 +4494,7 @@ pub mod tests {
           line_layouts: HashMap::new(),
           virtual_line_layouts: HashMap::new(),
           scroll_offset_y: 0.0,
+          editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
           viewport_height: px(DEFAULT_VIEWPORT_HEIGHT),
           viewport_width: px(DEFAULT_VIEWPORT_WIDTH),
           max_line_width: px(DEFAULT_MAX_LINE_WIDTH),

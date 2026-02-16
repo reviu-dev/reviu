@@ -3,7 +3,7 @@
 //! This module contains all the action handlers for the editor,
 //! including text editing, cursor movement, and selection operations.
 
-use gpui::{actions, ClipboardItem, Context, EntityInputHandler, Window};
+use gpui::{ClipboardItem, Context, EntityInputHandler, Window, actions};
 
 use crate::{boundaries, editor::Editor};
 

@@ -1749,9 +1749,9 @@ impl Element for SelectableText {
       let index = clamp_to_char_boundary(
         text_for_hover.as_ref(),
         text_layout
-        .index_for_position(window.mouse_position())
-        .unwrap_or_else(|ix| ix)
-        .min(text_len),
+          .index_for_position(window.mouse_position())
+          .unwrap_or_else(|ix| ix)
+          .min(text_len),
       );
       link_ranges.iter().any(|range| range.range.contains(&index))
     } {

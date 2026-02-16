@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use editor::set_indent_rainbow_enabled;
 use gpui::{
   App, Context, FocusHandle, Focusable, Render, SharedString, Window, div, prelude::*, px,
 };
@@ -27,6 +28,7 @@ use crate::{
 pub struct SettingsPage {
   focus_handle: FocusHandle,
   auto_switch_theme: bool,
+  indent_rainbow: bool,
   size: Size,
 }
 
@@ -35,6 +37,7 @@ impl SettingsPage {
     Self {
       focus_handle: cx.focus_handle(),
       auto_switch_theme: settings.auto_switch_theme,
+      indent_rainbow: settings.indent_rainbow,
       size: Size::default(),
     }
   }
@@ -43,9 +46,14 @@ impl SettingsPage {
     self.auto_switch_theme
   }
 
+  pub(crate) fn indent_rainbow_enabled(&self) -> bool {
+    self.indent_rainbow
+  }
+
   fn setting_pages(&self, _: &mut Window, cx: &mut Context<Self>) -> Vec<SettingPage> {
     let view = cx.entity();
     let default_auto = self.auto_switch_theme;
+    let default_indent_rainbow = self.indent_rainbow;
 
     vec![SettingPage::new("General").default_open(true).groups(vec![
       SettingGroup::new().title("Appearance").items(vec![
@@ -56,10 +64,11 @@ impl SettingsPage {
             {
               let view = view.clone();
               move |val: bool, cx: &mut App| {
-                let auto_switch_theme = view.read(cx).auto_switch_theme;
+                let settings = view.read(cx);
                 ConfigStore::persist_app_settings(PersistedSettings {
-                  auto_switch_theme,
+                  auto_switch_theme: settings.auto_switch_theme,
                   dark_mode: val,
+                  indent_rainbow: settings.indent_rainbow,
                 });
 
                 let mode = if val {
@@ -95,6 +104,7 @@ impl SettingsPage {
                 ConfigStore::persist_app_settings(PersistedSettings {
                   auto_switch_theme: val,
                   dark_mode: cx.theme().mode.is_dark(),
+                  indent_rainbow: view.read(cx).indent_rainbow,
                 });
 
                 cx.refresh_windows();
@@ -104,6 +114,34 @@ impl SettingsPage {
           .default_value(default_auto),
         )
         .description("Automatically switch theme based on system settings."),
+        SettingItem::new(
+          "Indent Rainbow",
+          SettingField::checkbox(
+            {
+              let view = view.clone();
+              move |cx: &App| view.read(cx).indent_rainbow
+            },
+            {
+              let view = view.clone();
+              move |val: bool, cx: &mut App| {
+                view.update(cx, |view, _| {
+                  view.indent_rainbow = val;
+                });
+
+                set_indent_rainbow_enabled(val);
+                ConfigStore::persist_app_settings(PersistedSettings {
+                  auto_switch_theme: view.read(cx).auto_switch_theme,
+                  dark_mode: cx.theme().mode.is_dark(),
+                  indent_rainbow: val,
+                });
+
+                cx.refresh_windows();
+              }
+            },
+          )
+          .default_value(default_indent_rainbow),
+        )
+        .description("Color indentation guides by level in the editor."),
       ]),
     ])]
   }
