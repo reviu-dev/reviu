@@ -6,6 +6,127 @@ use crate::{
   text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
 };
 
+fn is_identifier_char(ch: char) -> bool {
+  ch == '_' || ch.is_alphanumeric()
+}
+
+fn previous_char_boundary(text: &str, byte_offset: usize) -> Option<usize> {
+  if byte_offset == 0 {
+    return None;
+  }
+  text[..byte_offset].char_indices().next_back().map(|(idx, _)| idx)
+}
+
+fn code_subsegment_start(segment: &str, cursor_byte: usize) -> Option<usize> {
+  if segment.is_empty() {
+    return None;
+  }
+  let cursor_byte = cursor_byte.min(segment.len());
+  let probe = previous_char_boundary(segment, cursor_byte)?;
+  let probe_char = segment.get(probe..)?.chars().next()?;
+  if !is_identifier_char(probe_char) {
+    return Some(probe);
+  }
+
+  let mut start = probe;
+  while let Some(prev_idx) = previous_char_boundary(segment, start) {
+    let Some(prev_char) = segment.get(prev_idx..).and_then(|rest| rest.chars().next()) else {
+      break;
+    };
+    if !is_identifier_char(prev_char) {
+      break;
+    }
+    start = prev_idx;
+  }
+  Some(start)
+}
+
+fn code_subsegment_end(segment: &str, cursor_byte: usize) -> Option<usize> {
+  if segment.is_empty() {
+    return None;
+  }
+  let cursor_byte = cursor_byte.min(segment.len());
+  if cursor_byte >= segment.len() {
+    return None;
+  }
+
+  let current = segment.get(cursor_byte..)?.chars().next()?;
+  if !is_identifier_char(current) {
+    return Some(cursor_byte + current.len_utf8());
+  }
+
+  let mut end = cursor_byte + current.len_utf8();
+  while end < segment.len() {
+    let Some(next_char) = segment.get(end..).and_then(|rest| rest.chars().next()) else {
+      break;
+    };
+    if !is_identifier_char(next_char) {
+      break;
+    }
+    end += next_char.len_utf8();
+  }
+  Some(end)
+}
+
+fn identifier_byte_range_at(text: &str, byte_offset: usize) -> Option<(usize, usize)> {
+  if byte_offset >= text.len() {
+    return None;
+  }
+
+  let current = text.get(byte_offset..)?.chars().next()?;
+  if !is_identifier_char(current) {
+    return None;
+  }
+
+  let mut start = byte_offset;
+  while let Some((prev_idx, prev_ch)) = text[..start].char_indices().next_back() {
+    if !is_identifier_char(prev_ch) {
+      break;
+    }
+    start = prev_idx;
+  }
+
+  let mut end = byte_offset + current.len_utf8();
+  while end < text.len() {
+    let Some(next_ch) = text.get(end..).and_then(|rest| rest.chars().next()) else {
+      break;
+    };
+    if !is_identifier_char(next_ch) {
+      break;
+    }
+    end += next_ch.len_utf8();
+  }
+
+  Some((start, end))
+}
+
+pub(crate) fn word_range_in_text(text: &str, column: usize) -> (usize, usize) {
+  let column = column.min(text.chars().count());
+  let column_byte = char_offset_to_byte_offset(text, column);
+
+  if let Some((start, end)) = identifier_byte_range_at(text, column_byte) {
+    return (
+      byte_offset_to_char_offset(text, start),
+      byte_offset_to_char_offset(text, end),
+    );
+  }
+
+  for (idx, segment) in text.split_word_bound_indices() {
+    if segment.trim().is_empty() {
+      continue;
+    }
+    let end = idx + segment.len();
+    if idx <= column_byte && column_byte < end {
+      return (
+        byte_offset_to_char_offset(text, idx),
+        byte_offset_to_char_offset(text, end),
+      );
+    }
+  }
+
+  (column, column)
+}
+
 fn previous_grapheme_boundary_in_text(text: &str, byte_offset: usize) -> usize {
   if byte_offset == 0 {
     return 0;
@@ -160,6 +281,10 @@ pub fn previous_word_boundary(editor: &Editor, offset: usize, cx: &Context<Edito
 
     // If we're inside this segment, go to its start
     if idx < relative_byte_offset && relative_byte_offset <= segment_end {
+      let local_cursor = relative_byte_offset - idx;
+      if let Some(local_start) = code_subsegment_start(segment, local_cursor) {
+        return start + byte_offset_to_char_offset(&slice, idx + local_start);
+      }
       return start + byte_offset_to_char_offset(&slice, idx);
     }
 
@@ -207,11 +332,18 @@ pub fn next_word_boundary(editor: &Editor, offset: usize, cx: &Context<Editor>) 
 
     // If we're before or at the start of this segment, go to its end
     if relative_byte_offset <= idx {
+      if let Some(local_end) = code_subsegment_end(segment, 0) {
+        return start + byte_offset_to_char_offset(&slice, idx + local_end);
+      }
       return start + byte_offset_to_char_offset(&slice, segment_end);
     }
 
     // If we're inside this segment, go to its end
     if relative_byte_offset < segment_end {
+      let local_cursor = relative_byte_offset - idx;
+      if let Some(local_end) = code_subsegment_end(segment, local_cursor) {
+        return start + byte_offset_to_char_offset(&slice, idx + local_end);
+      }
       return start + byte_offset_to_char_offset(&slice, segment_end);
     }
   }
@@ -237,28 +369,8 @@ pub fn word_range_at_offset(
   let end = (offset + 500).min(doc_len);
   let slice = doc.slice_to_string(start..end);
   let relative_offset = offset.saturating_sub(start).min(slice.chars().count());
-  let relative_byte_offset = char_offset_to_byte_offset(&slice, relative_offset);
-
-  // Find the segment containing the cursor
-  for (idx, segment) in slice.split_word_bound_indices() {
-    let segment_end = idx + segment.len();
-
-    // Skip whitespace-only segments
-    if segment.trim().is_empty() {
-      continue;
-    }
-
-    // Check if cursor is within this segment
-    if idx <= relative_byte_offset && relative_byte_offset < segment_end {
-      return (
-        start + byte_offset_to_char_offset(&slice, idx),
-        start + byte_offset_to_char_offset(&slice, segment_end),
-      );
-    }
-  }
-
-  // If no word found, return the offset itself
-  (offset, offset)
+  let (relative_start, relative_end) = word_range_in_text(&slice, relative_offset);
+  (start + relative_start, start + relative_end)
 }
 
 /// Find the line boundaries at the given offset (for triple-click selection)
@@ -706,6 +818,46 @@ mod tests {
       word_range_at_offset(editor, 3, cx)
     });
     assert_eq!((start, end), (3, 4));
+  }
+
+  #[gpui::test]
+  fn test_word_range_at_offset_splits_dot_separated_identifiers(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "content.font_family");
+
+    let (start, end) = ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      word_range_at_offset(editor, 2, cx)
+    });
+    assert_eq!((start, end), (0, 7));
+
+    let (start, end) = ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      word_range_at_offset(editor, 10, cx)
+    });
+    assert_eq!((start, end), (8, 19));
+  }
+
+  #[gpui::test]
+  fn test_previous_word_boundary_dot_separated_identifier(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "content.font_family");
+
+    let boundary = ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      previous_word_boundary(editor, 19, cx)
+    });
+    assert_eq!(boundary, 8);
+  }
+
+  #[gpui::test]
+  fn test_next_word_boundary_dot_separated_identifier(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "content.font_family");
+
+    let boundary = ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      next_word_boundary(editor, 0, cx)
+    });
+    assert_eq!(boundary, 7);
+
+    let boundary = ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      next_word_boundary(editor, 8, cx)
+    });
+    assert_eq!(boundary, 19);
   }
 
   #[gpui::test]
