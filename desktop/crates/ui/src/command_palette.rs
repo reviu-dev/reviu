@@ -91,6 +91,9 @@ pub enum CommandPaletteAction {
   MergeBranch {
     name: CommandPaletteBranch,
   },
+  RebaseBranch {
+    name: CommandPaletteBranch,
+  },
   CherryPick {
     commit_hashes: Vec<String>,
   },
@@ -370,6 +373,7 @@ pub enum CommandPaletteCommandId {
   CreateBranch,
   CreateBranchFrom,
   MergeBranch,
+  RebaseBranch,
   CherryPick,
   OpenGitPage,
   OpenGithubPage,
@@ -401,6 +405,14 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::MergeBranch,
       name: "Merge branch".into(),
       description: Some("Merge a branch into the current branch".into()),
+    }
+  }
+
+  pub fn rebase_branch() -> Self {
+    Self {
+      id: CommandPaletteCommandId::RebaseBranch,
+      name: "Rebase branch".into(),
+      description: Some("Rebase the current branch onto another branch".into()),
     }
   }
 
@@ -522,6 +534,7 @@ impl CommandPaletteCommand {
     match self.id {
       CommandPaletteCommandId::SwitchBranch => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::MergeBranch => Icon::new(UiIconName::GitMerge),
+      CommandPaletteCommandId::RebaseBranch => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::CherryPick => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
@@ -585,6 +598,7 @@ enum CommandPaletteScreen {
   CreateBranch,
   CreateBranchFrom,
   MergeBranch,
+  RebaseBranch,
   CherryPick,
   OpenGithubPrFromUrl,
 }
@@ -764,20 +778,23 @@ impl CommandPalette {
         |command_palette, list_state, ev: &ListEvent, window, cx| {
           if let ListEvent::Confirm(ix) = ev {
             match command_palette.screen {
-              CommandPaletteScreen::MergeBranch => {
+              CommandPaletteScreen::MergeBranch | CommandPaletteScreen::RebaseBranch => {
                 let branch = {
                   let list = list_state.read(cx);
                   list.delegate().matched_branches.get(ix.row).cloned()
                 };
 
                 if let Some(branch) = branch {
-                  command_palette.trigger_action(
-                    CommandPaletteAction::MergeBranch {
+                  let action = match command_palette.screen {
+                    CommandPaletteScreen::MergeBranch => CommandPaletteAction::MergeBranch {
                       name: (*branch).clone(),
                     },
-                    window,
-                    cx,
-                  );
+                    CommandPaletteScreen::RebaseBranch => CommandPaletteAction::RebaseBranch {
+                      name: (*branch).clone(),
+                    },
+                    _ => unreachable!(),
+                  };
+                  command_palette.trigger_action(action, window, cx);
                 }
               }
               CommandPaletteScreen::CreateBranchFrom => {
@@ -956,7 +973,7 @@ impl CommandPalette {
           state.focus(window, cx);
         });
       }
-      CommandPaletteScreen::MergeBranch => {
+      CommandPaletteScreen::MergeBranch | CommandPaletteScreen::RebaseBranch => {
         self.branches_list.update(cx, |state, cx| {
           state.focus(window, cx);
         });
@@ -995,6 +1012,9 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::MergeBranch => {
         self.set_screen(CommandPaletteScreen::MergeBranch, cx, window);
+      }
+      CommandPaletteCommandId::RebaseBranch => {
+        self.set_screen(CommandPaletteScreen::RebaseBranch, cx, window);
       }
       CommandPaletteCommandId::CreateBranch => {
         self.set_screen(CommandPaletteScreen::CreateBranch, cx, window);
@@ -1174,6 +1194,10 @@ impl CommandPalette {
       })
   }
 
+  fn render_rebase_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_merge_branch(cx)
+  }
+
   fn render_open_github_pr_from_url(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
@@ -1235,6 +1259,7 @@ impl Render for CommandPalette {
         self.render_create_branch_from(cx).into_any_element()
       }
       CommandPaletteScreen::MergeBranch => self.render_merge_branch(cx).into_any_element(),
+      CommandPaletteScreen::RebaseBranch => self.render_rebase_branch(cx).into_any_element(),
     };
 
     div()

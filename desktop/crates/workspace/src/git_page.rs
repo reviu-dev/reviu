@@ -13,7 +13,8 @@ use git::{
   cherry_pick_commits, commit_changes, create_branch, create_branch_from, current_branch_status,
   current_history_revision, delete_untracked_file, diff_set_from_patch, head_commit_status,
   list_branches, list_commit_changed_files, list_commit_history, list_repo_status,
-  load_commit_file_diff, merge_branch, push, restore_file, stage_all, stage_file, switch_branch,
+  load_commit_file_diff, merge_branch, push, rebase_branch, restore_file, stage_all, stage_file,
+  switch_branch,
   undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
@@ -1855,6 +1856,7 @@ impl GitPage {
         .collect::<Vec<_>>();
       commands.push(CommandPaletteCommand::switch_branch());
       commands.push(CommandPaletteCommand::merge_branch());
+      commands.push(CommandPaletteCommand::rebase_branch());
     }
 
     let config = CommandPaletteConfig::new(palette_branches, commands, handler);
@@ -2025,6 +2027,19 @@ impl GitPage {
           },
         };
         merge_branch(&root_path, &branch_ref)
+      }
+      CommandPaletteAction::RebaseBranch { name } => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
+        let branch_ref = BranchRef {
+          name: name.name.to_string(),
+          kind: match name.kind {
+            CommandPaletteBranchKind::Local => BranchKind::Local,
+            CommandPaletteBranchKind::Remote => BranchKind::Remote,
+          },
+        };
+        rebase_branch(&root_path, &branch_ref)
       }
       CommandPaletteAction::CherryPick { commit_hashes } => {
         let Some(root_path) = self.selected_repo.clone() else {
@@ -5177,6 +5192,75 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn command_palette_rebase_branch_fast_forwards_current_branch(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-rebase");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let base_branch = current_branch_status(&repo.path).expect("base status").name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let feature_head = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "v2-feature\n",
+      "feature change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base");
+    force_checkout_head(&repo.path);
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let result = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.handle_command_palette_action(
+        CommandPaletteAction::RebaseBranch {
+          name: CommandPaletteBranch {
+            name: "feature".into(),
+            kind: CommandPaletteBranchKind::Local,
+          },
+        },
+        _window,
+        cx,
+      )
+    });
+    assert!(result.is_ok());
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head");
+    assert_eq!(head.id(), feature_head);
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read rebased file"),
+      "v2-feature\n"
+    );
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("status after rebase")
+        .name,
+      base_branch
+    );
+  }
+
+  #[gpui::test]
   async fn command_palette_cherry_pick_applies_multiple_commits(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-cherry-pick");
@@ -5301,6 +5385,12 @@ mod tests {
           kind: CommandPaletteBranchKind::Local,
         },
       },
+      CommandPaletteAction::RebaseBranch {
+        name: CommandPaletteBranch {
+          name: "feature".into(),
+          kind: CommandPaletteBranchKind::Local,
+        },
+      },
       CommandPaletteAction::CherryPick {
         commit_hashes: vec!["deadbeef".to_string()],
       },
@@ -5354,6 +5444,7 @@ mod tests {
       },
     )
     .expect("switch back to base");
+    force_checkout_head(&repo.path);
 
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
     let result = git_page.update_in(cx, |this, _window, cx| {
@@ -5380,6 +5471,76 @@ mod tests {
     assert_eq!(
       current_branch_status(&repo.path)
         .expect("status after failed merge")
+        .name,
+      base_branch
+    );
+  }
+
+  #[gpui::test]
+  async fn command_palette_rebase_branch_returns_conflict_error(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-rebase-conflict");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "base\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "main change\n",
+      "main change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "feature change\n",
+      "feature change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base");
+    force_checkout_head(&repo.path);
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let result = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.handle_command_palette_action(
+        CommandPaletteAction::RebaseBranch {
+          name: CommandPaletteBranch {
+            name: "feature".into(),
+            kind: CommandPaletteBranchKind::Local,
+          },
+        },
+        _window,
+        cx,
+      )
+    });
+
+    let error = result.expect_err("rebase should fail on conflicts");
+    let error_text = error.as_ref();
+    assert!(
+      error_text.contains("Action failed: rebase has conflicts")
+        || error_text.contains("Action failed: 1 conflict prevents checkout"),
+      "unexpected error: {error_text}"
+    );
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("status after failed rebase")
         .name,
       base_branch
     );
