@@ -233,6 +233,47 @@ pub fn merge_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
   bail!("unsupported merge analysis")
 }
 
+pub fn rebase_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let refname = match branch.kind {
+    BranchKind::Local => format!("refs/heads/{}", branch.name),
+    BranchKind::Remote => format!("refs/remotes/{}", branch.name),
+  };
+  let oid = repo
+    .refname_to_id(&refname)
+    .with_context(|| format!("resolve branch {:?}", branch.name))?;
+  let upstream = repo.find_annotated_commit(oid)?;
+  let signature = repo
+    .signature()
+    .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
+  let mut rebase = repo.rebase(None, Some(&upstream), None, None)?;
+
+  while let Some(next_operation) = rebase.next() {
+    if let Err(err) = next_operation {
+      let _ = rebase.abort();
+      return Err(err.into());
+    }
+
+    let index = repo.index()?;
+    if index.has_conflicts() {
+      let _ = rebase.abort();
+      bail!("rebase has conflicts");
+    }
+
+    if let Err(err) = rebase.commit(None, &signature, None) {
+      let _ = rebase.abort();
+      return Err(err.into());
+    }
+  }
+
+  rebase.finish(Some(&signature))?;
+  let mut checkout = CheckoutBuilder::new();
+  checkout.safe();
+  repo.checkout_head(Some(&mut checkout))?;
+  Ok(())
+}
+
 pub fn cherry_pick_commits(repo_root: &Path, commit_hashes: &[String]) -> Result<()> {
   if commit_hashes.is_empty() {
     bail!("no commits provided for cherry-pick");
@@ -754,6 +795,119 @@ mod tests {
       .expect("head after merge")
       .id();
     assert_eq!(head_after, head_before);
+  }
+
+  #[test]
+  fn rebase_branch_fast_forward_moves_head_to_target_commit() {
+    let repo = TempRepo::init("branch-rebase-fast-forward");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let feature_commit = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "v2-feature\n",
+      "feature change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    force_checkout_head(&repo.path);
+
+    rebase_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("fast-forward rebase");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head");
+    assert_eq!(head.id(), feature_commit);
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read rebased file"),
+      "v2-feature\n"
+    );
+  }
+
+  #[test]
+  fn rebase_branch_returns_error_on_conflicts() {
+    let repo = TempRepo::init("branch-rebase-conflict");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "base\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "main change\n",
+      "main change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "feature change\n",
+      "feature change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    force_checkout_head(&repo.path);
+
+    let error = rebase_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect_err("rebase should fail with conflicts");
+
+    assert!(
+      error.to_string().contains("rebase has conflicts"),
+      "unexpected error: {error:?}"
+    );
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("status after failed rebase")
+        .name,
+      base_branch
+    );
   }
 
   #[test]
