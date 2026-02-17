@@ -1,9 +1,9 @@
 use gpui::{
-  App, Bounds, ContentMask, DispatchPhase, ElementId, ElementInputHandler, Entity, GlobalElementId,
-  Hitbox, HitboxBehavior, InspectorElementId, LayoutId, MouseButton, MouseDownEvent,
-  MouseMoveEvent, MouseUpEvent, PaintQuad, Path, PathBuilder, Pixels, Point, ScrollDelta,
-  ScrollWheelEvent, ShapedLine, Style, TextAlign, TextRun, TextStyle, Window, fill, point,
-  prelude::*, px, relative, size,
+  App, Bounds, ContentMask, CursorStyle, DispatchPhase, ElementId, ElementInputHandler, Entity,
+  GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, LayoutId, MouseButton,
+  MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Path, PathBuilder, Pixels, Point,
+  ScrollDelta, ScrollWheelEvent, ShapedLine, Style, TextAlign, TextRun, TextStyle, Window, fill,
+  point, prelude::*, px, relative, size,
 };
 use std::{
   collections::{HashMap, HashSet},
@@ -223,6 +223,19 @@ impl PositionMap {
     let line_start = document.line_to_char(doc_line);
     Some(line_start + column)
   }
+}
+
+fn position_hits_review_comment_line(position_map: &PositionMap, position: Point<Pixels>) -> bool {
+  let Some(display_line) = position_map.display_line_for_position(position) else {
+    return false;
+  };
+  let Some(projection) = &position_map.projection else {
+    return false;
+  };
+  matches!(
+    projection.lines.get(display_line),
+    Some(DisplayLine::ReviewComment { .. })
+  )
 }
 
 /// Helper to convert syntax highlights to TextRuns for rendering
@@ -1767,6 +1780,15 @@ impl Element for EditorElement {
       projection: prepaint.projection.clone(),
     });
 
+    window.set_cursor_style(CursorStyle::IBeam, &prepaint.scroll_hitbox);
+    let mouse_position = window.mouse_position();
+    if prepaint.bounds.contains(&mouse_position)
+      && prepaint.scroll_hitbox.should_handle_scroll(window)
+      && !position_hits_review_comment_line(&position_map, mouse_position)
+    {
+      window.set_window_cursor_style(CursorStyle::IBeam);
+    }
+
     if is_primary {
       window.handle_input(
         &focus_handle,
@@ -1999,7 +2021,9 @@ impl Element for EditorElement {
 mod tests {
   use super::*;
   use crate::editor::tests::EditorTestContext;
-  use gpui::{TestAppContext, px, size};
+  use crate::projection::{Projection, ReviewCommentSide};
+  use gpui::{Context, Modifiers, Render, TestAppContext, Window, point, px, size};
+  use std::sync::Arc;
   use syntax::TokenType;
 
   // Helper to create test bounds
@@ -2009,6 +2033,106 @@ mod tests {
 
   fn test_editor(cx: &mut TestAppContext) -> Entity<Editor> {
     EditorTestContext::with_text(cx.clone(), "").editor
+  }
+
+  fn projection_with_review_comment_line() -> Arc<Projection> {
+    Arc::new(Projection {
+      lines: vec![
+        DisplayLine::Doc {
+          doc_line: 0,
+          old_line: Some(0),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::ReviewComment {
+          id: 1,
+          side: ReviewCommentSide::Right,
+          group_id: None,
+          background: None,
+          secondary: false,
+          text: Arc::from("comment"),
+          is_header: true,
+        },
+        DisplayLine::Doc {
+          doc_line: 1,
+          old_line: Some(1),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+      ],
+      display_to_doc: vec![Some(0), None, Some(1)],
+      doc_to_display: vec![Some(0), Some(2)],
+      visible_doc_lines: vec![0, 1],
+      start_gap: None,
+      end_gap: None,
+      groups: HashMap::new(),
+    })
+  }
+
+  fn test_position_map(projection: Option<Arc<Projection>>) -> PositionMap {
+    PositionMap {
+      shaped_lines: Vec::new(),
+      line_texts: HashMap::new(),
+      bounds: test_bounds(200.0, 100.0),
+      line_height: px(20.0),
+      viewport: 0..3,
+      scroll_offset: 0.0,
+      projection,
+    }
+  }
+
+  struct EditorCursorTestView {
+    editor: Entity<Editor>,
+  }
+
+  impl Render for EditorCursorTestView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+      EditorElement::new(self.editor.clone())
+    }
+  }
+
+  #[gpui::test]
+  fn test_editor_element_tracks_mouse_move_inside_bounds(cx: &mut TestAppContext) {
+    let editor = test_editor(cx);
+    let editor_for_assert = editor.clone();
+    let (_view, cx) = cx.add_window_view(move |_window, _cx| EditorCursorTestView {
+      editor: editor.clone(),
+    });
+
+    let hover_point = point(px(12.0), px(12.0));
+    cx.simulate_mouse_move(hover_point, None, Modifiers::none());
+    let last_mouse_position =
+      editor_for_assert.read_with(cx, |editor, _| editor.last_mouse_position);
+
+    assert_eq!(last_mouse_position, Some(hover_point));
+  }
+
+  #[test]
+  fn test_position_hits_review_comment_line_true_for_comment_line() {
+    let position_map = test_position_map(Some(projection_with_review_comment_line()));
+    let position = point(px(8.0), px(24.0));
+
+    assert!(position_hits_review_comment_line(&position_map, position));
+  }
+
+  #[test]
+  fn test_position_hits_review_comment_line_false_for_doc_line() {
+    let position_map = test_position_map(Some(projection_with_review_comment_line()));
+    let position = point(px(8.0), px(4.0));
+
+    assert!(!position_hits_review_comment_line(&position_map, position));
+  }
+
+  #[test]
+  fn test_position_hits_review_comment_line_false_without_projection() {
+    let position_map = test_position_map(None);
+    let position = point(px(8.0), px(24.0));
+
+    assert!(!position_hits_review_comment_line(&position_map, position));
   }
 
   // ============================================================================
