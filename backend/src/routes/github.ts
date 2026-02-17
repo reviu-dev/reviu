@@ -1,4 +1,5 @@
 import type { Endpoints } from '@octokit/types'
+import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
@@ -7,6 +8,8 @@ import { authMiddleware } from '../middlewares/auth.js'
 import {
   compareGithubRefs,
   createGithubPullRequestComment,
+  createGithubPullRequestCommentReply,
+  deleteGithubPullRequestComment,
   fetchGithubNotifications,
   fetchGithubPullRequest,
   fetchGithubPullRequestComments,
@@ -14,37 +17,44 @@ import {
   fetchGithubPullRequests,
   fetchGithubRepositoryContent,
   patchGithubPullRequestComment,
+
 } from '../services/github.js'
 
-type ListPullsParams = Endpoints['GET /repos/{owner}/{repo}/pulls']['parameters']
-type CompareParams
-  = Endpoints['GET /repos/{owner}/{repo}/compare/{basehead}']['parameters']
+// type ListPullsParams = Endpoints['GET /repos/{owner}/{repo}/pulls']['parameters']
+// type CompareParams
+//   = Endpoints['GET /repos/{owner}/{repo}/compare/{basehead}']['parameters']
 
-type PullRequestParams
-  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
-type PullRequestCommentsParams
-  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
-type CreatePullRequestCommentParams
-  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
-type PullRequestCommentResponse
-  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data'][number]
-type CreatePullRequestCommentResponse
-  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data']
-type UpdatePullRequestCommentParams
-  = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['parameters']
-type UpdatePullRequestCommentResponse
-  = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['response']['data']
-type NotificationsParams = Endpoints['GET /notifications']['parameters']
-type NotificationResponse = Endpoints['GET /notifications']['response']['data'][number]
+// type PullRequestParams
+//   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
+// type PullRequestCommentsParams
+//   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
+// type CreatePullRequestCommentParams
+//   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
+// type CreatePullRequestCommentReplyParams
+//   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies']['parameters']
+// type PullRequestCommentResponse
+//   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data'][number]
+// type CreatePullRequestCommentResponse
+//   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data']
+// type CreatePullRequestCommentReplyResponse
+//   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies']['response']['data']
+// type UpdatePullRequestCommentParams
+//   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['parameters']
+// type UpdatePullRequestCommentResponse
+//   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['response']['data']
+// type DeletePullRequestCommentParams
+//   = Endpoints['DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}']['parameters']
+// type NotificationsParams = Endpoints['GET /notifications']['parameters']
+// type NotificationResponse = Endpoints['GET /notifications']['response']['data'][number]
 
-type GetContentParams
-  = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['parameters']
+// type GetContentParams
+//   = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['parameters']
 
-type PullRequestDetailsResponse
-  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['response']['data']
+// type PullRequestDetailsResponse
+//   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['response']['data']
 
-type PullRequestResponse
-  = Endpoints['GET /repos/{owner}/{repo}/pulls']['response']['data'][number]
+// type PullRequestResponse
+//   = Endpoints['GET /repos/{owner}/{repo}/pulls']['response']['data'][number]
 
 interface GithubRepository {
   owner: string
@@ -157,6 +167,7 @@ interface GithubFileContent {
 type GithubReviewCommentResponse
   = | PullRequestCommentResponse
     | CreatePullRequestCommentResponse
+    | CreatePullRequestCommentReplyResponse
     | UpdatePullRequestCommentResponse
 
 const updatePullRequestCommentBodySchema = z.object({
@@ -482,7 +493,7 @@ export const githubRoutes = githubRouter
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })
-  .post('/pr/:prId/comments/:commentId/reply', zValidator(
+  .post('/pr/:prId/comments/:commentId/replies', zValidator(
     'json',
     createPullRequestThreadReplyBodySchema,
   ), async (ctx) => {
@@ -499,18 +510,49 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const params = {
+      const params: CreatePullRequestCommentReplyParams = {
         owner: org,
         repo,
         pull_number: pullNumber,
+        comment_id: inReplyToId,
         body,
-        in_reply_to: inReplyToId,
-      } as CreatePullRequestCommentParams
+      }
 
-      const data = await createGithubPullRequestComment(githubToken, params)
+      const data = await createGithubPullRequestCommentReply(githubToken, params)
 
       const comment = mapGithubPullRequestReviewComment(data)
       return ctx.json({ comment }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .delete('/pr/:id/comments/:commentId', async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const commentId = Number(ctx.req.param('commentId'))
+
+    if (!org || !repo || Number.isNaN(pullNumber) || Number.isNaN(commentId)) {
+      return ctx.json({ error: 'Missing org, repo, id, or commentId' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: DeletePullRequestCommentParams = {
+        owner: org,
+        repo,
+        comment_id: commentId,
+      }
+
+      await deleteGithubPullRequestComment(githubToken, params)
+
+      return ctx.json({ success: true }, 200)
     }
     catch (error) {
       const status = (error as { status?: number }).status

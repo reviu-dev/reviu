@@ -1,39 +1,45 @@
 import type { Endpoints } from '@octokit/types'
 import { request } from '@octokit/request'
 
-type ListPullsParams = Endpoints['GET /repos/{owner}/{repo}/pulls']['parameters']
-type CompareParams
+export type ListPullsParams = Endpoints['GET /repos/{owner}/{repo}/pulls']['parameters']
+export type CompareParams
   = Endpoints['GET /repos/{owner}/{repo}/compare/{basehead}']['parameters']
-type PullRequestParams
+export type PullRequestParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
-type PullRequestCommentsParams
+export type PullRequestCommentsParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
-type CreatePullRequestCommentParams
+export type CreatePullRequestCommentParams
   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
-type UpdatePullRequestCommentParams
+export type CreatePullRequestCommentReplyParams
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies']['parameters']
+export type UpdatePullRequestCommentParams
   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['parameters']
-type PullRequestFilesParams
+export type DeletePullRequestCommentParams
+  = Endpoints['DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}']['parameters']
+export type PullRequestFilesParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['parameters']
-type NotificationsParams = Endpoints['GET /notifications']['parameters']
-type GetContentParams
+export type NotificationsParams = Endpoints['GET /notifications']['parameters']
+export type GetContentParams
   = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['parameters']
 
-type NotificationResponse = Endpoints['GET /notifications']['response']['data'][number]
-type PullRequestResponse
+export type NotificationResponse = Endpoints['GET /notifications']['response']['data'][number]
+export type PullRequestResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls']['response']['data'][number]
-type PullRequestDetailsResponse
+export type PullRequestDetailsResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['response']['data']
-type PullRequestCommentResponse
+export type PullRequestCommentResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data'][number]
-type CreatePullRequestCommentResponse
+export type CreatePullRequestCommentResponse
   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data']
-type UpdatePullRequestCommentResponse
+export type CreatePullRequestCommentReplyResponse
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies']['response']['data']
+export type UpdatePullRequestCommentResponse
   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['response']['data']
-type PullRequestFileResponse
+export type PullRequestFileResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['response']['data'][number]
-type GetContentResponse
+export type GetContentResponse
   = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['response']['data']
-type GithubUserResponse = Endpoints['GET /user']['response']['data']
+export type GithubUserResponse = Endpoints['GET /user']['response']['data']
 
 function githubAuthHeaders(token: string, extraHeaders?: Record<string, string>) {
   return {
@@ -144,6 +150,17 @@ export async function createGithubPullRequestComment(
   return data
 }
 
+export async function createGithubPullRequestCommentReply(
+  token: string,
+  params: CreatePullRequestCommentReplyParams,
+): Promise<CreatePullRequestCommentReplyResponse> {
+  const { data } = await request('POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
 export async function patchGithubPullRequestComment(
   token: string,
   params: UpdatePullRequestCommentParams,
@@ -153,6 +170,16 @@ export async function patchGithubPullRequestComment(
     headers: githubAuthHeaders(token),
   })
   return data
+}
+
+export async function deleteGithubPullRequestComment(
+  token: string,
+  params: DeletePullRequestCommentParams,
+): Promise<void> {
+  await request('DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
 }
 
 export async function fetchGithubRepositoryContent(

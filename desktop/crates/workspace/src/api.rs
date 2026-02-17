@@ -629,7 +629,7 @@ impl ApiClient {
     let response = self
       .authed_request(
         Method::POST,
-        &format!("/github/pr/{number}/comments/{comment_id}/reply"),
+        &format!("/github/pr/{number}/comments/{comment_id}/replies"),
       )
       .query(&[("org", owner), ("repo", repo)])
       .json(&ReplyGithubPullRequestCommentRequest { body })
@@ -642,6 +642,29 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestCommentResponse>()?;
     Ok(payload.comment)
+  }
+
+  pub fn delete_pull_request_review_comment(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    comment_id: u64,
+  ) -> Result<()> {
+    let response = self
+      .authed_request(
+        Method::DELETE,
+        &format!("/github/pr/{number}/comments/{comment_id}"),
+      )
+      .query(&[("org", owner), ("repo", repo)])
+      .send()?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !response.status().is_success() {
+      anyhow::bail!("unexpected status: {}", response.status());
+    }
+    Ok(())
   }
 
   pub fn fetch_github_file_content(
@@ -717,6 +740,43 @@ mod tests {
     });
 
     (address, handle)
+  }
+
+  fn start_single_response_server_with_request_line(
+    status: &str,
+    body: &str,
+  ) -> (String, Arc<Mutex<Option<String>>>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+    let address = format!("http://{}", listener.local_addr().expect("local addr"));
+    let status = status.to_string();
+    let body = body.to_string();
+    let request_line = Arc::new(Mutex::new(None));
+    let request_line_for_thread = request_line.clone();
+
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().expect("accept connection");
+      let mut request_buffer = [0u8; 4096];
+      let bytes_read = stream.read(&mut request_buffer).expect("read request");
+      let request = String::from_utf8_lossy(&request_buffer[..bytes_read]);
+      let first_line = request
+        .lines()
+        .next()
+        .map(str::to_string)
+        .unwrap_or_default();
+      *request_line_for_thread.lock().expect("lock request line") = Some(first_line);
+
+      let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+        body.as_bytes().len(),
+        body
+      );
+      stream
+        .write_all(response.as_bytes())
+        .expect("write response");
+      stream.flush().expect("flush response");
+    });
+
+    (address, request_line, handle)
   }
 
   fn make_pull_request(
@@ -1110,6 +1170,63 @@ mod tests {
   }
 
   #[test]
+  fn reply_pull_request_review_comment_uses_replies_route() {
+    let body = r#"{
+      "comment": {
+        "id": 3,
+        "pullRequestReviewId": 12,
+        "diffHunk": "@@ -1 +1 @@",
+        "path": "src/main.rs",
+        "position": 1,
+        "originalPosition": 1,
+        "commitId": "head123",
+        "originalCommitId": "base123",
+        "inReplyToId": 2,
+        "user": { "login": "octocat", "avatarUrl": null },
+        "body": "Reply body",
+        "createdAt": "2026-02-15T12:00:00Z",
+        "updatedAt": "2026-02-16T12:01:00Z",
+        "startLine": null,
+        "originalStartLine": null,
+        "startSide": null,
+        "line": 1,
+        "originalLine": 1,
+        "side": "RIGHT"
+      }
+    }"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .reply_pull_request_review_comment("acme", "widget", 42, 2, "Reply body")
+      .expect("create review comment reply");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request_line.contains("/github/pr/42/comments/2/replies"),
+      "unexpected request line: {request_line}"
+    );
+  }
+
+  #[test]
+  fn delete_pull_request_review_comment_returns_ok_on_success() {
+    let (base_url, handle) = start_single_response_server("200 OK", "{}");
+    let api = make_test_api_client(base_url);
+
+    api
+      .delete_pull_request_review_comment("acme", "widget", 42, 2)
+      .expect("delete review comment");
+
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
   fn fetch_github_notifications_parses_success_payload() {
     let body = r#"{
       "notifications": [
@@ -1277,6 +1394,19 @@ mod tests {
 
     let err = api
       .reply_pull_request_review_comment("acme", "widget", 42, 2, "Reply body")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn delete_pull_request_review_comment_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .delete_pull_request_review_comment("acme", "widget", 42, 2)
       .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
