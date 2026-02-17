@@ -1,10 +1,19 @@
 import type { Endpoints } from '@octokit/types'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
-import { request } from '@octokit/request'
 import { Hono } from 'hono'
 import z from 'zod'
 import { authMiddleware } from '../middlewares/auth.js'
+import {
+  compareGithubRefs,
+  fetchGithubNotifications,
+  fetchGithubPullRequest,
+  fetchGithubPullRequestComments,
+  fetchGithubPullRequestFilesAllPages,
+  fetchGithubPullRequests,
+  fetchGithubRepositoryContent,
+  patchGithubPullRequestComment,
+} from '../services/github.js'
 
 type ListPullsParams = Endpoints['GET /repos/{owner}/{repo}/pulls']['parameters']
 type CompareParams
@@ -20,10 +29,6 @@ type UpdatePullRequestCommentParams
   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['parameters']
 type UpdatePullRequestCommentResponse
   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['response']['data']
-type PullRequestFilesParams
-  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['parameters']
-type PullRequestFileResponse
-  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['response']['data'][number]
 type NotificationsParams = Endpoints['GET /notifications']['parameters']
 type NotificationResponse = Endpoints['GET /notifications']['response']['data'][number]
 
@@ -194,12 +199,7 @@ export const githubRoutes = githubRouter
         all: false,
       }
 
-      const { data } = await request('GET /notifications', {
-        ...params,
-        headers: {
-          authorization: `Bearer ${githubToken}`,
-        },
-      })
+      const data = await fetchGithubNotifications(githubToken, params)
 
       const notifications: GithubNotification[] = data.map(notification => ({
         id: notification.id,
@@ -251,12 +251,7 @@ export const githubRoutes = githubRouter
         per_page: 20,
       }
 
-      const { data } = await request('GET /repos/{owner}/{repo}/pulls', {
-        ...params,
-        headers: {
-          authorization: `Bearer ${githubToken}`,
-        },
-      })
+      const data = await fetchGithubPullRequests(githubToken, params)
 
       const pullRequests: GithubPullRequest[] = data.map(pull => ({
         number: pull.number,
@@ -296,12 +291,7 @@ export const githubRoutes = githubRouter
         pull_number: pullNumber,
       }
 
-      const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
-        ...params,
-        headers: {
-          authorization: `Bearer ${githubToken}`,
-        },
-      })
+      const data = await fetchGithubPullRequest(githubToken, params)
 
       const author: GithubPullRequestDetailsAuthor = {
         login: data.user.login,
@@ -320,15 +310,7 @@ export const githubRoutes = githubRouter
           basehead: `${baseRef}...${headOwner}:${headRef}`,
         }
 
-        const { data: compare } = await request(
-          'GET /repos/{owner}/{repo}/compare/{basehead}',
-          {
-            ...compareParams,
-            headers: {
-              authorization: `Bearer ${githubToken}`,
-            },
-          },
-        )
+        const compare = await compareGithubRefs(githubToken, compareParams)
 
         mergeBaseSha = compare.merge_base_commit.sha
       }
@@ -386,37 +368,11 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const files: PullRequestFileResponse[] = []
-      const perPage = 100
-      let page = 1
-
-      // Fetch all pages of files (GitHub max is 100 per page).
-      while (true) {
-        const params: PullRequestFilesParams = {
-          owner: org,
-          repo,
-          pull_number: pullNumber,
-          per_page: perPage,
-          page,
-        }
-
-        const { data } = await request(
-          'GET /repos/{owner}/{repo}/pulls/{pull_number}/files',
-          {
-            ...params,
-            headers: {
-              authorization: `Bearer ${githubToken}`,
-            },
-          },
-        )
-
-        files.push(...data)
-
-        if (data.length < perPage) {
-          break
-        }
-        page += 1
-      }
+      const files = await fetchGithubPullRequestFilesAllPages(githubToken, {
+        owner: org,
+        repo,
+        pull_number: pullNumber,
+      })
 
       return ctx.json({ files }, 200)
     }
@@ -443,12 +399,7 @@ export const githubRoutes = githubRouter
         per_page: 100,
       }
 
-      const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
-        ...params,
-        headers: {
-          authorization: `Bearer ${githubToken}`,
-        },
-      })
+      const data = await fetchGithubPullRequestComments(githubToken, params)
 
       const comments: GithubPullRequestReviewComment[]
         = data.map(mapGithubPullRequestReviewComment)
@@ -483,12 +434,7 @@ export const githubRoutes = githubRouter
         body,
       }
 
-      const { data } = await request('PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}', {
-        ...params,
-        headers: {
-          authorization: `Bearer ${githubToken}`,
-        },
-      })
+      const data = await patchGithubPullRequestComment(githubToken, params)
 
       const comment = mapGithubPullRequestReviewComment(data)
       return ctx.json({ comment }, 200)
@@ -519,13 +465,7 @@ export const githubRoutes = githubRouter
         ref,
       }
 
-      const { data } = await request('GET /repos/{owner}/{repo}/contents/{path}', {
-        ...params,
-        headers: {
-          authorization: `Bearer ${githubToken}`,
-          accept: 'application/vnd.github.raw+json',
-        },
-      })
+      const data = await fetchGithubRepositoryContent(githubToken, params)
 
       let content: string | null = null
 

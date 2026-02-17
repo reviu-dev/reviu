@@ -1,7 +1,7 @@
-import { request } from '@octokit/request'
 import { pick } from 'es-toolkit'
 import { Hono } from 'hono'
 import { authMiddleware } from '../middlewares/auth.js'
+import { fetchGithubViewer } from '../services/github.js'
 
 const userRouter = new Hono()
 
@@ -12,11 +12,7 @@ export const userRoutes = userRouter.get('/me', authMiddleware, async (ctx) => {
   let githubLogin: string | null = null
 
   try {
-    const { data } = await request('GET /user', {
-      headers: {
-        authorization: `Bearer ${githubToken}`,
-      },
-    })
+    const data = await fetchGithubViewer(githubToken)
     githubLogin = data.login ?? null
   }
   catch {
