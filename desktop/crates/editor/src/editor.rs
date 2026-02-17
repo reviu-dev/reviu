@@ -3054,11 +3054,46 @@ impl Editor {
     let Some(cursor) = self.current_display_cursor(cx) else {
       return false;
     };
+    let line_len = self.display_line_len(cursor.line, cx);
+
+    if self.projection.is_some() {
+      if delta < 0 && cursor.column == 0 {
+        if let Some(target_line) = self.next_selectable_display_line(cursor.line, -1) {
+          let column = self.display_line_len(target_line, cx);
+          self.target_column = Some(column);
+          self.set_display_cursor(
+            DisplayCursor {
+              line: target_line,
+              column,
+            },
+            cx,
+          );
+        }
+        // Keep projected navigation in display space; do not fall back to
+        // doc-only movement into hidden lines.
+        return true;
+      }
+      if delta > 0 && cursor.column == line_len {
+        if let Some(target_line) = self.next_selectable_display_line(cursor.line, 1) {
+          self.target_column = Some(0);
+          self.set_display_cursor(
+            DisplayCursor {
+              line: target_line,
+              column: 0,
+            },
+            cx,
+          );
+        }
+        // Keep projected navigation in display space; do not fall back to
+        // doc-only movement into hidden lines.
+        return true;
+      }
+    }
+
     if !self.is_removed_display_line(cursor.line, cx) {
       return false;
     }
 
-    let line_len = self.display_line_len(cursor.line, cx);
     let mut column = cursor.column as i32 + delta;
     column = column.clamp(0, line_len as i32);
     let column = column as usize;
@@ -3141,11 +3176,48 @@ impl Editor {
       return true;
     }
 
+    let line_len = self.display_line_len(cursor.line, cx);
+
+    if self.projection.is_some() {
+      if delta < 0 && cursor.column == 0 {
+        if let Some(target_line) = self.next_selectable_display_line(cursor.line, -1) {
+          let column = self.display_line_len(target_line, cx);
+          self.target_column = Some(column);
+          self.set_display_selection_with_anchor(
+            anchor,
+            DisplayCursor {
+              line: target_line,
+              column,
+            },
+            cx,
+          );
+        }
+        // Keep projected selection navigation in display space; do not fall
+        // back to doc-only selection into hidden lines.
+        return true;
+      }
+      if delta > 0 && cursor.column == line_len {
+        if let Some(target_line) = self.next_selectable_display_line(cursor.line, 1) {
+          self.target_column = Some(0);
+          self.set_display_selection_with_anchor(
+            anchor,
+            DisplayCursor {
+              line: target_line,
+              column: 0,
+            },
+            cx,
+          );
+        }
+        // Keep projected selection navigation in display space; do not fall
+        // back to doc-only selection into hidden lines.
+        return true;
+      }
+    }
+
     if !self.is_removed_display_line(cursor.line, cx) {
       return false;
     }
 
-    let line_len = self.display_line_len(cursor.line, cx);
     let mut column = cursor.column as i32 + delta;
     column = column.clamp(0, line_len as i32);
     let column = column as usize;
@@ -4670,6 +4742,53 @@ pub mod tests {
     })
   }
 
+  fn projection_with_hidden_start_and_end() -> Arc<Projection> {
+    let start_gap = GapId { start: 0, end: 1 };
+    let end_gap = GapId { start: 4, end: 5 };
+    Arc::new(Projection {
+      lines: vec![
+        DisplayLine::Gap {
+          id: start_gap,
+          hidden_range: 0..1,
+        },
+        DisplayLine::Doc {
+          doc_line: 1,
+          old_line: Some(1),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::Doc {
+          doc_line: 2,
+          old_line: Some(2),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::Doc {
+          doc_line: 3,
+          old_line: Some(3),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::Gap {
+          id: end_gap,
+          hidden_range: 4..5,
+        },
+      ],
+      display_to_doc: vec![None, Some(1), Some(2), Some(3), None],
+      doc_to_display: vec![None, Some(1), Some(2), Some(3), None],
+      visible_doc_lines: vec![1, 2, 3],
+      start_gap: Some(start_gap),
+      end_gap: Some(end_gap),
+      groups: HashMap::new(),
+    })
+  }
+
   // ============================================================================
   // Cache Management Tests
   // ============================================================================
@@ -5435,6 +5554,46 @@ pub mod tests {
       );
       assert!(editor.display_to_doc_line(1).is_none());
       assert_eq!(editor.selected_range, 0..2);
+    });
+  }
+
+  #[gpui::test]
+  fn test_move_display_cursor_left_stays_on_first_visible_line_with_start_gap(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb\nc\nd\ne");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.projection = Some(projection_with_hidden_start_and_end());
+      editor.set_display_cursor(DisplayCursor { line: 1, column: 0 }, cx);
+
+      let before_cursor = editor.current_display_cursor(cx);
+      let before_offset = editor.cursor_offset();
+      assert!(editor.move_display_cursor_horizontal(-1, cx));
+
+      assert_eq!(editor.current_display_cursor(cx), before_cursor);
+      assert_eq!(editor.cursor_offset(), before_offset);
+      assert_eq!(editor.selected_range, before_offset..before_offset);
+    });
+  }
+
+  #[gpui::test]
+  fn test_move_display_cursor_right_stays_on_last_visible_line_with_end_gap(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb\nc\nd\ne");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.projection = Some(projection_with_hidden_start_and_end());
+      editor.set_display_cursor(DisplayCursor { line: 3, column: 1 }, cx);
+
+      let before_cursor = editor.current_display_cursor(cx);
+      let before_offset = editor.cursor_offset();
+      assert!(editor.move_display_cursor_horizontal(1, cx));
+
+      assert_eq!(editor.current_display_cursor(cx), before_cursor);
+      assert_eq!(editor.cursor_offset(), before_offset);
+      assert_eq!(editor.selected_range, before_offset..before_offset);
     });
   }
 

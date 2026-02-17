@@ -14,7 +14,10 @@ fn previous_char_boundary(text: &str, byte_offset: usize) -> Option<usize> {
   if byte_offset == 0 {
     return None;
   }
-  text[..byte_offset].char_indices().next_back().map(|(idx, _)| idx)
+  text[..byte_offset]
+    .char_indices()
+    .next_back()
+    .map(|(idx, _)| idx)
 }
 
 fn code_subsegment_start(segment: &str, cursor_byte: usize) -> Option<usize> {
@@ -849,14 +852,14 @@ mod tests {
   fn test_next_word_boundary_dot_separated_identifier(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "content.font_family");
 
-    let boundary = ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      next_word_boundary(editor, 0, cx)
-    });
+    let boundary = ctx
+      .editor
+      .update(&mut ctx.cx, |editor, cx| next_word_boundary(editor, 0, cx));
     assert_eq!(boundary, 7);
 
-    let boundary = ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      next_word_boundary(editor, 8, cx)
-    });
+    let boundary = ctx
+      .editor
+      .update(&mut ctx.cx, |editor, cx| next_word_boundary(editor, 8, cx));
     assert_eq!(boundary, 19);
   }
 

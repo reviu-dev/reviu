@@ -796,12 +796,8 @@ impl CommandPalette {
     let open_github_pr_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Paste GitHub pull request URL..."));
 
-    let default_repositories: Vec<Rc<CommandPaletteRepository>> = config
-      .repositories
-      .iter()
-      .cloned()
-      .map(Rc::new)
-      .collect();
+    let default_repositories: Vec<Rc<CommandPaletteRepository>> =
+      config.repositories.iter().cloned().map(Rc::new).collect();
 
     let repositories_list_delegate = RepositoriesListDelegate {
       _repositories: default_repositories.clone(),
