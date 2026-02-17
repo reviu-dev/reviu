@@ -237,12 +237,14 @@ pub struct Editor {
   editing_review_comment_id: Option<u64>,
   review_comment_edit_initial_body: Option<Arc<str>>,
   review_comment_edit_submitting_id: Option<u64>,
+  review_comment_edit_error: Option<(u64, Arc<str>)>,
   review_comment_create_handler: Option<ReviewCommentCreateHandler>,
   review_comment_create_input: Option<Entity<InputState>>,
   review_comment_create_draft: Option<ReviewCommentCreateDraft>,
   review_comment_create_drag_start_display_line: Option<usize>,
   review_comment_create_drag_active: bool,
   review_comment_create_submitting: bool,
+  review_comment_create_error: Option<Arc<str>>,
   hovered_review_comment_create_display_line: Option<usize>,
   collapsed_review_comments: HashSet<u64>,
   review_comment_scroll_epoch: usize,
@@ -506,12 +508,14 @@ impl Editor {
       editing_review_comment_id: None,
       review_comment_edit_initial_body: None,
       review_comment_edit_submitting_id: None,
+      review_comment_edit_error: None,
       review_comment_create_handler: None,
       review_comment_create_input: None,
       review_comment_create_draft: None,
       review_comment_create_drag_start_display_line: None,
       review_comment_create_drag_active: false,
       review_comment_create_submitting: false,
+      review_comment_create_error: None,
       hovered_review_comment_create_display_line: None,
       collapsed_review_comments: HashSet::new(),
       review_comment_scroll_epoch: 0,
@@ -703,6 +707,13 @@ impl Editor {
     {
       self.review_comment_edit_submitting_id = None;
     }
+    if self
+      .review_comment_edit_error
+      .as_ref()
+      .is_some_and(|(id, _)| !self.review_comments.iter().any(|comment| comment.id == *id))
+    {
+      self.review_comment_edit_error = None;
+    }
     for comment in &self.review_comments {
       self
         .review_comment_markdown_states
@@ -826,6 +837,13 @@ impl Editor {
     {
       self.review_comment_edit_submitting_id = None;
     }
+    if self
+      .review_comment_edit_error
+      .as_ref()
+      .is_some_and(|(id, _)| !self.editable_review_comment_ids.contains(id))
+    {
+      self.review_comment_edit_error = None;
+    }
     cx.notify();
   }
 
@@ -855,6 +873,7 @@ impl Editor {
   fn clear_review_comment_edit_state(&mut self) {
     self.editing_review_comment_id = None;
     self.review_comment_edit_initial_body = None;
+    self.review_comment_edit_error = None;
   }
 
   fn clear_review_comment_create_state(&mut self) {
@@ -862,31 +881,40 @@ impl Editor {
     self.review_comment_create_drag_start_display_line = None;
     self.review_comment_create_drag_active = false;
     self.review_comment_create_submitting = false;
+    self.review_comment_create_error = None;
     self.hovered_review_comment_create_display_line = None;
   }
 
   pub fn finish_review_comment_edit_submission(
     &mut self,
     comment_id: u64,
-    success: bool,
+    error: Option<Arc<str>>,
     cx: &mut Context<Self>,
   ) {
     if self.review_comment_edit_submitting_id != Some(comment_id) {
       return;
     }
     self.review_comment_edit_submitting_id = None;
-    if success {
+    if let Some(error) = error {
+      self.review_comment_edit_error = Some((comment_id, error));
+    } else {
       self.clear_review_comment_edit_state();
     }
     self.refresh_review_comment_projection(cx);
   }
 
-  pub fn finish_review_comment_create_submission(&mut self, success: bool, cx: &mut Context<Self>) {
+  pub fn finish_review_comment_create_submission(
+    &mut self,
+    error: Option<Arc<str>>,
+    cx: &mut Context<Self>,
+  ) {
     if !self.review_comment_create_submitting {
       return;
     }
     self.review_comment_create_submitting = false;
-    if success {
+    if let Some(error) = error {
+      self.review_comment_create_error = Some(error);
+    } else {
       self.clear_review_comment_create_state();
     }
     self.refresh_review_comment_projection(cx);
@@ -949,6 +977,7 @@ impl Editor {
 
     self.editing_review_comment_id = Some(comment_id);
     self.review_comment_edit_initial_body = Some(body);
+    self.review_comment_edit_error = None;
     self.refresh_review_comment_projection(cx);
   }
 
@@ -1005,6 +1034,7 @@ impl Editor {
     if let Some(next_body) = next_review_comment_body(raw_value.as_str(), initial_body.as_ref())
       && let Some(handler) = self.review_comment_edit_handler.as_ref()
     {
+      self.review_comment_edit_error = None;
       self.review_comment_edit_submitting_id = Some(comment_id);
       handler(comment_id, next_body, window, cx);
       self.refresh_review_comment_projection(cx);
@@ -1101,6 +1131,7 @@ impl Editor {
       start_line: None,
       start_side: None,
     });
+    self.review_comment_create_error = None;
     self.hovered_review_comment_create_display_line = Some(target.display_line);
     cx.notify();
   }
@@ -1252,6 +1283,7 @@ impl Editor {
       cx,
     );
 
+    self.review_comment_create_error = None;
     self.review_comment_create_submitting = true;
     self.refresh_review_comment_projection(cx);
   }
@@ -2268,6 +2300,10 @@ impl Editor {
             let cancel_editor = editor_entity.clone();
             let save_editor = editor_entity.clone();
             let message_id = message.id;
+            let edit_error = self
+              .review_comment_edit_error
+              .as_ref()
+              .and_then(|(id, error)| (*id == message_id).then_some(error.clone()));
             v_flex()
               .on_action(cx.listener(Self::on_review_comment_edit_input_escape))
               .gap_2()
@@ -2275,44 +2311,64 @@ impl Editor {
               .child(
                 h_flex()
                   .items_center()
-                  .justify_end()
+                  .justify_between()
                   .gap_2()
                   .child(
                     div()
-                      .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                        cx.stop_propagation();
-                      })
-                      .child(
-                        Button::new(format!("review-comment-edit-cancel-{}", message_id))
-                          .ghost()
-                          .xsmall()
-                          .compact()
-                          .label("Cancel")
-                          .on_click(move |_, _, cx| {
-                            cx.stop_propagation();
-                            cancel_editor.update(cx, |editor, cx| {
-                              editor.cancel_review_comment_edit(cx);
-                            });
-                          }),
-                      ),
+                      .flex_1()
+                      .min_w_0()
+                      .when_some(edit_error, |this, error| {
+                        this.child(
+                          div()
+                            .text_xs()
+                            .text_color(theme.status_red())
+                            .overflow_hidden()
+                            .text_ellipsis_start()
+                            .child(error.as_ref().to_string()),
+                        )
+                      }),
                   )
                   .child(
-                    div()
-                      .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                        cx.stop_propagation();
-                      })
+                    h_flex()
+                      .items_center()
+                      .gap_2()
                       .child(
-                        Button::new(format!("review-comment-edit-save-{}", message_id))
-                          .xsmall()
-                          .compact()
-                          .label("Save")
-                          .disabled(!can_save_review_comment_edit)
-                          .on_click(move |_, window, cx| {
+                        div()
+                          .on_mouse_down(MouseButton::Left, |_, _, cx| {
                             cx.stop_propagation();
-                            save_editor.update(cx, |editor, cx| {
-                              editor.save_review_comment_edit(message_id, window, cx);
-                            });
-                          }),
+                          })
+                          .child(
+                            Button::new(format!("review-comment-edit-cancel-{}", message_id))
+                              .ghost()
+                              .xsmall()
+                              .compact()
+                              .label("Cancel")
+                              .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                cancel_editor.update(cx, |editor, cx| {
+                                  editor.cancel_review_comment_edit(cx);
+                                });
+                              }),
+                          ),
+                      )
+                      .child(
+                        div()
+                          .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation();
+                          })
+                          .child(
+                            Button::new(format!("review-comment-edit-save-{}", message_id))
+                              .xsmall()
+                              .compact()
+                              .label("Save")
+                              .disabled(!can_save_review_comment_edit)
+                              .on_click(move |_, window, cx| {
+                                cx.stop_propagation();
+                                save_editor.update(cx, |editor, cx| {
+                                  editor.save_review_comment_edit(message_id, window, cx);
+                                });
+                              }),
+                          ),
                       ),
                   ),
               )
@@ -2573,6 +2629,7 @@ impl Editor {
         let cancel_editor = editor_entity.clone();
         let save_editor = editor_entity.clone();
         let can_save = self.review_comment_create_handler.is_some();
+        let create_error = self.review_comment_create_error.clone();
         Some(
           div()
             .w(px(REVIEW_COMMENT_FIXED_WIDTH_PX))
@@ -2596,44 +2653,64 @@ impl Editor {
                 .child(
                   h_flex()
                     .items_center()
-                    .justify_end()
+                    .justify_between()
                     .gap_2()
                     .child(
                       div()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                          cx.stop_propagation();
-                        })
-                        .child(
-                          Button::new("review-comment-create-cancel")
-                            .ghost()
-                            .xsmall()
-                            .compact()
-                            .label("Cancel")
-                            .on_click(move |_, _, cx| {
-                              cx.stop_propagation();
-                              cancel_editor.update(cx, |editor, cx| {
-                                editor.cancel_review_comment_create(cx);
-                              });
-                            }),
-                        ),
+                        .flex_1()
+                        .min_w_0()
+                        .when_some(create_error, |this, error| {
+                          this.child(
+                            div()
+                              .text_xs()
+                              .text_color(theme.status_red())
+                              .overflow_hidden()
+                              .text_ellipsis_start()
+                              .child(error.as_ref().to_string()),
+                          )
+                        }),
                     )
                     .child(
-                      div()
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                          cx.stop_propagation();
-                        })
+                      h_flex()
+                        .items_center()
+                        .gap_2()
                         .child(
-                          Button::new("review-comment-create-save")
-                            .xsmall()
-                            .compact()
-                            .label("Save")
-                            .disabled(!can_save)
-                            .on_click(move |_, window, cx| {
+                          div()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
                               cx.stop_propagation();
-                              save_editor.update(cx, |editor, cx| {
-                                editor.save_review_comment_create(window, cx);
-                              });
-                            }),
+                            })
+                            .child(
+                              Button::new("review-comment-create-cancel")
+                                .ghost()
+                                .xsmall()
+                                .compact()
+                                .label("Cancel")
+                                .on_click(move |_, _, cx| {
+                                  cx.stop_propagation();
+                                  cancel_editor.update(cx, |editor, cx| {
+                                    editor.cancel_review_comment_create(cx);
+                                  });
+                                }),
+                            ),
+                        )
+                        .child(
+                          div()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                              cx.stop_propagation();
+                            })
+                            .child(
+                              Button::new("review-comment-create-save")
+                                .xsmall()
+                                .compact()
+                                .label("Save")
+                                .disabled(!can_save)
+                                .on_click(move |_, window, cx| {
+                                  cx.stop_propagation();
+                                  save_editor.update(cx, |editor, cx| {
+                                    editor.save_review_comment_create(window, cx);
+                                  });
+                                }),
+                            ),
                         ),
                     ),
                 ),
@@ -5746,12 +5823,14 @@ pub mod tests {
           editing_review_comment_id: None,
           review_comment_edit_initial_body: None,
           review_comment_edit_submitting_id: None,
+          review_comment_edit_error: None,
           review_comment_create_handler: None,
           review_comment_create_input: None,
           review_comment_create_draft: None,
           review_comment_create_drag_start_display_line: None,
           review_comment_create_drag_active: false,
           review_comment_create_submitting: false,
+          review_comment_create_error: None,
           hovered_review_comment_create_display_line: None,
           collapsed_review_comments: HashSet::new(),
           review_comment_scroll_epoch: 0,
@@ -6058,11 +6137,12 @@ pub mod tests {
       editor.review_comment_edit_initial_body = Some(Arc::from("before"));
       editor.review_comment_edit_submitting_id = Some(42);
 
-      editor.finish_review_comment_edit_submission(42, true, cx);
+      editor.finish_review_comment_edit_submission(42, None, cx);
 
       assert!(editor.review_comment_edit_submitting_id.is_none());
       assert!(editor.editing_review_comment_id.is_none());
       assert!(editor.review_comment_edit_initial_body.is_none());
+      assert!(editor.review_comment_edit_error.is_none());
     });
   }
 
@@ -6075,13 +6155,20 @@ pub mod tests {
       editor.review_comment_edit_initial_body = Some(Arc::from("before"));
       editor.review_comment_edit_submitting_id = Some(42);
 
-      editor.finish_review_comment_edit_submission(42, false, cx);
+      editor.finish_review_comment_edit_submission(42, Some(Arc::from("request failed")), cx);
 
       assert!(editor.review_comment_edit_submitting_id.is_none());
       assert_eq!(editor.editing_review_comment_id, Some(42));
       assert_eq!(
         editor.review_comment_edit_initial_body.as_deref(),
         Some("before")
+      );
+      assert_eq!(
+        editor
+          .review_comment_edit_error
+          .as_ref()
+          .map(|(_, error)| error.as_ref()),
+        Some("request failed")
       );
     });
   }
@@ -6103,10 +6190,11 @@ pub mod tests {
       });
       editor.review_comment_create_submitting = true;
 
-      editor.finish_review_comment_create_submission(true, cx);
+      editor.finish_review_comment_create_submission(None, cx);
 
       assert!(editor.review_comment_create_draft.is_none());
       assert!(!editor.review_comment_create_submitting);
+      assert!(editor.review_comment_create_error.is_none());
     });
   }
 
@@ -6127,10 +6215,14 @@ pub mod tests {
       });
       editor.review_comment_create_submitting = true;
 
-      editor.finish_review_comment_create_submission(false, cx);
+      editor.finish_review_comment_create_submission(Some(Arc::from("request failed")), cx);
 
       assert!(editor.review_comment_create_draft.is_some());
       assert!(!editor.review_comment_create_submitting);
+      assert_eq!(
+        editor.review_comment_create_error.as_deref(),
+        Some("request failed")
+      );
     });
   }
 
