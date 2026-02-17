@@ -14,8 +14,7 @@ use git::{
   current_history_revision, delete_untracked_file, diff_set_from_patch, head_commit_status,
   list_branches, list_commit_changed_files, list_commit_history, list_repo_status,
   load_commit_file_diff, merge_branch, push, rebase_branch, restore_file, stage_all, stage_file,
-  switch_branch,
-  undo_last_commit, unstage_all, unstage_file,
+  switch_branch, undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
@@ -50,8 +49,8 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteHandler, CommandPalettePage,
   CommandPaletteRepository, ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState,
-  SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
-  StatusThemeExt, UiIconName, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
+  SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt,
+  UiIconName, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
   file_icon_path_for_path_with_theme, user_menu,
 };
 
@@ -136,7 +135,9 @@ fn render_repo_status_label(
     .flex_1()
     .overflow_hidden()
     .text_ellipsis_start()
-    .when(status == Some(RepoStatusKind::Deleted), |this| this.line_through())
+    .when(status == Some(RepoStatusKind::Deleted), |this| {
+      this.line_through()
+    })
     .child(label)
     .into_any_element()
 }
@@ -2061,7 +2062,8 @@ impl GitPage {
       CommandPaletteAction::SwitchRepository(repository) => {
         let repo_root = PathBuf::from(repository.path.as_ref());
         if !repo_root.is_dir() {
-          let message: SharedString = format!("Repository not found: {}", repo_root.display()).into();
+          let message: SharedString =
+            format!("Repository not found: {}", repo_root.display()).into();
           return Err(message);
         }
         self.set_selected_repo(repo_root.clone(), cx);

@@ -46,7 +46,8 @@ const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
 const DIAGONAL_STRIPE_WIDTH: f32 = 1.0;
 const INDENT_GUIDE_BORDER_WIDTH: f32 = 1.0;
 const INDENT_RAINBOW_BLOCK_COLUMNS: usize = 2;
-const EDITOR_CHAR_WIDTH_SAMPLE: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
+const EDITOR_CHAR_WIDTH_SAMPLE: &str =
+  "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
 
 fn clamp_to_char_boundary(text: &str, byte_offset: usize) -> usize {
   let mut byte_offset = byte_offset.min(text.len());
