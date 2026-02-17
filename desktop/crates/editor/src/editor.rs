@@ -129,6 +129,7 @@ pub enum DiffViewMode {
 pub type ReviewCommentEditHandler = Arc<dyn Fn(u64, Arc<str>, &mut Window, &mut App)>;
 pub type ReviewCommentCreateHandler =
   Arc<dyn Fn(ReviewCommentCreateRequest, &mut Window, &mut App)>;
+pub type ReviewCommentDeleteHandler = Arc<dyn Fn(u64, &mut Window, &mut App)>;
 pub type ReviewCommentLinkHandler = Arc<dyn Fn(u64, u64, &mut Window, &mut App) -> bool>;
 
 #[derive(Clone, Debug)]
@@ -249,6 +250,8 @@ pub struct Editor {
   review_comment_edit_initial_body: Option<Arc<str>>,
   review_comment_edit_submitting_id: Option<u64>,
   review_comment_edit_error: Option<(u64, Arc<str>)>,
+  review_comment_delete_handler: Option<ReviewCommentDeleteHandler>,
+  review_comment_delete_submitting_id: Option<u64>,
   review_comment_create_handler: Option<ReviewCommentCreateHandler>,
   review_comment_link_handler: Option<ReviewCommentLinkHandler>,
   review_comment_create_input: Option<Entity<InputState>>,
@@ -525,6 +528,8 @@ impl Editor {
       review_comment_edit_initial_body: None,
       review_comment_edit_submitting_id: None,
       review_comment_edit_error: None,
+      review_comment_delete_handler: None,
+      review_comment_delete_submitting_id: None,
       review_comment_create_handler: None,
       review_comment_link_handler: None,
       review_comment_create_input: None,
@@ -654,6 +659,7 @@ impl Editor {
       self.clear_review_comment_edit_state();
       self.clear_review_comment_create_state();
       self.clear_review_comment_reply_state();
+      self.review_comment_delete_submitting_id = None;
       self.collapsed_review_comments.clear();
       self.set_projection(None);
       self.virtual_line_layouts.clear();
@@ -735,6 +741,12 @@ impl Editor {
       .is_some_and(|(id, _)| !self.review_comments.iter().any(|comment| comment.id == *id))
     {
       self.review_comment_edit_error = None;
+    }
+    if self
+      .review_comment_delete_submitting_id
+      .is_some_and(|id| !self.review_comments.iter().any(|comment| comment.id == id))
+    {
+      self.review_comment_delete_submitting_id = None;
     }
     if self
       .replying_to_review_comment_id
@@ -872,6 +884,12 @@ impl Editor {
     {
       self.review_comment_edit_error = None;
     }
+    if self
+      .review_comment_delete_submitting_id
+      .is_some_and(|id| !self.editable_review_comment_ids.contains(&id))
+    {
+      self.review_comment_delete_submitting_id = None;
+    }
     cx.notify();
   }
 
@@ -881,6 +899,18 @@ impl Editor {
     cx: &mut Context<Self>,
   ) {
     self.review_comment_edit_handler = handler;
+    cx.notify();
+  }
+
+  pub fn set_review_comment_delete_handler(
+    &mut self,
+    handler: Option<ReviewCommentDeleteHandler>,
+    cx: &mut Context<Self>,
+  ) {
+    self.review_comment_delete_handler = handler;
+    if self.review_comment_delete_handler.is_none() {
+      self.review_comment_delete_submitting_id = None;
+    }
     cx.notify();
   }
 
@@ -944,6 +974,39 @@ impl Editor {
     } else {
       self.clear_review_comment_edit_state();
     }
+    self.refresh_review_comment_projection(cx);
+  }
+
+  pub fn start_review_comment_delete_submission(
+    &mut self,
+    comment_id: u64,
+    cx: &mut Context<Self>,
+  ) {
+    if !self.editable_review_comment_ids.contains(&comment_id)
+      || !self
+        .review_comments
+        .iter()
+        .any(|comment| comment.id == comment_id)
+    {
+      return;
+    }
+
+    self.review_comment_delete_submitting_id = Some(comment_id);
+    if self.editing_review_comment_id == Some(comment_id) {
+      self.clear_review_comment_edit_state();
+    }
+    self.refresh_review_comment_projection(cx);
+  }
+
+  pub fn finish_review_comment_delete_submission(
+    &mut self,
+    comment_id: u64,
+    cx: &mut Context<Self>,
+  ) {
+    if self.review_comment_delete_submitting_id != Some(comment_id) {
+      return;
+    }
+    self.review_comment_delete_submitting_id = None;
     self.refresh_review_comment_projection(cx);
   }
 
@@ -1012,6 +1075,7 @@ impl Editor {
     if self.review_comment_edit_submitting_id.is_some()
       || self.review_comment_create_submitting
       || self.review_comment_reply_submitting
+      || self.review_comment_delete_submitting_id.is_some()
     {
       return;
     }
@@ -1071,7 +1135,9 @@ impl Editor {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.review_comment_edit_submitting_id.is_some() {
+    if self.review_comment_edit_submitting_id.is_some()
+      || self.review_comment_delete_submitting_id.is_some()
+    {
       return;
     }
     if self.editing_review_comment_id != Some(comment_id) {
@@ -1102,6 +1168,36 @@ impl Editor {
 
     self.clear_review_comment_edit_state();
     self.refresh_review_comment_projection(cx);
+  }
+
+  fn request_review_comment_delete(
+    &mut self,
+    comment_id: u64,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.review_comment_delete_submitting_id.is_some()
+      || self.review_comment_edit_submitting_id.is_some()
+      || self.review_comment_create_submitting
+      || self.review_comment_reply_submitting
+    {
+      return;
+    }
+    if !self.editable_review_comment_ids.contains(&comment_id) {
+      return;
+    }
+    if !self
+      .review_comments
+      .iter()
+      .any(|comment| comment.id == comment_id)
+    {
+      return;
+    }
+    let Some(handler) = self.review_comment_delete_handler.as_ref() else {
+      return;
+    };
+
+    handler(comment_id, window, cx);
   }
 
   fn ensure_review_comment_create_input(
@@ -1153,6 +1249,7 @@ impl Editor {
       || self.review_comment_create_submitting
       || self.review_comment_edit_submitting_id.is_some()
       || self.review_comment_reply_submitting
+      || self.review_comment_delete_submitting_id.is_some()
     {
       return;
     }
@@ -1224,6 +1321,7 @@ impl Editor {
       || self.review_comment_create_submitting
       || self.review_comment_edit_submitting_id.is_some()
       || self.review_comment_reply_submitting
+      || self.review_comment_delete_submitting_id.is_some()
     {
       return;
     }
@@ -1322,6 +1420,7 @@ impl Editor {
       || self.replying_to_review_comment_id.is_some()
       || self.review_comment_reply_submitting
       || self.review_comment_create_submitting
+      || self.review_comment_delete_submitting_id.is_some()
     {
       return;
     }
@@ -1463,6 +1562,7 @@ impl Editor {
       || self.review_comment_create_submitting
       || self.review_comment_reply_submitting
       || self.review_comment_edit_submitting_id.is_some()
+      || self.review_comment_delete_submitting_id.is_some()
     {
       return;
     }
@@ -2376,9 +2476,11 @@ impl Editor {
         continue;
       };
       let review_comment_edit_handler = self.review_comment_edit_handler.clone();
+      let review_comment_delete_handler = self.review_comment_delete_handler.clone();
       let review_comment_submission_in_flight = self.review_comment_edit_submitting_id.is_some()
         || self.review_comment_create_submitting
-        || self.review_comment_reply_submitting;
+        || self.review_comment_reply_submitting
+        || self.review_comment_delete_submitting_id.is_some();
       let can_save_review_comment_edit =
         review_comment_edit_handler.is_some() && !review_comment_submission_in_flight;
       let can_save_review_comment_reply =
@@ -2429,6 +2531,34 @@ impl Editor {
                   cx.stop_propagation();
                   editor.update(cx, |editor, cx| {
                     editor.start_review_comment_edit(first_message_id, body.clone(), window, cx);
+                  });
+                }),
+            ),
+        )
+      } else {
+        None
+      };
+      let first_message_delete_button = if !review_comment_submission_in_flight
+        && self.editable_review_comment_ids.contains(&first_message.id)
+        && review_comment_delete_handler.is_some()
+      {
+        let editor = editor_entity.clone();
+        Some(
+          div()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+              cx.stop_propagation();
+            })
+            .child(
+              Button::new(format!("review-comment-delete-{}", first_message_id))
+                .ghost()
+                .xsmall()
+                .compact()
+                .icon(IconName::Delete)
+                .tooltip("Delete comment")
+                .on_click(move |_, window, cx| {
+                  cx.stop_propagation();
+                  editor.update(cx, |editor, cx| {
+                    editor.request_review_comment_delete(first_message_id, window, cx);
                   });
                 }),
             ),
@@ -2519,6 +2649,9 @@ impl Editor {
             .items_center()
             .gap_1()
             .when_some(first_message_edit_button, |this, button| this.child(button))
+            .when_some(first_message_delete_button, |this, button| {
+              this.child(button)
+            })
             .when_some(first_message_reply_button, |this, button| {
               this.child(button)
             })
@@ -2569,7 +2702,8 @@ impl Editor {
       let mut thread_messages = v_flex();
       for (index, message) in layout.messages.iter().enumerate() {
         let is_last_message = Some(message.id) == last_message_id;
-        let body: gpui::AnyElement = if self.review_comment_edit_submitting_id == Some(message.id) {
+        let body: gpui::AnyElement = if self.review_comment_edit_submitting_id == Some(message.id)
+        {
           self.review_comment_composer_skeleton(line_height)
         } else if self.editing_review_comment_id == Some(message.id) {
           if let Some(input_state) = self.review_comment_edit_input.clone() {
@@ -2718,6 +2852,35 @@ impl Editor {
           } else {
             None
           };
+          let message_delete_button = if !review_comment_submission_in_flight
+            && self.editable_review_comment_ids.contains(&message.id)
+            && review_comment_delete_handler.is_some()
+          {
+            let editor = editor_entity.clone();
+            let message_id = message.id;
+            Some(
+              div()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                  cx.stop_propagation();
+                })
+                .child(
+                  Button::new(format!("review-comment-delete-{}", message_id))
+                    .ghost()
+                    .xsmall()
+                    .compact()
+                    .icon(IconName::Delete)
+                    .tooltip("Delete comment")
+                    .on_click(move |_, window, cx| {
+                      cx.stop_propagation();
+                      editor.update(cx, |editor, cx| {
+                        editor.request_review_comment_delete(message_id, window, cx);
+                      });
+                    }),
+                ),
+            )
+          } else {
+            None
+          };
           let message_reply_button = if !review_comment_submission_in_flight
             && self.replying_to_review_comment_id.is_none()
             && is_last_message
@@ -2797,6 +2960,7 @@ impl Editor {
                     .items_center()
                     .gap_1()
                     .when_some(message_edit_button, |this, button| this.child(button))
+                    .when_some(message_delete_button, |this, button| this.child(button))
                     .when_some(message_reply_button, |this, button| this.child(button)),
                 ),
             )
@@ -6294,6 +6458,8 @@ pub mod tests {
           review_comment_edit_initial_body: None,
           review_comment_edit_submitting_id: None,
           review_comment_edit_error: None,
+          review_comment_delete_handler: None,
+          review_comment_delete_submitting_id: None,
           review_comment_create_handler: None,
           review_comment_link_handler: None,
           review_comment_create_input: None,
@@ -6572,6 +6738,19 @@ pub mod tests {
   }
 
   #[gpui::test]
+  fn test_set_diffs_none_keeps_review_comment_delete_handler(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let handler: ReviewCommentDeleteHandler = Arc::new(|_, _, _| {});
+      editor.set_review_comment_delete_handler(Some(handler), cx);
+      editor.set_diffs(None, cx);
+
+      assert!(editor.review_comment_delete_handler.is_some());
+    });
+  }
+
+  #[gpui::test]
   fn test_set_diffs_none_keeps_review_comment_link_handler(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
 
@@ -6630,6 +6809,20 @@ pub mod tests {
       assert!(editor.replying_to_review_comment_id.is_none());
       assert!(!editor.review_comment_reply_submitting);
       assert!(editor.review_comment_reply_error.is_none());
+    });
+  }
+
+  #[gpui::test]
+  fn test_set_review_comments_clears_review_comment_delete_submission_when_comment_is_missing(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.review_comment_delete_submitting_id = Some(42);
+      editor.set_review_comments(Vec::new(), cx);
+
+      assert!(editor.review_comment_delete_submitting_id.is_none());
     });
   }
 

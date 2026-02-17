@@ -7,8 +7,8 @@ use std::{
 
 use editor::{
   CloseFind, DiffViewMode, Editor, Find, ReviewComment, ReviewCommentCreateHandler,
-  ReviewCommentCreateRequest, ReviewCommentEditHandler, ReviewCommentLinkHandler,
-  ReviewCommentSide,
+  ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentEditHandler,
+  ReviewCommentLinkHandler, ReviewCommentSide,
 };
 use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
@@ -37,10 +37,10 @@ use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler,
-  SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UiIconName, UserMenuConfig,
-  UserMenuPage, UserMenuState, UserMenuUser, WindowExt, file_icon_path_for_name_with_theme,
-  h_resizable, resizable_panel, user_menu,
+  CommandPaletteHandler, CommandPalettePage, ConfirmDialog, FILE_ICON_SIZE_PX, SearchFileEntry,
+  SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UiIconName,
+  UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
+  file_icon_path_for_name_with_theme, h_resizable, resizable_panel, user_menu,
 };
 
 use crate::{
@@ -438,6 +438,16 @@ impl GithubPrDetailsPage {
       });
       editor.set_review_comment_create_handler(Some(create_handler), cx);
 
+      let delete_handler: ReviewCommentDeleteHandler = Arc::new({
+        let view = view.clone();
+        move |comment_id, window, cx| {
+          let _ = view.update(cx, |this, cx| {
+            this.confirm_review_comment_delete(comment_id, window, cx);
+          });
+        }
+      });
+      editor.set_review_comment_delete_handler(Some(delete_handler), cx);
+
       let link_handler: ReviewCommentLinkHandler = Arc::new({
         let view = view.clone();
         move |pr_number, comment_id, _window, cx| {
@@ -687,6 +697,103 @@ impl GithubPrDetailsPage {
         }
         this.diff_editor.update(cx, |editor, cx| {
           editor.finish_review_comment_create_submission(error_message, cx);
+        });
+        cx.notify();
+      });
+    });
+    self.review_comments_task = Some(task);
+  }
+
+  fn confirm_review_comment_delete(
+    &mut self,
+    comment_id: u64,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !self.editable_review_comment_ids(cx).contains(&comment_id) {
+      return;
+    }
+
+    let title: SharedString = "Delete comment?".into();
+    let message: SharedString = "This review comment will be permanently deleted.".into();
+    let view = cx.entity();
+
+    window.open_dialog(cx, move |dialog, _, _| {
+      let view = view.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text("Delete")
+        .cancel_text("Cancel")
+        .destructive()
+        .on_confirm(move |_, _, cx| {
+          view.update(cx, |this, cx| {
+            this.submit_review_comment_delete(comment_id, cx);
+          });
+          true
+        })
+        .build(dialog)
+    });
+  }
+
+  fn submit_review_comment_delete(&mut self, comment_id: u64, cx: &mut Context<Self>) {
+    let Some((owner, repo, number)) = self.pull_request.as_ref().map(|pull_request| {
+      (
+        pull_request.repository.owner.clone(),
+        pull_request.repository.repo.clone(),
+        pull_request.number,
+      )
+    }) else {
+      self.review_comments_error = Some("No pull request selected".into());
+      self.diff_editor.update(cx, |editor, cx| {
+        editor.finish_review_comment_delete_submission(comment_id, cx);
+      });
+      cx.notify();
+      return;
+    };
+    let Some((removed_index, removed_comment)) = self
+      .review_comments
+      .iter()
+      .enumerate()
+      .find(|(_, comment)| comment.id == comment_id)
+      .map(|(index, comment)| (index, comment.clone()))
+    else {
+      return;
+    };
+
+    self.diff_editor.update(cx, |editor, cx| {
+      editor.start_review_comment_delete_submission(comment_id, cx);
+    });
+    self.review_comments.remove(removed_index);
+    self.review_comments_error = None;
+    self.sync_review_comments(cx);
+    cx.notify();
+
+    let api = self.api.clone();
+
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.delete_pull_request_review_comment(&owner, &repo, number, comment_id))
+          .await;
+
+      let _ = this.update(cx, |this, cx| {
+        if let Err(error) = result {
+          if !this
+            .review_comments
+            .iter()
+            .any(|comment| comment.id == removed_comment.id)
+          {
+            let insert_index = removed_index.min(this.review_comments.len());
+            this
+              .review_comments
+              .insert(insert_index, removed_comment.clone());
+          }
+          this.review_comments_error = Some(error.to_string().into());
+          this.sync_review_comments(cx);
+        } else {
+          this.review_comments_error = None;
+        }
+
+        this.diff_editor.update(cx, |editor, cx| {
+          editor.finish_review_comment_delete_submission(comment_id, cx);
         });
         cx.notify();
       });
