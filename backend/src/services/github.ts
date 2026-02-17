@@ -8,6 +8,8 @@ type PullRequestParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
 type PullRequestCommentsParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
+type CreatePullRequestCommentParams
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
 type UpdatePullRequestCommentParams
   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['parameters']
 type PullRequestFilesParams
@@ -23,6 +25,8 @@ type PullRequestDetailsResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['response']['data']
 type PullRequestCommentResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data'][number]
+type CreatePullRequestCommentResponse
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data']
 type UpdatePullRequestCommentResponse
   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['response']['data']
 type PullRequestFileResponse
@@ -123,6 +127,17 @@ export async function fetchGithubPullRequestComments(
   params: PullRequestCommentsParams,
 ): Promise<PullRequestCommentResponse[]> {
   const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
+export async function createGithubPullRequestComment(
+  token: string,
+  params: CreatePullRequestCommentParams,
+): Promise<CreatePullRequestCommentResponse> {
+  const { data } = await request('POST /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
     ...params,
     headers: githubAuthHeaders(token),
   })

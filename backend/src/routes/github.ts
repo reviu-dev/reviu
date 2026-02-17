@@ -6,6 +6,7 @@ import z from 'zod'
 import { authMiddleware } from '../middlewares/auth.js'
 import {
   compareGithubRefs,
+  createGithubPullRequestComment,
   fetchGithubNotifications,
   fetchGithubPullRequest,
   fetchGithubPullRequestComments,
@@ -23,8 +24,12 @@ type PullRequestParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
 type PullRequestCommentsParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
+type CreatePullRequestCommentParams
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
 type PullRequestCommentResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data'][number]
+type CreatePullRequestCommentResponse
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data']
 type UpdatePullRequestCommentParams
   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['parameters']
 type UpdatePullRequestCommentResponse
@@ -149,10 +154,23 @@ interface GithubFileContent {
   content: string | null
 }
 
-type GithubReviewCommentResponse = PullRequestCommentResponse | UpdatePullRequestCommentResponse
+type GithubReviewCommentResponse
+  = | PullRequestCommentResponse
+    | CreatePullRequestCommentResponse
+    | UpdatePullRequestCommentResponse
 
 const updatePullRequestCommentBodySchema = z.object({
   body: z.string().trim().min(1, 'Missing comment body'),
+})
+
+const createPullRequestCommentBodySchema = z.object({
+  body: z.string().trim().min(1, 'Missing comment body'),
+  path: z.string().trim().min(1, 'Missing comment path'),
+  commitId: z.string().trim().min(1, 'Missing comment commit id'),
+  line: z.number().int().positive(),
+  side: z.enum(['LEFT', 'RIGHT']),
+  startLine: z.number().int().positive().optional(),
+  startSide: z.enum(['LEFT', 'RIGHT']).optional(),
 })
 
 function mapGithubPullRequestReviewComment(
@@ -407,6 +425,56 @@ export const githubRoutes = githubRouter
       return ctx.json({ comments }, 200)
     }
     catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/:id/comments', zValidator(
+    'json',
+    createPullRequestCommentBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const {
+      body,
+      path,
+      commitId,
+      line,
+      side,
+      startLine,
+      startSide,
+    } = ctx.req.valid('json')
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: CreatePullRequestCommentParams = {
+        owner: org,
+        repo,
+        pull_number: pullNumber,
+        body,
+        path,
+        commit_id: commitId,
+        line,
+        side,
+        ...(startLine != null ? { start_line: startLine } : {}),
+        ...(startSide != null ? { start_side: startSide } : {}),
+      }
+
+      const data = await createGithubPullRequestComment(githubToken, params)
+
+      const comment = mapGithubPullRequestReviewComment(data)
+      return ctx.json({ comment }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })

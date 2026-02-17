@@ -6,7 +6,8 @@ use std::{
 };
 
 use editor::{
-  CloseFind, DiffViewMode, Editor, Find, ReviewComment, ReviewCommentEditHandler, ReviewCommentSide,
+  CloseFind, DiffViewMode, Editor, Find, ReviewComment, ReviewCommentCreateHandler,
+  ReviewCommentCreateRequest, ReviewCommentEditHandler, ReviewCommentSide,
 };
 use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
@@ -361,7 +362,7 @@ impl GithubPrDetailsPage {
       pull_request: None,
       error: None,
     };
-    this.install_diff_editor_review_comment_edit_handler(cx);
+    this.install_diff_editor_review_comment_handlers(cx);
     this
   }
 
@@ -392,7 +393,7 @@ impl GithubPrDetailsPage {
       .collect()
   }
 
-  fn install_diff_editor_review_comment_edit_handler(&mut self, cx: &mut Context<Self>) {
+  fn install_diff_editor_review_comment_handlers(&mut self, cx: &mut Context<Self>) {
     let view = cx.entity().downgrade();
     self.diff_editor.update(cx, |editor, cx| {
       let handler: ReviewCommentEditHandler = Arc::new({
@@ -404,12 +405,25 @@ impl GithubPrDetailsPage {
         }
       });
       editor.set_review_comment_edit_handler(Some(handler), cx);
+
+      let create_handler: ReviewCommentCreateHandler = Arc::new({
+        let view = view.clone();
+        move |request, _window, cx| {
+          let _ = view.update(cx, |this, cx| {
+            this.submit_review_comment_create(request, cx);
+          });
+        }
+      });
+      editor.set_review_comment_create_handler(Some(create_handler), cx);
     });
   }
 
   fn submit_review_comment_edit(&mut self, comment_id: u64, body: String, cx: &mut Context<Self>) {
     let Some(pull_request) = self.pull_request.as_ref() else {
       self.review_comments_error = Some("No pull request selected".into());
+      self.diff_editor.update(cx, |editor, cx| {
+        editor.finish_review_comment_edit_submission(comment_id, false, cx);
+      });
       cx.notify();
       return;
     };
@@ -425,6 +439,7 @@ impl GithubPrDetailsPage {
       .await;
 
       let _ = this.update(cx, |this, cx| {
+        let mut success = false;
         match result {
           Ok(updated_comment) => {
             if let Some(existing) = this
@@ -438,11 +453,104 @@ impl GithubPrDetailsPage {
             }
             this.review_comments_error = None;
             this.sync_review_comments(cx);
+            success = true;
           }
           Err(error) => {
             this.review_comments_error = Some(error.to_string().into());
           }
         }
+        this.diff_editor.update(cx, |editor, cx| {
+          editor.finish_review_comment_edit_submission(comment_id, success, cx);
+        });
+        cx.notify();
+      });
+    });
+    self.review_comments_task = Some(task);
+  }
+
+  fn submit_review_comment_create(
+    &mut self,
+    request: ReviewCommentCreateRequest,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      self.review_comments_error = Some("No pull request selected".into());
+      self.diff_editor.update(cx, |editor, cx| {
+        editor.finish_review_comment_create_submission(false, cx);
+      });
+      cx.notify();
+      return;
+    };
+    let Some(selected_file) = self.selected_file.as_ref() else {
+      self.review_comments_error = Some("No selected file".into());
+      self.diff_editor.update(cx, |editor, cx| {
+        editor.finish_review_comment_create_submission(false, cx);
+      });
+      cx.notify();
+      return;
+    };
+
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let path = selected_file.path.to_string();
+    let commit_id = pull_request.head_sha.clone();
+    let side = match request.side {
+      ReviewCommentSide::Left => "LEFT".to_string(),
+      ReviewCommentSide::Right => "RIGHT".to_string(),
+    };
+    let start_side = request.start_side.map(|value| match value {
+      ReviewCommentSide::Left => "LEFT".to_string(),
+      ReviewCommentSide::Right => "RIGHT".to_string(),
+    });
+    let line = request.line.saturating_add(1) as u64;
+    let start_line = request
+      .start_line
+      .map(|value| value.saturating_add(1) as u64);
+    let body = request.body.as_ref().to_string();
+    let api = self.api.clone();
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.create_pull_request_review_comment(
+          &owner,
+          &repo,
+          number,
+          &path,
+          &commit_id,
+          line,
+          &side,
+          start_line,
+          start_side.as_deref(),
+          &body,
+        )
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        let mut success = false;
+        match result {
+          Ok(created_comment) => {
+            if let Some(existing) = this
+              .review_comments
+              .iter_mut()
+              .find(|comment| comment.id == created_comment.id)
+            {
+              *existing = created_comment;
+            } else {
+              this.review_comments.push(created_comment);
+            }
+            this.review_comments_error = None;
+            this.sync_review_comments(cx);
+            success = true;
+          }
+          Err(error) => {
+            this.review_comments_error = Some(error.to_string().into());
+          }
+        }
+        this.diff_editor.update(cx, |editor, cx| {
+          editor.finish_review_comment_create_submission(success, cx);
+        });
         cx.notify();
       });
     });
@@ -524,7 +632,7 @@ impl GithubPrDetailsPage {
       editor.is_read_only = true;
       editor
     });
-    self.install_diff_editor_review_comment_edit_handler(cx);
+    self.install_diff_editor_review_comment_handlers(cx);
   }
 
   fn clear_diff_editor(&mut self, cx: &mut Context<Self>) {

@@ -323,6 +323,20 @@ struct UpdateGithubPullRequestCommentRequest<'a> {
   body: &'a str,
 }
 
+#[derive(Debug, Serialize)]
+struct CreateGithubPullRequestCommentRequest<'a> {
+  body: &'a str,
+  path: &'a str,
+  #[serde(rename = "commitId")]
+  commit_id: &'a str,
+  line: u64,
+  side: &'a str,
+  #[serde(rename = "startLine", skip_serializing_if = "Option::is_none")]
+  start_line: Option<u64>,
+  #[serde(rename = "startSide", skip_serializing_if = "Option::is_none")]
+  start_side: Option<&'a str>,
+}
+
 #[derive(Debug, Deserialize)]
 struct GithubFileContentResponse {
   content: Option<String>,
@@ -551,6 +565,43 @@ impl ApiClient {
       )
       .query(&[("org", owner), ("repo", repo)])
       .json(&UpdateGithubPullRequestCommentRequest { body })
+      .send()?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !response.status().is_success() {
+      anyhow::bail!("unexpected status: {}", response.status());
+    }
+    let payload = response.json::<GithubPullRequestCommentResponse>()?;
+    Ok(payload.comment)
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn create_pull_request_review_comment(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    path: &str,
+    commit_id: &str,
+    line: u64,
+    side: &str,
+    start_line: Option<u64>,
+    start_side: Option<&str>,
+    body: &str,
+  ) -> Result<GithubPullRequestReviewComment> {
+    let response = self
+      .authed_request(Method::POST, &format!("/github/pr/{number}/comments"))
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&CreateGithubPullRequestCommentRequest {
+        body,
+        path,
+        commit_id,
+        line,
+        side,
+        start_line,
+        start_side,
+      })
       .send()?;
     if response.status() == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
@@ -943,6 +994,54 @@ mod tests {
   }
 
   #[test]
+  fn create_pull_request_review_comment_parses_success_payload() {
+    let body = r#"{
+      "comment": {
+        "id": 2,
+        "pullRequestReviewId": 12,
+        "diffHunk": "@@ -1 +1 @@",
+        "path": "src/main.rs",
+        "position": 1,
+        "originalPosition": 1,
+        "commitId": "head123",
+        "originalCommitId": "base123",
+        "inReplyToId": null,
+        "user": { "login": "octocat", "avatarUrl": null },
+        "body": "New comment body",
+        "createdAt": "2026-02-15T12:00:00Z",
+        "updatedAt": "2026-02-16T12:01:00Z",
+        "startLine": null,
+        "originalStartLine": null,
+        "startSide": null,
+        "line": 1,
+        "originalLine": 1,
+        "side": "RIGHT"
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let comment = api
+      .create_pull_request_review_comment(
+        "acme",
+        "widget",
+        42,
+        "src/main.rs",
+        "head123",
+        1,
+        "RIGHT",
+        None,
+        None,
+        "New comment body",
+      )
+      .expect("create review comment");
+    assert_eq!(comment.id, 2);
+    assert_eq!(comment.body, "New comment body");
+    assert_eq!(comment.path, "src/main.rs");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
   fn fetch_github_notifications_parses_success_payload() {
     let body = r#"{
       "notifications": [
@@ -1073,6 +1172,30 @@ mod tests {
 
     let err = api
       .update_pull_request_review_comment("acme", "widget", 42, 1, "Updated body")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn create_pull_request_review_comment_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .create_pull_request_review_comment(
+        "acme",
+        "widget",
+        42,
+        "src/main.rs",
+        "head123",
+        1,
+        "RIGHT",
+        None,
+        None,
+        "New comment body",
+      )
       .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
