@@ -12,7 +12,7 @@ mod text_offsets;
 pub use actions::*;
 pub use cursor_blink::CursorBlink;
 pub use document::Document;
-pub use editor::{DiffViewMode, Editor, HunkAction};
+pub use editor::{DiffViewMode, Editor, HunkAction, ReviewCommentEditHandler};
 pub use editor_element::{EditorElement, PositionMap};
 pub use gutter_element::GutterElement;
 pub use projection::*;

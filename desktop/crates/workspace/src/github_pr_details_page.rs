@@ -1,11 +1,13 @@
 use std::{
-  collections::{BTreeMap, HashMap},
+  collections::{BTreeMap, HashMap, HashSet},
   path::{Path, PathBuf},
   rc::Rc,
   sync::Arc,
 };
 
-use editor::{CloseFind, DiffViewMode, Editor, Find, ReviewComment, ReviewCommentSide};
+use editor::{
+  CloseFind, DiffViewMode, Editor, Find, ReviewComment, ReviewCommentEditHandler, ReviewCommentSide,
+};
 use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
 use gpui::{
@@ -323,8 +325,13 @@ impl GithubPrDetailsPage {
     GithubPrDetailsPageHandle::register(cx);
 
     let tree_state = cx.new(|cx| TreeState::new(cx));
+    let diff_editor = cx.new(|cx| {
+      let mut editor = Editor::new_with_paths(PathBuf::from("."), PathBuf::from("pr.diff"), cx);
+      editor.is_read_only = true;
+      editor
+    });
 
-    Self {
+    let mut this = Self {
       focus_handle: cx.focus_handle(),
       api: WorkspaceApi::global(cx).api.clone(),
       details_task: None,
@@ -343,11 +350,7 @@ impl GithubPrDetailsPage {
       file_content_tasks: HashMap::new(),
       selected_file: None,
       selected_tree_id: None,
-      diff_editor: cx.new(|cx| {
-        let mut editor = Editor::new_with_paths(PathBuf::from("."), PathBuf::from("pr.diff"), cx);
-        editor.is_read_only = true;
-        editor
-      }),
+      diff_editor,
       diff_view: DiffViewMode::Inline,
       show_markdown_preview: false,
       description_markdown_state: MarkdownRenderState::new(),
@@ -357,7 +360,93 @@ impl GithubPrDetailsPage {
       active_tab_ix: 0,
       pull_request: None,
       error: None,
+    };
+    this.install_diff_editor_review_comment_edit_handler(cx);
+    this
+  }
+
+  fn current_github_login(cx: &App) -> Option<String> {
+    match AuthStateStore::get(cx) {
+      AuthState::Authenticated(user) => user.github_login.or_else(|| {
+        let fallback = user.name.trim();
+        if fallback.is_empty() {
+          None
+        } else {
+          Some(fallback.to_string())
+        }
+      }),
+      _ => None,
     }
+  }
+
+  fn editable_review_comment_ids(&self, cx: &App) -> HashSet<u64> {
+    let Some(login) = Self::current_github_login(cx) else {
+      return HashSet::new();
+    };
+
+    self
+      .review_comments
+      .iter()
+      .filter(|comment| comment.user.login.eq_ignore_ascii_case(&login))
+      .map(|comment| comment.id)
+      .collect()
+  }
+
+  fn install_diff_editor_review_comment_edit_handler(&mut self, cx: &mut Context<Self>) {
+    let view = cx.entity().downgrade();
+    self.diff_editor.update(cx, |editor, cx| {
+      let handler: ReviewCommentEditHandler = Arc::new({
+        let view = view.clone();
+        move |comment_id, body, _window, cx| {
+          let _ = view.update(cx, |this, cx| {
+            this.submit_review_comment_edit(comment_id, body.as_ref().to_string(), cx);
+          });
+        }
+      });
+      editor.set_review_comment_edit_handler(Some(handler), cx);
+    });
+  }
+
+  fn submit_review_comment_edit(&mut self, comment_id: u64, body: String, cx: &mut Context<Self>) {
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      self.review_comments_error = Some("No pull request selected".into());
+      cx.notify();
+      return;
+    };
+
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let api = self.api.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.update_pull_request_review_comment(&owner, &repo, number, comment_id, &body)
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(updated_comment) => {
+            if let Some(existing) = this
+              .review_comments
+              .iter_mut()
+              .find(|comment| comment.id == updated_comment.id)
+            {
+              *existing = updated_comment;
+            } else {
+              this.review_comments.push(updated_comment);
+            }
+            this.review_comments_error = None;
+            this.sync_review_comments(cx);
+          }
+          Err(error) => {
+            this.review_comments_error = Some(error.to_string().into());
+          }
+        }
+        cx.notify();
+      });
+    });
+    self.review_comments_task = Some(task);
   }
 
   fn set_active_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -435,6 +524,7 @@ impl GithubPrDetailsPage {
       editor.is_read_only = true;
       editor
     });
+    self.install_diff_editor_review_comment_edit_handler(cx);
   }
 
   fn clear_diff_editor(&mut self, cx: &mut Context<Self>) {
@@ -597,12 +687,12 @@ impl GithubPrDetailsPage {
   fn sync_review_comments(&mut self, cx: &mut Context<Self>) {
     let comments = self.review_comments_for_selected_file();
     let pr_number = self.pull_request.as_ref().map(|pr| pr.number);
+    let editable_comment_ids = self.editable_review_comment_ids(cx);
     self.diff_editor.update(cx, |editor, cx| {
-      editor.set_review_comment_pr_number(pr_number, cx)
+      editor.set_review_comment_pr_number(pr_number, cx);
+      editor.set_editable_review_comment_ids(editable_comment_ids.iter().copied(), cx);
+      editor.set_review_comments(comments, cx);
     });
-    self
-      .diff_editor
-      .update(cx, |editor, cx| editor.set_review_comments(comments, cx));
   }
 
   fn effective_diff_view(&self) -> DiffViewMode {
