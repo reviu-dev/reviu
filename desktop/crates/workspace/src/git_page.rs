@@ -4180,6 +4180,7 @@ mod tests {
   use git2::build::CheckoutBuilder;
   use git2::{BranchType, Cred, PushOptions, RemoteCallbacks, Repository, Signature};
   use gpui::TestAppContext;
+  use std::sync::atomic::{AtomicU64, Ordering};
   use std::time::{SystemTime, UNIX_EPOCH};
 
   #[test]
@@ -4416,7 +4417,19 @@ mod tests {
     }
   }
 
+  fn isolate_config_store_for_test() {
+    static NEXT_DB_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_DB_ID.fetch_add(1, Ordering::Relaxed);
+    let db_path = std::env::temp_dir().join(format!(
+      "reviu-git-page-test-config-{}-{id}.sqlite",
+      std::process::id()
+    ));
+    let _ = std::fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+  }
+
   fn init_gpui_test(cx: &mut TestAppContext) {
+    isolate_config_store_for_test();
     cx.update(|cx| {
       gpui_component::init(cx);
     });
