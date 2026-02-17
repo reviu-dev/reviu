@@ -600,49 +600,67 @@ impl GithubPrDetailsPage {
       cx.notify();
       return;
     };
-    let Some(selected_file) = self.selected_file.as_ref() else {
-      self.review_comments_error = Some("No selected file".into());
-      self.diff_editor.update(cx, |editor, cx| {
-        editor.finish_review_comment_create_submission(Some(Arc::from("No selected file")), cx);
-      });
-      cx.notify();
-      return;
-    };
-
     let owner = pull_request.repository.owner.clone();
     let repo = pull_request.repository.repo.clone();
     let number = pull_request.number;
-    let path = selected_file.path.to_string();
-    let commit_id = pull_request.head_sha.clone();
-    let side = match request.side {
-      ReviewCommentSide::Left => "LEFT".to_string(),
-      ReviewCommentSide::Right => "RIGHT".to_string(),
+    let in_reply_to_id = request.in_reply_to_id;
+    let line_comment_payload = if in_reply_to_id.is_none() {
+      let Some(selected_file) = self.selected_file.as_ref() else {
+        self.review_comments_error = Some("No selected file".into());
+        self.diff_editor.update(cx, |editor, cx| {
+          editor.finish_review_comment_create_submission(Some(Arc::from("No selected file")), cx);
+        });
+        cx.notify();
+        return;
+      };
+
+      let side = match request.side {
+        ReviewCommentSide::Left => "LEFT".to_string(),
+        ReviewCommentSide::Right => "RIGHT".to_string(),
+      };
+      let start_side = request.start_side.map(|value| match value {
+        ReviewCommentSide::Left => "LEFT".to_string(),
+        ReviewCommentSide::Right => "RIGHT".to_string(),
+      });
+      let line = request.line.saturating_add(1) as u64;
+      let start_line = request
+        .start_line
+        .map(|value| value.saturating_add(1) as u64);
+
+      Some((
+        selected_file.path.to_string(),
+        pull_request.head_sha.clone(),
+        line,
+        side,
+        start_line,
+        start_side,
+      ))
+    } else {
+      None
     };
-    let start_side = request.start_side.map(|value| match value {
-      ReviewCommentSide::Left => "LEFT".to_string(),
-      ReviewCommentSide::Right => "RIGHT".to_string(),
-    });
-    let line = request.line.saturating_add(1) as u64;
-    let start_line = request
-      .start_line
-      .map(|value| value.saturating_add(1) as u64);
     let body = request.body.as_ref().to_string();
     let api = self.api.clone();
 
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || {
-        api.create_pull_request_review_comment(
-          &owner,
-          &repo,
-          number,
-          &path,
-          &commit_id,
-          line,
-          &side,
-          start_line,
-          start_side.as_deref(),
-          &body,
-        )
+        if let Some(in_reply_to_id) = in_reply_to_id {
+          api.reply_pull_request_review_comment(&owner, &repo, number, in_reply_to_id, &body)
+        } else {
+          let (path, commit_id, line, side, start_line, start_side) = line_comment_payload
+            .expect("line comment payload should exist when creating a top-level comment");
+          api.create_pull_request_review_comment(
+            &owner,
+            &repo,
+            number,
+            &path,
+            &commit_id,
+            line,
+            &side,
+            start_line,
+            start_side.as_deref(),
+            &body,
+          )
+        }
       })
       .await;
 
