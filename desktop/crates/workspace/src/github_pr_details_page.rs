@@ -422,7 +422,11 @@ impl GithubPrDetailsPage {
     let Some(pull_request) = self.pull_request.as_ref() else {
       self.review_comments_error = Some("No pull request selected".into());
       self.diff_editor.update(cx, |editor, cx| {
-        editor.finish_review_comment_edit_submission(comment_id, false, cx);
+        editor.finish_review_comment_edit_submission(
+          comment_id,
+          Some(Arc::from("No pull request selected")),
+          cx,
+        );
       });
       cx.notify();
       return;
@@ -439,7 +443,7 @@ impl GithubPrDetailsPage {
       .await;
 
       let _ = this.update(cx, |this, cx| {
-        let mut success = false;
+        let mut error_message: Option<Arc<str>> = None;
         match result {
           Ok(updated_comment) => {
             if let Some(existing) = this
@@ -453,14 +457,14 @@ impl GithubPrDetailsPage {
             }
             this.review_comments_error = None;
             this.sync_review_comments(cx);
-            success = true;
           }
           Err(error) => {
             this.review_comments_error = Some(error.to_string().into());
+            error_message = Some(Arc::from(error.to_string()));
           }
         }
         this.diff_editor.update(cx, |editor, cx| {
-          editor.finish_review_comment_edit_submission(comment_id, success, cx);
+          editor.finish_review_comment_edit_submission(comment_id, error_message, cx);
         });
         cx.notify();
       });
@@ -476,7 +480,8 @@ impl GithubPrDetailsPage {
     let Some(pull_request) = self.pull_request.as_ref() else {
       self.review_comments_error = Some("No pull request selected".into());
       self.diff_editor.update(cx, |editor, cx| {
-        editor.finish_review_comment_create_submission(false, cx);
+        editor
+          .finish_review_comment_create_submission(Some(Arc::from("No pull request selected")), cx);
       });
       cx.notify();
       return;
@@ -484,7 +489,7 @@ impl GithubPrDetailsPage {
     let Some(selected_file) = self.selected_file.as_ref() else {
       self.review_comments_error = Some("No selected file".into());
       self.diff_editor.update(cx, |editor, cx| {
-        editor.finish_review_comment_create_submission(false, cx);
+        editor.finish_review_comment_create_submission(Some(Arc::from("No selected file")), cx);
       });
       cx.notify();
       return;
@@ -528,7 +533,7 @@ impl GithubPrDetailsPage {
       .await;
 
       let _ = this.update(cx, |this, cx| {
-        let mut success = false;
+        let mut error_message: Option<Arc<str>> = None;
         match result {
           Ok(created_comment) => {
             if let Some(existing) = this
@@ -542,14 +547,14 @@ impl GithubPrDetailsPage {
             }
             this.review_comments_error = None;
             this.sync_review_comments(cx);
-            success = true;
           }
           Err(error) => {
             this.review_comments_error = Some(error.to_string().into());
+            error_message = Some(Arc::from(error.to_string()));
           }
         }
         this.diff_editor.update(cx, |editor, cx| {
-          editor.finish_review_comment_create_submission(success, cx);
+          editor.finish_review_comment_create_submission(error_message, cx);
         });
         cx.notify();
       });
