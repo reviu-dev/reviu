@@ -7,7 +7,8 @@ use std::{
 
 use editor::{
   CloseFind, DiffViewMode, Editor, Find, ReviewComment, ReviewCommentCreateHandler,
-  ReviewCommentCreateRequest, ReviewCommentEditHandler, ReviewCommentSide,
+  ReviewCommentCreateRequest, ReviewCommentEditHandler, ReviewCommentLinkHandler,
+  ReviewCommentSide,
 };
 use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
@@ -131,6 +132,25 @@ fn files_from_api(files: Vec<GithubPullRequestFile>) -> Vec<Rc<GithubPrFileDiff>
       })
     })
     .collect()
+}
+
+fn file_for_review_comment_path(
+  file_lookup: &HashMap<String, Rc<GithubPrFileDiff>>,
+  path: &str,
+) -> Option<Rc<GithubPrFileDiff>> {
+  if let Some(file) = file_lookup.get(path) {
+    return Some(file.clone());
+  }
+
+  file_lookup
+    .values()
+    .find(|file| {
+      file
+        .old_path
+        .as_ref()
+        .is_some_and(|old_path| old_path.as_ref() == path)
+    })
+    .cloned()
 }
 
 #[derive(Clone, Debug, Default)]
@@ -271,6 +291,7 @@ pub struct GithubPrDetailsPage {
   review_comments_loading: bool,
   review_comments_error: Option<SharedString>,
   review_comments: Vec<GithubPullRequestReviewComment>,
+  pending_review_comment_link_comment_id: Option<u64>,
   file_loading: bool,
   file_error: Option<SharedString>,
   tree_state: Entity<TreeState>,
@@ -343,6 +364,7 @@ impl GithubPrDetailsPage {
       review_comments_loading: false,
       review_comments_error: None,
       review_comments: Vec::new(),
+      pending_review_comment_link_comment_id: None,
       file_loading: false,
       file_error: None,
       tree_state,
@@ -415,7 +437,99 @@ impl GithubPrDetailsPage {
         }
       });
       editor.set_review_comment_create_handler(Some(create_handler), cx);
+
+      let link_handler: ReviewCommentLinkHandler = Arc::new({
+        let view = view.clone();
+        move |pr_number, comment_id, _window, cx| {
+          view
+            .update(cx, |this, cx| {
+              this.handle_review_comment_link_target(pr_number, comment_id, cx)
+            })
+            .unwrap_or(false)
+        }
+      });
+      editor.set_review_comment_link_handler(Some(link_handler), cx);
     });
+  }
+
+  fn handle_review_comment_link_target(
+    &mut self,
+    pr_number: u64,
+    comment_id: u64,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      return false;
+    };
+    if pull_request.number != pr_number {
+      return false;
+    }
+
+    self.pending_review_comment_link_comment_id = Some(comment_id);
+    self.resolve_pending_review_comment_link(cx);
+
+    if self.pending_review_comment_link_comment_id == Some(comment_id)
+      && !self.review_comments_loading
+      && !self.files_loading
+      && !self.file_loading
+      && !self.file_lookup.is_empty()
+    {
+      self.pending_review_comment_link_comment_id = None;
+      return false;
+    }
+
+    true
+  }
+
+  fn file_for_review_comment_path(&self, path: &str) -> Option<Rc<GithubPrFileDiff>> {
+    file_for_review_comment_path(&self.file_lookup, path)
+  }
+
+  fn try_scroll_to_pending_review_comment(&mut self, cx: &mut Context<Self>) -> bool {
+    let Some(comment_id) = self.pending_review_comment_link_comment_id else {
+      return false;
+    };
+
+    let did_scroll = self.diff_editor.update(cx, |editor, cx| {
+      editor.scroll_to_review_comment(comment_id, editor.measured_editor_line_height(), cx)
+    });
+
+    if did_scroll {
+      self.pending_review_comment_link_comment_id = None;
+    }
+
+    did_scroll
+  }
+
+  fn resolve_pending_review_comment_link(&mut self, cx: &mut Context<Self>) {
+    let Some(comment_id) = self.pending_review_comment_link_comment_id else {
+      return;
+    };
+
+    let Some(comment_path) = self
+      .review_comments
+      .iter()
+      .find(|comment| comment.id == comment_id)
+      .map(|comment| comment.path.clone())
+    else {
+      return;
+    };
+
+    let Some(target_file) = self.file_for_review_comment_path(comment_path.as_str()) else {
+      return;
+    };
+
+    let selected_matches_target = self
+      .selected_file
+      .as_ref()
+      .is_some_and(|file| file.path == target_file.path);
+
+    if !selected_matches_target {
+      self.set_selected_file(Some(target_file), cx);
+      return;
+    }
+
+    let _ = self.try_scroll_to_pending_review_comment(cx);
   }
 
   fn submit_review_comment_edit(&mut self, comment_id: u64, body: String, cx: &mut Context<Self>) {
@@ -806,6 +920,7 @@ impl GithubPrDetailsPage {
       editor.set_editable_review_comment_ids(editable_comment_ids.iter().copied(), cx);
       editor.set_review_comments(comments, cx);
     });
+    self.resolve_pending_review_comment_link(cx);
   }
 
   fn effective_diff_view(&self) -> DiffViewMode {
@@ -949,6 +1064,7 @@ impl GithubPrDetailsPage {
       editor.is_read_only = true;
     });
     self.sync_diff_view(cx);
+    self.resolve_pending_review_comment_link(cx);
   }
 
   fn maybe_fetch_selected_file_contents(&mut self, cx: &mut Context<Self>) {
@@ -1084,6 +1200,7 @@ impl GithubPrDetailsPage {
     self.review_comments_loading = true;
     self.review_comments_error = None;
     self.review_comments.clear();
+    self.pending_review_comment_link_comment_id = None;
     self.file_loading = false;
     self.file_error = None;
     self.tree_state.update(cx, |state, cx| {
@@ -2416,6 +2533,41 @@ mod tests {
 
     assert_eq!(files[2].status, GithubPrFileStatus::Modified);
     assert_eq!(files[2].old_path, None);
+  }
+
+  #[test]
+  fn file_for_review_comment_path_prefers_direct_match() {
+    let files = files_from_api(vec![make_api_file("src/main.rs", "modified", None)]);
+    let lookup: HashMap<String, Rc<GithubPrFileDiff>> = files
+      .into_iter()
+      .map(|file| (file.path.as_ref().to_string(), file))
+      .collect();
+
+    let resolved = file_for_review_comment_path(&lookup, "src/main.rs");
+    assert_eq!(
+      resolved.as_ref().map(|file| file.path.as_ref()),
+      Some("src/main.rs")
+    );
+  }
+
+  #[test]
+  fn file_for_review_comment_path_falls_back_to_renamed_old_path() {
+    let files = files_from_api(vec![make_api_file(
+      "src/new.rs",
+      "renamed",
+      Some("src/old.rs"),
+    )]);
+    let lookup: HashMap<String, Rc<GithubPrFileDiff>> = files
+      .into_iter()
+      .map(|file| (file.path.as_ref().to_string(), file))
+      .collect();
+
+    let resolved = file_for_review_comment_path(&lookup, "src/old.rs");
+    assert_eq!(
+      resolved.as_ref().map(|file| file.path.as_ref()),
+      Some("src/new.rs")
+    );
+    assert!(file_for_review_comment_path(&lookup, "missing.rs").is_none());
   }
 
   #[test]

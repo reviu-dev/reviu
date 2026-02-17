@@ -128,6 +128,7 @@ pub enum DiffViewMode {
 pub type ReviewCommentEditHandler = Arc<dyn Fn(u64, Arc<str>, &mut Window, &mut App)>;
 pub type ReviewCommentCreateHandler =
   Arc<dyn Fn(ReviewCommentCreateRequest, &mut Window, &mut App)>;
+pub type ReviewCommentLinkHandler = Arc<dyn Fn(u64, u64, &mut Window, &mut App) -> bool>;
 
 #[derive(Clone, Debug)]
 pub struct ReviewCommentCreateRequest {
@@ -243,6 +244,7 @@ pub struct Editor {
   review_comment_edit_submitting_id: Option<u64>,
   review_comment_edit_error: Option<(u64, Arc<str>)>,
   review_comment_create_handler: Option<ReviewCommentCreateHandler>,
+  review_comment_link_handler: Option<ReviewCommentLinkHandler>,
   review_comment_create_input: Option<Entity<InputState>>,
   review_comment_create_draft: Option<ReviewCommentCreateDraft>,
   review_comment_create_drag_start_display_line: Option<usize>,
@@ -514,6 +516,7 @@ impl Editor {
       review_comment_edit_submitting_id: None,
       review_comment_edit_error: None,
       review_comment_create_handler: None,
+      review_comment_link_handler: None,
       review_comment_create_input: None,
       review_comment_create_draft: None,
       review_comment_create_drag_start_display_line: None,
@@ -871,6 +874,15 @@ impl Editor {
       self.refresh_review_comment_projection(cx);
       return;
     }
+    cx.notify();
+  }
+
+  pub fn set_review_comment_link_handler(
+    &mut self,
+    handler: Option<ReviewCommentLinkHandler>,
+    cx: &mut Context<Self>,
+  ) {
+    self.review_comment_link_handler = handler;
     cx.notify();
   }
 
@@ -2276,27 +2288,37 @@ impl Editor {
             return LinkAction::Open;
           }
 
-          let handled = editor.update(cx, |editor, cx| {
-            let Some((pr_number, comment_id)) = parse_github_pr_comment_link(url) else {
-              return false;
-            };
+          let Some((pr_number, comment_id)) = parse_github_pr_comment_link(url) else {
+            return LinkAction::Open;
+          };
+
+          let (handled, link_handler) = editor.update(cx, |editor, cx| {
             if editor.review_comment_pr_number != Some(pr_number) {
-              return false;
+              return (false, editor.review_comment_link_handler.clone());
             }
             if !editor
               .review_comments
               .iter()
               .any(|comment| comment.id == comment_id)
             {
-              return false;
+              return (false, editor.review_comment_link_handler.clone());
             }
-            editor.scroll_to_review_comment(comment_id, line_height, cx)
+            (
+              editor.scroll_to_review_comment(comment_id, line_height, cx),
+              editor.review_comment_link_handler.clone(),
+            )
           });
           if handled {
-            LinkAction::Handled
-          } else {
-            LinkAction::Open
+            return LinkAction::Handled;
           }
+
+          if let Some(handler) = link_handler
+            && handler(pr_number, comment_id, window, cx)
+          {
+            return LinkAction::Handled;
+          }
+
+          LinkAction::Open
         })
       };
 
@@ -5848,6 +5870,7 @@ pub mod tests {
           review_comment_edit_submitting_id: None,
           review_comment_edit_error: None,
           review_comment_create_handler: None,
+          review_comment_link_handler: None,
           review_comment_create_input: None,
           review_comment_create_draft: None,
           review_comment_create_drag_start_display_line: None,
@@ -6116,6 +6139,19 @@ pub mod tests {
       editor.set_diffs(None, cx);
 
       assert!(editor.review_comment_edit_handler.is_some());
+    });
+  }
+
+  #[gpui::test]
+  fn test_set_diffs_none_keeps_review_comment_link_handler(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let handler: ReviewCommentLinkHandler = Arc::new(|_, _, _, _| false);
+      editor.set_review_comment_link_handler(Some(handler), cx);
+      editor.set_diffs(None, cx);
+
+      assert!(editor.review_comment_link_handler.is_some());
     });
   }
 
