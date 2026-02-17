@@ -31,6 +31,7 @@ use gpui_component::{
   menu::{DropdownMenu, PopupMenuItem},
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
   spinner::Spinner,
+  tag::Tag,
   text::TextView,
   tooltip::Tooltip,
   tree::{TreeItem, TreeState, tree},
@@ -2752,6 +2753,14 @@ impl GitPage {
     Self::all_entries_staged(&self.status_entries)
   }
 
+  fn changed_files_count(entries: &[RepoStatusEntry]) -> usize {
+    entries.len()
+  }
+
+  fn should_show_changed_files_tag(changed_files_count: usize) -> bool {
+    changed_files_count > 0
+  }
+
   fn build_history_rows(commits: &[HistoryCommitNode]) -> Vec<HistoryRenderRow> {
     commits
       .iter()
@@ -3802,7 +3811,7 @@ impl GitPage {
     let theme = cx.theme();
     let all_staged = self.all_changes_staged();
     let sidebar_enabled = self.selected_repo.is_some() && !self.status_entries.is_empty();
-    let changed_files_count = self.status_entries.len();
+    let changed_files_count = Self::changed_files_count(&self.status_entries);
     let (label, icon, tooltip) = if all_staged {
       ("Unstage all", IconName::Minus, "Unstage all files")
     } else {
@@ -3831,18 +3840,17 @@ impl GitPage {
             .text_color(theme.sidebar_foreground)
             .child("Changes"),
         )
-        .when(changed_files_count > 0, |this| {
-          this.child(
-            div()
-              .px_1()
-              .py(px(1.))
-              .rounded(theme.radius)
-              .text_xs()
-              .bg(theme.secondary)
-              .text_color(theme.sidebar_foreground)
-              .child(changed_files_count.to_string()),
-          )
-        })
+        .when(
+          Self::should_show_changed_files_tag(changed_files_count),
+          |this| {
+            this.child(
+              Tag::secondary()
+                .small()
+                .rounded_full()
+                .child(changed_files_count.to_string()),
+            )
+          },
+        )
         .into_any_element()
     };
 
@@ -4598,6 +4606,25 @@ mod tests {
       "src/a.rs",
       RepoStage::PartiallyStaged
     )]));
+  }
+
+  #[test]
+  fn changed_files_count_matches_status_entries_len() {
+    assert_eq!(GitPage::changed_files_count(&[]), 0);
+
+    let entries = vec![
+      make_status_entry("src/a.rs", RepoStage::Unstaged),
+      make_status_entry("src/b.rs", RepoStage::Staged),
+      make_status_entry("src/c.rs", RepoStage::PartiallyStaged),
+    ];
+    assert_eq!(GitPage::changed_files_count(&entries), 3);
+  }
+
+  #[test]
+  fn changed_files_tag_visibility_requires_positive_count() {
+    assert!(!GitPage::should_show_changed_files_tag(0));
+    assert!(GitPage::should_show_changed_files_tag(1));
+    assert!(GitPage::should_show_changed_files_tag(42));
   }
 
   #[gpui::test]
