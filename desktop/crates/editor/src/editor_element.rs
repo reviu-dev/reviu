@@ -46,6 +46,7 @@ const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
 const DIAGONAL_STRIPE_WIDTH: f32 = 1.0;
 const INDENT_GUIDE_BORDER_WIDTH: f32 = 1.0;
 const INDENT_RAINBOW_BLOCK_COLUMNS: usize = 2;
+const EDITOR_CHAR_WIDTH_SAMPLE: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
 
 fn clamp_to_char_boundary(text: &str, byte_offset: usize) -> usize {
   let mut byte_offset = byte_offset.min(text.len());
@@ -958,6 +959,27 @@ impl Element for EditorElement {
 
     let style = window.text_style();
     let font_size = style.font_size.to_pixels(window.rem_size());
+    let measured_char_width = {
+      let sample_runs = vec![TextRun {
+        len: EDITOR_CHAR_WIDTH_SAMPLE.len(),
+        font: style.font(),
+        color: style.color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+      }];
+      let shaped = window.text_system().shape_line(
+        EDITOR_CHAR_WIDTH_SAMPLE.into(),
+        font_size,
+        &sample_runs,
+        None,
+      );
+      let sample_chars = EDITOR_CHAR_WIDTH_SAMPLE.chars().count().max(1) as f32;
+      (shaped.x_for_index(EDITOR_CHAR_WIDTH_SAMPLE.len()) / sample_chars).max(px(1.0))
+    };
+    self.editor.update(cx, |editor, _| {
+      editor.editor_char_width = measured_char_width;
+    });
     let line_height = measured_line_height;
 
     // Get theme for syntax highlighting colors

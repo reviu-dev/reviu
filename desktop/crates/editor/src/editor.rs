@@ -96,7 +96,6 @@ const REVIEW_COMMENT_CHAR_WIDTH_PX: f32 = 7.8;
 const REVIEW_COMMENT_HORIZONTAL_PADDING_PX: f32 =
   REVIEW_COMMENT_CARD_PADDING_X_PX * 2.0 + REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
 const REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX: f32 = 20.0;
-const REVIEW_COMMENT_MARKDOWN_LINE_HEIGHT_SCALE: f32 = 0.8;
 const REVIEW_COMMENT_FIXED_WIDTH_PX: f32 = 800.0;
 
 fn has_fractional_scroll(scroll_offset: f32) -> bool {
@@ -132,6 +131,7 @@ pub struct Editor {
 
   pub scroll_offset_y: f32, // Vertical scroll offset in lines (0.0 = top, 1.5 = 1.5 lines down)
   pub editor_line_height: Pixels,
+  pub editor_char_width: Pixels,
   pub viewport_height: Pixels,
   pub viewport_width: Pixels,
   pub max_line_width: Pixels, // Maximum width of visible lines (never decreases to avoid scroll jumps)
@@ -390,6 +390,7 @@ impl Editor {
       virtual_line_layouts: HashMap::new(),
       scroll_offset_y: 0.0,
       editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
+      editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
       viewport_height: px(DEFAULT_VIEWPORT_HEIGHT), // Will be updated on first render
       viewport_width: px(DEFAULT_VIEWPORT_WIDTH),   // Will be updated on first render
       max_line_width: px(DEFAULT_MAX_LINE_WIDTH),   // Will be updated on first render
@@ -462,6 +463,14 @@ impl Editor {
       self.editor_line_height
     } else {
       px(DEFAULT_EDITOR_LINE_HEIGHT)
+    }
+  }
+
+  pub fn measured_editor_char_width(&self) -> Pixels {
+    if self.editor_char_width > px(0.0) {
+      self.editor_char_width
+    } else {
+      px(REVIEW_COMMENT_CHAR_WIDTH_PX)
     }
   }
 
@@ -601,9 +610,10 @@ impl Editor {
   }
 
   fn computed_review_comment_wrap_columns(&self) -> usize {
-    let available_px = (REVIEW_COMMENT_FIXED_WIDTH_PX - REVIEW_COMMENT_HORIZONTAL_PADDING_PX)
-      .max(REVIEW_COMMENT_CHAR_WIDTH_PX);
-    let columns = (available_px / REVIEW_COMMENT_CHAR_WIDTH_PX).floor() as usize;
+    let char_width_px = (self.measured_editor_char_width() / px(1.0)).max(1.0);
+    let available_px =
+      (REVIEW_COMMENT_FIXED_WIDTH_PX - REVIEW_COMMENT_HORIZONTAL_PADDING_PX).max(char_width_px);
+    let columns = (available_px / char_width_px).floor() as usize;
     columns.clamp(
       REVIEW_COMMENT_MIN_WRAP_COLUMNS,
       REVIEW_COMMENT_MAX_WRAP_COLUMNS,
@@ -1852,8 +1862,7 @@ impl Editor {
       return;
     }
 
-    let markdown_line_height_px =
-      self.review_comment_line_height_px * REVIEW_COMMENT_MARKDOWN_LINE_HEIGHT_SCALE;
+    let markdown_line_height_px = self.review_comment_line_height_px;
     let wrap_columns = self.review_comment_wrap_columns;
     let mut review_comment_body_heights_px = HashMap::new();
     for index in 0..self.review_comments.len() {
@@ -4439,6 +4448,28 @@ pub mod tests {
     assert_eq!(measured, px(17.0));
   }
 
+  #[gpui::test]
+  fn test_computed_review_comment_wrap_columns_tracks_measured_char_width(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "line");
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.editor_char_width = px(6.0);
+    });
+    let narrow_columns = ctx
+      .editor
+      .read_with(&ctx.cx, |editor, _| editor.computed_review_comment_wrap_columns());
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.editor_char_width = px(12.0);
+    });
+    let wide_columns = ctx
+      .editor
+      .read_with(&ctx.cx, |editor, _| editor.computed_review_comment_wrap_columns());
+
+    assert!(wide_columns < narrow_columns);
+  }
+
   /// Helper context for testing Editor
   pub struct EditorTestContext {
     pub cx: TestAppContext,
@@ -4482,6 +4513,7 @@ pub mod tests {
           virtual_line_layouts: HashMap::new(),
           scroll_offset_y: 0.0,
           editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
+          editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
           viewport_height: px(DEFAULT_VIEWPORT_HEIGHT),
           viewport_width: px(DEFAULT_VIEWPORT_WIDTH),
           max_line_width: px(DEFAULT_MAX_LINE_WIDTH),
