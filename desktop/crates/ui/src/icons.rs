@@ -14,6 +14,7 @@ pub enum UiIconName {
   FileCode,
   EllipsisVertical,
   SquarePen,
+  MessageCircleReply,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -30,6 +31,7 @@ impl IconNamed for UiIconName {
       UiIconName::FileCode => "icons/file-code.svg",
       UiIconName::EllipsisVertical => "icons/ellipsis-vertical.svg",
       UiIconName::SquarePen => "icons/square-pen.svg",
+      UiIconName::MessageCircleReply => "icons/message-circle-reply.svg",
     }
     .into()
   }

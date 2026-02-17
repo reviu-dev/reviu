@@ -103,6 +103,7 @@ const REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX: f32 = 180.0;
 const REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX: f32 = 24.0;
 const REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX: f32 = 8.0;
 const REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID: u64 = u64::MAX;
+const REVIEW_COMMENT_REPLY_DRAFT_COMMENT_ID: u64 = u64::MAX - 1;
 const REVIEW_COMMENT_CREATE_SELECTION_BACKGROUND_ALPHA: f32 = 0.16;
 const REVIEW_COMMENT_CREATE_BUTTON_GUTTER_RIGHT_PX: f32 = 10.0;
 const REVIEW_COMMENT_CREATE_BUTTON_HITBOX_WIDTH_PX: f32 = 10.0;
@@ -136,6 +137,7 @@ pub struct ReviewCommentCreateRequest {
   pub side: ReviewCommentSide,
   pub start_line: Option<usize>,
   pub start_side: Option<ReviewCommentSide>,
+  pub in_reply_to_id: Option<u64>,
   pub body: Arc<str>,
 }
 
@@ -162,8 +164,12 @@ fn editor_actions_enabled(
   find_input_focused: bool,
   review_comment_edit_input_focused: bool,
   review_comment_create_input_focused: bool,
+  review_comment_reply_input_focused: bool,
 ) -> bool {
-  !find_input_focused && !review_comment_edit_input_focused && !review_comment_create_input_focused
+  !find_input_focused
+    && !review_comment_edit_input_focused
+    && !review_comment_create_input_focused
+    && !review_comment_reply_input_focused
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -251,6 +257,10 @@ pub struct Editor {
   review_comment_create_drag_active: bool,
   review_comment_create_submitting: bool,
   review_comment_create_error: Option<Arc<str>>,
+  review_comment_reply_input: Option<Entity<InputState>>,
+  replying_to_review_comment_id: Option<u64>,
+  review_comment_reply_submitting: bool,
+  review_comment_reply_error: Option<Arc<str>>,
   hovered_review_comment_create_display_line: Option<usize>,
   collapsed_review_comments: HashSet<u64>,
   review_comment_scroll_epoch: usize,
@@ -523,6 +533,10 @@ impl Editor {
       review_comment_create_drag_active: false,
       review_comment_create_submitting: false,
       review_comment_create_error: None,
+      review_comment_reply_input: None,
+      replying_to_review_comment_id: None,
+      review_comment_reply_submitting: false,
+      review_comment_reply_error: None,
       hovered_review_comment_create_display_line: None,
       collapsed_review_comments: HashSet::new(),
       review_comment_scroll_epoch: 0,
@@ -639,6 +653,7 @@ impl Editor {
       self.editable_review_comment_ids.clear();
       self.clear_review_comment_edit_state();
       self.clear_review_comment_create_state();
+      self.clear_review_comment_reply_state();
       self.collapsed_review_comments.clear();
       self.set_projection(None);
       self.virtual_line_layouts.clear();
@@ -720,6 +735,12 @@ impl Editor {
       .is_some_and(|(id, _)| !self.review_comments.iter().any(|comment| comment.id == *id))
     {
       self.review_comment_edit_error = None;
+    }
+    if self
+      .replying_to_review_comment_id
+      .is_some_and(|id| !self.review_comments.iter().any(|comment| comment.id == id))
+    {
+      self.clear_review_comment_reply_state();
     }
     for comment in &self.review_comments {
       self
@@ -871,6 +892,7 @@ impl Editor {
     self.review_comment_create_handler = handler;
     if self.review_comment_create_handler.is_none() {
       self.clear_review_comment_create_state();
+      self.clear_review_comment_reply_state();
       self.refresh_review_comment_projection(cx);
       return;
     }
@@ -901,6 +923,12 @@ impl Editor {
     self.hovered_review_comment_create_display_line = None;
   }
 
+  fn clear_review_comment_reply_state(&mut self) {
+    self.replying_to_review_comment_id = None;
+    self.review_comment_reply_submitting = false;
+    self.review_comment_reply_error = None;
+  }
+
   pub fn finish_review_comment_edit_submission(
     &mut self,
     comment_id: u64,
@@ -924,6 +952,17 @@ impl Editor {
     error: Option<Arc<str>>,
     cx: &mut Context<Self>,
   ) {
+    if self.review_comment_reply_submitting {
+      self.review_comment_reply_submitting = false;
+      if let Some(error) = error {
+        self.review_comment_reply_error = Some(error);
+      } else {
+        self.clear_review_comment_reply_state();
+      }
+      self.refresh_review_comment_projection(cx);
+      return;
+    }
+
     if !self.review_comment_create_submitting {
       return;
     }
@@ -970,13 +1009,17 @@ impl Editor {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.review_comment_edit_submitting_id.is_some() || self.review_comment_create_submitting {
+    if self.review_comment_edit_submitting_id.is_some()
+      || self.review_comment_create_submitting
+      || self.review_comment_reply_submitting
+    {
       return;
     }
     if !self.editable_review_comment_ids.contains(&comment_id) {
       return;
     }
     self.clear_review_comment_create_state();
+    self.clear_review_comment_reply_state();
 
     let input = self.ensure_review_comment_edit_input(window, cx);
     let initial_text = body.to_string();
@@ -1080,6 +1123,155 @@ impl Editor {
     input
   }
 
+  fn ensure_review_comment_reply_input(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<InputState> {
+    if let Some(input) = self.review_comment_reply_input.as_ref() {
+      return input.clone();
+    }
+
+    let input = cx.new(|cx| {
+      InputState::new(window, cx)
+        .multi_line(true)
+        .rows(6)
+        .placeholder("Reply to review comment...")
+    });
+    self.review_comment_reply_input = Some(input.clone());
+    input
+  }
+
+  fn start_review_comment_reply(
+    &mut self,
+    comment_id: u64,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.review_comment_create_handler.is_none()
+      || self.review_comment_create_drag_active
+      || self.review_comment_create_submitting
+      || self.review_comment_edit_submitting_id.is_some()
+      || self.review_comment_reply_submitting
+    {
+      return;
+    }
+
+    let thread_id = self.thread_id_for_comment(comment_id);
+    if self
+      .review_comment_threads
+      .get(&thread_id)
+      .and_then(|comments| comments.last().copied())
+      != Some(comment_id)
+    {
+      return;
+    }
+    if !self
+      .review_comments
+      .iter()
+      .any(|comment| comment.id == comment_id)
+    {
+      return;
+    }
+
+    self.clear_review_comment_edit_state();
+    self.clear_review_comment_create_state();
+
+    let input = self.ensure_review_comment_reply_input(window, cx);
+    input.update(cx, |state, cx| {
+      state.set_value("", window, cx);
+    });
+
+    let input_for_focus = input.clone();
+    window.on_next_frame(move |window, cx| {
+      input_for_focus.update(cx, |state, cx| {
+        state.focus(window, cx);
+      });
+    });
+
+    self.replying_to_review_comment_id = Some(comment_id);
+    self.review_comment_reply_error = None;
+    self.refresh_review_comment_projection(cx);
+  }
+
+  fn cancel_review_comment_reply(&mut self, cx: &mut Context<Self>) {
+    if self.review_comment_reply_submitting {
+      return;
+    }
+    if self.replying_to_review_comment_id.is_none() {
+      return;
+    }
+    self.clear_review_comment_reply_state();
+    self.refresh_review_comment_projection(cx);
+  }
+
+  fn on_review_comment_reply_input_escape(
+    &mut self,
+    _: &InputEscape,
+    _: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.review_comment_reply_submitting {
+      cx.stop_propagation();
+      return;
+    }
+    self.cancel_review_comment_reply(cx);
+    cx.stop_propagation();
+  }
+
+  fn save_review_comment_reply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.review_comment_create_drag_active
+      || self.review_comment_create_submitting
+      || self.review_comment_edit_submitting_id.is_some()
+      || self.review_comment_reply_submitting
+    {
+      return;
+    }
+    let Some(in_reply_to_id) = self.replying_to_review_comment_id else {
+      return;
+    };
+    let Some(reply_to_comment) = self
+      .review_comments
+      .iter()
+      .find(|comment| comment.id == in_reply_to_id)
+      .cloned()
+    else {
+      self.clear_review_comment_reply_state();
+      self.refresh_review_comment_projection(cx);
+      return;
+    };
+    let Some(input) = self.review_comment_reply_input.as_ref() else {
+      self.clear_review_comment_reply_state();
+      self.refresh_review_comment_projection(cx);
+      return;
+    };
+
+    let raw_value = input.read(cx).value();
+    let Some(body) = next_review_comment_body(raw_value.as_str(), "") else {
+      return;
+    };
+    let Some(handler) = self.review_comment_create_handler.as_ref() else {
+      return;
+    };
+
+    handler(
+      ReviewCommentCreateRequest {
+        line: reply_to_comment.line,
+        side: reply_to_comment.side,
+        start_line: None,
+        start_side: None,
+        in_reply_to_id: Some(in_reply_to_id),
+        body,
+      },
+      window,
+      cx,
+    );
+
+    self.review_comment_reply_error = None;
+    self.review_comment_reply_submitting = true;
+    self.refresh_review_comment_projection(cx);
+  }
+
   fn review_comment_create_target_for_display_line(
     &self,
     display_line: usize,
@@ -1127,6 +1319,8 @@ impl Editor {
     if self.review_comment_create_handler.is_none()
       || self.editing_review_comment_id.is_some()
       || self.review_comment_edit_submitting_id.is_some()
+      || self.replying_to_review_comment_id.is_some()
+      || self.review_comment_reply_submitting
       || self.review_comment_create_submitting
     {
       return;
@@ -1267,6 +1461,7 @@ impl Editor {
   fn save_review_comment_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if self.review_comment_create_drag_active
       || self.review_comment_create_submitting
+      || self.review_comment_reply_submitting
       || self.review_comment_edit_submitting_id.is_some()
     {
       return;
@@ -1293,6 +1488,7 @@ impl Editor {
         side: draft.side,
         start_line: draft.start_line,
         start_side: draft.start_side,
+        in_reply_to_id: None,
         body,
       },
       window,
@@ -1419,6 +1615,18 @@ impl Editor {
 
     self
       .review_comment_create_input
+      .as_ref()
+      .map(|input| input.read(cx).focus_handle(cx).is_focused(window))
+      .unwrap_or(false)
+  }
+
+  fn is_review_comment_reply_input_focused(&self, window: &Window, cx: &App) -> bool {
+    if self.replying_to_review_comment_id.is_none() || self.review_comment_reply_submitting {
+      return false;
+    }
+
+    self
+      .review_comment_reply_input
       .as_ref()
       .map(|input| input.read(cx).focus_handle(cx).is_focused(window))
       .unwrap_or(false)
@@ -2168,12 +2376,16 @@ impl Editor {
         continue;
       };
       let review_comment_edit_handler = self.review_comment_edit_handler.clone();
-      let review_comment_submission_in_flight =
-        self.review_comment_edit_submitting_id.is_some() || self.review_comment_create_submitting;
+      let review_comment_submission_in_flight = self.review_comment_edit_submitting_id.is_some()
+        || self.review_comment_create_submitting
+        || self.review_comment_reply_submitting;
       let can_save_review_comment_edit =
         review_comment_edit_handler.is_some() && !review_comment_submission_in_flight;
+      let can_save_review_comment_reply =
+        self.review_comment_create_handler.is_some() && !review_comment_submission_in_flight;
       let editor = editor_entity.clone();
       let is_collapsed = layout.collapsed;
+      let last_message_id = layout.messages.last().map(|message| message.id);
       let toggle_icon = if is_collapsed {
         IconName::ChevronRight
       } else {
@@ -2212,10 +2424,39 @@ impl Editor {
                 .xsmall()
                 .compact()
                 .icon(UiIconName::SquarePen)
+                .tooltip("Edit comment")
                 .on_click(move |_, window, cx| {
                   cx.stop_propagation();
                   editor.update(cx, |editor, cx| {
                     editor.start_review_comment_edit(first_message_id, body.clone(), window, cx);
+                  });
+                }),
+            ),
+        )
+      } else {
+        None
+      };
+      let first_message_reply_button = if !review_comment_submission_in_flight
+        && self.replying_to_review_comment_id.is_none()
+        && last_message_id == Some(first_message_id)
+      {
+        let editor = editor_entity.clone();
+        Some(
+          div()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+              cx.stop_propagation();
+            })
+            .child(
+              Button::new(format!("review-comment-reply-{}", first_message_id))
+                .ghost()
+                .xsmall()
+                .compact()
+                .icon(UiIconName::MessageCircleReply)
+                .tooltip("Reply")
+                .on_click(move |_, window, cx| {
+                  cx.stop_propagation();
+                  editor.update(cx, |editor, cx| {
+                    editor.start_review_comment_reply(first_message_id, window, cx);
                   });
                 }),
             ),
@@ -2278,6 +2519,9 @@ impl Editor {
             .items_center()
             .gap_1()
             .when_some(first_message_edit_button, |this, button| this.child(button))
+            .when_some(first_message_reply_button, |this, button| {
+              this.child(button)
+            })
             .child(toggle_button),
         );
 
@@ -2324,6 +2568,7 @@ impl Editor {
 
       let mut thread_messages = v_flex();
       for (index, message) in layout.messages.iter().enumerate() {
+        let is_last_message = Some(message.id) == last_message_id;
         let body: gpui::AnyElement = if self.review_comment_edit_submitting_id == Some(message.id) {
           self.review_comment_composer_skeleton(line_height)
         } else if self.editing_review_comment_id == Some(message.id) {
@@ -2461,10 +2706,40 @@ impl Editor {
                     .xsmall()
                     .compact()
                     .icon(UiIconName::SquarePen)
+                    .tooltip("Edit comment")
                     .on_click(move |_, window, cx| {
                       cx.stop_propagation();
                       editor.update(cx, |editor, cx| {
                         editor.start_review_comment_edit(message_id, body.clone(), window, cx);
+                      });
+                    }),
+                ),
+            )
+          } else {
+            None
+          };
+          let message_reply_button = if !review_comment_submission_in_flight
+            && self.replying_to_review_comment_id.is_none()
+            && is_last_message
+          {
+            let editor = editor_entity.clone();
+            let message_id = message.id;
+            Some(
+              div()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                  cx.stop_propagation();
+                })
+                .child(
+                  Button::new(format!("review-comment-reply-{}", message_id))
+                    .ghost()
+                    .xsmall()
+                    .compact()
+                    .icon(UiIconName::MessageCircleReply)
+                    .tooltip("Reply")
+                    .on_click(move |_, window, cx| {
+                      cx.stop_propagation();
+                      editor.update(cx, |editor, cx| {
+                        editor.start_review_comment_reply(message_id, window, cx);
                       });
                     }),
                 ),
@@ -2517,11 +2792,133 @@ impl Editor {
                         .child(message.created_at.as_ref().to_string()),
                     ),
                 )
-                .when_some(message_edit_button, |this, button| this.child(button)),
+                .child(
+                  h_flex()
+                    .items_center()
+                    .gap_1()
+                    .when_some(message_edit_button, |this, button| this.child(button))
+                    .when_some(message_reply_button, |this, button| this.child(button)),
+                ),
             )
             .child(body)
         };
         thread_messages = thread_messages.child(message_block);
+      }
+
+      if self
+        .replying_to_review_comment_id
+        .is_some_and(|reply_to_id| self.thread_id_for_comment(reply_to_id) == thread_id)
+      {
+        let reply_to_id = self
+          .replying_to_review_comment_id
+          .expect("reply target should exist when rendering thread reply composer");
+        let reply_block: gpui::AnyElement = if self.review_comment_reply_submitting {
+          v_flex()
+            .pt(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
+            .pb(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
+            .gap(px(REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX))
+            .border_t(px(REVIEW_COMMENT_REPLY_BORDER_TOP_PX))
+            .border_color(theme.border)
+            .child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .child(div().text_sm().text_color(theme.foreground).child("You")),
+            )
+            .child(self.review_comment_composer_skeleton(line_height))
+            .into_any_element()
+        } else if let Some(input_state) = self.review_comment_reply_input.clone() {
+          let cancel_editor = editor_entity.clone();
+          let save_editor = editor_entity.clone();
+          let reply_error = self.review_comment_reply_error.clone();
+          v_flex()
+            .on_action(cx.listener(Self::on_review_comment_reply_input_escape))
+            .pt(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
+            .pb(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
+            .gap(px(REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX))
+            .border_t(px(REVIEW_COMMENT_REPLY_BORDER_TOP_PX))
+            .border_color(theme.border)
+            .child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .child(div().text_sm().text_color(theme.foreground).child("You")),
+            )
+            .child(
+              v_flex()
+                .gap(px(REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX))
+                .child(Input::new(&input_state).h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)))
+                .child(
+                  h_flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                      div()
+                        .flex_1()
+                        .min_w_0()
+                        .when_some(reply_error, |this, error| {
+                          this.child(
+                            div()
+                              .text_xs()
+                              .text_color(theme.status_red())
+                              .overflow_hidden()
+                              .text_ellipsis_start()
+                              .child(error.as_ref().to_string()),
+                          )
+                        }),
+                    )
+                    .child(
+                      h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                          div()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                              cx.stop_propagation();
+                            })
+                            .child(
+                              Button::new(format!("review-comment-reply-cancel-{}", reply_to_id))
+                                .ghost()
+                                .xsmall()
+                                .compact()
+                                .label("Cancel")
+                                .on_click(move |_, _, cx| {
+                                  cx.stop_propagation();
+                                  cancel_editor.update(cx, |editor, cx| {
+                                    editor.cancel_review_comment_reply(cx);
+                                  });
+                                }),
+                            ),
+                        )
+                        .child(
+                          div()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                              cx.stop_propagation();
+                            })
+                            .child(
+                              Button::new(format!("review-comment-reply-save-{}", reply_to_id))
+                                .xsmall()
+                                .compact()
+                                .label("Save")
+                                .disabled(!can_save_review_comment_reply)
+                                .on_click(move |_, window, cx| {
+                                  cx.stop_propagation();
+                                  save_editor.update(cx, |editor, cx| {
+                                    editor.save_review_comment_reply(window, cx);
+                                  });
+                                }),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+            .into_any_element()
+        } else {
+          self.review_comment_composer_skeleton(line_height)
+        };
+
+        thread_messages = thread_messages.child(reply_block);
       }
 
       let card = div()
@@ -2960,6 +3357,14 @@ impl Editor {
     let mut review_comment_body_heights_px = HashMap::new();
     let show_review_comment_create_composer =
       self.review_comment_create_draft.is_some() && !self.review_comment_create_drag_active;
+    let reply_target_comment = self.replying_to_review_comment_id.and_then(|reply_to_id| {
+      self
+        .review_comments
+        .iter()
+        .find(|comment| comment.id == reply_to_id)
+        .cloned()
+    });
+    let show_review_comment_reply_composer = reply_target_comment.is_some();
     let mut projection_comments = self.review_comments.clone();
 
     for index in 0..self.review_comments.len() {
@@ -2993,6 +3398,23 @@ impl Editor {
       });
       review_comment_body_heights_px.insert(
         REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID,
+        review_comment_composer_body_height_px(self.review_comment_line_height_px),
+      );
+    }
+    if show_review_comment_reply_composer && let Some(reply_to_comment) = reply_target_comment {
+      projection_comments.push(ReviewComment {
+        id: REVIEW_COMMENT_REPLY_DRAFT_COMMENT_ID,
+        in_reply_to_id: Some(reply_to_comment.id),
+        line: reply_to_comment.line,
+        side: reply_to_comment.side,
+        author: Arc::from("You"),
+        avatar_url: None,
+        line_label: None,
+        body: Arc::from(""),
+        created_at: Arc::from(""),
+      });
+      review_comment_body_heights_px.insert(
+        REVIEW_COMMENT_REPLY_DRAFT_COMMENT_ID,
         review_comment_composer_body_height_px(self.review_comment_line_height_px),
       );
     }
@@ -5370,12 +5792,14 @@ impl Render for Editor {
     })
     .and_then(|display_line| self.review_comment_create_target_for_display_line(display_line, cx));
     let show_review_comment_create_button = self.review_comment_create_handler.is_some()
+      && self.replying_to_review_comment_id.is_none()
       && (self.review_comment_create_draft.is_none() || self.review_comment_create_drag_active);
     let find_panel = self.render_find_panel(editor_entity.clone(), window, cx);
     let editor_actions_enabled = editor_actions_enabled(
       self.is_find_input_focused(window, cx),
       self.is_review_comment_edit_input_focused(window, cx),
       self.is_review_comment_create_input_focused(window, cx),
+      self.is_review_comment_reply_input_focused(window, cx),
     );
 
     let build_gutter = |gutter_element: GutterElement,
@@ -5775,11 +6199,12 @@ pub mod tests {
 
   #[gpui::test]
   fn test_editor_actions_enabled_depends_on_nested_input_focus(_cx: &mut TestAppContext) {
-    assert!(editor_actions_enabled(false, false, false));
-    assert!(!editor_actions_enabled(true, false, false));
-    assert!(!editor_actions_enabled(false, true, false));
-    assert!(!editor_actions_enabled(false, false, true));
-    assert!(!editor_actions_enabled(true, true, true));
+    assert!(editor_actions_enabled(false, false, false, false));
+    assert!(!editor_actions_enabled(true, false, false, false));
+    assert!(!editor_actions_enabled(false, true, false, false));
+    assert!(!editor_actions_enabled(false, false, true, false));
+    assert!(!editor_actions_enabled(false, false, false, true));
+    assert!(!editor_actions_enabled(true, true, true, true));
   }
 
   #[gpui::test]
@@ -5877,6 +6302,10 @@ pub mod tests {
           review_comment_create_drag_active: false,
           review_comment_create_submitting: false,
           review_comment_create_error: None,
+          review_comment_reply_input: None,
+          replying_to_review_comment_id: None,
+          review_comment_reply_submitting: false,
+          review_comment_reply_error: None,
           hovered_review_comment_create_display_line: None,
           collapsed_review_comments: HashSet::new(),
           review_comment_scroll_epoch: 0,
@@ -6188,6 +6617,23 @@ pub mod tests {
   }
 
   #[gpui::test]
+  fn test_set_diffs_none_clears_review_comment_reply_state(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.replying_to_review_comment_id = Some(42);
+      editor.review_comment_reply_submitting = true;
+      editor.review_comment_reply_error = Some(Arc::from("request failed"));
+
+      editor.set_diffs(None, cx);
+
+      assert!(editor.replying_to_review_comment_id.is_none());
+      assert!(!editor.review_comment_reply_submitting);
+      assert!(editor.review_comment_reply_error.is_none());
+    });
+  }
+
+  #[gpui::test]
   fn test_finish_review_comment_edit_submission_success_clears_edit_state(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
 
@@ -6258,6 +6704,24 @@ pub mod tests {
   }
 
   #[gpui::test]
+  fn test_finish_review_comment_create_submission_success_clears_reply_state(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.replying_to_review_comment_id = Some(42);
+      editor.review_comment_reply_submitting = true;
+
+      editor.finish_review_comment_create_submission(None, cx);
+
+      assert!(editor.replying_to_review_comment_id.is_none());
+      assert!(!editor.review_comment_reply_submitting);
+      assert!(editor.review_comment_reply_error.is_none());
+    });
+  }
+
+  #[gpui::test]
   fn test_finish_review_comment_create_submission_failure_keeps_create_state(
     cx: &mut TestAppContext,
   ) {
@@ -6280,6 +6744,27 @@ pub mod tests {
       assert!(!editor.review_comment_create_submitting);
       assert_eq!(
         editor.review_comment_create_error.as_deref(),
+        Some("request failed")
+      );
+    });
+  }
+
+  #[gpui::test]
+  fn test_finish_review_comment_create_submission_failure_keeps_reply_state(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.replying_to_review_comment_id = Some(42);
+      editor.review_comment_reply_submitting = true;
+
+      editor.finish_review_comment_create_submission(Some(Arc::from("request failed")), cx);
+
+      assert_eq!(editor.replying_to_review_comment_id, Some(42));
+      assert!(!editor.review_comment_reply_submitting);
+      assert_eq!(
+        editor.review_comment_reply_error.as_deref(),
         Some("request failed")
       );
     });

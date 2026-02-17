@@ -163,7 +163,7 @@ const updatePullRequestCommentBodySchema = z.object({
   body: z.string().trim().min(1, 'Missing comment body'),
 })
 
-const createPullRequestCommentBodySchema = z.object({
+const createPullRequestLineCommentBodySchema = z.object({
   body: z.string().trim().min(1, 'Missing comment body'),
   path: z.string().trim().min(1, 'Missing comment path'),
   commitId: z.string().trim().min(1, 'Missing comment commit id'),
@@ -171,6 +171,10 @@ const createPullRequestCommentBodySchema = z.object({
   side: z.enum(['LEFT', 'RIGHT']),
   startLine: z.number().int().positive().optional(),
   startSide: z.enum(['LEFT', 'RIGHT']).optional(),
+})
+
+const createPullRequestThreadReplyBodySchema = z.object({
+  body: z.string().trim().min(1, 'Missing comment body'),
 })
 
 function mapGithubPullRequestReviewComment(
@@ -430,7 +434,7 @@ export const githubRoutes = githubRouter
   })
   .post('/pr/:id/comments', zValidator(
     'json',
-    createPullRequestCommentBodySchema,
+    createPullRequestLineCommentBodySchema,
   ), async (ctx) => {
     const { org, repo } = ctx.req.query()
     const pullNumber = Number(ctx.req.param('id'))
@@ -464,6 +468,44 @@ export const githubRoutes = githubRouter
         ...(startLine != null ? { start_line: startLine } : {}),
         ...(startSide != null ? { start_side: startSide } : {}),
       }
+
+      const data = await createGithubPullRequestComment(githubToken, params)
+
+      const comment = mapGithubPullRequestReviewComment(data)
+      return ctx.json({ comment }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/:prId/comments/:commentId/reply', zValidator(
+    'json',
+    createPullRequestThreadReplyBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('prId'))
+    const inReplyToId = Number(ctx.req.param('commentId'))
+    const { body } = ctx.req.valid('json')
+
+    if (!org || !repo || Number.isNaN(pullNumber) || Number.isNaN(inReplyToId)) {
+      return ctx.json({ error: 'Missing org, repo, prId, or commentId' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params = {
+        owner: org,
+        repo,
+        pull_number: pullNumber,
+        body,
+        in_reply_to: inReplyToId,
+      } as CreatePullRequestCommentParams
 
       const data = await createGithubPullRequestComment(githubToken, params)
 
