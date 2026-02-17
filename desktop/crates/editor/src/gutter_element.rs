@@ -60,6 +60,7 @@ pub struct GutterPrepaintState {
   line_height: Pixels,
   scroll_offset: f32,
   line_number_color: gpui::Hsla,
+  line_number_right_padding: Pixels,
   line_backgrounds: Vec<PaintQuad>,
   gap_separators: Vec<PaintQuad>,
   stripe_quads: Vec<PaintQuad>,
@@ -140,6 +141,7 @@ impl Element for GutterElement {
       line_height,
       scroll_offset,
       line_number_color,
+      line_number_right_padding,
       line_backgrounds,
       gap_separators,
       stripe_quads,
@@ -157,6 +159,7 @@ impl Element for GutterElement {
       let projection = editor.projection.clone();
       let show_stripes = matches!(self.view, GutterView::Inline);
       let scroll_hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+      let line_number_right_padding = editor.gutter_line_number_right_padding();
 
       // Calculate viewport (same logic as EditorElement)
       let mut visible_line_count = ((bounds.size.height / line_height).ceil() as usize).max(1);
@@ -505,6 +508,7 @@ impl Element for GutterElement {
         line_height,
         scroll_offset,
         line_number_color,
+        line_number_right_padding,
         line_backgrounds,
         gap_separators,
         stripe_quads,
@@ -523,6 +527,7 @@ impl Element for GutterElement {
       line_height,
       scroll_offset,
       line_number_color,
+      line_number_right_padding,
       line_backgrounds,
       gap_separators,
       stripe_quads,
@@ -583,22 +588,27 @@ impl Element for GutterElement {
           return;
         }
         editor.update(cx, |editor, cx| {
-          let hovered = {
+          let display_line = {
             let y_offset = event.position.y - bounds.top();
             let line_float = editor.scroll_offset_y + (y_offset / line_height);
             if line_float.is_sign_negative() {
               None
             } else {
-              let display_line = line_float.floor() as usize;
-              let doc_line_count = editor.document().read(cx).len_lines();
-              let total_lines = editor.display_line_count(doc_line_count);
-              if display_line < total_lines {
-                editor.group_id_for_modified_display_line(display_line)
-              } else {
-                None
-              }
+              Some(line_float.floor() as usize)
             }
           };
+
+          let hovered = display_line.and_then(|display_line| {
+            let doc_line_count = editor.document().read(cx).len_lines();
+            let total_lines = editor.display_line_count(doc_line_count);
+            if display_line < total_lines {
+              editor.group_id_for_modified_display_line(display_line)
+            } else {
+              None
+            }
+          });
+
+          editor.update_review_comment_create_drag_from_display_line(display_line, cx);
 
           if editor.hovered_group_id.as_deref() != hovered.as_deref() {
             editor.hovered_group_id = hovered;
@@ -607,7 +617,6 @@ impl Element for GutterElement {
         });
       }
     });
-
     window.on_mouse_event({
       let editor = self.editor.clone();
       let scroll_hitbox = prepaint.scroll_hitbox.clone();
@@ -734,8 +743,7 @@ impl Element for GutterElement {
 
       // Align to the right with padding
       let text_width = shaped.width;
-      let right_padding = px(20.0);
-      let x = bounds.right() - text_width - right_padding;
+      let x = bounds.right() - text_width - prepaint.line_number_right_padding;
 
       let line_origin = point(x, y);
       shaped
