@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::RefCell;
 use std::{
   fs,
   path::{Path, PathBuf},
@@ -28,6 +30,11 @@ const SETTINGS_TABLE: ConfigTable = ConfigTable {
 
 const CONFIG_TABLES: [ConfigTable; 2] = [RECENT_REPOS_TABLE, SETTINGS_TABLE];
 
+#[cfg(test)]
+thread_local! {
+  static TEST_DB_PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+
 pub struct ConfigStore {
   conn: Connection,
 }
@@ -56,11 +63,28 @@ impl Default for AppSettings {
 
 impl ConfigStore {
   fn db_path() -> PathBuf {
+    #[cfg(test)]
+    if let Some(path) = Self::test_db_path() {
+      return path;
+    }
+
     if let Some(base) = config_dir() {
       base.join(CONFIG_DIR_NAME).join(CONFIG_DB_NAME)
     } else {
       PathBuf::from(CONFIG_DB_NAME)
     }
+  }
+
+  #[cfg(test)]
+  fn test_db_path() -> Option<PathBuf> {
+    TEST_DB_PATH.with(|path| path.borrow().clone())
+  }
+
+  #[cfg(test)]
+  pub(crate) fn set_test_db_path(path: Option<PathBuf>) {
+    TEST_DB_PATH.with(|slot| {
+      *slot.borrow_mut() = path;
+    });
   }
 
   fn open() -> Option<Self> {
@@ -283,5 +307,62 @@ impl ConfigStore {
     ) {
       eprintln!("Failed to persist app settings: {}", err);
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::sync::atomic::{AtomicU64, Ordering};
+
+  fn unique_test_db_path(label: &str) -> PathBuf {
+    static NEXT_DB_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_DB_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+      "reviu-config-{label}-{}-{id}.sqlite",
+      std::process::id()
+    ))
+  }
+
+  #[test]
+  fn recent_repositories_use_test_db_override() {
+    let db_path = unique_test_db_path("recent");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    let repo_a = Path::new("/tmp/reviu-config-test-repo-a");
+    let repo_b = Path::new("/tmp/reviu-config-test-repo-b");
+    ConfigStore::persist_recent_repository(repo_a);
+    ConfigStore::persist_recent_repository(repo_b);
+
+    let paths: Vec<PathBuf> = ConfigStore::load_recent_repositories()
+      .into_iter()
+      .map(|repo| repo.path)
+      .collect();
+    assert!(paths.contains(&repo_a.to_path_buf()));
+    assert!(paths.contains(&repo_b.to_path_buf()));
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn app_settings_use_test_db_override() {
+    let db_path = unique_test_db_path("settings");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    let settings = AppSettings {
+      auto_switch_theme: false,
+      dark_mode: true,
+      indent_rainbow: true,
+    };
+    ConfigStore::persist_app_settings(settings);
+
+    let loaded = ConfigStore::load_app_settings();
+    assert!(!loaded.auto_switch_theme);
+    assert!(loaded.dark_mode);
+    assert!(loaded.indent_rainbow);
+
+    ConfigStore::set_test_db_path(None);
   }
 }
