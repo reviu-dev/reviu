@@ -14,7 +14,7 @@ pub use cursor_blink::CursorBlink;
 pub use document::Document;
 pub use editor::{
   DiffViewMode, Editor, HunkAction, ReviewCommentCreateHandler, ReviewCommentCreateRequest,
-  ReviewCommentEditHandler,
+  ReviewCommentEditHandler, ReviewCommentLinkHandler,
 };
 pub use editor_element::{EditorElement, PositionMap};
 pub use gutter_element::GutterElement;
