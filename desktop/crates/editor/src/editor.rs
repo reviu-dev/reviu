@@ -4521,23 +4521,21 @@ pub mod tests {
   }
 
   #[gpui::test]
-  fn test_computed_review_comment_wrap_columns_tracks_measured_char_width(
-    cx: &mut TestAppContext,
-  ) {
+  fn test_computed_review_comment_wrap_columns_tracks_measured_char_width(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "line");
     ctx.editor.update(&mut ctx.cx, |editor, _| {
       editor.editor_char_width = px(6.0);
     });
-    let narrow_columns = ctx
-      .editor
-      .read_with(&ctx.cx, |editor, _| editor.computed_review_comment_wrap_columns());
+    let narrow_columns = ctx.editor.read_with(&ctx.cx, |editor, _| {
+      editor.computed_review_comment_wrap_columns()
+    });
 
     ctx.editor.update(&mut ctx.cx, |editor, _| {
       editor.editor_char_width = px(12.0);
     });
-    let wide_columns = ctx
-      .editor
-      .read_with(&ctx.cx, |editor, _| editor.computed_review_comment_wrap_columns());
+    let wide_columns = ctx.editor.read_with(&ctx.cx, |editor, _| {
+      editor.computed_review_comment_wrap_columns()
+    });
 
     assert!(wide_columns < narrow_columns);
   }
