@@ -1,7 +1,9 @@
 import type { Endpoints } from '@octokit/types'
 import { Buffer } from 'node:buffer'
+import { zValidator } from '@hono/zod-validator'
 import { request } from '@octokit/request'
 import { Hono } from 'hono'
+import z from 'zod'
 import { authMiddleware } from '../middlewares/auth.js'
 
 type ListPullsParams = Endpoints['GET /repos/{owner}/{repo}/pulls']['parameters']
@@ -14,6 +16,10 @@ type PullRequestCommentsParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
 type PullRequestCommentResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data'][number]
+type UpdatePullRequestCommentParams
+  = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['parameters']
+type UpdatePullRequestCommentResponse
+  = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['response']['data']
 type PullRequestFilesParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['parameters']
 type PullRequestFileResponse
@@ -136,6 +142,41 @@ interface GithubNotification {
 
 interface GithubFileContent {
   content: string | null
+}
+
+type GithubReviewCommentResponse = PullRequestCommentResponse | UpdatePullRequestCommentResponse
+
+const updatePullRequestCommentBodySchema = z.object({
+  body: z.string().trim().min(1, 'Missing comment body'),
+})
+
+function mapGithubPullRequestReviewComment(
+  comment: GithubReviewCommentResponse,
+): GithubPullRequestReviewComment {
+  return {
+    id: comment.id,
+    pullRequestReviewId: comment.pull_request_review_id,
+    diffHunk: comment.diff_hunk,
+    path: comment.path,
+    position: comment.position,
+    originalPosition: comment.original_position,
+    commitId: comment.commit_id,
+    originalCommitId: comment.original_commit_id,
+    inReplyToId: comment.in_reply_to_id,
+    user: {
+      login: comment.user.login,
+      avatarUrl: comment.user.avatar_url,
+    },
+    body: comment.body,
+    createdAt: comment.created_at,
+    updatedAt: comment.updated_at,
+    startLine: comment.start_line,
+    originalStartLine: comment.original_start_line,
+    startSide: comment.start_side,
+    line: comment.line,
+    originalLine: comment.original_line,
+    side: comment.side,
+  }
 }
 
 const githubRouter = new Hono()
@@ -409,34 +450,54 @@ export const githubRoutes = githubRouter
         },
       })
 
-      const comments: GithubPullRequestReviewComment[] = data.map(comment => ({
-        id: comment.id,
-        pullRequestReviewId: comment.pull_request_review_id,
-        diffHunk: comment.diff_hunk,
-        path: comment.path,
-        position: comment.position,
-        originalPosition: comment.original_position,
-        commitId: comment.commit_id,
-        originalCommitId: comment.original_commit_id,
-        inReplyToId: comment.in_reply_to_id,
-        user: {
-          login: comment.user.login,
-          avatarUrl: comment.user.avatar_url,
-        },
-        body: comment.body,
-        createdAt: comment.created_at,
-        updatedAt: comment.updated_at,
-        startLine: comment.start_line,
-        originalStartLine: comment.original_start_line,
-        startSide: comment.start_side,
-        line: comment.line,
-        originalLine: comment.original_line,
-        side: comment.side,
-      }))
+      const comments: GithubPullRequestReviewComment[]
+        = data.map(mapGithubPullRequestReviewComment)
 
       return ctx.json({ comments }, 200)
     }
     catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .patch('/pr/:id/comments/:commentId', zValidator(
+    'json',
+    updatePullRequestCommentBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const commentId = Number(ctx.req.param('commentId'))
+    const { body } = ctx.req.valid('json')
+
+    if (!org || !repo || Number.isNaN(pullNumber) || Number.isNaN(commentId)) {
+      return ctx.json({ error: 'Missing org, repo, id, or commentId' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: UpdatePullRequestCommentParams = {
+        owner: org,
+        repo,
+        comment_id: commentId,
+        body,
+      }
+
+      const { data } = await request('PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}', {
+        ...params,
+        headers: {
+          authorization: `Bearer ${githubToken}`,
+        },
+      })
+
+      const comment = mapGithubPullRequestReviewComment(data)
+      return ctx.json({ comment }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })

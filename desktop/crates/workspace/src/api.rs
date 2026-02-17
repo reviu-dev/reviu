@@ -74,6 +74,8 @@ pub struct User {
   #[serde(rename = "emailVerified")]
   pub email_verified: bool,
   pub image: Option<String>,
+  #[serde(rename = "githubLogin")]
+  pub github_login: Option<String>,
   pub role: UserRole,
 }
 
@@ -312,6 +314,16 @@ struct GithubPullRequestCommentsResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct GithubPullRequestCommentResponse {
+  comment: GithubPullRequestReviewComment,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateGithubPullRequestCommentRequest<'a> {
+  body: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubFileContentResponse {
   content: Option<String>,
 }
@@ -522,6 +534,32 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestCommentsResponse>()?;
     Ok(payload.comments)
+  }
+
+  pub fn update_pull_request_review_comment(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    comment_id: u64,
+    body: &str,
+  ) -> Result<GithubPullRequestReviewComment> {
+    let response = self
+      .authed_request(
+        Method::PATCH,
+        &format!("/github/pr/{number}/comments/{comment_id}"),
+      )
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&UpdateGithubPullRequestCommentRequest { body })
+      .send()?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !response.status().is_success() {
+      anyhow::bail!("unexpected status: {}", response.status());
+    }
+    let payload = response.json::<GithubPullRequestCommentResponse>()?;
+    Ok(payload.comment)
   }
 
   pub fn fetch_github_file_content(
@@ -868,6 +906,43 @@ mod tests {
   }
 
   #[test]
+  fn update_pull_request_review_comment_parses_success_payload() {
+    let body = r#"{
+      "comment": {
+        "id": 1,
+        "pullRequestReviewId": 12,
+        "diffHunk": "@@ -1 +1 @@",
+        "path": "src/main.rs",
+        "position": 1,
+        "originalPosition": 1,
+        "commitId": "head123",
+        "originalCommitId": "base123",
+        "inReplyToId": null,
+        "user": { "login": "octocat", "avatarUrl": null },
+        "body": "Updated body",
+        "createdAt": "2026-02-15T12:00:00Z",
+        "updatedAt": "2026-02-16T12:01:00Z",
+        "startLine": null,
+        "originalStartLine": null,
+        "startSide": null,
+        "line": 1,
+        "originalLine": 1,
+        "side": "RIGHT"
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let comment = api
+      .update_pull_request_review_comment("acme", "widget", 42, 1, "Updated body")
+      .expect("update review comment");
+    assert_eq!(comment.id, 1);
+    assert_eq!(comment.body, "Updated body");
+    assert_eq!(comment.path, "src/main.rs");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
   fn fetch_github_notifications_parses_success_payload() {
     let body = r#"{
       "notifications": [
@@ -985,6 +1060,19 @@ mod tests {
 
     let err = api
       .fetch_pull_request_review_comments("acme", "widget", 42)
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn update_pull_request_review_comment_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .update_pull_request_review_comment("acme", "widget", 42, 1, "Updated body")
       .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));

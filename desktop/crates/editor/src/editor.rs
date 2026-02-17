@@ -97,6 +97,9 @@ const REVIEW_COMMENT_HORIZONTAL_PADDING_PX: f32 =
   REVIEW_COMMENT_CARD_PADDING_X_PX * 2.0 + REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
 const REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX: f32 = 20.0;
 const REVIEW_COMMENT_FIXED_WIDTH_PX: f32 = 800.0;
+const REVIEW_COMMENT_EDIT_TEXTAREA_HEIGHT_PX: f32 = 180.0;
+const REVIEW_COMMENT_EDIT_ACTIONS_HEIGHT_PX: f32 = 24.0;
+const REVIEW_COMMENT_EDIT_ACTIONS_GAP_PX: f32 = 8.0;
 
 fn has_fractional_scroll(scroll_offset: f32) -> bool {
   (scroll_offset - scroll_offset.floor()) > FRACTIONAL_SCROLL_EPSILON
@@ -114,6 +117,30 @@ fn editor_code_font_family(cx: &App) -> SharedString {
 pub enum DiffViewMode {
   Inline,
   Split,
+}
+
+pub type ReviewCommentEditHandler = Arc<dyn Fn(u64, Arc<str>, &mut Window, &mut App)>;
+
+fn next_review_comment_body(raw_value: &str, initial_value: &str) -> Option<Arc<str>> {
+  let next_body = raw_value.trim();
+  if next_body.is_empty() || next_body == initial_value {
+    None
+  } else {
+    Some(Arc::<str>::from(next_body.to_string()))
+  }
+}
+
+fn review_comment_edit_body_height_px(editor_line_height_px: f32) -> f32 {
+  REVIEW_COMMENT_EDIT_TEXTAREA_HEIGHT_PX
+    + REVIEW_COMMENT_EDIT_ACTIONS_HEIGHT_PX.max(editor_line_height_px)
+    + REVIEW_COMMENT_EDIT_ACTIONS_GAP_PX
+}
+
+fn editor_actions_enabled(
+  find_input_focused: bool,
+  review_comment_edit_input_focused: bool,
+) -> bool {
+  !find_input_focused && !review_comment_edit_input_focused
 }
 
 pub struct Editor {
@@ -169,6 +196,11 @@ pub struct Editor {
   review_comment_markdown_states: HashMap<u64, MarkdownRenderState>,
   review_comment_markdown_cache: HashMap<u64, ReviewCommentMarkdownCacheEntry>,
   review_comment_pr_number: Option<u64>,
+  editable_review_comment_ids: HashSet<u64>,
+  review_comment_edit_handler: Option<ReviewCommentEditHandler>,
+  review_comment_edit_input: Option<Entity<InputState>>,
+  editing_review_comment_id: Option<u64>,
+  review_comment_edit_initial_body: Option<Arc<str>>,
   collapsed_review_comments: HashSet<u64>,
   review_comment_scroll_epoch: usize,
   find_panel_open: bool,
@@ -425,6 +457,11 @@ impl Editor {
       review_comment_markdown_states: HashMap::new(),
       review_comment_markdown_cache: HashMap::new(),
       review_comment_pr_number: None,
+      editable_review_comment_ids: HashSet::new(),
+      review_comment_edit_handler: None,
+      review_comment_edit_input: None,
+      editing_review_comment_id: None,
+      review_comment_edit_initial_body: None,
       collapsed_review_comments: HashSet::new(),
       review_comment_scroll_epoch: 0,
       find_panel_open: false,
@@ -537,6 +574,8 @@ impl Editor {
       self.review_comment_markdown_states.clear();
       self.review_comment_markdown_cache.clear();
       self.review_comment_pr_number = None;
+      self.editable_review_comment_ids.clear();
+      self.clear_review_comment_edit_state();
       self.collapsed_review_comments.clear();
       self.set_projection(None);
       self.virtual_line_layouts.clear();
@@ -597,6 +636,15 @@ impl Editor {
     self
       .review_comment_markdown_cache
       .retain(|id, _| self.review_comments.iter().any(|comment| comment.id == *id));
+    self
+      .editable_review_comment_ids
+      .retain(|id| self.review_comments.iter().any(|comment| comment.id == *id));
+    if self
+      .editing_review_comment_id
+      .is_some_and(|id| !self.review_comments.iter().any(|comment| comment.id == id))
+    {
+      self.clear_review_comment_edit_state();
+    }
     for comment in &self.review_comments {
       self
         .review_comment_markdown_states
@@ -687,6 +735,130 @@ impl Editor {
     }
   }
 
+  pub fn set_editable_review_comment_ids<I>(&mut self, ids: I, cx: &mut Context<Self>)
+  where
+    I: IntoIterator<Item = u64>,
+  {
+    self.editable_review_comment_ids = ids.into_iter().collect();
+    if self
+      .editing_review_comment_id
+      .is_some_and(|id| !self.editable_review_comment_ids.contains(&id))
+    {
+      self.clear_review_comment_edit_state();
+    }
+    cx.notify();
+  }
+
+  pub fn set_review_comment_edit_handler(
+    &mut self,
+    handler: Option<ReviewCommentEditHandler>,
+    cx: &mut Context<Self>,
+  ) {
+    self.review_comment_edit_handler = handler;
+    cx.notify();
+  }
+
+  fn clear_review_comment_edit_state(&mut self) {
+    self.editing_review_comment_id = None;
+    self.review_comment_edit_initial_body = None;
+  }
+
+  fn refresh_review_comment_projection_for_edit_state(&mut self, cx: &mut Context<Self>) {
+    if self.diffs.is_some() {
+      self.rebuild_projection(cx);
+    } else {
+      cx.notify();
+    }
+  }
+
+  fn ensure_review_comment_edit_input(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<InputState> {
+    if let Some(input) = self.review_comment_edit_input.as_ref() {
+      return input.clone();
+    }
+
+    let input = cx.new(|cx| {
+      InputState::new(window, cx)
+        .multi_line(true)
+        .rows(6)
+        .placeholder("Edit review comment...")
+    });
+    self.review_comment_edit_input = Some(input.clone());
+    input
+  }
+
+  fn start_review_comment_edit(
+    &mut self,
+    comment_id: u64,
+    body: Arc<str>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !self.editable_review_comment_ids.contains(&comment_id) {
+      return;
+    }
+
+    let input = self.ensure_review_comment_edit_input(window, cx);
+    let initial_text = body.to_string();
+    input.update(cx, |state, cx| {
+      state.set_value(initial_text.clone(), window, cx);
+    });
+
+    let input_for_focus = input.clone();
+    window.on_next_frame(move |window, cx| {
+      input_for_focus.update(cx, |state, cx| {
+        state.focus(window, cx);
+      });
+    });
+
+    self.editing_review_comment_id = Some(comment_id);
+    self.review_comment_edit_initial_body = Some(body);
+    self.refresh_review_comment_projection_for_edit_state(cx);
+  }
+
+  fn cancel_review_comment_edit(&mut self, cx: &mut Context<Self>) {
+    if self.editing_review_comment_id.is_none() {
+      return;
+    }
+    self.clear_review_comment_edit_state();
+    self.refresh_review_comment_projection_for_edit_state(cx);
+  }
+
+  fn save_review_comment_edit(
+    &mut self,
+    comment_id: u64,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.editing_review_comment_id != Some(comment_id) {
+      return;
+    }
+
+    let Some(initial_body) = self.review_comment_edit_initial_body.as_ref() else {
+      self.clear_review_comment_edit_state();
+      self.refresh_review_comment_projection_for_edit_state(cx);
+      return;
+    };
+    let Some(input) = self.review_comment_edit_input.as_ref() else {
+      self.clear_review_comment_edit_state();
+      self.refresh_review_comment_projection_for_edit_state(cx);
+      return;
+    };
+    let raw_value = input.read(cx).value();
+
+    if let Some(next_body) = next_review_comment_body(raw_value.as_str(), initial_body.as_ref())
+      && let Some(handler) = self.review_comment_edit_handler.as_ref()
+    {
+      handler(comment_id, next_body, window, cx);
+    }
+
+    self.clear_review_comment_edit_state();
+    self.refresh_review_comment_projection_for_edit_state(cx);
+  }
+
   fn resolve_review_comment_thread_root(
     comment: &ReviewComment,
     comments_by_id: &HashMap<u64, &ReviewComment>,
@@ -774,6 +946,18 @@ impl Editor {
 
     self
       .find_input
+      .as_ref()
+      .map(|input| input.read(cx).focus_handle(cx).is_focused(window))
+      .unwrap_or(false)
+  }
+
+  fn is_review_comment_edit_input_focused(&self, window: &Window, cx: &App) -> bool {
+    if self.editing_review_comment_id.is_none() {
+      return false;
+    }
+
+    self
+      .review_comment_edit_input
       .as_ref()
       .map(|input| input.read(cx).focus_handle(cx).is_focused(window))
       .unwrap_or(false)
@@ -1470,6 +1654,8 @@ impl Editor {
       let Some(first_message) = layout.messages.first() else {
         continue;
       };
+      let review_comment_edit_handler = self.review_comment_edit_handler.clone();
+      let can_save_review_comment_edit = review_comment_edit_handler.is_some();
       let editor = editor_entity.clone();
       let is_collapsed = layout.collapsed;
       let toggle_icon = if is_collapsed {
@@ -1493,6 +1679,33 @@ impl Editor {
           cx.stop_propagation();
         })
         .child(toggle_button);
+      let first_message_id = first_message.id;
+      let first_message_edit_button =
+        if self.editable_review_comment_ids.contains(&first_message.id) {
+          let editor = editor_entity.clone();
+          let body = first_message.body.clone();
+          Some(
+            div()
+              .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+              })
+              .child(
+                Button::new(format!("review-comment-edit-{}", first_message_id))
+                  .ghost()
+                  .xsmall()
+                  .compact()
+                  .icon(UiIconName::SquarePen)
+                  .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    editor.update(cx, |editor, cx| {
+                      editor.start_review_comment_edit(first_message_id, body.clone(), window, cx);
+                    });
+                  }),
+              ),
+          )
+        } else {
+          None
+        };
 
       let line_label = first_message
         .line_label
@@ -1543,7 +1756,13 @@ impl Editor {
           });
         })
         .child(meta)
-        .child(toggle_button);
+        .child(
+          h_flex()
+            .items_center()
+            .gap_1()
+            .when_some(first_message_edit_button, |this, button| this.child(button))
+            .child(toggle_button),
+        );
 
       let link_handler = {
         let editor = editor_entity.clone();
@@ -1578,17 +1797,89 @@ impl Editor {
 
       let mut thread_messages = v_flex();
       for (index, message) in layout.messages.iter().enumerate() {
-        let state = self
-          .review_comment_markdown_states
-          .get(&message.id)
-          .cloned()
-          .unwrap_or_else(MarkdownRenderState::new);
-        let parsed = self.cached_parsed_review_comment_markdown(message.id, message.body.as_ref());
-        let body = render_parsed_markdown(
-          &parsed,
-          &MarkdownRenderOptions::with_on_link(link_handler.clone()).with_state(state),
-          cx,
-        );
+        let body: gpui::AnyElement = if self.editing_review_comment_id == Some(message.id) {
+          if let Some(input_state) = self.review_comment_edit_input.clone() {
+            let cancel_editor = editor_entity.clone();
+            let save_editor = editor_entity.clone();
+            let message_id = message.id;
+            v_flex()
+              .gap_2()
+              .child(Input::new(&input_state).h(px(REVIEW_COMMENT_EDIT_TEXTAREA_HEIGHT_PX)))
+              .child(
+                h_flex()
+                  .items_center()
+                  .justify_end()
+                  .gap_2()
+                  .child(
+                    div()
+                      .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                        cx.stop_propagation();
+                      })
+                      .child(
+                        Button::new(format!("review-comment-edit-cancel-{}", message_id))
+                          .ghost()
+                          .xsmall()
+                          .compact()
+                          .label("Cancel")
+                          .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            cancel_editor.update(cx, |editor, cx| {
+                              editor.cancel_review_comment_edit(cx);
+                            });
+                          }),
+                      ),
+                  )
+                  .child(
+                    div()
+                      .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                        cx.stop_propagation();
+                      })
+                      .child(
+                        Button::new(format!("review-comment-edit-save-{}", message_id))
+                          .xsmall()
+                          .compact()
+                          .label("Save")
+                          .disabled(!can_save_review_comment_edit)
+                          .on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            save_editor.update(cx, |editor, cx| {
+                              editor.save_review_comment_edit(message_id, window, cx);
+                            });
+                          }),
+                      ),
+                  ),
+              )
+              .into_any_element()
+          } else {
+            let state = self
+              .review_comment_markdown_states
+              .get(&message.id)
+              .cloned()
+              .unwrap_or_else(MarkdownRenderState::new);
+            let parsed =
+              self.cached_parsed_review_comment_markdown(message.id, message.body.as_ref());
+            render_parsed_markdown(
+              &parsed,
+              &MarkdownRenderOptions::with_on_link(link_handler.clone()).with_state(state),
+              cx,
+            )
+            .into_any_element()
+          }
+        } else {
+          let state = self
+            .review_comment_markdown_states
+            .get(&message.id)
+            .cloned()
+            .unwrap_or_else(MarkdownRenderState::new);
+          let parsed =
+            self.cached_parsed_review_comment_markdown(message.id, message.body.as_ref());
+          render_parsed_markdown(
+            &parsed,
+            &MarkdownRenderOptions::with_on_link(link_handler.clone()).with_state(state),
+            cx,
+          )
+          .into_any_element()
+        };
 
         let message_block = if index == 0 {
           v_flex()
@@ -1599,6 +1890,33 @@ impl Editor {
             .line_label
             .clone()
             .or_else(|| Some(Arc::from(format!("L{}", message.line + 1))));
+          let message_edit_button = if self.editable_review_comment_ids.contains(&message.id) {
+            let editor = editor_entity.clone();
+            let message_id = message.id;
+            let body = message.body.clone();
+            Some(
+              div()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                  cx.stop_propagation();
+                })
+                .child(
+                  Button::new(format!("review-comment-edit-{}", message_id))
+                    .ghost()
+                    .xsmall()
+                    .compact()
+                    .icon(UiIconName::SquarePen)
+                    .on_click(move |_, window, cx| {
+                      cx.stop_propagation();
+                      editor.update(cx, |editor, cx| {
+                        editor.start_review_comment_edit(message_id, body.clone(), window, cx);
+                      });
+                    }),
+                ),
+            )
+          } else {
+            None
+          };
+
           v_flex()
             .pt(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
             .pb(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
@@ -1608,35 +1926,42 @@ impl Editor {
             .child(
               h_flex()
                 .items_center()
+                .justify_between()
                 .gap_2()
                 .child(
-                  Avatar::new()
-                    .name(message.author.to_string())
-                    .when_some(message.avatar_url.clone(), |this, url| {
-                      this.src(url.as_ref().to_string())
+                  h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                      Avatar::new()
+                        .name(message.author.to_string())
+                        .when_some(message.avatar_url.clone(), |this, url| {
+                          this.src(url.as_ref().to_string())
+                        })
+                        .xsmall(),
+                    )
+                    .child(
+                      div()
+                        .text_sm()
+                        .text_color(theme.foreground)
+                        .child(message.author.to_string()),
+                    )
+                    .when_some(message_line_label, |this, label| {
+                      this.child(
+                        div()
+                          .text_xs()
+                          .text_color(theme.muted_foreground)
+                          .child(label.as_ref().to_string()),
+                      )
                     })
-                    .xsmall(),
+                    .child(
+                      div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(message.created_at.as_ref().to_string()),
+                    ),
                 )
-                .child(
-                  div()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .child(message.author.to_string()),
-                )
-                .when_some(message_line_label, |this, label| {
-                  this.child(
-                    div()
-                      .text_xs()
-                      .text_color(theme.muted_foreground)
-                      .child(label.as_ref().to_string()),
-                  )
-                })
-                .child(
-                  div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(message.created_at.as_ref().to_string()),
-                ),
+                .when_some(message_edit_button, |this, button| this.child(button)),
             )
             .child(body)
         };
@@ -1870,12 +2195,16 @@ impl Editor {
         let comment = &self.review_comments[index];
         (comment.id, comment.body.clone())
       };
-      let estimated_height = self.cached_review_comment_body_height_px(
-        comment_id,
-        body.as_ref(),
-        wrap_columns,
-        markdown_line_height_px,
-      );
+      let estimated_height = if self.editing_review_comment_id == Some(comment_id) {
+        review_comment_edit_body_height_px(self.review_comment_line_height_px)
+      } else {
+        self.cached_review_comment_body_height_px(
+          comment_id,
+          body.as_ref(),
+          wrap_columns,
+          markdown_line_height_px,
+        )
+      };
       review_comment_body_heights_px.insert(comment_id, estimated_height);
     }
     let diffs = self
@@ -4222,7 +4551,10 @@ impl Render for Editor {
     let gutter_background = self.theme.gutter_background();
     let scroll_offset_y = self.scroll_offset_y;
     let find_panel = self.render_find_panel(editor_entity.clone(), window, cx);
-    let editor_actions_enabled = !self.is_find_input_focused(window, cx);
+    let editor_actions_enabled = editor_actions_enabled(
+      self.is_find_input_focused(window, cx),
+      self.is_review_comment_edit_input_focused(window, cx),
+    );
 
     let build_gutter =
       |gutter_element: GutterElement, view_suffix: &'static str, editor_entity: Entity<Editor>| {
@@ -4540,6 +4872,47 @@ pub mod tests {
     assert!(wide_columns < narrow_columns);
   }
 
+  #[gpui::test]
+  fn test_next_review_comment_body_rejects_empty_or_unchanged(_cx: &mut TestAppContext) {
+    assert!(next_review_comment_body("", "before").is_none());
+    assert!(next_review_comment_body("   \n\t", "before").is_none());
+    assert!(next_review_comment_body("before", "before").is_none());
+  }
+
+  #[gpui::test]
+  fn test_next_review_comment_body_trims_and_keeps_multiline(_cx: &mut TestAppContext) {
+    assert_eq!(
+      next_review_comment_body("line 1\nline 2", "line 1"),
+      Some(Arc::from("line 1\nline 2"))
+    );
+    assert_eq!(
+      next_review_comment_body("\nline 1\nline 2\n", "line 1"),
+      Some(Arc::from("line 1\nline 2"))
+    );
+  }
+
+  #[gpui::test]
+  fn test_editor_actions_enabled_depends_on_nested_input_focus(_cx: &mut TestAppContext) {
+    assert!(editor_actions_enabled(false, false));
+    assert!(!editor_actions_enabled(true, false));
+    assert!(!editor_actions_enabled(false, true));
+    assert!(!editor_actions_enabled(true, true));
+  }
+
+  #[gpui::test]
+  fn test_review_comment_edit_body_height_uses_fixed_textarea_size(_cx: &mut TestAppContext) {
+    assert_eq!(
+      review_comment_edit_body_height_px(20.0),
+      REVIEW_COMMENT_EDIT_TEXTAREA_HEIGHT_PX
+        + REVIEW_COMMENT_EDIT_ACTIONS_HEIGHT_PX
+        + REVIEW_COMMENT_EDIT_ACTIONS_GAP_PX
+    );
+    assert_eq!(
+      review_comment_edit_body_height_px(40.0),
+      REVIEW_COMMENT_EDIT_TEXTAREA_HEIGHT_PX + 40.0 + REVIEW_COMMENT_EDIT_ACTIONS_GAP_PX
+    );
+  }
+
   /// Helper context for testing Editor
   pub struct EditorTestContext {
     pub cx: TestAppContext,
@@ -4562,6 +4935,11 @@ pub mod tests {
           review_comment_markdown_states: HashMap::new(),
           review_comment_markdown_cache: HashMap::new(),
           review_comment_pr_number: None,
+          editable_review_comment_ids: HashSet::new(),
+          review_comment_edit_handler: None,
+          review_comment_edit_input: None,
+          editing_review_comment_id: None,
+          review_comment_edit_initial_body: None,
           collapsed_review_comments: HashSet::new(),
           review_comment_scroll_epoch: 0,
           find_panel_open: false,
@@ -4785,6 +5163,45 @@ pub mod tests {
       end_gap: Some(end_gap),
       groups: HashMap::new(),
     })
+  }
+
+  #[gpui::test]
+  fn test_set_review_comments_prunes_editable_review_comment_ids(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.set_editable_review_comment_ids([1, 2], cx);
+      editor.set_review_comments(
+        vec![ReviewComment {
+          id: 1,
+          in_reply_to_id: None,
+          line: 0,
+          side: ReviewCommentSide::Right,
+          author: Arc::from("octocat"),
+          avatar_url: None,
+          line_label: None,
+          body: Arc::from("hello"),
+          created_at: Arc::from("2026-02-17"),
+        }],
+        cx,
+      );
+
+      assert!(editor.editable_review_comment_ids.contains(&1));
+      assert!(!editor.editable_review_comment_ids.contains(&2));
+    });
+  }
+
+  #[gpui::test]
+  fn test_set_diffs_none_keeps_review_comment_edit_handler(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let handler: ReviewCommentEditHandler = Arc::new(|_, _, _, _| {});
+      editor.set_review_comment_edit_handler(Some(handler), cx);
+      editor.set_diffs(None, cx);
+
+      assert!(editor.review_comment_edit_handler.is_some());
+    });
   }
 
   // ============================================================================

@@ -13,6 +13,7 @@ pub enum UiIconName {
   History,
   FileCode,
   EllipsisVertical,
+  SquarePen,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -28,6 +29,7 @@ impl IconNamed for UiIconName {
       UiIconName::History => "icons/history.svg",
       UiIconName::FileCode => "icons/file-code.svg",
       UiIconName::EllipsisVertical => "icons/ellipsis-vertical.svg",
+      UiIconName::SquarePen => "icons/square-pen.svg",
     }
     .into()
   }
