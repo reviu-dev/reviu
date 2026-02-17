@@ -1483,17 +1483,56 @@ fn render_code_block(
     .into_any_element()
 }
 
-fn code_block_display_value(value: &str) -> &str {
+fn code_block_display_value(code: &CodeBlock) -> String {
+  let mut value = code.value.as_str();
   if let Some(stripped) = value.strip_suffix('\n') {
-    stripped.strip_suffix('\r').unwrap_or(stripped)
-  } else {
-    value
+    value = stripped.strip_suffix('\r').unwrap_or(stripped);
   }
+
+  if is_plain_text_code_fence_language(code.lang.as_deref()) {
+    value = strip_trailing_orphan_details_line(value);
+  }
+
+  value.to_string()
+}
+
+fn strip_trailing_orphan_details_line(value: &str) -> &str {
+  let trimmed_end = value.trim_end_matches([' ', '\t', '\r', '\n']);
+  let line_start = trimmed_end.rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+  if line_start == 0 {
+    return value;
+  }
+
+  let last_line = trimmed_end[line_start..].trim();
+  if !last_line.eq_ignore_ascii_case("</details>") {
+    return value;
+  }
+
+  value[..line_start].trim_end_matches([' ', '\t', '\r', '\n'])
+}
+
+fn is_plain_text_code_fence_language(lang: Option<&str>) -> bool {
+  let Some(lang) = lang else {
+    return true;
+  };
+  let lang = lang
+    .trim()
+    .trim_matches(|c| c == '{' || c == '}')
+    .trim_start_matches('.')
+    .to_ascii_lowercase();
+  if lang.is_empty() {
+    return true;
+  }
+
+  matches!(
+    lang.as_str(),
+    "text" | "txt" | "plain" | "plaintext" | "log" | "output" | "console"
+  )
 }
 
 fn build_code_block_spans(code: &CodeBlock) -> (SharedString, Vec<InlineSpan>, Vec<LinkRange>) {
-  let value = code_block_display_value(code.value.as_ref());
-  let text = SharedString::from(value.to_string());
+  let display_value = code_block_display_value(code);
+  let text = SharedString::from(display_value.clone());
   let text_len = text.len();
   let base_style = InlineStyle {
     code: true,
@@ -1508,9 +1547,11 @@ fn build_code_block_spans(code: &CodeBlock) -> (SharedString, Vec<InlineSpan>, V
     .and_then(|config| {
       let mut highlighter = SyntaxHighlighter::new(config);
       highlighter
-        .highlight_text(value)
+        .highlight_text(display_value.as_ref())
         .ok()
-        .map(|highlights| syntax_highlight_spans_for_code(value, &highlights, base_style))
+        .map(|highlights| {
+          syntax_highlight_spans_for_code(display_value.as_ref(), &highlights, base_style)
+        })
     })
     .filter(|spans| !spans.is_empty())
     .unwrap_or_else(|| {
@@ -2248,7 +2289,7 @@ fn blocks_from_node<'a>(node: &'a AstNode<'a>) -> Vec<Block> {
     NodeValue::Table(_) => vec![Block::Table(table_from_node(node))],
     NodeValue::Item(_) => node.children().flat_map(blocks_from_node).collect(),
     NodeValue::HtmlBlock(html) => {
-      if is_html_comment_only_block(&html.literal) {
+      if is_html_comment_only_block(&html.literal) || is_details_close_only_block(&html.literal) {
         Vec::new()
       } else if let Some(details) = parse_details_html(&html.literal) {
         vec![Block::Details(details)]
@@ -2311,6 +2352,27 @@ fn is_html_comment_only_block(html: &str) -> bool {
     };
 
     rest = rest[end + 3..].trim_start();
+  }
+
+  true
+}
+
+fn is_details_close_only_block(html: &str) -> bool {
+  let mut rest = html.trim();
+  if rest.is_empty() {
+    return false;
+  }
+
+  while !rest.is_empty() {
+    let lower = rest.to_ascii_lowercase();
+    if !lower.starts_with("</details") {
+      return false;
+    }
+
+    let Some(close_idx) = rest.find('>') else {
+      return false;
+    };
+    rest = rest[close_idx + 1..].trim_start();
   }
 
   true
@@ -2832,6 +2894,26 @@ publish body
   }
 
   #[test]
+  fn ignores_orphan_details_closing_tag_after_valid_block() {
+    let source = r#"<details>
+<summary>Summary</summary>
+
+Body
+</details>
+</details>"#;
+
+    let blocks = parse_gfm(source);
+    assert_eq!(blocks.len(), 1);
+    match &blocks[0] {
+      Block::Details(details) => {
+        assert_eq!(inline_to_plain_text(&details.summary), "Summary");
+        assert!(!details.blocks.is_empty());
+      }
+      _ => panic!("expected details"),
+    }
+  }
+
+  #[test]
   fn ignores_comment_only_html_blocks() {
     let blocks = parse_gfm(
       r#"<!--
@@ -2883,9 +2965,45 @@ Apres"#,
 
   #[test]
   fn normalizes_code_block_display_value_trailing_newline() {
-    assert_eq!(code_block_display_value("fn main() {}\n"), "fn main() {}");
-    assert_eq!(code_block_display_value("line\r\n"), "line");
-    assert_eq!(code_block_display_value("line\n\n"), "line\n");
+    let rust = CodeBlock {
+      lang: Some("rust".to_string()),
+      value: "fn main() {}\n".to_string(),
+    };
+    let text = CodeBlock {
+      lang: Some("text".to_string()),
+      value: "line\r\n".to_string(),
+    };
+    let multiline = CodeBlock {
+      lang: Some("text".to_string()),
+      value: "line\n\n".to_string(),
+    };
+
+    assert_eq!(code_block_display_value(&rust), "fn main() {}");
+    assert_eq!(code_block_display_value(&text), "line");
+    assert_eq!(code_block_display_value(&multiline), "line\n");
+  }
+
+  #[test]
+  fn strips_orphan_details_closing_line_for_plain_text_code_blocks() {
+    let code = CodeBlock {
+      lang: Some("text".to_string()),
+      value: "Downloaded crate-a\nDownloaded crate-b\n\n</details>\n".to_string(),
+    };
+
+    assert_eq!(
+      code_block_display_value(&code),
+      "Downloaded crate-a\nDownloaded crate-b"
+    );
+  }
+
+  #[test]
+  fn keeps_details_closing_line_for_non_plain_text_code_blocks() {
+    let code = CodeBlock {
+      lang: Some("html".to_string()),
+      value: "<details>\n</details>\n".to_string(),
+    };
+
+    assert_eq!(code_block_display_value(&code), "<details>\n</details>");
   }
 
   #[test]
