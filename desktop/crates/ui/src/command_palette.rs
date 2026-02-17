@@ -78,8 +78,23 @@ impl CommandPaletteBranch {
   }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandPaletteRepository {
+  pub path: SharedString,
+}
+
+impl CommandPaletteRepository {
+  fn matches(&self, query: &str) -> bool {
+    if query.is_empty() {
+      return true;
+    }
+    self.path.as_ref().to_lowercase().contains(query)
+  }
+}
+
 #[derive(Clone, Debug)]
 pub enum CommandPaletteAction {
+  SwitchRepository(CommandPaletteRepository),
   SwitchBranch(CommandPaletteBranch),
   CreateBranch {
     name: String,
@@ -97,6 +112,7 @@ pub enum CommandPaletteAction {
   CherryPick {
     commit_hashes: Vec<String>,
   },
+  OpenRepository,
   OpenGitPage,
   OpenGithubPage,
   OpenGithubPrDetails {
@@ -164,6 +180,85 @@ impl ListDelegate for BranchesListDelegate {
               .overflow_hidden()
               .text_ellipsis()
               .child(Label::new(branch.name.clone())),
+          ),
+      )
+    })
+  }
+
+  fn set_selected_index(
+    &mut self,
+    ix: Option<IndexPath>,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) {
+    update_selected_index(&mut self.selected_index, ix, cx);
+  }
+
+  fn perform_search(
+    &mut self,
+    query: &str,
+    _: &mut Window,
+    _: &mut Context<ListState<Self>>,
+  ) -> Task<()> {
+    self.prepare(query.to_owned());
+    Task::ready(())
+  }
+}
+
+struct RepositoriesListDelegate {
+  _repositories: Vec<Rc<CommandPaletteRepository>>,
+  matched_repositories: Vec<Rc<CommandPaletteRepository>>,
+  selected_index: Option<IndexPath>,
+  query: SharedString,
+}
+
+impl RepositoriesListDelegate {
+  fn prepare(&mut self, query: impl Into<SharedString>) {
+    self.query = query.into();
+
+    let q = self.query.as_ref().to_lowercase();
+
+    let repositories: Vec<Rc<CommandPaletteRepository>> = self
+      ._repositories
+      .iter()
+      .filter(|repository| repository.matches(&q))
+      .cloned()
+      .collect();
+
+    self.matched_repositories = repositories;
+  }
+}
+
+impl ListDelegate for RepositoriesListDelegate {
+  type Item = ListItem;
+
+  fn items_count(&self, _section: usize, _cx: &App) -> usize {
+    self.matched_repositories.len()
+  }
+
+  fn render_item(
+    &mut self,
+    ix: IndexPath,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<Self::Item> {
+    let total_items = self.matched_repositories.len();
+    let theme = cx.theme().clone();
+
+    let base_item = list_base_item(ix, total_items, self.selected_index, &theme);
+
+    self.matched_repositories.get(ix.row).map(|repository| {
+      base_item.child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(Icon::new(IconName::FolderOpen))
+          .child(
+            div()
+              .flex_1()
+              .overflow_hidden()
+              .text_ellipsis()
+              .child(Label::new(repository.path.clone())),
           ),
       )
     })
@@ -369,12 +464,14 @@ pub type CommandPaletteHandler = Arc<
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandPaletteCommandId {
+  SwitchRepository,
   SwitchBranch,
   CreateBranch,
   CreateBranchFrom,
   MergeBranch,
   RebaseBranch,
   CherryPick,
+  OpenRepository,
   OpenGitPage,
   OpenGithubPage,
   OpenGithubPrFromUrl,
@@ -390,6 +487,14 @@ impl CommandPaletteCommand {
       || Icon::new(IconName::File),
       |path| Icon::empty().path(path),
     )
+  }
+
+  pub fn switch_repository() -> Self {
+    Self {
+      id: CommandPaletteCommandId::SwitchRepository,
+      name: "Switch repo".into(),
+      description: Some("Switch to another recent repository".into()),
+    }
   }
 
   pub fn switch_branch() -> Self {
@@ -437,6 +542,14 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::CherryPick,
       name: "Cherry pick".into(),
       description: Some("Apply one or more commits to the current branch".into()),
+    }
+  }
+
+  pub fn open_repository() -> Self {
+    Self {
+      id: CommandPaletteCommandId::OpenRepository,
+      name: "Open repository".into(),
+      description: Some("Pick and open a local repository".into()),
     }
   }
 
@@ -532,10 +645,12 @@ impl CommandPaletteCommand {
 
   fn icon(&self) -> Icon {
     match self.id {
+      CommandPaletteCommandId::SwitchRepository => Icon::new(IconName::FolderOpen),
       CommandPaletteCommandId::SwitchBranch => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::MergeBranch => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::RebaseBranch => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::CherryPick => Icon::new(UiIconName::GitMerge),
+      CommandPaletteCommandId::OpenRepository => Icon::new(IconName::FolderOpen),
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
       }
@@ -573,6 +688,7 @@ impl CommandPaletteCommand {
 
 pub struct CommandPaletteConfig {
   pub branches: Vec<CommandPaletteBranch>,
+  pub repositories: Vec<CommandPaletteRepository>,
   pub commands: Vec<CommandPaletteCommand>,
   pub on_action: CommandPaletteHandler,
 }
@@ -585,15 +701,22 @@ impl CommandPaletteConfig {
   ) -> Self {
     Self {
       branches,
+      repositories: Vec::new(),
       commands,
       on_action,
     }
+  }
+
+  pub fn with_repositories(mut self, repositories: Vec<CommandPaletteRepository>) -> Self {
+    self.repositories = repositories;
+    self
   }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CommandPaletteScreen {
   Root,
+  SwitchRepository,
   SwitchBranch,
   CreateBranch,
   CreateBranchFrom,
@@ -607,6 +730,7 @@ pub struct CommandPalette {
   focus_handle: FocusHandle,
   screen: CommandPaletteScreen,
   commands_list: Entity<ListState<CommandListDelegate>>,
+  repositories_list: Entity<ListState<RepositoriesListDelegate>>,
   branches_list: Entity<ListState<BranchesListDelegate>>,
   branches_with_commands_list: Entity<ListState<BranchesListWithCommandsDelegate>>,
   create_branch_input: Entity<InputState>,
@@ -671,6 +795,23 @@ impl CommandPalette {
     });
     let open_github_pr_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Paste GitHub pull request URL..."));
+
+    let default_repositories: Vec<Rc<CommandPaletteRepository>> = config
+      .repositories
+      .iter()
+      .cloned()
+      .map(Rc::new)
+      .collect();
+
+    let repositories_list_delegate = RepositoriesListDelegate {
+      _repositories: default_repositories.clone(),
+      matched_repositories: default_repositories.clone(),
+      selected_index: None,
+      query: "".into(),
+    };
+
+    let repositories_list =
+      cx.new(|cx| ListState::new(repositories_list_delegate, window, cx).searchable(true));
 
     let default_branches: Vec<Rc<CommandPaletteBranch>> =
       config.branches.iter().cloned().map(Rc::new).collect();
@@ -738,6 +879,26 @@ impl CommandPalette {
             && let Some(command) = list_state.read(cx).delegate().matched_commands.get(ix.row)
           {
             command_palette.select_command(command.id, cx, window);
+          }
+        },
+      ),
+      cx.subscribe_in(
+        &repositories_list,
+        window,
+        |command_palette, list_state, ev: &ListEvent, window, cx| {
+          if let ListEvent::Confirm(ix) = ev {
+            let repository = {
+              let list = list_state.read(cx);
+              list.delegate().matched_repositories.get(ix.row).cloned()
+            };
+
+            if let Some(repository) = repository {
+              command_palette.trigger_action(
+                CommandPaletteAction::SwitchRepository((*repository).clone()),
+                window,
+                cx,
+              );
+            }
           }
         },
       ),
@@ -832,6 +993,7 @@ impl CommandPalette {
       create_branch_base: None,
       screen: CommandPaletteScreen::Root,
       commands_list,
+      repositories_list,
       branches_list,
       branches_with_commands_list,
       open_github_pr_input,
@@ -943,6 +1105,11 @@ impl CommandPalette {
 
   pub fn focus_screen_input(&self, window: &mut Window, cx: &mut Context<Self>) {
     match self.screen {
+      CommandPaletteScreen::SwitchRepository => {
+        self.repositories_list.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      }
       CommandPaletteScreen::SwitchBranch => {
         self.branches_with_commands_list.update(cx, |state, cx| {
           state.focus(window, cx);
@@ -1007,6 +1174,9 @@ impl CommandPalette {
     window: &mut Window,
   ) {
     match command {
+      CommandPaletteCommandId::SwitchRepository => {
+        self.set_screen(CommandPaletteScreen::SwitchRepository, cx, window);
+      }
       CommandPaletteCommandId::SwitchBranch => {
         self.set_screen(CommandPaletteScreen::SwitchBranch, cx, window);
       }
@@ -1027,6 +1197,9 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::CreateBranchFrom => {
         self.set_screen(CommandPaletteScreen::CreateBranchFrom, cx, window);
+      }
+      CommandPaletteCommandId::OpenRepository => {
+        self.trigger_action(CommandPaletteAction::OpenRepository, window, cx);
       }
       CommandPaletteCommandId::OpenGitPage => {
         self.trigger_action(CommandPaletteAction::OpenGitPage, window, cx);
@@ -1119,6 +1292,29 @@ impl CommandPalette {
         &self.commands_list,
         count_commands,
         "Search commands...",
+        cx,
+      ))
+      .when(self.error.is_some(), |parent| {
+        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
+      })
+  }
+
+  fn render_switch_repository(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    let count_items = self
+      .repositories_list
+      .read(cx)
+      .delegate()
+      .matched_repositories
+      .len();
+
+    v_flex()
+      .h_full()
+      .child(self.render_search_list(
+        &self.repositories_list,
+        count_items,
+        "Search repositories...",
         cx,
       ))
       .when(self.error.is_some(), |parent| {
@@ -1249,6 +1445,9 @@ impl Render for CommandPalette {
 
     let content = match self.screen {
       CommandPaletteScreen::Root => self.render_root(cx).into_any_element(),
+      CommandPaletteScreen::SwitchRepository => {
+        self.render_switch_repository(cx).into_any_element()
+      }
       CommandPaletteScreen::SwitchBranch => self.render_switch_branch(cx).into_any_element(),
       CommandPaletteScreen::CreateBranch => self.render_create_branch(cx).into_any_element(),
       CommandPaletteScreen::CherryPick => self.render_cherry_pick(cx).into_any_element(),
@@ -1273,7 +1472,7 @@ impl Render for CommandPalette {
 
 #[cfg(test)]
 mod tests {
-  use super::CommandPalette;
+  use super::{CommandPalette, CommandPaletteCommand, CommandPaletteCommandId};
 
   #[test]
   fn parse_github_pull_request_url_accepts_standard_url() {
@@ -1329,5 +1528,13 @@ mod tests {
   fn parse_cherry_pick_commit_hashes_rejects_empty_input() {
     let parsed = CommandPalette::parse_cherry_pick_commit_hashes("   \n\t  ");
     assert_eq!(parsed, None);
+  }
+
+  #[test]
+  fn open_repository_command_is_available_with_expected_metadata() {
+    let command = CommandPaletteCommand::open_repository();
+    assert_eq!(command.id, CommandPaletteCommandId::OpenRepository);
+    assert_eq!(command.name.as_ref(), "Open repository");
+    assert!(command.matches("open repo"));
   }
 }

@@ -49,9 +49,9 @@ use crate::{
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteHandler, CommandPalettePage,
-  ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState, SearchFileEntry,
-  SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UiIconName,
-  UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
+  CommandPaletteRepository, ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState,
+  SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
+  StatusThemeExt, UiIconName, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
   file_icon_path_for_path_with_theme, user_menu,
 };
 
@@ -1307,12 +1307,24 @@ impl GitPage {
     self.reload_status(cx);
     self.refresh_branches(cx);
     self.refresh_repo_select(cx);
+    self.sync_repo_select_with_path(&repo_root, cx);
     cx.notify();
   }
 
   fn refresh_repo_select(&mut self, cx: &mut Context<Self>) {
-    let recent = ConfigStore::load_recent_repositories();
     let selected_repo = self.selected_repo.clone();
+    let mut recent = ConfigStore::load_recent_repositories();
+    if let Some(selected_repo_path) = selected_repo.as_ref()
+      && !recent.iter().any(|repo| &repo.path == selected_repo_path)
+    {
+      recent.insert(
+        0,
+        RecentRepository {
+          path: selected_repo_path.clone(),
+        },
+      );
+    }
+
     let items: Vec<RecentRepoItem> = recent
       .iter()
       .map(|repo| RecentRepoItem::new(repo, selected_repo.as_ref()))
@@ -1334,6 +1346,31 @@ impl GitPage {
       self.repo_select = select;
       self.subscribe_to_repo_select(cx);
     }
+  }
+
+  fn sync_repo_select_with_path(&self, repo_root: &Path, cx: &mut Context<Self>) {
+    let repo_select = self.repo_select.clone();
+    let repo_root = repo_root.to_path_buf();
+    let mut recent = ConfigStore::load_recent_repositories();
+    if !recent.iter().any(|repo| repo.path == repo_root) {
+      recent.insert(
+        0,
+        RecentRepository {
+          path: repo_root.clone(),
+        },
+      );
+    }
+    let items = recent
+      .iter()
+      .map(|repo| RecentRepoItem::new(repo, Some(&repo_root)))
+      .collect::<Vec<_>>();
+    let window_handle = self.window_handle;
+    let _ = cx.update_window(window_handle, |_, window, cx| {
+      repo_select.update(cx, |state, cx| {
+        state.set_items(SearchableVec::new(items), window, cx);
+        state.set_selected_value(&repo_root, window, cx);
+      });
+    });
   }
 
   fn clear_branch_select(&mut self, cx: &mut Context<Self>) {
@@ -1843,6 +1880,27 @@ impl GitPage {
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let mut palette_branches = Vec::new();
+    let mut palette_repositories = ConfigStore::load_recent_repositories()
+      .into_iter()
+      .map(|repo| CommandPaletteRepository {
+        path: repo.path.to_string_lossy().replace(['\n', '\r'], "").into(),
+      })
+      .collect::<Vec<_>>();
+
+    if let Some(selected_repo) = self.selected_repo.as_ref() {
+      let selected_repo_path = selected_repo.to_string_lossy().replace(['\n', '\r'], "");
+      if !palette_repositories
+        .iter()
+        .any(|repo| repo.path.as_ref() == selected_repo_path)
+      {
+        palette_repositories.insert(
+          0,
+          CommandPaletteRepository {
+            path: selected_repo_path.into(),
+          },
+        );
+      }
+    }
 
     let view = cx.entity();
     let handler: CommandPaletteHandler = Arc::new(move |action, window, cx| {
@@ -1854,6 +1912,12 @@ impl GitPage {
     let include_github = matches!(self.auth_state, AuthState::Authenticated(_));
     let mut commands =
       CommandPaletteCommand::default_global_commands(CommandPalettePage::Git, include_github);
+
+    if palette_repositories.len() > 1 {
+      commands.push(CommandPaletteCommand::switch_repository());
+    }
+
+    commands.push(CommandPaletteCommand::open_repository());
 
     if self.selected_repo.is_some() {
       commands.push(CommandPaletteCommand::cherry_pick());
@@ -1877,7 +1941,8 @@ impl GitPage {
       commands.push(CommandPaletteCommand::rebase_branch());
     }
 
-    let config = CommandPaletteConfig::new(palette_branches, commands, handler);
+    let config = CommandPaletteConfig::new(palette_branches, commands, handler)
+      .with_repositories(palette_repositories);
 
     let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
     let palette_for_dialog = palette.clone();
@@ -1952,6 +2017,10 @@ impl GitPage {
   ) -> Result<(), SharedString> {
     let mut selected_branch: Option<BranchRef> = None;
     let result = match action {
+      CommandPaletteAction::OpenRepository => {
+        self.start_open_repository(window, cx);
+        Ok(())
+      }
       CommandPaletteAction::OpenGitPage => {
         WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
         cx.refresh_windows();
@@ -1987,6 +2056,32 @@ impl GitPage {
       }
       CommandPaletteAction::OpenGitChangesSidebar => {
         self.set_sidebar_mode(GitSidebarMode::Changes, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::SwitchRepository(repository) => {
+        let repo_root = PathBuf::from(repository.path.as_ref());
+        if !repo_root.is_dir() {
+          let message: SharedString = format!("Repository not found: {}", repo_root.display()).into();
+          return Err(message);
+        }
+        self.set_selected_repo(repo_root.clone(), cx);
+        let mut recent = ConfigStore::load_recent_repositories();
+        if !recent.iter().any(|repo| repo.path == repo_root) {
+          recent.insert(
+            0,
+            RecentRepository {
+              path: repo_root.clone(),
+            },
+          );
+        }
+        let items = recent
+          .iter()
+          .map(|repo| RecentRepoItem::new(repo, Some(&repo_root)))
+          .collect::<Vec<_>>();
+        self.repo_select.update(cx, |state, cx| {
+          state.set_items(SearchableVec::new(items), window, cx);
+          state.set_selected_value(&repo_root, window, cx);
+        });
         Ok(())
       }
       CommandPaletteAction::SwitchBranch(branch) => {
@@ -4865,6 +4960,74 @@ mod tests {
 
     let status = current_branch_status(&repo.path).expect("read status");
     assert_eq!(status.name, "feature");
+  }
+
+  #[gpui::test]
+  async fn command_palette_switch_repository_updates_selected_repo_and_header_select(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo_a = TempRepo::init("git-page-cmd-switch-repo-a");
+    let repo_b = TempRepo::init("git-page-cmd-switch-repo-b");
+    let _ = commit_text_file(&repo_a.path, Path::new("README.md"), "a1\n", "initial");
+    let _ = commit_text_file(&repo_b.path, Path::new("README.md"), "b1\n", "initial");
+
+    ConfigStore::persist_recent_repository(&repo_a.path);
+    ConfigStore::persist_recent_repository(&repo_b.path);
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let result = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo_a.path.clone());
+      this.refresh_repo_select(cx);
+      this.handle_command_palette_action(
+        CommandPaletteAction::SwitchRepository(CommandPaletteRepository {
+          path: repo_b.path.to_string_lossy().to_string().into(),
+        }),
+        _window,
+        cx,
+      )
+    });
+    assert!(result.is_ok());
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let (selected_repo, selected_in_header) = git_page.read_with(cx, |this, cx| {
+      (
+        this.selected_repo.clone(),
+        this.repo_select.read(cx).selected_value().cloned(),
+      )
+    });
+    assert_eq!(selected_repo, Some(repo_b.path.clone()));
+    assert_eq!(selected_in_header, Some(repo_b.path.clone()));
+  }
+
+  #[gpui::test]
+  async fn command_palette_switch_repository_returns_error_for_missing_repository(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-switch-repo-missing");
+    let missing_repo = repo.path.join("does-not-exist");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    let result = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.handle_command_palette_action(
+        CommandPaletteAction::SwitchRepository(CommandPaletteRepository {
+          path: missing_repo.to_string_lossy().to_string().into(),
+        }),
+        _window,
+        cx,
+      )
+    });
+
+    let error = result.expect_err("switch repository should fail for a missing path");
+    assert!(error.as_ref().starts_with("Repository not found:"));
+    let selected_repo = git_page.read_with(cx, |this, _| this.selected_repo.clone());
+    assert_eq!(selected_repo, Some(repo.path.clone()));
   }
 
   #[gpui::test]
