@@ -2420,6 +2420,7 @@ dependencies = [
  "gpui-component",
  "once_cell",
  "reqwest",
+ "syntax",
 ]
 
 [[package]]
