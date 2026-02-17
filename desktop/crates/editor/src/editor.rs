@@ -153,6 +153,10 @@ fn review_comment_composer_body_height_px(editor_line_height_px: f32) -> f32 {
     + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
 }
 
+fn review_comment_overlay_x_offset_for_scroll(scroll_x: Pixels) -> Pixels {
+  (-scroll_x).max(px(0.0))
+}
+
 fn editor_actions_enabled(
   find_input_focused: bool,
   review_comment_edit_input_focused: bool,
@@ -2115,6 +2119,10 @@ impl Editor {
       .into_any_element()
   }
 
+  fn review_comment_overlay_x_offset(&self) -> Pixels {
+    review_comment_overlay_x_offset_for_scroll(self.scroll_handle.offset().x)
+  }
+
   fn render_review_comments_overlay(
     &mut self,
     editor_entity: Entity<Editor>,
@@ -2133,11 +2141,12 @@ impl Editor {
     });
 
     let theme = cx.theme().clone();
+    let overlay_x_offset = self.review_comment_overlay_x_offset();
     let review_comment_header_height = line_height * REVIEW_COMMENT_HEADER_HEIGHT_LINES;
     let mut overlay = div()
       .absolute()
       .top(px(0.0))
-      .left(px(0.0))
+      .left(overlay_x_offset)
       .right(px(0.0))
       .bottom(px(0.0));
 
@@ -2565,10 +2574,11 @@ impl Editor {
     cx: &mut Context<Self>,
   ) -> Option<gpui::AnyElement> {
     let theme = cx.theme().clone();
+    let overlay_x_offset = self.review_comment_overlay_x_offset();
     let mut overlay = div()
       .absolute()
       .top(px(0.0))
-      .left(px(0.0))
+      .left(overlay_x_offset)
       .right(px(0.0))
       .bottom(px(0.0));
     let mut has_content = false;
@@ -5792,6 +5802,19 @@ pub mod tests {
     assert_eq!(
       review_comment_composer_body_height_px(40.0),
       REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX + 40.0 + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
+    );
+  }
+
+  #[test]
+  fn test_review_comment_overlay_x_offset_for_scroll() {
+    assert_eq!(review_comment_overlay_x_offset_for_scroll(px(0.0)), px(0.0));
+    assert_eq!(
+      review_comment_overlay_x_offset_for_scroll(px(-120.0)),
+      px(120.0)
+    );
+    assert_eq!(
+      review_comment_overlay_x_offset_for_scroll(px(32.0)),
+      px(0.0)
     );
   }
 
