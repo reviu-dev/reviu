@@ -1639,6 +1639,7 @@ impl Editor {
         .border(px(REVIEW_COMMENT_CARD_BORDER_PX))
         .border_color(theme.border)
         .rounded_md()
+        .cursor(CursorStyle::Arrow)
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
           cx.stop_propagation();
         })
