@@ -691,6 +691,31 @@ enum LineVisibility {
   Blank,
 }
 
+fn display_line_text_for_view(
+  display_line: &DisplayLine,
+  diff_view: DiffElementView,
+  document: &Document,
+) -> String {
+  match display_line {
+    DisplayLine::Doc { doc_line, .. } => document
+      .line_content(*doc_line)
+      .map(|cow| clean_line_text(&cow))
+      .unwrap_or_default(),
+    DisplayLine::Modified {
+      old_text, doc_line, ..
+    } => match diff_view {
+      DiffElementView::SplitLeft => clean_line_text(old_text),
+      DiffElementView::SplitRight | DiffElementView::Inline => document
+        .line_content(*doc_line)
+        .map(|cow| clean_line_text(&cow))
+        .unwrap_or_default(),
+    },
+    DisplayLine::Removed { text, .. } => clean_line_text(text),
+    DisplayLine::NoNewline { .. } => NO_NEWLINE_MARKER_TEXT.to_string(),
+    _ => String::new(),
+  }
+}
+
 pub struct EditorElement {
   editor: Entity<Editor>,
   diff_view: DiffElementView,
@@ -1137,15 +1162,7 @@ impl Element for EditorElement {
       let document = document_entity.read(cx);
       let mut line_texts = HashMap::new();
       for (display_idx, display_line) in &viewport_lines {
-        let text = match display_line {
-          DisplayLine::Doc { doc_line, .. } | DisplayLine::Modified { doc_line, .. } => document
-            .line_content(*doc_line)
-            .map(|cow| clean_line_text(&cow))
-            .unwrap_or_default(),
-          DisplayLine::Removed { text, .. } => clean_line_text(text),
-          DisplayLine::NoNewline { .. } => NO_NEWLINE_MARKER_TEXT.to_string(),
-          _ => String::new(),
-        };
+        let text = display_line_text_for_view(display_line, self.diff_view, &document);
         line_texts.insert(*display_idx, text);
       }
       line_texts
@@ -2377,6 +2394,31 @@ mod tests {
     assert_eq!(border.l, fill_color.l);
     assert!(border.a > fill_color.a);
     assert!(border.a <= 0.28);
+  }
+
+  #[gpui::test]
+  fn test_display_line_text_for_view_uses_old_text_on_split_left(cx: &mut TestAppContext) {
+    let document = cx.new(|cx| Document::new("  new_text", None, cx));
+    let display_line = DisplayLine::Modified {
+      doc_line: 0,
+      old_line: 0,
+      old_text: "        old_text".to_string(),
+      hunk: HunkState::Unstaged,
+      group_id: None,
+      secondary: false,
+    };
+
+    let (split_left, split_right, inline) = document.read_with(cx, |document, _| {
+      (
+        display_line_text_for_view(&display_line, DiffElementView::SplitLeft, document),
+        display_line_text_for_view(&display_line, DiffElementView::SplitRight, document),
+        display_line_text_for_view(&display_line, DiffElementView::Inline, document),
+      )
+    });
+
+    assert_eq!(split_left, "        old_text");
+    assert_eq!(split_right, "  new_text");
+    assert_eq!(inline, "  new_text");
   }
 
   #[test]
