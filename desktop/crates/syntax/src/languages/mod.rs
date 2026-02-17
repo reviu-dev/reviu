@@ -32,6 +32,8 @@ const EXTENSIONS_MARKDOWN: &[&str] = &["md", "markdown"];
 const EXTENSIONS_VUE: &[&str] = &["vue"];
 
 pub fn detect_language_config(extension: &str) -> Option<&'static LanguageConfig> {
+  let extension = extension.trim().trim_start_matches('.').to_ascii_lowercase();
+  let extension = extension.as_str();
   match extension {
     _ if EXTENSIONS_CSS.contains(&extension) => Some(&*css::CSS_CONFIG),
     _ if EXTENSIONS_SCSS.contains(&extension) => Some(&*scss::SCSS_CONFIG),
@@ -51,19 +53,29 @@ pub fn detect_language_config(extension: &str) -> Option<&'static LanguageConfig
 }
 
 pub fn language_config_for_name(name: &str) -> Option<&'static LanguageConfig> {
-  let name = name.to_ascii_lowercase();
+  let name = name
+    .trim()
+    .trim_matches(|c| c == '{' || c == '}')
+    .trim_start_matches('.')
+    .to_ascii_lowercase();
   match name.as_str() {
     "css" => Some(&*css::CSS_CONFIG),
     "scss" => Some(&*scss::SCSS_CONFIG),
     "toml" => Some(&*toml::TOML_CONFIG),
     "sass" | "less" | "postcss" => Some(&*css::CSS_CONFIG),
+    "rust" | "rs" => Some(&*rust::RUST_CONFIG),
+    "python" | "python3" | "py" => Some(&*python::PYTHON_CONFIG),
+    "dockerfile" | "docker" => Some(&*dockerfile::DOCKERFILE_CONFIG),
+    "yaml" | "yml" => Some(&*yaml::YAML_CONFIG),
+    "xml" => Some(&*xml::XML_CONFIG),
+    "markdown" | "md" | "mdx" => Some(&*markdown::MARKDOWN_CONFIG),
     "html" => Some(&*html::HTML_CONFIG),
     "javascript" | "js" | "typescript" | "ts" | "tsx" | "jsx" => {
       Some(&*typescript::TYPESCRIPT_CONFIG)
     }
     "json" => Some(&*json::JSON_CONFIG),
     "vue" => Some(&*vue::VUE_CONFIG),
-    _ => None,
+    _ => detect_language_config(&name),
   }
 }
 
@@ -92,6 +104,12 @@ mod tests {
   fn test_detect_unknown() {
     assert!(detect_language_config("unknown").is_none());
     assert!(detect_language_config("").is_none());
+  }
+
+  #[test]
+  fn test_detect_is_case_and_dot_insensitive() {
+    assert!(detect_language_config("RS").is_some());
+    assert!(detect_language_config(".tsx").is_some());
   }
 
   #[test]
@@ -182,5 +200,17 @@ mod tests {
   fn test_vue_config_has_correct_name() {
     let config = detect_language_config("vue").unwrap();
     assert_eq!(config.name, "vue");
+  }
+
+  #[test]
+  fn test_language_config_for_name_supports_code_fence_language_names() {
+    let rust = language_config_for_name("rust").unwrap();
+    assert_eq!(rust.name, "rust");
+
+    let python = language_config_for_name("python").unwrap();
+    assert_eq!(python.name, "python");
+
+    let yaml = language_config_for_name("yml").unwrap();
+    assert_eq!(yaml.name, "yaml");
   }
 }

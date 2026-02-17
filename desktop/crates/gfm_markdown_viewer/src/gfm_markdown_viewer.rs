@@ -28,6 +28,7 @@ use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
 use once_cell::sync::Lazy;
 use reqwest::header::CONTENT_TYPE;
+use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, TokenType, languages};
 
 type BlockRenderFn = dyn Fn(AnyElement, &App) -> AnyElement + Send + Sync;
 type HeadingRenderFn = dyn Fn(u8, AnyElement, &App) -> AnyElement + Send + Sync;
@@ -116,6 +117,7 @@ struct InlineSpan {
   range: Range<usize>,
   style: InlineStyle,
   link: Option<Arc<str>>,
+  syntax_token: Option<TokenType>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -253,8 +255,12 @@ const MARKDOWN_LIST_ITEM_GAP_PX: f32 = 4.0;
 const MARKDOWN_INDENT_PER_LEVEL_PX: f32 = 12.0;
 const MARKDOWN_CHAR_WIDTH_PX: f32 = 8.8;
 const MARKDOWN_MIN_WRAP_COLUMNS: usize = 8;
-const MARKDOWN_CODE_LINE_HEIGHT_SCALE: f32 = 0.9;
-const MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX: f32 = 18.0;
+const MARKDOWN_CODE_LINE_HEIGHT_SCALE: f32 = 0.95;
+const MARKDOWN_CODE_BLOCK_PADDING_X_PX: f32 = 8.0;
+const MARKDOWN_CODE_BLOCK_PADDING_TOP_PX: f32 = 8.0;
+const MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX: f32 = 4.0;
+const MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX: f32 =
+  MARKDOWN_CODE_BLOCK_PADDING_TOP_PX + MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX + 2.0;
 static BADGE_IMAGE_SOURCE_CACHE: Lazy<Mutex<HashMap<String, BadgeResolveState>>> =
   Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -1453,18 +1459,141 @@ fn render_code_block(
   ctx: &mut RenderContext,
 ) -> AnyElement {
   let theme = cx.theme();
-  let inlines = [Inline::Code(code.value.clone())];
-  let content = render_inline_text(&inlines, options, cx, ctx);
+  let (text, spans, link_ranges) = build_code_block_spans(code);
+  let content = SelectableText::new(
+    text,
+    spans,
+    link_ranges,
+    options.state.clone(),
+    options.on_link.clone(),
+    ctx.next_text_id(),
+    true,
+  );
 
   div()
     .bg(theme.muted)
     .border_1()
     .border_color(theme.border)
     .rounded_md()
-    .p_2()
+    .px(px(MARKDOWN_CODE_BLOCK_PADDING_X_PX))
+    .pt(px(MARKDOWN_CODE_BLOCK_PADDING_TOP_PX))
+    .pb(px(MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX))
     .whitespace_nowrap()
-    .child(div().text_xs().text_color(theme.foreground).child(content))
+    .child(div().text_sm().text_color(theme.foreground).child(content))
     .into_any_element()
+}
+
+fn code_block_display_value(value: &str) -> &str {
+  if let Some(stripped) = value.strip_suffix('\n') {
+    stripped.strip_suffix('\r').unwrap_or(stripped)
+  } else {
+    value
+  }
+}
+
+fn build_code_block_spans(code: &CodeBlock) -> (SharedString, Vec<InlineSpan>, Vec<LinkRange>) {
+  let value = code_block_display_value(code.value.as_ref());
+  let text = SharedString::from(value.to_string());
+  let text_len = text.len();
+  let base_style = InlineStyle {
+    code: true,
+    ..InlineStyle::default()
+  };
+
+  if text_len == 0 {
+    return (text, Vec::new(), Vec::new());
+  }
+
+  let spans = code_block_language_config(code.lang.as_deref())
+    .and_then(|config| {
+      let mut highlighter = SyntaxHighlighter::new(config);
+      highlighter
+        .highlight_text(value)
+        .ok()
+        .map(|highlights| syntax_highlight_spans_for_code(value, &highlights, base_style))
+    })
+    .filter(|spans| !spans.is_empty())
+    .unwrap_or_else(|| {
+      vec![InlineSpan {
+        range: 0..text_len,
+        style: base_style,
+        link: None,
+        syntax_token: None,
+      }]
+    });
+
+  (text, spans, Vec::new())
+}
+
+fn code_block_language_config(lang: Option<&str>) -> Option<&'static syntax::LanguageConfig> {
+  let lang = lang?
+    .trim()
+    .trim_matches(|c| c == '{' || c == '}')
+    .trim_start_matches('.');
+  if lang.is_empty() {
+    return None;
+  }
+
+  languages::language_config_for_name(lang).or_else(|| languages::detect_language_config(lang))
+}
+
+fn syntax_highlight_spans_for_code(
+  text: &str,
+  highlights: &[HighlightSpan],
+  base_style: InlineStyle,
+) -> Vec<InlineSpan> {
+  let text_len = text.len();
+  if text_len == 0 {
+    return Vec::new();
+  }
+
+  let mut syntax_ranges: Vec<_> = highlights
+    .iter()
+    .filter_map(|highlight| {
+      let start = clamp_to_char_boundary(text, highlight.byte_range.start.min(text_len));
+      let end = clamp_to_char_boundary(text, highlight.byte_range.end.min(text_len));
+      (end > start).then_some((start..end, highlight.token_type))
+    })
+    .collect();
+  syntax_ranges.sort_by_key(|(range, _)| (range.start, range.end));
+
+  let mut spans = Vec::new();
+  let mut current_pos = 0usize;
+  for (range, token_type) in syntax_ranges {
+    let start = range.start.max(current_pos);
+    let end = range.end.min(text_len);
+    if end <= start {
+      continue;
+    }
+
+    if start > current_pos {
+      spans.push(InlineSpan {
+        range: current_pos..start,
+        style: base_style,
+        link: None,
+        syntax_token: None,
+      });
+    }
+
+    spans.push(InlineSpan {
+      range: start..end,
+      style: base_style,
+      link: None,
+      syntax_token: Some(token_type),
+    });
+    current_pos = end;
+  }
+
+  if current_pos < text_len {
+    spans.push(InlineSpan {
+      range: current_pos..text_len,
+      style: base_style,
+      link: None,
+      syntax_token: None,
+    });
+  }
+
+  spans
 }
 
 fn render_details(
@@ -1583,6 +1712,7 @@ impl SpanBuilder {
     if let Some(last) = self.spans.last_mut()
       && last.style == style
       && last.link == link
+      && last.syntax_token.is_none()
     {
       last.range.end = end;
       return;
@@ -1592,6 +1722,7 @@ impl SpanBuilder {
       range: start..end,
       style,
       link,
+      syntax_token: None,
     });
   }
 
@@ -1959,6 +2090,7 @@ fn build_runs(
   let base_color = base_style.color;
   let theme = cx.theme();
   let link_color = github_link_color(theme.background);
+  let syntax_theme = syntax_theme_for_background(theme.background);
 
   let mut runs = Vec::new();
   for span in spans {
@@ -1975,6 +2107,9 @@ fn build_runs(
 
     let mut color = base_color;
     let mut underline = None;
+    if let Some(token_type) = span.syntax_token {
+      color = syntax_theme.color_for_token(token_type);
+    }
     if span.link.is_some() {
       color = link_color;
       underline = Some(UnderlineStyle {
@@ -2031,6 +2166,14 @@ fn github_link_color(background: Hsla) -> Hsla {
       l: 0.45,
       a: 1.0,
     }
+  }
+}
+
+fn syntax_theme_for_background(background: Hsla) -> SyntaxTheme {
+  if background.l < 0.5 {
+    SyntaxTheme::default_dark()
+  } else {
+    SyntaxTheme::default_light()
   }
 }
 
@@ -2736,6 +2879,42 @@ Apres"#,
     let wide = estimate_markdown_height_px(source, 96, 20.0);
     let narrow = estimate_markdown_height_px(source, 32, 20.0);
     assert!(narrow > wide);
+  }
+
+  #[test]
+  fn normalizes_code_block_display_value_trailing_newline() {
+    assert_eq!(code_block_display_value("fn main() {}\n"), "fn main() {}");
+    assert_eq!(code_block_display_value("line\r\n"), "line");
+    assert_eq!(code_block_display_value("line\n\n"), "line\n");
+  }
+
+  #[test]
+  fn resolves_code_block_language_from_fence_name_or_extension() {
+    let rust = code_block_language_config(Some("rust")).expect("rust language");
+    assert_eq!(rust.name, "rust");
+
+    let rs = code_block_language_config(Some("rs")).expect("rs extension");
+    assert_eq!(rs.name, "rust");
+
+    let dotted = code_block_language_config(Some(".py")).expect(".py extension");
+    assert_eq!(dotted.name, "python");
+  }
+
+  #[test]
+  fn builds_syntax_highlighted_spans_for_rust_code_blocks() {
+    let code = CodeBlock {
+      lang: Some("rust".to_string()),
+      value: "fn main() {}\n".to_string(),
+    };
+    let (_, spans, _) = build_code_block_spans(&code);
+
+    assert!(!spans.is_empty());
+    assert!(spans.iter().all(|span| span.style.code));
+    assert!(
+      spans
+        .iter()
+        .any(|span| span.syntax_token == Some(TokenType::Keyword))
+    );
   }
 
   #[test]
