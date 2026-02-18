@@ -6,15 +6,15 @@ use std::{
   time::Duration,
 };
 
-use editor::{CloseFind, DiffViewMode, Editor, Find, HunkAction, HunkState};
+use editor::{CloseFind, ConflictResolution, DiffViewMode, Editor, Find, HunkAction, HunkState};
 use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
-  HistoryCommitNode, HistoryRevision, RepoStage, RepoStatusEntry, RepoStatusKind, amend_commit,
-  cherry_pick_commits, commit_changes, create_branch, create_branch_from, current_branch_status,
-  current_history_revision, delete_untracked_file, diff_set_from_patch, head_commit_status,
-  list_branches, list_commit_changed_files, list_commit_history, list_repo_status,
-  load_commit_file_diff, merge_branch, push, rebase_branch, restore_file, stage_all, stage_file,
-  switch_branch, undo_last_commit, unstage_all, unstage_file,
+  HistoryCommitNode, HistoryRevision, RepoStage, RepoStatusEntry, RepoStatusKind, abort_merge,
+  amend_commit, cherry_pick_commits, commit_changes, create_branch, create_branch_from,
+  current_branch_status, current_history_revision, delete_untracked_file, diff_set_from_patch,
+  head_commit_status, is_merge_in_progress, list_branches, list_commit_changed_files,
+  list_commit_history, list_repo_status, load_commit_file_diff, merge_branch, push, rebase_branch,
+  restore_file, stage_all, stage_file, switch_branch, undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
@@ -23,6 +23,7 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable,
+  alert::Alert,
   button::{Button, ButtonVariant, ButtonVariants as _},
   h_flex,
   kbd::Kbd,
@@ -526,6 +527,7 @@ pub struct GitPage {
   can_push: bool,
   can_force_push: bool,
   has_staged_changes: bool,
+  merge_in_progress: bool,
   sidebar_mode: GitSidebarMode,
   history_commits: Vec<HistoryCommitNode>,
   history_revision: Option<HistoryRevision>,
@@ -670,6 +672,25 @@ impl GitPage {
     status == RepoStatusKind::Untracked
   }
 
+  fn stage_requires_confirmation(status: RepoStatusKind) -> bool {
+    status == RepoStatusKind::Conflicted
+  }
+
+  fn should_confirm_stage_for_status(
+    status: Option<RepoStatusKind>,
+    has_unresolved_conflict_markers: bool,
+  ) -> bool {
+    status.is_some_and(Self::stage_requires_confirmation) && has_unresolved_conflict_markers
+  }
+
+  fn first_conflicted_path(repo_root: &Path) -> Option<PathBuf> {
+    list_repo_status(repo_root)
+      .ok()?
+      .into_iter()
+      .find(|entry| entry.status == RepoStatusKind::Conflicted)
+      .map(|entry| entry.path)
+  }
+
   fn all_entries_staged(entries: &[RepoStatusEntry]) -> bool {
     !entries.is_empty() && entries.iter().all(|entry| entry.stage == RepoStage::Staged)
   }
@@ -679,6 +700,7 @@ impl GitPage {
     entries: Vec<RepoStatusEntry>,
     branch_status: Option<BranchStatus>,
     head_status: Option<HeadCommitStatus>,
+    merge_in_progress: bool,
     sync_diff_when_selected_retained: bool,
     cx: &mut Context<Self>,
   ) -> bool {
@@ -686,6 +708,7 @@ impl GitPage {
     let branch_changed =
       Self::branch_name_changed(self.branch_status.as_ref(), branch_status.as_ref());
     self.branch_status = branch_status;
+    self.merge_in_progress = merge_in_progress;
     self.has_staged_changes = Self::has_staged_changes(&self.status_entries);
     let head_status = head_status.unwrap_or(HeadCommitStatus {
       has_head_commit: false,
@@ -1104,6 +1127,7 @@ impl GitPage {
       can_push: false,
       can_force_push: false,
       has_staged_changes: false,
+      merge_in_progress: false,
       sidebar_mode: GitSidebarMode::Changes,
       history_commits: Vec::new(),
       history_revision: None,
@@ -1190,6 +1214,7 @@ impl GitPage {
       can_push: false,
       can_force_push: false,
       has_staged_changes: false,
+      merge_in_progress: false,
       sidebar_mode: GitSidebarMode::Changes,
       history_commits: Vec::new(),
       history_revision: None,
@@ -1295,6 +1320,7 @@ impl GitPage {
     self.selected_repo = Some(repo_root.clone());
     self.selected_file = None;
     self.editor = None;
+    self.merge_in_progress = false;
     self.history_commits.clear();
     self.history_revision = None;
     self.history_loading = self.sidebar_mode == GitSidebarMode::History;
@@ -1504,6 +1530,7 @@ impl GitPage {
       self.can_push = false;
       self.can_force_push = false;
       self.has_staged_changes = false;
+      self.merge_in_progress = false;
       self.history_commits.clear();
       self.history_revision = None;
       self.history_loading = false;
@@ -1528,6 +1555,7 @@ impl GitPage {
         let entries = list_repo_status(&repo_root).ok()?;
         let branch = current_branch_status(&repo_root).ok();
         let head_status = head_commit_status(&repo_root).ok();
+        let merge_in_progress = is_merge_in_progress(&repo_root).unwrap_or(false);
         let history = if include_history {
           list_commit_history(&repo_root, HISTORY_MAX_COMMITS).ok()
         } else {
@@ -1538,10 +1566,25 @@ impl GitPage {
         } else {
           None
         };
-        Some((entries, branch, head_status, history, history_revision))
+        Some((
+          entries,
+          branch,
+          head_status,
+          merge_in_progress,
+          history,
+          history_revision,
+        ))
       })
       .await;
-      let Some((entries, branch_status, head_status, history, history_revision)) = status else {
+      let Some((
+        entries,
+        branch_status,
+        head_status,
+        merge_in_progress,
+        history,
+        history_revision,
+      )) = status
+      else {
         let _ = this.update(cx, |this, cx| {
           if this.selected_repo.as_ref() != Some(&requested_repo) {
             return;
@@ -1553,6 +1596,7 @@ impl GitPage {
           this.can_push = false;
           this.can_force_push = false;
           this.has_staged_changes = false;
+          this.merge_in_progress = false;
           this.selected_file = None;
           this.editor = None;
           this.history_opened_commit_file = None;
@@ -1581,8 +1625,14 @@ impl GitPage {
         if this.selected_repo.as_ref() != Some(&requested_repo) {
           return;
         }
-        let branch_changed =
-          this.apply_status_snapshot(entries, branch_status, head_status, true, cx);
+        let branch_changed = this.apply_status_snapshot(
+          entries,
+          branch_status,
+          head_status,
+          merge_in_progress,
+          true,
+          cx,
+        );
         if include_history {
           if let Some(history) = history {
             this.history_commits = history;
@@ -1639,6 +1689,7 @@ impl GitPage {
           let entries = list_repo_status(&repo_root).ok()?;
           let branch = current_branch_status(&repo_root).ok();
           let head_status = head_commit_status(&repo_root).ok();
+          let merge_in_progress = is_merge_in_progress(&repo_root).unwrap_or(false);
           let polled_history_revision = if include_history {
             current_history_revision(&repo_root).ok()
           } else {
@@ -1659,6 +1710,7 @@ impl GitPage {
             entries,
             branch,
             head_status,
+            merge_in_progress,
             polled_history_revision,
             should_refresh_history,
             history,
@@ -1669,6 +1721,7 @@ impl GitPage {
           entries,
           branch_status,
           head_status,
+          merge_in_progress,
           polled_history_revision,
           should_refresh_history,
           history,
@@ -1681,8 +1734,14 @@ impl GitPage {
           if this.selected_repo.as_ref() != Some(&requested_repo) {
             return;
           }
-          let branch_changed =
-            this.apply_status_snapshot(entries, branch_status, head_status, false, cx);
+          let branch_changed = this.apply_status_snapshot(
+            entries,
+            branch_status,
+            head_status,
+            merge_in_progress,
+            false,
+            cx,
+          );
           if include_history {
             if let Some(history) = history {
               this.history_commits = history;
@@ -1728,6 +1787,7 @@ impl GitPage {
         let entries = list_repo_status(&repo_root).ok()?;
         let branch = current_branch_status(&repo_root).ok();
         let head_status = head_commit_status(&repo_root).ok();
+        let merge_in_progress = is_merge_in_progress(&repo_root).unwrap_or(false);
         let polled_history_revision = if include_history {
           current_history_revision(&repo_root).ok()
         } else {
@@ -1748,6 +1808,7 @@ impl GitPage {
           entries,
           branch,
           head_status,
+          merge_in_progress,
           polled_history_revision,
           should_refresh_history,
           history,
@@ -1759,6 +1820,7 @@ impl GitPage {
         entries,
         branch_status,
         head_status,
+        merge_in_progress,
         polled_history_revision,
         should_refresh_history,
         history,
@@ -1771,8 +1833,14 @@ impl GitPage {
         if this.selected_repo.as_ref() != Some(&requested_repo) {
           return;
         }
-        let branch_changed =
-          this.apply_status_snapshot(entries, branch_status, head_status, false, cx);
+        let branch_changed = this.apply_status_snapshot(
+          entries,
+          branch_status,
+          head_status,
+          merge_in_progress,
+          false,
+          cx,
+        );
         if include_history {
           if let Some(history) = history {
             this.history_commits = history;
@@ -2134,6 +2202,12 @@ impl GitPage {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
+        let target_branch = self
+          .branch_status
+          .as_ref()
+          .map(|status| status.name.clone())
+          .or_else(|| current_branch_status(&root_path).ok().map(|status| status.name))
+          .unwrap_or_else(|| "HEAD".to_string());
         let branch_ref = BranchRef {
           name: name.name.to_string(),
           kind: match name.kind {
@@ -2141,7 +2215,22 @@ impl GitPage {
             CommandPaletteBranchKind::Remote => BranchKind::Remote,
           },
         };
-        merge_branch(&root_path, &branch_ref)
+        match merge_branch(&root_path, &branch_ref) {
+          Ok(()) => Ok(()),
+          Err(err) => {
+            if let Some(path) = Self::first_conflicted_path(&root_path) {
+              let merge_message =
+                Self::merge_commit_message(branch_ref.name.as_str(), target_branch.as_str());
+              self
+                .commit_input
+                .update(cx, |input, cx| input.set_value(&merge_message, window, cx));
+              self.open_file(path, cx);
+              Ok(())
+            } else {
+              Err(err)
+            }
+          }
+        }
       }
       CommandPaletteAction::RebaseBranch { name } => {
         let Some(root_path) = self.selected_repo.clone() else {
@@ -2631,14 +2720,37 @@ impl GitPage {
   fn toggle_stage_all_action(
     &mut self,
     _: &gpui::ClickEvent,
-    _: &mut Window,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     if self.all_changes_staged() {
       self.unstage_all_action(cx);
+    } else if Self::should_confirm_stage_all(self.selected_repo.as_ref(), &self.status_entries) {
+      self.confirm_stage_all_conflicted_action(window, cx);
     } else {
       self.stage_all_action(cx);
     }
+  }
+
+  fn abort_merge_action(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    if !self.merge_in_progress {
+      return;
+    }
+
+    let editor = self.editor.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let _ = unblock(move || abort_merge(&repo_root)).await;
+      let _ = this.update(cx, |this, cx| {
+        this.reload_status(cx);
+        if let Some(editor) = editor.clone() {
+          editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
+        }
+      });
+    });
+    self.status_task = Some(task);
   }
 
   fn stage_all_action(&mut self, cx: &mut Context<Self>) {
@@ -2743,6 +2855,60 @@ impl GitPage {
       });
     });
     self.status_task = Some(task);
+  }
+
+  fn confirm_stage_conflicted_file_action(
+    &mut self,
+    window: &mut Window,
+    rel_path: PathBuf,
+    cx: &mut Context<Self>,
+  ) {
+    let file_label = rel_path.to_string_lossy().replace(['\n', '\r'], "");
+    let title: SharedString = "Mark conflicts as resolved?".into();
+    let message: SharedString = format!(
+      "Stage {} and mark its merge conflicts as resolved?",
+      file_label
+    )
+    .into();
+    let view = cx.entity();
+    let rel_path_for_action = rel_path.clone();
+
+    window.open_dialog(cx, move |dialog, _, _| {
+      let view = view.clone();
+      let rel_path_for_action = rel_path_for_action.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text("Stage")
+        .cancel_text("Cancel")
+        .on_confirm(move |_, _, cx| {
+          let rel_path_for_action = rel_path_for_action.clone();
+          view.update(cx, |view, cx| {
+            view.stage_file_action(rel_path_for_action, cx);
+          });
+          true
+        })
+        .build(dialog)
+    });
+  }
+
+  fn confirm_stage_all_conflicted_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let title: SharedString = "Mark conflicts as resolved?".into();
+    let message: SharedString =
+      "Stage all files and mark merge conflicts as resolved?".into();
+    let view = cx.entity();
+
+    window.open_dialog(cx, move |dialog, _, _| {
+      let view = view.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text("Stage all")
+        .cancel_text("Cancel")
+        .on_confirm(move |_, _, cx| {
+          view.update(cx, |view, cx| {
+            view.stage_all_action(cx);
+          });
+          true
+        })
+        .build(dialog)
+    });
   }
 
   fn confirm_restore_file_action(
@@ -2852,6 +3018,23 @@ impl GitPage {
 
   fn changed_files_count(entries: &[RepoStatusEntry]) -> usize {
     entries.len()
+  }
+
+  fn has_conflicted_entries(entries: &[RepoStatusEntry]) -> bool {
+    entries
+      .iter()
+      .any(|entry| entry.status == RepoStatusKind::Conflicted)
+  }
+
+  fn should_confirm_stage_all(
+    selected_repo: Option<&PathBuf>,
+    status_entries: &[RepoStatusEntry],
+  ) -> bool {
+    selected_repo.is_some() && Self::has_conflicted_entries(status_entries)
+  }
+
+  fn merge_commit_message(source_branch: &str, target_branch: &str) -> String {
+    format!("Merge branch '{source_branch}' into {target_branch}")
   }
 
   fn should_show_changed_files_tag(changed_files_count: usize) -> bool {
@@ -3523,6 +3706,7 @@ impl GitPage {
     let file_path_stage = file_path.clone();
     let file_path_unstage = file_path.clone();
     let file_path_restore = file_path.clone();
+    let file_status_for_stage = file_status;
 
     let view = cx.entity();
     let stage_button = Button::new("editor-stage-file")
@@ -3531,10 +3715,20 @@ impl GitPage {
       .xsmall()
       .ghost()
       .disabled(!can_stage)
-      .on_click(move |_, _, cx| {
+      .on_click(move |_, window, cx| {
         if let Some(path) = file_path_stage.clone() {
           view.update(cx, |this, cx| {
-            this.stage_file_action(path.clone(), cx);
+            let has_unresolved_conflict_markers = this.editor.as_ref().map_or(true, |editor| {
+              editor.read_with(cx, |editor, cx| editor.has_unresolved_conflict_markers(cx))
+            });
+            if Self::should_confirm_stage_for_status(
+              file_status_for_stage,
+              has_unresolved_conflict_markers,
+            ) {
+              this.confirm_stage_conflicted_file_action(window, path.clone(), cx);
+            } else {
+              this.stage_file_action(path.clone(), cx);
+            }
           });
         }
       });
@@ -3631,6 +3825,93 @@ impl GitPage {
     if self.history_opened_commit_file.is_some() || editor_state.is_read_only {
       return None;
     }
+    let selected_status = self
+      .selected_file
+      .as_ref()
+      .and_then(|selected| {
+        self
+          .status_entries
+          .iter()
+          .find(|entry| &entry.path == selected)
+      })
+      .map(|entry| entry.status);
+
+    if matches!(selected_status, Some(RepoStatusKind::Conflicted)) {
+      let conflict_start_line = editor_state.hovered_conflict_start_line?;
+      let anchor_display_line = editor_state
+        .first_display_line_for_conflict(conflict_start_line)
+        .unwrap_or(conflict_start_line);
+      if editor_state.find_panel_occludes_display_line(anchor_display_line) {
+        return None;
+      }
+      let mut top = Self::hunk_action_top(
+        editor_state.measured_editor_line_height(),
+        anchor_display_line,
+        editor_state.scroll_offset_y,
+      );
+      if top >= editor_state.viewport_height {
+        return None;
+      }
+      if top < px(0.0) {
+        top = px(0.0);
+      }
+
+      let editor_entity = editor.clone();
+      let mut actions = div().flex().items_center();
+
+      let editor_entity_current = editor_entity.clone();
+      actions = actions.child(
+        Button::new("accept-current-conflict")
+          .label("Accept Current")
+          .small()
+          .bg(theme.background)
+          .rounded_t_none()
+          .rounded_br_none()
+          .on_click(move |_, _, cx| {
+            editor_entity_current.update(cx, |editor, cx| {
+              editor.resolve_conflict_region(conflict_start_line, ConflictResolution::Current, cx);
+            });
+          }),
+      );
+
+      let editor_entity_incoming = editor_entity.clone();
+      actions = actions.child(
+        Button::new("accept-incoming-conflict")
+          .label("Accept Incoming")
+          .small()
+          .bg(theme.background)
+          .rounded_t_none()
+          .on_click(move |_, _, cx| {
+            editor_entity_incoming.update(cx, |editor, cx| {
+              editor.resolve_conflict_region(conflict_start_line, ConflictResolution::Incoming, cx);
+            });
+          }),
+      );
+
+      actions = actions.child(
+        Button::new("accept-both-conflict")
+          .label("Accept Both")
+          .small()
+          .bg(theme.background)
+          .rounded_t_none()
+          .rounded_bl_none()
+          .on_click(move |_, _, cx| {
+            editor_entity.update(cx, |editor, cx| {
+              editor.resolve_conflict_region(conflict_start_line, ConflictResolution::Both, cx);
+            });
+          }),
+      );
+
+      return Some(
+        div()
+          .absolute()
+          .top(top)
+          .right(px(30.0))
+          .child(actions)
+          .into_any_element(),
+      );
+    }
+
     let hovered_id = editor_state.hovered_group_id.as_ref()?;
     let overlay = editor_state
       .visible_groups
@@ -3655,16 +3936,6 @@ impl GitPage {
       top = px(0.0);
     }
     let file_dirty = editor_state.is_dirty;
-    let selected_status = self
-      .selected_file
-      .as_ref()
-      .and_then(|selected| {
-        self
-          .status_entries
-          .iter()
-          .find(|entry| &entry.path == selected)
-      })
-      .map(|entry| entry.status);
 
     if matches!(
       selected_status,
@@ -3891,6 +4162,7 @@ impl GitPage {
   fn render_commit_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let input = self.commit_input.clone();
+    let has_conflicts = Self::has_conflicted_entries(&self.status_entries);
 
     div()
       .w_full()
@@ -3900,6 +4172,15 @@ impl GitPage {
       .gap_2()
       .border_t_1()
       .border_color(theme.border)
+      .when(has_conflicts, |this| {
+        this.child(
+          Alert::warning(
+            "commit-conflicts-warning",
+            "Resolve all merge conflicts before committing.",
+          )
+          .title("Merge conflicts detected"),
+        )
+      })
       .child(div().w_full().child(Input::new(&input)))
       .child(self.render_commit_button(cx))
   }
@@ -3908,6 +4189,7 @@ impl GitPage {
     let theme = cx.theme();
     let all_staged = self.all_changes_staged();
     let sidebar_enabled = self.selected_repo.is_some() && !self.status_entries.is_empty();
+    let merge_abort_enabled = self.selected_repo.is_some() && self.merge_in_progress;
     let changed_files_count = Self::changed_files_count(&self.status_entries);
     let (label, icon, tooltip) = if all_staged {
       ("Unstage all", IconName::Minus, "Unstage all files")
@@ -3965,6 +4247,18 @@ impl GitPage {
         h_flex()
           .items_center()
           .gap_2()
+          .when(self.merge_in_progress, |this| {
+            this.child(
+              Button::new("abort-merge-button")
+                .label("Abort merge")
+                .icon(IconName::Undo)
+                .with_variant(ButtonVariant::Secondary)
+                .xsmall()
+                .disabled(!merge_abort_enabled)
+                .tooltip("Abort current merge")
+                .on_click(cx.listener(Self::abort_merge_action)),
+            )
+          })
           .when(!is_history_mode, |this| {
             this.child(
               Button::new("stage-all-button")
@@ -4731,6 +5025,43 @@ mod tests {
   }
 
   #[test]
+  fn has_conflicted_entries_detects_conflict_status() {
+    let clean_entries = vec![
+      make_status_entry("src/a.rs", RepoStage::Unstaged),
+      make_status_entry("src/b.rs", RepoStage::Staged),
+    ];
+    assert!(!GitPage::has_conflicted_entries(&clean_entries));
+
+    let mut conflicted_entries = clean_entries;
+    conflicted_entries.push(RepoStatusEntry {
+      path: PathBuf::from("src/conflict.rs"),
+      old_path: None,
+      status: RepoStatusKind::Conflicted,
+      stage: RepoStage::Unstaged,
+    });
+    assert!(GitPage::has_conflicted_entries(&conflicted_entries));
+  }
+
+  #[test]
+  fn should_confirm_stage_all_when_repo_selected_and_conflicts_present() {
+    let repo_path = PathBuf::from("/tmp/reviu-stage-all");
+    let conflicted_entries = vec![RepoStatusEntry {
+      path: PathBuf::from("README.md"),
+      old_path: None,
+      status: RepoStatusKind::Conflicted,
+      stage: RepoStage::Unstaged,
+    }];
+    let clean_entries = vec![make_status_entry("src/a.rs", RepoStage::Unstaged)];
+
+    assert!(GitPage::should_confirm_stage_all(
+      Some(&repo_path),
+      &conflicted_entries
+    ));
+    assert!(!GitPage::should_confirm_stage_all(None, &conflicted_entries));
+    assert!(!GitPage::should_confirm_stage_all(Some(&repo_path), &clean_entries));
+  }
+
+  #[test]
   fn changed_files_tag_visibility_requires_positive_count() {
     assert!(!GitPage::should_show_changed_files_tag(0));
     assert!(GitPage::should_show_changed_files_tag(1));
@@ -4921,6 +5252,7 @@ mod tests {
     create_branch(&repo.path, "feature").expect("create existing target branch");
 
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
     let result = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.handle_command_palette_action(
@@ -5110,6 +5442,7 @@ mod tests {
     create_branch(&repo.path, "feature-copy").expect("create existing target branch");
 
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
     let result = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.handle_command_palette_action(
@@ -5648,7 +5981,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn command_palette_merge_branch_returns_conflict_error(cx: &mut TestAppContext) {
+  async fn command_palette_merge_branch_opens_first_conflicted_file(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-merge-conflict");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "base\n", "initial");
@@ -5688,6 +6021,7 @@ mod tests {
     force_checkout_head(&repo.path);
 
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
     let result = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.handle_command_palette_action(
@@ -5702,12 +6036,27 @@ mod tests {
       )
     });
 
-    let error = result.expect_err("merge should fail on conflicts");
-    let error_text = error.as_ref();
+    assert!(result.is_ok(), "merge conflict should be handled in-editor");
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let selected_file = git_page.read_with(cx, |this, _| this.selected_file.clone());
+    assert_eq!(selected_file.as_deref(), Some(Path::new("README.md")));
+    let commit_input_value =
+      git_page.read_with(cx, |this, cx| this.commit_input.read(cx).value().to_string());
+    assert_eq!(
+      commit_input_value,
+      format!("Merge branch 'feature' into {base_branch}")
+    );
+    let editor_text = git_page.read_with(cx, |this, cx| {
+      let editor = this.editor.as_ref().expect("editor opened").clone();
+      editor.read_with(cx, |editor, cx| {
+        let doc = editor.document().read(cx);
+        doc.slice_to_string(0..doc.len())
+      })
+    });
     assert!(
-      error_text.contains("Action failed: merge has conflicts")
-        || error_text.contains("would be overwritten by merge"),
-      "unexpected error: {error_text}"
+      editor_text.contains("<<<<<<<"),
+      "expected conflict markers in opened editor file: {editor_text}"
     );
     assert_eq!(
       current_branch_status(&repo.path)
@@ -5715,6 +6064,96 @@ mod tests {
         .name,
       base_branch
     );
+  }
+
+  #[gpui::test]
+  async fn abort_merge_action_clears_merge_state(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-abort-merge");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "base\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "main change\n",
+      "main change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "feature change\n",
+      "feature change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base");
+    force_checkout_head(&repo.path);
+
+    let _ = merge_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect_err("merge should fail with conflicts");
+    assert!(
+      is_merge_in_progress(&repo.path).expect("read merge state"),
+      "merge state should be active after conflict"
+    );
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let reload_task = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.reload_status(cx);
+      this.status_task.take().expect("reload status task")
+    });
+    reload_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(git_page.read_with(cx, |this, _| this.merge_in_progress));
+
+    let abort_task = git_page.update_in(cx, |this, window, cx| {
+      this.abort_merge_action(&gpui::ClickEvent::default(), window, cx);
+      this.status_task.take().expect("abort merge task")
+    });
+    abort_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(
+      !is_merge_in_progress(&repo.path).expect("read merge state after abort"),
+      "merge state should be cleaned after abort"
+    );
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read README after abort"),
+      "main change\n"
+    );
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("status after abort merge")
+        .name,
+      base_branch
+    );
+    assert!(!git_page.read_with(cx, |this, _| this.merge_in_progress));
   }
 
   #[gpui::test]
@@ -7104,6 +7543,34 @@ mod tests {
     assert!(!GitPage::restore_uses_delete(RepoStatusKind::Modified));
     assert!(!GitPage::restore_uses_delete(RepoStatusKind::Added));
     assert!(!GitPage::restore_uses_delete(RepoStatusKind::Deleted));
+  }
+
+  #[test]
+  fn stage_requires_confirmation_only_for_conflicted_entries() {
+    assert!(GitPage::stage_requires_confirmation(
+      RepoStatusKind::Conflicted
+    ));
+    assert!(!GitPage::stage_requires_confirmation(
+      RepoStatusKind::Modified
+    ));
+    assert!(!GitPage::stage_requires_confirmation(RepoStatusKind::Added));
+  }
+
+  #[test]
+  fn should_confirm_stage_for_status_only_when_conflicts_are_unresolved() {
+    assert!(GitPage::should_confirm_stage_for_status(
+      Some(RepoStatusKind::Conflicted),
+      true
+    ));
+    assert!(!GitPage::should_confirm_stage_for_status(
+      Some(RepoStatusKind::Conflicted),
+      false
+    ));
+    assert!(!GitPage::should_confirm_stage_for_status(
+      Some(RepoStatusKind::Modified),
+      true
+    ));
+    assert!(!GitPage::should_confirm_stage_for_status(None, true));
   }
 
   #[test]

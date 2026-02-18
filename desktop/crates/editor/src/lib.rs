@@ -13,7 +13,7 @@ pub use actions::*;
 pub use cursor_blink::CursorBlink;
 pub use document::Document;
 pub use editor::{
-  DiffViewMode, Editor, HunkAction, ReviewCommentCodeReferencePreview,
+  ConflictResolution, DiffViewMode, Editor, HunkAction, ReviewCommentCodeReferencePreview,
   ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
   ReviewCommentEditHandler, ReviewCommentLinkHandler,
 };
