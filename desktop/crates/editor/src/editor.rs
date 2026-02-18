@@ -744,6 +744,21 @@ impl Editor {
   }
 
   pub fn set_review_comments(&mut self, comments: Vec<ReviewComment>, cx: &mut Context<Self>) {
+    let previously_collapsed_threads: HashSet<u64> = self
+      .review_comment_threads
+      .iter()
+      .filter_map(|(thread_id, comment_ids)| {
+        if comment_ids
+          .iter()
+          .all(|id| self.collapsed_review_comments.contains(id))
+        {
+          Some(*thread_id)
+        } else {
+          None
+        }
+      })
+      .collect();
+
     self.review_comments = comments;
 
     let comments_by_id: HashMap<u64, &ReviewComment> = self
@@ -769,6 +784,13 @@ impl Editor {
       }
     }
     self.collapsed_review_comments.clear();
+    for thread_id in previously_collapsed_threads {
+      if let Some(comment_ids) = self.review_comment_threads.get(&thread_id) {
+        self
+          .collapsed_review_comments
+          .extend(comment_ids.iter().copied());
+      }
+    }
     self
       .review_comment_markdown_states
       .retain(|id, _| self.review_comments.iter().any(|comment| comment.id == *id));
@@ -7233,6 +7255,100 @@ pub mod tests {
       editor.set_review_comments(Vec::new(), cx);
 
       assert!(editor.review_comment_delete_submitting_id.is_none());
+    });
+  }
+
+  #[gpui::test]
+  fn test_set_review_comments_preserves_collapsed_threads_on_update(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb\nc");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.set_review_comments(
+        vec![
+          ReviewComment {
+            id: 1,
+            in_reply_to_id: None,
+            line: 0,
+            side: ReviewCommentSide::Right,
+            author: Arc::from("alice"),
+            avatar_url: None,
+            line_label: None,
+            body: Arc::from("thread one"),
+            created_at: Arc::from("2026-02-18"),
+          },
+          ReviewComment {
+            id: 2,
+            in_reply_to_id: Some(1),
+            line: 0,
+            side: ReviewCommentSide::Right,
+            author: Arc::from("bob"),
+            avatar_url: None,
+            line_label: None,
+            body: Arc::from("thread one reply"),
+            created_at: Arc::from("2026-02-18"),
+          },
+          ReviewComment {
+            id: 3,
+            in_reply_to_id: None,
+            line: 1,
+            side: ReviewCommentSide::Right,
+            author: Arc::from("charlie"),
+            avatar_url: None,
+            line_label: None,
+            body: Arc::from("thread two"),
+            created_at: Arc::from("2026-02-18"),
+          },
+        ],
+        cx,
+      );
+
+      editor.toggle_review_comment_thread(1, cx);
+      assert!(editor.collapsed_review_comments.contains(&1));
+      assert!(editor.collapsed_review_comments.contains(&2));
+      assert!(!editor.collapsed_review_comments.contains(&3));
+
+      editor.set_review_comments(
+        vec![
+          ReviewComment {
+            id: 1,
+            in_reply_to_id: None,
+            line: 0,
+            side: ReviewCommentSide::Right,
+            author: Arc::from("alice"),
+            avatar_url: None,
+            line_label: None,
+            body: Arc::from("thread one updated"),
+            created_at: Arc::from("2026-02-18"),
+          },
+          ReviewComment {
+            id: 2,
+            in_reply_to_id: Some(1),
+            line: 0,
+            side: ReviewCommentSide::Right,
+            author: Arc::from("bob"),
+            avatar_url: None,
+            line_label: None,
+            body: Arc::from("thread one reply"),
+            created_at: Arc::from("2026-02-18"),
+          },
+          ReviewComment {
+            id: 3,
+            in_reply_to_id: None,
+            line: 1,
+            side: ReviewCommentSide::Right,
+            author: Arc::from("charlie"),
+            avatar_url: None,
+            line_label: None,
+            body: Arc::from("thread two"),
+            created_at: Arc::from("2026-02-18"),
+          },
+        ],
+        cx,
+      );
+
+      assert!(editor.collapsed_review_comments.contains(&1));
+      assert!(editor.collapsed_review_comments.contains(&2));
+      assert!(!editor.collapsed_review_comments.contains(&3));
     });
   }
 
