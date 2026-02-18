@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
-use git2::{BranchType, CherrypickOptions, Repository, Signature};
+use git2::{BranchType, CherrypickOptions, Repository, RepositoryState, ResetType, Signature};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BranchKind {
@@ -231,6 +231,32 @@ pub fn merge_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
   }
 
   bail!("unsupported merge analysis")
+}
+
+pub fn is_merge_in_progress(repo_root: &Path) -> Result<bool> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  Ok(repo.state() == RepositoryState::Merge)
+}
+
+pub fn abort_merge(repo_root: &Path) -> Result<()> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  if repo.state() != RepositoryState::Merge {
+    return Ok(());
+  }
+
+  let head = repo
+    .head()
+    .and_then(|head| head.peel_to_commit())
+    .context("read HEAD commit")?;
+  let mut checkout = CheckoutBuilder::new();
+  checkout.force();
+  repo
+    .reset(head.as_object(), ResetType::Hard, Some(&mut checkout))
+    .context("reset merge state to HEAD")?;
+  repo.cleanup_state().context("cleanup merge state")?;
+  Ok(())
 }
 
 pub fn rebase_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
@@ -763,6 +789,129 @@ mod tests {
       error.to_string().contains("merge has conflicts"),
       "unexpected error: {error:?}"
     );
+  }
+
+  #[test]
+  fn is_merge_in_progress_reports_true_when_merge_conflicts_exist() {
+    let repo = TempRepo::init("branch-merge-state-conflict");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "base\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "main change\n",
+      "main change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "feature change\n",
+      "feature change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    force_checkout_head(&repo.path);
+
+    let error = merge_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect_err("merge should fail with conflicts");
+    assert!(
+      error.to_string().contains("merge has conflicts"),
+      "unexpected error: {error:?}"
+    );
+    assert!(
+      is_merge_in_progress(&repo.path).expect("read merge state"),
+      "merge state should be active after conflict"
+    );
+  }
+
+  #[test]
+  fn abort_merge_clears_merge_state_and_conflict_markers() {
+    let repo = TempRepo::init("branch-abort-merge");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "base\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "main change\n",
+      "main change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "feature change\n",
+      "feature change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    force_checkout_head(&repo.path);
+
+    let _ = merge_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect_err("merge should fail with conflicts");
+    assert!(
+      is_merge_in_progress(&repo.path).expect("read merge state"),
+      "merge state should be active after conflict"
+    );
+
+    abort_merge(&repo.path).expect("abort merge");
+
+    assert!(
+      !is_merge_in_progress(&repo.path).expect("read merge state after abort"),
+      "merge state should be cleaned after abort"
+    );
+    let readme = std::fs::read_to_string(repo.path.join("README.md")).expect("read README");
+    assert!(
+      !readme.contains("<<<<<<<"),
+      "merge markers should be removed after abort: {readme}"
+    );
+    assert_eq!(readme, "main change\n");
   }
 
   #[test]

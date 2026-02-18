@@ -213,6 +213,111 @@ fn line_is_markdown_link_to_url(trimmed: &str, url: &str) -> bool {
   link_target == url
 }
 
+fn is_conflict_start_marker(line: &str) -> bool {
+  line.starts_with("<<<<<<<")
+}
+
+fn is_conflict_base_marker(line: &str) -> bool {
+  line.starts_with("|||||||")
+}
+
+fn is_conflict_divider_marker(line: &str) -> bool {
+  line.starts_with("=======")
+}
+
+fn is_conflict_end_marker(line: &str) -> bool {
+  line.starts_with(">>>>>>>")
+}
+
+fn conflict_regions_from_lines(lines: &[String]) -> Vec<ConflictRegion> {
+  let mut regions = Vec::new();
+  let mut index = 0;
+
+  while index < lines.len() {
+    if !is_conflict_start_marker(lines[index].as_str()) {
+      index += 1;
+      continue;
+    }
+
+    let start_line = index;
+    let mut scan = index + 1;
+    let mut base_marker_line = None;
+    let mut divider_line = None;
+    let mut resolved = false;
+
+    while scan < lines.len() {
+      let line = lines[scan].as_str();
+      if divider_line.is_none() {
+        if is_conflict_start_marker(line) {
+          break;
+        }
+        if base_marker_line.is_none() && is_conflict_base_marker(line) {
+          base_marker_line = Some(scan);
+          scan += 1;
+          continue;
+        }
+        if is_conflict_divider_marker(line) {
+          divider_line = Some(scan);
+          scan += 1;
+          continue;
+        }
+      } else if is_conflict_end_marker(line) {
+        let divider = divider_line.expect("divider line is set");
+        let current_end = base_marker_line.unwrap_or(divider);
+        regions.push(ConflictRegion {
+          start_line,
+          current_range: (start_line + 1)..current_end,
+          incoming_range: (divider + 1)..scan,
+          replace_end_line: scan + 1,
+        });
+        index = scan + 1;
+        resolved = true;
+        break;
+      }
+
+      scan += 1;
+    }
+
+    if !resolved {
+      index = start_line + 1;
+    }
+  }
+
+  regions
+}
+
+fn conflict_line_kinds_from_regions(
+  regions: &[ConflictRegion],
+) -> HashMap<usize, ConflictLineKind> {
+  let mut kinds = HashMap::new();
+
+  for region in regions {
+    kinds.insert(region.start_line, ConflictLineKind::CurrentMarker);
+
+    for doc_line in region.current_range.clone() {
+      kinds.insert(doc_line, ConflictLineKind::Current);
+    }
+
+    if region.incoming_range.start > 0 {
+      kinds.insert(
+        region.incoming_range.start.saturating_sub(1),
+        ConflictLineKind::Divider,
+      );
+    }
+
+    for doc_line in region.incoming_range.clone() {
+      kinds.insert(doc_line, ConflictLineKind::Incoming);
+    }
+
+    kinds.insert(
+      region.replace_end_line.saturating_sub(1),
+      ConflictLineKind::IncomingMarker,
+    );
+  }
+
+  kinds
+}
+
 fn editor_actions_enabled(
   find_input_focused: bool,
   review_comment_edit_input_focused: bool,
@@ -279,6 +384,7 @@ pub struct Editor {
   pub projection: Option<Arc<Projection>>,
   pub visible_groups: Vec<GroupOverlay>,
   pub hovered_group_id: Option<Arc<str>>,
+  pub hovered_conflict_start_line: Option<usize>,
   pub last_mouse_position: Option<Point<Pixels>>,
   pub expanded_gaps: HashMap<GapId, GapReveal>,
   pub workdir_path: PathBuf,
@@ -406,6 +512,22 @@ pub enum HunkAction {
   Restore,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConflictLineKind {
+  CurrentMarker,
+  Current,
+  Divider,
+  Incoming,
+  IncomingMarker,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConflictResolution {
+  Current,
+  Incoming,
+  Both,
+}
+
 #[derive(Clone, Debug)]
 struct GroupToken {
   state: HunkState,
@@ -417,6 +539,20 @@ struct GroupToken {
 struct GitJob {
   token: GroupToken,
   action: HunkAction,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConflictRegion {
+  start_line: usize,
+  current_range: Range<usize>,
+  incoming_range: Range<usize>,
+  replace_end_line: usize,
+}
+
+impl ConflictRegion {
+  fn contains_doc_line(&self, doc_line: usize) -> bool {
+    self.start_line <= doc_line && doc_line < self.replace_end_line
+  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -555,6 +691,7 @@ impl Editor {
       projection: None,
       visible_groups: Vec::new(),
       hovered_group_id: None,
+      hovered_conflict_start_line: None,
       last_mouse_position: None,
       expanded_gaps: HashMap::new(),
       last_highlights_version: 0,
@@ -693,6 +830,7 @@ impl Editor {
     self.virtual_line_layouts.clear();
     self.expanded_gaps.clear();
     self.hovered_group_id = None;
+    self.hovered_conflict_start_line = None;
     self.last_mouse_position = None;
     self.scroll_offset_y = 0.0;
   }
@@ -2245,12 +2383,13 @@ impl Editor {
 
   fn clear_hovered_hunk_for_overlay(&mut self, cx: &mut Context<Self>) {
     let had_hover = self.hovered_group_id.take().is_some();
+    let had_conflict_hover = self.hovered_conflict_start_line.take().is_some();
     let had_comment_create_hover = self
       .hovered_review_comment_create_display_line
       .take()
       .is_some();
     self.last_mouse_position = None;
-    if had_hover || had_comment_create_hover {
+    if had_hover || had_conflict_hover || had_comment_create_hover {
       cx.notify();
     }
   }
@@ -4437,6 +4576,7 @@ impl Editor {
     self.display_selection = None;
     self.marked_range = None;
     self.hovered_group_id = None;
+    self.hovered_conflict_start_line = None;
     self.last_mouse_position = None;
     self.git_jobs.clear();
     self.git_op_in_flight = false;
@@ -4506,6 +4646,162 @@ impl Editor {
       } => id.as_ref() == group_id.as_ref(),
       _ => false,
     })
+  }
+
+  fn conflict_regions(&self, cx: &App) -> Vec<ConflictRegion> {
+    let document = self.document.read(cx);
+    let line_count = document.len_lines();
+    if line_count == 0 {
+      return Vec::new();
+    }
+
+    let mut lines = Vec::with_capacity(line_count);
+    for line_idx in 0..line_count {
+      lines.push(
+        document
+          .line_content(line_idx)
+          .map(|line| line.into_owned())
+          .unwrap_or_default(),
+      );
+    }
+
+    conflict_regions_from_lines(&lines)
+  }
+
+  pub(crate) fn conflict_line_kinds(&self, cx: &App) -> HashMap<usize, ConflictLineKind> {
+    let regions = self.conflict_regions(cx);
+    conflict_line_kinds_from_regions(&regions)
+  }
+
+  pub fn has_unresolved_conflict_markers(&self, cx: &App) -> bool {
+    !self.conflict_regions(cx).is_empty()
+  }
+
+  pub(crate) fn conflict_start_line_for_display_line(
+    &self,
+    display_line: usize,
+    cx: &App,
+  ) -> Option<usize> {
+    let doc_line = self.display_to_doc_line(display_line)?;
+    self
+      .conflict_regions(cx)
+      .into_iter()
+      .find(|region| region.contains_doc_line(doc_line))
+      .map(|region| region.start_line)
+  }
+
+  pub fn first_display_line_for_conflict(&self, conflict_start_line: usize) -> Option<usize> {
+    self.doc_to_display_line(conflict_start_line)
+  }
+
+  pub fn resolve_conflict_region(
+    &mut self,
+    conflict_start_line: usize,
+    resolution: ConflictResolution,
+    cx: &mut Context<Self>,
+  ) {
+    if self.is_read_only {
+      return;
+    }
+
+    let Some(region) = self
+      .conflict_regions(cx)
+      .into_iter()
+      .find(|region| region.start_line == conflict_start_line)
+    else {
+      return;
+    };
+
+    let (range, mut replacement, start_line, end_line, doc_line_count) = {
+      let document = self.document.read(cx);
+      let line_count = document.len_lines();
+      let start_offset = document.line_to_char(region.start_line);
+      let end_offset = if region.replace_end_line < line_count {
+        document.line_to_char(region.replace_end_line)
+      } else {
+        document.len()
+      };
+
+      let mut replacement_lines = Vec::new();
+      let mut append_lines = |line_range: Range<usize>| {
+        for line_idx in line_range {
+          replacement_lines.push(
+            document
+              .line_content(line_idx)
+              .map(|line| line.into_owned())
+              .unwrap_or_default(),
+          );
+        }
+      };
+
+      match resolution {
+        ConflictResolution::Current => append_lines(region.current_range.clone()),
+        ConflictResolution::Incoming => append_lines(region.incoming_range.clone()),
+        ConflictResolution::Both => {
+          append_lines(region.current_range.clone());
+          append_lines(region.incoming_range.clone());
+        }
+      }
+
+      (
+        start_offset..end_offset,
+        replacement_lines.join("\n"),
+        region.start_line,
+        region.replace_end_line.saturating_sub(1),
+        line_count,
+      )
+    };
+
+    if !replacement.is_empty() && region.replace_end_line < doc_line_count {
+      replacement.push('\n');
+    }
+
+    let selection_before = self.clamp_range_to_doc_len(self.selected_range.clone(), cx);
+    let line_height = self.measured_editor_line_height();
+    let total_display_lines = self.display_line_count(doc_line_count);
+    let display_viewport = self.viewport_range(line_height, total_display_lines);
+    let doc_viewport = self.doc_range_for_display_viewport(display_viewport);
+    let replacement_line_count = replacement.matches('\n').count();
+    let force_end_line = start_line
+      .saturating_add(replacement_line_count)
+      .max(end_line);
+    let force_range = start_line..(force_end_line + 1);
+
+    self.maybe_optimistic_unstage_for_edit(start_line, end_line, cx);
+
+    let transaction_id = self.document.update(cx, |doc, cx| {
+      let id = doc.buffer.transaction(Instant::now(), |buffer, tx| {
+        buffer.replace(tx, range.clone(), &replacement);
+      });
+      doc.schedule_recompute_highlights(cx);
+      doc.schedule_viewport_highlights(
+        doc_viewport.clone(),
+        Some(force_range.clone()),
+        crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
+        cx,
+      );
+      cx.notify();
+      id
+    });
+
+    self.invalidate_lines_from(start_line);
+    self.display_selection = None;
+    self.marked_range = None;
+    self.selection_reversed = false;
+
+    let doc_len_after = self.document.read(cx).len();
+    let new_cursor = (range.start + replacement.chars().count()).min(doc_len_after);
+    self.selected_range = new_cursor..new_cursor;
+
+    let selection_after = self.selected_range.clone();
+    self.record_transaction(transaction_id, selection_before, selection_after);
+
+    self.hovered_group_id = None;
+    self.hovered_conflict_start_line = None;
+    self.last_mouse_position = None;
+    self.is_dirty = true;
+    self.schedule_diff_recompute(cx);
+    cx.notify();
   }
 
   pub fn display_to_doc_line(&self, display_line: usize) -> Option<usize> {
@@ -5979,6 +6275,7 @@ impl Editor {
   ) {
     if !position_map.bounds.contains(&event.position) {
       let had_hovered_group = self.hovered_group_id.take().is_some();
+      let had_hovered_conflict = self.hovered_conflict_start_line.take().is_some();
       let in_adjacent_gutter_band = event.position.y >= position_map.bounds.top()
         && event.position.y <= position_map.bounds.bottom()
         && event.position.x >= position_map.bounds.left() - self.gutter_width()
@@ -5991,7 +6288,7 @@ impl Editor {
           .take()
           .is_some()
       };
-      if had_hovered_group || had_review_comment_create_hover {
+      if had_hovered_group || had_hovered_conflict || had_review_comment_create_hover {
         cx.notify();
       }
       return;
@@ -6001,9 +6298,19 @@ impl Editor {
     self.update_review_comment_create_drag_from_display_line(display_line, cx);
 
     let hovered = display_line.and_then(|line| self.group_id_for_modified_display_line(line));
+    let hovered_conflict =
+      display_line.and_then(|line| self.conflict_start_line_for_display_line(line, cx));
+    let mut did_change = false;
 
     if self.hovered_group_id.as_deref() != hovered.as_deref() {
       self.hovered_group_id = hovered;
+      did_change = true;
+    }
+    if self.hovered_conflict_start_line != hovered_conflict {
+      self.hovered_conflict_start_line = hovered_conflict;
+      did_change = true;
+    }
+    if did_change {
       cx.notify();
     }
   }
@@ -6698,6 +7005,154 @@ pub mod tests {
     assert!(!line_is_markdown_link_to_url(url, url));
   }
 
+  #[test]
+  fn conflict_regions_from_lines_parses_standard_markers() {
+    let lines = vec![
+      "before",
+      "<<<<<<< HEAD",
+      "ours",
+      "=======",
+      "theirs",
+      ">>>>>>> branch",
+      "after",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect::<Vec<_>>();
+
+    let regions = conflict_regions_from_lines(&lines);
+    assert_eq!(regions.len(), 1);
+    let region = &regions[0];
+    assert_eq!(region.start_line, 1);
+    assert_eq!(region.current_range, 2..3);
+    assert_eq!(region.incoming_range, 4..5);
+    assert_eq!(region.replace_end_line, 6);
+  }
+
+  #[test]
+  fn conflict_regions_from_lines_parses_diff3_markers() {
+    let lines = vec![
+      "before",
+      "<<<<<<< HEAD",
+      "ours",
+      "||||||| base",
+      "base",
+      "=======",
+      "theirs",
+      ">>>>>>> branch",
+      "after",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect::<Vec<_>>();
+
+    let regions = conflict_regions_from_lines(&lines);
+    assert_eq!(regions.len(), 1);
+    let region = &regions[0];
+    assert_eq!(region.start_line, 1);
+    assert_eq!(region.current_range, 2..3);
+    assert_eq!(region.incoming_range, 6..7);
+    assert_eq!(region.replace_end_line, 8);
+  }
+
+  #[test]
+  fn conflict_line_kinds_from_regions_marks_markers_and_divider() {
+    let lines = vec!["<<<<<<< HEAD", "ours", "=======", "theirs", ">>>>>>> main"]
+      .into_iter()
+      .map(String::from)
+      .collect::<Vec<_>>();
+
+    let regions = conflict_regions_from_lines(&lines);
+    let kinds = conflict_line_kinds_from_regions(&regions);
+
+    assert_eq!(kinds.get(&0), Some(&ConflictLineKind::CurrentMarker));
+    assert_eq!(kinds.get(&1), Some(&ConflictLineKind::Current));
+    assert_eq!(kinds.get(&2), Some(&ConflictLineKind::Divider));
+    assert_eq!(kinds.get(&3), Some(&ConflictLineKind::Incoming));
+    assert_eq!(kinds.get(&4), Some(&ConflictLineKind::IncomingMarker));
+  }
+
+  #[gpui::test]
+  fn has_unresolved_conflict_markers_detects_conflict_markers(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(
+      cx.clone(),
+      "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> main\n",
+    );
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      assert!(editor.has_unresolved_conflict_markers(cx));
+    });
+  }
+
+  #[gpui::test]
+  fn has_unresolved_conflict_markers_returns_false_when_clean(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "resolved\ncontent\n");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      assert!(!editor.has_unresolved_conflict_markers(cx));
+    });
+  }
+
+  #[gpui::test]
+  fn resolve_conflict_region_accept_current(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(
+      cx.clone(),
+      "pre\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\npost\n",
+    );
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let conflict_start_line = editor
+        .conflict_regions(cx)
+        .into_iter()
+        .next()
+        .expect("conflict region")
+        .start_line;
+      editor.resolve_conflict_region(conflict_start_line, ConflictResolution::Current, cx);
+    });
+
+    assert_eq!(ctx.text(), "pre\nours\npost\n");
+  }
+
+  #[gpui::test]
+  fn resolve_conflict_region_accept_incoming(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(
+      cx.clone(),
+      "pre\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\npost\n",
+    );
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let conflict_start_line = editor
+        .conflict_regions(cx)
+        .into_iter()
+        .next()
+        .expect("conflict region")
+        .start_line;
+      editor.resolve_conflict_region(conflict_start_line, ConflictResolution::Incoming, cx);
+    });
+
+    assert_eq!(ctx.text(), "pre\ntheirs\npost\n");
+  }
+
+  #[gpui::test]
+  fn resolve_conflict_region_accept_both(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(
+      cx.clone(),
+      "pre\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\npost\n",
+    );
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let conflict_start_line = editor
+        .conflict_regions(cx)
+        .into_iter()
+        .next()
+        .expect("conflict region")
+        .start_line;
+      editor.resolve_conflict_region(conflict_start_line, ConflictResolution::Both, cx);
+    });
+
+    assert_eq!(ctx.text(), "pre\nours\ntheirs\npost\n");
+  }
+
   #[gpui::test]
   fn review_comment_body_segments_inserts_preview_between_markdown_lines(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "line");
@@ -6942,6 +7397,7 @@ pub mod tests {
           projection: None,
           visible_groups: Vec::new(),
           hovered_group_id: None,
+          hovered_conflict_start_line: None,
           last_mouse_position: None,
           expanded_gaps: HashMap::new(),
           workdir_path: PathBuf::new(),

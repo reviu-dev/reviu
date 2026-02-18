@@ -10,7 +10,7 @@ use std::{collections::HashMap, sync::Arc};
 use git::DiffLineKind;
 
 use crate::{
-  editor::{Editor, ScrollAxis},
+  editor::{ConflictLineKind, Editor, ScrollAxis},
   projection::{ChangeKind, DisplayLine, HunkState, ReviewCommentBackground, ReviewCommentSide},
 };
 
@@ -22,6 +22,7 @@ const FRACTIONAL_SCROLL_EPSILON: f32 = 0.001;
 const SCROLL_AXIS_RATIO: f32 = 1.1;
 const SCROLL_AXIS_SWITCH_RATIO: f32 = 1.4;
 const SCROLL_AXIS_TIMEOUT_MS: u64 = 150;
+const CONFLICT_MARKER_ALPHA_MULTIPLIER: f32 = 1.35;
 
 fn has_fractional_scroll(scroll_offset: f32) -> bool {
   (scroll_offset - scroll_offset.floor()) > FRACTIONAL_SCROLL_EPSILON
@@ -34,6 +35,73 @@ fn line_y(
   scroll_offset: f32,
 ) -> Pixels {
   bounds_top + line_height * (display_line as f32 - scroll_offset)
+}
+
+fn conflict_doc_line(display_line: &DisplayLine) -> Option<usize> {
+  match display_line {
+    DisplayLine::Doc { doc_line, .. } | DisplayLine::Modified { doc_line, .. } => Some(*doc_line),
+    _ => None,
+  }
+}
+
+fn incoming_conflict_background(theme: &ui::Theme) -> gpui::Hsla {
+  if theme.is_dark {
+    gpui::Hsla {
+      h: 212.0 / 360.0,
+      s: 0.44,
+      l: 0.24,
+      a: 0.6,
+    }
+  } else {
+    gpui::Hsla {
+      h: 212.0 / 360.0,
+      s: 0.42,
+      l: 0.9,
+      a: 0.72,
+    }
+  }
+}
+
+fn conflict_background(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
+  match kind {
+    ConflictLineKind::Current => Some(theme.diff_added_background()),
+    ConflictLineKind::CurrentMarker => {
+      let mut color = theme.diff_added_background();
+      color.a = (color.a * CONFLICT_MARKER_ALPHA_MULTIPLIER).min(1.0);
+      Some(color)
+    }
+    ConflictLineKind::Divider => None,
+    ConflictLineKind::Incoming => Some(incoming_conflict_background(theme)),
+    ConflictLineKind::IncomingMarker => {
+      let mut color = incoming_conflict_background(theme);
+      color.a = (color.a * CONFLICT_MARKER_ALPHA_MULTIPLIER).min(1.0);
+      Some(color)
+    }
+  }
+}
+
+fn conflict_stripe_color(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
+  match kind {
+    ConflictLineKind::Current | ConflictLineKind::CurrentMarker => Some(theme.diff_gutter_added()),
+    ConflictLineKind::Divider => None,
+    ConflictLineKind::Incoming | ConflictLineKind::IncomingMarker => {
+      if theme.is_dark {
+        Some(gpui::Hsla {
+          h: 212.0 / 360.0,
+          s: 0.96,
+          l: 0.58,
+          a: 1.0,
+        })
+      } else {
+        Some(gpui::Hsla {
+          h: 212.0 / 360.0,
+          s: 0.95,
+          l: 0.5,
+          a: 1.0,
+        })
+      }
+    }
+  }
 }
 
 pub struct GutterElement {
@@ -242,6 +310,7 @@ impl Element for GutterElement {
       let added_staged_bg = theme.diff_added_staged_background();
       let removed_bg = theme.diff_removed_background();
       let removed_staged_bg = theme.diff_removed_staged_background();
+      let conflict_line_kinds = editor.conflict_line_kinds(cx);
       let stripe_added = theme.diff_gutter_added();
       let stripe_removed = theme.diff_gutter_removed();
       let stripe_modified = theme.diff_gutter_modified();
@@ -338,8 +407,15 @@ impl Element for GutterElement {
           .map(&is_blank_for_view)
           .unwrap_or(false);
 
+        let conflict_kind = display_line
+          .as_ref()
+          .and_then(conflict_doc_line)
+          .and_then(|doc_line| conflict_line_kinds.get(&doc_line))
+          .copied();
         let background = if is_blank {
           None
+        } else if let Some(conflict_kind) = conflict_kind {
+          conflict_background(&theme, conflict_kind)
         } else {
           match &display_line {
             Some(DisplayLine::Doc {
@@ -411,21 +487,28 @@ impl Element for GutterElement {
         }
 
         let group_id: Option<Arc<str>> = display_line.as_ref().and_then(&group_id_for_line);
+        if show_stripes {
+          let stripe_color = match conflict_kind {
+            Some(conflict_kind) => conflict_stripe_color(&theme, conflict_kind),
+            None => group_id.as_ref().and_then(|group_id| {
+              group_kinds.get(group_id).map(|kind| match kind {
+                GroupKind::Added => stripe_added,
+                GroupKind::Removed => stripe_removed,
+                GroupKind::Mixed => stripe_modified,
+              })
+            }),
+          };
 
-        if let Some(group_id) = group_id {
-          if show_stripes && let Some(kind) = group_kinds.get(&group_id) {
-            let stripe_color = match kind {
-              GroupKind::Added => stripe_added,
-              GroupKind::Removed => stripe_removed,
-              GroupKind::Mixed => stripe_modified,
-            };
+          if let Some(stripe_color) = stripe_color {
             let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
             stripe_quads.push(fill(
               Bounds::new(point(bounds.left(), y), size(px(4.0), line_height)),
               stripe_color,
             ));
           }
+        }
 
+        if let Some(group_id) = group_id {
           if let (Some(projection), Some((top_color, bottom_color))) =
             (projection.as_ref(), group_border_colors.get(&group_id))
           {
@@ -757,5 +840,42 @@ impl Element for GutterElement {
         )
         .ok();
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn conflict_stripe_color_divider_is_none() {
+    let theme = ui::Theme::dark();
+    assert_eq!(
+      conflict_stripe_color(&theme, ConflictLineKind::Divider),
+      None
+    );
+  }
+
+  #[test]
+  fn conflict_stripe_color_current_matches_classic_added_stripe() {
+    let theme = ui::Theme::dark();
+    assert_eq!(
+      conflict_stripe_color(&theme, ConflictLineKind::Current),
+      Some(theme.diff_gutter_added())
+    );
+    assert_eq!(
+      conflict_stripe_color(&theme, ConflictLineKind::CurrentMarker),
+      Some(theme.diff_gutter_added())
+    );
+  }
+
+  #[test]
+  fn conflict_stripe_color_incoming_is_fully_opaque() {
+    let dark = ui::Theme::dark();
+    let light = ui::Theme::light();
+    let dark_color = conflict_stripe_color(&dark, ConflictLineKind::Incoming).expect("dark");
+    let light_color = conflict_stripe_color(&light, ConflictLineKind::Incoming).expect("light");
+    assert_eq!(dark_color.a, 1.0);
+    assert_eq!(light_color.a, 1.0);
   }
 }

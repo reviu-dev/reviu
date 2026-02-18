@@ -18,7 +18,8 @@ use git::DiffLineKind;
 use crate::{
   document::Document,
   editor::{
-    DEFAULT_MAX_LINE_WIDTH, DisplayCursor, Editor, GroupOverlay, SCROLL_PADDING, ScrollAxis,
+    ConflictLineKind, DEFAULT_MAX_LINE_WIDTH, DisplayCursor, Editor, GroupOverlay, SCROLL_PADDING,
+    ScrollAxis,
   },
   projection::{
     ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
@@ -46,6 +47,7 @@ const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
 const DIAGONAL_STRIPE_WIDTH: f32 = 1.0;
 const INDENT_GUIDE_BORDER_WIDTH: f32 = 1.0;
 const INDENT_RAINBOW_BLOCK_COLUMNS: usize = 2;
+const CONFLICT_MARKER_ALPHA_MULTIPLIER: f32 = 1.35;
 const EDITOR_CHAR_WIDTH_SAMPLE: &str =
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
 
@@ -114,6 +116,49 @@ fn line_y(
   scroll_offset: f32,
 ) -> Pixels {
   bounds_top + line_height * (display_line as f32 - scroll_offset)
+}
+
+fn conflict_doc_line(display_line: &DisplayLine) -> Option<usize> {
+  match display_line {
+    DisplayLine::Doc { doc_line, .. } | DisplayLine::Modified { doc_line, .. } => Some(*doc_line),
+    _ => None,
+  }
+}
+
+fn incoming_conflict_background(theme: &Theme) -> gpui::Hsla {
+  if theme.is_dark {
+    gpui::Hsla {
+      h: 212.0 / 360.0,
+      s: 0.44,
+      l: 0.24,
+      a: 0.6,
+    }
+  } else {
+    gpui::Hsla {
+      h: 212.0 / 360.0,
+      s: 0.42,
+      l: 0.9,
+      a: 0.72,
+    }
+  }
+}
+
+fn conflict_background(theme: &Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
+  match kind {
+    ConflictLineKind::Current => Some(theme.diff_added_background()),
+    ConflictLineKind::CurrentMarker => {
+      let mut color = theme.diff_added_background();
+      color.a = (color.a * CONFLICT_MARKER_ALPHA_MULTIPLIER).min(1.0);
+      Some(color)
+    }
+    ConflictLineKind::Divider => None,
+    ConflictLineKind::Incoming => Some(incoming_conflict_background(theme)),
+    ConflictLineKind::IncomingMarker => {
+      let mut color = incoming_conflict_background(theme);
+      color.a = (color.a * CONFLICT_MARKER_ALPHA_MULTIPLIER).min(1.0);
+      Some(color)
+    }
+  }
 }
 
 /// Encapsulates layout information for mouse position -> text offset conversion
@@ -1236,6 +1281,7 @@ impl Element for EditorElement {
     let added_staged_bg = theme.diff_added_staged_background();
     let removed_bg = theme.diff_removed_background();
     let removed_staged_bg = theme.diff_removed_staged_background();
+    let conflict_line_kinds = self.editor.read(cx).conflict_line_kinds(cx);
     let mut group_border_colors: HashMap<Arc<str>, (gpui::Hsla, gpui::Hsla)> = HashMap::new();
     if let Some(projection) = projection.as_ref() {
       for (group_id, group) in &projection.groups {
@@ -1318,57 +1364,68 @@ impl Element for EditorElement {
         }
       }
 
-      let background = match display_line {
-        DisplayLine::Doc {
-          change: Some(ChangeKind::Added),
-          secondary,
-          ..
-        } if !matches!(self.diff_view, DiffElementView::SplitLeft) => Some(if *secondary {
-          added_staged_bg
+      let conflict_kind = conflict_doc_line(display_line)
+        .and_then(|doc_line| conflict_line_kinds.get(&doc_line))
+        .copied();
+      let background = if let Some(conflict_kind) = conflict_kind {
+        if self.line_visibility(display_line) == LineVisibility::Blank {
+          None
         } else {
-          added_bg
-        }),
-        DisplayLine::Removed { secondary, .. }
-          if !matches!(self.diff_view, DiffElementView::SplitRight) =>
-        {
-          Some(if *secondary {
-            removed_staged_bg
-          } else {
-            removed_bg
-          })
+          conflict_background(&theme, conflict_kind)
         }
-        DisplayLine::Modified { secondary, .. } => match self.diff_view {
-          DiffElementView::SplitLeft => Some(if *secondary {
-            removed_staged_bg
-          } else {
-            removed_bg
-          }),
-          DiffElementView::SplitRight => Some(if *secondary {
+      } else {
+        match display_line {
+          DisplayLine::Doc {
+            change: Some(ChangeKind::Added),
+            secondary,
+            ..
+          } if !matches!(self.diff_view, DiffElementView::SplitLeft) => Some(if *secondary {
             added_staged_bg
           } else {
             added_bg
           }),
-          DiffElementView::Inline => None,
-        },
-        DisplayLine::ReviewComment {
-          background: Some(ReviewCommentBackground::Added),
-          secondary,
-          ..
-        } if !matches!(self.diff_view, DiffElementView::SplitLeft) => Some(if *secondary {
-          added_staged_bg
-        } else {
-          added_bg
-        }),
-        DisplayLine::ReviewComment {
-          background: Some(ReviewCommentBackground::Removed),
-          secondary,
-          ..
-        } if !matches!(self.diff_view, DiffElementView::SplitRight) => Some(if *secondary {
-          removed_staged_bg
-        } else {
-          removed_bg
-        }),
-        _ => None,
+          DisplayLine::Removed { secondary, .. }
+            if !matches!(self.diff_view, DiffElementView::SplitRight) =>
+          {
+            Some(if *secondary {
+              removed_staged_bg
+            } else {
+              removed_bg
+            })
+          }
+          DisplayLine::Modified { secondary, .. } => match self.diff_view {
+            DiffElementView::SplitLeft => Some(if *secondary {
+              removed_staged_bg
+            } else {
+              removed_bg
+            }),
+            DiffElementView::SplitRight => Some(if *secondary {
+              added_staged_bg
+            } else {
+              added_bg
+            }),
+            DiffElementView::Inline => None,
+          },
+          DisplayLine::ReviewComment {
+            background: Some(ReviewCommentBackground::Added),
+            secondary,
+            ..
+          } if !matches!(self.diff_view, DiffElementView::SplitLeft) => Some(if *secondary {
+            added_staged_bg
+          } else {
+            added_bg
+          }),
+          DisplayLine::ReviewComment {
+            background: Some(ReviewCommentBackground::Removed),
+            secondary,
+            ..
+          } if !matches!(self.diff_view, DiffElementView::SplitRight) => Some(if *secondary {
+            removed_staged_bg
+          } else {
+            removed_bg
+          }),
+          _ => None,
+        }
       };
 
       if let Some(color) = background {
@@ -1581,8 +1638,17 @@ impl Element for EditorElement {
           display_line = viewport.end.saturating_sub(1);
         }
         let hovered = editor.group_id_for_modified_display_line(display_line);
+        let hovered_conflict = editor.conflict_start_line_for_display_line(display_line, cx);
+        let mut did_change = false;
         if editor.hovered_group_id.as_deref() != hovered.as_deref() {
           editor.hovered_group_id = hovered;
+          did_change = true;
+        }
+        if editor.hovered_conflict_start_line != hovered_conflict {
+          editor.hovered_conflict_start_line = hovered_conflict;
+          did_change = true;
+        }
+        if did_change {
           cx.notify();
         }
       });
