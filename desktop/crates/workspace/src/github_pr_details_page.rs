@@ -7,8 +7,8 @@ use std::{
 
 use editor::{
   CloseFind, DiffViewMode, Editor, Find, ReviewComment, ReviewCommentCreateHandler,
-  ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentEditHandler,
-  ReviewCommentLinkHandler, ReviewCommentSide,
+  ReviewCommentCodeReferencePreview, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
+  ReviewCommentEditHandler, ReviewCommentLinkHandler, ReviewCommentSide,
 };
 use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
@@ -153,6 +153,156 @@ fn file_for_review_comment_path(
     .cloned()
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct GithubBlobLineReference {
+  url: String,
+  owner: String,
+  repo: String,
+  reference: String,
+  path: String,
+  start_line: usize,
+  end_line: usize,
+}
+
+fn extract_url_token_candidates(text: &str) -> Vec<String> {
+  let mut tokens = Vec::new();
+  let mut remaining = text;
+  loop {
+    let https_idx = remaining.find("https://");
+    let http_idx = remaining.find("http://");
+    let start = match (https_idx, http_idx) {
+      (None, None) => break,
+      (Some(https), None) => https,
+      (None, Some(http)) => http,
+      (Some(https), Some(http)) => https.min(http),
+    };
+    remaining = &remaining[start..];
+
+    let end = remaining
+      .find(char::is_whitespace)
+      .unwrap_or(remaining.len());
+    let token = remaining[..end]
+      .trim_matches(|ch: char| {
+        matches!(ch, '(' | ')' | '[' | ']' | '<' | '>' | '"' | '\'' | ',' | ';')
+      })
+      .trim_end_matches('.')
+      .to_string();
+    if !token.is_empty() {
+      tokens.push(token);
+    }
+    remaining = &remaining[end..];
+  }
+  tokens
+}
+
+fn parse_github_blob_line_reference(url: &str) -> Option<GithubBlobLineReference> {
+  let trimmed = url.trim();
+  let rest = trimmed
+    .strip_prefix("https://github.com/")
+    .or_else(|| trimmed.strip_prefix("http://github.com/"))?;
+  let (path_and_blob, fragment) = rest.split_once('#')?;
+  let path_and_blob = path_and_blob.split('?').next().unwrap_or(path_and_blob);
+  let fragment = fragment.strip_prefix('L')?;
+  let start_digits: String = fragment
+    .chars()
+    .take_while(|ch| ch.is_ascii_digit())
+    .collect();
+  if start_digits.is_empty() {
+    return None;
+  }
+  let start_line = start_digits.parse::<usize>().ok()?;
+  if start_line == 0 {
+    return None;
+  }
+  let fragment_tail = &fragment[start_digits.len()..];
+  let end_line = if fragment_tail.is_empty() {
+    start_line
+  } else {
+    let fragment_tail = fragment_tail.strip_prefix('-')?;
+    let fragment_tail = fragment_tail.strip_prefix('L').unwrap_or(fragment_tail);
+    let end_digits: String = fragment_tail
+      .chars()
+      .take_while(|ch| ch.is_ascii_digit())
+      .collect();
+    if end_digits.is_empty() {
+      return None;
+    }
+    let parsed = end_digits.parse::<usize>().ok()?;
+    if parsed == 0 {
+      return None;
+    }
+    parsed
+  };
+  let (start_line, end_line) = if start_line <= end_line {
+    (start_line, end_line)
+  } else {
+    (end_line, start_line)
+  };
+
+  let (repo_path, blob_path) = path_and_blob.split_once("/blob/")?;
+  let mut repo_parts = repo_path.split('/');
+  let owner = repo_parts.next()?.trim();
+  let repo = repo_parts.next()?.trim();
+  if owner.is_empty() || repo.is_empty() || repo_parts.next().is_some() {
+    return None;
+  }
+
+  let (reference, file_path) = blob_path.split_once('/')?;
+  if reference.is_empty() || file_path.is_empty() {
+    return None;
+  }
+
+  Some(GithubBlobLineReference {
+    url: trimmed.to_string(),
+    owner: owner.to_string(),
+    repo: repo.to_string(),
+    reference: reference.to_string(),
+    path: file_path.to_string(),
+    start_line,
+    end_line,
+  })
+}
+
+fn extract_github_blob_line_references(text: &str) -> Vec<GithubBlobLineReference> {
+  let mut references = Vec::new();
+  let mut seen = HashSet::new();
+  for candidate in extract_url_token_candidates(text) {
+    if let Some(reference) = parse_github_blob_line_reference(&candidate)
+      && seen.insert(reference.url.clone())
+    {
+      references.push(reference);
+    }
+  }
+  references
+}
+
+fn line_snippets_from_content(content: &str, start_line: usize, end_line: usize) -> Option<Vec<String>> {
+  if start_line == 0 || end_line == 0 {
+    return None;
+  }
+  let (start_line, end_line) = if start_line <= end_line {
+    (start_line, end_line)
+  } else {
+    (end_line, start_line)
+  };
+
+  let lines: Vec<&str> = content.split('\n').collect();
+  if start_line > lines.len() {
+    return None;
+  }
+  let end_index = end_line.min(lines.len());
+  if end_index < start_line {
+    return None;
+  }
+
+  Some(
+    lines[start_line.saturating_sub(1)..end_index]
+      .iter()
+      .map(|line| line.trim_end_matches('\r').to_string())
+      .collect(),
+  )
+}
+
 #[derive(Clone, Debug, Default)]
 struct GithubPrFileContents {
   base: Option<String>,
@@ -291,6 +441,8 @@ pub struct GithubPrDetailsPage {
   review_comments_loading: bool,
   review_comments_error: Option<SharedString>,
   review_comments: Vec<GithubPullRequestReviewComment>,
+  review_comment_code_reference_cache: HashMap<String, Option<ReviewCommentCodeReferencePreview>>,
+  review_comment_code_reference_tasks: HashMap<String, Task<()>>,
   pending_review_comment_link_comment_id: Option<u64>,
   file_loading: bool,
   file_error: Option<SharedString>,
@@ -364,6 +516,8 @@ impl GithubPrDetailsPage {
       review_comments_loading: false,
       review_comments_error: None,
       review_comments: Vec::new(),
+      review_comment_code_reference_cache: HashMap::new(),
+      review_comment_code_reference_tasks: HashMap::new(),
       pending_review_comment_link_comment_id: None,
       file_loading: false,
       file_error: None,
@@ -1036,15 +1190,126 @@ impl GithubPrDetailsPage {
       .collect()
   }
 
+  fn review_comment_code_reference_requests_for_comments(
+    &self,
+    comments: &[ReviewComment],
+  ) -> HashMap<u64, Vec<GithubBlobLineReference>> {
+    comments
+      .iter()
+      .filter_map(|comment| {
+        let references = extract_github_blob_line_references(comment.body.as_ref());
+        if references.is_empty() {
+          None
+        } else {
+          Some((comment.id, references))
+        }
+      })
+      .collect()
+  }
+
+  fn cached_review_comment_code_reference_previews(
+    &self,
+    requests: &HashMap<u64, Vec<GithubBlobLineReference>>,
+  ) -> HashMap<u64, Vec<ReviewCommentCodeReferencePreview>> {
+    requests
+      .iter()
+      .filter_map(|(comment_id, references)| {
+        let previews: Vec<ReviewCommentCodeReferencePreview> = references
+          .iter()
+          .filter_map(|reference| {
+            self
+              .review_comment_code_reference_cache
+              .get(&reference.url)
+              .and_then(|preview| preview.clone())
+          })
+          .collect();
+        if previews.is_empty() {
+          None
+        } else {
+          Some((*comment_id, previews))
+        }
+      })
+      .collect()
+  }
+
+  fn schedule_review_comment_code_reference_fetches(
+    &mut self,
+    requests: &HashMap<u64, Vec<GithubBlobLineReference>>,
+    cx: &mut Context<Self>,
+  ) {
+    for reference in requests.values().flat_map(|items| items.iter()) {
+      if self.review_comment_code_reference_cache.contains_key(&reference.url)
+        || self
+          .review_comment_code_reference_tasks
+          .contains_key(&reference.url)
+      {
+        continue;
+      }
+
+      let cache_key = reference.url.clone();
+      let api = self.api.clone();
+      let owner = reference.owner.clone();
+      let repo = reference.repo.clone();
+      let path = reference.path.clone();
+      let revision = reference.reference.clone();
+      let start_line = reference.start_line;
+      let end_line = reference.end_line;
+      let repo_label = format!("{owner}/{repo}");
+      let url = Arc::<str>::from(reference.url.as_str());
+      let path_arc = Arc::<str>::from(path.as_str());
+      let reference_arc = Arc::<str>::from(revision.as_str());
+      let repo_arc = Arc::<str>::from(repo_label.as_str());
+
+      let task = cx.spawn(async move |this, cx| {
+        let result = unblock(move || api.fetch_github_file_content(&owner, &repo, &path, &revision)).await;
+
+        let preview = match result {
+          Ok(Some(content)) => {
+            line_snippets_from_content(&content, start_line, end_line).map(|snippets| {
+              let actual_end_line = start_line.saturating_add(snippets.len().saturating_sub(1));
+              ReviewCommentCodeReferencePreview {
+                url: url.clone(),
+                repo: repo_arc.clone(),
+                path: path_arc.clone(),
+                reference: reference_arc.clone(),
+                start_line,
+                end_line: actual_end_line,
+                snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
+              }
+            })
+          }
+          _ => None,
+        };
+
+        let _ = this.update(cx, |this, cx| {
+          this
+            .review_comment_code_reference_cache
+            .insert(cache_key.clone(), preview);
+          this.review_comment_code_reference_tasks.remove(&cache_key);
+          this.sync_review_comments(cx);
+          cx.notify();
+        });
+      });
+
+      self
+        .review_comment_code_reference_tasks
+        .insert(reference.url.clone(), task);
+    }
+  }
+
   fn sync_review_comments(&mut self, cx: &mut Context<Self>) {
     let comments = self.review_comments_for_selected_file();
+    let preview_requests = self.review_comment_code_reference_requests_for_comments(&comments);
+    let preview_map = self.cached_review_comment_code_reference_previews(&preview_requests);
     let pr_number = self.pull_request.as_ref().map(|pr| pr.number);
     let editable_comment_ids = self.editable_review_comment_ids(cx);
-    self.diff_editor.update(cx, |editor, cx| {
+    self.diff_editor.update(cx, move |editor, cx| {
       editor.set_review_comment_pr_number(pr_number, cx);
       editor.set_editable_review_comment_ids(editable_comment_ids.iter().copied(), cx);
       editor.set_review_comments(comments, cx);
+      editor.set_review_comment_code_reference_previews(preview_map, cx);
     });
+    self.schedule_review_comment_code_reference_fetches(&preview_requests, cx);
     self.resolve_pending_review_comment_link(cx);
   }
 
@@ -1325,6 +1590,8 @@ impl GithubPrDetailsPage {
     self.review_comments_loading = true;
     self.review_comments_error = None;
     self.review_comments.clear();
+    self.review_comment_code_reference_cache.clear();
+    self.review_comment_code_reference_tasks.clear();
     self.pending_review_comment_link_comment_id = None;
     self.file_loading = false;
     self.file_error = None;
@@ -2725,5 +2992,68 @@ mod tests {
     assert!(lookup.is_empty());
     assert_eq!(selected_index, None);
     assert_eq!(selected_id, None);
+  }
+
+  #[test]
+  fn parse_github_blob_line_reference_parses_standard_blob_link() {
+    let parsed = parse_github_blob_line_reference(
+      "https://github.com/joris-gallot/guit/blob/0a25a8d0816a770ec75edb442dc3e533c78343a3/docker-compose.yml#L11",
+    )
+    .expect("valid blob line reference");
+
+    assert_eq!(parsed.owner, "joris-gallot");
+    assert_eq!(parsed.repo, "guit");
+    assert_eq!(parsed.reference, "0a25a8d0816a770ec75edb442dc3e533c78343a3");
+    assert_eq!(parsed.path, "docker-compose.yml");
+    assert_eq!(parsed.start_line, 11);
+    assert_eq!(parsed.end_line, 11);
+  }
+
+  #[test]
+  fn parse_github_blob_line_reference_parses_line_range_with_optional_second_l_prefix() {
+    let parsed = parse_github_blob_line_reference(
+      "https://github.com/joris-gallot/guit/blob/main/docker-compose.yml#L03-L11",
+    )
+    .expect("valid blob line range reference");
+    assert_eq!(parsed.start_line, 3);
+    assert_eq!(parsed.end_line, 11);
+
+    let parsed = parse_github_blob_line_reference(
+      "https://github.com/joris-gallot/guit/blob/main/docker-compose.yml#L3-L11",
+    )
+    .expect("valid blob line range reference");
+    assert_eq!(parsed.start_line, 3);
+    assert_eq!(parsed.end_line, 11);
+
+    let parsed = parse_github_blob_line_reference(
+      "https://github.com/joris-gallot/guit/blob/main/docker-compose.yml#L3-11",
+    )
+    .expect("valid blob line range reference");
+    assert_eq!(parsed.start_line, 3);
+    assert_eq!(parsed.end_line, 11);
+  }
+
+  #[test]
+  fn extract_github_blob_line_references_reads_markdown_link_syntax() {
+    let body = "[compose](https://github.com/acme/widget/blob/main/docker-compose.yml#L7)";
+    let references = extract_github_blob_line_references(body);
+    assert_eq!(references.len(), 1);
+    assert_eq!(references[0].start_line, 7);
+    assert_eq!(references[0].end_line, 7);
+    assert_eq!(references[0].path, "docker-compose.yml");
+  }
+
+  #[test]
+  fn line_snippets_from_content_returns_expected_lines() {
+    let content = "first\nsecond\nthird\n";
+    assert_eq!(
+      line_snippets_from_content(content, 2, 3),
+      Some(vec!["second".to_string(), "third".to_string()])
+    );
+    assert_eq!(
+      line_snippets_from_content(content, 4, 4),
+      Some(vec!["".to_string()])
+    );
+    assert!(line_snippets_from_content(content, 0, 2).is_none());
   }
 }

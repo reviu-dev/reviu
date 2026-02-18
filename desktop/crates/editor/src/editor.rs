@@ -13,7 +13,8 @@ use std::{
 use buffer::TransactionId;
 use gfm_markdown_viewer::{
   LinkAction, MarkdownRenderOptions, MarkdownRenderState, ParsedMarkdown,
-  estimate_parsed_markdown_height_px, parse_markdown, render_parsed_markdown,
+  estimate_markdown_height_px, estimate_parsed_markdown_height_px, parse_markdown,
+  render_parsed_markdown,
 };
 use git::{ApplyLocation, DiffSet, GitFileBases, GitStore, RepoFile};
 use gpui::{
@@ -23,7 +24,7 @@ use gpui::{
   prelude::*, px, white,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, IconName, Sizable,
+  ActiveTheme as _, Disableable as _, IconName, Sizable, StyledExt as _,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   h_flex,
@@ -107,6 +108,14 @@ const REVIEW_COMMENT_REPLY_DRAFT_COMMENT_ID: u64 = u64::MAX - 1;
 const REVIEW_COMMENT_CREATE_SELECTION_BACKGROUND_ALPHA: f32 = 0.16;
 const REVIEW_COMMENT_CREATE_BUTTON_GUTTER_RIGHT_PX: f32 = 10.0;
 const REVIEW_COMMENT_CREATE_BUTTON_HITBOX_WIDTH_PX: f32 = 10.0;
+const REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_Y_PX: f32 = 8.0;
+const REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_X_PX: f32 = 12.0;
+const REVIEW_COMMENT_CODE_REFERENCE_CARD_MARGIN_Y_PX: f32 = 4.0;
+const REVIEW_COMMENT_CODE_REFERENCE_CARD_HEADER_LINE_COUNT: f32 = 2.0;
+const REVIEW_COMMENT_CODE_REFERENCE_CARD_INTERNAL_GAP_PX: f32 = 4.0;
+const REVIEW_COMMENT_CODE_REFERENCE_CARD_BORDER_PX: f32 = 2.0;
+const REVIEW_COMMENT_CODE_REFERENCE_CARD_HEIGHT_BUFFER_PX: f32 = 8.0;
+const REVIEW_COMMENT_CODE_REFERENCE_SNIPPET_ROW_GAP_PX: f32 = 2.0;
 
 fn has_fractional_scroll(scroll_offset: f32) -> bool {
   (scroll_offset - scroll_offset.floor()) > FRACTIONAL_SCROLL_EPSILON
@@ -131,6 +140,23 @@ pub type ReviewCommentCreateHandler =
   Arc<dyn Fn(ReviewCommentCreateRequest, &mut Window, &mut App)>;
 pub type ReviewCommentDeleteHandler = Arc<dyn Fn(u64, &mut Window, &mut App)>;
 pub type ReviewCommentLinkHandler = Arc<dyn Fn(u64, u64, &mut Window, &mut App) -> bool>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReviewCommentCodeReferencePreview {
+  pub url: Arc<str>,
+  pub repo: Arc<str>,
+  pub path: Arc<str>,
+  pub reference: Arc<str>,
+  pub start_line: usize,
+  pub end_line: usize,
+  pub snippets: Vec<Arc<str>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ReviewCommentBodySegment {
+  Markdown(String),
+  Preview(ReviewCommentCodeReferencePreview),
+}
 
 #[derive(Clone, Debug)]
 pub struct ReviewCommentCreateRequest {
@@ -159,6 +185,32 @@ fn review_comment_composer_body_height_px(editor_line_height_px: f32) -> f32 {
 
 fn review_comment_overlay_x_offset_for_scroll(scroll_x: Pixels) -> Pixels {
   (-scroll_x).max(px(0.0))
+}
+
+fn short_github_reference(reference: &str) -> String {
+  let trimmed = reference.trim();
+  if trimmed.len() > 7 && trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+    return trimmed.chars().take(7).collect();
+  }
+  if trimmed.len() > 24 {
+    let mut shortened: String = trimmed.chars().take(24).collect();
+    shortened.push_str("...");
+    return shortened;
+  }
+  trimmed.to_string()
+}
+
+fn line_is_markdown_link_to_url(trimmed: &str, url: &str) -> bool {
+  if !trimmed.starts_with('[') || !trimmed.ends_with(')') {
+    return false;
+  }
+  let Some((_, rest)) = trimmed.split_once("](") else {
+    return false;
+  };
+  let Some(link_target) = rest.strip_suffix(')') else {
+    return false;
+  };
+  link_target == url
 }
 
 fn editor_actions_enabled(
@@ -242,6 +294,7 @@ pub struct Editor {
   review_comment_line_height_px: f32,
   review_comment_markdown_states: HashMap<u64, MarkdownRenderState>,
   review_comment_markdown_cache: HashMap<u64, ReviewCommentMarkdownCacheEntry>,
+  review_comment_code_reference_previews: HashMap<u64, Vec<ReviewCommentCodeReferencePreview>>,
   review_comment_pr_number: Option<u64>,
   editable_review_comment_ids: HashSet<u64>,
   review_comment_edit_handler: Option<ReviewCommentEditHandler>,
@@ -520,6 +573,7 @@ impl Editor {
       review_comment_line_height_px: REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX,
       review_comment_markdown_states: HashMap::new(),
       review_comment_markdown_cache: HashMap::new(),
+      review_comment_code_reference_previews: HashMap::new(),
       review_comment_pr_number: None,
       editable_review_comment_ids: HashSet::new(),
       review_comment_edit_handler: None,
@@ -654,6 +708,7 @@ impl Editor {
       self.review_comment_thread_order.clear();
       self.review_comment_markdown_states.clear();
       self.review_comment_markdown_cache.clear();
+      self.review_comment_code_reference_previews.clear();
       self.review_comment_pr_number = None;
       self.editable_review_comment_ids.clear();
       self.clear_review_comment_edit_state();
@@ -721,6 +776,9 @@ impl Editor {
       .review_comment_markdown_cache
       .retain(|id, _| self.review_comments.iter().any(|comment| comment.id == *id));
     self
+      .review_comment_code_reference_previews
+      .retain(|id, _| self.review_comments.iter().any(|comment| comment.id == *id));
+    self
       .editable_review_comment_ids
       .retain(|id| self.review_comments.iter().any(|comment| comment.id == *id));
     if self
@@ -766,6 +824,19 @@ impl Editor {
     }
   }
 
+  pub fn set_review_comment_code_reference_previews(
+    &mut self,
+    previews_by_comment: HashMap<u64, Vec<ReviewCommentCodeReferencePreview>>,
+    cx: &mut Context<Self>,
+  ) {
+    self.review_comment_code_reference_previews = previews_by_comment;
+    if self.diffs.is_some() {
+      self.rebuild_projection(cx);
+    } else {
+      cx.notify();
+    }
+  }
+
   fn computed_review_comment_wrap_columns(&self) -> usize {
     let char_width_px = (self.measured_editor_char_width() / px(1.0)).max(1.0);
     let available_px =
@@ -797,6 +868,113 @@ impl Editor {
     let mut hasher = DefaultHasher::new();
     body.hash(&mut hasher);
     hasher.finish()
+  }
+
+  fn review_comment_code_reference_preview_height_px(
+    &self,
+    preview: &ReviewCommentCodeReferencePreview,
+  ) -> f32 {
+    let row_height_px = self.review_comment_line_height_px.max(1.0);
+    let snippet_line_count = preview.snippets.len().max(1) as f32;
+    let card_height_px = row_height_px
+      * (REVIEW_COMMENT_CODE_REFERENCE_CARD_HEADER_LINE_COUNT + snippet_line_count)
+      + REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_Y_PX * 4.0
+      + REVIEW_COMMENT_CODE_REFERENCE_CARD_INTERNAL_GAP_PX
+      + REVIEW_COMMENT_CODE_REFERENCE_CARD_BORDER_PX
+      + REVIEW_COMMENT_CODE_REFERENCE_SNIPPET_ROW_GAP_PX * (snippet_line_count - 1.0).max(0.0)
+      + REVIEW_COMMENT_CODE_REFERENCE_CARD_MARGIN_Y_PX * 2.0
+      + REVIEW_COMMENT_CODE_REFERENCE_CARD_HEIGHT_BUFFER_PX;
+    card_height_px
+  }
+
+  fn review_comment_body_segments(
+    &self,
+    comment_id: u64,
+    body: &str,
+  ) -> Vec<ReviewCommentBodySegment> {
+    let Some(previews) = self.review_comment_code_reference_previews.get(&comment_id) else {
+      return vec![ReviewCommentBodySegment::Markdown(body.to_string())];
+    };
+
+    if previews.is_empty() {
+      return vec![ReviewCommentBodySegment::Markdown(body.to_string())];
+    }
+
+    let mut segments = Vec::new();
+    let mut markdown_lines = Vec::new();
+    let flush_markdown = |segments: &mut Vec<ReviewCommentBodySegment>, lines: &mut Vec<String>| {
+      if lines.is_empty() {
+        return;
+      }
+      segments.push(ReviewCommentBodySegment::Markdown(lines.join("\n")));
+      lines.clear();
+    };
+
+    for line in body.lines() {
+      let trimmed = line.trim();
+      let preview = previews.iter().find(|preview| {
+        let url = preview.url.as_ref();
+        trimmed == url
+          || trimmed == format!("<{url}>")
+          || line_is_markdown_link_to_url(trimmed, url)
+      });
+
+      if let Some(preview) = preview {
+        flush_markdown(&mut segments, &mut markdown_lines);
+        segments.push(ReviewCommentBodySegment::Preview(preview.clone()));
+      } else {
+        markdown_lines.push(line.to_string());
+      }
+    }
+
+    flush_markdown(&mut segments, &mut markdown_lines);
+
+    if segments.is_empty() {
+      vec![ReviewCommentBodySegment::Markdown(body.to_string())]
+    } else {
+      segments
+    }
+  }
+
+  #[cfg(test)]
+  fn review_comment_markdown_body_from_segments(segments: &[ReviewCommentBodySegment]) -> String {
+    segments
+      .iter()
+      .filter_map(|segment| match segment {
+        ReviewCommentBodySegment::Markdown(markdown) => Some(markdown.as_str()),
+        ReviewCommentBodySegment::Preview(_) => None,
+      })
+      .collect::<Vec<_>>()
+      .join("\n")
+  }
+
+  fn review_comment_segmented_height_px(
+    &self,
+    comment_id: u64,
+    body: &str,
+    wrap_columns: usize,
+    markdown_line_height_px: f32,
+  ) -> f32 {
+    let segments = self.review_comment_body_segments(comment_id, body);
+    let mut markdown_height = 0.0;
+    let mut previews_height = 0.0;
+
+    for segment in segments {
+      match segment {
+        ReviewCommentBodySegment::Markdown(markdown) => {
+          if markdown.trim().is_empty() {
+            continue;
+          }
+          markdown_height +=
+            estimate_markdown_height_px(&markdown, wrap_columns, markdown_line_height_px);
+        }
+        ReviewCommentBodySegment::Preview(preview) => {
+          previews_height += self.review_comment_code_reference_preview_height_px(&preview);
+        }
+      }
+    }
+
+    markdown_height + previews_height
   }
 
   fn ensure_review_comment_markdown_cache_entry(
@@ -2396,6 +2574,130 @@ impl Editor {
     layouts
   }
 
+  fn render_review_comment_code_reference_preview_card(
+    &self,
+    comment_id: u64,
+    segment_index: usize,
+    preview: &ReviewCommentCodeReferencePreview,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let theme = cx.theme();
+    let url = preview.url.clone();
+    let file_label = format!("{}/{}", preview.repo.as_ref(), preview.path.as_ref());
+    let line_label = if preview.start_line == preview.end_line {
+      format!(
+        "Line {} in {}",
+        preview.start_line,
+        short_github_reference(preview.reference.as_ref())
+      )
+    } else {
+      format!(
+        "Lines {}-{} in {}",
+        preview.start_line,
+        preview.end_line,
+        short_github_reference(preview.reference.as_ref())
+      )
+    };
+
+    let mut snippet_rows = v_flex().gap(px(REVIEW_COMMENT_CODE_REFERENCE_SNIPPET_ROW_GAP_PX));
+    if preview.snippets.is_empty() {
+      snippet_rows = snippet_rows.child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(
+            div()
+              .text_xs()
+              .font_medium()
+              .text_color(theme.muted_foreground)
+              .child(preview.start_line.to_string()),
+          )
+          .child(
+            div()
+              .flex_1()
+              .min_w_0()
+              .font_family(editor_code_font_family(cx))
+              .text_sm()
+              .text_color(theme.foreground)
+              .child(""),
+          ),
+      );
+    } else {
+      for (offset, snippet) in preview.snippets.iter().enumerate() {
+        let line_number = preview.start_line + offset;
+        snippet_rows = snippet_rows.child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child(
+              div()
+                .text_xs()
+                .font_medium()
+                .text_color(theme.muted_foreground)
+                .child(line_number.to_string()),
+            )
+            .child(
+              div()
+                .flex_1()
+                .min_w_0()
+                .font_family(editor_code_font_family(cx))
+                .text_sm()
+                .text_color(theme.foreground)
+                .child(snippet.as_ref().to_string()),
+            ),
+        );
+      }
+    }
+
+    v_flex()
+      .my(px(REVIEW_COMMENT_CODE_REFERENCE_CARD_MARGIN_Y_PX))
+      .border_1()
+      .border_color(theme.border)
+      .rounded_md()
+      .overflow_hidden()
+      .child(
+        div()
+          .bg(theme.muted)
+          .border_b_1()
+          .border_color(theme.border)
+          .px(px(REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_X_PX))
+          .py(px(REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_Y_PX))
+          .cursor(CursorStyle::PointingHand)
+          .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+            cx.stop_propagation();
+            cx.open_url(url.as_ref());
+          })
+          .child(
+            v_flex()
+              .gap_1()
+              .child(
+                div()
+                  .text_sm()
+                  .font_medium()
+                  .text_color(theme.status_blue())
+                  .child(file_label),
+              )
+              .child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child(line_label),
+              ),
+          ),
+      )
+      .child(
+        div()
+          .px(px(REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_X_PX))
+          .py(px(REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_Y_PX))
+          .child(snippet_rows),
+      )
+      .id(format!(
+        "review-comment-code-reference-{}-{segment_index}",
+        comment_id
+      ))
+      .into_any_element()
+  }
+
   fn review_comment_composer_skeleton(&self, line_height: Pixels) -> gpui::AnyElement {
     let actions_height_px = REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX.max(line_height / px(1.0));
     let skeleton_line_height_px = (line_height / px(1.0)).clamp(12.0, 20.0);
@@ -2702,8 +3004,7 @@ impl Editor {
       let mut thread_messages = v_flex();
       for (index, message) in layout.messages.iter().enumerate() {
         let is_last_message = Some(message.id) == last_message_id;
-        let body: gpui::AnyElement = if self.review_comment_edit_submitting_id == Some(message.id)
-        {
+        let body: gpui::AnyElement = if self.review_comment_edit_submitting_id == Some(message.id) {
           self.review_comment_composer_skeleton(line_height)
         } else if self.editing_review_comment_id == Some(message.id) {
           if let Some(input_state) = self.review_comment_edit_input.clone() {
@@ -2799,19 +3100,71 @@ impl Editor {
             .into_any_element()
           }
         } else {
-          let state = self
-            .review_comment_markdown_states
+          let has_previews = self
+            .review_comment_code_reference_previews
             .get(&message.id)
-            .cloned()
-            .unwrap_or_else(MarkdownRenderState::new);
-          let parsed =
-            self.cached_parsed_review_comment_markdown(message.id, message.body.as_ref());
-          render_parsed_markdown(
-            &parsed,
-            &MarkdownRenderOptions::with_on_link(link_handler.clone()).with_state(state),
-            cx,
-          )
-          .into_any_element()
+            .is_some_and(|previews| !previews.is_empty());
+          if !has_previews {
+            let state = self
+              .review_comment_markdown_states
+              .get(&message.id)
+              .cloned()
+              .unwrap_or_else(MarkdownRenderState::new);
+            let parsed =
+              self.cached_parsed_review_comment_markdown(message.id, message.body.as_ref());
+            render_parsed_markdown(
+              &parsed,
+              &MarkdownRenderOptions::with_on_link(link_handler.clone()).with_state(state),
+              cx,
+            )
+            .into_any_element()
+          } else {
+            let segments = self.review_comment_body_segments(message.id, message.body.as_ref());
+            let state = self
+              .review_comment_markdown_states
+              .get(&message.id)
+              .cloned()
+              .unwrap_or_else(MarkdownRenderState::new);
+            let mut rendered = v_flex();
+            let mut has_rendered_content = false;
+
+            for (segment_index, segment) in segments.iter().enumerate() {
+              match segment {
+                ReviewCommentBodySegment::Markdown(markdown) => {
+                  if markdown.trim().is_empty() {
+                    continue;
+                  }
+                  let parsed = parse_markdown(markdown);
+                  rendered = rendered.child(
+                    render_parsed_markdown(
+                      &parsed,
+                      &MarkdownRenderOptions::with_on_link(link_handler.clone())
+                        .with_state(state.clone()),
+                      cx,
+                    )
+                    .into_any_element(),
+                  );
+                  has_rendered_content = true;
+                }
+                ReviewCommentBodySegment::Preview(preview) => {
+                  rendered =
+                    rendered.child(self.render_review_comment_code_reference_preview_card(
+                      message.id,
+                      segment_index,
+                      preview,
+                      cx,
+                    ));
+                  has_rendered_content = true;
+                }
+              }
+            }
+
+            if has_rendered_content {
+              rendered.into_any_element()
+            } else {
+              div().into_any_element()
+            }
+          }
         };
 
         let message_block = if index == 0 {
@@ -2912,8 +3265,7 @@ impl Editor {
           };
 
           v_flex()
-            .pt(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
-            .pb(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
+            .py(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
             .gap(px(REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX))
             .border_t(px(REVIEW_COMMENT_REPLY_BORDER_TOP_PX))
             .border_color(theme.border)
@@ -3539,12 +3891,25 @@ impl Editor {
       let estimated_height = if self.editing_review_comment_id == Some(comment_id) {
         review_comment_composer_body_height_px(self.review_comment_line_height_px)
       } else {
-        self.cached_review_comment_body_height_px(
-          comment_id,
-          body.as_ref(),
-          wrap_columns,
-          markdown_line_height_px,
-        )
+        let has_previews = self
+          .review_comment_code_reference_previews
+          .get(&comment_id)
+          .is_some_and(|previews| !previews.is_empty());
+        if has_previews {
+          self.review_comment_segmented_height_px(
+            comment_id,
+            body.as_ref(),
+            wrap_columns,
+            markdown_line_height_px,
+          )
+        } else {
+          self.cached_review_comment_body_height_px(
+            comment_id,
+            body.as_ref(),
+            wrap_columns,
+            markdown_line_height_px,
+          )
+        }
       };
       review_comment_body_heights_px.insert(comment_id, estimated_height);
     }
@@ -6297,6 +6662,50 @@ pub mod tests {
     assert_eq!(parsed, None);
   }
 
+  #[test]
+  fn line_is_markdown_link_to_url_matches_exact_target() {
+    let url = "https://github.com/acme/widget/blob/main/docker-compose.yml#L11";
+    assert!(line_is_markdown_link_to_url(
+      &format!("[compose]({url})"),
+      url
+    ));
+    assert!(!line_is_markdown_link_to_url(
+      "[compose](https://github.com/acme/other)",
+      url
+    ));
+    assert!(!line_is_markdown_link_to_url(url, url));
+  }
+
+  #[gpui::test]
+  fn review_comment_body_segments_inserts_preview_between_markdown_lines(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "line");
+    let url = "https://github.com/acme/widget/blob/main/docker-compose.yml#L11";
+    let previews = vec![ReviewCommentCodeReferencePreview {
+      url: Arc::from(url),
+      repo: Arc::from("acme/widget"),
+      path: Arc::from("docker-compose.yml"),
+      reference: Arc::from("main"),
+      start_line: 11,
+      end_line: 11,
+      snippets: vec![Arc::from("- '5433:5432'")],
+    }];
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor
+        .review_comment_code_reference_previews
+        .insert(42, previews.clone());
+      let segments = editor.review_comment_body_segments(42, &format!("test before\n{url}\ntest after"));
+      assert_eq!(segments.len(), 3);
+      assert!(matches!(&segments[0], ReviewCommentBodySegment::Markdown(value) if value == "test before"));
+      assert!(matches!(&segments[1], ReviewCommentBodySegment::Preview(preview) if preview.url.as_ref() == url));
+      assert!(matches!(&segments[2], ReviewCommentBodySegment::Markdown(value) if value == "test after"));
+      assert_eq!(
+        Editor::review_comment_markdown_body_from_segments(&segments),
+        "test before\ntest after"
+      );
+    });
+  }
+
   #[gpui::test]
   fn test_editor_code_font_family_matches_theme_mono_font(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
@@ -6450,6 +6859,7 @@ pub mod tests {
           review_comment_line_height_px: REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX,
           review_comment_markdown_states: HashMap::new(),
           review_comment_markdown_cache: HashMap::new(),
+          review_comment_code_reference_previews: HashMap::new(),
           review_comment_pr_number: None,
           editable_review_comment_ids: HashSet::new(),
           review_comment_edit_handler: None,
