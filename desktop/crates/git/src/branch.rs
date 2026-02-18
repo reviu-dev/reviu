@@ -239,6 +239,46 @@ pub fn is_merge_in_progress(repo_root: &Path) -> Result<bool> {
   Ok(repo.state() == RepositoryState::Merge)
 }
 
+pub fn is_rebase_in_progress(repo_root: &Path) -> Result<bool> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  Ok(matches!(
+    repo.state(),
+    RepositoryState::Rebase | RepositoryState::RebaseInteractive | RepositoryState::RebaseMerge
+  ))
+}
+
+pub fn current_rebase_commit_message(repo_root: &Path) -> Result<Option<String>> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  if !matches!(
+    repo.state(),
+    RepositoryState::Rebase | RepositoryState::RebaseInteractive | RepositoryState::RebaseMerge
+  ) {
+    return Ok(None);
+  }
+
+  let mut rebase = repo.open_rebase(None).context("open in-progress rebase")?;
+  let Some(current_index) = rebase.operation_current() else {
+    return Ok(None);
+  };
+  let Some(operation) = rebase.nth(current_index) else {
+    return Ok(None);
+  };
+  let Ok(commit) = repo.find_commit(operation.id()) else {
+    return Ok(None);
+  };
+
+  Ok(
+    commit
+      .summary()
+      .or_else(|| commit.message())
+      .map(str::trim)
+      .filter(|message| !message.is_empty())
+      .map(ToOwned::to_owned),
+  )
+}
+
 pub fn abort_merge(repo_root: &Path) -> Result<()> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
@@ -256,6 +296,21 @@ pub fn abort_merge(repo_root: &Path) -> Result<()> {
     .reset(head.as_object(), ResetType::Hard, Some(&mut checkout))
     .context("reset merge state to HEAD")?;
   repo.cleanup_state().context("cleanup merge state")?;
+  Ok(())
+}
+
+pub fn abort_rebase(repo_root: &Path) -> Result<()> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  if !matches!(
+    repo.state(),
+    RepositoryState::Rebase | RepositoryState::RebaseInteractive | RepositoryState::RebaseMerge
+  ) {
+    return Ok(());
+  }
+
+  let mut rebase = repo.open_rebase(None).context("open in-progress rebase")?;
+  rebase.abort().context("abort rebase")?;
   Ok(())
 }
 
@@ -277,13 +332,73 @@ pub fn rebase_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
 
   while let Some(next_operation) = rebase.next() {
     if let Err(err) = next_operation {
+      if repo
+        .index()
+        .map(|index| index.has_conflicts())
+        .unwrap_or(false)
+      {
+        bail!("rebase has conflicts");
+      }
       let _ = rebase.abort();
       return Err(err.into());
     }
 
     let index = repo.index()?;
     if index.has_conflicts() {
+      bail!("rebase has conflicts");
+    }
+
+    if let Err(err) = rebase.commit(None, &signature, None) {
       let _ = rebase.abort();
+      return Err(err.into());
+    }
+  }
+
+  rebase.finish(Some(&signature))?;
+  let mut checkout = CheckoutBuilder::new();
+  checkout.safe();
+  repo.checkout_head(Some(&mut checkout))?;
+  Ok(())
+}
+
+pub fn continue_rebase(repo_root: &Path) -> Result<()> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  if !matches!(
+    repo.state(),
+    RepositoryState::Rebase | RepositoryState::RebaseInteractive | RepositoryState::RebaseMerge
+  ) {
+    return Ok(());
+  }
+
+  let signature = repo
+    .signature()
+    .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
+  let mut rebase = repo.open_rebase(None).context("open in-progress rebase")?;
+
+  if rebase.operation_current().is_some() {
+    let index = repo.index()?;
+    if index.has_conflicts() {
+      bail!("rebase has conflicts");
+    }
+    rebase.commit(None, &signature, None)?;
+  }
+
+  while let Some(next_operation) = rebase.next() {
+    if let Err(err) = next_operation {
+      if repo
+        .index()
+        .map(|index| index.has_conflicts())
+        .unwrap_or(false)
+      {
+        bail!("rebase has conflicts");
+      }
+      let _ = rebase.abort();
+      return Err(err.into());
+    }
+
+    let index = repo.index()?;
+    if index.has_conflicts() {
       bail!("rebase has conflicts");
     }
 
@@ -1051,9 +1166,178 @@ mod tests {
       error.to_string().contains("rebase has conflicts"),
       "unexpected error: {error:?}"
     );
+    let conflicted =
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read conflicted README");
+    assert!(
+      conflicted.contains("<<<<<<<"),
+      "expected conflict markers in README: {conflicted}"
+    );
+    assert!(
+      conflicted.contains("feature change"),
+      "expected feature change text in README: {conflicted}"
+    );
+    assert!(
+      conflicted.contains("main change"),
+      "expected main change text in README: {conflicted}"
+    );
+    assert!(
+      is_rebase_in_progress(&repo.path).expect("read rebase state"),
+      "rebase state should be active after conflict"
+    );
+    assert_eq!(
+      current_rebase_commit_message(&repo.path).expect("read current rebase commit message"),
+      Some("main change".to_string())
+    );
+  }
+
+  #[test]
+  fn abort_rebase_clears_rebase_state_and_conflict_markers() {
+    let repo = TempRepo::init("branch-abort-rebase");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "base\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "main change\n",
+      "main change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "feature change\n",
+      "feature change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    force_checkout_head(&repo.path);
+
+    let _ = rebase_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect_err("rebase should fail with conflicts");
+    assert!(
+      is_rebase_in_progress(&repo.path).expect("read rebase state"),
+      "rebase state should be active after conflict"
+    );
+    assert_eq!(
+      current_rebase_commit_message(&repo.path).expect("read current rebase commit message"),
+      Some("main change".to_string())
+    );
+
+    abort_rebase(&repo.path).expect("abort rebase");
+
+    assert!(
+      !is_rebase_in_progress(&repo.path).expect("read rebase state after abort"),
+      "rebase state should be cleaned after abort"
+    );
+    assert_eq!(
+      current_rebase_commit_message(&repo.path).expect("read current rebase commit message"),
+      None
+    );
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read README after abort"),
+      "main change\n"
+    );
     assert_eq!(
       current_branch_status(&repo.path)
-        .expect("status after failed rebase")
+        .expect("status after abort rebase")
+        .name,
+      base_branch
+    );
+  }
+
+  #[test]
+  fn continue_rebase_completes_after_conflict_resolution() {
+    let repo = TempRepo::init("branch-continue-rebase");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "base\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let _ = commit_text_file(&repo.path, rel_path, "main change\n", "main change");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(&repo.path, rel_path, "feature change\n", "feature change");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    force_checkout_head(&repo.path);
+
+    let _ = rebase_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect_err("rebase should fail with conflicts");
+    assert!(
+      is_rebase_in_progress(&repo.path).expect("read rebase state"),
+      "rebase state should be active after conflict"
+    );
+    assert_eq!(
+      current_rebase_commit_message(&repo.path).expect("read current rebase commit message"),
+      Some("main change".to_string())
+    );
+
+    std::fs::write(repo.path.join(rel_path), "resolved\n").expect("write resolved contents");
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let mut index = repo_handle.index().expect("open index");
+    index.add_path(rel_path).expect("stage resolved file");
+    index.write().expect("write index");
+
+    continue_rebase(&repo.path).expect("continue rebase");
+
+    assert!(
+      !is_rebase_in_progress(&repo.path).expect("read rebase state after continue"),
+      "rebase state should be cleaned after continue"
+    );
+    assert_eq!(
+      current_rebase_commit_message(&repo.path).expect("read current rebase commit message"),
+      None
+    );
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read README after continue"),
+      "resolved\n"
+    );
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("status after continue rebase")
         .name,
       base_branch
     );

@@ -106,9 +106,11 @@ pub enum CommandPaletteAction {
   MergeBranch {
     name: CommandPaletteBranch,
   },
+  AbortMerge,
   RebaseBranch {
     name: CommandPaletteBranch,
   },
+  AbortRebase,
   CherryPick {
     commit_hashes: Vec<String>,
   },
@@ -469,7 +471,9 @@ pub enum CommandPaletteCommandId {
   CreateBranch,
   CreateBranchFrom,
   MergeBranch,
+  AbortMerge,
   RebaseBranch,
+  AbortRebase,
   CherryPick,
   OpenRepository,
   OpenGitPage,
@@ -518,6 +522,22 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::RebaseBranch,
       name: "Rebase branch".into(),
       description: Some("Rebase the current branch onto another branch".into()),
+    }
+  }
+
+  pub fn abort_merge() -> Self {
+    Self {
+      id: CommandPaletteCommandId::AbortMerge,
+      name: "Abort merge".into(),
+      description: Some("Abort the current merge operation".into()),
+    }
+  }
+
+  pub fn abort_rebase() -> Self {
+    Self {
+      id: CommandPaletteCommandId::AbortRebase,
+      name: "Abort rebase".into(),
+      description: Some("Abort the current rebase operation".into()),
     }
   }
 
@@ -648,7 +668,9 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::SwitchRepository => Icon::new(IconName::FolderOpen),
       CommandPaletteCommandId::SwitchBranch => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::MergeBranch => Icon::new(UiIconName::GitMerge),
+      CommandPaletteCommandId::AbortMerge => Icon::new(IconName::Undo),
       CommandPaletteCommandId::RebaseBranch => Icon::new(UiIconName::GitMerge),
+      CommandPaletteCommandId::AbortRebase => Icon::new(IconName::Undo),
       CommandPaletteCommandId::CherryPick => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::OpenRepository => Icon::new(IconName::FolderOpen),
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
@@ -1179,8 +1201,14 @@ impl CommandPalette {
       CommandPaletteCommandId::MergeBranch => {
         self.set_screen(CommandPaletteScreen::MergeBranch, cx, window);
       }
+      CommandPaletteCommandId::AbortMerge => {
+        self.trigger_action(CommandPaletteAction::AbortMerge, window, cx);
+      }
       CommandPaletteCommandId::RebaseBranch => {
         self.set_screen(CommandPaletteScreen::RebaseBranch, cx, window);
+      }
+      CommandPaletteCommandId::AbortRebase => {
+        self.trigger_action(CommandPaletteAction::AbortRebase, window, cx);
       }
       CommandPaletteCommandId::CreateBranch => {
         self.set_screen(CommandPaletteScreen::CreateBranch, cx, window);

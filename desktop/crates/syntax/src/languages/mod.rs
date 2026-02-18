@@ -32,7 +32,10 @@ const EXTENSIONS_MARKDOWN: &[&str] = &["md", "markdown"];
 const EXTENSIONS_VUE: &[&str] = &["vue"];
 
 pub fn detect_language_config(extension: &str) -> Option<&'static LanguageConfig> {
-  let extension = extension.trim().trim_start_matches('.').to_ascii_lowercase();
+  let extension = extension
+    .trim()
+    .trim_start_matches('.')
+    .to_ascii_lowercase();
   let extension = extension.as_str();
   match extension {
     _ if EXTENSIONS_CSS.contains(&extension) => Some(&*css::CSS_CONFIG),

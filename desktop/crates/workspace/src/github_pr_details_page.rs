@@ -6,8 +6,8 @@ use std::{
 };
 
 use editor::{
-  CloseFind, DiffViewMode, Editor, Find, ReviewComment, ReviewCommentCreateHandler,
-  ReviewCommentCodeReferencePreview, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
+  CloseFind, DiffViewMode, Editor, Find, ReviewComment, ReviewCommentCodeReferencePreview,
+  ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
   ReviewCommentEditHandler, ReviewCommentLinkHandler, ReviewCommentSide,
 };
 use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
@@ -183,7 +183,10 @@ fn extract_url_token_candidates(text: &str) -> Vec<String> {
       .unwrap_or(remaining.len());
     let token = remaining[..end]
       .trim_matches(|ch: char| {
-        matches!(ch, '(' | ')' | '[' | ']' | '<' | '>' | '"' | '\'' | ',' | ';')
+        matches!(
+          ch,
+          '(' | ')' | '[' | ']' | '<' | '>' | '"' | '\'' | ',' | ';'
+        )
       })
       .trim_end_matches('.')
       .to_string();
@@ -276,7 +279,11 @@ fn extract_github_blob_line_references(text: &str) -> Vec<GithubBlobLineReferenc
   references
 }
 
-fn line_snippets_from_content(content: &str, start_line: usize, end_line: usize) -> Option<Vec<String>> {
+fn line_snippets_from_content(
+  content: &str,
+  start_line: usize,
+  end_line: usize,
+) -> Option<Vec<String>> {
   if start_line == 0 || end_line == 0 {
     return None;
   }
@@ -1238,7 +1245,9 @@ impl GithubPrDetailsPage {
     cx: &mut Context<Self>,
   ) {
     for reference in requests.values().flat_map(|items| items.iter()) {
-      if self.review_comment_code_reference_cache.contains_key(&reference.url)
+      if self
+        .review_comment_code_reference_cache
+        .contains_key(&reference.url)
         || self
           .review_comment_code_reference_tasks
           .contains_key(&reference.url)
@@ -1261,7 +1270,8 @@ impl GithubPrDetailsPage {
       let repo_arc = Arc::<str>::from(repo_label.as_str());
 
       let task = cx.spawn(async move |this, cx| {
-        let result = unblock(move || api.fetch_github_file_content(&owner, &repo, &path, &revision)).await;
+        let result =
+          unblock(move || api.fetch_github_file_content(&owner, &repo, &path, &revision)).await;
 
         let preview = match result {
           Ok(Some(content)) => {
