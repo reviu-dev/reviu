@@ -33,6 +33,7 @@ use gpui_component::{
   skeleton::Skeleton,
   v_flex,
 };
+use parking_lot::RwLock;
 use smol::{Timer, unblock};
 use ui::{StatusThemeExt as _, Theme, UiIconName};
 use unicode_segmentation::UnicodeSegmentation;
@@ -229,6 +230,7 @@ fn is_conflict_end_marker(line: &str) -> bool {
   line.starts_with(">>>>>>>")
 }
 
+#[cfg(test)]
 fn conflict_regions_from_lines(lines: &[String]) -> Vec<ConflictRegion> {
   let mut regions = Vec::new();
   let mut index = 0;
@@ -247,6 +249,67 @@ fn conflict_regions_from_lines(lines: &[String]) -> Vec<ConflictRegion> {
 
     while scan < lines.len() {
       let line = lines[scan].as_str();
+      if let Some(divider) = divider_line {
+        if is_conflict_end_marker(line) {
+          let current_end = base_marker_line.unwrap_or(divider);
+          regions.push(ConflictRegion {
+            start_line,
+            current_range: (start_line + 1)..current_end,
+            incoming_range: (divider + 1)..scan,
+            replace_end_line: scan + 1,
+          });
+          index = scan + 1;
+          resolved = true;
+          break;
+        }
+      } else {
+        if is_conflict_start_marker(line) {
+          break;
+        }
+        if base_marker_line.is_none() && is_conflict_base_marker(line) {
+          base_marker_line = Some(scan);
+          scan += 1;
+          continue;
+        }
+        if is_conflict_divider_marker(line) {
+          divider_line = Some(scan);
+          scan += 1;
+          continue;
+        }
+      }
+
+      scan += 1;
+    }
+
+    if !resolved {
+      index = start_line + 1;
+    }
+  }
+
+  regions
+}
+
+fn conflict_regions_from_document(document: &Document) -> Vec<ConflictRegion> {
+  let mut regions = Vec::new();
+  let mut index = 0;
+  let line_count = document.len_lines();
+
+  while index < line_count {
+    let line = document.line_content(index).unwrap_or_default();
+    if !is_conflict_start_marker(line.as_ref()) {
+      index += 1;
+      continue;
+    }
+
+    let start_line = index;
+    let mut scan = index + 1;
+    let mut base_marker_line = None;
+    let mut divider_line = None;
+    let mut resolved = false;
+
+    while scan < line_count {
+      let line = document.line_content(scan).unwrap_or_default();
+      let line = line.as_ref();
       if let Some(divider) = divider_line {
         if is_conflict_end_marker(line) {
           let current_end = base_marker_line.unwrap_or(divider);
@@ -386,6 +449,7 @@ pub struct Editor {
   pub visible_groups: Vec<GroupOverlay>,
   pub hovered_group_id: Option<Arc<str>>,
   pub hovered_conflict_start_line: Option<usize>,
+  conflict_cache: RwLock<ConflictCache>,
   pub last_mouse_position: Option<Point<Pixels>>,
   pub expanded_gaps: HashMap<GapId, GapReveal>,
   pub workdir_path: PathBuf,
@@ -556,6 +620,23 @@ impl ConflictRegion {
   }
 }
 
+#[derive(Debug)]
+struct ConflictCache {
+  dirty: bool,
+  regions: Arc<Vec<ConflictRegion>>,
+  line_kinds: Arc<HashMap<usize, ConflictLineKind>>,
+}
+
+impl Default for ConflictCache {
+  fn default() -> Self {
+    Self {
+      dirty: true,
+      regions: Arc::new(Vec::new()),
+      line_kinds: Arc::new(HashMap::new()),
+    }
+  }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DisplayCursor {
   pub line: usize,
@@ -693,6 +774,7 @@ impl Editor {
       visible_groups: Vec::new(),
       hovered_group_id: None,
       hovered_conflict_start_line: None,
+      conflict_cache: RwLock::new(ConflictCache::default()),
       last_mouse_position: None,
       expanded_gaps: HashMap::new(),
       last_highlights_version: 0,
@@ -4566,6 +4648,7 @@ impl Editor {
     self.document.update(cx, |doc, cx| {
       doc.replace_all(&contents, cx);
     });
+    self.mark_conflict_cache_dirty();
     self.line_layouts.clear();
     self.virtual_line_layouts.clear();
     self.expanded_gaps.clear();
@@ -4648,29 +4731,38 @@ impl Editor {
     })
   }
 
-  fn conflict_regions(&self, cx: &App) -> Vec<ConflictRegion> {
-    let document = self.document.read(cx);
-    let line_count = document.len_lines();
-    if line_count == 0 {
-      return Vec::new();
-    }
-
-    let mut lines = Vec::with_capacity(line_count);
-    for line_idx in 0..line_count {
-      lines.push(
-        document
-          .line_content(line_idx)
-          .map(|line| line.into_owned())
-          .unwrap_or_default(),
-      );
-    }
-
-    conflict_regions_from_lines(&lines)
+  fn mark_conflict_cache_dirty(&self) {
+    self.conflict_cache.write().dirty = true;
   }
 
-  pub(crate) fn conflict_line_kinds(&self, cx: &App) -> HashMap<usize, ConflictLineKind> {
-    let regions = self.conflict_regions(cx);
-    conflict_line_kinds_from_regions(&regions)
+  fn ensure_conflict_cache(&self, cx: &App) {
+    if !self.conflict_cache.read().dirty {
+      return;
+    }
+
+    let regions = {
+      let document = self.document.read(cx);
+      conflict_regions_from_document(&document)
+    };
+    let line_kinds = conflict_line_kinds_from_regions(&regions);
+
+    let mut cache = self.conflict_cache.write();
+    if !cache.dirty {
+      return;
+    }
+    cache.regions = Arc::new(regions);
+    cache.line_kinds = Arc::new(line_kinds);
+    cache.dirty = false;
+  }
+
+  fn conflict_regions(&self, cx: &App) -> Arc<Vec<ConflictRegion>> {
+    self.ensure_conflict_cache(cx);
+    self.conflict_cache.read().regions.clone()
+  }
+
+  pub(crate) fn conflict_line_kinds(&self, cx: &App) -> Arc<HashMap<usize, ConflictLineKind>> {
+    self.ensure_conflict_cache(cx);
+    self.conflict_cache.read().line_kinds.clone()
   }
 
   pub fn has_unresolved_conflict_markers(&self, cx: &App) -> bool {
@@ -4683,9 +4775,9 @@ impl Editor {
     cx: &App,
   ) -> Option<usize> {
     let doc_line = self.display_to_doc_line(display_line)?;
-    self
-      .conflict_regions(cx)
-      .into_iter()
+    let regions = self.conflict_regions(cx);
+    regions
+      .iter()
       .find(|region| region.contains_doc_line(doc_line))
       .map(|region| region.start_line)
   }
@@ -4704,10 +4796,11 @@ impl Editor {
       return;
     }
 
-    let Some(region) = self
-      .conflict_regions(cx)
-      .into_iter()
+    let regions = self.conflict_regions(cx);
+    let Some(region) = regions
+      .iter()
       .find(|region| region.start_line == conflict_start_line)
+      .cloned()
     else {
       return;
     };
@@ -4783,6 +4876,7 @@ impl Editor {
       cx.notify();
       id
     });
+    self.mark_conflict_cache_dirty();
 
     self.invalidate_lines_from(start_line);
     self.display_selection = None;
@@ -4809,9 +4903,9 @@ impl Editor {
       return;
     }
 
-    let mut conflict_start_lines = self
-      .conflict_regions(cx)
-      .into_iter()
+    let conflict_regions = self.conflict_regions(cx);
+    let mut conflict_start_lines = conflict_regions
+      .iter()
       .map(|region| region.start_line)
       .collect::<Vec<_>>();
     conflict_start_lines.sort_unstable();
@@ -6480,6 +6574,7 @@ impl EntityInputHandler for Editor {
       cx.notify();
       id
     });
+    self.mark_conflict_cache_dirty();
 
     let has_newline = new_text.contains('\n');
 
@@ -6556,6 +6651,7 @@ impl EntityInputHandler for Editor {
         cx,
       );
     });
+    self.mark_conflict_cache_dirty();
 
     // Invalidate cache for all lines from the start of the edit
     self.invalidate_lines_from(start_line);
@@ -7090,6 +7186,20 @@ pub mod tests {
   }
 
   #[gpui::test]
+  fn conflict_regions_from_document_matches_line_parser(cx: &mut TestAppContext) {
+    let text =
+      "before\n<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> branch\nafter\n";
+    let doc = cx.new(|cx| Document::new(text, None, cx));
+    doc.read_with(cx, |doc, _| {
+      let lines = text.lines().map(String::from).collect::<Vec<_>>();
+      assert_eq!(
+        conflict_regions_from_document(doc),
+        conflict_regions_from_lines(&lines)
+      );
+    });
+  }
+
+  #[gpui::test]
   fn has_unresolved_conflict_markers_detects_conflict_markers(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(
       cx.clone(),
@@ -7111,6 +7221,40 @@ pub mod tests {
   }
 
   #[gpui::test]
+  fn resolve_conflict_region_invalidates_conflict_cache(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(
+      cx.clone(),
+      "pre\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\npost\n",
+    );
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      assert!(editor.has_unresolved_conflict_markers(cx));
+      let conflict_regions = editor.conflict_regions(cx);
+      let conflict_start_line = conflict_regions
+        .iter()
+        .next()
+        .expect("conflict region")
+        .start_line;
+      editor.resolve_conflict_region(conflict_start_line, ConflictResolution::Current, cx);
+      assert!(!editor.has_unresolved_conflict_markers(cx));
+    });
+  }
+
+  #[gpui::test]
+  fn load_readonly_snapshot_invalidates_conflict_cache(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(
+      cx.clone(),
+      "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n",
+    );
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      assert!(editor.has_unresolved_conflict_markers(cx));
+      editor.load_readonly_snapshot("resolved\ncontent\n".to_string(), None, cx);
+      assert!(!editor.has_unresolved_conflict_markers(cx));
+    });
+  }
+
+  #[gpui::test]
   fn resolve_conflict_region_accept_current(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(
       cx.clone(),
@@ -7118,9 +7262,9 @@ pub mod tests {
     );
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      let conflict_start_line = editor
-        .conflict_regions(cx)
-        .into_iter()
+      let conflict_regions = editor.conflict_regions(cx);
+      let conflict_start_line = conflict_regions
+        .iter()
         .next()
         .expect("conflict region")
         .start_line;
@@ -7138,9 +7282,9 @@ pub mod tests {
     );
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      let conflict_start_line = editor
-        .conflict_regions(cx)
-        .into_iter()
+      let conflict_regions = editor.conflict_regions(cx);
+      let conflict_start_line = conflict_regions
+        .iter()
         .next()
         .expect("conflict region")
         .start_line;
@@ -7158,9 +7302,9 @@ pub mod tests {
     );
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      let conflict_start_line = editor
-        .conflict_regions(cx)
-        .into_iter()
+      let conflict_regions = editor.conflict_regions(cx);
+      let conflict_start_line = conflict_regions
+        .iter()
         .next()
         .expect("conflict region")
         .start_line;
@@ -7445,6 +7589,7 @@ pub mod tests {
           visible_groups: Vec::new(),
           hovered_group_id: None,
           hovered_conflict_start_line: None,
+          conflict_cache: RwLock::new(ConflictCache::default()),
           last_mouse_position: None,
           expanded_gaps: HashMap::new(),
           workdir_path: PathBuf::new(),
