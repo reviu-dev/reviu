@@ -9,6 +9,12 @@ pub struct HeadCommitStatus {
   pub can_undo_last_commit: bool,
 }
 
+fn repo_signature(repo: &Repository) -> Result<Signature<'_>> {
+  repo
+    .signature()
+    .context("git user identity is not configured (set user.name and user.email)")
+}
+
 pub fn head_commit_status(repo_root: &Path) -> Result<HeadCommitStatus> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
@@ -51,9 +57,7 @@ pub fn commit_changes(repo_root: &Path, message: &str) -> Result<()> {
   let tree_id = index.write_tree()?;
   let tree = repo.find_tree(tree_id)?;
 
-  let signature = repo
-    .signature()
-    .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
+  let signature = repo_signature(&repo)?;
 
   let parent_commit = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
   if let Some(parent) = parent_commit.as_ref() {
@@ -84,9 +88,7 @@ pub fn amend_commit(repo_root: &Path, message: Option<&str>) -> Result<()> {
   let tree_id = index.write_tree()?;
   let tree = repo.find_tree(tree_id)?;
 
-  let signature = repo
-    .signature()
-    .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
+  let signature = repo_signature(&repo)?;
 
   let message = message.map(|msg| msg.trim()).filter(|msg| !msg.is_empty());
 
@@ -261,7 +263,14 @@ mod tests {
         .as_nanos();
       path.push(format!("reviu-{prefix}-{}-{nanos}", std::process::id()));
       std::fs::create_dir_all(&path).expect("create temp dir");
-      Repository::init(&path).expect("init git repository");
+      let repo = Repository::init(&path).expect("init git repository");
+      let mut config = repo.config().expect("open git config");
+      config
+        .set_str("user.name", "Reviu Tests")
+        .expect("set git user.name");
+      config
+        .set_str("user.email", "tests@reviu.local")
+        .expect("set git user.email");
       Self { path }
     }
   }

@@ -90,11 +90,7 @@ pub fn start_interactive_rebase(
     .arg("-i")
     .arg(target_command_arg(target))
     .env("GIT_SEQUENCE_EDITOR", &editor_script.path)
-    .env("GIT_EDITOR", ":")
-    .env("GIT_AUTHOR_NAME", "Reviu")
-    .env("GIT_AUTHOR_EMAIL", "reviu@contact")
-    .env("GIT_COMMITTER_NAME", "Reviu")
-    .env("GIT_COMMITTER_EMAIL", "reviu@contact");
+    .env("GIT_EDITOR", ":");
 
   let output = command.output().context("run interactive rebase")?;
   if output.status.success() {
@@ -351,7 +347,14 @@ mod tests {
         .as_nanos();
       path.push(format!("reviu-{prefix}-{}-{nanos}", std::process::id()));
       std::fs::create_dir_all(&path).expect("create temp dir");
-      Repository::init(&path).expect("init git repository");
+      let repo = Repository::init(&path).expect("init git repository");
+      let mut config = repo.config().expect("open git config");
+      config
+        .set_str("user.name", "Reviu Tests")
+        .expect("set git user.name");
+      config
+        .set_str("user.email", "tests@reviu.local")
+        .expect("set git user.email");
       Self { path }
     }
   }
