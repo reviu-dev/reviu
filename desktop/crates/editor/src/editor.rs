@@ -4804,6 +4804,27 @@ impl Editor {
     cx.notify();
   }
 
+  pub fn resolve_all_conflicts(
+    &mut self,
+    resolution: ConflictResolution,
+    cx: &mut Context<Self>,
+  ) {
+    if self.is_read_only {
+      return;
+    }
+
+    let mut conflict_start_lines = self
+      .conflict_regions(cx)
+      .into_iter()
+      .map(|region| region.start_line)
+      .collect::<Vec<_>>();
+    conflict_start_lines.sort_unstable();
+
+    for start_line in conflict_start_lines.into_iter().rev() {
+      self.resolve_conflict_region(start_line, resolution, cx);
+    }
+  }
+
   pub fn display_to_doc_line(&self, display_line: usize) -> Option<usize> {
     if let Some(projection) = &self.projection {
       projection.display_to_doc_line(display_line)
@@ -7151,6 +7172,36 @@ pub mod tests {
     });
 
     assert_eq!(ctx.text(), "pre\nours\ntheirs\npost\n");
+  }
+
+  #[gpui::test]
+  fn resolve_all_conflicts_accept_current(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(
+      cx.clone(),
+      "pre\n<<<<<<< HEAD\nours1\n=======\ntheirs1\n>>>>>>> branch\nmid\n<<<<<<< HEAD\nours2\n=======\ntheirs2\n>>>>>>> branch\npost\n",
+    );
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.resolve_all_conflicts(ConflictResolution::Current, cx);
+      assert!(!editor.has_unresolved_conflict_markers(cx));
+    });
+
+    assert_eq!(ctx.text(), "pre\nours1\nmid\nours2\npost\n");
+  }
+
+  #[gpui::test]
+  fn resolve_all_conflicts_accept_incoming(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(
+      cx.clone(),
+      "pre\n<<<<<<< HEAD\nours1\n=======\ntheirs1\n>>>>>>> branch\nmid\n<<<<<<< HEAD\nours2\n=======\ntheirs2\n>>>>>>> branch\npost\n",
+    );
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.resolve_all_conflicts(ConflictResolution::Incoming, cx);
+      assert!(!editor.has_unresolved_conflict_markers(cx));
+    });
+
+    assert_eq!(ctx.text(), "pre\ntheirs1\nmid\ntheirs2\npost\n");
   }
 
   #[gpui::test]

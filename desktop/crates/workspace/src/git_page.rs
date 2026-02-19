@@ -542,6 +542,7 @@ pub struct GitPage {
   history_rows_cache: Vec<HistoryRenderRow>,
   history_tree_nodes: HashMap<String, HistoryTreeNode>,
   selected_file: Option<PathBuf>,
+  select_first_file_after_restore: bool,
   force_list_selection: bool,
   editor: Option<Entity<Editor>>,
   diff_view: DiffViewMode,
@@ -559,6 +560,7 @@ pub struct GitPage {
   branch_refresh_generation: u64,
   poll_task: Option<Task<()>>,
   commit_input: Entity<InputState>,
+  operation_error: Option<SharedString>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -715,6 +717,9 @@ impl GitPage {
     self.branch_status = branch_status;
     self.merge_in_progress = merge_in_progress;
     self.rebase_in_progress = rebase_in_progress;
+    if !rebase_in_progress {
+      self.operation_error = None;
+    }
     self.sync_rebase_commit_input(
       was_rebase_in_progress,
       rebase_in_progress,
@@ -743,6 +748,13 @@ impl GitPage {
       self.editor = None;
     } else if selected_file_update.sync_diff_view {
       self.sync_diff_view(cx);
+    }
+
+    if self.select_first_file_after_restore {
+      self.select_first_file_after_restore = false;
+      if let Some(first_path) = self.status_entries.first().map(|entry| entry.path.clone()) {
+        self.open_file(first_path, cx);
+      }
     }
 
     branch_changed
@@ -1153,6 +1165,7 @@ impl GitPage {
       history_rows_cache: Vec::new(),
       history_tree_nodes: HashMap::new(),
       selected_file: None,
+      select_first_file_after_restore: false,
       force_list_selection: false,
       editor: None,
       diff_view: DiffViewMode::Inline,
@@ -1170,6 +1183,7 @@ impl GitPage {
       branch_refresh_generation: 0,
       poll_task: None,
       commit_input,
+      operation_error: None,
     };
 
     view.subscribe_to_repo_select(cx);
@@ -1241,6 +1255,7 @@ impl GitPage {
       history_rows_cache: Vec::new(),
       history_tree_nodes: HashMap::new(),
       selected_file: None,
+      select_first_file_after_restore: false,
       force_list_selection: false,
       editor: None,
       diff_view: DiffViewMode::Inline,
@@ -1258,6 +1273,7 @@ impl GitPage {
       branch_refresh_generation: 0,
       poll_task: None,
       commit_input,
+      operation_error: None,
     };
 
     view.subscribe_to_repo_select(cx);
@@ -1333,6 +1349,8 @@ impl GitPage {
 
     self.selected_repo = Some(repo_root.clone());
     self.selected_file = None;
+    self.select_first_file_after_restore = false;
+    self.operation_error = None;
     self.editor = None;
     self.merge_in_progress = false;
     self.rebase_in_progress = false;
@@ -1536,6 +1554,7 @@ impl GitPage {
   fn reload_status(&mut self, cx: &mut Context<Self>) {
     let Some(repo_root) = self.selected_repo.clone() else {
       self.status_entries.clear();
+      self.select_first_file_after_restore = false;
       if Self::should_refresh_file_list(self.sidebar_mode) {
         self.refresh_file_list(cx);
       }
@@ -1547,6 +1566,7 @@ impl GitPage {
       self.has_staged_changes = false;
       self.merge_in_progress = false;
       self.rebase_in_progress = false;
+      self.operation_error = None;
       self.history_commits.clear();
       self.history_revision = None;
       self.history_loading = false;
@@ -1616,6 +1636,7 @@ impl GitPage {
             return;
           }
           this.status_entries.clear();
+          this.select_first_file_after_restore = false;
           this.branch_status = None;
           this.has_head_commit = false;
           this.can_undo_last_commit = false;
@@ -1624,6 +1645,7 @@ impl GitPage {
           this.has_staged_changes = false;
           this.merge_in_progress = false;
           this.rebase_in_progress = false;
+          this.operation_error = None;
           this.selected_file = None;
           this.editor = None;
           this.history_opened_commit_file = None;
@@ -2451,7 +2473,10 @@ impl GitPage {
     if !self.rebase_in_progress {
       return;
     }
+    self.operation_error = None;
     if Self::has_conflicted_entries(&self.status_entries) {
+      self.operation_error = Some("Resolve all conflicts before continuing the rebase.".into());
+      cx.notify();
       return;
     }
 
@@ -2461,14 +2486,24 @@ impl GitPage {
     let task = cx.spawn(async move |this, cx| {
       let repo_root_for_continue = repo_root.clone();
       let result = unblock(move || continue_rebase(&repo_root_for_continue)).await;
-      let conflicted_path = if result.is_err() {
-        Self::first_conflicted_path(&repo_root)
-      } else {
-        None
+      let (success, conflicted_path, error_message) = match result {
+        Ok(()) => (true, None, None),
+        Err(err) => {
+          let conflicted_path = Self::first_conflicted_path(&repo_root);
+          let is_conflict_state =
+            conflicted_path.is_some() || err.to_string().contains("rebase has conflicts");
+          let error_message = if is_conflict_state {
+            None
+          } else {
+            Some(format!("Continue rebase failed: {err}"))
+          };
+          (false, conflicted_path, error_message)
+        }
       };
       let _ = this.update(cx, |this, cx| {
-        if result.is_ok() {
+        if success {
           this.rebase_in_progress = false;
+          this.operation_error = None;
           let _ = cx.update_window(window_handle, |_, window, cx| {
             commit_input.update(cx, |input, cx| input.set_value("", window, cx));
           });
@@ -2477,9 +2512,13 @@ impl GitPage {
         if let Some(path) = conflicted_path {
           this.open_file(path, cx);
         }
+        if let Some(error_message) = error_message {
+          this.operation_error = Some(error_message.into());
+        }
         if let Some(editor) = editor.clone() {
           editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
         }
+        cx.notify();
       });
     });
     self.status_task = Some(task);
@@ -2882,6 +2921,15 @@ impl GitPage {
     }
   }
 
+  fn restore_all_click_action(
+    &mut self,
+    _: &gpui::ClickEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.confirm_restore_all_action(window, cx);
+  }
+
   fn abort_merge_action(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
@@ -3031,7 +3079,7 @@ impl GitPage {
     let rel_path_for_job = rel_path.clone();
     let should_delete = Self::restore_uses_delete(status);
     let task = cx.spawn(async move |this, cx| {
-      let _ = unblock(move || {
+      let result = unblock(move || {
         if should_delete {
           delete_untracked_file(&repo_root, &rel_path_for_job)
         } else {
@@ -3040,10 +3088,44 @@ impl GitPage {
       })
       .await;
       let _ = this.update(cx, |this, cx| {
+        if result.is_ok() {
+          this.select_first_file_after_restore = true;
+        }
         this.reload_status(cx);
         if Self::should_refresh_editor_for_path(this.selected_file.as_deref(), &rel_path)
           && let Some(editor) = this.editor.clone()
         {
+          editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
+        }
+      });
+    });
+    self.status_task = Some(task);
+  }
+
+  fn restore_all_action(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    if self.status_entries.is_empty() {
+      return;
+    }
+    let entries = self.status_entries.clone();
+    let editor = self.editor.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let _ = unblock(move || {
+        for entry in entries {
+          if Self::restore_uses_delete(entry.status) {
+            let _ = delete_untracked_file(&repo_root, &entry.path);
+          } else {
+            let _ = restore_file(&repo_root, &entry.path);
+          }
+        }
+      })
+      .await;
+      let _ = this.update(cx, |this, cx| {
+        this.select_first_file_after_restore = true;
+        this.reload_status(cx);
+        if let Some(editor) = editor.clone() {
           editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
         }
       });
@@ -3150,6 +3232,35 @@ impl GitPage {
     });
   }
 
+  fn confirm_restore_all_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.selected_repo.is_none() || self.status_entries.is_empty() {
+      return;
+    }
+    let has_untracked = Self::has_untracked_entries(&self.status_entries);
+    let title: SharedString = "Restore all files?".into();
+    let message: SharedString = if has_untracked {
+      "Discard all tracked changes and delete all untracked files?".into()
+    } else {
+      "Discard all changes in the repository?".into()
+    };
+    let view = cx.entity();
+
+    window.open_dialog(cx, move |dialog, _, _| {
+      let view = view.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text("Restore all")
+        .cancel_text("Cancel")
+        .destructive()
+        .on_confirm(move |_, _, cx| {
+          view.update(cx, |view, cx| {
+            view.restore_all_action(cx);
+          });
+          true
+        })
+        .build(dialog)
+    });
+  }
+
   fn stage_style(
     stage: RepoStage,
     theme: &gpui_component::Theme,
@@ -3217,6 +3328,12 @@ impl GitPage {
     entries
       .iter()
       .any(|entry| entry.status == RepoStatusKind::Conflicted)
+  }
+
+  fn has_untracked_entries(entries: &[RepoStatusEntry]) -> bool {
+    entries
+      .iter()
+      .any(|entry| entry.status == RepoStatusKind::Untracked)
   }
 
   fn should_confirm_stage_all(
@@ -3933,6 +4050,33 @@ impl GitPage {
     } else {
       (false, false, false, None, None)
     };
+    let show_accept_all_conflict_actions = matches!(file_status, Some(RepoStatusKind::Conflicted));
+    let can_accept_all_conflicts =
+      show_accept_all_conflict_actions && !editor_state.is_read_only && editor_state.has_unresolved_conflict_markers(cx);
+
+    let editor_entity_accept_current = editor.clone();
+    let accept_all_current_button = Button::new("editor-accept-all-current")
+      .label("Accept All Current")
+      .xsmall()
+      .ghost()
+      .disabled(!can_accept_all_conflicts)
+      .on_click(move |_, _, cx| {
+        editor_entity_accept_current.update(cx, |editor, cx| {
+          editor.resolve_all_conflicts(ConflictResolution::Current, cx);
+        });
+      });
+
+    let editor_entity_accept_incoming = editor.clone();
+    let accept_all_incoming_button = Button::new("editor-accept-all-incoming")
+      .label("Accept All Incoming")
+      .xsmall()
+      .ghost()
+      .disabled(!can_accept_all_conflicts)
+      .on_click(move |_, _, cx| {
+        editor_entity_accept_incoming.update(cx, |editor, cx| {
+          editor.resolve_all_conflicts(ConflictResolution::Incoming, cx);
+        });
+      });
 
     let file_path_stage = file_path.clone();
     let file_path_unstage = file_path.clone();
@@ -4013,6 +4157,11 @@ impl GitPage {
           .items_center()
           .gap_2()
           .flex_shrink_0()
+          .when(show_accept_all_conflict_actions, |this| {
+            this
+              .child(accept_all_current_button)
+              .child(accept_all_incoming_button)
+          })
           .child(stage_button)
           .child(unstage_button)
           .child(restore_button)
@@ -4413,6 +4562,7 @@ impl GitPage {
     let theme = cx.theme().clone();
     let input = self.commit_input.clone();
     let has_conflicts = Self::has_conflicted_entries(&self.status_entries);
+    let operation_error = self.operation_error.clone();
 
     div()
       .w_full()
@@ -4431,6 +4581,11 @@ impl GitPage {
           .title("Conflicts detected"),
         )
       })
+      .when_some(operation_error, |this, error| {
+        this.child(
+          Alert::error("commit-operation-error", error.clone()).title("Operation failed"),
+        )
+      })
       .child(div().w_full().child(Input::new(&input)))
       .child(self.render_commit_button(cx))
   }
@@ -4439,6 +4594,7 @@ impl GitPage {
     let theme = cx.theme();
     let all_staged = self.all_changes_staged();
     let sidebar_enabled = self.selected_repo.is_some() && !self.status_entries.is_empty();
+    let restore_all_enabled = sidebar_enabled;
     let merge_abort_enabled = self.selected_repo.is_some() && self.merge_in_progress;
     let rebase_abort_enabled = self.selected_repo.is_some() && self.rebase_in_progress;
     let changed_files_count = Self::changed_files_count(&self.status_entries);
@@ -4532,6 +4688,16 @@ impl GitPage {
                 .disabled(!sidebar_enabled)
                 .tooltip(tooltip)
                 .on_click(cx.listener(Self::toggle_stage_all_action)),
+            )
+            .child(
+              Button::new("restore-all-button")
+                .label("Restore all")
+                .icon(IconName::Undo)
+                .with_variant(ButtonVariant::Secondary)
+                .xsmall()
+                .disabled(!restore_all_enabled)
+                .tooltip("Discard all changes")
+                .on_click(cx.listener(Self::restore_all_click_action)),
             )
           })
           .child(
@@ -7971,6 +8137,104 @@ mod tests {
     assert!(
       list_repo_status(&repo.path)
         .expect("status after deleted restore")
+        .is_empty()
+    );
+  }
+
+  #[gpui::test]
+  async fn restore_file_action_selects_first_remaining_file(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-restore-select-first-remaining");
+    let first_path = Path::new("a-first.txt");
+    let second_path = Path::new("b-second.txt");
+    let _ = commit_text_file(&repo.path, first_path, "v1\n", "initial first");
+    let _ = commit_text_file(&repo.path, second_path, "v1\n", "initial second");
+    std::fs::write(repo.path.join(first_path), "first change\n").expect("modify first file");
+    std::fs::write(repo.path.join(second_path), "second change\n").expect("modify second file");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let reload_task = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.reload_status(cx);
+      this.status_task.take().expect("reload status task")
+    });
+    reload_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let (restore_path, expected_first_remaining_path) = git_page.read_with(cx, |this, _| {
+      assert_eq!(
+        this.status_entries.len(),
+        2,
+        "expected two modified files before restore"
+      );
+      (
+        this.status_entries[1].path.clone(),
+        this.status_entries[0].path.clone(),
+      )
+    });
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.open_file(restore_path.clone(), cx);
+    });
+
+    let restore_task = git_page.update_in(cx, |this, _window, cx| {
+      this.restore_file_action(restore_path.clone(), RepoStatusKind::Modified, cx);
+      this.status_task.take().expect("restore file task")
+    });
+    restore_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let (selected_file, entries_len, first_remaining_path) = git_page.read_with(cx, |this, _| {
+      (
+        this.selected_file.clone(),
+        this.status_entries.len(),
+        this.status_entries.first().map(|entry| entry.path.clone()),
+      )
+    });
+
+    assert_eq!(entries_len, 1);
+    assert_eq!(first_remaining_path, Some(expected_first_remaining_path));
+    assert_eq!(selected_file, first_remaining_path);
+  }
+
+  #[gpui::test]
+  async fn restore_all_action_restores_tracked_and_deletes_untracked(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-restore-all");
+    let tracked_path = Path::new("README.md");
+    let untracked_path = Path::new("notes.txt");
+    let _ = commit_text_file(&repo.path, tracked_path, "v1\n", "initial");
+    std::fs::write(repo.path.join(tracked_path), "v2\n").expect("modify tracked file");
+    std::fs::write(repo.path.join(untracked_path), "temporary\n").expect("write untracked file");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let reload_task = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.reload_status(cx);
+      this.status_task.take().expect("reload status task")
+    });
+    reload_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let restore_all_task = git_page.update_in(cx, |this, _window, cx| {
+      this.restore_all_action(cx);
+      this.status_task.take().expect("restore all task")
+    });
+    restore_all_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(tracked_path)).expect("read tracked file"),
+      "v1\n"
+    );
+    assert!(!repo.path.join(untracked_path).exists());
+    assert!(
+      list_repo_status(&repo.path)
+        .expect("status after restore all")
         .is_empty()
     );
   }
