@@ -511,45 +511,45 @@ impl Element for GutterElement {
         if let Some(group_id) = group_id
           && let (Some(projection), Some((top_color, bottom_color))) =
             (projection.as_ref(), group_border_colors.get(&group_id))
-          {
-            let prev_group = display_idx
-              .checked_sub(1)
-              .and_then(|idx| projection.lines.get(idx))
-              .and_then(&group_id_for_line);
-            let next_group = projection
-              .lines
-              .get(display_idx + 1)
-              .and_then(&group_id_for_line);
+        {
+          let prev_group = display_idx
+            .checked_sub(1)
+            .and_then(|idx| projection.lines.get(idx))
+            .and_then(&group_id_for_line);
+          let next_group = projection
+            .lines
+            .get(display_idx + 1)
+            .and_then(&group_id_for_line);
 
-            let is_top = prev_group.as_deref() != Some(group_id.as_ref());
-            let is_bottom = next_group.as_deref() != Some(group_id.as_ref());
-            let border_thickness = px(1.0);
-            let stripe_width = if show_stripes { px(4.0) } else { px(0.0) };
-            let width = if bounds.size.width > stripe_width {
-              bounds.size.width - stripe_width
-            } else {
-              px(0.0)
-            };
-            let x = bounds.left() + stripe_width;
-            let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
+          let is_top = prev_group.as_deref() != Some(group_id.as_ref());
+          let is_bottom = next_group.as_deref() != Some(group_id.as_ref());
+          let border_thickness = px(1.0);
+          let stripe_width = if show_stripes { px(4.0) } else { px(0.0) };
+          let width = if bounds.size.width > stripe_width {
+            bounds.size.width - stripe_width
+          } else {
+            px(0.0)
+          };
+          let x = bounds.left() + stripe_width;
+          let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
 
-            if is_top {
-              group_borders.push(fill(
-                Bounds::new(point(x, y), size(width, border_thickness)),
-                *top_color,
-              ));
-            }
-
-            if is_bottom {
-              group_borders.push(fill(
-                Bounds::new(
-                  point(x, y + line_height - border_thickness),
-                  size(width, border_thickness),
-                ),
-                *bottom_color,
-              ));
-            }
+          if is_top {
+            group_borders.push(fill(
+              Bounds::new(point(x, y), size(width, border_thickness)),
+              *top_color,
+            ));
           }
+
+          if is_bottom {
+            group_borders.push(fill(
+              Bounds::new(
+                point(x, y + line_height - border_thickness),
+                size(width, border_thickness),
+              ),
+              *bottom_color,
+            ));
+          }
+        }
       }
 
       if let Some(start) = current_blank_start.take()

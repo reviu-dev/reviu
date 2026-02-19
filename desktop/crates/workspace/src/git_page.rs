@@ -4108,8 +4108,9 @@ impl GitPage {
       (false, false, false, None, None)
     };
     let show_accept_all_conflict_actions = matches!(file_status, Some(RepoStatusKind::Conflicted));
-    let can_accept_all_conflicts =
-      show_accept_all_conflict_actions && !editor_state.is_read_only && editor_state.has_unresolved_conflict_markers(cx);
+    let can_accept_all_conflicts = show_accept_all_conflict_actions
+      && !editor_state.is_read_only
+      && editor_state.has_unresolved_conflict_markers(cx);
 
     let editor_entity_accept_current = editor.clone();
     let accept_all_current_button = Button::new("editor-accept-all-current")
@@ -4639,9 +4640,7 @@ impl GitPage {
         )
       })
       .when_some(operation_error, |this, error| {
-        this.child(
-          Alert::error("commit-operation-error", error.clone()).title("Operation failed"),
-        )
+        this.child(Alert::error("commit-operation-error", error.clone()).title("Operation failed"))
       })
       .child(div().w_full().child(Input::new(&input)))
       .child(self.render_commit_button(cx))
@@ -4736,26 +4735,27 @@ impl GitPage {
             )
           })
           .when(!is_history_mode, |this| {
-            this.child(
-              Button::new("stage-all-button")
-                .label(label)
-                .icon(icon)
-                .with_variant(ButtonVariant::Secondary)
-                .xsmall()
-                .disabled(!sidebar_enabled)
-                .tooltip(tooltip)
-                .on_click(cx.listener(Self::toggle_stage_all_action)),
-            )
-            .child(
-              Button::new("restore-all-button")
-                .label("Restore all")
-                .icon(IconName::Undo)
-                .with_variant(ButtonVariant::Secondary)
-                .xsmall()
-                .disabled(!restore_all_enabled)
-                .tooltip("Discard all changes")
-                .on_click(cx.listener(Self::restore_all_click_action)),
-            )
+            this
+              .child(
+                Button::new("stage-all-button")
+                  .label(label)
+                  .icon(icon)
+                  .with_variant(ButtonVariant::Secondary)
+                  .xsmall()
+                  .disabled(!sidebar_enabled)
+                  .tooltip(tooltip)
+                  .on_click(cx.listener(Self::toggle_stage_all_action)),
+              )
+              .child(
+                Button::new("restore-all-button")
+                  .label("Restore all")
+                  .icon(IconName::Undo)
+                  .with_variant(ButtonVariant::Secondary)
+                  .xsmall()
+                  .disabled(!restore_all_enabled)
+                  .tooltip("Discard all changes")
+                  .on_click(cx.listener(Self::restore_all_click_action)),
+              )
           })
           .child(
             Button::new("sidebar-mode-toggle-button")
@@ -5897,14 +5897,27 @@ mod tests {
       .refname_to_id(&tracking_ref)
       .expect("read remote tracking ref before fetch");
 
-    let _ = commit_text_file(&source.path, Path::new("README.md"), "v2\n", "source update");
+    let _ = commit_text_file(
+      &source.path,
+      Path::new("README.md"),
+      "v2\n",
+      "source update",
+    );
     push_branch_to_remote(&source.path, &base_branch, "origin");
     let expected = remote_branch_oid(&remote.path, &base_branch);
-    assert_ne!(before, expected, "expected remote branch to advance after push");
+    assert_ne!(
+      before, expected,
+      "expected remote branch to advance after push"
+    );
 
     let clone_repo = Repository::open(&clone_dir.path).expect("open clone");
     clone_repo
-      .reference(&tracking_ref, before, true, "force stale remote tracking ref")
+      .reference(
+        &tracking_ref,
+        before,
+        true,
+        "force stale remote tracking ref",
+      )
       .expect("force stale remote tracking ref");
 
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
@@ -5947,7 +5960,12 @@ mod tests {
       &clone_dir.path,
     )
     .expect("clone remote");
-    let _ = commit_text_file(&source.path, Path::new("README.md"), "v2\n", "source update");
+    let _ = commit_text_file(
+      &source.path,
+      Path::new("README.md"),
+      "v2\n",
+      "source update",
+    );
     push_branch_to_remote(&source.path, &base_branch, "origin");
 
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
@@ -6835,7 +6853,10 @@ mod tests {
     let result = git_page.update_in(cx, |this, window, cx| {
       this.handle_command_palette_action(CommandPaletteAction::AbortMerge, window, cx)
     });
-    assert!(result.is_ok(), "abort merge via command palette should succeed");
+    assert!(
+      result.is_ok(),
+      "abort merge via command palette should succeed"
+    );
     await_git_page_background_tasks(git_page.clone(), cx).await;
 
     assert!(
@@ -7032,15 +7053,18 @@ mod tests {
 
     assert!(git_page.read_with(cx, |this, _| this.rebase_in_progress));
     git_page.update_in(cx, |this, window, cx| {
-      this.commit_input.update(cx, |input, cx| {
-        input.set_value("main change", window, cx)
-      });
+      this
+        .commit_input
+        .update(cx, |input, cx| input.set_value("main change", window, cx));
     });
 
     let result = git_page.update_in(cx, |this, window, cx| {
       this.handle_command_palette_action(CommandPaletteAction::AbortRebase, window, cx)
     });
-    assert!(result.is_ok(), "abort rebase via command palette should succeed");
+    assert!(
+      result.is_ok(),
+      "abort rebase via command palette should succeed"
+    );
     await_git_page_background_tasks(git_page.clone(), cx).await;
 
     assert!(

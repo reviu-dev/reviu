@@ -352,7 +352,10 @@ enum RebaseCommitOutcome {
 }
 
 fn repo_has_conflicts(repo: &Repository) -> bool {
-  repo.index().map(|index| index.has_conflicts()).unwrap_or(false)
+  repo
+    .index()
+    .map(|index| index.has_conflicts())
+    .unwrap_or(false)
 }
 
 fn is_rebase_conflict_error(repo: &Repository, err: &git2::Error) -> bool {
@@ -815,7 +818,12 @@ mod tests {
       .refname_to_id(&tracking_ref)
       .expect("read remote-tracking branch before fetch");
 
-    let _ = commit_text_file(&source.path, Path::new("README.md"), "v2\n", "source update");
+    let _ = commit_text_file(
+      &source.path,
+      Path::new("README.md"),
+      "v2\n",
+      "source update",
+    );
     push_branch_to_remote(&source.path, &base_branch, "origin");
     let expected = remote_branch_oid(&remote.path, &base_branch);
 
