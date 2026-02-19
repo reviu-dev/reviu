@@ -83,6 +83,10 @@ const GUTTER_LINE_NUMBER_BASE_RIGHT_PADDING_PX: f32 = 20.0;
 const DEFAULT_EDITOR_LINE_HEIGHT: f32 = 20.0;
 /// Diff recompute debounce (ms)
 const DIFF_DEBOUNCE_MS: u64 = 60;
+const LARGE_FILE_DIFF_DEBOUNCE_MS: u64 = 180;
+const HUGE_FILE_DIFF_DEBOUNCE_MS: u64 = 320;
+const LARGE_FILE_DIFF_DEBOUNCE_LINES: usize = 20_000;
+const HUGE_FILE_DIFF_DEBOUNCE_LINES: usize = 80_000;
 /// Build diff projection off the UI thread for very large files.
 const ASYNC_PROJECTION_MIN_DOC_LINES: usize = 5_000;
 /// External change polling interval (ms)
@@ -4121,6 +4125,8 @@ impl Editor {
     let Ok(rel_path) = repo_file.relative_path() else {
       return;
     };
+    let doc_line_count = self.document.read(cx).len_lines();
+    let debounce_ms = Self::diff_debounce_ms_for_line_count(doc_line_count);
 
     // For clean buffers, diff directly from git/workdir to avoid copying very large
     // in-memory documents on the UI thread.
@@ -4131,7 +4137,7 @@ impl Editor {
     let diff_generation = self.diff_generation.clone();
     self.diff_task = Some(cx.spawn(async move |this, cx| {
       cx.background_executor()
-        .timer(Duration::from_millis(DIFF_DEBOUNCE_MS))
+        .timer(Duration::from_millis(debounce_ms))
         .await;
 
       if diff_generation.load(Ordering::Relaxed) != generation {
@@ -4141,13 +4147,17 @@ impl Editor {
       let diffs = if use_workdir_diff {
         unblock(move || git::compute_file_diffs(&repo_file_for_diff)).await
       } else {
-        let Ok(buffer_text) = this.update(cx, |editor, cx| {
+        let Ok(buffer_snapshot) = this.update(cx, |editor, cx| {
           let document = editor.document.read(cx);
-          document.slice_to_string(0..document.len())
+          document.buffer.clone()
         }) else {
           return;
         };
-        unblock(move || git::compute_buffer_diffs(&git_bases, &buffer_text, &rel_path)).await
+        unblock(move || {
+          let buffer_text = buffer_snapshot.slice_to_string(0..buffer_snapshot.len());
+          git::compute_buffer_diffs(&git_bases, &buffer_text, &rel_path)
+        })
+        .await
       };
       let Ok(diffs) = diffs else {
         return;
@@ -4175,6 +4185,16 @@ impl Editor {
 
   fn should_build_projection_in_background(doc_line_count: usize) -> bool {
     doc_line_count >= ASYNC_PROJECTION_MIN_DOC_LINES
+  }
+
+  fn diff_debounce_ms_for_line_count(line_count: usize) -> u64 {
+    if line_count >= HUGE_FILE_DIFF_DEBOUNCE_LINES {
+      HUGE_FILE_DIFF_DEBOUNCE_MS
+    } else if line_count >= LARGE_FILE_DIFF_DEBOUNCE_LINES {
+      LARGE_FILE_DIFF_DEBOUNCE_MS
+    } else {
+      DIFF_DEBOUNCE_MS
+    }
   }
 
   fn build_projection_from_diffs(input: &ProjectionBuildInput) -> Projection {
@@ -5004,7 +5024,9 @@ impl Editor {
       let id = doc.buffer.transaction(Instant::now(), |buffer, tx| {
         buffer.replace(tx, range.clone(), &replacement);
       });
-      doc.schedule_recompute_highlights(cx);
+      if !doc.should_defer_full_highlight() {
+        doc.schedule_recompute_highlights(cx);
+      }
       doc.schedule_viewport_highlights(
         doc_viewport.clone(),
         Some(force_range.clone()),
@@ -6740,7 +6762,9 @@ impl EntityInputHandler for Editor {
       });
 
       // Trigger async syntax re-highlighting with debouncing
-      doc.schedule_recompute_highlights(cx);
+      if !doc.should_defer_full_highlight() {
+        doc.schedule_recompute_highlights(cx);
+      }
       doc.schedule_viewport_highlights(
         doc_viewport.clone(),
         Some(force_range.clone()),
@@ -6820,7 +6844,9 @@ impl EntityInputHandler for Editor {
 
     self.document.update(cx, |doc, cx| {
       doc.replace(range.clone(), new_text, cx);
-      doc.schedule_recompute_highlights(cx);
+      if !doc.should_defer_full_highlight() {
+        doc.schedule_recompute_highlights(cx);
+      }
       doc.schedule_viewport_highlights(
         doc_viewport.clone(),
         Some(force_range.clone()),
@@ -9495,5 +9521,21 @@ pub mod tests {
     assert!(Editor::should_build_projection_in_background(
       ASYNC_PROJECTION_MIN_DOC_LINES
     ));
+  }
+
+  #[test]
+  fn test_diff_debounce_scales_with_large_file_size() {
+    assert_eq!(
+      Editor::diff_debounce_ms_for_line_count(LARGE_FILE_DIFF_DEBOUNCE_LINES.saturating_sub(1)),
+      DIFF_DEBOUNCE_MS
+    );
+    assert_eq!(
+      Editor::diff_debounce_ms_for_line_count(LARGE_FILE_DIFF_DEBOUNCE_LINES),
+      LARGE_FILE_DIFF_DEBOUNCE_MS
+    );
+    assert_eq!(
+      Editor::diff_debounce_ms_for_line_count(HUGE_FILE_DIFF_DEBOUNCE_LINES),
+      HUGE_FILE_DIFF_DEBOUNCE_MS
+    );
   }
 }
