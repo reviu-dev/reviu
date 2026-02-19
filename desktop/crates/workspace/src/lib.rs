@@ -9,7 +9,7 @@ mod git_config_page;
 mod git_page;
 mod github_page;
 mod github_pr_details_page;
-mod interactive_rebase_dialog;
+mod interactive_rebase_todo_view;
 mod settings_page;
 mod workspace;
 

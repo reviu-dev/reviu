@@ -48,8 +48,9 @@ use crate::{
   config::{ConfigStore, RecentRepository},
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
-  interactive_rebase_dialog::{
-    InteractiveRebaseDialog, InteractiveRebaseDialogConfig, InteractiveRebaseDialogHandler,
+  interactive_rebase_todo_view::{
+    InteractiveRebaseTodoView, InteractiveRebaseTodoViewCancelHandler,
+    InteractiveRebaseTodoViewConfig, InteractiveRebaseTodoViewHandler,
   },
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
@@ -554,6 +555,7 @@ pub struct GitPage {
   select_first_file_after_restore: bool,
   force_list_selection: bool,
   editor: Option<Entity<Editor>>,
+  interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
   diff_view: DiffViewMode,
   show_markdown_preview: bool,
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
@@ -1199,6 +1201,7 @@ impl GitPage {
       select_first_file_after_restore: false,
       force_list_selection: false,
       editor: None,
+      interactive_rebase_todo_view: None,
       diff_view: DiffViewMode::Inline,
       show_markdown_preview: false,
       svg_preview: None,
@@ -1294,6 +1297,7 @@ impl GitPage {
       select_first_file_after_restore: false,
       force_list_selection: false,
       editor: None,
+      interactive_rebase_todo_view: None,
       diff_view: DiffViewMode::Inline,
       show_markdown_preview: false,
       svg_preview: None,
@@ -1396,6 +1400,7 @@ impl GitPage {
     self.select_first_file_after_restore = false;
     self.operation_error = None;
     self.editor = None;
+    self.interactive_rebase_todo_view = None;
     self.merge_in_progress = false;
     self.rebase_in_progress = false;
     self.force_push_after_rebase = false;
@@ -1558,6 +1563,7 @@ impl GitPage {
       self.history_commit_files_loading.clear();
       self.pending_history_file_loads.clear();
       self.history_opened_commit_file = None;
+      self.interactive_rebase_todo_view = None;
       self.refresh_history_list(cx);
       cx.notify();
       return;
@@ -1700,6 +1706,7 @@ impl GitPage {
           this.operation_error = None;
           this.selected_file = None;
           this.editor = None;
+          this.interactive_rebase_todo_view = None;
           this.history_opened_commit_file = None;
           this.clear_branch_select(cx);
           if include_history {
@@ -2671,7 +2678,7 @@ impl GitPage {
           let target = target.clone();
           let commits = commits.clone();
           view.update(cx, move |view, cx| {
-            view.open_interactive_rebase_dialog_with_commits(target, commits, window, cx);
+            view.open_interactive_rebase_todo_view_with_commits(target, commits, window, cx);
           });
         });
         Ok(())
@@ -2694,7 +2701,7 @@ impl GitPage {
           let target = target.clone();
           let commits = commits.clone();
           view.update(cx, move |view, cx| {
-            view.open_interactive_rebase_dialog_with_commits(target, commits, window, cx);
+            view.open_interactive_rebase_todo_view_with_commits(target, commits, window, cx);
           });
         });
         Ok(())
@@ -2943,7 +2950,16 @@ impl GitPage {
     Ok(commits)
   }
 
-  fn open_interactive_rebase_dialog_with_commits(
+  fn close_interactive_rebase_todo_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.interactive_rebase_todo_view = None;
+    self.focus_editor_or_page(window, cx);
+    cx.on_next_frame(window, |this, window, cx| {
+      this.focus_editor_or_page(window, cx);
+    });
+    cx.notify();
+  }
+
+  fn open_interactive_rebase_todo_view_with_commits(
     &mut self,
     target: InteractiveRebaseTarget,
     commits: Vec<git::InteractiveRebaseCommit>,
@@ -2956,27 +2972,34 @@ impl GitPage {
       return;
     }
 
-    let view = cx.entity();
-    let on_submit: InteractiveRebaseDialogHandler =
+    let view_for_submit = cx.entity();
+    let on_submit: InteractiveRebaseTodoViewHandler =
       Arc::new(move |target, todo_entries, window, cx| {
-        view.update(cx, |view, cx| {
-          view.start_interactive_rebase_action(target, todo_entries, window, cx)
+        view_for_submit.update(cx, |view, cx| {
+          let result = view.start_interactive_rebase_action(target, todo_entries, window, cx);
+          if result.is_ok() {
+            view.close_interactive_rebase_todo_view(window, cx);
+          }
+          result
         })
       });
 
-    let dialog_config = InteractiveRebaseDialogConfig::new(target, commits, on_submit);
-    let dialog = cx.new(|cx| InteractiveRebaseDialog::new(window, cx, dialog_config));
-    let dialog_for_overlay = dialog.clone();
-
-    window.open_dialog(cx, move |dialog, _, _| {
-      dialog
-        .w(px(860.0))
-        .overlay_closable(true)
-        .keyboard(true)
-        .close_button(false)
-        .title("Interactive rebase")
-        .child(dialog_for_overlay.clone())
+    let view_for_cancel = cx.entity();
+    let on_cancel: InteractiveRebaseTodoViewCancelHandler = Arc::new(move |window, cx| {
+      let _ = view_for_cancel.update(cx, |view, cx| {
+        view.close_interactive_rebase_todo_view(window, cx);
+      });
     });
+
+    let todo_config = InteractiveRebaseTodoViewConfig::new(target, commits, on_submit, on_cancel);
+    let todo_view = cx.new(|cx| InteractiveRebaseTodoView::new(window, cx, todo_config));
+    self.interactive_rebase_todo_view = Some(todo_view.clone());
+    cx.on_next_frame(window, move |_, window, cx| {
+      let _ = todo_view.update(cx, |view, cx| {
+        view.focus_rows_list(window, cx);
+      });
+    });
+    cx.notify();
   }
 
   fn start_interactive_rebase_action(
@@ -3493,6 +3516,16 @@ impl GitPage {
 
   fn focus_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     window.focus(&self.focus_handle, cx);
+  }
+
+  fn focus_editor_or_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(editor) = self.editor.clone() {
+      let editor_focus_handle = editor.read(cx).focus_handle(cx);
+      window.focus(&editor_focus_handle, cx);
+      return;
+    }
+
+    self.focus_page(window, cx);
   }
 
   fn ensure_page_shortcut_focus(&self, cx: &mut Context<Self>) {
@@ -5019,6 +5052,28 @@ impl GitPage {
       .into_any_element()
   }
 
+  fn render_interactive_rebase_todo_header(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    h_flex()
+      .min_h(px(EDITOR_HEADER_HEIGHT))
+      .h(px(EDITOR_HEADER_HEIGHT))
+      .px_3()
+      .items_center()
+      .justify_between()
+      .gap_2()
+      .bg(theme.sidebar)
+      .border_b_1()
+      .border_color(theme.title_bar_border)
+      .child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(Icon::new(UiIconName::GitMerge).size_3())
+          .child("Interactive rebase"),
+      )
+      .into_any_element()
+  }
+
   fn render_editor_with_overlay(
     &mut self,
     editor: Entity<Editor>,
@@ -5617,6 +5672,16 @@ impl GitPage {
   fn render_editor_area(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     if self.selected_repo.is_none() {
       return self.render_empty_state("Select a repository to view changes", cx);
+    }
+
+    if let Some(todo_view) = self.interactive_rebase_todo_view.clone() {
+      return div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .child(self.render_interactive_rebase_todo_header(cx))
+        .child(todo_view)
+        .into_any_element();
     }
 
     let theme = cx.theme().clone();
@@ -6626,6 +6691,35 @@ mod tests {
 
       this.focus_page(window, cx);
       assert!(this.focus_handle.contains_focused(window, cx));
+    });
+  }
+
+  #[gpui::test]
+  fn interactive_rebase_todo_view_open_and_cancel_returns_to_editor(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(PathBuf::from("/tmp/repo"));
+      this.has_head_commit = true;
+      this.branch_status = Some(make_branch_status("main", 0, 0, true));
+      this.status_entries.clear();
+
+      let commits = vec![git::InteractiveRebaseCommit {
+        oid: "1111111111111111111111111111111111111111".to_string(),
+        short_oid: "1111111".to_string(),
+        summary: "sample commit".to_string(),
+      }];
+      this.open_interactive_rebase_todo_view_with_commits(
+        InteractiveRebaseTarget::HeadCount(2),
+        commits,
+        window,
+        cx,
+      );
+      assert!(this.interactive_rebase_todo_view.is_some());
+
+      this.close_interactive_rebase_todo_view(window, cx);
+      assert!(this.interactive_rebase_todo_view.is_none());
     });
   }
 
