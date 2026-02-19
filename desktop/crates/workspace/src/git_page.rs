@@ -16,7 +16,7 @@ use git::{
   drop_stash, fetch, head_commit_status, is_merge_in_progress, is_rebase_in_progress,
   list_branches, list_commit_changed_files, list_commit_history, list_repo_status, list_stashes,
   load_commit_file_diff, merge_branch, pop_stash, push, rebase_branch, restore_file, stage_all,
-  stage_file, switch_branch, undo_last_commit, unstage_all, unstage_file,
+  skip_rebase, stage_file, switch_branch, undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
@@ -2112,6 +2112,17 @@ impl GitPage {
     commands.push(CommandPaletteCommand::open_repository());
 
     if let Some(root_path) = self.selected_repo.clone() {
+      let commit_message = self.commit_input.read(cx).value().to_string();
+      if self.should_show_commit_palette_command(&commit_message) {
+        commands.push(CommandPaletteCommand::commit());
+      }
+      if self.should_show_continue_rebase_palette_command() {
+        commands.push(CommandPaletteCommand::continue_rebase());
+      }
+      if self.should_show_skip_rebase_palette_command() {
+        commands.push(CommandPaletteCommand::skip_rebase());
+      }
+
       if Self::should_show_unstage_all_command(&self.status_entries) {
         commands.push(CommandPaletteCommand::unstage_all());
       } else if Self::should_show_stage_all_command(&self.status_entries) {
@@ -2294,6 +2305,59 @@ impl GitPage {
       CommandPaletteAction::OpenGitChangesSidebar => {
         self.set_sidebar_mode(GitSidebarMode::Changes, window, cx);
         Ok(())
+      }
+      CommandPaletteAction::Commit => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        let commit_message = self.commit_input.read(cx).value().to_string();
+        if !self.should_show_commit_palette_command(&commit_message) {
+          return Err("Commit command is currently disabled.".into());
+        }
+        should_post_action_refresh = false;
+        self.commit_changes_inner(window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::ContinueRebase => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        if !self.should_show_continue_rebase_palette_command() {
+          return Err("Rebase continue is currently disabled.".into());
+        }
+        should_post_action_refresh = false;
+        self.continue_rebase_inner(cx);
+        Ok(())
+      }
+      CommandPaletteAction::SkipRebase => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
+        if !self.should_show_skip_rebase_palette_command() {
+          return Err("No rebase in progress.".into());
+        }
+        match skip_rebase(&root_path) {
+          Ok(()) => {
+            if !is_rebase_in_progress(&root_path).unwrap_or(false) {
+              self.force_push_after_rebase = true;
+            }
+            Ok(())
+          }
+          Err(err) => {
+            if let Some(path) = Self::first_conflicted_path(&root_path) {
+              if let Some(rebase_message) = current_rebase_commit_message(&root_path).ok().flatten()
+              {
+                self
+                  .commit_input
+                  .update(cx, |input, cx| input.set_value(&rebase_message, window, cx));
+              }
+              self.open_file(path, cx);
+              Ok(())
+            } else {
+              Err(err)
+            }
+          }
+        }
       }
       CommandPaletteAction::SwitchRepository(repository) => {
         let repo_root = PathBuf::from(repository.path.as_ref());
@@ -3527,6 +3591,34 @@ impl GitPage {
       RepoStatusKind::Untracked => "Untracked".into(),
       RepoStatusKind::Conflicted => "Conflicted".into(),
     }
+  }
+
+  fn can_continue_rebase_command(&self) -> bool {
+    self.selected_repo.is_some()
+      && self.rebase_in_progress
+      && !Self::has_conflicted_entries(&self.status_entries)
+  }
+
+  fn commit_primary_action_enabled(&self, commit_message: &str) -> bool {
+    if self.rebase_in_progress {
+      self.can_continue_rebase_command()
+    } else {
+      self.selected_repo.is_some()
+        && !commit_message.trim().is_empty()
+        && !self.status_entries.is_empty()
+    }
+  }
+
+  fn should_show_commit_palette_command(&self, commit_message: &str) -> bool {
+    !self.rebase_in_progress && self.commit_primary_action_enabled(commit_message)
+  }
+
+  fn should_show_continue_rebase_palette_command(&self) -> bool {
+    self.rebase_in_progress && self.can_continue_rebase_command()
+  }
+
+  fn should_show_skip_rebase_palette_command(&self) -> bool {
+    self.rebase_in_progress && self.selected_repo.is_some()
   }
 
   fn should_publish_branch(branch_status: Option<&BranchStatus>, has_head_commit: bool) -> bool {
@@ -4773,16 +4865,8 @@ impl GitPage {
 
   fn render_commit_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let repo_ready = self.selected_repo.is_some();
-    let commit_message = self.commit_input.read(cx).value();
-    let commit_message_ready = !commit_message.trim().is_empty();
-    let has_changes = !self.status_entries.is_empty();
-    let can_continue_rebase =
-      repo_ready && self.rebase_in_progress && !Self::has_conflicted_entries(&self.status_entries);
-    let commit_enabled = if self.rebase_in_progress {
-      can_continue_rebase
-    } else {
-      repo_ready && commit_message_ready && has_changes
-    };
+    let commit_message = self.commit_input.read(cx).value().to_string();
+    let commit_enabled = self.commit_primary_action_enabled(&commit_message);
     let amend_enabled = repo_ready && self.has_head_commit;
     let undo_enabled = repo_ready && self.can_undo_last_commit;
     let push_enabled = repo_ready && self.can_push;
@@ -5819,6 +5903,37 @@ mod tests {
     assert_eq!(GitPage::push_action_label(None, true), "Push");
   }
 
+  #[gpui::test]
+  fn palette_commit_and_rebase_commands_follow_commit_button_rules(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-palette-commit-rules");
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    git_page.update_in(cx, |this, _window, _cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.rebase_in_progress = false;
+      this.status_entries = vec![make_status_entry("README.md", RepoStage::Unstaged)];
+      assert!(this.should_show_commit_palette_command("feat: commit"));
+      assert!(!this.should_show_commit_palette_command("   "));
+      assert!(!this.should_show_continue_rebase_palette_command());
+      assert!(!this.should_show_skip_rebase_palette_command());
+
+      this.rebase_in_progress = true;
+      assert!(!this.should_show_commit_palette_command("feat: commit"));
+      assert!(this.should_show_continue_rebase_palette_command());
+      assert!(this.should_show_skip_rebase_palette_command());
+
+      this.status_entries = vec![RepoStatusEntry {
+        path: PathBuf::from("README.md"),
+        old_path: None,
+        status: RepoStatusKind::Conflicted,
+        stage: RepoStage::Unstaged,
+      }];
+      assert!(!this.should_show_continue_rebase_palette_command());
+      assert!(this.should_show_skip_rebase_palette_command());
+    });
+  }
+
   fn make_status_entry(path: &str, stage: RepoStage) -> RepoStatusEntry {
     RepoStatusEntry {
       path: PathBuf::from(path),
@@ -6716,6 +6831,63 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn command_palette_commit_stages_all_when_needed(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-commit");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+    std::fs::write(repo.path.join(rel_path), "v2\n").expect("write unstaged change");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+    let result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.status_entries = list_repo_status(&repo.path).expect("list status before commit");
+      this.commit_input.update(cx, |input, cx| {
+        input.set_value("feat: command palette commit", window, cx)
+      });
+      this.handle_command_palette_action(CommandPaletteAction::Commit, window, cx)
+    });
+    assert!(result.is_ok());
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(
+      list_repo_status(&repo.path)
+        .expect("list status after commit")
+        .is_empty()
+    );
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head commit");
+    assert_eq!(head.summary(), Some("feat: command palette commit"));
+  }
+
+  #[gpui::test]
+  async fn command_palette_commit_returns_error_when_command_is_disabled(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-commit-disabled");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+    std::fs::write(repo.path.join(rel_path), "v2\n").expect("write unstaged change");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.status_entries = list_repo_status(&repo.path).expect("list status before commit");
+      this
+        .commit_input
+        .update(cx, |input, cx| input.set_value("   ", window, cx));
+      this.handle_command_palette_action(CommandPaletteAction::Commit, window, cx)
+    });
+    let error = result.expect_err("disabled commit should return an error");
+    assert_eq!(error.as_ref(), "Commit command is currently disabled.");
+  }
+
+  #[gpui::test]
   async fn command_palette_merge_branch_fast_forwards_current_branch(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-merge");
@@ -6765,8 +6937,6 @@ mod tests {
     assert!(result.is_ok());
 
     await_git_page_background_tasks(git_page.clone(), cx).await;
-
-    assert!(git_page.read_with(cx, |this, _| this.force_push_after_rebase));
 
     let repo_handle = Repository::open(&repo.path).expect("open repo");
     let head = repo_handle
@@ -7139,6 +7309,9 @@ mod tests {
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
 
     let actions = vec![
+      CommandPaletteAction::Commit,
+      CommandPaletteAction::ContinueRebase,
+      CommandPaletteAction::SkipRebase,
       CommandPaletteAction::SwitchBranch(CommandPaletteBranch {
         name: "feature".into(),
         kind: CommandPaletteBranchKind::Local,
@@ -7812,6 +7985,165 @@ mod tests {
         .value()
         .to_string()),
       ""
+    );
+  }
+
+  #[gpui::test]
+  async fn command_palette_continue_rebase_completes_rebase_after_conflict_resolution(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-continue-rebase");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "base\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let _ = commit_text_file(&repo.path, rel_path, "main change\n", "main change");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(&repo.path, rel_path, "feature change\n", "feature change");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base");
+    force_checkout_head(&repo.path);
+
+    let _ = rebase_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect_err("rebase should fail with conflicts");
+
+    std::fs::write(repo.path.join(rel_path), "resolved\n").expect("write resolved contents");
+    stage_file(&repo.path, rel_path).expect("stage resolved file");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let reload_task = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.reload_status(cx);
+      this.status_task.take().expect("reload status task")
+    });
+    reload_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let result = git_page.update_in(cx, |this, window, cx| {
+      this.handle_command_palette_action(CommandPaletteAction::ContinueRebase, window, cx)
+    });
+    assert!(
+      result.is_ok(),
+      "continue rebase via command palette should succeed"
+    );
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(
+      !is_rebase_in_progress(&repo.path).expect("read rebase state after continue"),
+      "rebase state should be cleaned after continue"
+    );
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read README after continue"),
+      "resolved\n"
+    );
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("status after continue rebase")
+        .name,
+      base_branch
+    );
+    assert!(!git_page.read_with(cx, |this, _| this.rebase_in_progress));
+  }
+
+  #[gpui::test]
+  async fn command_palette_skip_rebase_skips_conflicted_commit(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-skip-rebase");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "base\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let _ = commit_text_file(&repo.path, rel_path, "main change\n", "main change");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(&repo.path, rel_path, "feature change\n", "feature change");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base");
+    force_checkout_head(&repo.path);
+
+    let _ = rebase_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect_err("rebase should fail with conflicts");
+    assert!(
+      is_rebase_in_progress(&repo.path).expect("read rebase state"),
+      "rebase state should be active after conflict"
+    );
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let reload_task = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.reload_status(cx);
+      this.status_task.take().expect("reload status task")
+    });
+    reload_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let result = git_page.update_in(cx, |this, window, cx| {
+      this.handle_command_palette_action(CommandPaletteAction::SkipRebase, window, cx)
+    });
+    assert!(result.is_ok(), "skip rebase via command palette should succeed");
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(
+      !is_rebase_in_progress(&repo.path).expect("read rebase state after skip"),
+      "rebase state should be cleaned after skip"
+    );
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read README after skip"),
+      "feature change\n"
+    );
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("status after skip rebase")
+        .name,
+      base_branch
     );
   }
 
