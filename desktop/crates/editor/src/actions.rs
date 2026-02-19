@@ -52,6 +52,10 @@ actions!(
   ]
 );
 
+fn should_handle_backspace_in_display_space(editor: &Editor, cx: &Context<Editor>) -> bool {
+  editor.selected_range.is_empty() && editor.is_read_only_display_cursor(cx)
+}
+
 pub fn enter(editor: &mut Editor, _: &Enter, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
   editor.replace_text_in_range(None, "\n", window, cx);
@@ -72,7 +76,9 @@ pub fn backspace(
   cx: &mut Context<Editor>,
 ) {
   editor.target_column = None;
-  if editor.selected_range.is_empty() && editor.move_display_cursor_horizontal(-1, cx) {
+  if should_handle_backspace_in_display_space(editor, cx)
+    && editor.move_display_cursor_horizontal(-1, cx)
+  {
     editor.ensure_cursor_visible(window, cx);
     return;
   }
@@ -813,4 +819,129 @@ pub fn show_character_palette(
 
 pub fn quit(_editor: &mut Editor, _: &Quit, _: &mut Window, cx: &mut Context<Editor>) {
   cx.quit();
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::{
+    editor::{DisplayCursor, DisplaySelection},
+    projection::{DisplayLine, HunkState, Projection},
+  };
+  use std::{collections::HashMap, sync::Arc};
+
+  fn editable_projection() -> Arc<Projection> {
+    Arc::new(Projection {
+      lines: vec![
+        DisplayLine::Doc {
+          doc_line: 0,
+          old_line: Some(0),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::Doc {
+          doc_line: 1,
+          old_line: Some(1),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+      ],
+      display_to_doc: vec![Some(0), Some(1)],
+      doc_to_display: vec![Some(0), Some(1)],
+      visible_doc_lines: vec![0, 1],
+      start_gap: None,
+      end_gap: None,
+      groups: HashMap::new(),
+    })
+  }
+
+  fn projection_with_removed_line() -> Arc<Projection> {
+    Arc::new(Projection {
+      lines: vec![
+        DisplayLine::Doc {
+          doc_line: 0,
+          old_line: Some(0),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::Removed {
+          text: "removed".to_string(),
+          anchor_line: 0,
+          old_line: 0,
+          hunk: HunkState::Unstaged,
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::Doc {
+          doc_line: 1,
+          old_line: Some(1),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+      ],
+      display_to_doc: vec![Some(0), None, Some(1)],
+      doc_to_display: vec![Some(0), Some(2)],
+      visible_doc_lines: vec![0, 1],
+      start_gap: None,
+      end_gap: None,
+      groups: HashMap::new(),
+    })
+  }
+
+  #[gpui::test]
+  fn should_not_handle_backspace_in_display_space_for_editable_cursor(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let mut ctx = crate::editor::tests::EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.projection = Some(editable_projection());
+      editor.move_to(2, cx);
+      assert!(!should_handle_backspace_in_display_space(editor, cx));
+    });
+  }
+
+  #[gpui::test]
+  fn should_handle_backspace_in_display_space_for_removed_cursor(cx: &mut gpui::TestAppContext) {
+    let mut ctx = crate::editor::tests::EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, _cx| {
+      editor.projection = Some(projection_with_removed_line());
+      editor.selected_range = 0..0;
+      editor.selection_reversed = false;
+      editor.display_selection = Some(DisplaySelection {
+        start: DisplayCursor { line: 1, column: 3 },
+        end: DisplayCursor { line: 1, column: 3 },
+      });
+
+      assert!(should_handle_backspace_in_display_space(editor, _cx));
+    });
+  }
+
+  #[gpui::test]
+  fn should_not_handle_backspace_in_display_space_when_selection_is_not_empty(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let mut ctx = crate::editor::tests::EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, _cx| {
+      editor.projection = Some(projection_with_removed_line());
+      editor.selected_range = 0..1;
+      editor.selection_reversed = false;
+      editor.display_selection = Some(DisplaySelection {
+        start: DisplayCursor { line: 1, column: 3 },
+        end: DisplayCursor { line: 1, column: 3 },
+      });
+
+      assert!(!should_handle_backspace_in_display_space(editor, _cx));
+    });
+  }
 }
