@@ -3162,6 +3162,10 @@ impl GitPage {
     });
   }
 
+  fn focus_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    window.focus(&self.focus_handle, cx);
+  }
+
   fn focus_sidebar_on_next_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if self.sidebar_mode == GitSidebarMode::Changes {
       cx.on_next_frame(window, |this, window, cx| {
@@ -3173,7 +3177,7 @@ impl GitPage {
     }
 
     // Keep page-level shortcuts active in History mode without focusing the tree.
-    window.focus(&self.focus_handle, cx);
+    self.focus_page(window, cx);
   }
 
   fn set_sidebar_mode(
@@ -4922,6 +4926,7 @@ impl GitPage {
               amend_view.update(cx, |this, cx| {
                 let _ = event;
                 this.commit_amend_changes(window, cx);
+                this.focus_page(window, cx);
               });
             }),
         );
@@ -4933,8 +4938,8 @@ impl GitPage {
             .on_click(move |event, window, cx| {
               undo_view.update(cx, |this, cx| {
                 let _ = event;
-                let _ = window;
                 this.undo_last_commit_action(cx);
+                this.focus_page(window, cx);
               });
             }),
         );
@@ -4948,8 +4953,8 @@ impl GitPage {
             .on_click(move |event, window, cx| {
               push_view.update(cx, |this, cx| {
                 let _ = event;
-                let _ = window;
                 this.push_changes_action(cx);
+                this.focus_page(window, cx);
               });
             }),
         );
@@ -4961,8 +4966,8 @@ impl GitPage {
             .on_click(move |event, window, cx| {
               force_push_view.update(cx, |this, cx| {
                 let _ = event;
-                let _ = window;
                 this.force_push_changes_action(cx);
+                this.focus_page(window, cx);
               });
             }),
         )
@@ -6114,6 +6119,21 @@ mod tests {
 
     git_page.update_in(cx, |this, window, cx| {
       this.set_sidebar_mode(GitSidebarMode::History, window, cx);
+      assert!(this.focus_handle.contains_focused(window, cx));
+    });
+  }
+
+  #[gpui::test]
+  fn focus_page_restores_page_shortcut_focus(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    git_page.update_in(cx, |this, window, cx| {
+      let external_focus = cx.focus_handle();
+      window.focus(&external_focus, cx);
+      assert!(!this.focus_handle.contains_focused(window, cx));
+
+      this.focus_page(window, cx);
       assert!(this.focus_handle.contains_focused(window, cx));
     });
   }
