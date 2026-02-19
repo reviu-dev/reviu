@@ -1,4 +1,3 @@
-import type { Endpoints } from '@octokit/types'
 import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
