@@ -247,7 +247,20 @@ fn conflict_regions_from_lines(lines: &[String]) -> Vec<ConflictRegion> {
 
     while scan < lines.len() {
       let line = lines[scan].as_str();
-      if divider_line.is_none() {
+      if let Some(divider) = divider_line {
+        if is_conflict_end_marker(line) {
+          let current_end = base_marker_line.unwrap_or(divider);
+          regions.push(ConflictRegion {
+            start_line,
+            current_range: (start_line + 1)..current_end,
+            incoming_range: (divider + 1)..scan,
+            replace_end_line: scan + 1,
+          });
+          index = scan + 1;
+          resolved = true;
+          break;
+        }
+      } else {
         if is_conflict_start_marker(line) {
           break;
         }
@@ -261,18 +274,6 @@ fn conflict_regions_from_lines(lines: &[String]) -> Vec<ConflictRegion> {
           scan += 1;
           continue;
         }
-      } else if is_conflict_end_marker(line) {
-        let divider = divider_line.expect("divider line is set");
-        let current_end = base_marker_line.unwrap_or(divider);
-        regions.push(ConflictRegion {
-          start_line,
-          current_range: (start_line + 1)..current_end,
-          incoming_range: (divider + 1)..scan,
-          replace_end_line: scan + 1,
-        });
-        index = scan + 1;
-        resolved = true;
-        break;
       }
 
       scan += 1;
@@ -1036,15 +1037,15 @@ impl Editor {
   ) -> f32 {
     let row_height_px = self.review_comment_line_height_px.max(1.0);
     let snippet_line_count = preview.snippets.len().max(1) as f32;
-    let card_height_px = row_height_px
+    
+    row_height_px
       * (REVIEW_COMMENT_CODE_REFERENCE_CARD_HEADER_LINE_COUNT + snippet_line_count)
       + REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_Y_PX * 4.0
       + REVIEW_COMMENT_CODE_REFERENCE_CARD_INTERNAL_GAP_PX
       + REVIEW_COMMENT_CODE_REFERENCE_CARD_BORDER_PX
       + REVIEW_COMMENT_CODE_REFERENCE_SNIPPET_ROW_GAP_PX * (snippet_line_count - 1.0).max(0.0)
       + REVIEW_COMMENT_CODE_REFERENCE_CARD_MARGIN_Y_PX * 2.0
-      + REVIEW_COMMENT_CODE_REFERENCE_CARD_HEIGHT_BUFFER_PX;
-    card_height_px
+      + REVIEW_COMMENT_CODE_REFERENCE_CARD_HEIGHT_BUFFER_PX
   }
 
   fn review_comment_body_segments(
@@ -3680,7 +3681,7 @@ impl Editor {
     let mut has_content = false;
 
     if let Some(draft) = self.review_comment_create_draft
-      && side_filter.map_or(true, |filter| filter == draft.side)
+      && side_filter.is_none_or(|filter| filter == draft.side)
     {
       let top = line_height * (draft.first_display_line as f32 - self.scroll_offset_y);
       let span_count = draft
@@ -6738,7 +6739,7 @@ impl Render for Editor {
 
       if show_review_comment_create_button
         && let Some(target) = review_comment_create_button_target
-        && side_filter.map_or(true, |filter| filter == target.side)
+        && side_filter.is_none_or(|filter| filter == target.side)
         && viewport.contains(&target.display_line)
       {
         let y = line_height * (target.display_line as f32 - scroll_offset_y);

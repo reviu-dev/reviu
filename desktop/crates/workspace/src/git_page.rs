@@ -701,6 +701,7 @@ impl GitPage {
     !entries.is_empty() && entries.iter().all(|entry| entry.stage == RepoStage::Staged)
   }
 
+  #[allow(clippy::too_many_arguments)]
   fn apply_status_snapshot(
     &mut self,
     entries: Vec<RepoStatusEntry>,
@@ -4149,7 +4150,7 @@ impl GitPage {
       .on_click(move |_, window, cx| {
         if let Some(path) = file_path_stage.clone() {
           view.update(cx, |this, cx| {
-            let has_unresolved_conflict_markers = this.editor.as_ref().map_or(true, |editor| {
+            let has_unresolved_conflict_markers = this.editor.as_ref().is_none_or(|editor| {
               editor.read_with(cx, |editor, cx| editor.has_unresolved_conflict_markers(cx))
             });
             if Self::should_confirm_stage_for_status(
