@@ -15,6 +15,11 @@ use std::{
 use syntax::languages;
 use syntax::{HighlightSpan, SyntaxHighlighter};
 
+// Avoid expensive full-file highlight passes on very large buffers at open time.
+const FULL_HIGHLIGHT_MAX_LINES: usize = 30_000;
+const FULL_HIGHLIGHT_MAX_CHARS: usize = 2_000_000;
+const INITIAL_VIEWPORT_HIGHLIGHT_LINES: usize = 300;
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum HighlightQuality {
   Viewport = 1,
@@ -68,9 +73,7 @@ impl Document {
     };
 
     // Schedule initial highlighting
-    if doc.highlighter.is_some() {
-      doc.schedule_recompute_highlights(cx);
-    }
+    doc.schedule_initial_highlights(cx);
 
     doc
   }
@@ -130,10 +133,23 @@ impl Document {
     self.buffer = TextBuffer::from_text(text);
     self.highlights.write().clear();
     self.dirty_highlight_lines.write().clear();
-    if self.highlighter.is_some() {
+    self.schedule_initial_highlights(cx);
+    cx.notify();
+  }
+
+  fn schedule_initial_highlights(&mut self, cx: &mut Context<Self>) {
+    if self.highlighter.is_none() {
+      return;
+    }
+
+    let line_count = self.buffer.len_lines();
+    let char_count = self.buffer.len();
+    if should_defer_full_highlight(line_count, char_count) {
+      let initial_end = line_count.min(INITIAL_VIEWPORT_HIGHLIGHT_LINES).max(1);
+      self.schedule_viewport_highlights(0..initial_end, None, VIEWPORT_HIGHLIGHT_MARGIN_LINES, cx);
+    } else {
       self.schedule_recompute_highlights(cx);
     }
-    cx.notify();
   }
 
   pub fn undo(&mut self, cx: &mut Context<Self>) -> Option<buffer::TransactionId> {
@@ -416,6 +432,10 @@ const HIGHLIGHT_BATCH_LINES: usize = 200;
 const HIGHLIGHT_POLL_INTERVAL_MS: u64 = 16;
 pub(crate) const VIEWPORT_HIGHLIGHT_MARGIN_LINES: usize = 100;
 
+fn should_defer_full_highlight(line_count: usize, char_count: usize) -> bool {
+  line_count > FULL_HIGHLIGHT_MAX_LINES || char_count > FULL_HIGHLIGHT_MAX_CHARS
+}
+
 fn build_viewport_text(buffer: &TextBuffer, start_line: usize, end_line: usize) -> String {
   let mut text = String::new();
   for line_idx in start_line..end_line {
@@ -635,6 +655,24 @@ fn upper_bound(values: &[usize], key: usize) -> usize {
 mod tests {
   use super::*;
   use gpui::{AppContext, TestAppContext};
+
+  #[test]
+  fn test_should_defer_full_highlight_for_large_line_count() {
+    assert!(should_defer_full_highlight(
+      FULL_HIGHLIGHT_MAX_LINES + 1,
+      10
+    ));
+    assert!(!should_defer_full_highlight(FULL_HIGHLIGHT_MAX_LINES, 10));
+  }
+
+  #[test]
+  fn test_should_defer_full_highlight_for_large_char_count() {
+    assert!(should_defer_full_highlight(
+      10,
+      FULL_HIGHLIGHT_MAX_CHARS + 1
+    ));
+    assert!(!should_defer_full_highlight(10, FULL_HIGHLIGHT_MAX_CHARS));
+  }
 
   #[gpui::test]
   fn test_new_document(cx: &mut TestAppContext) {
