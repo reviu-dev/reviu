@@ -1037,9 +1037,8 @@ impl Editor {
   ) -> f32 {
     let row_height_px = self.review_comment_line_height_px.max(1.0);
     let snippet_line_count = preview.snippets.len().max(1) as f32;
-    
-    row_height_px
-      * (REVIEW_COMMENT_CODE_REFERENCE_CARD_HEADER_LINE_COUNT + snippet_line_count)
+
+    row_height_px * (REVIEW_COMMENT_CODE_REFERENCE_CARD_HEADER_LINE_COUNT + snippet_line_count)
       + REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_Y_PX * 4.0
       + REVIEW_COMMENT_CODE_REFERENCE_CARD_INTERNAL_GAP_PX
       + REVIEW_COMMENT_CODE_REFERENCE_CARD_BORDER_PX
@@ -4805,11 +4804,7 @@ impl Editor {
     cx.notify();
   }
 
-  pub fn resolve_all_conflicts(
-    &mut self,
-    resolution: ConflictResolution,
-    cx: &mut Context<Self>,
-  ) {
+  pub fn resolve_all_conflicts(&mut self, resolution: ConflictResolution, cx: &mut Context<Self>) {
     if self.is_read_only {
       return;
     }
