@@ -970,21 +970,42 @@ mod tests {
     }
   }
 
-  fn start_sequence_response_server(
-    responses: Vec<(&str, &str)>,
+  fn start_path_response_server(
+    responses: Vec<(&str, &str, &str)>,
   ) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
     let address = format!("http://{}", listener.local_addr().expect("local addr"));
-    let responses = responses
+    let mut responses = responses
       .into_iter()
-      .map(|(status, body)| (status.to_string(), body.to_string()))
+      .map(|(path, status, body)| (path.to_string(), status.to_string(), body.to_string()))
       .collect::<Vec<_>>();
+    let expected_requests = responses.len();
 
     let handle = thread::spawn(move || {
-      for (status, body) in responses {
+      for _ in 0..expected_requests {
         let (mut stream, _) = listener.accept().expect("accept connection");
         let mut request_buffer = [0u8; 4096];
-        let _ = stream.read(&mut request_buffer);
+        let bytes_read = stream.read(&mut request_buffer).unwrap_or(0);
+        let request = String::from_utf8_lossy(&request_buffer[..bytes_read]);
+        let request_path = request
+          .lines()
+          .next()
+          .and_then(|line| line.split_whitespace().nth(1))
+          .and_then(|target| target.split('?').next())
+          .unwrap_or_default();
+
+        let (status, body) = if let Some(index) = responses
+          .iter()
+          .position(|(path, _, _)| path == request_path)
+        {
+          let (_, status, body) = responses.remove(index);
+          (status, body)
+        } else {
+          (
+            "404 Not Found".to_string(),
+            format!(r#"{{"error":"unexpected path: {}"}}"#, request_path),
+          )
+        };
 
         let response = format!(
           "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
@@ -1066,8 +1087,10 @@ mod tests {
   #[gpui::test]
   async fn refresh_pull_requests_sets_unauthorized_errors(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    let (base_url, handle) =
-      start_sequence_response_server(vec![("401 Unauthorized", "{}"), ("401 Unauthorized", "{}")]);
+    let (base_url, handle) = start_path_response_server(vec![
+      ("/github/pr/latest", "401 Unauthorized", "{}"),
+      ("/github/notifications", "401 Unauthorized", "{}"),
+    ]);
     let api = ApiClient::new_with_base_url(base_url);
     let (github_page, cx) =
       cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
@@ -1129,9 +1152,9 @@ mod tests {
     init_gpui_test(cx);
     let pull_requests_body = r#"{"pullRequests":[{"number":42,"title":"Fix login","state":"open","mergedAt":null,"draft":false,"updatedAt":"2026-02-15T12:00:00Z","labels":[{"name":"bug"}],"repository":{"owner":"acme","repo":"portal"}}]}"#;
     let notifications_body = r#"{"notifications":[{"id":"n1","repository":{"name":"portal","fullName":"acme/portal","owner":null},"subject":{"title":"Please review","type":"PullRequest","url":null,"latestCommentUrl":null},"reason":"mention","unread":true,"updatedAt":"2026-02-15T12:10:00Z","lastReadAt":null,"url":"https://api.github.test/notif/1","subscriptionUrl":"https://api.github.test/sub/1"}]}"#;
-    let (base_url, handle) = start_sequence_response_server(vec![
-      ("200 OK", pull_requests_body),
-      ("200 OK", notifications_body),
+    let (base_url, handle) = start_path_response_server(vec![
+      ("/github/pr/latest", "200 OK", pull_requests_body),
+      ("/github/notifications", "200 OK", notifications_body),
     ]);
     let api = ApiClient::new_with_base_url(base_url);
     let (github_page, cx) =
