@@ -120,6 +120,12 @@ pub enum CommandPaletteAction {
   Commit,
   ContinueRebase,
   SkipRebase,
+  Push,
+  ForcePush,
+  UndoLastCommit,
+  Amend,
+  AcceptAllCurrentConflicts,
+  AcceptAllIncomingConflicts,
   CreateBranch {
     name: String,
   },
@@ -584,6 +590,12 @@ pub enum CommandPaletteCommandId {
   Commit,
   ContinueRebase,
   SkipRebase,
+  Push,
+  ForcePush,
+  UndoLastCommit,
+  Amend,
+  AcceptAllCurrentConflicts,
+  AcceptAllIncomingConflicts,
   CreateBranch,
   CreateBranchFrom,
   MergeBranch,
@@ -654,6 +666,54 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::SkipRebase,
       name: "Rebase skip".into(),
       description: Some("Skip the current rebase commit".into()),
+    }
+  }
+
+  pub fn push(label: impl Into<SharedString>) -> Self {
+    Self {
+      id: CommandPaletteCommandId::Push,
+      name: label.into(),
+      description: Some("Push local commits to the remote branch".into()),
+    }
+  }
+
+  pub fn force_push() -> Self {
+    Self {
+      id: CommandPaletteCommandId::ForcePush,
+      name: "Force push (with lease)".into(),
+      description: Some("Force push local commits to the remote branch".into()),
+    }
+  }
+
+  pub fn undo_last_commit() -> Self {
+    Self {
+      id: CommandPaletteCommandId::UndoLastCommit,
+      name: "Undo last commit".into(),
+      description: Some("Undo the most recent local commit".into()),
+    }
+  }
+
+  pub fn amend() -> Self {
+    Self {
+      id: CommandPaletteCommandId::Amend,
+      name: "Amend".into(),
+      description: Some("Amend the most recent commit".into()),
+    }
+  }
+
+  pub fn accept_all_current_conflicts() -> Self {
+    Self {
+      id: CommandPaletteCommandId::AcceptAllCurrentConflicts,
+      name: "Accept all current conflicts".into(),
+      description: Some("Resolve all conflict regions by keeping current changes".into()),
+    }
+  }
+
+  pub fn accept_all_incoming_conflicts() -> Self {
+    Self {
+      id: CommandPaletteCommandId::AcceptAllIncomingConflicts,
+      name: "Accept all incoming conflicts".into(),
+      description: Some("Resolve all conflict regions by keeping incoming changes".into()),
     }
   }
 
@@ -882,6 +942,12 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::Commit => Icon::new(IconName::Check),
       CommandPaletteCommandId::ContinueRebase => Icon::new(IconName::Check),
       CommandPaletteCommandId::SkipRebase => Icon::new(UiIconName::GitMerge),
+      CommandPaletteCommandId::Push => Icon::new(IconName::ArrowUp),
+      CommandPaletteCommandId::ForcePush => Icon::new(IconName::TriangleAlert),
+      CommandPaletteCommandId::UndoLastCommit => Icon::new(IconName::Undo),
+      CommandPaletteCommandId::Amend => Icon::new(IconName::Replace),
+      CommandPaletteCommandId::AcceptAllCurrentConflicts => Icon::new(IconName::Replace),
+      CommandPaletteCommandId::AcceptAllIncomingConflicts => Icon::new(IconName::Replace),
       CommandPaletteCommandId::MergeBranch => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::AbortMerge => Icon::new(IconName::Undo),
       CommandPaletteCommandId::RebaseBranch => Icon::new(UiIconName::GitMerge),
@@ -1563,6 +1629,24 @@ impl CommandPalette {
       CommandPaletteCommandId::SkipRebase => {
         self.trigger_action(CommandPaletteAction::SkipRebase, window, cx);
       }
+      CommandPaletteCommandId::Push => {
+        self.trigger_action(CommandPaletteAction::Push, window, cx);
+      }
+      CommandPaletteCommandId::ForcePush => {
+        self.trigger_action(CommandPaletteAction::ForcePush, window, cx);
+      }
+      CommandPaletteCommandId::UndoLastCommit => {
+        self.trigger_action(CommandPaletteAction::UndoLastCommit, window, cx);
+      }
+      CommandPaletteCommandId::Amend => {
+        self.trigger_action(CommandPaletteAction::Amend, window, cx);
+      }
+      CommandPaletteCommandId::AcceptAllCurrentConflicts => {
+        self.trigger_action(CommandPaletteAction::AcceptAllCurrentConflicts, window, cx);
+      }
+      CommandPaletteCommandId::AcceptAllIncomingConflicts => {
+        self.trigger_action(CommandPaletteAction::AcceptAllIncomingConflicts, window, cx);
+      }
       CommandPaletteCommandId::MergeBranch => {
         self.set_screen(CommandPaletteScreen::MergeBranch, cx, window);
       }
@@ -2029,6 +2113,12 @@ mod tests {
     let commit = CommandPaletteCommand::commit();
     let continue_rebase = CommandPaletteCommand::continue_rebase();
     let skip_rebase = CommandPaletteCommand::skip_rebase();
+    let push = CommandPaletteCommand::push("Push");
+    let force_push = CommandPaletteCommand::force_push();
+    let undo_last_commit = CommandPaletteCommand::undo_last_commit();
+    let amend = CommandPaletteCommand::amend();
+    let accept_all_current_conflicts = CommandPaletteCommand::accept_all_current_conflicts();
+    let accept_all_incoming_conflicts = CommandPaletteCommand::accept_all_incoming_conflicts();
 
     assert_eq!(commit.id, CommandPaletteCommandId::Commit);
     assert_eq!(commit.name.as_ref(), "Commit");
@@ -2041,6 +2131,42 @@ mod tests {
     assert_eq!(skip_rebase.id, CommandPaletteCommandId::SkipRebase);
     assert_eq!(skip_rebase.name.as_ref(), "Rebase skip");
     assert!(skip_rebase.matches("rebase commit"));
+
+    assert_eq!(push.id, CommandPaletteCommandId::Push);
+    assert_eq!(push.name.as_ref(), "Push");
+    assert!(push.matches("remote branch"));
+
+    assert_eq!(force_push.id, CommandPaletteCommandId::ForcePush);
+    assert_eq!(force_push.name.as_ref(), "Force push (with lease)");
+    assert!(force_push.matches("force push local commits"));
+
+    assert_eq!(undo_last_commit.id, CommandPaletteCommandId::UndoLastCommit);
+    assert_eq!(undo_last_commit.name.as_ref(), "Undo last commit");
+    assert!(undo_last_commit.matches("recent local commit"));
+
+    assert_eq!(amend.id, CommandPaletteCommandId::Amend);
+    assert_eq!(amend.name.as_ref(), "Amend");
+    assert!(amend.matches("amend the most recent"));
+
+    assert_eq!(
+      accept_all_current_conflicts.id,
+      CommandPaletteCommandId::AcceptAllCurrentConflicts
+    );
+    assert_eq!(
+      accept_all_current_conflicts.name.as_ref(),
+      "Accept all current conflicts"
+    );
+    assert!(accept_all_current_conflicts.matches("keeping current changes"));
+
+    assert_eq!(
+      accept_all_incoming_conflicts.id,
+      CommandPaletteCommandId::AcceptAllIncomingConflicts
+    );
+    assert_eq!(
+      accept_all_incoming_conflicts.name.as_ref(),
+      "Accept all incoming conflicts"
+    );
+    assert!(accept_all_incoming_conflicts.matches("incoming changes"));
   }
 
   #[test]
