@@ -5079,20 +5079,59 @@ impl Editor {
       return viewport;
     };
 
-    let mut min_line: Option<usize> = None;
-    let mut max_line: Option<usize> = None;
+    let viewport_start = viewport.start;
+    let viewport_end = viewport.end;
+    if viewport_start >= viewport_end {
+      return 0..0;
+    }
 
-    for display_line in viewport {
-      if let Some(doc_line) = projection.display_to_doc_line(display_line) {
-        min_line = Some(min_line.map_or(doc_line, |min| min.min(doc_line)));
-        max_line = Some(max_line.map_or(doc_line, |max| max.max(doc_line)));
+    let mapped_lines = (viewport_start..viewport_end)
+      .filter_map(|display_line| {
+        projection
+          .display_to_doc_line(display_line)
+          .map(|doc_line| (display_line, doc_line))
+      })
+      .collect::<Vec<_>>();
+
+    if mapped_lines.is_empty() {
+      return 0..0;
+    }
+
+    // When viewport spans a collapsed gap, visible doc lines become disjoint.
+    // Highlight only the contiguous segment nearest the viewport center.
+    let center_display = viewport_start + (viewport_end - viewport_start - 1) / 2;
+    let pivot = mapped_lines
+      .iter()
+      .enumerate()
+      .min_by_key(|(_, (display_line, _))| display_line.abs_diff(center_display))
+      .map(|(idx, _)| idx)
+      .unwrap_or(0);
+
+    let mut start_idx = pivot;
+    while start_idx > 0 {
+      let prev_doc_line = mapped_lines[start_idx - 1].1;
+      let current_doc_line = mapped_lines[start_idx].1;
+      if current_doc_line >= prev_doc_line && current_doc_line <= prev_doc_line.saturating_add(1) {
+        start_idx -= 1;
+      } else {
+        break;
       }
     }
 
-    match (min_line, max_line) {
-      (Some(min), Some(max)) => min..(max + 1),
-      _ => 0..0,
+    let mut end_idx = pivot;
+    while end_idx + 1 < mapped_lines.len() {
+      let current_doc_line = mapped_lines[end_idx].1;
+      let next_doc_line = mapped_lines[end_idx + 1].1;
+      if next_doc_line >= current_doc_line && next_doc_line <= current_doc_line.saturating_add(1) {
+        end_idx += 1;
+      } else {
+        break;
+      }
     }
+
+    let doc_start = mapped_lines[start_idx].1;
+    let doc_end = mapped_lines[end_idx].1;
+    doc_start..(doc_end + 1)
   }
 
   pub(crate) fn ensure_cursor_visible(&mut self, _window: &Window, cx: &mut Context<Self>) {
@@ -7778,6 +7817,59 @@ pub mod tests {
     })
   }
 
+  fn projection_with_large_middle_gap() -> Arc<Projection> {
+    let gap = GapId {
+      start: 12,
+      end: 49_990,
+    };
+    Arc::new(Projection {
+      lines: vec![
+        DisplayLine::Doc {
+          doc_line: 10,
+          old_line: Some(10),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::Doc {
+          doc_line: 11,
+          old_line: Some(11),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::Gap {
+          id: gap,
+          hidden_range: 12..49_990,
+        },
+        DisplayLine::Doc {
+          doc_line: 49_990,
+          old_line: Some(49_990),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::Doc {
+          doc_line: 49_991,
+          old_line: Some(49_991),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+      ],
+      display_to_doc: vec![Some(10), Some(11), None, Some(49_990), Some(49_991)],
+      doc_to_display: Vec::new(),
+      visible_doc_lines: vec![10, 11, 49_990, 49_991],
+      start_gap: None,
+      end_gap: None,
+      groups: HashMap::new(),
+    })
+  }
+
   #[gpui::test]
   fn test_set_review_comments_prunes_editable_review_comment_ids(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
@@ -9059,6 +9151,24 @@ pub mod tests {
       assert_eq!(editor.current_display_cursor(cx), before_cursor);
       assert_eq!(editor.cursor_offset(), before_offset);
       assert_eq!(editor.selected_range, before_offset..before_offset);
+    });
+  }
+
+  #[gpui::test]
+  fn test_doc_range_for_display_viewport_does_not_span_large_collapsed_gap(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.projection = Some(projection_with_large_middle_gap());
+
+      let range = editor.doc_range_for_display_viewport(0..5);
+      assert_eq!(range, 10..12);
+      assert!(range.end.saturating_sub(range.start) < 1_000);
+
+      let lower_range = editor.doc_range_for_display_viewport(2..5);
+      assert_eq!(lower_range, 49_990..49_992);
     });
   }
 
