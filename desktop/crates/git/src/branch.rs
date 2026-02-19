@@ -3,8 +3,8 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
 use git2::{
-  BranchType, CherrypickOptions, ErrorCode, Rebase, Repository, RepositoryState, ResetType,
-  Signature,
+  BranchType, CherrypickOptions, Cred, ErrorCode, FetchOptions, Rebase, RemoteCallbacks,
+  Repository, RepositoryState, ResetType, Signature,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +90,33 @@ pub fn current_branch_status(repo_root: &Path) -> Result<BranchStatus> {
     behind,
     has_upstream,
   })
+}
+
+pub fn fetch(repo_root: &Path) -> Result<()> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let remotes = repo.remotes().context("list remotes")?;
+
+  for remote_name in remotes.iter().flatten() {
+    let mut remote = repo
+      .find_remote(remote_name)
+      .with_context(|| format!("find remote {remote_name:?}"))?;
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(|_, username_from_url, _| {
+      if let Some(username) = username_from_url {
+        Cred::ssh_key_from_agent(username).or_else(|_| Cred::default())
+      } else {
+        Cred::default()
+      }
+    });
+    let mut fetch_options = FetchOptions::new();
+    fetch_options.remote_callbacks(callbacks);
+    remote
+      .fetch(&[] as &[&str], Some(&mut fetch_options), None)
+      .with_context(|| format!("fetch remote {remote_name:?}"))?;
+  }
+
+  Ok(())
 }
 
 pub fn switch_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
@@ -641,6 +668,14 @@ mod tests {
       .expect("force checkout head");
   }
 
+  fn remote_branch_oid(remote_root: &Path, branch_name: &str) -> git2::Oid {
+    let refname = format!("refs/heads/{branch_name}");
+    Repository::open(remote_root)
+      .expect("open remote")
+      .refname_to_id(&refname)
+      .expect("read remote branch oid")
+  }
+
   #[test]
   fn create_branch_creates_local_branch() {
     let repo = TempRepo::init("branch-create");
@@ -735,12 +770,7 @@ mod tests {
       .expect("peer commit");
     push_branch_to_remote(&peer.path, &branch_name, "origin");
 
-    {
-      let mut remote = local_repo.find_remote("origin").expect("find origin");
-      remote
-        .fetch(&["refs/heads/*:refs/remotes/origin/*"], None, None)
-        .expect("fetch remote updates");
-    }
+    fetch(&local.path).expect("fetch remote updates");
 
     let status = current_branch_status(&local.path).expect("branch status");
     assert_eq!(status.name, branch_name);
@@ -755,6 +785,48 @@ mod tests {
       "expected behind >= 1, got {}",
       status.behind
     );
+  }
+
+  #[test]
+  fn fetch_updates_remote_tracking_refs() {
+    let remote = TempBareRepo::init("branch-fetch-remote");
+    let source = TempRepo::init("branch-fetch-source");
+    let clone_dir = TempDir::new("branch-fetch-clone");
+
+    let _ = commit_text_file(&source.path, Path::new("README.md"), "v1\n", "initial");
+    let source_repo = Repository::open(&source.path).expect("open source repo");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add source origin");
+
+    let base_branch = current_branch_status(&source.path)
+      .expect("read source branch status")
+      .name;
+    push_branch_to_remote(&source.path, &base_branch, "origin");
+
+    let _clone_repo = Repository::clone(
+      remote.path.to_str().expect("remote path utf8"),
+      &clone_dir.path,
+    )
+    .expect("clone remote");
+    let tracking_ref = format!("refs/remotes/origin/{base_branch}");
+    let before = Repository::open(&clone_dir.path)
+      .expect("open clone")
+      .refname_to_id(&tracking_ref)
+      .expect("read remote-tracking branch before fetch");
+
+    let _ = commit_text_file(&source.path, Path::new("README.md"), "v2\n", "source update");
+    push_branch_to_remote(&source.path, &base_branch, "origin");
+    let expected = remote_branch_oid(&remote.path, &base_branch);
+
+    fetch(&clone_dir.path).expect("fetch updates into clone");
+
+    let after = Repository::open(&clone_dir.path)
+      .expect("open clone")
+      .refname_to_id(&tracking_ref)
+      .expect("read remote-tracking branch after fetch");
+    assert_ne!(before, after);
+    assert_eq!(after, expected);
   }
 
   #[test]
