@@ -2122,11 +2122,28 @@ impl GitPage {
       if self.should_show_skip_rebase_palette_command() {
         commands.push(CommandPaletteCommand::skip_rebase());
       }
+      if self.should_show_push_palette_command() {
+        let push_label = Self::push_action_label(self.branch_status.as_ref(), self.has_head_commit);
+        commands.push(CommandPaletteCommand::push(push_label));
+      }
+      if self.should_show_force_push_palette_command() {
+        commands.push(CommandPaletteCommand::force_push());
+      }
+      if self.should_show_undo_last_commit_palette_command() {
+        commands.push(CommandPaletteCommand::undo_last_commit());
+      }
+      if self.should_show_amend_palette_command() {
+        commands.push(CommandPaletteCommand::amend());
+      }
 
       if Self::should_show_unstage_all_command(&self.status_entries) {
         commands.push(CommandPaletteCommand::unstage_all());
       } else if Self::should_show_stage_all_command(&self.status_entries) {
         commands.push(CommandPaletteCommand::stage_all());
+      }
+      if self.should_show_accept_all_conflicts_palette_commands(cx) {
+        commands.push(CommandPaletteCommand::accept_all_current_conflicts());
+        commands.push(CommandPaletteCommand::accept_all_incoming_conflicts());
       }
       commands.push(CommandPaletteCommand::fetch());
       commands.push(CommandPaletteCommand::cherry_pick());
@@ -2358,6 +2375,72 @@ impl GitPage {
             }
           }
         }
+      }
+      CommandPaletteAction::Push => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        if !self.should_show_push_palette_command() {
+          return Err("Push command is currently disabled.".into());
+        }
+        should_post_action_refresh = false;
+        self.push_changes_action(cx);
+        Ok(())
+      }
+      CommandPaletteAction::ForcePush => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        if !self.should_show_force_push_palette_command() {
+          return Err("Force push command is currently disabled.".into());
+        }
+        should_post_action_refresh = false;
+        self.force_push_changes_action(cx);
+        Ok(())
+      }
+      CommandPaletteAction::UndoLastCommit => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        if !self.should_show_undo_last_commit_palette_command() {
+          return Err("Undo last commit command is currently disabled.".into());
+        }
+        should_post_action_refresh = false;
+        self.undo_last_commit_action(cx);
+        Ok(())
+      }
+      CommandPaletteAction::Amend => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        if !self.should_show_amend_palette_command() {
+          return Err("Amend command is currently disabled.".into());
+        }
+        should_post_action_refresh = false;
+        self.commit_amend_changes(window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::AcceptAllCurrentConflicts => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        if !self.should_show_accept_all_conflicts_palette_commands(cx) {
+          return Err("Accept all current conflicts is currently disabled.".into());
+        }
+        should_post_action_refresh = false;
+        self.resolve_all_conflicts_in_editor(ConflictResolution::Current, cx);
+        Ok(())
+      }
+      CommandPaletteAction::AcceptAllIncomingConflicts => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        if !self.should_show_accept_all_conflicts_palette_commands(cx) {
+          return Err("Accept all incoming conflicts is currently disabled.".into());
+        }
+        should_post_action_refresh = false;
+        self.resolve_all_conflicts_in_editor(ConflictResolution::Incoming, cx);
+        Ok(())
       }
       CommandPaletteAction::SwitchRepository(repository) => {
         let repo_root = PathBuf::from(repository.path.as_ref());
@@ -2735,6 +2818,18 @@ impl GitPage {
       });
     });
     self.status_task = Some(task);
+  }
+
+  fn resolve_all_conflicts_in_editor(
+    &mut self,
+    resolution: ConflictResolution,
+    cx: &mut Context<Self>,
+  ) {
+    if let Some(editor) = self.editor.clone() {
+      editor.update(cx, |editor, cx| {
+        editor.resolve_all_conflicts(resolution, cx);
+      });
+    }
   }
 
   fn commit_amend_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3625,6 +3720,58 @@ impl GitPage {
     self.rebase_in_progress && self.selected_repo.is_some()
   }
 
+  fn should_show_push_palette_command(&self) -> bool {
+    !self.rebase_in_progress && self.selected_repo.is_some() && self.can_push
+  }
+
+  fn should_show_force_push_palette_command(&self) -> bool {
+    !self.rebase_in_progress && self.selected_repo.is_some() && self.can_force_push
+  }
+
+  fn should_show_undo_last_commit_palette_command(&self) -> bool {
+    !self.rebase_in_progress && self.selected_repo.is_some() && self.can_undo_last_commit
+  }
+
+  fn should_show_amend_palette_command(&self) -> bool {
+    !self.rebase_in_progress && self.selected_repo.is_some() && self.has_head_commit
+  }
+
+  fn selected_file_status(&self) -> Option<RepoStatusKind> {
+    self
+      .selected_file
+      .as_ref()
+      .and_then(|selected| {
+        self
+          .status_entries
+          .iter()
+          .find(|entry| &entry.path == selected)
+      })
+      .map(|entry| entry.status)
+  }
+
+  fn can_accept_all_conflicts(
+    selected_status: Option<RepoStatusKind>,
+    is_read_only: bool,
+    has_unresolved_conflict_markers: bool,
+  ) -> bool {
+    matches!(selected_status, Some(RepoStatusKind::Conflicted))
+      && !is_read_only
+      && has_unresolved_conflict_markers
+  }
+
+  fn should_show_accept_all_conflicts_palette_commands(&self, cx: &App) -> bool {
+    let selected_status = self.selected_file_status();
+    self.editor.as_ref().is_some_and(|editor| {
+      editor.read_with(cx, |editor, cx| {
+        Self::can_accept_all_conflicts(
+          selected_status,
+          editor.is_read_only,
+          editor.has_unresolved_conflict_markers(cx),
+        )
+      })
+    })
+  }
+
   fn should_publish_branch(branch_status: Option<&BranchStatus>, has_head_commit: bool) -> bool {
     has_head_commit
       && matches!(
@@ -4479,9 +4626,11 @@ impl GitPage {
       (false, false, false, None, None)
     };
     let show_accept_all_conflict_actions = matches!(file_status, Some(RepoStatusKind::Conflicted));
-    let can_accept_all_conflicts = show_accept_all_conflict_actions
-      && !editor_state.is_read_only
-      && editor_state.has_unresolved_conflict_markers(cx);
+    let can_accept_all_conflicts = Self::can_accept_all_conflicts(
+      file_status,
+      editor_state.is_read_only,
+      editor_state.has_unresolved_conflict_markers(cx),
+    );
 
     let editor_entity_accept_current = editor.clone();
     let accept_all_current_button = Button::new("editor-accept-all-current")
@@ -5918,15 +6067,27 @@ mod tests {
       this.selected_repo = Some(repo.path.clone());
       this.rebase_in_progress = false;
       this.status_entries = vec![make_status_entry("README.md", RepoStage::Unstaged)];
+      this.has_head_commit = true;
+      this.can_undo_last_commit = true;
+      this.can_push = true;
+      this.can_force_push = true;
       assert!(this.should_show_commit_palette_command("feat: commit"));
       assert!(!this.should_show_commit_palette_command("   "));
       assert!(!this.should_show_continue_rebase_palette_command());
       assert!(!this.should_show_skip_rebase_palette_command());
+      assert!(this.should_show_push_palette_command());
+      assert!(this.should_show_force_push_palette_command());
+      assert!(this.should_show_undo_last_commit_palette_command());
+      assert!(this.should_show_amend_palette_command());
 
       this.rebase_in_progress = true;
       assert!(!this.should_show_commit_palette_command("feat: commit"));
       assert!(this.should_show_continue_rebase_palette_command());
       assert!(this.should_show_skip_rebase_palette_command());
+      assert!(!this.should_show_push_palette_command());
+      assert!(!this.should_show_force_push_palette_command());
+      assert!(!this.should_show_undo_last_commit_palette_command());
+      assert!(!this.should_show_amend_palette_command());
 
       this.status_entries = vec![RepoStatusEntry {
         path: PathBuf::from("README.md"),
@@ -5936,7 +6097,39 @@ mod tests {
       }];
       assert!(!this.should_show_continue_rebase_palette_command());
       assert!(this.should_show_skip_rebase_palette_command());
+
+      this.rebase_in_progress = false;
+      this.selected_repo = None;
+      assert!(!this.should_show_push_palette_command());
+      assert!(!this.should_show_force_push_palette_command());
+      assert!(!this.should_show_undo_last_commit_palette_command());
+      assert!(!this.should_show_amend_palette_command());
     });
+  }
+
+  #[test]
+  fn accept_all_conflict_command_rules_match_editor_header_rules() {
+    assert!(GitPage::can_accept_all_conflicts(
+      Some(RepoStatusKind::Conflicted),
+      false,
+      true,
+    ));
+    assert!(!GitPage::can_accept_all_conflicts(
+      Some(RepoStatusKind::Conflicted),
+      true,
+      true,
+    ));
+    assert!(!GitPage::can_accept_all_conflicts(
+      Some(RepoStatusKind::Conflicted),
+      false,
+      false,
+    ));
+    assert!(!GitPage::can_accept_all_conflicts(
+      Some(RepoStatusKind::Modified),
+      false,
+      true,
+    ));
+    assert!(!GitPage::can_accept_all_conflicts(None, false, true));
   }
 
   fn make_status_entry(path: &str, stage: RepoStage) -> RepoStatusEntry {
@@ -6908,6 +7101,325 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn command_palette_push_pushes_to_remote_when_allowed(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let source = TempRepo::init("git-page-cmd-push-success-source");
+    let remote = TempBareRepo::init("git-page-cmd-push-success-remote");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&source.path, rel_path, "v1\n", "initial");
+
+    let source_repo = Repository::open(&source.path).expect("open source");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin remote");
+    let branch_name = current_branch_status(&source.path)
+      .expect("source branch status")
+      .name;
+    push_branch_to_remote(&source.path, &branch_name, "origin");
+    set_upstream(&source.path, &branch_name, &format!("origin/{branch_name}"));
+    set_remote_head(&remote.path, &branch_name);
+
+    let _ = commit_text_file(&source.path, rel_path, "v2-source\n", "source change");
+    let expected_head = head_oid(&source.path);
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let push_result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(source.path.clone());
+      this.can_push = true;
+      this.handle_command_palette_action(CommandPaletteAction::Push, window, cx)
+    });
+    assert!(push_result.is_ok());
+    assert!(git_page.read_with(cx, |this, _| this.push_pull_in_progress));
+
+    let push_task = git_page.update_in(cx, |this, _window, _| this.status_task.take());
+    push_task.expect("push task should exist").await;
+    if let Some(reload_task) = git_page.update_in(cx, |this, _window, _| this.status_task.take()) {
+      reload_task.await;
+    }
+
+    assert_eq!(remote_branch_oid(&remote.path, &branch_name), expected_head);
+    assert!(!git_page.read_with(cx, |this, _| this.push_pull_in_progress));
+  }
+
+  #[gpui::test]
+  async fn command_palette_force_push_force_pushes_when_allowed(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let source = TempRepo::init("git-page-cmd-force-push-source");
+    let remote = TempBareRepo::init("git-page-cmd-force-push-remote");
+    let peer = TempDir::new("git-page-cmd-force-push-peer");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&source.path, rel_path, "v1\n", "initial");
+
+    let source_repo = Repository::open(&source.path).expect("open source");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin remote");
+    let branch_name = current_branch_status(&source.path)
+      .expect("source branch status")
+      .name;
+    push_branch_to_remote(&source.path, &branch_name, "origin");
+    set_upstream(&source.path, &branch_name, &format!("origin/{branch_name}"));
+    set_remote_head(&remote.path, &branch_name);
+
+    let _ = Repository::clone(remote.path.to_str().expect("remote path utf8"), &peer.path)
+      .expect("clone remote into peer");
+
+    let _ = commit_text_file(&source.path, rel_path, "v2-source\n", "source change");
+    let expected_head = head_oid(&source.path);
+
+    let _ = commit_text_file(&peer.path, rel_path, "v2-peer\n", "peer change");
+    push_branch_to_remote(&peer.path, &branch_name, "origin");
+
+    let non_force = push(&source.path, false).err();
+    assert!(non_force.is_some(), "non-force push should fail");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let push_result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(source.path.clone());
+      this.can_force_push = true;
+      this.handle_command_palette_action(CommandPaletteAction::ForcePush, window, cx)
+    });
+    assert!(push_result.is_ok());
+    assert!(git_page.read_with(cx, |this, _| this.push_pull_in_progress));
+
+    let force_task = git_page.update_in(cx, |this, _window, _| this.status_task.take());
+    force_task.expect("force push task should exist").await;
+    if let Some(reload_task) = git_page.update_in(cx, |this, _window, _| this.status_task.take()) {
+      reload_task.await;
+    }
+
+    assert_eq!(remote_branch_oid(&remote.path, &branch_name), expected_head);
+    assert!(!git_page.read_with(cx, |this, _| this.push_pull_in_progress));
+  }
+
+  #[gpui::test]
+  async fn command_palette_undo_last_commit_moves_head_when_allowed(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-undo-success");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "first");
+    let _ = commit_text_file(&repo.path, rel_path, "v2\n", "second");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let expected_parent = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("head before undo")
+      .parent(0)
+      .expect("parent")
+      .id();
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let undo_result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.can_undo_last_commit = true;
+      this.handle_command_palette_action(CommandPaletteAction::UndoLastCommit, window, cx)
+    });
+    assert!(undo_result.is_ok());
+
+    let undo_task = git_page.update_in(cx, |this, _window, _| this.status_task.take());
+    undo_task.expect("undo task should exist").await;
+    if let Some(reload_task) = git_page.update_in(cx, |this, _window, _| this.status_task.take()) {
+      reload_task.await;
+    }
+
+    let head_after = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("head after undo")
+      .id();
+    assert_eq!(head_after, expected_parent);
+  }
+
+  #[gpui::test]
+  async fn command_palette_amend_updates_head_message_when_allowed(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-amend-success");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let amend_result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.has_head_commit = true;
+      this
+        .commit_input
+        .update(cx, |input, cx| input.set_value("feat: amended", window, cx));
+      this.handle_command_palette_action(CommandPaletteAction::Amend, window, cx)
+    });
+    assert!(amend_result.is_ok());
+
+    let amend_task = git_page.update_in(cx, |this, _window, _| this.status_task.take());
+    amend_task.expect("amend task should exist").await;
+    if let Some(reload_task) = git_page.update_in(cx, |this, _window, _| this.status_task.take()) {
+      reload_task.await;
+    }
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head after amend");
+    assert_eq!(head.summary(), Some("feat: amended"));
+  }
+
+  #[gpui::test]
+  fn command_palette_commit_menu_actions_return_error_when_disabled(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-commit-menu-disabled");
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    for (action, expected_error) in [
+      (
+        CommandPaletteAction::Push,
+        "Push command is currently disabled.",
+      ),
+      (
+        CommandPaletteAction::ForcePush,
+        "Force push command is currently disabled.",
+      ),
+      (
+        CommandPaletteAction::UndoLastCommit,
+        "Undo last commit command is currently disabled.",
+      ),
+      (
+        CommandPaletteAction::Amend,
+        "Amend command is currently disabled.",
+      ),
+    ] {
+      let result = git_page.update_in(cx, |this, window, cx| {
+        this.selected_repo = Some(repo.path.clone());
+        this.rebase_in_progress = true;
+        this.can_push = true;
+        this.can_force_push = true;
+        this.can_undo_last_commit = true;
+        this.has_head_commit = true;
+        this.handle_command_palette_action(action.clone(), window, cx)
+      });
+      let error = result.expect_err("action should be disabled during rebase flow");
+      assert_eq!(error.as_ref(), expected_error);
+    }
+  }
+
+  #[gpui::test]
+  async fn command_palette_accept_all_current_conflicts_resolves_editor_markers(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-accept-all-current");
+    let rel_path = Path::new("README.md");
+    let conflict_text = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\nafter\n";
+    std::fs::write(repo.path.join(rel_path), conflict_text).expect("write conflict markers");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.status_entries = vec![RepoStatusEntry {
+        path: rel_path.to_path_buf(),
+        old_path: None,
+        status: RepoStatusKind::Conflicted,
+        stage: RepoStage::Unstaged,
+      }];
+      this.open_file(rel_path.to_path_buf(), cx);
+    });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let can_show_before = git_page.read_with(cx, |this, cx| {
+      this.should_show_accept_all_conflicts_palette_commands(cx)
+    });
+    assert!(can_show_before, "command should be visible for conflicted file");
+
+    let result = git_page.update_in(cx, |this, window, cx| {
+      this.handle_command_palette_action(CommandPaletteAction::AcceptAllCurrentConflicts, window, cx)
+    });
+    assert!(result.is_ok());
+
+    let (contents, can_show_after) = git_page.read_with(cx, |this, cx| {
+      let contents = {
+        let editor = this.editor.as_ref().expect("editor should exist").read(cx);
+        let document = editor.document().read(cx);
+        document.slice_to_string(0..document.len())
+      };
+      (
+        contents,
+        this.should_show_accept_all_conflicts_palette_commands(cx),
+      )
+    });
+    assert_eq!(contents, "before\nours\nafter\n");
+    assert!(
+      !can_show_after,
+      "commands should disappear once all conflict markers are resolved"
+    );
+  }
+
+  #[gpui::test]
+  async fn command_palette_accept_all_incoming_conflicts_resolves_editor_markers(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-accept-all-incoming");
+    let rel_path = Path::new("README.md");
+    let conflict_text = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\nafter\n";
+    std::fs::write(repo.path.join(rel_path), conflict_text).expect("write conflict markers");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.status_entries = vec![RepoStatusEntry {
+        path: rel_path.to_path_buf(),
+        old_path: None,
+        status: RepoStatusKind::Conflicted,
+        stage: RepoStage::Unstaged,
+      }];
+      this.open_file(rel_path.to_path_buf(), cx);
+    });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let can_show_before = git_page.read_with(cx, |this, cx| {
+      this.should_show_accept_all_conflicts_palette_commands(cx)
+    });
+    assert!(can_show_before, "command should be visible for conflicted file");
+
+    let result = git_page.update_in(cx, |this, window, cx| {
+      this.handle_command_palette_action(
+        CommandPaletteAction::AcceptAllIncomingConflicts,
+        window,
+        cx,
+      )
+    });
+    assert!(result.is_ok());
+
+    let (contents, can_show_after) = git_page.read_with(cx, |this, cx| {
+      let contents = {
+        let editor = this.editor.as_ref().expect("editor should exist").read(cx);
+        let document = editor.document().read(cx);
+        document.slice_to_string(0..document.len())
+      };
+      (
+        contents,
+        this.should_show_accept_all_conflicts_palette_commands(cx),
+      )
+    });
+    assert_eq!(contents, "before\ntheirs\nafter\n");
+    assert!(
+      !can_show_after,
+      "commands should disappear once all conflict markers are resolved"
+    );
+  }
+
+  #[gpui::test]
   async fn command_palette_merge_branch_fast_forwards_current_branch(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-merge");
@@ -7332,6 +7844,12 @@ mod tests {
       CommandPaletteAction::Commit,
       CommandPaletteAction::ContinueRebase,
       CommandPaletteAction::SkipRebase,
+      CommandPaletteAction::Push,
+      CommandPaletteAction::ForcePush,
+      CommandPaletteAction::UndoLastCommit,
+      CommandPaletteAction::Amend,
+      CommandPaletteAction::AcceptAllCurrentConflicts,
+      CommandPaletteAction::AcceptAllIncomingConflicts,
       CommandPaletteAction::SwitchBranch(CommandPaletteBranch {
         name: "feature".into(),
         kind: CommandPaletteBranchKind::Local,
