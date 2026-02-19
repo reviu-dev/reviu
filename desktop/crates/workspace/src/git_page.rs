@@ -529,6 +529,7 @@ pub struct GitPage {
   can_push: bool,
   can_force_push: bool,
   force_push_after_rebase: bool,
+  push_pull_in_progress: bool,
   fetch_in_progress: bool,
   has_staged_changes: bool,
   merge_in_progress: bool,
@@ -1172,6 +1173,7 @@ impl GitPage {
       can_push: false,
       can_force_push: false,
       force_push_after_rebase: false,
+      push_pull_in_progress: false,
       fetch_in_progress: false,
       has_staged_changes: false,
       merge_in_progress: false,
@@ -1266,6 +1268,7 @@ impl GitPage {
       can_push: false,
       can_force_push: false,
       force_push_after_rebase: false,
+      push_pull_in_progress: false,
       fetch_in_progress: false,
       has_staged_changes: false,
       merge_in_progress: false,
@@ -1390,6 +1393,7 @@ impl GitPage {
     self.merge_in_progress = false;
     self.rebase_in_progress = false;
     self.force_push_after_rebase = false;
+    self.push_pull_in_progress = false;
     self.history_commits.clear();
     self.history_revision = None;
     self.history_loading = self.sidebar_mode == GitSidebarMode::History;
@@ -1601,6 +1605,7 @@ impl GitPage {
       self.can_push = false;
       self.can_force_push = false;
       self.force_push_after_rebase = false;
+      self.push_pull_in_progress = false;
       self.has_staged_changes = false;
       self.merge_in_progress = false;
       self.rebase_in_progress = false;
@@ -1682,6 +1687,7 @@ impl GitPage {
           this.can_push = false;
           this.can_force_push = false;
           this.force_push_after_rebase = false;
+          this.push_pull_in_progress = false;
           this.has_staged_changes = false;
           this.merge_in_progress = false;
           this.rebase_in_progress = false;
@@ -2739,11 +2745,13 @@ impl GitPage {
       return;
     }
     self.fetch_in_progress = true;
+    self.push_pull_in_progress = true;
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
       let _ = unblock(move || fetch(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
         this.fetch_in_progress = false;
+        this.push_pull_in_progress = false;
         this.reload_status(cx);
         this.refresh_branches(cx);
         if let Some(editor) = editor.clone() {
@@ -2763,9 +2771,11 @@ impl GitPage {
       return;
     }
 
+    self.push_pull_in_progress = true;
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || push(&repo_root, false)).await;
       let _ = this.update(cx, |this, cx| {
+        this.push_pull_in_progress = false;
         if result.is_ok() {
           this.force_push_after_rebase = false;
         }
@@ -2784,9 +2794,11 @@ impl GitPage {
       return;
     }
 
+    self.push_pull_in_progress = true;
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || push(&repo_root, true)).await;
       let _ = this.update(cx, |this, cx| {
+        this.push_pull_in_progress = false;
         if result.is_ok() {
           this.force_push_after_rebase = false;
         }
@@ -3943,6 +3955,7 @@ impl GitPage {
 
   fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let push_pull_loading = self.push_pull_in_progress;
     let select = Select::new(&self.repo_select)
       .placeholder("Select repository...")
       .search_placeholder("Search repositories...")
@@ -4020,6 +4033,20 @@ impl GitPage {
                 ),
             ),
         )
+        .when(push_pull_loading, |this| {
+          this.child(
+            h_flex()
+              .items_center()
+              .gap_1()
+              .child(Spinner::new().small())
+              .child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child("Syncing"),
+              ),
+          )
+        })
     });
 
     let fetch_button = Button::new("git-fetch-button")
@@ -6361,10 +6388,12 @@ mod tests {
     });
     assert!(result.is_ok());
     assert!(git_page.read_with(cx, |this, _| this.fetch_in_progress));
+    assert!(git_page.read_with(cx, |this, _| this.push_pull_in_progress));
 
     await_git_page_background_tasks(git_page.clone(), cx).await;
 
     assert!(!git_page.read_with(cx, |this, _| this.fetch_in_progress));
+    assert!(!git_page.read_with(cx, |this, _| this.push_pull_in_progress));
   }
 
   #[gpui::test]
@@ -8409,11 +8438,13 @@ mod tests {
       this.can_push = false;
       this.push_changes_action(cx);
       assert!(this.status_task.is_none());
+      assert!(!this.push_pull_in_progress);
 
       this.selected_repo = None;
       this.can_push = true;
       this.push_changes_action(cx);
       assert!(this.status_task.is_none());
+      assert!(!this.push_pull_in_progress);
     });
   }
 
@@ -8430,11 +8461,13 @@ mod tests {
       this.can_force_push = false;
       this.force_push_changes_action(cx);
       assert!(this.status_task.is_none());
+      assert!(!this.push_pull_in_progress);
 
       this.selected_repo = None;
       this.can_force_push = true;
       this.force_push_changes_action(cx);
       assert!(this.status_task.is_none());
+      assert!(!this.push_pull_in_progress);
     });
   }
 
@@ -8496,6 +8529,7 @@ mod tests {
       this.push_changes_action(cx);
       this.status_task.take().expect("push task")
     });
+    assert!(git_page.read_with(cx, |this, _| this.push_pull_in_progress));
     push_task.await;
 
     if let Some(reload_task) = git_page.update_in(cx, |this, _window, _| this.status_task.take()) {
@@ -8506,6 +8540,7 @@ mod tests {
     let status = current_branch_status(&source.path).expect("status after push");
     assert_eq!(status.ahead, 0);
     assert!(!git_page.read_with(cx, |this, _| this.force_push_after_rebase));
+    assert!(!git_page.read_with(cx, |this, _| this.push_pull_in_progress));
   }
 
   #[gpui::test]
@@ -8550,6 +8585,7 @@ mod tests {
       this.force_push_changes_action(cx);
       this.status_task.take().expect("force push task")
     });
+    assert!(git_page.read_with(cx, |this, _| this.push_pull_in_progress));
     force_task.await;
 
     if let Some(reload_task) = git_page.update_in(cx, |this, _window, _| this.status_task.take()) {
@@ -8558,6 +8594,7 @@ mod tests {
 
     assert_eq!(remote_branch_oid(&remote.path, &branch_name), expected_head);
     assert!(!git_page.read_with(cx, |this, _| this.force_push_after_rebase));
+    assert!(!git_page.read_with(cx, |this, _| this.push_pull_in_progress));
   }
 
   #[gpui::test]
