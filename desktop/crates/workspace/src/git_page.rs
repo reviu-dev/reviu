@@ -528,6 +528,7 @@ pub struct GitPage {
   can_undo_last_commit: bool,
   can_push: bool,
   can_force_push: bool,
+  force_push_after_rebase: bool,
   fetch_in_progress: bool,
   has_staged_changes: bool,
   merge_in_progress: bool,
@@ -720,6 +721,16 @@ impl GitPage {
     let branch_changed =
       Self::branch_name_changed(self.branch_status.as_ref(), branch_status.as_ref());
     self.branch_status = branch_status;
+    if branch_changed {
+      self.force_push_after_rebase = false;
+    } else if self.force_push_after_rebase
+      && self
+        .branch_status
+        .as_ref()
+        .is_some_and(|status| status.ahead == 0)
+    {
+      self.force_push_after_rebase = false;
+    }
     self.merge_in_progress = merge_in_progress;
     self.rebase_in_progress = rebase_in_progress;
     if !rebase_in_progress {
@@ -738,7 +749,11 @@ impl GitPage {
     });
     self.has_head_commit = head_status.has_head_commit;
     self.can_undo_last_commit = head_status.can_undo_last_commit;
-    let (can_push, can_force_push) = Self::push_flags(self.branch_status.as_ref());
+    let (can_push, can_force_push) = Self::push_flags(
+      self.branch_status.as_ref(),
+      self.has_head_commit,
+      self.force_push_after_rebase,
+    );
     self.can_push = can_push;
     self.can_force_push = can_force_push;
 
@@ -1156,6 +1171,7 @@ impl GitPage {
       can_undo_last_commit: false,
       can_push: false,
       can_force_push: false,
+      force_push_after_rebase: false,
       fetch_in_progress: false,
       has_staged_changes: false,
       merge_in_progress: false,
@@ -1249,6 +1265,7 @@ impl GitPage {
       can_undo_last_commit: false,
       can_push: false,
       can_force_push: false,
+      force_push_after_rebase: false,
       fetch_in_progress: false,
       has_staged_changes: false,
       merge_in_progress: false,
@@ -1372,6 +1389,7 @@ impl GitPage {
     self.editor = None;
     self.merge_in_progress = false;
     self.rebase_in_progress = false;
+    self.force_push_after_rebase = false;
     self.history_commits.clear();
     self.history_revision = None;
     self.history_loading = self.sidebar_mode == GitSidebarMode::History;
@@ -1582,6 +1600,7 @@ impl GitPage {
       self.can_undo_last_commit = false;
       self.can_push = false;
       self.can_force_push = false;
+      self.force_push_after_rebase = false;
       self.has_staged_changes = false;
       self.merge_in_progress = false;
       self.rebase_in_progress = false;
@@ -1662,6 +1681,7 @@ impl GitPage {
           this.can_undo_last_commit = false;
           this.can_push = false;
           this.can_force_push = false;
+          this.force_push_after_rebase = false;
           this.has_staged_changes = false;
           this.merge_in_progress = false;
           this.rebase_in_progress = false;
@@ -2402,7 +2422,10 @@ impl GitPage {
           },
         };
         match rebase_branch(&root_path, &branch_ref) {
-          Ok(()) => Ok(()),
+          Ok(()) => {
+            self.force_push_after_rebase = true;
+            Ok(())
+          }
           Err(err) => {
             if let Some(path) = Self::first_conflicted_path(&root_path) {
               if let Some(rebase_message) = current_rebase_commit_message(&root_path).ok().flatten()
@@ -2425,6 +2448,7 @@ impl GitPage {
         };
         let result = abort_rebase(&root_path);
         if result.is_ok() {
+          self.force_push_after_rebase = false;
           self
             .commit_input
             .update(cx, |input, cx| input.set_value("", window, cx));
@@ -2621,6 +2645,7 @@ impl GitPage {
       let _ = this.update(cx, |this, cx| {
         if success {
           this.rebase_in_progress = false;
+          this.force_push_after_rebase = true;
           this.operation_error = None;
           let _ = cx.update_window(window_handle, |_, window, cx| {
             commit_input.update(cx, |input, cx| input.set_value("", window, cx));
@@ -2739,8 +2764,11 @@ impl GitPage {
     }
 
     let task = cx.spawn(async move |this, cx| {
-      let _ = unblock(move || push(&repo_root, false)).await;
+      let result = unblock(move || push(&repo_root, false)).await;
       let _ = this.update(cx, |this, cx| {
+        if result.is_ok() {
+          this.force_push_after_rebase = false;
+        }
         this.reload_status(cx);
       });
     });
@@ -2757,8 +2785,11 @@ impl GitPage {
     }
 
     let task = cx.spawn(async move |this, cx| {
-      let _ = unblock(move || push(&repo_root, true)).await;
+      let result = unblock(move || push(&repo_root, true)).await;
       let _ = this.update(cx, |this, cx| {
+        if result.is_ok() {
+          this.force_push_after_rebase = false;
+        }
         this.reload_status(cx);
       });
     });
@@ -3154,6 +3185,7 @@ impl GitPage {
       let result = unblock(move || abort_rebase(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
         if result.is_ok() {
+          this.force_push_after_rebase = false;
           let _ = cx.update_window(window_handle, |_, window, cx| {
             commit_input.update(cx, |input, cx| input.set_value("", window, cx));
           });
@@ -3485,12 +3517,41 @@ impl GitPage {
     }
   }
 
-  fn push_flags(branch_status: Option<&BranchStatus>) -> (bool, bool) {
+  fn should_publish_branch(branch_status: Option<&BranchStatus>, has_head_commit: bool) -> bool {
+    has_head_commit
+      && matches!(
+        branch_status,
+        Some(status) if !status.has_upstream && status.name != "HEAD"
+      )
+  }
+
+  fn push_action_label(
+    branch_status: Option<&BranchStatus>,
+    has_head_commit: bool,
+  ) -> &'static str {
+    if Self::should_publish_branch(branch_status, has_head_commit) {
+      "Push (Publish branch)"
+    } else {
+      "Push"
+    }
+  }
+
+  fn push_flags(
+    branch_status: Option<&BranchStatus>,
+    has_head_commit: bool,
+    force_push_after_rebase: bool,
+  ) -> (bool, bool) {
     let Some(status) = branch_status else {
       return (false, false);
     };
+    if Self::should_publish_branch(Some(status), has_head_commit) {
+      return (true, false);
+    }
     if !status.has_upstream {
       return (false, false);
+    }
+    if force_push_after_rebase && status.ahead > 0 {
+      return (false, true);
     }
     let can_push = status.ahead > 0 && status.behind == 0;
     let can_force_push = status.ahead > 0 && status.behind > 0;
@@ -4706,6 +4767,7 @@ impl GitPage {
     let undo_view = view.clone();
     let push_view = view.clone();
     let force_push_view = view.clone();
+    let push_label = Self::push_action_label(self.branch_status.as_ref(), self.has_head_commit);
 
     let main_button = if self.rebase_in_progress {
       Button::new("commit-button-main")
@@ -4769,7 +4831,7 @@ impl GitPage {
         let menu = menu.separator();
 
         let menu = menu.item(
-          PopupMenuItem::new("Push")
+          PopupMenuItem::new(push_label)
             .icon(IconName::ArrowUp)
             .disabled(!push_enabled)
             .on_click(move |event, window, cx| {
@@ -5664,16 +5726,70 @@ mod tests {
   #[test]
   fn push_flags_respect_upstream_and_divergence() {
     let no_upstream = make_branch_status("main", 3, 0, false);
-    assert_eq!(GitPage::push_flags(Some(&no_upstream)), (false, false));
+    assert_eq!(
+      GitPage::push_flags(Some(&no_upstream), false, false),
+      (false, false)
+    );
+    assert_eq!(
+      GitPage::push_flags(Some(&no_upstream), true, false),
+      (true, false)
+    );
 
     let clean_ahead = make_branch_status("main", 2, 0, true);
-    assert_eq!(GitPage::push_flags(Some(&clean_ahead)), (true, false));
+    assert_eq!(
+      GitPage::push_flags(Some(&clean_ahead), true, false),
+      (true, false)
+    );
 
     let diverged = make_branch_status("main", 1, 2, true);
-    assert_eq!(GitPage::push_flags(Some(&diverged)), (false, true));
+    assert_eq!(
+      GitPage::push_flags(Some(&diverged), true, false),
+      (false, true)
+    );
 
     let behind_only = make_branch_status("main", 0, 2, true);
-    assert_eq!(GitPage::push_flags(Some(&behind_only)), (false, false));
+    assert_eq!(
+      GitPage::push_flags(Some(&behind_only), true, false),
+      (false, false)
+    );
+  }
+
+  #[test]
+  fn push_flags_require_force_push_after_rebase_for_tracked_branch() {
+    let clean_ahead = make_branch_status("main", 2, 0, true);
+    assert_eq!(
+      GitPage::push_flags(Some(&clean_ahead), true, true),
+      (false, true)
+    );
+    assert_eq!(
+      GitPage::push_flags(Some(&clean_ahead), true, false),
+      (true, false)
+    );
+
+    let no_ahead = make_branch_status("main", 0, 0, true);
+    assert_eq!(
+      GitPage::push_flags(Some(&no_ahead), true, true),
+      (false, false)
+    );
+  }
+
+  #[test]
+  fn push_action_label_mentions_publish_branch_without_upstream() {
+    let no_upstream = make_branch_status("feature", 0, 0, false);
+    assert_eq!(
+      GitPage::push_action_label(Some(&no_upstream), true),
+      "Push (Publish branch)"
+    );
+    assert_eq!(
+      GitPage::push_action_label(Some(&no_upstream), false),
+      "Push"
+    );
+
+    let tracked = make_branch_status("main", 1, 0, true);
+    assert_eq!(GitPage::push_action_label(Some(&tracked), true), "Push");
+    let detached = make_branch_status("HEAD", 0, 0, false);
+    assert_eq!(GitPage::push_action_label(Some(&detached), true), "Push");
+    assert_eq!(GitPage::push_action_label(None, true), "Push");
   }
 
   fn make_status_entry(path: &str, stage: RepoStage) -> RepoStatusEntry {
@@ -6620,6 +6736,8 @@ mod tests {
     assert!(result.is_ok());
 
     await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(git_page.read_with(cx, |this, _| this.force_push_after_rebase));
 
     let repo_handle = Repository::open(&repo.path).expect("open repo");
     let head = repo_handle
@@ -8373,6 +8491,7 @@ mod tests {
 
     let push_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(source.path.clone());
+      this.force_push_after_rebase = true;
       this.can_push = true;
       this.push_changes_action(cx);
       this.status_task.take().expect("push task")
@@ -8386,6 +8505,7 @@ mod tests {
     assert_eq!(remote_branch_oid(&remote.path, &branch_name), expected_head);
     let status = current_branch_status(&source.path).expect("status after push");
     assert_eq!(status.ahead, 0);
+    assert!(!git_page.read_with(cx, |this, _| this.force_push_after_rebase));
   }
 
   #[gpui::test]
@@ -8425,6 +8545,7 @@ mod tests {
 
     let force_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(source.path.clone());
+      this.force_push_after_rebase = true;
       this.can_force_push = true;
       this.force_push_changes_action(cx);
       this.status_task.take().expect("force push task")
@@ -8436,6 +8557,7 @@ mod tests {
     }
 
     assert_eq!(remote_branch_oid(&remote.path, &branch_name), expected_head);
+    assert!(!git_page.read_with(cx, |this, _| this.force_push_after_rebase));
   }
 
   #[gpui::test]
@@ -9166,6 +9288,7 @@ mod tests {
       this.can_undo_last_commit = true;
       this.can_push = true;
       this.can_force_push = true;
+      this.force_push_after_rebase = true;
       this.has_staged_changes = true;
       this.selected_file = Some(rel_path.to_path_buf());
     });
@@ -9186,6 +9309,7 @@ mod tests {
       can_undo_last_commit,
       can_push,
       can_force_push,
+      force_push_after_rebase,
       has_staged_changes,
       selected_file,
       selected_branch,
@@ -9197,6 +9321,7 @@ mod tests {
         this.can_undo_last_commit,
         this.can_push,
         this.can_force_push,
+        this.force_push_after_rebase,
         this.has_staged_changes,
         this.selected_file.clone(),
         this.branch_select.read(cx).selected_value().cloned(),
@@ -9209,6 +9334,7 @@ mod tests {
     assert!(!can_undo_last_commit);
     assert!(!can_push);
     assert!(!can_force_push);
+    assert!(!force_push_after_rebase);
     assert!(!has_staged_changes);
     assert!(selected_file.is_none());
     assert!(selected_branch.is_none());

@@ -118,32 +118,40 @@ pub fn undo_last_commit(repo_root: &Path) -> Result<()> {
 pub fn push(repo_root: &Path, force: bool) -> Result<()> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
-  let Some(info) = upstream_info(&repo)? else {
-    bail!("no upstream configured");
+  let Some((info, should_set_upstream)) = push_target_info(&repo)? else {
+    bail!("no upstream configured and no publish remote available");
   };
 
-  let mut remote = repo.find_remote(&info.remote)?;
-  let mut callbacks = RemoteCallbacks::new();
-  callbacks.credentials(|_, username_from_url, _| {
-    if let Some(username) = username_from_url {
-      Cred::ssh_key_from_agent(username).or_else(|_| Cred::default())
+  {
+    let mut remote = repo.find_remote(&info.remote)?;
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(|_, username_from_url, _| {
+      if let Some(username) = username_from_url {
+        Cred::ssh_key_from_agent(username).or_else(|_| Cred::default())
+      } else {
+        Cred::default()
+      }
+    });
+
+    let mut options = PushOptions::new();
+    options.remote_callbacks(callbacks);
+
+    let local_ref = format!("refs/heads/{}", info.local_branch);
+    let remote_ref = format!("refs/heads/{}", info.remote_branch);
+    let refspec = if force {
+      format!("+{}:{}", local_ref, remote_ref)
     } else {
-      Cred::default()
-    }
-  });
+      format!("{}:{}", local_ref, remote_ref)
+    };
 
-  let mut options = PushOptions::new();
-  options.remote_callbacks(callbacks);
+    remote.push(&[refspec], Some(&mut options))?;
+  }
 
-  let local_ref = format!("refs/heads/{}", info.local_branch);
-  let remote_ref = format!("refs/heads/{}", info.remote_branch);
-  let refspec = if force {
-    format!("+{}:{}", local_ref, remote_ref)
-  } else {
-    format!("{}:{}", local_ref, remote_ref)
-  };
-
-  remote.push(&[refspec], Some(&mut options))?;
+  if should_set_upstream {
+    let mut local_branch = repo.find_branch(&info.local_branch, BranchType::Local)?;
+    let upstream_ref = format!("{}/{}", info.remote, info.remote_branch);
+    local_branch.set_upstream(Some(&upstream_ref))?;
+  }
   Ok(())
 }
 
@@ -151,6 +159,14 @@ struct UpstreamInfo {
   remote: String,
   remote_branch: String,
   local_branch: String,
+}
+
+fn push_target_info(repo: &Repository) -> Result<Option<(UpstreamInfo, bool)>> {
+  if let Some(info) = upstream_info(repo)? {
+    return Ok(Some((info, false)));
+  }
+
+  Ok(publish_info(repo)?.map(|info| (info, true)))
 }
 
 fn upstream_info(repo: &Repository) -> Result<Option<UpstreamInfo>> {
@@ -181,6 +197,47 @@ fn upstream_info(repo: &Repository) -> Result<Option<UpstreamInfo>> {
     remote_branch,
     local_branch: local_name.to_string(),
   }))
+}
+
+fn publish_info(repo: &Repository) -> Result<Option<UpstreamInfo>> {
+  let head = match repo.head() {
+    Ok(head) => head,
+    Err(_) => return Ok(None),
+  };
+  if !head.is_branch() {
+    return Ok(None);
+  }
+
+  let local_branch = head.shorthand().unwrap_or("HEAD").to_string();
+  if local_branch == "HEAD" {
+    return Ok(None);
+  }
+  let _ = repo.find_branch(&local_branch, BranchType::Local)?;
+
+  let Some(remote) = default_publish_remote(repo)? else {
+    return Ok(None);
+  };
+
+  Ok(Some(UpstreamInfo {
+    remote,
+    remote_branch: local_branch.clone(),
+    local_branch,
+  }))
+}
+
+fn default_publish_remote(repo: &Repository) -> Result<Option<String>> {
+  if repo.find_remote("origin").is_ok() {
+    return Ok(Some("origin".to_string()));
+  }
+
+  let remotes = repo.remotes().context("list remotes")?;
+  let mut remote_names = remotes.iter().flatten().map(ToString::to_string);
+  let first = remote_names.next();
+  if first.is_none() || remote_names.next().is_some() {
+    return Ok(None);
+  }
+
+  Ok(first)
 }
 
 #[cfg(test)]
@@ -432,7 +489,7 @@ mod tests {
   }
 
   #[test]
-  fn push_fails_without_upstream_configuration() {
+  fn push_fails_without_upstream_or_publish_remote() {
     let repo = TempRepo::init("commit-push-upstream");
     commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
 
@@ -442,7 +499,7 @@ mod tests {
       err
         .expect("push error")
         .to_string()
-        .contains("no upstream configured")
+        .contains("no upstream configured and no publish remote available")
     );
   }
 
@@ -477,6 +534,42 @@ mod tests {
       remote_branch_oid(&remote.path, &local_branch),
       expected_head
     );
+  }
+
+  #[test]
+  fn push_publishes_branch_and_sets_upstream_when_remote_exists() {
+    let local = TempRepo::init("commit-push-publish-local");
+    let remote = TempBareRepo::init("commit-push-publish-remote");
+    let rel_path = Path::new("README.md");
+
+    commit_text_file(&local.path, rel_path, "v1\n", "initial");
+
+    let local_repo = Repository::open(&local.path).expect("open local");
+    local_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin");
+
+    let local_branch = branch_name(&local.path);
+    let expected_head = head_oid(&local.path);
+
+    push(&local.path, false).expect("publish branch");
+
+    assert_eq!(
+      remote_branch_oid(&remote.path, &local_branch),
+      expected_head
+    );
+    let repo_handle = Repository::open(&local.path).expect("open local after publish");
+    let branch = repo_handle
+      .find_branch(&local_branch, BranchType::Local)
+      .expect("find local branch");
+    let upstream_name = branch
+      .upstream()
+      .expect("upstream configured")
+      .name()
+      .expect("read upstream name")
+      .unwrap_or("")
+      .to_string();
+    assert_eq!(upstream_name, format!("origin/{local_branch}"));
   }
 
   #[test]
