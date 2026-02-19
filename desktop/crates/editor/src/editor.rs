@@ -2,7 +2,7 @@ use std::{
   collections::{HashMap, HashSet, VecDeque, hash_map::DefaultHasher},
   hash::{Hash, Hasher},
   ops::Range,
-  path::PathBuf,
+  path::{Path, PathBuf},
   sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -83,6 +83,8 @@ const GUTTER_LINE_NUMBER_BASE_RIGHT_PADDING_PX: f32 = 20.0;
 const DEFAULT_EDITOR_LINE_HEIGHT: f32 = 20.0;
 /// Diff recompute debounce (ms)
 const DIFF_DEBOUNCE_MS: u64 = 60;
+/// Build diff projection off the UI thread for very large files.
+const ASYNC_PROJECTION_MIN_DOC_LINES: usize = 5_000;
 /// External change polling interval (ms)
 const POLL_INTERVAL_MS: u64 = 500;
 const FRACTIONAL_SCROLL_EPSILON: f32 = 0.001;
@@ -134,6 +136,15 @@ fn editor_code_font_family(cx: &App) -> SharedString {
 pub enum DiffViewMode {
   Inline,
   Split,
+}
+
+#[derive(Clone, Debug)]
+pub struct EditorFileLoad {
+  pub content: String,
+  pub is_read_only: bool,
+  pub language_hint: Option<String>,
+  pub file_mtime: Option<SystemTime>,
+  pub index_mtime: Option<SystemTime>,
 }
 
 pub type ReviewCommentEditHandler = Arc<dyn Fn(u64, Arc<str>, &mut Window, &mut App)>;
@@ -456,7 +467,7 @@ pub struct Editor {
   pub repo_file: Option<RepoFile>,
   pub git_store: Option<GitStore>,
   git_state: BufferGitState,
-  pub diffs: Option<DiffSet>,
+  pub diffs: Option<Arc<DiffSet>>,
   review_comments: Vec<ReviewComment>,
   review_comment_thread_roots: HashMap<u64, u64>,
   review_comment_threads: HashMap<u64, Vec<u64>>,
@@ -499,6 +510,7 @@ pub struct Editor {
   find_active_match: Option<usize>,
   find_scroll_epoch: usize,
   pub diff_task: Option<Task<()>>,
+  projection_task: Option<Task<()>>,
   pub bases_task: Option<Task<()>>,
   pub poll_task: Option<Task<()>>,
   pub git_task: Option<Task<()>>,
@@ -506,6 +518,7 @@ pub struct Editor {
   git_op_in_flight: bool,
   pending_git_after_bases: bool,
   pub diff_generation: Arc<AtomicUsize>,
+  projection_generation: Arc<AtomicUsize>,
   pub file_mtime: Option<SystemTime>,
   pub index_mtime: Option<SystemTime>,
   pub is_dirty: bool,
@@ -707,43 +720,50 @@ pub(crate) enum ScrollAxis {
 
 impl Editor {
   pub fn new_with_paths(repo_root: PathBuf, file_path: PathBuf, cx: &mut Context<Self>) -> Self {
-    let workdir_path = file_path;
-    let file_ext = workdir_path
-      .extension()
-      .and_then(|ext| ext.to_str())
-      .map(|ext| ext.to_ascii_lowercase());
-    let file_name = workdir_path
-      .file_name()
-      .and_then(|name| name.to_str())
-      .map(|name| name.to_ascii_lowercase());
-    let mut language_hint = file_ext.as_deref().or(file_name.as_deref());
-    if let Some(name) = file_name.as_deref()
-      && name.starts_with("dockerfile")
-    {
-      language_hint = Some("dockerfile");
-    }
-    let (content, is_read_only) = match std::fs::read_to_string(&workdir_path) {
+    let loaded = Self::load_file_for_editor(&repo_root, &file_path);
+    Self::new_with_loaded_file(repo_root, file_path, loaded, cx)
+  }
+
+  pub fn load_file_for_editor(repo_root: &Path, workdir_path: &Path) -> EditorFileLoad {
+    let language_hint = Self::language_hint_for_path(workdir_path);
+    let (content, is_read_only) = match std::fs::read_to_string(workdir_path) {
       Ok(content) => (content, false),
       Err(err) if err.kind() == std::io::ErrorKind::NotFound => (
-        Self::deleted_file_content(&repo_root, &workdir_path).unwrap_or_default(),
+        Self::deleted_file_content(repo_root, workdir_path).unwrap_or_default(),
         true,
       ),
       Err(_) => (String::new(), false),
     };
 
-    let document = cx.new(|cx| Document::new(&content, language_hint, cx));
+    let file_mtime = std::fs::metadata(workdir_path)
+      .and_then(|meta| meta.modified())
+      .ok();
+    let index_mtime = std::fs::metadata(repo_root.join(".git/index"))
+      .and_then(|meta| meta.modified())
+      .ok();
+
+    EditorFileLoad {
+      content,
+      is_read_only,
+      language_hint,
+      file_mtime,
+      index_mtime,
+    }
+  }
+
+  pub fn new_with_loaded_file(
+    repo_root: PathBuf,
+    file_path: PathBuf,
+    loaded: EditorFileLoad,
+    cx: &mut Context<Self>,
+  ) -> Self {
+    let workdir_path = file_path;
+    let document = cx.new(|cx| Document::new(&loaded.content, loaded.language_hint.as_deref(), cx));
     let cursor_blink = cx.new(CursorBlink::new);
     let repo_file = RepoFile::new(repo_root, workdir_path.clone()).ok();
     let git_store = repo_file
       .as_ref()
       .map(|repo_file| GitStore::new(repo_file.repo_root.clone()));
-    let file_mtime = std::fs::metadata(&workdir_path)
-      .and_then(|meta| meta.modified())
-      .ok();
-    let index_mtime = repo_file
-      .as_ref()
-      .and_then(|repo| std::fs::metadata(repo.repo_root.join(".git/index")).ok())
-      .and_then(|meta| meta.modified().ok());
 
     let mut editor = Self {
       document,
@@ -827,6 +847,7 @@ impl Editor {
       find_active_match: None,
       find_scroll_epoch: 0,
       diff_task: None,
+      projection_task: None,
       bases_task: None,
       poll_task: None,
       git_task: None,
@@ -834,16 +855,35 @@ impl Editor {
       git_op_in_flight: false,
       pending_git_after_bases: false,
       diff_generation: Arc::new(AtomicUsize::new(0)),
-      file_mtime,
-      index_mtime,
+      projection_generation: Arc::new(AtomicUsize::new(0)),
+      file_mtime: loaded.file_mtime,
+      index_mtime: loaded.index_mtime,
       is_dirty: false,
       save_task: None,
       optimistic_unstaged_groups: HashSet::new(),
       diff_view_mode: DiffViewMode::Inline,
-      is_read_only,
+      is_read_only: loaded.is_read_only,
     };
     editor.init(cx);
     editor
+  }
+
+  fn language_hint_for_path(workdir_path: &Path) -> Option<String> {
+    let file_ext = workdir_path
+      .extension()
+      .and_then(|ext| ext.to_str())
+      .map(|ext| ext.to_ascii_lowercase());
+    let file_name = workdir_path
+      .file_name()
+      .and_then(|name| name.to_str())
+      .map(|name| name.to_ascii_lowercase());
+    if file_name
+      .as_deref()
+      .is_some_and(|name| name.starts_with("dockerfile"))
+    {
+      return Some("dockerfile".to_string());
+    }
+    file_ext.or(file_name)
   }
 
   pub fn document(&self) -> &Entity<Document> {
@@ -922,6 +962,7 @@ impl Editor {
     if let Some(diffs) = diffs {
       self.apply_diffs(diffs, cx);
     } else {
+      self.invalidate_projection_builds();
       self.diffs = None;
       self.review_comments.clear();
       self.review_comment_thread_roots.clear();
@@ -4109,14 +4150,75 @@ impl Editor {
     }));
   }
 
+  fn invalidate_projection_builds(&mut self) {
+    self.projection_generation.fetch_add(1, Ordering::Relaxed);
+    self.projection_task = None;
+  }
+
   fn apply_diffs(&mut self, diffs: DiffSet, cx: &mut Context<Self>) {
-    self.diffs = Some(diffs);
+    self.diffs = Some(Arc::new(diffs));
     self.rebuild_projection(cx);
+  }
+
+  fn should_build_projection_in_background(doc_line_count: usize) -> bool {
+    doc_line_count >= ASYNC_PROJECTION_MIN_DOC_LINES
+  }
+
+  fn build_projection_from_diffs(
+    doc_line_count: usize,
+    diffs: &DiffSet,
+    expanded_gaps: &HashMap<GapId, GapReveal>,
+    align_modified: bool,
+    projection_comments: &[ReviewComment],
+    collapsed_review_comments: &HashSet<u64>,
+    review_comment_wrap_columns: usize,
+    review_comment_line_height_px: f32,
+    markdown_line_height_px: f32,
+    review_comment_body_heights_px: &HashMap<u64, f32>,
+  ) -> Projection {
+    Projection::from_diffs(
+      doc_line_count,
+      &diffs.uncommitted,
+      &diffs.unstaged,
+      &diffs.staged,
+      expanded_gaps,
+      align_modified,
+    )
+    .with_review_comments(
+      projection_comments,
+      collapsed_review_comments,
+      review_comment_wrap_columns,
+      review_comment_line_height_px,
+      markdown_line_height_px,
+      review_comment_body_heights_px,
+    )
+  }
+
+  fn apply_projection_result(
+    &mut self,
+    projection: Projection,
+    doc_line_count: usize,
+    cx: &mut Context<Self>,
+  ) {
+    self.set_projection(Some(projection));
+
+    let total_lines = self.display_line_count(doc_line_count);
+    if total_lines == 0 {
+      self.scroll_offset_y = 0.0;
+    } else {
+      let max_scroll = (total_lines.saturating_sub(1)) as f32;
+      if self.scroll_offset_y > max_scroll {
+        self.scroll_offset_y = max_scroll;
+      }
+    }
+
+    cx.notify();
   }
 
   fn rebuild_projection(&mut self, cx: &mut Context<Self>) {
     let doc_line_count = self.document.read(cx).len_lines();
     if self.diffs.is_none() {
+      self.invalidate_projection_builds();
       self.set_projection(None);
       self.virtual_line_layouts.clear();
       cx.notify();
@@ -4206,38 +4308,72 @@ impl Editor {
     let diffs = self
       .diffs
       .as_ref()
-      .expect("diffs should be present when rebuilding projection");
+      .expect("diffs should be present when rebuilding projection")
+      .clone();
+    let expanded_gaps = self.expanded_gaps.clone();
+    let collapsed_review_comments = self.collapsed_review_comments.clone();
+    let align_modified = matches!(self.diff_view_mode, DiffViewMode::Split);
+    let review_comment_wrap_columns = self.review_comment_wrap_columns;
+    let review_comment_line_height_px = self.review_comment_line_height_px;
+    let build_in_background = Self::should_build_projection_in_background(doc_line_count);
 
-    let projection = Projection::from_diffs(
-      doc_line_count,
-      &diffs.uncommitted,
-      &diffs.unstaged,
-      &diffs.staged,
-      &self.expanded_gaps,
-      matches!(self.diff_view_mode, DiffViewMode::Split),
-    )
-    .with_review_comments(
-      &projection_comments,
-      &self.collapsed_review_comments,
-      self.review_comment_wrap_columns,
-      self.review_comment_line_height_px,
-      markdown_line_height_px,
-      &review_comment_body_heights_px,
-    );
+    let generation = self.projection_generation.fetch_add(1, Ordering::Relaxed) + 1;
+    let projection_generation = self.projection_generation.clone();
 
-    self.set_projection(Some(projection));
-
-    let total_lines = self.display_line_count(doc_line_count);
-    if total_lines == 0 {
-      self.scroll_offset_y = 0.0;
-    } else {
-      let max_scroll = (total_lines.saturating_sub(1)) as f32;
-      if self.scroll_offset_y > max_scroll {
-        self.scroll_offset_y = max_scroll;
+    if !build_in_background {
+      self.projection_task = None;
+      let projection = Self::build_projection_from_diffs(
+        doc_line_count,
+        &diffs,
+        &expanded_gaps,
+        align_modified,
+        &projection_comments,
+        &collapsed_review_comments,
+        review_comment_wrap_columns,
+        review_comment_line_height_px,
+        markdown_line_height_px,
+        &review_comment_body_heights_px,
+      );
+      if self.projection_generation.load(Ordering::Relaxed) != generation {
+        return;
       }
+      self.apply_projection_result(projection, doc_line_count, cx);
+      return;
     }
 
-    cx.notify();
+    self.projection_task = Some(cx.spawn(async move |this, cx| {
+      if projection_generation.load(Ordering::Relaxed) != generation {
+        return;
+      }
+
+      let projection = cx
+        .background_spawn(async move {
+          Self::build_projection_from_diffs(
+            doc_line_count,
+            &diffs,
+            &expanded_gaps,
+            align_modified,
+            &projection_comments,
+            &collapsed_review_comments,
+            review_comment_wrap_columns,
+            review_comment_line_height_px,
+            markdown_line_height_px,
+            &review_comment_body_heights_px,
+          )
+        })
+        .await;
+
+      if projection_generation.load(Ordering::Relaxed) != generation {
+        return;
+      }
+
+      let _ = this.update(cx, move |editor, cx| {
+        if editor.projection_generation.load(Ordering::Relaxed) != generation {
+          return;
+        }
+        editor.apply_projection_result(projection, doc_line_count, cx);
+      });
+    }));
   }
 
   pub fn save(&mut self, cx: &mut Context<Self>) {
@@ -4657,6 +4793,7 @@ impl Editor {
 
   fn reload_from_disk(&mut self, contents: String, cx: &mut Context<Self>) {
     self.is_read_only = false;
+    self.invalidate_projection_builds();
     self.document.update(cx, |doc, cx| {
       doc.replace_all(&contents, cx);
     });
@@ -4962,8 +5099,8 @@ impl Editor {
     entry.head = entry.head.saturating_add(head_amount);
     entry.tail = entry.tail.saturating_add(tail_amount);
 
-    if let Some(diffs) = self.diffs.clone() {
-      self.apply_diffs(diffs, cx);
+    if self.diffs.is_some() {
+      self.rebuild_projection(cx);
     } else {
       self.schedule_diff_recompute(cx);
     }
@@ -7649,6 +7786,7 @@ pub mod tests {
           git_state: BufferGitState::default(),
           diffs: None,
           diff_task: None,
+          projection_task: None,
           bases_task: None,
           poll_task: None,
           git_task: None,
@@ -7656,6 +7794,7 @@ pub mod tests {
           git_op_in_flight: false,
           pending_git_after_bases: false,
           diff_generation: Arc::new(AtomicUsize::new(0)),
+          projection_generation: Arc::new(AtomicUsize::new(0)),
           file_mtime: None,
           index_mtime: None,
           is_dirty: false,
@@ -9357,5 +9496,15 @@ pub mod tests {
     // Verify entire buffer is selected
     assert_eq!(ctx.selection(), 0..doc_len);
     assert_eq!(doc_len, 17); // "line1\nline2\nline3"
+  }
+
+  #[test]
+  fn test_projection_background_threshold() {
+    assert!(!Editor::should_build_projection_in_background(
+      ASYNC_PROJECTION_MIN_DOC_LINES.saturating_sub(1)
+    ));
+    assert!(Editor::should_build_projection_in_background(
+      ASYNC_PROJECTION_MIN_DOC_LINES
+    ));
   }
 }
