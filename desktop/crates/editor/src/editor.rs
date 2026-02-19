@@ -4068,10 +4068,10 @@ impl Editor {
       return;
     };
 
-    let buffer_text = {
-      let document = self.document.read(cx);
-      document.slice_to_string(0..document.len())
-    };
+    // For clean buffers, diff directly from git/workdir to avoid copying very large
+    // in-memory documents on the UI thread.
+    let use_workdir_diff = !self.is_dirty && !self.git_state.index_dirty;
+    let repo_file_for_diff = repo_file.clone();
 
     let generation = self.diff_generation.fetch_add(1, Ordering::Relaxed) + 1;
     let diff_generation = self.diff_generation.clone();
@@ -4080,14 +4080,26 @@ impl Editor {
         .timer(Duration::from_millis(DIFF_DEBOUNCE_MS))
         .await;
 
-      let diffs =
-        unblock(move || git::compute_buffer_diffs(&git_bases, &buffer_text, &rel_path)).await;
+      if diff_generation.load(Ordering::Relaxed) != generation {
+        return;
+      }
+
+      let diffs = if use_workdir_diff {
+        unblock(move || git::compute_file_diffs(&repo_file_for_diff)).await
+      } else {
+        let Ok(buffer_text) = this.update(cx, |editor, cx| {
+          let document = editor.document.read(cx);
+          document.slice_to_string(0..document.len())
+        }) else {
+          return;
+        };
+        unblock(move || git::compute_buffer_diffs(&git_bases, &buffer_text, &rel_path)).await
+      };
       let Ok(diffs) = diffs else {
         return;
       };
 
-      let is_latest = diff_generation.load(Ordering::Relaxed) == generation;
-      if !is_latest {
+      if diff_generation.load(Ordering::Relaxed) != generation {
         return;
       }
 
