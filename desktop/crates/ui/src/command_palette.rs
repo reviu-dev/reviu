@@ -124,6 +124,8 @@ pub enum CommandPaletteAction {
   ForcePush,
   UndoLastCommit,
   Amend,
+  StageSelectedFile,
+  UnstageSelectedFile,
   AcceptAllCurrentConflicts,
   AcceptAllIncomingConflicts,
   CreateBranch {
@@ -594,6 +596,8 @@ pub enum CommandPaletteCommandId {
   ForcePush,
   UndoLastCommit,
   Amend,
+  StageSelectedFile,
+  UnstageSelectedFile,
   AcceptAllCurrentConflicts,
   AcceptAllIncomingConflicts,
   CreateBranch,
@@ -698,6 +702,22 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::Amend,
       name: "Amend".into(),
       description: Some("Amend the most recent commit".into()),
+    }
+  }
+
+  pub fn stage_selected_file() -> Self {
+    Self {
+      id: CommandPaletteCommandId::StageSelectedFile,
+      name: "Stage file".into(),
+      description: Some("Stage the selected file".into()),
+    }
+  }
+
+  pub fn unstage_selected_file() -> Self {
+    Self {
+      id: CommandPaletteCommandId::UnstageSelectedFile,
+      name: "Unstage file".into(),
+      description: Some("Unstage the selected file".into()),
     }
   }
 
@@ -946,6 +966,8 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::ForcePush => Icon::new(IconName::TriangleAlert),
       CommandPaletteCommandId::UndoLastCommit => Icon::new(IconName::Undo),
       CommandPaletteCommandId::Amend => Icon::new(IconName::Replace),
+      CommandPaletteCommandId::StageSelectedFile => Icon::new(IconName::Plus),
+      CommandPaletteCommandId::UnstageSelectedFile => Icon::new(IconName::Minus),
       CommandPaletteCommandId::AcceptAllCurrentConflicts => Icon::new(IconName::Replace),
       CommandPaletteCommandId::AcceptAllIncomingConflicts => Icon::new(IconName::Replace),
       CommandPaletteCommandId::MergeBranch => Icon::new(UiIconName::GitMerge),
@@ -1641,6 +1663,12 @@ impl CommandPalette {
       CommandPaletteCommandId::Amend => {
         self.trigger_action(CommandPaletteAction::Amend, window, cx);
       }
+      CommandPaletteCommandId::StageSelectedFile => {
+        self.trigger_action(CommandPaletteAction::StageSelectedFile, window, cx);
+      }
+      CommandPaletteCommandId::UnstageSelectedFile => {
+        self.trigger_action(CommandPaletteAction::UnstageSelectedFile, window, cx);
+      }
       CommandPaletteCommandId::AcceptAllCurrentConflicts => {
         self.trigger_action(CommandPaletteAction::AcceptAllCurrentConflicts, window, cx);
       }
@@ -2117,6 +2145,8 @@ mod tests {
     let force_push = CommandPaletteCommand::force_push();
     let undo_last_commit = CommandPaletteCommand::undo_last_commit();
     let amend = CommandPaletteCommand::amend();
+    let stage_selected_file = CommandPaletteCommand::stage_selected_file();
+    let unstage_selected_file = CommandPaletteCommand::unstage_selected_file();
     let accept_all_current_conflicts = CommandPaletteCommand::accept_all_current_conflicts();
     let accept_all_incoming_conflicts = CommandPaletteCommand::accept_all_incoming_conflicts();
 
@@ -2147,6 +2177,20 @@ mod tests {
     assert_eq!(amend.id, CommandPaletteCommandId::Amend);
     assert_eq!(amend.name.as_ref(), "Amend");
     assert!(amend.matches("amend the most recent"));
+
+    assert_eq!(
+      stage_selected_file.id,
+      CommandPaletteCommandId::StageSelectedFile
+    );
+    assert_eq!(stage_selected_file.name.as_ref(), "Stage file");
+    assert!(stage_selected_file.matches("selected file"));
+
+    assert_eq!(
+      unstage_selected_file.id,
+      CommandPaletteCommandId::UnstageSelectedFile
+    );
+    assert_eq!(unstage_selected_file.name.as_ref(), "Unstage file");
+    assert!(unstage_selected_file.matches("selected file"));
 
     assert_eq!(
       accept_all_current_conflicts.id,

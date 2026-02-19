@@ -2141,6 +2141,11 @@ impl GitPage {
       } else if Self::should_show_stage_all_command(&self.status_entries) {
         commands.push(CommandPaletteCommand::stage_all());
       }
+      if self.should_show_unstage_selected_file_palette_command() {
+        commands.push(CommandPaletteCommand::unstage_selected_file());
+      } else if self.should_show_stage_selected_file_palette_command() {
+        commands.push(CommandPaletteCommand::stage_selected_file());
+      }
       if self.should_show_accept_all_conflicts_palette_commands(cx) {
         commands.push(CommandPaletteCommand::accept_all_current_conflicts());
         commands.push(CommandPaletteCommand::accept_all_incoming_conflicts());
@@ -2418,6 +2423,44 @@ impl GitPage {
         }
         should_post_action_refresh = false;
         self.commit_amend_changes(window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::StageSelectedFile => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        if !self.should_show_stage_selected_file_palette_command() {
+          return Err("Stage file command is currently disabled.".into());
+        }
+        let Some(selected_entry) = self.selected_file_entry().cloned() else {
+          return Err("Stage file command is currently disabled.".into());
+        };
+        should_post_action_refresh = false;
+        let has_unresolved_conflict_markers = self.editor.as_ref().is_none_or(|editor| {
+          editor.read_with(cx, |editor, cx| editor.has_unresolved_conflict_markers(cx))
+        });
+        if Self::should_confirm_stage_for_status(
+          Some(selected_entry.status),
+          has_unresolved_conflict_markers,
+        ) {
+          self.confirm_stage_conflicted_file_action(window, selected_entry.path.clone(), cx);
+        } else {
+          self.stage_file_action(selected_entry.path.clone(), cx);
+        }
+        Ok(())
+      }
+      CommandPaletteAction::UnstageSelectedFile => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        if !self.should_show_unstage_selected_file_palette_command() {
+          return Err("Unstage file command is currently disabled.".into());
+        }
+        let Some(selected_entry) = self.selected_file_entry().cloned() else {
+          return Err("Unstage file command is currently disabled.".into());
+        };
+        should_post_action_refresh = false;
+        self.unstage_file_action(selected_entry.path.clone(), cx);
         Ok(())
       }
       CommandPaletteAction::AcceptAllCurrentConflicts => {
@@ -3736,17 +3779,30 @@ impl GitPage {
     !self.rebase_in_progress && self.selected_repo.is_some() && self.has_head_commit
   }
 
-  fn selected_file_status(&self) -> Option<RepoStatusKind> {
+  fn selected_file_entry(&self) -> Option<&RepoStatusEntry> {
+    let selected = self.selected_file.as_ref()?;
     self
-      .selected_file
-      .as_ref()
-      .and_then(|selected| {
-        self
-          .status_entries
-          .iter()
-          .find(|entry| &entry.path == selected)
+      .status_entries
+      .iter()
+      .find(|entry| &entry.path == selected)
+  }
+
+  fn should_show_stage_selected_file_palette_command(&self) -> bool {
+    self.selected_repo.is_some()
+      && self
+        .selected_file_entry()
+        .is_some_and(|entry| entry.stage == RepoStage::Unstaged)
+  }
+
+  fn should_show_unstage_selected_file_palette_command(&self) -> bool {
+    self.selected_repo.is_some()
+      && self.selected_file_entry().is_some_and(|entry| {
+        matches!(entry.stage, RepoStage::Staged | RepoStage::PartiallyStaged)
       })
-      .map(|entry| entry.status)
+  }
+
+  fn selected_file_status(&self) -> Option<RepoStatusKind> {
+    self.selected_file_entry().map(|entry| entry.status)
   }
 
   fn can_accept_all_conflicts(
@@ -6067,6 +6123,7 @@ mod tests {
       this.selected_repo = Some(repo.path.clone());
       this.rebase_in_progress = false;
       this.status_entries = vec![make_status_entry("README.md", RepoStage::Unstaged)];
+      this.selected_file = Some(PathBuf::from("README.md"));
       this.has_head_commit = true;
       this.can_undo_last_commit = true;
       this.can_push = true;
@@ -6079,6 +6136,20 @@ mod tests {
       assert!(this.should_show_force_push_palette_command());
       assert!(this.should_show_undo_last_commit_palette_command());
       assert!(this.should_show_amend_palette_command());
+      assert!(this.should_show_stage_selected_file_palette_command());
+      assert!(!this.should_show_unstage_selected_file_palette_command());
+
+      this.status_entries = vec![make_status_entry("README.md", RepoStage::Staged)];
+      assert!(!this.should_show_stage_selected_file_palette_command());
+      assert!(this.should_show_unstage_selected_file_palette_command());
+
+      this.status_entries = vec![make_status_entry("README.md", RepoStage::PartiallyStaged)];
+      assert!(!this.should_show_stage_selected_file_palette_command());
+      assert!(this.should_show_unstage_selected_file_palette_command());
+
+      this.selected_file = None;
+      assert!(!this.should_show_stage_selected_file_palette_command());
+      assert!(!this.should_show_unstage_selected_file_palette_command());
 
       this.rebase_in_progress = true;
       assert!(!this.should_show_commit_palette_command("feat: commit"));
@@ -6088,6 +6159,8 @@ mod tests {
       assert!(!this.should_show_force_push_palette_command());
       assert!(!this.should_show_undo_last_commit_palette_command());
       assert!(!this.should_show_amend_palette_command());
+      assert!(!this.should_show_stage_selected_file_palette_command());
+      assert!(!this.should_show_unstage_selected_file_palette_command());
 
       this.status_entries = vec![RepoStatusEntry {
         path: PathBuf::from("README.md"),
@@ -6104,6 +6177,8 @@ mod tests {
       assert!(!this.should_show_force_push_palette_command());
       assert!(!this.should_show_undo_last_commit_palette_command());
       assert!(!this.should_show_amend_palette_command());
+      assert!(!this.should_show_stage_selected_file_palette_command());
+      assert!(!this.should_show_unstage_selected_file_palette_command());
     });
   }
 
@@ -7310,6 +7385,120 @@ mod tests {
   }
 
   #[gpui::test]
+  fn command_palette_selected_file_stage_toggle_returns_error_when_disabled(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-selected-file-toggle-disabled");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+    std::fs::write(repo.path.join(rel_path), "v2\n").expect("modify tracked file");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    let stage_without_selection = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.selected_file = None;
+      this.status_entries = list_repo_status(&repo.path).expect("list status");
+      this.handle_command_palette_action(CommandPaletteAction::StageSelectedFile, window, cx)
+    });
+    assert_eq!(
+      stage_without_selection
+        .expect_err("stage selected file should be disabled without selection")
+        .as_ref(),
+      "Stage file command is currently disabled."
+    );
+
+    let unstage_without_staged_file = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.selected_file = Some(rel_path.to_path_buf());
+      this.status_entries = list_repo_status(&repo.path).expect("list status");
+      this.handle_command_palette_action(CommandPaletteAction::UnstageSelectedFile, window, cx)
+    });
+    assert_eq!(
+      unstage_without_staged_file
+        .expect_err("unstage selected file should be disabled when file is unstaged")
+        .as_ref(),
+      "Unstage file command is currently disabled."
+    );
+  }
+
+  #[gpui::test]
+  async fn command_palette_stage_selected_file_stages_selected_entry(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-stage-selected-file");
+    let first = Path::new("a.txt");
+    let second = Path::new("b.txt");
+    let _ = commit_text_file(&repo.path, first, "a1\n", "first");
+    let _ = commit_text_file(&repo.path, second, "b1\n", "second");
+    std::fs::write(repo.path.join(first), "a2\n").expect("modify first");
+    std::fs::write(repo.path.join(second), "b2\n").expect("modify second");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.status_entries = list_repo_status(&repo.path).expect("list status");
+      this.selected_file = Some(first.to_path_buf());
+      this.handle_command_palette_action(CommandPaletteAction::StageSelectedFile, window, cx)
+    });
+    assert!(result.is_ok());
+
+    let stage_task = git_page.update_in(cx, |this, _window, _| this.status_task.take());
+    stage_task.expect("stage selected file task").await;
+    if let Some(reload_task) = git_page.update_in(cx, |this, _window, _| this.status_task.take()) {
+      reload_task.await;
+    }
+
+    let entries = list_repo_status(&repo.path).expect("list status after stage selected file");
+    let first_entry = entries
+      .iter()
+      .find(|entry| entry.path == first)
+      .expect("first entry");
+    let second_entry = entries
+      .iter()
+      .find(|entry| entry.path == second)
+      .expect("second entry");
+    assert_eq!(first_entry.stage, RepoStage::Staged);
+    assert_eq!(second_entry.stage, RepoStage::Unstaged);
+  }
+
+  #[gpui::test]
+  async fn command_palette_unstage_selected_file_unstages_selected_entry(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-unstage-selected-file");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+    std::fs::write(repo.path.join(rel_path), "v2\n").expect("modify file");
+    stage_file(&repo.path, rel_path).expect("stage file before command");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.status_entries = list_repo_status(&repo.path).expect("list status");
+      this.selected_file = Some(rel_path.to_path_buf());
+      this.handle_command_palette_action(CommandPaletteAction::UnstageSelectedFile, window, cx)
+    });
+    assert!(result.is_ok());
+
+    let unstage_task = git_page.update_in(cx, |this, _window, _| this.status_task.take());
+    unstage_task.expect("unstage selected file task").await;
+    if let Some(reload_task) = git_page.update_in(cx, |this, _window, _| this.status_task.take()) {
+      reload_task.await;
+    }
+
+    let entries = list_repo_status(&repo.path).expect("list status after unstage selected file");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].path, rel_path);
+    assert_eq!(entries[0].stage, RepoStage::Unstaged);
+  }
+
+  #[gpui::test]
   async fn command_palette_accept_all_current_conflicts_resolves_editor_markers(
     cx: &mut TestAppContext,
   ) {
@@ -7880,6 +8069,8 @@ mod tests {
       CommandPaletteAction::AbortRebase,
       CommandPaletteAction::StageAll,
       CommandPaletteAction::UnstageAll,
+      CommandPaletteAction::StageSelectedFile,
+      CommandPaletteAction::UnstageSelectedFile,
       CommandPaletteAction::Fetch,
       CommandPaletteAction::Stash {
         include_untracked: false,
