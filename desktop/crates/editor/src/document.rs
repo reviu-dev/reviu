@@ -145,7 +145,7 @@ impl Document {
     let line_count = self.buffer.len_lines();
     let char_count = self.buffer.len();
     if should_defer_full_highlight(line_count, char_count) {
-      let initial_end = line_count.min(INITIAL_VIEWPORT_HIGHLIGHT_LINES).max(1);
+      let initial_end = line_count.clamp(1, INITIAL_VIEWPORT_HIGHLIGHT_LINES);
       self.schedule_viewport_highlights(0..initial_end, None, VIEWPORT_HIGHLIGHT_MARGIN_LINES, cx);
     } else {
       self.schedule_recompute_highlights(cx);
