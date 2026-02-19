@@ -5162,7 +5162,7 @@ impl GitPage {
           .label("Accept Incoming")
           .small()
           .bg(theme.background)
-          .rounded_t_none()
+          .rounded_none()
           .on_click(move |_, _, cx| {
             editor_entity_incoming.update(cx, |editor, cx| {
               editor.resolve_conflict_region(conflict_start_line, ConflictResolution::Incoming, cx);

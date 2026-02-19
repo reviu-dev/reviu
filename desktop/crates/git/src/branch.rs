@@ -34,6 +34,13 @@ pub struct StashEntry {
   pub oid: String,
 }
 
+fn repo_signature(repo: &Repository) -> Result<Signature<'static>> {
+  repo
+    .signature()
+    .map(|signature| signature.to_owned())
+    .context("git user identity is not configured (set user.name and user.email)")
+}
+
 pub fn list_branches(repo_root: &Path) -> Result<Vec<BranchRef>> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
@@ -248,9 +255,7 @@ pub fn merge_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
     }
     let tree_id = index.write_tree()?;
     let tree = repo.find_tree(tree_id)?;
-    let signature = repo
-      .signature()
-      .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
+    let signature = repo_signature(&repo)?;
     let message = format!("Merge branch '{}'", branch.name);
     repo.commit(
       Some("HEAD"),
@@ -415,10 +420,6 @@ fn run_git_rebase_command(repo_root: &Path, flag: &str, operation_name: &str) ->
     .args(["rebase", flag])
     .env("GIT_EDITOR", ":")
     .env("GIT_SEQUENCE_EDITOR", ":")
-    .env("GIT_AUTHOR_NAME", "Reviu")
-    .env("GIT_AUTHOR_EMAIL", "reviu@contact")
-    .env("GIT_COMMITTER_NAME", "Reviu")
-    .env("GIT_COMMITTER_EMAIL", "reviu@contact")
     .output()
     .with_context(|| format!("run git rebase {flag}"))?;
 
@@ -448,9 +449,7 @@ pub fn rebase_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
     .refname_to_id(&refname)
     .with_context(|| format!("resolve branch {:?}", branch.name))?;
   let upstream = repo.find_annotated_commit(oid)?;
-  let signature = repo
-    .signature()
-    .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
+  let signature = repo_signature(&repo)?;
   let mut rebase = repo.rebase(None, Some(&upstream), None, None)?;
 
   while let Some(next_operation) = rebase.next() {
@@ -489,9 +488,7 @@ pub fn continue_rebase(repo_root: &Path) -> Result<()> {
     return Ok(());
   }
 
-  let signature = repo
-    .signature()
-    .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
+  let signature = repo_signature(&repo)?;
   let mut rebase = match repo.open_rebase(None) {
     Ok(rebase) => rebase,
     Err(_) => return run_git_rebase_command(repo_root, "--continue", "continue rebase"),
@@ -544,9 +541,7 @@ pub fn skip_rebase(repo_root: &Path) -> Result<()> {
     return Ok(());
   }
 
-  let signature = repo
-    .signature()
-    .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
+  let signature = repo_signature(&repo)?;
   let mut rebase = match repo.open_rebase(None) {
     Ok(rebase) => rebase,
     Err(_) => return run_git_rebase_command(repo_root, "--skip", "skip rebase"),
@@ -625,9 +620,7 @@ pub fn cherry_pick_commits(repo_root: &Path, commit_hashes: &[String]) -> Result
 
     let tree_id = index.write_tree()?;
     let tree = repo.find_tree(tree_id)?;
-    let signature = repo
-      .signature()
-      .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
+    let signature = repo_signature(&repo)?;
     let message = commit
       .message()
       .map(str::trim)
@@ -674,9 +667,7 @@ pub fn create_stash(
 ) -> Result<()> {
   let mut repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
-  let signature = repo
-    .signature()
-    .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
+  let signature = repo_signature(&repo)?;
 
   let flags = include_untracked.then_some(StashFlags::INCLUDE_UNTRACKED);
   let message = message.map(str::trim).filter(|message| !message.is_empty());
@@ -756,7 +747,14 @@ mod tests {
         .as_nanos();
       path.push(format!("reviu-{prefix}-{}-{nanos}", std::process::id()));
       std::fs::create_dir_all(&path).expect("create temp dir");
-      Repository::init(&path).expect("init git repository");
+      let repo = Repository::init(&path).expect("init git repository");
+      let mut config = repo.config().expect("open git config");
+      config
+        .set_str("user.name", "Reviu Tests")
+        .expect("set git user.name");
+      config
+        .set_str("user.email", "tests@reviu.local")
+        .expect("set git user.email");
       Self { path }
     }
   }
