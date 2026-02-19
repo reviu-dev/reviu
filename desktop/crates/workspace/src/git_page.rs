@@ -554,11 +554,13 @@ pub struct GitPage {
   svg_preview_task: Option<Task<()>>,
   auth_state: AuthState,
   auth_task: Option<Task<()>>,
+  open_file_task: Option<Task<()>>,
   status_task: Option<Task<()>>,
   history_task: Option<Task<()>>,
   history_files_task: Option<Task<()>>,
   history_open_file_task: Option<Task<()>>,
   branch_task: Option<Task<()>>,
+  open_file_generation: u64,
   branch_refresh_generation: u64,
   poll_task: Option<Task<()>>,
   commit_input: Entity<InputState>,
@@ -747,6 +749,7 @@ impl GitPage {
       sync_diff_when_selected_retained,
     );
     if selected_file_update.clear_selection {
+      self.invalidate_open_file_task();
       self.selected_file = None;
       self.editor = None;
     } else if selected_file_update.sync_diff_view {
@@ -1179,11 +1182,13 @@ impl GitPage {
       svg_preview_task: None,
       auth_state: AuthState::Unknown,
       auth_task: None,
+      open_file_task: None,
       status_task: None,
       history_task: None,
       history_files_task: None,
       history_open_file_task: None,
       branch_task: None,
+      open_file_generation: 0,
       branch_refresh_generation: 0,
       poll_task: None,
       commit_input,
@@ -1270,11 +1275,13 @@ impl GitPage {
       svg_preview_task: None,
       auth_state: AuthState::Unknown,
       auth_task: None,
+      open_file_task: None,
       status_task: None,
       history_task: None,
       history_files_task: None,
       history_open_file_task: None,
       branch_task: None,
+      open_file_generation: 0,
       branch_refresh_generation: 0,
       poll_task: None,
       commit_input,
@@ -1347,12 +1354,18 @@ impl GitPage {
     .detach();
   }
 
+  fn invalidate_open_file_task(&mut self) {
+    self.open_file_generation = self.open_file_generation.wrapping_add(1);
+    self.open_file_task = None;
+  }
+
   fn set_selected_repo(&mut self, repo_root: PathBuf, cx: &mut Context<Self>) {
     if self.selected_repo.as_ref() == Some(&repo_root) {
       return;
     }
 
     self.selected_repo = Some(repo_root.clone());
+    self.invalidate_open_file_task();
     self.selected_file = None;
     self.select_first_file_after_restore = false;
     self.operation_error = None;
@@ -1558,6 +1571,7 @@ impl GitPage {
 
   fn reload_status(&mut self, cx: &mut Context<Self>) {
     let Some(repo_root) = self.selected_repo.clone() else {
+      self.invalidate_open_file_task();
       self.status_entries.clear();
       self.select_first_file_after_restore = false;
       if Self::should_refresh_file_list(self.sidebar_mode) {
@@ -1640,6 +1654,7 @@ impl GitPage {
           if this.selected_repo.as_ref() != Some(&requested_repo) {
             return;
           }
+          this.invalidate_open_file_task();
           this.status_entries.clear();
           this.select_first_file_after_restore = false;
           this.branch_status = None;
@@ -2737,14 +2752,13 @@ impl GitPage {
     if !is_markdown && !Self::is_svg_path(&rel_path) {
       self.show_markdown_preview = false;
     }
-    let file_path = repo_root.join(&rel_path);
-    let editor = cx.new(|cx| Editor::new_with_paths(repo_root, file_path, cx));
-    let diff_view = self.effective_diff_view_for_path(&rel_path);
-    editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
-    self.editor = Some(editor);
+
+    self.invalidate_open_file_task();
+    let generation = self.open_file_generation;
     let had_history_file_selection = self.history_opened_commit_file.is_some();
     self.history_opened_commit_file = None;
-    self.selected_file = Some(rel_path);
+    self.selected_file = Some(rel_path.clone());
+    self.editor = None;
     self.svg_preview = None;
     self.svg_preview_source = None;
     self.force_list_selection = true;
@@ -2758,6 +2772,41 @@ impl GitPage {
     if had_history_file_selection {
       self.refresh_history_list(cx);
     }
+
+    let diff_view = self.effective_diff_view_for_path(&rel_path);
+    let requested_repo = repo_root.clone();
+    let requested_path = rel_path.clone();
+    let file_path = requested_repo.join(&requested_path);
+    let load_repo_root = requested_repo.clone();
+    let load_file_path = file_path.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let loaded =
+        unblock(move || Editor::load_file_for_editor(&load_repo_root, &load_file_path)).await;
+      let _ = this.update(cx, move |this, cx| {
+        if this.open_file_generation != generation {
+          return;
+        }
+        if this.selected_repo.as_ref() != Some(&requested_repo) {
+          return;
+        }
+        if this.selected_file.as_ref() != Some(&requested_path) {
+          return;
+        }
+        if this.history_opened_commit_file.is_some() {
+          return;
+        }
+
+        let editor_repo_root = requested_repo.clone();
+        let editor_file_path = file_path.clone();
+        let editor = cx.new(move |cx| {
+          Editor::new_with_loaded_file(editor_repo_root, editor_file_path, loaded, cx)
+        });
+        editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
+        this.editor = Some(editor);
+        cx.notify();
+      });
+    });
+    self.open_file_task = Some(task);
     cx.notify();
   }
 
@@ -2832,6 +2881,7 @@ impl GitPage {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
     };
+    self.invalidate_open_file_task();
     self.history_opened_commit_file = Some((commit_oid.clone(), rel_path.clone()));
     self.selected_file = Some(rel_path.clone());
     self.refresh_history_list(cx);
@@ -4012,6 +4062,37 @@ impl GitPage {
       .into_any_element()
   }
 
+  fn render_loading_state(&self, message: &str, cx: &mut Context<Self>) -> AnyElement {
+    let message = message.to_string();
+    let theme = cx.theme().clone();
+    div()
+      .size_full()
+      .flex()
+      .bg(theme.background)
+      .items_center()
+      .justify_center()
+      .child(
+        div()
+          .id("git-editor-loading-state")
+          .flex()
+          .flex_col()
+          .items_center()
+          .gap_2()
+          .child(Spinner::new().small())
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child(message),
+          ),
+      )
+      .into_any_element()
+  }
+
+  fn should_show_editor_loading_state(selected_file: Option<&Path>, has_editor: bool) -> bool {
+    selected_file.is_some() && !has_editor
+  }
+
   fn render_editor_header(&self, editor: &Entity<Editor>, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let editor_state = editor.read(cx);
@@ -4989,6 +5070,11 @@ impl GitPage {
         .into_any_element();
     }
 
+    if Self::should_show_editor_loading_state(self.selected_file.as_deref(), self.editor.is_some())
+    {
+      return self.render_loading_state("Loading file...", cx);
+    }
+
     self.render_empty_state("Select a file to view diff", cx)
   }
 }
@@ -5317,18 +5403,29 @@ mod tests {
     cx: &mut gpui::VisualTestContext,
   ) {
     loop {
-      let (status_task, branch_task, history_task, history_files_task, history_open_file_task) =
-        git_page.update_in(cx, |this, _window, _| {
-          (
-            this.status_task.take(),
-            this.branch_task.take(),
-            this.history_task.take(),
-            this.history_files_task.take(),
-            this.history_open_file_task.take(),
-          )
-        });
+      let (
+        open_file_task,
+        status_task,
+        branch_task,
+        history_task,
+        history_files_task,
+        history_open_file_task,
+      ) = git_page.update_in(cx, |this, _window, _| {
+        (
+          this.open_file_task.take(),
+          this.status_task.take(),
+          this.branch_task.take(),
+          this.history_task.take(),
+          this.history_files_task.take(),
+          this.history_open_file_task.take(),
+        )
+      });
 
       let mut had_task = false;
+      if let Some(task) = open_file_task {
+        had_task = true;
+        task.await;
+      }
       if let Some(task) = status_task {
         had_task = true;
         task.await;
@@ -7829,6 +7926,48 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn open_file_loads_editor_asynchronously(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-open-file-async");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+    std::fs::write(repo.path.join(rel_path), "v2\n").expect("update worktree file");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.open_file(rel_path.to_path_buf(), cx);
+      assert!(
+        this.open_file_task.is_some(),
+        "open file should schedule an async load task"
+      );
+      assert_eq!(this.selected_file, Some(rel_path.to_path_buf()));
+      assert!(
+        this.editor.is_none(),
+        "editor should be created after async load"
+      );
+    });
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let (selected_file, is_read_only, contents) = git_page.read_with(cx, |this, cx| {
+      let editor = this.editor.as_ref().expect("editor should exist").read(cx);
+      let document = editor.document().read(cx);
+      (
+        this.selected_file.clone(),
+        editor.is_read_only,
+        document.slice_to_string(0..document.len()),
+      )
+    });
+
+    assert_eq!(selected_file, Some(rel_path.to_path_buf()));
+    assert!(!is_read_only);
+    assert_eq!(contents, "v2\n");
+  }
+
+  #[gpui::test]
   async fn open_file_replaces_history_snapshot_when_same_path_is_selected(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-open-file-after-history");
@@ -7870,6 +8009,7 @@ mod tests {
     git_page.update_in(cx, |this, _window, cx| {
       this.open_file(rel_path.to_path_buf(), cx);
     });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
 
     let (opened, is_read_only, contents) = git_page.read_with(cx, |this, cx| {
       let editor = this.editor.as_ref().expect("editor should exist");
@@ -9112,6 +9252,20 @@ mod tests {
       other
     ));
     assert!(!GitPage::should_refresh_editor_for_path(None, selected));
+  }
+
+  #[test]
+  fn should_show_editor_loading_state_only_when_file_selected_without_editor() {
+    let selected = Path::new("src/main.rs");
+    assert!(GitPage::should_show_editor_loading_state(
+      Some(selected),
+      false
+    ));
+    assert!(!GitPage::should_show_editor_loading_state(
+      Some(selected),
+      true
+    ));
+    assert!(!GitPage::should_show_editor_loading_state(None, false));
   }
 
   #[test]
