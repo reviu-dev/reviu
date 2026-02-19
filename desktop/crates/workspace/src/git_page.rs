@@ -12,10 +12,11 @@ use git::{
   HistoryCommitNode, HistoryRevision, RepoStage, RepoStatusEntry, RepoStatusKind, abort_merge,
   abort_rebase, amend_commit, cherry_pick_commits, commit_changes, continue_rebase, create_branch,
   create_branch_from, current_branch_status, current_history_revision,
-  current_rebase_commit_message, delete_untracked_file, diff_set_from_patch, head_commit_status,
-  is_merge_in_progress, is_rebase_in_progress, list_branches, list_commit_changed_files,
-  list_commit_history, list_repo_status, load_commit_file_diff, merge_branch, push, rebase_branch,
-  restore_file, stage_all, stage_file, switch_branch, undo_last_commit, unstage_all, unstage_file,
+  current_rebase_commit_message, delete_untracked_file, diff_set_from_patch, fetch,
+  head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
+  list_commit_changed_files, list_commit_history, list_repo_status, load_commit_file_diff,
+  merge_branch, push, rebase_branch, restore_file, stage_all, stage_file, switch_branch,
+  undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
@@ -527,6 +528,7 @@ pub struct GitPage {
   can_undo_last_commit: bool,
   can_push: bool,
   can_force_push: bool,
+  fetch_in_progress: bool,
   has_staged_changes: bool,
   merge_in_progress: bool,
   rebase_in_progress: bool,
@@ -1150,6 +1152,7 @@ impl GitPage {
       can_undo_last_commit: false,
       can_push: false,
       can_force_push: false,
+      fetch_in_progress: false,
       has_staged_changes: false,
       merge_in_progress: false,
       rebase_in_progress: false,
@@ -1240,6 +1243,7 @@ impl GitPage {
       can_undo_last_commit: false,
       can_push: false,
       can_force_push: false,
+      fetch_in_progress: false,
       has_staged_changes: false,
       merge_in_progress: false,
       rebase_in_progress: false,
@@ -2064,6 +2068,7 @@ impl GitPage {
     commands.push(CommandPaletteCommand::open_repository());
 
     if self.selected_repo.is_some() {
+      commands.push(CommandPaletteCommand::fetch());
       commands.push(CommandPaletteCommand::cherry_pick());
     }
 
@@ -2166,6 +2171,7 @@ impl GitPage {
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     let mut selected_branch: Option<BranchRef> = None;
+    let mut should_post_action_refresh = true;
     let result = match action {
       CommandPaletteAction::OpenRepository => {
         self.start_open_repository(window, cx);
@@ -2370,6 +2376,14 @@ impl GitPage {
         }
         result
       }
+      CommandPaletteAction::Fetch => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
+        should_post_action_refresh = false;
+        self.fetch_repository(root_path, cx);
+        Ok(())
+      }
       CommandPaletteAction::CherryPick { commit_hashes } => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
@@ -2393,10 +2407,12 @@ impl GitPage {
       });
     }
 
-    self.reload_status(cx);
-    self.refresh_branches(cx);
-    if let Some(editor) = self.editor.clone() {
-      editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
+    if should_post_action_refresh {
+      self.reload_status(cx);
+      self.refresh_branches(cx);
+      if let Some(editor) = self.editor.clone() {
+        editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
+      }
     }
     Ok(())
   }
@@ -2575,6 +2591,34 @@ impl GitPage {
       let _ = unblock(move || undo_last_commit(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
         this.reload_status(cx);
+        if let Some(editor) = editor.clone() {
+          editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
+        }
+      });
+    });
+
+    self.status_task = Some(task);
+  }
+
+  fn fetch_action(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    self.fetch_repository(repo_root, cx);
+  }
+
+  fn fetch_repository(&mut self, repo_root: PathBuf, cx: &mut Context<Self>) {
+    if self.fetch_in_progress {
+      return;
+    }
+    self.fetch_in_progress = true;
+    let editor = self.editor.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let _ = unblock(move || fetch(&repo_root)).await;
+      let _ = this.update(cx, |this, cx| {
+        this.fetch_in_progress = false;
+        this.reload_status(cx);
+        this.refresh_branches(cx);
         if let Some(editor) = editor.clone() {
           editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
         }
@@ -3760,6 +3804,17 @@ impl GitPage {
         )
     });
 
+    let fetch_button = Button::new("git-fetch-button")
+      .label("Fetch")
+      .icon(UiIconName::RefreshCcw)
+      .loading_icon(Icon::new(UiIconName::RefreshCcw))
+      .loading(self.fetch_in_progress)
+      .with_variant(ButtonVariant::Secondary)
+      .xsmall()
+      .disabled(self.selected_repo.is_none() || self.fetch_in_progress)
+      .tooltip("Fetch updates from remotes")
+      .on_click(cx.listener(Self::fetch_action));
+
     let header_left = div()
       .flex()
       .items_center()
@@ -3773,7 +3828,8 @@ impl GitPage {
       .child(select)
       .child(div().text_sm().text_color(theme.foreground).child("Branch"))
       .child(branch_select)
-      .when_some(branch_info, |this, info| this.child(info));
+      .when_some(branch_info, |this, info| this.child(info))
+      .child(fetch_button);
 
     let menu_state = match &self.auth_state {
       AuthState::Unknown => UserMenuState::Unknown,
@@ -5813,6 +5869,102 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn command_palette_fetch_updates_remote_tracking_refs(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let remote = TempBareRepo::init("git-page-cmd-fetch-origin");
+    let source = TempRepo::init("git-page-cmd-fetch-source");
+    let clone_dir = TempDir::new("git-page-cmd-fetch-clone");
+
+    let _ = commit_text_file(&source.path, Path::new("README.md"), "v1\n", "initial");
+    let source_repo = Repository::open(&source.path).expect("open source repo");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add source origin");
+    let base_branch = current_branch_status(&source.path)
+      .expect("read source branch status")
+      .name;
+    push_branch_to_remote(&source.path, &base_branch, "origin");
+
+    let _clone_repo = Repository::clone(
+      remote.path.to_str().expect("remote path utf8"),
+      &clone_dir.path,
+    )
+    .expect("clone remote");
+    let tracking_ref = format!("refs/remotes/origin/{base_branch}");
+    let before = Repository::open(&clone_dir.path)
+      .expect("open clone")
+      .refname_to_id(&tracking_ref)
+      .expect("read remote tracking ref before fetch");
+
+    let _ = commit_text_file(&source.path, Path::new("README.md"), "v2\n", "source update");
+    push_branch_to_remote(&source.path, &base_branch, "origin");
+    let expected = remote_branch_oid(&remote.path, &base_branch);
+    assert_ne!(before, expected, "expected remote branch to advance after push");
+
+    let clone_repo = Repository::open(&clone_dir.path).expect("open clone");
+    clone_repo
+      .reference(&tracking_ref, before, true, "force stale remote tracking ref")
+      .expect("force stale remote tracking ref");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(clone_dir.path.clone());
+      this.handle_command_palette_action(CommandPaletteAction::Fetch, window, cx)
+    });
+    assert!(result.is_ok());
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let after = Repository::open(&clone_dir.path)
+      .expect("open clone")
+      .refname_to_id(&tracking_ref)
+      .expect("read remote tracking ref after fetch");
+    assert_eq!(after, expected);
+  }
+
+  #[gpui::test]
+  async fn command_palette_fetch_toggles_loading_state(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let remote = TempBareRepo::init("git-page-cmd-fetch-loading-origin");
+    let source = TempRepo::init("git-page-cmd-fetch-loading-source");
+    let clone_dir = TempDir::new("git-page-cmd-fetch-loading-clone");
+
+    let _ = commit_text_file(&source.path, Path::new("README.md"), "v1\n", "initial");
+    let source_repo = Repository::open(&source.path).expect("open source repo");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add source origin");
+    let base_branch = current_branch_status(&source.path)
+      .expect("read source branch status")
+      .name;
+    push_branch_to_remote(&source.path, &base_branch, "origin");
+
+    let _clone_repo = Repository::clone(
+      remote.path.to_str().expect("remote path utf8"),
+      &clone_dir.path,
+    )
+    .expect("clone remote");
+    let _ = commit_text_file(&source.path, Path::new("README.md"), "v2\n", "source update");
+    push_branch_to_remote(&source.path, &base_branch, "origin");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(clone_dir.path.clone());
+      this.handle_command_palette_action(CommandPaletteAction::Fetch, window, cx)
+    });
+    assert!(result.is_ok());
+    assert!(git_page.read_with(cx, |this, _| this.fetch_in_progress));
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(!git_page.read_with(cx, |this, _| this.fetch_in_progress));
+  }
+
+  #[gpui::test]
   async fn command_palette_create_branch_from_local_creates_and_switches(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-create-from");
@@ -6402,6 +6554,7 @@ mod tests {
         },
       },
       CommandPaletteAction::AbortRebase,
+      CommandPaletteAction::Fetch,
       CommandPaletteAction::CherryPick {
         commit_hashes: vec!["deadbeef".to_string()],
       },

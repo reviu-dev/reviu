@@ -114,6 +114,7 @@ pub enum CommandPaletteAction {
   CherryPick {
     commit_hashes: Vec<String>,
   },
+  Fetch,
   OpenRepository,
   OpenGitPage,
   OpenGithubPage,
@@ -475,6 +476,7 @@ pub enum CommandPaletteCommandId {
   RebaseBranch,
   AbortRebase,
   CherryPick,
+  Fetch,
   OpenRepository,
   OpenGitPage,
   OpenGithubPage,
@@ -562,6 +564,14 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::CherryPick,
       name: "Cherry pick".into(),
       description: Some("Apply one or more commits to the current branch".into()),
+    }
+  }
+
+  pub fn fetch() -> Self {
+    Self {
+      id: CommandPaletteCommandId::Fetch,
+      name: "Fetch".into(),
+      description: Some("Fetch updates from remote repositories".into()),
     }
   }
 
@@ -672,6 +682,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::RebaseBranch => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::AbortRebase => Icon::new(IconName::Undo),
       CommandPaletteCommandId::CherryPick => Icon::new(UiIconName::GitMerge),
+      CommandPaletteCommandId::Fetch => Icon::new(UiIconName::RefreshCcw),
       CommandPaletteCommandId::OpenRepository => Icon::new(IconName::FolderOpen),
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
@@ -1219,6 +1230,9 @@ impl CommandPalette {
         });
         self.set_screen(CommandPaletteScreen::CherryPick, cx, window);
       }
+      CommandPaletteCommandId::Fetch => {
+        self.trigger_action(CommandPaletteAction::Fetch, window, cx);
+      }
       CommandPaletteCommandId::CreateBranchFrom => {
         self.set_screen(CommandPaletteScreen::CreateBranchFrom, cx, window);
       }
@@ -1560,5 +1574,13 @@ mod tests {
     assert_eq!(command.id, CommandPaletteCommandId::OpenRepository);
     assert_eq!(command.name.as_ref(), "Open repository");
     assert!(command.matches("open repo"));
+  }
+
+  #[test]
+  fn fetch_command_is_available_with_expected_metadata() {
+    let command = CommandPaletteCommand::fetch();
+    assert_eq!(command.id, CommandPaletteCommandId::Fetch);
+    assert_eq!(command.name.as_ref(), "Fetch");
+    assert!(command.matches("fetch updates"));
   }
 }
