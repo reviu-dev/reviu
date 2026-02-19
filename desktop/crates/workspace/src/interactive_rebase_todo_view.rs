@@ -6,16 +6,18 @@ use git::{
 };
 use gpui::{
   App, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent,
-  ParentElement, Render, RenderOnce, SharedString, Styled, WeakEntity, Window, div, prelude::*, px,
+  ParentElement, Render, RenderOnce, SharedString, Styled, Subscription, WeakEntity, Window, div,
+  prelude::*, px, white,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, IconName, IndexPath, Selectable, Sizable,
   button::{Button, ButtonVariant, ButtonVariants as _},
   h_flex,
-  list::{List, ListDelegate, ListState},
+  list::{List, ListDelegate, ListEvent, ListState},
   select::{Select, SelectEvent, SelectItem, SelectState},
   v_flex,
 };
+use ui::StatusThemeExt;
 
 pub type InteractiveRebaseTodoViewHandler = Arc<
   dyn Fn(
@@ -60,6 +62,13 @@ struct InteractiveRebaseRow {
   action_select: Entity<SelectState<Vec<InteractiveRebaseActionOption>>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InteractiveRebaseKeyboardCommand {
+  SetAction(InteractiveRebaseAction),
+  ToggleMoveMode,
+  CancelMoveMode,
+}
+
 #[derive(IntoElement)]
 struct InteractiveRebaseTodoListItem {
   index: usize,
@@ -69,6 +78,7 @@ struct InteractiveRebaseTodoListItem {
   short_oid: String,
   summary: String,
   selected: bool,
+  moving: bool,
   view: WeakEntity<InteractiveRebaseTodoView>,
 }
 
@@ -77,6 +87,7 @@ impl InteractiveRebaseTodoListItem {
     index: usize,
     total_rows: usize,
     row: &InteractiveRebaseRow,
+    moving: bool,
     view: WeakEntity<InteractiveRebaseTodoView>,
   ) -> Self {
     Self {
@@ -87,6 +98,7 @@ impl InteractiveRebaseTodoListItem {
       short_oid: row.commit.short_oid.clone(),
       summary: row.commit.summary.clone(),
       selected: false,
+      moving,
       view,
     }
   }
@@ -118,17 +130,20 @@ impl RenderOnce for InteractiveRebaseTodoListItem {
     let index_for_down = self.index;
     let view_for_move_up = self.view.clone();
     let view_for_move_down = self.view.clone();
+    let border_color = if self.moving {
+      theme.status_blue()
+    } else if self.selected {
+      white()
+    } else {
+      theme.border.opacity(0.0)
+    };
 
     h_flex()
       .id(row_id)
       .w_full()
       .items_center()
       .gap_2()
-      .when_else(
-        self.selected,
-        |row| row.border_color(theme.primary),
-        |row| row.border_color(theme.border.opacity(0.0)),
-      )
+      .border_color(border_color)
       .border_2()
       .rounded(theme.radius)
       .child(
@@ -202,6 +217,11 @@ impl InteractiveRebaseTodoListDelegate {
     let view = self.view.upgrade()?;
     view.read(cx).rows.get(ix.row).cloned()
   }
+
+  fn moving_row_index(&self, cx: &App) -> Option<usize> {
+    let view = self.view.upgrade()?;
+    view.read(cx).moving_row_index
+  }
 }
 
 impl ListDelegate for InteractiveRebaseTodoListDelegate {
@@ -220,10 +240,15 @@ impl ListDelegate for InteractiveRebaseTodoListDelegate {
     let row = self.row_at(ix, cx)?;
     let index = ix.row;
     let total_rows = self.row_count(cx);
+    let moving = self
+      .moving_row_index(cx)
+      .map(|moving_index| moving_index == index)
+      .unwrap_or(false);
     Some(InteractiveRebaseTodoListItem::new(
       index,
       total_rows,
       &row,
+      moving,
       self.view.clone(),
     ))
   }
@@ -276,9 +301,12 @@ pub struct InteractiveRebaseTodoView {
   target: InteractiveRebaseTarget,
   rows: Vec<InteractiveRebaseRow>,
   rows_list: Entity<ListState<InteractiveRebaseTodoListDelegate>>,
+  moving_row_index: Option<usize>,
+  last_selected_row_index: Option<usize>,
   error: Option<SharedString>,
   on_submit: Option<InteractiveRebaseTodoViewHandler>,
   on_cancel: Option<InteractiveRebaseTodoViewCancelHandler>,
+  _subscriptions: Vec<Subscription>,
 }
 
 impl InteractiveRebaseTodoView {
@@ -327,15 +355,27 @@ impl InteractiveRebaseTodoView {
         list.set_selected_index(Some(IndexPath::new(0)), window, cx);
       }
     });
+    let _subscriptions = vec![cx.subscribe_in(
+      &rows_list,
+      window,
+      |this, _, event: &ListEvent, window, cx| {
+        if let ListEvent::Select(ix) = event {
+          this.on_rows_list_select(*ix, window, cx);
+        }
+      },
+    )];
 
     Self {
       focus_handle: cx.focus_handle(),
       target: config.target,
       rows,
       rows_list,
+      moving_row_index: None,
+      last_selected_row_index: has_rows.then_some(0),
       error: None,
       on_submit: Some(config.on_submit),
       on_cancel: Some(config.on_cancel),
+      _subscriptions,
     }
   }
 
@@ -365,17 +405,27 @@ impl InteractiveRebaseTodoView {
     }
   }
 
-  fn shortcut_action(event: &KeyDownEvent) -> Option<InteractiveRebaseAction> {
+  fn keyboard_command(event: &KeyDownEvent) -> Option<InteractiveRebaseKeyboardCommand> {
     let modifiers = event.keystroke.modifiers;
     if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
       return None;
     }
 
     match event.keystroke.key.to_ascii_lowercase().as_str() {
-      "p" => Some(InteractiveRebaseAction::Pick),
-      "s" => Some(InteractiveRebaseAction::Squash),
-      "f" => Some(InteractiveRebaseAction::Fixup),
-      "d" => Some(InteractiveRebaseAction::Drop),
+      "p" => Some(InteractiveRebaseKeyboardCommand::SetAction(
+        InteractiveRebaseAction::Pick,
+      )),
+      "s" => Some(InteractiveRebaseKeyboardCommand::SetAction(
+        InteractiveRebaseAction::Squash,
+      )),
+      "f" => Some(InteractiveRebaseKeyboardCommand::SetAction(
+        InteractiveRebaseAction::Fixup,
+      )),
+      "d" => Some(InteractiveRebaseKeyboardCommand::SetAction(
+        InteractiveRebaseAction::Drop,
+      )),
+      "space" | " " => Some(InteractiveRebaseKeyboardCommand::ToggleMoveMode),
+      "escape" => Some(InteractiveRebaseKeyboardCommand::CancelMoveMode),
       _ => None,
     }
   }
@@ -429,22 +479,97 @@ impl InteractiveRebaseTodoView {
     cx.notify();
   }
 
-  fn move_row_up(&mut self, index: usize, cx: &mut Context<Self>) {
+  fn move_row_up(&mut self, index: usize, cx: &mut Context<Self>) -> usize {
     if index == 0 || index >= self.rows.len() {
-      return;
+      return index;
     }
     self.rows.swap(index, index - 1);
+    if let Some(moving_index) = self.moving_row_index {
+      if moving_index == index {
+        self.moving_row_index = Some(index - 1);
+      } else if moving_index + 1 == index {
+        self.moving_row_index = Some(index);
+      }
+    }
     self.error = None;
+    cx.notify();
+    index - 1
+  }
+
+  fn move_row_down(&mut self, index: usize, cx: &mut Context<Self>) -> usize {
+    if self.rows.is_empty() || index + 1 >= self.rows.len() {
+      return index;
+    }
+    self.rows.swap(index, index + 1);
+    if let Some(moving_index) = self.moving_row_index {
+      if moving_index == index {
+        self.moving_row_index = Some(index + 1);
+      } else if moving_index == index + 1 {
+        self.moving_row_index = Some(index);
+      }
+    }
+    self.error = None;
+    cx.notify();
+    index + 1
+  }
+
+  fn selected_row_index(&self, cx: &App) -> Option<usize> {
+    self.rows_list.read(cx).selected_index().map(|ix| ix.row)
+  }
+
+  fn set_selected_row_index(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    self.last_selected_row_index = Some(index);
+    self.rows_list.update(cx, |list, cx| {
+      list.set_selected_index(Some(IndexPath::new(index)), window, cx);
+    });
+  }
+
+  fn toggle_move_mode(&mut self, cx: &mut Context<Self>) {
+    if self.moving_row_index.is_some() {
+      self.moving_row_index = None;
+      cx.notify();
+      return;
+    }
+
+    self.moving_row_index = self.selected_row_index(cx);
     cx.notify();
   }
 
-  fn move_row_down(&mut self, index: usize, cx: &mut Context<Self>) {
-    if self.rows.is_empty() || index + 1 >= self.rows.len() {
+  fn cancel_move_mode(&mut self, cx: &mut Context<Self>) {
+    if self.moving_row_index.take().is_some() {
+      cx.notify();
+    }
+  }
+
+  fn on_rows_list_select(&mut self, index: IndexPath, window: &mut Window, cx: &mut Context<Self>) {
+    let next_selected = index.row;
+    let previous_selected = self.last_selected_row_index.replace(next_selected);
+    let Some(moving_index) = self.moving_row_index else {
+      return;
+    };
+
+    let Some(previous_selected) = previous_selected else {
+      self.moving_row_index = Some(next_selected);
+      cx.notify();
+      return;
+    };
+
+    if next_selected == previous_selected {
       return;
     }
-    self.rows.swap(index, index + 1);
-    self.error = None;
-    cx.notify();
+
+    let moved_index = if next_selected + 1 == previous_selected {
+      self.move_row_up(moving_index, cx)
+    } else if next_selected == previous_selected + 1 {
+      self.move_row_down(moving_index, cx)
+    } else {
+      self.moving_row_index = Some(next_selected);
+      cx.notify();
+      return;
+    };
+
+    self.moving_row_index = Some(moved_index);
+    self.set_selected_row_index(moved_index, window, cx);
   }
 
   fn apply_action_to_selected_row(
@@ -470,7 +595,7 @@ impl InteractiveRebaseTodoView {
   }
 
   fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(action) = Self::shortcut_action(event) else {
+    let Some(command) = Self::keyboard_command(event) else {
       return;
     };
 
@@ -479,8 +604,20 @@ impl InteractiveRebaseTodoView {
       return;
     }
 
-    self.apply_action_to_selected_row(action, window, cx);
-    cx.stop_propagation();
+    match command {
+      InteractiveRebaseKeyboardCommand::SetAction(action) => {
+        self.apply_action_to_selected_row(action, window, cx);
+        cx.stop_propagation();
+      }
+      InteractiveRebaseKeyboardCommand::ToggleMoveMode => {
+        self.toggle_move_mode(cx);
+        cx.stop_propagation();
+      }
+      InteractiveRebaseKeyboardCommand::CancelMoveMode => {
+        self.cancel_move_mode(cx);
+        cx.stop_propagation();
+      }
+    }
   }
 
   pub fn focus_rows_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -567,6 +704,12 @@ impl Render for InteractiveRebaseTodoView {
               .text_sm()
               .text_color(theme.muted_foreground)
               .child("Choose action/order for each commit before starting interactive rebase."),
+          )
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child("Shortcuts: p pick, s squash, f fixup, d drop, space toggle move mode (use up/down while moving)."),
           ),
       )
       .child(
@@ -642,7 +785,7 @@ mod tests {
   }
 
   #[test]
-  fn shortcut_action_matches_expected_keys() {
+  fn keyboard_command_matches_expected_keys() {
     let event = |key: &str, modifiers: Modifiers| KeyDownEvent {
       keystroke: Keystroke {
         modifiers,
@@ -654,37 +797,63 @@ mod tests {
     };
 
     assert_eq!(
-      InteractiveRebaseTodoView::shortcut_action(&event("p", Modifiers::none())),
-      Some(InteractiveRebaseAction::Pick)
+      InteractiveRebaseTodoView::keyboard_command(&event("p", Modifiers::none())),
+      Some(InteractiveRebaseKeyboardCommand::SetAction(
+        InteractiveRebaseAction::Pick
+      ))
     );
     assert_eq!(
-      InteractiveRebaseTodoView::shortcut_action(&event("s", Modifiers::none())),
-      Some(InteractiveRebaseAction::Squash)
+      InteractiveRebaseTodoView::keyboard_command(&event("s", Modifiers::none())),
+      Some(InteractiveRebaseKeyboardCommand::SetAction(
+        InteractiveRebaseAction::Squash
+      ))
     );
     assert_eq!(
-      InteractiveRebaseTodoView::shortcut_action(&event("f", Modifiers::none())),
-      Some(InteractiveRebaseAction::Fixup)
+      InteractiveRebaseTodoView::keyboard_command(&event("f", Modifiers::none())),
+      Some(InteractiveRebaseKeyboardCommand::SetAction(
+        InteractiveRebaseAction::Fixup
+      ))
     );
     assert_eq!(
-      InteractiveRebaseTodoView::shortcut_action(&event("d", Modifiers::none())),
-      Some(InteractiveRebaseAction::Drop)
+      InteractiveRebaseTodoView::keyboard_command(&event("d", Modifiers::none())),
+      Some(InteractiveRebaseKeyboardCommand::SetAction(
+        InteractiveRebaseAction::Drop
+      ))
+    );
+    assert_eq!(
+      InteractiveRebaseTodoView::keyboard_command(&event("space", Modifiers::none())),
+      Some(InteractiveRebaseKeyboardCommand::ToggleMoveMode)
+    );
+    assert_eq!(
+      InteractiveRebaseTodoView::keyboard_command(&event("up", Modifiers::none())),
+      None
+    );
+    assert_eq!(
+      InteractiveRebaseTodoView::keyboard_command(&event("down", Modifiers::none())),
+      None
+    );
+    assert_eq!(
+      InteractiveRebaseTodoView::keyboard_command(&event("escape", Modifiers::none())),
+      Some(InteractiveRebaseKeyboardCommand::CancelMoveMode)
     );
 
     let mut shift = Modifiers::none();
     shift.shift = true;
     assert_eq!(
-      InteractiveRebaseTodoView::shortcut_action(&event("p", shift)),
-      Some(InteractiveRebaseAction::Pick)
+      InteractiveRebaseTodoView::keyboard_command(&event("p", shift)),
+      Some(InteractiveRebaseKeyboardCommand::SetAction(
+        InteractiveRebaseAction::Pick
+      ))
     );
 
     let mut cmd = Modifiers::none();
     cmd.platform = true;
     assert_eq!(
-      InteractiveRebaseTodoView::shortcut_action(&event("p", cmd)),
+      InteractiveRebaseTodoView::keyboard_command(&event("p", cmd)),
       None
     );
     assert_eq!(
-      InteractiveRebaseTodoView::shortcut_action(&event("x", Modifiers::none())),
+      InteractiveRebaseTodoView::keyboard_command(&event("x", Modifiers::none())),
       None
     );
   }
