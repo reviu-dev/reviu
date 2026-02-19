@@ -5387,7 +5387,7 @@ impl Editor {
     )
   }
 
-  fn is_read_only_display_cursor(&self, cx: &App) -> bool {
+  pub(crate) fn is_read_only_display_cursor(&self, cx: &App) -> bool {
     let Some(cursor) = self.current_display_cursor(cx) else {
       return false;
     };
