@@ -117,6 +117,9 @@ impl CommandPaletteStash {
 pub enum CommandPaletteAction {
   SwitchRepository(CommandPaletteRepository),
   SwitchBranch(CommandPaletteBranch),
+  Commit,
+  ContinueRebase,
+  SkipRebase,
   CreateBranch {
     name: String,
   },
@@ -578,6 +581,9 @@ pub type CommandPaletteHandler = Arc<
 pub enum CommandPaletteCommandId {
   SwitchRepository,
   SwitchBranch,
+  Commit,
+  ContinueRebase,
+  SkipRebase,
   CreateBranch,
   CreateBranchFrom,
   MergeBranch,
@@ -624,6 +630,30 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::SwitchBranch,
       name: "Switch branch".into(),
       description: Some("Checkout or create branches".into()),
+    }
+  }
+
+  pub fn commit() -> Self {
+    Self {
+      id: CommandPaletteCommandId::Commit,
+      name: "Commit".into(),
+      description: Some("Create a commit (stages all changes if needed)".into()),
+    }
+  }
+
+  pub fn continue_rebase() -> Self {
+    Self {
+      id: CommandPaletteCommandId::ContinueRebase,
+      name: "Rebase continue".into(),
+      description: Some("Continue the current rebase".into()),
+    }
+  }
+
+  pub fn skip_rebase() -> Self {
+    Self {
+      id: CommandPaletteCommandId::SkipRebase,
+      name: "Rebase skip".into(),
+      description: Some("Skip the current rebase commit".into()),
     }
   }
 
@@ -849,6 +879,9 @@ impl CommandPaletteCommand {
     match self.id {
       CommandPaletteCommandId::SwitchRepository => Icon::new(IconName::FolderOpen),
       CommandPaletteCommandId::SwitchBranch => Icon::new(UiIconName::GitBranch),
+      CommandPaletteCommandId::Commit => Icon::new(IconName::Check),
+      CommandPaletteCommandId::ContinueRebase => Icon::new(IconName::Check),
+      CommandPaletteCommandId::SkipRebase => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::MergeBranch => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::AbortMerge => Icon::new(IconName::Undo),
       CommandPaletteCommandId::RebaseBranch => Icon::new(UiIconName::GitMerge),
@@ -1521,6 +1554,15 @@ impl CommandPalette {
       CommandPaletteCommandId::SwitchBranch => {
         self.set_screen(CommandPaletteScreen::SwitchBranch, cx, window);
       }
+      CommandPaletteCommandId::Commit => {
+        self.trigger_action(CommandPaletteAction::Commit, window, cx);
+      }
+      CommandPaletteCommandId::ContinueRebase => {
+        self.trigger_action(CommandPaletteAction::ContinueRebase, window, cx);
+      }
+      CommandPaletteCommandId::SkipRebase => {
+        self.trigger_action(CommandPaletteAction::SkipRebase, window, cx);
+      }
       CommandPaletteCommandId::MergeBranch => {
         self.set_screen(CommandPaletteScreen::MergeBranch, cx, window);
       }
@@ -1980,6 +2022,25 @@ mod tests {
     assert_eq!(command.id, CommandPaletteCommandId::UnstageAll);
     assert_eq!(command.name.as_ref(), "Unstage all");
     assert!(command.matches("staged files"));
+  }
+
+  #[test]
+  fn commit_and_rebase_progress_commands_are_available_with_expected_metadata() {
+    let commit = CommandPaletteCommand::commit();
+    let continue_rebase = CommandPaletteCommand::continue_rebase();
+    let skip_rebase = CommandPaletteCommand::skip_rebase();
+
+    assert_eq!(commit.id, CommandPaletteCommandId::Commit);
+    assert_eq!(commit.name.as_ref(), "Commit");
+    assert!(commit.matches("stages all changes"));
+
+    assert_eq!(continue_rebase.id, CommandPaletteCommandId::ContinueRebase);
+    assert_eq!(continue_rebase.name.as_ref(), "Rebase continue");
+    assert!(continue_rebase.matches("current rebase"));
+
+    assert_eq!(skip_rebase.id, CommandPaletteCommandId::SkipRebase);
+    assert_eq!(skip_rebase.name.as_ref(), "Rebase skip");
+    assert!(skip_rebase.matches("rebase commit"));
   }
 
   #[test]
