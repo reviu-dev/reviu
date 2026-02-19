@@ -2086,6 +2086,11 @@ impl GitPage {
     commands.push(CommandPaletteCommand::open_repository());
 
     if let Some(root_path) = self.selected_repo.clone() {
+      if Self::should_show_unstage_all_command(&self.status_entries) {
+        commands.push(CommandPaletteCommand::unstage_all());
+      } else if Self::should_show_stage_all_command(&self.status_entries) {
+        commands.push(CommandPaletteCommand::stage_all());
+      }
       commands.push(CommandPaletteCommand::fetch());
       commands.push(CommandPaletteCommand::cherry_pick());
 
@@ -2425,6 +2430,26 @@ impl GitPage {
             .update(cx, |input, cx| input.set_value("", window, cx));
         }
         result
+      }
+      CommandPaletteAction::StageAll => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        should_post_action_refresh = false;
+        if Self::should_confirm_stage_all(self.selected_repo.as_ref(), &self.status_entries) {
+          self.confirm_stage_all_conflicted_action(window, cx);
+        } else {
+          self.stage_all_action(cx);
+        }
+        Ok(())
+      }
+      CommandPaletteAction::UnstageAll => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        should_post_action_refresh = false;
+        self.unstage_all_action(cx);
+        Ok(())
       }
       CommandPaletteAction::Fetch => {
         let Some(root_path) = self.selected_repo.clone() else {
@@ -3502,6 +3527,14 @@ impl GitPage {
     let show_stash = Self::has_tracked_entries(entries);
     let show_stash_with_untracked = show_stash || Self::has_untracked_entries(entries);
     (show_stash, show_stash_with_untracked)
+  }
+
+  fn should_show_stage_all_command(entries: &[RepoStatusEntry]) -> bool {
+    Self::changed_files_count(entries) > 0 && !Self::all_entries_staged(entries)
+  }
+
+  fn should_show_unstage_all_command(entries: &[RepoStatusEntry]) -> bool {
+    Self::all_entries_staged(entries)
   }
 
   fn should_confirm_stage_all(
@@ -5739,6 +5772,31 @@ mod tests {
   }
 
   #[test]
+  fn stage_all_command_visibility_requires_at_least_one_entry() {
+    let entries = vec![make_status_entry("src/main.rs", RepoStage::Unstaged)];
+    let all_staged_entries = vec![make_status_entry("src/lib.rs", RepoStage::Staged)];
+
+    assert!(!GitPage::should_show_stage_all_command(&[]));
+    assert!(GitPage::should_show_stage_all_command(&entries));
+    assert!(!GitPage::should_show_stage_all_command(&all_staged_entries));
+  }
+
+  #[test]
+  fn unstage_all_command_visibility_requires_all_entries_staged() {
+    let mixed_entries = vec![
+      make_status_entry("src/main.rs", RepoStage::Staged),
+      make_status_entry("src/lib.rs", RepoStage::Unstaged),
+    ];
+    let all_staged_entries = vec![make_status_entry("src/editor.rs", RepoStage::Staged)];
+
+    assert!(!GitPage::should_show_unstage_all_command(&[]));
+    assert!(!GitPage::should_show_unstage_all_command(&mixed_entries));
+    assert!(GitPage::should_show_unstage_all_command(
+      &all_staged_entries
+    ));
+  }
+
+  #[test]
   fn should_confirm_stage_all_when_repo_selected_and_conflicts_present() {
     let repo_path = PathBuf::from("/tmp/reviu-stage-all");
     let conflicted_entries = vec![RepoStatusEntry {
@@ -6962,6 +7020,8 @@ mod tests {
         },
       },
       CommandPaletteAction::AbortRebase,
+      CommandPaletteAction::StageAll,
+      CommandPaletteAction::UnstageAll,
       CommandPaletteAction::Fetch,
       CommandPaletteAction::Stash {
         include_untracked: false,

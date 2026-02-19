@@ -135,6 +135,8 @@ pub enum CommandPaletteAction {
   CherryPick {
     commit_hashes: Vec<String>,
   },
+  StageAll,
+  UnstageAll,
   Fetch,
   Stash {
     include_untracked: bool,
@@ -583,6 +585,8 @@ pub enum CommandPaletteCommandId {
   RebaseBranch,
   AbortRebase,
   CherryPick,
+  StageAll,
+  UnstageAll,
   Fetch,
   Stash,
   StashIncludeUntracked,
@@ -676,6 +680,22 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::CherryPick,
       name: "Cherry pick".into(),
       description: Some("Apply one or more commits to the current branch".into()),
+    }
+  }
+
+  pub fn stage_all() -> Self {
+    Self {
+      id: CommandPaletteCommandId::StageAll,
+      name: "Stage all".into(),
+      description: Some("Stage all changed files".into()),
+    }
+  }
+
+  pub fn unstage_all() -> Self {
+    Self {
+      id: CommandPaletteCommandId::UnstageAll,
+      name: "Unstage all".into(),
+      description: Some("Unstage all staged files".into()),
     }
   }
 
@@ -834,6 +854,8 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::RebaseBranch => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::AbortRebase => Icon::new(IconName::Undo),
       CommandPaletteCommandId::CherryPick => Icon::new(UiIconName::GitMerge),
+      CommandPaletteCommandId::StageAll => Icon::new(IconName::Plus),
+      CommandPaletteCommandId::UnstageAll => Icon::new(UiIconName::ArrowUpFromLine),
       CommandPaletteCommandId::Fetch => Icon::new(UiIconName::RefreshCcw),
       CommandPaletteCommandId::Stash | CommandPaletteCommandId::StashIncludeUntracked => {
         Icon::new(UiIconName::ArrowDownFromLine)
@@ -1520,6 +1542,12 @@ impl CommandPalette {
         });
         self.set_screen(CommandPaletteScreen::CherryPick, cx, window);
       }
+      CommandPaletteCommandId::StageAll => {
+        self.trigger_action(CommandPaletteAction::StageAll, window, cx);
+      }
+      CommandPaletteCommandId::UnstageAll => {
+        self.trigger_action(CommandPaletteAction::UnstageAll, window, cx);
+      }
       CommandPaletteCommandId::Fetch => {
         self.trigger_action(CommandPaletteAction::Fetch, window, cx);
       }
@@ -1936,6 +1964,22 @@ mod tests {
     assert_eq!(command.id, CommandPaletteCommandId::Fetch);
     assert_eq!(command.name.as_ref(), "Fetch");
     assert!(command.matches("fetch updates"));
+  }
+
+  #[test]
+  fn stage_all_command_is_available_with_expected_metadata() {
+    let command = CommandPaletteCommand::stage_all();
+    assert_eq!(command.id, CommandPaletteCommandId::StageAll);
+    assert_eq!(command.name.as_ref(), "Stage all");
+    assert!(command.matches("changed files"));
+  }
+
+  #[test]
+  fn unstage_all_command_is_available_with_expected_metadata() {
+    let command = CommandPaletteCommand::unstage_all();
+    assert_eq!(command.id, CommandPaletteCommandId::UnstageAll);
+    assert_eq!(command.name.as_ref(), "Unstage all");
+    assert!(command.matches("staged files"));
   }
 
   #[test]
