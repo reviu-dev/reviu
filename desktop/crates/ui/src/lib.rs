@@ -13,7 +13,7 @@ pub use assets::AppAssets;
 pub use command_palette::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig, CommandPaletteHandler,
-  CommandPalettePage, CommandPaletteRepository,
+  CommandPalettePage, CommandPaletteRepository, CommandPaletteStash,
 };
 pub use confirm_dialog::ConfirmDialog;
 pub use gpui_component::Disableable;

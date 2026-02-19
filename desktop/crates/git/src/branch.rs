@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
 use git2::{
   BranchType, CherrypickOptions, Cred, ErrorCode, FetchOptions, Rebase, RemoteCallbacks,
-  Repository, RepositoryState, ResetType, Signature,
+  Repository, RepositoryState, ResetType, Signature, StashFlags,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +25,13 @@ pub struct BranchStatus {
   pub ahead: usize,
   pub behind: usize,
   pub has_upstream: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StashEntry {
+  pub index: usize,
+  pub name: String,
+  pub oid: String,
 }
 
 pub fn list_branches(repo_root: &Path) -> Result<Vec<BranchRef>> {
@@ -535,6 +542,91 @@ pub fn cherry_pick_commits(repo_root: &Path, commit_hashes: &[String]) -> Result
     repo.cleanup_state().context("cleanup cherry-pick state")?;
   }
 
+  Ok(())
+}
+
+pub fn default_stash_message(repo_root: &Path) -> Result<String> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let head = repo.head().context("read HEAD reference")?;
+  let head_label = head.shorthand().unwrap_or("HEAD");
+  let commit = head.peel_to_commit().context("read HEAD commit")?;
+  let short_oid = commit.id().to_string().chars().take(7).collect::<String>();
+  let summary = commit
+    .summary()
+    .or_else(|| commit.message())
+    .map(str::trim)
+    .filter(|message| !message.is_empty())
+    .unwrap_or("WIP");
+
+  Ok(format!("WIP on {head_label}: {short_oid} {summary}"))
+}
+
+pub fn create_stash(
+  repo_root: &Path,
+  include_untracked: bool,
+  message: Option<&str>,
+) -> Result<()> {
+  let mut repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let signature = repo
+    .signature()
+    .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
+
+  let flags = include_untracked.then_some(StashFlags::INCLUDE_UNTRACKED);
+  let message = message
+    .map(str::trim)
+    .filter(|message| !message.is_empty());
+  repo
+    .stash_save2(&signature, message, flags)
+    .context("create stash entry")?;
+
+  Ok(())
+}
+
+pub fn list_stashes(repo_root: &Path) -> Result<Vec<StashEntry>> {
+  let mut repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let mut stashes = Vec::new();
+
+  repo
+    .stash_foreach(|index, name, oid| {
+      stashes.push(StashEntry {
+        index,
+        name: name.to_string(),
+        oid: oid.to_string(),
+      });
+      true
+    })
+    .context("list stash entries")?;
+
+  Ok(stashes)
+}
+
+pub fn apply_stash(repo_root: &Path, index: usize) -> Result<()> {
+  let mut repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  repo
+    .stash_apply(index, None)
+    .with_context(|| format!("apply stash at index {index}"))?;
+  Ok(())
+}
+
+pub fn drop_stash(repo_root: &Path, index: usize) -> Result<()> {
+  let mut repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  repo
+    .stash_drop(index)
+    .with_context(|| format!("drop stash at index {index}"))?;
+  Ok(())
+}
+
+pub fn pop_stash(repo_root: &Path, index: usize) -> Result<()> {
+  let mut repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  repo
+    .stash_pop(index, None)
+    .with_context(|| format!("pop stash at index {index}"))?;
   Ok(())
 }
 
@@ -1809,5 +1901,151 @@ mod tests {
       .expect("find copied branch");
     assert_eq!(copy.get().target(), Some(feature_head));
     assert!(copy.upstream().is_err());
+  }
+
+  #[test]
+  fn create_and_apply_stash_restores_tracked_changes() {
+    let repo = TempRepo::init("branch-stash-apply");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+
+    std::fs::write(repo.path.join(rel_path), "v2\n").expect("write tracked change");
+    create_stash(&repo.path, false, None).expect("create stash");
+
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read file after stash"),
+      "v1\n"
+    );
+
+    let stashes = list_stashes(&repo.path).expect("list stashes after create");
+    assert_eq!(stashes.len(), 1);
+
+    apply_stash(&repo.path, stashes[0].index).expect("apply stash");
+
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read file after apply"),
+      "v2\n"
+    );
+    assert_eq!(
+      list_stashes(&repo.path).expect("list stashes after apply").len(),
+      1
+    );
+  }
+
+  #[test]
+  fn default_stash_message_uses_head_branch_and_summary() {
+    let repo = TempRepo::init("branch-stash-default-message");
+    let head_oid = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let branch = current_branch_status(&repo.path)
+      .expect("read current branch")
+      .name;
+    let short_head = head_oid.to_string().chars().take(7).collect::<String>();
+
+    let default_message = default_stash_message(&repo.path).expect("read default stash message");
+    assert_eq!(
+      default_message,
+      format!("WIP on {branch}: {short_head} initial")
+    );
+  }
+
+  #[test]
+  fn create_stash_uses_custom_message_when_provided() {
+    let repo = TempRepo::init("branch-stash-custom-message");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+    std::fs::write(repo.path.join(rel_path), "v2\n").expect("write tracked change");
+
+    create_stash(&repo.path, false, Some("checkpoint before refactor"))
+      .expect("create stash with custom message");
+
+    let stash = list_stashes(&repo.path)
+      .expect("list stashes after create")
+      .into_iter()
+      .next()
+      .expect("stash entry exists");
+    assert!(
+      stash.name.contains("checkpoint before refactor"),
+      "stash name should contain custom message, got: {}",
+      stash.name
+    );
+  }
+
+  #[test]
+  fn pop_stash_restores_changes_and_removes_entry() {
+    let repo = TempRepo::init("branch-stash-pop");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+
+    std::fs::write(repo.path.join(rel_path), "v2\n").expect("write tracked change");
+    create_stash(&repo.path, false, None).expect("create stash");
+
+    let stashes = list_stashes(&repo.path).expect("list stashes");
+    assert_eq!(stashes.len(), 1);
+
+    pop_stash(&repo.path, stashes[0].index).expect("pop stash");
+
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read file after pop"),
+      "v2\n"
+    );
+    assert!(
+      list_stashes(&repo.path)
+        .expect("list stashes after pop")
+        .is_empty()
+    );
+  }
+
+  #[test]
+  fn drop_stash_removes_entry_without_applying() {
+    let repo = TempRepo::init("branch-stash-drop");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+
+    std::fs::write(repo.path.join(rel_path), "v2\n").expect("write tracked change");
+    create_stash(&repo.path, false, None).expect("create stash");
+
+    let stashes = list_stashes(&repo.path).expect("list stashes");
+    assert_eq!(stashes.len(), 1);
+    drop_stash(&repo.path, stashes[0].index).expect("drop stash");
+
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read file after drop"),
+      "v1\n"
+    );
+    assert!(
+      list_stashes(&repo.path)
+        .expect("list stashes after drop")
+        .is_empty()
+    );
+  }
+
+  #[test]
+  fn create_stash_with_untracked_stashes_and_restores_untracked_file() {
+    let repo = TempRepo::init("branch-stash-untracked");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let rel_path = Path::new("notes.txt");
+    std::fs::write(repo.path.join(rel_path), "notes\n").expect("write untracked file");
+
+    create_stash(&repo.path, true, None).expect("create stash with untracked");
+
+    assert!(
+      !repo.path.join(rel_path).exists(),
+      "untracked file should be removed from worktree after stash"
+    );
+
+    let stashes = list_stashes(&repo.path).expect("list stashes");
+    assert_eq!(stashes.len(), 1);
+
+    pop_stash(&repo.path, stashes[0].index).expect("pop stash with untracked");
+
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read restored untracked file"),
+      "notes\n"
+    );
+    assert!(
+      list_stashes(&repo.path)
+        .expect("list stashes after pop")
+        .is_empty()
+    );
   }
 }
