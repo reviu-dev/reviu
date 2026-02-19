@@ -11,14 +11,12 @@ use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
   HistoryCommitNode, HistoryRevision, RepoStage, RepoStatusEntry, RepoStatusKind, abort_merge,
   abort_rebase, amend_commit, apply_stash, cherry_pick_commits, commit_changes, continue_rebase,
-  create_branch, create_branch_from, create_stash, current_branch_status,
-  current_history_revision, current_rebase_commit_message, default_stash_message,
-  delete_untracked_file,
-  diff_set_from_patch, drop_stash, fetch, head_commit_status, is_merge_in_progress,
-  is_rebase_in_progress, list_branches, list_commit_changed_files, list_commit_history,
-  list_repo_status, list_stashes, load_commit_file_diff, merge_branch, pop_stash, push,
-  rebase_branch, restore_file, stage_all, stage_file, switch_branch, undo_last_commit,
-  unstage_all, unstage_file,
+  create_branch, create_branch_from, create_stash, current_branch_status, current_history_revision,
+  current_rebase_commit_message, default_stash_message, delete_untracked_file, diff_set_from_patch,
+  drop_stash, fetch, head_commit_status, is_merge_in_progress, is_rebase_in_progress,
+  list_branches, list_commit_changed_files, list_commit_history, list_repo_status, list_stashes,
+  load_commit_file_diff, merge_branch, pop_stash, push, rebase_branch, restore_file, stage_all,
+  stage_file, switch_branch, undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
@@ -55,9 +53,8 @@ use ui::{
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteHandler, CommandPalettePage,
   CommandPaletteRepository, CommandPaletteStash, ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT,
   Input, InputState, SearchFileEntry, SearchFileHandler, SearchFilePalette,
-  SearchFilePaletteConfig, StatusThemeExt, UiIconName, UserMenuConfig, UserMenuPage,
-  UserMenuState, UserMenuUser, WindowExt,
-  file_icon_path_for_path_with_theme, user_menu,
+  SearchFilePaletteConfig, StatusThemeExt, UiIconName, UserMenuConfig, UserMenuPage, UserMenuState,
+  UserMenuUser, WindowExt, file_icon_path_for_path_with_theme, user_menu,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
@@ -2077,8 +2074,7 @@ impl GitPage {
       commands.push(CommandPaletteCommand::fetch());
       commands.push(CommandPaletteCommand::cherry_pick());
 
-      let (show_stash, show_stash_with_untracked) =
-        Self::stash_command_flags(&self.status_entries);
+      let (show_stash, show_stash_with_untracked) = Self::stash_command_flags(&self.status_entries);
 
       if show_stash {
         commands.push(CommandPaletteCommand::stash());
@@ -5638,7 +5634,10 @@ mod tests {
     let tracked_entries = vec![make_status_entry("src/main.rs", RepoStage::Unstaged)];
 
     assert_eq!(GitPage::stash_command_flags(&[]), (false, false));
-    assert_eq!(GitPage::stash_command_flags(&untracked_entries), (false, true));
+    assert_eq!(
+      GitPage::stash_command_flags(&untracked_entries),
+      (false, true)
+    );
     assert_eq!(GitPage::stash_command_flags(&tracked_entries), (true, true));
   }
 

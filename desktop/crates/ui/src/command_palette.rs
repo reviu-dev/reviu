@@ -1734,12 +1734,7 @@ impl CommandPalette {
 
     v_flex()
       .h_full()
-      .child(self.render_search_list(
-        &self.stashes_list,
-        count_stashes,
-        "Search stashes...",
-        cx,
-      ))
+      .child(self.render_search_list(&self.stashes_list, count_stashes, "Search stashes...", cx))
       .when(self.error.is_some(), |parent| {
         parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
       })

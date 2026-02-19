@@ -574,9 +574,7 @@ pub fn create_stash(
     .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
 
   let flags = include_untracked.then_some(StashFlags::INCLUDE_UNTRACKED);
-  let message = message
-    .map(str::trim)
-    .filter(|message| !message.is_empty());
+  let message = message.map(str::trim).filter(|message| !message.is_empty());
   repo
     .stash_save2(&signature, message, flags)
     .context("create stash entry")?;
@@ -1927,7 +1925,9 @@ mod tests {
       "v2\n"
     );
     assert_eq!(
-      list_stashes(&repo.path).expect("list stashes after apply").len(),
+      list_stashes(&repo.path)
+        .expect("list stashes after apply")
+        .len(),
       1
     );
   }
