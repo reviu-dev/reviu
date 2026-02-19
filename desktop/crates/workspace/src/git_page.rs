@@ -9,14 +9,16 @@ use std::{
 use editor::{CloseFind, ConflictResolution, DiffViewMode, Editor, Find, HunkAction, HunkState};
 use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
-  HistoryCommitNode, HistoryRevision, RepoStage, RepoStatusEntry, RepoStatusKind, abort_merge,
-  abort_rebase, amend_commit, apply_stash, cherry_pick_commits, commit_changes, continue_rebase,
-  create_branch, create_branch_from, create_stash, current_branch_status, current_history_revision,
-  current_rebase_commit_message, default_stash_message, delete_untracked_file, diff_set_from_patch,
-  drop_stash, fetch, head_commit_status, is_merge_in_progress, is_rebase_in_progress,
-  list_branches, list_commit_changed_files, list_commit_history, list_repo_status, list_stashes,
-  load_commit_file_diff, merge_branch, pop_stash, push, rebase_branch, restore_file, stage_all,
-  skip_rebase, stage_file, switch_branch, undo_last_commit, unstage_all, unstage_file,
+  HistoryCommitNode, HistoryRevision, InteractiveRebaseTarget, InteractiveRebaseTodoEntry,
+  RepoStage, RepoStatusEntry, RepoStatusKind, abort_merge, abort_rebase, amend_commit, apply_stash,
+  cherry_pick_commits, commit_changes, continue_rebase, create_branch, create_branch_from,
+  create_stash, current_branch_status, current_history_revision, current_rebase_commit_message,
+  default_stash_message, delete_untracked_file, diff_set_from_patch, drop_stash, fetch,
+  head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
+  list_commit_changed_files, list_commit_history, list_interactive_rebase_commits,
+  list_repo_status, list_stashes, load_commit_file_diff, merge_branch, pop_stash, push,
+  rebase_branch, restore_file, skip_rebase, stage_all, stage_file, start_interactive_rebase,
+  switch_branch, undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
@@ -46,6 +48,9 @@ use crate::{
   config::{ConfigStore, RecentRepository},
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
+  interactive_rebase_dialog::{
+    InteractiveRebaseDialog, InteractiveRebaseDialogConfig, InteractiveRebaseDialogHandler,
+  },
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 use ui::{
@@ -768,6 +773,7 @@ impl GitPage {
       self.invalidate_open_file_task();
       self.selected_file = None;
       self.editor = None;
+      self.ensure_page_shortcut_focus(cx);
     } else if selected_file_update.sync_diff_view {
       self.sync_diff_view(cx);
     }
@@ -2201,6 +2207,9 @@ impl GitPage {
         commands.push(CommandPaletteCommand::abort_merge());
       }
       commands.push(CommandPaletteCommand::rebase_branch());
+      if self.should_show_interactive_rebase_palette_command() {
+        commands.push(CommandPaletteCommand::interactive_rebase());
+      }
       if self.rebase_in_progress {
         commands.push(CommandPaletteCommand::abort_rebase());
       }
@@ -2638,6 +2647,58 @@ impl GitPage {
           }
         }
       }
+      CommandPaletteAction::InteractiveRebaseBranch { name } => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        if !self.should_show_interactive_rebase_palette_command() {
+          return Err("Interactive rebase is currently disabled.".into());
+        }
+        should_post_action_refresh = false;
+        let target = InteractiveRebaseTarget::Branch(BranchRef {
+          name: name.name.to_string(),
+          kind: match name.kind {
+            CommandPaletteBranchKind::Local => BranchKind::Local,
+            CommandPaletteBranchKind::Remote => BranchKind::Remote,
+          },
+        });
+        let commits = match self.prepare_interactive_rebase_commits(&target) {
+          Ok(commits) => commits,
+          Err(err) => return Err(err),
+        };
+        let view = cx.entity();
+        window.on_next_frame(move |window, cx| {
+          let target = target.clone();
+          let commits = commits.clone();
+          view.update(cx, move |view, cx| {
+            view.open_interactive_rebase_dialog_with_commits(target, commits, window, cx);
+          });
+        });
+        Ok(())
+      }
+      CommandPaletteAction::InteractiveRebaseHeadCount { count } => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        if !self.should_show_interactive_rebase_palette_command() {
+          return Err("Interactive rebase is currently disabled.".into());
+        }
+        should_post_action_refresh = false;
+        let target = InteractiveRebaseTarget::HeadCount(count);
+        let commits = match self.prepare_interactive_rebase_commits(&target) {
+          Ok(commits) => commits,
+          Err(err) => return Err(err),
+        };
+        let view = cx.entity();
+        window.on_next_frame(move |window, cx| {
+          let target = target.clone();
+          let commits = commits.clone();
+          view.update(cx, move |view, cx| {
+            view.open_interactive_rebase_dialog_with_commits(target, commits, window, cx);
+          });
+        });
+        Ok(())
+      }
       CommandPaletteAction::AbortRebase => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
@@ -2861,6 +2922,136 @@ impl GitPage {
       });
     });
     self.status_task = Some(task);
+  }
+
+  fn prepare_interactive_rebase_commits(
+    &self,
+    target: &InteractiveRebaseTarget,
+  ) -> Result<Vec<git::InteractiveRebaseCommit>, SharedString> {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return Err("No repository selected.".into());
+    };
+    if !self.should_show_interactive_rebase_palette_command() {
+      return Err("Interactive rebase is currently disabled.".into());
+    }
+
+    let commits = list_interactive_rebase_commits(&repo_root, target)
+      .map_err(|err| -> SharedString { format!("Action failed: {err}").into() })?;
+    if commits.is_empty() {
+      return Err("No commits available for interactive rebase.".into());
+    }
+    Ok(commits)
+  }
+
+  fn open_interactive_rebase_dialog_with_commits(
+    &mut self,
+    target: InteractiveRebaseTarget,
+    commits: Vec<git::InteractiveRebaseCommit>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !self.should_show_interactive_rebase_palette_command() {
+      self.operation_error = Some("Interactive rebase is currently disabled.".into());
+      cx.notify();
+      return;
+    }
+
+    let view = cx.entity();
+    let on_submit: InteractiveRebaseDialogHandler =
+      Arc::new(move |target, todo_entries, window, cx| {
+        view.update(cx, |view, cx| {
+          view.start_interactive_rebase_action(target, todo_entries, window, cx)
+        })
+      });
+
+    let dialog_config = InteractiveRebaseDialogConfig::new(target, commits, on_submit);
+    let dialog = cx.new(|cx| InteractiveRebaseDialog::new(window, cx, dialog_config));
+    let dialog_for_overlay = dialog.clone();
+
+    window.open_dialog(cx, move |dialog, _, _| {
+      dialog
+        .w(px(860.0))
+        .overlay_closable(true)
+        .keyboard(true)
+        .close_button(false)
+        .title("Interactive rebase")
+        .child(dialog_for_overlay.clone())
+    });
+  }
+
+  fn start_interactive_rebase_action(
+    &mut self,
+    target: InteractiveRebaseTarget,
+    todo_entries: Vec<InteractiveRebaseTodoEntry>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return Err("No repository selected.".into());
+    };
+    if !self.should_show_interactive_rebase_palette_command() {
+      return Err("Interactive rebase is currently disabled.".into());
+    }
+
+    self.operation_error = None;
+    let commit_input = self.commit_input.clone();
+    let window_handle = window.window_handle();
+    let editor = self.editor.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let repo_root_for_rebase = repo_root.clone();
+      let result =
+        unblock(move || start_interactive_rebase(&repo_root_for_rebase, &target, &todo_entries))
+          .await;
+
+      let rebase_in_progress = is_rebase_in_progress(&repo_root).unwrap_or(false);
+      let conflicted_path = Self::first_conflicted_path(&repo_root);
+      let rebase_message = if rebase_in_progress {
+        current_rebase_commit_message(&repo_root).ok().flatten()
+      } else {
+        None
+      };
+      let (success, error_message) = match result {
+        Ok(()) => (!rebase_in_progress, None),
+        Err(err) => {
+          let is_conflict_state = conflicted_path.is_some() || rebase_in_progress;
+          let error_message = if is_conflict_state {
+            None
+          } else {
+            Some(format!("Interactive rebase failed: {err}"))
+          };
+          (false, error_message)
+        }
+      };
+
+      let _ = this.update(cx, |this, cx| {
+        if success {
+          this.force_push_after_rebase = true;
+          this.operation_error = None;
+          let _ = cx.update_window(window_handle, |_, window, cx| {
+            commit_input.update(cx, |input, cx| input.set_value("", window, cx));
+          });
+        }
+        this.reload_status(cx);
+        this.refresh_branches(cx);
+        if let Some(path) = conflicted_path {
+          this.open_file(path, cx);
+        }
+        if let Some(message) = rebase_message {
+          let _ = cx.update_window(window_handle, |_, window, cx| {
+            commit_input.update(cx, |input, cx| input.set_value(&message, window, cx));
+          });
+        }
+        if let Some(error_message) = error_message {
+          this.operation_error = Some(error_message.into());
+        }
+        if let Some(editor) = editor.clone() {
+          editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
+        }
+        cx.notify();
+      });
+    });
+    self.status_task = Some(task);
+    Ok(())
   }
 
   fn resolve_all_conflicts_in_editor(
@@ -3302,6 +3493,16 @@ impl GitPage {
 
   fn focus_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     window.focus(&self.focus_handle, cx);
+  }
+
+  fn ensure_page_shortcut_focus(&self, cx: &mut Context<Self>) {
+    let focus_handle = self.focus_handle.clone();
+    let window_handle = self.window_handle;
+    let _ = cx.update_window(window_handle, move |_, window, cx| {
+      if !focus_handle.contains_focused(window, cx) {
+        window.focus(&focus_handle, cx);
+      }
+    });
   }
 
   fn focus_sidebar_on_next_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3779,6 +3980,18 @@ impl GitPage {
     !self.rebase_in_progress && self.selected_repo.is_some() && self.has_head_commit
   }
 
+  fn should_show_interactive_rebase_palette_command(&self) -> bool {
+    !self.rebase_in_progress
+      && !self.merge_in_progress
+      && self.selected_repo.is_some()
+      && self.has_head_commit
+      && self.status_entries.is_empty()
+      && self
+        .branch_status
+        .as_ref()
+        .is_some_and(|status| status.name != "HEAD")
+  }
+
   fn selected_file_entry(&self) -> Option<&RepoStatusEntry> {
     let selected = self.selected_file.as_ref()?;
     self
@@ -3796,9 +4009,9 @@ impl GitPage {
 
   fn should_show_unstage_selected_file_palette_command(&self) -> bool {
     self.selected_repo.is_some()
-      && self.selected_file_entry().is_some_and(|entry| {
-        matches!(entry.stage, RepoStage::Staged | RepoStage::PartiallyStaged)
-      })
+      && self
+        .selected_file_entry()
+        .is_some_and(|entry| matches!(entry.stage, RepoStage::Staged | RepoStage::PartiallyStaged))
   }
 
   fn selected_file_status(&self) -> Option<RepoStatusKind> {
@@ -6121,6 +6334,7 @@ mod tests {
 
     git_page.update_in(cx, |this, _window, _cx| {
       this.selected_repo = Some(repo.path.clone());
+      this.branch_status = Some(make_branch_status("main", 0, 0, true));
       this.rebase_in_progress = false;
       this.status_entries = vec![make_status_entry("README.md", RepoStage::Unstaged)];
       this.selected_file = Some(PathBuf::from("README.md"));
@@ -6136,6 +6350,7 @@ mod tests {
       assert!(this.should_show_force_push_palette_command());
       assert!(this.should_show_undo_last_commit_palette_command());
       assert!(this.should_show_amend_palette_command());
+      assert!(!this.should_show_interactive_rebase_palette_command());
       assert!(this.should_show_stage_selected_file_palette_command());
       assert!(!this.should_show_unstage_selected_file_palette_command());
 
@@ -6146,6 +6361,12 @@ mod tests {
       this.status_entries = vec![make_status_entry("README.md", RepoStage::PartiallyStaged)];
       assert!(!this.should_show_stage_selected_file_palette_command());
       assert!(this.should_show_unstage_selected_file_palette_command());
+
+      this.status_entries.clear();
+      assert!(this.should_show_interactive_rebase_palette_command());
+      this.branch_status = Some(make_branch_status("HEAD", 0, 0, false));
+      assert!(!this.should_show_interactive_rebase_palette_command());
+      this.branch_status = Some(make_branch_status("main", 0, 0, true));
 
       this.selected_file = None;
       assert!(!this.should_show_stage_selected_file_palette_command());
@@ -6159,6 +6380,7 @@ mod tests {
       assert!(!this.should_show_force_push_palette_command());
       assert!(!this.should_show_undo_last_commit_palette_command());
       assert!(!this.should_show_amend_palette_command());
+      assert!(!this.should_show_interactive_rebase_palette_command());
       assert!(!this.should_show_stage_selected_file_palette_command());
       assert!(!this.should_show_unstage_selected_file_palette_command());
 
@@ -6177,6 +6399,7 @@ mod tests {
       assert!(!this.should_show_force_push_palette_command());
       assert!(!this.should_show_undo_last_commit_palette_command());
       assert!(!this.should_show_amend_palette_command());
+      assert!(!this.should_show_interactive_rebase_palette_command());
       assert!(!this.should_show_stage_selected_file_palette_command());
       assert!(!this.should_show_unstage_selected_file_palette_command());
     });
@@ -6404,6 +6627,46 @@ mod tests {
       this.focus_page(window, cx);
       assert!(this.focus_handle.contains_focused(window, cx));
     });
+  }
+
+  #[gpui::test]
+  async fn reload_status_refocuses_page_when_selected_file_disappears(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-focus-after-selection-clear");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+    std::fs::write(repo.path.join(rel_path), "v2\n").expect("modify file");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.selected_file = Some(rel_path.to_path_buf());
+      this.status_entries = vec![make_status_entry("README.md", RepoStage::Unstaged)];
+
+      let external_focus = cx.focus_handle();
+      window.focus(&external_focus, cx);
+      assert!(!this.focus_handle.contains_focused(window, cx));
+    });
+
+    restore_file(&repo.path, rel_path).expect("restore file on disk");
+
+    let reload_task = git_page.update_in(cx, |this, _window, cx| {
+      this.reload_status(cx);
+      this.status_task.take().expect("reload status task")
+    });
+    reload_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let (selected_file, has_page_focus) = git_page.update_in(cx, |this, window, cx| {
+      (
+        this.selected_file.clone(),
+        this.focus_handle.contains_focused(window, cx),
+      )
+    });
+    assert!(selected_file.is_none());
+    assert!(has_page_focus);
   }
 
   #[test]
@@ -7153,9 +7416,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn command_palette_commit_returns_error_when_command_is_disabled(
-    cx: &mut TestAppContext,
-  ) {
+  async fn command_palette_commit_returns_error_when_command_is_disabled(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-commit-disabled");
     let rel_path = Path::new("README.md");
@@ -7465,9 +7726,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn command_palette_unstage_selected_file_unstages_selected_entry(
-    cx: &mut TestAppContext,
-  ) {
+  async fn command_palette_unstage_selected_file_unstages_selected_entry(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-unstage-selected-file");
     let rel_path = Path::new("README.md");
@@ -7526,10 +7785,17 @@ mod tests {
     let can_show_before = git_page.read_with(cx, |this, cx| {
       this.should_show_accept_all_conflicts_palette_commands(cx)
     });
-    assert!(can_show_before, "command should be visible for conflicted file");
+    assert!(
+      can_show_before,
+      "command should be visible for conflicted file"
+    );
 
     let result = git_page.update_in(cx, |this, window, cx| {
-      this.handle_command_palette_action(CommandPaletteAction::AcceptAllCurrentConflicts, window, cx)
+      this.handle_command_palette_action(
+        CommandPaletteAction::AcceptAllCurrentConflicts,
+        window,
+        cx,
+      )
     });
     assert!(result.is_ok());
 
@@ -7579,7 +7845,10 @@ mod tests {
     let can_show_before = git_page.read_with(cx, |this, cx| {
       this.should_show_accept_all_conflicts_palette_commands(cx)
     });
-    assert!(can_show_before, "command should be visible for conflicted file");
+    assert!(
+      can_show_before,
+      "command should be visible for conflicted file"
+    );
 
     let result = git_page.update_in(cx, |this, window, cx| {
       this.handle_command_palette_action(
@@ -8066,6 +8335,13 @@ mod tests {
           kind: CommandPaletteBranchKind::Local,
         },
       },
+      CommandPaletteAction::InteractiveRebaseBranch {
+        name: CommandPaletteBranch {
+          name: "feature".into(),
+          kind: CommandPaletteBranchKind::Local,
+        },
+      },
+      CommandPaletteAction::InteractiveRebaseHeadCount { count: 3 },
       CommandPaletteAction::AbortRebase,
       CommandPaletteAction::StageAll,
       CommandPaletteAction::UnstageAll,
@@ -8857,7 +9133,10 @@ mod tests {
     let result = git_page.update_in(cx, |this, window, cx| {
       this.handle_command_palette_action(CommandPaletteAction::SkipRebase, window, cx)
     });
-    assert!(result.is_ok(), "skip rebase via command palette should succeed");
+    assert!(
+      result.is_ok(),
+      "skip rebase via command palette should succeed"
+    );
     await_git_page_background_tasks(git_page.clone(), cx).await;
 
     assert!(

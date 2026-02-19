@@ -142,6 +142,12 @@ pub enum CommandPaletteAction {
   RebaseBranch {
     name: CommandPaletteBranch,
   },
+  InteractiveRebaseBranch {
+    name: CommandPaletteBranch,
+  },
+  InteractiveRebaseHeadCount {
+    count: usize,
+  },
   AbortRebase,
   CherryPick {
     commit_hashes: Vec<String>,
@@ -605,6 +611,9 @@ pub enum CommandPaletteCommandId {
   MergeBranch,
   AbortMerge,
   RebaseBranch,
+  InteractiveRebase,
+  InteractiveRebaseOntoBranch,
+  InteractiveRebaseHeadCount,
   AbortRebase,
   CherryPick,
   StageAll,
@@ -750,6 +759,30 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::RebaseBranch,
       name: "Rebase branch".into(),
       description: Some("Rebase the current branch onto another branch".into()),
+    }
+  }
+
+  pub fn interactive_rebase() -> Self {
+    Self {
+      id: CommandPaletteCommandId::InteractiveRebase,
+      name: "Rebase interactive".into(),
+      description: Some("Interactively edit and reorder commits before rebasing".into()),
+    }
+  }
+
+  pub fn interactive_rebase_onto_branch() -> Self {
+    Self {
+      id: CommandPaletteCommandId::InteractiveRebaseOntoBranch,
+      name: "Onto branch".into(),
+      description: Some("Start interactive rebase onto another branch".into()),
+    }
+  }
+
+  pub fn interactive_rebase_head_count() -> Self {
+    Self {
+      id: CommandPaletteCommandId::InteractiveRebaseHeadCount,
+      name: "Last N commits (HEAD~n)".into(),
+      description: Some("Start interactive rebase for the last N commits".into()),
     }
   }
 
@@ -973,6 +1006,9 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::MergeBranch => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::AbortMerge => Icon::new(IconName::Undo),
       CommandPaletteCommandId::RebaseBranch => Icon::new(UiIconName::GitMerge),
+      CommandPaletteCommandId::InteractiveRebase => Icon::new(UiIconName::GitMerge),
+      CommandPaletteCommandId::InteractiveRebaseOntoBranch => Icon::new(UiIconName::GitMerge),
+      CommandPaletteCommandId::InteractiveRebaseHeadCount => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::AbortRebase => Icon::new(IconName::Undo),
       CommandPaletteCommandId::CherryPick => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::StageAll => Icon::new(IconName::Plus),
@@ -1074,6 +1110,9 @@ enum CommandPaletteScreen {
   CreateBranchFrom,
   MergeBranch,
   RebaseBranch,
+  InteractiveRebaseMode,
+  InteractiveRebaseBranch,
+  InteractiveRebaseHeadCount,
   CherryPick,
   Stash,
   StashIncludeUntracked,
@@ -1087,12 +1126,14 @@ pub struct CommandPalette {
   focus_handle: FocusHandle,
   screen: CommandPaletteScreen,
   commands_list: Entity<ListState<CommandListDelegate>>,
+  interactive_rebase_mode_list: Entity<ListState<CommandListDelegate>>,
   repositories_list: Entity<ListState<RepositoriesListDelegate>>,
   branches_list: Entity<ListState<BranchesListDelegate>>,
   stashes_list: Entity<ListState<StashesListDelegate>>,
   branches_with_commands_list: Entity<ListState<BranchesListWithCommandsDelegate>>,
   create_branch_input: Entity<InputState>,
   cherry_pick_input: Entity<InputState>,
+  interactive_rebase_head_count_input: Entity<InputState>,
   stash_input: Entity<InputState>,
   open_github_pr_input: Entity<InputState>,
   default_stash_message: SharedString,
@@ -1146,6 +1187,14 @@ impl CommandPalette {
     }
   }
 
+  fn parse_interactive_rebase_head_count(value: &str) -> Option<usize> {
+    let count: usize = value.trim().parse().ok()?;
+    if count < 2 {
+      return None;
+    }
+    Some(count)
+  }
+
   pub fn new(window: &mut Window, cx: &mut Context<Self>, config: CommandPaletteConfig) -> Self {
     let create_branch_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Enter branch name..."));
@@ -1153,6 +1202,8 @@ impl CommandPalette {
       InputState::new(window, cx)
         .placeholder("Enter one or more commit hashes (space-separated)...")
     });
+    let interactive_rebase_head_count_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Enter commit count (n >= 2)..."));
     let stash_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Enter stash message..."));
     let open_github_pr_input =
@@ -1242,9 +1293,37 @@ impl CommandPalette {
     let commands_list =
       cx.new(|cx| ListState::new(commands_list_delegate, window, cx).searchable(true));
 
+    let interactive_rebase_mode_commands = vec![
+      CommandPaletteCommand::interactive_rebase_onto_branch(),
+      CommandPaletteCommand::interactive_rebase_head_count(),
+    ];
+    let interactive_rebase_mode_commands = interactive_rebase_mode_commands
+      .into_iter()
+      .map(Rc::new)
+      .collect::<Vec<_>>();
+    let interactive_rebase_mode_list_delegate = CommandListDelegate {
+      _commands: interactive_rebase_mode_commands.clone(),
+      matched_commands: interactive_rebase_mode_commands.clone(),
+      selected_index: None,
+      query: "".into(),
+    };
+    let interactive_rebase_mode_list = cx
+      .new(|cx| ListState::new(interactive_rebase_mode_list_delegate, window, cx).searchable(true));
+
     let _subscriptions = vec![
       cx.subscribe_in(
         &commands_list,
+        window,
+        |command_palette, list_state, ev: &ListEvent, window, cx| {
+          if let ListEvent::Confirm(ix) = ev
+            && let Some(command) = list_state.read(cx).delegate().matched_commands.get(ix.row)
+          {
+            command_palette.select_command(command.id, cx, window);
+          }
+        },
+      ),
+      cx.subscribe_in(
+        &interactive_rebase_mode_list,
         window,
         |command_palette, list_state, ev: &ListEvent, window, cx| {
           if let ListEvent::Confirm(ix) = ev
@@ -1311,7 +1390,9 @@ impl CommandPalette {
         |command_palette, list_state, ev: &ListEvent, window, cx| {
           if let ListEvent::Confirm(ix) = ev {
             match command_palette.screen {
-              CommandPaletteScreen::MergeBranch | CommandPaletteScreen::RebaseBranch => {
+              CommandPaletteScreen::MergeBranch
+              | CommandPaletteScreen::RebaseBranch
+              | CommandPaletteScreen::InteractiveRebaseBranch => {
                 let branch = {
                   let list = list_state.read(cx);
                   list.delegate().matched_branches.get(ix.row).cloned()
@@ -1325,6 +1406,11 @@ impl CommandPalette {
                     CommandPaletteScreen::RebaseBranch => CommandPaletteAction::RebaseBranch {
                       name: (*branch).clone(),
                     },
+                    CommandPaletteScreen::InteractiveRebaseBranch => {
+                      CommandPaletteAction::InteractiveRebaseBranch {
+                        name: (*branch).clone(),
+                      }
+                    }
                     _ => unreachable!(),
                   };
                   command_palette.trigger_action(action, window, cx);
@@ -1375,6 +1461,11 @@ impl CommandPalette {
       ),
       cx.subscribe_in(&create_branch_input, window, Self::on_input_event),
       cx.subscribe_in(&cherry_pick_input, window, Self::on_cherry_pick_input_event),
+      cx.subscribe_in(
+        &interactive_rebase_head_count_input,
+        window,
+        Self::on_interactive_rebase_head_count_input_event,
+      ),
       cx.subscribe_in(&stash_input, window, Self::on_stash_input_event),
       cx.subscribe_in(
         &open_github_pr_input,
@@ -1396,11 +1487,13 @@ impl CommandPalette {
       create_branch_base: None,
       screen: CommandPaletteScreen::Root,
       commands_list,
+      interactive_rebase_mode_list,
       repositories_list,
       branches_list,
       stashes_list,
       branches_with_commands_list,
       open_github_pr_input,
+      interactive_rebase_head_count_input,
       error: None,
       on_action: Some(config.on_action),
       _subscriptions,
@@ -1507,6 +1600,31 @@ impl CommandPalette {
     );
   }
 
+  fn on_interactive_rebase_head_count_input_event(
+    &mut self,
+    state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !matches!(event, InputEvent::PressEnter { .. }) {
+      return;
+    }
+
+    let input = state.read(cx).value().to_string();
+    let Some(count) = Self::parse_interactive_rebase_head_count(&input) else {
+      self.error = Some("Commit count must be an integer >= 2".into());
+      cx.notify();
+      return;
+    };
+
+    self.trigger_action(
+      CommandPaletteAction::InteractiveRebaseHeadCount { count },
+      window,
+      cx,
+    );
+  }
+
   fn on_stash_input_event(
     &mut self,
     state: &Entity<InputState>,
@@ -1560,6 +1678,11 @@ impl CommandPalette {
           state.focus(window, cx);
         });
       }
+      CommandPaletteScreen::InteractiveRebaseMode => {
+        self.interactive_rebase_mode_list.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      }
       CommandPaletteScreen::SwitchBranch => {
         self.branches_with_commands_list.update(cx, |state, cx| {
           state.focus(window, cx);
@@ -1579,6 +1702,13 @@ impl CommandPalette {
         self.cherry_pick_input.update(cx, |state, cx| {
           state.focus(window, cx);
         });
+      }
+      CommandPaletteScreen::InteractiveRebaseHeadCount => {
+        self
+          .interactive_rebase_head_count_input
+          .update(cx, |state, cx| {
+            state.focus(window, cx);
+          });
       }
       CommandPaletteScreen::Stash | CommandPaletteScreen::StashIncludeUntracked => {
         self.stash_input.update(cx, |state, cx| {
@@ -1602,7 +1732,9 @@ impl CommandPalette {
           state.focus(window, cx);
         });
       }
-      CommandPaletteScreen::MergeBranch | CommandPaletteScreen::RebaseBranch => {
+      CommandPaletteScreen::MergeBranch
+      | CommandPaletteScreen::RebaseBranch
+      | CommandPaletteScreen::InteractiveRebaseBranch => {
         self.branches_list.update(cx, |state, cx| {
           state.focus(window, cx);
         });
@@ -1683,6 +1815,20 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::RebaseBranch => {
         self.set_screen(CommandPaletteScreen::RebaseBranch, cx, window);
+      }
+      CommandPaletteCommandId::InteractiveRebase => {
+        self.set_screen(CommandPaletteScreen::InteractiveRebaseMode, cx, window);
+      }
+      CommandPaletteCommandId::InteractiveRebaseOntoBranch => {
+        self.set_screen(CommandPaletteScreen::InteractiveRebaseBranch, cx, window);
+      }
+      CommandPaletteCommandId::InteractiveRebaseHeadCount => {
+        self
+          .interactive_rebase_head_count_input
+          .update(cx, |input, cx| {
+            input.set_value("", window, cx);
+          });
+        self.set_screen(CommandPaletteScreen::InteractiveRebaseHeadCount, cx, window);
       }
       CommandPaletteCommandId::AbortRebase => {
         self.trigger_action(CommandPaletteAction::AbortRebase, window, cx);
@@ -1957,6 +2103,44 @@ impl CommandPalette {
       })
   }
 
+  fn render_interactive_rebase_mode(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    let count_modes = self
+      .interactive_rebase_mode_list
+      .read(cx)
+      .delegate()
+      .matched_commands
+      .len();
+
+    v_flex()
+      .h_full()
+      .child(self.render_search_list(
+        &self.interactive_rebase_mode_list,
+        count_modes,
+        "Select interactive rebase mode...",
+        cx,
+      ))
+      .when(self.error.is_some(), |parent| {
+        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
+      })
+  }
+
+  fn render_interactive_rebase_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_merge_branch(cx)
+  }
+
+  fn render_interactive_rebase_head_count(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .gap_3()
+      .child(Input::new(&self.interactive_rebase_head_count_input).border_color(theme.border))
+      .when(self.error.is_some(), |parent| {
+        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
+      })
+  }
+
   fn render_rebase_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     self.render_merge_branch(cx)
   }
@@ -2033,6 +2217,15 @@ impl Render for CommandPalette {
       }
       CommandPaletteScreen::MergeBranch => self.render_merge_branch(cx).into_any_element(),
       CommandPaletteScreen::RebaseBranch => self.render_rebase_branch(cx).into_any_element(),
+      CommandPaletteScreen::InteractiveRebaseMode => {
+        self.render_interactive_rebase_mode(cx).into_any_element()
+      }
+      CommandPaletteScreen::InteractiveRebaseBranch => {
+        self.render_interactive_rebase_branch(cx).into_any_element()
+      }
+      CommandPaletteScreen::InteractiveRebaseHeadCount => self
+        .render_interactive_rebase_head_count(cx)
+        .into_any_element(),
     };
 
     div()
@@ -2105,6 +2298,28 @@ mod tests {
   }
 
   #[test]
+  fn parse_interactive_rebase_head_count_accepts_integer_greater_than_one() {
+    let parsed = CommandPalette::parse_interactive_rebase_head_count(" 5 ");
+    assert_eq!(parsed, Some(5));
+  }
+
+  #[test]
+  fn parse_interactive_rebase_head_count_rejects_non_integer_or_small_value() {
+    assert_eq!(
+      CommandPalette::parse_interactive_rebase_head_count("abc"),
+      None
+    );
+    assert_eq!(
+      CommandPalette::parse_interactive_rebase_head_count("1"),
+      None
+    );
+    assert_eq!(
+      CommandPalette::parse_interactive_rebase_head_count("0"),
+      None
+    );
+  }
+
+  #[test]
   fn open_repository_command_is_available_with_expected_metadata() {
     let command = CommandPaletteCommand::open_repository();
     assert_eq!(command.id, CommandPaletteCommandId::OpenRepository);
@@ -2141,6 +2356,9 @@ mod tests {
     let commit = CommandPaletteCommand::commit();
     let continue_rebase = CommandPaletteCommand::continue_rebase();
     let skip_rebase = CommandPaletteCommand::skip_rebase();
+    let interactive_rebase = CommandPaletteCommand::interactive_rebase();
+    let interactive_rebase_onto_branch = CommandPaletteCommand::interactive_rebase_onto_branch();
+    let interactive_rebase_head_count = CommandPaletteCommand::interactive_rebase_head_count();
     let push = CommandPaletteCommand::push("Push");
     let force_push = CommandPaletteCommand::force_push();
     let undo_last_commit = CommandPaletteCommand::undo_last_commit();
@@ -2161,6 +2379,30 @@ mod tests {
     assert_eq!(skip_rebase.id, CommandPaletteCommandId::SkipRebase);
     assert_eq!(skip_rebase.name.as_ref(), "Rebase skip");
     assert!(skip_rebase.matches("rebase commit"));
+
+    assert_eq!(
+      interactive_rebase.id,
+      CommandPaletteCommandId::InteractiveRebase
+    );
+    assert_eq!(interactive_rebase.name.as_ref(), "Rebase interactive");
+    assert!(interactive_rebase.matches("reorder commits"));
+
+    assert_eq!(
+      interactive_rebase_onto_branch.id,
+      CommandPaletteCommandId::InteractiveRebaseOntoBranch
+    );
+    assert_eq!(interactive_rebase_onto_branch.name.as_ref(), "Onto branch");
+    assert!(interactive_rebase_onto_branch.matches("another branch"));
+
+    assert_eq!(
+      interactive_rebase_head_count.id,
+      CommandPaletteCommandId::InteractiveRebaseHeadCount
+    );
+    assert_eq!(
+      interactive_rebase_head_count.name.as_ref(),
+      "Last N commits (HEAD~n)"
+    );
+    assert!(interactive_rebase_head_count.matches("last n commits"));
 
     assert_eq!(push.id, CommandPaletteCommandId::Push);
     assert_eq!(push.name.as_ref(), "Push");
