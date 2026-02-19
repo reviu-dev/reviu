@@ -4,6 +4,7 @@ mod branch;
 mod commit;
 mod diff;
 mod history;
+mod interactive_rebase;
 mod status;
 mod store;
 
@@ -12,6 +13,7 @@ pub use commit::*;
 pub use diff::*;
 pub use git2::ApplyLocation;
 pub use history::*;
+pub use interactive_rebase::*;
 pub use status::*;
 pub use store::*;
 

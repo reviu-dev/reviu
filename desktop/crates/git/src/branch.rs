@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, process::Command};
 
 use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
@@ -346,8 +346,10 @@ pub fn abort_rebase(repo_root: &Path) -> Result<()> {
     return Ok(());
   }
 
-  let mut rebase = repo.open_rebase(None).context("open in-progress rebase")?;
-  rebase.abort().context("abort rebase")?;
+  match repo.open_rebase(None) {
+    Ok(mut rebase) => rebase.abort().context("abort rebase")?,
+    Err(_) => run_git_rebase_command(repo_root, "--abort", "abort rebase")?,
+  }
   Ok(())
 }
 
@@ -387,6 +389,52 @@ fn commit_rebase_operation(
     Err(err) if is_rebase_conflict_error(repo, &err) => Ok(RebaseCommitOutcome::Conflicts),
     Err(err) => Err(err),
   }
+}
+
+fn rebase_command_output_details(output: &std::process::Output) -> String {
+  let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+  let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+  [stderr, stdout]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+fn rebase_output_has_conflicts(details: &str) -> bool {
+  let details = details.to_ascii_lowercase();
+  details.contains("conflict")
+    || details.contains("could not apply")
+    || details.contains("resolve all conflicts")
+    || details.contains("unmerged")
+}
+
+fn run_git_rebase_command(repo_root: &Path, flag: &str, operation_name: &str) -> Result<()> {
+  let output = Command::new("git")
+    .current_dir(repo_root)
+    .args(["rebase", flag])
+    .env("GIT_EDITOR", ":")
+    .env("GIT_SEQUENCE_EDITOR", ":")
+    .env("GIT_AUTHOR_NAME", "Reviu")
+    .env("GIT_AUTHOR_EMAIL", "reviu@contact")
+    .env("GIT_COMMITTER_NAME", "Reviu")
+    .env("GIT_COMMITTER_EMAIL", "reviu@contact")
+    .output()
+    .with_context(|| format!("run git rebase {flag}"))?;
+
+  if output.status.success() {
+    return Ok(());
+  }
+
+  let details = rebase_command_output_details(&output);
+  if rebase_output_has_conflicts(&details) {
+    bail!("rebase has conflicts");
+  }
+  if details.is_empty() {
+    bail!("{operation_name} failed");
+  }
+
+  bail!("{operation_name} failed: {details}")
 }
 
 pub fn rebase_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
@@ -444,7 +492,10 @@ pub fn continue_rebase(repo_root: &Path) -> Result<()> {
   let signature = repo
     .signature()
     .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
-  let mut rebase = repo.open_rebase(None).context("open in-progress rebase")?;
+  let mut rebase = match repo.open_rebase(None) {
+    Ok(rebase) => rebase,
+    Err(_) => return run_git_rebase_command(repo_root, "--continue", "continue rebase"),
+  };
 
   if rebase.operation_current().is_some() {
     match commit_rebase_operation(&mut rebase, &repo, &signature) {
@@ -496,7 +547,10 @@ pub fn skip_rebase(repo_root: &Path) -> Result<()> {
   let signature = repo
     .signature()
     .or_else(|_| Signature::now("reviu", "reviu@contact"))?;
-  let mut rebase = repo.open_rebase(None).context("open in-progress rebase")?;
+  let mut rebase = match repo.open_rebase(None) {
+    Ok(rebase) => rebase,
+    Err(_) => return run_git_rebase_command(repo_root, "--skip", "skip rebase"),
+  };
 
   if rebase.operation_current().is_some() {
     let head = repo
@@ -1582,6 +1636,80 @@ mod tests {
     assert_eq!(
       current_rebase_commit_message(&repo.path).expect("read current rebase commit message"),
       None
+    );
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read README after continue"),
+      "resolved\n"
+    );
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("status after continue rebase")
+        .name,
+      base_branch
+    );
+  }
+
+  #[test]
+  fn continue_rebase_after_cli_interactive_rebase_conflict_uses_command_fallback() {
+    let repo = TempRepo::init("branch-continue-cli-interactive-rebase");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "base\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(&repo.path, rel_path, "feature change\n", "feature change");
+
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    let _ = commit_text_file(&repo.path, rel_path, "main change\n", "main change");
+    force_checkout_head(&repo.path);
+
+    let target = crate::InteractiveRebaseTarget::Branch(BranchRef {
+      name: "feature".to_string(),
+      kind: BranchKind::Local,
+    });
+    let commits =
+      crate::list_interactive_rebase_commits(&repo.path, &target).expect("list commits to rebase");
+    assert_eq!(commits.len(), 1);
+    let todo = vec![crate::InteractiveRebaseTodoEntry {
+      oid: commits[0].oid.clone(),
+      action: crate::InteractiveRebaseAction::Pick,
+    }];
+
+    let _ = crate::start_interactive_rebase(&repo.path, &target, &todo)
+      .expect_err("interactive rebase should stop on conflict");
+    assert!(
+      is_rebase_in_progress(&repo.path).expect("read rebase state"),
+      "rebase state should be active after interactive rebase conflict"
+    );
+
+    std::fs::write(repo.path.join(rel_path), "resolved\n").expect("write resolved contents");
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let mut index = repo_handle.index().expect("open index");
+    index.add_path(rel_path).expect("stage resolved file");
+    index.write().expect("write index");
+
+    continue_rebase(&repo.path).expect("continue rebase");
+
+    assert!(
+      !is_rebase_in_progress(&repo.path).expect("read rebase state after continue"),
+      "rebase state should be cleaned after continue"
     );
     assert_eq!(
       std::fs::read_to_string(repo.path.join(rel_path)).expect("read README after continue"),
