@@ -137,6 +137,10 @@ impl Document {
     cx.notify();
   }
 
+  pub fn should_defer_full_highlight(&self) -> bool {
+    should_defer_full_highlight(self.buffer.len_lines(), self.buffer.len())
+  }
+
   fn schedule_initial_highlights(&mut self, cx: &mut Context<Self>) {
     if self.highlighter.is_none() {
       return;
