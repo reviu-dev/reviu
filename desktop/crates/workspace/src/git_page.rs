@@ -10,13 +10,15 @@ use editor::{CloseFind, ConflictResolution, DiffViewMode, Editor, Find, HunkActi
 use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
   HistoryCommitNode, HistoryRevision, RepoStage, RepoStatusEntry, RepoStatusKind, abort_merge,
-  abort_rebase, amend_commit, cherry_pick_commits, commit_changes, continue_rebase, create_branch,
-  create_branch_from, current_branch_status, current_history_revision,
-  current_rebase_commit_message, delete_untracked_file, diff_set_from_patch, fetch,
-  head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
-  list_commit_changed_files, list_commit_history, list_repo_status, load_commit_file_diff,
-  merge_branch, push, rebase_branch, restore_file, stage_all, stage_file, switch_branch,
-  undo_last_commit, unstage_all, unstage_file,
+  abort_rebase, amend_commit, apply_stash, cherry_pick_commits, commit_changes, continue_rebase,
+  create_branch, create_branch_from, create_stash, current_branch_status,
+  current_history_revision, current_rebase_commit_message, default_stash_message,
+  delete_untracked_file,
+  diff_set_from_patch, drop_stash, fetch, head_commit_status, is_merge_in_progress,
+  is_rebase_in_progress, list_branches, list_commit_changed_files, list_commit_history,
+  list_repo_status, list_stashes, load_commit_file_diff, merge_branch, pop_stash, push,
+  rebase_branch, restore_file, stage_all, stage_file, switch_branch, undo_last_commit,
+  unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
@@ -51,9 +53,10 @@ use crate::{
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteHandler, CommandPalettePage,
-  CommandPaletteRepository, ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState,
-  SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt,
-  UiIconName, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
+  CommandPaletteRepository, CommandPaletteStash, ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT,
+  Input, InputState, SearchFileEntry, SearchFileHandler, SearchFilePalette,
+  SearchFilePaletteConfig, StatusThemeExt, UiIconName, UserMenuConfig, UserMenuPage,
+  UserMenuState, UserMenuUser, WindowExt,
   file_icon_path_for_path_with_theme, user_menu,
 };
 
@@ -2029,6 +2032,8 @@ impl GitPage {
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let mut palette_branches = Vec::new();
+    let mut palette_stashes = Vec::new();
+    let mut palette_default_stash_message: Option<SharedString> = None;
     let mut palette_repositories = ConfigStore::load_recent_repositories()
       .into_iter()
       .map(|repo| CommandPaletteRepository {
@@ -2068,9 +2073,38 @@ impl GitPage {
 
     commands.push(CommandPaletteCommand::open_repository());
 
-    if self.selected_repo.is_some() {
+    if let Some(root_path) = self.selected_repo.clone() {
       commands.push(CommandPaletteCommand::fetch());
       commands.push(CommandPaletteCommand::cherry_pick());
+
+      let (show_stash, show_stash_with_untracked) =
+        Self::stash_command_flags(&self.status_entries);
+
+      if show_stash {
+        commands.push(CommandPaletteCommand::stash());
+      }
+
+      if show_stash_with_untracked {
+        commands.push(CommandPaletteCommand::stash_with_untracked());
+        palette_default_stash_message = default_stash_message(&root_path).ok().map(Into::into);
+      }
+
+      if let Ok(stashes) = list_stashes(&root_path) {
+        palette_stashes = stashes
+          .into_iter()
+          .map(|stash| CommandPaletteStash {
+            index: stash.index,
+            name: stash.name.into(),
+            oid: stash.oid.into(),
+          })
+          .collect();
+
+        if !palette_stashes.is_empty() {
+          commands.push(CommandPaletteCommand::apply_stash());
+          commands.push(CommandPaletteCommand::drop_stash());
+          commands.push(CommandPaletteCommand::pop_stash());
+        }
+      }
     }
 
     if let Some(root_path) = self.selected_repo.clone()
@@ -2097,8 +2131,12 @@ impl GitPage {
       }
     }
 
-    let config = CommandPaletteConfig::new(palette_branches, commands, handler)
-      .with_repositories(palette_repositories);
+    let mut config = CommandPaletteConfig::new(palette_branches, commands, handler)
+      .with_repositories(palette_repositories)
+      .with_stashes(palette_stashes);
+    if let Some(default_stash_message) = palette_default_stash_message {
+      config = config.with_default_stash_message(default_stash_message);
+    }
 
     let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
     let palette_for_dialog = palette.clone();
@@ -2384,6 +2422,33 @@ impl GitPage {
         should_post_action_refresh = false;
         self.fetch_repository(root_path, cx);
         Ok(())
+      }
+      CommandPaletteAction::Stash {
+        include_untracked,
+        message,
+      } => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
+        create_stash(&root_path, include_untracked, message.as_deref())
+      }
+      CommandPaletteAction::ApplyStash(stash) => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
+        apply_stash(&root_path, stash.index)
+      }
+      CommandPaletteAction::DropStash(stash) => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
+        drop_stash(&root_path, stash.index)
+      }
+      CommandPaletteAction::PopStash(stash) => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
+        pop_stash(&root_path, stash.index)
       }
       CommandPaletteAction::CherryPick { commit_hashes } => {
         let Some(root_path) = self.selected_repo.clone() else {
@@ -3379,6 +3444,18 @@ impl GitPage {
     entries
       .iter()
       .any(|entry| entry.status == RepoStatusKind::Untracked)
+  }
+
+  fn has_tracked_entries(entries: &[RepoStatusEntry]) -> bool {
+    entries
+      .iter()
+      .any(|entry| entry.status != RepoStatusKind::Untracked)
+  }
+
+  fn stash_command_flags(entries: &[RepoStatusEntry]) -> (bool, bool) {
+    let show_stash = Self::has_tracked_entries(entries);
+    let show_stash_with_untracked = show_stash || Self::has_untracked_entries(entries);
+    (show_stash, show_stash_with_untracked)
   }
 
   fn should_confirm_stage_all(
@@ -5529,6 +5606,43 @@ mod tests {
   }
 
   #[test]
+  fn has_tracked_entries_excludes_untracked_only_state() {
+    let untracked_entries = vec![RepoStatusEntry {
+      path: PathBuf::from("notes.txt"),
+      old_path: None,
+      status: RepoStatusKind::Untracked,
+      stage: RepoStage::Unstaged,
+    }];
+    let tracked_entries = vec![
+      RepoStatusEntry {
+        path: PathBuf::from("notes.txt"),
+        old_path: None,
+        status: RepoStatusKind::Untracked,
+        stage: RepoStage::Unstaged,
+      },
+      make_status_entry("src/main.rs", RepoStage::Unstaged),
+    ];
+
+    assert!(!GitPage::has_tracked_entries(&untracked_entries));
+    assert!(GitPage::has_tracked_entries(&tracked_entries));
+  }
+
+  #[test]
+  fn stash_command_flags_follow_untracked_only_rule() {
+    let untracked_entries = vec![RepoStatusEntry {
+      path: PathBuf::from("notes.txt"),
+      old_path: None,
+      status: RepoStatusKind::Untracked,
+      stage: RepoStage::Unstaged,
+    }];
+    let tracked_entries = vec![make_status_entry("src/main.rs", RepoStage::Unstaged)];
+
+    assert_eq!(GitPage::stash_command_flags(&[]), (false, false));
+    assert_eq!(GitPage::stash_command_flags(&untracked_entries), (false, true));
+    assert_eq!(GitPage::stash_command_flags(&tracked_entries), (true, true));
+  }
+
+  #[test]
   fn should_confirm_stage_all_when_repo_selected_and_conflicts_present() {
     let repo_path = PathBuf::from("/tmp/reviu-stage-all");
     let conflicted_entries = vec![RepoStatusEntry {
@@ -6540,6 +6654,185 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn command_palette_stash_and_apply_restore_tracked_changes(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-stash-apply");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+    std::fs::write(repo.path.join(rel_path), "v2\n").expect("write tracked change");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+    let stash_result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.handle_command_palette_action(
+        CommandPaletteAction::Stash {
+          include_untracked: false,
+          message: None,
+        },
+        window,
+        cx,
+      )
+    });
+    assert!(stash_result.is_ok());
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read file after stash"),
+      "v1\n"
+    );
+    let stash = list_stashes(&repo.path)
+      .expect("list stashes after stash")
+      .into_iter()
+      .next()
+      .expect("stash entry exists");
+
+    let apply_result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.handle_command_palette_action(
+        CommandPaletteAction::ApplyStash(CommandPaletteStash {
+          index: stash.index,
+          name: stash.name.clone().into(),
+          oid: stash.oid.clone().into(),
+        }),
+        window,
+        cx,
+      )
+    });
+    assert!(apply_result.is_ok());
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read file after apply stash"),
+      "v2\n"
+    );
+    assert_eq!(
+      list_stashes(&repo.path)
+        .expect("list stashes after apply")
+        .len(),
+      1
+    );
+  }
+
+  #[gpui::test]
+  async fn command_palette_stash_with_untracked_and_pop_restores_untracked_file(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-stash-pop-untracked");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let rel_path = Path::new("notes.txt");
+    std::fs::write(repo.path.join(rel_path), "notes\n").expect("write untracked file");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+    let stash_result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.handle_command_palette_action(
+        CommandPaletteAction::Stash {
+          include_untracked: true,
+          message: None,
+        },
+        window,
+        cx,
+      )
+    });
+    assert!(stash_result.is_ok());
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(
+      !repo.path.join(rel_path).exists(),
+      "untracked file should be removed after stash"
+    );
+    let stash = list_stashes(&repo.path)
+      .expect("list stashes")
+      .into_iter()
+      .next()
+      .expect("stash entry exists");
+
+    let pop_result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.handle_command_palette_action(
+        CommandPaletteAction::PopStash(CommandPaletteStash {
+          index: stash.index,
+          name: stash.name.clone().into(),
+          oid: stash.oid.clone().into(),
+        }),
+        window,
+        cx,
+      )
+    });
+    assert!(pop_result.is_ok());
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read restored untracked file"),
+      "notes\n"
+    );
+    assert!(
+      list_stashes(&repo.path)
+        .expect("list stashes after pop")
+        .is_empty()
+    );
+  }
+
+  #[gpui::test]
+  async fn command_palette_drop_stash_removes_entry(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-stash-drop");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+    std::fs::write(repo.path.join(rel_path), "v2\n").expect("write tracked change");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+    let stash_result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.handle_command_palette_action(
+        CommandPaletteAction::Stash {
+          include_untracked: false,
+          message: None,
+        },
+        window,
+        cx,
+      )
+    });
+    assert!(stash_result.is_ok());
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let stash = list_stashes(&repo.path)
+      .expect("list stashes")
+      .into_iter()
+      .next()
+      .expect("stash entry exists");
+
+    let drop_result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.handle_command_palette_action(
+        CommandPaletteAction::DropStash(CommandPaletteStash {
+          index: stash.index,
+          name: stash.name.clone().into(),
+          oid: stash.oid.clone().into(),
+        }),
+        window,
+        cx,
+      )
+    });
+    assert!(drop_result.is_ok());
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(
+      list_stashes(&repo.path)
+        .expect("list stashes after drop")
+        .is_empty()
+    );
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read file after drop stash"),
+      "v1\n"
+    );
+  }
+
+  #[gpui::test]
   async fn command_palette_branch_actions_require_selected_repo(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
@@ -6574,6 +6867,25 @@ mod tests {
       },
       CommandPaletteAction::AbortRebase,
       CommandPaletteAction::Fetch,
+      CommandPaletteAction::Stash {
+        include_untracked: false,
+        message: None,
+      },
+      CommandPaletteAction::ApplyStash(CommandPaletteStash {
+        index: 0,
+        name: "stash@{0}".into(),
+        oid: "deadbeef".into(),
+      }),
+      CommandPaletteAction::DropStash(CommandPaletteStash {
+        index: 0,
+        name: "stash@{0}".into(),
+        oid: "deadbeef".into(),
+      }),
+      CommandPaletteAction::PopStash(CommandPaletteStash {
+        index: 0,
+        name: "stash@{0}".into(),
+        oid: "deadbeef".into(),
+      }),
       CommandPaletteAction::CherryPick {
         commit_hashes: vec!["deadbeef".to_string()],
       },

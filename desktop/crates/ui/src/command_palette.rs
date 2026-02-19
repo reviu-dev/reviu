@@ -92,6 +92,27 @@ impl CommandPaletteRepository {
   }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandPaletteStash {
+  pub index: usize,
+  pub name: SharedString,
+  pub oid: SharedString,
+}
+
+impl CommandPaletteStash {
+  fn matches(&self, query: &str) -> bool {
+    if query.is_empty() {
+      return true;
+    }
+
+    let stash_index = format!("#{}", self.index);
+    self.name.as_ref().to_lowercase().contains(query)
+      || self.oid.as_ref().to_lowercase().contains(query)
+      || stash_index.contains(query)
+      || self.index.to_string().contains(query)
+  }
+}
+
 #[derive(Clone, Debug)]
 pub enum CommandPaletteAction {
   SwitchRepository(CommandPaletteRepository),
@@ -115,6 +136,13 @@ pub enum CommandPaletteAction {
     commit_hashes: Vec<String>,
   },
   Fetch,
+  Stash {
+    include_untracked: bool,
+    message: Option<String>,
+  },
+  ApplyStash(CommandPaletteStash),
+  DropStash(CommandPaletteStash),
+  PopStash(CommandPaletteStash),
   OpenRepository,
   OpenGitPage,
   OpenGithubPage,
@@ -262,6 +290,85 @@ impl ListDelegate for RepositoriesListDelegate {
               .overflow_hidden()
               .text_ellipsis()
               .child(Label::new(repository.path.clone())),
+          ),
+      )
+    })
+  }
+
+  fn set_selected_index(
+    &mut self,
+    ix: Option<IndexPath>,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) {
+    update_selected_index(&mut self.selected_index, ix, cx);
+  }
+
+  fn perform_search(
+    &mut self,
+    query: &str,
+    _: &mut Window,
+    _: &mut Context<ListState<Self>>,
+  ) -> Task<()> {
+    self.prepare(query.to_owned());
+    Task::ready(())
+  }
+}
+
+struct StashesListDelegate {
+  _stashes: Vec<Rc<CommandPaletteStash>>,
+  matched_stashes: Vec<Rc<CommandPaletteStash>>,
+  selected_index: Option<IndexPath>,
+  query: SharedString,
+}
+
+impl StashesListDelegate {
+  fn prepare(&mut self, query: impl Into<SharedString>) {
+    self.query = query.into();
+
+    let q = self.query.as_ref().to_lowercase();
+
+    let stashes = self
+      ._stashes
+      .iter()
+      .filter(|stash| stash.matches(&q))
+      .cloned()
+      .collect();
+
+    self.matched_stashes = stashes;
+  }
+}
+
+impl ListDelegate for StashesListDelegate {
+  type Item = ListItem;
+
+  fn items_count(&self, _section: usize, _cx: &App) -> usize {
+    self.matched_stashes.len()
+  }
+
+  fn render_item(
+    &mut self,
+    ix: IndexPath,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<Self::Item> {
+    let total_items = self.matched_stashes.len();
+    let theme = cx.theme().clone();
+    let base_item = list_base_item(ix, total_items, self.selected_index, &theme);
+
+    self.matched_stashes.get(ix.row).map(|stash| {
+      let label: SharedString = format!("#{} {}", stash.index, stash.name.as_ref()).into();
+      base_item.child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(Icon::new(IconName::Inbox))
+          .child(
+            div()
+              .flex_1()
+              .overflow_hidden()
+              .text_ellipsis()
+              .child(Label::new(label)),
           ),
       )
     })
@@ -477,6 +584,11 @@ pub enum CommandPaletteCommandId {
   AbortRebase,
   CherryPick,
   Fetch,
+  Stash,
+  StashIncludeUntracked,
+  ApplyStash,
+  DropStash,
+  PopStash,
   OpenRepository,
   OpenGitPage,
   OpenGithubPage,
@@ -572,6 +684,46 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::Fetch,
       name: "Fetch".into(),
       description: Some("Fetch updates from remote repositories".into()),
+    }
+  }
+
+  pub fn stash() -> Self {
+    Self {
+      id: CommandPaletteCommandId::Stash,
+      name: "Stash".into(),
+      description: Some("Stash tracked changes".into()),
+    }
+  }
+
+  pub fn stash_with_untracked() -> Self {
+    Self {
+      id: CommandPaletteCommandId::StashIncludeUntracked,
+      name: "Stash with untracked".into(),
+      description: Some("Stash tracked and untracked changes".into()),
+    }
+  }
+
+  pub fn apply_stash() -> Self {
+    Self {
+      id: CommandPaletteCommandId::ApplyStash,
+      name: "Apply stash".into(),
+      description: Some("Apply a stash entry without dropping it".into()),
+    }
+  }
+
+  pub fn drop_stash() -> Self {
+    Self {
+      id: CommandPaletteCommandId::DropStash,
+      name: "Drop stash".into(),
+      description: Some("Delete a stash entry".into()),
+    }
+  }
+
+  pub fn pop_stash() -> Self {
+    Self {
+      id: CommandPaletteCommandId::PopStash,
+      name: "Pop stash".into(),
+      description: Some("Apply and delete a stash entry".into()),
     }
   }
 
@@ -683,6 +835,13 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::AbortRebase => Icon::new(IconName::Undo),
       CommandPaletteCommandId::CherryPick => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::Fetch => Icon::new(UiIconName::RefreshCcw),
+      CommandPaletteCommandId::Stash | CommandPaletteCommandId::StashIncludeUntracked => {
+        Icon::new(UiIconName::ArrowDownFromLine)
+      }
+      CommandPaletteCommandId::ApplyStash | CommandPaletteCommandId::PopStash => {
+        Icon::new(UiIconName::ArrowUpFromLine)
+      }
+      CommandPaletteCommandId::DropStash => Icon::new(IconName::Delete),
       CommandPaletteCommandId::OpenRepository => Icon::new(IconName::FolderOpen),
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
@@ -721,6 +880,8 @@ impl CommandPaletteCommand {
 
 pub struct CommandPaletteConfig {
   pub branches: Vec<CommandPaletteBranch>,
+  pub stashes: Vec<CommandPaletteStash>,
+  pub default_stash_message: Option<SharedString>,
   pub repositories: Vec<CommandPaletteRepository>,
   pub commands: Vec<CommandPaletteCommand>,
   pub on_action: CommandPaletteHandler,
@@ -734,6 +895,8 @@ impl CommandPaletteConfig {
   ) -> Self {
     Self {
       branches,
+      stashes: Vec::new(),
+      default_stash_message: None,
       repositories: Vec::new(),
       commands,
       on_action,
@@ -742,6 +905,19 @@ impl CommandPaletteConfig {
 
   pub fn with_repositories(mut self, repositories: Vec<CommandPaletteRepository>) -> Self {
     self.repositories = repositories;
+    self
+  }
+
+  pub fn with_stashes(mut self, stashes: Vec<CommandPaletteStash>) -> Self {
+    self.stashes = stashes;
+    self
+  }
+
+  pub fn with_default_stash_message(
+    mut self,
+    default_stash_message: impl Into<SharedString>,
+  ) -> Self {
+    self.default_stash_message = Some(default_stash_message.into());
     self
   }
 }
@@ -756,6 +932,11 @@ enum CommandPaletteScreen {
   MergeBranch,
   RebaseBranch,
   CherryPick,
+  Stash,
+  StashIncludeUntracked,
+  ApplyStash,
+  DropStash,
+  PopStash,
   OpenGithubPrFromUrl,
 }
 
@@ -765,10 +946,13 @@ pub struct CommandPalette {
   commands_list: Entity<ListState<CommandListDelegate>>,
   repositories_list: Entity<ListState<RepositoriesListDelegate>>,
   branches_list: Entity<ListState<BranchesListDelegate>>,
+  stashes_list: Entity<ListState<StashesListDelegate>>,
   branches_with_commands_list: Entity<ListState<BranchesListWithCommandsDelegate>>,
   create_branch_input: Entity<InputState>,
   cherry_pick_input: Entity<InputState>,
+  stash_input: Entity<InputState>,
   open_github_pr_input: Entity<InputState>,
+  default_stash_message: SharedString,
   create_branch_base: Option<Rc<CommandPaletteBranch>>,
   error: Option<SharedString>,
   on_action: Option<CommandPaletteHandler>,
@@ -826,8 +1010,11 @@ impl CommandPalette {
       InputState::new(window, cx)
         .placeholder("Enter one or more commit hashes (space-separated)...")
     });
+    let stash_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Enter stash message..."));
     let open_github_pr_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Paste GitHub pull request URL..."));
+    let default_stash_message = config.default_stash_message.clone().unwrap_or_default();
 
     let default_repositories: Vec<Rc<CommandPaletteRepository>> =
       config.repositories.iter().cloned().map(Rc::new).collect();
@@ -854,6 +1041,19 @@ impl CommandPalette {
 
     let branches_list =
       cx.new(|cx| ListState::new(branches_list_delegate, window, cx).searchable(true));
+
+    let default_stashes: Vec<Rc<CommandPaletteStash>> =
+      config.stashes.iter().cloned().map(Rc::new).collect();
+
+    let stashes_list_delegate = StashesListDelegate {
+      _stashes: default_stashes.clone(),
+      matched_stashes: default_stashes.clone(),
+      selected_index: None,
+      query: "".into(),
+    };
+
+    let stashes_list =
+      cx.new(|cx| ListState::new(stashes_list_delegate, window, cx).searchable(true));
 
     let mut branches_with_actions: Vec<Rc<BranchListWithCommands>> = default_branches
       .into_iter()
@@ -1002,8 +1202,37 @@ impl CommandPalette {
           }
         },
       ),
+      cx.subscribe_in(
+        &stashes_list,
+        window,
+        |command_palette, list_state, ev: &ListEvent, window, cx| {
+          if let ListEvent::Confirm(ix) = ev {
+            let stash = {
+              let list = list_state.read(cx);
+              list.delegate().matched_stashes.get(ix.row).cloned()
+            };
+
+            if let Some(stash) = stash {
+              let action = match command_palette.screen {
+                CommandPaletteScreen::ApplyStash => {
+                  CommandPaletteAction::ApplyStash(stash.as_ref().clone())
+                }
+                CommandPaletteScreen::DropStash => {
+                  CommandPaletteAction::DropStash(stash.as_ref().clone())
+                }
+                CommandPaletteScreen::PopStash => {
+                  CommandPaletteAction::PopStash(stash.as_ref().clone())
+                }
+                _ => return,
+              };
+              command_palette.trigger_action(action, window, cx);
+            }
+          }
+        },
+      ),
       cx.subscribe_in(&create_branch_input, window, Self::on_input_event),
       cx.subscribe_in(&cherry_pick_input, window, Self::on_cherry_pick_input_event),
+      cx.subscribe_in(&stash_input, window, Self::on_stash_input_event),
       cx.subscribe_in(
         &open_github_pr_input,
         window,
@@ -1019,11 +1248,14 @@ impl CommandPalette {
       focus_handle: cx.focus_handle(),
       create_branch_input,
       cherry_pick_input,
+      stash_input,
+      default_stash_message,
       create_branch_base: None,
       screen: CommandPaletteScreen::Root,
       commands_list,
       repositories_list,
       branches_list,
+      stashes_list,
       branches_with_commands_list,
       open_github_pr_input,
       error: None,
@@ -1132,6 +1364,52 @@ impl CommandPalette {
     );
   }
 
+  fn on_stash_input_event(
+    &mut self,
+    state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !matches!(event, InputEvent::PressEnter { .. }) {
+      return;
+    }
+
+    let message = state.read(cx).value().trim().to_string();
+    let message = if message.is_empty() {
+      None
+    } else {
+      Some(message)
+    };
+
+    match self.screen {
+      CommandPaletteScreen::Stash => self.trigger_action(
+        CommandPaletteAction::Stash {
+          include_untracked: false,
+          message,
+        },
+        window,
+        cx,
+      ),
+      CommandPaletteScreen::StashIncludeUntracked => self.trigger_action(
+        CommandPaletteAction::Stash {
+          include_untracked: true,
+          message,
+        },
+        window,
+        cx,
+      ),
+      _ => {}
+    }
+  }
+
+  fn prepare_stash_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let default_stash_message = self.default_stash_message.clone();
+    self.stash_input.update(cx, move |input, cx| {
+      input.set_value(default_stash_message.clone(), window, cx);
+    });
+  }
+
   pub fn focus_screen_input(&self, window: &mut Window, cx: &mut Context<Self>) {
     match self.screen {
       CommandPaletteScreen::SwitchRepository => {
@@ -1156,6 +1434,18 @@ impl CommandPalette {
       }
       CommandPaletteScreen::CherryPick => {
         self.cherry_pick_input.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      }
+      CommandPaletteScreen::Stash | CommandPaletteScreen::StashIncludeUntracked => {
+        self.stash_input.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      }
+      CommandPaletteScreen::ApplyStash
+      | CommandPaletteScreen::DropStash
+      | CommandPaletteScreen::PopStash => {
+        self.stashes_list.update(cx, |state, cx| {
           state.focus(window, cx);
         });
       }
@@ -1232,6 +1522,23 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::Fetch => {
         self.trigger_action(CommandPaletteAction::Fetch, window, cx);
+      }
+      CommandPaletteCommandId::Stash => {
+        self.prepare_stash_input(window, cx);
+        self.set_screen(CommandPaletteScreen::Stash, cx, window);
+      }
+      CommandPaletteCommandId::StashIncludeUntracked => {
+        self.prepare_stash_input(window, cx);
+        self.set_screen(CommandPaletteScreen::StashIncludeUntracked, cx, window);
+      }
+      CommandPaletteCommandId::ApplyStash => {
+        self.set_screen(CommandPaletteScreen::ApplyStash, cx, window);
+      }
+      CommandPaletteCommandId::DropStash => {
+        self.set_screen(CommandPaletteScreen::DropStash, cx, window);
+      }
+      CommandPaletteCommandId::PopStash => {
+        self.set_screen(CommandPaletteScreen::PopStash, cx, window);
       }
       CommandPaletteCommandId::CreateBranchFrom => {
         self.set_screen(CommandPaletteScreen::CreateBranchFrom, cx, window);
@@ -1405,6 +1712,51 @@ impl CommandPalette {
       })
   }
 
+  fn render_stash(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .gap_3()
+      .child(Input::new(&self.stash_input).border_color(theme.border))
+      .when(self.error.is_some(), |parent| {
+        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
+      })
+  }
+
+  fn render_stash_include_untracked(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_stash(cx)
+  }
+
+  fn render_select_stash(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    let count_stashes = self.stashes_list.read(cx).delegate().matched_stashes.len();
+
+    v_flex()
+      .h_full()
+      .child(self.render_search_list(
+        &self.stashes_list,
+        count_stashes,
+        "Search stashes...",
+        cx,
+      ))
+      .when(self.error.is_some(), |parent| {
+        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
+      })
+  }
+
+  fn render_apply_stash(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_select_stash(cx)
+  }
+
+  fn render_drop_stash(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_select_stash(cx)
+  }
+
+  fn render_pop_stash(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_select_stash(cx)
+  }
+
   fn render_merge_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
@@ -1489,6 +1841,13 @@ impl Render for CommandPalette {
       CommandPaletteScreen::SwitchBranch => self.render_switch_branch(cx).into_any_element(),
       CommandPaletteScreen::CreateBranch => self.render_create_branch(cx).into_any_element(),
       CommandPaletteScreen::CherryPick => self.render_cherry_pick(cx).into_any_element(),
+      CommandPaletteScreen::Stash => self.render_stash(cx).into_any_element(),
+      CommandPaletteScreen::StashIncludeUntracked => {
+        self.render_stash_include_untracked(cx).into_any_element()
+      }
+      CommandPaletteScreen::ApplyStash => self.render_apply_stash(cx).into_any_element(),
+      CommandPaletteScreen::DropStash => self.render_drop_stash(cx).into_any_element(),
+      CommandPaletteScreen::PopStash => self.render_pop_stash(cx).into_any_element(),
       CommandPaletteScreen::OpenGithubPrFromUrl => {
         self.render_open_github_pr_from_url(cx).into_any_element()
       }
@@ -1582,5 +1941,25 @@ mod tests {
     assert_eq!(command.id, CommandPaletteCommandId::Fetch);
     assert_eq!(command.name.as_ref(), "Fetch");
     assert!(command.matches("fetch updates"));
+  }
+
+  #[test]
+  fn stash_commands_are_available_with_expected_metadata() {
+    let stash = CommandPaletteCommand::stash();
+    let stash_untracked = CommandPaletteCommand::stash_with_untracked();
+    let apply_stash = CommandPaletteCommand::apply_stash();
+    let drop_stash = CommandPaletteCommand::drop_stash();
+    let pop_stash = CommandPaletteCommand::pop_stash();
+
+    assert_eq!(stash.id, CommandPaletteCommandId::Stash);
+    assert_eq!(
+      stash_untracked.id,
+      CommandPaletteCommandId::StashIncludeUntracked
+    );
+    assert_eq!(apply_stash.id, CommandPaletteCommandId::ApplyStash);
+    assert_eq!(drop_stash.id, CommandPaletteCommandId::DropStash);
+    assert_eq!(pop_stash.id, CommandPaletteCommandId::PopStash);
+    assert!(stash.matches("tracked changes"));
+    assert!(apply_stash.matches("without dropping"));
   }
 }
