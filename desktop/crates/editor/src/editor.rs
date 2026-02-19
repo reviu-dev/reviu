@@ -576,6 +576,19 @@ struct ReviewCommentMarkdownCacheEntry {
   estimated_heights_px: HashMap<(usize, u32), f32>,
 }
 
+struct ProjectionBuildInput {
+  doc_line_count: usize,
+  diffs: Arc<DiffSet>,
+  expanded_gaps: HashMap<GapId, GapReveal>,
+  align_modified: bool,
+  projection_comments: Vec<ReviewComment>,
+  collapsed_review_comments: HashSet<u64>,
+  review_comment_wrap_columns: usize,
+  review_comment_line_height_px: f32,
+  markdown_line_height_px: f32,
+  review_comment_body_heights_px: HashMap<u64, f32>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct BufferGitState {
   pub op_id: usize,
@@ -4164,33 +4177,22 @@ impl Editor {
     doc_line_count >= ASYNC_PROJECTION_MIN_DOC_LINES
   }
 
-  fn build_projection_from_diffs(
-    doc_line_count: usize,
-    diffs: &DiffSet,
-    expanded_gaps: &HashMap<GapId, GapReveal>,
-    align_modified: bool,
-    projection_comments: &[ReviewComment],
-    collapsed_review_comments: &HashSet<u64>,
-    review_comment_wrap_columns: usize,
-    review_comment_line_height_px: f32,
-    markdown_line_height_px: f32,
-    review_comment_body_heights_px: &HashMap<u64, f32>,
-  ) -> Projection {
+  fn build_projection_from_diffs(input: &ProjectionBuildInput) -> Projection {
     Projection::from_diffs(
-      doc_line_count,
-      &diffs.uncommitted,
-      &diffs.unstaged,
-      &diffs.staged,
-      expanded_gaps,
-      align_modified,
+      input.doc_line_count,
+      &input.diffs.uncommitted,
+      &input.diffs.unstaged,
+      &input.diffs.staged,
+      &input.expanded_gaps,
+      input.align_modified,
     )
     .with_review_comments(
-      projection_comments,
-      collapsed_review_comments,
-      review_comment_wrap_columns,
-      review_comment_line_height_px,
-      markdown_line_height_px,
-      review_comment_body_heights_px,
+      &input.projection_comments,
+      &input.collapsed_review_comments,
+      input.review_comment_wrap_columns,
+      input.review_comment_line_height_px,
+      input.markdown_line_height_px,
+      &input.review_comment_body_heights_px,
     )
   }
 
@@ -4305,39 +4307,35 @@ impl Editor {
       );
     }
 
-    let diffs = self
-      .diffs
-      .as_ref()
-      .expect("diffs should be present when rebuilding projection")
-      .clone();
-    let expanded_gaps = self.expanded_gaps.clone();
-    let collapsed_review_comments = self.collapsed_review_comments.clone();
-    let align_modified = matches!(self.diff_view_mode, DiffViewMode::Split);
-    let review_comment_wrap_columns = self.review_comment_wrap_columns;
-    let review_comment_line_height_px = self.review_comment_line_height_px;
-    let build_in_background = Self::should_build_projection_in_background(doc_line_count);
+    let build_input = ProjectionBuildInput {
+      doc_line_count,
+      diffs: self
+        .diffs
+        .as_ref()
+        .expect("diffs should be present when rebuilding projection")
+        .clone(),
+      expanded_gaps: self.expanded_gaps.clone(),
+      align_modified: matches!(self.diff_view_mode, DiffViewMode::Split),
+      projection_comments,
+      collapsed_review_comments: self.collapsed_review_comments.clone(),
+      review_comment_wrap_columns: self.review_comment_wrap_columns,
+      review_comment_line_height_px: self.review_comment_line_height_px,
+      markdown_line_height_px,
+      review_comment_body_heights_px,
+    };
+    let build_in_background =
+      Self::should_build_projection_in_background(build_input.doc_line_count);
 
     let generation = self.projection_generation.fetch_add(1, Ordering::Relaxed) + 1;
     let projection_generation = self.projection_generation.clone();
 
     if !build_in_background {
       self.projection_task = None;
-      let projection = Self::build_projection_from_diffs(
-        doc_line_count,
-        &diffs,
-        &expanded_gaps,
-        align_modified,
-        &projection_comments,
-        &collapsed_review_comments,
-        review_comment_wrap_columns,
-        review_comment_line_height_px,
-        markdown_line_height_px,
-        &review_comment_body_heights_px,
-      );
+      let projection = Self::build_projection_from_diffs(&build_input);
       if self.projection_generation.load(Ordering::Relaxed) != generation {
         return;
       }
-      self.apply_projection_result(projection, doc_line_count, cx);
+      self.apply_projection_result(projection, build_input.doc_line_count, cx);
       return;
     }
 
@@ -4346,20 +4344,11 @@ impl Editor {
         return;
       }
 
+      let projection_doc_line_count = build_input.doc_line_count;
       let projection = cx
-        .background_spawn(async move {
-          Self::build_projection_from_diffs(
-            doc_line_count,
-            &diffs,
-            &expanded_gaps,
-            align_modified,
-            &projection_comments,
-            &collapsed_review_comments,
-            review_comment_wrap_columns,
-            review_comment_line_height_px,
-            markdown_line_height_px,
-            &review_comment_body_heights_px,
-          )
+        .background_spawn({
+          let build_input = build_input;
+          async move { Self::build_projection_from_diffs(&build_input) }
         })
         .await;
 
@@ -4371,7 +4360,7 @@ impl Editor {
         if editor.projection_generation.load(Ordering::Relaxed) != generation {
           return;
         }
-        editor.apply_projection_result(projection, doc_line_count, cx);
+        editor.apply_projection_result(projection, projection_doc_line_count, cx);
       });
     }));
   }
@@ -4891,7 +4880,7 @@ impl Editor {
 
     let regions = {
       let document = self.document.read(cx);
-      conflict_regions_from_document(&document)
+      conflict_regions_from_document(document)
     };
     let line_kinds = conflict_line_kinds_from_regions(&regions);
 
