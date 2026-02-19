@@ -508,8 +508,8 @@ impl Element for GutterElement {
           }
         }
 
-        if let Some(group_id) = group_id {
-          if let (Some(projection), Some((top_color, bottom_color))) =
+        if let Some(group_id) = group_id
+          && let (Some(projection), Some((top_color, bottom_color))) =
             (projection.as_ref(), group_border_colors.get(&group_id))
           {
             let prev_group = display_idx
@@ -550,7 +550,6 @@ impl Element for GutterElement {
               ));
             }
           }
-        }
       }
 
       if let Some(start) = current_blank_start.take()

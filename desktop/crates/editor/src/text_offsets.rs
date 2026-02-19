@@ -3,12 +3,10 @@ pub(crate) fn char_offset_to_byte_offset(text: &str, char_offset: usize) -> usiz
     return 0;
   }
 
-  let mut count = 0usize;
-  for (idx, _) in text.char_indices() {
+  for (count, (idx, _)) in text.char_indices().enumerate() {
     if count == char_offset {
       return idx;
     }
-    count += 1;
   }
 
   text.len()

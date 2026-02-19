@@ -75,7 +75,7 @@ fn indent_guide_byte_ranges(text: &str, tab_spaces: usize) -> Vec<Range<usize>> 
     match ch {
       ' ' => {
         columns += 1;
-        if columns % tab_spaces == 0 {
+        if columns.is_multiple_of(tab_spaces) {
           let boundary = idx + 1;
           if boundary > previous_boundary {
             ranges.push(previous_boundary..boundary);
@@ -87,7 +87,7 @@ fn indent_guide_byte_ranges(text: &str, tab_spaces: usize) -> Vec<Range<usize>> 
         let next_tab_stop = ((columns / tab_spaces) + 1) * tab_spaces;
         while columns < next_tab_stop {
           columns += 1;
-          if columns % tab_spaces == 0 {
+          if columns.is_multiple_of(tab_spaces) {
             let boundary = idx + 1;
             if boundary > previous_boundary {
               ranges.push(previous_boundary..boundary);
@@ -1207,7 +1207,7 @@ impl Element for EditorElement {
       let document = document_entity.read(cx);
       let mut line_texts = HashMap::new();
       for (display_idx, display_line) in &viewport_lines {
-        let text = display_line_text_for_view(display_line, self.diff_view, &document);
+        let text = display_line_text_for_view(display_line, self.diff_view, document);
         line_texts.insert(*display_idx, text);
       }
       line_texts
