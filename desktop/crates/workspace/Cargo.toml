@@ -18,6 +18,7 @@ smol = { workspace = true }
 anyhow = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
+time = { workspace = true }
 
 [dev-dependencies]
 git2 = { workspace = true }

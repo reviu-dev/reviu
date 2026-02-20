@@ -49,6 +49,7 @@ use crate::{
     ApiClient, GithubPullRequestDetails, GithubPullRequestFile, GithubPullRequestReviewComment,
   },
   auth_state::{AuthState, AuthStateStore},
+  date_format::format_long_date,
   github_page::GithubPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
@@ -57,15 +58,6 @@ const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
 const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const DIFF_HEADER_HEIGHT: f32 = 40.0;
-
-fn format_datetime(value: &str) -> SharedString {
-  let Some((date, time)) = value.split_once('T') else {
-    return value.to_string().into();
-  };
-
-  let _ = time;
-  date.to_string().into()
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GithubPrFileStatus {
@@ -1197,7 +1189,7 @@ impl GithubPrDetailsPage {
           avatar_url: comment.user.avatar_url.as_deref().map(Arc::from),
           line_label,
           body: Arc::from(comment.body.as_str()),
-          created_at: Arc::from(format_datetime(&comment.created_at).to_string()),
+          created_at: Arc::from(format_long_date(&comment.created_at).to_string()),
         })
       })
       .collect()
@@ -1887,9 +1879,9 @@ impl GithubPrDetailsPage {
       "https://github.com/{}/{}/pull/{}",
       pr.repository.owner, pr.repository.repo, pr.number
     );
-    let updated_at = format_datetime(&pr.updated_at);
-    let created_at = format_datetime(&pr.created_at);
-    let merged_at = pr.merged_at.as_deref().map(format_datetime);
+    let updated_at = format_long_date(&pr.updated_at);
+    let created_at = format_long_date(&pr.created_at);
+    let merged_at = pr.merged_at.as_deref().map(format_long_date);
 
     let body = pr
       .body
@@ -2878,12 +2870,12 @@ mod tests {
   }
 
   #[test]
-  fn format_datetime_returns_date_component_for_iso_values() {
+  fn format_long_date_returns_long_month_for_iso_values() {
     assert_eq!(
-      format_datetime("2026-02-15T12:34:56Z").as_ref(),
-      "2026-02-15"
+      format_long_date("2026-02-15T12:34:56Z").as_ref(),
+      "February 15, 2026"
     );
-    assert_eq!(format_datetime("2026-02-15").as_ref(), "2026-02-15");
+    assert_eq!(format_long_date("2026-02-15").as_ref(), "2026-02-15");
   }
 
   #[test]

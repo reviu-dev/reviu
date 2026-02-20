@@ -21,6 +21,7 @@ use crate::{
   AuthCallbackTarget, ShowCommandPalette,
   api::{ApiClient, GithubNotification, GithubPullRequest, GithubPullRequestStatus},
   auth_state::{AuthState, AuthStateStore},
+  date_format::format_compact_datetime,
   github_pr_details_page::GithubPrDetailsPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
@@ -72,21 +73,6 @@ fn update_selected_index<D: ListDelegate>(
 ) {
   *selected_index = ix;
   cx.notify();
-}
-
-fn format_updated_at(value: &str) -> SharedString {
-  let Some((date, time)) = value.split_once('T') else {
-    return value.to_string().into();
-  };
-
-  let time = time.split('Z').next().unwrap_or(time);
-  let time = if time.len() >= 5 { &time[..5] } else { time };
-
-  if time.is_empty() {
-    date.to_string().into()
-  } else {
-    format!("{} {}", date, time).into()
-  }
 }
 
 #[derive(Clone, Debug)]
@@ -197,7 +183,7 @@ impl ListDelegate for GithubNotificationListDelegate {
     let base_item = list_base_item(ix, self.selected_index);
     let row = self.matched_rows.get(ix.row)?;
     let notification = &row.notification;
-    let updated_at = format_updated_at(&notification.updated_at);
+    let updated_at = format_compact_datetime(&notification.updated_at);
     let repo_name = notification.repository.full_name.clone();
     let subject = notification.subject.title.clone();
     let reason_tag = Tag::secondary()
@@ -335,7 +321,7 @@ impl ListDelegate for GithubPullRequestListDelegate {
 
     let status_tag = row.pr.status().tag(&theme);
 
-    let updated_at = format_updated_at(&row.pr.updated_at);
+    let updated_at = format_compact_datetime(&row.pr.updated_at);
     let repo_name = format!("{}/{}", row.owner, row.repo);
 
     let label_tags = row.pr.labels.iter().take(4).map(|label| {
@@ -1036,20 +1022,20 @@ mod tests {
   }
 
   #[test]
-  fn format_updated_at_formats_date_and_time() {
+  fn compact_datetime_formats_rfc3339_values() {
     assert_eq!(
-      format_updated_at("2026-02-15T12:34:56Z").as_ref(),
-      "2026-02-15 12:34"
+      format_compact_datetime("2026-02-15T12:34:56Z").as_ref(),
+      "Feb 15, 2026 12:34"
     );
     assert_eq!(
-      format_updated_at("2026-02-15T12:34:56+02:00").as_ref(),
-      "2026-02-15 12:34"
+      format_compact_datetime("2026-02-15T12:34:56+02:00").as_ref(),
+      "Feb 15, 2026 12:34"
     );
   }
 
   #[test]
-  fn format_updated_at_preserves_non_iso_inputs() {
-    assert_eq!(format_updated_at("2026-02-15").as_ref(), "2026-02-15");
+  fn compact_datetime_preserves_non_iso_inputs() {
+    assert_eq!(format_compact_datetime("2026-02-15").as_ref(), "2026-02-15");
   }
 
   #[test]

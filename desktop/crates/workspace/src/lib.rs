@@ -6,6 +6,7 @@ mod api;
 mod auth_state;
 mod billing_page;
 mod config;
+mod date_format;
 mod git_config_page;
 mod git_page;
 mod github_page;
