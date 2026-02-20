@@ -42,6 +42,11 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+
       - name: Install X11/GPUI system deps
         run: |
           sudo apt-get update
