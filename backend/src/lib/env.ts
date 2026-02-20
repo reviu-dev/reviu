@@ -13,6 +13,9 @@ const envSchema = z.object({
   AUTH_SECRET: z.string(),
   GITHUB_OAUTH_CLIENT_SECRET: z.string(),
   GITHUB_OAUTH_CLIENT_ID: z.string(),
+  POLAR_ACCESS_TOKEN: z.string(),
+  POLAR_SUCCESS_URL: z.string(),
+  POLAR_SUBSCRIPTION_PRODUCT_ID: z.string(),
 })
 
 export const env = envSchema.parse(process.env)

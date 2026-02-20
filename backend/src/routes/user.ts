@@ -1,23 +1,44 @@
 import { pick } from 'es-toolkit'
 import { Hono } from 'hono'
+import { auth } from '../lib/auth.js'
+import { env } from '../lib/env.js'
 import { authMiddleware } from '../middlewares/auth.js'
 import { fetchGithubViewer } from '../services/github.js'
 
 const userRouter = new Hono()
 
-export const userRoutes = userRouter.get('/me', authMiddleware, async (ctx) => {
-  const user = ctx.get('user')!
-  const formatedUser = pick(user, ['id', 'name', 'email', 'emailVerified', 'image', 'role'])
-  const githubToken = user.github.accessToken
-  let githubLogin: string | null = null
+export const userRoutes = userRouter
+  .get('/me', authMiddleware, async (ctx) => {
+    const user = ctx.get('user')!
 
-  try {
-    const data = await fetchGithubViewer(githubToken)
-    githubLogin = data.login ?? null
-  }
-  catch {
-    githubLogin = null
-  }
+    const activeSubscription = user.polar.activeSubscriptions.find(sub => sub.productId === env.POLAR_SUBSCRIPTION_PRODUCT_ID) ?? null
 
-  return ctx.json({ ...formatedUser, githubLogin }, 200)
-})
+    const { url: portalUrl } = await auth.api.portal({
+      body: {
+        redirect: false,
+      },
+      headers: ctx.req.raw.headers,
+    })
+
+    const githubToken = user.github.accessToken
+    let githubLogin: string | null = null
+
+    try {
+      const data = await fetchGithubViewer(githubToken)
+      githubLogin = data.login ?? null
+    }
+    catch {
+      githubLogin = null
+    }
+
+    const formatedUser = {
+      ...pick(user, ['id', 'name', 'email', 'emailVerified', 'image', 'role']),
+      subscription: {
+        portalUrl,
+        activeSubscription,
+      },
+      githubLogin,
+    }
+
+    return ctx.json(formatedUser, 200)
+  })

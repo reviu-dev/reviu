@@ -657,8 +657,12 @@ impl GithubPage {
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        GithubPageHandle::refresh(cx);
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+        if AuthStateStore::has_active_subscription(cx) {
+          GithubPageHandle::refresh(cx);
+          WorkspaceRoute::open_github(cx);
+        } else {
+          WorkspaceRoute::open_billing(cx);
+        }
         cx.refresh_windows();
         Ok(())
       }
@@ -711,7 +715,16 @@ impl GithubPage {
     });
     let open_github = Rc::new(|_window: &mut Window, cx: &mut App| {
       let cx = &mut *cx;
-      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+      if AuthStateStore::has_active_subscription(cx) {
+        WorkspaceRoute::open_github(cx);
+      } else {
+        WorkspaceRoute::open_billing(cx);
+      }
+      cx.refresh_windows();
+    });
+    let open_billing = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::open_billing(cx);
       cx.refresh_windows();
     });
     let open_settings = Rc::new(|_window: &mut Window, cx: &mut App| {
@@ -737,6 +750,7 @@ impl GithubPage {
       current_page: UserMenuPage::Github,
       on_open_git: Some(open_git),
       on_open_github: Some(open_github),
+      on_open_billing: Some(open_billing),
       on_open_git_config: Some(open_git_config),
       on_open_settings: Some(open_settings),
       on_sign_in: Some(sign_in),

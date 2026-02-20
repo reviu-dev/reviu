@@ -526,6 +526,20 @@ impl AuthCallbackTarget {
     };
     let _ = weak.update(cx, |this, cx| this.logout(cx));
   }
+
+  pub fn refresh_me(cx: &mut App) {
+    let Some(weak) = cx.global::<Self>().git_page.clone() else {
+      return;
+    };
+    let _ = weak.update(cx, |this, cx| this.refresh_auth_state(cx));
+  }
+
+  pub fn handle_subscription_callback(cx: &mut App) {
+    let Some(weak) = cx.global::<Self>().git_page.clone() else {
+      return;
+    };
+    let _ = weak.update(cx, |this, cx| this.handle_subscription_callback(cx));
+  }
 }
 
 pub struct GitPage {
@@ -1094,6 +1108,15 @@ impl GitPage {
     });
 
     self.auth_task = Some(task);
+  }
+
+  fn handle_subscription_callback(&mut self, cx: &mut Context<Self>) {
+    self.refresh_auth_state(cx);
+
+    if WorkspaceRoute::global(cx).page != WorkspacePage::Billing {
+      WorkspaceRoute::open_billing(cx);
+      cx.refresh_windows();
+    }
   }
 
   fn logout(&mut self, cx: &mut Context<Self>) {
@@ -2359,8 +2382,12 @@ impl GitPage {
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        GithubPageHandle::refresh(cx);
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+        if AuthStateStore::has_active_subscription(cx) {
+          GithubPageHandle::refresh(cx);
+          WorkspaceRoute::open_github(cx);
+        } else {
+          WorkspaceRoute::open_billing(cx);
+        }
         cx.refresh_windows();
         Ok(())
       }
@@ -4712,8 +4739,17 @@ impl GitPage {
     });
     let open_github = Rc::new(|_window: &mut Window, cx: &mut App| {
       let cx = &mut *cx;
-      GithubPageHandle::refresh(cx);
-      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+      if AuthStateStore::has_active_subscription(cx) {
+        GithubPageHandle::refresh(cx);
+        WorkspaceRoute::open_github(cx);
+      } else {
+        WorkspaceRoute::open_billing(cx);
+      }
+      cx.refresh_windows();
+    });
+    let open_billing = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::open_billing(cx);
       cx.refresh_windows();
     });
     let open_settings = Rc::new(|_window: &mut Window, cx: &mut App| {
@@ -4740,6 +4776,7 @@ impl GitPage {
       current_page: UserMenuPage::Git,
       on_open_git: Some(open_git),
       on_open_github: Some(open_github),
+      on_open_billing: Some(open_billing),
       on_open_git_config: Some(open_git_config),
       on_open_settings: Some(open_settings),
       on_sign_in: Some(sign_in),

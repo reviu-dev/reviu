@@ -116,17 +116,24 @@ fn main() {
           .await;
         while let Ok(urls) = open_url_rx.try_recv() {
           let mut codes = Vec::new();
+          let mut should_handle_subscription_callback = false;
           for url in urls {
             if let Some(code) = extract_auth_code(&url) {
               codes.push(code);
             }
+            if is_subscription_callback(&url) {
+              should_handle_subscription_callback = true;
+            }
           }
-          if codes.is_empty() {
+          if codes.is_empty() && !should_handle_subscription_callback {
             continue;
           }
           cx.update(|cx| {
             for code in codes {
               AuthCallbackTarget::handle_auth_code(code, cx);
+            }
+            if should_handle_subscription_callback {
+              AuthCallbackTarget::handle_subscription_callback(cx);
             }
           });
         }
@@ -153,4 +160,47 @@ fn extract_auth_code(url: &str) -> Option<String> {
     }
   }
   None
+}
+
+fn is_subscription_callback(url: &str) -> bool {
+  let Some(url) = url.strip_prefix(REVIU_URL_SCHEME) else {
+    return false;
+  };
+  let Some(url) = url.strip_prefix("://") else {
+    return false;
+  };
+
+  let path = url.split_once('?').map(|(path, _)| path).unwrap_or(url);
+  path == "subscription/callback"
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{extract_auth_code, is_subscription_callback};
+
+  #[test]
+  fn extract_auth_code_reads_code_from_auth_callback_url() {
+    let code = extract_auth_code("reviu://auth/callback?code=abc123&state=test");
+    assert_eq!(code.as_deref(), Some("abc123"));
+  }
+
+  #[test]
+  fn extract_auth_code_rejects_non_auth_callback_url() {
+    let code = extract_auth_code("reviu://subscription/callback");
+    assert_eq!(code, None);
+  }
+
+  #[test]
+  fn is_subscription_callback_accepts_plain_and_query_urls() {
+    assert!(is_subscription_callback("reviu://subscription/callback"));
+    assert!(is_subscription_callback(
+      "reviu://subscription/callback?checkout_id=123"
+    ));
+  }
+
+  #[test]
+  fn is_subscription_callback_rejects_other_urls() {
+    assert!(!is_subscription_callback("reviu://auth/callback?code=abc123"));
+    assert!(!is_subscription_callback("https://example.com"));
+  }
 }

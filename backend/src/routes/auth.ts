@@ -36,3 +36,6 @@ export const authRoutes = authRouter
 
     return c.redirect(`reviu://auth/callback?code=${code}`)
   })
+  .get('/subscription', async (c) => {
+    return c.redirect('reviu://subscription/callback')
+  })

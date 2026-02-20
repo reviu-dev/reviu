@@ -18,7 +18,13 @@ export const authMiddleware = createMiddleware(async (c, next) => {
     headers: c.req.raw.headers,
   })
 
-  c.set('user', { ...user, github: ghAccessToken })
+  const polarState = await auth.api.state(
+    {
+      headers: c.req.raw.headers,
+    },
+  )
+
+  c.set('user', { ...user, github: ghAccessToken, polar: polarState })
 
   await next()
 })
