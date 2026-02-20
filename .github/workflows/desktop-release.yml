@@ -57,12 +57,115 @@ jobs:
         working-directory: desktop
         run: cargo bundle -p reviu --release
 
+      - name: Validate macOS signing and notarization secrets
+        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_NOTARYTOOL_APPLE_ID: ${{ secrets.APPLE_NOTARYTOOL_APPLE_ID }}
+          APPLE_NOTARYTOOL_APP_PASSWORD: ${{ secrets.APPLE_NOTARYTOOL_APP_PASSWORD }}
+          APPLE_NOTARYTOOL_TEAM_ID: ${{ secrets.APPLE_NOTARYTOOL_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required_vars=(
+            APPLE_CERTIFICATE_P12_BASE64
+            APPLE_CERTIFICATE_PASSWORD
+            APPLE_SIGNING_IDENTITY
+            APPLE_NOTARYTOOL_APPLE_ID
+            APPLE_NOTARYTOOL_APP_PASSWORD
+            APPLE_NOTARYTOOL_TEAM_ID
+          )
+
+          missing=()
+          for var_name in "${required_vars[@]}"; do
+            if [[ -z "${!var_name:-}" ]]; then
+              missing+=("${var_name}")
+            fi
+          done
+
+          if [[ "${#missing[@]}" -gt 0 ]]; then
+            printf 'Missing required GitHub secrets: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Import Apple Developer ID certificate
+        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          certificate_path="${RUNNER_TEMP}/reviu-signing-cert.p12"
+          keychain_path="${RUNNER_TEMP}/reviu-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+
+          printf '%s' "${APPLE_CERTIFICATE_P12_BASE64}" | base64 --decode > "${certificate_path}" 2>/dev/null || \
+            printf '%s' "${APPLE_CERTIFICATE_P12_BASE64}" | base64 -D > "${certificate_path}"
+
+          security create-keychain -p "${keychain_password}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+          security import "${certificate_path}" \
+            -k "${keychain_path}" \
+            -P "${APPLE_CERTIFICATE_PASSWORD}" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security \
+            -T /usr/bin/xcrun
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "${keychain_password}" \
+            "${keychain_path}"
+          security list-keychains -d user -s "${keychain_path}" "/Library/Keychains/System.keychain"
+          security default-keychain -d user -s "${keychain_path}"
+
+          rm -f "${certificate_path}"
+
+          echo "APPLE_KEYCHAIN_PATH=${keychain_path}" >> "${GITHUB_ENV}"
+          echo "APPLE_KEYCHAIN_PASSWORD=${keychain_password}" >> "${GITHUB_ENV}"
+
+      - name: Sign macOS app bundle
+        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app_path="desktop/target/release/bundle/osx/Reviu.app"
+          if [[ ! -d "${app_path}" ]]; then
+            echo "Expected app bundle not found: ${app_path}" >&2
+            exit 1
+          fi
+
+          security unlock-keychain -p "${APPLE_KEYCHAIN_PASSWORD}" "${APPLE_KEYCHAIN_PATH}"
+
+          /usr/bin/codesign \
+            --force \
+            --deep \
+            --options runtime \
+            --timestamp \
+            --sign "${APPLE_SIGNING_IDENTITY}" \
+            --keychain "${APPLE_KEYCHAIN_PATH}" \
+            "${app_path}"
+
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "${app_path}"
+
       - name: Create DMG and desktop update manifest
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
         id: package_assets
         env:
           VERSION: ${{ steps.release_meta.outputs.version }}
           TAG: ${{ steps.release_meta.outputs.tag }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_NOTARYTOOL_APPLE_ID: ${{ secrets.APPLE_NOTARYTOOL_APPLE_ID }}
+          APPLE_NOTARYTOOL_APP_PASSWORD: ${{ secrets.APPLE_NOTARYTOOL_APP_PASSWORD }}
+          APPLE_NOTARYTOOL_TEAM_ID: ${{ secrets.APPLE_NOTARYTOOL_TEAM_ID }}
         shell: bash
         run: |
           set -euo pipefail
@@ -91,6 +194,27 @@ jobs:
             "${dmg_path}"
 
           rm -rf "${staging_dir}"
+
+          security unlock-keychain -p "${APPLE_KEYCHAIN_PASSWORD}" "${APPLE_KEYCHAIN_PATH}"
+
+          /usr/bin/codesign \
+            --force \
+            --timestamp \
+            --sign "${APPLE_SIGNING_IDENTITY}" \
+            --keychain "${APPLE_KEYCHAIN_PATH}" \
+            "${dmg_path}"
+
+          /usr/bin/codesign --verify --verbose=2 "${dmg_path}"
+
+          xcrun notarytool submit "${dmg_path}" \
+            --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
+            --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
+            --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
+            --wait
+
+          xcrun stapler staple "${dmg_path}"
+          xcrun stapler validate "${dmg_path}"
+          /usr/bin/spctl --assess --type open --context context:primary-signature --verbose=4 "${dmg_path}"
 
           sha256="$(shasum -a 256 "${dmg_path}" | awk '{print $1}')"
           size="$(stat -f%z "${dmg_path}")"
@@ -132,3 +256,12 @@ jobs:
             ${{ steps.package_assets.outputs.manifest_path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup signing keychain
+        if: ${{ always() && steps.release_meta.outputs.should_release == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${APPLE_KEYCHAIN_PATH:-}" ]]; then
+            security delete-keychain "${APPLE_KEYCHAIN_PATH}" || true
+          fi
