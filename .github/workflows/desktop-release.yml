@@ -129,10 +129,13 @@ jobs:
           echo "APPLE_KEYCHAIN_PATH=${keychain_path}" >> "${GITHUB_ENV}"
           echo "APPLE_KEYCHAIN_PASSWORD=${keychain_password}" >> "${GITHUB_ENV}"
 
-      - name: Sign macOS app bundle
+      - name: Sign and notarize macOS app bundle
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_NOTARYTOOL_APPLE_ID: ${{ secrets.APPLE_NOTARYTOOL_APPLE_ID }}
+          APPLE_NOTARYTOOL_APP_PASSWORD: ${{ secrets.APPLE_NOTARYTOOL_APP_PASSWORD }}
+          APPLE_NOTARYTOOL_TEAM_ID: ${{ secrets.APPLE_NOTARYTOOL_TEAM_ID }}
         shell: bash
         run: |
           set -euo pipefail
@@ -155,6 +158,20 @@ jobs:
             "${app_path}"
 
           /usr/bin/codesign --verify --deep --strict --verbose=2 "${app_path}"
+
+          app_zip_path="${RUNNER_TEMP}/Reviu.app.zip"
+          rm -f "${app_zip_path}"
+          ditto -c -k --keepParent "${app_path}" "${app_zip_path}"
+
+          xcrun notarytool submit "${app_zip_path}" \
+            --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
+            --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
+            --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
+            --wait
+
+          xcrun stapler staple "${app_path}"
+          xcrun stapler validate "${app_path}"
+          rm -f "${app_zip_path}"
 
       - name: Create DMG and desktop update manifest
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
