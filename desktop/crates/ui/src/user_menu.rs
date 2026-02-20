@@ -28,6 +28,7 @@ pub enum UserMenuPage {
   Billing,
   GitConfig,
   Settings,
+  About,
 }
 
 #[derive(Clone, Debug)]
@@ -53,6 +54,7 @@ pub struct UserMenuConfig {
   pub on_open_billing: Option<UserMenuHandler>,
   pub on_open_git_config: Option<UserMenuHandler>,
   pub on_open_settings: Option<UserMenuHandler>,
+  pub on_open_about: Option<UserMenuHandler>,
   pub on_sign_in: Option<UserMenuHandler>,
   pub on_sign_out: Option<UserMenuHandler>,
 }
@@ -64,8 +66,9 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
       let current_page = config.current_page;
       let on_open_git_config = config.on_open_git_config.clone();
       let on_open_settings = config.on_open_settings.clone();
+      let on_open_about = config.on_open_about.clone();
 
-      if on_open_git_config.is_none() && on_open_settings.is_none() {
+      if on_open_git_config.is_none() && on_open_settings.is_none() && on_open_about.is_none() {
         return None;
       }
 
@@ -102,6 +105,16 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
               );
             }
 
+            if current_page != UserMenuPage::About
+              && let Some(handler) = on_open_about.clone()
+            {
+              menu = menu.item(PopupMenuItem::new("About").icon(UiIconName::Info).on_click(
+                move |_, window, cx| {
+                  handler(window, cx);
+                },
+              ));
+            }
+
             menu
           })
           .into_any_element(),
@@ -119,6 +132,7 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
       let on_open_billing = config.on_open_billing.clone();
       let on_open_git_config = config.on_open_git_config.clone();
       let on_open_settings = config.on_open_settings.clone();
+      let on_open_about = config.on_open_about.clone();
       let on_sign_out = config.on_sign_out.clone();
 
       Some(
@@ -192,6 +206,16 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
                     handler(window, cx);
                   }),
               );
+            }
+
+            if current_page != UserMenuPage::About
+              && let Some(handler) = on_open_about.clone()
+            {
+              menu = menu.item(PopupMenuItem::new("About").icon(UiIconName::Info).on_click(
+                move |_, window, cx| {
+                  handler(window, cx);
+                },
+              ));
             }
 
             if let Some(handler) = on_sign_out.clone() {

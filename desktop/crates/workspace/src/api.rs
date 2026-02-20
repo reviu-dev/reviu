@@ -411,6 +411,25 @@ struct GithubFileContentResponse {
   content: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct DesktopUpdateCheckResponse {
+  #[serde(rename = "updateAvailable")]
+  pub update_available: bool,
+  #[serde(rename = "currentVersion")]
+  pub current_version: String,
+  #[serde(rename = "latestVersion")]
+  pub latest_version: String,
+  #[serde(rename = "downloadUrl")]
+  pub download_url: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopUpdateCheckRequest<'a> {
+  #[serde(rename = "currentVersion")]
+  current_version: &'a str,
+}
+
 impl ApiClient {
   pub fn new() -> Self {
     let base_url =
@@ -776,6 +795,20 @@ impl ApiClient {
     }
     let payload = response.json::<GithubFileContentResponse>()?;
     Ok(payload.content)
+  }
+
+  pub fn check_desktop_update(&self, current_version: &str) -> Result<DesktopUpdateCheckResponse> {
+    let response = self
+      .client
+      .post(self.get_api_url("/desktop/update/check"))
+      .json(&DesktopUpdateCheckRequest { current_version })
+      .send()?;
+    if !response.status().is_success() {
+      anyhow::bail!("unexpected status: {}", response.status());
+    }
+
+    let payload = response.json::<DesktopUpdateCheckResponse>()?;
+    Ok(payload)
   }
 }
 
@@ -1701,6 +1734,75 @@ mod tests {
     let err = api
       .fetch_github_file_content("acme", "widget", "README.md", "main")
       .err();
+    assert!(err.is_some());
+    assert!(
+      err
+        .expect("error")
+        .to_string()
+        .contains("unexpected status")
+    );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn check_desktop_update_parses_success_payload() {
+    let body = r#"{
+      "updateAvailable": true,
+      "currentVersion": "0.1.0",
+      "latestVersion": "0.2.0",
+      "downloadUrl": "https://reviu.dev/downloads/latest"
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let payload = api
+      .check_desktop_update("0.1.0")
+      .expect("check desktop update");
+    assert!(payload.update_available);
+    assert_eq!(payload.current_version, "0.1.0");
+    assert_eq!(payload.latest_version, "0.2.0");
+    assert_eq!(payload.download_url, "https://reviu.dev/downloads/latest");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn check_desktop_update_posts_expected_route_and_payload() {
+    let body = r#"{
+      "updateAvailable": false,
+      "currentVersion": "0.1.0",
+      "latestVersion": "0.1.0",
+      "downloadUrl": "https://reviu.dev/downloads/latest"
+    }"#;
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .check_desktop_update("0.1.0")
+      .expect("check desktop update");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+
+    assert!(
+      request.contains("POST /desktop/update/check "),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"currentVersion\":\"0.1.0\""),
+      "request: {request}"
+    );
+  }
+
+  #[test]
+  fn check_desktop_update_returns_error_on_non_success_status() {
+    let (base_url, handle) = start_single_response_server("502 Bad Gateway", "{}");
+    let api = make_test_api_client(base_url);
+
+    let err = api.check_desktop_update("0.1.0").err();
     assert!(err.is_some());
     assert!(
       err

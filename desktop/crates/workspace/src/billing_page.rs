@@ -159,7 +159,7 @@ impl BillingPage {
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
     let commands =
-      CommandPaletteCommand::default_global_commands(CommandPalettePage::Settings, include_github);
+      CommandPaletteCommand::default_global_commands(CommandPalettePage::Billing, include_github);
 
     let view = cx.entity();
     let handler: CommandPaletteHandler = Arc::new(move |action, _window, cx| {
@@ -215,6 +215,12 @@ impl BillingPage {
       }
       CommandPaletteAction::OpenSettingsPage => {
         WorkspaceRoute::open_settings(cx);
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenBillingPage => Ok(()),
+      CommandPaletteAction::OpenAboutPage => {
+        WorkspaceRoute::open_about(cx);
         cx.refresh_windows();
         Ok(())
       }

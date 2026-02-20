@@ -17,6 +17,8 @@ pub enum UiIconName {
   MessageCircleReply,
   RefreshCcw,
   CreditCard,
+  Download,
+  Info,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -36,6 +38,8 @@ impl IconNamed for UiIconName {
       UiIconName::MessageCircleReply => "icons/message-circle-reply.svg",
       UiIconName::RefreshCcw => "icons/refresh-ccw.svg",
       UiIconName::CreditCard => "icons/credit-card.svg",
+      UiIconName::Download => "icons/download.svg",
+      UiIconName::Info => "icons/info.svg",
     }
     .into()
   }

@@ -223,6 +223,16 @@ impl SettingsPage {
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => Ok(()),
+      CommandPaletteAction::OpenBillingPage => {
+        WorkspaceRoute::open_billing(cx);
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenAboutPage => {
+        WorkspaceRoute::open_about(cx);
+        cx.refresh_windows();
+        Ok(())
+      }
       CommandPaletteAction::OpenGitConfigPage => {
         WorkspaceRoute::open_git_config(cx);
         cx.refresh_windows();

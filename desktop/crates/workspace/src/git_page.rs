@@ -44,6 +44,7 @@ use smol::unblock;
 
 use crate::{
   api::ApiClient,
+  app_update::{AppUpdateNotificationId, AppUpdateStore},
   auth_state::{AuthState, AuthStateStore},
   config::{ConfigStore, RecentRepository},
   github_page::GithubPageHandle,
@@ -606,6 +607,26 @@ struct SelectedFileUpdate {
 }
 
 impl GitPage {
+  fn has_available_app_update(cx: &App) -> bool {
+    AppUpdateStore::try_available_update(cx).is_some()
+  }
+
+  fn app_update_download_action(
+    &mut self,
+    _: &gpui::ClickEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(update) = AppUpdateStore::try_available_update(cx) else {
+      return;
+    };
+
+    AppUpdateStore::apply_download_action(&update.download_url, &update.latest_version, cx);
+    window.on_next_frame(|window, cx| {
+      window.remove_notification::<AppUpdateNotificationId>(cx);
+    });
+  }
+
   fn should_refresh_file_list(sidebar_mode: GitSidebarMode) -> bool {
     sidebar_mode == GitSidebarMode::Changes
   }
@@ -2401,6 +2422,16 @@ impl GitPage {
       }
       CommandPaletteAction::OpenSettingsPage => {
         WorkspaceRoute::open_settings(cx);
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenBillingPage => {
+        WorkspaceRoute::open_billing(cx);
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenAboutPage => {
+        WorkspaceRoute::open_about(cx);
         cx.refresh_windows();
         Ok(())
       }
@@ -4757,6 +4788,11 @@ impl GitPage {
       WorkspaceRoute::open_settings(cx);
       cx.refresh_windows();
     });
+    let open_about = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::open_about(cx);
+      cx.refresh_windows();
+    });
     let open_git_config = Rc::new(|_window: &mut Window, cx: &mut App| {
       let cx = &mut *cx;
       WorkspaceRoute::open_git_config(cx);
@@ -4779,6 +4815,7 @@ impl GitPage {
       on_open_billing: Some(open_billing),
       on_open_git_config: Some(open_git_config),
       on_open_settings: Some(open_settings),
+      on_open_about: Some(open_about),
       on_sign_in: Some(sign_in),
       on_sign_out: Some(sign_out),
     });
@@ -4794,9 +4831,19 @@ impl GitPage {
         sign_in_button_view.update(cx, |this, cx| this.start_github_sign_in(cx));
       });
 
+    let show_update_button = Self::has_available_app_update(cx);
+    let update_button = Button::new("git-update-download-button")
+      .icon(UiIconName::Download)
+      .label("New version available")
+      .ghost()
+      .compact()
+      .small()
+      .on_click(cx.listener(Self::app_update_download_action));
+
     let header_right = h_flex()
       .items_center()
       .gap_2()
+      .when(show_update_button, |this| this.child(update_button))
       .when(is_unauthenticated, |this| this.child(sign_in_button))
       .when_some(auth_control, |this, control| this.child(control));
 
@@ -6177,6 +6224,9 @@ mod tests {
     isolate_config_store_for_test();
     cx.update(|cx| {
       gpui_component::init(cx);
+      if cx.try_global::<AppUpdateStore>().is_none() {
+        cx.set_global(AppUpdateStore::default());
+      }
     });
   }
 
@@ -6792,6 +6842,29 @@ mod tests {
     assert!(!GitPage::should_show_changed_files_tag(0));
     assert!(GitPage::should_show_changed_files_tag(1));
     assert!(GitPage::should_show_changed_files_tag(42));
+  }
+
+  #[gpui::test]
+  fn update_button_visibility_follows_global_app_update_store(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    let visible_without_update =
+      git_page.read_with(cx, |_, cx| GitPage::has_available_app_update(cx));
+    assert!(!visible_without_update);
+
+    git_page.update_in(cx, |_, _, cx| {
+      AppUpdateStore::set_available_update(
+        cx,
+        Some(crate::app_update::AvailableAppUpdate {
+          latest_version: "0.2.0".to_string(),
+          download_url: "https://reviu.dev/downloads/latest".to_string(),
+        }),
+      );
+    });
+
+    let visible_with_update = git_page.read_with(cx, |_, cx| GitPage::has_available_app_update(cx));
+    assert!(visible_with_update);
   }
 
   #[gpui::test]

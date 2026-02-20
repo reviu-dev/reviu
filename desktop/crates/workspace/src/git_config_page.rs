@@ -176,6 +176,16 @@ impl GitConfigPage {
         cx.refresh_windows();
         Ok(())
       }
+      CommandPaletteAction::OpenBillingPage => {
+        WorkspaceRoute::open_billing(cx);
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenAboutPage => {
+        WorkspaceRoute::open_about(cx);
+        cx.refresh_windows();
+        Ok(())
+      }
       CommandPaletteAction::OpenGitConfigPage => Ok(()),
       _ => Err("Command not available.".into()),
     }
