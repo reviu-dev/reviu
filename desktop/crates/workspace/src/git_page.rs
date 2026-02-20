@@ -855,13 +855,12 @@ impl GitPage {
     let branch_changed =
       Self::branch_name_changed(self.branch_status.as_ref(), branch_status.as_ref());
     self.branch_status = branch_status;
-    if branch_changed {
-      self.force_push_after_rebase = false;
-    } else if self.force_push_after_rebase
-      && self
-        .branch_status
-        .as_ref()
-        .is_some_and(|status| status.ahead == 0)
+    if branch_changed
+      || (self.force_push_after_rebase
+        && self
+          .branch_status
+          .as_ref()
+          .is_some_and(|status| status.ahead == 0))
     {
       self.force_push_after_rebase = false;
     }
@@ -1237,7 +1236,7 @@ impl GitPage {
       let result = unblock(move || api.fetch_me()).await;
       let _ = this.update(cx, |this, cx| {
         let state = match result {
-          Ok(Some(user)) => AuthState::Authenticated(user),
+          Ok(Some(user)) => AuthState::Authenticated(Box::new(user)),
           Ok(None) => AuthState::Unauthenticated,
           Err(_) => AuthState::Unauthenticated,
         };
@@ -2841,10 +2840,7 @@ impl GitPage {
             CommandPaletteBranchKind::Remote => BranchKind::Remote,
           },
         });
-        let commits = match self.prepare_interactive_rebase_commits(&target) {
-          Ok(commits) => commits,
-          Err(err) => return Err(err),
-        };
+        let commits = self.prepare_interactive_rebase_commits(&target)?;
         let view = cx.entity();
         window.on_next_frame(move |window, cx| {
           let target = target.clone();
@@ -2864,10 +2860,7 @@ impl GitPage {
         }
         should_post_action_refresh = false;
         let target = InteractiveRebaseTarget::HeadCount(count);
-        let commits = match self.prepare_interactive_rebase_commits(&target) {
-          Ok(commits) => commits,
-          Err(err) => return Err(err),
-        };
+        let commits = self.prepare_interactive_rebase_commits(&target)?;
         let view = cx.entity();
         window.on_next_frame(move |window, cx| {
           let target = target.clone();
@@ -3158,7 +3151,7 @@ impl GitPage {
 
     let view_for_cancel = cx.entity();
     let on_cancel: InteractiveRebaseTodoViewCancelHandler = Arc::new(move |window, cx| {
-      let _ = view_for_cancel.update(cx, |view, cx| {
+      view_for_cancel.update(cx, |view, cx| {
         view.close_interactive_rebase_todo_view(window, cx);
       });
     });
@@ -3167,7 +3160,7 @@ impl GitPage {
     let todo_view = cx.new(|cx| InteractiveRebaseTodoView::new(window, cx, todo_config));
     self.interactive_rebase_todo_view = Some(todo_view.clone());
     cx.on_next_frame(window, move |_, window, cx| {
-      let _ = todo_view.update(cx, |view, cx| {
+      todo_view.update(cx, |view, cx| {
         view.focus_rows_list(window, cx);
       });
     });

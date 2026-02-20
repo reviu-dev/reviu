@@ -86,7 +86,7 @@ impl BillingPage {
 
       let _ = this.update(cx, |this, cx| {
         match result {
-          Ok(Some(user)) => AuthStateStore::set(cx, AuthState::Authenticated(user)),
+          Ok(Some(user)) => AuthStateStore::set(cx, AuthState::Authenticated(Box::new(user))),
           Ok(None) => AuthStateStore::set(cx, AuthState::Unauthenticated),
           Err(error) => this.error = Some(error.into()),
         }

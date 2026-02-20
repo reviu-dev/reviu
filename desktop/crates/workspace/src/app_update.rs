@@ -254,7 +254,7 @@ pub fn open_installer(artifact_path: &Path) -> Result<()> {
       bail!("failed to launch installer {}", artifact_path.display());
     }
 
-    return Ok(());
+    Ok(())
   }
 
   #[cfg(not(target_os = "macos"))]

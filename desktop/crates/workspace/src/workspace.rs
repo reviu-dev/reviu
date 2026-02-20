@@ -381,7 +381,7 @@ impl WorkspaceView {
               .icon(UiIconName::Download)
               .label("Download")
               .on_click(move |_, window, cx| {
-                let _ = view.update(cx, |this, cx| this.trigger_update_download(cx));
+                view.update(cx, |this, cx| this.trigger_update_download(cx));
                 window.on_next_frame(|window, cx| {
                   window.remove_notification::<AppUpdateNotificationId>(cx);
                 });
