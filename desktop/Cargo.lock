@@ -791,7 +791,7 @@ dependencies = [
 
 [[package]]
 name = "buffer"
-version = "0.0.2-alpha"
+version = "0.0.1"
 dependencies = [
  "ropey 1.6.1",
 ]
@@ -1771,7 +1771,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "editor"
-version = "0.0.2-alpha"
+version = "0.0.1"
 dependencies = [
  "blake3",
  "buffer",
@@ -2441,7 +2441,7 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
 name = "git"
-version = "0.0.2-alpha"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -5290,7 +5290,7 @@ dependencies = [
 
 [[package]]
 name = "reviu"
-version = "0.0.2-alpha"
+version = "0.0.1"
 dependencies = [
  "editor",
  "gpui",
@@ -6403,7 +6403,7 @@ dependencies = [
 
 [[package]]
 name = "syntax"
-version = "0.0.2-alpha"
+version = "0.0.1"
 dependencies = [
  "gpui",
  "once_cell",
@@ -7188,7 +7188,7 @@ dependencies = [
 
 [[package]]
 name = "ui"
-version = "0.0.2-alpha"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -8352,7 +8352,7 @@ checksum = "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59"
 
 [[package]]
 name = "workspace"
-version = "0.0.2-alpha"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
