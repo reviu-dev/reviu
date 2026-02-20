@@ -7,14 +7,19 @@ import {
   normalizeSemver,
 } from '../services/desktop_update.js'
 
+const desktopPlatformSchema = z.enum(['macos', 'linux', 'windows'])
+const desktopArchSchema = z.enum(['x86_64', 'aarch64'])
+
 const desktopUpdateCheckSchema = z.object({
   currentVersion: z.string().trim().min(1, 'Missing currentVersion'),
+  platform: desktopPlatformSchema,
+  arch: desktopArchSchema,
 })
 
 const router = new Hono()
 
 export const desktopUpdateRoutes = router.post('/check', zValidator('json', desktopUpdateCheckSchema), async (ctx) => {
-  const { currentVersion } = ctx.req.valid('json')
+  const { currentVersion, platform, arch } = ctx.req.valid('json')
 
   const normalizedCurrentVersion = normalizeSemver(currentVersion)
 
@@ -24,7 +29,11 @@ export const desktopUpdateRoutes = router.post('/check', zValidator('json', desk
   }
 
   try {
-    const result = await checkDesktopUpdate(normalizedCurrentVersion)
+    const result = await checkDesktopUpdate({
+      currentVersion: normalizedCurrentVersion,
+      platform,
+      arch,
+    })
 
     return ctx.json(result, 200)
   }

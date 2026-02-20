@@ -19,7 +19,9 @@ use ui::{
 use crate::{
   CloseWorkspacePage, ShowCommandPalette,
   app_update::{
-    AppUpdateNotificationId, AppUpdateStore, AvailableAppUpdate, effective_current_version,
+    AppUpdateNotificationId, AppUpdateState, AppUpdateStore, AvailableAppUpdate, UpdateArtifact,
+    current_arch, current_platform, download_update_artifact, open_installer,
+    resolve_effective_current_version,
   },
   auth_state::{AuthState, AuthStateStore},
   config::ConfigStore,
@@ -41,6 +43,7 @@ pub struct AboutPage {
   check_in_progress: bool,
   update_check_status: Option<UpdateCheckStatus>,
   update_check_task: Option<Task<()>>,
+  update_action_task: Option<Task<()>>,
 }
 
 impl AboutPage {
@@ -51,12 +54,12 @@ impl AboutPage {
       check_in_progress: false,
       update_check_status: None,
       update_check_task: None,
+      update_action_task: None,
     }
   }
 
   fn current_client_version() -> String {
-    let simulated_version = ConfigStore::load_simulated_app_version();
-    effective_current_version(env!("CARGO_PKG_VERSION"), simulated_version.as_deref())
+    resolve_effective_current_version(env!("CARGO_PKG_VERSION"))
   }
 
   fn close_workspace_page_action(
@@ -175,17 +178,39 @@ impl AboutPage {
 
     let api = WorkspaceApi::global(cx).api.clone();
     let current_version = Self::current_client_version();
+    let platform = current_platform().to_string();
+    let arch = current_arch().to_string();
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.check_desktop_update(&current_version)).await;
+      let result =
+        unblock(move || api.check_desktop_update(&current_version, &platform, &arch)).await;
       let _ = this.update(cx, |this, cx| {
         this.check_in_progress = false;
 
         match result {
           Ok(payload) if payload.update_available => {
+            let Some(artifact) = payload.artifact else {
+              this.update_check_status = Some(UpdateCheckStatus::Error(
+                "Update artifact is missing for this platform.".to_string(),
+              ));
+              AppUpdateStore::set_error(
+                cx,
+                None,
+                "Update artifact is missing for this platform.",
+              );
+              cx.notify();
+              return;
+            };
             let update = AvailableAppUpdate {
               latest_version: payload.latest_version,
-              download_url: payload.download_url,
+              minimum_supported_version: payload.minimum_supported_version,
+              release_notes_url: payload.release_notes_url,
+              force_update: payload.force_update,
+              artifact: UpdateArtifact {
+                url: artifact.url,
+                sha256: artifact.sha256,
+                size: artifact.size,
+              },
             };
             this.show_update_notification(update.clone(), cx);
             AppUpdateStore::set_available_update(cx, Some(update.clone()));
@@ -209,6 +234,77 @@ impl AboutPage {
     self.update_check_task = Some(task);
   }
 
+  fn trigger_update_download(&mut self, cx: &mut Context<Self>) {
+    if AppUpdateStore::is_downloading(cx) {
+      return;
+    }
+
+    if let Some(ready) = AppUpdateStore::try_ready_to_install(cx) {
+      match open_installer(&ready.artifact_path) {
+        Ok(()) => {
+          AppUpdateStore::mark_install_started(cx, &ready.update);
+          self.dismiss_update_notification(cx);
+          self.update_check_status =
+            Some(UpdateCheckStatus::UpdateAvailable(ready.update.latest_version));
+        }
+        Err(err) => {
+          AppUpdateStore::set_error(cx, Some(ready.update), err.to_string());
+          self.update_check_status = Some(UpdateCheckStatus::Error(err.to_string()));
+        }
+      }
+      cx.notify();
+      return;
+    }
+
+    let Some(update) = AppUpdateStore::try_available_update(cx) else {
+      return;
+    };
+
+    AppUpdateStore::set_downloading(cx, update.clone());
+    self.update_check_status = None;
+    cx.notify();
+
+    let task = cx.spawn(async move |this, cx| {
+      let download_result = unblock({
+        let update = update.clone();
+        move || download_update_artifact(&update)
+      })
+      .await;
+
+      match download_result {
+        Ok(ready) => {
+          let install_path = ready.artifact_path.clone();
+          let install_result = unblock(move || open_installer(&install_path)).await;
+          let _ = this.update(cx, |this, cx| {
+            AppUpdateStore::set_ready_to_install(cx, ready.clone());
+            match install_result {
+              Ok(()) => {
+                AppUpdateStore::mark_install_started(cx, &ready.update);
+                this.dismiss_update_notification(cx);
+                this.update_check_status =
+                  Some(UpdateCheckStatus::UpdateAvailable(ready.update.latest_version.clone()));
+              }
+              Err(err) => {
+                AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string());
+                this.update_check_status = Some(UpdateCheckStatus::Error(err.to_string()));
+              }
+            }
+            cx.notify();
+          });
+        }
+        Err(err) => {
+          let _ = this.update(cx, |this, cx| {
+            AppUpdateStore::set_error(cx, Some(update.clone()), err.to_string());
+            this.update_check_status = Some(UpdateCheckStatus::Error(err.to_string()));
+            cx.notify();
+          });
+        }
+      }
+    });
+
+    self.update_action_task = Some(task);
+  }
+
   fn dismiss_update_notification(&self, cx: &mut Context<Self>) {
     let _ = cx.update_window(self.window_handle, |_, window, cx| {
       window.remove_notification::<AppUpdateNotificationId>(cx);
@@ -217,10 +313,9 @@ impl AboutPage {
 
   fn show_update_notification(&self, update: AvailableAppUpdate, cx: &mut Context<Self>) {
     let latest_version = update.latest_version.clone();
-    let download_url = update.download_url.clone();
+    let view = cx.entity();
     let _ = cx.update_window(self.window_handle, move |_, window, cx| {
-      let latest_version_for_action = latest_version.clone();
-      let download_url_for_action = download_url.clone();
+      let view = view.clone();
       window.push_notification(
         Notification::new()
           .id::<AppUpdateNotificationId>()
@@ -230,19 +325,18 @@ impl AboutPage {
             latest_version
           ))
           .autohide(false)
-          .action(move |_, _, cx| {
-            let latest_version = latest_version_for_action.clone();
-            let download_url = download_url_for_action.clone();
+          .action(move |_, _, _cx| {
+            let view = view.clone();
             Button::new("about-update-download")
               .primary()
               .icon(UiIconName::Download)
               .label("Download")
-              .on_click(cx.listener(move |_, _, window, cx| {
-                AppUpdateStore::apply_download_action(&download_url, &latest_version, cx);
+              .on_click(move |_, window, cx| {
+                let _ = view.update(cx, |this, cx| this.trigger_update_download(cx));
                 window.on_next_frame(|window, cx| {
                   window.remove_notification::<AppUpdateNotificationId>(cx);
                 });
-              }))
+              })
           }),
         cx,
       );
@@ -255,7 +349,7 @@ impl Render for AboutPage {
     let theme = cx.theme().clone();
     let build_version = env!("CARGO_PKG_VERSION").to_string();
     let simulated_version = ConfigStore::load_simulated_app_version();
-    let client_version = effective_current_version(&build_version, simulated_version.as_deref());
+    let client_version = Self::current_client_version();
 
     let header = div()
       .h(px(HEADER_HEIGHT))
@@ -289,9 +383,21 @@ impl Render for AboutPage {
         Some((format!("Update available: {version}"), theme.status_green()))
       }
       Some(UpdateCheckStatus::Error(error)) => {
-        Some((format!("Update check failed: {error}"), theme.status_red()))
+        Some((format!("Update failed: {error}"), theme.status_red()))
       }
-      None => None,
+      None => match AppUpdateStore::try_state(cx) {
+        Some(AppUpdateState::Downloading(_)) => Some((
+          "Downloading update artifact...".to_string(),
+          theme.muted_foreground,
+        )),
+        Some(AppUpdateState::ReadyToInstall(_)) => {
+          Some(("Installer ready.".to_string(), theme.status_green()))
+        }
+        Some(AppUpdateState::Error { message, .. }) => {
+          Some((format!("Update failed: {message}"), theme.status_red()))
+        }
+        _ => None,
+      },
     };
 
     div()

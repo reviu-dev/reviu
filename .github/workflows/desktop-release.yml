@@ -1,0 +1,134 @@
+name: Desktop Release
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+jobs:
+  release-desktop:
+    name: Release Desktop
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Resolve release metadata from commit subject
+        id: release_meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          subject="$(git log -1 --pretty=%s)"
+          echo "Commit subject: ${subject}"
+
+          if [[ "${subject}" =~ ^release:\ ([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            version="${BASH_REMATCH[1]}"
+            tag="v${version}"
+            echo "should_release=true" >> "${GITHUB_OUTPUT}"
+            echo "version=${version}" >> "${GITHUB_OUTPUT}"
+            echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "should_release=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Skip non-release commit
+        if: ${{ steps.release_meta.outputs.should_release != 'true' }}
+        run: |
+          echo "Commit subject does not match ^release: (x.y.z)$, skipping desktop release."
+
+      - name: Setup Rust
+        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-bundle
+        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        run: cargo install cargo-bundle --locked
+
+      - name: Build macOS app bundle
+        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        working-directory: desktop
+        run: cargo bundle -p reviu --release
+
+      - name: Create DMG and desktop update manifest
+        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        id: package_assets
+        env:
+          VERSION: ${{ steps.release_meta.outputs.version }}
+          TAG: ${{ steps.release_meta.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app_path="desktop/target/release/bundle/osx/Reviu.app"
+          if [[ ! -d "${app_path}" ]]; then
+            echo "Expected app bundle not found: ${app_path}" >&2
+            exit 1
+          fi
+
+          output_dir="dist/release/macos"
+          mkdir -p "${output_dir}"
+
+          dmg_name="Reviu-${VERSION}-macos-aarch64.dmg"
+          dmg_path="${output_dir}/${dmg_name}"
+          manifest_path="${output_dir}/desktop-update.manifest.json"
+
+          staging_dir="$(mktemp -d)"
+          cp -R "${app_path}" "${staging_dir}/Reviu.app"
+
+          hdiutil create \
+            -volname "Reviu" \
+            -srcfolder "${staging_dir}" \
+            -ov \
+            -format UDZO \
+            "${dmg_path}"
+
+          rm -rf "${staging_dir}"
+
+          sha256="$(shasum -a 256 "${dmg_path}" | awk '{print $1}')"
+          size="$(stat -f%z "${dmg_path}")"
+          artifact_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${dmg_name}"
+          release_notes_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+          cat > "${manifest_path}" <<EOF
+          {
+            "version": "${VERSION}",
+            "minimumSupportedVersion": "0.0.0",
+            "releaseNotesUrl": "${release_notes_url}",
+            "artifacts": [
+              {
+                "platform": "macos",
+                "arch": "aarch64",
+                "url": "${artifact_url}",
+                "sha256": "${sha256}",
+                "size": ${size}
+              }
+            ]
+          }
+          EOF
+
+          echo "dmg_path=${dmg_path}" >> "${GITHUB_OUTPUT}"
+          echo "manifest_path=${manifest_path}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create or update GitHub release
+        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          target_commitish: ${{ github.event.workflow_run.head_sha }}
+          name: Reviu ${{ steps.release_meta.outputs.tag }}
+          generate_release_notes: true
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.package_assets.outputs.dmg_path }}
+            ${{ steps.package_assets.outputs.manifest_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

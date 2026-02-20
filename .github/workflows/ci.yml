@@ -34,6 +34,10 @@ jobs:
         working-directory: desktop
         run: cargo fmt -- --check
 
+      - name: Cargo test
+        working-directory: desktop
+        run: cargo test
+
   backend:
     name: Backend
     runs-on: ubuntu-latest
