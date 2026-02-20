@@ -106,6 +106,37 @@ pub fn current_branch_status(repo_root: &Path) -> Result<BranchStatus> {
   })
 }
 
+pub fn detached_head_label(repo_root: &Path) -> Result<String> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let head_commit = repo
+    .head()
+    .and_then(|head| head.peel_to_commit())
+    .context("read HEAD commit")?;
+  let head_oid = head_commit.id();
+
+  let tag_names = repo.tag_names(None).context("list tags")?;
+  let mut exact_tags = Vec::new();
+  for tag_name in tag_names.iter().flatten() {
+    let refname = format!("refs/tags/{tag_name}");
+    let Ok(object) = repo.revparse_single(&refname) else {
+      continue;
+    };
+    let Ok(commit) = object.peel_to_commit() else {
+      continue;
+    };
+    if commit.id() == head_oid {
+      exact_tags.push(tag_name.to_string());
+    }
+  }
+
+  if let Some(tag) = exact_tags.into_iter().min() {
+    return Ok(tag);
+  }
+
+  Ok(head_oid.to_string().chars().take(7).collect::<String>())
+}
+
 pub fn fetch(repo_root: &Path) -> Result<()> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
@@ -176,6 +207,38 @@ pub fn switch_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
   checkout.safe();
   repo.checkout_head(Some(&mut checkout))?;
   repo.set_head(&checkout_target)?;
+  Ok(())
+}
+
+pub fn checkout_detached_target(repo_root: &Path, target: &str) -> Result<()> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let target = target.trim();
+  if target.is_empty() {
+    bail!("detached target cannot be empty");
+  }
+  let (object, reference) = repo
+    .revparse_ext(target)
+    .with_context(|| format!("resolve detached target {target:?}"))?;
+  if let Some(reference) = reference.as_ref()
+    && let Some(name) = reference.name()
+    && (name == "HEAD" || name.starts_with("refs/heads/") || name.starts_with("refs/remotes/"))
+  {
+    bail!("detached target must be a commit hash or tag");
+  }
+  let target_commit = object
+    .peel_to_commit()
+    .with_context(|| format!("resolve commit for detached target {target:?}"))?;
+
+  repo
+    .set_head_detached(target_commit.id())
+    .context("set HEAD to detached")?;
+
+  let mut checkout = CheckoutBuilder::new();
+  checkout.safe();
+  repo
+    .checkout_head(Some(&mut checkout))
+    .context("checkout detached HEAD")?;
   Ok(())
 }
 
@@ -906,6 +969,45 @@ mod tests {
   }
 
   #[test]
+  fn checkout_detached_target_switches_to_detached_head_for_commit_hash() {
+    let repo = TempRepo::init("branch-checkout-detached");
+    let oid = commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
+
+    checkout_detached_target(&repo.path, &oid.to_string()).expect("checkout detached");
+
+    let status = current_branch_status(&repo.path).expect("branch status");
+    assert_eq!(status.name, "HEAD");
+  }
+
+  #[test]
+  fn checkout_detached_target_accepts_tag() {
+    let repo = TempRepo::init("branch-checkout-detached-tag");
+    let oid = commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let object = repo_handle.find_object(oid, None).expect("find commit object");
+    repo_handle
+      .tag_lightweight("v1", &object, false)
+      .expect("create lightweight tag");
+
+    checkout_detached_target(&repo.path, "v1").expect("checkout detached tag");
+
+    let status = current_branch_status(&repo.path).expect("branch status");
+    assert_eq!(status.name, "HEAD");
+  }
+
+  #[test]
+  fn checkout_detached_target_rejects_branch_name() {
+    let repo = TempRepo::init("branch-checkout-detached-reject-branch");
+    commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
+    let branch_name = current_branch_status(&repo.path)
+      .expect("read current branch")
+      .name;
+
+    let error = checkout_detached_target(&repo.path, &branch_name).expect_err("reject branch name");
+    assert!(format!("{error:#}").contains("commit hash or tag"));
+  }
+
+  #[test]
   fn current_branch_status_uses_head_label_for_detached_head() {
     let repo = TempRepo::init("branch-detached");
     let oid = commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
@@ -914,6 +1016,30 @@ mod tests {
 
     let status = current_branch_status(&repo.path).expect("branch status");
     assert_eq!(status.name, "HEAD");
+  }
+
+  #[test]
+  fn detached_head_label_prefers_exact_tag() {
+    let repo = TempRepo::init("branch-detached-label-tag");
+    let oid = commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let object = repo_handle.find_object(oid, None).expect("find commit object");
+    repo_handle
+      .tag_lightweight("v1.0.0", &object, false)
+      .expect("create lightweight tag");
+
+    let label = detached_head_label(&repo.path).expect("detached head label");
+    assert_eq!(label, "v1.0.0");
+  }
+
+  #[test]
+  fn detached_head_label_falls_back_to_short_commit_hash() {
+    let repo = TempRepo::init("branch-detached-label-hash");
+    let oid = commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
+
+    let label = detached_head_label(&repo.path).expect("detached head label");
+    let expected = oid.to_string().chars().take(7).collect::<String>();
+    assert_eq!(label, expected);
   }
 
   #[test]
