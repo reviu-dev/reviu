@@ -10,6 +10,14 @@ on:
 permissions:
   contents: write
 
+env:
+  APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+  APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+  APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+  APPLE_NOTARYTOOL_APPLE_ID: ${{ secrets.APPLE_NOTARYTOOL_APPLE_ID }}
+  APPLE_NOTARYTOOL_APP_PASSWORD: ${{ secrets.APPLE_NOTARYTOOL_APP_PASSWORD }}
+  APPLE_NOTARYTOOL_TEAM_ID: ${{ secrets.APPLE_NOTARYTOOL_TEAM_ID }}
+
 jobs:
   release-desktop:
     name: Release Desktop
@@ -59,13 +67,6 @@ jobs:
 
       - name: Validate macOS signing and notarization secrets
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
-        env:
-          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_NOTARYTOOL_APPLE_ID: ${{ secrets.APPLE_NOTARYTOOL_APPLE_ID }}
-          APPLE_NOTARYTOOL_APP_PASSWORD: ${{ secrets.APPLE_NOTARYTOOL_APP_PASSWORD }}
-          APPLE_NOTARYTOOL_TEAM_ID: ${{ secrets.APPLE_NOTARYTOOL_TEAM_ID }}
         shell: bash
         run: |
           set -euo pipefail
@@ -93,9 +94,6 @@ jobs:
 
       - name: Import Apple Developer ID certificate
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
-        env:
-          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
@@ -131,11 +129,6 @@ jobs:
 
       - name: Sign and notarize macOS app bundle
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_NOTARYTOOL_APPLE_ID: ${{ secrets.APPLE_NOTARYTOOL_APPLE_ID }}
-          APPLE_NOTARYTOOL_APP_PASSWORD: ${{ secrets.APPLE_NOTARYTOOL_APP_PASSWORD }}
-          APPLE_NOTARYTOOL_TEAM_ID: ${{ secrets.APPLE_NOTARYTOOL_TEAM_ID }}
         shell: bash
         run: |
           set -euo pipefail
@@ -179,10 +172,6 @@ jobs:
         env:
           VERSION: ${{ steps.release_meta.outputs.version }}
           TAG: ${{ steps.release_meta.outputs.tag }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_NOTARYTOOL_APPLE_ID: ${{ secrets.APPLE_NOTARYTOOL_APPLE_ID }}
-          APPLE_NOTARYTOOL_APP_PASSWORD: ${{ secrets.APPLE_NOTARYTOOL_APP_PASSWORD }}
-          APPLE_NOTARYTOOL_TEAM_ID: ${{ secrets.APPLE_NOTARYTOOL_TEAM_ID }}
         shell: bash
         run: |
           set -euo pipefail
