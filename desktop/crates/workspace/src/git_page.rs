@@ -6745,13 +6745,18 @@ mod tests {
       make_status_entry("src/main.rs", RepoStage::Staged),
       make_status_entry("src/lib.rs", RepoStage::Unstaged),
     ];
-    let partial_entries = vec![make_status_entry("src/editor.rs", RepoStage::PartiallyStaged)];
+    let partial_entries = vec![make_status_entry(
+      "src/editor.rs",
+      RepoStage::PartiallyStaged,
+    )];
 
     assert!(!GitPage::should_show_unstage_all_palette_command(&[]));
     assert!(!GitPage::should_show_unstage_all_palette_command(
       &unstaged_only_entries
     ));
-    assert!(GitPage::should_show_unstage_all_palette_command(&mixed_entries));
+    assert!(GitPage::should_show_unstage_all_palette_command(
+      &mixed_entries
+    ));
     assert!(GitPage::should_show_unstage_all_palette_command(
       &partial_entries
     ));
@@ -7151,7 +7156,11 @@ mod tests {
       this.branch_status = Some(make_branch_status("main", 0, 0, true));
       seed_repo_branch_state(this, &repo.path, cx);
       let target = head_oid(&repo.path).to_string();
-      this.handle_command_palette_action(CommandPaletteAction::CheckoutDetached { target }, window, cx)
+      this.handle_command_palette_action(
+        CommandPaletteAction::CheckoutDetached { target },
+        window,
+        cx,
+      )
     });
     assert!(result.is_ok());
 
@@ -7163,7 +7172,10 @@ mod tests {
     let selected_branch = git_page.read_with(cx, |this, cx| {
       this.branch_select.read(cx).selected_value().cloned()
     });
-    assert_eq!(selected_branch, Some(GitPage::detached_branch_select_value()));
+    assert_eq!(
+      selected_branch,
+      Some(GitPage::detached_branch_select_value())
+    );
   }
 
   #[gpui::test]
@@ -10014,11 +10026,12 @@ mod tests {
     let selected = GitPage::selected_branch_from_status(Some(&detached_status));
     assert_eq!(selected, Some(GitPage::detached_branch_select_value()));
     let detached_label = detached_head_label(&repo.path).ok();
-    let items = GitPage::branch_select_items(branches, selected.as_ref(), detached_label.as_deref());
+    let items =
+      GitPage::branch_select_items(branches, selected.as_ref(), detached_label.as_deref());
     assert!(
-      items.iter().any(|item| {
-        GitPage::is_detached_branch_select_value(&item.branch) && item.is_current
-      }),
+      items
+        .iter()
+        .any(|item| { GitPage::is_detached_branch_select_value(&item.branch) && item.is_current }),
       "detached HEAD entry should be selected"
     );
   }
@@ -10890,7 +10903,10 @@ mod tests {
       )
     });
     assert_eq!(branch_name.as_deref(), Some("HEAD"));
-    assert_eq!(selected_branch, Some(GitPage::detached_branch_select_value()));
+    assert_eq!(
+      selected_branch,
+      Some(GitPage::detached_branch_select_value())
+    );
   }
 
   #[gpui::test]
