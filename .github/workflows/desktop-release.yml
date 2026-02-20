@@ -42,7 +42,7 @@ jobs:
       - name: Skip non-release commit
         if: ${{ steps.release_meta.outputs.should_release != 'true' }}
         run: |
-          echo "Commit subject does not match ^release: (x.y.z)$, skipping desktop release."
+          echo "Commit subject does not match ^release: pattern, skipping release steps."
 
       - name: Setup Rust
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
