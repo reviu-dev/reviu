@@ -2,7 +2,9 @@ use gpui::actions;
 
 actions!(workspace, [CloseWorkspacePage]);
 
+mod about_page;
 mod api;
+mod app_update;
 mod auth_state;
 mod billing_page;
 mod config;

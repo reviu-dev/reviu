@@ -1760,6 +1760,11 @@ impl GithubPrDetailsPage {
       WorkspaceRoute::open_settings(cx);
       cx.refresh_windows();
     });
+    let open_about = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::open_about(cx);
+      cx.refresh_windows();
+    });
     let open_git_config = Rc::new(|_window: &mut Window, cx: &mut App| {
       let cx = &mut *cx;
       WorkspaceRoute::open_git_config(cx);
@@ -1781,6 +1786,7 @@ impl GithubPrDetailsPage {
       on_open_billing: Some(open_billing),
       on_open_git_config: Some(open_git_config),
       on_open_settings: Some(open_settings),
+      on_open_about: Some(open_about),
       on_sign_in: Some(sign_in),
       on_sign_out: Some(sign_out),
     });
@@ -2529,6 +2535,16 @@ impl GithubPrDetailsPage {
       }
       CommandPaletteAction::OpenSettingsPage => {
         WorkspaceRoute::open_settings(cx);
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenBillingPage => {
+        WorkspaceRoute::open_billing(cx);
+        cx.refresh_windows();
+        Ok(())
+      }
+      CommandPaletteAction::OpenAboutPage => {
+        WorkspaceRoute::open_about(cx);
         cx.refresh_windows();
         Ok(())
       }

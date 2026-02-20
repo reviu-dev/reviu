@@ -1,10 +1,16 @@
 use editor::set_indent_rainbow_enabled;
 use gpui::{
-  App, Context, Entity, FocusHandle, Focusable, Global, Render, Subscription, Window, prelude::*,
+  AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global, Render, Subscription,
+  Task, Window, prelude::*,
 };
-use gpui_component::{ActiveTheme as _, Theme, ThemeMode};
+use gpui_component::{ActiveTheme as _, Theme, ThemeMode, notification::Notification};
+use smol::unblock;
 
+use crate::about_page::AboutPage;
 use crate::api::ApiClient;
+use crate::app_update::{
+  AppUpdateNotificationId, AppUpdateStore, AvailableAppUpdate, effective_current_version,
+};
 use crate::auth_state::AuthStateStore;
 use crate::billing_page::BillingPage;
 use crate::config::{AppSettings as PersistedSettings, ConfigStore};
@@ -13,6 +19,7 @@ use crate::git_page::GitPage;
 use crate::github_page::GithubPage;
 use crate::github_pr_details_page::GithubPrDetailsPage;
 use crate::settings_page::SettingsPage;
+use ui::{Button, ButtonVariants as _, UiIconName, WindowExt};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspacePage {
@@ -22,6 +29,7 @@ pub enum WorkspacePage {
   Billing,
   GitConfig,
   Settings,
+  About,
 }
 
 fn github_access_required(page: WorkspacePage) -> bool {
@@ -53,6 +61,7 @@ pub(crate) struct WorkspaceRoute {
   pub settings_return: Option<WorkspacePage>,
   pub billing_return: Option<WorkspacePage>,
   pub git_config_return: Option<WorkspacePage>,
+  pub about_return: Option<WorkspacePage>,
 }
 
 impl Default for WorkspaceRoute {
@@ -62,6 +71,7 @@ impl Default for WorkspaceRoute {
       settings_return: None,
       billing_return: None,
       git_config_return: None,
+      about_return: None,
     }
   }
 }
@@ -138,6 +148,21 @@ impl WorkspaceRoute {
     let target = route.git_config_return.take().unwrap_or(WorkspacePage::Git);
     route.page = target;
   }
+
+  pub fn open_about(cx: &mut App) {
+    let current = cx.global::<Self>().page;
+    let route = cx.global_mut::<Self>();
+    if route.page != WorkspacePage::About {
+      route.about_return = Some(current);
+    }
+    route.page = WorkspacePage::About;
+  }
+
+  pub fn close_about(cx: &mut App) {
+    let route = cx.global_mut::<Self>();
+    let target = route.about_return.take().unwrap_or(WorkspacePage::Git);
+    route.page = target;
+  }
 }
 
 #[derive(Clone)]
@@ -166,7 +191,10 @@ pub struct WorkspaceView {
   github_pr_details_page: Entity<GithubPrDetailsPage>,
   billing_page: Entity<BillingPage>,
   settings_page: Entity<SettingsPage>,
+  about_page: Entity<AboutPage>,
+  window_handle: AnyWindowHandle,
   last_page: Option<WorkspacePage>,
+  _update_check_task: Option<Task<()>>,
   _subscriptions: Vec<Subscription>,
 }
 
@@ -175,6 +203,7 @@ impl WorkspaceView {
     cx.set_global(WorkspaceRoute::default());
     cx.set_global(WorkspaceApi::new());
     cx.set_global(AuthStateStore::default());
+    cx.set_global(AppUpdateStore::default());
 
     let settings = ConfigStore::load_app_settings();
     set_indent_rainbow_enabled(settings.indent_rainbow);
@@ -195,6 +224,7 @@ impl WorkspaceView {
     let github_pr_details_page = cx.new(|cx| GithubPrDetailsPage::new(window, cx));
     let billing_page = cx.new(|cx| BillingPage::new(window, cx));
     let settings_page = cx.new(|cx| SettingsPage::new(window, cx, settings));
+    let about_page = cx.new(|cx| AboutPage::new(window, cx));
 
     let view = Self {
       git_page,
@@ -203,7 +233,10 @@ impl WorkspaceView {
       github_pr_details_page,
       billing_page,
       settings_page,
+      about_page,
+      window_handle: window.window_handle(),
       last_page: None,
+      _update_check_task: None,
       _subscriptions: Vec::new(),
     };
 
@@ -212,6 +245,7 @@ impl WorkspaceView {
       this.on_window_appearance_changed(window, cx);
     });
     view._subscriptions.push(subscription);
+    view.check_for_updates(cx);
 
     view
   }
@@ -226,6 +260,70 @@ impl WorkspaceView {
       auto_switch_theme: true,
       dark_mode: cx.theme().mode.is_dark(),
       indent_rainbow: self.settings_page.read(cx).indent_rainbow_enabled(),
+    });
+  }
+
+  fn check_for_updates(&mut self, cx: &mut Context<Self>) {
+    let api = WorkspaceApi::global(cx).api.clone();
+    let simulated_version = ConfigStore::load_simulated_app_version();
+    let current_version =
+      effective_current_version(env!("CARGO_PKG_VERSION"), simulated_version.as_deref());
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.check_desktop_update(&current_version)).await;
+      let _ = this.update(cx, |this, cx| match result {
+        Ok(payload) if payload.update_available => {
+          let update = AvailableAppUpdate {
+            latest_version: payload.latest_version,
+            download_url: payload.download_url,
+          };
+          AppUpdateStore::set_available_update(cx, Some(update.clone()));
+          this.show_update_notification(update, cx);
+        }
+        Ok(_) => {
+          AppUpdateStore::clear_available_update(cx);
+          this.dismiss_update_notification(cx);
+        }
+        Err(_) => {}
+      });
+    });
+
+    self._update_check_task = Some(task);
+  }
+
+  fn dismiss_update_notification(&self, cx: &mut Context<Self>) {
+    let _ = cx.update_window(self.window_handle, |_, window, cx| {
+      window.remove_notification::<AppUpdateNotificationId>(cx);
+    });
+  }
+
+  fn show_update_notification(&self, update: AvailableAppUpdate, cx: &mut Context<Self>) {
+    let latest_version = update.latest_version.clone();
+    let download_url = update.download_url.clone();
+    let _ = cx.update_window(self.window_handle, move |_, window, cx| {
+      let latest_version_for_action = latest_version.clone();
+      let download_url_for_action = download_url.clone();
+      window.push_notification(
+        Notification::new()
+          .id::<AppUpdateNotificationId>()
+          .title(format!("New Reviu version {} available", latest_version))
+          .message("Download the latest version.")
+          .autohide(false)
+          .action(move |_, _, cx| {
+            let latest_version = latest_version_for_action.clone();
+            let download_url = download_url_for_action.clone();
+            Button::new("workspace-update-download")
+              .primary()
+              .icon(UiIconName::Download)
+              .label("Download")
+              .on_click(cx.listener(move |_, _, window, cx| {
+                AppUpdateStore::apply_download_action(&download_url, &latest_version, cx);
+                window.on_next_frame(|window, cx| {
+                  window.remove_notification::<AppUpdateNotificationId>(cx);
+                });
+              }))
+          }),
+        cx,
+      );
     });
   }
 }
@@ -252,6 +350,7 @@ impl Render for WorkspaceView {
       WorkspacePage::Billing => self.billing_page.clone().into_any_element(),
       WorkspacePage::GitConfig => self.git_config_page.clone().into_any_element(),
       WorkspacePage::Settings => self.settings_page.clone().into_any_element(),
+      WorkspacePage::About => self.about_page.clone().into_any_element(),
     }
   }
 }
@@ -279,6 +378,10 @@ mod tests {
     assert_eq!(
       page_for_subscription_access(WorkspacePage::Git, false),
       WorkspacePage::Git
+    );
+    assert_eq!(
+      page_for_subscription_access(WorkspacePage::About, false),
+      WorkspacePage::About
     );
     assert_eq!(
       page_for_subscription_access(WorkspacePage::Settings, false),
@@ -316,6 +419,7 @@ impl Focusable for WorkspaceView {
       WorkspacePage::Billing => self.billing_page.read(cx).focus_handle(cx),
       WorkspacePage::GitConfig => self.git_config_page.read(cx).focus_handle(cx),
       WorkspacePage::Settings => self.settings_page.read(cx).focus_handle(cx),
+      WorkspacePage::About => self.about_page.read(cx).focus_handle(cx),
     }
   }
 }

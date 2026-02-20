@@ -55,6 +55,8 @@ pub enum CommandPalettePage {
   GithubPrDetails,
   GitConfig,
   Settings,
+  Billing,
+  About,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -177,6 +179,8 @@ pub enum CommandPaletteAction {
   OpenGitChangesSidebar,
   OpenGitConfigPage,
   OpenSettingsPage,
+  OpenBillingPage,
+  OpenAboutPage,
 }
 
 struct BranchesListDelegate {
@@ -636,6 +640,8 @@ pub enum CommandPaletteCommandId {
   OpenGitChangesSidebar,
   OpenGitConfigPage,
   OpenSettingsPage,
+  OpenBillingPage,
+  OpenAboutPage,
 }
 
 impl CommandPaletteCommand {
@@ -958,6 +964,22 @@ impl CommandPaletteCommand {
     }
   }
 
+  pub fn open_billing_page() -> Self {
+    Self {
+      id: CommandPaletteCommandId::OpenBillingPage,
+      name: "Open Billing".into(),
+      description: Some("Go to Billing".into()),
+    }
+  }
+
+  pub fn open_about_page() -> Self {
+    Self {
+      id: CommandPaletteCommandId::OpenAboutPage,
+      name: "Open About".into(),
+      description: Some("Go to About".into()),
+    }
+  }
+
   pub fn open_git_config_page() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenGitConfigPage,
@@ -990,6 +1012,14 @@ impl CommandPaletteCommand {
 
     if current_page != CommandPalettePage::Settings {
       commands.push(Self::open_settings_page());
+    }
+
+    if current_page != CommandPalettePage::Billing {
+      commands.push(Self::open_billing_page());
+    }
+
+    if current_page != CommandPalettePage::About {
+      commands.push(Self::open_about_page());
     }
 
     if current_page == CommandPalettePage::Git {
@@ -1045,6 +1075,8 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::OpenGitChangesSidebar => Icon::new(UiIconName::FileCode),
       CommandPaletteCommandId::OpenGitConfigPage => Self::git_config_icon(),
       CommandPaletteCommandId::OpenSettingsPage => Icon::new(IconName::Settings2),
+      CommandPaletteCommandId::OpenBillingPage => Icon::new(UiIconName::CreditCard),
+      CommandPaletteCommandId::OpenAboutPage => Icon::new(UiIconName::Info),
     }
   }
 
@@ -1973,6 +2005,12 @@ impl CommandPalette {
       CommandPaletteCommandId::OpenSettingsPage => {
         self.trigger_action(CommandPaletteAction::OpenSettingsPage, window, cx);
       }
+      CommandPaletteCommandId::OpenBillingPage => {
+        self.trigger_action(CommandPaletteAction::OpenBillingPage, window, cx);
+      }
+      CommandPaletteCommandId::OpenAboutPage => {
+        self.trigger_action(CommandPaletteAction::OpenAboutPage, window, cx);
+      }
       CommandPaletteCommandId::OpenGitHistorySidebar => {
         self.trigger_action(CommandPaletteAction::OpenGitHistorySidebar, window, cx);
       }
@@ -2416,6 +2454,20 @@ mod tests {
     assert_eq!(command.id, CommandPaletteCommandId::OpenRepository);
     assert_eq!(command.name.as_ref(), "Open repository");
     assert!(command.matches("open repo"));
+  }
+
+  #[test]
+  fn billing_and_about_commands_are_available_with_expected_metadata() {
+    let billing = CommandPaletteCommand::open_billing_page();
+    let about = CommandPaletteCommand::open_about_page();
+
+    assert_eq!(billing.id, CommandPaletteCommandId::OpenBillingPage);
+    assert_eq!(billing.name.as_ref(), "Open Billing");
+    assert!(billing.matches("billing"));
+
+    assert_eq!(about.id, CommandPaletteCommandId::OpenAboutPage);
+    assert_eq!(about.name.as_ref(), "Open About");
+    assert!(about.matches("about"));
   }
 
   #[test]
