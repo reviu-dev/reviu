@@ -67,6 +67,48 @@ pub enum UserRole {
 
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
+pub struct CustomerStateSubscription {
+  pub id: String,
+  #[serde(rename = "createdAt")]
+  pub created_at: String,
+  #[serde(rename = "modifiedAt")]
+  pub modified_at: Option<String>,
+  pub status: String,
+  pub amount: i64,
+  pub currency: String,
+  #[serde(rename = "recurringInterval")]
+  pub recurring_interval: String,
+  #[serde(rename = "currentPeriodStart")]
+  pub current_period_start: String,
+  #[serde(rename = "currentPeriodEnd")]
+  pub current_period_end: Option<String>,
+  #[serde(rename = "trialStart")]
+  pub trial_start: Option<String>,
+  #[serde(rename = "trialEnd")]
+  pub trial_end: Option<String>,
+  #[serde(rename = "cancelAtPeriodEnd")]
+  pub cancel_at_period_end: bool,
+  #[serde(rename = "canceledAt")]
+  pub canceled_at: Option<String>,
+  #[serde(rename = "startedAt")]
+  pub started_at: Option<String>,
+  #[serde(rename = "endsAt")]
+  pub ends_at: Option<String>,
+  #[serde(rename = "productId")]
+  pub product_id: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[allow(dead_code)]
+pub struct UserSubscription {
+  #[serde(default, rename = "portalUrl")]
+  pub portal_url: Option<String>,
+  #[serde(default, rename = "activeSubscription")]
+  pub active_subscription: Option<CustomerStateSubscription>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct User {
   pub id: String,
   pub name: String,
@@ -77,6 +119,8 @@ pub struct User {
   #[serde(rename = "githubLogin")]
   pub github_login: Option<String>,
   pub role: UserRole,
+  #[serde(default)]
+  pub subscription: UserSubscription,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -291,6 +335,19 @@ struct ExchangeCodeResponse {
 #[derive(Debug, Serialize)]
 struct EmptyRequest {}
 
+#[derive(Debug, Serialize)]
+struct CheckoutSubscriptionRequest<'a> {
+  slug: &'a str,
+  redirect: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CheckoutSubscriptionResponse {
+  url: String,
+  #[allow(dead_code)]
+  redirect: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct GithubPullRequestsResponse {
   #[serde(rename = "pullRequests")]
@@ -460,6 +517,27 @@ impl ApiClient {
     }
     let user = response.json::<User>()?;
     Ok(Some(user))
+  }
+
+  pub fn checkout_subscription(&self, slug: &str) -> Result<String> {
+    let response = self
+      .authed_request(Method::POST, "/api/auth/checkout")
+      .json(&CheckoutSubscriptionRequest {
+        slug,
+        redirect: false,
+      })
+      .send()?;
+    if response.status() == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !response.status().is_success() {
+      anyhow::bail!("unexpected status: {}", response.status());
+    }
+    let payload = response.json::<CheckoutSubscriptionResponse>()?;
+    if payload.url.trim().is_empty() {
+      anyhow::bail!("missing checkout url");
+    }
+    Ok(payload.url)
   }
 
   pub fn fetch_latest_pull_requests(
@@ -777,6 +855,38 @@ mod tests {
     });
 
     (address, request_line, handle)
+  }
+
+  fn start_single_response_server_with_request(
+    status: &str,
+    body: &str,
+  ) -> (String, Arc<Mutex<Option<String>>>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+    let address = format!("http://{}", listener.local_addr().expect("local addr"));
+    let status = status.to_string();
+    let body = body.to_string();
+    let request = Arc::new(Mutex::new(None));
+    let request_for_thread = request.clone();
+
+    let handle = thread::spawn(move || {
+      let (mut stream, _) = listener.accept().expect("accept connection");
+      let mut request_buffer = [0u8; 4096];
+      let bytes_read = stream.read(&mut request_buffer).expect("read request");
+      let request_body = String::from_utf8_lossy(&request_buffer[..bytes_read]).to_string();
+      *request_for_thread.lock().expect("lock request") = Some(request_body);
+
+      let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+        body.as_bytes().len(),
+        body
+      );
+      stream
+        .write_all(response.as_bytes())
+        .expect("write response");
+      stream.flush().expect("flush response");
+    });
+
+    (address, request, handle)
   }
 
   fn make_pull_request(
@@ -1302,6 +1412,116 @@ mod tests {
         .contains("unexpected status")
     );
     handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_me_parses_subscription_and_portal_url() {
+    let body = r#"{
+      "id": "user_123",
+      "name": "Joris",
+      "email": "joris@example.com",
+      "emailVerified": true,
+      "image": null,
+      "githubLogin": "joris-gallot",
+      "role": "user",
+      "subscription": {
+        "portalUrl": "https://polar.sh/portal/session_123",
+        "activeSubscription": {
+          "id": "sub_123",
+          "createdAt": "2026-02-20T10:00:00Z",
+          "modifiedAt": null,
+          "status": "active",
+          "amount": 2000,
+          "currency": "usd",
+          "recurringInterval": "month",
+          "currentPeriodStart": "2026-02-20T10:00:00Z",
+          "currentPeriodEnd": "2026-03-20T10:00:00Z",
+          "trialStart": null,
+          "trialEnd": null,
+          "cancelAtPeriodEnd": false,
+          "canceledAt": null,
+          "startedAt": "2026-02-20T10:00:00Z",
+          "endsAt": null,
+          "productId": "prod_123"
+        }
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let user = api
+      .fetch_me()
+      .expect("fetch me")
+      .expect("authenticated user");
+
+    assert_eq!(
+      user.subscription.portal_url.as_deref(),
+      Some("https://polar.sh/portal/session_123")
+    );
+    assert_eq!(
+      user
+        .subscription
+        .active_subscription
+        .as_ref()
+        .map(|sub| sub.id.as_str()),
+      Some("sub_123")
+    );
+    assert_eq!(
+      user
+        .subscription
+        .active_subscription
+        .as_ref()
+        .map(|sub| sub.product_id.as_str()),
+      Some("prod_123")
+    );
+
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn checkout_subscription_returns_checkout_url_on_success() {
+    let body = r#"{"url":"https://polar.sh/checkout/session_123","redirect":false}"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let url = api
+      .checkout_subscription("pro")
+      .expect("checkout subscription should return a URL");
+
+    assert_eq!(url, "https://polar.sh/checkout/session_123");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn checkout_subscription_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "{}");
+    let api = make_test_api_client(base_url);
+
+    let err = api.checkout_subscription("pro").err();
+
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn checkout_subscription_posts_expected_route_and_payload() {
+    let body = r#"{"url":"https://polar.sh/checkout/session_123","redirect":false}"#;
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api.checkout_subscription("pro").expect("checkout request");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+
+    assert!(request.contains("POST /api/auth/checkout "), "request: {request}");
+    assert!(request.contains("\"slug\":\"pro\""), "request: {request}");
+    assert!(request.contains("\"redirect\":false"), "request: {request}");
   }
 
   #[test]

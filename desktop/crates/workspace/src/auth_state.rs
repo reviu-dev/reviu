@@ -27,6 +27,13 @@ impl AuthStateStore {
       .unwrap_or(AuthState::Unknown)
   }
 
+  pub fn has_active_subscription(cx: &App) -> bool {
+    matches!(
+      Self::get(cx),
+      AuthState::Authenticated(user) if user.subscription.active_subscription.is_some()
+    )
+  }
+
   pub fn set(cx: &mut App, state: AuthState) {
     if let Ok(mut guard) = cx.global::<Self>().state.lock() {
       *guard = state;

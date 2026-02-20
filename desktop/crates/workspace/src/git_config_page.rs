@@ -154,8 +154,12 @@ impl GitConfigPage {
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        GithubPageHandle::refresh(cx);
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Github;
+        if AuthStateStore::has_active_subscription(cx) {
+          GithubPageHandle::refresh(cx);
+          WorkspaceRoute::open_github(cx);
+        } else {
+          WorkspaceRoute::open_billing(cx);
+        }
         cx.refresh_windows();
         Ok(())
       }

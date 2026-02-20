@@ -4,6 +4,7 @@ actions!(workspace, [CloseWorkspacePage]);
 
 mod api;
 mod auth_state;
+mod billing_page;
 mod config;
 mod git_config_page;
 mod git_page;

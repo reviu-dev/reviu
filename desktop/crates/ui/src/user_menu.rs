@@ -25,6 +25,7 @@ pub enum UserMenuPage {
   Git,
   Github,
   GithubPrDetails,
+  Billing,
   GitConfig,
   Settings,
 }
@@ -49,6 +50,7 @@ pub struct UserMenuConfig {
   pub current_page: UserMenuPage,
   pub on_open_git: Option<UserMenuHandler>,
   pub on_open_github: Option<UserMenuHandler>,
+  pub on_open_billing: Option<UserMenuHandler>,
   pub on_open_git_config: Option<UserMenuHandler>,
   pub on_open_settings: Option<UserMenuHandler>,
   pub on_sign_in: Option<UserMenuHandler>,
@@ -114,6 +116,7 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
       let current_page = config.current_page;
       let on_open_git = config.on_open_git.clone();
       let on_open_github = config.on_open_github.clone();
+      let on_open_billing = config.on_open_billing.clone();
       let on_open_git_config = config.on_open_git_config.clone();
       let on_open_settings = config.on_open_settings.clone();
       let on_sign_out = config.on_sign_out.clone();
@@ -155,24 +158,36 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
               );
             }
 
-            if current_page != UserMenuPage::Settings
-              && let Some(handler) = on_open_settings.clone()
-            {
-              menu = menu.item(
-                PopupMenuItem::new("Settings")
-                  .icon(IconName::Settings2)
-                  .on_click(move |_, window, cx| {
-                    handler(window, cx);
-                  }),
-              );
-            }
-
             if current_page != UserMenuPage::GitConfig
               && let Some(handler) = on_open_git_config.clone()
             {
               menu = menu.item(
                 PopupMenuItem::new("Git Config")
                   .icon(git_config_icon())
+                  .on_click(move |_, window, cx| {
+                    handler(window, cx);
+                  }),
+              );
+            }
+
+            if current_page != UserMenuPage::Billing
+              && let Some(handler) = on_open_billing.clone()
+            {
+              menu = menu.item(
+                PopupMenuItem::new("Billing")
+                  .icon(UiIconName::CreditCard)
+                  .on_click(move |_, window, cx| {
+                    handler(window, cx);
+                  }),
+              );
+            }
+
+            if current_page != UserMenuPage::Settings
+              && let Some(handler) = on_open_settings.clone()
+            {
+              menu = menu.item(
+                PopupMenuItem::new("Settings")
+                  .icon(IconName::Settings2)
                   .on_click(move |_, window, cx| {
                     handler(window, cx);
                   }),
