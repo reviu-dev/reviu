@@ -7,7 +7,7 @@ use crate::api::User;
 #[derive(Clone, Debug)]
 pub enum AuthState {
   Unknown,
-  Authenticated(User),
+  Authenticated(Box<User>),
   Unauthenticated,
 }
 
