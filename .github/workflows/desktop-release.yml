@@ -29,7 +29,7 @@ jobs:
           subject="$(git log -1 --pretty=%s)"
           echo "Commit subject: ${subject}"
 
-          if [[ "${subject}" =~ ^release:\ ([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+          if [[ "${subject}" =~ ^release:\ ([0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?)$ ]]; then
             version="${BASH_REMATCH[1]}"
             tag="v${version}"
             echo "should_release=true" >> "${GITHUB_OUTPUT}"
