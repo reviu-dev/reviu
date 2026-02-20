@@ -44,7 +44,7 @@ use smol::unblock;
 
 use crate::{
   api::ApiClient,
-  app_update::{AppUpdateNotificationId, AppUpdateStore},
+  app_update::{AppUpdateNotificationId, AppUpdateStore, download_update_artifact, open_installer},
   auth_state::{AuthState, AuthStateStore},
   config::{ConfigStore, RecentRepository},
   github_page::GithubPageHandle,
@@ -593,6 +593,7 @@ pub struct GitPage {
   history_files_task: Option<Task<()>>,
   history_open_file_task: Option<Task<()>>,
   branch_task: Option<Task<()>>,
+  app_update_task: Option<Task<()>>,
   open_file_generation: u64,
   branch_refresh_generation: u64,
   poll_task: Option<Task<()>>,
@@ -617,14 +618,60 @@ impl GitPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    self.trigger_update_download(cx);
+    window.on_next_frame(|window, cx| {
+      window.remove_notification::<AppUpdateNotificationId>(cx);
+    });
+  }
+
+  fn trigger_update_download(&mut self, cx: &mut Context<Self>) {
+    if AppUpdateStore::is_downloading(cx) {
+      return;
+    }
+
+    if let Some(ready) = AppUpdateStore::try_ready_to_install(cx) {
+      match open_installer(&ready.artifact_path) {
+        Ok(()) => AppUpdateStore::mark_install_started(cx, &ready.update),
+        Err(err) => AppUpdateStore::set_error(cx, Some(ready.update), err.to_string()),
+      }
+      return;
+    }
+
     let Some(update) = AppUpdateStore::try_available_update(cx) else {
       return;
     };
 
-    AppUpdateStore::apply_download_action(&update.download_url, &update.latest_version, cx);
-    window.on_next_frame(|window, cx| {
-      window.remove_notification::<AppUpdateNotificationId>(cx);
+    AppUpdateStore::set_downloading(cx, update.clone());
+    let task = cx.spawn(async move |this, cx| {
+      let download_result = unblock({
+        let update = update.clone();
+        move || download_update_artifact(&update)
+      })
+      .await;
+
+      match download_result {
+        Ok(ready) => {
+          let install_path = ready.artifact_path.clone();
+          let install_result = unblock(move || open_installer(&install_path)).await;
+          let _ = this.update(cx, |_, cx| {
+            AppUpdateStore::set_ready_to_install(cx, ready.clone());
+            match install_result {
+              Ok(()) => AppUpdateStore::mark_install_started(cx, &ready.update),
+              Err(err) => {
+                AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string())
+              }
+            }
+          });
+        }
+        Err(err) => {
+          let _ = this.update(cx, |_, cx| {
+            AppUpdateStore::set_error(cx, Some(update.clone()), err.to_string());
+          });
+        }
+      }
     });
+
+    self.app_update_task = Some(task);
   }
 
   fn should_refresh_file_list(sidebar_mode: GitSidebarMode) -> bool {
@@ -1293,6 +1340,7 @@ impl GitPage {
       history_files_task: None,
       history_open_file_task: None,
       branch_task: None,
+      app_update_task: None,
       open_file_generation: 0,
       branch_refresh_generation: 0,
       poll_task: None,
@@ -1389,6 +1437,7 @@ impl GitPage {
       history_files_task: None,
       history_open_file_task: None,
       branch_task: None,
+      app_update_task: None,
       open_file_generation: 0,
       branch_refresh_generation: 0,
       poll_task: None,
@@ -4832,12 +4881,18 @@ impl GitPage {
       });
 
     let show_update_button = Self::has_available_app_update(cx);
+    let update_download_in_progress = AppUpdateStore::is_downloading(cx);
     let update_button = Button::new("git-update-download-button")
       .icon(UiIconName::Download)
-      .label("New version available")
+      .label(if update_download_in_progress {
+        "Downloading..."
+      } else {
+        "New version available"
+      })
       .ghost()
       .compact()
       .small()
+      .disabled(update_download_in_progress)
       .on_click(cx.listener(Self::app_update_download_action));
 
     let header_right = h_flex()
@@ -6858,7 +6913,15 @@ mod tests {
         cx,
         Some(crate::app_update::AvailableAppUpdate {
           latest_version: "0.2.0".to_string(),
-          download_url: "https://reviu.dev/downloads/latest".to_string(),
+          minimum_supported_version: "0.1.0".to_string(),
+          release_notes_url: "https://reviu.dev/releases/0.2.0".to_string(),
+          force_update: false,
+          artifact: crate::app_update::UpdateArtifact {
+            url: "https://reviu.dev/downloads/latest".to_string(),
+            sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+              .to_string(),
+            size: 1024,
+          },
         }),
       );
     });

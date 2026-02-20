@@ -30,6 +30,7 @@ const SETTINGS_TABLE: ConfigTable = ConfigTable {
 
 const APP_UPDATE_STATE_TABLE: ConfigTable = ConfigTable {
   name: "app_update_state",
+  // Transitional V1/V2 compatibility state for simulated client version.
   create_sql: "CREATE TABLE IF NOT EXISTS app_update_state (id INTEGER PRIMARY KEY CHECK (id = 1), simulated_app_version TEXT)",
 };
 

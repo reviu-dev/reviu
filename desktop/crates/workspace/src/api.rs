@@ -416,18 +416,33 @@ struct GithubFileContentResponse {
 pub struct DesktopUpdateCheckResponse {
   #[serde(rename = "updateAvailable")]
   pub update_available: bool,
+  #[serde(rename = "forceUpdate")]
+  pub force_update: bool,
   #[serde(rename = "currentVersion")]
   pub current_version: String,
   #[serde(rename = "latestVersion")]
   pub latest_version: String,
-  #[serde(rename = "downloadUrl")]
-  pub download_url: String,
+  #[serde(rename = "minimumSupportedVersion")]
+  pub minimum_supported_version: String,
+  #[serde(rename = "releaseNotesUrl")]
+  pub release_notes_url: String,
+  #[serde(default)]
+  pub artifact: Option<DesktopUpdateArtifact>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct DesktopUpdateArtifact {
+  pub url: String,
+  pub sha256: String,
+  pub size: u64,
 }
 
 #[derive(Debug, Serialize)]
 struct DesktopUpdateCheckRequest<'a> {
   #[serde(rename = "currentVersion")]
   current_version: &'a str,
+  platform: &'a str,
+  arch: &'a str,
 }
 
 impl ApiClient {
@@ -797,11 +812,20 @@ impl ApiClient {
     Ok(payload.content)
   }
 
-  pub fn check_desktop_update(&self, current_version: &str) -> Result<DesktopUpdateCheckResponse> {
+  pub fn check_desktop_update(
+    &self,
+    current_version: &str,
+    platform: &str,
+    arch: &str,
+  ) -> Result<DesktopUpdateCheckResponse> {
     let response = self
       .client
       .post(self.get_api_url("/desktop/update/check"))
-      .json(&DesktopUpdateCheckRequest { current_version })
+      .json(&DesktopUpdateCheckRequest {
+        current_version,
+        platform,
+        arch,
+      })
       .send()?;
     if !response.status().is_success() {
       anyhow::bail!("unexpected status: {}", response.status());
@@ -1748,20 +1772,33 @@ mod tests {
   fn check_desktop_update_parses_success_payload() {
     let body = r#"{
       "updateAvailable": true,
+      "forceUpdate": false,
       "currentVersion": "0.1.0",
       "latestVersion": "0.2.0",
-      "downloadUrl": "https://reviu.dev/downloads/latest"
+      "minimumSupportedVersion": "0.1.0",
+      "releaseNotesUrl": "https://reviu.dev/releases/0.2.0",
+      "artifact": {
+        "url": "https://reviu.dev/downloads/latest",
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "size": 1024
+      }
     }"#;
     let (base_url, handle) = start_single_response_server("200 OK", body);
     let api = make_test_api_client(base_url);
 
     let payload = api
-      .check_desktop_update("0.1.0")
+      .check_desktop_update("0.1.0", "macos", "aarch64")
       .expect("check desktop update");
     assert!(payload.update_available);
+    assert!(!payload.force_update);
     assert_eq!(payload.current_version, "0.1.0");
     assert_eq!(payload.latest_version, "0.2.0");
-    assert_eq!(payload.download_url, "https://reviu.dev/downloads/latest");
+    assert_eq!(payload.minimum_supported_version, "0.1.0");
+    assert_eq!(payload.release_notes_url, "https://reviu.dev/releases/0.2.0");
+    assert_eq!(
+      payload.artifact.as_ref().map(|artifact| artifact.url.as_str()),
+      Some("https://reviu.dev/downloads/latest")
+    );
     handle.join().expect("join server thread");
   }
 
@@ -1769,15 +1806,18 @@ mod tests {
   fn check_desktop_update_posts_expected_route_and_payload() {
     let body = r#"{
       "updateAvailable": false,
+      "forceUpdate": false,
       "currentVersion": "0.1.0",
       "latestVersion": "0.1.0",
-      "downloadUrl": "https://reviu.dev/downloads/latest"
+      "minimumSupportedVersion": "0.1.0",
+      "releaseNotesUrl": "https://reviu.dev/releases/0.1.0",
+      "artifact": null
     }"#;
     let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
     let api = make_test_api_client(base_url);
 
     let _ = api
-      .check_desktop_update("0.1.0")
+      .check_desktop_update("0.1.0", "macos", "aarch64")
       .expect("check desktop update");
 
     handle.join().expect("join server thread");
@@ -1795,6 +1835,8 @@ mod tests {
       request.contains("\"currentVersion\":\"0.1.0\""),
       "request: {request}"
     );
+    assert!(request.contains("\"platform\":\"macos\""), "request: {request}");
+    assert!(request.contains("\"arch\":\"aarch64\""), "request: {request}");
   }
 
   #[test]
@@ -1802,7 +1844,7 @@ mod tests {
     let (base_url, handle) = start_single_response_server("502 Bad Gateway", "{}");
     let api = make_test_api_client(base_url);
 
-    let err = api.check_desktop_update("0.1.0").err();
+    let err = api.check_desktop_update("0.1.0", "macos", "aarch64").err();
     assert!(err.is_some());
     assert!(
       err

@@ -8365,6 +8365,7 @@ dependencies = [
  "reqwest",
  "rusqlite",
  "serde",
+ "sha2",
  "smol",
  "syntax",
  "time",

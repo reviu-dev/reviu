@@ -9,7 +9,8 @@ use smol::unblock;
 use crate::about_page::AboutPage;
 use crate::api::ApiClient;
 use crate::app_update::{
-  AppUpdateNotificationId, AppUpdateStore, AvailableAppUpdate, effective_current_version,
+  AppUpdateNotificationId, AppUpdateStore, AvailableAppUpdate, current_arch, current_platform,
+  download_update_artifact, open_installer, resolve_effective_current_version, UpdateArtifact,
 };
 use crate::auth_state::AuthStateStore;
 use crate::billing_page::BillingPage;
@@ -195,6 +196,7 @@ pub struct WorkspaceView {
   window_handle: AnyWindowHandle,
   last_page: Option<WorkspacePage>,
   _update_check_task: Option<Task<()>>,
+  _update_download_task: Option<Task<()>>,
   _subscriptions: Vec<Subscription>,
 }
 
@@ -237,6 +239,7 @@ impl WorkspaceView {
       window_handle: window.window_handle(),
       last_page: None,
       _update_check_task: None,
+      _update_download_task: None,
       _subscriptions: Vec::new(),
     };
 
@@ -265,16 +268,32 @@ impl WorkspaceView {
 
   fn check_for_updates(&mut self, cx: &mut Context<Self>) {
     let api = WorkspaceApi::global(cx).api.clone();
-    let simulated_version = ConfigStore::load_simulated_app_version();
-    let current_version =
-      effective_current_version(env!("CARGO_PKG_VERSION"), simulated_version.as_deref());
+    let current_version = resolve_effective_current_version(env!("CARGO_PKG_VERSION"));
+    let platform = current_platform().to_string();
+    let arch = current_arch().to_string();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.check_desktop_update(&current_version)).await;
+      let result =
+        unblock(move || api.check_desktop_update(&current_version, &platform, &arch)).await;
       let _ = this.update(cx, |this, cx| match result {
         Ok(payload) if payload.update_available => {
+          let Some(artifact) = payload.artifact else {
+            AppUpdateStore::set_error(
+              cx,
+              None,
+              "Update artifact is missing for this platform.",
+            );
+            return;
+          };
           let update = AvailableAppUpdate {
             latest_version: payload.latest_version,
-            download_url: payload.download_url,
+            minimum_supported_version: payload.minimum_supported_version,
+            release_notes_url: payload.release_notes_url,
+            force_update: payload.force_update,
+            artifact: UpdateArtifact {
+              url: artifact.url,
+              sha256: artifact.sha256,
+              size: artifact.size,
+            },
           };
           AppUpdateStore::set_available_update(cx, Some(update.clone()));
           this.show_update_notification(update, cx);
@@ -290,6 +309,64 @@ impl WorkspaceView {
     self._update_check_task = Some(task);
   }
 
+  fn trigger_update_download(&mut self, cx: &mut Context<Self>) {
+    if AppUpdateStore::is_downloading(cx) {
+      return;
+    }
+
+    if let Some(ready) = AppUpdateStore::try_ready_to_install(cx) {
+      match open_installer(&ready.artifact_path) {
+        Ok(()) => {
+          AppUpdateStore::mark_install_started(cx, &ready.update);
+          self.dismiss_update_notification(cx);
+        }
+        Err(err) => {
+          AppUpdateStore::set_error(cx, Some(ready.update), err.to_string());
+        }
+      }
+      return;
+    }
+
+    let Some(update) = AppUpdateStore::try_available_update(cx) else {
+      return;
+    };
+
+    AppUpdateStore::set_downloading(cx, update.clone());
+    let task = cx.spawn(async move |this, cx| {
+      let download_result = unblock({
+        let update = update.clone();
+        move || download_update_artifact(&update)
+      })
+      .await;
+
+      match download_result {
+        Ok(ready) => {
+          let install_path = ready.artifact_path.clone();
+          let install_result = unblock(move || open_installer(&install_path)).await;
+          let _ = this.update(cx, |this, cx| {
+            AppUpdateStore::set_ready_to_install(cx, ready.clone());
+            match install_result {
+              Ok(()) => {
+                AppUpdateStore::mark_install_started(cx, &ready.update);
+                this.dismiss_update_notification(cx);
+              }
+              Err(err) => {
+                AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string());
+              }
+            }
+          });
+        }
+        Err(err) => {
+          let _ = this.update(cx, |_, cx| {
+            AppUpdateStore::set_error(cx, Some(update.clone()), err.to_string());
+          });
+        }
+      }
+    });
+
+    self._update_download_task = Some(task);
+  }
+
   fn dismiss_update_notification(&self, cx: &mut Context<Self>) {
     let _ = cx.update_window(self.window_handle, |_, window, cx| {
       window.remove_notification::<AppUpdateNotificationId>(cx);
@@ -298,29 +375,27 @@ impl WorkspaceView {
 
   fn show_update_notification(&self, update: AvailableAppUpdate, cx: &mut Context<Self>) {
     let latest_version = update.latest_version.clone();
-    let download_url = update.download_url.clone();
+    let view = cx.entity();
     let _ = cx.update_window(self.window_handle, move |_, window, cx| {
-      let latest_version_for_action = latest_version.clone();
-      let download_url_for_action = download_url.clone();
+      let view = view.clone();
       window.push_notification(
         Notification::new()
           .id::<AppUpdateNotificationId>()
           .title(format!("New Reviu version {} available", latest_version))
           .message("Download the latest version.")
           .autohide(false)
-          .action(move |_, _, cx| {
-            let latest_version = latest_version_for_action.clone();
-            let download_url = download_url_for_action.clone();
+          .action(move |_, _, _cx| {
+            let view = view.clone();
             Button::new("workspace-update-download")
               .primary()
               .icon(UiIconName::Download)
               .label("Download")
-              .on_click(cx.listener(move |_, _, window, cx| {
-                AppUpdateStore::apply_download_action(&download_url, &latest_version, cx);
+              .on_click(move |_, window, cx| {
+                let _ = view.update(cx, |this, cx| this.trigger_update_download(cx));
                 window.on_next_frame(|window, cx| {
                   window.remove_notification::<AppUpdateNotificationId>(cx);
                 });
-              }))
+              })
           }),
         cx,
       );
