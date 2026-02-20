@@ -10,7 +10,7 @@ use crate::about_page::AboutPage;
 use crate::api::ApiClient;
 use crate::app_update::{
   AppUpdateNotificationId, AppUpdateStore, AvailableAppUpdate, current_arch, current_platform,
-  download_update_artifact, open_installer, resolve_effective_current_version, UpdateArtifact,
+  download_update_artifact, open_installer, resolved_build_version, UpdateArtifact,
 };
 use crate::auth_state::AuthStateStore;
 use crate::billing_page::BillingPage;
@@ -268,7 +268,7 @@ impl WorkspaceView {
 
   fn check_for_updates(&mut self, cx: &mut Context<Self>) {
     let api = WorkspaceApi::global(cx).api.clone();
-    let current_version = resolve_effective_current_version(env!("CARGO_PKG_VERSION"));
+    let current_version = resolved_build_version(env!("CARGO_PKG_VERSION"));
     let platform = current_platform().to_string();
     let arch = current_arch().to_string();
     let task = cx.spawn(async move |this, cx| {
@@ -316,10 +316,7 @@ impl WorkspaceView {
 
     if let Some(ready) = AppUpdateStore::try_ready_to_install(cx) {
       match open_installer(&ready.artifact_path) {
-        Ok(()) => {
-          AppUpdateStore::mark_install_started(cx, &ready.update);
-          self.dismiss_update_notification(cx);
-        }
+        Ok(()) => AppUpdateStore::set_ready_to_install(cx, ready),
         Err(err) => {
           AppUpdateStore::set_error(cx, Some(ready.update), err.to_string());
         }
@@ -343,13 +340,10 @@ impl WorkspaceView {
         Ok(ready) => {
           let install_path = ready.artifact_path.clone();
           let install_result = unblock(move || open_installer(&install_path)).await;
-          let _ = this.update(cx, |this, cx| {
+          let _ = this.update(cx, |_, cx| {
             AppUpdateStore::set_ready_to_install(cx, ready.clone());
             match install_result {
-              Ok(()) => {
-                AppUpdateStore::mark_install_started(cx, &ready.update);
-                this.dismiss_update_notification(cx);
-              }
+              Ok(()) => {}
               Err(err) => {
                 AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string());
               }

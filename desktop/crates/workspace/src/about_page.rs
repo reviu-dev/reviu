@@ -21,10 +21,9 @@ use crate::{
   app_update::{
     AppUpdateNotificationId, AppUpdateState, AppUpdateStore, AvailableAppUpdate, UpdateArtifact,
     current_arch, current_platform, download_update_artifact, open_installer,
-    resolve_effective_current_version,
+    resolved_build_version,
   },
   auth_state::{AuthState, AuthStateStore},
-  config::ConfigStore,
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
   workspace::{WorkspaceApi, WorkspaceRoute},
@@ -59,7 +58,7 @@ impl AboutPage {
   }
 
   fn current_client_version() -> String {
-    resolve_effective_current_version(env!("CARGO_PKG_VERSION"))
+    resolved_build_version(env!("CARGO_PKG_VERSION"))
   }
 
   fn close_workspace_page_action(
@@ -242,10 +241,8 @@ impl AboutPage {
     if let Some(ready) = AppUpdateStore::try_ready_to_install(cx) {
       match open_installer(&ready.artifact_path) {
         Ok(()) => {
-          AppUpdateStore::mark_install_started(cx, &ready.update);
-          self.dismiss_update_notification(cx);
-          self.update_check_status =
-            Some(UpdateCheckStatus::UpdateAvailable(ready.update.latest_version));
+          AppUpdateStore::set_ready_to_install(cx, ready);
+          self.update_check_status = None;
         }
         Err(err) => {
           AppUpdateStore::set_error(cx, Some(ready.update), err.to_string());
@@ -279,10 +276,7 @@ impl AboutPage {
             AppUpdateStore::set_ready_to_install(cx, ready.clone());
             match install_result {
               Ok(()) => {
-                AppUpdateStore::mark_install_started(cx, &ready.update);
-                this.dismiss_update_notification(cx);
-                this.update_check_status =
-                  Some(UpdateCheckStatus::UpdateAvailable(ready.update.latest_version.clone()));
+                this.update_check_status = None;
               }
               Err(err) => {
                 AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string());
@@ -348,7 +342,6 @@ impl Render for AboutPage {
   fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let build_version = env!("CARGO_PKG_VERSION").to_string();
-    let simulated_version = ConfigStore::load_simulated_app_version();
     let client_version = Self::current_client_version();
 
     let header = div()
@@ -390,9 +383,10 @@ impl Render for AboutPage {
           "Downloading update artifact...".to_string(),
           theme.muted_foreground,
         )),
-        Some(AppUpdateState::ReadyToInstall(_)) => {
-          Some(("Installer ready.".to_string(), theme.status_green()))
-        }
+        Some(AppUpdateState::ReadyToInstall(_)) => Some((
+          "Installer opened. Finish install, then restart Reviu.".to_string(),
+          theme.status_green(),
+        )),
         Some(AppUpdateState::Error { message, .. }) => {
           Some((format!("Update failed: {message}"), theme.status_red()))
         }
@@ -454,15 +448,7 @@ impl Render for AboutPage {
                       .text_xs()
                       .text_color(theme.muted_foreground)
                       .child(format!("Build version: {build_version}")),
-                  )
-                  .when_some(simulated_version, |this, version| {
-                    this.child(
-                      div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(format!("Simulated version (V1): {version}")),
-                    )
-                  }),
+                  ),
               )
               .child(
                 Button::new("about-check-updates")

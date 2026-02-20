@@ -612,6 +612,16 @@ impl GitPage {
     AppUpdateStore::try_available_update(cx).is_some()
   }
 
+  fn app_update_button_label(cx: &App) -> &'static str {
+    if AppUpdateStore::is_downloading(cx) {
+      "Downloading..."
+    } else if AppUpdateStore::try_ready_to_install(cx).is_some() {
+      "Open installer again"
+    } else {
+      "New version available"
+    }
+  }
+
   fn app_update_download_action(
     &mut self,
     _: &gpui::ClickEvent,
@@ -631,7 +641,7 @@ impl GitPage {
 
     if let Some(ready) = AppUpdateStore::try_ready_to_install(cx) {
       match open_installer(&ready.artifact_path) {
-        Ok(()) => AppUpdateStore::mark_install_started(cx, &ready.update),
+        Ok(()) => AppUpdateStore::set_ready_to_install(cx, ready),
         Err(err) => AppUpdateStore::set_error(cx, Some(ready.update), err.to_string()),
       }
       return;
@@ -656,7 +666,7 @@ impl GitPage {
           let _ = this.update(cx, |_, cx| {
             AppUpdateStore::set_ready_to_install(cx, ready.clone());
             match install_result {
-              Ok(()) => AppUpdateStore::mark_install_started(cx, &ready.update),
+              Ok(()) => {}
               Err(err) => {
                 AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string())
               }
@@ -4884,11 +4894,7 @@ impl GitPage {
     let update_download_in_progress = AppUpdateStore::is_downloading(cx);
     let update_button = Button::new("git-update-download-button")
       .icon(UiIconName::Download)
-      .label(if update_download_in_progress {
-        "Downloading..."
-      } else {
-        "New version available"
-      })
+      .label(Self::app_update_button_label(cx))
       .ghost()
       .compact()
       .small()
@@ -6928,6 +6934,38 @@ mod tests {
 
     let visible_with_update = git_page.read_with(cx, |_, cx| GitPage::has_available_app_update(cx));
     assert!(visible_with_update);
+  }
+
+  #[gpui::test]
+  fn update_button_label_is_open_installer_again_when_ready(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    let update = crate::app_update::AvailableAppUpdate {
+      latest_version: "0.2.0".to_string(),
+      minimum_supported_version: "0.1.0".to_string(),
+      release_notes_url: "https://reviu.dev/releases/0.2.0".to_string(),
+      force_update: false,
+      artifact: crate::app_update::UpdateArtifact {
+        url: "https://reviu.dev/downloads/latest".to_string(),
+        sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          .to_string(),
+        size: 1024,
+      },
+    };
+
+    git_page.update_in(cx, |_, _, cx| {
+      AppUpdateStore::set_ready_to_install(
+        cx,
+        crate::app_update::ReadyToInstallAppUpdate {
+          update: update.clone(),
+          artifact_path: PathBuf::from("/tmp/reviu-installer.dmg"),
+        },
+      );
+    });
+
+    let label = git_page.read_with(cx, |_, cx| GitPage::app_update_button_label(cx));
+    assert_eq!(label, "Open installer again");
   }
 
   #[gpui::test]

@@ -28,14 +28,7 @@ const SETTINGS_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), auto_switch_theme INTEGER NOT NULL DEFAULT 1, dark_mode INTEGER NOT NULL DEFAULT 0, indent_rainbow INTEGER NOT NULL DEFAULT 0)",
 };
 
-const APP_UPDATE_STATE_TABLE: ConfigTable = ConfigTable {
-  name: "app_update_state",
-  // Transitional V1/V2 compatibility state for simulated client version.
-  create_sql: "CREATE TABLE IF NOT EXISTS app_update_state (id INTEGER PRIMARY KEY CHECK (id = 1), simulated_app_version TEXT)",
-};
-
-const CONFIG_TABLES: [ConfigTable; 3] =
-  [RECENT_REPOS_TABLE, SETTINGS_TABLE, APP_UPDATE_STATE_TABLE];
+const CONFIG_TABLES: [ConfigTable; 2] = [RECENT_REPOS_TABLE, SETTINGS_TABLE];
 
 #[cfg(test)]
 thread_local! {
@@ -146,14 +139,6 @@ impl ConfigStore {
         "INSERT INTO {} (id) VALUES (1)
          ON CONFLICT(id) DO NOTHING",
         SETTINGS_TABLE.name
-      ),
-      [],
-    )?;
-    self.conn.execute(
-      &format!(
-        "INSERT INTO {} (id) VALUES (1)
-         ON CONFLICT(id) DO NOTHING",
-        APP_UPDATE_STATE_TABLE.name
       ),
       [],
     )?;
@@ -324,61 +309,6 @@ impl ConfigStore {
     }
   }
 
-  pub fn load_simulated_app_version() -> Option<String> {
-    let Some(store) = Self::open_with_tables() else {
-      return None;
-    };
-    store.load_simulated_app_version_inner()
-  }
-
-  fn load_simulated_app_version_inner(&self) -> Option<String> {
-    let version = self.conn.query_row(
-      &format!(
-        "SELECT simulated_app_version FROM {} WHERE id = 1",
-        APP_UPDATE_STATE_TABLE.name
-      ),
-      [],
-      |row| row.get::<_, Option<String>>(0),
-    );
-
-    match version {
-      Ok(version) => version.and_then(|value| {
-        let trimmed = value.trim().to_string();
-        if trimmed.is_empty() {
-          None
-        } else {
-          Some(trimmed)
-        }
-      }),
-      Err(err) => {
-        eprintln!("Failed to load simulated app version: {}", err);
-        None
-      }
-    }
-  }
-
-  pub fn persist_simulated_app_version(version: Option<&str>) {
-    let Some(store) = Self::open_with_tables() else {
-      return;
-    };
-    store.persist_simulated_app_version_inner(version);
-  }
-
-  fn persist_simulated_app_version_inner(&self, version: Option<&str>) {
-    let version = version.map(str::trim).filter(|value| !value.is_empty());
-    if let Err(err) = self.conn.execute(
-      &format!(
-        "INSERT INTO {} (id, simulated_app_version)
-         VALUES (1, ?1)
-         ON CONFLICT(id) DO UPDATE
-         SET simulated_app_version = excluded.simulated_app_version",
-        APP_UPDATE_STATE_TABLE.name
-      ),
-      params![version],
-    ) {
-      eprintln!("Failed to persist simulated app version: {}", err);
-    }
-  }
 }
 
 #[cfg(test)]
@@ -437,21 +367,4 @@ mod tests {
     ConfigStore::set_test_db_path(None);
   }
 
-  #[test]
-  fn simulated_app_version_uses_test_db_override() {
-    let db_path = unique_test_db_path("simulated-version");
-    let _ = fs::remove_file(&db_path);
-    ConfigStore::set_test_db_path(Some(db_path));
-
-    ConfigStore::persist_simulated_app_version(Some("0.2.0"));
-    assert_eq!(
-      ConfigStore::load_simulated_app_version().as_deref(),
-      Some("0.2.0")
-    );
-
-    ConfigStore::persist_simulated_app_version(None);
-    assert_eq!(ConfigStore::load_simulated_app_version(), None);
-
-    ConfigStore::set_test_db_path(None);
-  }
 }
