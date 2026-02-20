@@ -117,6 +117,9 @@ impl CommandPaletteStash {
 pub enum CommandPaletteAction {
   SwitchRepository(CommandPaletteRepository),
   SwitchBranch(CommandPaletteBranch),
+  CheckoutDetached {
+    target: String,
+  },
   Commit,
   ContinueRebase,
   SkipRebase,
@@ -595,6 +598,7 @@ pub type CommandPaletteHandler = Arc<
 pub enum CommandPaletteCommandId {
   SwitchRepository,
   SwitchBranch,
+  CheckoutDetached,
   Commit,
   ContinueRebase,
   SkipRebase,
@@ -663,6 +667,14 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::Commit,
       name: "Commit".into(),
       description: Some("Create a commit (stages all changes if needed)".into()),
+    }
+  }
+
+  pub fn checkout_detached() -> Self {
+    Self {
+      id: CommandPaletteCommandId::CheckoutDetached,
+      name: "Git checkout detached".into(),
+      description: Some("Detach HEAD at a commit hash or tag".into()),
     }
   }
 
@@ -992,6 +1004,7 @@ impl CommandPaletteCommand {
     match self.id {
       CommandPaletteCommandId::SwitchRepository => Icon::new(IconName::FolderOpen),
       CommandPaletteCommandId::SwitchBranch => Icon::new(UiIconName::GitBranch),
+      CommandPaletteCommandId::CheckoutDetached => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::Commit => Icon::new(IconName::Check),
       CommandPaletteCommandId::ContinueRebase => Icon::new(IconName::Check),
       CommandPaletteCommandId::SkipRebase => Icon::new(UiIconName::GitMerge),
@@ -1106,6 +1119,7 @@ enum CommandPaletteScreen {
   Root,
   SwitchRepository,
   SwitchBranch,
+  CheckoutDetached,
   CreateBranch,
   CreateBranchFrom,
   MergeBranch,
@@ -1132,6 +1146,7 @@ pub struct CommandPalette {
   stashes_list: Entity<ListState<StashesListDelegate>>,
   branches_with_commands_list: Entity<ListState<BranchesListWithCommandsDelegate>>,
   create_branch_input: Entity<InputState>,
+  checkout_detached_input: Entity<InputState>,
   cherry_pick_input: Entity<InputState>,
   interactive_rebase_head_count_input: Entity<InputState>,
   stash_input: Entity<InputState>,
@@ -1187,6 +1202,15 @@ impl CommandPalette {
     }
   }
 
+  fn parse_checkout_detached_target(value: &str) -> Option<String> {
+    let target = value.trim();
+    if target.is_empty() {
+      None
+    } else {
+      Some(target.to_string())
+    }
+  }
+
   fn parse_interactive_rebase_head_count(value: &str) -> Option<usize> {
     let count: usize = value.trim().parse().ok()?;
     if count < 2 {
@@ -1198,6 +1222,8 @@ impl CommandPalette {
   pub fn new(window: &mut Window, cx: &mut Context<Self>, config: CommandPaletteConfig) -> Self {
     let create_branch_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Enter branch name..."));
+    let checkout_detached_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Enter commit hash or tag..."));
     let cherry_pick_input = cx.new(|cx| {
       InputState::new(window, cx)
         .placeholder("Enter one or more commit hashes (space-separated)...")
@@ -1460,6 +1486,11 @@ impl CommandPalette {
         },
       ),
       cx.subscribe_in(&create_branch_input, window, Self::on_input_event),
+      cx.subscribe_in(
+        &checkout_detached_input,
+        window,
+        Self::on_checkout_detached_input_event,
+      ),
       cx.subscribe_in(&cherry_pick_input, window, Self::on_cherry_pick_input_event),
       cx.subscribe_in(
         &interactive_rebase_head_count_input,
@@ -1481,6 +1512,7 @@ impl CommandPalette {
     Self {
       focus_handle: cx.focus_handle(),
       create_branch_input,
+      checkout_detached_input,
       cherry_pick_input,
       stash_input,
       default_stash_message,
@@ -1573,6 +1605,27 @@ impl CommandPalette {
       window,
       cx,
     );
+  }
+
+  fn on_checkout_detached_input_event(
+    &mut self,
+    state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !matches!(event, InputEvent::PressEnter { .. }) {
+      return;
+    }
+
+    let input = state.read(cx).value().to_string();
+    let Some(target) = Self::parse_checkout_detached_target(&input) else {
+      self.error = Some("Commit hash or tag cannot be empty".into());
+      cx.notify();
+      return;
+    };
+
+    self.trigger_action(CommandPaletteAction::CheckoutDetached { target }, window, cx);
   }
 
   fn on_cherry_pick_input_event(
@@ -1698,6 +1751,11 @@ impl CommandPalette {
           state.focus(window, cx);
         });
       }
+      CommandPaletteScreen::CheckoutDetached => {
+        self.checkout_detached_input.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      }
       CommandPaletteScreen::CherryPick => {
         self.cherry_pick_input.update(cx, |state, cx| {
           state.focus(window, cx);
@@ -1773,6 +1831,12 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::SwitchBranch => {
         self.set_screen(CommandPaletteScreen::SwitchBranch, cx, window);
+      }
+      CommandPaletteCommandId::CheckoutDetached => {
+        self.checkout_detached_input.update(cx, |input, cx| {
+          input.set_value("", window, cx);
+        });
+        self.set_screen(CommandPaletteScreen::CheckoutDetached, cx, window);
       }
       CommandPaletteCommandId::Commit => {
         self.trigger_action(CommandPaletteAction::Commit, window, cx);
@@ -2029,6 +2093,17 @@ impl CommandPalette {
       })
   }
 
+  fn render_checkout_detached(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .gap_3()
+      .child(Input::new(&self.checkout_detached_input).border_color(theme.border))
+      .when(self.error.is_some(), |parent| {
+        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
+      })
+  }
+
   fn render_cherry_pick(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
@@ -2200,6 +2275,7 @@ impl Render for CommandPalette {
         self.render_switch_repository(cx).into_any_element()
       }
       CommandPaletteScreen::SwitchBranch => self.render_switch_branch(cx).into_any_element(),
+      CommandPaletteScreen::CheckoutDetached => self.render_checkout_detached(cx).into_any_element(),
       CommandPaletteScreen::CreateBranch => self.render_create_branch(cx).into_any_element(),
       CommandPaletteScreen::CherryPick => self.render_cherry_pick(cx).into_any_element(),
       CommandPaletteScreen::Stash => self.render_stash(cx).into_any_element(),
@@ -2298,6 +2374,15 @@ mod tests {
   }
 
   #[test]
+  fn parse_checkout_detached_target_trims_and_rejects_empty() {
+    assert_eq!(
+      CommandPalette::parse_checkout_detached_target("  v1.2.3 "),
+      Some("v1.2.3".to_string())
+    );
+    assert_eq!(CommandPalette::parse_checkout_detached_target("   "), None);
+  }
+
+  #[test]
   fn parse_interactive_rebase_head_count_accepts_integer_greater_than_one() {
     let parsed = CommandPalette::parse_interactive_rebase_head_count(" 5 ");
     assert_eq!(parsed, Some(5));
@@ -2353,6 +2438,7 @@ mod tests {
 
   #[test]
   fn commit_and_rebase_progress_commands_are_available_with_expected_metadata() {
+    let checkout_detached = CommandPaletteCommand::checkout_detached();
     let commit = CommandPaletteCommand::commit();
     let continue_rebase = CommandPaletteCommand::continue_rebase();
     let skip_rebase = CommandPaletteCommand::skip_rebase();
@@ -2367,6 +2453,13 @@ mod tests {
     let unstage_selected_file = CommandPaletteCommand::unstage_selected_file();
     let accept_all_current_conflicts = CommandPaletteCommand::accept_all_current_conflicts();
     let accept_all_incoming_conflicts = CommandPaletteCommand::accept_all_incoming_conflicts();
+
+    assert_eq!(
+      checkout_detached.id,
+      CommandPaletteCommandId::CheckoutDetached
+    );
+    assert_eq!(checkout_detached.name.as_ref(), "Git checkout detached");
+    assert!(checkout_detached.matches("commit hash"));
 
     assert_eq!(commit.id, CommandPaletteCommandId::Commit);
     assert_eq!(commit.name.as_ref(), "Commit");

@@ -11,14 +11,14 @@ use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
   HistoryCommitNode, HistoryRevision, InteractiveRebaseTarget, InteractiveRebaseTodoEntry,
   RepoStage, RepoStatusEntry, RepoStatusKind, abort_merge, abort_rebase, amend_commit, apply_stash,
-  cherry_pick_commits, commit_changes, continue_rebase, create_branch, create_branch_from,
-  create_stash, current_branch_status, current_history_revision, current_rebase_commit_message,
-  default_stash_message, delete_untracked_file, diff_set_from_patch, drop_stash, fetch,
-  head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
-  list_commit_changed_files, list_commit_history, list_interactive_rebase_commits,
-  list_repo_status, list_stashes, load_commit_file_diff, merge_branch, pop_stash, push,
-  rebase_branch, restore_file, skip_rebase, stage_all, stage_file, start_interactive_rebase,
-  switch_branch, undo_last_commit, unstage_all, unstage_file,
+  checkout_detached_target, cherry_pick_commits, commit_changes, continue_rebase, create_branch,
+  create_branch_from, create_stash, current_branch_status, current_history_revision,
+  current_rebase_commit_message, default_stash_message, delete_untracked_file, detached_head_label,
+  diff_set_from_patch, drop_stash, fetch, head_commit_status, is_merge_in_progress,
+  is_rebase_in_progress, list_branches, list_commit_changed_files, list_commit_history,
+  list_interactive_rebase_commits, list_repo_status, list_stashes, load_commit_file_diff,
+  merge_branch, pop_stash, push, rebase_branch, restore_file, skip_rebase, stage_all, stage_file,
+  start_interactive_rebase, switch_branch, undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
@@ -70,6 +70,7 @@ const STATUS_POLL_INTERVAL_MS: u64 = 800;
 const EDITOR_HEADER_HEIGHT: f32 = 40.0;
 const HISTORY_MAX_COMMITS: usize = 200;
 const HISTORY_AUTHOR_MAX_WIDTH: f32 = 180.0;
+const DETACHED_BRANCH_SELECT_SENTINEL: &str = "__reviu_detached_head__";
 
 actions!(
   workspace,
@@ -446,6 +447,14 @@ impl BranchSelectItem {
       is_current,
     }
   }
+
+  fn detached(label: SharedString, is_current: bool) -> Self {
+    Self {
+      branch: GitPage::detached_branch_select_value(),
+      label,
+      is_current,
+    }
+  }
 }
 
 impl SelectItem for BranchSelectItem {
@@ -646,30 +655,55 @@ impl GitPage {
     }
   }
 
-  fn selected_branch_from_status(current: Option<BranchStatus>) -> Option<BranchRef> {
-    current.and_then(|status| {
-      if status.name == "HEAD" {
-        None
+  fn selected_branch_from_status(current: Option<&BranchStatus>) -> Option<BranchRef> {
+    current.map(|status| {
+      if Self::is_detached_head(Some(status)) {
+        Self::detached_branch_select_value()
       } else {
-        Some(BranchRef {
-          name: status.name,
+        BranchRef {
+          name: status.name.clone(),
           kind: BranchKind::Local,
-        })
+        }
       }
     })
+  }
+
+  fn is_detached_head(branch_status: Option<&BranchStatus>) -> bool {
+    branch_status.is_some_and(|status| status.name == "HEAD")
+  }
+
+  fn detached_branch_select_value() -> BranchRef {
+    BranchRef {
+      name: DETACHED_BRANCH_SELECT_SENTINEL.to_string(),
+      kind: BranchKind::Local,
+    }
+  }
+
+  fn is_detached_branch_select_value(branch: &BranchRef) -> bool {
+    branch.kind == BranchKind::Local && branch.name == DETACHED_BRANCH_SELECT_SENTINEL
   }
 
   fn branch_select_items(
     branches: Vec<BranchRef>,
     selected: Option<&BranchRef>,
+    detached_label: Option<&str>,
   ) -> Vec<BranchSelectItem> {
-    branches
+    let mut items = branches
       .into_iter()
       .map(|branch| {
         let is_current = selected == Some(&branch);
         BranchSelectItem::new(branch, is_current)
       })
-      .collect()
+      .collect::<Vec<_>>();
+
+    if selected.is_some_and(Self::is_detached_branch_select_value) {
+      let label = detached_label
+        .map(|label| format!("HEAD ({label})"))
+        .unwrap_or_else(|| "HEAD (detached)".to_string());
+      items.insert(0, BranchSelectItem::detached(label.into(), true));
+    }
+
+    items
   }
 
   fn should_apply_branch_refresh(
@@ -1347,6 +1381,9 @@ impl GitPage {
           return;
         };
         let branch = branch.clone();
+        if Self::is_detached_branch_select_value(&branch) {
+          return;
+        }
         let editor = this.editor.clone();
 
         let task = cx.spawn(async move |this, cx| {
@@ -1513,15 +1550,20 @@ impl GitPage {
       let result = unblock(move || {
         let branches = list_branches(&repo_root).ok()?;
         let current = current_branch_status(&repo_root).ok();
-        Some((branches, current))
+        let detached_label = if Self::is_detached_head(current.as_ref()) {
+          detached_head_label(&repo_root).ok()
+        } else {
+          None
+        };
+        Some((branches, current, detached_label))
       })
       .await;
-      let Some((branches, current)) = result else {
+      let Some((branches, current, detached_label)) = result else {
         return;
       };
 
-      let selected = Self::selected_branch_from_status(current);
-      let items = Self::branch_select_items(branches, selected.as_ref());
+      let selected = Self::selected_branch_from_status(current.as_ref());
+      let items = Self::branch_select_items(branches, selected.as_ref(), detached_label.as_deref());
 
       let select = cx.update_window(window_handle, |_, window, cx| {
         let select = cx
@@ -2148,11 +2190,15 @@ impl GitPage {
       if self.should_show_amend_palette_command() {
         commands.push(CommandPaletteCommand::amend());
       }
+      if self.should_show_checkout_detached_palette_command() {
+        commands.push(CommandPaletteCommand::checkout_detached());
+      }
 
-      if Self::should_show_unstage_all_command(&self.status_entries) {
-        commands.push(CommandPaletteCommand::unstage_all());
-      } else if Self::should_show_stage_all_command(&self.status_entries) {
+      if Self::should_show_stage_all_command(&self.status_entries) {
         commands.push(CommandPaletteCommand::stage_all());
+      }
+      if Self::should_show_unstage_all_palette_command(&self.status_entries) {
+        commands.push(CommandPaletteCommand::unstage_all());
       }
       if self.should_show_unstage_selected_file_palette_command() {
         commands.push(CommandPaletteCommand::unstage_selected_file());
@@ -2343,6 +2389,15 @@ impl GitPage {
       CommandPaletteAction::OpenGitChangesSidebar => {
         self.set_sidebar_mode(GitSidebarMode::Changes, window, cx);
         Ok(())
+      }
+      CommandPaletteAction::CheckoutDetached { target } => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
+        if !self.should_show_checkout_detached_palette_command() {
+          return Err("Checkout detached is currently disabled.".into());
+        }
+        checkout_detached_target(&root_path, &target)
       }
       CommandPaletteAction::Commit => {
         if self.selected_repo.is_none() {
@@ -4013,16 +4068,22 @@ impl GitPage {
     !self.rebase_in_progress && self.selected_repo.is_some() && self.has_head_commit
   }
 
+  fn should_show_checkout_detached_palette_command(&self) -> bool {
+    self.selected_repo.is_some()
+      && self.has_head_commit
+      && !self.merge_in_progress
+      && !self.rebase_in_progress
+      && self.branch_status.is_some()
+      && !Self::is_detached_head(self.branch_status.as_ref())
+  }
+
   fn should_show_interactive_rebase_palette_command(&self) -> bool {
     !self.rebase_in_progress
       && !self.merge_in_progress
       && self.selected_repo.is_some()
       && self.has_head_commit
       && self.status_entries.is_empty()
-      && self
-        .branch_status
-        .as_ref()
-        .is_some_and(|status| status.name != "HEAD")
+      && !Self::is_detached_head(self.branch_status.as_ref())
   }
 
   fn selected_file_entry(&self) -> Option<&RepoStatusEntry> {
@@ -4078,7 +4139,7 @@ impl GitPage {
     has_head_commit
       && matches!(
         branch_status,
-        Some(status) if !status.has_upstream && status.name != "HEAD"
+        Some(status) if !status.has_upstream && !Self::is_detached_head(Some(status))
       )
   }
 
@@ -4116,7 +4177,7 @@ impl GitPage {
   }
 
   fn all_changes_staged(&self) -> bool {
-    Self::all_entries_staged(&self.status_entries)
+    Self::should_show_unstage_all_command(&self.status_entries)
   }
 
   fn changed_files_count(entries: &[RepoStatusEntry]) -> usize {
@@ -4153,6 +4214,10 @@ impl GitPage {
 
   fn should_show_unstage_all_command(entries: &[RepoStatusEntry]) -> bool {
     Self::all_entries_staged(entries)
+  }
+
+  fn should_show_unstage_all_palette_command(entries: &[RepoStatusEntry]) -> bool {
+    Self::has_staged_changes(entries)
   }
 
   fn should_confirm_stage_all(
@@ -5458,6 +5523,7 @@ impl GitPage {
     let theme = cx.theme().clone();
     let input = self.commit_input.clone();
     let has_conflicts = Self::has_conflicted_entries(&self.status_entries);
+    let detached_head = Self::is_detached_head(self.branch_status.as_ref());
     let operation_error = self.operation_error.clone();
 
     div()
@@ -5468,6 +5534,15 @@ impl GitPage {
       .gap_2()
       .border_t_1()
       .border_color(theme.border)
+      .when(detached_head, |this| {
+        this.child(
+          Alert::info(
+            "commit-detached-head-info",
+            "You are in detached HEAD mode. Commits are not on a branch.",
+          )
+          .title("Detached HEAD"),
+        )
+      })
       .when(has_conflicts, |this| {
         this.child(
           Alert::warning(
@@ -6071,10 +6146,16 @@ mod tests {
   fn seed_repo_branch_state(this: &mut GitPage, repo_root: &Path, cx: &mut Context<GitPage>) {
     this.selected_repo = Some(repo_root.to_path_buf());
     let branch_status = current_branch_status(repo_root).expect("read initial branch status");
-    let selected = GitPage::selected_branch_from_status(Some(branch_status.clone()));
+    let selected = GitPage::selected_branch_from_status(Some(&branch_status));
+    let detached_label = if GitPage::is_detached_head(Some(&branch_status)) {
+      detached_head_label(repo_root).ok()
+    } else {
+      None
+    };
     let items = GitPage::branch_select_items(
       list_branches(repo_root).expect("list branches"),
       selected.as_ref(),
+      detached_label.as_deref(),
     );
     this.branch_status = Some(branch_status);
 
@@ -6415,6 +6496,7 @@ mod tests {
       assert!(this.should_show_force_push_palette_command());
       assert!(this.should_show_undo_last_commit_palette_command());
       assert!(this.should_show_amend_palette_command());
+      assert!(this.should_show_checkout_detached_palette_command());
       assert!(!this.should_show_interactive_rebase_palette_command());
       assert!(this.should_show_stage_selected_file_palette_command());
       assert!(!this.should_show_unstage_selected_file_palette_command());
@@ -6428,8 +6510,10 @@ mod tests {
       assert!(this.should_show_unstage_selected_file_palette_command());
 
       this.status_entries.clear();
+      assert!(this.should_show_checkout_detached_palette_command());
       assert!(this.should_show_interactive_rebase_palette_command());
       this.branch_status = Some(make_branch_status("HEAD", 0, 0, false));
+      assert!(!this.should_show_checkout_detached_palette_command());
       assert!(!this.should_show_interactive_rebase_palette_command());
       this.branch_status = Some(make_branch_status("main", 0, 0, true));
 
@@ -6445,6 +6529,7 @@ mod tests {
       assert!(!this.should_show_force_push_palette_command());
       assert!(!this.should_show_undo_last_commit_palette_command());
       assert!(!this.should_show_amend_palette_command());
+      assert!(!this.should_show_checkout_detached_palette_command());
       assert!(!this.should_show_interactive_rebase_palette_command());
       assert!(!this.should_show_stage_selected_file_palette_command());
       assert!(!this.should_show_unstage_selected_file_palette_command());
@@ -6464,6 +6549,7 @@ mod tests {
       assert!(!this.should_show_force_push_palette_command());
       assert!(!this.should_show_undo_last_commit_palette_command());
       assert!(!this.should_show_amend_palette_command());
+      assert!(!this.should_show_checkout_detached_palette_command());
       assert!(!this.should_show_interactive_rebase_palette_command());
       assert!(!this.should_show_stage_selected_file_palette_command());
       assert!(!this.should_show_unstage_selected_file_palette_command());
@@ -6612,6 +6698,25 @@ mod tests {
     assert!(!GitPage::should_show_unstage_all_command(&mixed_entries));
     assert!(GitPage::should_show_unstage_all_command(
       &all_staged_entries
+    ));
+  }
+
+  #[test]
+  fn unstage_all_palette_command_visibility_requires_any_staged_entry() {
+    let unstaged_only_entries = vec![make_status_entry("src/main.rs", RepoStage::Unstaged)];
+    let mixed_entries = vec![
+      make_status_entry("src/main.rs", RepoStage::Staged),
+      make_status_entry("src/lib.rs", RepoStage::Unstaged),
+    ];
+    let partial_entries = vec![make_status_entry("src/editor.rs", RepoStage::PartiallyStaged)];
+
+    assert!(!GitPage::should_show_unstage_all_palette_command(&[]));
+    assert!(!GitPage::should_show_unstage_all_palette_command(
+      &unstaged_only_entries
+    ));
+    assert!(GitPage::should_show_unstage_all_palette_command(&mixed_entries));
+    assert!(GitPage::should_show_unstage_all_palette_command(
+      &partial_entries
     ));
   }
 
@@ -6820,16 +6925,19 @@ mod tests {
   }
 
   #[test]
-  fn selected_branch_from_status_maps_detached_head_to_none() {
+  fn selected_branch_from_status_maps_detached_head_to_detached_select_value() {
     let detached = make_branch_status("HEAD", 0, 0, false);
-    assert_eq!(GitPage::selected_branch_from_status(Some(detached)), None);
+    assert_eq!(
+      GitPage::selected_branch_from_status(Some(&detached)),
+      Some(GitPage::detached_branch_select_value())
+    );
   }
 
   #[test]
   fn selected_branch_from_status_maps_named_head_to_local_branch() {
     let main = make_branch_status("main", 0, 0, true);
     assert_eq!(
-      GitPage::selected_branch_from_status(Some(main)),
+      GitPage::selected_branch_from_status(Some(&main)),
       Some(BranchRef {
         name: "main".to_string(),
         kind: BranchKind::Local,
@@ -6855,10 +6963,29 @@ mod tests {
         },
       ],
       Some(&selected),
+      None,
     );
 
     assert_eq!(items.len(), 2);
     assert!(items[0].is_current);
+    assert!(!items[1].is_current);
+  }
+
+  #[test]
+  fn branch_select_items_includes_detached_head_entry_when_selected_is_detached() {
+    let items = GitPage::branch_select_items(
+      vec![BranchRef {
+        name: "main".to_string(),
+        kind: BranchKind::Local,
+      }],
+      Some(&GitPage::detached_branch_select_value()),
+      Some("v1.0.0"),
+    );
+
+    assert_eq!(items.len(), 2);
+    assert!(items[0].is_current);
+    assert_eq!(items[0].label.as_ref(), "HEAD (v1.0.0)");
+    assert!(GitPage::is_detached_branch_select_value(&items[0].branch));
     assert!(!items[1].is_current);
   }
 
@@ -6970,6 +7097,36 @@ mod tests {
 
     let status = current_branch_status(&repo.path).expect("read status");
     assert_eq!(status.name, "feature");
+  }
+
+  #[gpui::test]
+  async fn command_palette_checkout_detached_detaches_head(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-checkout-detached");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let result = git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.has_head_commit = true;
+      this.branch_status = Some(make_branch_status("main", 0, 0, true));
+      seed_repo_branch_state(this, &repo.path, cx);
+      let target = head_oid(&repo.path).to_string();
+      this.handle_command_palette_action(CommandPaletteAction::CheckoutDetached { target }, window, cx)
+    });
+    assert!(result.is_ok());
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let status = current_branch_status(&repo.path).expect("read status");
+    assert_eq!(status.name, "HEAD");
+
+    let selected_branch = git_page.read_with(cx, |this, cx| {
+      this.branch_select.read(cx).selected_value().cloned()
+    });
+    assert_eq!(selected_branch, Some(GitPage::detached_branch_select_value()));
   }
 
   #[gpui::test]
@@ -8393,6 +8550,9 @@ mod tests {
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
 
     let actions = vec![
+      CommandPaletteAction::CheckoutDetached {
+        target: "deadbeef".to_string(),
+      },
       CommandPaletteAction::Commit,
       CommandPaletteAction::ContinueRebase,
       CommandPaletteAction::SkipRebase,
@@ -9777,8 +9937,8 @@ mod tests {
     ));
 
     let branches = list_branches(&repo.path).expect("list branches");
-    let selected = GitPage::selected_branch_from_status(Some(switched_status));
-    let items = GitPage::branch_select_items(branches, selected.as_ref());
+    let selected = GitPage::selected_branch_from_status(Some(&switched_status));
+    let items = GitPage::branch_select_items(branches, selected.as_ref(), None);
 
     assert_eq!(items.iter().filter(|item| item.is_current).count(), 1);
     assert!(
@@ -9798,7 +9958,7 @@ mod tests {
   }
 
   #[test]
-  fn external_detached_head_clears_selected_branch_in_branch_select_model() {
+  fn external_detached_head_selects_detached_entry_in_branch_select_model() {
     let repo = TempRepo::init("git-page-external-detach");
     let oid = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let initial_status = current_branch_status(&repo.path).expect("read initial branch");
@@ -9814,10 +9974,16 @@ mod tests {
     ));
 
     let branches = list_branches(&repo.path).expect("list branches");
-    let selected = GitPage::selected_branch_from_status(Some(detached_status));
-    assert!(selected.is_none());
-    let items = GitPage::branch_select_items(branches, selected.as_ref());
-    assert!(items.iter().all(|item| !item.is_current));
+    let selected = GitPage::selected_branch_from_status(Some(&detached_status));
+    assert_eq!(selected, Some(GitPage::detached_branch_select_value()));
+    let detached_label = detached_head_label(&repo.path).ok();
+    let items = GitPage::branch_select_items(branches, selected.as_ref(), detached_label.as_deref());
+    assert!(
+      items.iter().any(|item| {
+        GitPage::is_detached_branch_select_value(&item.branch) && item.is_current
+      }),
+      "detached HEAD entry should be selected"
+    );
   }
 
   #[gpui::test]
@@ -10652,7 +10818,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn poll_once_clears_branch_select_on_external_detached_head(cx: &mut TestAppContext) {
+  async fn poll_once_selects_detached_entry_on_external_detached_head(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-poll-once-detached");
     let oid = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -10687,7 +10853,7 @@ mod tests {
       )
     });
     assert_eq!(branch_name.as_deref(), Some("HEAD"));
-    assert_eq!(selected_branch, None);
+    assert_eq!(selected_branch, Some(GitPage::detached_branch_select_value()));
   }
 
   #[gpui::test]
@@ -10848,7 +11014,8 @@ mod tests {
     let repo_a_status = current_branch_status(&repo_a.path).expect("read repo a status");
     let repo_a_items = GitPage::branch_select_items(
       list_branches(&repo_a.path).expect("list repo a branches"),
-      GitPage::selected_branch_from_status(Some(repo_a_status.clone())).as_ref(),
+      GitPage::selected_branch_from_status(Some(&repo_a_status)).as_ref(),
+      None,
     );
     assert!(
       repo_a_items
@@ -10877,7 +11044,8 @@ mod tests {
     let repo_b_status = current_branch_status(&repo_b.path).expect("read repo b status");
     let repo_b_items = GitPage::branch_select_items(
       list_branches(&repo_b.path).expect("list repo b branches"),
-      GitPage::selected_branch_from_status(Some(repo_b_status.clone())).as_ref(),
+      GitPage::selected_branch_from_status(Some(&repo_b_status)).as_ref(),
+      None,
     );
     assert_eq!(
       repo_b_items.iter().filter(|item| item.is_current).count(),
