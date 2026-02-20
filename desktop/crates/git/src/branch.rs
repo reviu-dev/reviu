@@ -984,7 +984,9 @@ mod tests {
     let repo = TempRepo::init("branch-checkout-detached-tag");
     let oid = commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
     let repo_handle = Repository::open(&repo.path).expect("open repo");
-    let object = repo_handle.find_object(oid, None).expect("find commit object");
+    let object = repo_handle
+      .find_object(oid, None)
+      .expect("find commit object");
     repo_handle
       .tag_lightweight("v1", &object, false)
       .expect("create lightweight tag");
@@ -1023,7 +1025,9 @@ mod tests {
     let repo = TempRepo::init("branch-detached-label-tag");
     let oid = commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
     let repo_handle = Repository::open(&repo.path).expect("open repo");
-    let object = repo_handle.find_object(oid, None).expect("find commit object");
+    let object = repo_handle
+      .find_object(oid, None)
+      .expect("find commit object");
     repo_handle
       .tag_lightweight("v1.0.0", &object, false)
       .expect("create lightweight tag");

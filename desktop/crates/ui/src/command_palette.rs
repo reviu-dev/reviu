@@ -1625,7 +1625,11 @@ impl CommandPalette {
       return;
     };
 
-    self.trigger_action(CommandPaletteAction::CheckoutDetached { target }, window, cx);
+    self.trigger_action(
+      CommandPaletteAction::CheckoutDetached { target },
+      window,
+      cx,
+    );
   }
 
   fn on_cherry_pick_input_event(
@@ -2275,7 +2279,9 @@ impl Render for CommandPalette {
         self.render_switch_repository(cx).into_any_element()
       }
       CommandPaletteScreen::SwitchBranch => self.render_switch_branch(cx).into_any_element(),
-      CommandPaletteScreen::CheckoutDetached => self.render_checkout_detached(cx).into_any_element(),
+      CommandPaletteScreen::CheckoutDetached => {
+        self.render_checkout_detached(cx).into_any_element()
+      }
       CommandPaletteScreen::CreateBranch => self.render_create_branch(cx).into_any_element(),
       CommandPaletteScreen::CherryPick => self.render_cherry_pick(cx).into_any_element(),
       CommandPaletteScreen::Stash => self.render_stash(cx).into_any_element(),

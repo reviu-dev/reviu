@@ -200,7 +200,9 @@ mod tests {
 
   #[test]
   fn is_subscription_callback_rejects_other_urls() {
-    assert!(!is_subscription_callback("reviu://auth/callback?code=abc123"));
+    assert!(!is_subscription_callback(
+      "reviu://auth/callback?code=abc123"
+    ));
     assert!(!is_subscription_callback("https://example.com"));
   }
 }

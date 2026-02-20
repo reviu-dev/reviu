@@ -65,6 +65,13 @@ pub enum UserRole {
   Admin,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CustomerStateSubscriptionStatus {
+  Active,
+  Trialing,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct CustomerStateSubscription {
@@ -73,7 +80,7 @@ pub struct CustomerStateSubscription {
   pub created_at: String,
   #[serde(rename = "modifiedAt")]
   pub modified_at: Option<String>,
-  pub status: String,
+  pub status: CustomerStateSubscriptionStatus,
   pub amount: i64,
   pub currency: String,
   #[serde(rename = "recurringInterval")]
@@ -1519,7 +1526,10 @@ mod tests {
       .clone()
       .unwrap_or_default();
 
-    assert!(request.contains("POST /api/auth/checkout "), "request: {request}");
+    assert!(
+      request.contains("POST /api/auth/checkout "),
+      "request: {request}"
+    );
     assert!(request.contains("\"slug\":\"pro\""), "request: {request}");
     assert!(request.contains("\"redirect\":false"), "request: {request}");
   }
