@@ -1465,7 +1465,7 @@ impl GitPage {
       &self.repo_select,
       move |this, _state, event: &SelectEvent<SearchableVec<RecentRepoItem>>, cx| {
         if let SelectEvent::Confirm(Some(repo)) = event {
-          this.set_selected_repo(repo.clone(), cx);
+          this.handle_repo_select_confirm(repo.clone(), cx);
         }
       },
     )
@@ -1476,35 +1476,45 @@ impl GitPage {
     cx.subscribe(
       &self.branch_select,
       move |this, _state, event: &SelectEvent<SearchableVec<BranchSelectItem>>, cx| {
-        let SelectEvent::Confirm(Some(branch)) = event else {
-          return;
-        };
-        let Some(repo_root) = this.selected_repo.clone() else {
-          return;
-        };
-        let branch = branch.clone();
-        if Self::is_detached_branch_select_value(&branch) {
-          return;
+        if let SelectEvent::Confirm(Some(branch)) = event {
+          this.handle_branch_select_confirm(branch.clone(), cx);
         }
-        let editor = this.editor.clone();
-
-        let task = cx.spawn(async move |this, cx| {
-          let result = unblock(move || switch_branch(&repo_root, &branch)).await;
-          let _ = this.update(cx, |this, cx| {
-            if result.is_ok() {
-              this.reload_status(cx);
-              this.refresh_branches(cx);
-              if let Some(editor) = editor.clone() {
-                editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
-              }
-            }
-          });
-        });
-
-        this.branch_task = Some(task);
-      },
+      }
     )
     .detach();
+  }
+
+  fn handle_repo_select_confirm(&mut self, repo_root: PathBuf, cx: &mut Context<Self>) {
+    self.set_selected_repo(repo_root, cx);
+    self.ensure_page_shortcut_focus(cx);
+  }
+
+  fn handle_branch_select_confirm(&mut self, branch: BranchRef, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+
+    self.ensure_page_shortcut_focus(cx);
+
+    if Self::is_detached_branch_select_value(&branch) {
+      return;
+    }
+    let editor = self.editor.clone();
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || switch_branch(&repo_root, &branch)).await;
+      let _ = this.update(cx, |this, cx| {
+        if result.is_ok() {
+          this.reload_status(cx);
+          this.refresh_branches(cx);
+          if let Some(editor) = editor.clone() {
+            editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
+          }
+        }
+      });
+    });
+
+    self.branch_task = Some(task);
   }
 
   fn subscribe_to_file_list(&mut self, cx: &mut Context<Self>) {
@@ -7004,6 +7014,68 @@ mod tests {
       this.focus_page(window, cx);
       assert!(this.focus_handle.contains_focused(window, cx));
     });
+  }
+
+  #[gpui::test]
+  async fn repo_select_confirm_refocuses_page_shortcuts(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo_a = TempRepo::init("git-page-focus-after-repo-select-a");
+    let repo_b = TempRepo::init("git-page-focus-after-repo-select-b");
+    let _ = commit_text_file(&repo_a.path, Path::new("README.md"), "a1\n", "initial");
+    let _ = commit_text_file(&repo_b.path, Path::new("README.md"), "b1\n", "initial");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo_a.path.clone());
+
+      let external_focus = cx.focus_handle();
+      window.focus(&external_focus, cx);
+      assert!(!this.focus_handle.contains_focused(window, cx));
+    });
+
+    git_page.update(cx, |this, cx| {
+      this.handle_repo_select_confirm(repo_b.path.clone(), cx);
+    });
+
+    let (has_page_focus, selected_repo) = git_page.update_in(cx, |this, window, cx| {
+      (
+        this.focus_handle.contains_focused(window, cx),
+        this.selected_repo.clone(),
+      )
+    });
+    assert!(has_page_focus);
+    assert_eq!(selected_repo, Some(repo_b.path.clone()));
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+  }
+
+  #[gpui::test]
+  fn branch_select_confirm_refocuses_page_shortcuts(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(PathBuf::from("/tmp/reviu-focus-select-branch"));
+
+      let external_focus = cx.focus_handle();
+      window.focus(&external_focus, cx);
+      assert!(!this.focus_handle.contains_focused(window, cx));
+    });
+
+    git_page.update(cx, |this, cx| {
+      this.handle_branch_select_confirm(GitPage::detached_branch_select_value(), cx);
+    });
+
+    let (has_page_focus, branch_task_is_none) = git_page.update_in(cx, |this, window, cx| {
+      (
+        this.focus_handle.contains_focused(window, cx),
+        this.branch_task.is_none(),
+      )
+    });
+    assert!(has_page_focus);
+    assert!(branch_task_is_none);
   }
 
   #[gpui::test]
