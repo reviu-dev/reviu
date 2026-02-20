@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::{
   App, Context, FocusHandle, Focusable, Render, SharedString, Window, div, prelude::*, px,
@@ -12,6 +11,7 @@ use gpui_component::{
   v_flex,
 };
 use smol::unblock;
+use time::OffsetDateTime;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, HEADER_HEIGHT, StatusThemeExt, UiIconName, WindowExt,
@@ -21,6 +21,7 @@ use crate::{
   AuthCallbackTarget, CloseWorkspacePage, ShowCommandPalette,
   api::{ApiClient, CustomerStateSubscription, CustomerStateSubscriptionStatus},
   auth_state::{AuthState, AuthStateStore},
+  date_format::{format_long_date_opt, parse_rfc3339},
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
@@ -226,49 +227,6 @@ impl BillingPage {
     }
   }
 
-  fn format_datetime(value: Option<&str>) -> SharedString {
-    let Some(value) = value else {
-      return "—".into();
-    };
-
-    let trimmed = value.trim();
-    let date_part = trimmed
-      .split_once('T')
-      .map(|(date, _)| date)
-      .unwrap_or(trimmed);
-
-    let mut parts = date_part.split('-');
-    let year = parts.next().and_then(|value| value.parse::<u32>().ok());
-    let month = parts.next().and_then(|value| value.parse::<u32>().ok());
-    let day = parts.next().and_then(|value| value.parse::<u32>().ok());
-
-    if parts.next().is_some() {
-      return trimmed.to_string().into();
-    }
-
-    let (Some(year), Some(month), Some(day)) = (year, month, day) else {
-      return trimmed.to_string().into();
-    };
-
-    let month_name = match month {
-      1 => "January",
-      2 => "February",
-      3 => "March",
-      4 => "April",
-      5 => "May",
-      6 => "June",
-      7 => "July",
-      8 => "August",
-      9 => "September",
-      10 => "October",
-      11 => "November",
-      12 => "December",
-      _ => return trimmed.to_string().into(),
-    };
-
-    format!("{month_name} {day}, {year}").into()
-  }
-
   fn format_amount(amount_cents: i64, currency: &str) -> SharedString {
     let amount = amount_cents as f64 / 100.0;
     let currency = currency.to_uppercase();
@@ -278,76 +236,15 @@ impl BillingPage {
     format!("{amount:.2} {currency}").into()
   }
 
-  fn current_unix_seconds() -> Option<i64> {
-    let duration = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
-    Some(duration.as_secs() as i64)
-  }
-
-  fn days_from_civil(year: i32, month: u32, day: u32) -> i64 {
-    let year = year - if month <= 2 { 1 } else { 0 };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let yoe = year - era * 400;
-    let month = month as i32;
-    let day = day as i32;
-    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era as i64 * 146_097 + doe as i64 - 719_468
-  }
-
-  fn parse_rfc3339_to_unix_seconds(value: &str) -> Option<i64> {
-    let (date_part, time_part_with_offset) = value.trim().split_once('T')?;
-
-    let mut date_split = date_part.split('-');
-    let year = date_split.next()?.parse::<i32>().ok()?;
-    let month = date_split.next()?.parse::<u32>().ok()?;
-    let day = date_split.next()?.parse::<u32>().ok()?;
-    if date_split.next().is_some() {
-      return None;
-    }
-
-    let (time_part, offset_seconds) =
-      if let Some(time_part) = time_part_with_offset.strip_suffix('Z') {
-        (time_part, 0i64)
-      } else if let Some((time_part, offset_part)) = time_part_with_offset.rsplit_once('+') {
-        let (offset_hours, offset_minutes) = offset_part.split_once(':')?;
-        let offset_hours = offset_hours.parse::<i64>().ok()?;
-        let offset_minutes = offset_minutes.parse::<i64>().ok()?;
-        (time_part, offset_hours * 3600 + offset_minutes * 60)
-      } else if let Some((time_part, offset_part)) = time_part_with_offset.rsplit_once('-') {
-        let (offset_hours, offset_minutes) = offset_part.split_once(':')?;
-        let offset_hours = offset_hours.parse::<i64>().ok()?;
-        let offset_minutes = offset_minutes.parse::<i64>().ok()?;
-        (time_part, -(offset_hours * 3600 + offset_minutes * 60))
-      } else {
-        return None;
-      };
-
-    let mut time_split = time_part.split(':');
-    let hour = time_split.next()?.parse::<i64>().ok()?;
-    let minute = time_split.next()?.parse::<i64>().ok()?;
-    let second_raw = time_split.next()?;
-    if time_split.next().is_some() {
-      return None;
-    }
-    let second = second_raw
-      .split('.')
-      .next()
-      .and_then(|value| value.parse::<i64>().ok())?;
-
-    let days = Self::days_from_civil(year, month, day);
-    let unix_seconds = days * 86_400 + hour * 3_600 + minute * 60 + second - offset_seconds;
-    Some(unix_seconds)
-  }
-
   fn has_subscription_ended(subscription: &CustomerStateSubscription) -> bool {
     let end_timestamp = subscription
       .current_period_end
       .as_deref()
       .or(subscription.ends_at.as_deref())
-      .and_then(Self::parse_rfc3339_to_unix_seconds);
-    let now = Self::current_unix_seconds();
+      .and_then(parse_rfc3339);
+    let now = OffsetDateTime::now_utc();
 
-    matches!((end_timestamp, now), (Some(end), Some(now)) if end <= now)
+    matches!(end_timestamp, Some(end) if end <= now)
   }
 
   fn display_status(subscription: &CustomerStateSubscription) -> BillingSubscriptionState {
@@ -398,16 +295,16 @@ impl BillingPage {
     );
     let billing_date_label = Self::billing_date_label(subscription);
     let billing_date_value = if subscription.cancel_at_period_end {
-      Self::format_datetime(
+      format_long_date_opt(
         subscription
           .current_period_end
           .as_deref()
           .or(subscription.ends_at.as_deref()),
       )
     } else {
-      Self::format_datetime(subscription.current_period_end.as_deref())
+      format_long_date_opt(subscription.current_period_end.as_deref())
     };
-    let start_date_value = Self::format_datetime(
+    let start_date_value = format_long_date_opt(
       subscription
         .started_at
         .as_deref()
@@ -457,7 +354,7 @@ impl BillingPage {
                   .text_lg()
                   .font_semibold()
                   .text_color(theme.foreground)
-                  .child("Pro subscription"),
+                  .child("Pro subscription - GitHub Integration"),
               )
               .child(
                 div()
@@ -829,17 +726,5 @@ mod tests {
     canceled.cancel_at_period_end = true;
     canceled.current_period_end = Some("2000-01-01T00:00:00Z".to_string());
     assert_eq!(BillingPage::billing_date_label(&canceled), "Expiry Date");
-  }
-
-  #[test]
-  fn format_datetime_uses_long_month_date_format() {
-    assert_eq!(
-      BillingPage::format_datetime(Some("2026-02-20T15:42:30Z")).to_string(),
-      "February 20, 2026"
-    );
-    assert_eq!(
-      BillingPage::format_datetime(Some("2026-02-20")).to_string(),
-      "February 20, 2026"
-    );
   }
 }
