@@ -192,11 +192,7 @@ impl AboutPage {
               this.update_check_status = Some(UpdateCheckStatus::Error(
                 "Update artifact is missing for this platform.".to_string(),
               ));
-              AppUpdateStore::set_error(
-                cx,
-                None,
-                "Update artifact is missing for this platform.",
-              );
+              AppUpdateStore::set_error(cx, None, "Update artifact is missing for this platform.");
               cx.notify();
               return;
             };

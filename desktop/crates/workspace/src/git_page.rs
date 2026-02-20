@@ -6924,8 +6924,7 @@ mod tests {
           force_update: false,
           artifact: crate::app_update::UpdateArtifact {
             url: "https://reviu.dev/downloads/latest".to_string(),
-            sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-              .to_string(),
+            sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
             size: 1024,
           },
         }),
@@ -6948,8 +6947,7 @@ mod tests {
       force_update: false,
       artifact: crate::app_update::UpdateArtifact {
         url: "https://reviu.dev/downloads/latest".to_string(),
-        sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-          .to_string(),
+        sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
         size: 1024,
       },
     };

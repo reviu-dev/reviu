@@ -308,7 +308,6 @@ impl ConfigStore {
       eprintln!("Failed to persist app settings: {}", err);
     }
   }
-
 }
 
 #[cfg(test)]
@@ -366,5 +365,4 @@ mod tests {
 
     ConfigStore::set_test_db_path(None);
   }
-
 }
