@@ -1794,9 +1794,15 @@ mod tests {
     assert_eq!(payload.current_version, "0.1.0");
     assert_eq!(payload.latest_version, "0.2.0");
     assert_eq!(payload.minimum_supported_version, "0.1.0");
-    assert_eq!(payload.release_notes_url, "https://reviu.dev/releases/0.2.0");
     assert_eq!(
-      payload.artifact.as_ref().map(|artifact| artifact.url.as_str()),
+      payload.release_notes_url,
+      "https://reviu.dev/releases/0.2.0"
+    );
+    assert_eq!(
+      payload
+        .artifact
+        .as_ref()
+        .map(|artifact| artifact.url.as_str()),
       Some("https://reviu.dev/downloads/latest")
     );
     handle.join().expect("join server thread");
@@ -1835,8 +1841,14 @@ mod tests {
       request.contains("\"currentVersion\":\"0.1.0\""),
       "request: {request}"
     );
-    assert!(request.contains("\"platform\":\"macos\""), "request: {request}");
-    assert!(request.contains("\"arch\":\"aarch64\""), "request: {request}");
+    assert!(
+      request.contains("\"platform\":\"macos\""),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"arch\":\"aarch64\""),
+      "request: {request}"
+    );
   }
 
   #[test]

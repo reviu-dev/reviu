@@ -70,7 +70,11 @@ impl Global for AppUpdateStore {}
 impl AppUpdateStore {
   pub fn try_state(cx: &App) -> Option<AppUpdateState> {
     let store = cx.try_global::<Self>()?;
-    store.state.lock().ok().and_then(|state| state.state.clone())
+    store
+      .state
+      .lock()
+      .ok()
+      .and_then(|state| state.state.clone())
   }
 
   pub fn set_state(cx: &mut App, state: Option<AppUpdateState>) {
@@ -128,11 +132,7 @@ impl AppUpdateStore {
     Self::set_state(cx, Some(AppUpdateState::ReadyToInstall(ready)));
   }
 
-  pub fn set_error(
-    cx: &mut App,
-    update: Option<AvailableAppUpdate>,
-    message: impl Into<String>,
-  ) {
+  pub fn set_error(cx: &mut App, update: Option<AvailableAppUpdate>, message: impl Into<String>) {
     Self::set_state(
       cx,
       Some(AppUpdateState::Error {
@@ -178,21 +178,30 @@ pub fn current_arch() -> &'static str {
 
 pub fn download_update_artifact(update: &AvailableAppUpdate) -> Result<ReadyToInstallAppUpdate> {
   let updates_dir = updates_directory()?;
-  fs::create_dir_all(&updates_dir)
-    .with_context(|| format!("failed to create updates directory {}", updates_dir.display()))?;
+  fs::create_dir_all(&updates_dir).with_context(|| {
+    format!(
+      "failed to create updates directory {}",
+      updates_dir.display()
+    )
+  })?;
 
   let file_name = artifact_file_name(update);
   let artifact_path = updates_dir.join(file_name);
   let temp_path = artifact_path.with_extension("part");
 
   let client = Client::new();
-  let mut response = client
-    .get(&update.artifact.url)
-    .send()
-    .with_context(|| format!("failed to download update artifact from {}", update.artifact.url))?;
+  let mut response = client.get(&update.artifact.url).send().with_context(|| {
+    format!(
+      "failed to download update artifact from {}",
+      update.artifact.url
+    )
+  })?;
 
   if !response.status().is_success() {
-    bail!("update artifact download failed with status {}", response.status());
+    bail!(
+      "update artifact download failed with status {}",
+      response.status()
+    );
   }
 
   let mut temp_file = File::create(&temp_path)
@@ -280,7 +289,11 @@ fn artifact_file_name(update: &AvailableAppUpdate) -> String {
   raw
     .chars()
     .map(|character| {
-      if character.is_ascii_alphanumeric() || character == '.' || character == '_' || character == '-' {
+      if character.is_ascii_alphanumeric()
+        || character == '.'
+        || character == '_'
+        || character == '-'
+      {
         character
       } else {
         '_'
@@ -333,8 +346,7 @@ mod tests {
         force_update: false,
         artifact: UpdateArtifact {
           url: "https://reviu.dev/downloads/reviu-0.2.0.dmg".to_string(),
-          sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-            .to_string(),
+          sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
           size: 123,
         },
       };

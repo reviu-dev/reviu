@@ -9,8 +9,8 @@ use smol::unblock;
 use crate::about_page::AboutPage;
 use crate::api::ApiClient;
 use crate::app_update::{
-  AppUpdateNotificationId, AppUpdateStore, AvailableAppUpdate, current_arch, current_platform,
-  download_update_artifact, open_installer, resolved_build_version, UpdateArtifact,
+  AppUpdateNotificationId, AppUpdateStore, AvailableAppUpdate, UpdateArtifact, current_arch,
+  current_platform, download_update_artifact, open_installer, resolved_build_version,
 };
 use crate::auth_state::AuthStateStore;
 use crate::billing_page::BillingPage;
@@ -277,11 +277,7 @@ impl WorkspaceView {
       let _ = this.update(cx, |this, cx| match result {
         Ok(payload) if payload.update_available => {
           let Some(artifact) = payload.artifact else {
-            AppUpdateStore::set_error(
-              cx,
-              None,
-              "Update artifact is missing for this platform.",
-            );
+            AppUpdateStore::set_error(cx, None, "Update artifact is missing for this platform.");
             return;
           };
           let update = AvailableAppUpdate {
