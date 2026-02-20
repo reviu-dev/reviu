@@ -11,8 +11,6 @@ use gpui::{App, Global};
 use reqwest::blocking::Client;
 use sha2::{Digest, Sha256};
 
-use crate::config::ConfigStore;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpdateArtifact {
   pub url: String,
@@ -143,11 +141,6 @@ impl AppUpdateStore {
       }),
     );
   }
-
-  pub fn mark_install_started(cx: &mut App, update: &AvailableAppUpdate) {
-    ConfigStore::persist_simulated_app_version(Some(&update.latest_version));
-    Self::clear_available_update(cx);
-  }
 }
 
 pub fn normalize_semver(value: &str) -> Option<String> {
@@ -162,58 +155,8 @@ pub fn normalize_semver(value: &str) -> Option<String> {
   Some(format!("{major}.{minor}.{patch}"))
 }
 
-fn parse_semver_tuple(value: &str) -> Option<(u64, u64, u64)> {
-  let normalized = normalize_semver(value)?;
-  let mut parts = normalized.split('.');
-  let major: u64 = parts.next()?.parse().ok()?;
-  let minor: u64 = parts.next()?.parse().ok()?;
-  let patch: u64 = parts.next()?.parse().ok()?;
-  Some((major, minor, patch))
-}
-
-pub fn effective_current_version(base_version: &str, simulated_version: Option<&str>) -> String {
-  let normalized_base = normalize_semver(base_version).unwrap_or_else(|| base_version.to_string());
-  let Some(simulated_version) = simulated_version else {
-    return normalized_base;
-  };
-
-  let Some(base_tuple) = parse_semver_tuple(&normalized_base) else {
-    return normalized_base;
-  };
-  let Some(simulated_tuple) = parse_semver_tuple(simulated_version) else {
-    return normalized_base;
-  };
-
-  if simulated_tuple > base_tuple {
-    normalize_semver(simulated_version).unwrap_or(normalized_base)
-  } else {
-    normalized_base
-  }
-}
-
-pub fn resolve_effective_current_version(base_version: &str) -> String {
-  let simulated_version = ConfigStore::load_simulated_app_version();
-  let normalized_base = normalize_semver(base_version).unwrap_or_else(|| base_version.to_string());
-  let effective = effective_current_version(&normalized_base, simulated_version.as_deref());
-
-  let should_clear_simulated = match simulated_version.as_deref() {
-    Some(version) => {
-      let base_tuple = parse_semver_tuple(&normalized_base);
-      let simulated_tuple = parse_semver_tuple(version);
-      match (base_tuple, simulated_tuple) {
-        (Some(base), Some(simulated)) => simulated <= base,
-        (_, None) => true,
-        _ => false,
-      }
-    }
-    None => false,
-  };
-
-  if should_clear_simulated {
-    ConfigStore::persist_simulated_app_version(None);
-  }
-
-  effective
+pub fn resolved_build_version(build_version: &str) -> String {
+  normalize_semver(build_version).unwrap_or_else(|| build_version.to_string())
 }
 
 pub fn current_platform() -> &'static str {
@@ -369,72 +312,13 @@ fn sha256_hex(path: &Path) -> Result<String> {
 mod tests {
   use super::*;
   use gpui::TestAppContext;
-  use std::{
-    fs,
-    path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
-  };
-
-  fn unique_test_db_path(label: &str) -> PathBuf {
-    static NEXT_DB_ID: AtomicU64 = AtomicU64::new(1);
-    let id = NEXT_DB_ID.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-      "reviu-app-update-{label}-{}-{id}.sqlite",
-      std::process::id()
-    ))
-  }
+  use std::path::PathBuf;
 
   #[test]
-  fn effective_current_version_uses_simulated_only_when_newer() {
-    assert_eq!(
-      effective_current_version("0.1.0", Some("0.2.0")),
-      "0.2.0".to_string()
-    );
-    assert_eq!(
-      effective_current_version("0.2.0", Some("0.1.0")),
-      "0.2.0".to_string()
-    );
-    assert_eq!(
-      effective_current_version("v0.1.0", Some("v0.1.0")),
-      "0.1.0".to_string()
-    );
-    assert_eq!(
-      effective_current_version("0.1.0", Some("invalid")),
-      "0.1.0".to_string()
-    );
-  }
-
-  #[test]
-  fn resolve_effective_current_version_clears_stale_simulated_version() {
-    let db_path = unique_test_db_path("resolve-version-stale");
-    let _ = fs::remove_file(&db_path);
-    ConfigStore::set_test_db_path(Some(db_path));
-
-    ConfigStore::persist_simulated_app_version(Some("0.1.0"));
-    let effective = resolve_effective_current_version("0.1.1");
-
-    assert_eq!(effective, "0.1.1".to_string());
-    assert_eq!(ConfigStore::load_simulated_app_version(), None);
-
-    ConfigStore::set_test_db_path(None);
-  }
-
-  #[test]
-  fn resolve_effective_current_version_keeps_newer_simulated_version() {
-    let db_path = unique_test_db_path("resolve-version-newer");
-    let _ = fs::remove_file(&db_path);
-    ConfigStore::set_test_db_path(Some(db_path));
-
-    ConfigStore::persist_simulated_app_version(Some("0.3.0"));
-    let effective = resolve_effective_current_version("0.2.0");
-
-    assert_eq!(effective, "0.3.0".to_string());
-    assert_eq!(
-      ConfigStore::load_simulated_app_version(),
-      Some("0.3.0".to_string())
-    );
-
-    ConfigStore::set_test_db_path(None);
+  fn resolved_build_version_uses_build_version_only() {
+    assert_eq!(resolved_build_version("0.1.0"), "0.1.0");
+    assert_eq!(resolved_build_version("v0.1.0"), "0.1.0");
+    assert_eq!(resolved_build_version("invalid"), "invalid");
   }
 
   #[gpui::test]
@@ -463,6 +347,13 @@ mod tests {
 
       AppUpdateStore::set_downloading(cx, update.clone());
       assert!(AppUpdateStore::is_downloading(cx));
+
+      let ready = ReadyToInstallAppUpdate {
+        update: update.clone(),
+        artifact_path: PathBuf::from("/tmp/reviu-installer.dmg"),
+      };
+      AppUpdateStore::set_ready_to_install(cx, ready.clone());
+      assert_eq!(AppUpdateStore::try_ready_to_install(cx), Some(ready));
 
       AppUpdateStore::set_error(cx, Some(update.clone()), "checksum mismatch");
       assert!(matches!(
