@@ -42,6 +42,10 @@ export type GetContentResponse
 export type GithubUserResponse = Endpoints['GET /user']['response']['data']
 export type GithubIssueResponse = Endpoints['GET /repos/{owner}/{repo}/issues']['response']['data'][number]
 export type GithubIssueParameters = Endpoints['GET /repos/{owner}/{repo}/issues']['parameters']
+export type GithubIssueDetailsResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}']['response']['data']
+export type GithubIssueDetailsParameters = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}']['parameters']
+export type GithubIssueDetailsCommentResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}/comments']['response']['data'][number]
+export type GithubIssueDetailsCommentParameters = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}/comments']['parameters']
 
 function githubAuthHeaders(token: string, extraHeaders?: Record<string, string>) {
   return {
@@ -220,6 +224,28 @@ export async function fetchGithubRepositoryIssues(
   { token: string, params: GithubIssueParameters },
 ) {
   const { data } = await request('GET /repos/{owner}/{repo}/issues', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
+export async function fetchGithubRepositoryIssue(
+  { token, params }:
+  { token: string, params: GithubIssueDetailsParameters },
+) {
+  const { data } = await request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
+export async function fetchGithubRepositoryIssueComments(
+  { token, params }:
+  { token: string, params: GithubIssueDetailsCommentParameters },
+) {
+  const { data } = await request('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
     ...params,
     headers: githubAuthHeaders(token),
   })

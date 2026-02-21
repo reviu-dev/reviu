@@ -1,4 +1,4 @@
-import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueParameters, GithubIssueResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
+import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueParameters, GithubIssueResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
@@ -16,6 +16,8 @@ import {
   fetchGithubPullRequests,
   fetchGithubRepository,
   fetchGithubRepositoryContent,
+  fetchGithubRepositoryIssue,
+  fetchGithubRepositoryIssueComments,
   fetchGithubRepositoryIssues,
   patchGithubPullRequestComment,
 
@@ -143,6 +145,38 @@ interface GithubIssue {
   repository: GithubRepository
 }
 
+interface GithubIssueDetailsComment {
+  id: GithubIssueDetailsCommentResponse['id']
+  body: GithubIssueDetailsCommentResponse['body']
+  createdAt: GithubIssueDetailsCommentResponse['created_at']
+  updatedAt: GithubIssueDetailsCommentResponse['updated_at']
+  user: {
+    login: NonNullable<GithubIssueDetailsCommentResponse['user']>['login']
+    name?: NonNullable<GithubIssueDetailsCommentResponse['user']>['name']
+    avatarUrl: NonNullable<GithubIssueDetailsCommentResponse['user']>['avatar_url']
+  } | null
+}
+
+interface GithubIssueDetails {
+  id: GithubIssueResponse['id']
+  number: GithubIssueResponse['number']
+  title: GithubIssueResponse['title']
+  body: GithubIssueResponse['body']
+  state: GithubIssueResponse['state']
+  state_reason: GithubIssueResponse['state_reason']
+  createdAt: GithubIssueResponse['created_at']
+  updatedAt: GithubIssueResponse['updated_at']
+  closedAt: GithubIssueResponse['closed_at'] | null
+  labels: GithubIssueResponse['labels']
+  comments: GithubIssueDetailsComment[]
+  user: {
+    login: NonNullable<GithubIssueResponse['user']>['login']
+    name?: NonNullable<GithubIssueResponse['user']>['name']
+    avatarUrl: NonNullable<GithubIssueResponse['user']>['avatar_url']
+  } | null
+  repository: GithubRepository
+}
+
 interface GithubFileContent {
   content: string | null
 }
@@ -170,6 +204,17 @@ const createPullRequestLineCommentBodySchema = z.object({
 const createPullRequestThreadReplyBodySchema = z.object({
   body: z.string().trim().min(1, 'Missing comment body'),
 })
+
+function formatGithubUser<U extends { login: string, name?: string | null, avatar_url: string }>(user: U | null) {
+  if (!user)
+    return null
+
+  return {
+    login: user.login,
+    name: user.name,
+    avatarUrl: user.avatar_url,
+  }
+}
 
 function mapGithubPullRequestReviewComment(
   comment: GithubReviewCommentResponse,
@@ -713,13 +758,7 @@ export const githubRoutes = githubRouter
         updatedAt: issue.updated_at,
         closedAt: issue.closed_at,
         labels: issue.labels,
-        user: issue.user
-          ? {
-              login: issue.user.login,
-              name: issue.user.name,
-              avatarUrl: issue.user.avatar_url,
-            }
-          : null,
+        user: formatGithubUser(issue.user),
         repository: {
           owner,
           repo,
@@ -727,6 +766,68 @@ export const githubRoutes = githubRouter
       }))
 
       return ctx.json({ issues }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/repos/:owner/:repo/issues/:issue_number', async (ctx) => {
+    const { owner, repo, issue_number } = ctx.req.param()
+
+    const issueNumber = Number(issue_number)
+
+    if (!owner || !repo || Number.isNaN(issueNumber)) {
+      return ctx.json({ error: 'Missing owner, repo, or issue number' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const paramsIssue: GithubIssueDetailsParameters = {
+        owner,
+        repo,
+        issue_number: issueNumber,
+      }
+
+      const paramsComments: GithubIssueDetailsCommentParameters = {
+        owner,
+        repo,
+        issue_number: issueNumber,
+        per_page: 100,
+      }
+
+      const [data, issueComments] = await Promise.all([
+        fetchGithubRepositoryIssue({ token: githubToken, params: paramsIssue }),
+        fetchGithubRepositoryIssueComments({ token: githubToken, params: paramsComments }),
+      ])
+
+      const issue: GithubIssueDetails = {
+        id: data.id,
+        number: data.number,
+        title: data.title,
+        state: data.state,
+        state_reason: data.state_reason,
+        createdAt: data.created_at,
+        updatedAt: data.updated_at,
+        closedAt: data.closed_at,
+        labels: data.labels,
+        body: data.body,
+        comments: issueComments.map(comment => ({
+          id: comment.id,
+          body: comment.body,
+          createdAt: comment.created_at,
+          updatedAt: comment.updated_at,
+          user: formatGithubUser(comment.user),
+        })),
+        user: formatGithubUser(data.user),
+        repository: {
+          owner,
+          repo,
+        },
+      }
+
+      return ctx.json({ issue }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
