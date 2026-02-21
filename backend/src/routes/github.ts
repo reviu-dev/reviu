@@ -1,4 +1,4 @@
-import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
+import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueParameters, GithubIssueResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
@@ -16,6 +16,7 @@ import {
   fetchGithubPullRequests,
   fetchGithubRepository,
   fetchGithubRepositoryContent,
+  fetchGithubRepositoryIssues,
   patchGithubPullRequestComment,
 
 } from '../services/github.js'
@@ -122,6 +123,24 @@ interface GithubNotification {
   lastReadAt: NotificationResponse['last_read_at']
   url: NotificationResponse['url']
   subscriptionUrl: NotificationResponse['subscription_url']
+}
+
+interface GithubIssue {
+  id: GithubIssueResponse['id']
+  number: GithubIssueResponse['number']
+  title: GithubIssueResponse['title']
+  state: GithubIssueResponse['state']
+  state_reason: GithubIssueResponse['state_reason']
+  createdAt: GithubIssueResponse['created_at']
+  updatedAt: GithubIssueResponse['updated_at']
+  closedAt: GithubIssueResponse['closed_at'] | null
+  labels: GithubIssueResponse['labels']
+  user: {
+    login: NonNullable<GithubIssueResponse['user']>['login']
+    name?: NonNullable<GithubIssueResponse['user']>['name']
+    avatarUrl: NonNullable<GithubIssueResponse['user']>['avatar_url']
+  } | null
+  repository: GithubRepository
 }
 
 interface GithubFileContent {
@@ -661,6 +680,53 @@ export const githubRoutes = githubRouter
       }))
 
       return ctx.json({ pullRequests }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/repos/:owner/:repo/issues', async (ctx) => {
+    const { owner, repo } = ctx.req.param()
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: GithubIssueParameters = {
+        owner,
+        repo,
+        state: 'all',
+        sort: 'updated',
+        direction: 'desc',
+        per_page: 20,
+      }
+
+      const data = await fetchGithubRepositoryIssues({ token: githubToken, params })
+
+      const issues: GithubIssue[] = data.filter(issue => !issue.pull_request).map(issue => ({
+        id: issue.id,
+        number: issue.number,
+        title: issue.title,
+        state: issue.state,
+        state_reason: issue.state_reason,
+        createdAt: issue.created_at,
+        updatedAt: issue.updated_at,
+        closedAt: issue.closed_at,
+        labels: issue.labels,
+        user: issue.user
+          ? {
+              login: issue.user.login,
+              name: issue.user.name,
+              avatarUrl: issue.user.avatar_url,
+            }
+          : null,
+        repository: {
+          owner,
+          repo,
+        },
+      }))
+
+      return ctx.json({ issues }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)

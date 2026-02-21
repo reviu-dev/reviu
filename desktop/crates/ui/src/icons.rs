@@ -19,6 +19,9 @@ pub enum UiIconName {
   CreditCard,
   Download,
   Info,
+  CircleDot,
+  CircleCheck,
+  CircleSlash,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -40,6 +43,9 @@ impl IconNamed for UiIconName {
       UiIconName::CreditCard => "icons/credit-card.svg",
       UiIconName::Download => "icons/download.svg",
       UiIconName::Info => "icons/info.svg",
+      UiIconName::CircleDot => "icons/circle-dot.svg",
+      UiIconName::CircleCheck => "icons/circle-check.svg",
+      UiIconName::CircleSlash => "icons/circle-slash.svg",
     }
     .into()
   }

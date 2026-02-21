@@ -21,12 +21,15 @@ use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, UserMenuConfig, UserMenuPage, UserMenuState,
-  UserMenuUser, WindowExt, user_menu,
+  UserMenuUser, WindowExt, user_menu, StatusThemeExt as _, UiIconName,
 };
 
 use crate::{
   AuthCallbackTarget, ShowCommandPalette,
-  api::{ApiClient, GithubPullRequest, GithubRepositoryDetails},
+  api::{
+    ApiClient, GithubIssue, GithubIssueStateReason, GithubIssueUser, GithubPullRequest,
+    GithubRepositoryDetails,
+  },
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_compact_datetime, format_long_date_opt},
   github_page::GithubPageHandle,
@@ -74,6 +77,46 @@ fn github_page_navigation(has_active_subscription: bool) -> (WorkspacePage, bool
 
 fn should_show_overview_loading_state(repository_loading: bool, has_repository: bool) -> bool {
   repository_loading && !has_repository
+}
+
+fn repo_palette_open_target(has_active_subscription: bool) -> WorkspacePage {
+  if has_active_subscription {
+    WorkspacePage::GithubRepo
+  } else {
+    WorkspacePage::Billing
+  }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GithubIssueVisualState {
+  Open,
+  Completed,
+  NotPlanned,
+}
+
+fn issue_visual_state(state: &str, reason: Option<GithubIssueStateReason>) -> GithubIssueVisualState {
+  if state.eq_ignore_ascii_case("open") {
+    return GithubIssueVisualState::Open;
+  }
+
+  match reason {
+    Some(GithubIssueStateReason::Reopened) => GithubIssueVisualState::Open,
+    Some(GithubIssueStateReason::NotPlanned | GithubIssueStateReason::Duplicate) => {
+      GithubIssueVisualState::NotPlanned
+    }
+    Some(GithubIssueStateReason::Completed) | None => GithubIssueVisualState::Completed,
+  }
+}
+
+fn issue_user_display_name(user: Option<&GithubIssueUser>) -> SharedString {
+  let fallback = "unknown".to_string();
+  let name = user
+    .and_then(|user| user.name.clone())
+    .filter(|name| !name.trim().is_empty());
+  let login = user
+    .map(|user| user.login.clone())
+    .filter(|login| !login.trim().is_empty());
+  name.or(login).unwrap_or(fallback).into()
 }
 
 #[derive(Clone, Debug)]
@@ -191,7 +234,13 @@ impl ListDelegate for GithubRepoPullRequestListDelegate {
               .child(format!("Updated {}", updated_at)),
           )
           .when(!row.pr.labels.is_empty(), |this| {
-            this.child(h_flex().gap_1().flex_wrap().children(label_tags))
+            this.child(
+              h_flex()
+                .min_w_0()
+                .overflow_hidden()
+                .gap_1()
+                .children(label_tags),
+            )
           }),
       ),
     )
@@ -236,6 +285,216 @@ impl ListDelegate for GithubRepoPullRequestListDelegate {
   }
 }
 
+#[derive(Clone, Debug)]
+struct GithubRepoIssueRow {
+  issue: Rc<GithubIssue>,
+}
+
+impl GithubRepoIssueRow {
+  fn matches(&self, query: &str) -> bool {
+    if query.is_empty() {
+      return true;
+    }
+
+    let q = query.to_lowercase();
+    self.issue.title.to_lowercase().contains(&q)
+      || self.issue.number.to_string().contains(&q)
+      || self
+        .issue
+        .labels
+        .iter()
+        .any(|label| label.name.to_lowercase().contains(&q))
+      || self
+        .issue
+        .user
+        .as_ref()
+        .map(|user| {
+          user.login.to_lowercase().contains(&q)
+            || user
+              .name
+              .as_ref()
+              .map(|name| name.to_lowercase().contains(&q))
+              .unwrap_or(false)
+        })
+        .unwrap_or(false)
+  }
+}
+
+struct GithubRepoIssueListDelegate {
+  all_rows: Vec<Rc<GithubRepoIssueRow>>,
+  matched_rows: Vec<Rc<GithubRepoIssueRow>>,
+  selected_index: Option<IndexPath>,
+  query: SharedString,
+  loading: bool,
+}
+
+impl GithubRepoIssueListDelegate {
+  fn new() -> Self {
+    Self {
+      all_rows: Vec::new(),
+      matched_rows: Vec::new(),
+      selected_index: Some(IndexPath::default()),
+      query: "".into(),
+      loading: false,
+    }
+  }
+
+  fn prepare(&mut self, query: impl Into<SharedString>) {
+    self.query = query.into();
+    let q = self.query.as_ref();
+
+    let rows: Vec<Rc<GithubRepoIssueRow>> = self
+      .all_rows
+      .iter()
+      .filter(|row| row.matches(q))
+      .cloned()
+      .collect();
+
+    self.matched_rows = rows;
+  }
+
+  fn set_rows(&mut self, rows: Vec<Rc<GithubRepoIssueRow>>) {
+    self.all_rows = rows;
+    self.prepare(self.query.clone());
+  }
+}
+
+impl ListDelegate for GithubRepoIssueListDelegate {
+  type Item = ListItem;
+
+  fn items_count(&self, _section: usize, _cx: &App) -> usize {
+    self.matched_rows.len()
+  }
+
+  fn render_item(
+    &mut self,
+    ix: IndexPath,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<Self::Item> {
+    let theme = cx.theme().clone();
+    let base_item = list_base_item(ix, self.selected_index);
+    let row = self.matched_rows.get(ix.row)?;
+    let issue = &row.issue;
+
+    let display_name = issue_user_display_name(issue.user.as_ref());
+    let created_at = format_compact_datetime(&issue.created_at);
+    let updated_at = format_compact_datetime(&issue.updated_at);
+
+    let (state_icon, state_color) = match issue_visual_state(&issue.state, issue.state_reason.clone()) {
+      GithubIssueVisualState::Open => (UiIconName::CircleDot, theme.status_green()),
+      GithubIssueVisualState::Completed => (UiIconName::CircleCheck, theme.status_violet()),
+      GithubIssueVisualState::NotPlanned => (UiIconName::CircleSlash, theme.status_gray()),
+    };
+
+    let issue_user = h_flex()
+      .items_center()
+      .gap_2()
+      .child(
+        Avatar::new()
+          .name(display_name.clone())
+          .when_some(
+            issue.user.as_ref().and_then(|user| user.avatar_url.clone()),
+            |this, url| this.src(url),
+          )
+          .small(),
+      )
+      .child(
+        div()
+          .min_w_0()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child(Label::new(display_name).truncate()),
+      );
+
+    let label_tags = issue.labels.iter().take(4).map(|label| {
+      Tag::secondary()
+        .small()
+        .rounded_full()
+        .child(label.name.clone())
+    });
+
+    Some(
+      base_item.px_2().py_2().child(
+        v_flex()
+          .gap_1()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child(Icon::new(state_icon).size_3().text_color(state_color))
+              .child(
+                div()
+                  .min_w_0()
+                  .flex_1()
+                  .child(Label::new(issue.title.clone()).truncate()),
+              )
+              .when(!issue.labels.is_empty(), |this| {
+                this.child(
+                  h_flex()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .gap_1()
+                    .children(label_tags),
+                )
+              }),
+          )
+          .child(
+            h_flex()
+              .gap_3()
+              .items_center()
+              .min_w_0()
+              .overflow_hidden()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(format!("#{}", issue.number))
+              .child(issue_user)
+              .child(format!("Opened {}", created_at))
+              .child(format!("Updated {}", updated_at)),
+          ),
+      ),
+    )
+  }
+
+  fn render_empty(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> impl IntoElement {
+    v_flex()
+      .size_full()
+      .items_center()
+      .justify_center()
+      .gap_2()
+      .text_color(cx.theme().muted_foreground)
+      .child(Icon::new(IconName::Inbox).size_6())
+      .child("No issue found")
+  }
+
+  fn set_selected_index(
+    &mut self,
+    ix: Option<IndexPath>,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) {
+    update_selected_index(&mut self.selected_index, ix, cx);
+  }
+
+  fn perform_search(
+    &mut self,
+    query: &str,
+    _: &mut Window,
+    _: &mut Context<ListState<Self>>,
+  ) -> Task<()> {
+    self.prepare(query.to_owned());
+    Task::ready(())
+  }
+
+  fn loading(&self, _: &App) -> bool {
+    self.loading
+  }
+}
+
 pub struct GithubRepoPage {
   focus_handle: FocusHandle,
   api: ApiClient,
@@ -248,6 +507,9 @@ pub struct GithubRepoPage {
   pull_requests: Entity<ListState<GithubRepoPullRequestListDelegate>>,
   pull_requests_error: Option<SharedString>,
   pull_requests_task: Option<Task<()>>,
+  issues: Entity<ListState<GithubRepoIssueListDelegate>>,
+  issues_error: Option<SharedString>,
+  issues_task: Option<Task<()>>,
   active_tab_ix: usize,
   _subscriptions: Vec<Subscription>,
 }
@@ -310,6 +572,7 @@ impl GithubRepoPage {
 
     let pull_requests = cx
       .new(|cx| ListState::new(GithubRepoPullRequestListDelegate::new(), window, cx).searchable(true));
+    let issues = cx.new(|cx| ListState::new(GithubRepoIssueListDelegate::new(), window, cx).searchable(true));
 
     let api = WorkspaceApi::global(cx).api.clone();
     let mut this = Self {
@@ -324,11 +587,15 @@ impl GithubRepoPage {
       pull_requests,
       pull_requests_error: None,
       pull_requests_task: None,
+      issues,
+      issues_error: None,
+      issues_task: None,
       active_tab_ix: 0,
       _subscriptions: Vec::new(),
     };
 
     this.subscribe_to_pull_requests(cx);
+    this.subscribe_to_issues(cx);
     this
   }
 
@@ -355,6 +622,27 @@ impl GithubRepoPage {
     self._subscriptions.push(subscription);
   }
 
+  fn subscribe_to_issues(&mut self, cx: &mut Context<Self>) {
+    let subscription = cx.subscribe(
+      &self.issues,
+      |_, state, event: &ListEvent, cx| {
+        if let ListEvent::Confirm(ix) = event {
+          let row = state.read(cx).delegate().matched_rows.get(ix.row).cloned();
+          if let Some(row) = row {
+            let issue = &row.issue;
+            let issue_url = format!(
+              "https://github.com/{}/{}/issues/{}",
+              issue.repository.owner, issue.repository.repo, issue.number
+            );
+            cx.open_url(&issue_url);
+          }
+        }
+      },
+    );
+
+    self._subscriptions.push(subscription);
+  }
+
   fn set_active_tab(&mut self, tab_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
     if self.active_tab_ix == tab_ix {
       return;
@@ -365,6 +653,15 @@ impl GithubRepoPage {
     if tab_ix == 1 {
       cx.on_next_frame(window, |this, window, cx| {
         this.pull_requests.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      });
+      return;
+    }
+
+    if tab_ix == 2 {
+      cx.on_next_frame(window, |this, window, cx| {
+        this.issues.update(cx, |state, cx| {
           state.focus(window, cx);
         });
       });
@@ -382,6 +679,12 @@ impl GithubRepoPage {
 
     self.pull_requests_error = None;
     self.pull_requests.update(cx, |state, cx| {
+      state.delegate_mut().loading = true;
+      state.delegate_mut().set_rows(Vec::new());
+      cx.notify();
+    });
+    self.issues_error = None;
+    self.issues.update(cx, |state, cx| {
       state.delegate_mut().loading = true;
       state.delegate_mut().set_rows(Vec::new());
       cx.notify();
@@ -417,8 +720,8 @@ impl GithubRepoPage {
     self.repository_task = Some(details_task);
 
     let pull_requests_api = self.api.clone();
-    let pull_requests_owner = owner;
-    let pull_requests_repo = repo;
+    let pull_requests_owner = owner.clone();
+    let pull_requests_repo = repo.clone();
     let pull_requests_task = cx.spawn(async move |this, cx| {
       let result = unblock(move || {
         pull_requests_api.fetch_github_repository_pull_requests(&pull_requests_owner, &pull_requests_repo)
@@ -454,6 +757,45 @@ impl GithubRepoPage {
       });
     });
     self.pull_requests_task = Some(pull_requests_task);
+
+    let issues_api = self.api.clone();
+    let issues_owner = owner;
+    let issues_repo = repo;
+    let issues_task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        issues_api.fetch_github_repository_issues(&issues_owner, &issues_repo)
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        let mut rows = Vec::new();
+
+        match result {
+          Ok(issues) => {
+            rows = issues
+              .into_iter()
+              .map(|issue| Rc::new(GithubRepoIssueRow { issue: Rc::new(issue) }))
+              .collect();
+            this.issues_error = None;
+          }
+          Err(error) => {
+            let message = error.to_string();
+            if is_unauthorized_error_message(&message) {
+              this.issues_error = Some("Authentication required. Please sign in again.".into());
+            } else {
+              this.issues_error = Some(message.into());
+            }
+          }
+        }
+
+        this.issues.update(cx, |state, cx| {
+          state.delegate_mut().loading = false;
+          state.delegate_mut().set_rows(rows);
+          cx.notify();
+        });
+      });
+    });
+    self.issues_task = Some(issues_task);
 
     cx.notify();
   }
@@ -517,7 +859,17 @@ impl GithubRepoPage {
         Ok(())
       }
       CommandPaletteAction::OpenGithubRepoDetails { owner, repo } => {
-        GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
+        match repo_palette_open_target(AuthStateStore::has_active_subscription(cx)) {
+          WorkspacePage::GithubRepo => {
+            self.load_repository(owner, repo, cx);
+            WorkspaceRoute::global_mut(cx).page = WorkspacePage::GithubRepo;
+          }
+          WorkspacePage::Billing => {
+            WorkspaceRoute::open_billing(cx);
+          }
+          _ => {}
+        }
+        cx.refresh_windows();
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -647,7 +999,8 @@ impl GithubRepoPage {
         this.set_active_tab(*ix, window, cx);
       }))
       .child(Tab::new().label("Overview"))
-      .child(Tab::new().label("Pull Requests"));
+      .child(Tab::new().label("Pull Requests"))
+      .child(Tab::new().label("Issues"));
 
     div()
       .px_3()
@@ -863,16 +1216,41 @@ impl GithubRepoPage {
       })
       .child(list)
   }
+
+  fn render_issues(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    let list = List::new(&self.issues)
+      .search_placeholder("Search issues...")
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius)
+      .flex_1()
+      .min_w(px(0.0))
+      .min_h_0()
+      .p(px(8.));
+
+    v_flex()
+      .w_full()
+      .h_full()
+      .min_h_0()
+      .gap_3()
+      .p_4()
+      .when_some(self.issues_error.clone(), |this, error| {
+        this.child(div().text_sm().text_color(theme.red).child(error))
+      })
+      .child(list)
+  }
 }
 
 impl Render for GithubRepoPage {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
-    let content = if self.active_tab_ix == 0 {
-      self.render_overview(cx).into_any_element()
-    } else {
-      self.render_pull_requests(cx).into_any_element()
+    let content = match self.active_tab_ix {
+      0 => self.render_overview(cx).into_any_element(),
+      1 => self.render_pull_requests(cx).into_any_element(),
+      _ => self.render_issues(cx).into_any_element(),
     };
 
     div()
@@ -918,5 +1296,56 @@ mod tests {
     assert!(should_show_overview_loading_state(true, false));
     assert!(!should_show_overview_loading_state(false, false));
     assert!(!should_show_overview_loading_state(true, true));
+  }
+
+  #[test]
+  fn repo_palette_open_target_follows_subscription_state() {
+    assert_eq!(repo_palette_open_target(true), WorkspacePage::GithubRepo);
+    assert_eq!(repo_palette_open_target(false), WorkspacePage::Billing);
+  }
+
+  #[test]
+  fn issue_visual_state_maps_open_completed_and_not_planned_variants() {
+    assert_eq!(
+      issue_visual_state("open", None),
+      GithubIssueVisualState::Open
+    );
+    assert_eq!(
+      issue_visual_state("closed", Some(GithubIssueStateReason::Completed)),
+      GithubIssueVisualState::Completed
+    );
+    assert_eq!(
+      issue_visual_state("closed", Some(GithubIssueStateReason::Duplicate)),
+      GithubIssueVisualState::NotPlanned
+    );
+    assert_eq!(
+      issue_visual_state("closed", Some(GithubIssueStateReason::NotPlanned)),
+      GithubIssueVisualState::NotPlanned
+    );
+    assert_eq!(
+      issue_visual_state("closed", Some(GithubIssueStateReason::Reopened)),
+      GithubIssueVisualState::Open
+    );
+  }
+
+  #[test]
+  fn issue_user_display_name_prefers_name_then_login_then_unknown() {
+    let with_name = GithubIssueUser {
+      login: "octocat".into(),
+      name: Some("The Octocat".into()),
+      avatar_url: None,
+    };
+    assert_eq!(
+      issue_user_display_name(Some(&with_name)).as_ref(),
+      "The Octocat"
+    );
+
+    let with_login = GithubIssueUser {
+      login: "octocat".into(),
+      name: Some("".into()),
+      avatar_url: None,
+    };
+    assert_eq!(issue_user_display_name(Some(&with_login)).as_ref(), "octocat");
+    assert_eq!(issue_user_display_name(None).as_ref(), "unknown");
   }
 }

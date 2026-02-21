@@ -496,6 +496,13 @@ fn resolve_pr_back_target(owner: SharedString, repo: SharedString) -> GithubPrBa
   }
 }
 
+fn next_back_target_for_pr_palette(back_target: &GithubPrBackTarget) -> GithubPrBackTarget {
+  match back_target {
+    GithubPrBackTarget::GithubHome => GithubPrBackTarget::GithubHome,
+    GithubPrBackTarget::Repo { owner, repo } => resolve_pr_back_target(owner.clone(), repo.clone()),
+  }
+}
+
 #[derive(Clone, Default)]
 pub struct GithubPrDetailsPageHandle {
   page: Option<gpui::WeakEntity<GithubPrDetailsPage>>,
@@ -2710,24 +2717,16 @@ impl GithubPrDetailsPage {
         repo,
         number,
       } => {
-        match &self.back_target {
-          GithubPrBackTarget::GithubHome => {
-            GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
-          }
-          GithubPrBackTarget::Repo {
-            owner: return_owner,
-            repo: return_repo,
-          } => {
-            GithubPrDetailsPageHandle::show_with_repo_return(
-              owner.into(),
-              repo.into(),
-              number,
-              return_owner.clone(),
-              return_repo.clone(),
-              cx,
-            );
-          }
+        if !AuthStateStore::has_active_subscription(cx) {
+          WorkspaceRoute::open_billing(cx);
+          cx.refresh_windows();
+          return Ok(());
         }
+
+        self.back_target = next_back_target_for_pr_palette(&self.back_target);
+        self.load_pull_request(owner, repo, number, cx);
+        WorkspaceRoute::global_mut(cx).page = WorkspacePage::GithubPrDetails;
+        cx.refresh_windows();
         Ok(())
       }
       CommandPaletteAction::OpenGithubRepoDetails { owner, repo } => {
@@ -3307,6 +3306,27 @@ mod tests {
   #[test]
   fn resolve_pr_back_target_uses_repo_when_owner_and_repo_are_present() {
     let target = resolve_pr_back_target("acme".into(), "widget".into());
+    assert_eq!(
+      target,
+      GithubPrBackTarget::Repo {
+        owner: "acme".into(),
+        repo: "widget".into(),
+      }
+    );
+  }
+
+  #[test]
+  fn next_back_target_for_pr_palette_preserves_github_home() {
+    let target = next_back_target_for_pr_palette(&GithubPrBackTarget::GithubHome);
+    assert_eq!(target, GithubPrBackTarget::GithubHome);
+  }
+
+  #[test]
+  fn next_back_target_for_pr_palette_preserves_repo_target() {
+    let target = next_back_target_for_pr_palette(&GithubPrBackTarget::Repo {
+      owner: "acme".into(),
+      repo: "widget".into(),
+    });
     assert_eq!(
       target,
       GithubPrBackTarget::Repo {
