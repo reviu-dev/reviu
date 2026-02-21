@@ -1374,7 +1374,10 @@ mod tests {
     assert_eq!(details.default_branch, "main");
     assert_eq!(details.stargazers_count, 123);
     assert_eq!(
-      details.license.as_ref().map(|license| license.name.as_str()),
+      details
+        .license
+        .as_ref()
+        .map(|license| license.name.as_str()),
       Some("MIT License")
     );
     handle.join().expect("join server thread");
@@ -1507,7 +1510,10 @@ mod tests {
     assert_eq!(issue.comments[0].id, 9001);
     assert_eq!(issue.comments[0].body.as_deref(), Some("Looks good"));
     assert_eq!(
-      issue.comments[0].user.as_ref().map(|user| user.login.as_str()),
+      issue.comments[0]
+        .user
+        .as_ref()
+        .map(|user| user.login.as_str()),
       Some("octocat")
     );
     assert_eq!(issue.repository.owner, "acme");
@@ -1519,7 +1525,10 @@ mod tests {
       .expect("lock request line")
       .clone()
       .unwrap_or_default();
-    assert_eq!(request_line, "GET /github/repos/acme/widget/issues/77 HTTP/1.1");
+    assert_eq!(
+      request_line,
+      "GET /github/repos/acme/widget/issues/77 HTTP/1.1"
+    );
   }
 
   #[test]
@@ -2039,7 +2048,9 @@ mod tests {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
     let api = make_test_api_client(base_url);
 
-    let err = api.fetch_github_repository_pull_requests("acme", "widget").err();
+    let err = api
+      .fetch_github_repository_pull_requests("acme", "widget")
+      .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");

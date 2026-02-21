@@ -230,7 +230,9 @@ fn line_is_markdown_link_to_url(trimmed: &str, url: &str) -> bool {
 }
 
 fn review_comment_markdown_scope_id(comment_id: u64) -> usize {
-  (comment_id as usize).wrapping_mul(1_000_003).wrapping_add(1)
+  (comment_id as usize)
+    .wrapping_mul(1_000_003)
+    .wrapping_add(1)
 }
 
 fn review_comment_markdown_segment_scope_id(comment_id: u64, segment_index: usize) -> usize {

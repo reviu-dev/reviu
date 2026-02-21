@@ -598,30 +598,25 @@ impl Render for BillingPage {
       .on_action(cx.listener(BillingPage::close_workspace_page_action))
       .child(self.render_header(cx))
       .child(
-        div()
-          .w_full()
-          .h_full()
-          .min_h_0()
-          .p_4()
-          .child(
-            v_flex()
-              .w_full()
-              .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
-              .mx_auto()
-              .gap_3()
-              .child(content)
-              .when_some(self.error.clone(), |this, error| {
-                this.child(
-                  div().w_full().flex().justify_center().child(
-                    div()
-                      .text_sm()
-                      .text_color(theme.status_red())
-                      .text_center()
-                      .child(error),
-                  ),
-                )
-              }),
-          ),
+        div().w_full().h_full().min_h_0().p_4().child(
+          v_flex()
+            .w_full()
+            .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+            .mx_auto()
+            .gap_3()
+            .child(content)
+            .when_some(self.error.clone(), |this, error| {
+              this.child(
+                div().w_full().flex().justify_center().child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.status_red())
+                    .text_center()
+                    .child(error),
+                ),
+              )
+            }),
+        ),
       )
   }
 }

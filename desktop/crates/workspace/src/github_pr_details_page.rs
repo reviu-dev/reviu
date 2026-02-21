@@ -38,11 +38,11 @@ use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, ConfirmDialog, FILE_ICON_SIZE_PX, SearchFileEntry,
-  SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UiIconName,
-  UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
-  DETAILS_PAGE_CONTAINER_MAX_WIDTH,
-  file_icon_path_for_name_with_theme, h_resizable, resizable_panel, user_menu,
+  CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DETAILS_PAGE_CONTAINER_MAX_WIDTH,
+  FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler, SearchFilePalette,
+  SearchFilePaletteConfig, StatusThemeExt, UiIconName, UserMenuConfig, UserMenuPage, UserMenuState,
+  UserMenuUser, WindowExt, file_icon_path_for_name_with_theme, h_resizable, resizable_panel,
+  user_menu,
 };
 
 use crate::{
