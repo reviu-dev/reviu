@@ -706,7 +706,8 @@ impl GithubPage {
       }
       CommandPaletteAction::OpenGithubPage => {
         if AuthStateStore::has_active_subscription(cx) {
-          GithubPageHandle::refresh(cx);
+          self.focus_on_next_render = true;
+          self.refresh_pull_requests(cx);
           WorkspaceRoute::open_github(cx);
         } else {
           WorkspaceRoute::open_billing(cx);
