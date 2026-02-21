@@ -18,6 +18,7 @@ use crate::config::{AppSettings as PersistedSettings, ConfigStore};
 use crate::git_config_page::GitConfigPage;
 use crate::git_page::GitPage;
 use crate::github_page::GithubPage;
+use crate::github_repo_page::GithubRepoPage;
 use crate::github_pr_details_page::GithubPrDetailsPage;
 use crate::sentry_context;
 use crate::settings_page::SettingsPage;
@@ -27,6 +28,7 @@ use ui::{Button, ButtonVariants as _, UiIconName, WindowExt};
 pub enum WorkspacePage {
   Git,
   Github,
+  GithubRepo,
   GithubPrDetails,
   Billing,
   GitConfig,
@@ -35,7 +37,10 @@ pub enum WorkspacePage {
 }
 
 fn github_access_required(page: WorkspacePage) -> bool {
-  matches!(page, WorkspacePage::Github | WorkspacePage::GithubPrDetails)
+  matches!(
+    page,
+    WorkspacePage::Github | WorkspacePage::GithubRepo | WorkspacePage::GithubPrDetails
+  )
 }
 
 fn page_for_subscription_access(page: WorkspacePage, has_access: bool) -> WorkspacePage {
@@ -190,6 +195,7 @@ pub struct WorkspaceView {
   git_page: Entity<GitPage>,
   git_config_page: Entity<GitConfigPage>,
   github_page: Entity<GithubPage>,
+  github_repo_page: Entity<GithubRepoPage>,
   github_pr_details_page: Entity<GithubPrDetailsPage>,
   billing_page: Entity<BillingPage>,
   settings_page: Entity<SettingsPage>,
@@ -224,6 +230,7 @@ impl WorkspaceView {
     let git_page = cx.new(|cx| GitPage::new(window, cx));
     let git_config_page = cx.new(|cx| GitConfigPage::new(window, cx));
     let github_page = cx.new(|cx| GithubPage::new(window, cx));
+    let github_repo_page = cx.new(|cx| GithubRepoPage::new(window, cx));
     let github_pr_details_page = cx.new(|cx| GithubPrDetailsPage::new(window, cx));
     let billing_page = cx.new(|cx| BillingPage::new(window, cx));
     let settings_page = cx.new(|cx| SettingsPage::new(window, cx, settings));
@@ -233,6 +240,7 @@ impl WorkspaceView {
       git_page,
       git_config_page,
       github_page,
+      github_repo_page,
       github_pr_details_page,
       billing_page,
       settings_page,
@@ -422,6 +430,7 @@ impl Render for WorkspaceView {
     match page {
       WorkspacePage::Git => self.git_page.clone().into_any_element(),
       WorkspacePage::Github => self.github_page.clone().into_any_element(),
+      WorkspacePage::GithubRepo => self.github_repo_page.clone().into_any_element(),
       WorkspacePage::GithubPrDetails => self.github_pr_details_page.clone().into_any_element(),
       WorkspacePage::Billing => self.billing_page.clone().into_any_element(),
       WorkspacePage::GitConfig => self.git_config_page.clone().into_any_element(),
@@ -445,6 +454,10 @@ mod tests {
     );
     assert_eq!(
       page_for_subscription_access(WorkspacePage::GithubPrDetails, false),
+      WorkspacePage::Billing
+    );
+    assert_eq!(
+      page_for_subscription_access(WorkspacePage::GithubRepo, false),
       WorkspacePage::Billing
     );
   }
@@ -480,6 +493,10 @@ mod tests {
       WorkspacePage::Git
     );
     assert_eq!(
+      billing_return_target_for_subscription(WorkspacePage::GithubRepo, false),
+      WorkspacePage::Git
+    );
+    assert_eq!(
       billing_return_target_for_subscription(WorkspacePage::Settings, false),
       WorkspacePage::Settings
     );
@@ -491,6 +508,7 @@ impl Focusable for WorkspaceView {
     match WorkspaceRoute::global(cx).page {
       WorkspacePage::Git => self.git_page.read(cx).focus_handle(cx),
       WorkspacePage::Github => self.github_page.read(cx).focus_handle(cx),
+      WorkspacePage::GithubRepo => self.github_repo_page.read(cx).focus_handle(cx),
       WorkspacePage::GithubPrDetails => self.github_pr_details_page.read(cx).focus_handle(cx),
       WorkspacePage::Billing => self.billing_page.read(cx).focus_handle(cx),
       WorkspacePage::GitConfig => self.git_config_page.read(cx).focus_handle(cx),

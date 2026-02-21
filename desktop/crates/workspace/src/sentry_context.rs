@@ -37,6 +37,7 @@ fn workspace_page_tag(page: WorkspacePage) -> &'static str {
   match page {
     WorkspacePage::Git => "git",
     WorkspacePage::Github => "github",
+    WorkspacePage::GithubRepo => "github_repo",
     WorkspacePage::GithubPrDetails => "github_pr_details",
     WorkspacePage::Billing => "billing",
     WorkspacePage::GitConfig => "git_config",
@@ -337,6 +338,7 @@ mod tests {
   fn workspace_page_tag_maps_pages() {
     assert_eq!(workspace_page_tag(WorkspacePage::Git), "git");
     assert_eq!(workspace_page_tag(WorkspacePage::Github), "github");
+    assert_eq!(workspace_page_tag(WorkspacePage::GithubRepo), "github_repo");
     assert_eq!(
       workspace_page_tag(WorkspacePage::GithubPrDetails),
       "github_pr_details"

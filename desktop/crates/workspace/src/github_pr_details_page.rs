@@ -52,6 +52,7 @@ use crate::{
   auth_state::{AuthState, AuthStateStore},
   date_format::format_long_date,
   github_page::GithubPageHandle,
+  github_repo_page::GithubRepoPageHandle,
   sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
@@ -466,6 +467,7 @@ pub struct GithubPrDetailsPage {
   svg_preview_task: Option<Task<()>>,
   active_tab_ix: usize,
   current_pr_context: Option<CurrentPrContext>,
+  back_target: GithubPrBackTarget,
   pull_request: Option<GithubPullRequestDetails>,
   error: Option<SharedString>,
 }
@@ -475,6 +477,23 @@ struct CurrentPrContext {
   owner: String,
   repo: String,
   number: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum GithubPrBackTarget {
+  GithubHome,
+  Repo {
+    owner: SharedString,
+    repo: SharedString,
+  },
+}
+
+fn resolve_pr_back_target(owner: SharedString, repo: SharedString) -> GithubPrBackTarget {
+  if owner.as_ref().trim().is_empty() || repo.as_ref().trim().is_empty() {
+    GithubPrBackTarget::GithubHome
+  } else {
+    GithubPrBackTarget::Repo { owner, repo }
+  }
 }
 
 #[derive(Clone, Default)]
@@ -492,6 +511,33 @@ impl GithubPrDetailsPageHandle {
   }
 
   pub fn show(owner: SharedString, repo: SharedString, number: u64, cx: &mut App) {
+    Self::show_with_back_target(owner, repo, number, GithubPrBackTarget::GithubHome, cx);
+  }
+
+  pub fn show_with_repo_return(
+    owner: SharedString,
+    repo: SharedString,
+    number: u64,
+    return_owner: SharedString,
+    return_repo: SharedString,
+    cx: &mut App,
+  ) {
+    Self::show_with_back_target(
+      owner,
+      repo,
+      number,
+      resolve_pr_back_target(return_owner, return_repo),
+      cx,
+    );
+  }
+
+  fn show_with_back_target(
+    owner: SharedString,
+    repo: SharedString,
+    number: u64,
+    back_target: GithubPrBackTarget,
+    cx: &mut App,
+  ) {
     if !AuthStateStore::has_active_subscription(cx) {
       WorkspaceRoute::open_billing(cx);
       cx.refresh_windows();
@@ -504,7 +550,9 @@ impl GithubPrDetailsPageHandle {
 
     let owner_string = owner.to_string();
     let repo_string = repo.to_string();
+    let back_target_value = back_target.clone();
     let _ = weak.update(cx, |this, cx| {
+      this.back_target = back_target_value.clone();
       this.load_pull_request(owner_string, repo_string, number, cx);
     });
 
@@ -608,6 +656,7 @@ impl GithubPrDetailsPage {
       svg_preview_task: None,
       active_tab_ix: 0,
       current_pr_context: None,
+      back_target: GithubPrBackTarget::GithubHome,
       pull_request: None,
       error: None,
     };
@@ -1834,6 +1883,23 @@ impl GithubPrDetailsPage {
     self.files_task = Some(files_task);
   }
 
+  fn navigate_back(&self, cx: &mut Context<Self>) {
+    match &self.back_target {
+      GithubPrBackTarget::GithubHome => {
+        if AuthStateStore::has_active_subscription(cx) {
+          GithubPageHandle::refresh(cx);
+          WorkspaceRoute::open_github(cx);
+        } else {
+          WorkspaceRoute::open_billing(cx);
+        }
+        cx.refresh_windows();
+      }
+      GithubPrBackTarget::Repo { owner, repo } => {
+        GithubRepoPageHandle::show(owner.clone(), repo.clone(), cx);
+      }
+    }
+  }
+
   fn render_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
@@ -1862,6 +1928,7 @@ impl GithubPrDetailsPage {
     let open_github = Rc::new(|_window: &mut Window, cx: &mut App| {
       let cx = &mut *cx;
       if AuthStateStore::has_active_subscription(cx) {
+        GithubPageHandle::refresh(cx);
         WorkspaceRoute::open_github(cx);
       } else {
         WorkspaceRoute::open_billing(cx);
@@ -1924,14 +1991,9 @@ impl GithubPrDetailsPage {
         .icon(IconName::ArrowLeft)
         .ghost()
         .compact()
-        .on_click(|_, _, cx| {
-          if AuthStateStore::has_active_subscription(cx) {
-            WorkspaceRoute::open_github(cx);
-          } else {
-            WorkspaceRoute::open_billing(cx);
-          }
-          cx.refresh_windows();
-        })
+        .on_click(cx.listener(|this, _, _, cx| {
+          this.navigate_back(cx);
+        }))
     };
 
     let left_area = if let Some(pr) = self.pull_request.as_ref() {
@@ -2648,7 +2710,28 @@ impl GithubPrDetailsPage {
         repo,
         number,
       } => {
-        GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
+        match &self.back_target {
+          GithubPrBackTarget::GithubHome => {
+            GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
+          }
+          GithubPrBackTarget::Repo {
+            owner: return_owner,
+            repo: return_repo,
+          } => {
+            GithubPrDetailsPageHandle::show_with_repo_return(
+              owner.into(),
+              repo.into(),
+              number,
+              return_owner.clone(),
+              return_repo.clone(),
+              cx,
+            );
+          }
+        }
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubRepoDetails { owner, repo } => {
+        GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
@@ -3213,6 +3296,24 @@ mod tests {
       Some(vec!["".to_string()])
     );
     assert!(line_snippets_from_content(content, 0, 2).is_none());
+  }
+
+  #[test]
+  fn resolve_pr_back_target_defaults_to_github_home_when_repo_is_empty() {
+    let target = resolve_pr_back_target("".into(), "".into());
+    assert_eq!(target, GithubPrBackTarget::GithubHome);
+  }
+
+  #[test]
+  fn resolve_pr_back_target_uses_repo_when_owner_and_repo_are_present() {
+    let target = resolve_pr_back_target("acme".into(), "widget".into());
+    assert_eq!(
+      target,
+      GithubPrBackTarget::Repo {
+        owner: "acme".into(),
+        repo: "widget".into(),
+      }
+    );
   }
 
   #[test]

@@ -24,6 +24,7 @@ use crate::{
   date_format::{format_long_date_opt, parse_rfc3339},
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
+  github_repo_page::GithubRepoPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 
@@ -211,6 +212,10 @@ impl BillingPage {
         number,
       } => {
         GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubRepoDetails { owner, repo } => {
+        GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

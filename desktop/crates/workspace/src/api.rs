@@ -144,6 +144,50 @@ pub struct GithubRepository {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct GithubRepositoryDetailsOwner {
+  pub login: String,
+  #[serde(rename = "avatar_url")]
+  pub avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubRepositoryLicense {
+  pub key: String,
+  pub name: String,
+  #[serde(rename = "spdx_id")]
+  pub spdx_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubRepositoryDetails {
+  pub name: String,
+  #[serde(rename = "full_name")]
+  pub full_name: String,
+  pub description: Option<String>,
+  pub homepage: Option<String>,
+  pub language: Option<String>,
+  #[serde(rename = "default_branch")]
+  pub default_branch: String,
+  #[serde(rename = "stargazers_count")]
+  pub stargazers_count: u64,
+  #[serde(rename = "forks_count")]
+  pub forks_count: u64,
+  #[serde(rename = "subscribers_count")]
+  pub subscribers_count: u64,
+  #[serde(rename = "open_issues_count")]
+  pub open_issues_count: u64,
+  pub size: u64,
+  #[serde(rename = "pushed_at")]
+  pub pushed_at: Option<String>,
+  #[serde(rename = "html_url")]
+  pub html_url: String,
+  pub owner: GithubRepositoryDetailsOwner,
+  pub license: Option<GithubRepositoryLicense>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequest {
   pub number: u64,
   pub title: String,
@@ -608,6 +652,44 @@ impl ApiClient {
       .send()?;
     let status = response.status();
     Self::record_http_status("GET", "/github/pr/latest", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubPullRequestsResponse>()?;
+    Ok(payload.pull_requests)
+  }
+
+  pub fn fetch_github_repository_details(
+    &self,
+    owner: &str,
+    repo: &str,
+  ) -> Result<GithubRepositoryDetails> {
+    let route = format!("/github/repos/{owner}/{repo}");
+    let response = self.authed_request(Method::GET, route.as_str()).send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubRepositoryDetails>()?;
+    Ok(payload)
+  }
+
+  pub fn fetch_github_repository_pull_requests(
+    &self,
+    owner: &str,
+    repo: &str,
+  ) -> Result<Vec<GithubPullRequest>> {
+    let route = format!("/github/repos/{owner}/{repo}/pr");
+    let response = self.authed_request(Method::GET, route.as_str()).send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
     if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
@@ -1138,6 +1220,79 @@ mod tests {
   }
 
   #[test]
+  fn fetch_github_repository_details_parses_success_payload() {
+    let body = r#"{
+      "name": "widget",
+      "full_name": "acme/widget",
+      "description": "A sample repository",
+      "homepage": "https://acme.dev/widget",
+      "language": "Rust",
+      "default_branch": "main",
+      "stargazers_count": 123,
+      "forks_count": 45,
+      "subscribers_count": 6,
+      "open_issues_count": 7,
+      "size": 2048,
+      "pushed_at": "2026-02-20T12:00:00Z",
+      "html_url": "https://github.com/acme/widget",
+      "owner": {
+        "login": "acme",
+        "avatar_url": "https://example.com/avatar.png"
+      },
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT"
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let details = api
+      .fetch_github_repository_details("acme", "widget")
+      .expect("fetch repository details");
+    assert_eq!(details.full_name, "acme/widget");
+    assert_eq!(details.owner.login, "acme");
+    assert_eq!(details.default_branch, "main");
+    assert_eq!(details.stargazers_count, 123);
+    assert_eq!(
+      details.license.as_ref().map(|license| license.name.as_str()),
+      Some("MIT License")
+    );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_repository_pull_requests_parses_success_payload() {
+    let body = r#"{
+      "pullRequests": [
+        {
+          "number": 11,
+          "title": "Improve docs",
+          "state": "open",
+          "mergedAt": null,
+          "draft": false,
+          "updatedAt": "2026-02-15T12:00:00Z",
+          "labels": [{ "name": "docs" }],
+          "repository": { "owner": "acme", "repo": "widget" }
+        }
+      ]
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let prs = api
+      .fetch_github_repository_pull_requests("acme", "widget")
+      .expect("fetch repository pull requests");
+    assert_eq!(prs.len(), 1);
+    assert_eq!(prs[0].number, 11);
+    assert_eq!(prs[0].title, "Improve docs");
+    assert_eq!(prs[0].repository.owner, "acme");
+    assert_eq!(prs[0].repository.repo, "widget");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
   fn fetch_pull_request_details_parses_success_payload() {
     let body = r#"{
       "pullRequest": {
@@ -1633,6 +1788,28 @@ mod tests {
     let api = make_test_api_client(base_url);
 
     let err = api.fetch_latest_pull_requests("acme", "widget").err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_repository_details_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api.fetch_github_repository_details("acme", "widget").err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_repository_pull_requests_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api.fetch_github_repository_pull_requests("acme", "widget").err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");
