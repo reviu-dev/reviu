@@ -6,6 +6,7 @@ use gpui::{
 };
 use gpui_component::Root;
 use reqwest_client::ReqwestClient;
+use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use ui::AppAssets;
@@ -18,8 +19,34 @@ mod app_root;
 const INITIAL_WINDOW_WIDTH: f32 = 1200.0;
 const INITIAL_WINDOW_HEIGHT: f32 = 800.0;
 const REVIU_URL_SCHEME: &str = "reviu";
+const SENTRY_DSN: &str =
+  "https://a816f0ac9d37d42ec72719de4770c538@o1155685.ingest.us.sentry.io/4510920248918016";
+const SENTRY_ENABLE_DEV_ENV: &str = "SENTRY_ENABLE_DEV";
+const SENTRY_REDACTED: &str = "[REDACTED]";
 
 fn main() {
+  let traces_sample_rate = if cfg!(debug_assertions) { 1.0 } else { 0.1 };
+  let dsn = if sentry_enabled() {
+    Some(SENTRY_DSN.parse().expect("Invalid Sentry DSN"))
+  } else {
+    None
+  };
+
+  println!("Starting Reviu (Sentry enabled: {})", dsn.is_some());
+  let _guard = sentry::init(sentry::ClientOptions {
+    dsn,
+    release: resolved_sentry_release(),
+    // Capture user IPs and potentially sensitive headers when using HTTP server integrations
+    // see https://docs.sentry.io/platforms/rust/data-management/data-collected for more info
+    send_default_pii: true,
+    attach_stacktrace: true,
+    max_breadcrumbs: 300,
+    traces_sample_rate,
+    in_app_include: vec!["reviu", "workspace", "editor", "git", "ui"],
+    before_send: Some(Arc::new(redact_sensitive_event_data)),
+    ..Default::default()
+  });
+
   let (open_url_tx, open_url_rx) = mpsc::channel::<Vec<String>>();
   let app = Application::new().with_assets(AppAssets);
   app.on_open_urls({
@@ -146,6 +173,95 @@ fn main() {
   });
 }
 
+fn resolved_sentry_release_from(
+  env_release: Option<&'static str>,
+  fallback: Option<Cow<'static, str>>,
+) -> Option<Cow<'static, str>> {
+  env_release.map(Cow::Borrowed).or(fallback)
+}
+
+fn resolved_sentry_release() -> Option<Cow<'static, str>> {
+  resolved_sentry_release_from(option_env!("SENTRY_RELEASE"), sentry::release_name!())
+}
+
+fn sentry_enabled() -> bool {
+  let dev_flag = std::env::var(SENTRY_ENABLE_DEV_ENV).ok();
+  sentry_enabled_for(cfg!(debug_assertions), dev_flag.as_deref())
+}
+
+fn sentry_enabled_for(debug_build: bool, dev_flag: Option<&str>) -> bool {
+  if !debug_build {
+    return true;
+  }
+
+  dev_flag.is_some_and(is_truthy_env_value)
+}
+
+fn is_truthy_env_value(value: &str) -> bool {
+  matches!(
+    value.trim().to_ascii_lowercase().as_str(),
+    "1" | "true" | "yes" | "on"
+  )
+}
+
+fn redact_sensitive_event_data(
+  mut event: sentry::protocol::Event<'static>,
+) -> Option<sentry::protocol::Event<'static>> {
+  if let Some(request) = event.request.as_mut() {
+    if request.query_string.is_some() {
+      request.query_string = Some(SENTRY_REDACTED.to_string());
+    }
+    if request.cookies.is_some() {
+      request.cookies = Some(SENTRY_REDACTED.to_string());
+    }
+    for (name, value) in &mut request.headers {
+      if is_sensitive_header(name) {
+        *value = SENTRY_REDACTED.to_string();
+      }
+    }
+    if request
+      .data
+      .as_ref()
+      .is_some_and(|value| contains_sensitive_fragment(value))
+    {
+      request.data = Some(SENTRY_REDACTED.to_string());
+    }
+  }
+
+  for (key, value) in &mut event.extra {
+    if is_sensitive_key(key) {
+      *value = sentry::protocol::Value::String(SENTRY_REDACTED.to_string());
+    }
+  }
+
+  Some(event)
+}
+
+fn is_sensitive_header(name: &str) -> bool {
+  let name = name.trim().to_ascii_lowercase();
+  name == "authorization"
+    || name == "cookie"
+    || name == "set-cookie"
+    || name == "x-api-key"
+    || name == "x-auth-token"
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+  let key = key.trim().to_ascii_lowercase();
+  key.contains("token")
+    || key.contains("secret")
+    || key.contains("password")
+    || key.contains("authorization")
+}
+
+fn contains_sensitive_fragment(value: &str) -> bool {
+  let value = value.to_ascii_lowercase();
+  value.contains("token")
+    || value.contains("secret")
+    || value.contains("password")
+    || value.contains("authorization")
+}
+
 fn extract_auth_code(url: &str) -> Option<String> {
   let url = url.strip_prefix(REVIU_URL_SCHEME)?;
   let url = url.strip_prefix("://")?;
@@ -176,7 +292,118 @@ fn is_subscription_callback(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-  use super::{extract_auth_code, is_subscription_callback};
+  use super::{
+    contains_sensitive_fragment, extract_auth_code, is_sensitive_header, is_sensitive_key,
+    is_subscription_callback, is_truthy_env_value, redact_sensitive_event_data,
+    resolved_sentry_release_from, sentry_enabled_for,
+  };
+  use sentry::protocol::{Event, Request, Value};
+  use std::borrow::Cow;
+
+  #[test]
+  fn is_truthy_env_value_accepts_supported_values() {
+    assert!(is_truthy_env_value("1"));
+    assert!(is_truthy_env_value("true"));
+    assert!(is_truthy_env_value("TRUE"));
+    assert!(is_truthy_env_value("yes"));
+    assert!(is_truthy_env_value("on"));
+    assert!(is_truthy_env_value("  true  "));
+  }
+
+  #[test]
+  fn is_truthy_env_value_rejects_other_values() {
+    assert!(!is_truthy_env_value(""));
+    assert!(!is_truthy_env_value("0"));
+    assert!(!is_truthy_env_value("false"));
+    assert!(!is_truthy_env_value("no"));
+    assert!(!is_truthy_env_value("off"));
+  }
+
+  #[test]
+  fn sentry_enabled_for_enables_release_without_flag() {
+    assert!(sentry_enabled_for(false, None));
+    assert!(sentry_enabled_for(false, Some("0")));
+  }
+
+  #[test]
+  fn sentry_enabled_for_requires_flag_in_debug() {
+    assert!(!sentry_enabled_for(true, None));
+    assert!(!sentry_enabled_for(true, Some("0")));
+    assert!(sentry_enabled_for(true, Some("1")));
+  }
+
+  #[test]
+  fn resolved_sentry_release_prefers_env_value() {
+    let fallback = Some(Cow::Borrowed("reviu@0.0.1"));
+    let release = resolved_sentry_release_from(Some("reviu@1.2.3"), fallback);
+    assert_eq!(release.as_deref(), Some("reviu@1.2.3"));
+  }
+
+  #[test]
+  fn resolved_sentry_release_falls_back_when_env_missing() {
+    let fallback = Some(Cow::Borrowed("reviu@0.0.1"));
+    let release = resolved_sentry_release_from(None, fallback);
+    assert_eq!(release.as_deref(), Some("reviu@0.0.1"));
+  }
+
+  #[test]
+  fn redact_sensitive_event_data_masks_request_fields() {
+    let mut request = Request {
+      query_string: Some("token=abc123".into()),
+      cookies: Some("session=foo".into()),
+      data: Some(r#"{"password":"abc"}"#.into()),
+      ..Default::default()
+    };
+    request
+      .headers
+      .insert("Authorization".into(), "Bearer secret".into());
+    request.headers.insert("X-Trace-Id".into(), "safe".into());
+
+    let mut event = Event::default();
+    event.request = Some(request);
+    event
+      .extra
+      .insert("api_token".into(), Value::String("token".into()));
+    event
+      .extra
+      .insert("safe_key".into(), Value::String("value".into()));
+
+    let redacted = redact_sensitive_event_data(event).expect("event");
+    let request = redacted.request.expect("request");
+    assert_eq!(request.query_string.as_deref(), Some("[REDACTED]"));
+    assert_eq!(request.cookies.as_deref(), Some("[REDACTED]"));
+    assert_eq!(request.data.as_deref(), Some("[REDACTED]"));
+    assert_eq!(
+      request.headers.get("Authorization").map(String::as_str),
+      Some("[REDACTED]")
+    );
+    assert_eq!(
+      request.headers.get("X-Trace-Id").map(String::as_str),
+      Some("safe")
+    );
+    assert_eq!(
+      redacted.extra.get("api_token"),
+      Some(&Value::String("[REDACTED]".into()))
+    );
+    assert_eq!(
+      redacted.extra.get("safe_key"),
+      Some(&Value::String("value".into()))
+    );
+  }
+
+  #[test]
+  fn sensitive_key_helpers_detect_expected_patterns() {
+    assert!(is_sensitive_header("authorization"));
+    assert!(is_sensitive_header("X-AUTH-TOKEN"));
+    assert!(!is_sensitive_header("x-trace-id"));
+
+    assert!(is_sensitive_key("api_token"));
+    assert!(is_sensitive_key("db_password"));
+    assert!(!is_sensitive_key("git_branch"));
+
+    assert!(contains_sensitive_fragment("Authorization: Bearer token"));
+    assert!(!contains_sensitive_fragment("plain text"));
+  }
 
   #[test]
   fn extract_auth_code_reads_code_from_auth_callback_url() {

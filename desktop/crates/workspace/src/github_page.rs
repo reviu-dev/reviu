@@ -11,6 +11,7 @@ use gpui_component::{
   tag::Tag,
   v_flex,
 };
+use sentry::protocol::{Map, Value};
 use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
@@ -23,6 +24,7 @@ use crate::{
   auth_state::{AuthState, AuthStateStore},
   date_format::format_compact_datetime,
   github_pr_details_page::GithubPrDetailsPageHandle,
+  sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 use ui::{UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, user_menu};
@@ -442,6 +444,26 @@ impl GithubPageHandle {
 }
 
 impl GithubPage {
+  fn add_github_breadcrumb(&self, message: &str, data: Map<String, Value>) {
+    sentry_context::add_breadcrumb("github.page", message, data);
+  }
+
+  fn record_github_error(
+    &self,
+    operation: &'static str,
+    error: &str,
+    mut data: Map<String, Value>,
+  ) {
+    data.insert("error".into(), error.to_string().into());
+    if error.to_ascii_lowercase().contains("unauthorized") {
+      sentry_context::record_expected_error(operation, "unauthorized", data);
+      return;
+    }
+
+    let io_error = std::io::Error::other(error.to_string());
+    sentry_context::capture_unexpected_error(operation, &io_error, data);
+  }
+
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     let api = WorkspaceApi::global(cx).api.clone();
     Self::new_with_api(api, window, cx)
@@ -506,6 +528,11 @@ impl GithubPage {
     let owner = DEFAULT_ORG.to_string();
     let repo = DEFAULT_REPO.to_string();
 
+    let mut start_data = Map::new();
+    start_data.insert("owner".into(), owner.clone().into());
+    start_data.insert("repo".into(), repo.clone().into());
+    self.add_github_breadcrumb("Refresh pull requests started", start_data);
+
     self.error = None;
     self.pull_requests.update(cx, |state, cx| {
       state.delegate_mut().loading = true;
@@ -513,12 +540,15 @@ impl GithubPage {
     });
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.fetch_latest_pull_requests(&owner, &repo))
-        .await
-        .map_err(|error| error.to_string());
+      let owner_for_request = owner.clone();
+      let repo_for_request = repo.clone();
+      let result =
+        unblock(move || api.fetch_latest_pull_requests(&owner_for_request, &repo_for_request))
+          .await
+          .map_err(|error| error.to_string());
 
       let _ = this.update(cx, |this, cx| {
-        let (rows, error) = match result {
+        let (rows, error): (Vec<Rc<GithubPullRequestRow>>, Option<SharedString>) = match result {
           Ok(pull_requests) => (
             pull_requests
               .into_iter()
@@ -534,6 +564,23 @@ impl GithubPage {
           ),
           Err(error) => (Vec::new(), Some(error.into())),
         };
+
+        match error.as_ref() {
+          Some(error) => {
+            let mut data = Map::new();
+            data.insert("owner".into(), owner.clone().into());
+            data.insert("repo".into(), repo.clone().into());
+            this.add_github_breadcrumb("Refresh pull requests failed", data.clone());
+            this.record_github_error("github.pull_requests.refresh", error.as_ref(), data);
+          }
+          None => {
+            let mut data = Map::new();
+            data.insert("owner".into(), owner.clone().into());
+            data.insert("repo".into(), repo.clone().into());
+            data.insert("count".into(), rows.len().into());
+            this.add_github_breadcrumb("Refresh pull requests succeeded", data);
+          }
+        }
 
         this.error = error;
 
@@ -553,6 +600,7 @@ impl GithubPage {
 
   fn refresh_notifications(&mut self, cx: &mut Context<Self>) {
     let api = self.api.clone();
+    self.add_github_breadcrumb("Refresh notifications started", Map::new());
     self.notifications_error = None;
     self.notifications.update(cx, |state, cx| {
       state.delegate_mut().loading = true;
@@ -565,7 +613,7 @@ impl GithubPage {
         .map_err(|error| error.to_string());
 
       let _ = this.update(cx, |this, cx| {
-        let (rows, error) = match result {
+        let (rows, error): (Vec<Rc<GithubNotificationRow>>, Option<SharedString>) = match result {
           Ok(notifications) => (
             notifications
               .into_iter()
@@ -579,6 +627,19 @@ impl GithubPage {
           ),
           Err(error) => (Vec::new(), Some(error.into())),
         };
+
+        match error.as_ref() {
+          Some(error) => {
+            let data = Map::new();
+            this.add_github_breadcrumb("Refresh notifications failed", data.clone());
+            this.record_github_error("github.notifications.refresh", error.as_ref(), data);
+          }
+          None => {
+            let mut data = Map::new();
+            data.insert("count".into(), rows.len().into());
+            this.add_github_breadcrumb("Refresh notifications succeeded", data);
+          }
+        }
 
         this.notifications_error = error;
         this.notifications.update(cx, |state, cx| {

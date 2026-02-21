@@ -14,6 +14,7 @@ mod git_page;
 mod github_page;
 mod github_pr_details_page;
 mod interactive_rebase_todo_view;
+mod sentry_context;
 mod settings_page;
 mod workspace;
 

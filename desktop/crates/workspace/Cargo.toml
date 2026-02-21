@@ -20,6 +20,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 time = { workspace = true }
 sha2 = { workspace = true }
+sentry = { workspace = true }
 
 [dev-dependencies]
 git2 = { workspace = true }

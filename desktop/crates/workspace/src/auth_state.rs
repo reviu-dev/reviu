@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use gpui::{App, Global};
 
-use crate::api::User;
+use crate::{api::User, sentry_context};
 
 #[derive(Clone, Debug)]
 pub enum AuthState {
@@ -35,6 +35,7 @@ impl AuthStateStore {
   }
 
   pub fn set(cx: &mut App, state: AuthState) {
+    sentry_context::sync_auth_state(&state);
     if let Ok(mut guard) = cx.global::<Self>().state.lock() {
       *guard = state;
     }
