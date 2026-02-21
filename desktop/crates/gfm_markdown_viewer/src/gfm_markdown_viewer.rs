@@ -1,7 +1,7 @@
 use std::{
-  collections::{HashMap, hash_map::DefaultHasher},
+  collections::{HashMap, VecDeque},
   fs,
-  hash::{Hash, Hasher},
+  hash::{Hash, Hasher, DefaultHasher},
   ops::Range,
   path::PathBuf,
   sync::{
@@ -274,10 +274,14 @@ const MARKDOWN_CODE_INDENT_DOT_OPACITY: f32 = 0.45;
 const MARKDOWN_CODE_INDENT_DOT_MIN_SPACING_PX: f32 = 5.0;
 const MARKDOWN_CODE_INDENT_DOT_MAX_RENDER_COUNT: usize = 600;
 const MARKDOWN_CODE_INDENT_DOT_DISABLE_ABOVE_TEXT_LEN: usize = 20_000;
+const PARSED_MARKDOWN_CACHE_MAX_ENTRIES: usize = 256;
+const PARSED_MARKDOWN_CACHE_MAX_SOURCE_LEN: usize = 100_000;
 const MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX: f32 =
   MARKDOWN_CODE_BLOCK_PADDING_TOP_PX + MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX + 2.0;
 static BADGE_IMAGE_SOURCE_CACHE: Lazy<Mutex<HashMap<String, BadgeResolveState>>> =
   Lazy::new(|| Mutex::new(HashMap::new()));
+static PARSED_MARKDOWN_CACHE: Lazy<Mutex<ParsedMarkdownCache>> =
+  Lazy::new(|| Mutex::new(ParsedMarkdownCache::default()));
 
 #[derive(Clone, Debug)]
 enum BadgeImageSource {
@@ -304,6 +308,49 @@ enum Segment {
 #[derive(Clone)]
 pub struct ParsedMarkdown {
   blocks: Arc<Vec<Block>>,
+}
+
+#[derive(Default)]
+struct ParsedMarkdownCache {
+  entries: HashMap<Arc<str>, ParsedMarkdown>,
+  lru_keys: VecDeque<Arc<str>>,
+}
+
+impl ParsedMarkdownCache {
+  fn get(&mut self, source: &str) -> Option<ParsedMarkdown> {
+    let parsed = self.entries.get(source).cloned()?;
+    self.touch(source);
+    Some(parsed)
+  }
+
+  fn insert(&mut self, source: Arc<str>, parsed: ParsedMarkdown) {
+    if self.entries.contains_key(source.as_ref()) {
+      self.touch(source.as_ref());
+      return;
+    }
+
+    self.entries.insert(source.clone(), parsed);
+    self.lru_keys.push_back(source);
+    self.evict_excess();
+  }
+
+  fn touch(&mut self, source: &str) {
+    let Some(ix) = self.lru_keys.iter().position(|key| key.as_ref() == source) else {
+      return;
+    };
+    if let Some(key) = self.lru_keys.remove(ix) {
+      self.lru_keys.push_back(key);
+    }
+  }
+
+  fn evict_excess(&mut self) {
+    while self.entries.len() > PARSED_MARKDOWN_CACHE_MAX_ENTRIES {
+      let Some(oldest_key) = self.lru_keys.pop_front() else {
+        break;
+      };
+      self.entries.remove(oldest_key.as_ref());
+    }
+  }
 }
 
 pub fn parse_gfm(source: &str) -> Vec<Block> {
@@ -333,6 +380,30 @@ pub fn parse_markdown(source: &str) -> ParsedMarkdown {
   ParsedMarkdown {
     blocks: Arc::new(parse_gfm(source)),
   }
+}
+
+fn parse_markdown_for_render(source: &str) -> ParsedMarkdown {
+  if source.len() > PARSED_MARKDOWN_CACHE_MAX_SOURCE_LEN {
+    return parse_markdown(source);
+  }
+
+  if let Ok(mut cache) = PARSED_MARKDOWN_CACHE.lock()
+    && let Some(parsed) = cache.get(source)
+  {
+    return parsed;
+  }
+
+  let parsed = parse_markdown(source);
+  let cache_key: Arc<str> = Arc::from(source);
+
+  if let Ok(mut cache) = PARSED_MARKDOWN_CACHE.lock() {
+    if let Some(existing) = cache.get(source) {
+      return existing;
+    }
+    cache.insert(cache_key, parsed.clone());
+  }
+
+  parsed
 }
 
 pub fn render_parsed_markdown(
@@ -798,10 +869,8 @@ fn find_last_details_close_end(lower: &str) -> Option<usize> {
 }
 
 pub fn render_markdown(source: &str, options: &MarkdownRenderOptions, cx: &App) -> AnyElement {
-  let parsed = parse_markdown(source);
-  let scope_id = resolve_scope_id_for_source(source, options);
-  let mut ctx = RenderContext::new(scope_id);
-  render_blocks(parsed.blocks.as_ref(), options, 0, cx, &mut ctx)
+  let parsed = parse_markdown_for_render(source);
+  render_parsed_markdown(&parsed, options, cx)
 }
 
 struct RenderContext {
@@ -836,24 +905,11 @@ fn compose_text_id(scope_id: usize, local_id: usize) -> usize {
   scope_id.wrapping_mul(1_000_003usize).wrapping_add(local_id)
 }
 
-fn resolve_scope_id_for_source(source: &str, options: &MarkdownRenderOptions) -> usize {
-  options.scope_id.map_or_else(
-    || markdown_scope_id_from_source(source, &options.state),
-    |scope_id| scoped_id_for_state(scope_id, &options.state),
-  )
-}
-
 fn resolve_scope_id_for_parsed(parsed: &ParsedMarkdown, options: &MarkdownRenderOptions) -> usize {
   options.scope_id.map_or_else(
     || parsed_markdown_scope_id(parsed, &options.state),
     |scope_id| scoped_id_for_state(scope_id, &options.state),
   )
-}
-
-fn markdown_scope_id_from_source(source: &str, state: &MarkdownRenderState) -> usize {
-  let mut hasher = DefaultHasher::new();
-  source.hash(&mut hasher);
-  scoped_id_for_state(hasher.finish() as usize, state)
 }
 
 fn parsed_markdown_scope_id(parsed: &ParsedMarkdown, state: &MarkdownRenderState) -> usize {
@@ -2025,6 +2081,7 @@ struct SelectableText {
   show_indentation_dots: bool,
   indentation_dot_indices: Vec<usize>,
   styled_text: StyledText,
+  runs_initialized: bool,
   last_selection: Option<Range<usize>>,
 }
 
@@ -2061,8 +2118,25 @@ impl SelectableText {
       show_indentation_dots: options.show_indentation_dots,
       indentation_dot_indices,
       styled_text,
+      runs_initialized: false,
       last_selection: None,
     }
+  }
+
+  fn ensure_runs_up_to_date(
+    &mut self,
+    selection_range: Option<Range<usize>>,
+    window: &mut Window,
+    cx: &mut App,
+  ) {
+    if self.runs_initialized && selection_range == self.last_selection {
+      return;
+    }
+
+    let runs = build_runs(&self.spans, selection_range.clone(), window, cx);
+    self.styled_text = StyledText::new(self.text.clone()).with_runs(runs);
+    self.last_selection = selection_range;
+    self.runs_initialized = true;
   }
 
   fn paint_indentation_dots(
@@ -2146,9 +2220,7 @@ impl Element for SelectableText {
     cx: &mut App,
   ) -> (LayoutId, Self::RequestLayoutState) {
     let selection_range = selection_for_text(&self.render_state, self.text_id, &self.text);
-    let runs = build_runs(&self.spans, selection_range.clone(), window, cx);
-    self.styled_text = StyledText::new(self.text.clone()).with_runs(runs);
-    self.last_selection = selection_range;
+    self.ensure_runs_up_to_date(selection_range, window, cx);
     let (layout_id, _) = self
       .styled_text
       .request_layout(None, inspector_id, window, cx);
@@ -2165,11 +2237,7 @@ impl Element for SelectableText {
     cx: &mut App,
   ) -> Self::PrepaintState {
     let selection_range = selection_for_text(&self.render_state, self.text_id, &self.text);
-    if selection_range != self.last_selection {
-      let runs = build_runs(&self.spans, selection_range.clone(), window, cx);
-      self.styled_text = StyledText::new(self.text.clone()).with_runs(runs);
-      self.last_selection = selection_range;
-    }
+    self.ensure_runs_up_to_date(selection_range, window, cx);
     self
       .styled_text
       .prepaint(None, inspector_id, bounds, state, window, cx);
@@ -3434,6 +3502,59 @@ Apres"#,
     let indices = collect_indentation_dot_indices(text.as_str());
 
     assert!(indices.is_empty());
+  }
+
+  #[test]
+  fn parsed_markdown_cache_returns_cached_entry_for_same_source() {
+    let mut cache = ParsedMarkdownCache::default();
+    let source: Arc<str> = Arc::from("**hello**");
+    let parsed = parse_markdown(source.as_ref());
+    let original_ptr = Arc::as_ptr(&parsed.blocks);
+
+    cache.insert(source.clone(), parsed);
+    let cached = cache
+      .get(source.as_ref())
+      .expect("cached markdown should be present");
+
+    assert_eq!(Arc::as_ptr(&cached.blocks), original_ptr);
+  }
+
+  #[test]
+  fn parsed_markdown_cache_evicts_oldest_entry_when_full() {
+    let mut cache = ParsedMarkdownCache::default();
+    for ix in 0..=PARSED_MARKDOWN_CACHE_MAX_ENTRIES {
+      let source = format!("source-{ix}");
+      cache.insert(Arc::from(source.as_str()), parse_markdown(source.as_str()));
+    }
+
+    assert!(cache.entries.len() <= PARSED_MARKDOWN_CACHE_MAX_ENTRIES);
+    assert!(cache.get("source-0").is_none());
+    assert!(
+      cache
+        .get(format!("source-{PARSED_MARKDOWN_CACHE_MAX_ENTRIES}").as_str())
+        .is_some()
+    );
+  }
+
+  #[test]
+  fn parsed_markdown_cache_get_refreshes_lru_order() {
+    let mut cache = ParsedMarkdownCache::default();
+    for ix in 0..PARSED_MARKDOWN_CACHE_MAX_ENTRIES {
+      let source = format!("source-{ix}");
+      cache.insert(Arc::from(source.as_str()), parse_markdown(source.as_str()));
+    }
+
+    let first_key = "source-0";
+    assert!(cache.get(first_key).is_some());
+
+    let overflow_source = format!("source-{}", PARSED_MARKDOWN_CACHE_MAX_ENTRIES);
+    cache.insert(
+      Arc::from(overflow_source.as_str()),
+      parse_markdown(overflow_source.as_str()),
+    );
+
+    assert!(cache.get(first_key).is_some());
+    assert!(cache.get("source-1").is_none());
   }
 
   #[test]
