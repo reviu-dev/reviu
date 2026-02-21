@@ -2131,6 +2131,7 @@ impl GithubPrDetailsPage {
 
     let content = v_flex()
       .w_full()
+      .pb_8()
       .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
       .mx_auto()
       .gap_4()
@@ -2308,15 +2309,11 @@ impl GithubPrDetailsPage {
           ),
       );
 
-    v_flex()
-      .w_full()
-      .h_full()
-      .min_h_0()
-      .py_4()
-      .px_4()
-      .id("ad")
+    div()
+      .id("github-pr-overview-scroll")
+      .size_full()
       .overflow_y_scrollbar()
-      .child(content)
+      .child(v_flex().w_full().py_4().px_4().child(content))
   }
 
   fn render_files_sidebar(
