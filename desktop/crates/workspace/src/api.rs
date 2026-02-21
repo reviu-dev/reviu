@@ -180,6 +180,39 @@ pub struct GithubIssue {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubIssueDetailsComment {
+  pub id: u64,
+  pub body: Option<String>,
+  #[serde(rename = "createdAt")]
+  pub created_at: String,
+  #[serde(rename = "updatedAt")]
+  pub updated_at: String,
+  pub user: Option<GithubIssueUser>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubIssueDetails {
+  pub id: u64,
+  pub number: u64,
+  pub title: String,
+  pub body: Option<String>,
+  pub state: String,
+  pub state_reason: Option<GithubIssueStateReason>,
+  #[serde(rename = "createdAt")]
+  pub created_at: String,
+  #[serde(rename = "updatedAt")]
+  pub updated_at: String,
+  #[serde(rename = "closedAt")]
+  pub closed_at: Option<String>,
+  pub labels: Vec<GithubPullRequestLabel>,
+  pub comments: Vec<GithubIssueDetailsComment>,
+  pub user: Option<GithubIssueUser>,
+  pub repository: GithubRepository,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct GithubRepositoryDetailsOwner {
   pub login: String,
   #[serde(rename = "avatar_url")]
@@ -446,6 +479,11 @@ struct GithubPullRequestsResponse {
 #[derive(Debug, Deserialize)]
 struct GithubIssuesResponse {
   issues: Vec<GithubIssue>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubIssueDetailsResponse {
+  issue: GithubIssueDetails,
 }
 
 #[derive(Debug, Deserialize)]
@@ -758,6 +796,26 @@ impl ApiClient {
     }
     let payload = response.json::<GithubIssuesResponse>()?;
     Ok(payload.issues)
+  }
+
+  pub fn fetch_github_repository_issue_details(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+  ) -> Result<GithubIssueDetails> {
+    let route = format!("/github/repos/{owner}/{repo}/issues/{number}");
+    let response = self.authed_request(Method::GET, route.as_str()).send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubIssueDetailsResponse>()?;
+    Ok(payload.issue)
   }
 
   pub fn fetch_pull_request_details(
@@ -1399,6 +1457,72 @@ mod tests {
   }
 
   #[test]
+  fn fetch_github_repository_issue_details_parses_success_payload() {
+    let body = r#"{
+      "issue": {
+        "id": 501,
+        "number": 77,
+        "title": "Fix auth race condition",
+        "body": "Issue body",
+        "state": "closed",
+        "state_reason": "completed",
+        "createdAt": "2026-02-20T08:00:00Z",
+        "updatedAt": "2026-02-21T09:30:00Z",
+        "closedAt": "2026-02-21T09:30:00Z",
+        "labels": [{ "name": "bug" }],
+        "comments": [
+          {
+            "id": 9001,
+            "body": "Looks good",
+            "createdAt": "2026-02-20T10:00:00Z",
+            "updatedAt": "2026-02-20T10:05:00Z",
+            "user": {
+              "login": "octocat",
+              "name": "The Octocat",
+              "avatarUrl": "https://example.com/octocat.png"
+            }
+          }
+        ],
+        "user": {
+          "login": "octocat",
+          "name": "The Octocat",
+          "avatarUrl": "https://example.com/octocat.png"
+        },
+        "repository": { "owner": "acme", "repo": "widget" }
+      }
+    }"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let issue = api
+      .fetch_github_repository_issue_details("acme", "widget", 77)
+      .expect("fetch repository issue details");
+
+    assert_eq!(issue.number, 77);
+    assert_eq!(issue.title, "Fix auth race condition");
+    assert_eq!(issue.state, "closed");
+    assert_eq!(issue.state_reason, Some(GithubIssueStateReason::Completed));
+    assert_eq!(issue.comments.len(), 1);
+    assert_eq!(issue.comments[0].id, 9001);
+    assert_eq!(issue.comments[0].body.as_deref(), Some("Looks good"));
+    assert_eq!(
+      issue.comments[0].user.as_ref().map(|user| user.login.as_str()),
+      Some("octocat")
+    );
+    assert_eq!(issue.repository.owner, "acme");
+    assert_eq!(issue.repository.repo, "widget");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(request_line, "GET /github/repos/acme/widget/issues/77 HTTP/1.1");
+  }
+
+  #[test]
   fn fetch_pull_request_details_parses_success_payload() {
     let body = r#"{
       "pullRequest": {
@@ -1927,6 +2051,19 @@ mod tests {
     let api = make_test_api_client(base_url);
 
     let err = api.fetch_github_repository_issues("acme", "widget").err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_repository_issue_details_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .fetch_github_repository_issue_details("acme", "widget", 77)
+      .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");

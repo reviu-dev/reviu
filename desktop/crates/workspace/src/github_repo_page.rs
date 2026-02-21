@@ -1,16 +1,18 @@
 use std::{rc::Rc, sync::Arc};
 
+use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
 use gpui::{
   App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, SharedString, Styled,
   Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _, StyledExt,
+  ActiveTheme as _, Icon, IconName, IndexPath, Placement, Sizable as _, StyledExt,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   h_flex,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  scroll::ScrollableElement,
   spinner::Spinner,
   tab::{Tab, TabBar},
   tag::Tag,
@@ -27,8 +29,8 @@ use ui::{
 use crate::{
   AuthCallbackTarget, ShowCommandPalette,
   api::{
-    ApiClient, GithubIssue, GithubIssueStateReason, GithubIssueUser, GithubPullRequest,
-    GithubRepositoryDetails,
+    ApiClient, GithubIssue, GithubIssueDetails, GithubIssueStateReason, GithubIssueUser,
+    GithubPullRequest, GithubRepositoryDetails,
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_compact_datetime, format_long_date_opt},
@@ -117,6 +119,42 @@ fn issue_user_display_name(user: Option<&GithubIssueUser>) -> SharedString {
     .map(|user| user.login.clone())
     .filter(|login| !login.trim().is_empty());
   name.or(login).unwrap_or(fallback).into()
+}
+
+fn github_issue_url(owner: &str, repo: &str, issue_number: u64) -> String {
+  format!("https://github.com/{owner}/{repo}/issues/{issue_number}")
+}
+
+fn issue_markdown_body_or_fallback(body: Option<&str>) -> SharedString {
+  body
+    .map(str::trim)
+    .filter(|body| !body.is_empty())
+    .unwrap_or("No description provided.")
+    .to_string()
+    .into()
+}
+
+fn issue_comment_markdown_body_or_fallback(body: Option<&str>) -> SharedString {
+  body
+    .map(str::trim)
+    .filter(|body| !body.is_empty())
+    .unwrap_or("No comment body.")
+    .to_string()
+    .into()
+}
+
+fn issue_state_label(state: &str, reason: Option<GithubIssueStateReason>) -> SharedString {
+  if state.eq_ignore_ascii_case("open") {
+    return "Open".into();
+  }
+
+  match reason {
+    Some(GithubIssueStateReason::Completed) => "Completed".into(),
+    Some(GithubIssueStateReason::Reopened) => "Reopened".into(),
+    Some(GithubIssueStateReason::NotPlanned) => "Not planned".into(),
+    Some(GithubIssueStateReason::Duplicate) => "Duplicate".into(),
+    None => "Closed".into(),
+  }
 }
 
 #[derive(Clone, Debug)]
@@ -495,6 +533,318 @@ impl ListDelegate for GithubRepoIssueListDelegate {
   }
 }
 
+struct GithubIssueDetailsSheetView {
+  focus_handle: FocusHandle,
+  api: ApiClient,
+  owner: String,
+  repo: String,
+  issue_number: u64,
+  issue: Option<GithubIssueDetails>,
+  loading: bool,
+  error: Option<SharedString>,
+  task: Option<Task<()>>,
+  markdown_state: MarkdownRenderState,
+  request_generation: u64,
+}
+
+impl GithubIssueDetailsSheetView {
+  fn new(
+    api: ApiClient,
+    owner: String,
+    repo: String,
+    issue_number: u64,
+    cx: &mut Context<Self>,
+  ) -> Self {
+    let mut this = Self {
+      focus_handle: cx.focus_handle(),
+      api,
+      owner: owner.clone(),
+      repo: repo.clone(),
+      issue_number,
+      issue: None,
+      loading: false,
+      error: None,
+      task: None,
+      markdown_state: MarkdownRenderState::new(),
+      request_generation: 0,
+    };
+    this.load_issue(owner, repo, issue_number, cx);
+    this
+  }
+
+  fn load_issue(
+    &mut self,
+    owner: String,
+    repo: String,
+    issue_number: u64,
+    cx: &mut Context<Self>,
+  ) {
+    self.owner = owner.clone();
+    self.repo = repo.clone();
+    self.issue_number = issue_number;
+    self.issue = None;
+    self.loading = true;
+    self.error = None;
+    self.request_generation = self.request_generation.saturating_add(1);
+    let generation = self.request_generation;
+
+    let api = self.api.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.fetch_github_repository_issue_details(&owner, &repo, issue_number))
+          .await;
+
+      let _ = this.update(cx, |this, cx| {
+        if this.request_generation != generation {
+          return;
+        }
+
+        this.loading = false;
+
+        match result {
+          Ok(issue) => {
+            this.issue = Some(issue);
+            this.error = None;
+          }
+          Err(error) => {
+            let message = error.to_string();
+            let error_message: SharedString = if is_unauthorized_error_message(&message) {
+              "Authentication required. Please sign in again.".into()
+            } else {
+              message.into()
+            };
+            this.issue = None;
+            this.error = Some(error_message);
+          }
+        }
+
+        cx.notify();
+      });
+    });
+
+    self.task = Some(task);
+    cx.notify();
+  }
+}
+
+impl Focusable for GithubIssueDetailsSheetView {
+  fn focus_handle(&self, _cx: &App) -> FocusHandle {
+    self.focus_handle.clone()
+  }
+}
+
+impl Render for GithubIssueDetailsSheetView {
+  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    let content = if self.loading {
+      v_flex()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(Spinner::new().small())
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading issue details..."),
+        )
+        .into_any_element()
+    } else if let Some(error) = self.error.clone() {
+      v_flex()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .child(div().text_sm().text_color(theme.status_red()).child(error))
+        .into_any_element()
+    } else if let Some(issue) = self.issue.as_ref() {
+      let author_name = issue_user_display_name(issue.user.as_ref());
+      let opened_at = format_compact_datetime(&issue.created_at);
+      let updated_at = format_compact_datetime(&issue.updated_at);
+      let closed_at = issue
+        .closed_at
+        .as_deref()
+        .map(format_compact_datetime)
+        .unwrap_or_else(|| "—".into());
+      let body = issue_markdown_body_or_fallback(issue.body.as_deref());
+      let issue_url =
+        github_issue_url(&issue.repository.owner, &issue.repository.repo, issue.number);
+      let state_text = issue_state_label(&issue.state, issue.state_reason.clone());
+      let (state_icon, state_color) =
+        match issue_visual_state(&issue.state, issue.state_reason.clone()) {
+          GithubIssueVisualState::Open => (UiIconName::CircleDot, theme.status_green()),
+          GithubIssueVisualState::Completed => (UiIconName::CircleCheck, theme.status_violet()),
+          GithubIssueVisualState::NotPlanned => (UiIconName::CircleSlash, theme.status_gray()),
+        };
+
+      let label_tags = issue.labels.iter().map(|label| {
+        Tag::secondary()
+          .small()
+          .rounded_full()
+          .child(label.name.clone())
+      });
+
+      v_flex()
+        .w_full()
+        .gap_3()
+        .p_3()
+        .child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child(Icon::new(state_icon).size_4().text_color(state_color))
+            .child(div().text_lg().font_semibold().child(issue.title.clone())),
+        )
+        .child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child(format!("#{}", issue.number))
+            .child(
+              Tag::secondary()
+                .small()
+                .rounded_full()
+                .child(state_text),
+            ),
+        )
+        .when(!issue.labels.is_empty(), |this| {
+          this.child(h_flex().gap_1().flex_wrap().children(label_tags))
+        })
+        .child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child(
+              Avatar::new()
+                .name(author_name.clone())
+                .when_some(
+                  issue.user.as_ref().and_then(|user| user.avatar_url.clone()),
+                  |this, url| this.src(url),
+                )
+                .small(),
+            )
+            .child(
+              div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child(author_name),
+            ),
+        )
+        .child(
+          v_flex()
+            .gap_1()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(format!("Opened {opened_at}"))
+            .child(format!("Updated {updated_at}"))
+            .child(format!("Closed {closed_at}")),
+        )
+        .child(
+          Button::new("issue-details-open-on-github")
+            .icon(IconName::ExternalLink)
+            .small()
+            .label("Open on GitHub")
+            .on_click(move |_, _, cx| {
+              cx.open_url(&issue_url);
+            }),
+        )
+        .child(
+          v_flex()
+            .gap_2()
+            .child(div().text_sm().font_semibold().child("Description"))
+            .child(
+              div()
+                .border_1()
+                .border_color(theme.border)
+                .rounded(theme.radius)
+                .p_3()
+                .child(render_markdown(
+                  body.as_ref(),
+                  &MarkdownRenderOptions::default().with_state(self.markdown_state.clone()),
+                  cx,
+                )),
+            ),
+        )
+        .child(
+          v_flex()
+            .gap_2()
+            .child(div().text_sm().font_semibold().child("Comments"))
+            .when(issue.comments.is_empty(), |this| {
+              this.child(
+                div()
+                  .text_sm()
+                  .text_color(theme.muted_foreground)
+                  .child("No comments yet"),
+              )
+            })
+            .when(!issue.comments.is_empty(), |this| {
+              this.children(issue.comments.iter().map(|comment| {
+                let comment_author = issue_user_display_name(comment.user.as_ref());
+                let comment_created_at = format_compact_datetime(&comment.created_at);
+                let comment_updated_at = format_compact_datetime(&comment.updated_at);
+                let comment_body = issue_comment_markdown_body_or_fallback(comment.body.as_deref());
+
+                v_flex()
+                  .gap_2()
+                  .p_3()
+                  .border_1()
+                  .border_color(theme.border)
+                  .rounded(theme.radius)
+                  .child(
+                    h_flex()
+                      .items_center()
+                      .gap_2()
+                      .child(
+                        Avatar::new()
+                          .name(comment_author.clone())
+                          .when_some(
+                            comment.user.as_ref().and_then(|user| user.avatar_url.clone()),
+                            |this, url| this.src(url),
+                          )
+                          .small(),
+                      )
+                      .child(
+                        div()
+                          .text_sm()
+                          .text_color(theme.foreground)
+                          .child(comment_author.clone()),
+                      ),
+                  )
+                  .child(
+                    div().text_xs().text_color(theme.muted_foreground).child(format!(
+                      "Created {comment_created_at} • Updated {comment_updated_at}"
+                    )),
+                  )
+                  .child(render_markdown(
+                    comment_body.as_ref(),
+                    &MarkdownRenderOptions::default().with_state(self.markdown_state.clone()),
+                    cx,
+                  ))
+              }))
+            }),
+        )
+        .into_any_element()
+    } else {
+      v_flex()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .child("No issue selected")
+        .into_any_element()
+    };
+
+    div()
+      .id("github-issue-details-sheet-scroll")
+      .size_full()
+      .overflow_y_scrollbar()
+      .track_focus(&self.focus_handle)
+      .child(content)
+  }
+}
+
 pub struct GithubRepoPage {
   focus_handle: FocusHandle,
   api: ApiClient,
@@ -595,7 +945,7 @@ impl GithubRepoPage {
     };
 
     this.subscribe_to_pull_requests(cx);
-    this.subscribe_to_issues(cx);
+    this.subscribe_to_issues(window, cx);
     this
   }
 
@@ -622,25 +972,58 @@ impl GithubRepoPage {
     self._subscriptions.push(subscription);
   }
 
-  fn subscribe_to_issues(&mut self, cx: &mut Context<Self>) {
-    let subscription = cx.subscribe(
+  fn subscribe_to_issues(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let subscription = cx.subscribe_in(
       &self.issues,
-      |_, state, event: &ListEvent, cx| {
+      window,
+      |this, state, event: &ListEvent, window, cx| {
         if let ListEvent::Confirm(ix) = event {
           let row = state.read(cx).delegate().matched_rows.get(ix.row).cloned();
           if let Some(row) = row {
-            let issue = &row.issue;
-            let issue_url = format!(
-              "https://github.com/{}/{}/issues/{}",
-              issue.repository.owner, issue.repository.repo, issue.number
-            );
-            cx.open_url(&issue_url);
+            this.open_issue_details_sheet(row.issue.clone(), window, cx);
           }
         }
       },
     );
 
     self._subscriptions.push(subscription);
+  }
+
+  fn open_issue_details_sheet(
+    &mut self,
+    issue: Rc<GithubIssue>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let issue_number = issue.number;
+    let sheet_title: SharedString = format!("Issue #{issue_number}").into();
+    let issue_details_view = cx.new(|cx| {
+      GithubIssueDetailsSheetView::new(
+        self.api.clone(),
+        issue.repository.owner.clone(),
+        issue.repository.repo.clone(),
+        issue_number,
+        cx,
+      )
+    });
+
+    let issues_list = self.issues.clone();
+    window.open_sheet_at(Placement::Right, cx, move |sheet, _, _cx| {
+      sheet
+        .overlay(true)
+        .overlay_closable(true)
+        .size(px(620.0))
+        .title(sheet_title.clone())
+        .on_close({
+          let issues_list = issues_list.clone();
+          move |_, window, cx| {
+            issues_list.update(cx, |state, cx| {
+              state.focus(window, cx);
+            });
+          }
+        })
+        .child(issue_details_view.clone())
+    });
   }
 
   fn set_active_tab(&mut self, tab_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -1365,5 +1748,67 @@ mod tests {
     };
     assert_eq!(issue_user_display_name(Some(&with_login)).as_ref(), "octocat");
     assert_eq!(issue_user_display_name(None).as_ref(), "unknown");
+  }
+
+  #[test]
+  fn issue_markdown_body_or_fallback_prefers_non_empty_body() {
+    assert_eq!(
+      issue_markdown_body_or_fallback(Some("Hello world")).as_ref(),
+      "Hello world"
+    );
+    assert_eq!(
+      issue_markdown_body_or_fallback(Some("   ")).as_ref(),
+      "No description provided."
+    );
+    assert_eq!(
+      issue_markdown_body_or_fallback(None).as_ref(),
+      "No description provided."
+    );
+  }
+
+  #[test]
+  fn issue_comment_markdown_body_or_fallback_prefers_non_empty_body() {
+    assert_eq!(
+      issue_comment_markdown_body_or_fallback(Some("Looks good")).as_ref(),
+      "Looks good"
+    );
+    assert_eq!(
+      issue_comment_markdown_body_or_fallback(Some("  ")).as_ref(),
+      "No comment body."
+    );
+    assert_eq!(
+      issue_comment_markdown_body_or_fallback(None).as_ref(),
+      "No comment body."
+    );
+  }
+
+  #[test]
+  fn github_issue_url_formats_expected_path() {
+    assert_eq!(
+      github_issue_url("acme", "widget", 42),
+      "https://github.com/acme/widget/issues/42"
+    );
+  }
+
+  #[test]
+  fn issue_state_label_prefers_reason_then_state() {
+    assert_eq!(issue_state_label("open", None).as_ref(), "Open");
+    assert_eq!(
+      issue_state_label("closed", Some(GithubIssueStateReason::Completed)).as_ref(),
+      "Completed"
+    );
+    assert_eq!(
+      issue_state_label("closed", Some(GithubIssueStateReason::Duplicate)).as_ref(),
+      "Duplicate"
+    );
+    assert_eq!(
+      issue_state_label("closed", Some(GithubIssueStateReason::NotPlanned)).as_ref(),
+      "Not planned"
+    );
+    assert_eq!(
+      issue_state_label("closed", Some(GithubIssueStateReason::Reopened)).as_ref(),
+      "Reopened"
+    );
+    assert_eq!(issue_state_label("closed", None).as_ref(), "Closed");
   }
 }
