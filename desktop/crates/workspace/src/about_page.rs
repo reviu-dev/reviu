@@ -8,12 +8,14 @@ use gpui_component::{
   ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt,
   button::{Button, ButtonVariants as _},
   notification::Notification,
+  v_flex,
 };
 use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, HEADER_HEIGHT, StatusThemeExt, UiIconName, WindowExt,
+  CommandPaletteHandler, CommandPalettePage, DETAILS_PAGE_CONTAINER_MAX_WIDTH, HEADER_HEIGHT,
+  StatusThemeExt, UiIconName, WindowExt,
 };
 
 use crate::{
@@ -407,18 +409,15 @@ impl Render for AboutPage {
       .child(
         div()
           .w_full()
-          .mx_auto()
           .h_full()
           .min_h_0()
           .py_4()
           .px_4()
           .child(
-            div()
+            v_flex()
               .w_full()
-              .max_w(px(700.))
+              .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
               .mx_auto()
-              .flex()
-              .flex_col()
               .gap_3()
               .child(
                 div()
