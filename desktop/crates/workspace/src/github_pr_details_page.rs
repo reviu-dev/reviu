@@ -33,6 +33,7 @@ use gpui_component::{
   tree::{TreeItem, TreeState, tree},
   v_flex,
 };
+use sentry::protocol::{Map, Value};
 use smol::unblock;
 
 use ui::{
@@ -51,6 +52,7 @@ use crate::{
   auth_state::{AuthState, AuthStateStore},
   date_format::format_long_date,
   github_page::GithubPageHandle,
+  sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 
@@ -58,6 +60,10 @@ const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
 const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const DIFF_HEADER_HEIGHT: f32 = 40.0;
+
+fn is_unauthorized_error_message(error: &str) -> bool {
+  error.to_ascii_lowercase().contains("unauthorized")
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GithubPrFileStatus {
@@ -459,8 +465,16 @@ pub struct GithubPrDetailsPage {
   svg_preview_source: Option<SharedString>,
   svg_preview_task: Option<Task<()>>,
   active_tab_ix: usize,
+  current_pr_context: Option<CurrentPrContext>,
   pull_request: Option<GithubPullRequestDetails>,
   error: Option<SharedString>,
+}
+
+#[derive(Clone, Debug)]
+struct CurrentPrContext {
+  owner: String,
+  repo: String,
+  number: u64,
 }
 
 #[derive(Clone, Default)]
@@ -500,6 +514,59 @@ impl GithubPrDetailsPageHandle {
 }
 
 impl GithubPrDetailsPage {
+  fn sentry_pr_data(&self) -> Map<String, Value> {
+    let mut data = Map::new();
+    if let Some(context) = self.current_pr_context.as_ref() {
+      data.insert("owner".into(), context.owner.clone().into());
+      data.insert("repo".into(), context.repo.clone().into());
+      data.insert("number".into(), context.number.into());
+    }
+    if let Some(selected_file) = self.selected_file.as_ref() {
+      data.insert(
+        "selected_file".into(),
+        selected_file.path.to_string().into(),
+      );
+    }
+    data.insert("active_tab".into(), self.active_tab_ix.into());
+    data
+  }
+
+  fn add_pr_breadcrumb(&self, message: &str, mut data: Map<String, Value>) {
+    let base = self.sentry_pr_data();
+    for (key, value) in base {
+      data.entry(key).or_insert(value);
+    }
+    sentry_context::add_breadcrumb("github.pr", message, data);
+  }
+
+  fn sync_sentry_pr_context(&self) {
+    let Some(context) = self.current_pr_context.as_ref() else {
+      return;
+    };
+    sentry_context::sync_github_pr_context(
+      context.owner.as_str(),
+      context.repo.as_str(),
+      context.number,
+      self.selected_file.as_ref().map(|file| file.path.as_ref()),
+      Some(self.active_tab_ix),
+    );
+  }
+
+  fn record_pr_error(&self, operation: &'static str, error: &str, mut data: Map<String, Value>) {
+    data.insert("error".into(), error.to_string().into());
+    let base = self.sentry_pr_data();
+    for (key, value) in base {
+      data.entry(key).or_insert(value);
+    }
+    if is_unauthorized_error_message(error) {
+      sentry_context::record_expected_error(operation, "unauthorized", data);
+      return;
+    }
+
+    let io_error = std::io::Error::other(error.to_string());
+    sentry_context::capture_unexpected_error(operation, &io_error, data);
+  }
+
   pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
     GithubPrDetailsPageHandle::register(cx);
 
@@ -540,6 +607,7 @@ impl GithubPrDetailsPage {
       svg_preview_source: None,
       svg_preview_task: None,
       active_tab_ix: 0,
+      current_pr_context: None,
       pull_request: None,
       error: None,
     };
@@ -742,8 +810,15 @@ impl GithubPrDetailsPage {
             this.sync_review_comments(cx);
           }
           Err(error) => {
-            this.review_comments_error = Some(error.to_string().into());
-            error_message = Some(Arc::from(error.to_string()));
+            let error_message_text = error.to_string();
+            this.review_comments_error = Some(error_message_text.clone().into());
+            this.add_pr_breadcrumb("Update review comment failed", Map::new());
+            this.record_pr_error(
+              "github.pr.review_comment.update",
+              error_message_text.as_str(),
+              Map::new(),
+            );
+            error_message = Some(Arc::from(error_message_text));
           }
         }
         this.diff_editor.update(cx, |editor, cx| {
@@ -850,8 +925,15 @@ impl GithubPrDetailsPage {
             this.sync_review_comments(cx);
           }
           Err(error) => {
-            this.review_comments_error = Some(error.to_string().into());
-            error_message = Some(Arc::from(error.to_string()));
+            let error_message_text = error.to_string();
+            this.review_comments_error = Some(error_message_text.clone().into());
+            this.add_pr_breadcrumb("Create review comment failed", Map::new());
+            this.record_pr_error(
+              "github.pr.review_comment.create",
+              error_message_text.as_str(),
+              Map::new(),
+            );
+            error_message = Some(Arc::from(error_message_text));
           }
         }
         this.diff_editor.update(cx, |editor, cx| {
@@ -945,7 +1027,14 @@ impl GithubPrDetailsPage {
               .review_comments
               .insert(insert_index, removed_comment.clone());
           }
-          this.review_comments_error = Some(error.to_string().into());
+          let error_message_text = error.to_string();
+          this.review_comments_error = Some(error_message_text.clone().into());
+          this.add_pr_breadcrumb("Delete review comment failed", Map::new());
+          this.record_pr_error(
+            "github.pr.review_comment.delete",
+            error_message_text.as_str(),
+            Map::new(),
+          );
           this.sync_review_comments(cx);
         } else {
           this.review_comments_error = None;
@@ -962,6 +1051,10 @@ impl GithubPrDetailsPage {
 
   fn set_active_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
     self.active_tab_ix = ix;
+    self.sync_sentry_pr_context();
+    let mut data = Map::new();
+    data.insert("active_tab".into(), ix.into());
+    self.add_pr_breadcrumb("Changed PR tab", data);
     if ix == 1 {
       self.sync_tree_selection(cx);
       window.focus(&self.focus_handle, cx);
@@ -978,6 +1071,12 @@ impl GithubPrDetailsPage {
 
     self.selected_file = selected.clone();
     self.selected_tree_id = selected.as_ref().map(|file| file.path.to_string());
+    self.sync_sentry_pr_context();
+    let mut data = Map::new();
+    if let Some(file) = self.selected_file.as_ref() {
+      data.insert("selected_file".into(), file.path.to_string().into());
+    }
+    self.add_pr_breadcrumb("Selected PR file changed", data);
     if !self.selected_file_is_markdown() && !self.selected_file_is_svg() {
       self.show_markdown_preview = false;
     }
@@ -1591,6 +1690,13 @@ impl GithubPrDetailsPage {
     cx: &mut Context<Self>,
   ) {
     self.active_tab_ix = 0;
+    self.current_pr_context = Some(CurrentPrContext {
+      owner: owner.clone(),
+      repo: repo.clone(),
+      number,
+    });
+    self.sync_sentry_pr_context();
+    self.add_pr_breadcrumb("Load pull request started", Map::new());
     self.error = None;
     self.pull_request = None;
     self.files_loading = true;
@@ -1636,12 +1742,16 @@ impl GithubPrDetailsPage {
           Ok(pull_request) => {
             this.pull_request = Some(pull_request);
             this.error = None;
+            this.add_pr_breadcrumb("Load PR details succeeded", Map::new());
             this.sync_review_comments(cx);
             this.maybe_fetch_selected_file_contents(cx);
           }
           Err(error) => {
+            let error_message = error.to_string();
             this.pull_request = None;
-            this.error = Some(error.to_string().into());
+            this.error = Some(error_message.clone().into());
+            this.add_pr_breadcrumb("Load PR details failed", Map::new());
+            this.record_pr_error("github.pr.details", error_message.as_str(), Map::new());
             this.sync_review_comments(cx);
           }
         }
@@ -1664,11 +1774,15 @@ impl GithubPrDetailsPage {
             this.review_comments = comments;
             this.review_comments_loading = false;
             this.review_comments_error = None;
+            this.add_pr_breadcrumb("Load PR comments succeeded", Map::new());
             this.sync_review_comments(cx);
           }
           Err(error) => {
+            let error_message = error.to_string();
             this.review_comments_loading = false;
-            this.review_comments_error = Some(error.to_string().into());
+            this.review_comments_error = Some(error_message.clone().into());
+            this.add_pr_breadcrumb("Load PR comments failed", Map::new());
+            this.record_pr_error("github.pr.comments", error_message.as_str(), Map::new());
             this.sync_review_comments(cx);
           }
         }
@@ -1695,16 +1809,20 @@ impl GithubPrDetailsPage {
             });
             let selected = selected_id.and_then(|id| this.file_lookup.get(&id).cloned());
             this.set_selected_file(selected, cx);
+            this.add_pr_breadcrumb("Load PR files succeeded", Map::new());
           }
           Err(error) => {
+            let error_message = error.to_string();
             this.files_loading = false;
-            this.files_error = Some(error.to_string().into());
+            this.files_error = Some(error_message.clone().into());
             this.tree_state.update(cx, |state, cx| {
               state.set_items(Vec::new(), cx);
             });
             this.file_lookup.clear();
             this.selected_tree_id = None;
             this.set_selected_file(None, cx);
+            this.add_pr_breadcrumb("Load PR files failed", Map::new());
+            this.record_pr_error("github.pr.files", error_message.as_str(), Map::new());
           }
         }
         cx.notify();
@@ -3095,5 +3213,12 @@ mod tests {
       Some(vec!["".to_string()])
     );
     assert!(line_snippets_from_content(content, 0, 2).is_none());
+  }
+
+  #[test]
+  fn unauthorized_error_detection_is_case_insensitive() {
+    assert!(is_unauthorized_error_message("unauthorized"));
+    assert!(is_unauthorized_error_message("HTTP 401 Unauthorized"));
+    assert!(!is_unauthorized_error_message("unexpected status: 500"));
   }
 }

@@ -17,6 +17,9 @@ env:
   APPLE_NOTARYTOOL_APPLE_ID: ${{ secrets.APPLE_NOTARYTOOL_APPLE_ID }}
   APPLE_NOTARYTOOL_APP_PASSWORD: ${{ secrets.APPLE_NOTARYTOOL_APP_PASSWORD }}
   APPLE_NOTARYTOOL_TEAM_ID: ${{ secrets.APPLE_NOTARYTOOL_TEAM_ID }}
+  SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+  SENTRY_ORG: joris-gallot
+  SENTRY_PROJECT: reviu-desktop
 
 jobs:
   release-desktop:
@@ -56,16 +59,18 @@ jobs:
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Export Sentry release name
+        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "SENTRY_RELEASE=reviu@${{ steps.release_meta.outputs.version }}" >> "${GITHUB_ENV}"
+
       - name: Install cargo-bundle
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
         run: cargo install cargo-bundle --locked
 
-      - name: Build macOS app bundle
-        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
-        working-directory: desktop
-        run: cargo bundle -p reviu --release
-
-      - name: Validate macOS signing and notarization secrets
+      - name: Validate macOS signing, notarization and Sentry secrets
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
         shell: bash
         run: |
@@ -78,6 +83,9 @@ jobs:
             APPLE_NOTARYTOOL_APPLE_ID
             APPLE_NOTARYTOOL_APP_PASSWORD
             APPLE_NOTARYTOOL_TEAM_ID
+            SENTRY_AUTH_TOKEN
+            SENTRY_ORG
+            SENTRY_PROJECT
           )
 
           missing=()
@@ -91,6 +99,26 @@ jobs:
             printf 'Missing required GitHub secrets: %s\n' "${missing[*]}" >&2
             exit 1
           fi
+
+      - name: Setup Sentry CLI
+        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        uses: getsentry/action-setup-sentry-cli@v2
+
+      - name: Create Sentry release (idempotent)
+        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if sentry-cli releases info "${SENTRY_RELEASE}" >/dev/null 2>&1; then
+            echo "Sentry release ${SENTRY_RELEASE} already exists."
+          else
+            sentry-cli releases new "${SENTRY_RELEASE}"
+          fi
+
+      - name: Build macOS app bundle
+        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        working-directory: desktop
+        run: cargo bundle -p reviu --release
 
       - name: Import Apple Developer ID certificate
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
@@ -165,6 +193,18 @@ jobs:
           xcrun stapler staple "${app_path}"
           xcrun stapler validate "${app_path}"
           rm -f "${app_zip_path}"
+
+      - name: Upload Sentry debug files
+        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="desktop/target/release/bundle/osx/Reviu.app"
+          if [[ ! -d "${app_path}" ]]; then
+            echo "Expected app bundle not found for Sentry debug upload: ${app_path}" >&2
+            exit 1
+          fi
+          sentry-cli debug-files upload "${app_path}"
 
       - name: Create DMG and desktop update manifest
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
@@ -262,6 +302,13 @@ jobs:
             ${{ steps.package_assets.outputs.manifest_path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Finalize Sentry release (idempotent)
+        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sentry-cli releases finalize "${SENTRY_RELEASE}" || true
 
       - name: Cleanup signing keychain
         if: ${{ always() && steps.release_meta.outputs.should_release == 'true' }}

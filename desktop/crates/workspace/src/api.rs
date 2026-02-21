@@ -4,6 +4,8 @@ use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
+use crate::sentry_context;
+
 const DEFAULT_API_BASE_URL: &str = "http://localhost:3000";
 const KEYCHAIN_SERVICE: &str = "reviu_auth";
 const KEYCHAIN_USERNAME: &str = "bearer";
@@ -486,6 +488,10 @@ impl ApiClient {
     request
   }
 
+  fn record_http_status(method: &str, route: &str, status: StatusCode) {
+    sentry_context::record_http_status(method, route, status.as_u16());
+  }
+
   pub fn sign_in_with_github(&self) -> Result<Option<String>> {
     let request = SocialSignInRequest {
       provider: "github",
@@ -494,8 +500,10 @@ impl ApiClient {
     };
     let url = self.get_api_url("/api/auth/sign-in/social");
     let response = self.client.post(url).json(&request).send()?;
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    let status = response.status();
+    Self::record_http_status("POST", "/api/auth/sign-in/social", status);
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<SocialSignInResponse>()?;
     Ok(payload.url)
@@ -508,8 +516,10 @@ impl ApiClient {
       .post(url)
       .json(&ExchangeCodeRequest { code })
       .send()?;
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    let status = response.status();
+    Self::record_http_status("POST", "/auth/exchange", status);
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<ExchangeCodeResponse>()?;
     Ok(payload.token)
@@ -520,9 +530,11 @@ impl ApiClient {
       .authed_request(Method::POST, "/api/auth/sign-out")
       .json(&EmptyRequest {})
       .send()?;
-    if !response.status().is_success() {
+    let status = response.status();
+    Self::record_http_status("POST", "/api/auth/sign-out", status);
+    if !status.is_success() {
       self.clear_bearer_token();
-      anyhow::bail!("unexpected status: {}", response.status());
+      anyhow::bail!("unexpected status: {}", status);
     }
     self.clear_bearer_token();
     Ok(())
@@ -550,11 +562,13 @@ impl ApiClient {
 
   pub fn fetch_me(&self) -> Result<Option<User>> {
     let response = self.authed_request(Method::GET, "/users/me").send()?;
-    if response.status() == StatusCode::UNAUTHORIZED {
+    let status = response.status();
+    Self::record_http_status("GET", "/users/me", status);
+    if status == StatusCode::UNAUTHORIZED {
       return Ok(None);
     }
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
     let user = response.json::<User>()?;
     Ok(Some(user))
@@ -568,11 +582,13 @@ impl ApiClient {
         redirect: false,
       })
       .send()?;
-    if response.status() == StatusCode::UNAUTHORIZED {
+    let status = response.status();
+    Self::record_http_status("POST", "/api/auth/checkout", status);
+    if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<CheckoutSubscriptionResponse>()?;
     if payload.url.trim().is_empty() {
@@ -590,11 +606,13 @@ impl ApiClient {
       .authed_request(Method::GET, "/github/pr/latest")
       .query(&[("org", owner), ("repo", repo)])
       .send()?;
-    if response.status() == StatusCode::UNAUTHORIZED {
+    let status = response.status();
+    Self::record_http_status("GET", "/github/pr/latest", status);
+    if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubPullRequestsResponse>()?;
     Ok(payload.pull_requests)
@@ -606,15 +624,18 @@ impl ApiClient {
     repo: &str,
     number: u64,
   ) -> Result<GithubPullRequestDetails> {
+    let route = format!("/github/pr/{number}");
     let response = self
-      .authed_request(Method::GET, &format!("/github/pr/{number}"))
+      .authed_request(Method::GET, route.as_str())
       .query(&[("org", owner), ("repo", repo)])
       .send()?;
-    if response.status() == StatusCode::UNAUTHORIZED {
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubPullRequestDetailsResponse>()?;
     Ok(payload.pull_request)
@@ -626,15 +647,18 @@ impl ApiClient {
     repo: &str,
     number: u64,
   ) -> Result<Vec<GithubPullRequestFile>> {
+    let route = format!("/github/pr/{number}/files");
     let response = self
-      .authed_request(Method::GET, &format!("/github/pr/{number}/files"))
+      .authed_request(Method::GET, route.as_str())
       .query(&[("org", owner), ("repo", repo)])
       .send()?;
-    if response.status() == StatusCode::UNAUTHORIZED {
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubPullRequestFilesResponse>()?;
     Ok(payload.files)
@@ -644,11 +668,13 @@ impl ApiClient {
     let response = self
       .authed_request(Method::GET, "/github/notifications")
       .send()?;
-    if response.status() == StatusCode::UNAUTHORIZED {
+    let status = response.status();
+    Self::record_http_status("GET", "/github/notifications", status);
+    if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubNotificationsResponse>()?;
     Ok(payload.notifications)
@@ -660,15 +686,18 @@ impl ApiClient {
     repo: &str,
     number: u64,
   ) -> Result<Vec<GithubPullRequestReviewComment>> {
+    let route = format!("/github/pr/{number}/comments");
     let response = self
-      .authed_request(Method::GET, &format!("/github/pr/{number}/comments"))
+      .authed_request(Method::GET, route.as_str())
       .query(&[("org", owner), ("repo", repo)])
       .send()?;
-    if response.status() == StatusCode::UNAUTHORIZED {
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubPullRequestCommentsResponse>()?;
     Ok(payload.comments)
@@ -682,19 +711,19 @@ impl ApiClient {
     comment_id: u64,
     body: &str,
   ) -> Result<GithubPullRequestReviewComment> {
+    let route = format!("/github/pr/{number}/comments/{comment_id}");
     let response = self
-      .authed_request(
-        Method::PATCH,
-        &format!("/github/pr/{number}/comments/{comment_id}"),
-      )
+      .authed_request(Method::PATCH, route.as_str())
       .query(&[("org", owner), ("repo", repo)])
       .json(&UpdateGithubPullRequestCommentRequest { body })
       .send()?;
-    if response.status() == StatusCode::UNAUTHORIZED {
+    let status = response.status();
+    Self::record_http_status("PATCH", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubPullRequestCommentResponse>()?;
     Ok(payload.comment)
@@ -714,8 +743,9 @@ impl ApiClient {
     start_side: Option<&str>,
     body: &str,
   ) -> Result<GithubPullRequestReviewComment> {
+    let route = format!("/github/pr/{number}/comments");
     let response = self
-      .authed_request(Method::POST, &format!("/github/pr/{number}/comments"))
+      .authed_request(Method::POST, route.as_str())
       .query(&[("org", owner), ("repo", repo)])
       .json(&CreateGithubPullRequestCommentRequest {
         body,
@@ -727,11 +757,13 @@ impl ApiClient {
         start_side,
       })
       .send()?;
-    if response.status() == StatusCode::UNAUTHORIZED {
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubPullRequestCommentResponse>()?;
     Ok(payload.comment)
@@ -745,19 +777,19 @@ impl ApiClient {
     comment_id: u64,
     body: &str,
   ) -> Result<GithubPullRequestReviewComment> {
+    let route = format!("/github/pr/{number}/comments/{comment_id}/replies");
     let response = self
-      .authed_request(
-        Method::POST,
-        &format!("/github/pr/{number}/comments/{comment_id}/replies"),
-      )
+      .authed_request(Method::POST, route.as_str())
       .query(&[("org", owner), ("repo", repo)])
       .json(&ReplyGithubPullRequestCommentRequest { body })
       .send()?;
-    if response.status() == StatusCode::UNAUTHORIZED {
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubPullRequestCommentResponse>()?;
     Ok(payload.comment)
@@ -770,18 +802,18 @@ impl ApiClient {
     number: u64,
     comment_id: u64,
   ) -> Result<()> {
+    let route = format!("/github/pr/{number}/comments/{comment_id}");
     let response = self
-      .authed_request(
-        Method::DELETE,
-        &format!("/github/pr/{number}/comments/{comment_id}"),
-      )
+      .authed_request(Method::DELETE, route.as_str())
       .query(&[("org", owner), ("repo", repo)])
       .send()?;
-    if response.status() == StatusCode::UNAUTHORIZED {
+    let status = response.status();
+    Self::record_http_status("DELETE", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
     Ok(())
   }
@@ -802,11 +834,13 @@ impl ApiClient {
         ("ref", reference),
       ])
       .send()?;
-    if response.status() == StatusCode::UNAUTHORIZED {
+    let status = response.status();
+    Self::record_http_status("GET", "/github/file", status);
+    if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubFileContentResponse>()?;
     Ok(payload.content)
@@ -827,8 +861,10 @@ impl ApiClient {
         arch,
       })
       .send()?;
-    if !response.status().is_success() {
-      anyhow::bail!("unexpected status: {}", response.status());
+    let status = response.status();
+    Self::record_http_status("POST", "/desktop/update/check", status);
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
     }
 
     let payload = response.json::<DesktopUpdateCheckResponse>()?;

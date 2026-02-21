@@ -12,3 +12,4 @@ gpui-component-assets = { workspace = true }
 ui = { workspace = true }
 workspace = { workspace = true }
 reqwest_client = { workspace = true }
+sentry = { workspace = true }

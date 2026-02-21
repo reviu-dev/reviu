@@ -40,6 +40,7 @@ use gpui_component::{
   tooltip::Tooltip,
   tree::{TreeItem, TreeState, tree},
 };
+use sentry::protocol::{Map, Value};
 use smol::unblock;
 
 use crate::{
@@ -53,6 +54,7 @@ use crate::{
     InteractiveRebaseTodoView, InteractiveRebaseTodoViewCancelHandler,
     InteractiveRebaseTodoViewConfig, InteractiveRebaseTodoViewHandler,
   },
+  sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 use ui::{
@@ -608,6 +610,102 @@ struct SelectedFileUpdate {
 }
 
 impl GitPage {
+  fn sidebar_mode_tag(mode: GitSidebarMode) -> &'static str {
+    match mode {
+      GitSidebarMode::Changes => "changes",
+      GitSidebarMode::History => "history",
+    }
+  }
+
+  fn diff_view_tag(diff_view: DiffViewMode) -> &'static str {
+    match diff_view {
+      DiffViewMode::Inline => "inline",
+      DiffViewMode::Split => "split",
+    }
+  }
+
+  fn active_diff_view_tag(&self) -> &'static str {
+    if self.show_markdown_preview
+      && self
+        .selected_file
+        .as_ref()
+        .is_some_and(|path| Self::is_markdown_path(path) || Self::is_svg_path(path))
+    {
+      "markdown_preview"
+    } else {
+      Self::diff_view_tag(self.diff_view)
+    }
+  }
+
+  fn sentry_git_data(&self) -> Map<String, Value> {
+    let mut data = Map::new();
+    if let Some(repo_root) = self.selected_repo.as_deref() {
+      let (repo_name, repo_hash) = sentry_context::sanitize_repo_path(repo_root);
+      data.insert("repo_name".into(), repo_name.into());
+      data.insert("repo_hash".into(), repo_hash.into());
+    }
+    if let Some(selected_file) = self.selected_file.as_deref() {
+      let file = selected_file.to_string_lossy().replace(['\n', '\r'], "");
+      data.insert("selected_file".into(), file.into());
+    }
+    if let Some(branch) = self
+      .branch_status
+      .as_ref()
+      .map(|status| status.name.clone())
+    {
+      data.insert("branch".into(), branch.into());
+    }
+    data.insert(
+      "sidebar_mode".into(),
+      Self::sidebar_mode_tag(self.sidebar_mode).into(),
+    );
+    data.insert("diff_view".into(), self.active_diff_view_tag().into());
+    data
+  }
+
+  fn add_git_breadcrumb(&self, message: &str, mut data: Map<String, Value>) {
+    let base = self.sentry_git_data();
+    for (key, value) in base {
+      data.entry(key).or_insert(value);
+    }
+    sentry_context::add_breadcrumb("git.action", message, data);
+  }
+
+  fn record_git_unexpected_error(
+    &self,
+    op: &'static str,
+    error: &str,
+    mut data: Map<String, Value>,
+  ) {
+    let base = self.sentry_git_data();
+    for (key, value) in base {
+      data.entry(key).or_insert(value);
+    }
+    let io_error = std::io::Error::other(error.to_string());
+    sentry_context::capture_unexpected_error(op, &io_error, data);
+  }
+
+  fn record_git_expected_error(&self, operation: &str, reason: &str, mut data: Map<String, Value>) {
+    let base = self.sentry_git_data();
+    for (key, value) in base {
+      data.entry(key).or_insert(value);
+    }
+    sentry_context::record_expected_error(operation, reason, data);
+  }
+
+  fn sync_sentry_git_context(&self) {
+    sentry_context::sync_git_context(
+      self.selected_repo.as_deref(),
+      self.selected_file.as_deref(),
+      self
+        .branch_status
+        .as_ref()
+        .map(|status| status.name.as_str()),
+      Self::sidebar_mode_tag(self.sidebar_mode),
+      self.active_diff_view_tag(),
+    );
+  }
+
   fn has_available_app_update(cx: &App) -> bool {
     AppUpdateStore::try_available_update(cx).is_some()
   }
@@ -911,6 +1009,8 @@ impl GitPage {
         self.open_file(first_path, cx);
       }
     }
+
+    self.sync_sentry_git_context();
 
     branch_changed
   }
@@ -1479,7 +1579,7 @@ impl GitPage {
         if let SelectEvent::Confirm(Some(branch)) = event {
           this.handle_branch_select_confirm(branch.clone(), cx);
         }
-      }
+      },
     )
     .detach();
   }
@@ -1543,6 +1643,7 @@ impl GitPage {
       return;
     }
 
+    let previous_repo = self.selected_repo.clone();
     self.selected_repo = Some(repo_root.clone());
     self.invalidate_open_file_task();
     self.selected_file = None;
@@ -1568,6 +1669,17 @@ impl GitPage {
     self.refresh_branches(cx);
     self.refresh_repo_select(cx);
     self.sync_repo_select_with_path(&repo_root, cx);
+    self.sync_sentry_git_context();
+    let mut data = Map::new();
+    if let Some(previous_repo) = previous_repo.as_deref() {
+      let (repo_name, repo_hash) = sentry_context::sanitize_repo_path(previous_repo);
+      data.insert("from_repo_name".into(), repo_name.into());
+      data.insert("from_repo_hash".into(), repo_hash.into());
+    }
+    let (repo_name, repo_hash) = sentry_context::sanitize_repo_path(&repo_root);
+    data.insert("to_repo_name".into(), repo_name.into());
+    data.insert("to_repo_hash".into(), repo_hash.into());
+    self.add_git_breadcrumb("Selected repository changed", data);
     cx.notify();
   }
 
@@ -1785,6 +1897,7 @@ impl GitPage {
       self.pending_history_file_loads.clear();
       self.history_opened_commit_file = None;
       self.refresh_history_list(cx);
+      self.sync_sentry_git_context();
       cx.notify();
       return;
     };
@@ -2555,15 +2668,26 @@ impl GitPage {
         if !self.should_show_skip_rebase_palette_command() {
           return Err("No rebase in progress.".into());
         }
+        self.add_git_breadcrumb("Skip rebase started", Map::new());
         match skip_rebase(&root_path) {
           Ok(()) => {
             if !is_rebase_in_progress(&root_path).unwrap_or(false) {
               self.force_push_after_rebase = true;
             }
+            self.add_git_breadcrumb("Skip rebase succeeded", Map::new());
             Ok(())
           }
           Err(err) => {
+            let err_text = err.to_string();
             if let Some(path) = Self::first_conflicted_path(&root_path) {
+              let mut data = Map::new();
+              data.insert("error".into(), err_text.into());
+              data.insert(
+                "file".into(),
+                path.to_string_lossy().replace(['\n', '\r'], "").into(),
+              );
+              self.record_git_expected_error("git.rebase.skip", "conflict", data.clone());
+              self.add_git_breadcrumb("Skip rebase blocked by conflicts", data);
               if let Some(rebase_message) = current_rebase_commit_message(&root_path).ok().flatten()
               {
                 self
@@ -2573,6 +2697,10 @@ impl GitPage {
               self.open_file(path, cx);
               Ok(())
             } else {
+              let mut data = Map::new();
+              data.insert("error".into(), err_text.clone().into());
+              self.add_git_breadcrumb("Skip rebase failed", data.clone());
+              self.record_git_unexpected_error("git.rebase.skip", err_text.as_str(), data);
               Err(err)
             }
           }
@@ -2774,10 +2902,28 @@ impl GitPage {
             CommandPaletteBranchKind::Remote => BranchKind::Remote,
           },
         };
+        let mut start_data = Map::new();
+        start_data.insert("target_branch".into(), branch_ref.name.clone().into());
+        self.add_git_breadcrumb("Merge started", start_data);
         match merge_branch(&root_path, &branch_ref) {
-          Ok(()) => Ok(()),
+          Ok(()) => {
+            let mut data = Map::new();
+            data.insert("target_branch".into(), branch_ref.name.clone().into());
+            self.add_git_breadcrumb("Merge succeeded", data);
+            Ok(())
+          }
           Err(err) => {
+            let err_text = err.to_string();
             if let Some(path) = Self::first_conflicted_path(&root_path) {
+              let mut data = Map::new();
+              data.insert("target_branch".into(), branch_ref.name.clone().into());
+              data.insert(
+                "file".into(),
+                path.to_string_lossy().replace(['\n', '\r'], "").into(),
+              );
+              data.insert("error".into(), err_text.into());
+              self.record_git_expected_error("git.merge", "conflict", data.clone());
+              self.add_git_breadcrumb("Merge has conflicts", data);
               let merge_message =
                 Self::merge_commit_message(branch_ref.name.as_str(), target_branch.as_str());
               self
@@ -2786,6 +2932,11 @@ impl GitPage {
               self.open_file(path, cx);
               Ok(())
             } else {
+              let mut data = Map::new();
+              data.insert("target_branch".into(), branch_ref.name.clone().into());
+              data.insert("error".into(), err_text.clone().into());
+              self.add_git_breadcrumb("Merge failed", data.clone());
+              self.record_git_unexpected_error("git.merge", err_text.as_str(), data);
               Err(err)
             }
           }
@@ -2814,13 +2965,29 @@ impl GitPage {
             CommandPaletteBranchKind::Remote => BranchKind::Remote,
           },
         };
+        let mut start_data = Map::new();
+        start_data.insert("target_branch".into(), branch_ref.name.clone().into());
+        self.add_git_breadcrumb("Rebase started", start_data);
         match rebase_branch(&root_path, &branch_ref) {
           Ok(()) => {
             self.force_push_after_rebase = true;
+            let mut data = Map::new();
+            data.insert("target_branch".into(), branch_ref.name.clone().into());
+            self.add_git_breadcrumb("Rebase succeeded", data);
             Ok(())
           }
           Err(err) => {
+            let err_text = err.to_string();
             if let Some(path) = Self::first_conflicted_path(&root_path) {
+              let mut data = Map::new();
+              data.insert("target_branch".into(), branch_ref.name.clone().into());
+              data.insert(
+                "file".into(),
+                path.to_string_lossy().replace(['\n', '\r'], "").into(),
+              );
+              data.insert("error".into(), err_text.into());
+              self.record_git_expected_error("git.rebase", "conflict", data.clone());
+              self.add_git_breadcrumb("Rebase has conflicts", data);
               if let Some(rebase_message) = current_rebase_commit_message(&root_path).ok().flatten()
               {
                 self
@@ -2830,6 +2997,11 @@ impl GitPage {
               self.open_file(path, cx);
               Ok(())
             } else {
+              let mut data = Map::new();
+              data.insert("target_branch".into(), branch_ref.name.clone().into());
+              data.insert("error".into(), err_text.clone().into());
+              self.add_git_breadcrumb("Rebase failed", data.clone());
+              self.record_git_unexpected_error("git.rebase", err_text.as_str(), data);
               Err(err)
             }
           }
@@ -3018,6 +3190,9 @@ impl GitPage {
       return;
     }
     let stage_all_needed = !self.has_staged_changes;
+    let mut start_data = Map::new();
+    start_data.insert("stage_all_needed".into(), stage_all_needed.into());
+    self.add_git_breadcrumb("Commit started", start_data);
 
     let window_handle = window.window_handle();
     let commit_input = self.commit_input.clone();
@@ -3032,10 +3207,23 @@ impl GitPage {
       })
       .await;
       let _ = this.update(cx, |this, cx| {
-        if result.is_ok() {
-          let _ = cx.update_window(window_handle, |_, window, cx| {
-            commit_input.update(cx, |input, cx| input.set_value("", window, cx));
-          });
+        match result {
+          Ok(()) => {
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+              commit_input.update(cx, |input, cx| input.set_value("", window, cx));
+            });
+            let mut data = Map::new();
+            data.insert("stage_all_needed".into(), stage_all_needed.into());
+            this.add_git_breadcrumb("Commit succeeded", data);
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            let mut data = Map::new();
+            data.insert("stage_all_needed".into(), stage_all_needed.into());
+            data.insert("error".into(), error_message.clone().into());
+            this.add_git_breadcrumb("Commit failed", data.clone());
+            this.record_git_unexpected_error("git.commit", error_message.as_str(), data);
+          }
         }
         this.reload_status(cx);
         if let Some(editor) = editor.clone() {
@@ -3057,38 +3245,64 @@ impl GitPage {
     self.operation_error = None;
     if Self::has_conflicted_entries(&self.status_entries) {
       self.operation_error = Some("Resolve all conflicts before continuing the rebase.".into());
+      let mut data = Map::new();
+      data.insert("reason".into(), "conflicts_present".into());
+      self.record_git_expected_error("git.continue_rebase", "conflict", data);
       cx.notify();
       return;
     }
 
+    self.add_git_breadcrumb("Continue rebase started", Map::new());
     let commit_input = self.commit_input.clone();
     let window_handle = self.window_handle;
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
       let repo_root_for_continue = repo_root.clone();
       let result = unblock(move || continue_rebase(&repo_root_for_continue)).await;
-      let (success, conflicted_path, error_message) = match result {
-        Ok(()) => (true, None, None),
-        Err(err) => {
-          let conflicted_path = Self::first_conflicted_path(&repo_root);
-          let is_conflict_state =
-            conflicted_path.is_some() || err.to_string().contains("rebase has conflicts");
-          let error_message = if is_conflict_state {
-            None
-          } else {
-            Some(format!("Continue rebase failed: {err}"))
-          };
-          (false, conflicted_path, error_message)
-        }
-      };
+      let (success, conflicted_path, error_message, failure_message, expected_conflict) =
+        match result {
+          Ok(()) => (true, None, None, None, false),
+          Err(err) => {
+            let conflicted_path = Self::first_conflicted_path(&repo_root);
+            let err_text = err.to_string();
+            let is_conflict_state =
+              conflicted_path.is_some() || err_text.contains("rebase has conflicts");
+            let error_message = if is_conflict_state {
+              None
+            } else {
+              Some(format!("Continue rebase failed: {err}"))
+            };
+            (
+              false,
+              conflicted_path,
+              error_message,
+              Some(err_text),
+              is_conflict_state,
+            )
+          }
+        };
       let _ = this.update(cx, |this, cx| {
         if success {
           this.rebase_in_progress = false;
           this.force_push_after_rebase = true;
           this.operation_error = None;
+          this.add_git_breadcrumb("Continue rebase succeeded", Map::new());
           let _ = cx.update_window(window_handle, |_, window, cx| {
             commit_input.update(cx, |input, cx| input.set_value("", window, cx));
           });
+        } else if expected_conflict {
+          let mut data = Map::new();
+          data.insert("has_conflicts".into(), true.into());
+          if let Some(message) = failure_message.clone() {
+            data.insert("error".into(), message.into());
+          }
+          this.record_git_expected_error("git.continue_rebase", "conflict", data.clone());
+          this.add_git_breadcrumb("Continue rebase blocked by conflicts", data);
+        } else if let Some(message) = failure_message.as_deref() {
+          let mut data = Map::new();
+          data.insert("error".into(), message.to_string().into());
+          this.add_git_breadcrumb("Continue rebase failed", data.clone());
+          this.record_git_unexpected_error("git.continue_rebase", message, data);
         }
         this.reload_status(cx);
         if let Some(path) = conflicted_path {
@@ -3335,14 +3549,27 @@ impl GitPage {
     if self.fetch_in_progress {
       return;
     }
+    self.add_git_breadcrumb("Fetch started", Map::new());
     self.fetch_in_progress = true;
     self.push_pull_in_progress = true;
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
-      let _ = unblock(move || fetch(&repo_root)).await;
+      let result = unblock(move || fetch(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
         this.fetch_in_progress = false;
         this.push_pull_in_progress = false;
+        match result {
+          Ok(()) => {
+            this.add_git_breadcrumb("Fetch succeeded", Map::new());
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            let mut data = Map::new();
+            data.insert("error".into(), error_message.clone().into());
+            this.add_git_breadcrumb("Fetch failed", data.clone());
+            this.record_git_unexpected_error("git.fetch", error_message.as_str(), data);
+          }
+        }
         this.reload_status(cx);
         this.refresh_branches(cx);
         if let Some(editor) = editor.clone() {
@@ -3362,13 +3589,24 @@ impl GitPage {
       return;
     }
 
+    self.add_git_breadcrumb("Push started", Map::new());
     self.push_pull_in_progress = true;
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || push(&repo_root, false)).await;
       let _ = this.update(cx, |this, cx| {
         this.push_pull_in_progress = false;
-        if result.is_ok() {
-          this.force_push_after_rebase = false;
+        match result {
+          Ok(()) => {
+            this.force_push_after_rebase = false;
+            this.add_git_breadcrumb("Push succeeded", Map::new());
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            let mut data = Map::new();
+            data.insert("error".into(), error_message.clone().into());
+            this.add_git_breadcrumb("Push failed", data.clone());
+            this.record_git_unexpected_error("git.push", error_message.as_str(), data);
+          }
         }
         this.reload_status(cx);
       });
@@ -3385,13 +3623,24 @@ impl GitPage {
       return;
     }
 
+    self.add_git_breadcrumb("Force push started", Map::new());
     self.push_pull_in_progress = true;
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || push(&repo_root, true)).await;
       let _ = this.update(cx, |this, cx| {
         this.push_pull_in_progress = false;
-        if result.is_ok() {
-          this.force_push_after_rebase = false;
+        match result {
+          Ok(()) => {
+            this.force_push_after_rebase = false;
+            this.add_git_breadcrumb("Force push succeeded", Map::new());
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            let mut data = Map::new();
+            data.insert("error".into(), error_message.clone().into());
+            this.add_git_breadcrumb("Force push failed", data.clone());
+            this.record_git_unexpected_error("git.force_push", error_message.as_str(), data);
+          }
         }
         this.reload_status(cx);
       });
@@ -3417,6 +3666,13 @@ impl GitPage {
     let had_history_file_selection = self.history_opened_commit_file.is_some();
     self.history_opened_commit_file = None;
     self.selected_file = Some(rel_path.clone());
+    self.sync_sentry_git_context();
+    let mut data = Map::new();
+    data.insert(
+      "file".into(),
+      rel_path.to_string_lossy().replace(['\n', '\r'], "").into(),
+    );
+    self.add_git_breadcrumb("Opened file in git page", data);
     self.editor = None;
     self.svg_preview = None;
     self.svg_preview_source = None;
@@ -3543,6 +3799,14 @@ impl GitPage {
     self.invalidate_open_file_task();
     self.history_opened_commit_file = Some((commit_oid.clone(), rel_path.clone()));
     self.selected_file = Some(rel_path.clone());
+    self.sync_sentry_git_context();
+    let mut data = Map::new();
+    data.insert(
+      "file".into(),
+      rel_path.to_string_lossy().replace(['\n', '\r'], "").into(),
+    );
+    data.insert("history_commit".into(), commit_oid.clone().into());
+    self.add_git_breadcrumb("Opened history file in git page", data);
     self.refresh_history_list(cx);
     cx.notify();
 
@@ -3579,6 +3843,7 @@ impl GitPage {
         this.editor = Some(editor);
         this.selected_file = Some(rel_path.clone());
         this.history_opened_commit_file = Some((commit_oid.clone(), rel_path.clone()));
+        this.sync_sentry_git_context();
         this.svg_preview = None;
         this.svg_preview_source = None;
         this.refresh_history_list(cx);
@@ -3609,6 +3874,10 @@ impl GitPage {
       DiffViewMode::Split => DiffViewMode::Inline,
     };
     self.sync_diff_view(cx);
+    self.sync_sentry_git_context();
+    let mut data = Map::new();
+    data.insert("diff_view".into(), self.active_diff_view_tag().into());
+    self.add_git_breadcrumb("Toggled git diff view", data);
     cx.notify();
   }
 
@@ -3616,12 +3885,17 @@ impl GitPage {
     if !self.selected_file_is_markdown() && !self.selected_file_is_svg() {
       self.show_markdown_preview = false;
       self.sync_diff_view(cx);
+      self.sync_sentry_git_context();
       cx.notify();
       return;
     }
 
     self.show_markdown_preview = !self.show_markdown_preview;
     self.sync_diff_view(cx);
+    self.sync_sentry_git_context();
+    let mut data = Map::new();
+    data.insert("enabled".into(), self.show_markdown_preview.into());
+    self.add_git_breadcrumb("Toggled markdown preview", data);
     cx.notify();
   }
 
@@ -3734,6 +4008,13 @@ impl GitPage {
     cx: &mut Context<Self>,
   ) {
     self.sidebar_mode = mode;
+    self.sync_sentry_git_context();
+    let mut data = Map::new();
+    data.insert(
+      "sidebar_mode".into(),
+      Self::sidebar_mode_tag(self.sidebar_mode).into(),
+    );
+    self.add_git_breadcrumb("Changed git sidebar mode", data);
 
     if self.sidebar_mode == GitSidebarMode::History {
       self.refresh_history(cx);
@@ -3839,10 +4120,21 @@ impl GitPage {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
     };
+    self.add_git_breadcrumb("Stage all started", Map::new());
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
-      let _ = unblock(move || stage_all(&repo_root)).await;
+      let result = unblock(move || stage_all(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(()) => this.add_git_breadcrumb("Stage all succeeded", Map::new()),
+          Err(error) => {
+            let error_message = error.to_string();
+            let mut data = Map::new();
+            data.insert("error".into(), error_message.clone().into());
+            this.add_git_breadcrumb("Stage all failed", data.clone());
+            this.record_git_unexpected_error("git.stage_all", error_message.as_str(), data);
+          }
+        }
         this.reload_status(cx);
         if let Some(editor) = editor.clone() {
           editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
@@ -3856,10 +4148,21 @@ impl GitPage {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
     };
+    self.add_git_breadcrumb("Unstage all started", Map::new());
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
-      let _ = unblock(move || unstage_all(&repo_root)).await;
+      let result = unblock(move || unstage_all(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(()) => this.add_git_breadcrumb("Unstage all succeeded", Map::new()),
+          Err(error) => {
+            let error_message = error.to_string();
+            let mut data = Map::new();
+            data.insert("error".into(), error_message.clone().into());
+            this.add_git_breadcrumb("Unstage all failed", data.clone());
+            this.record_git_unexpected_error("git.unstage_all", error_message.as_str(), data);
+          }
+        }
         this.reload_status(cx);
         if let Some(editor) = editor.clone() {
           editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
@@ -3873,10 +4176,30 @@ impl GitPage {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
     };
+    let mut start_data = Map::new();
+    start_data.insert(
+      "file".into(),
+      rel_path.to_string_lossy().replace(['\n', '\r'], "").into(),
+    );
+    self.add_git_breadcrumb("Stage file started", start_data);
     let rel_path_for_job = rel_path.clone();
     let task = cx.spawn(async move |this, cx| {
-      let _ = unblock(move || stage_file(&repo_root, &rel_path_for_job)).await;
+      let result = unblock(move || stage_file(&repo_root, &rel_path_for_job)).await;
       let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(()) => this.add_git_breadcrumb("Stage file succeeded", Map::new()),
+          Err(error) => {
+            let error_message = error.to_string();
+            let mut data = Map::new();
+            data.insert("error".into(), error_message.clone().into());
+            data.insert(
+              "file".into(),
+              rel_path.to_string_lossy().replace(['\n', '\r'], "").into(),
+            );
+            this.add_git_breadcrumb("Stage file failed", data.clone());
+            this.record_git_unexpected_error("git.stage_file", error_message.as_str(), data);
+          }
+        }
         this.reload_status(cx);
         if Self::should_refresh_editor_for_path(this.selected_file.as_deref(), &rel_path)
           && let Some(editor) = this.editor.clone()
@@ -3892,10 +4215,30 @@ impl GitPage {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
     };
+    let mut start_data = Map::new();
+    start_data.insert(
+      "file".into(),
+      rel_path.to_string_lossy().replace(['\n', '\r'], "").into(),
+    );
+    self.add_git_breadcrumb("Unstage file started", start_data);
     let rel_path_for_job = rel_path.clone();
     let task = cx.spawn(async move |this, cx| {
-      let _ = unblock(move || unstage_file(&repo_root, &rel_path_for_job)).await;
+      let result = unblock(move || unstage_file(&repo_root, &rel_path_for_job)).await;
       let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(()) => this.add_git_breadcrumb("Unstage file succeeded", Map::new()),
+          Err(error) => {
+            let error_message = error.to_string();
+            let mut data = Map::new();
+            data.insert("error".into(), error_message.clone().into());
+            data.insert(
+              "file".into(),
+              rel_path.to_string_lossy().replace(['\n', '\r'], "").into(),
+            );
+            this.add_git_breadcrumb("Unstage file failed", data.clone());
+            this.record_git_unexpected_error("git.unstage_file", error_message.as_str(), data);
+          }
+        }
         this.reload_status(cx);
         if Self::should_refresh_editor_for_path(this.selected_file.as_deref(), &rel_path)
           && let Some(editor) = this.editor.clone()
@@ -3918,6 +4261,13 @@ impl GitPage {
     };
     let rel_path_for_job = rel_path.clone();
     let should_delete = Self::restore_uses_delete(status);
+    let mut start_data = Map::new();
+    start_data.insert(
+      "file".into(),
+      rel_path.to_string_lossy().replace(['\n', '\r'], "").into(),
+    );
+    start_data.insert("delete".into(), should_delete.into());
+    self.add_git_breadcrumb("Restore file started", start_data);
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || {
         if should_delete {
@@ -3928,8 +4278,25 @@ impl GitPage {
       })
       .await;
       let _ = this.update(cx, |this, cx| {
-        if result.is_ok() {
-          this.select_first_file_after_restore = true;
+        match result {
+          Ok(()) => {
+            this.select_first_file_after_restore = true;
+            let mut data = Map::new();
+            data.insert("delete".into(), should_delete.into());
+            this.add_git_breadcrumb("Restore file succeeded", data);
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            let mut data = Map::new();
+            data.insert("delete".into(), should_delete.into());
+            data.insert(
+              "file".into(),
+              rel_path.to_string_lossy().replace(['\n', '\r'], "").into(),
+            );
+            data.insert("error".into(), error_message.clone().into());
+            this.add_git_breadcrumb("Restore file failed", data.clone());
+            this.record_git_unexpected_error("git.restore_file", error_message.as_str(), data);
+          }
         }
         this.reload_status(cx);
         if Self::should_refresh_editor_for_path(this.selected_file.as_deref(), &rel_path)
@@ -3949,20 +4316,36 @@ impl GitPage {
     if self.status_entries.is_empty() {
       return;
     }
+    self.add_git_breadcrumb("Restore all started", Map::new());
     let entries = self.status_entries.clone();
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
-      let _ = unblock(move || {
+      let first_error = unblock(move || {
+        let mut first_error = None;
         for entry in entries {
-          if Self::restore_uses_delete(entry.status) {
-            let _ = delete_untracked_file(&repo_root, &entry.path);
+          let result = if Self::restore_uses_delete(entry.status) {
+            delete_untracked_file(&repo_root, &entry.path)
           } else {
-            let _ = restore_file(&repo_root, &entry.path);
+            restore_file(&repo_root, &entry.path)
+          };
+          if let Err(error) = result
+            && first_error.is_none()
+          {
+            first_error = Some(error.to_string());
           }
         }
+        first_error
       })
       .await;
       let _ = this.update(cx, |this, cx| {
+        if let Some(error_message) = first_error {
+          let mut data = Map::new();
+          data.insert("error".into(), error_message.clone().into());
+          this.add_git_breadcrumb("Restore all completed with errors", data.clone());
+          this.record_git_unexpected_error("git.restore_all", error_message.as_str(), data);
+        } else {
+          this.add_git_breadcrumb("Restore all succeeded", Map::new());
+        }
         this.select_first_file_after_restore = true;
         this.reload_status(cx);
         if let Some(editor) = editor.clone() {

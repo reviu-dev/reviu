@@ -19,6 +19,7 @@ use crate::git_config_page::GitConfigPage;
 use crate::git_page::GitPage;
 use crate::github_page::GithubPage;
 use crate::github_pr_details_page::GithubPrDetailsPage;
+use crate::sentry_context;
 use crate::settings_page::SettingsPage;
 use ui::{Button, ButtonVariants as _, UiIconName, WindowExt};
 
@@ -403,7 +404,17 @@ impl Render for WorkspaceView {
     }
 
     if self.last_page != Some(page) {
+      let previous_page = self.last_page;
       self.last_page = Some(page);
+      sentry_context::sync_workspace_page(previous_page, page);
+      if previous_page == Some(WorkspacePage::Git) && page != WorkspacePage::Git {
+        sentry_context::clear_git_context();
+      }
+      if previous_page == Some(WorkspacePage::GithubPrDetails)
+        && page != WorkspacePage::GithubPrDetails
+      {
+        sentry_context::clear_github_pr_context();
+      }
       let focus_handle = self.focus_handle(cx);
       window.focus(&focus_handle, cx);
     }
