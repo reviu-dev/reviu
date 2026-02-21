@@ -14,46 +14,11 @@ import {
   fetchGithubPullRequestComments,
   fetchGithubPullRequestFilesAllPages,
   fetchGithubPullRequests,
+  fetchGithubRepository,
   fetchGithubRepositoryContent,
   patchGithubPullRequestComment,
 
 } from '../services/github.js'
-
-// type ListPullsParams = Endpoints['GET /repos/{owner}/{repo}/pulls']['parameters']
-// type CompareParams
-//   = Endpoints['GET /repos/{owner}/{repo}/compare/{basehead}']['parameters']
-
-// type PullRequestParams
-//   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
-// type PullRequestCommentsParams
-//   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
-// type CreatePullRequestCommentParams
-//   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
-// type CreatePullRequestCommentReplyParams
-//   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies']['parameters']
-// type PullRequestCommentResponse
-//   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data'][number]
-// type CreatePullRequestCommentResponse
-//   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data']
-// type CreatePullRequestCommentReplyResponse
-//   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies']['response']['data']
-// type UpdatePullRequestCommentParams
-//   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['parameters']
-// type UpdatePullRequestCommentResponse
-//   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['response']['data']
-// type DeletePullRequestCommentParams
-//   = Endpoints['DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}']['parameters']
-// type NotificationsParams = Endpoints['GET /notifications']['parameters']
-// type NotificationResponse = Endpoints['GET /notifications']['response']['data'][number]
-
-// type GetContentParams
-//   = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['parameters']
-
-// type PullRequestDetailsResponse
-//   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['response']['data']
-
-// type PullRequestResponse
-//   = Endpoints['GET /repos/{owner}/{repo}/pulls']['response']['data'][number]
 
 interface GithubRepository {
   owner: string
@@ -231,7 +196,7 @@ export const githubRoutes = githubRouter
         all: false,
       }
 
-      const data = await fetchGithubNotifications(githubToken, params)
+      const data = await fetchGithubNotifications({ token: githubToken, params })
 
       const notifications: GithubNotification[] = data.map(notification => ({
         id: notification.id,
@@ -283,7 +248,7 @@ export const githubRoutes = githubRouter
         per_page: 20,
       }
 
-      const data = await fetchGithubPullRequests(githubToken, params)
+      const data = await fetchGithubPullRequests({ token: githubToken, params })
 
       const pullRequests: GithubPullRequest[] = data.map(pull => ({
         number: pull.number,
@@ -323,7 +288,7 @@ export const githubRoutes = githubRouter
         pull_number: pullNumber,
       }
 
-      const data = await fetchGithubPullRequest(githubToken, params)
+      const data = await fetchGithubPullRequest({ token: githubToken, params })
 
       const author: GithubPullRequestDetailsAuthor = {
         login: data.user.login,
@@ -342,7 +307,7 @@ export const githubRoutes = githubRouter
           basehead: `${baseRef}...${headOwner}:${headRef}`,
         }
 
-        const compare = await compareGithubRefs(githubToken, compareParams)
+        const compare = await compareGithubRefs({ token: githubToken, params: compareParams })
 
         mergeBaseSha = compare.merge_base_commit.sha
       }
@@ -400,11 +365,11 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const files = await fetchGithubPullRequestFilesAllPages(githubToken, {
+      const files = await fetchGithubPullRequestFilesAllPages({ token: githubToken, params: {
         owner: org,
         repo,
         pull_number: pullNumber,
-      })
+      } })
 
       return ctx.json({ files }, 200)
     }
@@ -431,7 +396,7 @@ export const githubRoutes = githubRouter
         per_page: 100,
       }
 
-      const data = await fetchGithubPullRequestComments(githubToken, params)
+      const data = await fetchGithubPullRequestComments({ token: githubToken, params })
 
       const comments: GithubPullRequestReviewComment[]
         = data.map(mapGithubPullRequestReviewComment)
@@ -479,7 +444,7 @@ export const githubRoutes = githubRouter
         ...(startSide != null ? { start_side: startSide } : {}),
       }
 
-      const data = await createGithubPullRequestComment(githubToken, params)
+      const data = await createGithubPullRequestComment({ token: githubToken, params })
 
       const comment = mapGithubPullRequestReviewComment(data)
       return ctx.json({ comment }, 200)
@@ -517,7 +482,7 @@ export const githubRoutes = githubRouter
         body,
       }
 
-      const data = await createGithubPullRequestCommentReply(githubToken, params)
+      const data = await createGithubPullRequestCommentReply({ token: githubToken, params })
 
       const comment = mapGithubPullRequestReviewComment(data)
       return ctx.json({ comment }, 200)
@@ -549,7 +514,7 @@ export const githubRoutes = githubRouter
         comment_id: commentId,
       }
 
-      await deleteGithubPullRequestComment(githubToken, params)
+      await deleteGithubPullRequestComment({ token: githubToken, params })
 
       return ctx.json({ success: true }, 200)
     }
@@ -585,7 +550,7 @@ export const githubRoutes = githubRouter
         body,
       }
 
-      const data = await patchGithubPullRequestComment(githubToken, params)
+      const data = await patchGithubPullRequestComment({ token: githubToken, params })
 
       const comment = mapGithubPullRequestReviewComment(data)
       return ctx.json({ comment }, 200)
@@ -616,7 +581,7 @@ export const githubRoutes = githubRouter
         ref,
       }
 
-      const data = await fetchGithubRepositoryContent(githubToken, params)
+      const data = await fetchGithubRepositoryContent({ token: githubToken, params })
 
       let content: string | null = null
 
@@ -642,6 +607,62 @@ export const githubRoutes = githubRouter
       if (status === 404) {
         return ctx.json({ content: null } satisfies GithubFileContent, 200)
       }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/repos/:owner/:repo', async (ctx) => {
+    const { owner, repo } = ctx.req.param()
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const data = await fetchGithubRepository({ token: githubToken, owner, repo })
+      return ctx.json(data, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 404) {
+        return ctx.json({ error: 'Repository not found' }, 404)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/repos/:owner/:repo/pr', async (ctx) => {
+    const { owner, repo } = ctx.req.param()
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: ListPullsParams = {
+        owner,
+        repo,
+        state: 'all',
+        sort: 'updated',
+        direction: 'desc',
+        per_page: 20,
+      }
+
+      const data = await fetchGithubPullRequests({ token: githubToken, params })
+
+      const pullRequests: GithubPullRequest[] = data.map(pull => ({
+        number: pull.number,
+        title: pull.title,
+        state: pull.state,
+        draft: Boolean(pull.draft),
+        mergedAt: pull.merged_at,
+        updatedAt: pull.updated_at,
+        labels: pull.labels,
+        repository: {
+          owner,
+          repo,
+        },
+      }))
+
+      return ctx.json({ pullRequests }, 200)
+    }
+    catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })

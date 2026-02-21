@@ -28,6 +28,7 @@ use crate::{
   auth_state::{AuthState, AuthStateStore},
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
+  github_repo_page::GithubRepoPageHandle,
   workspace::{WorkspacePage, WorkspaceRoute},
 };
 
@@ -169,6 +170,10 @@ impl GitConfigPage {
         number,
       } => {
         GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubRepoDetails { owner, repo } => {
+        GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

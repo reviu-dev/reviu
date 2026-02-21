@@ -49,8 +49,8 @@ function githubAuthHeaders(token: string, extraHeaders?: Record<string, string>)
 }
 
 export async function fetchGithubNotifications(
-  token: string,
-  params: NotificationsParams,
+  { token, params }:
+  { token: string, params: NotificationsParams },
 ): Promise<NotificationResponse[]> {
   const { data } = await request('GET /notifications', {
     ...params,
@@ -60,8 +60,8 @@ export async function fetchGithubNotifications(
 }
 
 export async function fetchGithubPullRequests(
-  token: string,
-  params: ListPullsParams,
+  { token, params }:
+  { token: string, params: ListPullsParams },
 ): Promise<PullRequestResponse[]> {
   const { data } = await request('GET /repos/{owner}/{repo}/pulls', {
     ...params,
@@ -71,8 +71,8 @@ export async function fetchGithubPullRequests(
 }
 
 export async function fetchGithubPullRequest(
-  token: string,
-  params: PullRequestParams,
+  { token, params }:
+  { token: string, params: PullRequestParams },
 ): Promise<PullRequestDetailsResponse> {
   const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
     ...params,
@@ -82,8 +82,8 @@ export async function fetchGithubPullRequest(
 }
 
 export async function compareGithubRefs(
-  token: string,
-  params: CompareParams,
+  { token, params }:
+  { token: string, params: CompareParams },
 ) {
   const { data } = await request('GET /repos/{owner}/{repo}/compare/{basehead}', {
     ...params,
@@ -93,8 +93,8 @@ export async function compareGithubRefs(
 }
 
 export async function fetchGithubPullRequestFilesPage(
-  token: string,
-  params: PullRequestFilesParams,
+  { token, params }:
+  { token: string, params: PullRequestFilesParams },
 ): Promise<PullRequestFileResponse[]> {
   const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}/files', {
     ...params,
@@ -104,18 +104,20 @@ export async function fetchGithubPullRequestFilesPage(
 }
 
 export async function fetchGithubPullRequestFilesAllPages(
-  token: string,
-  params: Omit<PullRequestFilesParams, 'per_page' | 'page'>,
-  perPage = 100,
+  { token, params, perPage = 100}:
+  { token: string, params: Omit<PullRequestFilesParams, 'per_page' | 'page'>, perPage?: number },
 ): Promise<PullRequestFileResponse[]> {
   const files: PullRequestFileResponse[] = []
   let page = 1
 
   while (true) {
-    const data = await fetchGithubPullRequestFilesPage(token, {
-      ...params,
-      per_page: perPage,
-      page,
+    const data = await fetchGithubPullRequestFilesPage({
+      token,
+      params: {
+        ...params,
+        per_page: perPage,
+        page,
+      },
     })
     files.push(...data)
 
@@ -129,8 +131,8 @@ export async function fetchGithubPullRequestFilesAllPages(
 }
 
 export async function fetchGithubPullRequestComments(
-  token: string,
-  params: PullRequestCommentsParams,
+  { token, params }:
+  { token: string, params: PullRequestCommentsParams },
 ): Promise<PullRequestCommentResponse[]> {
   const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
     ...params,
@@ -140,8 +142,8 @@ export async function fetchGithubPullRequestComments(
 }
 
 export async function createGithubPullRequestComment(
-  token: string,
-  params: CreatePullRequestCommentParams,
+  { token, params }:
+  { token: string, params: CreatePullRequestCommentParams },
 ): Promise<CreatePullRequestCommentResponse> {
   const { data } = await request('POST /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
     ...params,
@@ -151,8 +153,7 @@ export async function createGithubPullRequestComment(
 }
 
 export async function createGithubPullRequestCommentReply(
-  token: string,
-  params: CreatePullRequestCommentReplyParams,
+  { token, params }: { token: string, params: CreatePullRequestCommentReplyParams },
 ): Promise<CreatePullRequestCommentReplyResponse> {
   const { data } = await request('POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies', {
     ...params,
@@ -162,8 +163,8 @@ export async function createGithubPullRequestCommentReply(
 }
 
 export async function patchGithubPullRequestComment(
-  token: string,
-  params: UpdatePullRequestCommentParams,
+  { token, params }:
+  { token: string, params: UpdatePullRequestCommentParams },
 ): Promise<UpdatePullRequestCommentResponse> {
   const { data } = await request('PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}', {
     ...params,
@@ -173,8 +174,7 @@ export async function patchGithubPullRequestComment(
 }
 
 export async function deleteGithubPullRequestComment(
-  token: string,
-  params: DeletePullRequestCommentParams,
+  { token, params}: { token: string, params: DeletePullRequestCommentParams },
 ): Promise<void> {
   await request('DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}', {
     ...params,
@@ -183,8 +183,8 @@ export async function deleteGithubPullRequestComment(
 }
 
 export async function fetchGithubRepositoryContent(
-  token: string,
-  params: GetContentParams,
+  { token, params}:
+  { token: string, params: GetContentParams },
 ): Promise<GetContentResponse> {
   const { data } = await request('GET /repos/{owner}/{repo}/contents/{path}', {
     ...params,
@@ -195,8 +195,20 @@ export async function fetchGithubRepositoryContent(
   return data
 }
 
-export async function fetchGithubViewer(token: string): Promise<GithubUserResponse> {
+export async function fetchGithubViewer({ token }: { token: string }): Promise<GithubUserResponse> {
   const { data } = await request('GET /user', {
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
+export async function fetchGithubRepository(
+  { token, owner, repo}:
+  { token: string, owner: string, repo: string },
+) {
+  const { data } = await request('GET /repos/{owner}/{repo}', {
+    owner,
+    repo,
     headers: githubAuthHeaders(token),
   })
   return data

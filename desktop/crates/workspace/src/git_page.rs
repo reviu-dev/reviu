@@ -50,6 +50,7 @@ use crate::{
   config::{ConfigStore, RecentRepository},
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
+  github_repo_page::GithubRepoPageHandle,
   interactive_rebase_todo_view::{
     InteractiveRebaseTodoView, InteractiveRebaseTodoViewCancelHandler,
     InteractiveRebaseTodoViewConfig, InteractiveRebaseTodoViewHandler,
@@ -2599,6 +2600,10 @@ impl GitPage {
         number,
       } => {
         GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubRepoDetails { owner, repo } => {
+        GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

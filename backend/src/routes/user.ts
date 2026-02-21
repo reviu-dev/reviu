@@ -24,7 +24,7 @@ export const userRoutes = userRouter
     let githubLogin: string | null = null
 
     try {
-      const data = await fetchGithubViewer(githubToken)
+      const data = await fetchGithubViewer({ token: githubToken })
       githubLogin = data.login ?? null
     }
     catch {

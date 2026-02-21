@@ -24,6 +24,7 @@ use crate::{
   auth_state::{AuthState, AuthStateStore},
   date_format::format_compact_datetime,
   github_pr_details_page::GithubPrDetailsPageHandle,
+  github_repo_page::GithubRepoPageHandle,
   sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
@@ -719,6 +720,10 @@ impl GithubPage {
         number,
       } => {
         GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubRepoDetails { owner, repo } => {
+        GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
