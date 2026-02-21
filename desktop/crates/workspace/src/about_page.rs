@@ -407,65 +407,59 @@ impl Render for AboutPage {
       .on_action(cx.listener(AboutPage::close_workspace_page_action))
       .child(header)
       .child(
-        div()
-          .w_full()
-          .h_full()
-          .min_h_0()
-          .py_4()
-          .px_4()
-          .child(
-            v_flex()
-              .w_full()
-              .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
-              .mx_auto()
-              .gap_3()
-              .child(
-                div()
-                  .text_lg()
-                  .font_semibold()
-                  .text_color(theme.foreground)
-                  .child("Reviu Desktop"),
-              )
-              .child(
-                div()
-                  .text_sm()
-                  .text_color(theme.muted_foreground)
-                  .child("Version information and update controls."),
-              )
-              .child(
-                div()
-                  .flex()
-                  .flex_col()
-                  .gap_1()
-                  .child(
-                    div()
-                      .text_sm()
-                      .text_color(theme.foreground)
-                      .child(format!("Client version: {client_version}")),
-                  )
-                  .child(
-                    div()
-                      .text_xs()
-                      .text_color(theme.muted_foreground)
-                      .child(format!("Build version: {build_version}")),
-                  ),
-              )
-              .child(
-                Button::new("about-check-updates")
-                  .small()
-                  .icon(UiIconName::RefreshCcw)
-                  .label(if self.check_in_progress {
-                    "Checking..."
-                  } else {
-                    "Check for updates"
-                  })
-                  .disabled(self.check_in_progress)
-                  .on_click(cx.listener(AboutPage::check_for_updates_action)),
-              )
-              .when_some(check_status, |this, (message, color)| {
-                this.child(div().text_sm().text_color(color).child(message))
-              }),
-          ),
+        div().w_full().h_full().min_h_0().py_4().px_4().child(
+          v_flex()
+            .w_full()
+            .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+            .mx_auto()
+            .gap_3()
+            .child(
+              div()
+                .text_lg()
+                .font_semibold()
+                .text_color(theme.foreground)
+                .child("Reviu Desktop"),
+            )
+            .child(
+              div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child("Version information and update controls."),
+            )
+            .child(
+              div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(format!("Client version: {client_version}")),
+                )
+                .child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("Build version: {build_version}")),
+                ),
+            )
+            .child(
+              Button::new("about-check-updates")
+                .small()
+                .icon(UiIconName::RefreshCcw)
+                .label(if self.check_in_progress {
+                  "Checking..."
+                } else {
+                  "Check for updates"
+                })
+                .disabled(self.check_in_progress)
+                .on_click(cx.listener(AboutPage::check_for_updates_action)),
+            )
+            .when_some(check_status, |this, (message, color)| {
+              this.child(div().text_sm().text_color(color).child(message))
+            }),
+        ),
       )
   }
 }
