@@ -164,7 +164,7 @@ fn issue_state_label(state: &str, reason: Option<GithubIssueStateReason>) -> Sha
   }
 
   match reason {
-    Some(GithubIssueStateReason::Completed) => "Completed".into(),
+    Some(GithubIssueStateReason::Completed) => "Closed".into(),
     Some(GithubIssueStateReason::Reopened) => "Reopened".into(),
     Some(GithubIssueStateReason::NotPlanned) => "Not planned".into(),
     Some(GithubIssueStateReason::Duplicate) => "Duplicate".into(),
@@ -684,12 +684,11 @@ impl Render for GithubIssueDetailsSheetView {
         issue.number,
       );
       let state_text = issue_state_label(&issue.state, issue.state_reason.clone());
-      let (state_icon, state_color) =
-        match issue_visual_state(&issue.state, issue.state_reason.clone()) {
-          GithubIssueVisualState::Open => (UiIconName::CircleDot, theme.status_green()),
-          GithubIssueVisualState::Completed => (UiIconName::CircleCheck, theme.status_violet()),
-          GithubIssueVisualState::NotPlanned => (UiIconName::CircleSlash, theme.status_gray()),
-        };
+      let state_color = match issue_visual_state(&issue.state, issue.state_reason.clone()) {
+        GithubIssueVisualState::Open => theme.status_green(),
+        GithubIssueVisualState::Completed => theme.status_violet(),
+        GithubIssueVisualState::NotPlanned => theme.status_gray(),
+      };
 
       let label_tags = issue.labels.iter().map(|label| {
         Tag::secondary()
@@ -701,28 +700,16 @@ impl Render for GithubIssueDetailsSheetView {
       v_flex()
         .w_full()
         .gap_3()
-        .p_3()
+        .pt_3()
+        .pb_8()
         .child(
-          h_flex()
-            .items_center()
-            .w_full()
+          div()
             .min_w_0()
-            .gap_2()
-            .child(
-              div()
-                .flex_none()
-                .pt(px(1.0))
-                .child(Icon::new(state_icon).size_4().text_color(state_color)),
-            )
-            .child(
-              div()
-                .min_w_0()
-                .flex_1()
-                .text_lg()
-                .font_semibold()
-                .whitespace_normal()
-                .child(issue.title.clone()),
-            ),
+            .flex_1()
+            .text_lg()
+            .font_semibold()
+            .whitespace_normal()
+            .child(issue.title.clone()),
         )
         .child(
           h_flex()
@@ -731,7 +718,13 @@ impl Render for GithubIssueDetailsSheetView {
             .text_sm()
             .text_color(theme.muted_foreground)
             .child(format!("#{}", issue.number))
-            .child(Tag::secondary().small().rounded_full().child(state_text)),
+            .child(
+              Tag::secondary()
+                .small()
+                .rounded_full()
+                .text_color(state_color)
+                .child(state_text),
+            ),
         )
         .when(!issue.labels.is_empty(), |this| {
           this.child(h_flex().gap_1().flex_wrap().children(label_tags))
@@ -1836,7 +1829,7 @@ mod tests {
     assert_eq!(issue_state_label("open", None).as_ref(), "Open");
     assert_eq!(
       issue_state_label("closed", Some(GithubIssueStateReason::Completed)).as_ref(),
-      "Completed"
+      "Closed"
     );
     assert_eq!(
       issue_state_label("closed", Some(GithubIssueStateReason::Duplicate)).as_ref(),
