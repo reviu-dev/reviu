@@ -1464,8 +1464,10 @@ fn render_inline_text(
     options.state.clone(),
     options.on_link.clone(),
     text_id,
-    true,
-    false,
+    SelectableTextOptions {
+      interactive: true,
+      show_indentation_dots: false,
+    },
   )
   .into_any_element()
 }
@@ -1486,8 +1488,10 @@ fn render_inline_static(
     options.state.clone(),
     options.on_link.clone(),
     text_id,
-    false,
-    false,
+    SelectableTextOptions {
+      interactive: false,
+      show_indentation_dots: false,
+    },
   )
   .into_any_element()
 }
@@ -1532,8 +1536,10 @@ fn render_code_block(
     options.state.clone(),
     options.on_link.clone(),
     text_id,
-    true,
-    true,
+    SelectableTextOptions {
+      interactive: true,
+      show_indentation_dots: true,
+    },
   );
   let scroll_id: SharedString = format!("markdown-code-block-scroll-{text_id}").into();
   let scroll_x_id: SharedString = format!("markdown-code-block-scroll-x-{text_id}").into();
@@ -2023,6 +2029,12 @@ struct SelectableText {
   last_selection: Option<Range<usize>>,
 }
 
+#[derive(Clone, Copy)]
+struct SelectableTextOptions {
+  interactive: bool,
+  show_indentation_dots: bool,
+}
+
 impl SelectableText {
   fn new(
     text: SharedString,
@@ -2031,11 +2043,10 @@ impl SelectableText {
     render_state: MarkdownRenderState,
     on_link: Option<Arc<LinkHandlerFn>>,
     text_id: usize,
-    interactive: bool,
-    show_indentation_dots: bool,
+    options: SelectableTextOptions,
   ) -> Self {
     let styled_text = StyledText::new(text.clone());
-    let indentation_dot_indices = if show_indentation_dots {
+    let indentation_dot_indices = if options.show_indentation_dots {
       collect_indentation_dot_indices(text.as_ref())
     } else {
       Vec::new()
@@ -2047,8 +2058,8 @@ impl SelectableText {
       render_state,
       on_link,
       text_id,
-      interactive,
-      show_indentation_dots,
+      interactive: options.interactive,
+      show_indentation_dots: options.show_indentation_dots,
       indentation_dot_indices,
       styled_text,
       last_selection: None,
