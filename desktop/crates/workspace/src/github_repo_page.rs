@@ -20,8 +20,8 @@ use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, UserMenuConfig, UserMenuPage, UserMenuState,
-  UserMenuUser, WindowExt, user_menu, StatusThemeExt as _, UiIconName,
+  CommandPaletteHandler, CommandPalettePage, DETAILS_PAGE_CONTAINER_MAX_WIDTH, StatusThemeExt as _,
+  UiIconName, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt, user_menu,
 };
 
 use crate::{
@@ -1114,11 +1114,13 @@ impl GithubRepoPage {
     v_flex()
       .w_full()
       .h_full()
+      .min_h_0()
       .p_4()
-      .items_center()
       .child(
         v_flex()
-          .w(px(900.0))
+          .w_full()
+          .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+          .mx_auto()
           .gap_4()
           .child(
             h_flex()
@@ -1209,12 +1211,20 @@ impl GithubRepoPage {
       .w_full()
       .h_full()
       .min_h_0()
-      .gap_3()
       .p_4()
-      .when_some(self.pull_requests_error.clone(), |this, error| {
-        this.child(div().text_sm().text_color(theme.red).child(error))
-      })
-      .child(list)
+      .child(
+        v_flex()
+          .w_full()
+          .h_full()
+          .min_h_0()
+          .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+          .mx_auto()
+          .gap_3()
+          .when_some(self.pull_requests_error.clone(), |this, error| {
+            this.child(div().text_sm().text_color(theme.red).child(error))
+          })
+          .child(list),
+      )
   }
 
   fn render_issues(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1234,12 +1244,20 @@ impl GithubRepoPage {
       .w_full()
       .h_full()
       .min_h_0()
-      .gap_3()
       .p_4()
-      .when_some(self.issues_error.clone(), |this, error| {
-        this.child(div().text_sm().text_color(theme.red).child(error))
-      })
-      .child(list)
+      .child(
+        v_flex()
+          .w_full()
+          .h_full()
+          .min_h_0()
+          .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+          .mx_auto()
+          .gap_3()
+          .when_some(self.issues_error.clone(), |this, error| {
+            this.child(div().text_sm().text_color(theme.red).child(error))
+          })
+          .child(list),
+      )
   }
 }
 

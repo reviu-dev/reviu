@@ -8,6 +8,7 @@ mod theme;
 mod user_menu;
 
 pub const HEADER_HEIGHT: f32 = 50.0;
+pub const DETAILS_PAGE_CONTAINER_MAX_WIDTH: f32 = 900.0;
 
 pub use assets::AppAssets;
 pub use command_palette::{

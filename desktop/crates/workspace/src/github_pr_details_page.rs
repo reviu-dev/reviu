@@ -41,6 +41,7 @@ use ui::{
   CommandPaletteHandler, CommandPalettePage, ConfirmDialog, FILE_ICON_SIZE_PX, SearchFileEntry,
   SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UiIconName,
   UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
+  DETAILS_PAGE_CONTAINER_MAX_WIDTH,
   file_icon_path_for_name_with_theme, h_resizable, resizable_panel, user_menu,
 };
 
@@ -61,7 +62,6 @@ const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
 const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const DIFF_HEADER_HEIGHT: f32 = 40.0;
-
 fn is_unauthorized_error_message(error: &str) -> bool {
   error.to_ascii_lowercase().contains("unauthorized")
 }
@@ -2126,7 +2126,9 @@ impl GithubPrDetailsPage {
     };
 
     let content = v_flex()
-      .w(px(900.0))
+      .w_full()
+      .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+      .mx_auto()
       .gap_4()
       .child(
         h_flex()
@@ -2302,8 +2304,11 @@ impl GithubPrDetailsPage {
       );
 
     v_flex()
-      .items_center()
+      .w_full()
+      .h_full()
+      .min_h_0()
       .py_4()
+      .px_4()
       .id("ad")
       .overflow_y_scrollbar()
       .child(content)
