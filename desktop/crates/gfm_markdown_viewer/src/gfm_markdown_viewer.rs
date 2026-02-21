@@ -21,9 +21,8 @@ use gpui::{
   AnyElement, App, Bounds, ClipboardItem, CursorStyle, DispatchPhase, Element, ElementId,
   FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, ImageCacheError,
   ImgResourceLoader, InspectorElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-  MouseUpEvent, Pixels, RenderImage, Resource, SharedString, StatefulInteractiveElement,
-  StrikethroughStyle, StyledText, TextRun, UnderlineStyle, Window, div, fill, img, point,
-  prelude::*, px,
+  MouseUpEvent, Pixels, RenderImage, Resource, SharedString, StrikethroughStyle, StyledText,
+  TextRun, UnderlineStyle, Window, div, fill, img, point, prelude::*, px,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
@@ -1720,7 +1719,9 @@ fn limit_indentation_dot_indices(indices: Vec<usize>) -> Vec<usize> {
     return indices;
   }
 
-  let step = indices.len().div_ceil(MARKDOWN_CODE_INDENT_DOT_MAX_RENDER_COUNT);
+  let step = indices
+    .len()
+    .div_ceil(MARKDOWN_CODE_INDENT_DOT_MAX_RENDER_COUNT);
   indices.into_iter().step_by(step).collect()
 }
 
