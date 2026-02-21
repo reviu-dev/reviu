@@ -2087,21 +2087,25 @@ impl GithubPrDetailsPage {
       .unwrap_or_else(|| "No description provided.".to_string());
 
     let stats_badges = h_flex().gap_2().flex_wrap().children([
-      Tag::info()
+      Tag::secondary()
         .small()
         .rounded_full()
+        .text_color(theme.status_blue())
         .child(format!("Commits {}", pr.commits)),
-      Tag::success()
+      Tag::secondary()
         .small()
         .rounded_full()
+        .text_color(theme.status_green())
         .child(format!("Additions +{}", pr.additions)),
-      Tag::danger()
+      Tag::secondary()
         .small()
         .rounded_full()
+        .text_color(theme.status_red())
         .child(format!("Deletions -{}", pr.deletions)),
-      Tag::warning()
+      Tag::secondary()
         .small()
         .rounded_full()
+        .text_color(theme.status_orange())
         .child(format!("Files changed {}", pr.changed_files)),
       Tag::secondary()
         .small()
@@ -2313,7 +2317,7 @@ impl GithubPrDetailsPage {
       .id("github-pr-overview-scroll")
       .size_full()
       .overflow_y_scrollbar()
-      .child(v_flex().w_full().py_4().px_4().child(content))
+      .child(v_flex().w_full().pt_4().pb_8().px_4().child(content))
   }
 
   fn render_files_sidebar(
