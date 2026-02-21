@@ -36,31 +36,26 @@ const DEFAULT_REPO: &str = "guit";
 impl GithubPullRequestStatus {
   pub fn tag(&self, theme: &gpui_component::Theme) -> Tag {
     match self {
-      GithubPullRequestStatus::Open => Tag::success().small().rounded_full().child("Open"),
-      GithubPullRequestStatus::Closed => Tag::custom(
-        theme.status_red(),
-        theme.primary_foreground,
-        theme.status_red(),
-      )
-      .small()
-      .rounded_full()
-      .child("Closed"),
-      GithubPullRequestStatus::Merged => Tag::custom(
-        theme.status_violet(),
-        theme.primary_foreground,
-        theme.status_violet(),
-      )
-      .small()
-      .rounded_full()
-      .child("Merged"),
-      GithubPullRequestStatus::Draft => Tag::custom(
-        theme.status_gray(),
-        theme.primary_foreground,
-        theme.status_gray(),
-      )
-      .small()
-      .rounded_full()
-      .child("Draft"),
+      GithubPullRequestStatus::Open => Tag::secondary()
+        .small()
+        .rounded_full()
+        .text_color(theme.status_green())
+        .child("Open"),
+      GithubPullRequestStatus::Closed => Tag::secondary()
+        .small()
+        .rounded_full()
+        .text_color(theme.status_red())
+        .child("Closed"),
+      GithubPullRequestStatus::Merged => Tag::secondary()
+        .small()
+        .rounded_full()
+        .text_color(theme.status_violet())
+        .child("Merged"),
+      GithubPullRequestStatus::Draft => Tag::secondary()
+        .small()
+        .rounded_full()
+        .text_color(theme.status_gray())
+        .child("Draft"),
     }
   }
 }
