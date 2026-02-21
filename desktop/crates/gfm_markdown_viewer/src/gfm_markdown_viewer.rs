@@ -265,11 +265,10 @@ const MARKDOWN_CODE_LINE_HEIGHT_SCALE: f32 = 0.95;
 const MARKDOWN_CODE_BLOCK_PADDING_X_PX: f32 = 12.0;
 const MARKDOWN_CODE_BLOCK_PADDING_TOP_PX: f32 = 8.0;
 const MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX: f32 = 4.0;
-const MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX: f32 = 320.0;
+const MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX: f32 = 400.0;
 const MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX: f32 = 2.0;
 const MARKDOWN_CODE_BLOCK_LEADING_SPACE_RENDER_MULTIPLIER: usize = 2;
 const MARKDOWN_CODE_BLOCK_TAB_WIDTH: usize = 4;
-const MARKDOWN_CODE_BLOCK_ESTIMATED_LINE_HEIGHT_PX: f32 = 14.0;
 const MARKDOWN_CODE_INDENT_DOT_SIZE_PX: f32 = 2.0;
 const MARKDOWN_CODE_INDENT_DOT_OPACITY: f32 = 0.45;
 const MARKDOWN_CODE_INDENT_DOT_MIN_SPACING_PX: f32 = 5.0;
@@ -1529,7 +1528,6 @@ fn render_code_block(
   let theme = cx.theme();
   let (text, spans, link_ranges) = build_code_block_spans(code);
   let text_id = ctx.next_text_id();
-  let viewport_height_px = code_block_viewport_height_px(text.as_ref());
   let content = SelectableText::new(
     text,
     spans,
@@ -1543,7 +1541,6 @@ fn render_code_block(
     },
   );
   let scroll_id: SharedString = format!("markdown-code-block-scroll-{text_id}").into();
-  let scroll_x_id: SharedString = format!("markdown-code-block-scroll-x-{text_id}").into();
 
   div()
     .bg(theme.accent)
@@ -1554,16 +1551,13 @@ fn render_code_block(
     .child(
       div()
         .id(scroll_id)
-        .h(px(viewport_height_px))
         .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
-        .overflow_y_scroll()
+        .overflow_scroll()
         .on_scroll_wheel(|_, _, cx| {
           cx.stop_propagation();
         })
         .child(
           div()
-            .id(scroll_x_id)
-            .overflow_x_scroll()
             .px(px(MARKDOWN_CODE_BLOCK_PADDING_X_PX))
             .pt(px(MARKDOWN_CODE_BLOCK_PADDING_TOP_PX))
             .pb(px(MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX))
@@ -1578,13 +1572,6 @@ fn render_code_block(
         ),
     )
     .into_any_element()
-}
-
-fn code_block_viewport_height_px(text: &str) -> f32 {
-  let line_count = text.lines().count().max(1) as f32;
-  (line_count * MARKDOWN_CODE_BLOCK_ESTIMATED_LINE_HEIGHT_PX
-    + MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX)
-    .min(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX)
 }
 
 fn code_block_display_value(code: &CodeBlock) -> String {
