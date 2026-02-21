@@ -21,8 +21,9 @@ use gpui::{
   AnyElement, App, Bounds, ClipboardItem, CursorStyle, DispatchPhase, Element, ElementId,
   FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, ImageCacheError,
   ImgResourceLoader, InspectorElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-  MouseUpEvent, Pixels, RenderImage, Resource, SharedString, StrikethroughStyle, StyledText,
-  TextRun, UnderlineStyle, Window, div, img, prelude::*, px,
+  MouseUpEvent, Pixels, RenderImage, Resource, SharedString, StatefulInteractiveElement,
+  StrikethroughStyle, StyledText, TextRun, UnderlineStyle, Window, div, fill, img, point,
+  prelude::*, px,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
@@ -216,6 +217,7 @@ pub struct MarkdownRenderOptions {
   pub on_link: Option<Arc<LinkHandlerFn>>,
   pub overrides: RenderOverrides,
   pub state: MarkdownRenderState,
+  pub scope_id: Option<usize>,
 }
 
 impl MarkdownRenderOptions {
@@ -233,6 +235,11 @@ impl MarkdownRenderOptions {
 
   pub fn with_state(mut self, state: MarkdownRenderState) -> Self {
     self.state = state;
+    self
+  }
+
+  pub fn with_scope_id(mut self, scope_id: usize) -> Self {
+    self.scope_id = Some(scope_id);
     self
   }
 }
@@ -256,9 +263,17 @@ const MARKDOWN_INDENT_PER_LEVEL_PX: f32 = 12.0;
 const MARKDOWN_CHAR_WIDTH_PX: f32 = 8.8;
 const MARKDOWN_MIN_WRAP_COLUMNS: usize = 8;
 const MARKDOWN_CODE_LINE_HEIGHT_SCALE: f32 = 0.95;
-const MARKDOWN_CODE_BLOCK_PADDING_X_PX: f32 = 8.0;
+const MARKDOWN_CODE_BLOCK_PADDING_X_PX: f32 = 12.0;
 const MARKDOWN_CODE_BLOCK_PADDING_TOP_PX: f32 = 8.0;
 const MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX: f32 = 4.0;
+const MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX: f32 = 320.0;
+const MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX: f32 = 2.0;
+const MARKDOWN_CODE_BLOCK_LEADING_SPACE_RENDER_MULTIPLIER: usize = 2;
+const MARKDOWN_CODE_BLOCK_TAB_WIDTH: usize = 4;
+const MARKDOWN_CODE_BLOCK_ESTIMATED_LINE_HEIGHT_PX: f32 = 14.0;
+const MARKDOWN_CODE_INDENT_DOT_SIZE_PX: f32 = 2.0;
+const MARKDOWN_CODE_INDENT_DOT_OPACITY: f32 = 0.45;
+const MARKDOWN_CODE_INDENT_DOT_MIN_SPACING_PX: f32 = 5.0;
 const MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX: f32 =
   MARKDOWN_CODE_BLOCK_PADDING_TOP_PX + MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX + 2.0;
 static BADGE_IMAGE_SOURCE_CACHE: Lazy<Mutex<HashMap<String, BadgeResolveState>>> =
@@ -325,7 +340,8 @@ pub fn render_parsed_markdown(
   options: &MarkdownRenderOptions,
   cx: &App,
 ) -> AnyElement {
-  let mut ctx = RenderContext::new();
+  let scope_id = resolve_scope_id_for_parsed(parsed, options);
+  let mut ctx = RenderContext::new(scope_id);
   render_blocks(parsed.blocks.as_ref(), options, 0, cx, &mut ctx)
 }
 
@@ -393,8 +409,9 @@ fn estimate_block_height_px(
     Block::List(list) => estimate_list_height_px(list, wrap_columns, line_height_px, indent),
     Block::CodeBlock(code) => {
       let code_lines = code.value.lines().count().max(1) as f32;
-      code_lines * line_height_px * MARKDOWN_CODE_LINE_HEIGHT_SCALE
-        + MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX
+      (code_lines * line_height_px * MARKDOWN_CODE_LINE_HEIGHT_SCALE
+        + MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX)
+        .min(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX)
     }
     Block::BlockQuote(children) => {
       estimate_blocks_height_px(children, wrap_columns, line_height_px, indent + 1)
@@ -782,26 +799,30 @@ fn find_last_details_close_end(lower: &str) -> Option<usize> {
 
 pub fn render_markdown(source: &str, options: &MarkdownRenderOptions, cx: &App) -> AnyElement {
   let parsed = parse_markdown(source);
-  render_parsed_markdown(&parsed, options, cx)
+  let scope_id = resolve_scope_id_for_source(source, options);
+  let mut ctx = RenderContext::new(scope_id);
+  render_blocks(parsed.blocks.as_ref(), options, 0, cx, &mut ctx)
 }
 
 struct RenderContext {
+  text_scope_id: usize,
   next_text_id: usize,
   next_details_id: usize,
 }
 
 impl RenderContext {
-  fn new() -> Self {
+  fn new(text_scope_id: usize) -> Self {
     Self {
+      text_scope_id,
       next_text_id: 0,
       next_details_id: 0,
     }
   }
 
   fn next_text_id(&mut self) -> usize {
-    let id = self.next_text_id;
+    let local_id = self.next_text_id;
     self.next_text_id += 1;
-    id
+    compose_text_id(self.text_scope_id, local_id)
   }
 
   fn next_details_id(&mut self) -> usize {
@@ -809,6 +830,39 @@ impl RenderContext {
     self.next_details_id += 1;
     id
   }
+}
+
+fn compose_text_id(scope_id: usize, local_id: usize) -> usize {
+  scope_id.wrapping_mul(1_000_003usize).wrapping_add(local_id)
+}
+
+fn resolve_scope_id_for_source(source: &str, options: &MarkdownRenderOptions) -> usize {
+  options.scope_id.map_or_else(
+    || markdown_scope_id_from_source(source, &options.state),
+    |scope_id| scoped_id_for_state(scope_id, &options.state),
+  )
+}
+
+fn resolve_scope_id_for_parsed(parsed: &ParsedMarkdown, options: &MarkdownRenderOptions) -> usize {
+  options.scope_id.map_or_else(
+    || parsed_markdown_scope_id(parsed, &options.state),
+    |scope_id| scoped_id_for_state(scope_id, &options.state),
+  )
+}
+
+fn markdown_scope_id_from_source(source: &str, state: &MarkdownRenderState) -> usize {
+  let mut hasher = DefaultHasher::new();
+  source.hash(&mut hasher);
+  scoped_id_for_state(hasher.finish() as usize, state)
+}
+
+fn parsed_markdown_scope_id(parsed: &ParsedMarkdown, state: &MarkdownRenderState) -> usize {
+  let parsed_seed = Arc::as_ptr(&parsed.blocks) as usize;
+  scoped_id_for_state(parsed_seed, state)
+}
+
+fn scoped_id_for_state(scope_seed: usize, state: &MarkdownRenderState) -> usize {
+  scope_seed ^ state.instance_id.wrapping_mul(0x9E37_79B1usize)
 }
 
 fn comrak_options() -> ComrakOptions {
@@ -915,7 +969,11 @@ fn render_list(
   ctx: &mut RenderContext,
 ) -> AnyElement {
   let theme = cx.theme();
-  let mut container = v_flex().gap_1().pl(px(LIST_LEFT_PADDING_PX));
+  let mut container = v_flex()
+    .w_full()
+    .min_w_0()
+    .gap_1()
+    .pl(px(LIST_LEFT_PADDING_PX));
   let start = list.start.unwrap_or(1);
 
   for (ix, item) in list.items.iter().enumerate() {
@@ -941,14 +999,17 @@ fn render_list(
     } else {
       h_flex()
         .items_start()
+        .w_full()
+        .min_w_0()
         .child(
           div()
+            .flex_none()
             .text_sm()
             .text_color(theme.foreground)
             .pr(px(LIST_MARKER_GAP_PX))
             .child(bullet),
         )
-        .child(div().flex_1().child(row.content))
+        .child(div().min_w_0().flex_1().child(row.content))
         .into_any_element()
     };
     container = container.child(element);
@@ -968,7 +1029,7 @@ fn render_list_item_blocks(
   cx: &App,
   ctx: &mut RenderContext,
 ) -> AnyElement {
-  let mut container = v_flex().gap_2();
+  let mut container = v_flex().w_full().min_w_0().gap_2();
   for block in blocks {
     container = container.child(render_block(block, options, 0, cx, ctx));
   }
@@ -993,7 +1054,7 @@ fn render_table(
     .max(1);
   let column_widths = table_column_widths(table, column_count);
 
-  let mut header_row = h_flex().bg(theme.muted);
+  let mut header_row = h_flex().bg(theme.accent);
   for (column, width) in column_widths.iter().enumerate().take(column_count) {
     let cell = table
       .headers
@@ -1404,6 +1465,7 @@ fn render_inline_text(
     options.on_link.clone(),
     text_id,
     true,
+    false,
   )
   .into_any_element()
 }
@@ -1424,6 +1486,7 @@ fn render_inline_static(
     options.state.clone(),
     options.on_link.clone(),
     text_id,
+    false,
     false,
   )
   .into_any_element()
@@ -1460,27 +1523,61 @@ fn render_code_block(
 ) -> AnyElement {
   let theme = cx.theme();
   let (text, spans, link_ranges) = build_code_block_spans(code);
+  let text_id = ctx.next_text_id();
+  let viewport_height_px = code_block_viewport_height_px(text.as_ref());
   let content = SelectableText::new(
     text,
     spans,
     link_ranges,
     options.state.clone(),
     options.on_link.clone(),
-    ctx.next_text_id(),
+    text_id,
+    true,
     true,
   );
+  let scroll_id: SharedString = format!("markdown-code-block-scroll-{text_id}").into();
+  let scroll_x_id: SharedString = format!("markdown-code-block-scroll-x-{text_id}").into();
 
   div()
-    .bg(theme.muted)
+    .bg(theme.accent)
     .border_1()
     .border_color(theme.border)
     .rounded_md()
-    .px(px(MARKDOWN_CODE_BLOCK_PADDING_X_PX))
-    .pt(px(MARKDOWN_CODE_BLOCK_PADDING_TOP_PX))
-    .pb(px(MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX))
-    .whitespace_nowrap()
-    .child(div().text_sm().text_color(theme.foreground).child(content))
+    .overflow_hidden()
+    .child(
+      div()
+        .id(scroll_id)
+        .h(px(viewport_height_px))
+        .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
+        .overflow_y_scroll()
+        .on_scroll_wheel(|_, _, cx| {
+          cx.stop_propagation();
+        })
+        .child(
+          div()
+            .id(scroll_x_id)
+            .overflow_x_scroll()
+            .px(px(MARKDOWN_CODE_BLOCK_PADDING_X_PX))
+            .pt(px(MARKDOWN_CODE_BLOCK_PADDING_TOP_PX))
+            .pb(px(MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX))
+            .whitespace_nowrap()
+            .child(
+              div()
+                .pl(px(MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX))
+                .text_sm()
+                .text_color(theme.foreground)
+                .child(content),
+            ),
+        ),
+    )
     .into_any_element()
+}
+
+fn code_block_viewport_height_px(text: &str) -> f32 {
+  let line_count = text.lines().count().max(1) as f32;
+  (line_count * MARKDOWN_CODE_BLOCK_ESTIMATED_LINE_HEIGHT_PX
+    + MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX)
+    .min(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX)
 }
 
 fn code_block_display_value(code: &CodeBlock) -> String {
@@ -1493,7 +1590,121 @@ fn code_block_display_value(code: &CodeBlock) -> String {
     value = strip_trailing_orphan_details_line(value);
   }
 
-  value.to_string()
+  let widened = expand_leading_spaces_for_code_block(value);
+  expand_tabs_for_code_block(widened.as_ref())
+}
+
+fn expand_leading_spaces_for_code_block(value: &str) -> String {
+  if !value.contains(' ') || MARKDOWN_CODE_BLOCK_LEADING_SPACE_RENDER_MULTIPLIER <= 1 {
+    return value.to_string();
+  }
+
+  let mut widened =
+    String::with_capacity(value.len() * MARKDOWN_CODE_BLOCK_LEADING_SPACE_RENDER_MULTIPLIER);
+  let mut in_leading_indent = true;
+
+  for ch in value.chars() {
+    match ch {
+      ' ' if in_leading_indent => {
+        for _ in 0..MARKDOWN_CODE_BLOCK_LEADING_SPACE_RENDER_MULTIPLIER {
+          widened.push(' ');
+        }
+      }
+      '\n' => {
+        widened.push('\n');
+        in_leading_indent = true;
+      }
+      '\r' => {
+        widened.push('\r');
+        in_leading_indent = true;
+      }
+      '\t' => {
+        widened.push('\t');
+      }
+      _ => {
+        widened.push(ch);
+        in_leading_indent = false;
+      }
+    }
+  }
+
+  widened
+}
+
+fn expand_tabs_for_code_block(value: &str) -> String {
+  if !value.contains('\t') {
+    return value.to_string();
+  }
+
+  let mut expanded = String::with_capacity(value.len());
+  let mut column = 0usize;
+  for ch in value.chars() {
+    match ch {
+      '\t' => {
+        let spaces = MARKDOWN_CODE_BLOCK_TAB_WIDTH - (column % MARKDOWN_CODE_BLOCK_TAB_WIDTH);
+        for _ in 0..spaces {
+          expanded.push(' ');
+        }
+        column += spaces;
+      }
+      '\n' => {
+        expanded.push('\n');
+        column = 0;
+      }
+      '\r' => {
+        expanded.push('\r');
+        column = 0;
+      }
+      _ => {
+        expanded.push(ch);
+        column += 1;
+      }
+    }
+  }
+
+  expanded
+}
+
+fn collect_indentation_dot_indices(text: &str) -> Vec<usize> {
+  if !text.contains(' ') {
+    return Vec::new();
+  }
+
+  let mut indices = Vec::new();
+  let mut leading_spaces = Vec::new();
+  let mut saw_non_whitespace = false;
+  let mut in_leading_indent = true;
+
+  for (ix, ch) in text.char_indices() {
+    match ch {
+      '\n' | '\r' => {
+        if saw_non_whitespace {
+          indices.extend_from_slice(&leading_spaces);
+        }
+        leading_spaces.clear();
+        saw_non_whitespace = false;
+        in_leading_indent = true;
+      }
+      ' ' if in_leading_indent => {
+        leading_spaces.push(ix);
+      }
+      ' ' => {}
+      '\t' if in_leading_indent => {
+        in_leading_indent = false;
+      }
+      '\t' => {}
+      _ => {
+        saw_non_whitespace = true;
+        in_leading_indent = false;
+      }
+    }
+  }
+
+  if saw_non_whitespace {
+    indices.extend_from_slice(&leading_spaces);
+  }
+
+  indices
 }
 
 fn strip_trailing_orphan_details_line(value: &str) -> &str {
@@ -1806,6 +2017,8 @@ struct SelectableText {
   on_link: Option<Arc<LinkHandlerFn>>,
   text_id: usize,
   interactive: bool,
+  show_indentation_dots: bool,
+  indentation_dot_indices: Vec<usize>,
   styled_text: StyledText,
   last_selection: Option<Range<usize>>,
 }
@@ -1819,8 +2032,14 @@ impl SelectableText {
     on_link: Option<Arc<LinkHandlerFn>>,
     text_id: usize,
     interactive: bool,
+    show_indentation_dots: bool,
   ) -> Self {
     let styled_text = StyledText::new(text.clone());
+    let indentation_dot_indices = if show_indentation_dots {
+      collect_indentation_dot_indices(text.as_ref())
+    } else {
+      Vec::new()
+    };
     Self {
       text,
       spans,
@@ -1829,8 +2048,70 @@ impl SelectableText {
       on_link,
       text_id,
       interactive,
+      show_indentation_dots,
+      indentation_dot_indices,
       styled_text,
       last_selection: None,
+    }
+  }
+
+  fn paint_indentation_dots(
+    &self,
+    text_layout: &gpui::TextLayout,
+    window: &mut Window,
+    cx: &mut App,
+  ) {
+    if !self.show_indentation_dots || self.indentation_dot_indices.is_empty() {
+      return;
+    }
+
+    let text_len = self.text.len();
+    let dot_size = px(MARKDOWN_CODE_INDENT_DOT_SIZE_PX);
+    let dot_radius = dot_size / 2.;
+    let line_height = text_layout.line_height();
+    let min_spacing = px(MARKDOWN_CODE_INDENT_DOT_MIN_SPACING_PX);
+    let dot_color = cx
+      .theme()
+      .muted_foreground
+      .opacity(MARKDOWN_CODE_INDENT_DOT_OPACITY);
+    let mut last_drawn: Option<(usize, Pixels)> = None;
+
+    for &ix in &self.indentation_dot_indices {
+      if ix + 1 > text_len {
+        continue;
+      }
+      let Some(start) = text_layout.position_for_index(ix) else {
+        continue;
+      };
+      let Some(end) = text_layout.position_for_index(ix + 1) else {
+        continue;
+      };
+      let cell_width = end.x - start.x;
+      if cell_width <= px(0.) {
+        continue;
+      }
+
+      let dot_center_x = start.x + cell_width / 2.;
+      if let Some((last_ix, last_center_x)) = last_drawn
+        && ix == last_ix + 1
+        && dot_center_x - last_center_x < min_spacing
+      {
+        continue;
+      }
+
+      let dot_x = dot_center_x - dot_size / 2.;
+      let dot_y = start.y + (line_height - dot_size) / 2.;
+      window.paint_quad(
+        fill(
+          Bounds::from_corners(
+            point(dot_x, dot_y),
+            point(dot_x + dot_size, dot_y + dot_size),
+          ),
+          dot_color,
+        )
+        .corner_radii(dot_radius),
+      );
+      last_drawn = Some((ix, dot_center_x));
     }
   }
 }
@@ -1896,9 +2177,11 @@ impl Element for SelectableText {
     cx: &mut App,
   ) {
     if !self.interactive {
+      let text_layout = self.styled_text.layout().clone();
       self
         .styled_text
         .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
+      self.paint_indentation_dots(&text_layout, window, cx);
       return;
     }
 
@@ -2041,6 +2324,7 @@ impl Element for SelectableText {
     self
       .styled_text
       .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
+    self.paint_indentation_dots(&text_layout, window, cx);
   }
 }
 
@@ -2170,7 +2454,7 @@ fn build_runs(
     };
 
     let background_color = if span.style.code {
-      Some(theme.muted)
+      Some(theme.accent)
     } else {
       None
     };
@@ -2984,6 +3268,45 @@ Apres"#,
   }
 
   #[test]
+  fn expands_tabs_for_code_block_for_consistent_indentation() {
+    let code = CodeBlock {
+      lang: Some("rust".to_string()),
+      value: "\tfn main() {\n\t\tprintln!(\"hi\");\n\t}\n".to_string(),
+    };
+
+    assert_eq!(
+      code_block_display_value(&code),
+      "    fn main() {\n        println!(\"hi\");\n    }"
+    );
+  }
+
+  #[test]
+  fn expands_leading_spaces_for_code_block_for_tab_like_indentation() {
+    let code = CodeBlock {
+      lang: Some("rust".to_string()),
+      value: "  fn main() {\n    println!(\"ok\");\n  }\n".to_string(),
+    };
+
+    assert_eq!(
+      code_block_display_value(&code),
+      "    fn main() {\n        println!(\"ok\");\n    }"
+    );
+  }
+
+  #[test]
+  fn expands_only_leading_spaces_for_code_block() {
+    let code = CodeBlock {
+      lang: Some("rust".to_string()),
+      value: "  let x = 1 + 2;\nvalue . split_whitespace();\n".to_string(),
+    };
+
+    assert_eq!(
+      code_block_display_value(&code),
+      "    let x = 1 + 2;\nvalue . split_whitespace();"
+    );
+  }
+
+  #[test]
   fn strips_orphan_details_closing_line_for_plain_text_code_blocks() {
     let code = CodeBlock {
       lang: Some("text".to_string()),
@@ -3046,5 +3369,60 @@ Apres"#,
     assert_eq!(selection.start, 0);
     assert!(text.is_char_boundary(selection.start));
     assert!(text.is_char_boundary(selection.end));
+  }
+
+  #[test]
+  fn collect_indentation_dot_indices_marks_leading_spaces_only() {
+    let text = "    first\n  second";
+    let indices = collect_indentation_dot_indices(text);
+
+    assert_eq!(indices, vec![0, 1, 2, 3, 10, 11]);
+  }
+
+  #[test]
+  fn collect_indentation_dot_indices_ignores_internal_spaces() {
+    let text = "  first second third";
+    let indices = collect_indentation_dot_indices(text);
+
+    assert_eq!(indices, vec![0, 1]);
+  }
+
+  #[test]
+  fn collect_indentation_dot_indices_ignores_blank_or_whitespace_only_lines() {
+    let text = "  \n  valid\n    \n end";
+    let indices = collect_indentation_dot_indices(text);
+
+    assert_eq!(indices, vec![3, 4, 16]);
+  }
+
+  #[test]
+  fn collect_indentation_dot_indices_handles_crlf() {
+    let text = "  a\r\n    b\r\n  ";
+    let indices = collect_indentation_dot_indices(text);
+
+    assert_eq!(indices, vec![0, 1, 5, 6, 7, 8]);
+  }
+
+  #[test]
+  fn selection_text_keeps_raw_spaces_without_visual_markers() {
+    let state = MarkdownRenderState::new();
+    let text = SharedString::from("    let x = 1;");
+    update_selection_state(&state, 7, 0, text.len(), false);
+
+    let selected = selection_text(&state, 7, &text).expect("selection should exist");
+    assert_eq!(selected, "    let x = 1;");
+  }
+
+  #[test]
+  fn render_context_text_ids_are_scoped_and_stable_per_local_index() {
+    let mut first = RenderContext::new(42);
+    let mut second = RenderContext::new(43);
+
+    let first_id = first.next_text_id();
+    let second_id = second.next_text_id();
+    let first_next_id = first.next_text_id();
+
+    assert_ne!(first_id, second_id);
+    assert_eq!(first_next_id, first_id + 1);
   }
 }

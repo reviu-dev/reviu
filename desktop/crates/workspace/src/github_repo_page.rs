@@ -96,7 +96,10 @@ enum GithubIssueVisualState {
   NotPlanned,
 }
 
-fn issue_visual_state(state: &str, reason: Option<GithubIssueStateReason>) -> GithubIssueVisualState {
+fn issue_visual_state(
+  state: &str,
+  reason: Option<GithubIssueStateReason>,
+) -> GithubIssueVisualState {
   if state.eq_ignore_ascii_case("open") {
     return GithubIssueVisualState::Open;
   }
@@ -141,6 +144,18 @@ fn issue_comment_markdown_body_or_fallback(body: Option<&str>) -> SharedString {
     .unwrap_or("No comment body.")
     .to_string()
     .into()
+}
+
+fn issue_description_scope_id(issue_id: u64) -> usize {
+  (issue_id as usize).wrapping_mul(1_000_003).wrapping_add(1)
+}
+
+fn issue_comment_scope_id(issue_id: u64, comment_id: u64) -> usize {
+  (issue_id as usize)
+    .wrapping_mul(1_000_003)
+    .wrapping_add(comment_id as usize)
+    .wrapping_mul(31)
+    .wrapping_add(2)
 }
 
 fn issue_state_label(state: &str, reason: Option<GithubIssueStateReason>) -> SharedString {
@@ -419,11 +434,12 @@ impl ListDelegate for GithubRepoIssueListDelegate {
     let created_at = format_compact_datetime(&issue.created_at);
     let updated_at = format_compact_datetime(&issue.updated_at);
 
-    let (state_icon, state_color) = match issue_visual_state(&issue.state, issue.state_reason.clone()) {
-      GithubIssueVisualState::Open => (UiIconName::CircleDot, theme.status_green()),
-      GithubIssueVisualState::Completed => (UiIconName::CircleCheck, theme.status_violet()),
-      GithubIssueVisualState::NotPlanned => (UiIconName::CircleSlash, theme.status_gray()),
-    };
+    let (state_icon, state_color) =
+      match issue_visual_state(&issue.state, issue.state_reason.clone()) {
+        GithubIssueVisualState::Open => (UiIconName::CircleDot, theme.status_green()),
+        GithubIssueVisualState::Completed => (UiIconName::CircleCheck, theme.status_violet()),
+        GithubIssueVisualState::NotPlanned => (UiIconName::CircleSlash, theme.status_gray()),
+      };
 
     let issue_user = h_flex()
       .items_center()
@@ -572,13 +588,7 @@ impl GithubIssueDetailsSheetView {
     this
   }
 
-  fn load_issue(
-    &mut self,
-    owner: String,
-    repo: String,
-    issue_number: u64,
-    cx: &mut Context<Self>,
-  ) {
+  fn load_issue(&mut self, owner: String, repo: String, issue_number: u64, cx: &mut Context<Self>) {
     self.owner = owner.clone();
     self.repo = repo.clone();
     self.issue_number = issue_number;
@@ -668,8 +678,11 @@ impl Render for GithubIssueDetailsSheetView {
         .map(format_compact_datetime)
         .unwrap_or_else(|| "—".into());
       let body = issue_markdown_body_or_fallback(issue.body.as_deref());
-      let issue_url =
-        github_issue_url(&issue.repository.owner, &issue.repository.repo, issue.number);
+      let issue_url = github_issue_url(
+        &issue.repository.owner,
+        &issue.repository.repo,
+        issue.number,
+      );
       let state_text = issue_state_label(&issue.state, issue.state_reason.clone());
       let (state_icon, state_color) =
         match issue_visual_state(&issue.state, issue.state_reason.clone()) {
@@ -692,9 +705,24 @@ impl Render for GithubIssueDetailsSheetView {
         .child(
           h_flex()
             .items_center()
+            .w_full()
+            .min_w_0()
             .gap_2()
-            .child(Icon::new(state_icon).size_4().text_color(state_color))
-            .child(div().text_lg().font_semibold().child(issue.title.clone())),
+            .child(
+              div()
+                .flex_none()
+                .pt(px(1.0))
+                .child(Icon::new(state_icon).size_4().text_color(state_color)),
+            )
+            .child(
+              div()
+                .min_w_0()
+                .flex_1()
+                .text_lg()
+                .font_semibold()
+                .whitespace_normal()
+                .child(issue.title.clone()),
+            ),
         )
         .child(
           h_flex()
@@ -703,12 +731,7 @@ impl Render for GithubIssueDetailsSheetView {
             .text_sm()
             .text_color(theme.muted_foreground)
             .child(format!("#{}", issue.number))
-            .child(
-              Tag::secondary()
-                .small()
-                .rounded_full()
-                .child(state_text),
-            ),
+            .child(Tag::secondary().small().rounded_full().child(state_text)),
         )
         .when(!issue.labels.is_empty(), |this| {
           this.child(h_flex().gap_1().flex_wrap().children(label_tags))
@@ -763,7 +786,9 @@ impl Render for GithubIssueDetailsSheetView {
                 .p_3()
                 .child(render_markdown(
                   body.as_ref(),
-                  &MarkdownRenderOptions::default().with_state(self.markdown_state.clone()),
+                  &MarkdownRenderOptions::default()
+                    .with_state(self.markdown_state.clone())
+                    .with_scope_id(issue_description_scope_id(issue.id)),
                   cx,
                 )),
             ),
@@ -801,7 +826,10 @@ impl Render for GithubIssueDetailsSheetView {
                         Avatar::new()
                           .name(comment_author.clone())
                           .when_some(
-                            comment.user.as_ref().and_then(|user| user.avatar_url.clone()),
+                            comment
+                              .user
+                              .as_ref()
+                              .and_then(|user| user.avatar_url.clone()),
                             |this, url| this.src(url),
                           )
                           .small(),
@@ -814,13 +842,18 @@ impl Render for GithubIssueDetailsSheetView {
                       ),
                   )
                   .child(
-                    div().text_xs().text_color(theme.muted_foreground).child(format!(
-                      "Created {comment_created_at} • Updated {comment_updated_at}"
-                    )),
+                    div()
+                      .text_xs()
+                      .text_color(theme.muted_foreground)
+                      .child(format!(
+                        "Created {comment_created_at} • Updated {comment_updated_at}"
+                      )),
                   )
                   .child(render_markdown(
                     comment_body.as_ref(),
-                    &MarkdownRenderOptions::default().with_state(self.markdown_state.clone()),
+                    &MarkdownRenderOptions::default()
+                      .with_state(self.markdown_state.clone())
+                      .with_scope_id(issue_comment_scope_id(issue.id, comment.id)),
                     cx,
                   ))
               }))
@@ -920,9 +953,11 @@ impl GithubRepoPage {
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     GithubRepoPageHandle::register(cx);
 
-    let pull_requests = cx
-      .new(|cx| ListState::new(GithubRepoPullRequestListDelegate::new(), window, cx).searchable(true));
-    let issues = cx.new(|cx| ListState::new(GithubRepoIssueListDelegate::new(), window, cx).searchable(true));
+    let pull_requests = cx.new(|cx| {
+      ListState::new(GithubRepoPullRequestListDelegate::new(), window, cx).searchable(true)
+    });
+    let issues =
+      cx.new(|cx| ListState::new(GithubRepoIssueListDelegate::new(), window, cx).searchable(true));
 
     let api = WorkspaceApi::global(cx).api.clone();
     let mut this = Self {
@@ -950,24 +985,21 @@ impl GithubRepoPage {
   }
 
   fn subscribe_to_pull_requests(&mut self, cx: &mut Context<Self>) {
-    let subscription = cx.subscribe(
-      &self.pull_requests,
-      |this, state, event: &ListEvent, cx| {
-        if let ListEvent::Confirm(ix) = event {
-          let row = state.read(cx).delegate().matched_rows.get(ix.row).cloned();
-          if let Some(row) = row {
-            GithubPrDetailsPageHandle::show_with_repo_return(
-              row.pr.repository.owner.clone().into(),
-              row.pr.repository.repo.clone().into(),
-              row.pr.number,
-              this.owner.clone(),
-              this.repo.clone(),
-              cx,
-            );
-          }
+    let subscription = cx.subscribe(&self.pull_requests, |this, state, event: &ListEvent, cx| {
+      if let ListEvent::Confirm(ix) = event {
+        let row = state.read(cx).delegate().matched_rows.get(ix.row).cloned();
+        if let Some(row) = row {
+          GithubPrDetailsPageHandle::show_with_repo_return(
+            row.pr.repository.owner.clone().into(),
+            row.pr.repository.repo.clone().into(),
+            row.pr.number,
+            this.owner.clone(),
+            this.repo.clone(),
+            cx,
+          );
         }
-      },
-    );
+      }
+    });
 
     self._subscriptions.push(subscription);
   }
@@ -1077,10 +1109,9 @@ impl GithubRepoPage {
     let details_owner = owner.clone();
     let details_repo = repo.clone();
     let details_task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        details_api.fetch_github_repository_details(&details_owner, &details_repo)
-      })
-      .await;
+      let result =
+        unblock(move || details_api.fetch_github_repository_details(&details_owner, &details_repo))
+          .await;
 
       let _ = this.update(cx, |this, cx| {
         this.repository_loading = false;
@@ -1107,7 +1138,8 @@ impl GithubRepoPage {
     let pull_requests_repo = repo.clone();
     let pull_requests_task = cx.spawn(async move |this, cx| {
       let result = unblock(move || {
-        pull_requests_api.fetch_github_repository_pull_requests(&pull_requests_owner, &pull_requests_repo)
+        pull_requests_api
+          .fetch_github_repository_pull_requests(&pull_requests_owner, &pull_requests_repo)
       })
       .await;
 
@@ -1125,7 +1157,8 @@ impl GithubRepoPage {
           Err(error) => {
             let message = error.to_string();
             if is_unauthorized_error_message(&message) {
-              this.pull_requests_error = Some("Authentication required. Please sign in again.".into());
+              this.pull_requests_error =
+                Some("Authentication required. Please sign in again.".into());
             } else {
               this.pull_requests_error = Some(message.into());
             }
@@ -1145,10 +1178,9 @@ impl GithubRepoPage {
     let issues_owner = owner;
     let issues_repo = repo;
     let issues_task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        issues_api.fetch_github_repository_issues(&issues_owner, &issues_repo)
-      })
-      .await;
+      let result =
+        unblock(move || issues_api.fetch_github_repository_issues(&issues_owner, &issues_repo))
+          .await;
 
       let _ = this.update(cx, |this, cx| {
         let mut rows = Vec::new();
@@ -1157,7 +1189,11 @@ impl GithubRepoPage {
           Ok(issues) => {
             rows = issues
               .into_iter()
-              .map(|issue| Rc::new(GithubRepoIssueRow { issue: Rc::new(issue) }))
+              .map(|issue| {
+                Rc::new(GithubRepoIssueRow {
+                  issue: Rc::new(issue),
+                })
+              })
               .collect();
             this.issues_error = None;
           }
@@ -1194,8 +1230,10 @@ impl GithubRepoPage {
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
-    let commands =
-      CommandPaletteCommand::default_global_commands(CommandPalettePage::GithubRepo, include_github);
+    let commands = CommandPaletteCommand::default_global_commands(
+      CommandPalettePage::GithubRepo,
+      include_github,
+    );
 
     let view = cx.entity();
     let handler: CommandPaletteHandler = Arc::new(move |action, _window, cx| {
@@ -1368,11 +1406,12 @@ impl GithubRepoPage {
       on_sign_out: Some(sign_out),
     });
 
-    let repo_label: SharedString = if self.owner.as_ref().is_empty() || self.repo.as_ref().is_empty() {
-      "Repository".into()
-    } else {
-      format!("{}/{}", self.owner, self.repo).into()
-    };
+    let repo_label: SharedString =
+      if self.owner.as_ref().is_empty() || self.repo.as_ref().is_empty() {
+        "Repository".into()
+      } else {
+        format!("{}/{}", self.owner, self.repo).into()
+      };
 
     let tab_bar = TabBar::new("github-repo-tabs")
       .w_full()
@@ -1494,87 +1533,99 @@ impl GithubRepoPage {
         .child(format!("Open issues {}", repository.open_issues_count)),
     ]);
 
-    v_flex()
-      .w_full()
-      .h_full()
-      .min_h_0()
-      .p_4()
-      .child(
-        v_flex()
-          .w_full()
-          .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
-          .mx_auto()
-          .gap_4()
-          .child(
-            h_flex()
-              .items_center()
-              .gap_3()
-              .child(
-                Avatar::new()
-                  .name(repository.owner.login.clone())
-                  .when_some(repository.owner.avatar_url.clone(), |this, url| this.src(url))
-                  .small(),
-              )
-              .child(
-                v_flex()
-                  .gap_1()
-                  .child(div().text_lg().font_semibold().child(repository.full_name.clone()))
-                  .child(div().text_sm().text_color(theme.muted_foreground).child(repository.owner.login.clone())),
-              ),
-          )
-          .child(div().text_sm().text_color(theme.muted_foreground).child(description))
-          .child(
-            h_flex()
-              .gap_2()
-              .flex_wrap()
-              .child(
-                Button::new("repo-open-on-github")
-                  .icon(IconName::ExternalLink)
-                  .small()
-                  .label("Open on GitHub")
-                  .on_click({
-                    let url = repository.html_url.clone();
-                    move |_, _, cx| {
-                      cx.open_url(&url);
-                    }
-                  }),
-              )
-              .when_some(homepage.clone(), |this, homepage| {
-                this.child(
-                  Button::new("repo-open-homepage")
-                    .icon(IconName::ExternalLink)
-                    .ghost()
-                    .small()
-                    .label("Homepage")
-                    .on_click(move |_, _, cx| {
-                      cx.open_url(&homepage);
-                    }),
+    v_flex().w_full().h_full().min_h_0().p_4().child(
+      v_flex()
+        .w_full()
+        .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+        .mx_auto()
+        .gap_4()
+        .child(
+          h_flex()
+            .items_center()
+            .gap_3()
+            .child(
+              Avatar::new()
+                .name(repository.owner.login.clone())
+                .when_some(repository.owner.avatar_url.clone(), |this, url| {
+                  this.src(url)
+                })
+                .small(),
+            )
+            .child(
+              v_flex()
+                .gap_1()
+                .child(
+                  div()
+                    .text_lg()
+                    .font_semibold()
+                    .child(repository.full_name.clone()),
                 )
-              }),
-          )
-          .child(stats)
-          .child(
-            v_flex()
-              .gap_2()
-              .child(div().text_sm().font_semibold().child("Repository info"))
-              .child(
-                h_flex()
-                  .gap_6()
-                  .flex_wrap()
-                  .items_center()
-                  .text_sm()
-                  .text_color(theme.muted_foreground)
-                  .child(format!("Language: {}", language))
-                  .child(format!("License: {}", license))
-                  .child(format!("Default branch: {}", repository.default_branch))
-                  .child(format!("Last push: {}", pushed_at))
-                  .child(format!("Size: {}", format_repo_size(repository.size)))
-                  .when_some(homepage, |this, homepage| {
-                    this.child(format!("Homepage: {}", homepage))
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child(repository.owner.login.clone()),
+                ),
+            ),
+        )
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child(description),
+        )
+        .child(
+          h_flex()
+            .gap_2()
+            .flex_wrap()
+            .child(
+              Button::new("repo-open-on-github")
+                .icon(IconName::ExternalLink)
+                .small()
+                .label("Open on GitHub")
+                .on_click({
+                  let url = repository.html_url.clone();
+                  move |_, _, cx| {
+                    cx.open_url(&url);
+                  }
+                }),
+            )
+            .when_some(homepage.clone(), |this, homepage| {
+              this.child(
+                Button::new("repo-open-homepage")
+                  .icon(IconName::ExternalLink)
+                  .ghost()
+                  .small()
+                  .label("Homepage")
+                  .on_click(move |_, _, cx| {
+                    cx.open_url(&homepage);
                   }),
-              ),
-          ),
-      )
+              )
+            }),
+        )
+        .child(stats)
+        .child(
+          v_flex()
+            .gap_2()
+            .child(div().text_sm().font_semibold().child("Repository info"))
+            .child(
+              h_flex()
+                .gap_6()
+                .flex_wrap()
+                .items_center()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child(format!("Language: {}", language))
+                .child(format!("License: {}", license))
+                .child(format!("Default branch: {}", repository.default_branch))
+                .child(format!("Last push: {}", pushed_at))
+                .child(format!("Size: {}", format_repo_size(repository.size)))
+                .when_some(homepage, |this, homepage| {
+                  this.child(format!("Homepage: {}", homepage))
+                }),
+            ),
+        ),
+    )
   }
 
   fn render_pull_requests(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1590,24 +1641,19 @@ impl GithubRepoPage {
       .min_h_0()
       .p(px(8.));
 
-    v_flex()
-      .w_full()
-      .h_full()
-      .min_h_0()
-      .p_4()
-      .child(
-        v_flex()
-          .w_full()
-          .h_full()
-          .min_h_0()
-          .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
-          .mx_auto()
-          .gap_3()
-          .when_some(self.pull_requests_error.clone(), |this, error| {
-            this.child(div().text_sm().text_color(theme.red).child(error))
-          })
-          .child(list),
-      )
+    v_flex().w_full().h_full().min_h_0().p_4().child(
+      v_flex()
+        .w_full()
+        .h_full()
+        .min_h_0()
+        .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+        .mx_auto()
+        .gap_3()
+        .when_some(self.pull_requests_error.clone(), |this, error| {
+          this.child(div().text_sm().text_color(theme.red).child(error))
+        })
+        .child(list),
+    )
   }
 
   fn render_issues(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1623,24 +1669,19 @@ impl GithubRepoPage {
       .min_h_0()
       .p(px(8.));
 
-    v_flex()
-      .w_full()
-      .h_full()
-      .min_h_0()
-      .p_4()
-      .child(
-        v_flex()
-          .w_full()
-          .h_full()
-          .min_h_0()
-          .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
-          .mx_auto()
-          .gap_3()
-          .when_some(self.issues_error.clone(), |this, error| {
-            this.child(div().text_sm().text_color(theme.red).child(error))
-          })
-          .child(list),
-      )
+    v_flex().w_full().h_full().min_h_0().p_4().child(
+      v_flex()
+        .w_full()
+        .h_full()
+        .min_h_0()
+        .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+        .mx_auto()
+        .gap_3()
+        .when_some(self.issues_error.clone(), |this, error| {
+          this.child(div().text_sm().text_color(theme.red).child(error))
+        })
+        .child(list),
+    )
   }
 }
 
@@ -1662,13 +1703,7 @@ impl Render for GithubRepoPage {
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GithubRepoPage::show_command_palette_action))
       .child(self.render_header(cx))
-      .child(
-        v_flex()
-          .w_full()
-          .h_full()
-          .min_h_0()
-          .child(content),
-      )
+      .child(v_flex().w_full().h_full().min_h_0().child(content))
   }
 }
 
@@ -1689,7 +1724,10 @@ mod tests {
 
   #[test]
   fn github_page_navigation_targets_billing_without_refresh_when_subscription_is_inactive() {
-    assert_eq!(github_page_navigation(false), (WorkspacePage::Billing, false));
+    assert_eq!(
+      github_page_navigation(false),
+      (WorkspacePage::Billing, false)
+    );
   }
 
   #[test]
@@ -1746,7 +1784,10 @@ mod tests {
       name: Some("".into()),
       avatar_url: None,
     };
-    assert_eq!(issue_user_display_name(Some(&with_login)).as_ref(), "octocat");
+    assert_eq!(
+      issue_user_display_name(Some(&with_login)).as_ref(),
+      "octocat"
+    );
     assert_eq!(issue_user_display_name(None).as_ref(), "unknown");
   }
 

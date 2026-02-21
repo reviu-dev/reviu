@@ -66,6 +66,10 @@ fn is_unauthorized_error_message(error: &str) -> bool {
   error.to_ascii_lowercase().contains("unauthorized")
 }
 
+fn pr_description_scope_id(pr_number: u64) -> usize {
+  (pr_number as usize).wrapping_mul(1_000_003).wrapping_add(1)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GithubPrFileStatus {
   Added,
@@ -2297,7 +2301,8 @@ impl GithubPrDetailsPage {
               .child(render_markdown(
                 body.as_str(),
                 &MarkdownRenderOptions::default()
-                  .with_state(self.description_markdown_state.clone()),
+                  .with_state(self.description_markdown_state.clone())
+                  .with_scope_id(pr_description_scope_id(pr.number)),
                 cx,
               )),
           ),
