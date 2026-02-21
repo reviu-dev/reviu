@@ -229,6 +229,18 @@ fn line_is_markdown_link_to_url(trimmed: &str, url: &str) -> bool {
   link_target == url
 }
 
+fn review_comment_markdown_scope_id(comment_id: u64) -> usize {
+  (comment_id as usize).wrapping_mul(1_000_003).wrapping_add(1)
+}
+
+fn review_comment_markdown_segment_scope_id(comment_id: u64, segment_index: usize) -> usize {
+  (comment_id as usize)
+    .wrapping_mul(1_000_003)
+    .wrapping_add(segment_index)
+    .wrapping_mul(31)
+    .wrapping_add(2)
+}
+
 fn is_conflict_start_marker(line: &str) -> bool {
   line.starts_with("<<<<<<<")
 }
@@ -2958,7 +2970,7 @@ impl Editor {
       .overflow_hidden()
       .child(
         div()
-          .bg(theme.muted)
+          .bg(theme.accent)
           .border_b_1()
           .border_color(theme.border)
           .px(px(REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_X_PX))
@@ -3395,7 +3407,9 @@ impl Editor {
               self.cached_parsed_review_comment_markdown(message.id, message.body.as_ref());
             render_parsed_markdown(
               &parsed,
-              &MarkdownRenderOptions::with_on_link(link_handler.clone()).with_state(state),
+              &MarkdownRenderOptions::with_on_link(link_handler.clone())
+                .with_state(state)
+                .with_scope_id(review_comment_markdown_scope_id(message.id)),
               cx,
             )
             .into_any_element()
@@ -3415,7 +3429,9 @@ impl Editor {
               self.cached_parsed_review_comment_markdown(message.id, message.body.as_ref());
             render_parsed_markdown(
               &parsed,
-              &MarkdownRenderOptions::with_on_link(link_handler.clone()).with_state(state),
+              &MarkdownRenderOptions::with_on_link(link_handler.clone())
+                .with_state(state)
+                .with_scope_id(review_comment_markdown_scope_id(message.id)),
               cx,
             )
             .into_any_element()
@@ -3440,7 +3456,11 @@ impl Editor {
                     render_parsed_markdown(
                       &parsed,
                       &MarkdownRenderOptions::with_on_link(link_handler.clone())
-                        .with_state(state.clone()),
+                        .with_state(state.clone())
+                        .with_scope_id(review_comment_markdown_segment_scope_id(
+                          message.id,
+                          segment_index,
+                        )),
                       cx,
                     )
                     .into_any_element(),
