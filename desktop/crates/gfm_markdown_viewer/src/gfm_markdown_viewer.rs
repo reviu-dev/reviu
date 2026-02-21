@@ -274,6 +274,8 @@ const MARKDOWN_CODE_BLOCK_ESTIMATED_LINE_HEIGHT_PX: f32 = 14.0;
 const MARKDOWN_CODE_INDENT_DOT_SIZE_PX: f32 = 2.0;
 const MARKDOWN_CODE_INDENT_DOT_OPACITY: f32 = 0.45;
 const MARKDOWN_CODE_INDENT_DOT_MIN_SPACING_PX: f32 = 5.0;
+const MARKDOWN_CODE_INDENT_DOT_MAX_RENDER_COUNT: usize = 600;
+const MARKDOWN_CODE_INDENT_DOT_DISABLE_ABOVE_TEXT_LEN: usize = 20_000;
 const MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX: f32 =
   MARKDOWN_CODE_BLOCK_PADDING_TOP_PX + MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX + 2.0;
 static BADGE_IMAGE_SOURCE_CACHE: Lazy<Mutex<HashMap<String, BadgeResolveState>>> =
@@ -1672,7 +1674,7 @@ fn expand_tabs_for_code_block(value: &str) -> String {
 }
 
 fn collect_indentation_dot_indices(text: &str) -> Vec<usize> {
-  if !text.contains(' ') {
+  if text.len() > MARKDOWN_CODE_INDENT_DOT_DISABLE_ABOVE_TEXT_LEN || !text.contains(' ') {
     return Vec::new();
   }
 
@@ -1710,7 +1712,16 @@ fn collect_indentation_dot_indices(text: &str) -> Vec<usize> {
     indices.extend_from_slice(&leading_spaces);
   }
 
-  indices
+  limit_indentation_dot_indices(indices)
+}
+
+fn limit_indentation_dot_indices(indices: Vec<usize>) -> Vec<usize> {
+  if indices.len() <= MARKDOWN_CODE_INDENT_DOT_MAX_RENDER_COUNT {
+    return indices;
+  }
+
+  let step = indices.len().div_ceil(MARKDOWN_CODE_INDENT_DOT_MAX_RENDER_COUNT);
+  indices.into_iter().step_by(step).collect()
 }
 
 fn strip_trailing_orphan_details_line(value: &str) -> &str {
@@ -3412,6 +3423,29 @@ Apres"#,
     let indices = collect_indentation_dot_indices(text);
 
     assert_eq!(indices, vec![0, 1, 5, 6, 7, 8]);
+  }
+
+  #[test]
+  fn collect_indentation_dot_indices_limits_render_count_for_large_input() {
+    let text = (0..200)
+      .map(|_| "                              line")
+      .collect::<Vec<_>>()
+      .join("\n");
+    let indices = collect_indentation_dot_indices(text.as_str());
+
+    assert!(!indices.is_empty());
+    assert!(indices.len() <= MARKDOWN_CODE_INDENT_DOT_MAX_RENDER_COUNT);
+  }
+
+  #[test]
+  fn collect_indentation_dot_indices_disables_for_very_large_text() {
+    let text = format!(
+      "{}code",
+      " ".repeat(MARKDOWN_CODE_INDENT_DOT_DISABLE_ABOVE_TEXT_LEN + 1)
+    );
+    let indices = collect_indentation_dot_indices(text.as_str());
+
+    assert!(indices.is_empty());
   }
 
   #[test]
