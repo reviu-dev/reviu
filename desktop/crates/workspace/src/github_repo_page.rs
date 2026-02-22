@@ -3359,7 +3359,7 @@ mod tests {
         entry_type: "tree".to_string(),
         sha: "sha-src-tree".to_string(),
         size: None,
-        url: "https://example.com/src".to_string(),
+        url: Some("https://example.com/src".to_string()),
       },
       GithubRepositoryTreeEntry {
         path: "src/lib.rs".to_string(),
@@ -3367,7 +3367,7 @@ mod tests {
         entry_type: "blob".to_string(),
         sha: "sha-lib".to_string(),
         size: Some(12),
-        url: "https://example.com/src/lib.rs".to_string(),
+        url: Some("https://example.com/src/lib.rs".to_string()),
       },
       GithubRepositoryTreeEntry {
         path: "bin".to_string(),
@@ -3375,7 +3375,7 @@ mod tests {
         entry_type: "commit".to_string(),
         sha: "sha-submodule".to_string(),
         size: None,
-        url: "https://example.com/bin".to_string(),
+        url: Some("https://example.com/bin".to_string()),
       },
     ];
 
