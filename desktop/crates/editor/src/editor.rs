@@ -12,9 +12,10 @@ use std::{
 
 use buffer::TransactionId;
 use gfm_markdown_viewer::{
-  GithubCodeReferencePreview, LinkAction, MarkdownRenderOptions, MarkdownRenderState,
-  ParsedMarkdown, estimate_markdown_height_px, estimate_parsed_markdown_height_px, parse_markdown,
-  render_github_code_reference_preview_card, render_parsed_markdown,
+  GithubCodeReferencePreview, LinkAction, MarkdownRenderOptions, MarkdownRenderState, ParsedMarkdown,
+  estimate_github_code_reference_preview_height_px, estimate_markdown_height_px,
+  estimate_parsed_markdown_height_px, parse_markdown, render_github_code_reference_preview_card,
+  render_parsed_markdown,
 };
 use git::{ApplyLocation, DiffSet, GitFileBases, GitStore, RepoFile};
 use gpui::{
@@ -115,13 +116,6 @@ const REVIEW_COMMENT_REPLY_DRAFT_COMMENT_ID: u64 = u64::MAX - 1;
 const REVIEW_COMMENT_CREATE_SELECTION_BACKGROUND_ALPHA: f32 = 0.16;
 const REVIEW_COMMENT_CREATE_BUTTON_GUTTER_RIGHT_PX: f32 = 10.0;
 const REVIEW_COMMENT_CREATE_BUTTON_HITBOX_WIDTH_PX: f32 = 10.0;
-const REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_Y_PX: f32 = 8.0;
-const REVIEW_COMMENT_CODE_REFERENCE_CARD_MARGIN_Y_PX: f32 = 4.0;
-const REVIEW_COMMENT_CODE_REFERENCE_CARD_HEADER_LINE_COUNT: f32 = 2.0;
-const REVIEW_COMMENT_CODE_REFERENCE_CARD_INTERNAL_GAP_PX: f32 = 4.0;
-const REVIEW_COMMENT_CODE_REFERENCE_CARD_BORDER_PX: f32 = 2.0;
-const REVIEW_COMMENT_CODE_REFERENCE_CARD_HEIGHT_BUFFER_PX: f32 = 8.0;
-const REVIEW_COMMENT_CODE_REFERENCE_SNIPPET_ROW_GAP_PX: f32 = 2.0;
 
 fn has_fractional_scroll(scroll_offset: f32) -> bool {
   (scroll_offset - scroll_offset.floor()) > FRACTIONAL_SCROLL_EPSILON
@@ -1189,16 +1183,10 @@ impl Editor {
     &self,
     preview: &ReviewCommentCodeReferencePreview,
   ) -> f32 {
-    let row_height_px = self.review_comment_line_height_px.max(1.0);
-    let snippet_line_count = preview.snippets.len().max(1) as f32;
-
-    row_height_px * (REVIEW_COMMENT_CODE_REFERENCE_CARD_HEADER_LINE_COUNT + snippet_line_count)
-      + REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_Y_PX * 4.0
-      + REVIEW_COMMENT_CODE_REFERENCE_CARD_INTERNAL_GAP_PX
-      + REVIEW_COMMENT_CODE_REFERENCE_CARD_BORDER_PX
-      + REVIEW_COMMENT_CODE_REFERENCE_SNIPPET_ROW_GAP_PX * (snippet_line_count - 1.0).max(0.0)
-      + REVIEW_COMMENT_CODE_REFERENCE_CARD_MARGIN_Y_PX * 2.0
-      + REVIEW_COMMENT_CODE_REFERENCE_CARD_HEIGHT_BUFFER_PX
+    estimate_github_code_reference_preview_height_px(
+      preview.snippets.len(),
+      self.review_comment_line_height_px,
+    )
   }
 
   fn review_comment_body_segments(
@@ -7511,6 +7499,29 @@ pub mod tests {
     assert_eq!(converted.start_line, preview.start_line);
     assert_eq!(converted.end_line, preview.end_line);
     assert_eq!(converted.snippets, preview.snippets);
+  }
+
+  #[gpui::test]
+  fn review_comment_preview_height_uses_shared_gfm_estimator(cx: &mut TestAppContext) {
+    let ctx = EditorTestContext::with_text(cx.clone(), "line");
+    let preview = ReviewCommentCodeReferencePreview {
+      url: Arc::from("https://github.com/acme/widget/blob/main/src/lib.rs#L1-L2"),
+      repo: Arc::from("acme/widget"),
+      path: Arc::from("src/lib.rs"),
+      reference: Arc::from("main"),
+      start_line: 1,
+      end_line: 2,
+      snippets: vec![Arc::from("fn main() {"), Arc::from("}")],
+    };
+
+    ctx.editor.read_with(&ctx.cx, |editor, _| {
+      let actual = editor.review_comment_code_reference_preview_height_px(&preview);
+      let expected = estimate_github_code_reference_preview_height_px(
+        preview.snippets.len(),
+        editor.review_comment_line_height_px,
+      );
+      assert_eq!(actual, expected);
+    });
   }
 
   #[gpui::test]

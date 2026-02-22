@@ -1272,6 +1272,23 @@ pub fn render_github_code_reference_preview_card(
     .into_any_element()
 }
 
+pub fn estimate_github_code_reference_preview_height_px(
+  snippet_line_count: usize,
+  row_height_px: f32,
+) -> f32 {
+  let row_height_px = row_height_px.max(1.0);
+  let snippet_line_count = snippet_line_count.max(1) as f32;
+  let snippet_rows_height_px = row_height_px * snippet_line_count
+    + MARKDOWN_CODE_REFERENCE_SNIPPET_ROW_GAP_PX * (snippet_line_count - 1.0).max(0.0);
+  let snippet_scroll_height_px = snippet_rows_height_px.min(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX);
+
+  row_height_px * 2.0
+    + MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX * 4.0
+    + MARKDOWN_CODE_REFERENCE_CARD_MARGIN_Y_PX * 2.0
+    + 3.0
+    + snippet_scroll_height_px
+}
+
 fn code_block_language_hint_from_path(path: &str) -> Option<String> {
   let file_name = path.rsplit('/').next().unwrap_or(path).trim();
   if file_name.is_empty() {
@@ -4035,6 +4052,24 @@ Apres"#,
     let wide = estimate_markdown_height_px(source, 96, 20.0);
     let narrow = estimate_markdown_height_px(source, 32, 20.0);
     assert!(narrow > wide);
+  }
+
+  #[test]
+  fn estimate_github_code_reference_preview_height_grows_with_more_lines() {
+    let single = estimate_github_code_reference_preview_height_px(1, 20.0);
+    let many = estimate_github_code_reference_preview_height_px(12, 20.0);
+    assert!(many > single);
+  }
+
+  #[test]
+  fn estimate_github_code_reference_preview_height_caps_scroll_content() {
+    let capped = estimate_github_code_reference_preview_height_px(1_000, 20.0);
+    let expected = 20.0 * 2.0
+      + MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX * 4.0
+      + MARKDOWN_CODE_REFERENCE_CARD_MARGIN_Y_PX * 2.0
+      + 3.0
+      + MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX;
+    assert_eq!(capped, expected);
   }
 
   #[test]
