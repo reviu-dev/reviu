@@ -1115,7 +1115,7 @@ fn short_github_reference(reference: &str) -> String {
   trimmed.to_string()
 }
 
-fn render_github_code_reference_preview_card(
+pub fn render_github_code_reference_preview_card(
   preview: &GithubCodeReferencePreview,
   cx: &App,
 ) -> AnyElement {

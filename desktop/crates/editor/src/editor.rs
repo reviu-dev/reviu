@@ -12,9 +12,9 @@ use std::{
 
 use buffer::TransactionId;
 use gfm_markdown_viewer::{
-  LinkAction, MarkdownRenderOptions, MarkdownRenderState, ParsedMarkdown,
-  estimate_markdown_height_px, estimate_parsed_markdown_height_px, parse_markdown,
-  render_parsed_markdown,
+  GithubCodeReferencePreview, LinkAction, MarkdownRenderOptions, MarkdownRenderState,
+  ParsedMarkdown, estimate_markdown_height_px, estimate_parsed_markdown_height_px, parse_markdown,
+  render_github_code_reference_preview_card, render_parsed_markdown,
 };
 use git::{ApplyLocation, DiffSet, GitFileBases, GitStore, RepoFile};
 use gpui::{
@@ -24,7 +24,7 @@ use gpui::{
   prelude::*, px, white,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, IconName, Sizable, StyledExt as _,
+  ActiveTheme as _, Disableable as _, IconName, Sizable,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   h_flex,
@@ -116,7 +116,6 @@ const REVIEW_COMMENT_CREATE_SELECTION_BACKGROUND_ALPHA: f32 = 0.16;
 const REVIEW_COMMENT_CREATE_BUTTON_GUTTER_RIGHT_PX: f32 = 10.0;
 const REVIEW_COMMENT_CREATE_BUTTON_HITBOX_WIDTH_PX: f32 = 10.0;
 const REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_Y_PX: f32 = 8.0;
-const REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_X_PX: f32 = 12.0;
 const REVIEW_COMMENT_CODE_REFERENCE_CARD_MARGIN_Y_PX: f32 = 4.0;
 const REVIEW_COMMENT_CODE_REFERENCE_CARD_HEADER_LINE_COUNT: f32 = 2.0;
 const REVIEW_COMMENT_CODE_REFERENCE_CARD_INTERNAL_GAP_PX: f32 = 4.0;
@@ -203,17 +202,18 @@ fn review_comment_overlay_x_offset_for_scroll(scroll_x: Pixels) -> Pixels {
   (-scroll_x).max(px(0.0))
 }
 
-fn short_github_reference(reference: &str) -> String {
-  let trimmed = reference.trim();
-  if trimmed.len() > 7 && trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
-    return trimmed.chars().take(7).collect();
+fn as_gfm_code_reference_preview(
+  preview: &ReviewCommentCodeReferencePreview,
+) -> GithubCodeReferencePreview {
+  GithubCodeReferencePreview {
+    url: preview.url.clone(),
+    repo: preview.repo.clone(),
+    path: preview.path.clone(),
+    reference: preview.reference.clone(),
+    start_line: preview.start_line,
+    end_line: preview.end_line,
+    snippets: preview.snippets.clone(),
   }
-  if trimmed.len() > 24 {
-    let mut shortened: String = trimmed.chars().take(24).collect();
-    shortened.push_str("...");
-    return shortened;
-  }
-  trimmed.to_string()
 }
 
 fn line_is_markdown_link_to_url(trimmed: &str, url: &str) -> bool {
@@ -2896,120 +2896,13 @@ impl Editor {
     preview: &ReviewCommentCodeReferencePreview,
     cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
-    let theme = cx.theme();
-    let url = preview.url.clone();
-    let file_label = format!("{}/{}", preview.repo.as_ref(), preview.path.as_ref());
-    let line_label = if preview.start_line == preview.end_line {
-      format!(
-        "Line {} in {}",
-        preview.start_line,
-        short_github_reference(preview.reference.as_ref())
-      )
-    } else {
-      format!(
-        "Lines {}-{} in {}",
-        preview.start_line,
-        preview.end_line,
-        short_github_reference(preview.reference.as_ref())
-      )
-    };
-
-    let mut snippet_rows = v_flex().gap(px(REVIEW_COMMENT_CODE_REFERENCE_SNIPPET_ROW_GAP_PX));
-    if preview.snippets.is_empty() {
-      snippet_rows = snippet_rows.child(
-        h_flex()
-          .items_center()
-          .gap_2()
-          .child(
-            div()
-              .text_xs()
-              .font_medium()
-              .text_color(theme.muted_foreground)
-              .child(preview.start_line.to_string()),
-          )
-          .child(
-            div()
-              .flex_1()
-              .min_w_0()
-              .font_family(editor_code_font_family(cx))
-              .text_sm()
-              .text_color(theme.foreground)
-              .child(""),
-          ),
-      );
-    } else {
-      for (offset, snippet) in preview.snippets.iter().enumerate() {
-        let line_number = preview.start_line + offset;
-        snippet_rows = snippet_rows.child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child(
-              div()
-                .text_xs()
-                .font_medium()
-                .text_color(theme.muted_foreground)
-                .child(line_number.to_string()),
-            )
-            .child(
-              div()
-                .flex_1()
-                .min_w_0()
-                .font_family(editor_code_font_family(cx))
-                .text_sm()
-                .text_color(theme.foreground)
-                .child(snippet.as_ref().to_string()),
-            ),
-        );
-      }
-    }
-
-    v_flex()
-      .my(px(REVIEW_COMMENT_CODE_REFERENCE_CARD_MARGIN_Y_PX))
-      .border_1()
-      .border_color(theme.border)
-      .rounded_md()
-      .overflow_hidden()
-      .child(
-        div()
-          .bg(theme.accent)
-          .border_b_1()
-          .border_color(theme.border)
-          .px(px(REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_X_PX))
-          .py(px(REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_Y_PX))
-          .cursor(CursorStyle::PointingHand)
-          .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-            cx.stop_propagation();
-            cx.open_url(url.as_ref());
-          })
-          .child(
-            v_flex()
-              .gap_1()
-              .child(
-                div()
-                  .text_sm()
-                  .font_medium()
-                  .text_color(theme.status_blue())
-                  .child(file_label),
-              )
-              .child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child(line_label),
-              ),
-          ),
-      )
-      .child(
-        div()
-          .px(px(REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_X_PX))
-          .py(px(REVIEW_COMMENT_CODE_REFERENCE_CARD_PADDING_Y_PX))
-          .child(snippet_rows),
-      )
+    let preview = as_gfm_code_reference_preview(preview);
+    div()
       .id(format!(
         "review-comment-code-reference-{}-{segment_index}",
         comment_id
       ))
+      .child(render_github_code_reference_preview_card(&preview, cx))
       .into_any_element()
   }
 
@@ -7595,6 +7488,29 @@ pub mod tests {
         "test before\ntest after"
       );
     });
+  }
+
+  #[gpui::test]
+  fn as_gfm_code_reference_preview_preserves_fields(cx: &mut TestAppContext) {
+    let _ = cx;
+    let preview = ReviewCommentCodeReferencePreview {
+      url: Arc::from("https://github.com/acme/widget/blob/main/src/lib.rs#L1-L2"),
+      repo: Arc::from("acme/widget"),
+      path: Arc::from("src/lib.rs"),
+      reference: Arc::from("main"),
+      start_line: 1,
+      end_line: 2,
+      snippets: vec![Arc::from("fn main() {"), Arc::from("}")],
+    };
+
+    let converted = as_gfm_code_reference_preview(&preview);
+    assert_eq!(converted.url, preview.url);
+    assert_eq!(converted.repo, preview.repo);
+    assert_eq!(converted.path, preview.path);
+    assert_eq!(converted.reference, preview.reference);
+    assert_eq!(converted.start_line, preview.start_line);
+    assert_eq!(converted.end_line, preview.end_line);
+    assert_eq!(converted.snippets, preview.snippets);
   }
 
   #[gpui::test]
