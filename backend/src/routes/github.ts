@@ -1,4 +1,4 @@
-import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueParameters, GithubIssueResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
+import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueParameters, GithubIssueResponse, GithubRepositoryTreeParams, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
@@ -19,6 +19,7 @@ import {
   fetchGithubRepositoryIssue,
   fetchGithubRepositoryIssueComments,
   fetchGithubRepositoryIssues,
+  fetchGithubRepositoryTree,
   patchGithubPullRequestComment,
 
 } from '../services/github.js'
@@ -682,6 +683,32 @@ export const githubRoutes = githubRouter
 
     try {
       const data = await fetchGithubRepository({ token: githubToken, owner, repo })
+      return ctx.json(data, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 404) {
+        return ctx.json({ error: 'Repository not found' }, 404)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/repos/:owner/:repo/trees/:tree_sha', async (ctx) => {
+    const { owner, repo, tree_sha } = ctx.req.param()
+    const recursive = ctx.req.query('recursive')
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: GithubRepositoryTreeParams = {
+        owner,
+        repo,
+        tree_sha,
+        ...(recursive !== undefined ? { recursive } : {}),
+      }
+
+      const data = await fetchGithubRepositoryTree({ token: githubToken, params })
       return ctx.json(data, 200)
     }
     catch (error) {

@@ -1,19 +1,22 @@
 use std::{
-  collections::{HashMap, HashSet},
+  collections::{BTreeMap, HashMap, HashSet},
+  path::{Path, PathBuf},
   rc::Rc,
   sync::Arc,
 };
 
+use editor::Editor;
 use gfm_markdown_viewer::{
   GithubBlobLineReference, GithubCodeReferencePreview, LinkAction, MarkdownRenderOptions,
   MarkdownRenderState, extract_github_blob_line_references, render_markdown,
 };
 use gpui::{
-  App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, ScrollAnchor, ScrollHandle,
-  SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
+  App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, RenderImage, ScrollAnchor,
+  ScrollHandle, SharedString, Styled, Subscription, Task, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, IndexPath, Placement, Sizable as _, StyledExt,
+  ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Placement, Selectable, Sizable as _,
+  StyledExt,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   h_flex,
@@ -23,6 +26,8 @@ use gpui_component::{
   spinner::Spinner,
   tab::{Tab, TabBar},
   tag::Tag,
+  text::TextView,
+  tree::{TreeItem, TreeState, tree},
   v_flex,
 };
 use smol::unblock;
@@ -30,12 +35,14 @@ use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage,
-  DETAILS_PAGE_CONTAINER_MAX_WIDTH, StatusThemeExt as _, UiIconName, UserMenuConfig, UserMenuPage,
-  UserMenuState, UserMenuUser, WindowExt, parse_github_url_action, user_menu,
+  DETAILS_PAGE_CONTAINER_MAX_WIDTH, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler,
+  SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt as _, UiIconName, UserMenuConfig,
+  UserMenuPage, UserMenuState, UserMenuUser, WindowExt, file_icon_path_for_name_with_theme,
+  h_resizable, parse_github_url_action, resizable_panel, user_menu,
 };
 
 use crate::{
-  AuthCallbackTarget, ShowCommandPalette,
+  AuthCallbackTarget, ShowCommandPalette, ShowFileSearch,
   api::{
     ApiClient, GithubIssue, GithubIssueDetails, GithubIssueStateReason, GithubIssueUser,
     GithubPullRequest, GithubRepositoryDetails,
@@ -101,6 +108,138 @@ fn repo_palette_open_target(has_active_subscription: bool) -> WorkspacePage {
   }
 }
 
+const CODE_SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
+const CODE_SIDEBAR_MIN_WIDTH: f32 = 250.0;
+const CODE_SIDEBAR_MAX_WIDTH: f32 = 1500.0;
+const CODE_HEADER_HEIGHT: f32 = 40.0;
+
+#[derive(Clone, Debug)]
+struct GithubRepoCodeFile {
+  path: SharedString,
+  sha: SharedString,
+}
+
+#[derive(Default)]
+struct GithubRepoCodeTreeNode {
+  name: String,
+  path: String,
+  children: BTreeMap<String, GithubRepoCodeTreeNode>,
+  file: Option<Rc<GithubRepoCodeFile>>,
+}
+
+impl GithubRepoCodeTreeNode {
+  fn new(name: String, path: String) -> Self {
+    Self {
+      name,
+      path,
+      children: BTreeMap::new(),
+      file: None,
+    }
+  }
+
+  fn is_folder(&self) -> bool {
+    !self.children.is_empty()
+  }
+}
+
+type RepoCodeTreeBuildResult = (
+  Vec<TreeItem>,
+  HashMap<String, Rc<GithubRepoCodeFile>>,
+  Option<usize>,
+  Option<String>,
+);
+
+fn build_repo_code_tree_items(files: &[Rc<GithubRepoCodeFile>]) -> RepoCodeTreeBuildResult {
+  fn insert_node(
+    map: &mut BTreeMap<String, GithubRepoCodeTreeNode>,
+    parts: &[&str],
+    prefix: &str,
+    file: Rc<GithubRepoCodeFile>,
+  ) {
+    let Some((head, tail)) = parts.split_first() else {
+      return;
+    };
+
+    let path = if prefix.is_empty() {
+      head.to_string()
+    } else {
+      format!("{}/{}", prefix, head)
+    };
+
+    let node = map
+      .entry(head.to_string())
+      .or_insert_with(|| GithubRepoCodeTreeNode::new(head.to_string(), path.clone()));
+
+    if tail.is_empty() {
+      node.file = Some(file);
+      return;
+    }
+
+    let node_path = node.path.clone();
+    insert_node(&mut node.children, tail, &node_path, file);
+  }
+
+  let mut root: BTreeMap<String, GithubRepoCodeTreeNode> = BTreeMap::new();
+  let mut file_lookup: HashMap<String, Rc<GithubRepoCodeFile>> = HashMap::new();
+
+  for file in files {
+    let path = file.path.as_ref();
+    file_lookup.insert(path.to_string(), file.clone());
+    let parts: Vec<&str> = path.split('/').collect();
+    insert_node(&mut root, &parts, "", file.clone());
+  }
+
+  let mut order = Vec::new();
+  let mut first_file_id = None;
+
+  let mut root_nodes: Vec<GithubRepoCodeTreeNode> = root.into_values().collect();
+  root_nodes.sort_by(|a, b| {
+    b.is_folder()
+      .cmp(&a.is_folder())
+      .then_with(|| a.name.cmp(&b.name))
+  });
+
+  let items = root_nodes
+    .into_iter()
+    .map(|node| build_repo_code_tree_item(node, &mut order, &mut first_file_id))
+    .collect::<Vec<_>>();
+
+  let selected_index = first_file_id
+    .as_ref()
+    .and_then(|id| order.iter().position(|candidate| candidate == id));
+
+  (items, file_lookup, selected_index, first_file_id)
+}
+
+fn build_repo_code_tree_item(
+  node: GithubRepoCodeTreeNode,
+  order: &mut Vec<String>,
+  first_file_id: &mut Option<String>,
+) -> TreeItem {
+  let mut child_nodes: Vec<GithubRepoCodeTreeNode> = node.children.into_values().collect();
+  child_nodes.sort_by(|a, b| {
+    b.is_folder()
+      .cmp(&a.is_folder())
+      .then_with(|| a.name.cmp(&b.name))
+  });
+
+  let mut item = TreeItem::new(node.path.clone(), node.name.clone());
+  if !child_nodes.is_empty() {
+    let children = child_nodes
+      .into_iter()
+      .map(|child| build_repo_code_tree_item(child, order, first_file_id))
+      .collect::<Vec<_>>();
+    item = item.children(children);
+  }
+
+  order.push(node.path.clone());
+  if node.file.is_some() && first_file_id.is_none() {
+    *first_file_id = Some(node.path.clone());
+  }
+
+  item
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GithubRepoOpenTarget {
   Overview,
@@ -115,8 +254,8 @@ impl GithubRepoOpenTarget {
   fn tab_ix(self) -> usize {
     match self {
       GithubRepoOpenTarget::Overview => 0,
-      GithubRepoOpenTarget::PullRequests => 1,
-      GithubRepoOpenTarget::Issues { .. } => 2,
+      GithubRepoOpenTarget::PullRequests => 2,
+      GithubRepoOpenTarget::Issues { .. } => 3,
     }
   }
 
@@ -1299,6 +1438,22 @@ pub struct GithubRepoPage {
   repository_loading: bool,
   repository_error: Option<SharedString>,
   repository_task: Option<Task<()>>,
+  code_tree_state: Entity<TreeState>,
+  code_files_loading: bool,
+  code_files_error: Option<SharedString>,
+  code_tree_task: Option<Task<()>>,
+  code_lookup: HashMap<String, Rc<GithubRepoCodeFile>>,
+  code_selected_file: Option<Rc<GithubRepoCodeFile>>,
+  code_selected_tree_id: Option<String>,
+  code_file_loading: bool,
+  code_file_error: Option<SharedString>,
+  code_file_contents_cache: HashMap<String, Option<String>>,
+  code_file_tasks: HashMap<String, Task<()>>,
+  code_editor: Entity<Editor>,
+  show_markdown_preview: bool,
+  svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
+  svg_preview_source: Option<SharedString>,
+  svg_preview_task: Option<Task<()>>,
   pull_requests: Entity<ListState<GithubRepoPullRequestListDelegate>>,
   pull_requests_error: Option<SharedString>,
   pull_requests_task: Option<Task<()>>,
@@ -1398,11 +1553,17 @@ impl GithubRepoPage {
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     GithubRepoPageHandle::register(cx);
 
+    let code_tree_state = cx.new(|cx| TreeState::new(cx));
     let pull_requests = cx.new(|cx| {
       ListState::new(GithubRepoPullRequestListDelegate::new(), window, cx).searchable(true)
     });
     let issues =
       cx.new(|cx| ListState::new(GithubRepoIssueListDelegate::new(), window, cx).searchable(true));
+    let code_editor = cx.new(|cx| {
+      let mut editor = Editor::new_with_paths(PathBuf::from("."), PathBuf::from("."), cx);
+      editor.is_read_only = true;
+      editor
+    });
 
     let api = WorkspaceApi::global(cx).api.clone();
     let mut this = Self {
@@ -1414,6 +1575,22 @@ impl GithubRepoPage {
       repository_loading: false,
       repository_error: None,
       repository_task: None,
+      code_tree_state,
+      code_files_loading: false,
+      code_files_error: None,
+      code_tree_task: None,
+      code_lookup: HashMap::new(),
+      code_selected_file: None,
+      code_selected_tree_id: None,
+      code_file_loading: false,
+      code_file_error: None,
+      code_file_contents_cache: HashMap::new(),
+      code_file_tasks: HashMap::new(),
+      code_editor,
+      show_markdown_preview: false,
+      svg_preview: None,
+      svg_preview_source: None,
+      svg_preview_task: None,
       pull_requests,
       pull_requests_error: None,
       pull_requests_task: None,
@@ -1514,13 +1691,20 @@ impl GithubRepoPage {
       return;
     }
     self.active_tab_ix = tab_ix;
-    if tab_ix != 2 {
+    if tab_ix != 3 {
       self.pending_issue_sheet_number = None;
       self.pending_issue_sheet_comment_id = None;
     }
-    cx.notify();
 
     if tab_ix == 1 {
+      self.load_code_tree_if_needed(cx);
+      cx.notify();
+      return;
+    }
+
+    cx.notify();
+
+    if tab_ix == 2 {
       cx.on_next_frame(window, |this, window, cx| {
         this.pull_requests.update(cx, |state, cx| {
           state.focus(window, cx);
@@ -1529,7 +1713,7 @@ impl GithubRepoPage {
       return;
     }
 
-    if tab_ix == 2 {
+    if tab_ix == 3 {
       cx.on_next_frame(window, |this, window, cx| {
         this.issues.update(cx, |state, cx| {
           state.focus(window, cx);
@@ -1538,11 +1722,499 @@ impl GithubRepoPage {
     }
   }
 
+  fn reset_code_state(&mut self, cx: &mut Context<Self>) {
+    self.code_files_loading = false;
+    self.code_files_error = None;
+    self.code_tree_task = None;
+    self.code_lookup.clear();
+    self.code_selected_file = None;
+    self.code_selected_tree_id = None;
+    self.code_file_loading = false;
+    self.code_file_error = None;
+    self.code_file_contents_cache.clear();
+    self.code_file_tasks.clear();
+    self.show_markdown_preview = false;
+    self.svg_preview = None;
+    self.svg_preview_source = None;
+    self.svg_preview_task = None;
+    self.code_tree_state.update(cx, |state, cx| {
+      state.set_items(Vec::new(), cx);
+      state.set_selected_index(None, cx);
+    });
+    self.clear_code_editor(cx);
+  }
+
+  fn load_code_tree_if_needed(&mut self, cx: &mut Context<Self>) {
+    if self.active_tab_ix != 1 {
+      return;
+    }
+    if self.code_files_loading || self.code_tree_task.is_some() || !self.code_lookup.is_empty() {
+      return;
+    }
+    let Some(repository) = self.repository.as_ref() else {
+      return;
+    };
+
+    let owner = self.owner.to_string();
+    let repo = self.repo.to_string();
+    let default_branch = repository.default_branch.clone();
+    if owner.trim().is_empty() || repo.trim().is_empty() || default_branch.trim().is_empty() {
+      return;
+    }
+
+    self.code_files_loading = true;
+    self.code_files_error = None;
+    self.code_file_loading = false;
+    self.code_file_error = None;
+    self.code_lookup.clear();
+    self.code_selected_file = None;
+    self.code_selected_tree_id = None;
+    self.code_file_contents_cache.clear();
+    self.code_file_tasks.clear();
+    self.code_tree_state.update(cx, |state, cx| {
+      state.set_items(Vec::new(), cx);
+      state.set_selected_index(None, cx);
+    });
+    self.clear_code_editor(cx);
+
+    let api = self.api.clone();
+    let owner_for_task = owner.clone();
+    let repo_for_task = repo.clone();
+    let default_branch_for_task = default_branch.clone();
+    let owner_for_fetch = owner_for_task.clone();
+    let repo_for_fetch = repo_for_task.clone();
+    let default_branch_for_fetch = default_branch_for_task.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.fetch_github_repository_tree(
+          &owner_for_fetch,
+          &repo_for_fetch,
+          &default_branch_for_fetch,
+        )
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.code_tree_task = None;
+        if !this
+          .owner
+          .as_ref()
+          .eq_ignore_ascii_case(owner_for_task.as_str())
+          || !this
+            .repo
+            .as_ref()
+            .eq_ignore_ascii_case(repo_for_task.as_str())
+        {
+          return;
+        }
+
+        this.code_files_loading = false;
+
+        match result {
+          Ok(tree_payload) => {
+            let files: Vec<Rc<GithubRepoCodeFile>> = tree_payload
+              .tree
+              .into_iter()
+              .filter(|entry| entry.entry_type.eq_ignore_ascii_case("blob"))
+              .map(|entry| {
+                Rc::new(GithubRepoCodeFile {
+                  path: entry.path.into(),
+                  sha: entry.sha.into(),
+                })
+              })
+              .collect();
+
+            let (items, lookup, _selected_index, _selected_id) = build_repo_code_tree_items(&files);
+            this.code_lookup = lookup;
+            this.code_selected_tree_id = None;
+            this.code_tree_state.update(cx, |state, cx| {
+              state.set_items(items, cx);
+              state.set_selected_index(None, cx);
+            });
+            this.set_selected_code_file(None, cx);
+            this.code_files_error = None;
+          }
+          Err(error) => {
+            this.code_lookup.clear();
+            this.code_selected_file = None;
+            this.code_selected_tree_id = None;
+            this.code_tree_state.update(cx, |state, cx| {
+              state.set_items(Vec::new(), cx);
+              state.set_selected_index(None, cx);
+            });
+            let message = error.to_string();
+            if is_unauthorized_error_message(&message) {
+              this.code_files_error = Some("Authentication required. Please sign in again.".into());
+            } else {
+              this.code_files_error = Some(message.into());
+            }
+          }
+        }
+
+        cx.notify();
+      });
+    });
+    self.code_tree_task = Some(task);
+    cx.notify();
+  }
+
+  fn set_selected_code_file(
+    &mut self,
+    selected: Option<Rc<GithubRepoCodeFile>>,
+    cx: &mut Context<Self>,
+  ) {
+    let current_id = self
+      .code_selected_file
+      .as_ref()
+      .map(|file| file.path.as_ref().to_string());
+    let next_id = selected.as_ref().map(|file| file.path.as_ref().to_string());
+    if current_id == next_id {
+      return;
+    }
+
+    self.code_selected_file = selected.clone();
+    self.code_selected_tree_id = selected.as_ref().map(|file| file.path.as_ref().to_string());
+    if !self.selected_code_file_is_markdown() && !self.selected_code_file_is_svg() {
+      self.show_markdown_preview = false;
+    }
+    self.svg_preview = None;
+    self.svg_preview_source = None;
+
+    if let Some(file) = selected {
+      self.ensure_code_editor_for_path(file.path.as_ref(), cx);
+      self.sync_code_tree_selection(cx);
+
+      let key = file.path.as_ref().to_string();
+      if let Some(content) = self.code_file_contents_cache.get(&key).cloned() {
+        if let Some(content) = content {
+          self.apply_code_editor_content(&content, cx);
+          self.code_file_error = None;
+        } else {
+          self.code_file_loading = false;
+          self.code_file_error = Some("File contents unavailable".into());
+          self.clear_code_editor(cx);
+        }
+      } else {
+        self.code_file_loading = true;
+        self.code_file_error = None;
+        self.clear_code_editor(cx);
+        self.maybe_fetch_code_file_content(file, cx);
+      }
+    } else {
+      self.code_file_loading = false;
+      self.code_file_error = None;
+      self.clear_code_editor(cx);
+    }
+
+    cx.notify();
+  }
+
+  fn maybe_fetch_code_file_content(
+    &mut self,
+    file: Rc<GithubRepoCodeFile>,
+    cx: &mut Context<Self>,
+  ) {
+    let key = file.path.as_ref().to_string();
+    if self.code_file_contents_cache.contains_key(&key) || self.code_file_tasks.contains_key(&key) {
+      return;
+    }
+
+    let Some(reference) = self
+      .repository
+      .as_ref()
+      .map(|repository| repository.default_branch.clone())
+    else {
+      return;
+    };
+
+    let owner = self.owner.to_string();
+    let repo = self.repo.to_string();
+    let path = key.clone();
+    let key_for_task = key.clone();
+    let api = self.api.clone();
+    let owner_for_fetch = owner.clone();
+    let repo_for_fetch = repo.clone();
+    let path_for_fetch = path.clone();
+    let reference_for_fetch = reference.clone();
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.fetch_github_file_content(
+          &owner_for_fetch,
+          &repo_for_fetch,
+          &path_for_fetch,
+          &reference_for_fetch,
+        )
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.code_file_tasks.remove(&key_for_task);
+        if !this.owner.as_ref().eq_ignore_ascii_case(owner.as_str())
+          || !this.repo.as_ref().eq_ignore_ascii_case(repo.as_str())
+        {
+          return;
+        }
+
+        match result {
+          Ok(content) => {
+            this
+              .code_file_contents_cache
+              .insert(key_for_task.clone(), content.clone());
+            if this.code_selected_tree_id.as_deref() == Some(key_for_task.as_str()) {
+              if let Some(content) = content {
+                this.apply_code_editor_content(&content, cx);
+                this.code_file_error = None;
+              } else {
+                this.code_file_loading = false;
+                this.code_file_error = Some("File contents unavailable".into());
+                this.clear_code_editor(cx);
+              }
+            }
+          }
+          Err(_) => {
+            if this.code_selected_tree_id.as_deref() == Some(key_for_task.as_str()) {
+              this.code_file_loading = false;
+              this.code_file_error = Some("Failed to load file contents".into());
+              this.clear_code_editor(cx);
+            }
+          }
+        }
+
+        cx.notify();
+      });
+    });
+
+    self.code_file_tasks.insert(key, task);
+  }
+
+  fn is_markdown_path(path: &Path) -> bool {
+    matches!(
+      path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref(),
+      Some("md" | "markdown" | "mdx")
+    )
+  }
+
+  fn is_svg_path(path: &Path) -> bool {
+    matches!(
+      path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref(),
+      Some("svg")
+    )
+  }
+
+  fn selected_code_file_is_markdown(&self) -> bool {
+    self
+      .code_selected_file
+      .as_ref()
+      .map(|file| Self::is_markdown_path(Path::new(file.path.as_ref())))
+      .unwrap_or(false)
+  }
+
+  fn selected_code_file_is_svg(&self) -> bool {
+    self
+      .code_selected_file
+      .as_ref()
+      .map(|file| Self::is_svg_path(Path::new(file.path.as_ref())))
+      .unwrap_or(false)
+  }
+
+  fn toggle_code_markdown_preview(&mut self, cx: &mut Context<Self>) {
+    if !self.selected_code_file_is_markdown() && !self.selected_code_file_is_svg() {
+      return;
+    }
+
+    self.show_markdown_preview = !self.show_markdown_preview;
+    cx.notify();
+  }
+
+  fn update_code_svg_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if !self.show_markdown_preview || !self.selected_code_file_is_svg() {
+      return;
+    }
+
+    let document = self.code_editor.read(cx).document().read(cx);
+    let svg_source = document.slice_to_string(0..document.len());
+    let svg_source: SharedString = svg_source.into();
+
+    if self.svg_preview_source.as_ref() == Some(&svg_source) {
+      return;
+    }
+
+    self.svg_preview_source = Some(svg_source.clone());
+    let renderer = cx.svg_renderer();
+    let svg_bytes = svg_source.as_ref().as_bytes().to_vec();
+    let background =
+      cx.background_spawn(
+        async move { renderer.render_single_frame(svg_bytes.as_slice(), 1.0, true) },
+      );
+
+    let task = cx.spawn_in(window, async move |this, cx| {
+      let result = background.await;
+      let _ = this.update_in(cx, |this, window, cx| {
+        if let Some(Ok(image)) = this.svg_preview.take() {
+          let _ = window.drop_image(image);
+        }
+        this.svg_preview = Some(result.map_err(|err| err.to_string().into()));
+        cx.notify();
+      });
+    });
+
+    self.svg_preview_task = Some(task);
+  }
+
+  fn show_file_search_action(
+    &mut self,
+    _: &ShowFileSearch,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix != 1 {
+      return;
+    }
+
+    self.open_code_file_search_palette(window, cx);
+  }
+
+  fn open_code_file_search_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.code_lookup.is_empty() {
+      return;
+    }
+
+    let mut entries = self
+      .code_lookup
+      .values()
+      .map(|file| {
+        let path = PathBuf::from(file.path.as_ref());
+        let label = file.path.as_ref().replace(['\n', '\r'], "");
+        SearchFileEntry::new(path, label)
+      })
+      .collect::<Vec<_>>();
+    entries.sort_by(|a, b| a.label.cmp(&b.label));
+
+    let view = cx.entity();
+    let handler: SearchFileHandler = Arc::new(move |path, window, cx| {
+      view.update(cx, |view, cx| {
+        view.select_code_file_from_palette(&path, cx);
+      });
+
+      let view_for_focus = view.clone();
+      window.on_next_frame(move |window, cx| {
+        let focus_handle = view_for_focus
+          .read(cx)
+          .code_editor
+          .read(cx)
+          .focus_handle(cx);
+        window.focus(&focus_handle, cx);
+      });
+
+      Ok(())
+    });
+
+    let palette = cx
+      .new(|cx| SearchFilePalette::new(window, cx, SearchFilePaletteConfig::new(entries, handler)));
+    let palette_for_dialog = palette.clone();
+
+    window.open_dialog(cx, move |dialog, _, _| {
+      dialog
+        .p_0()
+        .border_0()
+        .min_h_0()
+        .overlay_closable(true)
+        .keyboard(true)
+        .close_button(false)
+        .child(palette_for_dialog.clone())
+    });
+  }
+
+  fn select_code_file_from_palette(&mut self, path: &Path, cx: &mut Context<Self>) {
+    let key = path.to_string_lossy().to_string();
+    let Some(file) = self.code_lookup.get(&key).cloned() else {
+      return;
+    };
+
+    let tree_item = TreeItem::new(key.clone(), key.clone());
+    self.code_tree_state.update(cx, |state, cx| {
+      state.set_selected_item(Some(&tree_item), cx);
+      if let Some(ix) = state.selected_index() {
+        state.scroll_to_item(ix, gpui::ScrollStrategy::Top);
+      }
+    });
+
+    self.set_selected_code_file(Some(file), cx);
+  }
+
+  fn ensure_code_editor_for_path(&mut self, path: &str, cx: &mut Context<Self>) {
+    let desired_path = PathBuf::from(path);
+    let mut current_path = None;
+    self.code_editor.update(cx, |editor, _| {
+      current_path = Some(editor.workdir_path.clone());
+    });
+    if current_path.as_ref() == Some(&desired_path) {
+      return;
+    }
+
+    let repo_root = PathBuf::from(".");
+    let desired_path_for_editor = desired_path.clone();
+    self.code_editor = cx.new(|cx| {
+      let mut editor = Editor::new_with_paths(repo_root, desired_path_for_editor, cx);
+      editor.is_read_only = true;
+      editor
+    });
+  }
+
+  fn clear_code_editor(&mut self, cx: &mut Context<Self>) {
+    self.code_editor.update(cx, |editor, cx| {
+      editor.document().update(cx, |doc, cx| {
+        doc.replace_all("", cx);
+      });
+      editor.reset_after_replace();
+      editor.reset_selection(cx);
+      editor.set_diffs(None, cx);
+      editor.is_read_only = true;
+    });
+  }
+
+  fn apply_code_editor_content(&mut self, content: &str, cx: &mut Context<Self>) {
+    self.code_editor.update(cx, |editor, cx| {
+      editor.document().update(cx, |doc, cx| {
+        doc.replace_all(content, cx);
+      });
+      editor.reset_after_replace();
+      editor.reset_selection(cx);
+      editor.set_diffs(None, cx);
+      editor.is_read_only = true;
+    });
+    self.code_file_loading = false;
+  }
+
+  fn sync_code_tree_selection(&mut self, cx: &mut Context<Self>) {
+    let Some(file) = self.code_selected_file.as_ref() else {
+      return;
+    };
+
+    let key = file.path.as_ref().to_string();
+    let tree_item = TreeItem::new(key.clone(), key.clone());
+    self.code_tree_state.update(cx, |state, cx| {
+      state.set_selected_item(Some(&tree_item), cx);
+      if let Some(ix) = state.selected_index() {
+        state.scroll_to_item(ix, gpui::ScrollStrategy::Top);
+      }
+    });
+  }
+
   fn try_open_pending_issue_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let Some(issue_number) = self.pending_issue_sheet_number else {
       return;
     };
-    if self.active_tab_ix != 2 {
+    if self.active_tab_ix != 3 {
       return;
     }
 
@@ -1584,6 +2256,7 @@ impl GithubRepoPage {
     self.repository = None;
     self.repository_loading = true;
     self.repository_error = None;
+    self.reset_code_state(cx);
 
     self.pull_requests_error = None;
     self.pull_requests.update(cx, |state, cx| {
@@ -1613,6 +2286,7 @@ impl GithubRepoPage {
           Ok(repository) => {
             this.repository = Some(repository);
             this.repository_error = None;
+            this.load_code_tree_if_needed(cx);
           }
           Err(error) => {
             let message = error.to_string();
@@ -1936,6 +2610,7 @@ impl GithubRepoPage {
         this.set_active_tab(*ix, window, cx);
       }))
       .child(Tab::new().label("Overview"))
+      .child(Tab::new().label("Code"))
       .child(Tab::new().label("Pull Requests"))
       .child(Tab::new().label("Issues"));
 
@@ -2143,6 +2818,374 @@ impl GithubRepoPage {
     )
   }
 
+  fn render_code_files_sidebar(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let count = self.code_lookup.len();
+
+    if let Some(selected_id) = self
+      .code_tree_state
+      .read(cx)
+      .selected_entry()
+      .map(|entry| entry.item().id.to_string())
+      && Some(selected_id.as_str()) != self.code_selected_tree_id.as_deref()
+      && let Some(file) = self.code_lookup.get(&selected_id).cloned()
+    {
+      self.code_selected_tree_id = Some(selected_id.clone());
+      cx.on_next_frame(window, move |this, _, cx| {
+        this.set_selected_code_file(Some(file), cx);
+      });
+    }
+
+    let header = div()
+      .px_3()
+      .flex()
+      .items_center()
+      .h(px(CODE_HEADER_HEIGHT))
+      .border_b_1()
+      .border_color(theme.border)
+      .child(
+        h_flex()
+          .items_center()
+          .w_full()
+          .justify_between()
+          .child(div().text_sm().text_color(theme.foreground).child("Files"))
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(count.to_string()),
+          ),
+      );
+
+    let list = if self.code_files_loading {
+      v_flex()
+        .flex_1()
+        .h_full()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(Spinner::new().small())
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading files..."),
+        )
+        .into_any_element()
+    } else if self.code_files_error.is_some() {
+      v_flex()
+        .flex_1()
+        .h_full()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(theme.status_red())
+        .child(self.code_files_error.clone().unwrap_or_default())
+        .into_any_element()
+    } else if count == 0 {
+      v_flex()
+        .flex_1()
+        .h_full()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child("No files found")
+        .into_any_element()
+    } else {
+      let view = cx.entity();
+      tree(
+        &self.code_tree_state,
+        move |ix, entry, _selected, _window, cx| {
+          view.update(cx, |this, cx| {
+            let theme = cx.theme().clone();
+            let item = entry.item();
+            let is_folder = entry.is_folder();
+            let icon = if is_folder {
+              if entry.is_expanded() {
+                Icon::new(IconName::FolderOpen)
+              } else {
+                Icon::new(IconName::Folder)
+              }
+              .size_3()
+              .text_color(theme.muted_foreground)
+              .into_any_element()
+            } else {
+              file_icon_path_for_name_with_theme(item.label.as_ref(), &theme)
+                .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
+                .unwrap_or_else(|| {
+                  Icon::new(IconName::File)
+                    .size_3()
+                    .text_color(theme.muted_foreground)
+                    .into_any_element()
+                })
+            };
+
+            let indent = px(12.) + px(15.) * entry.depth();
+            let mut row = ListItem::new(ix)
+              .w_full()
+              .rounded(theme.radius)
+              .px_2()
+              .pl(indent)
+              .child(
+                h_flex().items_center().gap_2().child(icon).child(
+                  div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .text_ellipsis_start()
+                    .child(item.label.clone()),
+                ),
+              );
+
+            if !is_folder && this.code_lookup.contains_key(item.id.as_ref()) {
+              let id = item.id.clone();
+              row = row.on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(file) = this.code_lookup.get(id.as_ref()).cloned() {
+                  this.set_selected_code_file(Some(file), cx);
+                }
+              }));
+            }
+
+            row
+          })
+        },
+      )
+      .flex_1()
+      .w_full()
+      .into_any_element()
+    };
+
+    v_flex()
+      .bg(theme.sidebar)
+      .size_full()
+      .child(header)
+      .child(div().flex_1().min_h_0().child(list))
+  }
+
+  fn render_code_header(
+    &self,
+    file: &GithubRepoCodeFile,
+    cx: &mut Context<Self>,
+  ) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let path = file.path.as_ref();
+    let file_name = path.rsplit('/').next().unwrap_or(path).to_string();
+    let dir_path = path
+      .rsplit_once('/')
+      .map(|(dir, _)| dir.to_string())
+      .unwrap_or_default();
+    let icon = file_icon_path_for_name_with_theme(&file_name, &theme)
+      .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
+      .unwrap_or_else(|| {
+        Icon::new(IconName::File)
+          .size_3()
+          .text_color(theme.muted_foreground)
+          .into_any_element()
+      });
+    let is_markdown = Self::is_markdown_path(Path::new(path));
+    let is_svg = Self::is_svg_path(Path::new(path));
+    let preview_active = (is_markdown || is_svg) && self.show_markdown_preview;
+    let view = cx.entity();
+    let preview_button = Button::new("repo-code-markdown-preview")
+      .label("Preview")
+      .icon(if preview_active {
+        IconName::EyeOff
+      } else {
+        IconName::Eye
+      })
+      .xsmall()
+      .ghost()
+      .selected(preview_active)
+      .disabled(self.code_file_loading)
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.toggle_code_markdown_preview(cx);
+        });
+      });
+
+    div()
+      .h(px(CODE_HEADER_HEIGHT))
+      .bg(theme.sidebar)
+      .px_3()
+      .flex()
+      .items_center()
+      .justify_between()
+      .border_b_1()
+      .border_color(theme.border)
+      .child(h_flex().items_center().gap_2().child(icon).child({
+        let mut label = Label::new(file_name);
+        if !dir_path.is_empty() {
+          label = label.secondary(format!("- {}", dir_path));
+        }
+        label.truncate()
+      }))
+      .child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(file.sha.clone()),
+          )
+          .when(is_markdown || is_svg, |this| this.child(preview_button)),
+      )
+  }
+
+  fn render_code(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let is_markdown = self.selected_code_file_is_markdown();
+    let is_svg = self.selected_code_file_is_svg();
+    let preview_active = self.show_markdown_preview && (is_markdown || is_svg);
+
+    let editor_content: gpui::AnyElement = if self.code_files_loading {
+      v_flex()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(Spinner::new().small())
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading files..."),
+        )
+        .into_any_element()
+    } else if self.code_file_loading {
+      v_flex()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(Spinner::new().small())
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading file contents..."),
+        )
+        .into_any_element()
+    } else if self.code_file_error.is_some() {
+      v_flex()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(theme.status_red())
+        .child(self.code_file_error.clone().unwrap_or_default())
+        .into_any_element()
+    } else if self.code_files_error.is_some() {
+      v_flex()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(theme.status_red())
+        .child(self.code_files_error.clone().unwrap_or_default())
+        .into_any_element()
+    } else if self.code_selected_file.is_some() {
+      if preview_active {
+        let preview_panel = if is_svg {
+          self.update_code_svg_preview(window, cx);
+          let preview = match self.svg_preview.clone() {
+            Some(Ok(image)) => img(image).max_w_full().max_h_full().into_any_element(),
+            Some(Err(error)) => div()
+              .text_sm()
+              .text_color(theme.status_red())
+              .child(error)
+              .into_any_element(),
+            None => div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child("Rendering SVG preview...")
+              .into_any_element(),
+          };
+          div()
+            .flex_1()
+            .min_h_0()
+            .min_w(px(0.0))
+            .bg(theme.background)
+            .child(
+              div()
+                .flex_1()
+                .min_h_0()
+                .min_w(px(0.0))
+                .p_4()
+                .items_center()
+                .justify_center()
+                .child(preview),
+            )
+            .into_any_element()
+        } else {
+          let markdown = self.code_editor.read(cx).document().read(cx);
+          let markdown = markdown.slice_to_string(0..markdown.len());
+          div()
+            .flex_1()
+            .min_h_0()
+            .min_w(px(0.0))
+            .bg(theme.background)
+            .child(
+              div().size_full().pb_4().px_4().child(
+                TextView::markdown("github-repo-code-markdown-preview-text", markdown)
+                  .size_full()
+                  .selectable(true)
+                  .scrollable(true),
+              ),
+            )
+            .into_any_element()
+        };
+        div()
+          .flex_1()
+          .min_h_0()
+          .child(
+            h_resizable("github-repo-code-markdown-preview")
+              .child(resizable_panel().child(self.code_editor.clone()))
+              .child(resizable_panel().child(preview_panel)),
+          )
+          .into_any_element()
+      } else {
+        div()
+          .flex_1()
+          .min_h_0()
+          .child(self.code_editor.clone())
+          .into_any_element()
+      }
+    } else {
+      v_flex()
+        .flex_1()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child("Select a file to view code")
+        .into_any_element()
+    };
+
+    let editor_panel = v_flex()
+      .size_full()
+      .overflow_hidden()
+      .when_some(self.code_selected_file.as_ref(), |this, file| {
+        this.child(self.render_code_header(file, cx))
+      })
+      .child(editor_content);
+
+    h_resizable("github-repo-code")
+      .child(
+        resizable_panel()
+          .size(px(CODE_SIDEBAR_DEFAULT_WIDTH))
+          .size_range(px(CODE_SIDEBAR_MIN_WIDTH)..px(CODE_SIDEBAR_MAX_WIDTH))
+          .child(self.render_code_files_sidebar(window, cx)),
+      )
+      .child(resizable_panel().child(editor_panel))
+  }
+
   fn render_pull_requests(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
@@ -2207,7 +3250,8 @@ impl Render for GithubRepoPage {
 
     let content = match self.active_tab_ix {
       0 => self.render_overview(cx).into_any_element(),
-      1 => self.render_pull_requests(cx).into_any_element(),
+      1 => self.render_code(window, cx).into_any_element(),
+      2 => self.render_pull_requests(cx).into_any_element(),
       _ => self.render_issues(cx).into_any_element(),
     };
 
@@ -2218,6 +3262,7 @@ impl Render for GithubRepoPage {
       .bg(theme.background)
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GithubRepoPage::show_command_palette_action))
+      .on_action(cx.listener(GithubRepoPage::show_file_search_action))
       .child(self.render_header(cx))
       .child(v_flex().w_full().h_full().min_h_0().child(content))
   }
@@ -2232,7 +3277,7 @@ impl Focusable for GithubRepoPage {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::api::{GithubIssueDetailsComment, GithubRepository};
+  use crate::api::{GithubIssueDetailsComment, GithubRepository, GithubRepositoryTreeEntry};
 
   fn test_issue_details_with_code_links() -> GithubIssueDetails {
     GithubIssueDetails {
@@ -2330,6 +3375,125 @@ mod tests {
   }
 
   #[test]
+  fn github_repo_open_target_tab_ix_accounts_for_code_tab_order() {
+    assert_eq!(GithubRepoOpenTarget::Overview.tab_ix(), 0);
+    assert_eq!(GithubRepoOpenTarget::PullRequests.tab_ix(), 2);
+    assert_eq!(
+      GithubRepoOpenTarget::Issues {
+        issue_number: None,
+        issue_comment_id: None,
+      }
+      .tab_ix(),
+      3
+    );
+  }
+
+  #[test]
+  fn build_repo_code_tree_items_prefers_folder_and_selects_first_file() {
+    let files = vec![
+      Rc::new(GithubRepoCodeFile {
+        path: "README.md".into(),
+        sha: "sha-readme".into(),
+      }),
+      Rc::new(GithubRepoCodeFile {
+        path: "src/lib.rs".into(),
+        sha: "sha-lib".into(),
+      }),
+      Rc::new(GithubRepoCodeFile {
+        path: "src/main.rs".into(),
+        sha: "sha-main".into(),
+      }),
+    ];
+
+    let (items, lookup, selected_index, selected_id) = build_repo_code_tree_items(&files);
+
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].label.as_ref(), "src");
+    assert_eq!(items[0].children.len(), 2);
+    assert_eq!(items[0].children[0].label.as_ref(), "lib.rs");
+    assert_eq!(items[0].children[1].label.as_ref(), "main.rs");
+    assert_eq!(items[1].label.as_ref(), "README.md");
+    assert!(!items[0].is_expanded());
+
+    assert_eq!(selected_id.as_deref(), Some("src/lib.rs"));
+    assert_eq!(selected_index, Some(0));
+    assert!(lookup.contains_key("src/lib.rs"));
+    assert!(lookup.contains_key("README.md"));
+  }
+
+  #[test]
+  fn build_repo_code_tree_items_ignores_non_blob_entries() {
+    let tree_entries = vec![
+      GithubRepositoryTreeEntry {
+        path: "src".to_string(),
+        mode: "040000".to_string(),
+        entry_type: "tree".to_string(),
+        sha: "sha-src-tree".to_string(),
+        size: None,
+        url: "https://example.com/src".to_string(),
+      },
+      GithubRepositoryTreeEntry {
+        path: "src/lib.rs".to_string(),
+        mode: "100644".to_string(),
+        entry_type: "blob".to_string(),
+        sha: "sha-lib".to_string(),
+        size: Some(12),
+        url: "https://example.com/src/lib.rs".to_string(),
+      },
+      GithubRepositoryTreeEntry {
+        path: "bin".to_string(),
+        mode: "160000".to_string(),
+        entry_type: "commit".to_string(),
+        sha: "sha-submodule".to_string(),
+        size: None,
+        url: "https://example.com/bin".to_string(),
+      },
+    ];
+
+    let files: Vec<Rc<GithubRepoCodeFile>> = tree_entries
+      .into_iter()
+      .filter(|entry| entry.entry_type.eq_ignore_ascii_case("blob"))
+      .map(|entry| {
+        Rc::new(GithubRepoCodeFile {
+          path: entry.path.into(),
+          sha: entry.sha.into(),
+        })
+      })
+      .collect();
+
+    let (items, lookup, selected_index, selected_id) = build_repo_code_tree_items(&files);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].label.as_ref(), "src");
+    assert_eq!(items[0].children.len(), 1);
+    assert_eq!(items[0].children[0].label.as_ref(), "lib.rs");
+    assert!(!items[0].is_expanded());
+    assert_eq!(lookup.len(), 1);
+    assert!(lookup.contains_key("src/lib.rs"));
+    assert_eq!(selected_id.as_deref(), Some("src/lib.rs"));
+    assert_eq!(selected_index, Some(0));
+  }
+
+  #[test]
+  fn repo_code_preview_support_detects_markdown_paths() {
+    assert!(GithubRepoPage::is_markdown_path(Path::new("README.md")));
+    assert!(GithubRepoPage::is_markdown_path(Path::new(
+      "docs/guide.Markdown"
+    )));
+    assert!(GithubRepoPage::is_markdown_path(Path::new("post.MdX")));
+    assert!(!GithubRepoPage::is_markdown_path(Path::new("README")));
+    assert!(!GithubRepoPage::is_markdown_path(Path::new("image.svg")));
+  }
+
+  #[test]
+  fn repo_code_preview_support_detects_svg_paths() {
+    assert!(GithubRepoPage::is_svg_path(Path::new("icon.svg")));
+    assert!(GithubRepoPage::is_svg_path(Path::new("assets/ICON.SVG")));
+    assert!(!GithubRepoPage::is_svg_path(Path::new("icon.svgz")));
+    assert!(!GithubRepoPage::is_svg_path(Path::new("README.md")));
+    assert!(!GithubRepoPage::is_svg_path(Path::new("icon")));
+  }
+
+  #[test]
   fn issue_code_reference_requests_extracts_from_description_and_comments() {
     let issue = test_issue_details_with_code_links();
     let (description, comments) = issue_code_reference_requests(&issue);
@@ -2391,7 +3555,7 @@ mod tests {
 
   #[test]
   fn issue_details_sheet_width_is_increased_for_readability() {
-    assert_eq!(ISSUE_DETAILS_SHEET_WIDTH_PX, 760.0);
+    assert_eq!(ISSUE_DETAILS_SHEET_WIDTH_PX, 800.0);
   }
 
   #[test]

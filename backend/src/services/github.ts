@@ -47,6 +47,9 @@ export type GithubIssueDetailsParameters = Endpoints['GET /repos/{owner}/{repo}/
 export type GithubIssueDetailsCommentResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}/comments']['response']['data'][number]
 export type GithubIssueDetailsCommentParameters = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}/comments']['parameters']
 
+export type GithubRepositoryTreesResponse = Endpoints['GET /repos/{owner}/{repo}/git/trees/{tree_sha}']['response']['data']
+export type GithubRepositoryTreeParams = Endpoints['GET /repos/{owner}/{repo}/git/trees/{tree_sha}']['parameters']
+
 function githubAuthHeaders(token: string, extraHeaders?: Record<string, string>) {
   return {
     authorization: `Bearer ${token}`,
@@ -246,6 +249,17 @@ export async function fetchGithubRepositoryIssueComments(
   { token: string, params: GithubIssueDetailsCommentParameters },
 ) {
   const { data } = await request('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
+export async function fetchGithubRepositoryTree(
+  { token, params }:
+  { token: string, params: GithubRepositoryTreeParams },
+) {
+  const { data } = await request('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', {
     ...params,
     headers: githubAuthHeaders(token),
   })

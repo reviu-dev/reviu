@@ -20,7 +20,7 @@ const EXTENSIONS_XML: &[&str] = &[
 ];
 const EXTENSIONS_PYTHON: &[&str] = &["py", "pyi", "pyw"];
 const EXTENSIONS_RUST: &[&str] = &["rs"];
-const EXTENSIONS_TYPESCRIPT: &[&str] = &["ts", "tsx", "js", "jsx"];
+const EXTENSIONS_TYPESCRIPT: &[&str] = &["ts", "cts", "mts", "tsx", "js", "cjs", "mjs", "jsx"];
 const EXTENSIONS_YAML: &[&str] = &["yml", "yaml"];
 const EXTENSIONS_JSON: &[&str] = &["json", "jsonc"];
 const EXTENSIONS_CSS: &[&str] = &["css"];
@@ -28,7 +28,7 @@ const EXTENSIONS_SCSS: &[&str] = &["scss"];
 const EXTENSIONS_TOML: &[&str] = &["toml"];
 const EXTENSIONS_DOCKERFILE: &[&str] = &["dockerfile"];
 const EXTENSIONS_HTML: &[&str] = &["html", "htm"];
-const EXTENSIONS_MARKDOWN: &[&str] = &["md", "markdown"];
+const EXTENSIONS_MARKDOWN: &[&str] = &["md", "markdown", "mdx"];
 const EXTENSIONS_VUE: &[&str] = &["vue"];
 
 pub fn detect_language_config(extension: &str) -> Option<&'static LanguageConfig> {
