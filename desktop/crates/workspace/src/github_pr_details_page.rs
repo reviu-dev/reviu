@@ -369,6 +369,22 @@ enum GithubPrBackTarget {
   },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct GithubPrOpenTarget {
+  open_changes_tab: bool,
+  review_comment_id: Option<u64>,
+}
+
+impl GithubPrOpenTarget {
+  fn tab_ix(self) -> usize {
+    if self.open_changes_tab || self.review_comment_id.is_some() {
+      1
+    } else {
+      0
+    }
+  }
+}
+
 fn resolve_pr_back_target(owner: SharedString, repo: SharedString) -> GithubPrBackTarget {
   if owner.as_ref().trim().is_empty() || repo.as_ref().trim().is_empty() {
     GithubPrBackTarget::GithubHome
@@ -399,7 +415,35 @@ impl GithubPrDetailsPageHandle {
   }
 
   pub fn show(owner: SharedString, repo: SharedString, number: u64, cx: &mut App) {
-    Self::show_with_back_target(owner, repo, number, GithubPrBackTarget::GithubHome, cx);
+    Self::show_with_back_target_and_open_target(
+      owner,
+      repo,
+      number,
+      GithubPrBackTarget::GithubHome,
+      GithubPrOpenTarget::default(),
+      cx,
+    );
+  }
+
+  pub fn show_with_open_target(
+    owner: SharedString,
+    repo: SharedString,
+    number: u64,
+    open_changes_tab: bool,
+    review_comment_id: Option<u64>,
+    cx: &mut App,
+  ) {
+    Self::show_with_back_target_and_open_target(
+      owner,
+      repo,
+      number,
+      GithubPrBackTarget::GithubHome,
+      GithubPrOpenTarget {
+        open_changes_tab,
+        review_comment_id,
+      },
+      cx,
+    );
   }
 
   pub fn show_with_repo_return(
@@ -410,20 +454,45 @@ impl GithubPrDetailsPageHandle {
     return_repo: SharedString,
     cx: &mut App,
   ) {
-    Self::show_with_back_target(
+    Self::show_with_back_target_and_open_target(
       owner,
       repo,
       number,
       resolve_pr_back_target(return_owner, return_repo),
+      GithubPrOpenTarget::default(),
       cx,
     );
   }
 
-  fn show_with_back_target(
+  pub fn show_with_repo_return_open_target(
+    owner: SharedString,
+    repo: SharedString,
+    number: u64,
+    return_owner: SharedString,
+    return_repo: SharedString,
+    open_changes_tab: bool,
+    review_comment_id: Option<u64>,
+    cx: &mut App,
+  ) {
+    Self::show_with_back_target_and_open_target(
+      owner,
+      repo,
+      number,
+      resolve_pr_back_target(return_owner, return_repo),
+      GithubPrOpenTarget {
+        open_changes_tab,
+        review_comment_id,
+      },
+      cx,
+    );
+  }
+
+  fn show_with_back_target_and_open_target(
     owner: SharedString,
     repo: SharedString,
     number: u64,
     back_target: GithubPrBackTarget,
+    open_target: GithubPrOpenTarget,
     cx: &mut App,
   ) {
     if !AuthStateStore::has_active_subscription(cx) {
@@ -439,9 +508,10 @@ impl GithubPrDetailsPageHandle {
     let owner_string = owner.to_string();
     let repo_string = repo.to_string();
     let back_target_value = back_target.clone();
+    let open_target_value = open_target;
     let _ = weak.update(cx, |this, cx| {
       this.back_target = back_target_value.clone();
-      this.load_pull_request(owner_string, repo_string, number, cx);
+      this.load_pull_request(owner_string, repo_string, number, open_target_value, cx);
     });
 
     WorkspaceRoute::global_mut(cx).page = WorkspacePage::GithubPrDetails;
@@ -1624,9 +1694,10 @@ impl GithubPrDetailsPage {
     owner: String,
     repo: String,
     number: u64,
+    open_target: GithubPrOpenTarget,
     cx: &mut Context<Self>,
   ) {
-    self.active_tab_ix = 0;
+    self.active_tab_ix = open_target.tab_ix();
     self.current_pr_context = Some(CurrentPrContext {
       owner: owner.clone(),
       repo: repo.clone(),
@@ -1643,7 +1714,7 @@ impl GithubPrDetailsPage {
     self.review_comments.clear();
     self.review_comment_code_reference_cache.clear();
     self.review_comment_code_reference_tasks.clear();
-    self.pending_review_comment_link_comment_id = None;
+    self.pending_review_comment_link_comment_id = open_target.review_comment_id;
     self.file_loading = false;
     self.file_error = None;
     self.tree_state.update(cx, |state, cx| {
@@ -2604,6 +2675,8 @@ impl GithubPrDetailsPage {
         owner,
         repo,
         number,
+        open_changes_tab,
+        review_comment_id,
       } => {
         if !AuthStateStore::has_active_subscription(cx) {
           WorkspaceRoute::open_billing(cx);
@@ -2612,7 +2685,16 @@ impl GithubPrDetailsPage {
         }
 
         self.back_target = next_back_target_for_pr_palette(&self.back_target);
-        self.load_pull_request(owner, repo, number, cx);
+        self.load_pull_request(
+          owner,
+          repo,
+          number,
+          GithubPrOpenTarget {
+            open_changes_tab,
+            review_comment_id,
+          },
+          cx,
+        );
         WorkspaceRoute::global_mut(cx).page = WorkspacePage::GithubPrDetails;
         cx.refresh_windows();
         Ok(())
@@ -2622,13 +2704,20 @@ impl GithubPrDetailsPage {
         repo,
         tab,
         issue_number,
+        issue_comment_id,
       } => {
         match tab {
           Some(CommandPaletteGithubRepoTab::PullRequests) => {
             GithubRepoPageHandle::show_pull_requests(owner.into(), repo.into(), cx);
           }
           Some(CommandPaletteGithubRepoTab::Issues) => {
-            GithubRepoPageHandle::show_issues(owner.into(), repo.into(), issue_number, cx);
+            GithubRepoPageHandle::show_issues(
+              owner.into(),
+              repo.into(),
+              issue_number,
+              issue_comment_id,
+              cx,
+            );
           }
           Some(CommandPaletteGithubRepoTab::Overview) | None => {
             GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
@@ -3198,6 +3287,22 @@ mod tests {
         repo: "widget".into(),
       }
     );
+  }
+
+  #[test]
+  fn github_pr_open_target_defaults_to_overview_tab() {
+    let target = GithubPrOpenTarget::default();
+    assert_eq!(target.tab_ix(), 0);
+    assert_eq!(target.review_comment_id, None);
+  }
+
+  #[test]
+  fn github_pr_open_target_routes_review_comment_links_to_changes_tab() {
+    let target = GithubPrOpenTarget {
+      open_changes_tab: false,
+      review_comment_id: Some(42),
+    };
+    assert_eq!(target.tab_ix(), 1);
   }
 
   #[test]
