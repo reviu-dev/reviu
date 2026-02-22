@@ -76,6 +76,10 @@ fn pr_description_scope_id(pr_number: u64) -> usize {
   (pr_number as usize).wrapping_mul(1_000_003).wrapping_add(1)
 }
 
+fn github_repo_label(owner: &str, repo: &str) -> String {
+  format!("{owner}/{repo}")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GithubPrFileStatus {
   Added,
@@ -2088,11 +2092,13 @@ impl GithubPrDetailsPage {
     cx: &mut Context<Self>,
   ) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let repo_label = format!("{}/{}", pr.repository.owner, pr.repository.repo);
+    let repo_label = github_repo_label(&pr.repository.owner, &pr.repository.repo);
     let pr_url = format!(
       "https://github.com/{}/{}/pull/{}",
       pr.repository.owner, pr.repository.repo, pr.number
     );
+    let repo_owner = pr.repository.owner.clone();
+    let repo_name = pr.repository.repo.clone();
     let updated_at = format_long_date(&pr.updated_at);
     let created_at = format_long_date(&pr.created_at);
     let merged_at = pr.merged_at.as_deref().map(format_long_date);
@@ -2189,7 +2195,16 @@ impl GithubPrDetailsPage {
                   .child(pr.author.login.clone()),
               ),
           )
-          .child(repo_label)
+          .child(
+            Button::new("open-pr-repo-details")
+              .ghost()
+              .small()
+              .compact()
+              .label(repo_label)
+              .on_click(move |_, _, cx| {
+                GithubRepoPageHandle::show(repo_owner.clone().into(), repo_name.clone().into(), cx);
+              }),
+          )
           .child(
             Button::new("open-pr-on-github")
               .icon(IconName::ExternalLink)
@@ -3147,6 +3162,11 @@ mod tests {
       "February 15, 2026"
     );
     assert_eq!(format_long_date("2026-02-15").as_ref(), "2026-02-15");
+  }
+
+  #[test]
+  fn github_repo_label_formats_owner_and_repo() {
+    assert_eq!(github_repo_label("acme", "widget"), "acme/widget");
   }
 
   #[test]
