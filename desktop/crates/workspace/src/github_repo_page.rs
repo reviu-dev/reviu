@@ -355,6 +355,20 @@ fn should_apply_issue_request_result(request_generation: u64, task_generation: u
   request_generation == task_generation
 }
 
+fn should_keep_issue_sheet_open_for_repo_target(
+  current_owner: &str,
+  current_repo: &str,
+  owner: &str,
+  repo: &str,
+  tab: Option<CommandPaletteGithubRepoTab>,
+  issue_number: Option<u64>,
+) -> bool {
+  current_owner.eq_ignore_ascii_case(owner)
+    && current_repo.eq_ignore_ascii_case(repo)
+    && tab == Some(CommandPaletteGithubRepoTab::Issues)
+    && issue_number.is_some()
+}
+
 #[derive(Clone, Debug)]
 struct GithubRepoPullRequestRow {
   pr: Rc<GithubPullRequest>,
@@ -931,10 +945,14 @@ impl GithubIssueDetailsSheetView {
         issue_number,
         issue_comment_id,
       } => {
-        let same_repo = self.owner.eq_ignore_ascii_case(&owner) && self.repo.eq_ignore_ascii_case(&repo);
-        if same_repo
-          && tab == Some(CommandPaletteGithubRepoTab::Issues)
-          && let Some(issue_number) = issue_number
+        if should_keep_issue_sheet_open_for_repo_target(
+          self.owner.as_str(),
+          self.repo.as_str(),
+          &owner,
+          &repo,
+          tab,
+          issue_number,
+        ) && let Some(issue_number) = issue_number
         {
           match same_repo_issue_link_navigation(self.issue_number, issue_number, issue_comment_id) {
             SameRepoIssueLinkNavigation::Noop => {
@@ -958,6 +976,7 @@ impl GithubIssueDetailsSheetView {
           }
         }
 
+        window.close_sheet(cx);
         open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
         true
       }
@@ -968,6 +987,7 @@ impl GithubIssueDetailsSheetView {
         open_changes_tab: _,
         review_comment_id,
       } => {
+        window.close_sheet(cx);
         open_pr_target(
           owner,
           repo,
@@ -2342,6 +2362,46 @@ mod tests {
   fn should_apply_issue_request_result_matches_generation() {
     assert!(should_apply_issue_request_result(4, 4));
     assert!(!should_apply_issue_request_result(5, 4));
+  }
+
+  #[test]
+  fn issue_sheet_keeps_open_for_same_repo_issue_targets_with_issue_number() {
+    assert!(should_keep_issue_sheet_open_for_repo_target(
+      "acme",
+      "widget",
+      "acme",
+      "widget",
+      Some(CommandPaletteGithubRepoTab::Issues),
+      Some(42),
+    ));
+  }
+
+  #[test]
+  fn issue_sheet_closes_for_cross_page_repo_targets() {
+    assert!(!should_keep_issue_sheet_open_for_repo_target(
+      "acme",
+      "widget",
+      "acme",
+      "widget",
+      Some(CommandPaletteGithubRepoTab::Overview),
+      None,
+    ));
+    assert!(!should_keep_issue_sheet_open_for_repo_target(
+      "acme",
+      "widget",
+      "acme",
+      "widget",
+      Some(CommandPaletteGithubRepoTab::Issues),
+      None,
+    ));
+    assert!(!should_keep_issue_sheet_open_for_repo_target(
+      "acme",
+      "widget",
+      "other",
+      "repo",
+      Some(CommandPaletteGithubRepoTab::Issues),
+      Some(42),
+    ));
   }
 
   #[test]
