@@ -48,6 +48,8 @@ use crate::{
   app_update::{AppUpdateNotificationId, AppUpdateStore, download_update_artifact, open_installer},
   auth_state::{AuthState, AuthStateStore},
   config::{ConfigStore, RecentRepository},
+  file_preview::{is_markdown_path, is_previewable_path, is_svg_path},
+  file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
   github_repo_page::GithubRepoPageHandle,
@@ -63,8 +65,8 @@ use ui::{
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteGithubRepoTab,
   CommandPaletteHandler, CommandPalettePage, CommandPaletteRepository, CommandPaletteStash,
   ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState, SearchFileEntry,
-  SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UiIconName,
-  UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
+  SearchFileHandler, StatusThemeExt, UiIconName, UserMenuConfig, UserMenuPage, UserMenuState,
+  UserMenuUser, WindowExt,
   file_icon_path_for_path_with_theme, user_menu,
 };
 
@@ -631,7 +633,7 @@ impl GitPage {
       && self
         .selected_file
         .as_ref()
-        .is_some_and(|path| Self::is_markdown_path(path) || Self::is_svg_path(path))
+        .is_some_and(|path| is_previewable_path(path))
     {
       "markdown_preview"
     } else {
@@ -1045,33 +1047,11 @@ impl GitPage {
     })
   }
 
-  fn is_markdown_path(path: &Path) -> bool {
-    matches!(
-      path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
-        .as_deref(),
-      Some("md" | "markdown" | "mdx")
-    )
-  }
-
-  fn is_svg_path(path: &Path) -> bool {
-    matches!(
-      path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
-        .as_deref(),
-      Some("svg")
-    )
-  }
-
   fn selected_file_is_markdown(&self) -> bool {
     self
       .selected_file
       .as_ref()
-      .map(|path| Self::is_markdown_path(path))
+      .map(|path| is_markdown_path(path))
       .unwrap_or(false)
   }
 
@@ -1079,12 +1059,12 @@ impl GitPage {
     self
       .selected_file
       .as_ref()
-      .map(|path| Self::is_svg_path(path))
+      .map(|path| is_svg_path(path))
       .unwrap_or(false)
   }
 
   fn effective_diff_view_for_path(&self, path: &Path) -> DiffViewMode {
-    if self.show_markdown_preview && (Self::is_markdown_path(path) || Self::is_svg_path(path)) {
+    if self.show_markdown_preview && is_previewable_path(path) {
       return DiffViewMode::Inline;
     }
 
@@ -2550,21 +2530,7 @@ impl GitPage {
       });
       Ok(())
     });
-
-    let palette = cx
-      .new(|cx| SearchFilePalette::new(window, cx, SearchFilePaletteConfig::new(entries, handler)));
-    let palette_for_dialog = palette.clone();
-
-    window.open_dialog(cx, move |dialog, _, _| {
-      dialog
-        .p_0()
-        .border_0()
-        .min_h_0()
-        .overlay_closable(true)
-        .keyboard(true)
-        .close_button(false)
-        .child(palette_for_dialog.clone())
-    });
+    open_shared_file_search_palette(window, cx, entries, handler, false);
   }
 
   fn handle_command_palette_action(
@@ -3693,8 +3659,8 @@ impl GitPage {
     if self.selected_file.as_ref() == Some(&rel_path) && self.history_opened_commit_file.is_none() {
       return;
     }
-    let is_markdown = Self::is_markdown_path(&rel_path);
-    if !is_markdown && !Self::is_svg_path(&rel_path) {
+    let is_markdown = is_markdown_path(&rel_path);
+    if !is_markdown && !is_svg_path(&rel_path) {
       self.show_markdown_preview = false;
     }
 
@@ -3892,7 +3858,7 @@ impl GitPage {
   }
 
   fn clear_markdown_preview_if_not_previewable(&mut self, rel_path: &Path) {
-    if !Self::is_markdown_path(rel_path) && !Self::is_svg_path(rel_path) {
+    if !is_previewable_path(rel_path) {
       self.show_markdown_preview = false;
     }
   }

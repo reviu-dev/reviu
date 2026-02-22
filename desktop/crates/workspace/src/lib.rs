@@ -9,6 +9,8 @@ mod auth_state;
 mod billing_page;
 mod config;
 mod date_format;
+mod file_preview;
+mod file_search_palette;
 mod git_config_page;
 mod git_page;
 mod github_page;
