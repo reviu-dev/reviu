@@ -1358,9 +1358,9 @@ mod tests {
           "number": 7,
           "title": "Fix login issue",
           "state": "open",
-          "mergedAt": null,
+          "merged_at": null,
           "draft": false,
-          "updatedAt": "2026-02-15T12:00:00Z",
+          "updated_at": "2026-02-15T12:00:00Z",
           "labels": [{ "name": "bug" }],
           "repository": { "owner": "acme", "repo": "widget" }
         }
@@ -1435,9 +1435,9 @@ mod tests {
           "number": 11,
           "title": "Improve docs",
           "state": "open",
-          "mergedAt": null,
+          "merged_at": null,
           "draft": false,
-          "updatedAt": "2026-02-15T12:00:00Z",
+          "updated_at": "2026-02-15T12:00:00Z",
           "labels": [{ "name": "docs" }],
           "repository": { "owner": "acme", "repo": "widget" }
         }
@@ -1535,14 +1535,14 @@ mod tests {
           "title": "Fix flaky test in CI",
           "state": "closed",
           "state_reason": "completed",
-          "createdAt": "2026-02-15T10:00:00Z",
-          "updatedAt": "2026-02-18T11:30:00Z",
-          "closedAt": "2026-02-18T11:30:00Z",
+          "created_at": "2026-02-15T10:00:00Z",
+          "updated_at": "2026-02-18T11:30:00Z",
+          "closed_at": "2026-02-18T11:30:00Z",
           "labels": [{ "name": "bug" }],
           "user": {
             "login": "octocat",
             "name": "The Octocat",
-            "avatarUrl": "https://example.com/octocat.png"
+            "avatar_url": "https://example.com/octocat.png"
           },
           "repository": { "owner": "acme", "repo": "widget" }
         }
@@ -1581,27 +1581,27 @@ mod tests {
         "body": "Issue body",
         "state": "closed",
         "state_reason": "completed",
-        "createdAt": "2026-02-20T08:00:00Z",
-        "updatedAt": "2026-02-21T09:30:00Z",
-        "closedAt": "2026-02-21T09:30:00Z",
+        "created_at": "2026-02-20T08:00:00Z",
+        "updated_at": "2026-02-21T09:30:00Z",
+        "closed_at": "2026-02-21T09:30:00Z",
         "labels": [{ "name": "bug" }],
         "comments": [
           {
             "id": 9001,
             "body": "Looks good",
-            "createdAt": "2026-02-20T10:00:00Z",
-            "updatedAt": "2026-02-20T10:05:00Z",
+            "created_at": "2026-02-20T10:00:00Z",
+            "updated_at": "2026-02-20T10:05:00Z",
             "user": {
               "login": "octocat",
               "name": "The Octocat",
-              "avatarUrl": "https://example.com/octocat.png"
+              "avatar_url": "https://example.com/octocat.png"
             }
           }
         ],
         "user": {
           "login": "octocat",
           "name": "The Octocat",
-          "avatarUrl": "https://example.com/octocat.png"
+          "avatar_url": "https://example.com/octocat.png"
         },
         "repository": { "owner": "acme", "repo": "widget" }
       }
@@ -1651,25 +1651,25 @@ mod tests {
         "title": "Improve parser",
         "state": "open",
         "draft": false,
-        "createdAt": "2026-02-10T09:00:00Z",
-        "updatedAt": "2026-02-15T12:00:00Z",
-        "mergedAt": null,
-        "mergeBaseSha": "abc123",
-        "baseSha": "base123",
-        "headSha": "head123",
-        "baseRefName": "main",
-        "headRefName": "feature/parser",
+        "created_at": "2026-02-10T09:00:00Z",
+        "updated_at": "2026-02-15T12:00:00Z",
+        "merged_at": null,
+        "merge_base_sha": "abc123",
+        "base_sha": "base123",
+        "head_sha": "head123",
+        "base_ref_name": "main",
+        "head_ref_name": "feature/parser",
         "body": "PR body",
-        "author": { "login": "octocat", "avatarUrl": null },
+        "author": { "login": "octocat", "avatar_url": null },
         "comments": 2,
-        "reviewComments": 3,
+        "review_comments": 3,
         "commits": 4,
         "additions": 10,
         "deletions": 5,
-        "changedFiles": 2,
+        "changed_files": 2,
         "labels": [{ "name": "enhancement" }],
         "repository": { "owner": "acme", "repo": "widget" },
-        "headRepository": { "owner": "acme", "repo": "widget-fork" }
+        "head_repository": { "owner": "acme", "repo": "widget-fork" }
       }
     }"#;
     let (base_url, handle) = start_single_response_server("200 OK", body);
@@ -1728,23 +1728,23 @@ mod tests {
       "comments": [
         {
           "id": 1,
-          "pullRequestReviewId": 12,
-          "diffHunk": "@@ -1 +1 @@",
+          "pull_request_review_id": 12,
+          "diff_hunk": "@@ -1 +1 @@",
           "path": "src/main.rs",
           "position": 1,
-          "originalPosition": 1,
-          "commitId": "head123",
-          "originalCommitId": "base123",
-          "inReplyToId": null,
-          "user": { "login": "octocat", "avatarUrl": null },
+          "original_position": 1,
+          "commit_id": "head123",
+          "original_commit_id": "base123",
+          "in_reply_to_id": null,
+          "user": { "login": "octocat", "avatar_url": null },
           "body": "Looks good",
-          "createdAt": "2026-02-15T12:00:00Z",
-          "updatedAt": "2026-02-15T12:01:00Z",
-          "startLine": null,
-          "originalStartLine": null,
-          "startSide": null,
+          "created_at": "2026-02-15T12:00:00Z",
+          "updated_at": "2026-02-15T12:01:00Z",
+          "start_line": null,
+          "original_start_line": null,
+          "start_side": null,
           "line": 1,
-          "originalLine": 1,
+          "original_line": 1,
           "side": "RIGHT"
         }
       ]
@@ -1769,22 +1769,22 @@ mod tests {
       "comment": {
         "id": 1,
         "pullRequestReviewId": 12,
-        "diffHunk": "@@ -1 +1 @@",
+        "diff_hunk": "@@ -1 +1 @@",
         "path": "src/main.rs",
         "position": 1,
-        "originalPosition": 1,
-        "commitId": "head123",
-        "originalCommitId": "base123",
-        "inReplyToId": null,
-        "user": { "login": "octocat", "avatarUrl": null },
+        "original_position": 1,
+        "commit_id": "head123",
+        "original_commit_id": "base123",
+        "in_reply_to_id": null,
+        "user": { "login": "octocat", "avatar_url": null },
         "body": "Updated body",
-        "createdAt": "2026-02-15T12:00:00Z",
-        "updatedAt": "2026-02-16T12:01:00Z",
-        "startLine": null,
-        "originalStartLine": null,
-        "startSide": null,
+        "created_at": "2026-02-15T12:00:00Z",
+        "updated_at": "2026-02-16T12:01:00Z",
+        "start_line": null,
+        "original_start_line": null,
+        "start_side": null,
         "line": 1,
-        "originalLine": 1,
+        "original_line": 1,
         "side": "RIGHT"
       }
     }"#;
@@ -1805,23 +1805,23 @@ mod tests {
     let body = r#"{
       "comment": {
         "id": 2,
-        "pullRequestReviewId": 12,
-        "diffHunk": "@@ -1 +1 @@",
+        "pull_request_review_id": 12,
+        "diff_hunk": "@@ -1 +1 @@",
         "path": "src/main.rs",
         "position": 1,
-        "originalPosition": 1,
-        "commitId": "head123",
-        "originalCommitId": "base123",
-        "inReplyToId": null,
-        "user": { "login": "octocat", "avatarUrl": null },
+        "original_position": 1,
+        "commit_id": "head123",
+        "original_commit_id": "base123",
+        "in_reply_to_id": null,
+        "user": { "login": "octocat", "avatar_url": null },
         "body": "New comment body",
-        "createdAt": "2026-02-15T12:00:00Z",
-        "updatedAt": "2026-02-16T12:01:00Z",
-        "startLine": null,
-        "originalStartLine": null,
-        "startSide": null,
+        "created_at": "2026-02-15T12:00:00Z",
+        "updated_at": "2026-02-16T12:01:00Z",
+        "start_line": null,
+        "original_start_line": null,
+        "start_side": null,
         "line": 1,
-        "originalLine": 1,
+        "original_line": 1,
         "side": "RIGHT"
       }
     }"#;
@@ -1853,23 +1853,23 @@ mod tests {
     let body = r#"{
       "comment": {
         "id": 3,
-        "pullRequestReviewId": 12,
-        "diffHunk": "@@ -1 +1 @@",
+        "pull_request_review_id": 12,
+        "diff_hunk": "@@ -1 +1 @@",
         "path": "src/main.rs",
         "position": 1,
-        "originalPosition": 1,
-        "commitId": "head123",
-        "originalCommitId": "base123",
-        "inReplyToId": 2,
-        "user": { "login": "octocat", "avatarUrl": null },
+        "original_position": 1,
+        "commit_id": "head123",
+        "original_commit_id": "base123",
+        "in_reply_to_id": 2,
+        "user": { "login": "octocat", "avatar_url": null },
         "body": "Reply body",
-        "createdAt": "2026-02-15T12:00:00Z",
-        "updatedAt": "2026-02-16T12:01:00Z",
-        "startLine": null,
-        "originalStartLine": null,
-        "startSide": null,
+        "created_at": "2026-02-15T12:00:00Z",
+        "updated_at": "2026-02-16T12:01:00Z",
+        "start_line": null,
+        "original_start_line": null,
+        "start_side": null,
         "line": 1,
-        "originalLine": 1,
+        "original_line": 1,
         "side": "RIGHT"
       }
     }"#;
@@ -1890,23 +1890,23 @@ mod tests {
     let body = r#"{
       "comment": {
         "id": 3,
-        "pullRequestReviewId": 12,
-        "diffHunk": "@@ -1 +1 @@",
+        "pull_request_review_id": 12,
+        "diff_hunk": "@@ -1 +1 @@",
         "path": "src/main.rs",
         "position": 1,
-        "originalPosition": 1,
-        "commitId": "head123",
-        "originalCommitId": "base123",
-        "inReplyToId": 2,
-        "user": { "login": "octocat", "avatarUrl": null },
+        "original_position": 1,
+        "commit_id": "head123",
+        "original_commit_id": "base123",
+        "in_reply_to_id": 2,
+        "user": { "login": "octocat", "avatar_url": null },
         "body": "Reply body",
-        "createdAt": "2026-02-15T12:00:00Z",
-        "updatedAt": "2026-02-16T12:01:00Z",
-        "startLine": null,
-        "originalStartLine": null,
-        "startSide": null,
+        "created_at": "2026-02-15T12:00:00Z",
+        "updated_at": "2026-02-16T12:01:00Z",
+        "start_line": null,
+        "original_start_line": null,
+        "start_side": null,
         "line": 1,
-        "originalLine": 1,
+        "original_line": 1,
         "side": "RIGHT"
       }
     }"#;
@@ -1950,24 +1950,24 @@ mod tests {
           "id": "1",
           "repository": {
             "name": "widget",
-            "fullName": "acme/widget",
+            "full_name": "acme/widget",
             "owner": {
               "login": "acme",
-              "avatarUrl": "https://example.com/avatar.png"
+              "avatar_url": "https://example.com/avatar.png"
             }
           },
           "subject": {
             "title": "Review requested",
             "type": "PullRequest",
             "url": "https://api.github.test/subject/1",
-            "latestCommentUrl": null
+            "latest_comment_url": null
           },
           "reason": "review_requested",
           "unread": true,
-          "updatedAt": "2026-02-15T12:00:00Z",
-          "lastReadAt": null,
+          "updated_at": "2026-02-15T12:00:00Z",
+          "last_read_at": null,
           "url": "https://api.github.test/notif/1",
-          "subscriptionUrl": "https://api.github.test/sub/1"
+          "subscription_url": "https://api.github.test/sub/1"
         }
       ]
     }"#;

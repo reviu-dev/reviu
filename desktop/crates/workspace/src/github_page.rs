@@ -1244,8 +1244,8 @@ mod tests {
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
-    let pull_requests_body = r#"{"pullRequests":[{"number":42,"title":"Fix login","state":"open","mergedAt":null,"draft":false,"updatedAt":"2026-02-15T12:00:00Z","labels":[{"name":"bug"}],"repository":{"owner":"acme","repo":"portal"}}]}"#;
-    let notifications_body = r#"{"notifications":[{"id":"n1","repository":{"name":"portal","fullName":"acme/portal","owner":null},"subject":{"title":"Please review","type":"PullRequest","url":null,"latestCommentUrl":null},"reason":"mention","unread":true,"updatedAt":"2026-02-15T12:10:00Z","lastReadAt":null,"url":"https://api.github.test/notif/1","subscriptionUrl":"https://api.github.test/sub/1"}]}"#;
+    let pull_requests_body = r#"{"pullRequests":[{"number":42,"title":"Fix login","state":"open","merged_at":null,"draft":false,"updated_at":"2026-02-15T12:00:00Z","labels":[{"name":"bug"}],"repository":{"owner":"acme","repo":"portal"}}]}"#;
+    let notifications_body = r#"{"notifications":[{"id":"n1","repository":{"name":"portal","full_name":"acme/portal","owner":null},"subject":{"title":"Please review","type":"PullRequest","url":null,"latest_comment_url":null},"reason":"mention","unread":true,"updated_at":"2026-02-15T12:10:00Z","last_read_at":null,"url":"https://api.github.test/notif/1","subscription_url":"https://api.github.test/sub/1"}]}"#;
     let (base_url, handle) = start_path_response_server(vec![
       ("/github/pr/latest", "200 OK", pull_requests_body),
       ("/github/notifications", "200 OK", notifications_body),
