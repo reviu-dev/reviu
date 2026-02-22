@@ -62,11 +62,10 @@ use crate::{
 };
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
-  CommandPaletteCommand, CommandPaletteConfig, CommandPaletteGithubRepoTab,
-  CommandPaletteHandler, CommandPalettePage, CommandPaletteRepository, CommandPaletteStash,
-  ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState, SearchFileEntry,
-  SearchFileHandler, StatusThemeExt, UiIconName, UserMenuConfig, UserMenuPage, UserMenuState,
-  UserMenuUser, WindowExt,
+  CommandPaletteCommand, CommandPaletteConfig, CommandPaletteGithubRepoTab, CommandPaletteHandler,
+  CommandPalettePage, CommandPaletteRepository, CommandPaletteStash, ConfirmDialog,
+  FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState, SearchFileEntry, SearchFileHandler,
+  StatusThemeExt, UiIconName, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
   file_icon_path_for_path_with_theme, user_menu,
 };
 

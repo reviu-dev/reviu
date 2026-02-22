@@ -1314,7 +1314,8 @@ fn estimate_code_reference_preview_min_content_width_px(
       .unwrap_or(0)
   } as f32;
 
-  (widest_row_columns * MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX + MARKDOWN_CODE_REFERENCE_ROW_GAP_PX)
+  (widest_row_columns * MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX
+    + MARKDOWN_CODE_REFERENCE_ROW_GAP_PX)
     .ceil()
 }
 
@@ -2269,7 +2270,8 @@ fn estimate_code_block_min_content_width_px(text: &str) -> f32 {
     .map(|line| line.chars().count())
     .max()
     .unwrap_or(0) as f32;
-  let chrome_width_px = MARKDOWN_CODE_BLOCK_PADDING_X_PX * 2.0 + MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX;
+  let chrome_width_px =
+    MARKDOWN_CODE_BLOCK_PADDING_X_PX * 2.0 + MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX;
   (widest_line_columns * MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX + chrome_width_px).ceil()
 }
 
@@ -4120,33 +4122,30 @@ Apres"#,
 
   #[test]
   fn estimate_code_reference_preview_min_content_width_px_uses_widest_row() {
-    let mut preview = test_preview_for_url(
-      "https://github.com/acme/widget/blob/main/docker-compose.yml#L7-L9",
-    );
+    let mut preview =
+      test_preview_for_url("https://github.com/acme/widget/blob/main/docker-compose.yml#L7-L9");
     preview.start_line = 7;
     preview.snippets = vec![Arc::from("abc"), Arc::from("abcdefgh")];
 
     let width = estimate_code_reference_preview_min_content_width_px(&preview);
     let expected_columns = 1 + 2 + 8;
-    let expected =
-      (expected_columns as f32 * MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX + MARKDOWN_CODE_REFERENCE_ROW_GAP_PX)
-        .ceil();
+    let expected = (expected_columns as f32 * MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX
+      + MARKDOWN_CODE_REFERENCE_ROW_GAP_PX)
+      .ceil();
 
     assert_eq!(width, expected);
   }
 
   #[test]
   fn estimate_code_reference_preview_min_content_width_px_handles_empty_snippets() {
-    let mut preview = test_preview_for_url(
-      "https://github.com/acme/widget/blob/main/docker-compose.yml#L7-L9",
-    );
+    let mut preview =
+      test_preview_for_url("https://github.com/acme/widget/blob/main/docker-compose.yml#L7-L9");
     preview.start_line = 1234;
     preview.snippets.clear();
 
     let width = estimate_code_reference_preview_min_content_width_px(&preview);
     let expected =
-      (4.0 * MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX + MARKDOWN_CODE_REFERENCE_ROW_GAP_PX)
-        .ceil();
+      (4.0 * MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX + MARKDOWN_CODE_REFERENCE_ROW_GAP_PX).ceil();
 
     assert_eq!(width, expected);
   }
@@ -4286,7 +4285,8 @@ Apres"#,
   #[test]
   fn estimate_code_block_min_content_width_px_keeps_code_block_chrome_width() {
     let width = estimate_code_block_min_content_width_px("");
-    let expected = (MARKDOWN_CODE_BLOCK_PADDING_X_PX * 2.0 + MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX).ceil();
+    let expected =
+      (MARKDOWN_CODE_BLOCK_PADDING_X_PX * 2.0 + MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX).ceil();
 
     assert_eq!(width, expected);
   }

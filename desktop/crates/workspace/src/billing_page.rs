@@ -23,8 +23,8 @@ use crate::{
   api::{ApiClient, CustomerStateSubscription, CustomerStateSubscriptionStatus},
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_long_date_opt, parse_rfc3339},
-  github_page::GithubPageHandle,
   github_navigation::{open_pr_target, open_repo_target},
+  github_page::GithubPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 

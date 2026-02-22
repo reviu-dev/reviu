@@ -29,7 +29,9 @@ pub(crate) fn same_pr_gfm_navigation(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SameRepoIssueLinkNavigation {
   Noop,
-  ScrollComment { comment_id: u64 },
+  ScrollComment {
+    comment_id: u64,
+  },
   ReloadIssue {
     issue_number: u64,
     issue_comment_id: Option<u64>,

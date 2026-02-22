@@ -418,21 +418,22 @@ fn github_code_reference_preview_from_content(
   reference: &GithubBlobLineReference,
   content: &str,
 ) -> Option<GithubCodeReferencePreview> {
-  github_shared::line_snippets_from_content(content, reference.start_line, reference.end_line)
-    .map(|snippets| {
-    let actual_end_line = reference
-      .start_line
-      .saturating_add(snippets.len().saturating_sub(1));
-    GithubCodeReferencePreview {
-      url: Arc::from(reference.url.as_str()),
-      repo: Arc::from(format!("{}/{}", reference.owner, reference.repo)),
-      path: Arc::from(reference.path.as_str()),
-      reference: Arc::from(reference.reference.as_str()),
-      start_line: reference.start_line,
-      end_line: actual_end_line,
-      snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
-    }
-    })
+  github_shared::line_snippets_from_content(content, reference.start_line, reference.end_line).map(
+    |snippets| {
+      let actual_end_line = reference
+        .start_line
+        .saturating_add(snippets.len().saturating_sub(1));
+      GithubCodeReferencePreview {
+        url: Arc::from(reference.url.as_str()),
+        repo: Arc::from(format!("{}/{}", reference.owner, reference.repo)),
+        path: Arc::from(reference.path.as_str()),
+        reference: Arc::from(reference.reference.as_str()),
+        start_line: reference.start_line,
+        end_line: actual_end_line,
+        snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
+      }
+    },
+  )
 }
 
 fn github_code_reference_preview_map(
@@ -944,11 +945,12 @@ impl GithubIssueDetailsSheetView {
           }
           Err(error) => {
             let message = error.to_string();
-            let error_message: SharedString = if github_shared::is_unauthorized_error_message(&message) {
-              "Authentication required. Please sign in again.".into()
-            } else {
-              message.into()
-            };
+            let error_message: SharedString =
+              if github_shared::is_unauthorized_error_message(&message) {
+                "Authentication required. Please sign in again.".into()
+              } else {
+                message.into()
+              };
             this.issue = None;
             this.error = Some(error_message);
           }

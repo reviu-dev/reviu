@@ -1,5 +1,7 @@
 use gpui::{AppContext as _, Context, ParentElement, Styled, Window};
-use ui::{SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, WindowExt};
+use ui::{
+  SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, WindowExt,
+};
 
 pub fn open_file_search_palette<T: 'static>(
   window: &mut Window,
