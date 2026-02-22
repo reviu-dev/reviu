@@ -310,6 +310,7 @@ const MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX: f32 = 12.0;
 const MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX: f32 = 8.0;
 const MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX: f32 = 6.0;
 const MARKDOWN_CODE_REFERENCE_SNIPPET_ROW_GAP_PX: f32 = 2.0;
+const MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX: f32 = 8.0;
 const MARKDOWN_INLINE_IMAGE_MAX_HEIGHT_PX: f32 = 420.0;
 const PARSED_MARKDOWN_CACHE_MAX_ENTRIES: usize = 256;
 const PARSED_MARKDOWN_CACHE_MAX_SOURCE_LEN: usize = 100_000;
@@ -2167,6 +2168,7 @@ fn render_code_block(
 ) -> AnyElement {
   let theme = cx.theme();
   let (text, spans, link_ranges) = build_code_block_spans(code);
+  let min_content_width_px = estimate_code_block_min_content_width_px(text.as_ref());
   let text_id = ctx.next_text_id();
   let content = SelectableText::new(
     text,
@@ -2183,6 +2185,8 @@ fn render_code_block(
   let scroll_id: SharedString = format!("markdown-code-block-scroll-{text_id}").into();
 
   div()
+    .w_full()
+    .min_w_0()
     .bg(theme.accent.opacity(0.3))
     .border_1()
     .border_color(theme.border)
@@ -2191,6 +2195,8 @@ fn render_code_block(
     .child(
       div()
         .id(scroll_id)
+        .w_full()
+        .min_w_0()
         .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
         .overflow_scroll()
         .on_scroll_wheel(|_, _, cx| {
@@ -2198,6 +2204,7 @@ fn render_code_block(
         })
         .child(
           div()
+            .min_w(px(min_content_width_px))
             .px(px(MARKDOWN_CODE_BLOCK_PADDING_X_PX))
             .pt(px(MARKDOWN_CODE_BLOCK_PADDING_TOP_PX))
             .pb(px(MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX))
@@ -2205,6 +2212,7 @@ fn render_code_block(
             .child(
               div()
                 .pl(px(MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX))
+                .font_family(cx.theme().mono_font_family.clone())
                 .text_sm()
                 .text_color(theme.foreground)
                 .child(content),
@@ -2226,6 +2234,16 @@ fn code_block_display_value(code: &CodeBlock) -> String {
 
   let widened = expand_leading_spaces_for_code_block(value);
   expand_tabs_for_code_block(widened.as_ref())
+}
+
+fn estimate_code_block_min_content_width_px(text: &str) -> f32 {
+  let widest_line_columns = text
+    .lines()
+    .map(|line| line.chars().count())
+    .max()
+    .unwrap_or(0) as f32;
+  let chrome_width_px = MARKDOWN_CODE_BLOCK_PADDING_X_PX * 2.0 + MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX;
+  (widest_line_columns * MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX + chrome_width_px).ceil()
 }
 
 fn expand_leading_spaces_for_code_block(value: &str) -> String {
@@ -4195,6 +4213,22 @@ Apres"#,
         .iter()
         .any(|span| span.syntax_token == Some(TokenType::Keyword))
     );
+  }
+
+  #[test]
+  fn estimate_code_block_min_content_width_px_uses_widest_line() {
+    let shorter = estimate_code_block_min_content_width_px("abc\ndef");
+    let wider = estimate_code_block_min_content_width_px("abc\ndefghijkl");
+
+    assert!(wider > shorter);
+  }
+
+  #[test]
+  fn estimate_code_block_min_content_width_px_keeps_code_block_chrome_width() {
+    let width = estimate_code_block_min_content_width_px("");
+    let expected = (MARKDOWN_CODE_BLOCK_PADDING_X_PX * 2.0 + MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX).ceil();
+
+    assert_eq!(width, expected);
   }
 
   #[test]
