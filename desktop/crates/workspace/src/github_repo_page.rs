@@ -36,9 +36,9 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage,
   DETAILS_PAGE_CONTAINER_MAX_WIDTH, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler,
-  SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt as _, UiIconName, UserMenuConfig,
-  UserMenuPage, UserMenuState, UserMenuUser, WindowExt, file_icon_path_for_name_with_theme,
-  h_resizable, parse_github_url_action, resizable_panel, user_menu,
+  StatusThemeExt as _, UiIconName, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser,
+  WindowExt, file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action,
+  resizable_panel, user_menu,
 };
 
 use crate::{
@@ -49,6 +49,8 @@ use crate::{
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_compact_datetime, format_long_date_opt},
+  file_preview::{is_markdown_path, is_svg_path},
+  file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   github_navigation::{
     SameRepoIssueLinkNavigation, open_pr_target, open_repo_target, same_repo_issue_link_navigation,
     should_open_externally,
@@ -1988,33 +1990,11 @@ impl GithubRepoPage {
     self.code_file_tasks.insert(key, task);
   }
 
-  fn is_markdown_path(path: &Path) -> bool {
-    matches!(
-      path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
-        .as_deref(),
-      Some("md" | "markdown" | "mdx")
-    )
-  }
-
-  fn is_svg_path(path: &Path) -> bool {
-    matches!(
-      path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
-        .as_deref(),
-      Some("svg")
-    )
-  }
-
   fn selected_code_file_is_markdown(&self) -> bool {
     self
       .code_selected_file
       .as_ref()
-      .map(|file| Self::is_markdown_path(Path::new(file.path.as_ref())))
+      .map(|file| is_markdown_path(Path::new(file.path.as_ref())))
       .unwrap_or(false)
   }
 
@@ -2022,7 +2002,7 @@ impl GithubRepoPage {
     self
       .code_selected_file
       .as_ref()
-      .map(|file| Self::is_svg_path(Path::new(file.path.as_ref())))
+      .map(|file| is_svg_path(Path::new(file.path.as_ref())))
       .unwrap_or(false)
   }
 
@@ -2088,7 +2068,7 @@ impl GithubRepoPage {
       return;
     }
 
-    let mut entries = self
+    let entries = self
       .code_lookup
       .values()
       .map(|file| {
@@ -2097,7 +2077,6 @@ impl GithubRepoPage {
         SearchFileEntry::new(path, label)
       })
       .collect::<Vec<_>>();
-    entries.sort_by(|a, b| a.label.cmp(&b.label));
 
     let view = cx.entity();
     let handler: SearchFileHandler = Arc::new(move |path, window, cx| {
@@ -2117,21 +2096,7 @@ impl GithubRepoPage {
 
       Ok(())
     });
-
-    let palette = cx
-      .new(|cx| SearchFilePalette::new(window, cx, SearchFilePaletteConfig::new(entries, handler)));
-    let palette_for_dialog = palette.clone();
-
-    window.open_dialog(cx, move |dialog, _, _| {
-      dialog
-        .p_0()
-        .border_0()
-        .min_h_0()
-        .overlay_closable(true)
-        .keyboard(true)
-        .close_button(false)
-        .child(palette_for_dialog.clone())
-    });
+    open_shared_file_search_palette(window, cx, entries, handler, true);
   }
 
   fn select_code_file_from_palette(&mut self, path: &Path, cx: &mut Context<Self>) {
@@ -2986,8 +2951,9 @@ impl GithubRepoPage {
           .text_color(theme.muted_foreground)
           .into_any_element()
       });
-    let is_markdown = Self::is_markdown_path(Path::new(path));
-    let is_svg = Self::is_svg_path(Path::new(path));
+    let is_markdown = is_markdown_path(Path::new(path));
+    let is_svg = is_svg_path(Path::new(path));
+    let short_sha: SharedString = file.sha.as_ref().chars().take(7).collect::<String>().into();
     let preview_active = (is_markdown || is_svg) && self.show_markdown_preview;
     let view = cx.entity();
     let preview_button = Button::new("repo-code-markdown-preview")
@@ -3031,7 +2997,7 @@ impl GithubRepoPage {
             div()
               .text_xs()
               .text_color(theme.muted_foreground)
-              .child(file.sha.slice(0..7)),
+              .child(short_sha),
           )
           .when(is_markdown || is_svg, |this| this.child(preview_button)),
       )
@@ -3475,22 +3441,20 @@ mod tests {
 
   #[test]
   fn repo_code_preview_support_detects_markdown_paths() {
-    assert!(GithubRepoPage::is_markdown_path(Path::new("README.md")));
-    assert!(GithubRepoPage::is_markdown_path(Path::new(
-      "docs/guide.Markdown"
-    )));
-    assert!(GithubRepoPage::is_markdown_path(Path::new("post.MdX")));
-    assert!(!GithubRepoPage::is_markdown_path(Path::new("README")));
-    assert!(!GithubRepoPage::is_markdown_path(Path::new("image.svg")));
+    assert!(is_markdown_path(Path::new("README.md")));
+    assert!(is_markdown_path(Path::new("docs/guide.Markdown")));
+    assert!(is_markdown_path(Path::new("post.MdX")));
+    assert!(!is_markdown_path(Path::new("README")));
+    assert!(!is_markdown_path(Path::new("image.svg")));
   }
 
   #[test]
   fn repo_code_preview_support_detects_svg_paths() {
-    assert!(GithubRepoPage::is_svg_path(Path::new("icon.svg")));
-    assert!(GithubRepoPage::is_svg_path(Path::new("assets/ICON.SVG")));
-    assert!(!GithubRepoPage::is_svg_path(Path::new("icon.svgz")));
-    assert!(!GithubRepoPage::is_svg_path(Path::new("README.md")));
-    assert!(!GithubRepoPage::is_svg_path(Path::new("icon")));
+    assert!(is_svg_path(Path::new("icon.svg")));
+    assert!(is_svg_path(Path::new("assets/ICON.SVG")));
+    assert!(!is_svg_path(Path::new("icon.svgz")));
+    assert!(!is_svg_path(Path::new("README.md")));
+    assert!(!is_svg_path(Path::new("icon")));
   }
 
   #[test]
