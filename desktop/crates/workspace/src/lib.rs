@@ -17,6 +17,7 @@ mod github_page;
 mod github_navigation;
 mod github_pr_details_page;
 mod github_repo_page;
+mod github_shared;
 mod interactive_rebase_todo_view;
 mod sentry_context;
 mod settings_page;

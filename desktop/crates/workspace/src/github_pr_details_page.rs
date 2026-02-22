@@ -63,6 +63,7 @@ use crate::{
     SamePrGfmNavigation, open_repo_target, same_pr_gfm_navigation, should_open_externally,
   },
   github_repo_page::GithubRepoPageHandle,
+  github_shared,
   sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
@@ -71,16 +72,9 @@ const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
 const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const DIFF_HEADER_HEIGHT: f32 = 40.0;
-fn is_unauthorized_error_message(error: &str) -> bool {
-  error.to_ascii_lowercase().contains("unauthorized")
-}
 
 fn pr_description_scope_id(pr_number: u64) -> usize {
   (pr_number as usize).wrapping_mul(1_000_003).wrapping_add(1)
-}
-
-fn github_repo_label(owner: &str, repo: &str) -> String {
-  format!("{owner}/{repo}")
 }
 
 fn code_reference_requests_from_markdown(markdown: &str) -> Vec<GithubBlobLineReference> {
@@ -185,37 +179,6 @@ fn file_for_review_comment_path(
         .is_some_and(|old_path| old_path.as_ref() == path)
     })
     .cloned()
-}
-
-fn line_snippets_from_content(
-  content: &str,
-  start_line: usize,
-  end_line: usize,
-) -> Option<Vec<String>> {
-  if start_line == 0 || end_line == 0 {
-    return None;
-  }
-  let (start_line, end_line) = if start_line <= end_line {
-    (start_line, end_line)
-  } else {
-    (end_line, start_line)
-  };
-
-  let lines: Vec<&str> = content.split('\n').collect();
-  if start_line > lines.len() {
-    return None;
-  }
-  let end_index = end_line.min(lines.len());
-  if end_index < start_line {
-    return None;
-  }
-
-  Some(
-    lines[start_line.saturating_sub(1)..end_index]
-      .iter()
-      .map(|line| line.trim_end_matches('\r').to_string())
-      .collect(),
-  )
 }
 
 #[derive(Clone, Debug, Default)]
@@ -593,7 +556,7 @@ impl GithubPrDetailsPage {
     for (key, value) in base {
       data.entry(key).or_insert(value);
     }
-    if is_unauthorized_error_message(error) {
+    if github_shared::is_unauthorized_error_message(error) {
       sentry_context::record_expected_error(operation, "unauthorized", data);
       return;
     }
@@ -1488,7 +1451,8 @@ impl GithubPrDetailsPage {
 
         let preview = match result {
           Ok(Some(content)) => {
-            line_snippets_from_content(&content, start_line, end_line).map(|snippets| {
+            github_shared::line_snippets_from_content(&content, start_line, end_line).map(
+              |snippets| {
               let actual_end_line = start_line.saturating_add(snippets.len().saturating_sub(1));
               ReviewCommentCodeReferencePreview {
                 url: url.clone(),
@@ -1499,7 +1463,8 @@ impl GithubPrDetailsPage {
                 end_line: actual_end_line,
                 snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
               }
-            })
+            },
+            )
           }
           _ => None,
         };
@@ -2137,11 +2102,8 @@ impl GithubPrDetailsPage {
     cx: &mut Context<Self>,
   ) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let repo_label = github_repo_label(&pr.repository.owner, &pr.repository.repo);
-    let pr_url = format!(
-      "https://github.com/{}/{}/pull/{}",
-      pr.repository.owner, pr.repository.repo, pr.number
-    );
+    let repo_label = github_shared::repo_label(&pr.repository.owner, &pr.repository.repo);
+    let pr_url = github_shared::pr_url(&pr.repository.owner, &pr.repository.repo, pr.number);
     let repo_owner = pr.repository.owner.clone();
     let repo_name = pr.repository.repo.clone();
     let updated_at = format_long_date(&pr.updated_at);
@@ -3199,11 +3161,6 @@ mod tests {
   }
 
   #[test]
-  fn github_repo_label_formats_owner_and_repo() {
-    assert_eq!(github_repo_label("acme", "widget"), "acme/widget");
-  }
-
-  #[test]
   fn status_letter_covers_all_file_statuses() {
     assert_eq!(status_letter(GithubPrFileStatus::Added), "A");
     assert_eq!(status_letter(GithubPrFileStatus::Modified), "M");
@@ -3375,20 +3332,6 @@ mod tests {
   }
 
   #[test]
-  fn line_snippets_from_content_returns_expected_lines() {
-    let content = "first\nsecond\nthird\n";
-    assert_eq!(
-      line_snippets_from_content(content, 2, 3),
-      Some(vec!["second".to_string(), "third".to_string()])
-    );
-    assert_eq!(
-      line_snippets_from_content(content, 4, 4),
-      Some(vec!["".to_string()])
-    );
-    assert!(line_snippets_from_content(content, 0, 2).is_none());
-  }
-
-  #[test]
   fn resolve_pr_back_target_defaults_to_github_home_when_repo_is_empty() {
     let target = resolve_pr_back_target("".into(), "".into());
     assert_eq!(target, GithubPrBackTarget::GithubHome);
@@ -3443,10 +3386,4 @@ mod tests {
     assert_eq!(target.tab_ix(), 1);
   }
 
-  #[test]
-  fn unauthorized_error_detection_is_case_insensitive() {
-    assert!(is_unauthorized_error_message("unauthorized"));
-    assert!(is_unauthorized_error_message("HTTP 401 Unauthorized"));
-    assert!(!is_unauthorized_error_message("unexpected status: 500"));
-  }
 }

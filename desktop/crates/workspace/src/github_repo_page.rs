@@ -57,12 +57,9 @@ use crate::{
   },
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
+  github_shared,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
-
-fn is_unauthorized_error_message(error: &str) -> bool {
-  error.to_ascii_lowercase().contains("unauthorized")
-}
 
 fn list_base_item(ix: IndexPath, selected_index: Option<IndexPath>) -> ListItem {
   ListItem::new(ix).selected(Some(ix) == selected_index)
@@ -328,10 +325,6 @@ fn issue_user_display_name(user: Option<&GithubIssueUser>) -> SharedString {
   name.or(login).unwrap_or(fallback).into()
 }
 
-fn github_issue_url(owner: &str, repo: &str, issue_number: u64) -> String {
-  format!("https://github.com/{owner}/{repo}/issues/{issue_number}")
-}
-
 fn issue_markdown_body_or_fallback(body: Option<&str>) -> SharedString {
   body
     .map(str::trim)
@@ -376,38 +369,6 @@ fn issue_state_label(state: &str, reason: Option<GithubIssueStateReason>) -> Sha
     Some(GithubIssueStateReason::Duplicate) => "Duplicate".into(),
     None => "Closed".into(),
   }
-}
-
-fn line_snippets_from_content(
-  content: &str,
-  start_line: usize,
-  end_line: usize,
-) -> Option<Vec<String>> {
-  if start_line == 0 || end_line == 0 {
-    return None;
-  }
-  let (start_line, end_line) = if start_line <= end_line {
-    (start_line, end_line)
-  } else {
-    (end_line, start_line)
-  };
-
-  let lines: Vec<&str> = content.split('\n').collect();
-  if start_line > lines.len() {
-    return None;
-  }
-
-  let end_index = end_line.min(lines.len());
-  if end_index < start_line {
-    return None;
-  }
-
-  Some(
-    lines[start_line.saturating_sub(1)..end_index]
-      .iter()
-      .map(|line| line.trim_end_matches('\r').to_string())
-      .collect(),
-  )
 }
 
 fn issue_code_reference_requests(
@@ -457,7 +418,8 @@ fn github_code_reference_preview_from_content(
   reference: &GithubBlobLineReference,
   content: &str,
 ) -> Option<GithubCodeReferencePreview> {
-  line_snippets_from_content(content, reference.start_line, reference.end_line).map(|snippets| {
+  github_shared::line_snippets_from_content(content, reference.start_line, reference.end_line)
+    .map(|snippets| {
     let actual_end_line = reference
       .start_line
       .saturating_add(snippets.len().saturating_sub(1));
@@ -470,7 +432,7 @@ fn github_code_reference_preview_from_content(
       end_line: actual_end_line,
       snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
     }
-  })
+    })
 }
 
 fn github_code_reference_preview_map(
@@ -982,7 +944,7 @@ impl GithubIssueDetailsSheetView {
           }
           Err(error) => {
             let message = error.to_string();
-            let error_message: SharedString = if is_unauthorized_error_message(&message) {
+            let error_message: SharedString = if github_shared::is_unauthorized_error_message(&message) {
               "Authentication required. Please sign in again.".into()
             } else {
               message.into()
@@ -1193,7 +1155,7 @@ impl Render for GithubIssueDetailsSheetView {
       let body = issue_markdown_body_or_fallback(issue.body.as_deref());
       let description_previews =
         github_code_reference_preview_map(&self.description_references, &self.code_reference_cache);
-      let issue_url = github_issue_url(
+      let issue_url = github_shared::issue_url(
         &issue.repository.owner,
         &issue.repository.repo,
         issue.number,
@@ -1845,7 +1807,7 @@ impl GithubRepoPage {
               state.set_selected_index(None, cx);
             });
             let message = error.to_string();
-            if is_unauthorized_error_message(&message) {
+            if github_shared::is_unauthorized_error_message(&message) {
               this.code_files_error = Some("Authentication required. Please sign in again.".into());
             } else {
               this.code_files_error = Some(message.into());
@@ -2288,7 +2250,7 @@ impl GithubRepoPage {
           }
           Err(error) => {
             let message = error.to_string();
-            if is_unauthorized_error_message(&message) {
+            if github_shared::is_unauthorized_error_message(&message) {
               this.pull_requests_error =
                 Some("Authentication required. Please sign in again.".into());
             } else {
@@ -2331,7 +2293,7 @@ impl GithubRepoPage {
           }
           Err(error) => {
             let message = error.to_string();
-            if is_unauthorized_error_message(&message) {
+            if github_shared::is_unauthorized_error_message(&message) {
               this.issues_error = Some("Authentication required. Please sign in again.".into());
             } else {
               this.issues_error = Some(message.into());
@@ -2953,7 +2915,7 @@ impl GithubRepoPage {
       });
     let is_markdown = is_markdown_path(Path::new(path));
     let is_svg = is_svg_path(Path::new(path));
-    let short_sha: SharedString = file.sha.as_ref().chars().take(7).collect::<String>().into();
+    let short_sha: SharedString = github_shared::short_sha(file.sha.as_ref()).into();
     let preview_active = (is_markdown || is_svg) && self.show_markdown_preview;
     let view = cx.entity();
     let preview_button = Button::new("repo-code-markdown-preview")
@@ -3485,21 +3447,6 @@ mod tests {
   }
 
   #[test]
-  fn line_snippets_from_content_handles_crlf_and_bounds() {
-    let content = "first\r\nsecond\r\nthird\r\n";
-    assert_eq!(
-      line_snippets_from_content(content, 2, 3),
-      Some(vec!["second".to_string(), "third".to_string()])
-    );
-    assert_eq!(
-      line_snippets_from_content(content, 4, 4),
-      Some(vec!["".to_string()])
-    );
-    assert!(line_snippets_from_content(content, 0, 3).is_none());
-    assert!(line_snippets_from_content(content, 10, 10).is_none());
-  }
-
-  #[test]
   fn should_apply_issue_request_result_matches_generation() {
     assert!(should_apply_issue_request_result(4, 4));
     assert!(!should_apply_issue_request_result(5, 4));
@@ -3627,14 +3574,6 @@ mod tests {
     assert_eq!(
       issue_comment_markdown_body_or_fallback(None).as_ref(),
       "No comment body."
-    );
-  }
-
-  #[test]
-  fn github_issue_url_formats_expected_path() {
-    assert_eq!(
-      github_issue_url("acme", "widget", 42),
-      "https://github.com/acme/widget/issues/42"
     );
   }
 
