@@ -1,5 +1,5 @@
 use std::{
-  collections::{HashMap, VecDeque},
+  collections::{HashMap, HashSet, VecDeque},
   fs,
   hash::{Hash, Hasher, DefaultHasher},
   ops::Range,
@@ -55,6 +55,28 @@ pub enum Block {
 pub struct CodeBlock {
   pub lang: Option<String>,
   pub value: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct GithubBlobLineReference {
+  pub url: String,
+  pub owner: String,
+  pub repo: String,
+  pub reference: String,
+  pub path: String,
+  pub start_line: usize,
+  pub end_line: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GithubCodeReferencePreview {
+  pub url: Arc<str>,
+  pub repo: Arc<str>,
+  pub path: Arc<str>,
+  pub reference: Arc<str>,
+  pub start_line: usize,
+  pub end_line: usize,
+  pub snippets: Vec<Arc<str>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,6 +239,8 @@ pub struct MarkdownRenderOptions {
   pub overrides: RenderOverrides,
   pub state: MarkdownRenderState,
   pub scope_id: Option<usize>,
+  pub github_code_reference_previews:
+    Option<Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>>,
 }
 
 impl MarkdownRenderOptions {
@@ -239,6 +263,14 @@ impl MarkdownRenderOptions {
 
   pub fn with_scope_id(mut self, scope_id: usize) -> Self {
     self.scope_id = Some(scope_id);
+    self
+  }
+
+  pub fn with_github_code_reference_previews(
+    mut self,
+    previews: Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>,
+  ) -> Self {
+    self.github_code_reference_previews = Some(previews);
     self
   }
 }
@@ -274,6 +306,11 @@ const MARKDOWN_CODE_INDENT_DOT_OPACITY: f32 = 0.45;
 const MARKDOWN_CODE_INDENT_DOT_MIN_SPACING_PX: f32 = 5.0;
 const MARKDOWN_CODE_INDENT_DOT_MAX_RENDER_COUNT: usize = 600;
 const MARKDOWN_CODE_INDENT_DOT_DISABLE_ABOVE_TEXT_LEN: usize = 20_000;
+const MARKDOWN_CODE_REFERENCE_CARD_MARGIN_Y_PX: f32 = 8.0;
+const MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX: f32 = 12.0;
+const MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX: f32 = 8.0;
+const MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX: f32 = 6.0;
+const MARKDOWN_CODE_REFERENCE_SNIPPET_ROW_GAP_PX: f32 = 2.0;
 const PARSED_MARKDOWN_CACHE_MAX_ENTRIES: usize = 256;
 const PARSED_MARKDOWN_CACHE_MAX_SOURCE_LEN: usize = 100_000;
 const MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX: f32 =
@@ -868,7 +905,386 @@ fn find_last_details_close_end(lower: &str) -> Option<usize> {
   last_end
 }
 
+fn extract_url_token_candidates(text: &str) -> Vec<String> {
+  let mut tokens = Vec::new();
+  let mut remaining = text;
+
+  loop {
+    let https_idx = remaining.find("https://");
+    let http_idx = remaining.find("http://");
+    let start = match (https_idx, http_idx) {
+      (None, None) => break,
+      (Some(https), None) => https,
+      (None, Some(http)) => http,
+      (Some(https), Some(http)) => https.min(http),
+    };
+    remaining = &remaining[start..];
+
+    let end = remaining
+      .find(char::is_whitespace)
+      .unwrap_or(remaining.len());
+    let token = remaining[..end]
+      .trim_matches(|ch: char| {
+        matches!(
+          ch,
+          '(' | ')' | '[' | ']' | '<' | '>' | '"' | '\'' | ',' | ';'
+        )
+      })
+      .trim_end_matches('.')
+      .to_string();
+    if !token.is_empty() {
+      tokens.push(token);
+    }
+    remaining = &remaining[end..];
+  }
+
+  tokens
+}
+
+pub fn parse_github_blob_line_reference(url: &str) -> Option<GithubBlobLineReference> {
+  let trimmed = url.trim();
+  let rest = trimmed
+    .strip_prefix("https://github.com/")
+    .or_else(|| trimmed.strip_prefix("http://github.com/"))?;
+  let (path_and_blob, fragment) = rest.split_once('#')?;
+  let path_and_blob = path_and_blob.split('?').next().unwrap_or(path_and_blob);
+  let fragment = fragment.strip_prefix('L')?;
+  let start_digits: String = fragment
+    .chars()
+    .take_while(|ch| ch.is_ascii_digit())
+    .collect();
+  if start_digits.is_empty() {
+    return None;
+  }
+  let start_line = start_digits.parse::<usize>().ok()?;
+  if start_line == 0 {
+    return None;
+  }
+  let fragment_tail = &fragment[start_digits.len()..];
+  let end_line = if fragment_tail.is_empty() {
+    start_line
+  } else {
+    let fragment_tail = fragment_tail.strip_prefix('-')?;
+    let fragment_tail = fragment_tail.strip_prefix('L').unwrap_or(fragment_tail);
+    let end_digits: String = fragment_tail
+      .chars()
+      .take_while(|ch| ch.is_ascii_digit())
+      .collect();
+    if end_digits.is_empty() {
+      return None;
+    }
+    let parsed = end_digits.parse::<usize>().ok()?;
+    if parsed == 0 {
+      return None;
+    }
+    parsed
+  };
+  let (start_line, end_line) = if start_line <= end_line {
+    (start_line, end_line)
+  } else {
+    (end_line, start_line)
+  };
+
+  let (repo_path, blob_path) = path_and_blob.split_once("/blob/")?;
+  let mut repo_parts = repo_path.split('/');
+  let owner = repo_parts.next()?.trim();
+  let repo = repo_parts.next()?.trim();
+  if owner.is_empty() || repo.is_empty() || repo_parts.next().is_some() {
+    return None;
+  }
+
+  let (reference, file_path) = blob_path.split_once('/')?;
+  if reference.is_empty() || file_path.is_empty() {
+    return None;
+  }
+
+  Some(GithubBlobLineReference {
+    url: trimmed.to_string(),
+    owner: owner.to_string(),
+    repo: repo.to_string(),
+    reference: reference.to_string(),
+    path: file_path.to_string(),
+    start_line,
+    end_line,
+  })
+}
+
+pub fn extract_github_blob_line_references(text: &str) -> Vec<GithubBlobLineReference> {
+  let mut references = Vec::new();
+  let mut seen = HashSet::new();
+
+  for candidate in extract_url_token_candidates(text) {
+    if let Some(reference) = parse_github_blob_line_reference(&candidate)
+      && seen.insert(reference.url.clone())
+    {
+      references.push(reference);
+    }
+  }
+
+  references
+}
+
+fn line_is_markdown_link_to_url(trimmed: &str, url: &str) -> bool {
+  if !trimmed.starts_with('[') || !trimmed.ends_with(')') {
+    return false;
+  }
+  let Some((_, rest)) = trimmed.split_once("](") else {
+    return false;
+  };
+  let Some(link_target) = rest.strip_suffix(')') else {
+    return false;
+  };
+  link_target == url
+}
+
+fn markdown_source_scope_id(source: &str, state: &MarkdownRenderState) -> usize {
+  let mut hasher = DefaultHasher::new();
+  source.hash(&mut hasher);
+  scoped_id_for_state(hasher.finish() as usize, state)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum MarkdownRenderSegment {
+  Markdown(String),
+  Preview(GithubCodeReferencePreview),
+}
+
+fn split_markdown_preview_segments(
+  source: &str,
+  previews: &HashMap<Arc<str>, GithubCodeReferencePreview>,
+) -> Vec<MarkdownRenderSegment> {
+  if source.is_empty() || previews.is_empty() {
+    return vec![MarkdownRenderSegment::Markdown(source.to_string())];
+  }
+
+  let mut segments = Vec::new();
+  let mut markdown = String::new();
+  let mut has_preview = false;
+
+  for raw_line in source.split_inclusive('\n') {
+    let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+    let trimmed = line.trim();
+    let line_preview = if trimmed.is_empty() {
+      None
+    } else if let Some(inner) = trimmed
+      .strip_prefix('<')
+      .and_then(|inner| inner.strip_suffix('>'))
+    {
+      previews.get(inner).cloned()
+    } else {
+      let markdown_link_preview = previews
+        .iter()
+        .find(|(url, _)| line_is_markdown_link_to_url(trimmed, url.as_ref()))
+        .map(|(_, preview)| preview.clone());
+      markdown_link_preview.or_else(|| previews.get(trimmed).cloned())
+    };
+
+    if let Some(preview) = line_preview {
+      if !markdown.is_empty() {
+        segments.push(MarkdownRenderSegment::Markdown(markdown.clone()));
+        markdown.clear();
+      }
+      segments.push(MarkdownRenderSegment::Preview(preview));
+      has_preview = true;
+    } else {
+      markdown.push_str(raw_line);
+    }
+  }
+
+  if !markdown.is_empty() {
+    segments.push(MarkdownRenderSegment::Markdown(markdown));
+  }
+
+  if !has_preview {
+    return vec![MarkdownRenderSegment::Markdown(source.to_string())];
+  }
+
+  segments
+}
+
+fn short_github_reference(reference: &str) -> String {
+  let trimmed = reference.trim();
+  if trimmed.len() > 7 && trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+    return trimmed.chars().take(7).collect();
+  }
+  if trimmed.len() > 24 {
+    let mut shortened: String = trimmed.chars().take(24).collect();
+    shortened.push_str("...");
+    return shortened;
+  }
+  trimmed.to_string()
+}
+
+fn render_github_code_reference_preview_card(
+  preview: &GithubCodeReferencePreview,
+  cx: &App,
+) -> AnyElement {
+  let theme = cx.theme();
+  let url = preview.url.clone();
+  let file_label = format!("{}/{}", preview.repo.as_ref(), preview.path.as_ref());
+  let line_label = if preview.start_line == preview.end_line {
+    format!(
+      "Line {} in {}",
+      preview.start_line,
+      short_github_reference(preview.reference.as_ref())
+    )
+  } else {
+    format!(
+      "Lines {}-{} in {}",
+      preview.start_line,
+      preview.end_line,
+      short_github_reference(preview.reference.as_ref())
+    )
+  };
+
+  let mut snippet_rows = v_flex().gap(px(MARKDOWN_CODE_REFERENCE_SNIPPET_ROW_GAP_PX));
+  if preview.snippets.is_empty() {
+    snippet_rows = snippet_rows.child(
+      h_flex()
+        .items_center()
+        .gap_2()
+        .child(
+          div()
+            .text_xs()
+            .font_medium()
+            .text_color(theme.muted_foreground)
+            .child(preview.start_line.to_string()),
+        )
+        .child(
+          div()
+            .flex_1()
+            .min_w_0()
+            .font_family(cx.theme().mono_font_family.clone())
+            .text_sm()
+            .text_color(theme.foreground)
+            .child(""),
+        ),
+    );
+  } else {
+    for (offset, snippet) in preview.snippets.iter().enumerate() {
+      let line_number = preview.start_line + offset;
+      snippet_rows = snippet_rows.child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(
+            div()
+              .text_xs()
+              .font_medium()
+              .text_color(theme.muted_foreground)
+              .child(line_number.to_string()),
+          )
+            .child(
+              div()
+                .flex_1()
+                .min_w_0()
+                .font_family(cx.theme().mono_font_family.clone())
+                .text_sm()
+                .text_color(theme.foreground)
+                .child(snippet.as_ref().to_string()),
+          ),
+      );
+    }
+  }
+
+  v_flex()
+    .my(px(MARKDOWN_CODE_REFERENCE_CARD_MARGIN_Y_PX))
+    .border_1()
+    .border_color(theme.border)
+    .rounded_md()
+    .overflow_hidden()
+    .child(
+      div()
+        .bg(theme.accent)
+        .border_b_1()
+        .border_color(theme.border)
+        .px(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX))
+        .py(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX))
+        .cursor(CursorStyle::PointingHand)
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+          cx.stop_propagation();
+          cx.open_url(url.as_ref());
+        })
+        .child(
+          v_flex()
+            .gap_1()
+            .child(
+              div()
+                .text_sm()
+                .font_medium()
+                .text_color(theme.info)
+                .child(file_label),
+            )
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(line_label),
+            ),
+        ),
+    )
+    .child(
+      div()
+        .px(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX))
+        .py(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX))
+        .child(
+          v_flex()
+            .gap(px(MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX))
+            .child(snippet_rows),
+        ),
+    )
+    .into_any_element()
+}
+
+fn render_markdown_with_preview_segments(
+  source: &str,
+  options: &MarkdownRenderOptions,
+  previews: &HashMap<Arc<str>, GithubCodeReferencePreview>,
+  cx: &App,
+) -> AnyElement {
+  let segments = split_markdown_preview_segments(source, previews);
+  let has_previews = segments
+    .iter()
+    .any(|segment| matches!(segment, MarkdownRenderSegment::Preview(_)));
+  if !has_previews {
+    let parsed = parse_markdown_for_render(source);
+    return render_parsed_markdown(&parsed, options, cx);
+  }
+
+  let base_scope_id = options.scope_id.map_or_else(
+    || markdown_source_scope_id(source, &options.state),
+    |scope_id| scoped_id_for_state(scope_id, &options.state),
+  );
+
+  let mut rendered = v_flex();
+  for (segment_index, segment) in segments.into_iter().enumerate() {
+    match segment {
+      MarkdownRenderSegment::Markdown(markdown) => {
+        if markdown.is_empty() {
+          continue;
+        }
+        let parsed = parse_markdown_for_render(markdown.as_str());
+        let scoped_options = options
+          .clone()
+          .with_scope_id(compose_text_id(base_scope_id, segment_index + 1));
+        rendered = rendered.child(render_parsed_markdown(&parsed, &scoped_options, cx));
+      }
+      MarkdownRenderSegment::Preview(preview) => {
+        rendered = rendered.child(render_github_code_reference_preview_card(&preview, cx));
+      }
+    }
+  }
+
+  rendered.into_any_element()
+}
+
 pub fn render_markdown(source: &str, options: &MarkdownRenderOptions, cx: &App) -> AnyElement {
+  if let Some(previews) = options.github_code_reference_previews.as_ref()
+    && !previews.is_empty()
+  {
+    return render_markdown_with_preview_segments(source, options, previews.as_ref(), cx);
+  }
+
   let parsed = parse_markdown_for_render(source);
   render_parsed_markdown(&parsed, options, cx)
 }
@@ -2996,6 +3412,22 @@ fn collect_text<'a>(node: &'a AstNode<'a>) -> String {
 mod tests {
   use super::*;
 
+  fn test_preview_for_url(url: &str) -> GithubCodeReferencePreview {
+    GithubCodeReferencePreview {
+      url: Arc::from(url),
+      repo: Arc::from("acme/widget"),
+      path: Arc::from("docker-compose.yml"),
+      reference: Arc::from("main"),
+      start_line: 7,
+      end_line: 9,
+      snippets: vec![Arc::from("services:")],
+    }
+  }
+
+  fn test_preview_map(url: &str) -> HashMap<Arc<str>, GithubCodeReferencePreview> {
+    HashMap::from([(Arc::from(url), test_preview_for_url(url))])
+  }
+
   #[test]
   fn parses_links_and_text() {
     let blocks = parse_gfm("See [comment](https://github.com/org/repo/pull/4/changes#r123)");
@@ -3007,6 +3439,97 @@ mod tests {
       }
       _ => panic!("expected paragraph"),
     }
+  }
+
+  #[test]
+  fn parse_github_blob_line_reference_parses_standard_blob_link() {
+    let parsed = parse_github_blob_line_reference(
+      "https://github.com/joris-gallot/guit/blob/0a25a8d0816a770ec75edb442dc3e533c78343a3/docker-compose.yml#L11",
+    )
+    .expect("valid blob line reference");
+
+    assert_eq!(parsed.owner, "joris-gallot");
+    assert_eq!(parsed.repo, "guit");
+    assert_eq!(parsed.reference, "0a25a8d0816a770ec75edb442dc3e533c78343a3");
+    assert_eq!(parsed.path, "docker-compose.yml");
+    assert_eq!(parsed.start_line, 11);
+    assert_eq!(parsed.end_line, 11);
+  }
+
+  #[test]
+  fn parse_github_blob_line_reference_parses_line_range_variants() {
+    let parsed = parse_github_blob_line_reference(
+      "https://github.com/joris-gallot/guit/blob/main/docker-compose.yml#L03-L11",
+    )
+    .expect("valid blob line range reference");
+    assert_eq!(parsed.start_line, 3);
+    assert_eq!(parsed.end_line, 11);
+
+    let parsed = parse_github_blob_line_reference(
+      "https://github.com/joris-gallot/guit/blob/main/docker-compose.yml#L3-L11",
+    )
+    .expect("valid blob line range reference");
+    assert_eq!(parsed.start_line, 3);
+    assert_eq!(parsed.end_line, 11);
+
+    let parsed = parse_github_blob_line_reference(
+      "https://github.com/joris-gallot/guit/blob/main/docker-compose.yml#L3-11",
+    )
+    .expect("valid blob line range reference");
+    assert_eq!(parsed.start_line, 3);
+    assert_eq!(parsed.end_line, 11);
+  }
+
+  #[test]
+  fn parse_github_blob_line_reference_rejects_invalid_inputs() {
+    assert!(parse_github_blob_line_reference("https://example.com/repo/blob/main/file.rs#L7").is_none());
+    assert!(parse_github_blob_line_reference("https://github.com/acme/widget/blob/main/file.rs").is_none());
+    assert!(parse_github_blob_line_reference("https://github.com/acme/widget/blob/main/file.rs#L0").is_none());
+    assert!(parse_github_blob_line_reference("https://github.com/acme/widget/blob/main/file.rs#L7-L0").is_none());
+  }
+
+  #[test]
+  fn extract_github_blob_line_references_reads_markdown_link_syntax() {
+    let body = "[compose](https://github.com/acme/widget/blob/main/docker-compose.yml#L7)";
+    let references = extract_github_blob_line_references(body);
+    assert_eq!(references.len(), 1);
+    assert_eq!(references[0].start_line, 7);
+    assert_eq!(references[0].end_line, 7);
+    assert_eq!(references[0].path, "docker-compose.yml");
+  }
+
+  #[test]
+  fn split_markdown_preview_segments_replaces_standalone_raw_url_line() {
+    let url = "https://github.com/acme/widget/blob/main/docker-compose.yml#L7-L9";
+    let source = format!("Before\n{url}\nAfter");
+    let previews = test_preview_map(url);
+
+    let segments = split_markdown_preview_segments(&source, &previews);
+    assert_eq!(segments.len(), 3);
+    assert!(matches!(&segments[0], MarkdownRenderSegment::Markdown(markdown) if markdown == "Before\n"));
+    assert!(matches!(&segments[1], MarkdownRenderSegment::Preview(preview) if preview.url.as_ref() == url));
+    assert!(matches!(&segments[2], MarkdownRenderSegment::Markdown(markdown) if markdown == "After"));
+  }
+
+  #[test]
+  fn split_markdown_preview_segments_replaces_standalone_markdown_link_line() {
+    let url = "https://github.com/acme/widget/blob/main/docker-compose.yml#L7-L9";
+    let source = format!("Before\n[compose]({url})\nAfter");
+    let previews = test_preview_map(url);
+
+    let segments = split_markdown_preview_segments(&source, &previews);
+    assert_eq!(segments.len(), 3);
+    assert!(matches!(&segments[1], MarkdownRenderSegment::Preview(preview) if preview.url.as_ref() == url));
+  }
+
+  #[test]
+  fn split_markdown_preview_segments_keeps_inline_link_as_markdown() {
+    let url = "https://github.com/acme/widget/blob/main/docker-compose.yml#L7-L9";
+    let source = format!("Inline link {url} should stay markdown");
+    let previews = test_preview_map(url);
+
+    let segments = split_markdown_preview_segments(&source, &previews);
+    assert_eq!(segments, vec![MarkdownRenderSegment::Markdown(source)]);
   }
 
   #[test]
