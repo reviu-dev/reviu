@@ -174,6 +174,8 @@ pub enum CommandPaletteAction {
   OpenGithubRepoDetails {
     owner: String,
     repo: String,
+    tab: Option<CommandPaletteGithubRepoTab>,
+    issue_number: Option<u64>,
   },
   OpenGithubPrDetails {
     owner: String,
@@ -186,6 +188,13 @@ pub enum CommandPaletteAction {
   OpenSettingsPage,
   OpenBillingPage,
   OpenAboutPage,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandPaletteGithubRepoTab {
+  Overview,
+  PullRequests,
+  Issues,
 }
 
 struct BranchesListDelegate {
@@ -1177,6 +1186,8 @@ enum GithubUrlTarget {
   Repo {
     owner: String,
     repo: String,
+    tab: Option<CommandPaletteGithubRepoTab>,
+    issue_number: Option<u64>,
   },
   PullRequest {
     owner: String,
@@ -1208,37 +1219,7 @@ pub struct CommandPalette {
 }
 
 impl CommandPalette {
-  fn parse_github_pull_request_url(url: &str) -> Option<(String, String, u64)> {
-    let url = url.trim();
-    let tail = url
-      .strip_prefix("https://github.com/")
-      .or_else(|| url.strip_prefix("http://github.com/"))
-      .or_else(|| url.strip_prefix("github.com/"))?;
-
-    let mut parts = tail.split('/');
-    let owner = parts.next()?.trim();
-    let repo = parts.next()?.trim();
-    if owner.is_empty() || repo.is_empty() {
-      return None;
-    }
-    if parts.next()? != "pull" {
-      return None;
-    }
-
-    let number_part = parts.next()?;
-    let number_part = number_part
-      .split('#')
-      .next()
-      .unwrap_or(number_part)
-      .split('?')
-      .next()
-      .unwrap_or(number_part);
-    let number: u64 = number_part.parse().ok()?;
-
-    Some((owner.to_string(), repo.to_string(), number))
-  }
-
-  fn parse_github_repository_url(url: &str) -> Option<(String, String)> {
+  fn parse_github_repository_parts(url: &str) -> Option<(String, String, Vec<String>)> {
     let url = url.trim();
     let tail = url
       .strip_prefix("https://github.com/")
@@ -1252,14 +1233,47 @@ impl CommandPalette {
       .next()
       .unwrap_or(tail);
 
-    let mut parts = tail.split('/');
-    let owner = parts.next()?.trim();
-    let repo = parts.next()?.trim();
-    if owner.is_empty() || repo.is_empty() {
+    let parts = tail
+      .split('/')
+      .map(str::trim)
+      .filter(|part| !part.is_empty())
+      .collect::<Vec<_>>();
+    if parts.len() < 2 {
       return None;
     }
 
-    Some((owner.to_string(), repo.to_string()))
+    let owner = parts[0].to_string();
+    let repo = parts[1].to_string();
+    let rest = parts[2..].iter().map(|part| (*part).to_string()).collect();
+
+    Some((owner, repo, rest))
+  }
+
+  fn parse_github_pull_request_url(url: &str) -> Option<(String, String, u64)> {
+    let (owner, repo, path_parts) = Self::parse_github_repository_parts(url)?;
+    if path_parts.first().map(|part| part.as_str()) != Some("pull") {
+      return None;
+    }
+
+    let number: u64 = path_parts.get(1)?.parse().ok()?;
+
+    Some((owner, repo, number))
+  }
+
+  fn parse_github_issue_url(url: &str) -> Option<(String, String, u64)> {
+    let (owner, repo, path_parts) = Self::parse_github_repository_parts(url)?;
+    if path_parts.first().map(|part| part.as_str()) != Some("issues") {
+      return None;
+    }
+
+    let number: u64 = path_parts.get(1)?.parse().ok()?;
+    Some((owner, repo, number))
+  }
+
+  #[cfg(test)]
+  fn parse_github_repository_url(url: &str) -> Option<(String, String)> {
+    let (owner, repo, _) = Self::parse_github_repository_parts(url)?;
+    Some((owner, repo))
   }
 
   fn parse_github_url_target(url: &str) -> Option<GithubUrlTarget> {
@@ -1271,11 +1285,33 @@ impl CommandPalette {
       });
     }
 
-    if let Some((owner, repo)) = Self::parse_github_repository_url(url) {
-      return Some(GithubUrlTarget::Repo { owner, repo });
+    if let Some((owner, repo, number)) = Self::parse_github_issue_url(url) {
+      return Some(GithubUrlTarget::Repo {
+        owner,
+        repo,
+        tab: Some(CommandPaletteGithubRepoTab::Issues),
+        issue_number: Some(number),
+      });
     }
 
-    None
+    let (owner, repo, path_parts) = Self::parse_github_repository_parts(url)?;
+    let tab = match path_parts.first().map(|part| part.as_str()) {
+      Some("pulls") => Some(CommandPaletteGithubRepoTab::PullRequests),
+      Some("issues") => Some(CommandPaletteGithubRepoTab::Issues),
+      _ => None,
+    };
+    let issue_number = if tab == Some(CommandPaletteGithubRepoTab::Issues) {
+      path_parts.get(1).and_then(|value| value.parse().ok())
+    } else {
+      None
+    };
+
+    Some(GithubUrlTarget::Repo {
+      owner,
+      repo,
+      tab,
+      issue_number,
+    })
   }
 
   fn parse_cherry_pick_commit_hashes(value: &str) -> Option<Vec<String>> {
@@ -1686,8 +1722,18 @@ impl CommandPalette {
     };
 
     match target {
-      GithubUrlTarget::Repo { owner, repo } => self.trigger_action(
-        CommandPaletteAction::OpenGithubRepoDetails { owner, repo },
+      GithubUrlTarget::Repo {
+        owner,
+        repo,
+        tab,
+        issue_number,
+      } => self.trigger_action(
+        CommandPaletteAction::OpenGithubRepoDetails {
+          owner,
+          repo,
+          tab,
+          issue_number,
+        },
         window,
         cx,
       ),
@@ -2052,8 +2098,18 @@ impl CommandPalette {
         let query = self.commands_list.read(cx).delegate().query.to_string();
         if let Some(target) = Self::parse_github_url_target(&query) {
           match target {
-            GithubUrlTarget::Repo { owner, repo } => self.trigger_action(
-              CommandPaletteAction::OpenGithubRepoDetails { owner, repo },
+            GithubUrlTarget::Repo {
+              owner,
+              repo,
+              tab,
+              issue_number,
+            } => self.trigger_action(
+              CommandPaletteAction::OpenGithubRepoDetails {
+                owner,
+                repo,
+                tab,
+                issue_number,
+              },
               window,
               cx,
             ),
@@ -2438,7 +2494,9 @@ impl Render for CommandPalette {
 
 #[cfg(test)]
 mod tests {
-  use super::{CommandPalette, CommandPaletteCommand, CommandPaletteCommandId};
+  use super::{
+    CommandPalette, CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteGithubRepoTab,
+  };
 
   #[test]
   fn parse_github_pull_request_url_accepts_standard_url() {
@@ -2469,6 +2527,13 @@ mod tests {
       "https://github.com/joris-gallot/guit/pull/4?notification_referrer_id=NT_kwDOAAABBBCCC",
     );
     assert_eq!(parsed, Some(("joris-gallot".into(), "guit".into(), 4)));
+  }
+
+  #[test]
+  fn parse_github_issue_url_accepts_standard_url() {
+    let parsed =
+      CommandPalette::parse_github_issue_url("https://github.com/joris-gallot/guit/issues/23");
+    assert_eq!(parsed, Some(("joris-gallot".into(), "guit".into(), 23)));
   }
 
   #[test]
@@ -2511,19 +2576,59 @@ mod tests {
     let parsed = CommandPalette::parse_github_url_target("https://github.com/joris-gallot/guit");
     assert!(matches!(
       parsed,
-      Some(super::GithubUrlTarget::Repo { owner, repo })
-        if owner == "joris-gallot" && repo == "guit"
+      Some(super::GithubUrlTarget::Repo {
+        owner,
+        repo,
+        tab: None,
+        issue_number: None
+      }) if owner == "joris-gallot" && repo == "guit"
     ));
   }
 
   #[test]
-  fn parse_github_url_target_falls_back_to_repo_for_issue_url() {
+  fn parse_github_url_target_routes_pulls_url_to_repo_pull_requests_tab() {
+    let parsed = CommandPalette::parse_github_url_target(
+      "https://github.com/joris-gallot/guit/pulls?q=sort%3Aupdated-desc+is%3Apr+is%3Aopen",
+    );
+    assert!(matches!(
+      parsed,
+      Some(super::GithubUrlTarget::Repo {
+        owner,
+        repo,
+        tab: Some(CommandPaletteGithubRepoTab::PullRequests),
+        issue_number: None
+      }) if owner == "joris-gallot" && repo == "guit"
+    ));
+  }
+
+  #[test]
+  fn parse_github_url_target_routes_issues_url_to_repo_issues_tab() {
+    let parsed = CommandPalette::parse_github_url_target(
+      "https://github.com/joris-gallot/guit/issues?q=sort%3Aupdated-desc+is%3Aissue+is%3Aopen",
+    );
+    assert!(matches!(
+      parsed,
+      Some(super::GithubUrlTarget::Repo {
+        owner,
+        repo,
+        tab: Some(CommandPaletteGithubRepoTab::Issues),
+        issue_number: None
+      }) if owner == "joris-gallot" && repo == "guit"
+    ));
+  }
+
+  #[test]
+  fn parse_github_url_target_routes_issue_details_url_to_repo_issue_sheet_target() {
     let parsed =
       CommandPalette::parse_github_url_target("https://github.com/joris-gallot/guit/issues/23");
     assert!(matches!(
       parsed,
-      Some(super::GithubUrlTarget::Repo { owner, repo })
-        if owner == "joris-gallot" && repo == "guit"
+      Some(super::GithubUrlTarget::Repo {
+        owner,
+        repo,
+        tab: Some(CommandPaletteGithubRepoTab::Issues),
+        issue_number: Some(23)
+      }) if owner == "joris-gallot" && repo == "guit"
     ));
   }
 
@@ -2533,6 +2638,8 @@ mod tests {
 
     assert!(command.matches("https://github.com/joris-gallot/guit"));
     assert!(command.matches("https://github.com/joris-gallot/guit/pull/4"));
+    assert!(command.matches("https://github.com/joris-gallot/guit/pulls?q=is%3Apr"));
+    assert!(command.matches("https://github.com/joris-gallot/guit/issues?q=is%3Aissue"));
     assert!(command.matches("https://github.com/joris-gallot/guit/issues/23"));
     assert!(!command.matches("https://gitlab.com/acme/widget"));
   }

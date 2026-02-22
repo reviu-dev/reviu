@@ -13,7 +13,7 @@ use gpui_component::{
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, HEADER_HEIGHT, WindowExt,
+  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, HEADER_HEIGHT, WindowExt,
 };
 
 use crate::{
@@ -223,8 +223,23 @@ impl SettingsPage {
         GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
         Ok(())
       }
-      CommandPaletteAction::OpenGithubRepoDetails { owner, repo } => {
-        GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
+      CommandPaletteAction::OpenGithubRepoDetails {
+        owner,
+        repo,
+        tab,
+        issue_number,
+      } => {
+        match tab {
+          Some(CommandPaletteGithubRepoTab::PullRequests) => {
+            GithubRepoPageHandle::show_pull_requests(owner.into(), repo.into(), cx);
+          }
+          Some(CommandPaletteGithubRepoTab::Issues) => {
+            GithubRepoPageHandle::show_issues(owner.into(), repo.into(), issue_number, cx);
+          }
+          Some(CommandPaletteGithubRepoTab::Overview) | None => {
+            GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
+          }
+        }
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => Ok(()),

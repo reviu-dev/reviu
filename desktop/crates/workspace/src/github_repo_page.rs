@@ -22,8 +22,9 @@ use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, DETAILS_PAGE_CONTAINER_MAX_WIDTH, StatusThemeExt as _,
-  UiIconName, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt, user_menu,
+  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage,
+  DETAILS_PAGE_CONTAINER_MAX_WIDTH, StatusThemeExt as _, UiIconName, UserMenuConfig, UserMenuPage,
+  UserMenuState, UserMenuUser, WindowExt, user_menu,
 };
 
 use crate::{
@@ -86,6 +87,41 @@ fn repo_palette_open_target(has_active_subscription: bool) -> WorkspacePage {
     WorkspacePage::GithubRepo
   } else {
     WorkspacePage::Billing
+  }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GithubRepoOpenTarget {
+  Overview,
+  PullRequests,
+  Issues { issue_number: Option<u64> },
+}
+
+impl GithubRepoOpenTarget {
+  fn tab_ix(self) -> usize {
+    match self {
+      GithubRepoOpenTarget::Overview => 0,
+      GithubRepoOpenTarget::PullRequests => 1,
+      GithubRepoOpenTarget::Issues { .. } => 2,
+    }
+  }
+
+  fn issue_number(self) -> Option<u64> {
+    match self {
+      GithubRepoOpenTarget::Issues { issue_number } => issue_number,
+      _ => None,
+    }
+  }
+}
+
+fn repo_open_target_from_palette(
+  tab: Option<CommandPaletteGithubRepoTab>,
+  issue_number: Option<u64>,
+) -> GithubRepoOpenTarget {
+  match tab {
+    Some(CommandPaletteGithubRepoTab::PullRequests) => GithubRepoOpenTarget::PullRequests,
+    Some(CommandPaletteGithubRepoTab::Issues) => GithubRepoOpenTarget::Issues { issue_number },
+    Some(CommandPaletteGithubRepoTab::Overview) | None => GithubRepoOpenTarget::Overview,
   }
 }
 
@@ -887,6 +923,7 @@ pub struct GithubRepoPage {
   issues_error: Option<SharedString>,
   issues_task: Option<Task<()>>,
   active_tab_ix: usize,
+  pending_issue_sheet_number: Option<u64>,
   _subscriptions: Vec<Subscription>,
 }
 
@@ -905,6 +942,28 @@ impl GithubRepoPageHandle {
   }
 
   pub fn show(owner: SharedString, repo: SharedString, cx: &mut App) {
+    Self::show_with_target(owner, repo, GithubRepoOpenTarget::Overview, cx);
+  }
+
+  pub fn show_pull_requests(owner: SharedString, repo: SharedString, cx: &mut App) {
+    Self::show_with_target(owner, repo, GithubRepoOpenTarget::PullRequests, cx);
+  }
+
+  pub fn show_issues(
+    owner: SharedString,
+    repo: SharedString,
+    issue_number: Option<u64>,
+    cx: &mut App,
+  ) {
+    Self::show_with_target(owner, repo, GithubRepoOpenTarget::Issues { issue_number }, cx);
+  }
+
+  fn show_with_target(
+    owner: SharedString,
+    repo: SharedString,
+    target: GithubRepoOpenTarget,
+    cx: &mut App,
+  ) {
     if !AuthStateStore::has_active_subscription(cx) {
       WorkspaceRoute::open_billing(cx);
       cx.refresh_windows();
@@ -918,7 +977,7 @@ impl GithubRepoPageHandle {
     let owner_string = owner.to_string();
     let repo_string = repo.to_string();
     let _ = weak.update(cx, |this, cx| {
-      this.load_repository(owner_string, repo_string, cx);
+      this.load_repository(owner_string, repo_string, target, cx);
     });
 
     WorkspaceRoute::global_mut(cx).page = WorkspacePage::GithubRepo;
@@ -969,6 +1028,7 @@ impl GithubRepoPage {
       issues_error: None,
       issues_task: None,
       active_tab_ix: 0,
+      pending_issue_sheet_number: None,
       _subscriptions: Vec::new(),
     };
 
@@ -1020,6 +1080,7 @@ impl GithubRepoPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    self.pending_issue_sheet_number = None;
     let issue_number = issue.number;
     let sheet_title: SharedString = format!("Issue #{issue_number}").into();
     let issue_details_view = cx.new(|cx| {
@@ -1056,6 +1117,9 @@ impl GithubRepoPage {
       return;
     }
     self.active_tab_ix = tab_ix;
+    if tab_ix != 2 {
+      self.pending_issue_sheet_number = None;
+    }
     cx.notify();
 
     if tab_ix == 1 {
@@ -1076,10 +1140,46 @@ impl GithubRepoPage {
     }
   }
 
-  fn load_repository(&mut self, owner: String, repo: String, cx: &mut Context<Self>) {
+  fn try_open_pending_issue_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(issue_number) = self.pending_issue_sheet_number else {
+      return;
+    };
+    if self.active_tab_ix != 2 {
+      return;
+    }
+
+    let (loading, issue) = {
+      let issues = self.issues.read(cx);
+      let delegate = issues.delegate();
+      let issue = delegate
+        .all_rows
+        .iter()
+        .find(|row| row.issue.number == issue_number)
+        .map(|row| row.issue.clone());
+      (delegate.loading, issue)
+    };
+
+    if let Some(issue) = issue {
+      self.open_issue_details_sheet(issue, window, cx);
+      return;
+    }
+
+    if !loading {
+      self.pending_issue_sheet_number = None;
+    }
+  }
+
+  fn load_repository(
+    &mut self,
+    owner: String,
+    repo: String,
+    open_target: GithubRepoOpenTarget,
+    cx: &mut Context<Self>,
+  ) {
     self.owner = owner.clone().into();
     self.repo = repo.clone().into();
-    self.active_tab_ix = 0;
+    self.active_tab_ix = open_target.tab_ix();
+    self.pending_issue_sheet_number = open_target.issue_number();
 
     self.repository = None;
     self.repository_loading = true;
@@ -1272,10 +1372,15 @@ impl GithubRepoPage {
         cx.refresh_windows();
         Ok(())
       }
-      CommandPaletteAction::OpenGithubRepoDetails { owner, repo } => {
+      CommandPaletteAction::OpenGithubRepoDetails {
+        owner,
+        repo,
+        tab,
+        issue_number,
+      } => {
         match repo_palette_open_target(AuthStateStore::has_active_subscription(cx)) {
           WorkspacePage::GithubRepo => {
-            self.load_repository(owner, repo, cx);
+            self.load_repository(owner, repo, repo_open_target_from_palette(tab, issue_number), cx);
             WorkspaceRoute::global_mut(cx).page = WorkspacePage::GithubRepo;
           }
           WorkspacePage::Billing => {
@@ -1679,8 +1784,9 @@ impl GithubRepoPage {
 }
 
 impl Render for GithubRepoPage {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
+    self.try_open_pending_issue_sheet(window, cx);
 
     let content = match self.active_tab_ix {
       0 => self.render_overview(cx).into_any_element(),
@@ -1734,6 +1840,28 @@ mod tests {
   fn repo_palette_open_target_follows_subscription_state() {
     assert_eq!(repo_palette_open_target(true), WorkspacePage::GithubRepo);
     assert_eq!(repo_palette_open_target(false), WorkspacePage::Billing);
+  }
+
+  #[test]
+  fn repo_open_target_from_palette_maps_tabs_and_issue_number() {
+    assert_eq!(
+      repo_open_target_from_palette(None, None),
+      GithubRepoOpenTarget::Overview
+    );
+    assert_eq!(
+      repo_open_target_from_palette(Some(CommandPaletteGithubRepoTab::Overview), Some(7)),
+      GithubRepoOpenTarget::Overview
+    );
+    assert_eq!(
+      repo_open_target_from_palette(Some(CommandPaletteGithubRepoTab::PullRequests), Some(7)),
+      GithubRepoOpenTarget::PullRequests
+    );
+    assert_eq!(
+      repo_open_target_from_palette(Some(CommandPaletteGithubRepoTab::Issues), Some(42)),
+      GithubRepoOpenTarget::Issues {
+        issue_number: Some(42)
+      }
+    );
   }
 
   #[test]

@@ -13,8 +13,9 @@ pub const DETAILS_PAGE_CONTAINER_MAX_WIDTH: f32 = 900.0;
 pub use assets::AppAssets;
 pub use command_palette::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
-  CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig, CommandPaletteHandler,
-  CommandPalettePage, CommandPaletteRepository, CommandPaletteStash,
+  CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig,
+  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage,
+  CommandPaletteRepository, CommandPaletteStash,
 };
 pub use confirm_dialog::ConfirmDialog;
 pub use gpui_component::Disableable;
