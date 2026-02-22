@@ -355,7 +355,7 @@ fn issue_comment_scope_id(issue_id: u64, comment_id: u64) -> usize {
     .wrapping_add(2)
 }
 
-const ISSUE_DETAILS_SHEET_WIDTH_PX: f32 = 800.0;
+const ISSUE_DETAILS_SHEET_WIDTH_PX: f32 = 950.0;
 
 fn issue_state_label(state: &str, reason: Option<GithubIssueStateReason>) -> SharedString {
   if state.eq_ignore_ascii_case("open") {
@@ -1272,6 +1272,7 @@ impl Render for GithubIssueDetailsSheetView {
         .w_full()
         .gap_3()
         .pt_3()
+        .pl_6()
         .pb_8()
         .child(
           div()
