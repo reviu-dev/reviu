@@ -1,4 +1,4 @@
-import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueParameters, GithubIssueResponse, GithubRepositoryTreeParams, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
+import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueParameters, GithubIssueResponse, GithubRepositoryParameters, GithubRepositoryResponse, GithubRepositoryTreeParams, GithubRepositoryTreesResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
@@ -19,7 +19,7 @@ import {
   fetchGithubRepositoryIssue,
   fetchGithubRepositoryIssueComments,
   fetchGithubRepositoryIssues,
-  fetchGithubRepositoryTree,
+  fetchGithubRepositoryTrees,
   patchGithubPullRequestComment,
 
 } from '../services/github.js'
@@ -34,41 +34,41 @@ interface GithubPullRequest {
   title: PullRequestResponse['title']
   state: PullRequestResponse['state']
   draft: NonNullable<PullRequestResponse['draft']>
-  mergedAt: PullRequestResponse['merged_at']
-  updatedAt: PullRequestResponse['updated_at']
+  merged_at: PullRequestResponse['merged_at']
+  updated_at: PullRequestResponse['updated_at']
   labels: PullRequestResponse['labels']
   repository: GithubRepository
 }
 
 interface GithubPullRequestDetailsAuthor {
   login: PullRequestDetailsResponse['user']['login']
-  avatarUrl: PullRequestDetailsResponse['user']['avatar_url']
+  avatar_url: PullRequestDetailsResponse['user']['avatar_url']
 }
 
 interface GithubPullRequestReviewCommentUser {
   login: PullRequestCommentResponse['user']['login']
-  avatarUrl: PullRequestCommentResponse['user']['avatar_url']
+  avatar_url: PullRequestCommentResponse['user']['avatar_url']
 }
 
 interface GithubPullRequestReviewComment {
   id: PullRequestCommentResponse['id']
-  pullRequestReviewId: PullRequestCommentResponse['pull_request_review_id']
-  diffHunk: PullRequestCommentResponse['diff_hunk']
+  pull_request_review_id: PullRequestCommentResponse['pull_request_review_id']
+  diff_hunk: PullRequestCommentResponse['diff_hunk']
   path: PullRequestCommentResponse['path']
   position: PullRequestCommentResponse['position']
-  originalPosition: PullRequestCommentResponse['original_position']
-  commitId: PullRequestCommentResponse['commit_id']
-  originalCommitId: PullRequestCommentResponse['original_commit_id']
-  inReplyToId: PullRequestCommentResponse['in_reply_to_id']
+  original_position: PullRequestCommentResponse['original_position']
+  commit_id: PullRequestCommentResponse['commit_id']
+  original_commit_id: PullRequestCommentResponse['original_commit_id']
+  in_reply_to_id: PullRequestCommentResponse['in_reply_to_id']
   user: GithubPullRequestReviewCommentUser
   body: PullRequestCommentResponse['body']
-  createdAt: PullRequestCommentResponse['created_at']
-  updatedAt: PullRequestCommentResponse['updated_at']
-  startLine: PullRequestCommentResponse['start_line']
-  originalStartLine: PullRequestCommentResponse['original_start_line']
-  startSide: PullRequestCommentResponse['start_side']
+  created_at: PullRequestCommentResponse['created_at']
+  updated_at: PullRequestCommentResponse['updated_at']
+  start_line: PullRequestCommentResponse['start_line']
+  original_start_line: PullRequestCommentResponse['original_start_line']
+  start_side: PullRequestCommentResponse['start_side']
   line: PullRequestCommentResponse['line']
-  originalLine: PullRequestCommentResponse['original_line']
+  original_line: PullRequestCommentResponse['original_line']
   side: PullRequestCommentResponse['side']
 }
 
@@ -77,35 +77,35 @@ interface GithubPullRequestDetails {
   title: PullRequestDetailsResponse['title']
   state: PullRequestDetailsResponse['state']
   draft: NonNullable<PullRequestDetailsResponse['draft']>
-  createdAt: PullRequestDetailsResponse['created_at']
-  updatedAt: PullRequestDetailsResponse['updated_at']
-  mergedAt: PullRequestDetailsResponse['merged_at']
-  mergeBaseSha: string
-  baseSha: PullRequestDetailsResponse['base']['sha']
-  headSha: PullRequestDetailsResponse['head']['sha']
-  baseRefName: PullRequestDetailsResponse['base']['ref']
-  headRefName: PullRequestDetailsResponse['head']['ref']
+  created_at: PullRequestDetailsResponse['created_at']
+  updated_at: PullRequestDetailsResponse['updated_at']
+  merged_at: PullRequestDetailsResponse['merged_at']
+  merge_base_sha: string
+  base_sha: PullRequestDetailsResponse['base']['sha']
+  head_sha: PullRequestDetailsResponse['head']['sha']
+  base_ref_name: PullRequestDetailsResponse['base']['ref']
+  head_ref_name: PullRequestDetailsResponse['head']['ref']
   body: PullRequestDetailsResponse['body']
   author: GithubPullRequestDetailsAuthor
   comments: PullRequestDetailsResponse['comments']
-  reviewComments: PullRequestDetailsResponse['review_comments']
+  review_comments: PullRequestDetailsResponse['review_comments']
   commits: PullRequestDetailsResponse['commits']
   additions: PullRequestDetailsResponse['additions']
   deletions: PullRequestDetailsResponse['deletions']
-  changedFiles: PullRequestDetailsResponse['changed_files']
+  changed_files: PullRequestDetailsResponse['changed_files']
   labels: PullRequestDetailsResponse['labels']
   repository: GithubRepository
-  headRepository: GithubRepository
+  head_repository: GithubRepository
 }
 
 interface GithubNotificationRepositoryOwner {
   login: NotificationResponse['repository']['owner']['login']
-  avatarUrl: NotificationResponse['repository']['owner']['avatar_url']
+  avatar_url: NotificationResponse['repository']['owner']['avatar_url']
 }
 
 interface GithubNotificationRepository {
   name: NotificationResponse['repository']['name']
-  fullName: NotificationResponse['repository']['full_name']
+  full_name: NotificationResponse['repository']['full_name']
   owner: GithubNotificationRepositoryOwner
 }
 
@@ -113,7 +113,7 @@ interface GithubNotificationSubject {
   title: NotificationResponse['subject']['title']
   type: NotificationResponse['subject']['type']
   url: NotificationResponse['subject']['url']
-  latestCommentUrl: NotificationResponse['subject']['latest_comment_url']
+  latest_comment_url: NotificationResponse['subject']['latest_comment_url']
 }
 
 interface GithubNotification {
@@ -122,10 +122,10 @@ interface GithubNotification {
   subject: GithubNotificationSubject
   reason: NotificationResponse['reason']
   unread: NotificationResponse['unread']
-  updatedAt: NotificationResponse['updated_at']
-  lastReadAt: NotificationResponse['last_read_at']
+  updated_at: NotificationResponse['updated_at']
+  last_read_at: NotificationResponse['last_read_at']
   url: NotificationResponse['url']
-  subscriptionUrl: NotificationResponse['subscription_url']
+  subscription_url: NotificationResponse['subscription_url']
 }
 
 interface GithubIssue {
@@ -134,14 +134,14 @@ interface GithubIssue {
   title: GithubIssueResponse['title']
   state: GithubIssueResponse['state']
   state_reason: GithubIssueResponse['state_reason']
-  createdAt: GithubIssueResponse['created_at']
-  updatedAt: GithubIssueResponse['updated_at']
-  closedAt: GithubIssueResponse['closed_at'] | null
+  created_at: GithubIssueResponse['created_at']
+  updated_at: GithubIssueResponse['updated_at']
+  closed_at: GithubIssueResponse['closed_at'] | null
   labels: GithubIssueResponse['labels']
   user: {
     login: NonNullable<GithubIssueResponse['user']>['login']
     name?: NonNullable<GithubIssueResponse['user']>['name']
-    avatarUrl: NonNullable<GithubIssueResponse['user']>['avatar_url']
+    avatar_url: NonNullable<GithubIssueResponse['user']>['avatar_url']
   } | null
   repository: GithubRepository
 }
@@ -149,12 +149,12 @@ interface GithubIssue {
 interface GithubIssueDetailsComment {
   id: GithubIssueDetailsCommentResponse['id']
   body: GithubIssueDetailsCommentResponse['body']
-  createdAt: GithubIssueDetailsCommentResponse['created_at']
-  updatedAt: GithubIssueDetailsCommentResponse['updated_at']
+  created_at: GithubIssueDetailsCommentResponse['created_at']
+  updated_at: GithubIssueDetailsCommentResponse['updated_at']
   user: {
     login: NonNullable<GithubIssueDetailsCommentResponse['user']>['login']
     name?: NonNullable<GithubIssueDetailsCommentResponse['user']>['name']
-    avatarUrl: NonNullable<GithubIssueDetailsCommentResponse['user']>['avatar_url']
+    avatar_url: NonNullable<GithubIssueDetailsCommentResponse['user']>['avatar_url']
   } | null
 }
 
@@ -165,17 +165,50 @@ interface GithubIssueDetails {
   body: GithubIssueResponse['body']
   state: GithubIssueResponse['state']
   state_reason: GithubIssueResponse['state_reason']
-  createdAt: GithubIssueResponse['created_at']
-  updatedAt: GithubIssueResponse['updated_at']
-  closedAt: GithubIssueResponse['closed_at'] | null
+  created_at: GithubIssueResponse['created_at']
+  updated_at: GithubIssueResponse['updated_at']
+  closed_at: GithubIssueResponse['closed_at'] | null
   labels: GithubIssueResponse['labels']
   comments: GithubIssueDetailsComment[]
   user: {
     login: NonNullable<GithubIssueResponse['user']>['login']
     name?: NonNullable<GithubIssueResponse['user']>['name']
-    avatarUrl: NonNullable<GithubIssueResponse['user']>['avatar_url']
+    avatar_url: NonNullable<GithubIssueResponse['user']>['avatar_url']
   } | null
   repository: GithubRepository
+}
+
+interface GithubRepositoryDetails {
+  name: GithubRepositoryResponse['name']
+  full_name: GithubRepositoryResponse['full_name']
+  description: GithubRepositoryResponse['description']
+  homepage: GithubRepositoryResponse['homepage']
+  language: GithubRepositoryResponse['language']
+  default_branch: GithubRepositoryResponse['default_branch']
+  stargazers_count: GithubRepositoryResponse['stargazers_count']
+  forks_count: GithubRepositoryResponse['forks_count']
+  subscribers_count: GithubRepositoryResponse['subscribers_count']
+  open_issues_count: GithubRepositoryResponse['open_issues_count']
+  size: GithubRepositoryResponse['size']
+  pushed_at: GithubRepositoryResponse['pushed_at']
+  html_url: GithubRepositoryResponse['html_url']
+  owner: {
+    login: GithubRepositoryResponse['owner']['login']
+    name?: GithubRepositoryResponse['owner']['name']
+    avatar_url: GithubRepositoryResponse['owner']['avatar_url']
+  }
+  license: {
+    key: NonNullable<GithubRepositoryResponse['license']>['key']
+    name: NonNullable<GithubRepositoryResponse['license']>['name']
+    spdx_id: NonNullable<GithubRepositoryResponse['license']>['spdx_id']
+  } | null
+}
+
+interface GithubRepositoryTree {
+  sha: GithubRepositoryTreesResponse['sha']
+  url?: GithubRepositoryTreesResponse['url']
+  truncated: GithubRepositoryTreesResponse['truncated']
+  tree: GithubRepositoryTreesResponse['tree']
 }
 
 interface GithubFileContent {
@@ -213,7 +246,7 @@ function formatGithubUser<U extends { login: string, name?: string | null, avata
   return {
     login: user.login,
     name: user.name,
-    avatarUrl: user.avatar_url,
+    avatar_url: user.avatar_url,
   }
 }
 
@@ -222,26 +255,26 @@ function mapGithubPullRequestReviewComment(
 ): GithubPullRequestReviewComment {
   return {
     id: comment.id,
-    pullRequestReviewId: comment.pull_request_review_id,
-    diffHunk: comment.diff_hunk,
+    pull_request_review_id: comment.pull_request_review_id,
+    diff_hunk: comment.diff_hunk,
     path: comment.path,
     position: comment.position,
-    originalPosition: comment.original_position,
-    commitId: comment.commit_id,
-    originalCommitId: comment.original_commit_id,
-    inReplyToId: comment.in_reply_to_id,
+    original_position: comment.original_position,
+    commit_id: comment.commit_id,
+    original_commit_id: comment.original_commit_id,
+    in_reply_to_id: comment.in_reply_to_id,
     user: {
       login: comment.user.login,
-      avatarUrl: comment.user.avatar_url,
+      avatar_url: comment.user.avatar_url,
     },
     body: comment.body,
-    createdAt: comment.created_at,
-    updatedAt: comment.updated_at,
-    startLine: comment.start_line,
-    originalStartLine: comment.original_start_line,
-    startSide: comment.start_side,
+    created_at: comment.created_at,
+    updated_at: comment.updated_at,
+    start_line: comment.start_line,
+    original_start_line: comment.original_start_line,
+    start_side: comment.start_side,
     line: comment.line,
-    originalLine: comment.original_line,
+    original_line: comment.original_line,
     side: comment.side,
   }
 }
@@ -267,24 +300,24 @@ export const githubRoutes = githubRouter
         id: notification.id,
         repository: {
           name: notification.repository.name,
-          fullName: notification.repository.full_name,
+          full_name: notification.repository.full_name,
           owner: {
             login: notification.repository.owner.login,
-            avatarUrl: notification.repository.owner.avatar_url,
+            avatar_url: notification.repository.owner.avatar_url,
           },
         },
         subject: {
           title: notification.subject.title,
           type: notification.subject.type,
           url: notification.subject.url,
-          latestCommentUrl: notification.subject.latest_comment_url,
+          latest_comment_url: notification.subject.latest_comment_url,
         },
         reason: notification.reason,
         unread: notification.unread,
-        updatedAt: notification.updated_at,
-        lastReadAt: notification.last_read_at,
+        updated_at: notification.updated_at,
+        last_read_at: notification.last_read_at,
         url: notification.url,
-        subscriptionUrl: notification.subscription_url,
+        subscription_url: notification.subscription_url,
       }))
 
       return ctx.json({ notifications }, 200)
@@ -320,8 +353,8 @@ export const githubRoutes = githubRouter
         title: pull.title,
         state: pull.state,
         draft: Boolean(pull.draft),
-        mergedAt: pull.merged_at,
-        updatedAt: pull.updated_at,
+        merged_at: pull.merged_at,
+        updated_at: pull.updated_at,
         labels: pull.labels,
         repository: {
           owner: org,
@@ -357,7 +390,7 @@ export const githubRoutes = githubRouter
 
       const author: GithubPullRequestDetailsAuthor = {
         login: data.user.login,
-        avatarUrl: data.user.avatar_url,
+        avatar_url: data.user.avatar_url,
       }
 
       let mergeBaseSha = data.base.sha
@@ -385,28 +418,28 @@ export const githubRoutes = githubRouter
         title: data.title,
         state: data.state,
         draft: Boolean(data.draft),
-        createdAt: data.created_at,
-        updatedAt: data.updated_at,
-        mergedAt: data.merged_at,
-        mergeBaseSha,
-        baseSha: data.base.sha,
-        headSha: data.head.sha,
-        baseRefName: data.base.ref,
-        headRefName: data.head.ref,
+        created_at: data.created_at,
+        updated_at: data.updated_at,
+        merged_at: data.merged_at,
+        merge_base_sha: mergeBaseSha,
+        base_sha: data.base.sha,
+        head_sha: data.head.sha,
+        base_ref_name: data.base.ref,
+        head_ref_name: data.head.ref,
         body: data.body,
         author,
         comments: data.comments,
-        reviewComments: data.review_comments,
+        review_comments: data.review_comments,
         commits: data.commits,
         additions: data.additions,
         deletions: data.deletions,
-        changedFiles: data.changed_files,
+        changed_files: data.changed_files,
         labels: data.labels,
         repository: {
           owner: org,
           repo,
         },
-        headRepository: {
+        head_repository: {
           owner: data.head.repo.owner.login,
           repo: data.head.repo.name,
         },
@@ -682,8 +715,42 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const data = await fetchGithubRepository({ token: githubToken, owner, repo })
-      return ctx.json(data, 200)
+      const params: GithubRepositoryParameters = {
+        owner,
+        repo,
+      }
+
+      const data = await fetchGithubRepository({ token: githubToken, params })
+
+      const repositoryDetails: GithubRepositoryDetails = {
+        name: data.name,
+        full_name: data.full_name,
+        description: data.description,
+        homepage: data.homepage,
+        language: data.language,
+        default_branch: data.default_branch,
+        stargazers_count: data.stargazers_count,
+        forks_count: data.forks_count,
+        subscribers_count: data.subscribers_count,
+        open_issues_count: data.open_issues_count,
+        size: data.size,
+        pushed_at: data.pushed_at,
+        html_url: data.html_url,
+        owner: {
+          login: data.owner.login,
+          name: data.owner.name || undefined,
+          avatar_url: data.owner.avatar_url,
+        },
+        license: data.license
+          ? {
+              key: data.license.key,
+              name: data.license.name,
+              spdx_id: data.license.spdx_id,
+            }
+          : null,
+      }
+
+      return ctx.json(repositoryDetails, 200)
     }
     catch (error) {
       const status = (error as { status?: number }).status
@@ -708,8 +775,16 @@ export const githubRoutes = githubRouter
         ...(recursive !== undefined ? { recursive } : {}),
       }
 
-      const data = await fetchGithubRepositoryTree({ token: githubToken, params })
-      return ctx.json(data, 200)
+      const data = await fetchGithubRepositoryTrees({ token: githubToken, params })
+
+      const tree: GithubRepositoryTree = {
+        sha: data.sha,
+        url: data.url,
+        truncated: data.truncated,
+        tree: data.tree,
+      }
+
+      return ctx.json(tree, 200)
     }
     catch (error) {
       const status = (error as { status?: number }).status
@@ -742,8 +817,8 @@ export const githubRoutes = githubRouter
         title: pull.title,
         state: pull.state,
         draft: Boolean(pull.draft),
-        mergedAt: pull.merged_at,
-        updatedAt: pull.updated_at,
+        merged_at: pull.merged_at,
+        updated_at: pull.updated_at,
         labels: pull.labels,
         repository: {
           owner,
@@ -781,9 +856,9 @@ export const githubRoutes = githubRouter
         title: issue.title,
         state: issue.state,
         state_reason: issue.state_reason,
-        createdAt: issue.created_at,
-        updatedAt: issue.updated_at,
-        closedAt: issue.closed_at,
+        created_at: issue.created_at,
+        updated_at: issue.updated_at,
+        closed_at: issue.closed_at,
         labels: issue.labels,
         user: formatGithubUser(issue.user),
         repository: {
@@ -835,16 +910,16 @@ export const githubRoutes = githubRouter
         title: data.title,
         state: data.state,
         state_reason: data.state_reason,
-        createdAt: data.created_at,
-        updatedAt: data.updated_at,
-        closedAt: data.closed_at,
+        created_at: data.created_at,
+        updated_at: data.updated_at,
+        closed_at: data.closed_at,
         labels: data.labels,
         body: data.body,
         comments: issueComments.map(comment => ({
           id: comment.id,
           body: comment.body,
-          createdAt: comment.created_at,
-          updatedAt: comment.updated_at,
+          created_at: comment.created_at,
+          updated_at: comment.updated_at,
           user: formatGithubUser(comment.user),
         })),
         user: formatGithubUser(data.user),

@@ -46,7 +46,8 @@ export type GithubIssueDetailsResponse = Endpoints['GET /repos/{owner}/{repo}/is
 export type GithubIssueDetailsParameters = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}']['parameters']
 export type GithubIssueDetailsCommentResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}/comments']['response']['data'][number]
 export type GithubIssueDetailsCommentParameters = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}/comments']['parameters']
-
+export type GithubRepositoryResponse = Endpoints['GET /repos/{owner}/{repo}']['response']['data']
+export type GithubRepositoryParameters = Endpoints['GET /repos/{owner}/{repo}']['parameters']
 export type GithubRepositoryTreesResponse = Endpoints['GET /repos/{owner}/{repo}/git/trees/{tree_sha}']['response']['data']
 export type GithubRepositoryTreeParams = Endpoints['GET /repos/{owner}/{repo}/git/trees/{tree_sha}']['parameters']
 
@@ -211,12 +212,11 @@ export async function fetchGithubViewer({ token }: { token: string }): Promise<G
 }
 
 export async function fetchGithubRepository(
-  { token, owner, repo}:
-  { token: string, owner: string, repo: string },
-) {
+  { token, params }:
+  { token: string, params: GithubRepositoryParameters },
+): Promise<GithubRepositoryResponse> {
   const { data } = await request('GET /repos/{owner}/{repo}', {
-    owner,
-    repo,
+    ...params,
     headers: githubAuthHeaders(token),
   })
   return data
@@ -225,7 +225,7 @@ export async function fetchGithubRepository(
 export async function fetchGithubRepositoryIssues(
   { token, params }:
   { token: string, params: GithubIssueParameters },
-) {
+): Promise<GithubIssueResponse[]> {
   const { data } = await request('GET /repos/{owner}/{repo}/issues', {
     ...params,
     headers: githubAuthHeaders(token),
@@ -236,7 +236,7 @@ export async function fetchGithubRepositoryIssues(
 export async function fetchGithubRepositoryIssue(
   { token, params }:
   { token: string, params: GithubIssueDetailsParameters },
-) {
+): Promise<GithubIssueDetailsResponse> {
   const { data } = await request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
     ...params,
     headers: githubAuthHeaders(token),
@@ -247,7 +247,7 @@ export async function fetchGithubRepositoryIssue(
 export async function fetchGithubRepositoryIssueComments(
   { token, params }:
   { token: string, params: GithubIssueDetailsCommentParameters },
-) {
+): Promise<GithubIssueDetailsCommentResponse[]> {
   const { data } = await request('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
     ...params,
     headers: githubAuthHeaders(token),
@@ -255,10 +255,10 @@ export async function fetchGithubRepositoryIssueComments(
   return data
 }
 
-export async function fetchGithubRepositoryTree(
+export async function fetchGithubRepositoryTrees(
   { token, params }:
   { token: string, params: GithubRepositoryTreeParams },
-) {
+): Promise<GithubRepositoryTreesResponse> {
   const { data } = await request('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', {
     ...params,
     headers: githubAuthHeaders(token),

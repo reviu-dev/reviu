@@ -14,7 +14,7 @@ const KEYCHAIN_USERNAME: &str = "bearer";
 #[allow(dead_code)]
 pub struct GithubNotificationRepositoryOwner {
   pub login: String,
-  #[serde(rename = "avatarUrl")]
+  #[serde(rename = "avatar_url")]
   pub avatar_url: Option<String>,
 }
 
@@ -22,7 +22,7 @@ pub struct GithubNotificationRepositoryOwner {
 #[allow(dead_code)]
 pub struct GithubNotificationRepository {
   pub name: String,
-  #[serde(rename = "fullName")]
+  #[serde(rename = "full_name")]
   pub full_name: String,
   pub owner: Option<GithubNotificationRepositoryOwner>,
 }
@@ -34,7 +34,7 @@ pub struct GithubNotificationSubject {
   #[serde(rename = "type")]
   pub subject_type: String,
   pub url: Option<String>,
-  #[serde(rename = "latestCommentUrl")]
+  #[serde(rename = "latest_comment_url")]
   pub latest_comment_url: Option<String>,
 }
 
@@ -46,12 +46,12 @@ pub struct GithubNotification {
   pub subject: GithubNotificationSubject,
   pub reason: String,
   pub unread: bool,
-  #[serde(rename = "updatedAt")]
+  #[serde(rename = "updated_at")]
   pub updated_at: String,
-  #[serde(rename = "lastReadAt")]
+  #[serde(rename = "last_read_at")]
   pub last_read_at: Option<String>,
   pub url: String,
-  #[serde(rename = "subscriptionUrl")]
+  #[serde(rename = "subscription_url")]
   pub subscription_url: String,
 }
 
@@ -156,7 +156,7 @@ pub enum GithubIssueStateReason {
 pub struct GithubIssueUser {
   pub login: String,
   pub name: Option<String>,
-  #[serde(rename = "avatarUrl")]
+  #[serde(rename = "avatar_url")]
   pub avatar_url: Option<String>,
 }
 
@@ -168,11 +168,11 @@ pub struct GithubIssue {
   pub title: String,
   pub state: String,
   pub state_reason: Option<GithubIssueStateReason>,
-  #[serde(rename = "createdAt")]
+  #[serde(rename = "created_at")]
   pub created_at: String,
-  #[serde(rename = "updatedAt")]
+  #[serde(rename = "updated_at")]
   pub updated_at: String,
-  #[serde(rename = "closedAt")]
+  #[serde(rename = "closed_at")]
   pub closed_at: Option<String>,
   pub labels: Vec<GithubPullRequestLabel>,
   pub user: Option<GithubIssueUser>,
@@ -184,9 +184,9 @@ pub struct GithubIssue {
 pub struct GithubIssueDetailsComment {
   pub id: u64,
   pub body: Option<String>,
-  #[serde(rename = "createdAt")]
+  #[serde(rename = "created_at")]
   pub created_at: String,
-  #[serde(rename = "updatedAt")]
+  #[serde(rename = "updated_at")]
   pub updated_at: String,
   pub user: Option<GithubIssueUser>,
 }
@@ -200,11 +200,11 @@ pub struct GithubIssueDetails {
   pub body: Option<String>,
   pub state: String,
   pub state_reason: Option<GithubIssueStateReason>,
-  #[serde(rename = "createdAt")]
+  #[serde(rename = "created_at")]
   pub created_at: String,
-  #[serde(rename = "updatedAt")]
+  #[serde(rename = "updated_at")]
   pub updated_at: String,
-  #[serde(rename = "closedAt")]
+  #[serde(rename = "closed_at")]
   pub closed_at: Option<String>,
   pub labels: Vec<GithubPullRequestLabel>,
   pub comments: Vec<GithubIssueDetailsComment>,
@@ -265,14 +265,14 @@ pub struct GithubRepositoryTreeEntry {
   pub entry_type: String,
   pub sha: String,
   pub size: Option<u64>,
-  pub url: String,
+  pub url: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubRepositoryTree {
   pub sha: String,
-  pub url: String,
+  pub url: Option<String>,
   pub tree: Vec<GithubRepositoryTreeEntry>,
   pub truncated: bool,
 }
@@ -282,10 +282,10 @@ pub struct GithubPullRequest {
   pub number: u64,
   pub title: String,
   pub state: GithubPullRequestState,
-  #[serde(rename = "mergedAt")]
+  #[serde(rename = "merged_at")]
   pub merged_at: Option<String>,
   pub draft: bool,
-  #[serde(rename = "updatedAt")]
+  #[serde(rename = "updated_at")]
   pub updated_at: String,
   pub labels: Vec<GithubPullRequestLabel>,
   pub repository: GithubRepository,
@@ -306,14 +306,14 @@ impl GithubPullRequest {
 #[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestAuthor {
   pub login: String,
-  #[serde(rename = "avatarUrl")]
+  #[serde(rename = "avatar_url")]
   pub avatar_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestReviewCommentUser {
   pub login: String,
-  #[serde(rename = "avatarUrl")]
+  #[serde(rename = "avatar_url")]
   pub avatar_url: Option<String>,
 }
 
@@ -321,34 +321,34 @@ pub struct GithubPullRequestReviewCommentUser {
 #[allow(dead_code)]
 pub struct GithubPullRequestReviewComment {
   pub id: u64,
-  #[serde(rename = "pullRequestReviewId")]
+  #[serde(rename = "pull_request_review_id")]
   pub pull_request_review_id: Option<u64>,
-  #[serde(rename = "diffHunk")]
+  #[serde(rename = "diff_hunk")]
   pub diff_hunk: String,
   pub path: String,
   pub position: Option<i64>,
-  #[serde(rename = "originalPosition")]
+  #[serde(rename = "original_position")]
   pub original_position: Option<i64>,
-  #[serde(rename = "commitId")]
+  #[serde(rename = "commit_id")]
   pub commit_id: String,
-  #[serde(rename = "originalCommitId")]
+  #[serde(rename = "original_commit_id")]
   pub original_commit_id: String,
-  #[serde(rename = "inReplyToId")]
+  #[serde(rename = "in_reply_to_id")]
   pub in_reply_to_id: Option<u64>,
   pub user: GithubPullRequestReviewCommentUser,
   pub body: String,
-  #[serde(rename = "createdAt")]
+  #[serde(rename = "created_at")]
   pub created_at: String,
-  #[serde(rename = "updatedAt")]
+  #[serde(rename = "updated_at")]
   pub updated_at: String,
-  #[serde(rename = "startLine")]
+  #[serde(rename = "start_line")]
   pub start_line: Option<i64>,
-  #[serde(rename = "originalStartLine")]
+  #[serde(rename = "original_start_line")]
   pub original_start_line: Option<i64>,
-  #[serde(rename = "startSide")]
+  #[serde(rename = "start_side")]
   pub start_side: Option<String>,
   pub line: Option<i64>,
-  #[serde(rename = "originalLine")]
+  #[serde(rename = "original_line")]
   pub original_line: Option<i64>,
   pub side: Option<String>,
 }
@@ -392,35 +392,35 @@ pub struct GithubPullRequestDetails {
   pub title: String,
   pub state: GithubPullRequestState,
   pub draft: bool,
-  #[serde(rename = "createdAt")]
+  #[serde(rename = "created_at")]
   pub created_at: String,
-  #[serde(rename = "updatedAt")]
+  #[serde(rename = "updated_at")]
   pub updated_at: String,
-  #[serde(rename = "mergedAt")]
+  #[serde(rename = "merged_at")]
   pub merged_at: Option<String>,
-  #[serde(rename = "mergeBaseSha")]
+  #[serde(rename = "merge_base_sha")]
   pub merge_base_sha: String,
-  #[serde(rename = "baseSha")]
+  #[serde(rename = "base_sha")]
   pub base_sha: String,
-  #[serde(rename = "headSha")]
+  #[serde(rename = "head_sha")]
   pub head_sha: String,
-  #[serde(rename = "baseRefName")]
+  #[serde(rename = "base_ref_name")]
   pub base_ref_name: String,
-  #[serde(rename = "headRefName")]
+  #[serde(rename = "head_ref_name")]
   pub head_ref_name: String,
   pub body: Option<String>,
   pub author: GithubPullRequestAuthor,
   pub comments: u64,
-  #[serde(rename = "reviewComments")]
+  #[serde(rename = "review_comments")]
   pub review_comments: u64,
   pub commits: u64,
   pub additions: u64,
   pub deletions: u64,
-  #[serde(rename = "changedFiles")]
+  #[serde(rename = "changed_files")]
   pub changed_files: u64,
   pub labels: Vec<GithubPullRequestLabel>,
   pub repository: GithubRepository,
-  #[serde(rename = "headRepository")]
+  #[serde(rename = "head_repository")]
   pub head_repository: Option<GithubRepository>,
 }
 
