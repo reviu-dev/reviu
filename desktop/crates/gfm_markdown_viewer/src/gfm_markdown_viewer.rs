@@ -3,7 +3,7 @@ use std::{
   fs,
   hash::{DefaultHasher, Hash, Hasher},
   ops::Range,
-  path::PathBuf,
+  path::{Path, PathBuf},
   sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
@@ -22,7 +22,7 @@ use gpui::{
   FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, ImageCacheError,
   ImgResourceLoader, InspectorElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
   MouseUpEvent, Pixels, RenderImage, Resource, SharedString, StrikethroughStyle, StyledText,
-  TextRun, UnderlineStyle, Window, div, fill, img, point, prelude::*, px, red,
+  TextRun, UnderlineStyle, Window, div, fill, img, point, prelude::*, px,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
@@ -1123,11 +1123,12 @@ fn render_github_code_reference_preview_card(
   preview.url.hash(&mut preview_id_hasher);
   preview.start_line.hash(&mut preview_id_hasher);
   preview.end_line.hash(&mut preview_id_hasher);
-  let preview_scroll_id: SharedString = format!(
-    "markdown-code-reference-preview-scroll-{}",
-    preview_id_hasher.finish()
-  )
-  .into();
+  let preview_hash = preview_id_hasher.finish();
+  let preview_scroll_id: SharedString =
+    format!("markdown-code-reference-preview-scroll-{}", preview_hash).into();
+  let snippet_text_seed = preview_hash as usize;
+  let snippet_language_hint = code_block_language_hint_from_path(preview.path.as_ref());
+  let snippet_render_state = MarkdownRenderState::new();
   let url = preview.url.clone();
   let file_label = format!("{}/{}", preview.repo.as_ref(), preview.path.as_ref());
   let line_label = if preview.start_line == preview.end_line {
@@ -1170,6 +1171,9 @@ fn render_github_code_reference_preview_card(
   } else {
     for (offset, snippet) in preview.snippets.iter().enumerate() {
       let line_number = preview.start_line + offset;
+      let (snippet_text, snippet_spans, snippet_links) =
+        build_preview_code_spans(snippet.as_ref(), snippet_language_hint.as_deref());
+      let text_id = compose_text_id(snippet_text_seed, line_number);
       snippet_rows = snippet_rows.child(
         h_flex()
           .items_center()
@@ -1187,7 +1191,18 @@ fn render_github_code_reference_preview_card(
               .text_sm()
               .whitespace_nowrap()
               .text_color(theme.foreground)
-              .child(snippet.as_ref().to_string()),
+              .child(SelectableText::new(
+                snippet_text,
+                snippet_spans,
+                snippet_links,
+                snippet_render_state.clone(),
+                None,
+                text_id,
+                SelectableTextOptions {
+                  interactive: false,
+                  show_indentation_dots: true,
+                },
+              )),
           ),
       );
     }
@@ -1241,13 +1256,46 @@ fn render_github_code_reference_preview_card(
               cx.stop_propagation();
             })
             .child(
-              v_flex()
-                .gap(px(MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX))
-                .child(snippet_rows),
+              div()
+                .whitespace_nowrap()
+                .text_sm()
+                .text_color(theme.foreground)
+                .child(
+                  v_flex()
+                    .gap(px(MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX))
+                    .child(snippet_rows),
+                ),
             ),
         ),
     )
     .into_any_element()
+}
+
+fn code_block_language_hint_from_path(path: &str) -> Option<String> {
+  let file_name = path.rsplit('/').next().unwrap_or(path).trim();
+  if file_name.is_empty() {
+    return None;
+  }
+
+  if let Some(extension) = Path::new(file_name)
+    .extension()
+    .and_then(|ext| ext.to_str())
+    .filter(|ext| !ext.is_empty())
+  {
+    return Some(extension.to_string());
+  }
+
+  Some(file_name.to_string())
+}
+
+fn build_preview_code_spans(
+  snippet: &str,
+  language_hint: Option<&str>,
+) -> (SharedString, Vec<InlineSpan>, Vec<LinkRange>) {
+  build_code_block_spans(&CodeBlock {
+    lang: language_hint.map(ToOwned::to_owned),
+    value: snippet.to_string(),
+  })
 }
 
 fn render_markdown_with_preview_segments(
@@ -2029,6 +2077,7 @@ fn render_code_block(
   let scroll_id: SharedString = format!("markdown-code-block-scroll-{text_id}").into();
 
   div()
+    .bg(theme.accent.opacity(0.3))
     .border_1()
     .border_color(theme.border)
     .rounded_md()
@@ -3966,6 +4015,19 @@ Apres"#,
 
     let dotted = code_block_language_config(Some(".py")).expect(".py extension");
     assert_eq!(dotted.name, "python");
+  }
+
+  #[test]
+  fn code_block_language_hint_from_path_prefers_extension() {
+    assert_eq!(
+      code_block_language_hint_from_path("src/lib.rs").as_deref(),
+      Some("rs")
+    );
+    assert_eq!(
+      code_block_language_hint_from_path("Dockerfile").as_deref(),
+      Some("Dockerfile")
+    );
+    assert_eq!(code_block_language_hint_from_path(""), None);
   }
 
   #[test]
