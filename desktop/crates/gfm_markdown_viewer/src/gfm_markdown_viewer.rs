@@ -1120,6 +1120,7 @@ pub fn render_github_code_reference_preview_card(
   cx: &App,
 ) -> AnyElement {
   let theme = cx.theme();
+  let link_color = github_link_color(theme.background);
   let mut preview_id_hasher = DefaultHasher::new();
   preview.url.hash(&mut preview_id_hasher);
   preview.start_line.hash(&mut preview_id_hasher);
@@ -1217,7 +1218,7 @@ pub fn render_github_code_reference_preview_card(
     .overflow_hidden()
     .child(
       div()
-        .bg(theme.accent)
+        .bg(theme.accent.opacity(0.3))
         .border_b_1()
         .border_color(theme.border)
         .px(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX))
@@ -1233,7 +1234,7 @@ pub fn render_github_code_reference_preview_card(
               div()
                 .text_sm()
                 .font_medium()
-                .text_color(theme.info)
+                .text_color(link_color)
                 .child(file_label),
             )
             .child(
@@ -1606,7 +1607,7 @@ fn render_table(
     .max(1);
   let column_widths = table_column_widths(table, column_count);
 
-  let mut header_row = h_flex().bg(theme.accent);
+  let mut header_row = h_flex().bg(theme.accent.opacity(0.3));
   for (column, width) in column_widths.iter().enumerate().take(column_count) {
     let cell = table
       .headers

@@ -11,7 +11,8 @@ use editor::{
   ReviewCommentEditHandler, ReviewCommentLinkHandler, ReviewCommentSide,
 };
 use gfm_markdown_viewer::{
-  GithubBlobLineReference, LinkAction, MarkdownRenderOptions, MarkdownRenderState,
+  GithubBlobLineReference, GithubCodeReferencePreview, LinkAction, MarkdownRenderOptions,
+  MarkdownRenderState,
   extract_github_blob_line_references, render_markdown,
 };
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
@@ -78,6 +79,24 @@ fn pr_description_scope_id(pr_number: u64) -> usize {
 
 fn github_repo_label(owner: &str, repo: &str) -> String {
   format!("{owner}/{repo}")
+}
+
+fn code_reference_requests_from_markdown(markdown: &str) -> Vec<GithubBlobLineReference> {
+  extract_github_blob_line_references(markdown)
+}
+
+fn gfm_preview_from_review_preview(
+  preview: &ReviewCommentCodeReferencePreview,
+) -> GithubCodeReferencePreview {
+  GithubCodeReferencePreview {
+    url: preview.url.clone(),
+    repo: preview.repo.clone(),
+    path: preview.path.clone(),
+    reference: preview.reference.clone(),
+    start_line: preview.start_line,
+    end_line: preview.end_line,
+    snippets: preview.snippets.clone(),
+  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -335,6 +354,7 @@ pub struct GithubPrDetailsPage {
   review_comments_loading: bool,
   review_comments_error: Option<SharedString>,
   review_comments: Vec<GithubPullRequestReviewComment>,
+  description_code_reference_requests: Vec<GithubBlobLineReference>,
   review_comment_code_reference_cache: HashMap<String, Option<ReviewCommentCodeReferencePreview>>,
   review_comment_code_reference_tasks: HashMap<String, Task<()>>,
   pending_review_comment_link_comment_id: Option<u64>,
@@ -601,6 +621,7 @@ impl GithubPrDetailsPage {
       review_comments_loading: false,
       review_comments_error: None,
       review_comments: Vec::new(),
+      description_code_reference_requests: Vec::new(),
       review_comment_code_reference_cache: HashMap::new(),
       review_comment_code_reference_tasks: HashMap::new(),
       pending_review_comment_link_comment_id: None,
@@ -1381,7 +1402,7 @@ impl GithubPrDetailsPage {
     comments
       .iter()
       .filter_map(|comment| {
-        let references = extract_github_blob_line_references(comment.body.as_ref());
+        let references = code_reference_requests_from_markdown(comment.body.as_ref());
         if references.is_empty() {
           None
         } else {
@@ -1389,6 +1410,16 @@ impl GithubPrDetailsPage {
         }
       })
       .collect()
+  }
+
+  fn description_code_reference_requests_for_pull_request(
+    pull_request: &GithubPullRequestDetails,
+  ) -> Vec<GithubBlobLineReference> {
+    pull_request
+      .body
+      .as_deref()
+      .map(code_reference_requests_from_markdown)
+      .unwrap_or_default()
   }
 
   fn cached_review_comment_code_reference_previews(
@@ -1416,12 +1447,37 @@ impl GithubPrDetailsPage {
       .collect()
   }
 
-  fn schedule_review_comment_code_reference_fetches(
+  fn cached_github_code_reference_previews_for_requests(
+    &self,
+    requests: &[GithubBlobLineReference],
+  ) -> Option<Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>> {
+    let previews: HashMap<Arc<str>, GithubCodeReferencePreview> = requests
+      .iter()
+      .filter_map(|reference| {
+        self
+          .review_comment_code_reference_cache
+          .get(&reference.url)
+          .and_then(|preview| preview.as_ref())
+          .map(gfm_preview_from_review_preview)
+          .map(|preview| (preview.url.clone(), preview))
+      })
+      .collect();
+
+    if previews.is_empty() {
+      None
+    } else {
+      Some(Arc::new(previews))
+    }
+  }
+
+  fn schedule_code_reference_fetches<'a, I>(
     &mut self,
-    requests: &HashMap<u64, Vec<GithubBlobLineReference>>,
+    references: I,
     cx: &mut Context<Self>,
-  ) {
-    for reference in requests.values().flat_map(|items| items.iter()) {
+  ) where
+    I: IntoIterator<Item = &'a GithubBlobLineReference>,
+  {
+    for reference in references {
       if self
         .review_comment_code_reference_cache
         .contains_key(&reference.url)
@@ -1496,7 +1552,10 @@ impl GithubPrDetailsPage {
       editor.set_review_comments(comments, cx);
       editor.set_review_comment_code_reference_previews(preview_map, cx);
     });
-    self.schedule_review_comment_code_reference_fetches(&preview_requests, cx);
+    self.schedule_code_reference_fetches(
+      preview_requests.values().flat_map(|items| items.iter()),
+      cx,
+    );
     self.resolve_pending_review_comment_link(cx);
   }
 
@@ -1785,6 +1844,7 @@ impl GithubPrDetailsPage {
     self.review_comments_loading = true;
     self.review_comments_error = None;
     self.review_comments.clear();
+    self.description_code_reference_requests.clear();
     self.review_comment_code_reference_cache.clear();
     self.review_comment_code_reference_tasks.clear();
     self.pending_review_comment_link_comment_id = open_target.review_comment_id;
@@ -1821,15 +1881,20 @@ impl GithubPrDetailsPage {
       let _ = this.update(cx, |this, cx| {
         match result {
           Ok(pull_request) => {
+            this.description_code_reference_requests =
+              Self::description_code_reference_requests_for_pull_request(&pull_request);
             this.pull_request = Some(pull_request);
             this.error = None;
             this.add_pr_breadcrumb("Load PR details succeeded", Map::new());
+            let description_requests = this.description_code_reference_requests.clone();
+            this.schedule_code_reference_fetches(description_requests.iter(), cx);
             this.sync_review_comments(cx);
             this.maybe_fetch_selected_file_contents(cx);
           }
           Err(error) => {
             let error_message = error.to_string();
             this.pull_request = None;
+            this.description_code_reference_requests.clear();
             this.error = Some(error_message.clone().into());
             this.add_pr_breadcrumb("Load PR details failed", Map::new());
             this.record_pr_error("github.pr.details", error_message.as_str(), Map::new());
@@ -2165,6 +2230,8 @@ impl GithubPrDetailsPage {
         LinkAction::Open
       }
     });
+    let description_previews = self
+      .cached_github_code_reference_previews_for_requests(&self.description_code_reference_requests);
 
     let content = v_flex()
       .w_full()
@@ -2345,13 +2412,15 @@ impl GithubPrDetailsPage {
               .border_color(theme.border)
               .rounded(theme.radius)
               .p_3()
-              .child(render_markdown(
-                body.as_str(),
-                &MarkdownRenderOptions::with_on_link(description_link_handler)
+              .child({
+                let mut options = MarkdownRenderOptions::with_on_link(description_link_handler)
                   .with_state(self.description_markdown_state.clone())
-                  .with_scope_id(pr_description_scope_id(pr.number)),
-                cx,
-              )),
+                  .with_scope_id(pr_description_scope_id(pr.number));
+                if let Some(previews) = description_previews.clone() {
+                  options = options.with_github_code_reference_previews(previews);
+                }
+                render_markdown(body.as_str(), &options, cx)
+              }),
           ),
       );
 
@@ -3317,6 +3386,37 @@ mod tests {
     assert_eq!(references[0].start_line, 7);
     assert_eq!(references[0].end_line, 7);
     assert_eq!(references[0].path, "docker-compose.yml");
+  }
+
+  #[test]
+  fn code_reference_requests_from_markdown_extracts_blob_links() {
+    let body = "[compose](https://github.com/acme/widget/blob/main/docker-compose.yml#L7)";
+    let references = code_reference_requests_from_markdown(body);
+    assert_eq!(references.len(), 1);
+    assert_eq!(references[0].owner, "acme");
+    assert_eq!(references[0].repo, "widget");
+  }
+
+  #[test]
+  fn gfm_preview_from_review_preview_preserves_fields() {
+    let preview = ReviewCommentCodeReferencePreview {
+      url: Arc::from("https://github.com/acme/widget/blob/main/src/lib.rs#L1-L2"),
+      repo: Arc::from("acme/widget"),
+      path: Arc::from("src/lib.rs"),
+      reference: Arc::from("main"),
+      start_line: 1,
+      end_line: 2,
+      snippets: vec![Arc::from("fn main() {}")],
+    };
+
+    let converted = gfm_preview_from_review_preview(&preview);
+    assert_eq!(converted.url, preview.url);
+    assert_eq!(converted.repo, preview.repo);
+    assert_eq!(converted.path, preview.path);
+    assert_eq!(converted.reference, preview.reference);
+    assert_eq!(converted.start_line, preview.start_line);
+    assert_eq!(converted.end_line, preview.end_line);
+    assert_eq!(converted.snippets, preview.snippets);
   }
 
   #[test]
