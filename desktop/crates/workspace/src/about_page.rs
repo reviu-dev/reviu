@@ -14,8 +14,8 @@ use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage,
-  DETAILS_PAGE_CONTAINER_MAX_WIDTH, HEADER_HEIGHT, StatusThemeExt, UiIconName, WindowExt,
+  CommandPaletteHandler, CommandPalettePage, DETAILS_PAGE_CONTAINER_MAX_WIDTH, HEADER_HEIGHT,
+  StatusThemeExt, UiIconName, WindowExt,
 };
 
 use crate::{
@@ -27,8 +27,7 @@ use crate::{
   },
   auth_state::{AuthState, AuthStateStore},
   github_page::GithubPageHandle,
-  github_pr_details_page::GithubPrDetailsPageHandle,
-  github_repo_page::GithubRepoPageHandle,
+  github_navigation::{open_pr_target, open_repo_target},
   workspace::{WorkspaceApi, WorkspaceRoute},
 };
 
@@ -139,12 +138,13 @@ impl AboutPage {
         open_changes_tab,
         review_comment_id,
       } => {
-        GithubPrDetailsPageHandle::show_with_open_target(
-          owner.into(),
-          repo.into(),
+        open_pr_target(
+          owner,
+          repo,
           number,
           open_changes_tab,
           review_comment_id,
+          None,
           cx,
         );
         Ok(())
@@ -156,23 +156,7 @@ impl AboutPage {
         issue_number,
         issue_comment_id,
       } => {
-        match tab {
-          Some(CommandPaletteGithubRepoTab::PullRequests) => {
-            GithubRepoPageHandle::show_pull_requests(owner.into(), repo.into(), cx);
-          }
-          Some(CommandPaletteGithubRepoTab::Issues) => {
-            GithubRepoPageHandle::show_issues(
-              owner.into(),
-              repo.into(),
-              issue_number,
-              issue_comment_id,
-              cx,
-            );
-          }
-          Some(CommandPaletteGithubRepoTab::Overview) | None => {
-            GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
-          }
-        }
+        open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

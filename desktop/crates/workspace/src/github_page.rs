@@ -15,8 +15,7 @@ use sentry::protocol::{Map, Value};
 use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, HEADER_HEIGHT,
-  StatusThemeExt, WindowExt,
+  CommandPaletteHandler, CommandPalettePage, HEADER_HEIGHT, StatusThemeExt, WindowExt,
 };
 
 use crate::{
@@ -24,8 +23,8 @@ use crate::{
   api::{ApiClient, GithubNotification, GithubPullRequest, GithubPullRequestStatus},
   auth_state::{AuthState, AuthStateStore},
   date_format::format_compact_datetime,
+  github_navigation::{open_pr_target, open_repo_target},
   github_pr_details_page::GithubPrDetailsPageHandle,
-  github_repo_page::GithubRepoPageHandle,
   sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
@@ -718,12 +717,13 @@ impl GithubPage {
         open_changes_tab,
         review_comment_id,
       } => {
-        GithubPrDetailsPageHandle::show_with_open_target(
-          owner.into(),
-          repo.into(),
+        open_pr_target(
+          owner,
+          repo,
           number,
           open_changes_tab,
           review_comment_id,
+          None,
           cx,
         );
         Ok(())
@@ -735,23 +735,7 @@ impl GithubPage {
         issue_number,
         issue_comment_id,
       } => {
-        match tab {
-          Some(CommandPaletteGithubRepoTab::PullRequests) => {
-            GithubRepoPageHandle::show_pull_requests(owner.into(), repo.into(), cx);
-          }
-          Some(CommandPaletteGithubRepoTab::Issues) => {
-            GithubRepoPageHandle::show_issues(
-              owner.into(),
-              repo.into(),
-              issue_number,
-              issue_comment_id,
-              cx,
-            );
-          }
-          Some(CommandPaletteGithubRepoTab::Overview) | None => {
-            GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
-          }
-        }
+        open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

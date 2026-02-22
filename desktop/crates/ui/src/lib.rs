@@ -1,6 +1,7 @@
 mod assets;
 mod command_palette;
 mod confirm_dialog;
+mod github_url;
 mod icons;
 mod search_file_palette;
 mod status_theme_ext;
@@ -14,10 +15,11 @@ pub use assets::AppAssets;
 pub use command_palette::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig,
-  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage,
-  CommandPaletteRepository, CommandPaletteStash, parse_github_url_action,
+  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, CommandPaletteRepository,
+  CommandPaletteStash,
 };
 pub use confirm_dialog::ConfirmDialog;
+pub use github_url::parse_github_url_action;
 pub use gpui_component::Disableable;
 pub use gpui_component::WindowExt;
 pub use gpui_component::button::Button;
