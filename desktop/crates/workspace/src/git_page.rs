@@ -2599,8 +2599,17 @@ impl GitPage {
         owner,
         repo,
         number,
+        open_changes_tab,
+        review_comment_id,
       } => {
-        GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
+        GithubPrDetailsPageHandle::show_with_open_target(
+          owner.into(),
+          repo.into(),
+          number,
+          open_changes_tab,
+          review_comment_id,
+          cx,
+        );
         Ok(())
       }
       CommandPaletteAction::OpenGithubRepoDetails {
@@ -2608,13 +2617,20 @@ impl GitPage {
         repo,
         tab,
         issue_number,
+        issue_comment_id,
       } => {
         match tab {
           Some(CommandPaletteGithubRepoTab::PullRequests) => {
             GithubRepoPageHandle::show_pull_requests(owner.into(), repo.into(), cx);
           }
           Some(CommandPaletteGithubRepoTab::Issues) => {
-            GithubRepoPageHandle::show_issues(owner.into(), repo.into(), issue_number, cx);
+            GithubRepoPageHandle::show_issues(
+              owner.into(),
+              repo.into(),
+              issue_number,
+              issue_comment_id,
+              cx,
+            );
           }
           Some(CommandPaletteGithubRepoTab::Overview) | None => {
             GithubRepoPageHandle::show(owner.into(), repo.into(), cx);

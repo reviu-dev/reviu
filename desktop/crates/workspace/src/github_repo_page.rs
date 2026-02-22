@@ -9,8 +9,8 @@ use gfm_markdown_viewer::{
   MarkdownRenderState, extract_github_blob_line_references, render_markdown,
 };
 use gpui::{
-  App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, SharedString, Styled,
-  Subscription, Task, Window, div, prelude::*, px,
+  App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, ScrollAnchor, ScrollHandle,
+  SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, IndexPath, Placement, Sizable as _, StyledExt,
@@ -101,7 +101,10 @@ fn repo_palette_open_target(has_active_subscription: bool) -> WorkspacePage {
 enum GithubRepoOpenTarget {
   Overview,
   PullRequests,
-  Issues { issue_number: Option<u64> },
+  Issues {
+    issue_number: Option<u64>,
+    issue_comment_id: Option<u64>,
+  },
 }
 
 impl GithubRepoOpenTarget {
@@ -115,7 +118,16 @@ impl GithubRepoOpenTarget {
 
   fn issue_number(self) -> Option<u64> {
     match self {
-      GithubRepoOpenTarget::Issues { issue_number } => issue_number,
+      GithubRepoOpenTarget::Issues { issue_number, .. } => issue_number,
+      _ => None,
+    }
+  }
+
+  fn issue_comment_id(self) -> Option<u64> {
+    match self {
+      GithubRepoOpenTarget::Issues {
+        issue_comment_id, ..
+      } => issue_comment_id,
       _ => None,
     }
   }
@@ -124,10 +136,14 @@ impl GithubRepoOpenTarget {
 fn repo_open_target_from_palette(
   tab: Option<CommandPaletteGithubRepoTab>,
   issue_number: Option<u64>,
+  issue_comment_id: Option<u64>,
 ) -> GithubRepoOpenTarget {
   match tab {
     Some(CommandPaletteGithubRepoTab::PullRequests) => GithubRepoOpenTarget::PullRequests,
-    Some(CommandPaletteGithubRepoTab::Issues) => GithubRepoOpenTarget::Issues { issue_number },
+    Some(CommandPaletteGithubRepoTab::Issues) => GithubRepoOpenTarget::Issues {
+      issue_number,
+      issue_comment_id,
+    },
     Some(CommandPaletteGithubRepoTab::Overview) | None => GithubRepoOpenTarget::Overview,
   }
 }
@@ -714,6 +730,7 @@ impl ListDelegate for GithubRepoIssueListDelegate {
 
 struct GithubIssueDetailsSheetView {
   focus_handle: FocusHandle,
+  scroll_handle: ScrollHandle,
   api: ApiClient,
   owner: String,
   repo: String,
@@ -727,6 +744,8 @@ struct GithubIssueDetailsSheetView {
   code_reference_tasks: HashMap<String, Task<()>>,
   description_references: Vec<GithubBlobLineReference>,
   comment_references: HashMap<u64, Vec<GithubBlobLineReference>>,
+  pending_comment_scroll_id: Option<u64>,
+  pending_comment_scroll_attempts: u8,
   request_generation: u64,
 }
 
@@ -736,10 +755,12 @@ impl GithubIssueDetailsSheetView {
     owner: String,
     repo: String,
     issue_number: u64,
+    issue_comment_id: Option<u64>,
     cx: &mut Context<Self>,
   ) -> Self {
     let mut this = Self {
       focus_handle: cx.focus_handle(),
+      scroll_handle: ScrollHandle::new(),
       api,
       owner: owner.clone(),
       repo: repo.clone(),
@@ -753,6 +774,8 @@ impl GithubIssueDetailsSheetView {
       code_reference_tasks: HashMap::new(),
       description_references: Vec::new(),
       comment_references: HashMap::new(),
+      pending_comment_scroll_id: issue_comment_id,
+      pending_comment_scroll_attempts: if issue_comment_id.is_some() { 4 } else { 0 },
       request_generation: 0,
     };
     this.load_issue(owner, repo, issue_number, cx);
@@ -861,6 +884,31 @@ impl GithubIssueDetailsSheetView {
       self.code_reference_tasks.insert(reference.url.clone(), task);
     }
   }
+
+  fn schedule_pending_comment_scroll(
+    &mut self,
+    pending_anchor: Option<ScrollAnchor>,
+    comment_found: bool,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if let Some(anchor) = pending_anchor {
+      anchor.scroll_to(window, cx);
+      if self.pending_comment_scroll_attempts > 1 {
+        self.pending_comment_scroll_attempts -= 1;
+      } else {
+        self.pending_comment_scroll_id = None;
+        self.pending_comment_scroll_attempts = 0;
+      }
+      cx.notify();
+      return;
+    }
+
+    if self.pending_comment_scroll_id.is_some() && !comment_found {
+      self.pending_comment_scroll_id = None;
+      self.pending_comment_scroll_attempts = 0;
+    }
+  }
 }
 
 impl Focusable for GithubIssueDetailsSheetView {
@@ -870,7 +918,7 @@ impl Focusable for GithubIssueDetailsSheetView {
 }
 
 impl Render for GithubIssueDetailsSheetView {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
     let content = if self.loading {
@@ -894,7 +942,7 @@ impl Render for GithubIssueDetailsSheetView {
         .justify_center()
         .child(div().text_sm().text_color(theme.status_red()).child(error))
         .into_any_element()
-    } else if let Some(issue) = self.issue.as_ref() {
+    } else if let Some(issue) = self.issue.clone() {
       let author_name = issue_user_display_name(issue.user.as_ref());
       let opened_at = format_compact_datetime(&issue.created_at);
       let updated_at = format_compact_datetime(&issue.updated_at);
@@ -924,6 +972,79 @@ impl Render for GithubIssueDetailsSheetView {
           .rounded_full()
           .child(label.name.clone())
       });
+
+      let mut comments_rows = v_flex().gap_2();
+      let mut pending_comment_anchor: Option<ScrollAnchor> = None;
+      let mut pending_comment_found = false;
+      for comment in &issue.comments {
+        let comment_author = issue_user_display_name(comment.user.as_ref());
+        let comment_created_at = format_compact_datetime(&comment.created_at);
+        let comment_updated_at = format_compact_datetime(&comment.updated_at);
+        let comment_body = issue_comment_markdown_body_or_fallback(comment.body.as_deref());
+        let comment_previews = self
+          .comment_references
+          .get(&comment.id)
+          .and_then(|references| github_code_reference_preview_map(references, &self.code_reference_cache));
+        let comment_anchor = if self.pending_comment_scroll_id == Some(comment.id) {
+          pending_comment_found = true;
+          let anchor = ScrollAnchor::for_handle(self.scroll_handle.clone());
+          pending_comment_anchor = Some(anchor.clone());
+          Some(anchor)
+        } else {
+          None
+        };
+
+        comments_rows = comments_rows.child(
+          v_flex()
+            .id(format!("github-issue-comment-{}", comment.id))
+            .anchor_scroll(comment_anchor)
+            .gap_2()
+            .p_3()
+            .border_1()
+            .border_color(theme.border)
+            .rounded(theme.radius)
+            .child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                  Avatar::new()
+                    .name(comment_author.clone())
+                    .when_some(
+                      comment
+                        .user
+                        .as_ref()
+                        .and_then(|user| user.avatar_url.clone()),
+                      |this, url| this.src(url),
+                    )
+                    .small(),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(comment_author.clone()),
+                ),
+            )
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(format!("Created {comment_created_at} • Updated {comment_updated_at}")),
+            )
+            .child({
+              let mut options = MarkdownRenderOptions::default()
+                .with_state(self.markdown_state.clone())
+                .with_scope_id(issue_comment_scope_id(issue.id, comment.id));
+              if let Some(previews) = comment_previews.clone() {
+                options = options.with_github_code_reference_previews(previews);
+              }
+              render_markdown(comment_body.as_ref(), &options, cx)
+            }),
+        );
+      }
+
+      self.schedule_pending_comment_scroll(pending_comment_anchor, pending_comment_found, window, cx);
 
       v_flex()
         .w_full()
@@ -1028,67 +1149,7 @@ impl Render for GithubIssueDetailsSheetView {
                   .child("No comments yet"),
               )
             })
-            .when(!issue.comments.is_empty(), |this| {
-              this.children(issue.comments.iter().map(|comment| {
-                let comment_author = issue_user_display_name(comment.user.as_ref());
-                let comment_created_at = format_compact_datetime(&comment.created_at);
-                let comment_updated_at = format_compact_datetime(&comment.updated_at);
-                let comment_body = issue_comment_markdown_body_or_fallback(comment.body.as_deref());
-                let comment_previews = self
-                  .comment_references
-                  .get(&comment.id)
-                  .and_then(|references| {
-                    github_code_reference_preview_map(references, &self.code_reference_cache)
-                  });
-
-                v_flex()
-                  .gap_2()
-                  .p_3()
-                  .border_1()
-                  .border_color(theme.border)
-                  .rounded(theme.radius)
-                  .child(
-                    h_flex()
-                      .items_center()
-                      .gap_2()
-                      .child(
-                        Avatar::new()
-                          .name(comment_author.clone())
-                          .when_some(
-                            comment
-                              .user
-                              .as_ref()
-                              .and_then(|user| user.avatar_url.clone()),
-                            |this, url| this.src(url),
-                          )
-                          .small(),
-                      )
-                      .child(
-                        div()
-                          .text_sm()
-                          .text_color(theme.foreground)
-                          .child(comment_author.clone()),
-                      ),
-                  )
-                  .child(
-                    div()
-                      .text_xs()
-                      .text_color(theme.muted_foreground)
-                      .child(format!(
-                        "Created {comment_created_at} • Updated {comment_updated_at}"
-                      )),
-                  )
-                  .child({
-                    let mut options = MarkdownRenderOptions::default()
-                      .with_state(self.markdown_state.clone())
-                      .with_scope_id(issue_comment_scope_id(issue.id, comment.id));
-                    if let Some(previews) = comment_previews.clone() {
-                      options = options.with_github_code_reference_previews(previews);
-                    }
-                    render_markdown(comment_body.as_ref(), &options, cx)
-                  })
-              }))
-            }),
+            .when(!issue.comments.is_empty(), |this| this.child(comments_rows)),
         )
         .into_any_element()
     } else {
@@ -1103,7 +1164,10 @@ impl Render for GithubIssueDetailsSheetView {
     div()
       .id("github-issue-details-sheet-scroll")
       .size_full()
-      .overflow_y_scrollbar()
+      .relative()
+      .track_scroll(&self.scroll_handle)
+      .overflow_y_scroll()
+      .vertical_scrollbar(&self.scroll_handle)
       .track_focus(&self.focus_handle)
       .child(content)
   }
@@ -1126,6 +1190,7 @@ pub struct GithubRepoPage {
   issues_task: Option<Task<()>>,
   active_tab_ix: usize,
   pending_issue_sheet_number: Option<u64>,
+  pending_issue_sheet_comment_id: Option<u64>,
   _subscriptions: Vec<Subscription>,
 }
 
@@ -1155,9 +1220,18 @@ impl GithubRepoPageHandle {
     owner: SharedString,
     repo: SharedString,
     issue_number: Option<u64>,
+    issue_comment_id: Option<u64>,
     cx: &mut App,
   ) {
-    Self::show_with_target(owner, repo, GithubRepoOpenTarget::Issues { issue_number }, cx);
+    Self::show_with_target(
+      owner,
+      repo,
+      GithubRepoOpenTarget::Issues {
+        issue_number,
+        issue_comment_id,
+      },
+      cx,
+    );
   }
 
   fn show_with_target(
@@ -1231,6 +1305,7 @@ impl GithubRepoPage {
       issues_task: None,
       active_tab_ix: 0,
       pending_issue_sheet_number: None,
+      pending_issue_sheet_comment_id: None,
       _subscriptions: Vec::new(),
     };
 
@@ -1267,7 +1342,7 @@ impl GithubRepoPage {
         if let ListEvent::Confirm(ix) = event {
           let row = state.read(cx).delegate().matched_rows.get(ix.row).cloned();
           if let Some(row) = row {
-            this.open_issue_details_sheet(row.issue.clone(), window, cx);
+            this.open_issue_details_sheet(row.issue.clone(), None, window, cx);
           }
         }
       },
@@ -1279,10 +1354,12 @@ impl GithubRepoPage {
   fn open_issue_details_sheet(
     &mut self,
     issue: Rc<GithubIssue>,
+    issue_comment_id: Option<u64>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     self.pending_issue_sheet_number = None;
+    self.pending_issue_sheet_comment_id = None;
     let issue_number = issue.number;
     let sheet_title: SharedString = format!("Issue #{issue_number}").into();
     let issue_details_view = cx.new(|cx| {
@@ -1291,6 +1368,7 @@ impl GithubRepoPage {
         issue.repository.owner.clone(),
         issue.repository.repo.clone(),
         issue_number,
+        issue_comment_id,
         cx,
       )
     });
@@ -1321,6 +1399,7 @@ impl GithubRepoPage {
     self.active_tab_ix = tab_ix;
     if tab_ix != 2 {
       self.pending_issue_sheet_number = None;
+      self.pending_issue_sheet_comment_id = None;
     }
     cx.notify();
 
@@ -1362,12 +1441,13 @@ impl GithubRepoPage {
     };
 
     if let Some(issue) = issue {
-      self.open_issue_details_sheet(issue, window, cx);
+      self.open_issue_details_sheet(issue, self.pending_issue_sheet_comment_id, window, cx);
       return;
     }
 
     if !loading {
       self.pending_issue_sheet_number = None;
+      self.pending_issue_sheet_comment_id = None;
     }
   }
 
@@ -1382,6 +1462,7 @@ impl GithubRepoPage {
     self.repo = repo.clone().into();
     self.active_tab_ix = open_target.tab_ix();
     self.pending_issue_sheet_number = open_target.issue_number();
+    self.pending_issue_sheet_comment_id = open_target.issue_comment_id();
 
     self.repository = None;
     self.repository_loading = true;
@@ -1579,10 +1660,16 @@ impl GithubRepoPage {
         repo,
         tab,
         issue_number,
+        issue_comment_id,
       } => {
         match repo_palette_open_target(AuthStateStore::has_active_subscription(cx)) {
           WorkspacePage::GithubRepo => {
-            self.load_repository(owner, repo, repo_open_target_from_palette(tab, issue_number), cx);
+            self.load_repository(
+              owner,
+              repo,
+              repo_open_target_from_palette(tab, issue_number, issue_comment_id),
+              cx,
+            );
             WorkspaceRoute::global_mut(cx).page = WorkspacePage::GithubRepo;
           }
           WorkspacePage::Billing => {
@@ -1597,16 +1684,27 @@ impl GithubRepoPage {
         owner,
         repo,
         number,
+        open_changes_tab,
+        review_comment_id,
       } => {
         if self.owner.as_ref().is_empty() || self.repo.as_ref().is_empty() {
-          GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
+          GithubPrDetailsPageHandle::show_with_open_target(
+            owner.into(),
+            repo.into(),
+            number,
+            open_changes_tab,
+            review_comment_id,
+            cx,
+          );
         } else {
-          GithubPrDetailsPageHandle::show_with_repo_return(
+          GithubPrDetailsPageHandle::show_with_repo_return_open_target(
             owner.into(),
             repo.into(),
             number,
             self.owner.clone(),
             self.repo.clone(),
+            open_changes_tab,
+            review_comment_id,
             cx,
           );
         }
@@ -2088,21 +2186,30 @@ mod tests {
   #[test]
   fn repo_open_target_from_palette_maps_tabs_and_issue_number() {
     assert_eq!(
-      repo_open_target_from_palette(None, None),
+      repo_open_target_from_palette(None, None, None),
       GithubRepoOpenTarget::Overview
     );
     assert_eq!(
-      repo_open_target_from_palette(Some(CommandPaletteGithubRepoTab::Overview), Some(7)),
+      repo_open_target_from_palette(Some(CommandPaletteGithubRepoTab::Overview), Some(7), None),
       GithubRepoOpenTarget::Overview
     );
     assert_eq!(
-      repo_open_target_from_palette(Some(CommandPaletteGithubRepoTab::PullRequests), Some(7)),
+      repo_open_target_from_palette(
+        Some(CommandPaletteGithubRepoTab::PullRequests),
+        Some(7),
+        None,
+      ),
       GithubRepoOpenTarget::PullRequests
     );
     assert_eq!(
-      repo_open_target_from_palette(Some(CommandPaletteGithubRepoTab::Issues), Some(42)),
+      repo_open_target_from_palette(
+        Some(CommandPaletteGithubRepoTab::Issues),
+        Some(42),
+        Some(99),
+      ),
       GithubRepoOpenTarget::Issues {
-        issue_number: Some(42)
+        issue_number: Some(42),
+        issue_comment_id: Some(99),
       }
     );
   }
