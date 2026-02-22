@@ -56,7 +56,7 @@ use crate::{
     should_open_externally,
   },
   github_page::GithubPageHandle,
-  github_pr_details_page::GithubPrDetailsPageHandle,
+  github_pr_details_page::{GithubPrDetailsPageHandle, GithubPrOpenTarget},
   github_shared,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
@@ -2423,8 +2423,7 @@ impl GithubRepoPage {
             number,
             self.owner.clone(),
             self.repo.clone(),
-            open_changes_tab,
-            review_comment_id,
+            GithubPrOpenTarget::new(open_changes_tab, review_comment_id),
             cx,
           );
         }

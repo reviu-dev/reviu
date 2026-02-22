@@ -2,7 +2,8 @@ use gpui::{App, Window};
 use ui::CommandPaletteGithubRepoTab;
 
 use crate::{
-  github_pr_details_page::GithubPrDetailsPageHandle, github_repo_page::GithubRepoPageHandle,
+  github_pr_details_page::{GithubPrDetailsPageHandle, GithubPrOpenTarget},
+  github_repo_page::GithubRepoPageHandle,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,8 +105,7 @@ pub(crate) fn open_pr_target(
       number,
       return_owner.into(),
       return_repo.into(),
-      open_changes_tab,
-      review_comment_id,
+      GithubPrOpenTarget::new(open_changes_tab, review_comment_id),
       cx,
     );
   } else {

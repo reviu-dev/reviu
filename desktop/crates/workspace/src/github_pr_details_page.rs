@@ -360,12 +360,19 @@ enum GithubPrBackTarget {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct GithubPrOpenTarget {
+pub(crate) struct GithubPrOpenTarget {
   open_changes_tab: bool,
   review_comment_id: Option<u64>,
 }
 
 impl GithubPrOpenTarget {
+  pub(crate) fn new(open_changes_tab: bool, review_comment_id: Option<u64>) -> Self {
+    Self {
+      open_changes_tab,
+      review_comment_id,
+    }
+  }
+
   fn tab_ix(self) -> usize {
     if self.open_changes_tab || self.review_comment_id.is_some() {
       1
@@ -428,10 +435,7 @@ impl GithubPrDetailsPageHandle {
       repo,
       number,
       GithubPrBackTarget::GithubHome,
-      GithubPrOpenTarget {
-        open_changes_tab,
-        review_comment_id,
-      },
+      GithubPrOpenTarget::new(open_changes_tab, review_comment_id),
       cx,
     );
   }
@@ -454,14 +458,13 @@ impl GithubPrDetailsPageHandle {
     );
   }
 
-  pub fn show_with_repo_return_open_target(
+  pub(crate) fn show_with_repo_return_open_target(
     owner: SharedString,
     repo: SharedString,
     number: u64,
     return_owner: SharedString,
     return_repo: SharedString,
-    open_changes_tab: bool,
-    review_comment_id: Option<u64>,
+    open_target: GithubPrOpenTarget,
     cx: &mut App,
   ) {
     Self::show_with_back_target_and_open_target(
@@ -469,10 +472,7 @@ impl GithubPrDetailsPageHandle {
       repo,
       number,
       resolve_pr_back_target(return_owner, return_repo),
-      GithubPrOpenTarget {
-        open_changes_tab,
-        review_comment_id,
-      },
+      open_target,
       cx,
     );
   }
@@ -3374,11 +3374,14 @@ mod tests {
   }
 
   #[test]
-  fn github_pr_open_target_routes_review_comment_links_to_changes_tab() {
-    let target = GithubPrOpenTarget {
-      open_changes_tab: false,
-      review_comment_id: Some(42),
-    };
+  fn github_pr_open_target_new_respects_open_changes_flag() {
+    let target = GithubPrOpenTarget::new(true, None);
+    assert_eq!(target.tab_ix(), 1);
+  }
+
+  #[test]
+  fn github_pr_open_target_new_routes_review_comment_links_to_changes_tab() {
+    let target = GithubPrOpenTarget::new(false, Some(42));
     assert_eq!(target.tab_ix(), 1);
   }
 }
