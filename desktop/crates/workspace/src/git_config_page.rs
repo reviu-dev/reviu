@@ -26,8 +26,8 @@ use ui::{
 use crate::{
   CloseWorkspacePage, ShowCommandPalette,
   auth_state::{AuthState, AuthStateStore},
-  github_page::GithubPageHandle,
   github_navigation::{open_pr_target, open_repo_target},
+  github_page::GithubPageHandle,
   workspace::{WorkspacePage, WorkspaceRoute},
 };
 

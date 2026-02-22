@@ -12,8 +12,7 @@ use editor::{
 };
 use gfm_markdown_viewer::{
   GithubBlobLineReference, GithubCodeReferencePreview, LinkAction, MarkdownRenderOptions,
-  MarkdownRenderState,
-  extract_github_blob_line_references, render_markdown,
+  MarkdownRenderState, extract_github_blob_line_references, render_markdown,
 };
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
 use gpui::{
@@ -42,11 +41,11 @@ use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
-  DETAILS_PAGE_CONTAINER_MAX_WIDTH, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler,
-  StatusThemeExt, UiIconName, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser,
-  WindowExt, file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action,
-  resizable_panel, user_menu,
+  CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DETAILS_PAGE_CONTAINER_MAX_WIDTH,
+  FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler, StatusThemeExt, UiIconName,
+  UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
+  file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
+  user_menu,
 };
 
 use crate::{
@@ -58,13 +57,12 @@ use crate::{
   date_format::format_long_date,
   file_preview::{is_markdown_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
-  github_page::GithubPageHandle,
   github_navigation::{
     SamePrGfmNavigation, open_repo_target, same_pr_gfm_navigation, should_open_externally,
   },
+  github_page::GithubPageHandle,
   github_repo_page::GithubRepoPageHandle,
-  github_shared,
-  sentry_context,
+  github_shared, sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 
@@ -724,8 +722,9 @@ impl GithubPrDetailsPage {
               }
             }
           }
-          return review_comment_id
-            .is_some_and(|comment_id| self.handle_review_comment_link_target(number, comment_id, cx));
+          return review_comment_id.is_some_and(|comment_id| {
+            self.handle_review_comment_link_target(number, comment_id, cx)
+          });
         }
 
         self.back_target = next_back_target_for_pr_palette(&self.back_target);
@@ -1413,11 +1412,8 @@ impl GithubPrDetailsPage {
     }
   }
 
-  fn schedule_code_reference_fetches<'a, I>(
-    &mut self,
-    references: I,
-    cx: &mut Context<Self>,
-  ) where
+  fn schedule_code_reference_fetches<'a, I>(&mut self, references: I, cx: &mut Context<Self>)
+  where
     I: IntoIterator<Item = &'a GithubBlobLineReference>,
   {
     for reference in references {
@@ -1450,22 +1446,21 @@ impl GithubPrDetailsPage {
           unblock(move || api.fetch_github_file_content(&owner, &repo, &path, &revision)).await;
 
         let preview = match result {
-          Ok(Some(content)) => {
-            github_shared::line_snippets_from_content(&content, start_line, end_line).map(
-              |snippets| {
-              let actual_end_line = start_line.saturating_add(snippets.len().saturating_sub(1));
-              ReviewCommentCodeReferencePreview {
-                url: url.clone(),
-                repo: repo_arc.clone(),
-                path: path_arc.clone(),
-                reference: reference_arc.clone(),
-                start_line,
-                end_line: actual_end_line,
-                snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
-              }
-            },
-            )
-          }
+          Ok(Some(content)) => github_shared::line_snippets_from_content(
+            &content, start_line, end_line,
+          )
+          .map(|snippets| {
+            let actual_end_line = start_line.saturating_add(snippets.len().saturating_sub(1));
+            ReviewCommentCodeReferencePreview {
+              url: url.clone(),
+              repo: repo_arc.clone(),
+              path: path_arc.clone(),
+              reference: reference_arc.clone(),
+              start_line,
+              end_line: actual_end_line,
+              snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
+            }
+          }),
           _ => None,
         };
 
@@ -2172,8 +2167,9 @@ impl GithubPrDetailsPage {
         LinkAction::Open
       }
     });
-    let description_previews = self
-      .cached_github_code_reference_previews_for_requests(&self.description_code_reference_requests);
+    let description_previews = self.cached_github_code_reference_previews_for_requests(
+      &self.description_code_reference_requests,
+    );
 
     let content = v_flex()
       .w_full()
@@ -3385,5 +3381,4 @@ mod tests {
     };
     assert_eq!(target.tab_ix(), 1);
   }
-
 }

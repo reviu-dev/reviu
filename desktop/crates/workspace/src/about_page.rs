@@ -26,8 +26,8 @@ use crate::{
     resolved_build_version,
   },
   auth_state::{AuthState, AuthStateStore},
-  github_page::GithubPageHandle,
   github_navigation::{open_pr_target, open_repo_target},
+  github_page::GithubPageHandle,
   workspace::{WorkspaceApi, WorkspaceRoute},
 };
 

@@ -12,8 +12,8 @@ use std::{
 
 use buffer::TransactionId;
 use gfm_markdown_viewer::{
-  GithubCodeReferencePreview, LinkAction, MarkdownRenderOptions, MarkdownRenderState, ParsedMarkdown,
-  estimate_github_code_reference_preview_height_px, estimate_markdown_height_px,
+  GithubCodeReferencePreview, LinkAction, MarkdownRenderOptions, MarkdownRenderState,
+  ParsedMarkdown, estimate_github_code_reference_preview_height_px, estimate_markdown_height_px,
   estimate_parsed_markdown_height_px, parse_markdown, render_github_code_reference_preview_card,
   render_parsed_markdown,
 };
@@ -3187,7 +3187,9 @@ impl Editor {
             return LinkAction::Handled;
           }
 
-          if let Some(handler) = link_handler && handler(url, window, cx) {
+          if let Some(handler) = link_handler
+            && handler(url, window, cx)
+          {
             return LinkAction::Handled;
           }
 

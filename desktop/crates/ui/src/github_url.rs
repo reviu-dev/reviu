@@ -1,6 +1,4 @@
-use crate::command_palette::{
-  CommandPaletteAction, CommandPaletteGithubRepoTab,
-};
+use crate::command_palette::{CommandPaletteAction, CommandPaletteGithubRepoTab};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum GithubUrlTarget {
@@ -204,8 +202,7 @@ mod tests {
 
   #[test]
   fn parse_github_pull_request_url_accepts_standard_url() {
-    let parsed =
-      parse_github_pull_request_url("https://github.com/joris-gallot/guit/pull/23");
+    let parsed = parse_github_pull_request_url("https://github.com/joris-gallot/guit/pull/23");
     assert_eq!(parsed, Some(("joris-gallot".into(), "guit".into(), 23)));
   }
 
@@ -355,9 +352,8 @@ mod tests {
 
   #[test]
   fn parse_github_url_target_routes_pr_review_comment_link_to_changes_tab_target() {
-    let parsed = parse_github_url_target(
-      "https://github.com/colinhacks/zod/pull/5533/changes#r2616576383",
-    );
+    let parsed =
+      parse_github_url_target("https://github.com/colinhacks/zod/pull/5533/changes#r2616576383");
     assert!(matches!(
       parsed,
       Some(GithubUrlTarget::PullRequest {
