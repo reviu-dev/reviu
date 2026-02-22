@@ -10,7 +10,10 @@ use editor::{
   ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
   ReviewCommentEditHandler, ReviewCommentLinkHandler, ReviewCommentSide,
 };
-use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
+use gfm_markdown_viewer::{
+  GithubBlobLineReference, MarkdownRenderOptions, MarkdownRenderState,
+  extract_github_blob_line_references, render_markdown,
+};
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
 use gpui::{
   App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, RenderImage, SharedString,
@@ -154,132 +157,6 @@ fn file_for_review_comment_path(
         .is_some_and(|old_path| old_path.as_ref() == path)
     })
     .cloned()
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct GithubBlobLineReference {
-  url: String,
-  owner: String,
-  repo: String,
-  reference: String,
-  path: String,
-  start_line: usize,
-  end_line: usize,
-}
-
-fn extract_url_token_candidates(text: &str) -> Vec<String> {
-  let mut tokens = Vec::new();
-  let mut remaining = text;
-  loop {
-    let https_idx = remaining.find("https://");
-    let http_idx = remaining.find("http://");
-    let start = match (https_idx, http_idx) {
-      (None, None) => break,
-      (Some(https), None) => https,
-      (None, Some(http)) => http,
-      (Some(https), Some(http)) => https.min(http),
-    };
-    remaining = &remaining[start..];
-
-    let end = remaining
-      .find(char::is_whitespace)
-      .unwrap_or(remaining.len());
-    let token = remaining[..end]
-      .trim_matches(|ch: char| {
-        matches!(
-          ch,
-          '(' | ')' | '[' | ']' | '<' | '>' | '"' | '\'' | ',' | ';'
-        )
-      })
-      .trim_end_matches('.')
-      .to_string();
-    if !token.is_empty() {
-      tokens.push(token);
-    }
-    remaining = &remaining[end..];
-  }
-  tokens
-}
-
-fn parse_github_blob_line_reference(url: &str) -> Option<GithubBlobLineReference> {
-  let trimmed = url.trim();
-  let rest = trimmed
-    .strip_prefix("https://github.com/")
-    .or_else(|| trimmed.strip_prefix("http://github.com/"))?;
-  let (path_and_blob, fragment) = rest.split_once('#')?;
-  let path_and_blob = path_and_blob.split('?').next().unwrap_or(path_and_blob);
-  let fragment = fragment.strip_prefix('L')?;
-  let start_digits: String = fragment
-    .chars()
-    .take_while(|ch| ch.is_ascii_digit())
-    .collect();
-  if start_digits.is_empty() {
-    return None;
-  }
-  let start_line = start_digits.parse::<usize>().ok()?;
-  if start_line == 0 {
-    return None;
-  }
-  let fragment_tail = &fragment[start_digits.len()..];
-  let end_line = if fragment_tail.is_empty() {
-    start_line
-  } else {
-    let fragment_tail = fragment_tail.strip_prefix('-')?;
-    let fragment_tail = fragment_tail.strip_prefix('L').unwrap_or(fragment_tail);
-    let end_digits: String = fragment_tail
-      .chars()
-      .take_while(|ch| ch.is_ascii_digit())
-      .collect();
-    if end_digits.is_empty() {
-      return None;
-    }
-    let parsed = end_digits.parse::<usize>().ok()?;
-    if parsed == 0 {
-      return None;
-    }
-    parsed
-  };
-  let (start_line, end_line) = if start_line <= end_line {
-    (start_line, end_line)
-  } else {
-    (end_line, start_line)
-  };
-
-  let (repo_path, blob_path) = path_and_blob.split_once("/blob/")?;
-  let mut repo_parts = repo_path.split('/');
-  let owner = repo_parts.next()?.trim();
-  let repo = repo_parts.next()?.trim();
-  if owner.is_empty() || repo.is_empty() || repo_parts.next().is_some() {
-    return None;
-  }
-
-  let (reference, file_path) = blob_path.split_once('/')?;
-  if reference.is_empty() || file_path.is_empty() {
-    return None;
-  }
-
-  Some(GithubBlobLineReference {
-    url: trimmed.to_string(),
-    owner: owner.to_string(),
-    repo: repo.to_string(),
-    reference: reference.to_string(),
-    path: file_path.to_string(),
-    start_line,
-    end_line,
-  })
-}
-
-fn extract_github_blob_line_references(text: &str) -> Vec<GithubBlobLineReference> {
-  let mut references = Vec::new();
-  let mut seen = HashSet::new();
-  for candidate in extract_url_token_candidates(text) {
-    if let Some(reference) = parse_github_blob_line_reference(&candidate)
-      && seen.insert(reference.url.clone())
-    {
-      references.push(reference);
-    }
-  }
-  references
 }
 
 fn line_snippets_from_content(
@@ -3258,45 +3135,6 @@ mod tests {
     assert!(lookup.is_empty());
     assert_eq!(selected_index, None);
     assert_eq!(selected_id, None);
-  }
-
-  #[test]
-  fn parse_github_blob_line_reference_parses_standard_blob_link() {
-    let parsed = parse_github_blob_line_reference(
-      "https://github.com/joris-gallot/guit/blob/0a25a8d0816a770ec75edb442dc3e533c78343a3/docker-compose.yml#L11",
-    )
-    .expect("valid blob line reference");
-
-    assert_eq!(parsed.owner, "joris-gallot");
-    assert_eq!(parsed.repo, "guit");
-    assert_eq!(parsed.reference, "0a25a8d0816a770ec75edb442dc3e533c78343a3");
-    assert_eq!(parsed.path, "docker-compose.yml");
-    assert_eq!(parsed.start_line, 11);
-    assert_eq!(parsed.end_line, 11);
-  }
-
-  #[test]
-  fn parse_github_blob_line_reference_parses_line_range_with_optional_second_l_prefix() {
-    let parsed = parse_github_blob_line_reference(
-      "https://github.com/joris-gallot/guit/blob/main/docker-compose.yml#L03-L11",
-    )
-    .expect("valid blob line range reference");
-    assert_eq!(parsed.start_line, 3);
-    assert_eq!(parsed.end_line, 11);
-
-    let parsed = parse_github_blob_line_reference(
-      "https://github.com/joris-gallot/guit/blob/main/docker-compose.yml#L3-L11",
-    )
-    .expect("valid blob line range reference");
-    assert_eq!(parsed.start_line, 3);
-    assert_eq!(parsed.end_line, 11);
-
-    let parsed = parse_github_blob_line_reference(
-      "https://github.com/joris-gallot/guit/blob/main/docker-compose.yml#L3-11",
-    )
-    .expect("valid blob line range reference");
-    assert_eq!(parsed.start_line, 3);
-    assert_eq!(parsed.end_line, 11);
   }
 
   #[test]

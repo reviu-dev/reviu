@@ -1,6 +1,13 @@
-use std::{rc::Rc, sync::Arc};
+use std::{
+  collections::{HashMap, HashSet},
+  rc::Rc,
+  sync::Arc,
+};
 
-use gfm_markdown_viewer::{MarkdownRenderOptions, MarkdownRenderState, render_markdown};
+use gfm_markdown_viewer::{
+  GithubBlobLineReference, GithubCodeReferencePreview, MarkdownRenderOptions,
+  MarkdownRenderState, extract_github_blob_line_references, render_markdown,
+};
 use gpui::{
   App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, SharedString, Styled,
   Subscription, Task, Window, div, prelude::*, px,
@@ -206,6 +213,126 @@ fn issue_state_label(state: &str, reason: Option<GithubIssueStateReason>) -> Sha
     Some(GithubIssueStateReason::Duplicate) => "Duplicate".into(),
     None => "Closed".into(),
   }
+}
+
+fn line_snippets_from_content(
+  content: &str,
+  start_line: usize,
+  end_line: usize,
+) -> Option<Vec<String>> {
+  if start_line == 0 || end_line == 0 {
+    return None;
+  }
+  let (start_line, end_line) = if start_line <= end_line {
+    (start_line, end_line)
+  } else {
+    (end_line, start_line)
+  };
+
+  let lines: Vec<&str> = content.split('\n').collect();
+  if start_line > lines.len() {
+    return None;
+  }
+
+  let end_index = end_line.min(lines.len());
+  if end_index < start_line {
+    return None;
+  }
+
+  Some(
+    lines[start_line.saturating_sub(1)..end_index]
+      .iter()
+      .map(|line| line.trim_end_matches('\r').to_string())
+      .collect(),
+  )
+}
+
+fn issue_code_reference_requests(
+  issue: &GithubIssueDetails,
+) -> (
+  Vec<GithubBlobLineReference>,
+  HashMap<u64, Vec<GithubBlobLineReference>>,
+) {
+  let description = issue_markdown_body_or_fallback(issue.body.as_deref());
+  let description_references = extract_github_blob_line_references(description.as_ref());
+
+  let comment_references: HashMap<u64, Vec<GithubBlobLineReference>> = issue
+    .comments
+    .iter()
+    .filter_map(|comment| {
+      let body = issue_comment_markdown_body_or_fallback(comment.body.as_deref());
+      let references = extract_github_blob_line_references(body.as_ref());
+      if references.is_empty() {
+        None
+      } else {
+        Some((comment.id, references))
+      }
+    })
+    .collect();
+
+  (description_references, comment_references)
+}
+
+fn collect_unique_issue_code_reference_requests(
+  description_references: &[GithubBlobLineReference],
+  comment_references: &HashMap<u64, Vec<GithubBlobLineReference>>,
+) -> Vec<GithubBlobLineReference> {
+  let mut references = Vec::new();
+  let mut seen = HashSet::new();
+  for reference in description_references
+    .iter()
+    .chain(comment_references.values().flat_map(|refs| refs.iter()))
+  {
+    if seen.insert(reference.url.clone()) {
+      references.push(reference.clone());
+    }
+  }
+  references
+}
+
+fn github_code_reference_preview_from_content(
+  reference: &GithubBlobLineReference,
+  content: &str,
+) -> Option<GithubCodeReferencePreview> {
+  line_snippets_from_content(content, reference.start_line, reference.end_line).map(|snippets| {
+    let actual_end_line = reference
+      .start_line
+      .saturating_add(snippets.len().saturating_sub(1));
+    GithubCodeReferencePreview {
+      url: Arc::from(reference.url.as_str()),
+      repo: Arc::from(format!("{}/{}", reference.owner, reference.repo)),
+      path: Arc::from(reference.path.as_str()),
+      reference: Arc::from(reference.reference.as_str()),
+      start_line: reference.start_line,
+      end_line: actual_end_line,
+      snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
+    }
+  })
+}
+
+fn github_code_reference_preview_map(
+  references: &[GithubBlobLineReference],
+  cache: &HashMap<String, Option<GithubCodeReferencePreview>>,
+) -> Option<Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>> {
+  let previews: HashMap<Arc<str>, GithubCodeReferencePreview> = references
+    .iter()
+    .filter_map(|reference| {
+      cache
+        .get(&reference.url)
+        .and_then(|preview| preview.clone())
+        .map(|preview| (preview.url.clone(), preview))
+    })
+    .collect();
+
+  if previews.is_empty() {
+    None
+  } else {
+    Some(Arc::new(previews))
+  }
+}
+
+fn should_apply_issue_request_result(request_generation: u64, task_generation: u64) -> bool {
+  request_generation == task_generation
 }
 
 #[derive(Clone, Debug)]
@@ -596,6 +723,10 @@ struct GithubIssueDetailsSheetView {
   error: Option<SharedString>,
   task: Option<Task<()>>,
   markdown_state: MarkdownRenderState,
+  code_reference_cache: HashMap<String, Option<GithubCodeReferencePreview>>,
+  code_reference_tasks: HashMap<String, Task<()>>,
+  description_references: Vec<GithubBlobLineReference>,
+  comment_references: HashMap<u64, Vec<GithubBlobLineReference>>,
   request_generation: u64,
 }
 
@@ -618,6 +749,10 @@ impl GithubIssueDetailsSheetView {
       error: None,
       task: None,
       markdown_state: MarkdownRenderState::new(),
+      code_reference_cache: HashMap::new(),
+      code_reference_tasks: HashMap::new(),
+      description_references: Vec::new(),
+      comment_references: HashMap::new(),
       request_generation: 0,
     };
     this.load_issue(owner, repo, issue_number, cx);
@@ -631,6 +766,10 @@ impl GithubIssueDetailsSheetView {
     self.issue = None;
     self.loading = true;
     self.error = None;
+    self.code_reference_cache.clear();
+    self.code_reference_tasks.clear();
+    self.description_references.clear();
+    self.comment_references.clear();
     self.request_generation = self.request_generation.saturating_add(1);
     let generation = self.request_generation;
 
@@ -641,7 +780,7 @@ impl GithubIssueDetailsSheetView {
           .await;
 
       let _ = this.update(cx, |this, cx| {
-        if this.request_generation != generation {
+        if !should_apply_issue_request_result(this.request_generation, generation) {
           return;
         }
 
@@ -649,8 +788,12 @@ impl GithubIssueDetailsSheetView {
 
         match result {
           Ok(issue) => {
+            let (description_references, comment_references) = issue_code_reference_requests(&issue);
+            this.description_references = description_references;
+            this.comment_references = comment_references;
             this.issue = Some(issue);
             this.error = None;
+            this.schedule_issue_code_reference_fetches(generation, cx);
           }
           Err(error) => {
             let message = error.to_string();
@@ -670,6 +813,53 @@ impl GithubIssueDetailsSheetView {
 
     self.task = Some(task);
     cx.notify();
+  }
+
+  fn schedule_issue_code_reference_fetches(&mut self, generation: u64, cx: &mut Context<Self>) {
+    let references = collect_unique_issue_code_reference_requests(
+      &self.description_references,
+      &self.comment_references,
+    );
+
+    for reference in references {
+      if self.code_reference_cache.contains_key(&reference.url)
+        || self.code_reference_tasks.contains_key(&reference.url)
+      {
+        continue;
+      }
+
+      let cache_key = reference.url.clone();
+      let owner = reference.owner.clone();
+      let repo = reference.repo.clone();
+      let path = reference.path.clone();
+      let revision = reference.reference.clone();
+      let api = self.api.clone();
+      let reference_for_preview = reference.clone();
+
+      let task = cx.spawn(async move |this, cx| {
+        let result = unblock(move || api.fetch_github_file_content(&owner, &repo, &path, &revision))
+          .await;
+
+        let preview = match result {
+          Ok(Some(content)) => {
+            github_code_reference_preview_from_content(&reference_for_preview, &content)
+          }
+          _ => None,
+        };
+
+        let _ = this.update(cx, |this, cx| {
+          if !should_apply_issue_request_result(this.request_generation, generation) {
+            return;
+          }
+
+          this.code_reference_cache.insert(cache_key.clone(), preview);
+          this.code_reference_tasks.remove(&cache_key);
+          cx.notify();
+        });
+      });
+
+      self.code_reference_tasks.insert(reference.url.clone(), task);
+    }
   }
 }
 
@@ -714,6 +904,8 @@ impl Render for GithubIssueDetailsSheetView {
         .map(format_compact_datetime)
         .unwrap_or_else(|| "—".into());
       let body = issue_markdown_body_or_fallback(issue.body.as_deref());
+      let description_previews =
+        github_code_reference_preview_map(&self.description_references, &self.code_reference_cache);
       let issue_url = github_issue_url(
         &issue.repository.owner,
         &issue.repository.repo,
@@ -813,13 +1005,15 @@ impl Render for GithubIssueDetailsSheetView {
                 .border_color(theme.border)
                 .rounded(theme.radius)
                 .p_3()
-                .child(render_markdown(
-                  body.as_ref(),
-                  &MarkdownRenderOptions::default()
+                .child({
+                  let mut options = MarkdownRenderOptions::default()
                     .with_state(self.markdown_state.clone())
-                    .with_scope_id(issue_description_scope_id(issue.id)),
-                  cx,
-                )),
+                    .with_scope_id(issue_description_scope_id(issue.id));
+                  if let Some(previews) = description_previews.clone() {
+                    options = options.with_github_code_reference_previews(previews);
+                  }
+                  render_markdown(body.as_ref(), &options, cx)
+                }),
             ),
         )
         .child(
@@ -840,6 +1034,12 @@ impl Render for GithubIssueDetailsSheetView {
                 let comment_created_at = format_compact_datetime(&comment.created_at);
                 let comment_updated_at = format_compact_datetime(&comment.updated_at);
                 let comment_body = issue_comment_markdown_body_or_fallback(comment.body.as_deref());
+                let comment_previews = self
+                  .comment_references
+                  .get(&comment.id)
+                  .and_then(|references| {
+                    github_code_reference_preview_map(references, &self.code_reference_cache)
+                  });
 
                 v_flex()
                   .gap_2()
@@ -878,13 +1078,15 @@ impl Render for GithubIssueDetailsSheetView {
                         "Created {comment_created_at} • Updated {comment_updated_at}"
                       )),
                   )
-                  .child(render_markdown(
-                    comment_body.as_ref(),
-                    &MarkdownRenderOptions::default()
+                  .child({
+                    let mut options = MarkdownRenderOptions::default()
                       .with_state(self.markdown_state.clone())
-                      .with_scope_id(issue_comment_scope_id(issue.id, comment.id)),
-                    cx,
-                  ))
+                      .with_scope_id(issue_comment_scope_id(issue.id, comment.id));
+                    if let Some(previews) = comment_previews.clone() {
+                      options = options.with_github_code_reference_previews(previews);
+                    }
+                    render_markdown(comment_body.as_ref(), &options, cx)
+                  })
               }))
             }),
         )
@@ -1815,6 +2017,47 @@ impl Focusable for GithubRepoPage {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::api::{GithubIssueDetailsComment, GithubRepository};
+
+  fn test_issue_details_with_code_links() -> GithubIssueDetails {
+    GithubIssueDetails {
+      id: 1,
+      number: 42,
+      title: "Issue".to_string(),
+      body: Some(
+        "See:\nhttps://github.com/acme/widget/blob/main/src/lib.rs#L3-L5".to_string(),
+      ),
+      state: "open".to_string(),
+      state_reason: None,
+      created_at: "2024-01-01T00:00:00Z".to_string(),
+      updated_at: "2024-01-02T00:00:00Z".to_string(),
+      closed_at: None,
+      labels: Vec::new(),
+      comments: vec![
+        GithubIssueDetailsComment {
+          id: 7,
+          body: Some(
+            "[lib](https://github.com/acme/widget/blob/main/src/lib.rs#L3-L5)".to_string(),
+          ),
+          created_at: "2024-01-03T00:00:00Z".to_string(),
+          updated_at: "2024-01-04T00:00:00Z".to_string(),
+          user: None,
+        },
+        GithubIssueDetailsComment {
+          id: 8,
+          body: Some("No code reference".to_string()),
+          created_at: "2024-01-03T00:00:00Z".to_string(),
+          updated_at: "2024-01-04T00:00:00Z".to_string(),
+          user: None,
+        },
+      ],
+      user: None,
+      repository: GithubRepository {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+      },
+    }
+  }
 
   #[test]
   fn github_page_navigation_targets_github_and_refresh_when_subscription_is_active() {
@@ -1862,6 +2105,54 @@ mod tests {
         issue_number: Some(42)
       }
     );
+  }
+
+  #[test]
+  fn issue_code_reference_requests_extracts_from_description_and_comments() {
+    let issue = test_issue_details_with_code_links();
+    let (description, comments) = issue_code_reference_requests(&issue);
+
+    assert_eq!(description.len(), 1);
+    assert_eq!(description[0].path, "src/lib.rs");
+
+    let comment_refs = comments.get(&7).expect("comment references");
+    assert_eq!(comment_refs.len(), 1);
+    assert_eq!(comment_refs[0].start_line, 3);
+    assert!(comments.get(&8).is_none());
+  }
+
+  #[test]
+  fn collect_unique_issue_code_reference_requests_deduplicates_urls() {
+    let issue = test_issue_details_with_code_links();
+    let (description, comments) = issue_code_reference_requests(&issue);
+    let unique = collect_unique_issue_code_reference_requests(&description, &comments);
+
+    assert_eq!(unique.len(), 1);
+    assert_eq!(
+      unique[0].url,
+      "https://github.com/acme/widget/blob/main/src/lib.rs#L3-L5"
+    );
+  }
+
+  #[test]
+  fn line_snippets_from_content_handles_crlf_and_bounds() {
+    let content = "first\r\nsecond\r\nthird\r\n";
+    assert_eq!(
+      line_snippets_from_content(content, 2, 3),
+      Some(vec!["second".to_string(), "third".to_string()])
+    );
+    assert_eq!(
+      line_snippets_from_content(content, 4, 4),
+      Some(vec!["".to_string()])
+    );
+    assert!(line_snippets_from_content(content, 0, 3).is_none());
+    assert!(line_snippets_from_content(content, 10, 10).is_none());
+  }
+
+  #[test]
+  fn should_apply_issue_request_result_matches_generation() {
+    assert!(should_apply_issue_request_result(4, 4));
+    assert!(!should_apply_issue_request_result(5, 4));
   }
 
   #[test]
