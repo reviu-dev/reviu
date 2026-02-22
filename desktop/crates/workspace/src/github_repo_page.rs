@@ -5,7 +5,7 @@ use std::{
 };
 
 use gfm_markdown_viewer::{
-  GithubBlobLineReference, GithubCodeReferencePreview, MarkdownRenderOptions,
+  GithubBlobLineReference, GithubCodeReferencePreview, LinkAction, MarkdownRenderOptions,
   MarkdownRenderState, extract_github_blob_line_references, render_markdown,
 };
 use gpui::{
@@ -31,7 +31,7 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage,
   DETAILS_PAGE_CONTAINER_MAX_WIDTH, StatusThemeExt as _, UiIconName, UserMenuConfig, UserMenuPage,
-  UserMenuState, UserMenuUser, WindowExt, user_menu,
+  UserMenuState, UserMenuUser, WindowExt, parse_github_url_action, user_menu,
 };
 
 use crate::{
@@ -349,6 +349,35 @@ fn github_code_reference_preview_map(
 
 fn should_apply_issue_request_result(request_generation: u64, task_generation: u64) -> bool {
   request_generation == task_generation
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SameRepoIssueLinkNavigation {
+  Noop,
+  ScrollComment { comment_id: u64 },
+  ReloadIssue {
+    issue_number: u64,
+    issue_comment_id: Option<u64>,
+  },
+}
+
+fn same_repo_issue_link_navigation(
+  current_issue_number: u64,
+  issue_number: u64,
+  issue_comment_id: Option<u64>,
+) -> SameRepoIssueLinkNavigation {
+  if current_issue_number == issue_number {
+    if let Some(comment_id) = issue_comment_id {
+      SameRepoIssueLinkNavigation::ScrollComment { comment_id }
+    } else {
+      SameRepoIssueLinkNavigation::Noop
+    }
+  } else {
+    SameRepoIssueLinkNavigation::ReloadIssue {
+      issue_number,
+      issue_comment_id,
+    }
+  }
 }
 
 #[derive(Clone, Debug)]
@@ -909,6 +938,92 @@ impl GithubIssueDetailsSheetView {
       self.pending_comment_scroll_attempts = 0;
     }
   }
+
+  fn handle_gfm_link(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    if window.modifiers().secondary() {
+      return false;
+    }
+
+    let Some(action) = parse_github_url_action(url) else {
+      return false;
+    };
+
+    match action {
+      CommandPaletteAction::OpenGithubRepoDetails {
+        owner,
+        repo,
+        tab,
+        issue_number,
+        issue_comment_id,
+      } => {
+        let same_repo = self.owner.eq_ignore_ascii_case(&owner) && self.repo.eq_ignore_ascii_case(&repo);
+        if same_repo
+          && tab == Some(CommandPaletteGithubRepoTab::Issues)
+          && let Some(issue_number) = issue_number
+        {
+          match same_repo_issue_link_navigation(self.issue_number, issue_number, issue_comment_id) {
+            SameRepoIssueLinkNavigation::Noop => {
+              return true;
+            }
+            SameRepoIssueLinkNavigation::ScrollComment { comment_id } => {
+              self.pending_comment_scroll_id = Some(comment_id);
+              self.pending_comment_scroll_attempts = 4;
+              cx.notify();
+              return true;
+            }
+            SameRepoIssueLinkNavigation::ReloadIssue {
+              issue_number,
+              issue_comment_id,
+            } => {
+              self.pending_comment_scroll_id = issue_comment_id;
+              self.pending_comment_scroll_attempts = if issue_comment_id.is_some() { 4 } else { 0 };
+              self.load_issue(owner, repo, issue_number, cx);
+              return true;
+            }
+          }
+        }
+
+        match tab {
+          Some(CommandPaletteGithubRepoTab::PullRequests) => {
+            GithubRepoPageHandle::show_pull_requests(owner.into(), repo.into(), cx);
+          }
+          Some(CommandPaletteGithubRepoTab::Issues) => {
+            GithubRepoPageHandle::show_issues(
+              owner.into(),
+              repo.into(),
+              issue_number,
+              issue_comment_id,
+              cx,
+            );
+          }
+          Some(CommandPaletteGithubRepoTab::Overview) | None => {
+            GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
+          }
+        }
+        true
+      }
+      CommandPaletteAction::OpenGithubPrDetails {
+        owner,
+        repo,
+        number,
+        open_changes_tab: _,
+        review_comment_id,
+      } => {
+        GithubPrDetailsPageHandle::show_with_repo_return_open_target(
+          owner.into(),
+          repo.into(),
+          number,
+          self.owner.clone().into(),
+          self.repo.clone().into(),
+          review_comment_id.is_some(),
+          review_comment_id,
+          cx,
+        );
+        true
+      }
+      _ => false,
+    }
+  }
 }
 
 impl Focusable for GithubIssueDetailsSheetView {
@@ -965,6 +1080,15 @@ impl Render for GithubIssueDetailsSheetView {
         GithubIssueVisualState::Completed => theme.status_violet(),
         GithubIssueVisualState::NotPlanned => theme.status_gray(),
       };
+      let issue_details_view = cx.entity().clone();
+      let gfm_link_handler = Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
+        let handled = issue_details_view.update(cx, |this, cx| this.handle_gfm_link(url, window, cx));
+        if handled {
+          LinkAction::Handled
+        } else {
+          LinkAction::Open
+        }
+      });
 
       let label_tags = issue.labels.iter().map(|label| {
         Tag::secondary()
@@ -1033,7 +1157,7 @@ impl Render for GithubIssueDetailsSheetView {
                 .child(format!("Created {comment_created_at} • Updated {comment_updated_at}")),
             )
             .child({
-              let mut options = MarkdownRenderOptions::default()
+              let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler.clone())
                 .with_state(self.markdown_state.clone())
                 .with_scope_id(issue_comment_scope_id(issue.id, comment.id));
               if let Some(previews) = comment_previews.clone() {
@@ -1127,7 +1251,7 @@ impl Render for GithubIssueDetailsSheetView {
                 .rounded(theme.radius)
                 .p_3()
                 .child({
-                  let mut options = MarkdownRenderOptions::default()
+                  let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler)
                     .with_state(self.markdown_state.clone())
                     .with_scope_id(issue_description_scope_id(issue.id));
                   if let Some(previews) = description_previews.clone() {
@@ -2210,6 +2334,33 @@ mod tests {
       GithubRepoOpenTarget::Issues {
         issue_number: Some(42),
         issue_comment_id: Some(99),
+      }
+    );
+  }
+
+  #[test]
+  fn same_repo_issue_link_navigation_noops_for_same_issue_without_fragment() {
+    let navigation = same_repo_issue_link_navigation(42, 42, None);
+    assert_eq!(navigation, SameRepoIssueLinkNavigation::Noop);
+  }
+
+  #[test]
+  fn same_repo_issue_link_navigation_scrolls_for_same_issue_comment_fragment() {
+    let navigation = same_repo_issue_link_navigation(42, 42, Some(99));
+    assert_eq!(
+      navigation,
+      SameRepoIssueLinkNavigation::ScrollComment { comment_id: 99 }
+    );
+  }
+
+  #[test]
+  fn same_repo_issue_link_navigation_reloads_for_other_issue() {
+    let navigation = same_repo_issue_link_navigation(42, 77, Some(101));
+    assert_eq!(
+      navigation,
+      SameRepoIssueLinkNavigation::ReloadIssue {
+        issue_number: 77,
+        issue_comment_id: Some(101),
       }
     );
   }

@@ -11,7 +11,7 @@ use editor::{
   ReviewCommentEditHandler, ReviewCommentLinkHandler, ReviewCommentSide,
 };
 use gfm_markdown_viewer::{
-  GithubBlobLineReference, MarkdownRenderOptions, MarkdownRenderState,
+  GithubBlobLineReference, LinkAction, MarkdownRenderOptions, MarkdownRenderState,
   extract_github_blob_line_references, render_markdown,
 };
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
@@ -45,7 +45,7 @@ use ui::{
   DETAILS_PAGE_CONTAINER_MAX_WIDTH, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler,
   SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UiIconName, UserMenuConfig,
   UserMenuPage, UserMenuState, UserMenuUser, WindowExt, file_icon_path_for_name_with_theme,
-  h_resizable, resizable_panel, user_menu,
+  h_resizable, parse_github_url_action, resizable_panel, user_menu,
 };
 
 use crate::{
@@ -358,6 +358,27 @@ struct CurrentPrContext {
   owner: String,
   repo: String,
   number: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SamePrGfmNavigation {
+  ShowOverview { switch_to_overview: bool },
+  ScrollComment { switch_to_changes: bool },
+}
+
+fn same_pr_gfm_navigation(
+  active_tab_ix: usize,
+  review_comment_id: Option<u64>,
+) -> SamePrGfmNavigation {
+  if review_comment_id.is_some() {
+    SamePrGfmNavigation::ScrollComment {
+      switch_to_changes: active_tab_ix != 1,
+    }
+  } else {
+    SamePrGfmNavigation::ShowOverview {
+      switch_to_overview: active_tab_ix != 0,
+    }
+  }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -684,16 +705,98 @@ impl GithubPrDetailsPage {
 
       let link_handler: ReviewCommentLinkHandler = Arc::new({
         let view = view.clone();
-        move |pr_number, comment_id, _window, cx| {
+        move |url, window, cx| {
           view
-            .update(cx, |this, cx| {
-              this.handle_review_comment_link_target(pr_number, comment_id, cx)
-            })
+            .update(cx, |this, cx| this.handle_gfm_link(url, window, cx))
             .unwrap_or(false)
         }
       });
       editor.set_review_comment_link_handler(Some(link_handler), cx);
     });
+  }
+
+  fn handle_gfm_link(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    if window.modifiers().secondary() {
+      return false;
+    }
+
+    let Some(action) = parse_github_url_action(url) else {
+      return false;
+    };
+
+    match action {
+      CommandPaletteAction::OpenGithubPrDetails {
+        owner,
+        repo,
+        number,
+        open_changes_tab: _,
+        review_comment_id,
+      } => {
+        let same_target = self.current_pr_context.as_ref().is_some_and(|context| {
+          context.number == number
+            && context.owner.eq_ignore_ascii_case(&owner)
+            && context.repo.eq_ignore_ascii_case(&repo)
+        });
+
+        if same_target {
+          match same_pr_gfm_navigation(self.active_tab_ix, review_comment_id) {
+            SamePrGfmNavigation::ShowOverview { switch_to_overview } => {
+              if switch_to_overview {
+                self.set_active_tab(0, window, cx);
+              }
+              return true;
+            }
+            SamePrGfmNavigation::ScrollComment { switch_to_changes } => {
+              if switch_to_changes {
+                self.set_active_tab(1, window, cx);
+              }
+            }
+          }
+          return review_comment_id
+            .is_some_and(|comment_id| self.handle_review_comment_link_target(number, comment_id, cx));
+        }
+
+        self.back_target = next_back_target_for_pr_palette(&self.back_target);
+        self.load_pull_request(
+          owner,
+          repo,
+          number,
+          GithubPrOpenTarget {
+            open_changes_tab: review_comment_id.is_some(),
+            review_comment_id,
+          },
+          cx,
+        );
+        true
+      }
+      CommandPaletteAction::OpenGithubRepoDetails {
+        owner,
+        repo,
+        tab,
+        issue_number,
+        issue_comment_id,
+      } => {
+        match tab {
+          Some(CommandPaletteGithubRepoTab::PullRequests) => {
+            GithubRepoPageHandle::show_pull_requests(owner.into(), repo.into(), cx);
+          }
+          Some(CommandPaletteGithubRepoTab::Issues) => {
+            GithubRepoPageHandle::show_issues(
+              owner.into(),
+              repo.into(),
+              issue_number,
+              issue_comment_id,
+              cx,
+            );
+          }
+          Some(CommandPaletteGithubRepoTab::Overview) | None => {
+            GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
+          }
+        }
+        true
+      }
+      _ => false,
+    }
   }
 
   fn handle_review_comment_link_target(
@@ -2081,6 +2184,16 @@ impl GithubPrDetailsPage {
       )
     };
 
+    let pr_page = cx.entity().clone();
+    let description_link_handler = Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
+      let handled = pr_page.update(cx, |this, cx| this.handle_gfm_link(url, window, cx));
+      if handled {
+        LinkAction::Handled
+      } else {
+        LinkAction::Open
+      }
+    });
+
     let content = v_flex()
       .w_full()
       .pb_8()
@@ -2253,7 +2366,7 @@ impl GithubPrDetailsPage {
               .p_3()
               .child(render_markdown(
                 body.as_str(),
-                &MarkdownRenderOptions::default()
+                &MarkdownRenderOptions::with_on_link(description_link_handler)
                   .with_state(self.description_markdown_state.clone())
                   .with_scope_id(pr_description_scope_id(pr.number)),
                 cx,
@@ -3303,6 +3416,36 @@ mod tests {
       review_comment_id: Some(42),
     };
     assert_eq!(target.tab_ix(), 1);
+  }
+
+  #[test]
+  fn same_pr_gfm_navigation_routes_comment_links_to_changes_and_scroll() {
+    let navigation = same_pr_gfm_navigation(0, Some(42));
+    assert_eq!(
+      navigation,
+      SamePrGfmNavigation::ScrollComment {
+        switch_to_changes: true,
+      }
+    );
+  }
+
+  #[test]
+  fn same_pr_gfm_navigation_routes_non_comment_links_to_overview_without_reload() {
+    let already_overview = same_pr_gfm_navigation(0, None);
+    assert_eq!(
+      already_overview,
+      SamePrGfmNavigation::ShowOverview {
+        switch_to_overview: false,
+      }
+    );
+
+    let from_changes = same_pr_gfm_navigation(1, None);
+    assert_eq!(
+      from_changes,
+      SamePrGfmNavigation::ShowOverview {
+        switch_to_overview: true,
+      }
+    );
   }
 
   #[test]

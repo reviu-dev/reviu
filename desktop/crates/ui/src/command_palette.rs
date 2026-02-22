@@ -1099,7 +1099,7 @@ impl CommandPaletteCommand {
 
   fn matches(&self, query: &str) -> bool {
     if self.id == CommandPaletteCommandId::OpenGithubFromUrl
-      && CommandPalette::parse_github_url_target(query).is_some()
+      && parse_github_url_action(query).is_some()
     {
       return true;
     }
@@ -1202,6 +1202,41 @@ enum GithubUrlTarget {
   },
 }
 
+fn github_url_target_to_action(target: GithubUrlTarget) -> CommandPaletteAction {
+  match target {
+    GithubUrlTarget::Repo {
+      owner,
+      repo,
+      tab,
+      issue_number,
+      issue_comment_id,
+    } => CommandPaletteAction::OpenGithubRepoDetails {
+      owner,
+      repo,
+      tab,
+      issue_number,
+      issue_comment_id,
+    },
+    GithubUrlTarget::PullRequest {
+      owner,
+      repo,
+      number,
+      open_changes_tab,
+      review_comment_id,
+    } => CommandPaletteAction::OpenGithubPrDetails {
+      owner,
+      repo,
+      number,
+      open_changes_tab,
+      review_comment_id,
+    },
+  }
+}
+
+pub fn parse_github_url_action(url: &str) -> Option<CommandPaletteAction> {
+  CommandPalette::parse_github_url_target(url).map(github_url_target_to_action)
+}
+
 pub struct CommandPalette {
   focus_handle: FocusHandle,
   screen: CommandPaletteScreen,
@@ -1267,7 +1302,9 @@ impl CommandPalette {
 
   fn parse_github_review_comment_fragment(url: &str) -> Option<u64> {
     let fragment = Self::parse_github_fragment(url)?;
-    let fragment = fragment.strip_prefix('r')?;
+    let fragment = fragment
+      .strip_prefix("discussion_r")
+      .or_else(|| fragment.strip_prefix('r'))?;
     let digits: String = fragment
       .chars()
       .take_while(|ch| ch.is_ascii_digit())
@@ -1310,6 +1347,16 @@ impl CommandPalette {
       let (_, _, path_parts) = Self::parse_github_repository_parts(url)?;
       let review_comment_id = Self::parse_github_review_comment_fragment(url);
       let path_target = path_parts.get(2).map(|part| part.as_str());
+      let managed_pr_path = matches!(path_target, None | Some("changes") | Some("files"));
+      if review_comment_id.is_none() && !managed_pr_path {
+        return Some(GithubUrlTarget::Repo {
+          owner,
+          repo,
+          tab: None,
+          issue_number: None,
+          issue_comment_id: None,
+        });
+      }
       let open_changes_tab = review_comment_id.is_some()
         || matches!(path_target, Some("changes") | Some("files"));
       return Some(GithubUrlTarget::PullRequest {
@@ -1753,48 +1800,13 @@ impl CommandPalette {
       return;
     }
 
-    let Some(target) = Self::parse_github_url_target(&url) else {
+    let Some(action) = parse_github_url_action(&url) else {
       self.error = Some("Invalid GitHub URL".into());
       cx.notify();
       return;
     };
 
-    match target {
-      GithubUrlTarget::Repo {
-        owner,
-        repo,
-        tab,
-        issue_number,
-        issue_comment_id,
-      } => self.trigger_action(
-        CommandPaletteAction::OpenGithubRepoDetails {
-          owner,
-          repo,
-          tab,
-          issue_number,
-          issue_comment_id,
-        },
-        window,
-        cx,
-      ),
-      GithubUrlTarget::PullRequest {
-        owner,
-        repo,
-        number,
-        open_changes_tab,
-        review_comment_id,
-      } => self.trigger_action(
-        CommandPaletteAction::OpenGithubPrDetails {
-          owner,
-          repo,
-          number,
-          open_changes_tab,
-          review_comment_id,
-        },
-        window,
-        cx,
-      ),
-    }
+    self.trigger_action(action, window, cx);
   }
 
   fn on_checkout_detached_input_event(
@@ -2140,43 +2152,8 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::OpenGithubFromUrl => {
         let query = self.commands_list.read(cx).delegate().query.to_string();
-        if let Some(target) = Self::parse_github_url_target(&query) {
-          match target {
-            GithubUrlTarget::Repo {
-              owner,
-              repo,
-              tab,
-              issue_number,
-              issue_comment_id,
-            } => self.trigger_action(
-              CommandPaletteAction::OpenGithubRepoDetails {
-                owner,
-                repo,
-                tab,
-                issue_number,
-                issue_comment_id,
-              },
-              window,
-              cx,
-            ),
-            GithubUrlTarget::PullRequest {
-              owner,
-              repo,
-              number,
-              open_changes_tab,
-              review_comment_id,
-            } => self.trigger_action(
-              CommandPaletteAction::OpenGithubPrDetails {
-                owner,
-                repo,
-                number,
-                open_changes_tab,
-                review_comment_id,
-              },
-              window,
-              cx,
-            ),
-          }
+        if let Some(action) = parse_github_url_action(&query) {
+          self.trigger_action(action, window, cx);
         } else {
           self.open_github_url_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
@@ -2545,7 +2522,8 @@ impl Render for CommandPalette {
 #[cfg(test)]
 mod tests {
   use super::{
-    CommandPalette, CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteGithubRepoTab,
+    CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteCommandId,
+    CommandPaletteGithubRepoTab, parse_github_url_action,
   };
 
   #[test]
@@ -2718,6 +2696,54 @@ mod tests {
         number: 5533,
         open_changes_tab: true,
         review_comment_id: Some(2616576383)
+      }) if owner == "colinhacks" && repo == "zod"
+    ));
+  }
+
+  #[test]
+  fn parse_github_url_target_routes_pr_discussion_comment_link_to_changes_tab_target() {
+    let parsed = CommandPalette::parse_github_url_target(
+      "https://github.com/colinhacks/zod/pull/5533#discussion_r2616576383",
+    );
+    assert!(matches!(
+      parsed,
+      Some(super::GithubUrlTarget::PullRequest {
+        owner,
+        repo,
+        number: 5533,
+        open_changes_tab: true,
+        review_comment_id: Some(2616576383)
+      }) if owner == "colinhacks" && repo == "zod"
+    ));
+  }
+
+  #[test]
+  fn parse_github_url_target_routes_unmanaged_pr_subpage_to_repo() {
+    let parsed =
+      CommandPalette::parse_github_url_target("https://github.com/colinhacks/zod/pull/5533/checks");
+    assert!(matches!(
+      parsed,
+      Some(super::GithubUrlTarget::Repo {
+        owner,
+        repo,
+        tab: None,
+        issue_number: None,
+        issue_comment_id: None
+      }) if owner == "colinhacks" && repo == "zod"
+    ));
+  }
+
+  #[test]
+  fn parse_github_url_action_routes_repo_actions_url_to_repo_details() {
+    let action = parse_github_url_action("https://github.com/colinhacks/zod/actions");
+    assert!(matches!(
+      action,
+      Some(CommandPaletteAction::OpenGithubRepoDetails {
+        owner,
+        repo,
+        tab: None,
+        issue_number: None,
+        issue_comment_id: None
       }) if owner == "colinhacks" && repo == "zod"
     ));
   }

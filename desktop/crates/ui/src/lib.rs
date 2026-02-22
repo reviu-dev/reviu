@@ -15,7 +15,7 @@ pub use command_palette::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage,
-  CommandPaletteRepository, CommandPaletteStash,
+  CommandPaletteRepository, CommandPaletteStash, parse_github_url_action,
 };
 pub use confirm_dialog::ConfirmDialog;
 pub use gpui_component::Disableable;

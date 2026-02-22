@@ -155,7 +155,7 @@ pub type ReviewCommentEditHandler = Arc<dyn Fn(u64, Arc<str>, &mut Window, &mut 
 pub type ReviewCommentCreateHandler =
   Arc<dyn Fn(ReviewCommentCreateRequest, &mut Window, &mut App)>;
 pub type ReviewCommentDeleteHandler = Arc<dyn Fn(u64, &mut Window, &mut App)>;
-pub type ReviewCommentLinkHandler = Arc<dyn Fn(u64, u64, &mut Window, &mut App) -> bool>;
+pub type ReviewCommentLinkHandler = Arc<dyn Fn(&str, &mut Window, &mut App) -> bool>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReviewCommentCodeReferencePreview {
@@ -3282,33 +3282,31 @@ impl Editor {
             return LinkAction::Open;
           }
 
-          let Some((pr_number, comment_id)) = parse_github_pr_comment_link(url) else {
-            return LinkAction::Open;
-          };
-
+          let parsed_comment_link = parse_github_pr_comment_link(url);
           let (handled, link_handler) = editor.update(cx, |editor, cx| {
-            if editor.review_comment_pr_number != Some(pr_number) {
-              return (false, editor.review_comment_link_handler.clone());
+            if let Some((pr_number, comment_id)) = parsed_comment_link {
+              if editor.review_comment_pr_number != Some(pr_number) {
+                return (false, editor.review_comment_link_handler.clone());
+              }
+              if !editor
+                .review_comments
+                .iter()
+                .any(|comment| comment.id == comment_id)
+              {
+                return (false, editor.review_comment_link_handler.clone());
+              }
+              return (
+                editor.scroll_to_review_comment(comment_id, line_height, cx),
+                editor.review_comment_link_handler.clone(),
+              );
             }
-            if !editor
-              .review_comments
-              .iter()
-              .any(|comment| comment.id == comment_id)
-            {
-              return (false, editor.review_comment_link_handler.clone());
-            }
-            (
-              editor.scroll_to_review_comment(comment_id, line_height, cx),
-              editor.review_comment_link_handler.clone(),
-            )
+            (false, editor.review_comment_link_handler.clone())
           });
           if handled {
             return LinkAction::Handled;
           }
 
-          if let Some(handler) = link_handler
-            && handler(pr_number, comment_id, window, cx)
-          {
+          if let Some(handler) = link_handler && handler(url, window, cx) {
             return LinkAction::Handled;
           }
 
@@ -8115,7 +8113,7 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      let handler: ReviewCommentLinkHandler = Arc::new(|_, _, _, _| false);
+      let handler: ReviewCommentLinkHandler = Arc::new(|_, _, _| false);
       editor.set_review_comment_link_handler(Some(handler), cx);
       editor.set_diffs(None, cx);
 
