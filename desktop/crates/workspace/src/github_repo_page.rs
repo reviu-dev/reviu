@@ -43,6 +43,10 @@ use crate::{
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_compact_datetime, format_long_date_opt},
   github_page::GithubPageHandle,
+  github_navigation::{
+    SameRepoIssueLinkNavigation, open_pr_target, open_repo_target,
+    same_repo_issue_link_navigation, should_open_externally,
+  },
   github_pr_details_page::GithubPrDetailsPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
@@ -349,35 +353,6 @@ fn github_code_reference_preview_map(
 
 fn should_apply_issue_request_result(request_generation: u64, task_generation: u64) -> bool {
   request_generation == task_generation
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SameRepoIssueLinkNavigation {
-  Noop,
-  ScrollComment { comment_id: u64 },
-  ReloadIssue {
-    issue_number: u64,
-    issue_comment_id: Option<u64>,
-  },
-}
-
-fn same_repo_issue_link_navigation(
-  current_issue_number: u64,
-  issue_number: u64,
-  issue_comment_id: Option<u64>,
-) -> SameRepoIssueLinkNavigation {
-  if current_issue_number == issue_number {
-    if let Some(comment_id) = issue_comment_id {
-      SameRepoIssueLinkNavigation::ScrollComment { comment_id }
-    } else {
-      SameRepoIssueLinkNavigation::Noop
-    }
-  } else {
-    SameRepoIssueLinkNavigation::ReloadIssue {
-      issue_number,
-      issue_comment_id,
-    }
-  }
 }
 
 #[derive(Clone, Debug)]
@@ -940,7 +915,7 @@ impl GithubIssueDetailsSheetView {
   }
 
   fn handle_gfm_link(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
-    if window.modifiers().secondary() {
+    if should_open_externally(window) {
       return false;
     }
 
@@ -983,23 +958,7 @@ impl GithubIssueDetailsSheetView {
           }
         }
 
-        match tab {
-          Some(CommandPaletteGithubRepoTab::PullRequests) => {
-            GithubRepoPageHandle::show_pull_requests(owner.into(), repo.into(), cx);
-          }
-          Some(CommandPaletteGithubRepoTab::Issues) => {
-            GithubRepoPageHandle::show_issues(
-              owner.into(),
-              repo.into(),
-              issue_number,
-              issue_comment_id,
-              cx,
-            );
-          }
-          Some(CommandPaletteGithubRepoTab::Overview) | None => {
-            GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
-          }
-        }
+        open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
         true
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -1009,14 +968,13 @@ impl GithubIssueDetailsSheetView {
         open_changes_tab: _,
         review_comment_id,
       } => {
-        GithubPrDetailsPageHandle::show_with_repo_return_open_target(
-          owner.into(),
-          repo.into(),
+        open_pr_target(
+          owner,
+          repo,
           number,
-          self.owner.clone().into(),
-          self.repo.clone().into(),
           review_comment_id.is_some(),
           review_comment_id,
+          Some((self.owner.to_string(), self.repo.to_string())),
           cx,
         );
         true
@@ -2334,33 +2292,6 @@ mod tests {
       GithubRepoOpenTarget::Issues {
         issue_number: Some(42),
         issue_comment_id: Some(99),
-      }
-    );
-  }
-
-  #[test]
-  fn same_repo_issue_link_navigation_noops_for_same_issue_without_fragment() {
-    let navigation = same_repo_issue_link_navigation(42, 42, None);
-    assert_eq!(navigation, SameRepoIssueLinkNavigation::Noop);
-  }
-
-  #[test]
-  fn same_repo_issue_link_navigation_scrolls_for_same_issue_comment_fragment() {
-    let navigation = same_repo_issue_link_navigation(42, 42, Some(99));
-    assert_eq!(
-      navigation,
-      SameRepoIssueLinkNavigation::ScrollComment { comment_id: 99 }
-    );
-  }
-
-  #[test]
-  fn same_repo_issue_link_navigation_reloads_for_other_issue() {
-    let navigation = same_repo_issue_link_navigation(42, 77, Some(101));
-    assert_eq!(
-      navigation,
-      SameRepoIssueLinkNavigation::ReloadIssue {
-        issue_number: 77,
-        issue_comment_id: Some(101),
       }
     );
   }

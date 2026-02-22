@@ -41,7 +41,7 @@ use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
+  CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
   DETAILS_PAGE_CONTAINER_MAX_WIDTH, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler,
   SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UiIconName, UserMenuConfig,
   UserMenuPage, UserMenuState, UserMenuUser, WindowExt, file_icon_path_for_name_with_theme,
@@ -56,6 +56,9 @@ use crate::{
   auth_state::{AuthState, AuthStateStore},
   date_format::format_long_date,
   github_page::GithubPageHandle,
+  github_navigation::{
+    SamePrGfmNavigation, open_repo_target, same_pr_gfm_navigation, should_open_externally,
+  },
   github_repo_page::GithubRepoPageHandle,
   sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
@@ -358,27 +361,6 @@ struct CurrentPrContext {
   owner: String,
   repo: String,
   number: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SamePrGfmNavigation {
-  ShowOverview { switch_to_overview: bool },
-  ScrollComment { switch_to_changes: bool },
-}
-
-fn same_pr_gfm_navigation(
-  active_tab_ix: usize,
-  review_comment_id: Option<u64>,
-) -> SamePrGfmNavigation {
-  if review_comment_id.is_some() {
-    SamePrGfmNavigation::ScrollComment {
-      switch_to_changes: active_tab_ix != 1,
-    }
-  } else {
-    SamePrGfmNavigation::ShowOverview {
-      switch_to_overview: active_tab_ix != 0,
-    }
-  }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -716,7 +698,7 @@ impl GithubPrDetailsPage {
   }
 
   fn handle_gfm_link(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
-    if window.modifiers().secondary() {
+    if should_open_externally(window) {
       return false;
     }
 
@@ -776,23 +758,7 @@ impl GithubPrDetailsPage {
         issue_number,
         issue_comment_id,
       } => {
-        match tab {
-          Some(CommandPaletteGithubRepoTab::PullRequests) => {
-            GithubRepoPageHandle::show_pull_requests(owner.into(), repo.into(), cx);
-          }
-          Some(CommandPaletteGithubRepoTab::Issues) => {
-            GithubRepoPageHandle::show_issues(
-              owner.into(),
-              repo.into(),
-              issue_number,
-              issue_comment_id,
-              cx,
-            );
-          }
-          Some(CommandPaletteGithubRepoTab::Overview) | None => {
-            GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
-          }
-        }
+        open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
         true
       }
       _ => false,
@@ -2819,23 +2785,7 @@ impl GithubPrDetailsPage {
         issue_number,
         issue_comment_id,
       } => {
-        match tab {
-          Some(CommandPaletteGithubRepoTab::PullRequests) => {
-            GithubRepoPageHandle::show_pull_requests(owner.into(), repo.into(), cx);
-          }
-          Some(CommandPaletteGithubRepoTab::Issues) => {
-            GithubRepoPageHandle::show_issues(
-              owner.into(),
-              repo.into(),
-              issue_number,
-              issue_comment_id,
-              cx,
-            );
-          }
-          Some(CommandPaletteGithubRepoTab::Overview) | None => {
-            GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
-          }
-        }
+        open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
@@ -3416,36 +3366,6 @@ mod tests {
       review_comment_id: Some(42),
     };
     assert_eq!(target.tab_ix(), 1);
-  }
-
-  #[test]
-  fn same_pr_gfm_navigation_routes_comment_links_to_changes_and_scroll() {
-    let navigation = same_pr_gfm_navigation(0, Some(42));
-    assert_eq!(
-      navigation,
-      SamePrGfmNavigation::ScrollComment {
-        switch_to_changes: true,
-      }
-    );
-  }
-
-  #[test]
-  fn same_pr_gfm_navigation_routes_non_comment_links_to_overview_without_reload() {
-    let already_overview = same_pr_gfm_navigation(0, None);
-    assert_eq!(
-      already_overview,
-      SamePrGfmNavigation::ShowOverview {
-        switch_to_overview: false,
-      }
-    );
-
-    let from_changes = same_pr_gfm_navigation(1, None);
-    assert_eq!(
-      from_changes,
-      SamePrGfmNavigation::ShowOverview {
-        switch_to_overview: true,
-      }
-    );
   }
 
   #[test]

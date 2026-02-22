@@ -12,6 +12,7 @@ mod date_format;
 mod git_config_page;
 mod git_page;
 mod github_page;
+mod github_navigation;
 mod github_pr_details_page;
 mod github_repo_page;
 mod interactive_rebase_todo_view;
