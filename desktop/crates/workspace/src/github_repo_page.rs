@@ -3031,7 +3031,7 @@ impl GithubRepoPage {
             div()
               .text_xs()
               .text_color(theme.muted_foreground)
-              .child(file.sha.clone()),
+              .child(file.sha.slice(0..7)),
           )
           .when(is_markdown || is_svg, |this| this.child(preview_button)),
       )
