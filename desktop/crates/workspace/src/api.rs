@@ -257,6 +257,27 @@ pub struct GithubRepositoryDetails {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubRepositoryTreeEntry {
+  pub path: String,
+  pub mode: String,
+  #[serde(rename = "type")]
+  pub entry_type: String,
+  pub sha: String,
+  pub size: Option<u64>,
+  pub url: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubRepositoryTree {
+  pub sha: String,
+  pub url: String,
+  pub tree: Vec<GithubRepositoryTreeEntry>,
+  pub truncated: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequest {
   pub number: u64,
   pub title: String,
@@ -757,6 +778,29 @@ impl ApiClient {
       anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubRepositoryDetails>()?;
+    Ok(payload)
+  }
+
+  pub fn fetch_github_repository_tree(
+    &self,
+    owner: &str,
+    repo: &str,
+    tree_sha: &str,
+  ) -> Result<GithubRepositoryTree> {
+    let route = format!("/github/repos/{owner}/{repo}/trees/{tree_sha}");
+    let response = self
+      .authed_request(Method::GET, route.as_str())
+      .query(&[("recursive", "1")])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubRepositoryTree>()?;
     Ok(payload)
   }
 
@@ -1414,6 +1458,74 @@ mod tests {
   }
 
   #[test]
+  fn fetch_github_repository_tree_parses_success_payload() {
+    let body = r#"{
+      "sha": "9fb037999f264ba9a7fc6274d15fa3ae2ab98312",
+      "url": "https://api.github.com/repos/octocat/Hello-World/trees/9fb037999f264ba9a7fc6274d15fa3ae2ab98312",
+      "tree": [
+        {
+          "path": "file.rb",
+          "mode": "100644",
+          "type": "blob",
+          "size": 30,
+          "sha": "44b4fc6d56897b048c772eb4087f854f46256132",
+          "url": "https://api.github.com/repos/octocat/Hello-World/git/blobs/44b4fc6d56897b048c772eb4087f854f46256132"
+        },
+        {
+          "path": "subdir",
+          "mode": "040000",
+          "type": "tree",
+          "sha": "f484d249c660418515fb01c2b9662073663c242e",
+          "url": "https://api.github.com/repos/octocat/Hello-World/git/trees/f484d249c660418515fb01c2b9662073663c242e"
+        }
+      ],
+      "truncated": false
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let tree = api
+      .fetch_github_repository_tree("acme", "widget", "main")
+      .expect("fetch repository tree");
+    assert_eq!(tree.sha, "9fb037999f264ba9a7fc6274d15fa3ae2ab98312");
+    assert_eq!(tree.tree.len(), 2);
+    assert_eq!(tree.tree[0].path, "file.rb");
+    assert_eq!(tree.tree[0].entry_type, "blob");
+    assert_eq!(tree.tree[1].path, "subdir");
+    assert_eq!(tree.tree[1].entry_type, "tree");
+    assert!(!tree.truncated);
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_repository_tree_uses_recursive_query() {
+    let body = r#"{
+      "sha": "9fb037999f264ba9a7fc6274d15fa3ae2ab98312",
+      "url": "https://api.github.com/repos/octocat/Hello-World/trees/9fb037999f264ba9a7fc6274d15fa3ae2ab98312",
+      "tree": [],
+      "truncated": false
+    }"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_github_repository_tree("acme", "widget", "main")
+      .expect("fetch repository tree");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "GET /github/repos/acme/widget/trees/main?recursive=1 HTTP/1.1"
+    );
+  }
+
+  #[test]
   fn fetch_github_repository_issues_parses_success_payload() {
     let body = r#"{
       "issues": [
@@ -2050,6 +2162,19 @@ mod tests {
 
     let err = api
       .fetch_github_repository_pull_requests("acme", "widget")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_repository_tree_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "{}");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .fetch_github_repository_tree("acme", "widget", "main")
       .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
