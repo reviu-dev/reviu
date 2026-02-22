@@ -311,6 +311,7 @@ const MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX: f32 = 8.0;
 const MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX: f32 = 6.0;
 const MARKDOWN_CODE_REFERENCE_SNIPPET_ROW_GAP_PX: f32 = 2.0;
 const MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX: f32 = 8.0;
+const MARKDOWN_CODE_REFERENCE_ROW_GAP_PX: f32 = 8.0;
 const MARKDOWN_INLINE_IMAGE_MAX_HEIGHT_PX: f32 = 420.0;
 const PARSED_MARKDOWN_CACHE_MAX_ENTRIES: usize = 256;
 const PARSED_MARKDOWN_CACHE_MAX_SOURCE_LEN: usize = 100_000;
@@ -1132,6 +1133,7 @@ pub fn render_github_code_reference_preview_card(
   let snippet_text_seed = preview_hash as usize;
   let snippet_language_hint = code_block_language_hint_from_path(preview.path.as_ref());
   let snippet_render_state = MarkdownRenderState::new();
+  let min_preview_content_width_px = estimate_code_reference_preview_min_content_width_px(preview);
   let url = preview.url.clone();
   let file_label = format!("{}/{}", preview.repo.as_ref(), preview.path.as_ref());
   let line_label = if preview.start_line == preview.end_line {
@@ -1253,6 +1255,8 @@ pub fn render_github_code_reference_preview_card(
         .child(
           div()
             .id(preview_scroll_id)
+            .w_full()
+            .min_w_0()
             .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
             .overflow_scroll()
             .on_scroll_wheel(|_, _, cx| {
@@ -1260,6 +1264,7 @@ pub fn render_github_code_reference_preview_card(
             })
             .child(
               div()
+                .min_w(px(min_preview_content_width_px))
                 .whitespace_nowrap()
                 .text_sm()
                 .text_color(theme.foreground)
@@ -1289,6 +1294,28 @@ pub fn estimate_github_code_reference_preview_height_px(
     + MARKDOWN_CODE_REFERENCE_CARD_MARGIN_Y_PX * 2.0
     + 3.0
     + snippet_scroll_height_px
+}
+
+fn estimate_code_reference_preview_min_content_width_px(
+  preview: &GithubCodeReferencePreview,
+) -> f32 {
+  let widest_row_columns = if preview.snippets.is_empty() {
+    preview.start_line.to_string().chars().count()
+  } else {
+    preview
+      .snippets
+      .iter()
+      .enumerate()
+      .map(|(offset, snippet)| {
+        let line_number_columns = (preview.start_line + offset).to_string().chars().count();
+        line_number_columns + 2 + snippet.chars().count()
+      })
+      .max()
+      .unwrap_or(0)
+  } as f32;
+
+  (widest_row_columns * MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX + MARKDOWN_CODE_REFERENCE_ROW_GAP_PX)
+    .ceil()
 }
 
 fn code_block_language_hint_from_path(path: &str) -> Option<String> {
@@ -4089,6 +4116,39 @@ Apres"#,
       + 3.0
       + MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX;
     assert_eq!(capped, expected);
+  }
+
+  #[test]
+  fn estimate_code_reference_preview_min_content_width_px_uses_widest_row() {
+    let mut preview = test_preview_for_url(
+      "https://github.com/acme/widget/blob/main/docker-compose.yml#L7-L9",
+    );
+    preview.start_line = 7;
+    preview.snippets = vec![Arc::from("abc"), Arc::from("abcdefgh")];
+
+    let width = estimate_code_reference_preview_min_content_width_px(&preview);
+    let expected_columns = 1 + 2 + 8;
+    let expected =
+      (expected_columns as f32 * MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX + MARKDOWN_CODE_REFERENCE_ROW_GAP_PX)
+        .ceil();
+
+    assert_eq!(width, expected);
+  }
+
+  #[test]
+  fn estimate_code_reference_preview_min_content_width_px_handles_empty_snippets() {
+    let mut preview = test_preview_for_url(
+      "https://github.com/acme/widget/blob/main/docker-compose.yml#L7-L9",
+    );
+    preview.start_line = 1234;
+    preview.snippets.clear();
+
+    let width = estimate_code_reference_preview_min_content_width_px(&preview);
+    let expected =
+      (4.0 * MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX + MARKDOWN_CODE_REFERENCE_ROW_GAP_PX)
+        .ceil();
+
+    assert_eq!(width, expected);
   }
 
   #[test]
