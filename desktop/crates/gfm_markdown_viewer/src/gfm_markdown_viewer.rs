@@ -1,7 +1,7 @@
 use std::{
   collections::{HashMap, HashSet, VecDeque},
   fs,
-  hash::{Hash, Hasher, DefaultHasher},
+  hash::{DefaultHasher, Hash, Hasher},
   ops::Range,
   path::PathBuf,
   sync::{
@@ -22,7 +22,7 @@ use gpui::{
   FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, ImageCacheError,
   ImgResourceLoader, InspectorElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
   MouseUpEvent, Pixels, RenderImage, Resource, SharedString, StrikethroughStyle, StyledText,
-  TextRun, UnderlineStyle, Window, div, fill, img, point, prelude::*, px,
+  TextRun, UnderlineStyle, Window, div, fill, img, point, prelude::*, px, red,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
@@ -239,8 +239,7 @@ pub struct MarkdownRenderOptions {
   pub overrides: RenderOverrides,
   pub state: MarkdownRenderState,
   pub scope_id: Option<usize>,
-  pub github_code_reference_previews:
-    Option<Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>>,
+  pub github_code_reference_previews: Option<Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>>,
 }
 
 impl MarkdownRenderOptions {
@@ -1120,6 +1119,15 @@ fn render_github_code_reference_preview_card(
   cx: &App,
 ) -> AnyElement {
   let theme = cx.theme();
+  let mut preview_id_hasher = DefaultHasher::new();
+  preview.url.hash(&mut preview_id_hasher);
+  preview.start_line.hash(&mut preview_id_hasher);
+  preview.end_line.hash(&mut preview_id_hasher);
+  let preview_scroll_id: SharedString = format!(
+    "markdown-code-reference-preview-scroll-{}",
+    preview_id_hasher.finish()
+  )
+  .into();
   let url = preview.url.clone();
   let file_label = format!("{}/{}", preview.repo.as_ref(), preview.path.as_ref());
   let line_label = if preview.start_line == preview.end_line {
@@ -1152,10 +1160,9 @@ fn render_github_code_reference_preview_card(
         )
         .child(
           div()
-            .flex_1()
-            .min_w_0()
             .font_family(cx.theme().mono_font_family.clone())
             .text_sm()
+            .whitespace_nowrap()
             .text_color(theme.foreground)
             .child(""),
         ),
@@ -1174,14 +1181,13 @@ fn render_github_code_reference_preview_card(
               .text_color(theme.muted_foreground)
               .child(line_number.to_string()),
           )
-            .child(
-              div()
-                .flex_1()
-                .min_w_0()
-                .font_family(cx.theme().mono_font_family.clone())
-                .text_sm()
-                .text_color(theme.foreground)
-                .child(snippet.as_ref().to_string()),
+          .child(
+            div()
+              .font_family(cx.theme().mono_font_family.clone())
+              .text_sm()
+              .whitespace_nowrap()
+              .text_color(theme.foreground)
+              .child(snippet.as_ref().to_string()),
           ),
       );
     }
@@ -1207,7 +1213,6 @@ fn render_github_code_reference_preview_card(
         })
         .child(
           v_flex()
-            .gap_1()
             .child(
               div()
                 .text_sm()
@@ -1228,9 +1233,18 @@ fn render_github_code_reference_preview_card(
         .px(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX))
         .py(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX))
         .child(
-          v_flex()
-            .gap(px(MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX))
-            .child(snippet_rows),
+          div()
+            .id(preview_scroll_id)
+            .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
+            .overflow_scroll()
+            .on_scroll_wheel(|_, _, cx| {
+              cx.stop_propagation();
+            })
+            .child(
+              v_flex()
+                .gap(px(MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX))
+                .child(snippet_rows),
+            ),
         ),
     )
     .into_any_element()
@@ -2015,7 +2029,6 @@ fn render_code_block(
   let scroll_id: SharedString = format!("markdown-code-block-scroll-{text_id}").into();
 
   div()
-    .bg(theme.accent)
     .border_1()
     .border_color(theme.border)
     .rounded_md()
@@ -2947,17 +2960,11 @@ fn build_runs(
       None
     };
 
-    let background_color = if span.style.code {
-      Some(theme.accent)
-    } else {
-      None
-    };
-
     runs.push(TextRun {
       len: span.range.end.saturating_sub(span.range.start),
       font,
       color,
-      background_color,
+      background_color: None,
       underline,
       strikethrough,
     });
@@ -3482,10 +3489,21 @@ mod tests {
 
   #[test]
   fn parse_github_blob_line_reference_rejects_invalid_inputs() {
-    assert!(parse_github_blob_line_reference("https://example.com/repo/blob/main/file.rs#L7").is_none());
-    assert!(parse_github_blob_line_reference("https://github.com/acme/widget/blob/main/file.rs").is_none());
-    assert!(parse_github_blob_line_reference("https://github.com/acme/widget/blob/main/file.rs#L0").is_none());
-    assert!(parse_github_blob_line_reference("https://github.com/acme/widget/blob/main/file.rs#L7-L0").is_none());
+    assert!(
+      parse_github_blob_line_reference("https://example.com/repo/blob/main/file.rs#L7").is_none()
+    );
+    assert!(
+      parse_github_blob_line_reference("https://github.com/acme/widget/blob/main/file.rs")
+        .is_none()
+    );
+    assert!(
+      parse_github_blob_line_reference("https://github.com/acme/widget/blob/main/file.rs#L0")
+        .is_none()
+    );
+    assert!(
+      parse_github_blob_line_reference("https://github.com/acme/widget/blob/main/file.rs#L7-L0")
+        .is_none()
+    );
   }
 
   #[test]
@@ -3506,9 +3524,15 @@ mod tests {
 
     let segments = split_markdown_preview_segments(&source, &previews);
     assert_eq!(segments.len(), 3);
-    assert!(matches!(&segments[0], MarkdownRenderSegment::Markdown(markdown) if markdown == "Before\n"));
-    assert!(matches!(&segments[1], MarkdownRenderSegment::Preview(preview) if preview.url.as_ref() == url));
-    assert!(matches!(&segments[2], MarkdownRenderSegment::Markdown(markdown) if markdown == "After"));
+    assert!(
+      matches!(&segments[0], MarkdownRenderSegment::Markdown(markdown) if markdown == "Before\n")
+    );
+    assert!(
+      matches!(&segments[1], MarkdownRenderSegment::Preview(preview) if preview.url.as_ref() == url)
+    );
+    assert!(
+      matches!(&segments[2], MarkdownRenderSegment::Markdown(markdown) if markdown == "After")
+    );
   }
 
   #[test]
@@ -3519,7 +3543,9 @@ mod tests {
 
     let segments = split_markdown_preview_segments(&source, &previews);
     assert_eq!(segments.len(), 3);
-    assert!(matches!(&segments[1], MarkdownRenderSegment::Preview(preview) if preview.url.as_ref() == url));
+    assert!(
+      matches!(&segments[1], MarkdownRenderSegment::Preview(preview) if preview.url.as_ref() == url)
+    );
   }
 
   #[test]
