@@ -310,6 +310,7 @@ const MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX: f32 = 12.0;
 const MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX: f32 = 8.0;
 const MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX: f32 = 6.0;
 const MARKDOWN_CODE_REFERENCE_SNIPPET_ROW_GAP_PX: f32 = 2.0;
+const MARKDOWN_INLINE_IMAGE_MAX_HEIGHT_PX: f32 = 420.0;
 const PARSED_MARKDOWN_CACHE_MAX_ENTRIES: usize = 256;
 const PARSED_MARKDOWN_CACHE_MAX_SOURCE_LEN: usize = 100_000;
 const MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX: f32 =
@@ -1982,9 +1983,46 @@ fn render_badge_placeholder(label: &str) -> AnyElement {
     .into_any_element()
 }
 
-fn render_inline_text(
+fn render_inline_image(url: &str, alt: &str) -> AnyElement {
+  let label = if alt.trim().is_empty() {
+    "image".to_string()
+  } else {
+    alt.trim().to_string()
+  };
+  let image_url = url.to_string();
+  let mut hasher = DefaultHasher::new();
+  image_url.hash(&mut hasher);
+  let image_scroll_id: SharedString =
+    format!("markdown-inline-image-scroll-{:x}", hasher.finish()).into();
+
+  div()
+    .id(image_scroll_id)
+    .w_full()
+    .overflow_x_scrollbar()
+    .child(
+      img(move |window: &mut Window, cx: &mut App| {
+        if let Some(source) = resolve_badge_image_source_async(&image_url) {
+          return load_badge_image_data(&source, window, cx);
+        }
+
+        window.request_animation_frame();
+        None
+      })
+      .max_w_full()
+      .max_h(px(MARKDOWN_INLINE_IMAGE_MAX_HEIGHT_PX))
+      .with_loading({
+        let label = label.clone();
+        move || render_badge_placeholder(&label)
+      })
+      .with_fallback(move || render_badge_placeholder(&label)),
+    )
+    .into_any_element()
+}
+
+fn render_inline_selectable_text(
   inlines: &[Inline],
   options: &MarkdownRenderOptions,
+  interactive: bool,
   _cx: &App,
   ctx: &mut RenderContext,
 ) -> AnyElement {
@@ -1999,35 +2037,85 @@ fn render_inline_text(
     options.on_link.clone(),
     text_id,
     SelectableTextOptions {
-      interactive: true,
+      interactive,
       show_indentation_dots: false,
     },
   )
   .into_any_element()
 }
 
+fn render_inline_with_images(
+  inlines: &[Inline],
+  options: &MarkdownRenderOptions,
+  interactive: bool,
+  cx: &App,
+  ctx: &mut RenderContext,
+) -> AnyElement {
+  let mut content = v_flex().w_full().min_w_0().gap_2();
+  let mut has_content = false;
+  let mut text_chunk: Vec<Inline> = Vec::new();
+
+  for inline in inlines {
+    if let Some((url, alt)) = inline_image_data(inline) {
+      if !text_chunk.is_empty() {
+        content = content.child(render_inline_selectable_text(
+          &text_chunk,
+          options,
+          interactive,
+          cx,
+          ctx,
+        ));
+        text_chunk.clear();
+      }
+      content = content.child(render_inline_image(&url, &alt));
+      has_content = true;
+    } else {
+      text_chunk.push(inline.clone());
+    }
+  }
+
+  if !text_chunk.is_empty() {
+    content = content.child(render_inline_selectable_text(
+      &text_chunk,
+      options,
+      interactive,
+      cx,
+      ctx,
+    ));
+    has_content = true;
+  }
+
+  if has_content {
+    content.into_any_element()
+  } else {
+    div().into_any_element()
+  }
+}
+
+fn render_inline_text(
+  inlines: &[Inline],
+  options: &MarkdownRenderOptions,
+  cx: &App,
+  ctx: &mut RenderContext,
+) -> AnyElement {
+  if inlines.iter().any(inline_contains_image) {
+    return render_inline_with_images(inlines, options, true, cx, ctx);
+  }
+
+  render_inline_selectable_text(inlines, options, true, cx, ctx)
+}
+
 fn render_inline_static(
   inlines: &[Inline],
   options: &MarkdownRenderOptions,
-  _cx: &App,
+  cx: &App,
   ctx: &mut RenderContext,
 ) -> AnyElement {
-  let (text, spans, link_ranges) = build_spans(inlines);
-  let text_id = ctx.next_text_id();
+  if inlines.iter().any(inline_contains_image) {
+    return render_inline_with_images(inlines, options, false, cx, ctx);
+  }
 
-  SelectableText::new(
-    text,
-    spans,
-    link_ranges,
-    options.state.clone(),
-    options.on_link.clone(),
-    text_id,
-    SelectableTextOptions {
-      interactive: false,
-      show_indentation_dots: false,
-    },
-  )
-  .into_any_element()
+  render_inline_selectable_text(inlines, options, false, cx, ctx)
 }
 
 fn render_heading_text(
@@ -3127,6 +3215,8 @@ fn blocks_from_node<'a>(node: &'a AstNode<'a>) -> Vec<Block> {
         Vec::new()
       } else if let Some(details) = parse_details_html(&html.literal) {
         vec![Block::Details(details)]
+      } else if let Some(image) = parse_inline_html_image(&html.literal) {
+        vec![Block::Paragraph(vec![image])]
       } else {
         vec![Block::Paragraph(vec![Inline::Text(html.literal.clone())])]
       }
@@ -3697,6 +3787,30 @@ mod tests {
         }
       }
       _ => panic!("expected table"),
+    }
+  }
+
+  #[test]
+  fn parses_html_block_image_as_inline_image_paragraph() {
+    let blocks = parse_gfm(
+      "<img width=\"1159\" height=\"272\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/525e1fe3-1159-47ea-a1ac-8926a03c9cd1\" />",
+    );
+    assert_eq!(blocks.len(), 1);
+    match &blocks[0] {
+      Block::Paragraph(inlines) => {
+        assert_eq!(inlines.len(), 1);
+        match &inlines[0] {
+          Inline::Image { url, alt, .. } => {
+            assert_eq!(
+              url,
+              "https://github.com/user-attachments/assets/525e1fe3-1159-47ea-a1ac-8926a03c9cd1"
+            );
+            assert_eq!(alt, "Image");
+          }
+          _ => panic!("expected image inline"),
+        }
+      }
+      _ => panic!("expected paragraph"),
     }
   }
 
