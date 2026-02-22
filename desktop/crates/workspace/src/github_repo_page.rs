@@ -42,11 +42,11 @@ use crate::{
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_compact_datetime, format_long_date_opt},
-  github_page::GithubPageHandle,
   github_navigation::{
-    SameRepoIssueLinkNavigation, open_pr_target, open_repo_target,
-    same_repo_issue_link_navigation, should_open_externally,
+    SameRepoIssueLinkNavigation, open_pr_target, open_repo_target, same_repo_issue_link_navigation,
+    should_open_externally,
   },
+  github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
@@ -220,6 +220,8 @@ fn issue_comment_scope_id(issue_id: u64, comment_id: u64) -> usize {
     .wrapping_mul(31)
     .wrapping_add(2)
 }
+
+const ISSUE_DETAILS_SHEET_WIDTH_PX: f32 = 800.0;
 
 fn issue_state_label(state: &str, reason: Option<GithubIssueStateReason>) -> SharedString {
   if state.eq_ignore_ascii_case("open") {
@@ -829,7 +831,8 @@ impl GithubIssueDetailsSheetView {
 
         match result {
           Ok(issue) => {
-            let (description_references, comment_references) = issue_code_reference_requests(&issue);
+            let (description_references, comment_references) =
+              issue_code_reference_requests(&issue);
             this.description_references = description_references;
             this.comment_references = comment_references;
             this.issue = Some(issue);
@@ -878,8 +881,8 @@ impl GithubIssueDetailsSheetView {
       let reference_for_preview = reference.clone();
 
       let task = cx.spawn(async move |this, cx| {
-        let result = unblock(move || api.fetch_github_file_content(&owner, &repo, &path, &revision))
-          .await;
+        let result =
+          unblock(move || api.fetch_github_file_content(&owner, &repo, &path, &revision)).await;
 
         let preview = match result {
           Ok(Some(content)) => {
@@ -899,7 +902,9 @@ impl GithubIssueDetailsSheetView {
         });
       });
 
-      self.code_reference_tasks.insert(reference.url.clone(), task);
+      self
+        .code_reference_tasks
+        .insert(reference.url.clone(), task);
     }
   }
 
@@ -1060,7 +1065,8 @@ impl Render for GithubIssueDetailsSheetView {
       };
       let issue_details_view = cx.entity().clone();
       let gfm_link_handler = Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
-        let handled = issue_details_view.update(cx, |this, cx| this.handle_gfm_link(url, window, cx));
+        let handled =
+          issue_details_view.update(cx, |this, cx| this.handle_gfm_link(url, window, cx));
         if handled {
           LinkAction::Handled
         } else {
@@ -1086,7 +1092,9 @@ impl Render for GithubIssueDetailsSheetView {
         let comment_previews = self
           .comment_references
           .get(&comment.id)
-          .and_then(|references| github_code_reference_preview_map(references, &self.code_reference_cache));
+          .and_then(|references| {
+            github_code_reference_preview_map(references, &self.code_reference_cache)
+          });
         let comment_anchor = if self.pending_comment_scroll_id == Some(comment.id) {
           pending_comment_found = true;
           let anchor = ScrollAnchor::for_handle(self.scroll_handle.clone());
@@ -1132,7 +1140,9 @@ impl Render for GithubIssueDetailsSheetView {
               div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(format!("Created {comment_created_at} • Updated {comment_updated_at}")),
+                .child(format!(
+                  "Created {comment_created_at} • Updated {comment_updated_at}"
+                )),
             )
             .child({
               let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler.clone())
@@ -1146,7 +1156,12 @@ impl Render for GithubIssueDetailsSheetView {
         );
       }
 
-      self.schedule_pending_comment_scroll(pending_comment_anchor, pending_comment_found, window, cx);
+      self.schedule_pending_comment_scroll(
+        pending_comment_anchor,
+        pending_comment_found,
+        window,
+        cx,
+      );
 
       v_flex()
         .w_full()
@@ -1480,7 +1495,7 @@ impl GithubRepoPage {
       sheet
         .overlay(true)
         .overlay_closable(true)
-        .size(px(620.0))
+        .size(px(ISSUE_DETAILS_SHEET_WIDTH_PX))
         .title(sheet_title.clone())
         .on_close({
           let issues_list = issues_list.clone();
@@ -2224,9 +2239,7 @@ mod tests {
       id: 1,
       number: 42,
       title: "Issue".to_string(),
-      body: Some(
-        "See:\nhttps://github.com/acme/widget/blob/main/src/lib.rs#L3-L5".to_string(),
-      ),
+      body: Some("See:\nhttps://github.com/acme/widget/blob/main/src/lib.rs#L3-L5".to_string()),
       state: "open".to_string(),
       state_reason: None,
       created_at: "2024-01-01T00:00:00Z".to_string(),
@@ -2374,6 +2387,11 @@ mod tests {
       Some(CommandPaletteGithubRepoTab::Issues),
       Some(42),
     ));
+  }
+
+  #[test]
+  fn issue_details_sheet_width_is_increased_for_readability() {
+    assert_eq!(ISSUE_DETAILS_SHEET_WIDTH_PX, 760.0);
   }
 
   #[test]
