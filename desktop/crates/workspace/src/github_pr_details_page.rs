@@ -38,11 +38,11 @@ use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DETAILS_PAGE_CONTAINER_MAX_WIDTH,
-  FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler, SearchFilePalette,
-  SearchFilePaletteConfig, StatusThemeExt, UiIconName, UserMenuConfig, UserMenuPage, UserMenuState,
-  UserMenuUser, WindowExt, file_icon_path_for_name_with_theme, h_resizable, resizable_panel,
-  user_menu,
+  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
+  DETAILS_PAGE_CONTAINER_MAX_WIDTH, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler,
+  SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UiIconName, UserMenuConfig,
+  UserMenuPage, UserMenuState, UserMenuUser, WindowExt, file_icon_path_for_name_with_theme,
+  h_resizable, resizable_panel, user_menu,
 };
 
 use crate::{
@@ -2740,8 +2740,23 @@ impl GithubPrDetailsPage {
         cx.refresh_windows();
         Ok(())
       }
-      CommandPaletteAction::OpenGithubRepoDetails { owner, repo } => {
-        GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
+      CommandPaletteAction::OpenGithubRepoDetails {
+        owner,
+        repo,
+        tab,
+        issue_number,
+      } => {
+        match tab {
+          Some(CommandPaletteGithubRepoTab::PullRequests) => {
+            GithubRepoPageHandle::show_pull_requests(owner.into(), repo.into(), cx);
+          }
+          Some(CommandPaletteGithubRepoTab::Issues) => {
+            GithubRepoPageHandle::show_issues(owner.into(), repo.into(), issue_number, cx);
+          }
+          Some(CommandPaletteGithubRepoTab::Overview) | None => {
+            GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
+          }
+        }
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

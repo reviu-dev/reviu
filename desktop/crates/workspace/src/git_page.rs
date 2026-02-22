@@ -60,11 +60,12 @@ use crate::{
 };
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
-  CommandPaletteCommand, CommandPaletteConfig, CommandPaletteHandler, CommandPalettePage,
-  CommandPaletteRepository, CommandPaletteStash, ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT,
-  Input, InputState, SearchFileEntry, SearchFileHandler, SearchFilePalette,
-  SearchFilePaletteConfig, StatusThemeExt, UiIconName, UserMenuConfig, UserMenuPage, UserMenuState,
-  UserMenuUser, WindowExt, file_icon_path_for_path_with_theme, user_menu,
+  CommandPaletteCommand, CommandPaletteConfig, CommandPaletteGithubRepoTab,
+  CommandPaletteHandler, CommandPalettePage, CommandPaletteRepository, CommandPaletteStash,
+  ConfirmDialog, FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState, SearchFileEntry,
+  SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, StatusThemeExt, UiIconName,
+  UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
+  file_icon_path_for_path_with_theme, user_menu,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
@@ -2602,8 +2603,23 @@ impl GitPage {
         GithubPrDetailsPageHandle::show(owner.into(), repo.into(), number, cx);
         Ok(())
       }
-      CommandPaletteAction::OpenGithubRepoDetails { owner, repo } => {
-        GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
+      CommandPaletteAction::OpenGithubRepoDetails {
+        owner,
+        repo,
+        tab,
+        issue_number,
+      } => {
+        match tab {
+          Some(CommandPaletteGithubRepoTab::PullRequests) => {
+            GithubRepoPageHandle::show_pull_requests(owner.into(), repo.into(), cx);
+          }
+          Some(CommandPaletteGithubRepoTab::Issues) => {
+            GithubRepoPageHandle::show_issues(owner.into(), repo.into(), issue_number, cx);
+          }
+          Some(CommandPaletteGithubRepoTab::Overview) | None => {
+            GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
+          }
+        }
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
