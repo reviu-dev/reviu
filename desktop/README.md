@@ -9,7 +9,7 @@ open target/release/bundle/osx/Reviu.app
 
 ## Release CD
 
-Desktop release publication is automated by `/.github/workflows/desktop-release.yml`.
+Desktop release publication is automated by [`/.github/workflows/desktop-release.yml`](../.github/workflows/desktop-release.yml).
 
 Rules:
 
