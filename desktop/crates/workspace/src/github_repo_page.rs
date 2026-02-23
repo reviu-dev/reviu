@@ -110,6 +110,10 @@ fn repo_palette_open_target(has_active_subscription: bool) -> WorkspacePage {
   }
 }
 
+fn repo_tab_count_label(count: usize) -> SharedString {
+  count.to_string().into()
+}
+
 const CODE_SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
 const CODE_SIDEBAR_MIN_WIDTH: f32 = 250.0;
 const CODE_SIDEBAR_MAX_WIDTH: f32 = 1500.0;
@@ -2993,6 +2997,8 @@ impl GithubRepoPage {
       } else {
         format!("{}/{}", self.owner, self.repo).into()
       };
+    let pull_requests_count = self.pull_requests.read(cx).delegate().all_rows.len();
+    let issues_count = self.issues.read(cx).delegate().all_rows.len();
 
     let tab_bar = TabBar::new("github-repo-tabs")
       .w_full()
@@ -3004,8 +3010,34 @@ impl GithubRepoPage {
       .child(Tab::new().label("Overview"))
       .child(Tab::new().label("Readme"))
       .child(Tab::new().label("Code"))
-      .child(Tab::new().label("Pull Requests"))
-      .child(Tab::new().label("Issues"));
+      .child(
+        Tab::new().child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child("Pull Requests")
+            .child(
+              Tag::secondary()
+                .small()
+                .rounded_full()
+                .child(repo_tab_count_label(pull_requests_count)),
+            ),
+        ),
+      )
+      .child(
+        Tab::new().child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child("Issues")
+            .child(
+              Tag::secondary()
+                .small()
+                .rounded_full()
+                .child(repo_tab_count_label(issues_count)),
+            ),
+        ),
+      );
 
     div()
       .px_3()
@@ -3846,6 +3878,12 @@ mod tests {
   fn repo_palette_open_target_follows_subscription_state() {
     assert_eq!(repo_palette_open_target(true), WorkspacePage::GithubRepo);
     assert_eq!(repo_palette_open_target(false), WorkspacePage::Billing);
+  }
+
+  #[test]
+  fn repo_tab_count_label_formats_counts() {
+    assert_eq!(repo_tab_count_label(0).as_ref(), "0");
+    assert_eq!(repo_tab_count_label(42).as_ref(), "42");
   }
 
   #[test]
