@@ -2663,6 +2663,8 @@ dependencies = [
  "once_cell",
  "reqwest",
  "syntax",
+ "tree-sitter 0.25.10",
+ "tree-sitter-html",
 ]
 
 [[package]]

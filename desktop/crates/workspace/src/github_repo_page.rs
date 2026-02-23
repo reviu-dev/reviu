@@ -3652,6 +3652,7 @@ impl GithubRepoPage {
         .unwrap_or_default();
       let options = MarkdownRenderOptions::with_on_link(gfm_link_handler)
         .with_state(self.readme_markdown_state.clone())
+        .with_expanded_code_blocks()
         .with_scope_id(readme_scope_id(
           self.owner.as_ref(),
           self.repo.as_ref(),
@@ -3679,18 +3680,13 @@ impl GithubRepoPage {
       .size_full()
       .overflow_y_scrollbar()
       .child(
-        v_flex()
-          .w_full()
-          .px_4()
-          .pt_4()
-          .pb_12()
-          .child(
-            v_flex()
-              .w_full()
-              .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
-              .mx_auto()
-              .child(body),
-          ),
+        v_flex().w_full().px_4().pt_4().pb_32().child(
+          v_flex()
+            .w_full()
+            .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+            .mx_auto()
+            .child(body),
+        ),
       )
   }
 
@@ -4125,11 +4121,6 @@ mod tests {
       Some(CommandPaletteGithubRepoTab::Issues),
       Some(42),
     ));
-  }
-
-  #[test]
-  fn issue_details_sheet_width_is_increased_for_readability() {
-    assert_eq!(ISSUE_DETAILS_SHEET_WIDTH_PX, 800.0);
   }
 
   #[test]

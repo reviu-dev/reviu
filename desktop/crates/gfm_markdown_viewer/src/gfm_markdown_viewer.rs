@@ -29,6 +29,7 @@ use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_f
 use once_cell::sync::Lazy;
 use reqwest::header::CONTENT_TYPE;
 use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, TokenType, languages};
+use tree_sitter::{Node as TsNode, Parser as TsParser};
 
 type BlockRenderFn = dyn Fn(AnyElement, &App) -> AnyElement + Send + Sync;
 type HeadingRenderFn = dyn Fn(u8, AnyElement, &App) -> AnyElement + Send + Sync;
@@ -49,6 +50,7 @@ pub enum Block {
   ThematicBreak,
   Table(Table),
   Details(Details),
+  Aligned { center: bool, blocks: Vec<Block> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +126,25 @@ pub enum Inline {
   Strong(Vec<Inline>),
   Emphasis(Vec<Inline>),
   Strikethrough(Vec<Inline>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HtmlElement {
+  tag: String,
+  attrs: Vec<HtmlAttribute>,
+  children: Vec<HtmlNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HtmlAttribute {
+  name: String,
+  value: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HtmlNode {
+  Element(HtmlElement),
+  Text(String),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -240,6 +261,7 @@ pub struct MarkdownRenderOptions {
   pub state: MarkdownRenderState,
   pub scope_id: Option<usize>,
   pub github_code_reference_previews: Option<Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>>,
+  pub expand_code_blocks: bool,
 }
 
 impl MarkdownRenderOptions {
@@ -270,6 +292,11 @@ impl MarkdownRenderOptions {
     previews: Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>,
   ) -> Self {
     self.github_code_reference_previews = Some(previews);
+    self
+  }
+
+  pub fn with_expanded_code_blocks(mut self) -> Self {
+    self.expand_code_blocks = true;
     self
   }
 }
@@ -530,6 +557,9 @@ fn estimate_block_height_px(
     Block::Table(table) => estimate_table_height_px(table, line_height_px),
     Block::Details(details) => {
       estimate_details_height_px(details, wrap_columns, line_height_px, indent)
+    }
+    Block::Aligned { blocks, .. } => {
+      estimate_blocks_height_px(blocks, wrap_columns, line_height_px, indent)
     }
   }
 }
@@ -1540,6 +1570,28 @@ fn render_block(
     }
     Block::Table(table) => render_table(table, options, cx, ctx),
     Block::Details(details) => render_details(details, options, indent, cx, ctx),
+    Block::Aligned { center, blocks } => {
+      if *center {
+        let mut aligned = v_flex().w_full().min_w_0().gap_2();
+        for block in blocks {
+          aligned = aligned.child(
+            h_flex()
+              .w_full()
+              .min_w_0()
+              .justify_center()
+              .child(
+                div()
+                  .text_center()
+                  .min_w_0()
+                  .child(render_block(block, options, indent, cx, ctx)),
+              ),
+          );
+        }
+        aligned.into_any_element()
+      } else {
+        render_blocks(blocks, options, indent, cx, ctx)
+      }
+    }
   }
 }
 
@@ -1930,22 +1982,59 @@ fn inline_contains_image(inline: &Inline) -> bool {
   }
 }
 
-fn inline_image_data(inline: &Inline) -> Option<(String, String)> {
+fn inline_image_data(inline: &Inline) -> Option<(String, String, Option<String>)> {
   match inline {
-    Inline::Image { url, alt, .. } => Some((url.clone(), alt.clone())),
-    Inline::Link { content, .. }
-    | Inline::Strong(content)
-    | Inline::Emphasis(content)
-    | Inline::Strikethrough(content) => {
+    Inline::Image { url, alt, .. } => Some((url.clone(), alt.clone(), None)),
+    Inline::Link {
+      url: link_url,
+      content,
+      ..
+    } => {
       for child in content {
-        if let Some(data) = inline_image_data(child) {
-          return Some(data);
+        if let Some((url, alt, child_link)) = inline_image_data(child) {
+          return Some((
+            url,
+            alt,
+            Some(child_link.unwrap_or_else(|| link_url.clone())),
+          ));
+        }
+      }
+      None
+    }
+    Inline::Strong(content) | Inline::Emphasis(content) | Inline::Strikethrough(content) => {
+      for child in content {
+        if let Some((url, alt, link)) = inline_image_data(child) {
+          return Some((url, alt, link));
         }
       }
       None
     }
     _ => None,
   }
+}
+
+fn split_inlines_by_hard_breaks(inlines: &[Inline]) -> Vec<Vec<Inline>> {
+  let mut rows = Vec::new();
+  let mut current_row = Vec::new();
+
+  for inline in inlines {
+    if matches!(inline, Inline::HardBreak) {
+      rows.push(current_row);
+      current_row = Vec::new();
+      continue;
+    }
+    current_row.push(inline.clone());
+  }
+
+  rows.push(current_row);
+  rows
+}
+
+fn single_inline_image_data(inlines: &[Inline]) -> Option<(String, String, Option<String>)> {
+  if inlines.len() != 1 {
+    return None;
+  }
+  inline_image_data(&inlines[0])
 }
 
 fn render_table_cell_inlines(
@@ -1962,7 +2051,7 @@ fn render_table_cell_inlines(
   let mut text_chunk: Vec<Inline> = Vec::new();
 
   for inline in inlines {
-    if let Some((url, alt)) = inline_image_data(inline) {
+    if let Some((url, alt, _)) = inline_image_data(inline) {
       if !text_chunk.is_empty() {
         row = row.child(render_inline_text(&text_chunk, options, cx, ctx));
         text_chunk.clear();
@@ -2030,15 +2119,79 @@ fn render_badge_placeholder(label: &str) -> AnyElement {
     .into_any_element()
 }
 
-fn render_inline_image(url: &str, alt: &str) -> AnyElement {
+fn render_image_node(url: &str, alt: &str) -> impl IntoElement {
   let label = if alt.trim().is_empty() {
     "image".to_string()
   } else {
     alt.trim().to_string()
   };
   let image_url = url.to_string();
+  img(move |window: &mut Window, cx: &mut App| {
+    if let Some(source) = resolve_badge_image_source_async(&image_url) {
+      return load_badge_image_data(&source, window, cx);
+    }
+
+    window.request_animation_frame();
+    None
+  })
+  .max_h(px(MARKDOWN_INLINE_IMAGE_MAX_HEIGHT_PX))
+  .with_loading({
+    let label = label.clone();
+    move || render_badge_placeholder(&label)
+  })
+  .with_fallback(move || render_badge_placeholder(&label))
+}
+
+fn attach_image_link_handler(
+  image: AnyElement,
+  url: &str,
+  link_url: Option<&str>,
+  on_link: Option<Arc<LinkHandlerFn>>,
+  interactive: bool,
+) -> AnyElement {
   let mut hasher = DefaultHasher::new();
-  image_url.hash(&mut hasher);
+  url.hash(&mut hasher);
+  link_url.hash(&mut hasher);
+  let image_id: SharedString = format!("markdown-inline-image-{:x}", hasher.finish()).into();
+
+  let mut container = div().id(image_id).child(image);
+  if interactive && let Some(link_url) = link_url {
+    let link_url = link_url.to_string();
+    let on_link = on_link.clone();
+    container = container.cursor_pointer().on_click(move |_, window, cx| {
+      let handled = on_link
+        .as_ref()
+        .is_some_and(|handler| matches!(handler(&link_url, window, cx), LinkAction::Handled));
+      if !handled {
+        cx.open_url(&link_url);
+      }
+    });
+  }
+
+  container.into_any_element()
+}
+
+fn render_inline_image(
+  url: &str,
+  alt: &str,
+  link_url: Option<&str>,
+  on_link: Option<Arc<LinkHandlerFn>>,
+  interactive: bool,
+) -> AnyElement {
+  let image = render_image_node(url, alt).into_any_element();
+  attach_image_link_handler(image, url, link_url, on_link, interactive)
+}
+
+fn render_block_image(
+  url: &str,
+  alt: &str,
+  link_url: Option<&str>,
+  on_link: Option<Arc<LinkHandlerFn>>,
+  interactive: bool,
+) -> AnyElement {
+  let mut hasher = DefaultHasher::new();
+  url.hash(&mut hasher);
+  link_url.hash(&mut hasher);
   let image_scroll_id: SharedString =
     format!("markdown-inline-image-scroll-{:x}", hasher.finish()).into();
 
@@ -2046,23 +2199,13 @@ fn render_inline_image(url: &str, alt: &str) -> AnyElement {
     .id(image_scroll_id)
     .w_full()
     .overflow_x_scrollbar()
-    .child(
-      img(move |window: &mut Window, cx: &mut App| {
-        if let Some(source) = resolve_badge_image_source_async(&image_url) {
-          return load_badge_image_data(&source, window, cx);
-        }
-
-        window.request_animation_frame();
-        None
-      })
-      .max_w_full()
-      .max_h(px(MARKDOWN_INLINE_IMAGE_MAX_HEIGHT_PX))
-      .with_loading({
-        let label = label.clone();
-        move || render_badge_placeholder(&label)
-      })
-      .with_fallback(move || render_badge_placeholder(&label)),
-    )
+    .child(attach_image_link_handler(
+      render_image_node(url, alt).into_any_element(),
+      url,
+      link_url,
+      on_link,
+      interactive,
+    ))
     .into_any_element()
 }
 
@@ -2098,38 +2241,65 @@ fn render_inline_with_images(
   cx: &App,
   ctx: &mut RenderContext,
 ) -> AnyElement {
-  let mut content = v_flex().w_full().min_w_0().gap_2();
-  let mut has_content = false;
-  let mut text_chunk: Vec<Inline> = Vec::new();
-
-  for inline in inlines {
-    if let Some((url, alt)) = inline_image_data(inline) {
-      if !text_chunk.is_empty() {
-        content = content.child(render_inline_selectable_text(
-          &text_chunk,
-          options,
-          interactive,
-          cx,
-          ctx,
-        ));
-        text_chunk.clear();
-      }
-      content = content.child(render_inline_image(&url, &alt));
-      has_content = true;
-    } else {
-      text_chunk.push(inline.clone());
-    }
+  if let Some((url, alt, link)) = single_inline_image_data(inlines) {
+    return render_block_image(
+      &url,
+      &alt,
+      link.as_deref(),
+      options.on_link.clone(),
+      interactive,
+    );
   }
 
-  if !text_chunk.is_empty() {
-    content = content.child(render_inline_selectable_text(
-      &text_chunk,
-      options,
-      interactive,
-      cx,
-      ctx,
-    ));
-    has_content = true;
+  let rows = split_inlines_by_hard_breaks(inlines);
+  let mut content = v_flex().min_w_0().gap_1();
+  let mut has_content = false;
+
+  for row in rows {
+    let mut row_container = h_flex().items_center().gap_1().flex_wrap().min_w_0();
+    let mut row_has_content = false;
+    let mut text_chunk: Vec<Inline> = Vec::new();
+
+    for inline in &row {
+      if let Some((url, alt, link)) = inline_image_data(inline) {
+        if !text_chunk.is_empty() {
+          row_container = row_container.child(render_inline_selectable_text(
+            &text_chunk,
+            options,
+            interactive,
+            cx,
+            ctx,
+          ));
+          text_chunk.clear();
+        }
+        row_container = row_container.child(render_inline_image(
+          &url,
+          &alt,
+          link.as_deref(),
+          options.on_link.clone(),
+          interactive,
+        ));
+        row_has_content = true;
+      } else {
+        text_chunk.push(inline.clone());
+      }
+    }
+
+    if !text_chunk.is_empty() {
+      row_container = row_container.child(render_inline_selectable_text(
+        &text_chunk,
+        options,
+        interactive,
+        cx,
+        ctx,
+      ));
+      row_has_content = true;
+    }
+
+    if row_has_content {
+      content = content.child(row_container);
+      has_content = true;
+    }
   }
 
   if has_content {
@@ -2211,6 +2381,38 @@ fn render_code_block(
     },
   );
   let scroll_id: SharedString = format!("markdown-code-block-scroll-{text_id}").into();
+  let scroll_content = div()
+    .id(scroll_id)
+    .w_full()
+    .min_w_0()
+    .child(
+      div()
+        .min_w(px(min_content_width_px))
+        .px(px(MARKDOWN_CODE_BLOCK_PADDING_X_PX))
+        .pt(px(MARKDOWN_CODE_BLOCK_PADDING_TOP_PX))
+        .pb(px(MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX))
+        .whitespace_nowrap()
+        .child(
+          div()
+            .pl(px(MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX))
+            .font_family(cx.theme().mono_font_family.clone())
+            .text_sm()
+            .text_color(theme.foreground)
+            .child(content),
+        ),
+    );
+
+  let scroll_container = if options.expand_code_blocks {
+    scroll_content.overflow_x_scroll().into_any_element()
+  } else {
+    scroll_content
+      .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
+      .overflow_scroll()
+      .on_scroll_wheel(|_, _, cx| {
+        cx.stop_propagation();
+      })
+      .into_any_element()
+  };
 
   div()
     .w_full()
@@ -2220,33 +2422,7 @@ fn render_code_block(
     .border_color(theme.border)
     .rounded_md()
     .overflow_hidden()
-    .child(
-      div()
-        .id(scroll_id)
-        .w_full()
-        .min_w_0()
-        .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
-        .overflow_scroll()
-        .on_scroll_wheel(|_, _, cx| {
-          cx.stop_propagation();
-        })
-        .child(
-          div()
-            .min_w(px(min_content_width_px))
-            .px(px(MARKDOWN_CODE_BLOCK_PADDING_X_PX))
-            .pt(px(MARKDOWN_CODE_BLOCK_PADDING_TOP_PX))
-            .pb(px(MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX))
-            .whitespace_nowrap()
-            .child(
-              div()
-                .pl(px(MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX))
-                .font_family(cx.theme().mono_font_family.clone())
-                .text_sm()
-                .text_color(theme.foreground)
-                .child(content),
-            ),
-        ),
-    )
+    .child(scroll_container)
     .into_any_element()
 }
 
@@ -3280,10 +3456,8 @@ fn blocks_from_node<'a>(node: &'a AstNode<'a>) -> Vec<Block> {
         Vec::new()
       } else if let Some(details) = parse_details_html(&html.literal) {
         vec![Block::Details(details)]
-      } else if let Some(image) = parse_inline_html_image(&html.literal) {
-        vec![Block::Paragraph(vec![image])]
       } else {
-        vec![Block::Paragraph(vec![Inline::Text(html.literal.clone())])]
+        blocks_from_html_fragment(&html.literal)
       }
     }
     NodeValue::Text(text) => vec![Block::Paragraph(vec![Inline::Text(text.clone())])],
@@ -3425,6 +3599,519 @@ fn parse_inline_html_image(html: &str) -> Option<Inline> {
   Some(Inline::Image { url, title, alt })
 }
 
+fn is_html_line_break_tag(html: &str) -> bool {
+  let trimmed = html.trim();
+  if !trimmed.starts_with('<') || !trimmed.ends_with('>') || trimmed.len() < 3 {
+    return false;
+  }
+
+  let inner = &trimmed[1..trimmed.len() - 1];
+  let inner = inner.trim();
+  let inner = inner.strip_suffix('/').unwrap_or(inner).trim_end();
+  inner.eq_ignore_ascii_case("br")
+}
+
+fn decode_basic_html_entities(segment: &str) -> String {
+  segment
+    .replace("&nbsp;", " ")
+    .replace("&amp;", "&")
+    .replace("&lt;", "<")
+    .replace("&gt;", ">")
+    .replace("&quot;", "\"")
+    .replace("&#39;", "'")
+}
+
+fn push_html_text_segment(inlines: &mut Vec<Inline>, segment: &str, pending_space: &mut bool) {
+  let segment = decode_basic_html_entities(segment);
+  for ch in segment.chars() {
+    if ch.is_whitespace() {
+      *pending_space = true;
+      continue;
+    }
+
+    if *pending_space {
+      if let Some(Inline::Text(last)) = inlines.last_mut()
+        && !last.is_empty()
+        && !last.ends_with('\n')
+      {
+        last.push(' ');
+      }
+      *pending_space = false;
+    }
+
+    if let Some(Inline::Text(last)) = inlines.last_mut() {
+      last.push(ch);
+    } else {
+      inlines.push(Inline::Text(ch.to_string()));
+    }
+  }
+}
+
+fn push_html_inline(inlines: &mut Vec<Inline>, inline: Inline, pending_space: &mut bool) {
+  match inline {
+    Inline::Text(text) => {
+      push_html_text_segment(inlines, &text, pending_space);
+    }
+    Inline::HardBreak => {
+      inlines.push(Inline::HardBreak);
+      *pending_space = false;
+    }
+    other => {
+      if *pending_space {
+        if let Some(Inline::Text(last)) = inlines.last_mut()
+          && !last.is_empty()
+          && !last.ends_with('\n')
+        {
+          last.push(' ');
+        } else if !inlines.is_empty() {
+          inlines.push(Inline::Text(" ".to_string()));
+        }
+        *pending_space = false;
+      }
+      inlines.push(other);
+    }
+  }
+}
+
+fn push_html_inlines(inlines: &mut Vec<Inline>, items: Vec<Inline>, pending_space: &mut bool) {
+  for inline in items {
+    push_html_inline(inlines, inline, pending_space);
+  }
+}
+
+fn html_inlines_have_visible_content(inlines: &[Inline]) -> bool {
+  if inlines.is_empty() {
+    return false;
+  }
+  if inlines.iter().any(inline_contains_image) {
+    return true;
+  }
+  if inlines
+    .iter()
+    .any(|inline| matches!(inline, Inline::HardBreak))
+  {
+    return true;
+  }
+  !inline_to_plain_text(inlines).trim().is_empty()
+}
+
+fn flush_html_inline_buffer_to_blocks(blocks: &mut Vec<Block>, inlines: &mut Vec<Inline>) {
+  let merged = merge_adjacent_text(inlines);
+  inlines.clear();
+  if html_inlines_have_visible_content(&merged) {
+    blocks.push(Block::Paragraph(merged));
+  }
+}
+
+fn blocks_from_html_fragment(html: &str) -> Vec<Block> {
+  if let Some(nodes) = parse_html_fragment_nodes(html) {
+    let blocks = html_nodes_to_blocks(&nodes);
+    if !blocks.is_empty() {
+      return blocks;
+    }
+  }
+
+  let inlines = legacy_inlines_from_html_fragment(html);
+  if inlines.is_empty() {
+    Vec::new()
+  } else {
+    vec![Block::Paragraph(inlines)]
+  }
+}
+
+fn parse_html_fragment_nodes(html: &str) -> Option<Vec<HtmlNode>> {
+  let mut parser = TsParser::new();
+  let language: tree_sitter::Language = tree_sitter_html::LANGUAGE.into();
+  parser.set_language(&language).ok()?;
+  let tree = parser.parse(html, None)?;
+  let root = tree.root_node();
+
+  let mut nodes = Vec::new();
+  let mut cursor = root.walk();
+  let mut previous_end = root.start_byte();
+  for child in root.named_children(&mut cursor) {
+    append_html_text_node_from_range(&mut nodes, html, previous_end, child.start_byte());
+    if let Some(node) = html_node_from_tree_sitter(child, html) {
+      nodes.push(node);
+    }
+    previous_end = child.end_byte();
+  }
+  append_html_text_node_from_range(&mut nodes, html, previous_end, root.end_byte());
+
+  Some(nodes)
+}
+
+fn tree_sitter_node_text<'a>(node: TsNode<'a>, source: &'a str) -> &'a str {
+  source.get(node.byte_range()).unwrap_or_default()
+}
+
+fn append_html_text_node_from_range(
+  nodes: &mut Vec<HtmlNode>,
+  source: &str,
+  start: usize,
+  end: usize,
+) {
+  if end <= start {
+    return;
+  }
+  if let Some(text) = source.get(start..end)
+    && !text.is_empty()
+  {
+    nodes.push(HtmlNode::Text(text.to_string()));
+  }
+}
+
+fn html_node_from_tree_sitter(node: TsNode<'_>, source: &str) -> Option<HtmlNode> {
+  match node.kind() {
+    "element" => html_element_from_tree_sitter_element(node, source).map(HtmlNode::Element),
+    "self_closing_tag" => {
+      let (tag, attrs) = html_tag_from_tree_sitter(node, source)?;
+      Some(HtmlNode::Element(HtmlElement {
+        tag,
+        attrs,
+        children: Vec::new(),
+      }))
+    }
+    "text" | "entity" => {
+      let text = tree_sitter_node_text(node, source).to_string();
+      if text.is_empty() {
+        None
+      } else {
+        Some(HtmlNode::Text(text))
+      }
+    }
+    _ => None,
+  }
+}
+
+fn html_element_from_tree_sitter_element(node: TsNode<'_>, source: &str) -> Option<HtmlElement> {
+  let mut tag_name = None;
+  let mut attrs = Vec::new();
+  let mut children = Vec::new();
+  let mut content_start = None;
+
+  let mut cursor = node.walk();
+  for child in node.named_children(&mut cursor) {
+    match child.kind() {
+      "start_tag" | "self_closing_tag" => {
+        if let Some((tag, parsed_attrs)) = html_tag_from_tree_sitter(child, source) {
+          tag_name = Some(tag);
+          attrs = parsed_attrs;
+          content_start = Some(child.end_byte());
+        }
+      }
+      "end_tag" | "erroneous_end_tag" => {
+        if let Some(start) = content_start.take() {
+          append_html_text_node_from_range(&mut children, source, start, child.start_byte());
+        }
+      }
+      _ => {
+        if let Some(start) = content_start {
+          append_html_text_node_from_range(&mut children, source, start, child.start_byte());
+        }
+        if let Some(mapped) = html_node_from_tree_sitter(child, source) {
+          children.push(mapped);
+        }
+        content_start = Some(child.end_byte());
+      }
+    }
+  }
+  if let Some(start) = content_start {
+    append_html_text_node_from_range(&mut children, source, start, node.end_byte());
+  }
+
+  Some(HtmlElement {
+    tag: tag_name?,
+    attrs,
+    children,
+  })
+}
+
+fn html_tag_from_tree_sitter(
+  node: TsNode<'_>,
+  source: &str,
+) -> Option<(String, Vec<HtmlAttribute>)> {
+  let mut tag_name = None;
+  let mut attrs = Vec::new();
+
+  let mut cursor = node.walk();
+  for child in node.named_children(&mut cursor) {
+    match child.kind() {
+      "tag_name" => {
+        let name = tree_sitter_node_text(child, source).trim();
+        if !name.is_empty() {
+          tag_name = Some(name.to_ascii_lowercase());
+        }
+      }
+      "attribute" => {
+        if let Some(attr) = html_attribute_from_tree_sitter(child, source) {
+          attrs.push(attr);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  Some((tag_name?, attrs))
+}
+
+fn html_attribute_from_tree_sitter(node: TsNode<'_>, source: &str) -> Option<HtmlAttribute> {
+  let mut name = None;
+  let mut value = None;
+
+  let mut cursor = node.walk();
+  for child in node.named_children(&mut cursor) {
+    match child.kind() {
+      "attribute_name" => {
+        let attr = tree_sitter_node_text(child, source).trim();
+        if !attr.is_empty() {
+          name = Some(attr.to_ascii_lowercase());
+        }
+      }
+      "attribute_value" => {
+        value = Some(tree_sitter_node_text(child, source).to_string());
+      }
+      "quoted_attribute_value" => {
+        let mut quoted_cursor = child.walk();
+        let mut parsed = None;
+        for quoted_child in child.named_children(&mut quoted_cursor) {
+          if quoted_child.kind() == "attribute_value" {
+            parsed = Some(tree_sitter_node_text(quoted_child, source).to_string());
+            break;
+          }
+        }
+        value = Some(parsed.unwrap_or_default());
+      }
+      _ => {}
+    }
+  }
+
+  Some(HtmlAttribute { name: name?, value })
+}
+
+fn html_attribute_value<'a>(element: &'a HtmlElement, name: &str) -> Option<&'a str> {
+  element
+    .attrs
+    .iter()
+    .find(|attr| attr.name.eq_ignore_ascii_case(name))
+    .and_then(|attr| attr.value.as_deref())
+}
+
+fn html_element_is_centered(element: &HtmlElement) -> bool {
+  if let Some(align) = html_attribute_value(element, "align")
+    && align.trim().eq_ignore_ascii_case("center")
+  {
+    return true;
+  }
+
+  if let Some(style) = html_attribute_value(element, "style") {
+    let normalized = style
+      .chars()
+      .filter(|ch| !ch.is_whitespace())
+      .collect::<String>()
+      .to_ascii_lowercase();
+    if normalized.contains("text-align:center") {
+      return true;
+    }
+  }
+
+  false
+}
+
+fn is_html_block_level_tag(tag: &str) -> bool {
+  matches!(tag, "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+}
+
+fn html_nodes_to_blocks(nodes: &[HtmlNode]) -> Vec<Block> {
+  let mut blocks = Vec::new();
+  let mut inline_buffer = Vec::new();
+  let mut pending_space = false;
+
+  for node in nodes {
+    match node {
+      HtmlNode::Text(text) => {
+        push_html_text_segment(&mut inline_buffer, text, &mut pending_space);
+      }
+      HtmlNode::Element(element) => {
+        if is_html_block_level_tag(element.tag.as_str()) {
+          flush_html_inline_buffer_to_blocks(&mut blocks, &mut inline_buffer);
+          blocks.extend(html_element_to_blocks(element));
+        } else {
+          let inlines = html_element_to_inlines(element);
+          push_html_inlines(&mut inline_buffer, inlines, &mut pending_space);
+        }
+      }
+    }
+  }
+
+  flush_html_inline_buffer_to_blocks(&mut blocks, &mut inline_buffer);
+  blocks
+}
+
+fn html_nodes_to_inlines(nodes: &[HtmlNode]) -> Vec<Inline> {
+  let mut inlines = Vec::new();
+  let mut pending_space = false;
+
+  for node in nodes {
+    match node {
+      HtmlNode::Text(text) => {
+        push_html_text_segment(&mut inlines, text, &mut pending_space);
+      }
+      HtmlNode::Element(element) => {
+        let child_inlines = html_element_to_inlines(element);
+        push_html_inlines(&mut inlines, child_inlines, &mut pending_space);
+      }
+    }
+  }
+
+  merge_adjacent_text(&inlines)
+}
+
+fn html_heading_level(tag: &str) -> Option<u8> {
+  match tag {
+    "h1" => Some(1),
+    "h2" => Some(2),
+    "h3" => Some(3),
+    "h4" => Some(4),
+    "h5" => Some(5),
+    "h6" => Some(6),
+    _ => None,
+  }
+}
+
+fn html_element_to_blocks(element: &HtmlElement) -> Vec<Block> {
+  if let Some(level) = html_heading_level(element.tag.as_str()) {
+    let content = html_nodes_to_inlines(&element.children);
+    if !html_inlines_have_visible_content(&content) {
+      return Vec::new();
+    }
+
+    let heading = Block::Heading { level, content };
+    if html_element_is_centered(element) {
+      return vec![Block::Aligned {
+        center: true,
+        blocks: vec![heading],
+      }];
+    }
+    return vec![heading];
+  }
+
+  let mut blocks = html_nodes_to_blocks(&element.children);
+  if blocks.is_empty() {
+    let fallback = html_nodes_to_inlines(&element.children);
+    if html_inlines_have_visible_content(&fallback) {
+      blocks.push(Block::Paragraph(fallback));
+    }
+  }
+
+  if blocks.is_empty() {
+    return blocks;
+  }
+
+  if html_element_is_centered(element) {
+    vec![Block::Aligned {
+      center: true,
+      blocks,
+    }]
+  } else {
+    blocks
+  }
+}
+
+fn html_element_to_inlines(element: &HtmlElement) -> Vec<Inline> {
+  match element.tag.as_str() {
+    "br" => vec![Inline::HardBreak],
+    "img" => {
+      let Some(url) = html_attribute_value(element, "src")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+      else {
+        return Vec::new();
+      };
+      vec![Inline::Image {
+        url: url.to_string(),
+        title: html_attribute_value(element, "title")
+          .map(str::trim)
+          .filter(|value| !value.is_empty())
+          .map(ToString::to_string),
+        alt: html_attribute_value(element, "alt")
+          .map(str::trim)
+          .unwrap_or_default()
+          .to_string(),
+      }]
+    }
+    "a" => {
+      let content = html_nodes_to_inlines(&element.children);
+      let Some(url) = html_attribute_value(element, "href")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+      else {
+        return content;
+      };
+      if content.is_empty() {
+        return vec![Inline::Text(url.to_string())];
+      }
+      vec![Inline::Link {
+        url: url.to_string(),
+        title: html_attribute_value(element, "title")
+          .map(str::trim)
+          .filter(|value| !value.is_empty())
+          .map(ToString::to_string),
+        content,
+      }]
+    }
+    "picture" => {
+      let children = html_nodes_to_inlines(&element.children);
+      if let Some((url, alt, _)) = children.iter().find_map(inline_image_data) {
+        vec![Inline::Image {
+          url,
+          title: None,
+          alt,
+        }]
+      } else {
+        children
+      }
+    }
+    "source" => Vec::new(),
+    "span" | "sub" | "sup" => html_nodes_to_inlines(&element.children),
+    _ => html_nodes_to_inlines(&element.children),
+  }
+}
+
+fn legacy_inlines_from_html_fragment(html: &str) -> Vec<Inline> {
+  let mut inlines = Vec::new();
+  let mut cursor = 0usize;
+  let mut pending_space = false;
+
+  while cursor < html.len() {
+    let Some(rel_lt) = html[cursor..].find('<') else {
+      push_html_text_segment(&mut inlines, &html[cursor..], &mut pending_space);
+      break;
+    };
+
+    let lt = cursor + rel_lt;
+    push_html_text_segment(&mut inlines, &html[cursor..lt], &mut pending_space);
+
+    let Some(rel_gt) = html[lt..].find('>') else {
+      push_html_text_segment(&mut inlines, &html[lt..], &mut pending_space);
+      break;
+    };
+
+    let gt = lt + rel_gt + 1;
+    let tag = &html[lt..gt];
+    if let Some(image) = parse_inline_html_image(tag) {
+      inlines.push(image);
+    } else if is_html_line_break_tag(tag) {
+      inlines.push(Inline::HardBreak);
+      pending_space = false;
+    }
+
+    cursor = gt;
+  }
+
+  merge_adjacent_text(&inlines)
+}
+
 fn extract_html_attribute(tag: &str, name: &str) -> Option<String> {
   let lower = tag.to_ascii_lowercase();
   let pattern = format!("{name}=");
@@ -3554,8 +4241,18 @@ fn inlines_from_nodes<'a>(nodes: impl Iterator<Item = &'a AstNode<'a>>) -> Vec<I
         });
       }
       NodeValue::HtmlInline(html) => {
+        if let Some(nodes) = parse_html_fragment_nodes(html) {
+          let parsed = html_nodes_to_inlines(&nodes);
+          if !parsed.is_empty() {
+            inlines.extend(parsed);
+            continue;
+          }
+        }
+
         if let Some(image) = parse_inline_html_image(html) {
           inlines.push(image);
+        } else if is_html_line_break_tag(html) {
+          inlines.push(Inline::HardBreak);
         } else {
           let text = strip_html_tags(html);
           if !text.is_empty() {
@@ -3640,6 +4337,15 @@ mod tests {
   }
 
   #[test]
+  fn markdown_render_options_expanded_code_blocks_flag_is_opt_in() {
+    let defaults = MarkdownRenderOptions::default();
+    assert!(!defaults.expand_code_blocks);
+
+    let expanded = MarkdownRenderOptions::default().with_expanded_code_blocks();
+    assert!(expanded.expand_code_blocks);
+  }
+
+  #[test]
   fn parses_links_and_text() {
     let blocks = parse_gfm("See [comment](https://github.com/org/repo/pull/4/changes#r123)");
     assert_eq!(blocks.len(), 1);
@@ -3650,6 +4356,240 @@ mod tests {
       }
       _ => panic!("expected paragraph"),
     }
+  }
+
+  #[test]
+  fn parses_html_br_inline_as_hard_break() {
+    for br in ["<br>", "<br/>", "<br />", "<BR />"] {
+      let source = format!("hello{br}world");
+      let blocks = parse_gfm(&source);
+      assert_eq!(blocks.len(), 1);
+      match &blocks[0] {
+        Block::Paragraph(inlines) => {
+          assert!(
+            inlines
+              .iter()
+              .any(|inline| matches!(inline, Inline::HardBreak))
+          );
+          assert_eq!(inline_to_plain_text(inlines), "hello\nworld");
+        }
+        _ => panic!("expected paragraph"),
+      }
+    }
+  }
+
+  #[test]
+  fn parses_html_block_with_multiple_elements_and_br_tags() {
+    let source = r#"<p align="center">
+TypeScript-first schema validation with static type inference
+<br/>
+by <a href="https://x.com/colinhacks">@colinhacks</a>
+</p>"#;
+
+    let blocks = parse_gfm(source);
+    assert_eq!(blocks.len(), 1);
+    match &blocks[0] {
+      Block::Aligned { center, blocks } => {
+        assert!(*center);
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0] {
+          Block::Paragraph(inlines) => {
+            assert!(
+              inlines
+                .iter()
+                .any(|inline| matches!(inline, Inline::HardBreak))
+            );
+            assert_eq!(
+              inline_to_plain_text(inlines),
+              "TypeScript-first schema validation with static type inference\nby @colinhacks"
+            );
+          }
+          _ => panic!("expected paragraph"),
+        }
+      }
+      _ => panic!("expected aligned block"),
+    }
+  }
+
+  #[test]
+  fn parses_html_block_with_multiple_images() {
+    let source = r#"<p>
+<a href="https://example.com/a"><img src="https://img.shields.io/a.svg" alt="A" /></a>
+<a href="https://example.com/b"><img src="https://img.shields.io/b.svg" alt="B" /></a>
+</p>"#;
+
+    let blocks = parse_gfm(source);
+    assert_eq!(blocks.len(), 1);
+    match &blocks[0] {
+      Block::Paragraph(inlines) => {
+        let linked_images = inlines
+          .iter()
+          .filter(|inline| {
+            matches!(
+              inline,
+              Inline::Link { content, .. } if content.iter().any(inline_contains_image)
+            )
+          })
+          .count();
+        assert_eq!(linked_images, 2);
+      }
+      _ => panic!("expected paragraph"),
+    }
+  }
+
+  #[test]
+  fn parses_html_badge_row_as_centered_links_with_images() {
+    let source = r#"<p align="center">
+<a href="https://a.example"><img src="https://img.shields.io/a.svg" alt="A" /></a>
+<a href="https://b.example"><img src="https://img.shields.io/b.svg" alt="B" /></a>
+<a href="https://c.example"><img src="https://img.shields.io/c.svg" alt="C" /></a>
+<a href="https://d.example"><img src="https://img.shields.io/d.svg" alt="D" /></a>
+<a href="https://e.example"><img src="https://img.shields.io/e.svg" alt="E" /></a>
+</p>"#;
+
+    let blocks = parse_gfm(source);
+    assert_eq!(blocks.len(), 1);
+    match &blocks[0] {
+      Block::Aligned { center, blocks } => {
+        assert!(*center);
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0] {
+          Block::Paragraph(inlines) => {
+            let linked_images = inlines
+              .iter()
+              .filter(|inline| {
+                matches!(
+                  inline,
+                  Inline::Link { content, .. } if content.iter().any(inline_contains_image)
+                )
+              })
+              .count();
+            assert_eq!(linked_images, 5);
+          }
+          _ => panic!("expected paragraph"),
+        }
+      }
+      _ => panic!("expected aligned block"),
+    }
+  }
+
+  #[test]
+  fn parses_html_heading_with_center_alignment_wrapper() {
+    let source = r#"<h2 align="center">Featured sponsor: Jazz</h2>"#;
+    let blocks = parse_gfm(source);
+    assert_eq!(blocks.len(), 1);
+    match &blocks[0] {
+      Block::Aligned { center, blocks } => {
+        assert!(*center);
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0] {
+          Block::Heading { level, content } => {
+            assert_eq!(*level, 2);
+            assert_eq!(inline_to_plain_text(content), "Featured sponsor: Jazz");
+          }
+          _ => panic!("expected heading"),
+        }
+      }
+      _ => panic!("expected aligned block"),
+    }
+  }
+
+  #[test]
+  fn parses_html_picture_uses_img_descendant() {
+    let source = r#"<div>
+  <picture width="85%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://example.com/dark.png">
+    <img alt="jazz logo" src="https://example.com/light.png" width="85%">
+  </picture>
+</div>"#;
+
+    let blocks = parse_gfm(source);
+    assert_eq!(blocks.len(), 1);
+    match &blocks[0] {
+      Block::Paragraph(inlines) => {
+        let image = inlines.iter().find_map(|inline| match inline {
+          Inline::Image { url, alt, .. } => Some((url.as_str(), alt.as_str())),
+          _ => None,
+        });
+        assert_eq!(image, Some(("https://example.com/light.png", "jazz logo")));
+      }
+      _ => panic!("expected paragraph"),
+    }
+  }
+
+  #[test]
+  fn parses_unknown_html_tags_using_children_text_fallback() {
+    let source = r#"<custom-tag>Hello <strong-tag>world</strong-tag></custom-tag>"#;
+    let blocks = parse_gfm(source);
+    assert_eq!(blocks.len(), 1);
+    match &blocks[0] {
+      Block::Paragraph(inlines) => {
+        assert_eq!(inline_to_plain_text(inlines), "Hello world");
+      }
+      _ => panic!("expected paragraph"),
+    }
+  }
+
+  #[test]
+  fn split_inlines_by_hard_breaks_creates_rows() {
+    let rows = split_inlines_by_hard_breaks(&[
+      Inline::Text("a".to_string()),
+      Inline::HardBreak,
+      Inline::Text("b".to_string()),
+      Inline::HardBreak,
+      Inline::Text("c".to_string()),
+    ]);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(inline_to_plain_text(&rows[0]), "a");
+    assert_eq!(inline_to_plain_text(&rows[1]), "b");
+    assert_eq!(inline_to_plain_text(&rows[2]), "c");
+  }
+
+  #[test]
+  fn inline_image_data_keeps_parent_link_context() {
+    let inline = Inline::Link {
+      url: "https://example.com".to_string(),
+      title: None,
+      content: vec![Inline::Image {
+        url: "https://img.shields.io/example.svg".to_string(),
+        title: None,
+        alt: "badge".to_string(),
+      }],
+    };
+
+    let image = inline_image_data(&inline);
+    assert_eq!(
+      image,
+      Some((
+        "https://img.shields.io/example.svg".to_string(),
+        "badge".to_string(),
+        Some("https://example.com".to_string())
+      ))
+    );
+  }
+
+  #[test]
+  fn single_inline_image_data_only_matches_single_image_rows() {
+    let single = vec![Inline::Image {
+      url: "https://img.shields.io/a.svg".to_string(),
+      title: None,
+      alt: "A".to_string(),
+    }];
+    assert!(single_inline_image_data(&single).is_some());
+
+    let multiple = vec![
+      Inline::Image {
+        url: "https://img.shields.io/a.svg".to_string(),
+        title: None,
+        alt: "A".to_string(),
+      },
+      Inline::Image {
+        url: "https://img.shields.io/b.svg".to_string(),
+        title: None,
+        alt: "B".to_string(),
+      },
+    ];
+    assert!(single_inline_image_data(&multiple).is_none());
   }
 
   #[test]
