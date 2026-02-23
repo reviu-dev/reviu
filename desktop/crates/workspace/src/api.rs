@@ -852,11 +852,12 @@ impl ApiClient {
   ) -> Result<Option<String>> {
     let route = format!("/github/repos/{owner}/{repo}/readme");
     let request = self.authed_request(Method::GET, route.as_str());
-    let request = if let Some(reference) = reference.map(str::trim).filter(|value| !value.is_empty()) {
-      request.query(&[("ref", reference)])
-    } else {
-      request
-    };
+    let request =
+      if let Some(reference) = reference.map(str::trim).filter(|value| !value.is_empty()) {
+        request.query(&[("ref", reference)])
+      } else {
+        request
+      };
     let response = request.send()?;
     let status = response.status();
     Self::record_http_status("GET", route.as_str(), status);
@@ -2365,9 +2366,7 @@ mod tests {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "{}");
     let api = make_test_api_client(base_url);
 
-    let err = api
-      .fetch_github_repository_branches("acme", "widget")
-      .err();
+    let err = api.fetch_github_repository_branches("acme", "widget").err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");

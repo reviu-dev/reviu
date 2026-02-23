@@ -3026,16 +3026,12 @@ impl GithubRepoPage {
       )
       .child(
         Tab::new().child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child("Issues")
-            .child(
-              Tag::secondary()
-                .small()
-                .rounded_full()
-                .child(repo_tab_count_label(issues_count)),
-            ),
+          h_flex().items_center().gap_2().child("Issues").child(
+            Tag::secondary()
+              .small()
+              .rounded_full()
+              .child(repo_tab_count_label(issues_count)),
+          ),
         ),
       );
 
