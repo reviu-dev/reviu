@@ -50,6 +50,8 @@ export type GithubRepositoryResponse = Endpoints['GET /repos/{owner}/{repo}']['r
 export type GithubRepositoryParameters = Endpoints['GET /repos/{owner}/{repo}']['parameters']
 export type GithubRepositoryTreesResponse = Endpoints['GET /repos/{owner}/{repo}/git/trees/{tree_sha}']['response']['data']
 export type GithubRepositoryTreeParams = Endpoints['GET /repos/{owner}/{repo}/git/trees/{tree_sha}']['parameters']
+export type GithubRepositoryBranchesResponse = Endpoints['GET /repos/{owner}/{repo}/branches']['response']['data'][number]
+export type GithubRepositoryBranchesParameters = Endpoints['GET /repos/{owner}/{repo}/branches']['parameters']
 
 function githubAuthHeaders(token: string, extraHeaders?: Record<string, string>) {
   return {
@@ -260,6 +262,17 @@ export async function fetchGithubRepositoryTrees(
   { token: string, params: GithubRepositoryTreeParams },
 ): Promise<GithubRepositoryTreesResponse> {
   const { data } = await request('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
+export async function fetchGithubRepositoryBranches(
+  { token, params }:
+  { token: string, params: GithubRepositoryBranchesParameters },
+): Promise<GithubRepositoryBranchesResponse[]> {
+  const { data } = await request('GET /repos/{owner}/{repo}/branches', {
     ...params,
     headers: githubAuthHeaders(token),
   })

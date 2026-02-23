@@ -1,4 +1,4 @@
-import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueParameters, GithubIssueResponse, GithubRepositoryParameters, GithubRepositoryResponse, GithubRepositoryTreeParams, GithubRepositoryTreesResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
+import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueParameters, GithubIssueResponse, GithubRepositoryBranchesParameters, GithubRepositoryBranchesResponse, GithubRepositoryParameters, GithubRepositoryResponse, GithubRepositoryTreeParams, GithubRepositoryTreesResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
@@ -15,6 +15,7 @@ import {
   fetchGithubPullRequestFilesAllPages,
   fetchGithubPullRequests,
   fetchGithubRepository,
+  fetchGithubRepositoryBranches,
   fetchGithubRepositoryContent,
   fetchGithubRepositoryIssue,
   fetchGithubRepositoryIssueComments,
@@ -209,6 +210,15 @@ interface GithubRepositoryTree {
   url?: GithubRepositoryTreesResponse['url']
   truncated: GithubRepositoryTreesResponse['truncated']
   tree: GithubRepositoryTreesResponse['tree']
+}
+
+interface GithubRepositoryBranch {
+  name: GithubRepositoryBranchesResponse['name']
+  commit: {
+    sha: GithubRepositoryBranchesResponse['commit']['sha']
+    url: GithubRepositoryBranchesResponse['commit']['url']
+  }
+  protected: GithubRepositoryBranchesResponse['protected']
 }
 
 interface GithubFileContent {
@@ -751,6 +761,40 @@ export const githubRoutes = githubRouter
       }
 
       return ctx.json(repositoryDetails, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 404) {
+        return ctx.json({ error: 'Repository not found' }, 404)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/repos/:owner/:repo/branches', async (ctx) => {
+    const { owner, repo } = ctx.req.param()
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: GithubRepositoryBranchesParameters = {
+        owner,
+        repo,
+        per_page: 100,
+      }
+
+      const data = await fetchGithubRepositoryBranches({ token: githubToken, params })
+
+      const branches: GithubRepositoryBranch[] = data.map(branch => ({
+        name: branch.name,
+        commit: {
+          sha: branch.commit.sha,
+          url: branch.commit.url,
+        },
+        protected: branch.protected,
+      }))
+
+      return ctx.json(branches, 200)
     }
     catch (error) {
       const status = (error as { status?: number }).status

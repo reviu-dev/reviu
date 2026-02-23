@@ -11,8 +11,9 @@ use gfm_markdown_viewer::{
   MarkdownRenderState, extract_github_blob_line_references, render_markdown,
 };
 use gpui::{
-  App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, RenderImage, ScrollAnchor,
-  ScrollHandle, SharedString, Styled, Subscription, Task, Window, div, img, prelude::*, px,
+  AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, ParentElement, Render,
+  RenderImage, ScrollAnchor, ScrollHandle, SharedString, Styled, Subscription, Task, Window, div,
+  img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Placement, Selectable, Sizable as _,
@@ -22,6 +23,7 @@ use gpui_component::{
   h_flex,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
   scroll::ScrollableElement,
   spinner::Spinner,
   tab::{Tab, TabBar},
@@ -237,6 +239,89 @@ fn build_repo_code_tree_item(
   }
 
   item
+}
+
+fn normalize_non_empty_string(value: &str) -> Option<String> {
+  let trimmed = value.trim();
+  if trimmed.is_empty() {
+    None
+  } else {
+    Some(trimmed.to_string())
+  }
+}
+
+fn effective_repo_branch(
+  selected_branch: Option<&str>,
+  default_branch: Option<&str>,
+) -> Option<String> {
+  selected_branch
+    .and_then(normalize_non_empty_string)
+    .or_else(|| default_branch.and_then(normalize_non_empty_string))
+}
+
+fn should_apply_repo_request_result(request_generation: u64, task_generation: u64) -> bool {
+  request_generation == task_generation
+}
+
+#[derive(Clone)]
+struct GithubRepoBranchSelectItem {
+  branch: String,
+  label: SharedString,
+}
+
+impl GithubRepoBranchSelectItem {
+  fn new(branch: String) -> Self {
+    let label: SharedString = branch.clone().into();
+    Self { branch, label }
+  }
+}
+
+impl SelectItem for GithubRepoBranchSelectItem {
+  type Value = String;
+
+  fn title(&self) -> SharedString {
+    self.label.clone()
+  }
+
+  fn render(&self, _: &mut Window, _cx: &mut App) -> impl IntoElement {
+    div()
+      .w_full()
+      .overflow_hidden()
+      .text_ellipsis()
+      .child(self.label.clone())
+  }
+
+  fn value(&self) -> &Self::Value {
+    &self.branch
+  }
+
+  fn matches(&self, query: &str) -> bool {
+    self.label.to_lowercase().contains(&query.to_lowercase())
+  }
+}
+
+fn build_repo_branch_select_items(
+  branches: Vec<String>,
+  selected_branch: Option<&str>,
+) -> Vec<GithubRepoBranchSelectItem> {
+  let mut names = branches
+    .into_iter()
+    .filter_map(|name| normalize_non_empty_string(&name))
+    .collect::<Vec<_>>();
+  names.sort();
+  names.dedup();
+
+  if let Some(selected_branch) = selected_branch.and_then(normalize_non_empty_string)
+    && !names.iter().any(|name| name == &selected_branch)
+  {
+    names.push(selected_branch);
+    names.sort();
+  }
+
+  names
+    .into_iter()
+    .map(GithubRepoBranchSelectItem::new)
+    .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1396,13 +1481,21 @@ impl Render for GithubIssueDetailsSheetView {
 
 pub struct GithubRepoPage {
   focus_handle: FocusHandle,
+  window_handle: AnyWindowHandle,
   api: ApiClient,
   owner: SharedString,
   repo: SharedString,
+  branch_select: Entity<SelectState<SearchableVec<GithubRepoBranchSelectItem>>>,
+  selected_branch: Option<SharedString>,
+  branches_loading: bool,
+  branches_error: Option<SharedString>,
+  branches_task: Option<Task<()>>,
+  branches_request_generation: u64,
   repository: Option<GithubRepositoryDetails>,
   repository_loading: bool,
   repository_error: Option<SharedString>,
   repository_task: Option<Task<()>>,
+  code_request_generation: u64,
   code_tree_state: Entity<TreeState>,
   code_files_loading: bool,
   code_files_error: Option<SharedString>,
@@ -1519,6 +1612,15 @@ impl GithubRepoPage {
     GithubRepoPageHandle::register(cx);
 
     let code_tree_state = cx.new(|cx| TreeState::new(cx));
+    let branch_select = cx.new(|cx| {
+      SelectState::new(
+        SearchableVec::new(Vec::<GithubRepoBranchSelectItem>::new()),
+        None,
+        window,
+        cx,
+      )
+      .searchable(true)
+    });
     let pull_requests = cx.new(|cx| {
       ListState::new(GithubRepoPullRequestListDelegate::new(), window, cx).searchable(true)
     });
@@ -1533,13 +1635,21 @@ impl GithubRepoPage {
     let api = WorkspaceApi::global(cx).api.clone();
     let mut this = Self {
       focus_handle: cx.focus_handle(),
+      window_handle: window.window_handle(),
       api,
       owner: "".into(),
       repo: "".into(),
+      branch_select,
+      selected_branch: None,
+      branches_loading: false,
+      branches_error: None,
+      branches_task: None,
+      branches_request_generation: 0,
       repository: None,
       repository_loading: false,
       repository_error: None,
       repository_task: None,
+      code_request_generation: 0,
       code_tree_state,
       code_files_loading: false,
       code_files_error: None,
@@ -1570,6 +1680,7 @@ impl GithubRepoPage {
 
     this.subscribe_to_pull_requests(cx);
     this.subscribe_to_issues(window, cx);
+    this.subscribe_to_branch_select(cx);
     this
   }
 
@@ -1608,6 +1719,157 @@ impl GithubRepoPage {
     );
 
     self._subscriptions.push(subscription);
+  }
+
+  fn subscribe_to_branch_select(&mut self, cx: &mut Context<Self>) {
+    cx.subscribe(
+      &self.branch_select,
+      |this, _state, event: &SelectEvent<SearchableVec<GithubRepoBranchSelectItem>>, cx| {
+        if let SelectEvent::Confirm(Some(branch)) = event {
+          this.set_selected_branch(branch.clone(), cx);
+        }
+      },
+    )
+    .detach();
+  }
+
+  fn set_branch_select_items(
+    &mut self,
+    items: Vec<GithubRepoBranchSelectItem>,
+    selected_branch: Option<String>,
+    cx: &mut Context<Self>,
+  ) {
+    let branch_select = self.branch_select.clone();
+    let window_handle = self.window_handle;
+    let _ = cx.update_window(window_handle, move |_, window, cx| {
+      branch_select.update(cx, |state, cx| {
+        state.set_items(SearchableVec::new(items), window, cx);
+        if let Some(selected_branch) = selected_branch.as_ref() {
+          state.set_selected_value(selected_branch, window, cx);
+        } else {
+          state.set_selected_index(None, window, cx);
+        }
+      });
+    });
+  }
+
+  fn set_branch_select_selected_value(&mut self, selected_branch: String, cx: &mut Context<Self>) {
+    let branch_select = self.branch_select.clone();
+    let window_handle = self.window_handle;
+    let _ = cx.update_window(window_handle, move |_, window, cx| {
+      branch_select.update(cx, |state, cx| {
+        state.set_selected_value(&selected_branch, window, cx);
+      });
+    });
+  }
+
+  fn reset_branch_state(&mut self, cx: &mut Context<Self>) {
+    self.branches_loading = false;
+    self.branches_error = None;
+    self.branches_task = None;
+    self.selected_branch = None;
+    self.branches_request_generation = self.branches_request_generation.wrapping_add(1);
+    self.set_branch_select_items(Vec::new(), None, cx);
+  }
+
+  fn effective_branch(&self) -> Option<String> {
+    effective_repo_branch(
+      self.selected_branch.as_ref().map(SharedString::as_ref),
+      self
+        .repository
+        .as_ref()
+        .map(|repository| repository.default_branch.as_str()),
+    )
+  }
+
+  fn set_selected_branch(&mut self, branch: String, cx: &mut Context<Self>) {
+    let Some(next_branch) = normalize_non_empty_string(&branch) else {
+      return;
+    };
+    let current_branch = self
+      .selected_branch
+      .as_ref()
+      .and_then(|branch| normalize_non_empty_string(branch.as_ref()));
+    if current_branch.as_deref() == Some(next_branch.as_str()) {
+      return;
+    }
+
+    self.selected_branch = Some(next_branch.clone().into());
+    self.set_branch_select_selected_value(next_branch, cx);
+    self.reset_code_state(cx);
+    if self.active_tab_ix == 1 {
+      self.load_code_tree_if_needed(cx);
+    }
+    cx.notify();
+  }
+
+  fn load_repository_branches(&mut self, cx: &mut Context<Self>) {
+    let owner = self.owner.to_string();
+    let repo = self.repo.to_string();
+    if owner.trim().is_empty() || repo.trim().is_empty() {
+      return;
+    }
+
+    self.branches_loading = true;
+    self.branches_error = None;
+    self.branches_request_generation = self.branches_request_generation.wrapping_add(1);
+    let request_generation = self.branches_request_generation;
+
+    let api = self.api.clone();
+    let owner_for_task = owner.clone();
+    let repo_for_task = repo.clone();
+    let owner_for_fetch = owner_for_task.clone();
+    let repo_for_fetch = repo_for_task.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.fetch_github_repository_branches(&owner_for_fetch, &repo_for_fetch))
+          .await;
+
+      let _ = this.update(cx, |this, cx| {
+        if !this
+          .owner
+          .as_ref()
+          .eq_ignore_ascii_case(owner_for_task.as_str())
+          || !this
+            .repo
+            .as_ref()
+            .eq_ignore_ascii_case(repo_for_task.as_str())
+          || !should_apply_repo_request_result(this.branches_request_generation, request_generation)
+        {
+          return;
+        }
+
+        this.branches_task = None;
+        this.branches_loading = false;
+
+        match result {
+          Ok(branches) => {
+            let branch_names = branches
+              .into_iter()
+              .map(|branch| branch.name)
+              .collect::<Vec<_>>();
+            let selected_branch = this.effective_branch();
+            this.selected_branch = selected_branch.clone().map(Into::into);
+            let items = build_repo_branch_select_items(branch_names, selected_branch.as_deref());
+            this.set_branch_select_items(items, selected_branch, cx);
+            this.branches_error = None;
+          }
+          Err(error) => {
+            let message = error.to_string();
+            if github_shared::is_unauthorized_error_message(&message) {
+              this.branches_error = Some("Authentication required. Please sign in again.".into());
+            } else {
+              this.branches_error = Some(message.into());
+            }
+          }
+        }
+
+        cx.notify();
+      });
+    });
+
+    self.branches_task = Some(task);
+    cx.notify();
   }
 
   fn open_issue_details_sheet(
@@ -1688,6 +1950,7 @@ impl GithubRepoPage {
   }
 
   fn reset_code_state(&mut self, cx: &mut Context<Self>) {
+    self.code_request_generation = self.code_request_generation.wrapping_add(1);
     self.code_files_loading = false;
     self.code_files_error = None;
     self.code_tree_task = None;
@@ -1716,14 +1979,16 @@ impl GithubRepoPage {
     if self.code_files_loading || self.code_tree_task.is_some() || !self.code_lookup.is_empty() {
       return;
     }
-    let Some(repository) = self.repository.as_ref() else {
+    let Some(_repository) = self.repository.as_ref() else {
       return;
     };
 
     let owner = self.owner.to_string();
     let repo = self.repo.to_string();
-    let default_branch = repository.default_branch.clone();
-    if owner.trim().is_empty() || repo.trim().is_empty() || default_branch.trim().is_empty() {
+    let Some(branch) = self.effective_branch() else {
+      return;
+    };
+    if owner.trim().is_empty() || repo.trim().is_empty() || branch.trim().is_empty() {
       return;
     }
 
@@ -1741,26 +2006,27 @@ impl GithubRepoPage {
       state.set_selected_index(None, cx);
     });
     self.clear_code_editor(cx);
+    self.code_request_generation = self.code_request_generation.wrapping_add(1);
+    let request_generation = self.code_request_generation;
 
     let api = self.api.clone();
     let owner_for_task = owner.clone();
     let repo_for_task = repo.clone();
-    let default_branch_for_task = default_branch.clone();
+    let branch_for_task = branch.clone();
     let owner_for_fetch = owner_for_task.clone();
     let repo_for_fetch = repo_for_task.clone();
-    let default_branch_for_fetch = default_branch_for_task.clone();
+    let branch_for_fetch = branch_for_task.clone();
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || {
         api.fetch_github_repository_tree(
           &owner_for_fetch,
           &repo_for_fetch,
-          &default_branch_for_fetch,
+          &branch_for_fetch,
         )
       })
       .await;
 
       let _ = this.update(cx, |this, cx| {
-        this.code_tree_task = None;
         if !this
           .owner
           .as_ref()
@@ -1769,10 +2035,13 @@ impl GithubRepoPage {
             .repo
             .as_ref()
             .eq_ignore_ascii_case(repo_for_task.as_str())
+          || !should_apply_repo_request_result(this.code_request_generation, request_generation)
+          || this.effective_branch().as_deref() != Some(branch_for_task.as_str())
         {
           return;
         }
 
+        this.code_tree_task = None;
         this.code_files_loading = false;
 
         match result {
@@ -1884,11 +2153,7 @@ impl GithubRepoPage {
       return;
     }
 
-    let Some(reference) = self
-      .repository
-      .as_ref()
-      .map(|repository| repository.default_branch.clone())
-    else {
+    let Some(reference) = self.effective_branch() else {
       return;
     };
 
@@ -1901,6 +2166,7 @@ impl GithubRepoPage {
     let repo_for_fetch = repo.clone();
     let path_for_fetch = path.clone();
     let reference_for_fetch = reference.clone();
+    let request_generation = self.code_request_generation;
 
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || {
@@ -1914,13 +2180,15 @@ impl GithubRepoPage {
       .await;
 
       let _ = this.update(cx, |this, cx| {
-        this.code_file_tasks.remove(&key_for_task);
         if !this.owner.as_ref().eq_ignore_ascii_case(owner.as_str())
           || !this.repo.as_ref().eq_ignore_ascii_case(repo.as_str())
+          || !should_apply_repo_request_result(this.code_request_generation, request_generation)
+          || this.effective_branch().as_deref() != Some(reference.as_str())
         {
           return;
         }
 
+        this.code_file_tasks.remove(&key_for_task);
         match result {
           Ok(content) => {
             this
@@ -2181,6 +2449,7 @@ impl GithubRepoPage {
     self.pending_issue_sheet_number = open_target.issue_number();
     self.pending_issue_sheet_comment_id = open_target.issue_comment_id();
 
+    self.reset_branch_state(cx);
     self.repository = None;
     self.repository_loading = true;
     self.repository_error = None;
@@ -2212,8 +2481,24 @@ impl GithubRepoPage {
 
         match result {
           Ok(repository) => {
+            let selected_branch =
+              normalize_non_empty_string(&repository.default_branch).map(SharedString::from);
             this.repository = Some(repository);
+            this.selected_branch = selected_branch.clone();
+            let branch_items = build_repo_branch_select_items(
+              selected_branch
+                .clone()
+                .map(|branch| vec![branch.to_string()])
+                .unwrap_or_default(),
+              selected_branch.as_ref().map(SharedString::as_ref),
+            );
+            this.set_branch_select_items(
+              branch_items,
+              selected_branch.as_ref().map(ToString::to_string),
+              cx,
+            );
             this.repository_error = None;
+            this.load_repository_branches(cx);
             this.load_code_tree_if_needed(cx);
           }
           Err(error) => {
@@ -2649,6 +2934,13 @@ impl GithubRepoPage {
         .rounded_full()
         .child(format!("Open issues {}", repository.open_issues_count)),
     ]);
+    let branch_select = Select::new(&self.branch_select)
+      .placeholder("Select branch...")
+      .search_placeholder("Search branches...")
+      .menu_width(px(320.))
+      .w(px(280.))
+      .small()
+      .disabled(self.repository.is_none());
 
     v_flex().w_full().h_full().min_h_0().p_4().child(
       v_flex()
@@ -2721,6 +3013,21 @@ impl GithubRepoPage {
             }),
         )
         .child(stats)
+        .child(
+          v_flex()
+            .gap_2()
+            .child(div().text_sm().font_semibold().child("Code branch"))
+            .child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .child(branch_select)
+                .when(self.branches_loading, |this| this.child(Spinner::new().small())),
+            )
+            .when_some(self.branches_error.clone(), |this, error| {
+              this.child(div().text_xs().text_color(theme.status_red()).child(error))
+            }),
+        )
         .child(
           v_flex()
             .gap_2()
@@ -3450,6 +3757,50 @@ mod tests {
   fn should_apply_issue_request_result_matches_generation() {
     assert!(should_apply_issue_request_result(4, 4));
     assert!(!should_apply_issue_request_result(5, 4));
+  }
+
+  #[test]
+  fn should_apply_repo_request_result_matches_generation() {
+    assert!(should_apply_repo_request_result(8, 8));
+    assert!(!should_apply_repo_request_result(9, 8));
+  }
+
+  #[test]
+  fn effective_repo_branch_prefers_selected_then_default() {
+    assert_eq!(
+      effective_repo_branch(Some("feature"), Some("main")),
+      Some("feature".to_string())
+    );
+    assert_eq!(
+      effective_repo_branch(Some("   "), Some("main")),
+      Some("main".to_string())
+    );
+    assert_eq!(effective_repo_branch(None, Some("main")), Some("main".to_string()));
+    assert_eq!(effective_repo_branch(None, None), None);
+  }
+
+  #[test]
+  fn build_repo_branch_select_items_adds_selected_and_sorts_uniquely() {
+    let items = build_repo_branch_select_items(
+      vec![
+        "main".to_string(),
+        "feature/a".to_string(),
+        "main".to_string(),
+      ],
+      Some("release/1.0"),
+    );
+    let branches = items
+      .iter()
+      .map(|item| item.branch.clone())
+      .collect::<Vec<_>>();
+    assert_eq!(
+      branches,
+      vec![
+        "feature/a".to_string(),
+        "main".to_string(),
+        "release/1.0".to_string()
+      ]
+    );
   }
 
   #[test]

@@ -278,6 +278,21 @@ pub struct GithubRepositoryTree {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubRepositoryBranchCommit {
+  pub sha: String,
+  pub url: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubRepositoryBranch {
+  pub name: String,
+  pub commit: GithubRepositoryBranchCommit,
+  pub protected: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequest {
   pub number: u64,
   pub title: String,
@@ -801,6 +816,25 @@ impl ApiClient {
       anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubRepositoryTree>()?;
+    Ok(payload)
+  }
+
+  pub fn fetch_github_repository_branches(
+    &self,
+    owner: &str,
+    repo: &str,
+  ) -> Result<Vec<GithubRepositoryBranch>> {
+    let route = format!("/github/repos/{owner}/{repo}/branches");
+    let response = self.authed_request(Method::GET, route.as_str()).send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<Vec<GithubRepositoryBranch>>()?;
     Ok(payload)
   }
 
@@ -1526,6 +1560,67 @@ mod tests {
   }
 
   #[test]
+  fn fetch_github_repository_branches_parses_success_payload() {
+    let body = r#"[
+      {
+        "name": "main",
+        "commit": {
+          "sha": "1111111111111111111111111111111111111111",
+          "url": "https://api.github.com/repos/acme/widget/commits/1111111111111111111111111111111111111111"
+        },
+        "protected": true
+      },
+      {
+        "name": "feature/new-ui",
+        "commit": {
+          "sha": "2222222222222222222222222222222222222222",
+          "url": "https://api.github.com/repos/acme/widget/commits/2222222222222222222222222222222222222222"
+        },
+        "protected": false
+      }
+    ]"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let branches = api
+      .fetch_github_repository_branches("acme", "widget")
+      .expect("fetch repository branches");
+    assert_eq!(branches.len(), 2);
+    assert_eq!(branches[0].name, "main");
+    assert_eq!(
+      branches[0].commit.sha,
+      "1111111111111111111111111111111111111111"
+    );
+    assert!(branches[0].protected);
+    assert_eq!(branches[1].name, "feature/new-ui");
+    assert!(!branches[1].protected);
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_repository_branches_uses_branches_route() {
+    let body = r#"[]"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_github_repository_branches("acme", "widget")
+      .expect("fetch repository branches");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "GET /github/repos/acme/widget/branches HTTP/1.1"
+    );
+  }
+
+  #[test]
   fn fetch_github_repository_issues_parses_success_payload() {
     let body = r#"{
       "issues": [
@@ -2175,6 +2270,19 @@ mod tests {
 
     let err = api
       .fetch_github_repository_tree("acme", "widget", "main")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_repository_branches_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "{}");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .fetch_github_repository_branches("acme", "widget")
       .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
