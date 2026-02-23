@@ -1575,16 +1575,12 @@ fn render_block(
         let mut aligned = v_flex().w_full().min_w_0().gap_2();
         for block in blocks {
           aligned = aligned.child(
-            h_flex()
-              .w_full()
-              .min_w_0()
-              .justify_center()
-              .child(
-                div()
-                  .text_center()
-                  .min_w_0()
-                  .child(render_block(block, options, indent, cx, ctx)),
-              ),
+            h_flex().w_full().min_w_0().justify_center().child(
+              div()
+                .text_center()
+                .min_w_0()
+                .child(render_block(block, options, indent, cx, ctx)),
+            ),
           );
         }
         aligned.into_any_element()
@@ -1914,7 +1910,14 @@ fn should_resolve_svg_embedded_image(svg: &str) -> bool {
   }
 
   let has_badge_like_shape_or_text = [
-    "<text", "<rect", "<path", "<line", "<polyline", "<polygon", "<circle", "<ellipse",
+    "<text",
+    "<rect",
+    "<path",
+    "<line",
+    "<polyline",
+    "<polygon",
+    "<circle",
+    "<ellipse",
   ]
   .iter()
   .any(|pattern| lower.contains(pattern));
@@ -2397,26 +2400,22 @@ fn render_code_block(
     },
   );
   let scroll_id: SharedString = format!("markdown-code-block-scroll-{text_id}").into();
-  let scroll_content = div()
-    .id(scroll_id)
-    .w_full()
-    .min_w_0()
-    .child(
-      div()
-        .min_w(px(min_content_width_px))
-        .px(px(MARKDOWN_CODE_BLOCK_PADDING_X_PX))
-        .pt(px(MARKDOWN_CODE_BLOCK_PADDING_TOP_PX))
-        .pb(px(MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX))
-        .whitespace_nowrap()
-        .child(
-          div()
-            .pl(px(MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX))
-            .font_family(cx.theme().mono_font_family.clone())
-            .text_sm()
-            .text_color(theme.foreground)
-            .child(content),
-        ),
-    );
+  let scroll_content = div().id(scroll_id).w_full().min_w_0().child(
+    div()
+      .min_w(px(min_content_width_px))
+      .px(px(MARKDOWN_CODE_BLOCK_PADDING_X_PX))
+      .pt(px(MARKDOWN_CODE_BLOCK_PADDING_TOP_PX))
+      .pb(px(MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX))
+      .whitespace_nowrap()
+      .child(
+        div()
+          .pl(px(MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX))
+          .font_family(cx.theme().mono_font_family.clone())
+          .text_sm()
+          .text_color(theme.foreground)
+          .child(content),
+      ),
+  );
 
   let scroll_container = if options.expand_code_blocks {
     scroll_content.overflow_x_scroll().into_any_element()
