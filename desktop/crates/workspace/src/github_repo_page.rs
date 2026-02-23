@@ -24,6 +24,7 @@ use gpui_component::{
   h_flex,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  red_800,
   scroll::ScrollableElement,
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
   spinner::Spinner,
@@ -479,7 +480,18 @@ fn readme_scope_id(owner: &str, repo: &str, branch: &str) -> usize {
   hasher.finish() as usize
 }
 
-const ISSUE_DETAILS_SHEET_WIDTH_PX: f32 = 950.0;
+const ISSUE_DETAILS_SHEET_WIDTH_PX: f32 = 850.0;
+const ISSUE_DETAILS_SHEET_MIN_WIDTH_PX: f32 = 600.0;
+const ISSUE_DETAILS_SHEET_MAX_WIDTH_PX: f32 = 1200.0;
+
+#[derive(Clone)]
+struct IssueSheetResizeDrag;
+
+impl Render for IssueSheetResizeDrag {
+  fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    gpui::Empty
+  }
+}
 
 fn issue_state_label(state: &str, reason: Option<GithubIssueStateReason>) -> SharedString {
   if state.eq_ignore_ascii_case("open") {
@@ -597,6 +609,17 @@ fn should_keep_issue_sheet_open_for_repo_target(
     && current_repo.eq_ignore_ascii_case(repo)
     && tab == Some(CommandPaletteGithubRepoTab::Issues)
     && issue_number.is_some()
+}
+
+fn clamp_issue_sheet_width(width: f32) -> f32 {
+  width.clamp(
+    ISSUE_DETAILS_SHEET_MIN_WIDTH_PX,
+    ISSUE_DETAILS_SHEET_MAX_WIDTH_PX,
+  )
+}
+
+fn issue_sheet_width_from_cursor_x(viewport_width: f32, cursor_x: f32) -> f32 {
+  clamp_issue_sheet_width((viewport_width - cursor_x).max(0.0))
 }
 
 #[derive(Clone, Debug)]
@@ -1564,6 +1587,7 @@ pub struct GithubRepoPage {
   issues: Entity<ListState<GithubRepoIssueListDelegate>>,
   issues_error: Option<SharedString>,
   issues_task: Option<Task<()>>,
+  issue_sheet_width_px: f32,
   active_tab_ix: usize,
   pending_issue_sheet_number: Option<u64>,
   pending_issue_sheet_comment_id: Option<u64>,
@@ -1725,6 +1749,7 @@ impl GithubRepoPage {
       issues,
       issues_error: None,
       issues_task: None,
+      issue_sheet_width_px: ISSUE_DETAILS_SHEET_WIDTH_PX,
       active_tab_ix: 0,
       pending_issue_sheet_number: None,
       pending_issue_sheet_comment_id: None,
@@ -1939,7 +1964,6 @@ impl GithubRepoPage {
     self.pending_issue_sheet_number = None;
     self.pending_issue_sheet_comment_id = None;
     let issue_number = issue.number;
-    let sheet_title: SharedString = format!("Issue #{issue_number}").into();
     let issue_details_view = cx.new(|cx| {
       GithubIssueDetailsSheetView::new(
         self.api.clone(),
@@ -1952,12 +1976,16 @@ impl GithubRepoPage {
     });
 
     let issues_list = self.issues.clone();
-    window.open_sheet_at(Placement::Right, cx, move |sheet, _, _cx| {
+    let repo_page = cx.entity().clone();
+    window.open_sheet_at(Placement::Right, cx, move |sheet, _, cx| {
+      let width = repo_page.read(cx).issue_sheet_width_px;
+
       sheet
         .overlay(true)
         .overlay_closable(true)
-        .size(px(ISSUE_DETAILS_SHEET_WIDTH_PX))
-        .title(sheet_title.clone())
+        .resizable(true)
+        .size(px(width))
+        .title(format!("Issue #{issue_number}"))
         .on_close({
           let issues_list = issues_list.clone();
           move |_, window, cx| {
@@ -1966,7 +1994,45 @@ impl GithubRepoPage {
             });
           }
         })
-        .child(issue_details_view.clone())
+        .child(
+          div()
+            .id(("github-repo-issue-sheet-content", issue_number))
+            .size_full()
+            .relative()
+            .child(
+              div()
+                .id(("github-repo-issue-sheet-resize-handle", issue_number))
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(-16.0))
+                .w(px(6.0))
+                .cursor(gpui::CursorStyle::ResizeColumn)
+                .on_drag(
+                  IssueSheetResizeDrag,
+                  |drag: &IssueSheetResizeDrag, _, _, cx: &mut App| cx.new(|_| drag.clone()),
+                )
+                .on_drag_move::<IssueSheetResizeDrag>({
+                  let repo_page = repo_page.clone();
+                  move |event: &gpui::DragMoveEvent<IssueSheetResizeDrag>,
+                        window: &mut Window,
+                        cx: &mut App| {
+                    let next_width = issue_sheet_width_from_cursor_x(
+                      f32::from(window.viewport_size().width),
+                      f32::from(event.event.position.x),
+                    );
+                    let _ = repo_page.update(cx, |this, cx| {
+                      if (this.issue_sheet_width_px - next_width).abs() <= f32::EPSILON {
+                        return;
+                      }
+                      this.issue_sheet_width_px = next_width;
+                      cx.notify();
+                    });
+                  }
+                }),
+            )
+            .child(issue_details_view.clone()),
+        )
     });
   }
 
@@ -3880,6 +3946,35 @@ mod tests {
   fn repo_tab_count_label_formats_counts() {
     assert_eq!(repo_tab_count_label(0).as_ref(), "0");
     assert_eq!(repo_tab_count_label(42).as_ref(), "42");
+  }
+
+  #[test]
+  fn clamp_issue_sheet_width_enforces_min_and_max() {
+    assert_eq!(
+      clamp_issue_sheet_width(ISSUE_DETAILS_SHEET_MIN_WIDTH_PX - 200.0),
+      ISSUE_DETAILS_SHEET_MIN_WIDTH_PX
+    );
+    assert_eq!(
+      clamp_issue_sheet_width(ISSUE_DETAILS_SHEET_MAX_WIDTH_PX + 200.0),
+      ISSUE_DETAILS_SHEET_MAX_WIDTH_PX
+    );
+    assert_eq!(
+      clamp_issue_sheet_width(ISSUE_DETAILS_SHEET_WIDTH_PX),
+      ISSUE_DETAILS_SHEET_WIDTH_PX
+    );
+  }
+
+  #[test]
+  fn issue_sheet_width_from_cursor_x_uses_right_edge_distance_and_clamps() {
+    assert_eq!(
+      issue_sheet_width_from_cursor_x(2000.0, 1600.0),
+      ISSUE_DETAILS_SHEET_MIN_WIDTH_PX
+    );
+    assert_eq!(issue_sheet_width_from_cursor_x(2000.0, 900.0), 1100.0);
+    assert_eq!(
+      issue_sheet_width_from_cursor_x(2000.0, 100.0),
+      ISSUE_DETAILS_SHEET_MAX_WIDTH_PX
+    );
   }
 
   #[test]
