@@ -1897,6 +1897,7 @@ fn fetch_badge_image_source_blocking(url: &str) -> Option<BadgeImageSource> {
 
   if (content_type.contains("svg") || bytes.starts_with(b"<svg"))
     && let Ok(svg) = String::from_utf8(bytes.to_vec())
+    && should_resolve_svg_embedded_image(&svg)
     && let Some(href) = extract_svg_image_href(&svg)
     && let Some(source) = resolve_badge_href(url, &href)
   {
@@ -1904,6 +1905,21 @@ fn fetch_badge_image_source_blocking(url: &str) -> Option<BadgeImageSource> {
   }
 
   Some(BadgeImageSource::Remote(url.to_string()))
+}
+
+fn should_resolve_svg_embedded_image(svg: &str) -> bool {
+  let lower = svg.to_ascii_lowercase();
+  if lower.match_indices("<image").count() != 1 {
+    return false;
+  }
+
+  let has_badge_like_shape_or_text = [
+    "<text", "<rect", "<path", "<line", "<polyline", "<polygon", "<circle", "<ellipse",
+  ]
+  .iter()
+  .any(|pattern| lower.contains(pattern));
+
+  !has_badge_like_shape_or_text
 }
 
 fn extract_svg_image_href(svg: &str) -> Option<String> {
@@ -4343,6 +4359,24 @@ mod tests {
 
     let expanded = MarkdownRenderOptions::default().with_expanded_code_blocks();
     assert!(expanded.expand_code_blocks);
+  }
+
+  #[test]
+  fn should_resolve_svg_embedded_image_allows_simple_image_wrapper() {
+    let svg = r#"<svg width="16" height="16" xmlns="http://www.w3.org/2000/svg">
+  <image href="data:image/png;base64,AAA=" width="16" height="16"/>
+</svg>"#;
+    assert!(should_resolve_svg_embedded_image(svg));
+  }
+
+  #[test]
+  fn should_resolve_svg_embedded_image_rejects_badge_like_svg() {
+    let svg = r##"<svg width="86" height="20" xmlns="http://www.w3.org/2000/svg">
+  <rect width="86" height="20" fill="#555"/>
+  <image href="data:image/png;base64,AAA=" x="5" y="3" width="14" height="14"/>
+  <text x="25" y="14">Zed</text>
+</svg>"##;
+    assert!(!should_resolve_svg_embedded_image(svg));
   }
 
   #[test]
