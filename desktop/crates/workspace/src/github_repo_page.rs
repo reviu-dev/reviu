@@ -1,5 +1,6 @@
 use std::{
   collections::{BTreeMap, HashMap, HashSet},
+  hash::{DefaultHasher, Hash, Hasher},
   path::{Path, PathBuf},
   rc::Rc,
   sync::Arc,
@@ -23,8 +24,8 @@ use gpui_component::{
   h_flex,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
-  select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
   scroll::ScrollableElement,
+  select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
   spinner::Spinner,
   tab::{Tab, TabBar},
   tag::Tag,
@@ -113,6 +114,11 @@ const CODE_SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
 const CODE_SIDEBAR_MIN_WIDTH: f32 = 250.0;
 const CODE_SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const CODE_HEADER_HEIGHT: f32 = 40.0;
+const REPO_TAB_OVERVIEW_IX: usize = 0;
+const REPO_TAB_README_IX: usize = 1;
+const REPO_TAB_CODE_IX: usize = 2;
+const REPO_TAB_PULL_REQUESTS_IX: usize = 3;
+const REPO_TAB_ISSUES_IX: usize = 4;
 
 #[derive(Clone, Debug)]
 struct GithubRepoCodeFile {
@@ -263,6 +269,26 @@ fn should_apply_repo_request_result(request_generation: u64, task_generation: u6
   request_generation == task_generation
 }
 
+fn should_fetch_readme_for_branch(
+  loaded_branch: Option<&str>,
+  requested_branch: &str,
+  has_error: bool,
+) -> bool {
+  if has_error {
+    return true;
+  }
+
+  let requested_branch = requested_branch.trim();
+  if requested_branch.is_empty() {
+    return false;
+  }
+
+  loaded_branch
+    .map(str::trim)
+    .filter(|branch| !branch.is_empty())
+    != Some(requested_branch)
+}
+
 #[derive(Clone)]
 struct GithubRepoBranchSelectItem {
   branch: String,
@@ -337,9 +363,9 @@ enum GithubRepoOpenTarget {
 impl GithubRepoOpenTarget {
   fn tab_ix(self) -> usize {
     match self {
-      GithubRepoOpenTarget::Overview => 0,
-      GithubRepoOpenTarget::PullRequests => 2,
-      GithubRepoOpenTarget::Issues { .. } => 3,
+      GithubRepoOpenTarget::Overview => REPO_TAB_OVERVIEW_IX,
+      GithubRepoOpenTarget::PullRequests => REPO_TAB_PULL_REQUESTS_IX,
+      GithubRepoOpenTarget::Issues { .. } => REPO_TAB_ISSUES_IX,
     }
   }
 
@@ -438,6 +464,15 @@ fn issue_comment_scope_id(issue_id: u64, comment_id: u64) -> usize {
     .wrapping_add(comment_id as usize)
     .wrapping_mul(31)
     .wrapping_add(2)
+}
+
+fn readme_scope_id(owner: &str, repo: &str, branch: &str) -> usize {
+  let mut hasher = DefaultHasher::new();
+  "github-repo-readme".hash(&mut hasher);
+  owner.to_ascii_lowercase().hash(&mut hasher);
+  repo.to_ascii_lowercase().hash(&mut hasher);
+  branch.to_ascii_lowercase().hash(&mut hasher);
+  hasher.finish() as usize
 }
 
 const ISSUE_DETAILS_SHEET_WIDTH_PX: f32 = 950.0;
@@ -1495,6 +1530,13 @@ pub struct GithubRepoPage {
   repository_loading: bool,
   repository_error: Option<SharedString>,
   repository_task: Option<Task<()>>,
+  readme_request_generation: u64,
+  readme_loading: bool,
+  readme_error: Option<SharedString>,
+  readme_task: Option<Task<()>>,
+  readme_content: Option<SharedString>,
+  readme_loaded_branch: Option<SharedString>,
+  readme_markdown_state: MarkdownRenderState,
   code_request_generation: u64,
   code_tree_state: Entity<TreeState>,
   code_files_loading: bool,
@@ -1649,6 +1691,13 @@ impl GithubRepoPage {
       repository_loading: false,
       repository_error: None,
       repository_task: None,
+      readme_request_generation: 0,
+      readme_loading: false,
+      readme_error: None,
+      readme_task: None,
+      readme_content: None,
+      readme_loaded_branch: None,
+      readme_markdown_state: MarkdownRenderState::new(),
       code_request_generation: 0,
       code_tree_state,
       code_files_loading: false,
@@ -1796,8 +1845,12 @@ impl GithubRepoPage {
 
     self.selected_branch = Some(next_branch.clone().into());
     self.set_branch_select_selected_value(next_branch, cx);
+    self.reset_readme_state(cx);
     self.reset_code_state(cx);
-    if self.active_tab_ix == 1 {
+    if self.active_tab_ix == REPO_TAB_README_IX {
+      self.load_readme_if_needed(cx);
+    }
+    if self.active_tab_ix == REPO_TAB_CODE_IX {
       self.load_code_tree_if_needed(cx);
     }
     cx.notify();
@@ -1918,12 +1971,18 @@ impl GithubRepoPage {
       return;
     }
     self.active_tab_ix = tab_ix;
-    if tab_ix != 3 {
+    if tab_ix != REPO_TAB_ISSUES_IX {
       self.pending_issue_sheet_number = None;
       self.pending_issue_sheet_comment_id = None;
     }
 
-    if tab_ix == 1 {
+    if tab_ix == REPO_TAB_README_IX {
+      self.load_readme_if_needed(cx);
+      cx.notify();
+      return;
+    }
+
+    if tab_ix == REPO_TAB_CODE_IX {
       self.load_code_tree_if_needed(cx);
       cx.notify();
       return;
@@ -1931,7 +1990,7 @@ impl GithubRepoPage {
 
     cx.notify();
 
-    if tab_ix == 2 {
+    if tab_ix == REPO_TAB_PULL_REQUESTS_IX {
       cx.on_next_frame(window, |this, window, cx| {
         this.pull_requests.update(cx, |state, cx| {
           state.focus(window, cx);
@@ -1940,13 +1999,119 @@ impl GithubRepoPage {
       return;
     }
 
-    if tab_ix == 3 {
+    if tab_ix == REPO_TAB_ISSUES_IX {
       cx.on_next_frame(window, |this, window, cx| {
         this.issues.update(cx, |state, cx| {
           state.focus(window, cx);
         });
       });
     }
+  }
+
+  fn reset_readme_state(&mut self, _cx: &mut Context<Self>) {
+    self.readme_request_generation = self.readme_request_generation.wrapping_add(1);
+    self.readme_loading = false;
+    self.readme_error = None;
+    self.readme_task = None;
+    self.readme_content = None;
+    self.readme_loaded_branch = None;
+    self.readme_markdown_state = MarkdownRenderState::new();
+  }
+
+  fn load_readme_if_needed(&mut self, cx: &mut Context<Self>) {
+    if self.active_tab_ix != REPO_TAB_README_IX {
+      return;
+    }
+    if self.readme_loading || self.readme_task.is_some() {
+      return;
+    }
+    let Some(_repository) = self.repository.as_ref() else {
+      return;
+    };
+
+    let owner = self.owner.to_string();
+    let repo = self.repo.to_string();
+    let Some(branch) = self.effective_branch() else {
+      return;
+    };
+    if owner.trim().is_empty() || repo.trim().is_empty() || branch.trim().is_empty() {
+      return;
+    }
+    if !should_fetch_readme_for_branch(
+      self
+        .readme_loaded_branch
+        .as_deref()
+        .map(|branch| branch.as_ref()),
+      &branch,
+      self.readme_error.is_some(),
+    ) {
+      return;
+    }
+
+    self.readme_loading = true;
+    self.readme_error = None;
+    self.readme_request_generation = self.readme_request_generation.wrapping_add(1);
+    let request_generation = self.readme_request_generation;
+
+    let api = self.api.clone();
+    let owner_for_task = owner.clone();
+    let repo_for_task = repo.clone();
+    let branch_for_task = branch.clone();
+    let owner_for_fetch = owner_for_task.clone();
+    let repo_for_fetch = repo_for_task.clone();
+    let branch_for_fetch = branch_for_task.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.fetch_github_repository_readme(
+          &owner_for_fetch,
+          &repo_for_fetch,
+          Some(branch_for_fetch.as_str()),
+        )
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        if !this
+          .owner
+          .as_ref()
+          .eq_ignore_ascii_case(owner_for_task.as_str())
+          || !this
+            .repo
+            .as_ref()
+            .eq_ignore_ascii_case(repo_for_task.as_str())
+          || !should_apply_repo_request_result(this.readme_request_generation, request_generation)
+          || this.effective_branch().as_deref() != Some(branch_for_task.as_str())
+        {
+          return;
+        }
+
+        this.readme_task = None;
+        this.readme_loading = false;
+
+        match result {
+          Ok(content) => {
+            this.readme_content = content.map(SharedString::from);
+            this.readme_loaded_branch = Some(branch_for_task.clone().into());
+            this.readme_error = None;
+          }
+          Err(error) => {
+            let message = error.to_string();
+            this.readme_content = None;
+            this.readme_loaded_branch = None;
+            if github_shared::is_unauthorized_error_message(&message) {
+              this.readme_error = Some("Authentication required. Please sign in again.".into());
+            } else {
+              this.readme_error = Some(message.into());
+            }
+          }
+        }
+
+        cx.notify();
+      });
+    });
+
+    self.readme_task = Some(task);
+    cx.notify();
   }
 
   fn reset_code_state(&mut self, cx: &mut Context<Self>) {
@@ -1973,7 +2138,7 @@ impl GithubRepoPage {
   }
 
   fn load_code_tree_if_needed(&mut self, cx: &mut Context<Self>) {
-    if self.active_tab_ix != 1 {
+    if self.active_tab_ix != REPO_TAB_CODE_IX {
       return;
     }
     if self.code_files_loading || self.code_tree_task.is_some() || !self.code_lookup.is_empty() {
@@ -2018,11 +2183,7 @@ impl GithubRepoPage {
     let branch_for_fetch = branch_for_task.clone();
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || {
-        api.fetch_github_repository_tree(
-          &owner_for_fetch,
-          &repo_for_fetch,
-          &branch_for_fetch,
-        )
+        api.fetch_github_repository_tree(&owner_for_fetch, &repo_for_fetch, &branch_for_fetch)
       })
       .await;
 
@@ -2287,7 +2448,7 @@ impl GithubRepoPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.active_tab_ix != 1 {
+    if self.active_tab_ix != REPO_TAB_CODE_IX {
       return;
     }
 
@@ -2410,7 +2571,7 @@ impl GithubRepoPage {
     let Some(issue_number) = self.pending_issue_sheet_number else {
       return;
     };
-    if self.active_tab_ix != 3 {
+    if self.active_tab_ix != REPO_TAB_ISSUES_IX {
       return;
     }
 
@@ -2453,6 +2614,7 @@ impl GithubRepoPage {
     self.repository = None;
     self.repository_loading = true;
     self.repository_error = None;
+    self.reset_readme_state(cx);
     self.reset_code_state(cx);
 
     self.pull_requests_error = None;
@@ -2499,6 +2661,7 @@ impl GithubRepoPage {
             );
             this.repository_error = None;
             this.load_repository_branches(cx);
+            this.load_readme_if_needed(cx);
             this.load_code_tree_if_needed(cx);
           }
           Err(error) => {
@@ -2636,6 +2799,23 @@ impl GithubRepoPage {
         .close_button(false)
         .child(palette_for_dialog.clone())
     });
+  }
+
+  fn handle_readme_gfm_link(
+    &mut self,
+    url: &str,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    if should_open_externally(window) {
+      return false;
+    }
+
+    let Some(action) = parse_github_url_action(url) else {
+      return false;
+    };
+
+    self.handle_command_palette_action(action, cx).is_ok()
   }
 
   fn handle_command_palette_action(
@@ -2822,6 +3002,7 @@ impl GithubRepoPage {
         this.set_active_tab(*ix, window, cx);
       }))
       .child(Tab::new().label("Overview"))
+      .child(Tab::new().label("Readme"))
       .child(Tab::new().label("Code"))
       .child(Tab::new().label("Pull Requests"))
       .child(Tab::new().label("Issues"));
@@ -3022,7 +3203,9 @@ impl GithubRepoPage {
                 .items_center()
                 .gap_2()
                 .child(branch_select)
-                .when(self.branches_loading, |this| this.child(Spinner::new().small())),
+                .when(self.branches_loading, |this| {
+                  this.child(Spinner::new().small())
+                }),
             )
             .when_some(self.branches_error.clone(), |this, error| {
               this.child(div().text_xs().text_color(theme.status_red()).child(error))
@@ -3421,6 +3604,96 @@ impl GithubRepoPage {
       .child(resizable_panel().child(editor_panel))
   }
 
+  fn render_readme(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    let body = if self.readme_loading {
+      v_flex()
+        .w_full()
+        .min_h(px(240.))
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(Spinner::new().small())
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading README..."),
+        )
+        .into_any_element()
+    } else if let Some(error) = self.readme_error.as_ref() {
+      v_flex()
+        .w_full()
+        .min_h(px(240.))
+        .items_center()
+        .justify_center()
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.status_red())
+            .child(error.clone()),
+        )
+        .into_any_element()
+    } else if let Some(content) = self.readme_content.as_ref() {
+      let repo_page = cx.entity().clone();
+      let gfm_link_handler = Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
+        let handled = repo_page.update(cx, |this, cx| this.handle_readme_gfm_link(url, window, cx));
+        if handled {
+          LinkAction::Handled
+        } else {
+          LinkAction::Open
+        }
+      });
+      let readme_branch = self
+        .readme_loaded_branch
+        .as_ref()
+        .map(SharedString::as_ref)
+        .unwrap_or_default();
+      let options = MarkdownRenderOptions::with_on_link(gfm_link_handler)
+        .with_state(self.readme_markdown_state.clone())
+        .with_scope_id(readme_scope_id(
+          self.owner.as_ref(),
+          self.repo.as_ref(),
+          readme_branch,
+        ));
+
+      render_markdown(content.as_ref(), &options, cx)
+    } else {
+      v_flex()
+        .w_full()
+        .min_h(px(240.))
+        .items_center()
+        .justify_center()
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("No README found for this branch"),
+        )
+        .into_any_element()
+    };
+
+    div()
+      .id("github-repo-readme-scroll")
+      .size_full()
+      .overflow_y_scrollbar()
+      .child(
+        v_flex()
+          .w_full()
+          .px_4()
+          .pt_4()
+          .pb_12()
+          .child(
+            v_flex()
+              .w_full()
+              .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+              .mx_auto()
+              .child(body),
+          ),
+      )
+  }
+
   fn render_pull_requests(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
@@ -3437,10 +3710,10 @@ impl GithubRepoPage {
     v_flex().w_full().h_full().min_h_0().p_4().child(
       v_flex()
         .w_full()
-        .h_full()
-        .min_h_0()
         .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
         .mx_auto()
+        .h_full()
+        .min_h_0()
         .gap_3()
         .when_some(self.pull_requests_error.clone(), |this, error| {
           this.child(div().text_sm().text_color(theme.red).child(error))
@@ -3484,9 +3757,10 @@ impl Render for GithubRepoPage {
     self.try_open_pending_issue_sheet(window, cx);
 
     let content = match self.active_tab_ix {
-      0 => self.render_overview(cx).into_any_element(),
-      1 => self.render_code(window, cx).into_any_element(),
-      2 => self.render_pull_requests(cx).into_any_element(),
+      REPO_TAB_OVERVIEW_IX => self.render_overview(cx).into_any_element(),
+      REPO_TAB_README_IX => self.render_readme(cx).into_any_element(),
+      REPO_TAB_CODE_IX => self.render_code(window, cx).into_any_element(),
+      REPO_TAB_PULL_REQUESTS_IX => self.render_pull_requests(cx).into_any_element(),
       _ => self.render_issues(cx).into_any_element(),
     };
 
@@ -3611,16 +3885,31 @@ mod tests {
 
   #[test]
   fn github_repo_open_target_tab_ix_accounts_for_code_tab_order() {
-    assert_eq!(GithubRepoOpenTarget::Overview.tab_ix(), 0);
-    assert_eq!(GithubRepoOpenTarget::PullRequests.tab_ix(), 2);
+    assert_eq!(
+      GithubRepoOpenTarget::Overview.tab_ix(),
+      REPO_TAB_OVERVIEW_IX
+    );
+    assert_eq!(
+      GithubRepoOpenTarget::PullRequests.tab_ix(),
+      REPO_TAB_PULL_REQUESTS_IX
+    );
     assert_eq!(
       GithubRepoOpenTarget::Issues {
         issue_number: None,
         issue_comment_id: None,
       }
       .tab_ix(),
-      3
+      REPO_TAB_ISSUES_IX
     );
+  }
+
+  #[test]
+  fn repo_tab_indices_match_overview_readme_code_pr_issues_order() {
+    assert_eq!(REPO_TAB_OVERVIEW_IX, 0);
+    assert_eq!(REPO_TAB_README_IX, 1);
+    assert_eq!(REPO_TAB_CODE_IX, 2);
+    assert_eq!(REPO_TAB_PULL_REQUESTS_IX, 3);
+    assert_eq!(REPO_TAB_ISSUES_IX, 4);
   }
 
   #[test]
@@ -3766,6 +4055,26 @@ mod tests {
   }
 
   #[test]
+  fn should_fetch_readme_for_branch_respects_loaded_branch_and_errors() {
+    assert!(!should_fetch_readme_for_branch(Some("main"), "main", false));
+    assert!(should_fetch_readme_for_branch(
+      Some("main"),
+      "feature",
+      false
+    ));
+    assert!(should_fetch_readme_for_branch(Some("main"), "main", true));
+    assert!(should_fetch_readme_for_branch(None, "main", false));
+  }
+
+  #[test]
+  fn readme_scope_id_changes_with_repo_or_branch() {
+    let base = readme_scope_id("acme", "widget", "main");
+    assert_eq!(base, readme_scope_id("ACME", "WIDGET", "MAIN"));
+    assert_ne!(base, readme_scope_id("acme", "widget", "develop"));
+    assert_ne!(base, readme_scope_id("acme", "widget-api", "main"));
+  }
+
+  #[test]
   fn effective_repo_branch_prefers_selected_then_default() {
     assert_eq!(
       effective_repo_branch(Some("feature"), Some("main")),
@@ -3775,7 +4084,10 @@ mod tests {
       effective_repo_branch(Some("   "), Some("main")),
       Some("main".to_string())
     );
-    assert_eq!(effective_repo_branch(None, Some("main")), Some("main".to_string()));
+    assert_eq!(
+      effective_repo_branch(None, Some("main")),
+      Some("main".to_string())
+    );
     assert_eq!(effective_repo_branch(None, None), None);
   }
 

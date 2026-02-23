@@ -2366,7 +2366,7 @@ impl GithubPrDetailsPage {
       .id("github-pr-overview-scroll")
       .size_full()
       .overflow_y_scrollbar()
-      .child(v_flex().w_full().pt_4().pb_12().px_4().child(content))
+      .child(v_flex().w_full().pt_4().pb_32().px_4().child(content))
   }
 
   fn render_files_sidebar(
