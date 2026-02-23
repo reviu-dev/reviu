@@ -1,4 +1,4 @@
-import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueParameters, GithubIssueResponse, GithubRepositoryBranchesParameters, GithubRepositoryBranchesResponse, GithubRepositoryParameters, GithubRepositoryResponse, GithubRepositoryTreeParams, GithubRepositoryTreesResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
+import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueParameters, GithubIssueResponse, GithubRepositoryBranchesParameters, GithubRepositoryBranchesResponse, GithubRepositoryParameters, GithubRepositoryReadmeParameters, GithubRepositoryResponse, GithubRepositoryTreeParams, GithubRepositoryTreesResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
@@ -20,6 +20,7 @@ import {
   fetchGithubRepositoryIssue,
   fetchGithubRepositoryIssueComments,
   fetchGithubRepositoryIssues,
+  fetchGithubRepositoryReadme,
   fetchGithubRepositoryTrees,
   patchGithubPullRequestComment,
 
@@ -203,6 +204,10 @@ interface GithubRepositoryDetails {
     name: NonNullable<GithubRepositoryResponse['license']>['name']
     spdx_id: NonNullable<GithubRepositoryResponse['license']>['spdx_id']
   } | null
+}
+
+interface GithubRepositoryReadme {
+  content: string | null
 }
 
 interface GithubRepositoryTree {
@@ -766,6 +771,42 @@ export const githubRoutes = githubRouter
       const status = (error as { status?: number }).status
       if (status === 404) {
         return ctx.json({ error: 'Repository not found' }, 404)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/repos/:owner/:repo/readme', async (ctx) => {
+    const { owner, repo } = ctx.req.param()
+    const ref = ctx.req.query('ref')
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: GithubRepositoryReadmeParameters = {
+        owner,
+        repo,
+        ...(ref && ref.trim().length > 0 ? { ref } : {}),
+      }
+
+      const data = await fetchGithubRepositoryReadme({ token: githubToken, params })
+
+      let content: string | null = null
+      if (typeof data.content === 'string') {
+        const encoding = data.encoding === 'base64' ? 'base64' : 'utf8'
+        content = Buffer.from(data.content, encoding).toString('utf8')
+      }
+
+      const repositoryReadme: GithubRepositoryReadme = {
+        content,
+      }
+
+      return ctx.json(repositoryReadme, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 404) {
+        return ctx.json({ content: null } satisfies GithubRepositoryReadme, 200)
       }
       return ctx.json({ error: (error as Error).message }, 502)
     }

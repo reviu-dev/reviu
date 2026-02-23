@@ -293,6 +293,12 @@ pub struct GithubRepositoryBranch {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubRepositoryReadme {
+  pub content: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequest {
   pub number: u64,
   pub title: String,
@@ -836,6 +842,35 @@ impl ApiClient {
     }
     let payload = response.json::<Vec<GithubRepositoryBranch>>()?;
     Ok(payload)
+  }
+
+  pub fn fetch_github_repository_readme(
+    &self,
+    owner: &str,
+    repo: &str,
+    reference: Option<&str>,
+  ) -> Result<Option<String>> {
+    let route = format!("/github/repos/{owner}/{repo}/readme");
+    let request = self.authed_request(Method::GET, route.as_str());
+    let request = if let Some(reference) = reference.map(str::trim).filter(|value| !value.is_empty()) {
+      request.query(&[("ref", reference)])
+    } else {
+      request
+    };
+    let response = request.send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if status == StatusCode::NOT_FOUND {
+      return Ok(None);
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubRepositoryReadme>()?;
+    Ok(payload.content)
   }
 
   pub fn fetch_github_repository_pull_requests(
@@ -1621,6 +1656,55 @@ mod tests {
   }
 
   #[test]
+  fn fetch_github_repository_readme_parses_success_payload() {
+    let body = r##"{"content":"# Widget\n\nHello README"}"##;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let readme = api
+      .fetch_github_repository_readme("acme", "widget", Some("main"))
+      .expect("fetch repository readme");
+    assert_eq!(readme.as_deref(), Some("# Widget\n\nHello README"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_repository_readme_uses_ref_query_when_provided() {
+    let body = r##"{"content":"# Widget"}"##;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_github_repository_readme("acme", "widget", Some("main"))
+      .expect("fetch repository readme");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "GET /github/repos/acme/widget/readme?ref=main HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn fetch_github_repository_readme_returns_none_on_not_found() {
+    let body = r#"{"error":"Repository not found"}"#;
+    let (base_url, handle) = start_single_response_server("404 Not Found", body);
+    let api = make_test_api_client(base_url);
+
+    let readme = api
+      .fetch_github_repository_readme("acme", "widget", Some("main"))
+      .expect("fetch repository readme");
+    assert_eq!(readme, None);
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
   fn fetch_github_repository_issues_parses_success_payload() {
     let body = r#"{
       "issues": [
@@ -2283,6 +2367,19 @@ mod tests {
 
     let err = api
       .fetch_github_repository_branches("acme", "widget")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_repository_readme_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "{}");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .fetch_github_repository_readme("acme", "widget", Some("main"))
       .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
