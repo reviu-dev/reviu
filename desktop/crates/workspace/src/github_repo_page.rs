@@ -1276,8 +1276,6 @@ impl Render for GithubIssueDetailsSheetView {
         .pb_8()
         .child(
           div()
-            .min_w_0()
-            .flex_1()
             .text_lg()
             .font_semibold()
             .whitespace_normal()
