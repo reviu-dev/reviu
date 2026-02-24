@@ -25,7 +25,9 @@ use gpui::{
   TextRun, UnderlineStyle, Window, div, fill, img, point, prelude::*, px,
 };
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
+use gpui_component::{
+  ActiveTheme as _, Sizable as _, StyledExt as _, clipboard::Clipboard, h_flex, v_flex,
+};
 use once_cell::sync::Lazy;
 use reqwest::header::CONTENT_TYPE;
 use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, TokenType, languages};
@@ -2428,17 +2430,38 @@ fn render_code_block(
       })
       .into_any_element()
   };
+  let copy_value = code_block_copy_value(code);
+  let hover_group_id = code_block_hover_group_id(text_id);
 
   div()
     .w_full()
     .min_w_0()
+    .relative()
+    .group(hover_group_id.clone())
     .bg(theme.accent.opacity(0.3))
     .border_1()
     .border_color(theme.border)
     .rounded_md()
     .overflow_hidden()
     .child(scroll_container)
+    .child(
+      div()
+        .absolute()
+        .top_1()
+        .right_1()
+        .invisible()
+        .group_hover(&hover_group_id, |this| this.visible())
+        .child(Clipboard::new(("markdown-code-block-copy", text_id)).value(copy_value)),
+    )
     .into_any_element()
+}
+
+fn code_block_hover_group_id(text_id: usize) -> SharedString {
+  format!("markdown-code-block-hover-{text_id}").into()
+}
+
+fn code_block_copy_value(code: &CodeBlock) -> SharedString {
+  code.value.clone().into()
 }
 
 fn code_block_display_value(code: &CodeBlock) -> String {
@@ -5141,6 +5164,28 @@ Apres"#,
     assert_eq!(code_block_display_value(&rust), "fn main() {}");
     assert_eq!(code_block_display_value(&text), "line");
     assert_eq!(code_block_display_value(&multiline), "line\n");
+  }
+
+  #[test]
+  fn code_block_copy_value_keeps_original_source() {
+    let code = CodeBlock {
+      lang: Some("text".to_string()),
+      value: "\tline one\n\n</details>\n".to_string(),
+    };
+
+    assert_eq!(
+      code_block_copy_value(&code).as_ref(),
+      "\tline one\n\n</details>\n"
+    );
+  }
+
+  #[test]
+  fn code_block_hover_group_id_is_stable_and_unique() {
+    assert_eq!(
+      code_block_hover_group_id(42).as_ref(),
+      "markdown-code-block-hover-42"
+    );
+    assert_ne!(code_block_hover_group_id(1), code_block_hover_group_id(2));
   }
 
   #[test]
