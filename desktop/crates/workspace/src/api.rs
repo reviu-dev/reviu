@@ -296,6 +296,7 @@ pub struct GithubRepositoryBranch {
 #[allow(dead_code)]
 pub struct GithubRepositoryReadme {
   pub content: Option<String>,
+  pub path: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -849,7 +850,7 @@ impl ApiClient {
     owner: &str,
     repo: &str,
     reference: Option<&str>,
-  ) -> Result<Option<String>> {
+  ) -> Result<Option<GithubRepositoryReadme>> {
     let route = format!("/github/repos/{owner}/{repo}/readme");
     let request = self.authed_request(Method::GET, route.as_str());
     let request =
@@ -871,7 +872,7 @@ impl ApiClient {
       anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubRepositoryReadme>()?;
-    Ok(payload.content)
+    Ok(Some(payload))
   }
 
   pub fn fetch_github_repository_pull_requests(
@@ -1658,14 +1659,16 @@ mod tests {
 
   #[test]
   fn fetch_github_repository_readme_parses_success_payload() {
-    let body = r##"{"content":"# Widget\n\nHello README"}"##;
+    let body = r##"{"content":"# Widget\n\nHello README","path":"docs/README.md"}"##;
     let (base_url, handle) = start_single_response_server("200 OK", body);
     let api = make_test_api_client(base_url);
 
     let readme = api
       .fetch_github_repository_readme("acme", "widget", Some("main"))
       .expect("fetch repository readme");
-    assert_eq!(readme.as_deref(), Some("# Widget\n\nHello README"));
+    let readme = readme.expect("readme payload");
+    assert_eq!(readme.content.as_deref(), Some("# Widget\n\nHello README"));
+    assert_eq!(readme.path.as_deref(), Some("docs/README.md"));
     handle.join().expect("join server thread");
   }
 
@@ -1701,7 +1704,7 @@ mod tests {
     let readme = api
       .fetch_github_repository_readme("acme", "widget", Some("main"))
       .expect("fetch repository readme");
-    assert_eq!(readme, None);
+    assert!(readme.is_none());
     handle.join().expect("join server thread");
   }
 

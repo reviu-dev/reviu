@@ -21,8 +21,8 @@ use gpui::{
   AnyElement, App, Bounds, ClipboardItem, CursorStyle, DispatchPhase, Element, ElementId,
   FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, ImageCacheError,
   ImgResourceLoader, InspectorElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-  MouseUpEvent, Pixels, RenderImage, Resource, SharedString, StrikethroughStyle, StyledText,
-  TextRun, UnderlineStyle, Window, div, fill, img, point, prelude::*, px,
+  MouseUpEvent, ObjectFit, Pixels, RenderImage, Resource, SharedString, StrikethroughStyle,
+  StyledText, TextRun, UnderlineStyle, Window, div, fill, img, point, prelude::*, px,
 };
 use gpui_component::scroll::ScrollableElement;
 use gpui_component::{
@@ -264,6 +264,7 @@ pub struct MarkdownRenderOptions {
   pub scope_id: Option<usize>,
   pub github_code_reference_previews: Option<Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>>,
   pub expand_code_blocks: bool,
+  pub image_base_url: Option<SharedString>,
 }
 
 impl MarkdownRenderOptions {
@@ -299,6 +300,11 @@ impl MarkdownRenderOptions {
 
   pub fn with_expanded_code_blocks(mut self) -> Self {
     self.expand_code_blocks = true;
+    self
+  }
+
+  pub fn with_image_base_url(mut self, image_base_url: impl Into<SharedString>) -> Self {
+    self.image_base_url = Some(image_base_url.into());
     self
   }
 }
@@ -1957,6 +1963,63 @@ fn resolve_badge_href(base_url: &str, href: &str) -> Option<BadgeImageSource> {
   None
 }
 
+fn markdown_image_repo_root_url(base: &reqwest::Url) -> Option<reqwest::Url> {
+  let root_segments = base
+    .path_segments()
+    .map(|segments| {
+      segments
+        .filter(|segment| !segment.is_empty())
+        .take(3)
+        .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+  if root_segments.len() < 3 {
+    return None;
+  }
+  let mut root = base.clone();
+  let root_path = format!("/{}/", root_segments.join("/"));
+  root.set_path(root_path.as_str());
+  Some(root)
+}
+
+fn resolve_markdown_image_url(url: &str, image_base_url: Option<&str>) -> String {
+  let trimmed = url.trim();
+  if trimmed.is_empty() {
+    return String::new();
+  }
+
+  if trimmed.starts_with("data:")
+    || trimmed.starts_with("http://")
+    || trimmed.starts_with("https://")
+  {
+    return trimmed.to_string();
+  }
+
+  if trimmed.starts_with("//") {
+    return format!("https:{trimmed}");
+  }
+
+  let Some(base_url) = image_base_url else {
+    return trimmed.to_string();
+  };
+  let Ok(base) = reqwest::Url::parse(base_url) else {
+    return trimmed.to_string();
+  };
+
+  if trimmed.starts_with('/')
+    && let Some(repo_root) = markdown_image_repo_root_url(&base)
+    && let Ok(joined) = repo_root.join(trimmed.trim_start_matches('/'))
+  {
+    return joined.to_string();
+  }
+
+  if let Ok(joined) = base.join(trimmed) {
+    return joined.to_string();
+  }
+
+  trimmed.to_string()
+}
+
 fn data_uri_to_temp_file(data_uri: &str) -> Option<PathBuf> {
   let (meta, payload) = data_uri.split_once(',')?;
   if !meta.contains(";base64") {
@@ -2083,7 +2146,10 @@ fn render_table_cell_inlines(
       } else {
         alt
       };
-      let badge_url = url.clone();
+      let badge_url = resolve_markdown_image_url(
+        &url,
+        options.image_base_url.as_ref().map(SharedString::as_ref),
+      );
       row = row.child(
         img(move |window: &mut Window, cx: &mut App| {
           if let Some(source) = resolve_badge_image_source_async(&badge_url) {
@@ -2094,6 +2160,7 @@ fn render_table_cell_inlines(
           None
         })
         .h(px(18.0))
+        .object_fit(ObjectFit::Contain)
         .with_loading({
           let badge_label = badge_label.clone();
           move || render_badge_placeholder(&badge_label)
@@ -2156,6 +2223,31 @@ fn render_image_node(url: &str, alt: &str) -> impl IntoElement {
     None
   })
   .max_h(px(MARKDOWN_INLINE_IMAGE_MAX_HEIGHT_PX))
+  .object_fit(ObjectFit::Contain)
+  .with_loading({
+    let label = label.clone();
+    move || render_badge_placeholder(&label)
+  })
+  .with_fallback(move || render_badge_placeholder(&label))
+}
+
+fn render_block_image_node(url: &str, alt: &str) -> impl IntoElement {
+  let label = if alt.trim().is_empty() {
+    "image".to_string()
+  } else {
+    alt.trim().to_string()
+  };
+  let image_url = url.to_string();
+  img(move |window: &mut Window, cx: &mut App| {
+    if let Some(source) = resolve_badge_image_source_async(&image_url) {
+      return load_badge_image_data(&source, window, cx);
+    }
+
+    window.request_animation_frame();
+    None
+  })
+  .max_w_full()
+  .h_auto()
   .with_loading({
     let label = label.clone();
     move || render_badge_placeholder(&label)
@@ -2198,9 +2290,11 @@ fn render_inline_image(
   link_url: Option<&str>,
   on_link: Option<Arc<LinkHandlerFn>>,
   interactive: bool,
+  image_base_url: Option<&str>,
 ) -> AnyElement {
-  let image = render_image_node(url, alt).into_any_element();
-  attach_image_link_handler(image, url, link_url, on_link, interactive)
+  let resolved_url = resolve_markdown_image_url(url, image_base_url);
+  let image = render_image_node(&resolved_url, alt).into_any_element();
+  attach_image_link_handler(image, &resolved_url, link_url, on_link, interactive)
 }
 
 fn render_block_image(
@@ -2209,9 +2303,11 @@ fn render_block_image(
   link_url: Option<&str>,
   on_link: Option<Arc<LinkHandlerFn>>,
   interactive: bool,
+  image_base_url: Option<&str>,
 ) -> AnyElement {
+  let resolved_url = resolve_markdown_image_url(url, image_base_url);
   let mut hasher = DefaultHasher::new();
-  url.hash(&mut hasher);
+  resolved_url.hash(&mut hasher);
   link_url.hash(&mut hasher);
   let image_scroll_id: SharedString =
     format!("markdown-inline-image-scroll-{:x}", hasher.finish()).into();
@@ -2219,10 +2315,9 @@ fn render_block_image(
   div()
     .id(image_scroll_id)
     .w_full()
-    .overflow_x_scrollbar()
     .child(attach_image_link_handler(
-      render_image_node(url, alt).into_any_element(),
-      url,
+      render_block_image_node(&resolved_url, alt).into_any_element(),
+      &resolved_url,
       link_url,
       on_link,
       interactive,
@@ -2269,6 +2364,7 @@ fn render_inline_with_images(
       link.as_deref(),
       options.on_link.clone(),
       interactive,
+      options.image_base_url.as_ref().map(SharedString::as_ref),
     );
   }
 
@@ -2299,6 +2395,7 @@ fn render_inline_with_images(
           link.as_deref(),
           options.on_link.clone(),
           interactive,
+          options.image_base_url.as_ref().map(SharedString::as_ref),
         ));
         row_has_content = true;
       } else {
@@ -4399,6 +4496,42 @@ mod tests {
   <text x="25" y="14">Zed</text>
 </svg>"##;
     assert!(!should_resolve_svg_embedded_image(svg));
+  }
+
+  #[test]
+  fn resolve_markdown_image_url_joins_relative_path_with_base_url() {
+    let resolved = resolve_markdown_image_url(
+      "./assets/hero.gif",
+      Some("https://raw.githubusercontent.com/acme/widget/main/docs/"),
+    );
+
+    assert_eq!(
+      resolved,
+      "https://raw.githubusercontent.com/acme/widget/main/docs/assets/hero.gif"
+    );
+  }
+
+  #[test]
+  fn resolve_markdown_image_url_treats_leading_slash_as_repo_root() {
+    let resolved = resolve_markdown_image_url(
+      "/assets/hero.gif",
+      Some("https://raw.githubusercontent.com/acme/widget/main/docs/"),
+    );
+
+    assert_eq!(
+      resolved,
+      "https://raw.githubusercontent.com/acme/widget/main/assets/hero.gif"
+    );
+  }
+
+  #[test]
+  fn resolve_markdown_image_url_keeps_absolute_urls() {
+    let absolute = "https://images.example.com/hero.gif";
+    assert_eq!(resolve_markdown_image_url(absolute, None), absolute);
+    assert_eq!(
+      resolve_markdown_image_url("//images.example.com/hero.gif", None),
+      "https://images.example.com/hero.gif"
+    );
   }
 
   #[test]
