@@ -208,6 +208,7 @@ interface GithubRepositoryDetails {
 
 interface GithubRepositoryReadme {
   content: string | null
+  path: string | null
 }
 
 interface GithubRepositoryTree {
@@ -796,9 +797,11 @@ export const githubRoutes = githubRouter
         const encoding = data.encoding === 'base64' ? 'base64' : 'utf8'
         content = Buffer.from(data.content, encoding).toString('utf8')
       }
+      const path = typeof data.path === 'string' ? data.path : null
 
       const repositoryReadme: GithubRepositoryReadme = {
         content,
+        path,
       }
 
       return ctx.json(repositoryReadme, 200)
@@ -806,7 +809,7 @@ export const githubRoutes = githubRouter
     catch (error) {
       const status = (error as { status?: number }).status
       if (status === 404) {
-        return ctx.json({ content: null } satisfies GithubRepositoryReadme, 200)
+        return ctx.json({ content: null, path: null } satisfies GithubRepositoryReadme, 200)
       }
       return ctx.json({ error: (error as Error).message }, 502)
     }

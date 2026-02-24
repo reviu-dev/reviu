@@ -293,6 +293,10 @@ fn should_fetch_readme_for_branch(
     != Some(requested_branch)
 }
 
+fn should_prefetch_code_tree_for_tab(tab_ix: usize) -> bool {
+  tab_ix == REPO_TAB_OVERVIEW_IX || tab_ix == REPO_TAB_CODE_IX
+}
+
 #[derive(Clone)]
 struct GithubRepoBranchSelectItem {
   branch: String,
@@ -477,6 +481,43 @@ fn readme_scope_id(owner: &str, repo: &str, branch: &str) -> usize {
   repo.to_ascii_lowercase().hash(&mut hasher);
   branch.to_ascii_lowercase().hash(&mut hasher);
   hasher.finish() as usize
+}
+
+fn readme_image_base_url(
+  owner: &str,
+  repo: &str,
+  branch: &str,
+  readme_path: Option<&str>,
+) -> Option<String> {
+  let owner = normalize_non_empty_string(owner)?;
+  let repo = normalize_non_empty_string(repo)?;
+  let branch = normalize_non_empty_string(branch)?;
+
+  let readme_path = readme_path
+    .and_then(normalize_non_empty_string)
+    .unwrap_or_else(|| "README.md".to_string())
+    .trim_start_matches('/')
+    .to_string();
+
+  let readme_dir = Path::new(readme_path.as_str())
+    .parent()
+    .map(|path| path.to_string_lossy().replace('\\', "/"))
+    .and_then(|path| {
+      let normalized = path.trim().trim_matches('/');
+      if normalized.is_empty() || normalized == "." {
+        None
+      } else {
+        Some(normalized.to_string())
+      }
+    });
+
+  let mut base_url = format!("https://raw.githubusercontent.com/{owner}/{repo}/{branch}/");
+  if let Some(dir) = readme_dir {
+    base_url.push_str(dir.as_str());
+    base_url.push('/');
+  }
+
+  Some(base_url)
 }
 
 const ISSUE_DETAILS_SHEET_WIDTH_PX: f32 = 850.0;
@@ -1561,6 +1602,7 @@ pub struct GithubRepoPage {
   readme_error: Option<SharedString>,
   readme_task: Option<Task<()>>,
   readme_content: Option<SharedString>,
+  readme_path: Option<SharedString>,
   readme_loaded_branch: Option<SharedString>,
   readme_markdown_state: MarkdownRenderState,
   code_request_generation: u64,
@@ -1723,6 +1765,7 @@ impl GithubRepoPage {
       readme_error: None,
       readme_task: None,
       readme_content: None,
+      readme_path: None,
       readme_loaded_branch: None,
       readme_markdown_state: MarkdownRenderState::new(),
       code_request_generation: 0,
@@ -2083,6 +2126,7 @@ impl GithubRepoPage {
     self.readme_error = None;
     self.readme_task = None;
     self.readme_content = None;
+    self.readme_path = None;
     self.readme_loaded_branch = None;
     self.readme_markdown_state = MarkdownRenderState::new();
   }
@@ -2158,14 +2202,22 @@ impl GithubRepoPage {
         this.readme_loading = false;
 
         match result {
-          Ok(content) => {
-            this.readme_content = content.map(SharedString::from);
+          Ok(readme) => {
+            this.readme_content = readme
+              .as_ref()
+              .and_then(|readme| readme.content.as_ref())
+              .map(ToString::to_string)
+              .map(SharedString::from);
+            this.readme_path = readme
+              .and_then(|readme| readme.path)
+              .map(SharedString::from);
             this.readme_loaded_branch = Some(branch_for_task.clone().into());
             this.readme_error = None;
           }
           Err(error) => {
             let message = error.to_string();
             this.readme_content = None;
+            this.readme_path = None;
             this.readme_loaded_branch = None;
             if github_shared::is_unauthorized_error_message(&message) {
               this.readme_error = Some("Authentication required. Please sign in again.".into());
@@ -2207,7 +2259,7 @@ impl GithubRepoPage {
   }
 
   fn load_code_tree_if_needed(&mut self, cx: &mut Context<Self>) {
-    if self.active_tab_ix != REPO_TAB_CODE_IX {
+    if !should_prefetch_code_tree_for_tab(self.active_tab_ix) {
       return;
     }
     if self.code_files_loading || self.code_tree_task.is_some() || !self.code_lookup.is_empty() {
@@ -3743,7 +3795,13 @@ impl GithubRepoPage {
         .as_ref()
         .map(SharedString::as_ref)
         .unwrap_or_default();
-      let options = MarkdownRenderOptions::with_on_link(gfm_link_handler)
+      let image_base_url = readme_image_base_url(
+        self.owner.as_ref(),
+        self.repo.as_ref(),
+        readme_branch,
+        self.readme_path.as_ref().map(SharedString::as_ref),
+      );
+      let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler)
         .with_state(self.readme_markdown_state.clone())
         .with_expanded_code_blocks()
         .with_scope_id(readme_scope_id(
@@ -3751,6 +3809,9 @@ impl GithubRepoPage {
           self.repo.as_ref(),
           readme_branch,
         ));
+      if let Some(image_base_url) = image_base_url {
+        options = options.with_image_base_url(image_base_url);
+      }
 
       render_markdown(content.as_ref(), &options, cx)
     } else {
@@ -4037,6 +4098,15 @@ mod tests {
   }
 
   #[test]
+  fn should_prefetch_code_tree_for_tab_prefetches_overview_and_code_only() {
+    assert!(should_prefetch_code_tree_for_tab(REPO_TAB_OVERVIEW_IX));
+    assert!(should_prefetch_code_tree_for_tab(REPO_TAB_CODE_IX));
+    assert!(!should_prefetch_code_tree_for_tab(REPO_TAB_README_IX));
+    assert!(!should_prefetch_code_tree_for_tab(REPO_TAB_PULL_REQUESTS_IX));
+    assert!(!should_prefetch_code_tree_for_tab(REPO_TAB_ISSUES_IX));
+  }
+
+  #[test]
   fn build_repo_code_tree_items_prefers_folder_and_selects_first_file() {
     let files = vec![
       Rc::new(GithubRepoCodeFile {
@@ -4196,6 +4266,40 @@ mod tests {
     assert_eq!(base, readme_scope_id("ACME", "WIDGET", "MAIN"));
     assert_ne!(base, readme_scope_id("acme", "widget", "develop"));
     assert_ne!(base, readme_scope_id("acme", "widget-api", "main"));
+  }
+
+  #[test]
+  fn readme_image_base_url_uses_readme_directory_when_present() {
+    let base = readme_image_base_url("acme", "widget", "main", Some("docs/README.md"));
+    assert_eq!(
+      base.as_deref(),
+      Some("https://raw.githubusercontent.com/acme/widget/main/docs/")
+    );
+  }
+
+  #[test]
+  fn readme_image_base_url_defaults_to_repo_root_for_top_level_readme() {
+    let base = readme_image_base_url("acme", "widget", "main", Some("README.md"));
+    assert_eq!(
+      base.as_deref(),
+      Some("https://raw.githubusercontent.com/acme/widget/main/")
+    );
+  }
+
+  #[test]
+  fn readme_image_base_url_returns_none_for_missing_repo_context() {
+    assert_eq!(
+      readme_image_base_url("", "widget", "main", Some("README.md")),
+      None
+    );
+    assert_eq!(
+      readme_image_base_url("acme", "", "main", Some("README.md")),
+      None
+    );
+    assert_eq!(
+      readme_image_base_url("acme", "widget", "", Some("README.md")),
+      None
+    );
   }
 
   #[test]
