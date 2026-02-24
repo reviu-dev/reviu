@@ -24,7 +24,6 @@ use gpui_component::{
   h_flex,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
-  red_800,
   scroll::ScrollableElement,
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
   spinner::Spinner,
