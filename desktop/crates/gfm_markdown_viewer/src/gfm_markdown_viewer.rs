@@ -122,6 +122,7 @@ pub enum Inline {
     title: Option<String>,
     alt: String,
     width: Option<String>,
+    height: Option<String>,
   },
   Code(String),
   SoftBreak,
@@ -2067,23 +2068,36 @@ fn inline_contains_image(inline: &Inline) -> bool {
   }
 }
 
-fn inline_image_data(inline: &Inline) -> Option<(String, String, Option<String>, Option<String>)> {
+fn inline_image_data(
+  inline: &Inline,
+) -> Option<(String, String, Option<String>, Option<String>, Option<String>)> {
   match inline {
     Inline::Image {
-      url, alt, width, ..
-    } => Some((url.clone(), alt.clone(), None, width.clone())),
+      url,
+      alt,
+      width,
+      height,
+      ..
+    } => Some((
+      url.clone(),
+      alt.clone(),
+      None,
+      width.clone(),
+      height.clone(),
+    )),
     Inline::Link {
       url: link_url,
       content,
       ..
     } => {
       for child in content {
-        if let Some((url, alt, child_link, child_width)) = inline_image_data(child) {
+        if let Some((url, alt, child_link, child_width, child_height)) = inline_image_data(child) {
           return Some((
             url,
             alt,
             Some(child_link.unwrap_or_else(|| link_url.clone())),
             child_width,
+            child_height,
           ));
         }
       }
@@ -2091,8 +2105,8 @@ fn inline_image_data(inline: &Inline) -> Option<(String, String, Option<String>,
     }
     Inline::Strong(content) | Inline::Emphasis(content) | Inline::Strikethrough(content) => {
       for child in content {
-        if let Some((url, alt, link, width)) = inline_image_data(child) {
-          return Some((url, alt, link, width));
+        if let Some((url, alt, link, width, height)) = inline_image_data(child) {
+          return Some((url, alt, link, width, height));
         }
       }
       None
@@ -2120,7 +2134,7 @@ fn split_inlines_by_hard_breaks(inlines: &[Inline]) -> Vec<Vec<Inline>> {
 
 fn single_inline_image_data(
   inlines: &[Inline],
-) -> Option<(String, String, Option<String>, Option<String>)> {
+) -> Option<(String, String, Option<String>, Option<String>, Option<String>)> {
   if inlines.len() != 1 {
     return None;
   }
@@ -2141,7 +2155,7 @@ fn render_table_cell_inlines(
   let mut text_chunk: Vec<Inline> = Vec::new();
 
   for inline in inlines {
-    if let Some((url, alt, _, _)) = inline_image_data(inline) {
+    if let Some((url, alt, _, _, _)) = inline_image_data(inline) {
       if !text_chunk.is_empty() {
         row = row.child(render_inline_text(&text_chunk, options, cx, ctx));
         text_chunk.clear();
@@ -2214,23 +2228,23 @@ fn render_badge_placeholder(label: &str) -> AnyElement {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum MarkdownImageWidth {
+enum MarkdownImageDimension {
   Pixels(f32),
   Fraction(f32),
 }
 
-fn parse_markdown_image_width(width_hint: Option<&str>) -> Option<MarkdownImageWidth> {
-  let width_hint = width_hint
+fn parse_markdown_image_dimension(dimension_hint: Option<&str>) -> Option<MarkdownImageDimension> {
+  let dimension_hint = dimension_hint
     .map(str::trim)
     .filter(|hint| !hint.is_empty())?;
-  let lower = width_hint.to_ascii_lowercase();
+  let lower = dimension_hint.to_ascii_lowercase();
 
   if let Some(percent) = lower.strip_suffix('%')
     && let Ok(value) = percent.trim().parse::<f32>()
     && value.is_finite()
     && value > 0.0
   {
-    return Some(MarkdownImageWidth::Fraction((value / 100.0).min(1.0)));
+    return Some(MarkdownImageDimension::Fraction((value / 100.0).min(1.0)));
   }
 
   let px_value = lower.strip_suffix("px").unwrap_or(lower.as_str()).trim();
@@ -2238,13 +2252,18 @@ fn parse_markdown_image_width(width_hint: Option<&str>) -> Option<MarkdownImageW
     && value.is_finite()
     && value > 0.0
   {
-    return Some(MarkdownImageWidth::Pixels(value));
+    return Some(MarkdownImageDimension::Pixels(value));
   }
 
   None
 }
 
-fn render_image_node(url: &str, alt: &str, width_hint: Option<&str>) -> impl IntoElement {
+fn render_image_node(
+  url: &str,
+  alt: &str,
+  width_hint: Option<&str>,
+  height_hint: Option<&str>,
+) -> impl IntoElement {
   let label = if alt.trim().is_empty() {
     "image".to_string()
   } else {
@@ -2261,10 +2280,16 @@ fn render_image_node(url: &str, alt: &str, width_hint: Option<&str>) -> impl Int
   })
   .max_h(px(MARKDOWN_INLINE_IMAGE_MAX_HEIGHT_PX))
   .object_fit(ObjectFit::Contain);
-  if let Some(width) = parse_markdown_image_width(width_hint) {
+  if let Some(width) = parse_markdown_image_dimension(width_hint) {
     image = match width {
-      MarkdownImageWidth::Pixels(value) => image.w(px(value)),
-      MarkdownImageWidth::Fraction(value) => image.w(relative(value)),
+      MarkdownImageDimension::Pixels(value) => image.w(px(value)),
+      MarkdownImageDimension::Fraction(value) => image.w(relative(value)),
+    };
+  }
+  if let Some(height) = parse_markdown_image_dimension(height_hint) {
+    image = match height {
+      MarkdownImageDimension::Pixels(value) => image.h(px(value)),
+      MarkdownImageDimension::Fraction(value) => image.h(relative(value)),
     };
   }
 
@@ -2275,7 +2300,12 @@ fn render_image_node(url: &str, alt: &str, width_hint: Option<&str>) -> impl Int
   .with_fallback(move || render_badge_placeholder(&label))
 }
 
-fn render_block_image_node(url: &str, alt: &str, width_hint: Option<&str>) -> impl IntoElement {
+fn render_block_image_node(
+  url: &str,
+  alt: &str,
+  width_hint: Option<&str>,
+  height_hint: Option<&str>,
+) -> impl IntoElement {
   let label = if alt.trim().is_empty() {
     "image".to_string()
   } else {
@@ -2292,10 +2322,16 @@ fn render_block_image_node(url: &str, alt: &str, width_hint: Option<&str>) -> im
   })
   .max_w_full()
   .h_auto();
-  if let Some(width) = parse_markdown_image_width(width_hint) {
+  if let Some(width) = parse_markdown_image_dimension(width_hint) {
     image = match width {
-      MarkdownImageWidth::Pixels(value) => image.w(px(value)),
-      MarkdownImageWidth::Fraction(value) => image.w(relative(value)),
+      MarkdownImageDimension::Pixels(value) => image.w(px(value)),
+      MarkdownImageDimension::Fraction(value) => image.w(relative(value)),
+    };
+  }
+  if let Some(height) = parse_markdown_image_dimension(height_hint) {
+    image = match height {
+      MarkdownImageDimension::Pixels(value) => image.h(px(value)),
+      MarkdownImageDimension::Fraction(value) => image.h(relative(value)),
     };
   }
 
@@ -2339,13 +2375,14 @@ fn render_inline_image(
   url: &str,
   alt: &str,
   width_hint: Option<&str>,
+  height_hint: Option<&str>,
   link_url: Option<&str>,
   on_link: Option<Arc<LinkHandlerFn>>,
   interactive: bool,
   image_base_url: Option<&str>,
 ) -> AnyElement {
   let resolved_url = resolve_markdown_image_url(url, image_base_url);
-  let image = render_image_node(&resolved_url, alt, width_hint).into_any_element();
+  let image = render_image_node(&resolved_url, alt, width_hint, height_hint).into_any_element();
   attach_image_link_handler(image, &resolved_url, link_url, on_link, interactive)
 }
 
@@ -2353,6 +2390,7 @@ fn render_block_image(
   url: &str,
   alt: &str,
   width_hint: Option<&str>,
+  height_hint: Option<&str>,
   link_url: Option<&str>,
   on_link: Option<Arc<LinkHandlerFn>>,
   interactive: bool,
@@ -2369,7 +2407,7 @@ fn render_block_image(
     .id(image_scroll_id)
     .w_full()
     .child(attach_image_link_handler(
-      render_block_image_node(&resolved_url, alt, width_hint).into_any_element(),
+      render_block_image_node(&resolved_url, alt, width_hint, height_hint).into_any_element(),
       &resolved_url,
       link_url,
       on_link,
@@ -2410,11 +2448,12 @@ fn render_inline_with_images(
   cx: &App,
   ctx: &mut RenderContext,
 ) -> AnyElement {
-  if let Some((url, alt, link, width)) = single_inline_image_data(inlines) {
+  if let Some((url, alt, link, width, height)) = single_inline_image_data(inlines) {
     return render_block_image(
       &url,
       &alt,
       width.as_deref(),
+      height.as_deref(),
       link.as_deref(),
       options.on_link.clone(),
       interactive,
@@ -2432,7 +2471,7 @@ fn render_inline_with_images(
     let mut text_chunk: Vec<Inline> = Vec::new();
 
     for inline in &row {
-      if let Some((url, alt, link, width)) = inline_image_data(inline) {
+      if let Some((url, alt, link, width, height)) = inline_image_data(inline) {
         if !text_chunk.is_empty() {
           row_container = row_container.child(render_inline_selectable_text(
             &text_chunk,
@@ -2447,6 +2486,7 @@ fn render_inline_with_images(
           &url,
           &alt,
           width.as_deref(),
+          height.as_deref(),
           link.as_deref(),
           options.on_link.clone(),
           interactive,
@@ -3789,11 +3829,15 @@ fn parse_inline_html_image(html: &str) -> Option<Inline> {
   let width = extract_html_attribute(tag, "width")
     .map(|value| value.trim().to_string())
     .filter(|value| !value.is_empty());
+  let height = extract_html_attribute(tag, "height")
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty());
   Some(Inline::Image {
     url,
     title,
     alt,
     width,
+    height,
   })
 }
 
@@ -4240,6 +4284,10 @@ fn html_element_to_inlines(element: &HtmlElement) -> Vec<Inline> {
           .map(str::trim)
           .filter(|value| !value.is_empty())
           .map(ToString::to_string),
+        height: html_attribute_value(element, "height")
+          .map(str::trim)
+          .filter(|value| !value.is_empty())
+          .map(ToString::to_string),
       }]
     }
     "a" => {
@@ -4264,12 +4312,13 @@ fn html_element_to_inlines(element: &HtmlElement) -> Vec<Inline> {
     }
     "picture" => {
       let children = html_nodes_to_inlines(&element.children);
-      if let Some((url, alt, _, width)) = children.iter().find_map(inline_image_data) {
+      if let Some((url, alt, _, width, height)) = children.iter().find_map(inline_image_data) {
         vec![Inline::Image {
           url,
           title: None,
           alt,
           width,
+          height,
         }]
       } else {
         children
@@ -4442,6 +4491,7 @@ fn inlines_from_nodes<'a>(nodes: impl Iterator<Item = &'a AstNode<'a>>) -> Vec<I
           },
           alt,
           width: None,
+          height: None,
         });
       }
       NodeValue::HtmlInline(html) => {
@@ -4568,44 +4618,45 @@ mod tests {
   }
 
   #[test]
-  fn parse_markdown_image_width_supports_pixels_and_percent() {
+  fn parse_markdown_image_dimension_supports_pixels_and_percent() {
     assert_eq!(
-      parse_markdown_image_width(Some("200px")),
-      Some(MarkdownImageWidth::Pixels(200.0))
+      parse_markdown_image_dimension(Some("200px")),
+      Some(MarkdownImageDimension::Pixels(200.0))
     );
     assert_eq!(
-      parse_markdown_image_width(Some("200")),
-      Some(MarkdownImageWidth::Pixels(200.0))
+      parse_markdown_image_dimension(Some("200")),
+      Some(MarkdownImageDimension::Pixels(200.0))
     );
     assert_eq!(
-      parse_markdown_image_width(Some("85%")),
-      Some(MarkdownImageWidth::Fraction(0.85))
+      parse_markdown_image_dimension(Some("85%")),
+      Some(MarkdownImageDimension::Fraction(0.85))
     );
   }
 
   #[test]
-  fn parse_markdown_image_width_rejects_invalid_values() {
-    assert_eq!(parse_markdown_image_width(Some("")), None);
-    assert_eq!(parse_markdown_image_width(Some("abc")), None);
-    assert_eq!(parse_markdown_image_width(Some("0")), None);
-    assert_eq!(parse_markdown_image_width(Some("0%")), None);
-    assert_eq!(parse_markdown_image_width(None), None);
+  fn parse_markdown_image_dimension_rejects_invalid_values() {
+    assert_eq!(parse_markdown_image_dimension(Some("")), None);
+    assert_eq!(parse_markdown_image_dimension(Some("abc")), None);
+    assert_eq!(parse_markdown_image_dimension(Some("0")), None);
+    assert_eq!(parse_markdown_image_dimension(Some("0%")), None);
+    assert_eq!(parse_markdown_image_dimension(None), None);
   }
 
   #[test]
-  fn parse_inline_html_image_reads_width_attribute() {
+  fn parse_inline_html_image_reads_width_and_height_attributes() {
     let inline = parse_inline_html_image(
-      r#"<img src="logo.svg" width="200px" align="center" alt="Zod logo" />"#,
+      r#"<img src="logo.svg" width="200px" height="80px" align="center" alt="Zod logo" />"#,
     )
     .expect("inline image");
 
     match inline {
       Inline::Image {
-        url, alt, width, ..
+        url, alt, width, height, ..
       } => {
         assert_eq!(url, "logo.svg");
         assert_eq!(alt, "Zod logo");
         assert_eq!(width.as_deref(), Some("200px"));
+        assert_eq!(height.as_deref(), Some("80px"));
       }
       _ => panic!("expected image"),
     }
@@ -4862,6 +4913,7 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
         title: None,
         alt: "badge".to_string(),
         width: Some("120px".to_string()),
+        height: None,
       }],
     };
 
@@ -4872,7 +4924,8 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
         "https://img.shields.io/example.svg".to_string(),
         "badge".to_string(),
         Some("https://example.com".to_string()),
-        Some("120px".to_string())
+        Some("120px".to_string()),
+        None
       ))
     );
   }
@@ -4884,6 +4937,7 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
       title: None,
       alt: "A".to_string(),
       width: None,
+      height: None,
     }];
     assert!(single_inline_image_data(&single).is_some());
 
@@ -4893,12 +4947,14 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
         title: None,
         alt: "A".to_string(),
         width: None,
+        height: None,
       },
       Inline::Image {
         url: "https://img.shields.io/b.svg".to_string(),
         title: None,
         alt: "B".to_string(),
         width: None,
+        height: None,
       },
     ];
     assert!(single_inline_image_data(&multiple).is_none());
