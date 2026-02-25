@@ -4118,7 +4118,9 @@ mod tests {
     assert!(should_prefetch_code_tree_for_tab(REPO_TAB_OVERVIEW_IX));
     assert!(should_prefetch_code_tree_for_tab(REPO_TAB_CODE_IX));
     assert!(!should_prefetch_code_tree_for_tab(REPO_TAB_README_IX));
-    assert!(!should_prefetch_code_tree_for_tab(REPO_TAB_PULL_REQUESTS_IX));
+    assert!(!should_prefetch_code_tree_for_tab(
+      REPO_TAB_PULL_REQUESTS_IX
+    ));
     assert!(!should_prefetch_code_tree_for_tab(REPO_TAB_ISSUES_IX));
   }
 
