@@ -4,6 +4,8 @@ import {
   GitPullRequestIcon,
   KeyboardIcon,
 } from 'lucide-vue-next'
+import git_dark from '../assets/app_screenshots/git_dark.png'
+import git_light from '../assets/app_screenshots/git_light.png'
 </script>
 
 <template>
@@ -26,7 +28,7 @@ import {
       <div class="mx-auto max-w-2xl shrink-0 lg:mx-0 lg:pt-8">
         <img class="h-11 dark:hidden" src="https://tailwindcss.com/plus-assets/img/logos/mark.svg?color=indigo&amp;shade=600" alt="Reviu logo" />
         <img class="h-11 not-dark:hidden" src="https://tailwindcss.com/plus-assets/img/logos/mark.svg?color=indigo&amp;shade=500" alt="Reviu logo" />
-        <!-- <span class="text-5xl font-semibold tracking-tight text-pretty text-foreground">Reviu</span> -->
+        
         <div class="mt-24 sm:mt-32 lg:mt-16">
           <span class="inline-flex rounded-full bg-primary/10 px-3 py-1 text-sm/6 font-semibold text-primary ring-1 ring-primary/20 ring-inset dark:ring-primary/25">Git client + GitHub workflows</span>
         </div>
@@ -56,8 +58,8 @@ import {
       </div>
       <div class="mx-auto mt-16 flex max-w-2xl sm:mt-24 lg:mt-0 lg:mr-0 lg:ml-10 lg:max-w-none lg:flex-none xl:ml-32">
         <div class="max-w-3xl flex-none sm:max-w-5xl lg:max-w-none">
-          <img src="https://tailwindcss.com/plus-assets/img/component-images/project-app-screenshot.png" alt="Reviu desktop interface preview" width="2432" height="1442" class="w-304 rounded-md bg-gray-50 shadow-xl ring-1 ring-gray-900/10 dark:hidden" />
-          <img src="https://tailwindcss.com/plus-assets/img/component-images/dark-project-app-screenshot.png" alt="Reviu desktop interface preview" width="2432" height="1442" class="w-304 rounded-md bg-white/5 shadow-2xl ring-1 ring-white/10 not-dark:hidden" />
+          <img :src="git_light.src" alt="Reviu desktop interface preview" width="2432" height="1442" class="w-304 rounded-md bg-gray-50 shadow-xl ring-1 ring-gray-900/10 dark:hidden" />
+          <img :src="git_dark.src" alt="Reviu desktop interface preview" width="2432" height="1442" class="w-304 rounded-md bg-white/5 shadow-2xl ring-1 ring-white/10 not-dark:hidden" />
         </div>
       </div>
     </div>
