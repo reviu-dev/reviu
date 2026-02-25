@@ -763,17 +763,26 @@ impl ApiClient {
     Ok(payload.url)
   }
 
-  pub fn fetch_latest_pull_requests(
-    &self,
-    owner: &str,
-    repo: &str,
-  ) -> Result<Vec<GithubPullRequest>> {
-    let response = self
-      .authed_request(Method::GET, "/github/pr/latest")
-      .query(&[("org", owner), ("repo", repo)])
-      .send()?;
+  pub fn fetch_latest_pull_requests(&self) -> Result<Vec<GithubPullRequest>> {
+    let response = self.authed_request(Method::GET, "/github/pr/latest").send()?;
     let status = response.status();
     Self::record_http_status("GET", "/github/pr/latest", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubPullRequestsResponse>()?;
+    Ok(payload.pull_requests)
+  }
+
+  pub fn fetch_need_review_pull_requests(&self) -> Result<Vec<GithubPullRequest>> {
+    let response = self
+      .authed_request(Method::GET, "/github/pr/need-reviews")
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", "/github/pr/need-reviews", status);
     if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
@@ -1440,9 +1449,7 @@ mod tests {
     let (base_url, handle) = start_single_response_server("200 OK", body);
     let api = make_test_api_client(base_url);
 
-    let prs = api
-      .fetch_latest_pull_requests("acme", "widget")
-      .expect("fetch pull requests");
+    let prs = api.fetch_latest_pull_requests().expect("fetch pull requests");
     assert_eq!(prs.len(), 1);
     assert_eq!(prs[0].number, 7);
     assert_eq!(prs[0].title, "Fix login issue");
@@ -1450,6 +1457,77 @@ mod tests {
     assert_eq!(prs[0].repository.owner, "acme");
     assert_eq!(prs[0].repository.repo, "widget");
     handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_latest_pull_requests_calls_expected_route_without_query_params() {
+    let body = r#"{"pullRequests":[]}"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_latest_pull_requests()
+      .expect("fetch latest pull requests");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(request_line, "GET /github/pr/latest HTTP/1.1");
+  }
+
+  #[test]
+  fn fetch_need_review_pull_requests_parses_success_payload() {
+    let body = r#"{
+      "pullRequests": [
+        {
+          "number": 9,
+          "title": "Review requested change",
+          "state": "open",
+          "merged_at": null,
+          "draft": false,
+          "updated_at": "2026-02-15T13:00:00Z",
+          "labels": [{ "name": "enhancement" }],
+          "repository": { "owner": "acme", "repo": "portal" }
+        }
+      ]
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let prs = api
+      .fetch_need_review_pull_requests()
+      .expect("fetch need review pull requests");
+    assert_eq!(prs.len(), 1);
+    assert_eq!(prs[0].number, 9);
+    assert_eq!(prs[0].title, "Review requested change");
+    assert!(matches!(prs[0].state, GithubPullRequestState::Open));
+    assert_eq!(prs[0].repository.owner, "acme");
+    assert_eq!(prs[0].repository.repo, "portal");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_need_review_pull_requests_calls_expected_route_without_query_params() {
+    let body = r#"{"pullRequests":[]}"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_need_review_pull_requests()
+      .expect("fetch need review pull requests");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(request_line, "GET /github/pr/need-reviews HTTP/1.1");
   }
 
   #[test]
@@ -2321,7 +2399,18 @@ mod tests {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
     let api = make_test_api_client(base_url);
 
-    let err = api.fetch_latest_pull_requests("acme", "widget").err();
+    let err = api.fetch_latest_pull_requests().err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_need_review_pull_requests_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api.fetch_need_review_pull_requests().err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");

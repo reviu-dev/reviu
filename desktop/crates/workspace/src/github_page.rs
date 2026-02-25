@@ -8,6 +8,7 @@ use gpui_component::{
   ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _, h_flex,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  tab::{Tab, TabBar},
   tag::Tag,
   v_flex,
 };
@@ -29,9 +30,6 @@ use crate::{
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 use ui::{UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, user_menu};
-
-const DEFAULT_ORG: &str = "joris-gallot";
-const DEFAULT_REPO: &str = "guit";
 
 impl GithubPullRequestStatus {
   pub fn tag(&self, theme: &gpui_component::Theme) -> Tag {
@@ -91,6 +89,29 @@ impl GithubPullRequestRow {
       || format!("{}/{}", self.owner, self.repo)
         .to_lowercase()
         .contains(&q)
+  }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GithubPullRequestTab {
+  MyOpen,
+  NeedReview,
+}
+
+impl GithubPullRequestTab {
+  fn as_index(&self) -> usize {
+    match self {
+      GithubPullRequestTab::MyOpen => 0,
+      GithubPullRequestTab::NeedReview => 1,
+    }
+  }
+
+  fn from_index(index: usize) -> Option<Self> {
+    match index {
+      0 => Some(GithubPullRequestTab::MyOpen),
+      1 => Some(GithubPullRequestTab::NeedReview),
+      _ => None,
+    }
   }
 }
 
@@ -406,6 +427,9 @@ pub struct GithubPage {
   api: ApiClient,
   notifications: Entity<ListState<GithubNotificationListDelegate>>,
   pull_requests: Entity<ListState<GithubPullRequestListDelegate>>,
+  my_open_pull_request_rows: Vec<Rc<GithubPullRequestRow>>,
+  need_review_pull_request_rows: Vec<Rc<GithubPullRequestRow>>,
+  active_pull_request_tab: GithubPullRequestTab,
   load_task: Option<Task<()>>,
   notifications_task: Option<Task<()>>,
   notifications_error: Option<SharedString>,
@@ -476,6 +500,9 @@ impl GithubPage {
       api,
       notifications,
       pull_requests,
+      my_open_pull_request_rows: Vec::new(),
+      need_review_pull_request_rows: Vec::new(),
+      active_pull_request_tab: GithubPullRequestTab::MyOpen,
       load_task: None,
       notifications_task: None,
       notifications_error: None,
@@ -519,15 +546,42 @@ impl GithubPage {
     self._subscriptions.push(subscription);
   }
 
+  fn active_pull_request_rows(&self) -> Vec<Rc<GithubPullRequestRow>> {
+    match self.active_pull_request_tab {
+      GithubPullRequestTab::MyOpen => self.my_open_pull_request_rows.clone(),
+      GithubPullRequestTab::NeedReview => self.need_review_pull_request_rows.clone(),
+    }
+  }
+
+  fn apply_active_pull_request_rows(&mut self, cx: &mut Context<Self>) {
+    let rows = self.active_pull_request_rows();
+    self.pull_requests.update(cx, |state, cx| {
+      state.delegate_mut().set_rows(rows);
+      cx.notify();
+    });
+  }
+
+  fn set_active_pull_request_tab(
+    &mut self,
+    index: usize,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(tab) = GithubPullRequestTab::from_index(index) else {
+      return;
+    };
+    if self.active_pull_request_tab == tab {
+      return;
+    }
+
+    self.active_pull_request_tab = tab;
+    self.apply_active_pull_request_rows(cx);
+    cx.notify();
+  }
+
   fn refresh_pull_requests(&mut self, cx: &mut Context<Self>) {
     let api = self.api.clone();
-    let owner = DEFAULT_ORG.to_string();
-    let repo = DEFAULT_REPO.to_string();
-
-    let mut start_data = Map::new();
-    start_data.insert("owner".into(), owner.clone().into());
-    start_data.insert("repo".into(), repo.clone().into());
-    self.add_github_breadcrumb("Refresh pull requests started", start_data);
+    self.add_github_breadcrumb("Refresh pull requests started", Map::new());
 
     self.error = None;
     self.pull_requests.update(cx, |state, cx| {
@@ -536,17 +590,32 @@ impl GithubPage {
     });
 
     let task = cx.spawn(async move |this, cx| {
-      let owner_for_request = owner.clone();
-      let repo_for_request = repo.clone();
-      let result =
-        unblock(move || api.fetch_latest_pull_requests(&owner_for_request, &repo_for_request))
-          .await
-          .map_err(|error| error.to_string());
+      let result = unblock(move || {
+        let my_open_pull_requests = api.fetch_latest_pull_requests()?;
+        let need_review_pull_requests = api.fetch_need_review_pull_requests()?;
+        Ok::<_, anyhow::Error>((my_open_pull_requests, need_review_pull_requests))
+      })
+      .await
+      .map_err(|error| error.to_string());
 
       let _ = this.update(cx, |this, cx| {
-        let (rows, error): (Vec<Rc<GithubPullRequestRow>>, Option<SharedString>) = match result {
-          Ok(pull_requests) => (
-            pull_requests
+        let (my_open_rows, need_review_rows, error): (
+          Vec<Rc<GithubPullRequestRow>>,
+          Vec<Rc<GithubPullRequestRow>>,
+          Option<SharedString>,
+        ) = match result {
+          Ok((my_open_pull_requests, need_review_pull_requests)) => (
+            my_open_pull_requests
+              .into_iter()
+              .map(|pr| {
+                Rc::new(GithubPullRequestRow {
+                  owner: pr.repository.owner.clone().into(),
+                  repo: pr.repository.repo.clone().into(),
+                  pr: Rc::new(pr),
+                })
+              })
+              .collect::<Vec<_>>(),
+            need_review_pull_requests
               .into_iter()
               .map(|pr| {
                 Rc::new(GithubPullRequestRow {
@@ -558,33 +627,32 @@ impl GithubPage {
               .collect::<Vec<_>>(),
             None,
           ),
-          Err(error) => (Vec::new(), Some(error.into())),
+          Err(error) => (Vec::new(), Vec::new(), Some(error.into())),
         };
 
         match error.as_ref() {
           Some(error) => {
-            let mut data = Map::new();
-            data.insert("owner".into(), owner.clone().into());
-            data.insert("repo".into(), repo.clone().into());
+            let data = Map::new();
             this.add_github_breadcrumb("Refresh pull requests failed", data.clone());
             this.record_github_error("github.pull_requests.refresh", error.as_ref(), data);
           }
           None => {
             let mut data = Map::new();
-            data.insert("owner".into(), owner.clone().into());
-            data.insert("repo".into(), repo.clone().into());
-            data.insert("count".into(), rows.len().into());
+            data.insert("my_open_count".into(), my_open_rows.len().into());
+            data.insert("need_review_count".into(), need_review_rows.len().into());
             this.add_github_breadcrumb("Refresh pull requests succeeded", data);
           }
         }
 
         this.error = error;
+        this.my_open_pull_request_rows = my_open_rows;
+        this.need_review_pull_request_rows = need_review_rows;
 
         this.pull_requests.update(cx, |state, cx| {
           state.delegate_mut().loading = false;
-          state.delegate_mut().set_rows(rows);
           cx.notify();
         });
+        this.apply_active_pull_request_rows(cx);
 
         cx.notify();
       });
@@ -862,8 +930,13 @@ impl Render for GithubPage {
       cx.on_next_frame(window, |this, window, cx| this.focus_search(window, cx));
     }
 
+    let pull_requests_search_placeholder = match self.active_pull_request_tab {
+      GithubPullRequestTab::MyOpen => "Search my open pull requests...",
+      GithubPullRequestTab::NeedReview => "Search pull requests needing review...",
+    };
+
     let list = List::new(&self.pull_requests)
-      .search_placeholder("Search pull requests...")
+      .search_placeholder(pull_requests_search_placeholder)
       .border_1()
       .border_color(theme.border)
       .rounded(theme.radius)
@@ -871,6 +944,44 @@ impl Render for GithubPage {
       .min_w(px(0.0))
       .min_h_0()
       .p(px(8.));
+    let my_open_count = self.my_open_pull_request_rows.len();
+    let need_review_count = self.need_review_pull_request_rows.len();
+
+    let pr_tabs = TabBar::new("github-home-pr-tabs")
+      .w_full()
+      .segmented()
+      .selected_index(self.active_pull_request_tab.as_index())
+      .on_click(cx.listener(|this, ix: &usize, window, cx| {
+        this.set_active_pull_request_tab(*ix, window, cx);
+      }))
+      .child(
+        Tab::new().child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child("My Open PRs")
+            .child(
+              Tag::secondary()
+                .small()
+                .rounded_full()
+                .child(my_open_count.to_string()),
+            ),
+        ),
+      )
+      .child(
+        Tab::new().child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child("Need Review")
+            .child(
+              Tag::secondary()
+                .small()
+                .rounded_full()
+                .child(need_review_count.to_string()),
+            ),
+        ),
+      );
 
     let unread_count = self.notifications.read(cx).delegate().unread_count();
 
@@ -919,7 +1030,8 @@ impl Render for GithubPage {
       .min_w_0()
       .h_full()
       .min_h_0()
-      .child("Latest Pull Requests")
+      .child("Pull Requests")
+      .child(pr_tabs)
       .child(list);
 
     div()
@@ -1245,9 +1357,11 @@ mod tests {
   ) {
     init_gpui_test(cx);
     let pull_requests_body = r#"{"pullRequests":[{"number":42,"title":"Fix login","state":"open","merged_at":null,"draft":false,"updated_at":"2026-02-15T12:00:00Z","labels":[{"name":"bug"}],"repository":{"owner":"acme","repo":"portal"}}]}"#;
+    let need_reviews_body = r#"{"pullRequests":[{"number":55,"title":"Review billing flow","state":"open","merged_at":null,"draft":false,"updated_at":"2026-02-15T12:05:00Z","labels":[{"name":"review"}],"repository":{"owner":"acme","repo":"payments"}}]}"#;
     let notifications_body = r#"{"notifications":[{"id":"n1","repository":{"name":"portal","full_name":"acme/portal","owner":null},"subject":{"title":"Please review","type":"PullRequest","url":null,"latest_comment_url":null},"reason":"mention","unread":true,"updated_at":"2026-02-15T12:10:00Z","last_read_at":null,"url":"https://api.github.test/notif/1","subscription_url":"https://api.github.test/sub/1"}]}"#;
     let (base_url, handle) = start_path_response_server(vec![
       ("/github/pr/latest", "200 OK", pull_requests_body),
+      ("/github/pr/need-reviews", "200 OK", need_reviews_body),
       ("/github/notifications", "200 OK", notifications_body),
     ]);
     let api = ApiClient::new_with_base_url(base_url);
@@ -1294,6 +1408,21 @@ mod tests {
     assert_eq!(pr_titles, vec!["Fix login".to_string()]);
     assert_eq!(notification_titles, vec!["Please review".to_string()]);
     assert_eq!(unread_count, 1);
+
+    github_page.update_in(cx, |this, window, cx| {
+      this.set_active_pull_request_tab(1, window, cx);
+    });
+    let need_review_titles = github_page.read_with(cx, |this, cx| {
+      this
+        .pull_requests
+        .read(cx)
+        .delegate()
+        .matched_rows
+        .iter()
+        .map(|row| row.pr.title.clone())
+        .collect::<Vec<_>>()
+    });
+    assert_eq!(need_review_titles, vec!["Review billing flow".to_string()]);
 
     handle.join().expect("join server thread");
   }

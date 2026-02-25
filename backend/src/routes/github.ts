@@ -1,4 +1,4 @@
-import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueParameters, GithubIssueResponse, GithubRepositoryBranchesParameters, GithubRepositoryBranchesResponse, GithubRepositoryParameters, GithubRepositoryReadmeParameters, GithubRepositoryResponse, GithubRepositoryTreeParams, GithubRepositoryTreesResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
+import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueParameters, GithubIssueResponse, GithubRepositoryBranchesParameters, GithubRepositoryBranchesResponse, GithubRepositoryParameters, GithubRepositoryReadmeParameters, GithubRepositoryResponse, GithubRepositoryTreeParams, GithubRepositoryTreesResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, SearchIssuesItemResponse, SearchIssuesParams, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
@@ -22,6 +22,7 @@ import {
   fetchGithubRepositoryIssues,
   fetchGithubRepositoryReadme,
   fetchGithubRepositoryTrees,
+  fetchGithubSearchIssues,
   patchGithubPullRequestComment,
 
 } from '../services/github.js'
@@ -38,7 +39,7 @@ interface GithubPullRequest {
   draft: NonNullable<PullRequestResponse['draft']>
   merged_at: PullRequestResponse['merged_at']
   updated_at: PullRequestResponse['updated_at']
-  labels: PullRequestResponse['labels']
+  labels: { name: string }[]
   repository: GithubRepository
 }
 
@@ -295,6 +296,127 @@ function mapGithubPullRequestReviewComment(
   }
 }
 
+const LATEST_PULL_REQUESTS_QUERY = 'author:@me is:pr is:open archived:false'
+const NEED_REVIEWS_PULL_REQUESTS_QUERY = 'review-requested:@me is:pr is:open archived:false'
+const LATEST_PULL_REQUESTS_LIMIT = 20
+const LATEST_PULL_REQUESTS_CACHE_TTL_MS = 60_000
+
+interface PullRequestSearchCacheEntry {
+  pullRequests: GithubPullRequest[]
+  expiresAt: number
+}
+
+const latestPullRequestsCache = new Map<string, PullRequestSearchCacheEntry>()
+const latestPullRequestsInflight = new Map<string, Promise<GithubPullRequest[]>>()
+const needReviewsPullRequestsCache = new Map<string, PullRequestSearchCacheEntry>()
+const needReviewsPullRequestsInflight = new Map<string, Promise<GithubPullRequest[]>>()
+
+function parseGithubRepositoryUrl(repositoryUrl: string): GithubRepository | null {
+  try {
+    const pathParts = new URL(repositoryUrl).pathname.split('/').filter(Boolean)
+    if (pathParts.length < 3 || pathParts[0] !== 'repos') {
+      return null
+    }
+
+    const owner = pathParts[1]
+    const repo = pathParts[2]
+    if (!owner || !repo) {
+      return null
+    }
+
+    return { owner, repo }
+  }
+  catch {
+    return null
+  }
+}
+
+function mapSearchIssueItemToPullRequest(item: SearchIssuesItemResponse): GithubPullRequest | null {
+  const repository = parseGithubRepositoryUrl(item.repository_url)
+  if (!repository || !item.pull_request) {
+    return null
+  }
+
+  return {
+    number: item.number,
+    title: item.title,
+    state: item.state as PullRequestResponse['state'],
+    draft: Boolean(item.draft),
+    merged_at: item.pull_request.merged_at ?? null,
+    updated_at: item.updated_at,
+    labels: item.labels
+      .flatMap(label => (typeof label.name === 'string' && label.name.trim().length > 0 ? [{ name: label.name }] : [])),
+    repository,
+  }
+}
+
+async function fetchPullRequestsSearchWithCache(
+  cache: Map<string, PullRequestSearchCacheEntry>,
+  inflight: Map<string, Promise<GithubPullRequest[]>>,
+  cacheKey: string,
+  githubToken: string,
+  query: string,
+) {
+  const now = Date.now()
+  const cachedEntry = cache.get(cacheKey)
+
+  if (cachedEntry && cachedEntry.expiresAt > now) {
+    return cachedEntry.pullRequests
+  }
+
+  const inflightRequest = inflight.get(cacheKey)
+  if (inflightRequest) {
+    try {
+      return await inflightRequest
+    }
+    catch (error) {
+      if (cachedEntry) {
+        return cachedEntry.pullRequests
+      }
+      throw error
+    }
+  }
+
+  const loadPullRequests = (async () => {
+    const params: SearchIssuesParams = {
+      q: query,
+      sort: 'updated',
+      order: 'desc',
+      per_page: LATEST_PULL_REQUESTS_LIMIT,
+    }
+
+    const data = await fetchGithubSearchIssues({ token: githubToken, params })
+    const pullRequests = data.items
+      .flatMap((item) => {
+        const pullRequest = mapSearchIssueItemToPullRequest(item)
+        return pullRequest ? [pullRequest] : []
+      })
+      .slice(0, LATEST_PULL_REQUESTS_LIMIT)
+
+    cache.set(cacheKey, {
+      pullRequests,
+      expiresAt: Date.now() + LATEST_PULL_REQUESTS_CACHE_TTL_MS,
+    })
+
+    return pullRequests
+  })()
+
+  inflight.set(cacheKey, loadPullRequests)
+
+  try {
+    return await loadPullRequests
+  }
+  catch (error) {
+    if (cachedEntry) {
+      return cachedEntry.pullRequests
+    }
+    throw error
+  }
+  finally {
+    inflight.delete(cacheKey)
+  }
+}
+
 const githubRouter = new Hono()
 
 githubRouter.use('*', authMiddleware)
@@ -343,41 +465,34 @@ export const githubRoutes = githubRouter
     }
   })
   .get('/pr/latest', async (ctx) => {
-    const { org, repo } = ctx.req.query()
-
-    if (!org || !repo) {
-      return ctx.json({ error: 'Missing org or repo' }, 400)
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+    try {
+      const pullRequests = await fetchPullRequestsSearchWithCache(
+        latestPullRequestsCache,
+        latestPullRequestsInflight,
+        user.id,
+        githubToken,
+        LATEST_PULL_REQUESTS_QUERY,
+      )
+      return ctx.json({ pullRequests }, 200)
     }
-
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/pr/need-reviews', async (ctx) => {
     const user = ctx.get('user')!
     const githubToken = user.github.accessToken
 
     try {
-      const params: ListPullsParams = {
-        owner: org,
-        repo,
-        state: 'all',
-        sort: 'updated',
-        direction: 'desc',
-        per_page: 20,
-      }
-
-      const data = await fetchGithubPullRequests({ token: githubToken, params })
-
-      const pullRequests: GithubPullRequest[] = data.map(pull => ({
-        number: pull.number,
-        title: pull.title,
-        state: pull.state,
-        draft: Boolean(pull.draft),
-        merged_at: pull.merged_at,
-        updated_at: pull.updated_at,
-        labels: pull.labels,
-        repository: {
-          owner: org,
-          repo,
-        },
-      }))
-
+      const pullRequests = await fetchPullRequestsSearchWithCache(
+        needReviewsPullRequestsCache,
+        needReviewsPullRequestsInflight,
+        user.id,
+        githubToken,
+        NEED_REVIEWS_PULL_REQUESTS_QUERY,
+      )
       return ctx.json({ pullRequests }, 200)
     }
     catch (error) {
@@ -907,7 +1022,7 @@ export const githubRoutes = githubRouter
         draft: Boolean(pull.draft),
         merged_at: pull.merged_at,
         updated_at: pull.updated_at,
-        labels: pull.labels,
+        labels: pull.labels.map(label => ({ name: label.name })),
         repository: {
           owner,
           repo,
