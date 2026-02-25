@@ -26,8 +26,7 @@ import git_light from '../assets/app_screenshots/git_light.png'
     </div>
     <div class="mx-auto max-w-7xl px-6 pt-10 pb-24 sm:pb-32 lg:flex lg:px-8 lg:py-40">
       <div class="mx-auto max-w-2xl shrink-0 lg:mx-0 lg:pt-8">
-        <img class="h-11 dark:hidden" src="https://tailwindcss.com/plus-assets/img/logos/mark.svg?color=indigo&amp;shade=600" alt="Reviu logo" />
-        <img class="h-11 not-dark:hidden" src="https://tailwindcss.com/plus-assets/img/logos/mark.svg?color=indigo&amp;shade=500" alt="Reviu logo" />
+        <p class="text-6xl font-semibold text-foreground ">Rev<span class="text-primary">iu</span></p>
         
         <div class="mt-24 sm:mt-32 lg:mt-16">
           <span class="inline-flex rounded-full bg-primary/10 px-3 py-1 text-sm/6 font-semibold text-primary ring-1 ring-primary/20 ring-inset dark:ring-primary/25">Git client + GitHub workflows</span>
