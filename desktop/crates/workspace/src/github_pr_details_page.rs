@@ -2430,6 +2430,10 @@ impl GithubPrDetailsPage {
               .child({
                 let mut options = MarkdownRenderOptions::with_on_link(description_link_handler)
                   .with_state(self.description_markdown_state.clone())
+                  .with_github_issue_reference_context(
+                    pr.repository.owner.as_str(),
+                    pr.repository.repo.as_str(),
+                  )
                   .with_scope_id(pr_description_scope_id(pr.number));
                 if let Some(previews) = description_previews.clone() {
                   options = options.with_github_code_reference_previews(previews);
