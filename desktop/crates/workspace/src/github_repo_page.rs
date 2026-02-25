@@ -1445,6 +1445,10 @@ impl Render for GithubIssueDetailsSheetView {
             .child({
               let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler.clone())
                 .with_state(self.markdown_state.clone())
+                .with_github_issue_reference_context(
+                  issue.repository.owner.as_str(),
+                  issue.repository.repo.as_str(),
+                )
                 .with_scope_id(issue_comment_scope_id(issue.id, comment.id));
               if let Some(previews) = comment_previews.clone() {
                 options = options.with_github_code_reference_previews(previews);
@@ -1543,6 +1547,10 @@ impl Render for GithubIssueDetailsSheetView {
                 .child({
                   let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler)
                     .with_state(self.markdown_state.clone())
+                    .with_github_issue_reference_context(
+                      issue.repository.owner.as_str(),
+                      issue.repository.repo.as_str(),
+                    )
                     .with_scope_id(issue_description_scope_id(issue.id));
                   if let Some(previews) = description_previews.clone() {
                     options = options.with_github_code_reference_previews(previews);
@@ -3810,6 +3818,7 @@ impl GithubRepoPage {
       );
       let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler)
         .with_state(self.readme_markdown_state.clone())
+        .with_github_issue_reference_context(self.owner.as_ref(), self.repo.as_ref())
         .with_expanded_code_blocks()
         .with_scope_id(readme_scope_id(
           self.owner.as_ref(),

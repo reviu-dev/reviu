@@ -174,6 +174,12 @@ struct LinkRange {
   url: Arc<str>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GithubIssueReferenceContext {
+  pub owner: Arc<str>,
+  pub repo: Arc<str>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkAction {
   Open,
@@ -266,6 +272,7 @@ pub struct MarkdownRenderOptions {
   pub state: MarkdownRenderState,
   pub scope_id: Option<usize>,
   pub github_code_reference_previews: Option<Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>>,
+  pub github_issue_reference_context: Option<GithubIssueReferenceContext>,
   pub expand_code_blocks: bool,
   pub image_base_url: Option<SharedString>,
 }
@@ -298,6 +305,25 @@ impl MarkdownRenderOptions {
     previews: Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>,
   ) -> Self {
     self.github_code_reference_previews = Some(previews);
+    self
+  }
+
+  pub fn with_github_issue_reference_context(
+    mut self,
+    owner: impl AsRef<str>,
+    repo: impl AsRef<str>,
+  ) -> Self {
+    let owner = owner.as_ref().trim();
+    let repo = repo.as_ref().trim();
+    if owner.is_empty() || repo.is_empty() {
+      self.github_issue_reference_context = None;
+      return self;
+    }
+
+    self.github_issue_reference_context = Some(GithubIssueReferenceContext {
+      owner: Arc::from(owner.to_string()),
+      repo: Arc::from(repo.to_string()),
+    });
     self
   }
 
@@ -2557,7 +2583,7 @@ fn render_inline_selectable_text(
   _cx: &App,
   ctx: &mut RenderContext,
 ) -> AnyElement {
-  let (text, spans, link_ranges) = build_spans(inlines);
+  let (text, spans, link_ranges) = build_spans(inlines, options);
   let text_id = ctx.next_text_id();
 
   SelectableText::new(
@@ -3153,8 +3179,14 @@ fn render_details(
   container.into_any_element()
 }
 
-fn build_spans(inlines: &[Inline]) -> (SharedString, Vec<InlineSpan>, Vec<LinkRange>) {
-  let mut builder = SpanBuilder::default();
+fn build_spans(
+  inlines: &[Inline],
+  options: &MarkdownRenderOptions,
+) -> (SharedString, Vec<InlineSpan>, Vec<LinkRange>) {
+  let mut builder = SpanBuilder {
+    github_issue_reference_context: options.github_issue_reference_context.clone(),
+    ..Default::default()
+  };
   builder.push_inlines(inlines, InlineStyle::default(), None);
   builder.finish()
 }
@@ -3163,6 +3195,7 @@ fn build_spans(inlines: &[Inline]) -> (SharedString, Vec<InlineSpan>, Vec<LinkRa
 struct SpanBuilder {
   text: String,
   spans: Vec<InlineSpan>,
+  github_issue_reference_context: Option<GithubIssueReferenceContext>,
 }
 
 impl SpanBuilder {
@@ -3205,6 +3238,74 @@ impl SpanBuilder {
     if value.is_empty() {
       return;
     }
+
+    if style.code || link.is_some() || self.github_issue_reference_context.is_none() {
+      self.push_text_span(value, style, link);
+      return;
+    }
+
+    self.push_text_with_issue_reference_links(value, style);
+  }
+
+  fn push_text_with_issue_reference_links(&mut self, value: &str, style: InlineStyle) {
+    let Some((owner, repo)) = self
+      .github_issue_reference_context
+      .as_ref()
+      .map(|context| (context.owner.clone(), context.repo.clone()))
+    else {
+      self.push_text_span(value, style, None);
+      return;
+    };
+
+    let mut cursor = 0usize;
+    while cursor < value.len() {
+      let Some(relative_hash_ix) = value[cursor..].find('#') else {
+        break;
+      };
+      let hash_ix = cursor + relative_hash_ix;
+      let prefix_char = value[..hash_ix].chars().next_back();
+      if prefix_char.is_some_and(is_issue_reference_prefix_char) {
+        cursor = hash_ix + 1;
+        continue;
+      }
+
+      let digits_start = hash_ix + 1;
+      if digits_start >= value.len() || !value.as_bytes()[digits_start].is_ascii_digit() {
+        cursor = hash_ix + 1;
+        continue;
+      }
+
+      let mut digits_end = digits_start;
+      while digits_end < value.len() && value.as_bytes()[digits_end].is_ascii_digit() {
+        digits_end += 1;
+      }
+      let suffix_char = value[digits_end..].chars().next();
+      if suffix_char.is_some_and(is_issue_reference_suffix_char) {
+        cursor = digits_end;
+        continue;
+      }
+
+      if hash_ix > cursor {
+        self.push_text_span(&value[cursor..hash_ix], style, None);
+      }
+
+      let issue_number = &value[digits_start..digits_end];
+      let issue_url: Arc<str> =
+        format!("https://github.com/{owner}/{repo}/issues/{issue_number}").into();
+      self.push_text_span(&value[hash_ix..digits_end], style, Some(issue_url));
+      cursor = digits_end;
+    }
+
+    if cursor < value.len() {
+      self.push_text_span(&value[cursor..], style, None);
+    }
+  }
+
+  fn push_text_span(&mut self, value: &str, style: InlineStyle, link: Option<Arc<str>>) {
+    if value.is_empty() {
+      return;
+    }
+
     let start = self.text.len();
     self.text.push_str(value);
     let end = self.text.len();
@@ -3255,6 +3356,14 @@ impl SpanBuilder {
 
     (SharedString::from(self.text), self.spans, link_ranges)
   }
+}
+
+fn is_issue_reference_prefix_char(ch: char) -> bool {
+  ch.is_alphanumeric() || matches!(ch, '_' | '/' | '-')
+}
+
+fn is_issue_reference_suffix_char(ch: char) -> bool {
+  ch.is_alphanumeric() || ch == '_'
 }
 
 struct SelectableText {
@@ -4991,6 +5100,86 @@ mod tests {
       }
       _ => panic!("expected paragraph"),
     }
+  }
+
+  #[test]
+  fn build_spans_linkifies_issue_references_with_repo_context() {
+    let inlines = vec![Inline::Text("Fixes #5320 and closes #81.".to_string())];
+    let options =
+      MarkdownRenderOptions::default().with_github_issue_reference_context("acme", "widget");
+
+    let (text, _, link_ranges) = build_spans(&inlines, &options);
+    let rendered = text.as_ref();
+
+    assert_eq!(rendered, "Fixes #5320 and closes #81.");
+    assert_eq!(link_ranges.len(), 2);
+    assert_eq!(&rendered[link_ranges[0].range.clone()], "#5320");
+    assert_eq!(
+      link_ranges[0].url.as_ref(),
+      "https://github.com/acme/widget/issues/5320"
+    );
+    assert_eq!(&rendered[link_ranges[1].range.clone()], "#81");
+    assert_eq!(
+      link_ranges[1].url.as_ref(),
+      "https://github.com/acme/widget/issues/81"
+    );
+  }
+
+  #[test]
+  fn build_spans_does_not_linkify_issue_references_without_repo_context() {
+    let inlines = vec![Inline::Text("Fixes #5320.".to_string())];
+    let options = MarkdownRenderOptions::default();
+
+    let (_, _, link_ranges) = build_spans(&inlines, &options);
+    assert!(link_ranges.is_empty());
+  }
+
+  #[test]
+  fn build_spans_does_not_linkify_owner_repo_shorthand_before_issue_number() {
+    let inlines = vec![Inline::Text(
+      "Use owner/repo#5320 and then #81.".to_string(),
+    )];
+    let options =
+      MarkdownRenderOptions::default().with_github_issue_reference_context("acme", "widget");
+
+    let (text, _, link_ranges) = build_spans(&inlines, &options);
+    let rendered = text.as_ref();
+    assert_eq!(link_ranges.len(), 1);
+    assert_eq!(&rendered[link_ranges[0].range.clone()], "#81");
+    assert_eq!(
+      link_ranges[0].url.as_ref(),
+      "https://github.com/acme/widget/issues/81"
+    );
+  }
+
+  #[test]
+  fn build_spans_keeps_issue_reference_detection_outside_code_and_existing_links() {
+    let inlines = vec![
+      Inline::Code("#11".to_string()),
+      Inline::Text(" and #22 ".to_string()),
+      Inline::Link {
+        url: "https://example.com/already-linked".to_string(),
+        title: None,
+        content: vec![Inline::Text("#33".to_string())],
+      },
+    ];
+    let options =
+      MarkdownRenderOptions::default().with_github_issue_reference_context("acme", "widget");
+
+    let (text, _, link_ranges) = build_spans(&inlines, &options);
+    let rendered = text.as_ref();
+    assert_eq!(rendered, "#11 and #22 #33");
+    assert_eq!(link_ranges.len(), 2);
+    assert_eq!(&rendered[link_ranges[0].range.clone()], "#22");
+    assert_eq!(
+      link_ranges[0].url.as_ref(),
+      "https://github.com/acme/widget/issues/22"
+    );
+    assert_eq!(&rendered[link_ranges[1].range.clone()], "#33");
+    assert_eq!(
+      link_ranges[1].url.as_ref(),
+      "https://example.com/already-linked"
+    );
   }
 
   #[test]
