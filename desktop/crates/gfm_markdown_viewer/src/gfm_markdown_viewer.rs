@@ -351,6 +351,7 @@ const MARKDOWN_CODE_REFERENCE_SNIPPET_ROW_GAP_PX: f32 = 2.0;
 const MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX: f32 = 8.0;
 const MARKDOWN_CODE_REFERENCE_ROW_GAP_PX: f32 = 8.0;
 const MARKDOWN_INLINE_IMAGE_MAX_HEIGHT_PX: f32 = 420.0;
+const MARKDOWN_IMAGE_HARD_BREAK_SPACER_PX: f32 = 14.0;
 const PARSED_MARKDOWN_CACHE_MAX_ENTRIES: usize = 256;
 const PARSED_MARKDOWN_CACHE_MAX_SOURCE_LEN: usize = 100_000;
 const MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX: f32 =
@@ -2584,15 +2585,15 @@ fn render_inline_with_images(
   }
 
   let rows = split_inlines_by_hard_breaks(inlines);
-  let mut content = v_flex().min_w_0().gap_1();
+  let mut content = v_flex().min_w_0();
   let mut has_content = false;
 
-  for row in rows {
+  for (row_ix, row) in rows.iter().enumerate() {
     let mut row_container = h_flex().items_center().gap_1().flex_wrap().min_w_0();
     let mut row_has_content = false;
     let mut text_chunk: Vec<Inline> = Vec::new();
 
-    for inline in &row {
+    for inline in row {
       if let Some((url, alt, link, width, height, dark_url, light_url)) = inline_image_data(inline) {
         if !text_chunk.is_empty() {
           row_container = row_container.child(render_inline_selectable_text(
@@ -2636,6 +2637,12 @@ fn render_inline_with_images(
 
     if row_has_content {
       content = content.child(row_container);
+      has_content = true;
+    }
+
+    // Keep explicit <br>/<hard break> vertical rhythm around image rows.
+    if row_ix + 1 < rows.len() {
+      content = content.child(div().h(px(MARKDOWN_IMAGE_HARD_BREAK_SPACER_PX)));
       has_content = true;
     }
   }
@@ -5113,6 +5120,129 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
         }
       }
       _ => panic!("expected aligned block"),
+    }
+  }
+
+  #[test]
+  fn parses_centered_picture_with_br_padding() {
+    let source = r#"<p align="center">
+  <br>
+  <br>
+  <a href="https://oxc.rs" target="_blank" rel="noopener noreferrer">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://oxc.rs/oxc-light.svg">
+      <source media="(prefers-color-scheme: light)" srcset="https://oxc.rs/oxc-dark.svg">
+      <img alt="Oxc logo" src="https://oxc.rs/oxc-dark.svg" height="60">
+    </picture>
+  </a>
+  <br>
+  <br>
+  <br>
+</p>"#;
+
+    let blocks = parse_gfm(source);
+    assert_eq!(blocks.len(), 1);
+    match &blocks[0] {
+      Block::Aligned { center, blocks } => {
+        assert!(*center);
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0] {
+          Block::Paragraph(inlines) => {
+            let hard_breaks = inlines
+              .iter()
+              .filter(|inline| matches!(inline, Inline::HardBreak))
+              .count();
+            assert_eq!(hard_breaks, 5);
+
+            let image = inlines.iter().find_map(|inline| match inline {
+              Inline::Image {
+                url,
+                alt,
+                height,
+                dark_url,
+                light_url,
+                ..
+              } => Some((
+                url.as_str(),
+                alt.as_str(),
+                height.as_deref(),
+                dark_url.as_deref(),
+                light_url.as_deref(),
+              )),
+              Inline::Link { content, .. } => content.iter().find_map(|child| match child {
+                Inline::Image {
+                  url,
+                  alt,
+                  height,
+                  dark_url,
+                  light_url,
+                  ..
+                } => Some((
+                  url.as_str(),
+                  alt.as_str(),
+                  height.as_deref(),
+                  dark_url.as_deref(),
+                  light_url.as_deref(),
+                )),
+                _ => None,
+              }),
+              _ => None,
+            });
+
+            assert_eq!(
+              image,
+              Some((
+                "https://oxc.rs/oxc-dark.svg",
+                "Oxc logo",
+                Some("60"),
+                Some("https://oxc.rs/oxc-light.svg"),
+                Some("https://oxc.rs/oxc-dark.svg"),
+              ))
+            );
+          }
+          _ => panic!("expected paragraph"),
+        }
+      }
+      _ => panic!("expected aligned block"),
+    }
+  }
+
+  #[test]
+  fn parses_left_aligned_image_paragraph_without_extra_blocks() {
+    let source = r#"To give you an idea of its capabilities, here is an example from the [vscode] repository, which finishes linting 4800+ files in 0.7 seconds:
+
+<p float="left" align="left">
+  <img src="https://cdn.jsdelivr.net/gh/oxc-project/oxc-assets/linter-screenshot.png" width="60%">
+</p>
+
+→ [oxlint documentation](https://oxc.rs/docs/guide/usage/linter/cli.html)"#;
+
+    let blocks = parse_gfm(source);
+    assert_eq!(blocks.len(), 3);
+
+    match &blocks[1] {
+      Block::Paragraph(inlines) => {
+        assert_eq!(inlines.len(), 1);
+        match &inlines[0] {
+          Inline::Image {
+            url,
+            width,
+            dark_url,
+            light_url,
+            ..
+          } => {
+            assert_eq!(
+              url,
+              "https://cdn.jsdelivr.net/gh/oxc-project/oxc-assets/linter-screenshot.png"
+            );
+            assert_eq!(width.as_deref(), Some("60%"));
+            assert_eq!(dark_url, &None);
+            assert_eq!(light_url, &None);
+          }
+          _ => panic!("expected image inline"),
+        }
+      }
+      _ => panic!("expected paragraph"),
     }
   }
 
