@@ -119,6 +119,40 @@ fn status_color(status: GithubPrFileStatus, theme: &gpui_component::Theme) -> gp
   }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewCommentNavigationDirection {
+  Previous,
+  Next,
+}
+
+fn next_review_comment_navigation_index(
+  comment_ids: &[u64],
+  active_comment_id: Option<u64>,
+  direction: ReviewCommentNavigationDirection,
+) -> Option<usize> {
+  if comment_ids.is_empty() {
+    return None;
+  }
+
+  let active_index =
+    active_comment_id.and_then(|id| comment_ids.iter().position(|value| *value == id));
+
+  Some(match direction {
+    ReviewCommentNavigationDirection::Next => active_index
+      .map(|ix| (ix + 1) % comment_ids.len())
+      .unwrap_or(0),
+    ReviewCommentNavigationDirection::Previous => active_index
+      .map(|ix| {
+        if ix == 0 {
+          comment_ids.len() - 1
+        } else {
+          ix - 1
+        }
+      })
+      .unwrap_or(comment_ids.len() - 1),
+  })
+}
+
 #[derive(Clone, Debug)]
 struct GithubPrFileDiff {
   path: SharedString,
@@ -317,6 +351,8 @@ pub struct GithubPrDetailsPage {
   review_comments_loading: bool,
   review_comments_error: Option<SharedString>,
   review_comments: Vec<GithubPullRequestReviewComment>,
+  selected_file_review_comment_ids: Vec<u64>,
+  active_review_comment_id: Option<u64>,
   description_code_reference_requests: Vec<GithubBlobLineReference>,
   review_comment_code_reference_cache: HashMap<String, Option<ReviewCommentCodeReferencePreview>>,
   review_comment_code_reference_tasks: HashMap<String, Task<()>>,
@@ -584,6 +620,8 @@ impl GithubPrDetailsPage {
       review_comments_loading: false,
       review_comments_error: None,
       review_comments: Vec::new(),
+      selected_file_review_comment_ids: Vec::new(),
+      active_review_comment_id: None,
       description_code_reference_requests: Vec::new(),
       review_comment_code_reference_cache: HashMap::new(),
       review_comment_code_reference_tasks: HashMap::new(),
@@ -798,6 +836,7 @@ impl GithubPrDetailsPage {
 
     if did_scroll {
       self.pending_review_comment_link_comment_id = None;
+      self.active_review_comment_id = Some(comment_id);
     }
 
     did_scroll
@@ -832,6 +871,33 @@ impl GithubPrDetailsPage {
     }
 
     let _ = self.try_scroll_to_pending_review_comment(cx);
+  }
+
+  fn navigate_review_comment(
+    &mut self,
+    direction: ReviewCommentNavigationDirection,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(index) = next_review_comment_navigation_index(
+      &self.selected_file_review_comment_ids,
+      self.active_review_comment_id,
+      direction,
+    ) else {
+      return;
+    };
+    let Some(comment_id) = self.selected_file_review_comment_ids.get(index).copied() else {
+      return;
+    };
+
+    let did_scroll = self.diff_editor.update(cx, |editor, cx| {
+      editor.scroll_to_review_comment(comment_id, editor.measured_editor_line_height(), cx)
+    });
+    if !did_scroll {
+      self.pending_review_comment_link_comment_id = Some(comment_id);
+      self.resolve_pending_review_comment_link(cx);
+    }
+    self.active_review_comment_id = Some(comment_id);
+    cx.notify();
   }
 
   fn submit_review_comment_edit(&mut self, comment_id: u64, body: String, cx: &mut Context<Self>) {
@@ -1136,6 +1202,8 @@ impl GithubPrDetailsPage {
 
     self.selected_file = selected.clone();
     self.selected_tree_id = selected.as_ref().map(|file| file.path.to_string());
+    self.active_review_comment_id = None;
+    self.selected_file_review_comment_ids.clear();
     self.sync_sentry_pr_context();
     let mut data = Map::new();
     if let Some(file) = self.selected_file.as_ref() {
@@ -1482,6 +1550,13 @@ impl GithubPrDetailsPage {
 
   fn sync_review_comments(&mut self, cx: &mut Context<Self>) {
     let comments = self.review_comments_for_selected_file();
+    self.selected_file_review_comment_ids = comments.iter().map(|comment| comment.id).collect();
+    if self
+      .active_review_comment_id
+      .is_some_and(|id| !self.selected_file_review_comment_ids.contains(&id))
+    {
+      self.active_review_comment_id = None;
+    }
     let preview_requests = self.review_comment_code_reference_requests_for_comments(&comments);
     let preview_map = self.cached_review_comment_code_reference_previews(&preview_requests);
     let pr_number = self.pull_request.as_ref().map(|pr| pr.number);
@@ -1784,6 +1859,8 @@ impl GithubPrDetailsPage {
     self.review_comments_loading = true;
     self.review_comments_error = None;
     self.review_comments.clear();
+    self.selected_file_review_comment_ids.clear();
+    self.active_review_comment_id = None;
     self.description_code_reference_requests.clear();
     self.review_comment_code_reference_cache.clear();
     self.review_comment_code_reference_tasks.clear();
@@ -2603,6 +2680,7 @@ impl GithubPrDetailsPage {
     let preview_active = (is_markdown || is_svg) && self.show_markdown_preview;
     let file_loading = self.file_loading;
     let split_disabled = self.split_disabled_for_file(file) || preview_active;
+    let has_review_comments = !self.selected_file_review_comment_ids.is_empty();
     let (toggle_label, toggle_icon) = if split_disabled {
       ("Split", IconName::PanelLeft)
     } else {
@@ -2611,6 +2689,32 @@ impl GithubPrDetailsPage {
         DiffViewMode::Split => ("Inline", IconName::PanelLeftClose),
       }
     };
+    let view = cx.entity();
+    let previous_comment_button = Button::new("pr-review-comment-prev")
+      .icon(IconName::ArrowUp)
+      .xsmall()
+      .ghost()
+      .compact()
+      .tooltip("Previous comment")
+      .disabled(!has_review_comments || file_loading)
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.navigate_review_comment(ReviewCommentNavigationDirection::Previous, cx);
+        });
+      });
+    let view = cx.entity();
+    let next_comment_button = Button::new("pr-review-comment-next")
+      .icon(IconName::ArrowDown)
+      .xsmall()
+      .ghost()
+      .compact()
+      .tooltip("Next comment")
+      .disabled(!has_review_comments || file_loading)
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.navigate_review_comment(ReviewCommentNavigationDirection::Next, cx);
+        });
+      });
     let view = cx.entity();
     let toggle_button = Button::new("pr-diff-toggle")
       .label(toggle_label)
@@ -2674,6 +2778,8 @@ impl GithubPrDetailsPage {
         h_flex()
           .items_center()
           .gap_2()
+          .child(previous_comment_button)
+          .child(next_comment_button)
           .child(toggle_button)
           .when(is_markdown || is_svg, |this| this.child(preview_button)),
       )
@@ -3325,6 +3431,77 @@ mod tests {
     assert_eq!(converted.start_line, preview.start_line);
     assert_eq!(converted.end_line, preview.end_line);
     assert_eq!(converted.snippets, preview.snippets);
+  }
+
+  #[test]
+  fn next_review_comment_navigation_index_handles_empty_list() {
+    assert_eq!(
+      next_review_comment_navigation_index(&[], None, ReviewCommentNavigationDirection::Next),
+      None
+    );
+  }
+
+  #[test]
+  fn next_review_comment_navigation_index_uses_first_or_last_without_active_selection() {
+    let comment_ids = [11, 22, 33];
+    assert_eq!(
+      next_review_comment_navigation_index(
+        &comment_ids,
+        None,
+        ReviewCommentNavigationDirection::Next
+      ),
+      Some(0)
+    );
+    assert_eq!(
+      next_review_comment_navigation_index(
+        &comment_ids,
+        None,
+        ReviewCommentNavigationDirection::Previous
+      ),
+      Some(2)
+    );
+  }
+
+  #[test]
+  fn next_review_comment_navigation_index_wraps_in_both_directions() {
+    let comment_ids = [11, 22, 33];
+    assert_eq!(
+      next_review_comment_navigation_index(
+        &comment_ids,
+        Some(33),
+        ReviewCommentNavigationDirection::Next
+      ),
+      Some(0)
+    );
+    assert_eq!(
+      next_review_comment_navigation_index(
+        &comment_ids,
+        Some(11),
+        ReviewCommentNavigationDirection::Previous
+      ),
+      Some(2)
+    );
+  }
+
+  #[test]
+  fn next_review_comment_navigation_index_falls_back_when_active_comment_is_missing() {
+    let comment_ids = [11, 22, 33];
+    assert_eq!(
+      next_review_comment_navigation_index(
+        &comment_ids,
+        Some(99),
+        ReviewCommentNavigationDirection::Next
+      ),
+      Some(0)
+    );
+    assert_eq!(
+      next_review_comment_navigation_index(
+        &comment_ids,
+        Some(99),
+        ReviewCommentNavigationDirection::Previous
+      ),
+      Some(2)
+    );
   }
 
   #[test]
