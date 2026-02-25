@@ -326,6 +326,7 @@ const TABLE_BADGE_WIDTH_PX: f32 = 56.0;
 const LIST_LEFT_PADDING_PX: f32 = 10.0;
 const LIST_MARKER_GAP_PX: f32 = 4.0;
 const MARKDOWN_BASE_BLOCK_GAP_PX: f32 = 8.0;
+const MARKDOWN_HEADING_EXTRA_TOP_MARGIN_PX: f32 = 10.0;
 const MARKDOWN_LIST_ITEM_GAP_PX: f32 = 4.0;
 const MARKDOWN_INDENT_PER_LEVEL_PX: f32 = 12.0;
 const MARKDOWN_CHAR_WIDTH_PX: f32 = 8.8;
@@ -526,6 +527,9 @@ fn estimate_blocks_height_px(
   for (ix, block) in blocks.iter().enumerate() {
     if ix > 0 {
       total += MARKDOWN_BASE_BLOCK_GAP_PX;
+      if matches!(block, Block::Heading { .. }) {
+        total += MARKDOWN_HEADING_EXTRA_TOP_MARGIN_PX;
+      }
     }
     total += estimate_block_height_px(block, wrap_columns, line_height_px, indent);
   }
@@ -1555,8 +1559,18 @@ fn render_blocks(
 ) -> AnyElement {
   let mut container = v_flex().gap_2();
 
-  for block in blocks {
-    container = container.child(render_block(block, options, indent, cx, ctx));
+  for (ix, block) in blocks.iter().enumerate() {
+    let block_element = render_block(block, options, indent, cx, ctx);
+    let block_element = if ix > 0 && matches!(block, Block::Heading { .. }) {
+      div()
+        .mt(px(MARKDOWN_HEADING_EXTRA_TOP_MARGIN_PX))
+        .child(block_element)
+        .into_any_element()
+    } else {
+      block_element
+    };
+
+    container = container.child(block_element);
   }
 
   if indent > 0 {
@@ -2182,8 +2196,7 @@ fn inline_image_data(
     }
     Inline::Strong(content) | Inline::Emphasis(content) | Inline::Strikethrough(content) => {
       for child in content {
-        if let Some((url, alt, link, width, height, dark_url, light_url)) =
-          inline_image_data(child)
+        if let Some((url, alt, link, width, height, dark_url, light_url)) = inline_image_data(child)
         {
           return Some((url, alt, link, width, height, dark_url, light_url));
         }
@@ -2404,11 +2417,12 @@ fn render_image_node(
     };
   }
 
-  image.with_loading({
-    let label = label.clone();
-    move || render_badge_placeholder(&label)
-  })
-  .with_fallback(move || render_badge_placeholder(&label))
+  image
+    .with_loading({
+      let label = label.clone();
+      move || render_badge_placeholder(&label)
+    })
+    .with_fallback(move || render_badge_placeholder(&label))
 }
 
 fn render_block_image_node(
@@ -2446,11 +2460,12 @@ fn render_block_image_node(
     };
   }
 
-  image.with_loading({
-    let label = label.clone();
-    move || render_badge_placeholder(&label)
-  })
-  .with_fallback(move || render_badge_placeholder(&label))
+  image
+    .with_loading({
+      let label = label.clone();
+      move || render_badge_placeholder(&label)
+    })
+    .with_fallback(move || render_badge_placeholder(&label))
 }
 
 fn attach_image_link_handler(
@@ -2568,7 +2583,9 @@ fn render_inline_with_images(
   ctx: &mut RenderContext,
 ) -> AnyElement {
   let is_dark_mode = cx.theme().mode.is_dark();
-  if let Some((url, alt, link, width, height, dark_url, light_url)) = single_inline_image_data(inlines) {
+  if let Some((url, alt, link, width, height, dark_url, light_url)) =
+    single_inline_image_data(inlines)
+  {
     return render_block_image(
       &url,
       dark_url.as_deref(),
@@ -2594,7 +2611,8 @@ fn render_inline_with_images(
     let mut text_chunk: Vec<Inline> = Vec::new();
 
     for inline in row {
-      if let Some((url, alt, link, width, height, dark_url, light_url)) = inline_image_data(inline) {
+      if let Some((url, alt, link, width, height, dark_url, light_url)) = inline_image_data(inline)
+      {
         if !text_chunk.is_empty() {
           row_container = row_container.child(render_inline_selectable_text(
             &text_chunk,
@@ -2694,10 +2712,10 @@ fn render_heading_text(
     .child(render_inline_text(inlines, options, cx, ctx));
 
   container = match level {
-    1 => container.text_xl().font_semibold(),
-    2 => container.text_lg().font_semibold(),
-    3 => container.text_base().font_medium(),
-    _ => container.text_sm().font_medium(),
+    1 => container.text_3xl().font_bold(),
+    2 => container.text_2xl().font_bold(),
+    3 => container.text_xl().font_semibold(),
+    _ => container.text_lg().font_medium(),
   };
 
   container.into_any_element()
@@ -4341,16 +4359,14 @@ fn html_attribute_value<'a>(element: &'a HtmlElement, name: &str) -> Option<&'a 
 }
 
 fn parse_html_picture_source_url(srcset: &str) -> Option<String> {
-  srcset
-    .split(',')
-    .find_map(|candidate| {
-      candidate
-        .split_whitespace()
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-    })
+  srcset.split(',').find_map(|candidate| {
+    candidate
+      .split_whitespace()
+      .next()
+      .map(str::trim)
+      .filter(|value| !value.is_empty())
+      .map(ToString::to_string)
+  })
 }
 
 fn html_picture_theme_urls(element: &HtmlElement) -> (Option<String>, Option<String>) {
@@ -4913,7 +4929,11 @@ mod tests {
 
     match inline {
       Inline::Image {
-        url, alt, width, height, ..
+        url,
+        alt,
+        width,
+        height,
+        ..
       } => {
         assert_eq!(url, "logo.svg");
         assert_eq!(alt, "Zod logo");
@@ -5923,6 +5943,21 @@ Apres"#,
     let wide = estimate_markdown_height_px(source, 96, 20.0);
     let narrow = estimate_markdown_height_px(source, 32, 20.0);
     assert!(narrow > wide);
+  }
+
+  #[test]
+  fn estimate_blocks_height_adds_extra_spacing_before_headings() {
+    let blocks = vec![
+      Block::Paragraph(vec![Inline::Text("Alpha".to_string())]),
+      Block::Heading {
+        level: 2,
+        content: vec![Inline::Text("Beta".to_string())],
+      },
+    ];
+
+    let height = estimate_blocks_height_px(&blocks, 80, 20.0, 0);
+    let expected = 20.0 + MARKDOWN_BASE_BLOCK_GAP_PX + MARKDOWN_HEADING_EXTRA_TOP_MARGIN_PX + 24.0;
+    assert_eq!(height, expected);
   }
 
   #[test]

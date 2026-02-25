@@ -260,6 +260,12 @@ fn normalize_non_empty_string(value: &str) -> Option<String> {
   }
 }
 
+fn homepage_button_label(homepage: &str) -> SharedString {
+  normalize_non_empty_string(homepage)
+    .unwrap_or_else(|| "Homepage".to_string())
+    .into()
+}
+
 fn effective_repo_branch(
   selected_branch: Option<&str>,
   default_branch: Option<&str>,
@@ -3326,12 +3332,13 @@ impl GithubRepoPage {
                 }),
             )
             .when_some(homepage.clone(), |this, homepage| {
+              let homepage_label = homepage_button_label(&homepage);
               this.child(
                 Button::new("repo-open-homepage")
                   .icon(IconName::ExternalLink)
                   .ghost()
                   .small()
-                  .label("Homepage")
+                  .label(homepage_label)
                   .on_click(move |_, _, cx| {
                     cx.open_url(&homepage);
                   }),
@@ -4006,6 +4013,15 @@ mod tests {
   fn repo_tab_count_label_formats_counts() {
     assert_eq!(repo_tab_count_label(0).as_ref(), "0");
     assert_eq!(repo_tab_count_label(42).as_ref(), "42");
+  }
+
+  #[test]
+  fn homepage_button_label_uses_trimmed_url_or_fallback() {
+    assert_eq!(
+      homepage_button_label(" https://example.com/docs ").as_ref(),
+      "https://example.com/docs"
+    );
+    assert_eq!(homepage_button_label("   ").as_ref(), "Homepage");
   }
 
   #[test]
