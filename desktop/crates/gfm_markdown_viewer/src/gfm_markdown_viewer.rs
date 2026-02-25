@@ -24,7 +24,6 @@ use gpui::{
   MouseUpEvent, ObjectFit, Pixels, RenderImage, Resource, SharedString, StrikethroughStyle,
   StyledText, TextRun, UnderlineStyle, Window, div, fill, img, point, prelude::*, px, relative,
 };
-use gpui_component::scroll::ScrollableElement;
 use gpui_component::{
   ActiveTheme as _, Sizable as _, StyledExt as _, clipboard::Clipboard, h_flex, v_flex,
 };
@@ -123,6 +122,8 @@ pub enum Inline {
     alt: String,
     width: Option<String>,
     height: Option<String>,
+    dark_url: Option<String>,
+    light_url: Option<String>,
   },
   Code(String),
   SoftBreak,
@@ -723,7 +724,53 @@ fn parse_comrak(source: &str) -> Vec<Block> {
   let arena = Arena::new();
   let options = comrak_options();
   let root = parse_document(&arena, source, &options);
-  root.children().flat_map(blocks_from_node).collect()
+  let mut blocks = Vec::new();
+  let mut centered_div_depth = 0usize;
+  let mut centered_div_blocks = Vec::new();
+
+  for node in root.children() {
+    let mut is_centered_open = false;
+    let mut is_centered_close = false;
+
+    if let NodeValue::HtmlBlock(html) = &node.data.borrow().value {
+      is_centered_open = is_centered_div_open_tag(&html.literal);
+      is_centered_close = is_centered_div_close_tag(&html.literal);
+    }
+
+    if is_centered_open {
+      centered_div_depth = centered_div_depth.saturating_add(1);
+      continue;
+    }
+
+    if is_centered_close {
+      if centered_div_depth > 0 {
+        centered_div_depth -= 1;
+      }
+      if centered_div_depth == 0 && !centered_div_blocks.is_empty() {
+        blocks.push(Block::Aligned {
+          center: true,
+          blocks: std::mem::take(&mut centered_div_blocks),
+        });
+      }
+      continue;
+    }
+
+    let node_blocks = blocks_from_node(node);
+    if centered_div_depth > 0 {
+      centered_div_blocks.extend(node_blocks);
+    } else {
+      blocks.extend(node_blocks);
+    }
+  }
+
+  if !centered_div_blocks.is_empty() {
+    blocks.push(Block::Aligned {
+      center: true,
+      blocks: centered_div_blocks,
+    });
+  }
+
+  blocks
 }
 
 fn split_details_segments(source: &str) -> Vec<Segment> {
@@ -1744,8 +1791,14 @@ fn render_table(
     body = body.child(row_el);
   }
 
+  let table_scroll_id: SharedString =
+    format!("markdown-table-scroll-{:x}", table as *const Table as usize).into();
+
   div()
-    .overflow_x_scrollbar()
+    .id(table_scroll_id)
+    .w_full()
+    .min_w_0()
+    .overflow_x_scroll()
     .child(
       div()
         .border_1()
@@ -2070,13 +2123,23 @@ fn inline_contains_image(inline: &Inline) -> bool {
 
 fn inline_image_data(
   inline: &Inline,
-) -> Option<(String, String, Option<String>, Option<String>, Option<String>)> {
+) -> Option<(
+  String,
+  String,
+  Option<String>,
+  Option<String>,
+  Option<String>,
+  Option<String>,
+  Option<String>,
+)> {
   match inline {
     Inline::Image {
       url,
       alt,
       width,
       height,
+      dark_url,
+      light_url,
       ..
     } => Some((
       url.clone(),
@@ -2084,6 +2147,8 @@ fn inline_image_data(
       None,
       width.clone(),
       height.clone(),
+      dark_url.clone(),
+      light_url.clone(),
     )),
     Inline::Link {
       url: link_url,
@@ -2091,13 +2156,24 @@ fn inline_image_data(
       ..
     } => {
       for child in content {
-        if let Some((url, alt, child_link, child_width, child_height)) = inline_image_data(child) {
+        if let Some((
+          url,
+          alt,
+          child_link,
+          child_width,
+          child_height,
+          child_dark_url,
+          child_light_url,
+        )) = inline_image_data(child)
+        {
           return Some((
             url,
             alt,
             Some(child_link.unwrap_or_else(|| link_url.clone())),
             child_width,
             child_height,
+            child_dark_url,
+            child_light_url,
           ));
         }
       }
@@ -2105,8 +2181,10 @@ fn inline_image_data(
     }
     Inline::Strong(content) | Inline::Emphasis(content) | Inline::Strikethrough(content) => {
       for child in content {
-        if let Some((url, alt, link, width, height)) = inline_image_data(child) {
-          return Some((url, alt, link, width, height));
+        if let Some((url, alt, link, width, height, dark_url, light_url)) =
+          inline_image_data(child)
+        {
+          return Some((url, alt, link, width, height, dark_url, light_url));
         }
       }
       None
@@ -2134,7 +2212,15 @@ fn split_inlines_by_hard_breaks(inlines: &[Inline]) -> Vec<Vec<Inline>> {
 
 fn single_inline_image_data(
   inlines: &[Inline],
-) -> Option<(String, String, Option<String>, Option<String>, Option<String>)> {
+) -> Option<(
+  String,
+  String,
+  Option<String>,
+  Option<String>,
+  Option<String>,
+  Option<String>,
+  Option<String>,
+)> {
   if inlines.len() != 1 {
     return None;
   }
@@ -2153,9 +2239,10 @@ fn render_table_cell_inlines(
 
   let mut row = h_flex().items_center().gap_1();
   let mut text_chunk: Vec<Inline> = Vec::new();
+  let is_dark_mode = cx.theme().mode.is_dark();
 
   for inline in inlines {
-    if let Some((url, alt, _, _, _)) = inline_image_data(inline) {
+    if let Some((url, alt, _, _, _, dark_url, light_url)) = inline_image_data(inline) {
       if !text_chunk.is_empty() {
         row = row.child(render_inline_text(&text_chunk, options, cx, ctx));
         text_chunk.clear();
@@ -2166,8 +2253,14 @@ fn render_table_cell_inlines(
       } else {
         alt
       };
-      let badge_url = resolve_markdown_image_url(
+      let themed_url = select_markdown_image_url_for_theme(
         &url,
+        dark_url.as_deref(),
+        light_url.as_deref(),
+        is_dark_mode,
+      );
+      let badge_url = resolve_markdown_image_url(
+        &themed_url,
         options.image_base_url.as_ref().map(SharedString::as_ref),
       );
       row = row.child(
@@ -2256,6 +2349,23 @@ fn parse_markdown_image_dimension(dimension_hint: Option<&str>) -> Option<Markdo
   }
 
   None
+}
+
+fn select_markdown_image_url_for_theme(
+  url: &str,
+  dark_url: Option<&str>,
+  light_url: Option<&str>,
+  is_dark_mode: bool,
+) -> String {
+  let fallback = {
+    let trimmed = url.trim();
+    if trimmed.is_empty() { url } else { trimmed }
+  };
+  let themed = (if is_dark_mode { dark_url } else { light_url })
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .unwrap_or(fallback);
+  themed.to_string()
 }
 
 fn render_image_node(
@@ -2373,30 +2483,38 @@ fn attach_image_link_handler(
 
 fn render_inline_image(
   url: &str,
+  dark_url: Option<&str>,
+  light_url: Option<&str>,
   alt: &str,
   width_hint: Option<&str>,
   height_hint: Option<&str>,
   link_url: Option<&str>,
   on_link: Option<Arc<LinkHandlerFn>>,
   interactive: bool,
+  is_dark_mode: bool,
   image_base_url: Option<&str>,
 ) -> AnyElement {
-  let resolved_url = resolve_markdown_image_url(url, image_base_url);
+  let themed_url = select_markdown_image_url_for_theme(url, dark_url, light_url, is_dark_mode);
+  let resolved_url = resolve_markdown_image_url(&themed_url, image_base_url);
   let image = render_image_node(&resolved_url, alt, width_hint, height_hint).into_any_element();
   attach_image_link_handler(image, &resolved_url, link_url, on_link, interactive)
 }
 
 fn render_block_image(
   url: &str,
+  dark_url: Option<&str>,
+  light_url: Option<&str>,
   alt: &str,
   width_hint: Option<&str>,
   height_hint: Option<&str>,
   link_url: Option<&str>,
   on_link: Option<Arc<LinkHandlerFn>>,
   interactive: bool,
+  is_dark_mode: bool,
   image_base_url: Option<&str>,
 ) -> AnyElement {
-  let resolved_url = resolve_markdown_image_url(url, image_base_url);
+  let themed_url = select_markdown_image_url_for_theme(url, dark_url, light_url, is_dark_mode);
+  let resolved_url = resolve_markdown_image_url(&themed_url, image_base_url);
   let mut hasher = DefaultHasher::new();
   resolved_url.hash(&mut hasher);
   link_url.hash(&mut hasher);
@@ -2448,15 +2566,19 @@ fn render_inline_with_images(
   cx: &App,
   ctx: &mut RenderContext,
 ) -> AnyElement {
-  if let Some((url, alt, link, width, height)) = single_inline_image_data(inlines) {
+  let is_dark_mode = cx.theme().mode.is_dark();
+  if let Some((url, alt, link, width, height, dark_url, light_url)) = single_inline_image_data(inlines) {
     return render_block_image(
       &url,
+      dark_url.as_deref(),
+      light_url.as_deref(),
       &alt,
       width.as_deref(),
       height.as_deref(),
       link.as_deref(),
       options.on_link.clone(),
       interactive,
+      is_dark_mode,
       options.image_base_url.as_ref().map(SharedString::as_ref),
     );
   }
@@ -2471,7 +2593,7 @@ fn render_inline_with_images(
     let mut text_chunk: Vec<Inline> = Vec::new();
 
     for inline in &row {
-      if let Some((url, alt, link, width, height)) = inline_image_data(inline) {
+      if let Some((url, alt, link, width, height, dark_url, light_url)) = inline_image_data(inline) {
         if !text_chunk.is_empty() {
           row_container = row_container.child(render_inline_selectable_text(
             &text_chunk,
@@ -2484,12 +2606,15 @@ fn render_inline_with_images(
         }
         row_container = row_container.child(render_inline_image(
           &url,
+          dark_url.as_deref(),
+          light_url.as_deref(),
           &alt,
           width.as_deref(),
           height.as_deref(),
           link.as_deref(),
           options.on_link.clone(),
           interactive,
+          is_dark_mode,
           options.image_base_url.as_ref().map(SharedString::as_ref),
         ));
         row_has_content = true;
@@ -3686,6 +3811,8 @@ fn blocks_from_node<'a>(node: &'a AstNode<'a>) -> Vec<Block> {
         Vec::new()
       } else if let Some(details) = parse_details_html(&html.literal) {
         vec![Block::Details(details)]
+      } else if let Some(centered) = parse_centered_div_html(&html.literal) {
+        centered
       } else {
         blocks_from_html_fragment(&html.literal)
       }
@@ -3727,6 +3854,71 @@ fn parse_details_html(html: &str) -> Option<Details> {
     blocks,
     open,
   })
+}
+
+fn is_centered_div_open_tag(html: &str) -> bool {
+  let trimmed = html.trim();
+  let lower = trimmed.to_ascii_lowercase();
+  if !lower.starts_with("<div")
+    || lower.starts_with("</div")
+    || lower.contains("</div")
+    || trimmed.ends_with("/>")
+  {
+    return false;
+  }
+
+  if let Some(align) = extract_html_attribute(trimmed, "align")
+    && align.trim().eq_ignore_ascii_case("center")
+  {
+    return true;
+  }
+
+  if let Some(style) = extract_html_attribute(trimmed, "style") {
+    let normalized = style
+      .chars()
+      .filter(|ch| !ch.is_whitespace())
+      .collect::<String>()
+      .to_ascii_lowercase();
+    if normalized.contains("text-align:center") {
+      return true;
+    }
+  }
+
+  false
+}
+
+fn is_centered_div_close_tag(html: &str) -> bool {
+  html.trim_start().to_ascii_lowercase().starts_with("</div")
+}
+
+fn parse_centered_div_html(html: &str) -> Option<Vec<Block>> {
+  let trimmed = html.trim();
+  let lower = trimmed.to_ascii_lowercase();
+  if !lower.starts_with("<div") || !lower.contains("</div>") {
+    return None;
+  }
+
+  let open_end = lower.find('>')?;
+  let open_tag = &trimmed[..=open_end];
+  if !is_centered_div_open_tag(open_tag) {
+    return None;
+  }
+
+  let close_start = lower.rfind("</div>")?;
+  if close_start <= open_end {
+    return None;
+  }
+
+  let body = &trimmed[open_end + 1..close_start];
+  let blocks = parse_gfm(body);
+  if blocks.is_empty() {
+    return Some(Vec::new());
+  }
+
+  Some(vec![Block::Aligned {
+    center: true,
+    blocks,
+  }])
 }
 
 fn is_html_comment_only_block(html: &str) -> bool {
@@ -3838,6 +4030,8 @@ fn parse_inline_html_image(html: &str) -> Option<Inline> {
     alt,
     width,
     height,
+    dark_url: None,
+    light_url: None,
   })
 }
 
@@ -4139,6 +4333,58 @@ fn html_attribute_value<'a>(element: &'a HtmlElement, name: &str) -> Option<&'a 
     .and_then(|attr| attr.value.as_deref())
 }
 
+fn parse_html_picture_source_url(srcset: &str) -> Option<String> {
+  srcset
+    .split(',')
+    .find_map(|candidate| {
+      candidate
+        .split_whitespace()
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+    })
+}
+
+fn html_picture_theme_urls(element: &HtmlElement) -> (Option<String>, Option<String>) {
+  let mut dark_url = None;
+  let mut light_url = None;
+
+  for child in &element.children {
+    let HtmlNode::Element(source) = child else {
+      continue;
+    };
+    if source.tag != "source" {
+      continue;
+    }
+
+    let Some(srcset) = html_attribute_value(source, "srcset")
+      .map(str::trim)
+      .filter(|value| !value.is_empty())
+    else {
+      continue;
+    };
+    let Some(source_url) = parse_html_picture_source_url(srcset) else {
+      continue;
+    };
+    let media = html_attribute_value(source, "media")
+      .map(str::trim)
+      .unwrap_or_default()
+      .to_ascii_lowercase();
+    if media.contains("prefers-color-scheme") && media.contains("dark") {
+      if dark_url.is_none() {
+        dark_url = Some(source_url);
+      }
+      continue;
+    }
+    if media.contains("prefers-color-scheme") && media.contains("light") && light_url.is_none() {
+      light_url = Some(source_url);
+    }
+  }
+
+  (dark_url, light_url)
+}
+
 fn html_element_is_centered(element: &HtmlElement) -> bool {
   if let Some(align) = html_attribute_value(element, "align")
     && align.trim().eq_ignore_ascii_case("center")
@@ -4288,6 +4534,8 @@ fn html_element_to_inlines(element: &HtmlElement) -> Vec<Inline> {
           .map(str::trim)
           .filter(|value| !value.is_empty())
           .map(ToString::to_string),
+        dark_url: None,
+        light_url: None,
       }]
     }
     "a" => {
@@ -4312,13 +4560,18 @@ fn html_element_to_inlines(element: &HtmlElement) -> Vec<Inline> {
     }
     "picture" => {
       let children = html_nodes_to_inlines(&element.children);
-      if let Some((url, alt, _, width, height)) = children.iter().find_map(inline_image_data) {
+      let (picture_dark_url, picture_light_url) = html_picture_theme_urls(element);
+      if let Some((url, alt, _, width, height, dark_url, light_url)) =
+        children.iter().find_map(inline_image_data)
+      {
         vec![Inline::Image {
           url,
           title: None,
           alt,
           width,
           height,
+          dark_url: picture_dark_url.or(dark_url),
+          light_url: picture_light_url.or(light_url),
         }]
       } else {
         children
@@ -4492,6 +4745,8 @@ fn inlines_from_nodes<'a>(nodes: impl Iterator<Item = &'a AstNode<'a>>) -> Vec<I
           alt,
           width: None,
           height: None,
+          dark_url: None,
+          light_url: None,
         });
       }
       NodeValue::HtmlInline(html) => {
@@ -4827,6 +5082,41 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
   }
 
   #[test]
+  fn parses_markdown_badge_rows_inside_centered_div() {
+    let source = r#"<div align="center">
+
+[![A](https://img.shields.io/a.svg)](https://a.example)
+[![B](https://img.shields.io/b.svg)](https://b.example)
+
+</div>"#;
+
+    let blocks = parse_gfm(source);
+    assert_eq!(blocks.len(), 1);
+    match &blocks[0] {
+      Block::Aligned { center, blocks } => {
+        assert!(*center);
+        assert_eq!(blocks.len(), 1);
+        match &blocks[0] {
+          Block::Paragraph(inlines) => {
+            let linked_images = inlines
+              .iter()
+              .filter(|inline| {
+                matches!(
+                  inline,
+                  Inline::Link { content, .. } if content.iter().any(inline_contains_image)
+                )
+              })
+              .count();
+            assert_eq!(linked_images, 2);
+          }
+          _ => panic!("expected paragraph"),
+        }
+      }
+      _ => panic!("expected aligned block"),
+    }
+  }
+
+  #[test]
   fn parses_html_heading_with_center_alignment_wrapper() {
     let source = r#"<h2 align="center">Featured sponsor: Jazz</h2>"#;
     let blocks = parse_gfm(source);
@@ -4852,7 +5142,8 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
     let source = r#"<div>
   <picture width="85%">
     <source media="(prefers-color-scheme: dark)" srcset="https://example.com/dark.png">
-    <img alt="jazz logo" src="https://example.com/light.png" width="85%">
+    <source media="(prefers-color-scheme: light)" srcset="https://example.com/light.png">
+    <img alt="jazz logo" src="https://example.com/fallback.png" width="85%">
   </picture>
 </div>"#;
 
@@ -4862,13 +5153,30 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
       Block::Paragraph(inlines) => {
         let image = inlines.iter().find_map(|inline| match inline {
           Inline::Image {
-            url, alt, width, ..
-          } => Some((url.as_str(), alt.as_str(), width.as_deref())),
+            url,
+            alt,
+            width,
+            dark_url,
+            light_url,
+            ..
+          } => Some((
+            url.as_str(),
+            alt.as_str(),
+            width.as_deref(),
+            dark_url.as_deref(),
+            light_url.as_deref(),
+          )),
           _ => None,
         });
         assert_eq!(
           image,
-          Some(("https://example.com/light.png", "jazz logo", Some("85%")))
+          Some((
+            "https://example.com/fallback.png",
+            "jazz logo",
+            Some("85%"),
+            Some("https://example.com/dark.png"),
+            Some("https://example.com/light.png"),
+          ))
         );
       }
       _ => panic!("expected paragraph"),
@@ -4914,6 +5222,8 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
         alt: "badge".to_string(),
         width: Some("120px".to_string()),
         height: None,
+        dark_url: Some("https://img.shields.io/example-dark.svg".to_string()),
+        light_url: Some("https://img.shields.io/example-light.svg".to_string()),
       }],
     };
 
@@ -4925,7 +5235,9 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
         "badge".to_string(),
         Some("https://example.com".to_string()),
         Some("120px".to_string()),
-        None
+        None,
+        Some("https://img.shields.io/example-dark.svg".to_string()),
+        Some("https://img.shields.io/example-light.svg".to_string()),
       ))
     );
   }
@@ -4938,6 +5250,8 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
       alt: "A".to_string(),
       width: None,
       height: None,
+      dark_url: None,
+      light_url: None,
     }];
     assert!(single_inline_image_data(&single).is_some());
 
@@ -4948,6 +5262,8 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
         alt: "A".to_string(),
         width: None,
         height: None,
+        dark_url: None,
+        light_url: None,
       },
       Inline::Image {
         url: "https://img.shields.io/b.svg".to_string(),
@@ -4955,9 +5271,33 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
         alt: "B".to_string(),
         width: None,
         height: None,
+        dark_url: None,
+        light_url: None,
       },
     ];
     assert!(single_inline_image_data(&multiple).is_none());
+  }
+
+  #[test]
+  fn select_markdown_image_url_for_theme_prefers_dark_variant() {
+    let selected = select_markdown_image_url_for_theme(
+      "https://example.com/fallback.png",
+      Some("https://example.com/dark.png"),
+      Some("https://example.com/light.png"),
+      true,
+    );
+    assert_eq!(selected, "https://example.com/dark.png");
+  }
+
+  #[test]
+  fn select_markdown_image_url_for_theme_prefers_light_variant() {
+    let selected = select_markdown_image_url_for_theme(
+      "https://example.com/fallback.png",
+      Some("https://example.com/dark.png"),
+      Some("https://example.com/light.png"),
+      false,
+    );
+    assert_eq!(selected, "https://example.com/light.png");
   }
 
   #[test]
@@ -5118,6 +5458,51 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
         assert_eq!(table.rows.len(), 1);
       }
       _ => panic!("expected table"),
+    }
+  }
+
+  #[test]
+  fn parses_table_followed_by_paragraph_without_empty_block() {
+    let source = r#"## 📦 Tools & Packages
+
+| Tool        | npm                                                     | crates.io                                                   |
+| ----------- | ------------------------------------------------------- | ----------------------------------------------------------- |
+| Linter      | [oxlint](https://npmx.dev/package/oxlint)               | -                                                           |
+| Formatter   | [oxfmt](https://npmx.dev/package/oxfmt)                 | -                                                           |
+| Parser      | [oxc-parser](https://npmx.dev/package/oxc-parser)       | [oxc_parser](https://crates.io/crates/oxc_parser)           |
+| Transformer | [oxc-transform](https://npmx.dev/package/oxc-transform) | [oxc_transformer](https://crates.io/crates/oxc_transformer) |
+| Minifier    | [oxc-minify](https://npmx.dev/package/oxc-minify)       | [oxc_minifier](https://crates.io/crates/oxc_minifier)       |
+| Resolver    | [oxc-resolver](https://npmx.dev/package/oxc-resolver)   | [oxc_resolver](https://crates.io/crates/oxc_resolver)       |
+
+See [documentation](https://oxc.rs/) for detailed usage guides for each tool."#;
+
+    let blocks = parse_gfm(source);
+    assert_eq!(blocks.len(), 3);
+
+    match &blocks[0] {
+      Block::Heading { level, content } => {
+        assert_eq!(*level, 2);
+        assert_eq!(inline_to_plain_text(content), "📦 Tools & Packages");
+      }
+      _ => panic!("expected heading"),
+    }
+
+    match &blocks[1] {
+      Block::Table(table) => {
+        assert_eq!(table.headers.len(), 3);
+        assert_eq!(table.rows.len(), 6);
+      }
+      _ => panic!("expected table"),
+    }
+
+    match &blocks[2] {
+      Block::Paragraph(inlines) => {
+        assert_eq!(
+          inline_to_plain_text(inlines),
+          "See documentation for detailed usage guides for each tool."
+        );
+      }
+      _ => panic!("expected paragraph"),
     }
   }
 
