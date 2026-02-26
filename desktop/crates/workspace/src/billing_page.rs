@@ -14,7 +14,7 @@ use smol::unblock;
 use time::OffsetDateTime;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, DETAILS_PAGE_CONTAINER_MAX_WIDTH, HEADER_HEIGHT,
+  CommandPaletteHandler, CommandPalettePage, DETAILS_PAGE_CONTAINER_MAX_WIDTH, PAGE_HEADER_HEIGHT,
   StatusThemeExt, UiIconName, WindowExt,
 };
 
@@ -559,8 +559,8 @@ impl BillingPage {
       });
 
     div()
-      .h(px(HEADER_HEIGHT))
-      .max_h(px(HEADER_HEIGHT))
+      .h(px(PAGE_HEADER_HEIGHT))
+      .max_h(px(PAGE_HEADER_HEIGHT))
       .px_3()
       .flex()
       .items_center()

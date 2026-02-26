@@ -8,7 +8,8 @@ mod status_theme_ext;
 mod theme;
 mod user_menu;
 
-pub const HEADER_HEIGHT: f32 = 50.0;
+pub const GLOBAL_BAR_HEIGHT: f32 = 36.0;
+pub const PAGE_HEADER_HEIGHT: f32 = 40.0;
 pub const DETAILS_PAGE_CONTAINER_MAX_WIDTH: f32 = 900.0;
 
 pub use assets::AppAssets;

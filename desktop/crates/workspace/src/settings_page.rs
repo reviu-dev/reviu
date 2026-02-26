@@ -13,7 +13,7 @@ use gpui_component::{
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, HEADER_HEIGHT, WindowExt,
+  CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT, WindowExt,
 };
 
 use crate::{
@@ -268,8 +268,8 @@ impl Render for SettingsPage {
     let theme = cx.theme().clone();
 
     let header = div()
-      .h(px(HEADER_HEIGHT))
-      .max_h(px(HEADER_HEIGHT))
+      .h(px(PAGE_HEADER_HEIGHT))
+      .max_h(px(PAGE_HEADER_HEIGHT))
       .px_3()
       .flex()
       .items_center()

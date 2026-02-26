@@ -19,7 +19,7 @@ use gpui_component::{
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, FILE_ICON_SIZE_PX, HEADER_HEIGHT, StatusThemeExt,
+  CommandPaletteHandler, CommandPalettePage, FILE_ICON_SIZE_PX, PAGE_HEADER_HEIGHT, StatusThemeExt,
   WindowExt, file_icon_path_for_path_with_theme,
 };
 
@@ -249,8 +249,8 @@ impl GitConfigPage {
       });
 
     div()
-      .h(px(HEADER_HEIGHT))
-      .max_h(px(HEADER_HEIGHT))
+      .h(px(PAGE_HEADER_HEIGHT))
+      .max_h(px(PAGE_HEADER_HEIGHT))
       .px_3()
       .flex()
       .items_center()
@@ -352,8 +352,8 @@ impl Render for GitConfigPage {
         .bg(theme.background)
         .child(
           div()
-            .h(px(HEADER_HEIGHT))
-            .max_h(px(HEADER_HEIGHT))
+            .h(px(PAGE_HEADER_HEIGHT))
+            .max_h(px(PAGE_HEADER_HEIGHT))
             .px_3()
             .flex()
             .items_center()

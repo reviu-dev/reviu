@@ -16,11 +16,11 @@ use sentry::protocol::{Map, Value};
 use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, HEADER_HEIGHT, StatusThemeExt, WindowExt,
+  CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT, StatusThemeExt, WindowExt,
 };
 
 use crate::{
-  AuthCallbackTarget, ShowCommandPalette,
+  ShowCommandPalette,
   api::{
     ApiClient, GithubNotification, GithubPullRequest, GithubPullRequestStatus, GithubUserRepository,
   },
@@ -31,7 +31,6 @@ use crate::{
   sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
-use ui::{UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, user_menu};
 
 impl GithubPullRequestStatus {
   pub fn tag(&self, theme: &gpui_component::Theme) -> Tag {
@@ -245,14 +244,7 @@ impl ListDelegate for GithubRepositoryListDelegate {
               .gap_2()
               .text_xs()
               .text_color(theme.muted_foreground)
-              .child(format!("Updated {}", updated_at))
-              .when_some(row.repository.description.clone(), |this, description| {
-                if description.trim().is_empty() {
-                  this
-                } else {
-                  this.child(Label::new(description).truncate())
-                }
-              }),
+              .child(format!("Updated {}", updated_at)),
           ),
       ),
     )
@@ -1089,91 +1081,18 @@ impl GithubPage {
   fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
-    let menu_state = match AuthStateStore::get(cx) {
-      AuthState::Unknown => UserMenuState::Unknown,
-      AuthState::Unauthenticated => UserMenuState::Unauthenticated,
-      AuthState::Authenticated(user) => {
-        let display_name = if user.name.trim().is_empty() {
-          user.email.clone()
-        } else {
-          user.name.clone()
-        };
-        UserMenuState::Authenticated(UserMenuUser {
-          name: display_name.into(),
-          email: user.email.into(),
-          image: user.image.map(Into::into),
-        })
-      }
-    };
-
-    let open_git = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
-      cx.refresh_windows();
-    });
-    let open_github = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      if AuthStateStore::has_active_subscription(cx) {
-        WorkspaceRoute::open_github(cx);
-      } else {
-        WorkspaceRoute::open_billing(cx);
-      }
-      cx.refresh_windows();
-    });
-    let open_billing = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_billing(cx);
-      cx.refresh_windows();
-    });
-    let open_settings = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_settings(cx);
-      cx.refresh_windows();
-    });
-    let open_about = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_about(cx);
-      cx.refresh_windows();
-    });
-    let open_git_config = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_git_config(cx);
-      cx.refresh_windows();
-    });
-    let sign_in = Rc::new(|_window: &mut Window, cx: &mut App| {
-      AuthCallbackTarget::start_sign_in(cx);
-    });
-    let sign_out = Rc::new(|_window: &mut Window, cx: &mut App| {
-      AuthCallbackTarget::sign_out(cx);
-    });
-
-    let auth_control = user_menu(UserMenuConfig {
-      id: "auth-menu".into(),
-      state: menu_state,
-      current_page: UserMenuPage::Github,
-      on_open_git: Some(open_git),
-      on_open_github: Some(open_github),
-      on_open_billing: Some(open_billing),
-      on_open_git_config: Some(open_git_config),
-      on_open_settings: Some(open_settings),
-      on_open_about: Some(open_about),
-      on_sign_in: Some(sign_in),
-      on_sign_out: Some(sign_out),
-    });
-
     div()
-      .h(px(HEADER_HEIGHT))
-      .max_h(px(HEADER_HEIGHT))
+      .h(px(PAGE_HEADER_HEIGHT))
+      .max_h(px(PAGE_HEADER_HEIGHT))
       .w_full()
       .px_3()
       .flex()
       .items_center()
-      .justify_between()
+      .justify_start()
       .bg(theme.sidebar)
       .border_b_1()
       .border_color(theme.title_bar_border)
       .child(div().text_sm().text_color(theme.foreground).child("GitHub"))
-      .when_some(auth_control, |this, control| this.child(control))
   }
 }
 
