@@ -39,13 +39,12 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage,
   DETAILS_PAGE_CONTAINER_MAX_WIDTH, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler,
-  StatusThemeExt as _, UiIconName, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser,
-  WindowExt, file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action,
-  resizable_panel, user_menu,
+  StatusThemeExt as _, UiIconName, WindowExt, file_icon_path_for_name_with_theme, h_resizable,
+  parse_github_url_action, resizable_panel,
 };
 
 use crate::{
-  AuthCallbackTarget, ShowCommandPalette, ShowFileSearch,
+  ShowCommandPalette, ShowFileSearch,
   api::{
     ApiClient, GithubIssue, GithubIssueDetails, GithubIssueStateReason, GithubIssueUser,
     GithubPullRequest, GithubRepositoryDetails,
@@ -3055,73 +3054,6 @@ impl GithubRepoPage {
   fn render_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
-    let menu_state = match AuthStateStore::get(cx) {
-      AuthState::Unknown => UserMenuState::Unknown,
-      AuthState::Unauthenticated => UserMenuState::Unauthenticated,
-      AuthState::Authenticated(user) => {
-        let display_name = if user.name.trim().is_empty() {
-          user.email.clone()
-        } else {
-          user.name.clone()
-        };
-        UserMenuState::Authenticated(UserMenuUser {
-          name: display_name.into(),
-          email: user.email.into(),
-          image: user.image.map(Into::into),
-        })
-      }
-    };
-
-    let open_git = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
-      cx.refresh_windows();
-    });
-    let open_github = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      Self::open_github_home(cx);
-    });
-    let open_billing = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_billing(cx);
-      cx.refresh_windows();
-    });
-    let open_settings = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_settings(cx);
-      cx.refresh_windows();
-    });
-    let open_about = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_about(cx);
-      cx.refresh_windows();
-    });
-    let open_git_config = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_git_config(cx);
-      cx.refresh_windows();
-    });
-    let sign_in = Rc::new(|_window: &mut Window, cx: &mut App| {
-      AuthCallbackTarget::start_sign_in(cx);
-    });
-    let sign_out = Rc::new(|_window: &mut Window, cx: &mut App| {
-      AuthCallbackTarget::sign_out(cx);
-    });
-
-    let auth_control = user_menu(UserMenuConfig {
-      id: "auth-menu".into(),
-      state: menu_state,
-      current_page: UserMenuPage::Github,
-      on_open_git: Some(open_git),
-      on_open_github: Some(open_github),
-      on_open_billing: Some(open_billing),
-      on_open_git_config: Some(open_git_config),
-      on_open_settings: Some(open_settings),
-      on_open_about: Some(open_about),
-      on_sign_in: Some(sign_in),
-      on_sign_out: Some(sign_out),
-    });
-
     let repo_label: SharedString =
       if self.owner.as_ref().is_empty() || self.repo.as_ref().is_empty() {
         "Repository".into()
@@ -3194,8 +3126,7 @@ impl GithubRepoPage {
                   }),
               )
               .child(div().text_sm().font_medium().child(repo_label)),
-          )
-          .when_some(auth_control, |this, control| this.child(control)),
+          ),
       )
       .child(tab_bar)
   }

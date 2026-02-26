@@ -1,28 +1,37 @@
+use std::rc::Rc;
+
 use editor::set_indent_rainbow_enabled;
 use gpui::{
   AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global, Render, Subscription,
-  Task, Window, prelude::*,
+  Task, Window, div, prelude::*, px,
 };
-use gpui_component::{ActiveTheme as _, Theme, ThemeMode, notification::Notification};
+use gpui_component::{
+  ActiveTheme as _, Disableable, IconName, Sizable as _, StyledExt, Theme, ThemeMode,
+  notification::Notification,
+};
 use smol::unblock;
 
+use crate::AuthCallbackTarget;
 use crate::about_page::AboutPage;
 use crate::api::ApiClient;
 use crate::app_update::{
-  AppUpdateNotificationId, AppUpdateStore, AvailableAppUpdate, UpdateArtifact, current_arch,
-  current_platform, download_update_artifact, open_installer, resolved_build_version,
+  AppUpdateNotificationId, AppUpdateState, AppUpdateStore, AvailableAppUpdate, UpdateArtifact,
+  current_arch, current_platform, download_update_artifact, open_installer, resolved_build_version,
 };
-use crate::auth_state::AuthStateStore;
+use crate::auth_state::{AuthState, AuthStateStore};
 use crate::billing_page::BillingPage;
 use crate::config::{AppSettings as PersistedSettings, ConfigStore};
 use crate::git_config_page::GitConfigPage;
 use crate::git_page::GitPage;
-use crate::github_page::GithubPage;
+use crate::github_page::{GithubPage, GithubPageHandle};
 use crate::github_pr_details_page::GithubPrDetailsPage;
 use crate::github_repo_page::GithubRepoPage;
 use crate::sentry_context;
 use crate::settings_page::SettingsPage;
-use ui::{Button, ButtonVariants as _, UiIconName, WindowExt};
+use ui::{
+  Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, UiIconName, UserMenuConfig, UserMenuPage,
+  UserMenuState, UserMenuUser, WindowExt, user_menu,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspacePage {
@@ -59,6 +68,18 @@ fn billing_return_target_for_subscription(
     WorkspacePage::Git
   } else {
     target
+  }
+}
+
+fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
+  match page {
+    WorkspacePage::Git => UserMenuPage::Git,
+    WorkspacePage::Github | WorkspacePage::GithubRepo => UserMenuPage::Github,
+    WorkspacePage::GithubPrDetails => UserMenuPage::GithubPrDetails,
+    WorkspacePage::Billing => UserMenuPage::Billing,
+    WorkspacePage::GitConfig => UserMenuPage::GitConfig,
+    WorkspacePage::Settings => UserMenuPage::Settings,
+    WorkspacePage::About => UserMenuPage::About,
   }
 }
 
@@ -208,6 +229,8 @@ pub struct WorkspaceView {
 }
 
 impl WorkspaceView {
+  const GLOBAL_BAR_MACOS_LEFT_PADDING: f32 = 85.0;
+
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     cx.set_global(WorkspaceRoute::default());
     cx.set_global(WorkspaceApi::new());
@@ -400,6 +423,168 @@ impl WorkspaceView {
       );
     });
   }
+
+  fn update_button_label(state: Option<AppUpdateState>) -> &'static str {
+    match state {
+      Some(AppUpdateState::Downloading(_)) => "Downloading...",
+      Some(AppUpdateState::ReadyToInstall(_)) => "Open installer again",
+      _ => "New version available",
+    }
+  }
+
+  fn global_update_download_action(
+    &mut self,
+    _: &gpui::ClickEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.trigger_update_download(cx);
+    window.on_next_frame(|window, cx| {
+      window.remove_notification::<AppUpdateNotificationId>(cx);
+    });
+  }
+
+  fn open_github_home(cx: &mut App) {
+    if AuthStateStore::has_active_subscription(cx) {
+      GithubPageHandle::refresh(cx);
+      WorkspaceRoute::open_github(cx);
+    } else {
+      WorkspaceRoute::open_billing(cx);
+    }
+    cx.refresh_windows();
+  }
+
+  fn render_global_bar(&self, page: WorkspacePage, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let show_update_button = AppUpdateStore::try_available_update(cx).is_some();
+    let update_download_in_progress = AppUpdateStore::is_downloading(cx);
+    let update_button_label = Self::update_button_label(AppUpdateStore::try_state(cx));
+
+    let current_page = user_menu_page_for_workspace_page(page);
+    let auth_state = AuthStateStore::get(cx);
+    let is_unauthenticated = matches!(auth_state, AuthState::Unauthenticated);
+
+    let open_git = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
+      cx.refresh_windows();
+    });
+    let open_github = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      Self::open_github_home(cx);
+    });
+    let open_billing = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::open_billing(cx);
+      cx.refresh_windows();
+    });
+    let open_git_config = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::open_git_config(cx);
+      cx.refresh_windows();
+    });
+    let open_settings = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::open_settings(cx);
+      cx.refresh_windows();
+    });
+    let open_about = Rc::new(|_window: &mut Window, cx: &mut App| {
+      let cx = &mut *cx;
+      WorkspaceRoute::open_about(cx);
+      cx.refresh_windows();
+    });
+    let sign_in = Rc::new(|_window: &mut Window, cx: &mut App| {
+      AuthCallbackTarget::start_sign_in(cx);
+    });
+    let sign_out = Rc::new(|_window: &mut Window, cx: &mut App| {
+      AuthCallbackTarget::sign_out(cx);
+    });
+
+    let auth_control = match auth_state {
+      AuthState::Authenticated(user) => {
+        let display_name = if user.name.trim().is_empty() {
+          user.email.clone()
+        } else {
+          user.name.clone()
+        };
+
+        user_menu(UserMenuConfig {
+          id: "workspace-auth-menu".into(),
+          state: UserMenuState::Authenticated(UserMenuUser {
+            name: display_name.into(),
+            email: user.email.into(),
+            image: user.image.map(Into::into),
+          }),
+          current_page,
+          on_open_git: Some(open_git),
+          on_open_github: Some(open_github),
+          on_open_billing: Some(open_billing),
+          on_open_git_config: Some(open_git_config),
+          on_open_settings: Some(open_settings),
+          on_open_about: Some(open_about),
+          on_sign_in: Some(sign_in),
+          on_sign_out: Some(sign_out),
+        })
+      }
+      _ => None,
+    };
+
+    let update_button = Button::new("workspace-global-update-download")
+      .icon(UiIconName::Download)
+      .label(update_button_label)
+      .ghost()
+      .compact()
+      .small()
+      .disabled(update_download_in_progress)
+      .on_click(cx.listener(Self::global_update_download_action));
+
+    let sign_in_button = Button::new("workspace-global-sign-in")
+      .icon(IconName::GitHub)
+      .label("Sign in with GitHub")
+      .ghost()
+      .gap_2()
+      .small()
+      .on_click(|_, _, cx| {
+        AuthCallbackTarget::start_sign_in(cx);
+      });
+
+    let bar = div()
+      .h(px(GLOBAL_BAR_HEIGHT))
+      .max_h(px(GLOBAL_BAR_HEIGHT))
+      .w_full()
+      .flex()
+      .items_center()
+      .justify_between()
+      .bg(theme.sidebar)
+      .border_b_1()
+      .border_color(theme.title_bar_border);
+    let bar = if cfg!(target_os = "macos") {
+      bar.pl(px(Self::GLOBAL_BAR_MACOS_LEFT_PADDING)).pr_3()
+    } else {
+      bar.px_3()
+    };
+
+    let mut right = div().flex().items_center().gap_2();
+    if show_update_button {
+      right = right.child(update_button);
+    }
+    if is_unauthenticated {
+      right = right.child(sign_in_button);
+    }
+    if let Some(auth_control) = auth_control {
+      right = right.child(auth_control);
+    }
+
+    bar
+      .child(
+        div()
+          .text_sm()
+          .font_medium()
+          .text_color(theme.foreground)
+          .child("Reviu"),
+      )
+      .child(right)
+  }
 }
 
 impl Render for WorkspaceView {
@@ -427,7 +612,7 @@ impl Render for WorkspaceView {
       window.focus(&focus_handle, cx);
     }
 
-    match page {
+    let page_view = match page {
       WorkspacePage::Git => self.git_page.clone().into_any_element(),
       WorkspacePage::Github => self.github_page.clone().into_any_element(),
       WorkspacePage::GithubRepo => self.github_repo_page.clone().into_any_element(),
@@ -436,15 +621,28 @@ impl Render for WorkspaceView {
       WorkspacePage::GitConfig => self.git_config_page.clone().into_any_element(),
       WorkspacePage::Settings => self.settings_page.clone().into_any_element(),
       WorkspacePage::About => self.about_page.clone().into_any_element(),
-    }
+    };
+
+    div()
+      .size_full()
+      .flex()
+      .flex_col()
+      .child(self.render_global_bar(page, cx))
+      .child(div().flex_1().min_h_0().child(page_view))
   }
 }
 
 #[cfg(test)]
 mod tests {
   use super::{
-    WorkspacePage, billing_return_target_for_subscription, page_for_subscription_access,
+    WorkspacePage, WorkspaceView, billing_return_target_for_subscription,
+    page_for_subscription_access, user_menu_page_for_workspace_page,
   };
+  use crate::app_update::{
+    AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
+  };
+  use std::path::PathBuf;
+  use ui::UserMenuPage;
 
   #[test]
   fn page_for_subscription_access_redirects_restricted_pages_without_subscription() {
@@ -499,6 +697,55 @@ mod tests {
     assert_eq!(
       billing_return_target_for_subscription(WorkspacePage::Settings, false),
       WorkspacePage::Settings
+    );
+  }
+
+  #[test]
+  fn user_menu_page_for_workspace_maps_repo_to_github() {
+    assert_eq!(
+      user_menu_page_for_workspace_page(WorkspacePage::GithubRepo),
+      UserMenuPage::Github
+    );
+    assert_eq!(
+      user_menu_page_for_workspace_page(WorkspacePage::GithubPrDetails),
+      UserMenuPage::GithubPrDetails
+    );
+  }
+
+  #[test]
+  fn workspace_update_button_label_tracks_update_state() {
+    let update = AvailableAppUpdate {
+      latest_version: "0.2.0".to_string(),
+      minimum_supported_version: "0.1.0".to_string(),
+      release_notes_url: "https://reviu.dev/releases/0.2.0".to_string(),
+      force_update: false,
+      artifact: UpdateArtifact {
+        url: "https://reviu.dev/downloads/latest".to_string(),
+        sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+        size: 1024,
+      },
+    };
+
+    assert_eq!(
+      WorkspaceView::update_button_label(None),
+      "New version available"
+    );
+    assert_eq!(
+      WorkspaceView::update_button_label(Some(AppUpdateState::Available(update.clone()))),
+      "New version available"
+    );
+    assert_eq!(
+      WorkspaceView::update_button_label(Some(AppUpdateState::Downloading(update.clone()))),
+      "Downloading..."
+    );
+    assert_eq!(
+      WorkspaceView::update_button_label(Some(AppUpdateState::ReadyToInstall(
+        ReadyToInstallAppUpdate {
+          update,
+          artifact_path: PathBuf::from("/tmp/reviu-installer.dmg"),
+        }
+      ))),
+      "Open installer again"
     );
   }
 }

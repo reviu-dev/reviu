@@ -1,15 +1,15 @@
 use app_root::AppRoot;
 use editor::*;
 use gpui::{
-  App, Application, Bounds, Focusable, KeyBinding, WindowBounds, WindowOptions, prelude::*, px,
-  size,
+  App, Application, Bounds, Focusable, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions,
+  point, prelude::*, px, size,
 };
-use gpui_component::Root;
+use gpui_component::{Root, TitleBar};
 use reqwest_client::ReqwestClient;
 use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
-use ui::AppAssets;
+use ui::{AppAssets, PAGE_HEADER_HEIGHT};
 use workspace::{
   AuthCallbackTarget, CloseWorkspacePage, CommitChanges, OpenRepository, ShowCommandPalette,
   ShowFileSearch, WorkspaceView,
@@ -23,6 +23,19 @@ const SENTRY_DSN: &str =
   "https://a816f0ac9d37d42ec72719de4770c538@o1155685.ingest.us.sentry.io/4510920248918016";
 const SENTRY_ENABLE_DEV_ENV: &str = "SENTRY_ENABLE_DEV";
 const SENTRY_REDACTED: &str = "[REDACTED]";
+#[cfg(target_os = "macos")]
+const MACOS_TRAFFIC_LIGHT_X: f32 = 9.0;
+#[cfg(target_os = "macos")]
+const MACOS_TRAFFIC_LIGHT_Y: f32 = ((PAGE_HEADER_HEIGHT - 34.0) / 2.0) + 9.0;
+
+#[cfg(target_os = "macos")]
+fn macos_titlebar_options() -> TitlebarOptions {
+  let mut options = TitleBar::title_bar_options();
+  // Align traffic lights vertically with the 50px global top bar.
+  options.traffic_light_position =
+    Some(point(px(MACOS_TRAFFIC_LIGHT_X), px(MACOS_TRAFFIC_LIGHT_Y)));
+  options
+}
 
 fn main() {
   let traces_sample_rate = if cfg!(debug_assertions) { 1.0 } else { 0.1 };
@@ -113,19 +126,20 @@ fn main() {
       KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, None),
     ]);
 
+    let window_options = WindowOptions {
+      window_bounds: Some(WindowBounds::Windowed(bounds)),
+      #[cfg(target_os = "macos")]
+      titlebar: Some(macos_titlebar_options()),
+      ..Default::default()
+    };
+
     let window = cx
-      .open_window(
-        WindowOptions {
-          window_bounds: Some(WindowBounds::Windowed(bounds)),
-          ..Default::default()
-        },
-        |window, cx| {
-          let view = cx.new(|cx| WorkspaceView::new(window, cx));
-          let app_root = cx.new(|cx| AppRoot::new(view, window, cx));
-          window.focus(&app_root.focus_handle(cx), cx);
-          cx.new(|cx| Root::new(app_root, window, cx))
-        },
-      )
+      .open_window(window_options, |window, cx| {
+        let view = cx.new(|cx| WorkspaceView::new(window, cx));
+        let app_root = cx.new(|cx| AppRoot::new(view, window, cx));
+        window.focus(&app_root.focus_handle(cx), cx);
+        cx.new(|cx| Root::new(app_root, window, cx))
+      })
       .unwrap();
 
     window

@@ -45,7 +45,6 @@ use smol::unblock;
 
 use crate::{
   api::ApiClient,
-  app_update::{AppUpdateNotificationId, AppUpdateStore, download_update_artifact, open_installer},
   auth_state::{AuthState, AuthStateStore},
   config::{ConfigStore, RecentRepository},
   file_preview::{is_markdown_path, is_previewable_path, is_svg_path},
@@ -64,9 +63,8 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteGithubRepoTab, CommandPaletteHandler,
   CommandPalettePage, CommandPaletteRepository, CommandPaletteStash, ConfirmDialog,
-  FILE_ICON_SIZE_PX, HEADER_HEIGHT, Input, InputState, SearchFileEntry, SearchFileHandler,
-  StatusThemeExt, UiIconName, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
-  file_icon_path_for_path_with_theme, user_menu,
+  FILE_ICON_SIZE_PX, Input, InputState, PAGE_HEADER_HEIGHT, SearchFileEntry, SearchFileHandler,
+  StatusThemeExt, UiIconName, WindowExt, file_icon_path_for_path_with_theme,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
@@ -89,22 +87,90 @@ actions!(
   ]
 );
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GitFileLabelFormat {
-  FullPath,
-  FileName,
+fn format_git_file_name_label(path: &Path) -> SharedString {
+  path
+    .file_name()
+    .and_then(|name| name.to_str())
+    .unwrap_or("Untitled")
+    .replace(['\n', '\r'], "")
+    .into()
 }
 
-fn format_git_file_label(path: &Path, format: GitFileLabelFormat) -> SharedString {
-  match format {
-    GitFileLabelFormat::FullPath => path.to_string_lossy().replace(['\n', '\r'], "").into(),
-    GitFileLabelFormat::FileName => path
-      .file_name()
-      .and_then(|name| name.to_str())
-      .unwrap_or("Untitled")
-      .replace(['\n', '\r'], "")
-      .into(),
+fn format_git_dir_label(path: &Path) -> SharedString {
+  path
+    .parent()
+    .and_then(|parent| parent.to_str())
+    .unwrap_or("")
+    .replace(['\n', '\r'], "")
+    .into()
+}
+
+fn render_git_path_label(
+  theme: &gpui_component::Theme,
+  path: &Path,
+  muted_file: bool,
+  line_through: bool,
+) -> AnyElement {
+  let dir_label = format_git_dir_label(path);
+  let file_label = format_git_file_name_label(path);
+  let has_dir_label = !dir_label.is_empty();
+
+  h_flex()
+    .min_w_0()
+    .flex_1()
+    .items_center()
+    .justify_between()
+    .gap_4()
+    .child(
+      div()
+        .min_w_0()
+        .overflow_hidden()
+        .flex_shrink_0()
+        .text_ellipsis_start()
+        .when(muted_file, |this| this.text_color(theme.muted_foreground))
+        .when(line_through, |this| this.line_through())
+        .child(file_label),
+    )
+    .when(has_dir_label, |this| {
+      this.child(
+        div()
+          .min_w_0()
+          .overflow_hidden()
+          .text_sm()
+          .text_ellipsis_start()
+          .text_color(theme.muted_foreground)
+          .when(line_through, |this| this.line_through())
+          .child(dir_label),
+      )
+    })
+    .into_any_element()
+}
+
+fn render_git_status_path_label(
+  theme: &gpui_component::Theme,
+  status: RepoStatusKind,
+  path: &Path,
+  old_path: Option<&Path>,
+) -> AnyElement {
+  if status == RepoStatusKind::Renamed
+    && let Some(old_path) = old_path
+  {
+    return h_flex()
+      .min_w_0()
+      .flex_1()
+      .items_center()
+      .gap_1()
+      .child(render_git_path_label(theme, old_path, true, true))
+      .child(
+        Icon::new(IconName::ArrowRight)
+          .size_3()
+          .text_color(theme.muted_foreground),
+      )
+      .child(render_git_path_label(theme, path, false, false))
+      .into_any_element();
   }
+
+  render_git_path_label(theme, path, false, status == RepoStatusKind::Deleted)
 }
 
 fn render_repo_status_label(
@@ -161,22 +227,11 @@ fn render_repo_status_label(
 #[derive(Clone, Debug)]
 struct GitFileRow {
   entry: RepoStatusEntry,
-  label: SharedString,
-  old_label: Option<SharedString>,
 }
 
 impl GitFileRow {
   fn new(entry: RepoStatusEntry) -> Self {
-    let label = format_git_file_label(&entry.path, GitFileLabelFormat::FullPath);
-    let old_label = entry
-      .old_path
-      .as_ref()
-      .map(|path| format_git_file_label(path, GitFileLabelFormat::FullPath));
-    Self {
-      entry,
-      label,
-      old_label,
-    }
+    Self { entry }
   }
 }
 
@@ -279,11 +334,11 @@ impl ListDelegate for GitFileListDelegate {
       .tooltip(move |window, cx| Tooltip::new(status_tooltip.clone()).build(window, cx))
       .child(status_letter);
 
-    let file_label = render_repo_status_label(
+    let file_label = render_git_status_path_label(
       &theme,
-      Some(row.entry.status),
-      row.label.clone(),
-      row.old_label.clone(),
+      row.entry.status,
+      &row.entry.path,
+      row.entry.old_path.as_deref(),
     );
 
     Some(
@@ -598,7 +653,6 @@ pub struct GitPage {
   history_files_task: Option<Task<()>>,
   history_open_file_task: Option<Task<()>>,
   branch_task: Option<Task<()>>,
-  app_update_task: Option<Task<()>>,
   open_file_generation: u64,
   branch_refresh_generation: u64,
   poll_task: Option<Task<()>>,
@@ -707,82 +761,6 @@ impl GitPage {
       Self::sidebar_mode_tag(self.sidebar_mode),
       self.active_diff_view_tag(),
     );
-  }
-
-  fn has_available_app_update(cx: &App) -> bool {
-    AppUpdateStore::try_available_update(cx).is_some()
-  }
-
-  fn app_update_button_label(cx: &App) -> &'static str {
-    if AppUpdateStore::is_downloading(cx) {
-      "Downloading..."
-    } else if AppUpdateStore::try_ready_to_install(cx).is_some() {
-      "Open installer again"
-    } else {
-      "New version available"
-    }
-  }
-
-  fn app_update_download_action(
-    &mut self,
-    _: &gpui::ClickEvent,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.trigger_update_download(cx);
-    window.on_next_frame(|window, cx| {
-      window.remove_notification::<AppUpdateNotificationId>(cx);
-    });
-  }
-
-  fn trigger_update_download(&mut self, cx: &mut Context<Self>) {
-    if AppUpdateStore::is_downloading(cx) {
-      return;
-    }
-
-    if let Some(ready) = AppUpdateStore::try_ready_to_install(cx) {
-      match open_installer(&ready.artifact_path) {
-        Ok(()) => AppUpdateStore::set_ready_to_install(cx, ready),
-        Err(err) => AppUpdateStore::set_error(cx, Some(ready.update), err.to_string()),
-      }
-      return;
-    }
-
-    let Some(update) = AppUpdateStore::try_available_update(cx) else {
-      return;
-    };
-
-    AppUpdateStore::set_downloading(cx, update.clone());
-    let task = cx.spawn(async move |this, cx| {
-      let download_result = unblock({
-        let update = update.clone();
-        move || download_update_artifact(&update)
-      })
-      .await;
-
-      match download_result {
-        Ok(ready) => {
-          let install_path = ready.artifact_path.clone();
-          let install_result = unblock(move || open_installer(&install_path)).await;
-          let _ = this.update(cx, |_, cx| {
-            AppUpdateStore::set_ready_to_install(cx, ready.clone());
-            match install_result {
-              Ok(()) => {}
-              Err(err) => {
-                AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string())
-              }
-            }
-          });
-        }
-        Err(err) => {
-          let _ = this.update(cx, |_, cx| {
-            AppUpdateStore::set_error(cx, Some(update.clone()), err.to_string());
-          });
-        }
-      }
-    });
-
-    self.app_update_task = Some(task);
   }
 
   fn should_refresh_file_list(sidebar_mode: GitSidebarMode) -> bool {
@@ -1430,7 +1408,6 @@ impl GitPage {
       history_files_task: None,
       history_open_file_task: None,
       branch_task: None,
-      app_update_task: None,
       open_file_generation: 0,
       branch_refresh_generation: 0,
       poll_task: None,
@@ -1527,7 +1504,6 @@ impl GitPage {
       history_files_task: None,
       history_open_file_task: None,
       branch_task: None,
-      app_update_task: None,
       open_file_generation: 0,
       branch_refresh_generation: 0,
       poll_task: None,
@@ -5191,124 +5167,18 @@ impl GitPage {
       .when_some(branch_info, |this, info| this.child(info))
       .child(fetch_button);
 
-    let menu_state = match &self.auth_state {
-      AuthState::Unknown => UserMenuState::Unknown,
-      AuthState::Unauthenticated => UserMenuState::Unauthenticated,
-      AuthState::Authenticated(user) => {
-        let display_name = if user.name.trim().is_empty() {
-          user.email.clone()
-        } else {
-          user.name.clone()
-        };
-        UserMenuState::Authenticated(UserMenuUser {
-          name: display_name.into(),
-          email: user.email.clone().into(),
-          image: user.image.clone().map(Into::into),
-        })
-      }
-    };
-    let is_unauthenticated = matches!(self.auth_state, AuthState::Unauthenticated);
-
-    let sign_in_view = cx.entity();
-    let open_git = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
-      cx.refresh_windows();
-    });
-    let open_github = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      if AuthStateStore::has_active_subscription(cx) {
-        GithubPageHandle::refresh(cx);
-        WorkspaceRoute::open_github(cx);
-      } else {
-        WorkspaceRoute::open_billing(cx);
-      }
-      cx.refresh_windows();
-    });
-    let open_billing = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_billing(cx);
-      cx.refresh_windows();
-    });
-    let open_settings = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_settings(cx);
-      cx.refresh_windows();
-    });
-    let open_about = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_about(cx);
-      cx.refresh_windows();
-    });
-    let open_git_config = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_git_config(cx);
-      cx.refresh_windows();
-    });
-    let sign_in = Rc::new(move |_window: &mut Window, cx: &mut App| {
-      sign_in_view.update(cx, |this, cx| this.start_github_sign_in(cx));
-    });
-    let sign_out_view = cx.entity();
-    let sign_out = Rc::new(move |_window: &mut Window, cx: &mut App| {
-      sign_out_view.update(cx, |this, cx| this.logout(cx));
-    });
-
-    let auth_control = user_menu(UserMenuConfig {
-      id: "auth-menu".into(),
-      state: menu_state,
-      current_page: UserMenuPage::Git,
-      on_open_git: Some(open_git),
-      on_open_github: Some(open_github),
-      on_open_billing: Some(open_billing),
-      on_open_git_config: Some(open_git_config),
-      on_open_settings: Some(open_settings),
-      on_open_about: Some(open_about),
-      on_sign_in: Some(sign_in),
-      on_sign_out: Some(sign_out),
-    });
-
-    let sign_in_button_view = cx.entity();
-    let sign_in_button = Button::new("git-sign-in")
-      .icon(IconName::GitHub)
-      .label("Sign in with GitHub")
-      .ghost()
-      .gap_2()
-      .small()
-      .on_click(move |_, _, cx| {
-        sign_in_button_view.update(cx, |this, cx| this.start_github_sign_in(cx));
-      });
-
-    let show_update_button = Self::has_available_app_update(cx);
-    let update_download_in_progress = AppUpdateStore::is_downloading(cx);
-    let update_button = Button::new("git-update-download-button")
-      .icon(UiIconName::Download)
-      .label(Self::app_update_button_label(cx))
-      .ghost()
-      .compact()
-      .small()
-      .disabled(update_download_in_progress)
-      .on_click(cx.listener(Self::app_update_download_action));
-
-    let header_right = h_flex()
-      .items_center()
-      .gap_2()
-      .when(show_update_button, |this| this.child(update_button))
-      .when(is_unauthenticated, |this| this.child(sign_in_button))
-      .when_some(auth_control, |this, control| this.child(control));
-
     div()
-      .h(px(HEADER_HEIGHT))
-      .min_h(px(HEADER_HEIGHT))
-      .max_h(px(HEADER_HEIGHT))
+      .h(px(PAGE_HEADER_HEIGHT))
+      .min_h(px(PAGE_HEADER_HEIGHT))
+      .max_h(px(PAGE_HEADER_HEIGHT))
       .px_3()
       .flex()
       .items_center()
-      .justify_between()
+      .justify_start()
       .bg(theme.sidebar)
       .border_b_1()
       .border_color(theme.title_bar_border)
       .child(header_left)
-      .child(header_right)
   }
 
   fn render_empty_state(&self, message: &str, cx: &mut Context<Self>) -> AnyElement {
@@ -5371,11 +5241,11 @@ impl GitPage {
       .map(|entry| entry.path.as_path())
       .or(self.selected_file.as_deref())
       .unwrap_or(editor_state.workdir_path.as_path());
-    let file_name = format_git_file_label(display_path, GitFileLabelFormat::FileName);
+    let file_name = format_git_file_name_label(display_path);
     let old_file_name = selected_entry
       .as_ref()
       .and_then(|entry| entry.old_path.as_ref())
-      .map(|path| format_git_file_label(path, GitFileLabelFormat::FileName));
+      .map(|path| format_git_file_name_label(path));
     let dir_path = display_path
       .parent()
       .and_then(|parent| parent.to_str())
@@ -6061,6 +5931,7 @@ impl GitPage {
 
     div()
       .w_full()
+      .min_w_0()
       .flex()
       .flex_col()
       .p_2()
@@ -6088,8 +5959,13 @@ impl GitPage {
       .when_some(operation_error, |this, error| {
         this.child(Alert::error("commit-operation-error", error.clone()).title("Operation failed"))
       })
-      .child(div().w_full().child(Input::new(&input)))
-      .child(self.render_commit_button(cx))
+      .child(div().w_full().min_w_0().child(Input::new(&input).w_full()))
+      .child(
+        div()
+          .w_full()
+          .min_w_0()
+          .child(self.render_commit_button(cx)),
+      )
   }
 
   fn render_sidebar_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -6425,30 +6301,47 @@ mod tests {
   use std::time::{SystemTime, UNIX_EPOCH};
 
   #[test]
-  fn format_git_file_label_supports_full_path_and_file_name() {
+  fn format_git_file_name_label_extracts_file_name() {
     let path = Path::new("src/features/renamed_file.rs");
 
-    assert_eq!(
-      format_git_file_label(path, GitFileLabelFormat::FullPath).as_ref(),
-      "src/features/renamed_file.rs"
-    );
-    assert_eq!(
-      format_git_file_label(path, GitFileLabelFormat::FileName).as_ref(),
-      "renamed_file.rs"
-    );
+    assert_eq!(format_git_file_name_label(path).as_ref(), "renamed_file.rs");
   }
 
   #[test]
-  fn format_git_file_label_strips_newlines() {
+  fn format_git_file_name_label_strips_newlines() {
     let path = Path::new("src/renamed\n_file.rs");
 
+    assert_eq!(format_git_file_name_label(path).as_ref(), "renamed_file.rs");
+  }
+
+  #[test]
+  fn format_git_dir_label_returns_parent_path() {
+    let path = Path::new("src/features/renamed_file.rs");
+    assert_eq!(format_git_dir_label(path).as_ref(), "src/features");
+  }
+
+  #[test]
+  fn format_git_dir_label_handles_root_file_and_newlines() {
+    let root_file = Path::new("main.rs");
+    assert_eq!(format_git_dir_label(root_file).as_ref(), "");
+
+    let path = Path::new("src/feature\ns/file.rs");
+    assert_eq!(format_git_dir_label(path).as_ref(), "src/features");
+  }
+
+  #[test]
+  fn git_file_row_keeps_entry_paths() {
+    let row = GitFileRow::new(RepoStatusEntry {
+      path: PathBuf::from("src/features/new_file.rs"),
+      old_path: Some(PathBuf::from("src/features/old_file.rs")),
+      status: RepoStatusKind::Renamed,
+      stage: RepoStage::Unstaged,
+    });
+
+    assert_eq!(row.entry.path, PathBuf::from("src/features/new_file.rs"));
     assert_eq!(
-      format_git_file_label(path, GitFileLabelFormat::FullPath).as_ref(),
-      "src/renamed_file.rs"
-    );
-    assert_eq!(
-      format_git_file_label(path, GitFileLabelFormat::FileName).as_ref(),
-      "renamed_file.rs"
+      row.entry.old_path.as_deref(),
+      Some(Path::new("src/features/old_file.rs"))
     );
   }
 
@@ -6673,9 +6566,6 @@ mod tests {
     isolate_config_store_for_test();
     cx.update(|cx| {
       gpui_component::init(cx);
-      if cx.try_global::<AppUpdateStore>().is_none() {
-        cx.set_global(AppUpdateStore::default());
-      }
     });
   }
 
@@ -7291,67 +7181,6 @@ mod tests {
     assert!(!GitPage::should_show_changed_files_tag(0));
     assert!(GitPage::should_show_changed_files_tag(1));
     assert!(GitPage::should_show_changed_files_tag(42));
-  }
-
-  #[gpui::test]
-  fn update_button_visibility_follows_global_app_update_store(cx: &mut TestAppContext) {
-    init_gpui_test(cx);
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
-
-    let visible_without_update =
-      git_page.read_with(cx, |_, cx| GitPage::has_available_app_update(cx));
-    assert!(!visible_without_update);
-
-    git_page.update_in(cx, |_, _, cx| {
-      AppUpdateStore::set_available_update(
-        cx,
-        Some(crate::app_update::AvailableAppUpdate {
-          latest_version: "0.2.0".to_string(),
-          minimum_supported_version: "0.1.0".to_string(),
-          release_notes_url: "https://reviu.dev/releases/0.2.0".to_string(),
-          force_update: false,
-          artifact: crate::app_update::UpdateArtifact {
-            url: "https://reviu.dev/downloads/latest".to_string(),
-            sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
-            size: 1024,
-          },
-        }),
-      );
-    });
-
-    let visible_with_update = git_page.read_with(cx, |_, cx| GitPage::has_available_app_update(cx));
-    assert!(visible_with_update);
-  }
-
-  #[gpui::test]
-  fn update_button_label_is_open_installer_again_when_ready(cx: &mut TestAppContext) {
-    init_gpui_test(cx);
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
-
-    let update = crate::app_update::AvailableAppUpdate {
-      latest_version: "0.2.0".to_string(),
-      minimum_supported_version: "0.1.0".to_string(),
-      release_notes_url: "https://reviu.dev/releases/0.2.0".to_string(),
-      force_update: false,
-      artifact: crate::app_update::UpdateArtifact {
-        url: "https://reviu.dev/downloads/latest".to_string(),
-        sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
-        size: 1024,
-      },
-    };
-
-    git_page.update_in(cx, |_, _, cx| {
-      AppUpdateStore::set_ready_to_install(
-        cx,
-        crate::app_update::ReadyToInstallAppUpdate {
-          update: update.clone(),
-          artifact_path: PathBuf::from("/tmp/reviu-installer.dmg"),
-        },
-      );
-    });
-
-    let label = git_page.read_with(cx, |_, cx| GitPage::app_update_button_label(cx));
-    assert_eq!(label, "Open installer again");
   }
 
   #[gpui::test]
