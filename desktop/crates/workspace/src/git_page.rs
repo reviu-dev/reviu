@@ -1527,11 +1527,24 @@ impl GitPage {
     self.ensure_page_shortcut_focus(cx);
   }
 
+  fn refocus_page_shortcuts_after_dropdown_select(
+    &self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let focus_handle = self.focus_handle.clone();
+    window.focus(&focus_handle, cx);
+    cx.on_next_frame(window, move |_, window, cx| {
+      window.focus(&focus_handle, cx);
+    });
+  }
+
   fn repo_select_handler(&self, cx: &Context<Self>) -> Rc<dyn Fn(PathBuf, &mut Window, &mut App)> {
     let view = cx.entity();
-    Rc::new(move |repo_root, _, cx| {
+    Rc::new(move |repo_root, window, cx| {
       let _ = view.update(cx, |this, cx| {
         this.handle_repo_select_confirm(repo_root, cx);
+        this.refocus_page_shortcuts_after_dropdown_select(window, cx);
       });
     })
   }
@@ -1569,9 +1582,10 @@ impl GitPage {
     cx: &Context<Self>,
   ) -> Rc<dyn Fn(BranchRef, &mut Window, &mut App)> {
     let view = cx.entity();
-    Rc::new(move |branch, _, cx| {
+    Rc::new(move |branch, window, cx| {
       let _ = view.update(cx, |this, cx| {
         this.handle_branch_select_confirm(branch, cx);
+        this.refocus_page_shortcuts_after_dropdown_select(window, cx);
       });
     })
   }
@@ -3883,9 +3897,7 @@ impl GitPage {
     let focus_handle = self.focus_handle.clone();
     let window_handle = self.window_handle;
     let _ = cx.update_window(window_handle, move |_, window, cx| {
-      if !focus_handle.contains_focused(window, cx) {
-        window.focus(&focus_handle, cx);
-      }
+      window.focus(&focus_handle, cx);
     });
   }
 
