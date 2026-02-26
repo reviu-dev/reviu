@@ -418,6 +418,8 @@ impl<I: DropdownSelectItem + 'static> ListDelegate for DropdownSelectListDelegat
   }
 
   fn confirm(&mut self, _: bool, window: &mut Window, cx: &mut Context<ListState<Self>>) {
+    self.dismiss_popover(window, cx);
+
     if let Some(ix) = self.selected_index {
       if let Some(option) = self.filtered_options.get(ix.row).cloned() {
         if !option.disabled() {
@@ -427,8 +429,6 @@ impl<I: DropdownSelectItem + 'static> ListDelegate for DropdownSelectListDelegat
         }
       }
     }
-
-    self.dismiss_popover(window, cx);
   }
 
   fn cancel(&mut self, window: &mut Window, cx: &mut Context<ListState<Self>>) {
