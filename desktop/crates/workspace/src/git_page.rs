@@ -3467,13 +3467,11 @@ impl GitPage {
     }
     self.add_git_breadcrumb("Fetch started", Map::new());
     self.fetch_in_progress = true;
-    self.push_pull_in_progress = true;
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || fetch(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
         this.fetch_in_progress = false;
-        this.push_pull_in_progress = false;
         match result {
           Ok(()) => {
             this.add_git_breadcrumb("Fetch succeeded", Map::new());
@@ -5031,12 +5029,6 @@ impl GitPage {
         .flex()
         .items_center()
         .gap_2()
-        .px_2()
-        .py_1()
-        .rounded(theme.radius)
-        .bg(theme.background)
-        .border_1()
-        .border_color(theme.title_bar_border)
         .child(
           div()
             .flex()
@@ -5113,8 +5105,18 @@ impl GitPage {
         div()
           .flex()
           .items_center()
-          .child(repo_dropdown)
-          .child(branch_dropdown),
+          .child(
+            div()
+              .border_r_1()
+              .border_color(theme.border)
+              .child(repo_dropdown),
+          )
+          .child(
+            div()
+              .border_r_1()
+              .border_color(theme.border)
+              .child(branch_dropdown),
+          ),
       )
       .when_some(branch_info, |this, info| this.child(info))
       .child(fetch_button);
