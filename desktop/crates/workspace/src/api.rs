@@ -143,6 +143,18 @@ pub struct GithubRepository {
   pub repo: String,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubUserRepository {
+  pub owner: String,
+  pub repo: String,
+  #[serde(rename = "full_name")]
+  pub full_name: String,
+  pub description: Option<String>,
+  pub private: bool,
+  #[serde(rename = "updated_at")]
+  pub updated_at: String,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GithubIssueStateReason {
@@ -520,6 +532,11 @@ struct GithubPullRequestsResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct GithubUserRepositoriesResponse {
+  repositories: Vec<GithubUserRepository>,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubIssuesResponse {
   issues: Vec<GithubIssue>,
 }
@@ -764,7 +781,9 @@ impl ApiClient {
   }
 
   pub fn fetch_latest_pull_requests(&self) -> Result<Vec<GithubPullRequest>> {
-    let response = self.authed_request(Method::GET, "/github/pr/latest").send()?;
+    let response = self
+      .authed_request(Method::GET, "/github/pr/latest")
+      .send()?;
     let status = response.status();
     Self::record_http_status("GET", "/github/pr/latest", status);
     if status == StatusCode::UNAUTHORIZED {
@@ -791,6 +810,22 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestsResponse>()?;
     Ok(payload.pull_requests)
+  }
+
+  pub fn fetch_github_user_repositories(&self) -> Result<Vec<GithubUserRepository>> {
+    let response = self
+      .authed_request(Method::GET, "/github/repos/me")
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", "/github/repos/me", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubUserRepositoriesResponse>()?;
+    Ok(payload.repositories)
   }
 
   pub fn fetch_github_repository_details(
@@ -1449,7 +1484,9 @@ mod tests {
     let (base_url, handle) = start_single_response_server("200 OK", body);
     let api = make_test_api_client(base_url);
 
-    let prs = api.fetch_latest_pull_requests().expect("fetch pull requests");
+    let prs = api
+      .fetch_latest_pull_requests()
+      .expect("fetch pull requests");
     assert_eq!(prs.len(), 1);
     assert_eq!(prs[0].number, 7);
     assert_eq!(prs[0].title, "Fix login issue");
@@ -1528,6 +1565,56 @@ mod tests {
       .clone()
       .unwrap_or_default();
     assert_eq!(request_line, "GET /github/pr/need-reviews HTTP/1.1");
+  }
+
+  #[test]
+  fn fetch_github_user_repositories_parses_success_payload() {
+    let body = r#"{
+      "repositories": [
+        {
+          "owner": "acme",
+          "repo": "portal",
+          "full_name": "acme/portal",
+          "description": "Main app",
+          "private": true,
+          "updated_at": "2026-02-20T14:12:00Z"
+        }
+      ]
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let repositories = api
+      .fetch_github_user_repositories()
+      .expect("fetch github user repositories");
+    assert_eq!(repositories.len(), 1);
+    assert_eq!(repositories[0].owner, "acme");
+    assert_eq!(repositories[0].repo, "portal");
+    assert_eq!(repositories[0].full_name, "acme/portal");
+    assert_eq!(repositories[0].description.as_deref(), Some("Main app"));
+    assert!(repositories[0].private);
+    assert_eq!(repositories[0].updated_at, "2026-02-20T14:12:00Z");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_user_repositories_calls_expected_route_without_query_params() {
+    let body = r#"{"repositories":[]}"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_github_user_repositories()
+      .expect("fetch github user repositories");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(request_line, "GET /github/repos/me HTTP/1.1");
   }
 
   #[test]
@@ -2411,6 +2498,17 @@ mod tests {
     let api = make_test_api_client(base_url);
 
     let err = api.fetch_need_review_pull_requests().err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_user_repositories_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api.fetch_github_user_repositories().err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");

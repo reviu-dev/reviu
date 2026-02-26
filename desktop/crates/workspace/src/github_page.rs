@@ -21,7 +21,9 @@ use ui::{
 
 use crate::{
   AuthCallbackTarget, ShowCommandPalette,
-  api::{ApiClient, GithubNotification, GithubPullRequest, GithubPullRequestStatus},
+  api::{
+    ApiClient, GithubNotification, GithubPullRequest, GithubPullRequestStatus, GithubUserRepository,
+  },
   auth_state::{AuthState, AuthStateStore},
   date_format::format_compact_datetime,
   github_navigation::{open_pr_target, open_repo_target},
@@ -96,6 +98,7 @@ impl GithubPullRequestRow {
 enum GithubPullRequestTab {
   MyOpen,
   NeedReview,
+  Notifications,
 }
 
 impl GithubPullRequestTab {
@@ -103,6 +106,7 @@ impl GithubPullRequestTab {
     match self {
       GithubPullRequestTab::MyOpen => 0,
       GithubPullRequestTab::NeedReview => 1,
+      GithubPullRequestTab::Notifications => 2,
     }
   }
 
@@ -110,6 +114,7 @@ impl GithubPullRequestTab {
     match index {
       0 => Some(GithubPullRequestTab::MyOpen),
       1 => Some(GithubPullRequestTab::NeedReview),
+      2 => Some(GithubPullRequestTab::Notifications),
       _ => None,
     }
   }
@@ -135,6 +140,160 @@ impl GithubNotificationRow {
         .to_lowercase()
         .contains(&q)
       || self.notification.reason.to_lowercase().contains(&q)
+  }
+}
+
+#[derive(Clone, Debug)]
+struct GithubRepositoryRow {
+  repository: Rc<GithubUserRepository>,
+}
+
+impl GithubRepositoryRow {
+  fn matches(&self, query: &str) -> bool {
+    if query.is_empty() {
+      return true;
+    }
+
+    let q = query.to_lowercase();
+    self.repository.full_name.to_lowercase().contains(&q)
+      || self
+        .repository
+        .description
+        .as_deref()
+        .is_some_and(|value| value.to_lowercase().contains(&q))
+  }
+}
+
+struct GithubRepositoryListDelegate {
+  all_rows: Vec<Rc<GithubRepositoryRow>>,
+  matched_rows: Vec<Rc<GithubRepositoryRow>>,
+  selected_index: Option<IndexPath>,
+  query: SharedString,
+  loading: bool,
+}
+
+impl GithubRepositoryListDelegate {
+  fn new() -> Self {
+    Self {
+      all_rows: Vec::new(),
+      matched_rows: Vec::new(),
+      selected_index: Some(IndexPath::default()),
+      query: "".into(),
+      loading: false,
+    }
+  }
+
+  fn set_rows(&mut self, rows: Vec<Rc<GithubRepositoryRow>>) {
+    self.all_rows = rows;
+    self.prepare(self.query.clone());
+  }
+
+  fn prepare(&mut self, query: impl Into<SharedString>) {
+    self.query = query.into();
+    let q = self.query.as_ref();
+
+    let rows: Vec<Rc<GithubRepositoryRow>> = self
+      .all_rows
+      .iter()
+      .filter(|row| row.matches(q))
+      .cloned()
+      .collect();
+
+    self.matched_rows = rows;
+  }
+}
+
+impl ListDelegate for GithubRepositoryListDelegate {
+  type Item = ListItem;
+
+  fn items_count(&self, _section: usize, _cx: &App) -> usize {
+    self.matched_rows.len()
+  }
+
+  fn render_item(
+    &mut self,
+    ix: IndexPath,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<Self::Item> {
+    let theme = cx.theme().clone();
+    let base_item = list_base_item(ix, self.selected_index);
+    let row = self.matched_rows.get(ix.row)?;
+    let updated_at = format_compact_datetime(&row.repository.updated_at);
+
+    Some(
+      base_item.px_2().py_2().child(
+        v_flex()
+          .gap_1()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child(
+                div()
+                  .min_w_0()
+                  .flex_1()
+                  .child(Label::new(row.repository.full_name.clone()).truncate()),
+              )
+              .when(row.repository.private, |this| {
+                this.child(Tag::secondary().small().rounded_full().child("Private"))
+              }),
+          )
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(format!("Updated {}", updated_at))
+              .when_some(row.repository.description.clone(), |this, description| {
+                if description.trim().is_empty() {
+                  this
+                } else {
+                  this.child(Label::new(description).truncate())
+                }
+              }),
+          ),
+      ),
+    )
+  }
+
+  fn render_empty(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> impl IntoElement {
+    v_flex()
+      .size_full()
+      .items_center()
+      .justify_center()
+      .gap_2()
+      .text_color(cx.theme().muted_foreground)
+      .child(Icon::new(IconName::Folder).size_6())
+      .child("No repositories found")
+  }
+
+  fn set_selected_index(
+    &mut self,
+    ix: Option<IndexPath>,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) {
+    update_selected_index(&mut self.selected_index, ix, cx);
+  }
+
+  fn perform_search(
+    &mut self,
+    query: &str,
+    _: &mut Window,
+    _: &mut Context<ListState<Self>>,
+  ) -> Task<()> {
+    self.prepare(query.to_owned());
+    Task::ready(())
+  }
+
+  fn loading(&self, _: &App) -> bool {
+    self.loading
   }
 }
 
@@ -425,13 +584,16 @@ impl ListDelegate for GithubPullRequestListDelegate {
 pub struct GithubPage {
   focus_handle: FocusHandle,
   api: ApiClient,
+  repositories: Entity<ListState<GithubRepositoryListDelegate>>,
   notifications: Entity<ListState<GithubNotificationListDelegate>>,
   pull_requests: Entity<ListState<GithubPullRequestListDelegate>>,
   my_open_pull_request_rows: Vec<Rc<GithubPullRequestRow>>,
   need_review_pull_request_rows: Vec<Rc<GithubPullRequestRow>>,
   active_pull_request_tab: GithubPullRequestTab,
   load_task: Option<Task<()>>,
+  repositories_task: Option<Task<()>>,
   notifications_task: Option<Task<()>>,
+  repositories_error: Option<SharedString>,
   notifications_error: Option<SharedString>,
   error: Option<SharedString>,
   focus_on_next_render: bool,
@@ -490,6 +652,8 @@ impl GithubPage {
   }
 
   fn new_with_api(api: ApiClient, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    let repositories =
+      cx.new(|cx| ListState::new(GithubRepositoryListDelegate::new(), window, cx).searchable(true));
     let notifications = cx
       .new(|cx| ListState::new(GithubNotificationListDelegate::new(), window, cx).searchable(true));
     let pull_requests = cx
@@ -498,13 +662,16 @@ impl GithubPage {
     let view = Self {
       focus_handle: cx.focus_handle(),
       api,
+      repositories,
       notifications,
       pull_requests,
       my_open_pull_request_rows: Vec::new(),
       need_review_pull_request_rows: Vec::new(),
       active_pull_request_tab: GithubPullRequestTab::MyOpen,
       load_task: None,
+      repositories_task: None,
       notifications_task: None,
+      repositories_error: None,
       notifications_error: None,
       error: None,
       focus_on_next_render: true,
@@ -525,13 +692,22 @@ impl GithubPage {
   }
 
   fn focus_search(&self, window: &mut Window, cx: &mut Context<Self>) {
-    self.pull_requests.update(cx, |state, cx| {
-      state.focus(window, cx);
-    });
+    match self.active_pull_request_tab {
+      GithubPullRequestTab::Notifications => {
+        self.notifications.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      }
+      _ => {
+        self.pull_requests.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      }
+    }
   }
 
   fn subscribe_to_list(&mut self, cx: &mut Context<Self>) {
-    let subscription = cx.subscribe(
+    let pull_requests_subscription = cx.subscribe(
       &self.pull_requests,
       move |_this, state, event: &ListEvent, cx| {
         if let ListEvent::Confirm(ix) = event {
@@ -542,14 +718,34 @@ impl GithubPage {
         }
       },
     );
+    self._subscriptions.push(pull_requests_subscription);
 
-    self._subscriptions.push(subscription);
+    let repositories_subscription = cx.subscribe(
+      &self.repositories,
+      move |_this, state, event: &ListEvent, cx| {
+        if let ListEvent::Confirm(ix) = event {
+          let row = state.read(cx).delegate().matched_rows.get(ix.row).cloned();
+          if let Some(row) = row {
+            open_repo_target(
+              row.repository.owner.clone(),
+              row.repository.repo.clone(),
+              None,
+              None,
+              None,
+              cx,
+            );
+          }
+        }
+      },
+    );
+    self._subscriptions.push(repositories_subscription);
   }
 
   fn active_pull_request_rows(&self) -> Vec<Rc<GithubPullRequestRow>> {
     match self.active_pull_request_tab {
       GithubPullRequestTab::MyOpen => self.my_open_pull_request_rows.clone(),
       GithubPullRequestTab::NeedReview => self.need_review_pull_request_rows.clone(),
+      GithubPullRequestTab::Notifications => self.my_open_pull_request_rows.clone(),
     }
   }
 
@@ -575,7 +771,9 @@ impl GithubPage {
     }
 
     self.active_pull_request_tab = tab;
-    self.apply_active_pull_request_rows(cx);
+    if !matches!(tab, GithubPullRequestTab::Notifications) {
+      self.apply_active_pull_request_rows(cx);
+    }
     cx.notify();
   }
 
@@ -660,6 +858,7 @@ impl GithubPage {
 
     self.load_task = Some(task);
     self.refresh_notifications(cx);
+    self.refresh_repositories(cx);
   }
 
   fn refresh_notifications(&mut self, cx: &mut Context<Self>) {
@@ -717,6 +916,63 @@ impl GithubPage {
     });
 
     self.notifications_task = Some(task);
+  }
+
+  fn refresh_repositories(&mut self, cx: &mut Context<Self>) {
+    let api = self.api.clone();
+    self.add_github_breadcrumb("Refresh repositories started", Map::new());
+    self.repositories_error = None;
+    self.repositories.update(cx, |state, cx| {
+      state.delegate_mut().loading = true;
+      cx.notify();
+    });
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.fetch_github_user_repositories())
+        .await
+        .map_err(|error| error.to_string());
+
+      let _ = this.update(cx, |this, cx| {
+        let (rows, error): (Vec<Rc<GithubRepositoryRow>>, Option<SharedString>) = match result {
+          Ok(repositories) => (
+            repositories
+              .into_iter()
+              .map(|repository| {
+                Rc::new(GithubRepositoryRow {
+                  repository: Rc::new(repository),
+                })
+              })
+              .collect::<Vec<_>>(),
+            None,
+          ),
+          Err(error) => (Vec::new(), Some(error.into())),
+        };
+
+        match error.as_ref() {
+          Some(error) => {
+            let data = Map::new();
+            this.add_github_breadcrumb("Refresh repositories failed", data.clone());
+            this.record_github_error("github.repositories.refresh", error.as_ref(), data);
+          }
+          None => {
+            let mut data = Map::new();
+            data.insert("count".into(), rows.len().into());
+            this.add_github_breadcrumb("Refresh repositories succeeded", data);
+          }
+        }
+
+        this.repositories_error = error;
+        this.repositories.update(cx, |state, cx| {
+          state.delegate_mut().loading = false;
+          state.delegate_mut().set_rows(rows);
+          cx.notify();
+        });
+
+        cx.notify();
+      });
+    });
+
+    self.repositories_task = Some(task);
   }
 
   fn show_command_palette_action(
@@ -933,9 +1189,10 @@ impl Render for GithubPage {
     let pull_requests_search_placeholder = match self.active_pull_request_tab {
       GithubPullRequestTab::MyOpen => "Search my open pull requests...",
       GithubPullRequestTab::NeedReview => "Search pull requests needing review...",
+      GithubPullRequestTab::Notifications => "Search pull requests...",
     };
 
-    let list = List::new(&self.pull_requests)
+    let pull_requests_list = List::new(&self.pull_requests)
       .search_placeholder(pull_requests_search_placeholder)
       .border_1()
       .border_color(theme.border)
@@ -944,8 +1201,26 @@ impl Render for GithubPage {
       .min_w(px(0.0))
       .min_h_0()
       .p(px(8.));
+    let notifications_list = List::new(&self.notifications)
+      .search_placeholder("Search notifications...")
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius)
+      .flex_1()
+      .min_h_0()
+      .p(px(8.));
+    let repositories_list = List::new(&self.repositories)
+      .search_placeholder("Search repositories...")
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius)
+      .flex_1()
+      .min_h_0()
+      .p(px(8.));
     let my_open_count = self.my_open_pull_request_rows.len();
     let need_review_count = self.need_review_pull_request_rows.len();
+    let unread_count = self.notifications.read(cx).delegate().unread_count();
+    let notifications_count = self.notifications.read(cx).delegate().matched_rows.len();
 
     let pr_tabs = TabBar::new("github-home-pr-tabs")
       .w_full()
@@ -956,16 +1231,22 @@ impl Render for GithubPage {
       }))
       .child(
         Tab::new().child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child("My Open PRs")
-            .child(
-              Tag::secondary()
-                .small()
-                .rounded_full()
-                .child(my_open_count.to_string()),
-            ),
+          h_flex().items_center().gap_2().child("My Open PRs").child(
+            Tag::secondary()
+              .small()
+              .rounded_full()
+              .child(my_open_count.to_string()),
+          ),
+        ),
+      )
+      .child(
+        Tab::new().child(
+          h_flex().items_center().gap_2().child("Need Review").child(
+            Tag::secondary()
+              .small()
+              .rounded_full()
+              .child(need_review_count.to_string()),
+          ),
         ),
       )
       .child(
@@ -973,30 +1254,24 @@ impl Render for GithubPage {
           h_flex()
             .items_center()
             .gap_2()
-            .child("Need Review")
+            .child("Notifications")
             .child(
               Tag::secondary()
                 .small()
                 .rounded_full()
-                .child(need_review_count.to_string()),
+                .child(if unread_count > 0 {
+                  format!("{} unread", unread_count)
+                } else {
+                  notifications_count.to_string()
+                }),
             ),
         ),
       );
 
-    let unread_count = self.notifications.read(cx).delegate().unread_count();
-
-    let notifications_list = List::new(&self.notifications)
-      .search_placeholder("Search notifications...")
-      .border_1()
-      .border_color(theme.border)
-      .rounded(theme.radius)
-      .flex_1()
-      .min_h_0()
-      .p(px(8.));
-
-    let notifications_panel = v_flex()
+    let repositories_count = self.repositories.read(cx).delegate().matched_rows.len();
+    let repositories_panel = v_flex()
       .gap_2()
-      .w(px(600.0))
+      .w(px(560.0))
       .h_full()
       .min_h_0()
       .child(
@@ -1007,32 +1282,46 @@ impl Render for GithubPage {
             h_flex()
               .items_center()
               .gap_2()
-              .child(Icon::new(IconName::Inbox).size_4())
-              .child("Notifications"),
+              .child(Icon::new(IconName::Folder).size_4())
+              .child("My Repositories"),
           )
-          .when(unread_count > 0, |this| {
+          .when(repositories_count > 0, |this| {
             this.child(
               Tag::secondary()
                 .small()
                 .rounded_full()
-                .child(format!("{} unread", unread_count)),
+                .child(repositories_count.to_string()),
             )
           }),
       )
-      .when_some(self.notifications_error.clone(), |this, error| {
+      .when_some(self.repositories_error.clone(), |this, error| {
         this.child(div().text_sm().text_color(theme.status_red()).child(error))
       })
-      .child(notifications_list);
+      .child(repositories_list);
 
-    let pr_panel = v_flex()
+    let active_right_error = match self.active_pull_request_tab {
+      GithubPullRequestTab::Notifications => self.notifications_error.clone(),
+      GithubPullRequestTab::MyOpen | GithubPullRequestTab::NeedReview => self.error.clone(),
+    };
+    let active_right_list = match self.active_pull_request_tab {
+      GithubPullRequestTab::Notifications => notifications_list.into_any_element(),
+      GithubPullRequestTab::MyOpen | GithubPullRequestTab::NeedReview => {
+        pull_requests_list.into_any_element()
+      }
+    };
+
+    let right_panel = v_flex()
       .gap_2()
       .flex_1()
       .min_w_0()
       .h_full()
       .min_h_0()
-      .child("Pull Requests")
+      .child("Review Inbox")
       .child(pr_tabs)
-      .child(list);
+      .when_some(active_right_error, |this, error| {
+        this.child(div().text_sm().text_color(theme.status_red()).child(error))
+      })
+      .child(active_right_list);
 
     div()
       .size_full()
@@ -1050,17 +1339,14 @@ impl Render for GithubPage {
           .min_h_0()
           .gap_3()
           .p_4()
-          .when_some(self.error.clone(), |this, error| {
-            this.child(div().text_sm().text_color(theme.status_red()).child(error))
-          })
           .child(
             h_flex()
               .h_full()
               .gap_3()
               .min_h_0()
               .items_start()
-              .child(notifications_panel)
-              .child(pr_panel),
+              .child(repositories_panel)
+              .child(right_panel),
           ),
       )
   }
@@ -1156,9 +1442,14 @@ mod tests {
     cx: &mut gpui::VisualTestContext,
   ) {
     loop {
-      let (load_task, notifications_task) = github_page.update_in(cx, |this, _window, _| {
-        (this.load_task.take(), this.notifications_task.take())
-      });
+      let (load_task, notifications_task, repositories_task) =
+        github_page.update_in(cx, |this, _window, _| {
+          (
+            this.load_task.take(),
+            this.notifications_task.take(),
+            this.repositories_task.take(),
+          )
+        });
 
       let mut had_task = false;
       if let Some(task) = load_task {
@@ -1166,6 +1457,10 @@ mod tests {
         task.await;
       }
       if let Some(task) = notifications_task {
+        had_task = true;
+        task.await;
+      }
+      if let Some(task) = repositories_task {
         had_task = true;
         task.await;
       }
@@ -1296,40 +1591,51 @@ mod tests {
     let (base_url, handle) = start_path_response_server(vec![
       ("/github/pr/latest", "401 Unauthorized", "{}"),
       ("/github/notifications", "401 Unauthorized", "{}"),
+      ("/github/repos/me", "401 Unauthorized", "{}"),
     ]);
     let api = ApiClient::new_with_base_url(base_url);
     let (github_page, cx) =
       cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
     cx.executor().allow_parking();
 
-    let (load_task, notifications_task) = github_page.update_in(cx, |this, _window, cx| {
-      this.refresh_pull_requests(cx);
-      (
-        this.load_task.take().expect("pull request load task"),
-        this.notifications_task.take().expect("notifications task"),
-      )
-    });
+    let (load_task, notifications_task, repositories_task) =
+      github_page.update_in(cx, |this, _window, cx| {
+        this.refresh_pull_requests(cx);
+        (
+          this.load_task.take().expect("pull request load task"),
+          this.notifications_task.take().expect("notifications task"),
+          this.repositories_task.take().expect("repositories task"),
+        )
+      });
     load_task.await;
     notifications_task.await;
+    repositories_task.await;
     await_github_page_background_tasks(github_page.clone(), cx).await;
 
     let (
       error,
       notifications_error,
+      repositories_error,
       pr_count,
       notifications_count,
+      repositories_count,
       pr_loading,
       notifications_loading,
+      repositories_loading,
     ) = github_page.read_with(cx, |this, cx| {
       let pull_requests = this.pull_requests.read(cx);
       let notifications = this.notifications.read(cx);
+      let repositories = this.repositories.read(cx);
       (
         this.error.clone(),
         this.notifications_error.clone(),
+        this.repositories_error.clone(),
         pull_requests.delegate().matched_rows.len(),
         notifications.delegate().matched_rows.len(),
+        repositories.delegate().matched_rows.len(),
         pull_requests.delegate().loading,
         notifications.delegate().loading,
+        repositories.delegate().loading,
       )
     });
 
@@ -1343,10 +1649,17 @@ mod tests {
         .as_ref()
         .is_some_and(|value| value.as_ref().contains("unauthorized"))
     );
+    assert!(
+      repositories_error
+        .as_ref()
+        .is_some_and(|value| value.as_ref().contains("unauthorized"))
+    );
     assert_eq!(pr_count, 0);
     assert_eq!(notifications_count, 0);
+    assert_eq!(repositories_count, 0);
     assert!(!pr_loading);
     assert!(!notifications_loading);
+    assert!(!repositories_loading);
 
     handle.join().expect("join server thread");
   }
@@ -1359,55 +1672,72 @@ mod tests {
     let pull_requests_body = r#"{"pullRequests":[{"number":42,"title":"Fix login","state":"open","merged_at":null,"draft":false,"updated_at":"2026-02-15T12:00:00Z","labels":[{"name":"bug"}],"repository":{"owner":"acme","repo":"portal"}}]}"#;
     let need_reviews_body = r#"{"pullRequests":[{"number":55,"title":"Review billing flow","state":"open","merged_at":null,"draft":false,"updated_at":"2026-02-15T12:05:00Z","labels":[{"name":"review"}],"repository":{"owner":"acme","repo":"payments"}}]}"#;
     let notifications_body = r#"{"notifications":[{"id":"n1","repository":{"name":"portal","full_name":"acme/portal","owner":null},"subject":{"title":"Please review","type":"PullRequest","url":null,"latest_comment_url":null},"reason":"mention","unread":true,"updated_at":"2026-02-15T12:10:00Z","last_read_at":null,"url":"https://api.github.test/notif/1","subscription_url":"https://api.github.test/sub/1"}]}"#;
+    let repositories_body = r#"{"repositories":[{"owner":"acme","repo":"portal","full_name":"acme/portal","description":"Main app","private":true,"updated_at":"2026-02-15T12:30:00Z"}]}"#;
     let (base_url, handle) = start_path_response_server(vec![
       ("/github/pr/latest", "200 OK", pull_requests_body),
       ("/github/pr/need-reviews", "200 OK", need_reviews_body),
       ("/github/notifications", "200 OK", notifications_body),
+      ("/github/repos/me", "200 OK", repositories_body),
     ]);
     let api = ApiClient::new_with_base_url(base_url);
     let (github_page, cx) =
       cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
     cx.executor().allow_parking();
 
-    let (load_task, notifications_task) = github_page.update_in(cx, |this, _window, cx| {
-      this.refresh_pull_requests(cx);
-      (
-        this.load_task.take().expect("pull request load task"),
-        this.notifications_task.take().expect("notifications task"),
-      )
-    });
-    load_task.await;
-    notifications_task.await;
-    await_github_page_background_tasks(github_page.clone(), cx).await;
-
-    let (error, notifications_error, pr_titles, notification_titles, unread_count) = github_page
-      .read_with(cx, |this, cx| {
-        let pull_requests = this.pull_requests.read(cx);
-        let notifications = this.notifications.read(cx);
+    let (load_task, notifications_task, repositories_task) =
+      github_page.update_in(cx, |this, _window, cx| {
+        this.refresh_pull_requests(cx);
         (
-          this.error.clone(),
-          this.notifications_error.clone(),
-          pull_requests
-            .delegate()
-            .matched_rows
-            .iter()
-            .map(|row| row.pr.title.clone())
-            .collect::<Vec<_>>(),
-          notifications
-            .delegate()
-            .matched_rows
-            .iter()
-            .map(|row| row.notification.subject.title.clone())
-            .collect::<Vec<_>>(),
-          notifications.delegate().unread_count(),
+          this.load_task.take().expect("pull request load task"),
+          this.notifications_task.take().expect("notifications task"),
+          this.repositories_task.take().expect("repositories task"),
         )
       });
+    load_task.await;
+    notifications_task.await;
+    repositories_task.await;
+    await_github_page_background_tasks(github_page.clone(), cx).await;
+
+    let (
+      error,
+      notifications_error,
+      repositories_error,
+      pr_titles,
+      notification_titles,
+      unread_count,
+      repositories_count,
+    ) = github_page.read_with(cx, |this, cx| {
+      let pull_requests = this.pull_requests.read(cx);
+      let notifications = this.notifications.read(cx);
+      let repositories = this.repositories.read(cx);
+      (
+        this.error.clone(),
+        this.notifications_error.clone(),
+        this.repositories_error.clone(),
+        pull_requests
+          .delegate()
+          .matched_rows
+          .iter()
+          .map(|row| row.pr.title.clone())
+          .collect::<Vec<_>>(),
+        notifications
+          .delegate()
+          .matched_rows
+          .iter()
+          .map(|row| row.notification.subject.title.clone())
+          .collect::<Vec<_>>(),
+        notifications.delegate().unread_count(),
+        repositories.delegate().matched_rows.len(),
+      )
+    });
 
     assert!(error.is_none());
     assert!(notifications_error.is_none());
+    assert!(repositories_error.is_none());
     assert_eq!(pr_titles, vec!["Fix login".to_string()]);
     assert_eq!(notification_titles, vec!["Please review".to_string()]);
     assert_eq!(unread_count, 1);
+    assert_eq!(repositories_count, 1);
 
     github_page.update_in(cx, |this, window, cx| {
       this.set_active_pull_request_tab(1, window, cx);
@@ -1423,6 +1753,21 @@ mod tests {
         .collect::<Vec<_>>()
     });
     assert_eq!(need_review_titles, vec!["Review billing flow".to_string()]);
+
+    github_page.update_in(cx, |this, window, cx| {
+      this.set_active_pull_request_tab(2, window, cx);
+    });
+    let notifications_tab_titles = github_page.read_with(cx, |this, cx| {
+      this
+        .notifications
+        .read(cx)
+        .delegate()
+        .matched_rows
+        .iter()
+        .map(|row| row.notification.subject.title.clone())
+        .collect::<Vec<_>>()
+    });
+    assert_eq!(notifications_tab_titles, vec!["Please review".to_string()]);
 
     handle.join().expect("join server thread");
   }
