@@ -26,7 +26,7 @@ const SENTRY_REDACTED: &str = "[REDACTED]";
 #[cfg(target_os = "macos")]
 const MACOS_TRAFFIC_LIGHT_X: f32 = 9.0;
 #[cfg(target_os = "macos")]
-const MACOS_TRAFFIC_LIGHT_Y: f32 = ((PAGE_HEADER_HEIGHT - 34.0) / 2.0) + 9.0;
+const MACOS_TRAFFIC_LIGHT_Y: f32 = PAGE_HEADER_HEIGHT / 2.0 - 12.0;
 
 #[cfg(target_os = "macos")]
 fn macos_titlebar_options() -> TitlebarOptions {

@@ -1,6 +1,7 @@
 mod assets;
 mod command_palette;
 mod confirm_dialog;
+mod dropdown_select;
 mod github_url;
 mod icons;
 mod search_file_palette;
@@ -9,7 +10,7 @@ mod theme;
 mod user_menu;
 
 pub const GLOBAL_BAR_HEIGHT: f32 = 36.0;
-pub const PAGE_HEADER_HEIGHT: f32 = 40.0;
+pub const PAGE_HEADER_HEIGHT: f32 = 45.0;
 pub const DETAILS_PAGE_CONTAINER_MAX_WIDTH: f32 = 900.0;
 
 pub use assets::AppAssets;
@@ -20,6 +21,9 @@ pub use command_palette::{
   CommandPaletteStash,
 };
 pub use confirm_dialog::ConfirmDialog;
+pub use dropdown_select::{
+  DropdownSelectConfig, DropdownSelectItem, DropdownSelectOption, dropdown_select,
+};
 pub use github_url::parse_github_url_action;
 pub use gpui_component::Disableable;
 pub use gpui_component::WindowExt;

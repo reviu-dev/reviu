@@ -22,7 +22,7 @@ use git::{
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
-  InteractiveElement, Keystroke, ParentElement, PathPromptOptions, Render, RenderImage,
+  InteractiveElement, Keystroke, ParentElement, PathPromptOptions, Pixels, Render, RenderImage,
   SharedString, Styled, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
 use gpui_component::{
@@ -33,7 +33,6 @@ use gpui_component::{
   kbd::Kbd,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{DropdownMenu, PopupMenuItem},
-  select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
   spinner::Spinner,
   tag::Tag,
   text::TextView,
@@ -63,8 +62,9 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteGithubRepoTab, CommandPaletteHandler,
   CommandPalettePage, CommandPaletteRepository, CommandPaletteStash, ConfirmDialog,
-  FILE_ICON_SIZE_PX, Input, InputState, PAGE_HEADER_HEIGHT, SearchFileEntry, SearchFileHandler,
-  StatusThemeExt, UiIconName, WindowExt, file_icon_path_for_path_with_theme,
+  DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState,
+  PAGE_HEADER_HEIGHT, SearchFileEntry, SearchFileHandler, StatusThemeExt, UiIconName, WindowExt,
+  dropdown_select, file_icon_path_for_path_with_theme,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
@@ -75,6 +75,7 @@ const EDITOR_HEADER_HEIGHT: f32 = 40.0;
 const HISTORY_MAX_COMMITS: usize = 200;
 const HISTORY_AUTHOR_MAX_WIDTH: f32 = 180.0;
 const DETACHED_BRANCH_SELECT_SENTINEL: &str = "__reviu_detached_head__";
+const TRIGGER_DROPDOWN_SELECT_WIDTH: f32 = 350.0;
 
 actions!(
   workspace,
@@ -96,13 +97,18 @@ fn format_git_file_name_label(path: &Path) -> SharedString {
     .into()
 }
 
-fn format_git_dir_label(path: &Path) -> SharedString {
-  path
-    .parent()
-    .and_then(|parent| parent.to_str())
+fn format_git_path_label_parts(path: &Path) -> (SharedString, SharedString) {
+  let label = path.to_string_lossy().replace(['\n', '\r'], "");
+  let file_name = path
+    .file_name()
+    .and_then(|name| name.to_str())
+    .unwrap_or(label.as_str())
+    .replace(['\n', '\r'], "");
+  let prefix = label
+    .strip_suffix(file_name.as_str())
     .unwrap_or("")
-    .replace(['\n', '\r'], "")
-    .into()
+    .to_string();
+  (prefix.into(), file_name.into())
 }
 
 fn render_git_path_label(
@@ -111,38 +117,27 @@ fn render_git_path_label(
   muted_file: bool,
   line_through: bool,
 ) -> AnyElement {
-  let dir_label = format_git_dir_label(path);
-  let file_label = format_git_file_name_label(path);
-  let has_dir_label = !dir_label.is_empty();
+  let (prefix_label, file_label) = format_git_path_label_parts(path);
 
   h_flex()
     .min_w_0()
-    .flex_1()
-    .items_center()
-    .justify_between()
-    .gap_4()
+    .overflow_hidden()
+    .gap_0()
+    .when(line_through, |this| this.line_through())
     .child(
       div()
-        .min_w_0()
+        .whitespace_nowrap()
         .overflow_hidden()
-        .flex_shrink_0()
         .text_ellipsis_start()
+        .text_color(theme.muted_foreground)
+        .child(prefix_label),
+    )
+    .child(
+      div()
+        .flex_shrink_0()
         .when(muted_file, |this| this.text_color(theme.muted_foreground))
-        .when(line_through, |this| this.line_through())
         .child(file_label),
     )
-    .when(has_dir_label, |this| {
-      this.child(
-        div()
-          .min_w_0()
-          .overflow_hidden()
-          .text_sm()
-          .text_ellipsis_start()
-          .text_color(theme.muted_foreground)
-          .when(line_through, |this| this.line_through())
-          .child(dir_label),
-      )
-    })
     .into_any_element()
 }
 
@@ -306,7 +301,12 @@ impl ListDelegate for GitFileListDelegate {
     let status_tooltip = GitPage::status_tooltip(status_kind);
     let (stage_icon, stage_color, stage_tooltip) = GitPage::stage_style(row.entry.stage, &theme);
     let file_icon = file_icon_path_for_path_with_theme(&row.entry.path, &theme)
-      .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
+      .map(|path| {
+        img(path)
+          .size(px(FILE_ICON_SIZE_PX))
+          .min_size(px(FILE_ICON_SIZE_PX))
+          .into_any_element()
+      })
       .unwrap_or_else(|| {
         Icon::new(IconName::File)
           .size_3()
@@ -329,6 +329,7 @@ impl ListDelegate for GitFileListDelegate {
     let status_element = div()
       .id(format!("git-status-letter-{}", ix.row))
       .w(px(15.))
+      .min_w(px(15.))
       .text_xs()
       .text_color(status_color)
       .tooltip(move |window, cx| Tooltip::new(status_tooltip.clone()).build(window, cx))
@@ -442,53 +443,86 @@ enum HistoryTreeNode {
 #[derive(Clone)]
 struct RecentRepoItem {
   path: PathBuf,
-  label: SharedString,
+  name: SharedString,
+  prefix: SharedString,
   is_selected: bool,
 }
 
 impl RecentRepoItem {
-  fn new(repo: &RecentRepository, selected_repo: Option<&PathBuf>) -> Self {
-    let label = repo.path.to_string_lossy().to_string();
+  fn new(repo: &RecentRepository, selected_repo: Option<&Path>) -> Self {
+    let label = repo.path.to_string_lossy().replace(['\n', '\r'], "");
+    let name = repo
+      .path
+      .file_name()
+      .and_then(|name| name.to_str())
+      .unwrap_or(label.as_str())
+      .replace(['\n', '\r'], "");
+    let prefix = label.strip_suffix(name.as_str()).unwrap_or("").to_string();
     Self {
       path: repo.path.clone(),
-      label: label.into(),
-      is_selected: selected_repo == Some(&repo.path),
+      name: name.into(),
+      prefix: prefix.into(),
+      is_selected: selected_repo.is_some_and(|selected| selected == repo.path.as_path()),
     }
   }
 }
 
-impl SelectItem for RecentRepoItem {
+impl DropdownSelectItem for RecentRepoItem {
   type Value = PathBuf;
-
-  fn title(&self) -> SharedString {
-    self.label.clone()
-  }
-
-  fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-    let icon = Icon::new(IconName::Check)
-      .size_3()
-      .text_color(cx.theme().accent_foreground)
-      .when(!self.is_selected, |this| this.opacity(0.0));
-
-    h_flex()
-      .items_center()
-      .gap_2()
-      .child(
-        div()
-          .flex_1()
-          .overflow_hidden()
-          .text_ellipsis_start()
-          .child(self.label.clone()),
-      )
-      .child(icon)
-  }
 
   fn value(&self) -> &Self::Value {
     &self.path
   }
 
+  fn selected(&self) -> bool {
+    self.is_selected
+  }
+
   fn matches(&self, query: &str) -> bool {
-    self.label.to_lowercase().contains(&query.to_lowercase())
+    let query = query.trim();
+    if query.is_empty() {
+      return true;
+    }
+
+    let lowered_query = query.to_lowercase();
+    self.name.to_lowercase().contains(&lowered_query)
+      || self.prefix.to_lowercase().contains(&lowered_query)
+  }
+
+  fn render_item(&self, _window: &mut Window, cx: &mut App) -> AnyElement {
+    h_flex()
+      .min_w_0()
+      .overflow_hidden()
+      .items_center()
+      .max_w(px(TRIGGER_DROPDOWN_SELECT_WIDTH - 40.0))
+      .gap_0()
+      .text_sm()
+      .child(
+        div()
+          .text_ellipsis_start()
+          .overflow_hidden()
+          .text_color(cx.theme().muted_foreground)
+          .child(self.prefix.clone()),
+      )
+      .child(div().flex_shrink().child(self.name.clone()))
+      .into_any_element()
+  }
+
+  fn render_selected(&self, _window: &mut Window, cx: &mut App) -> AnyElement {
+    h_flex()
+      .min_w_0()
+      .items_center()
+      .text_sm()
+      .gap_0()
+      .child(
+        div()
+          .overflow_hidden()
+          .text_ellipsis_start()
+          .text_color(cx.theme().muted_foreground)
+          .child(self.prefix.clone()),
+      )
+      .child(div().flex_shrink().child(self.name.clone()))
+      .into_any_element()
   }
 }
 
@@ -518,38 +552,47 @@ impl BranchSelectItem {
   }
 }
 
-impl SelectItem for BranchSelectItem {
+impl DropdownSelectItem for BranchSelectItem {
   type Value = BranchRef;
-
-  fn title(&self) -> SharedString {
-    self.label.clone()
-  }
-
-  fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-    let icon = Icon::new(IconName::Check)
-      .size_3()
-      .text_color(cx.theme().accent_foreground)
-      .when(!self.is_current, |this| this.opacity(0.0));
-
-    h_flex()
-      .items_center()
-      .gap_2()
-      .child(
-        div()
-          .flex_1()
-          .overflow_hidden()
-          .text_ellipsis()
-          .child(self.label.clone()),
-      )
-      .child(icon)
-  }
 
   fn value(&self) -> &Self::Value {
     &self.branch
   }
 
+  fn selected(&self) -> bool {
+    self.is_current
+  }
+
   fn matches(&self, query: &str) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+      return true;
+    }
+
     self.label.to_lowercase().contains(&query.to_lowercase())
+  }
+
+  fn render_item(&self, _window: &mut Window, _cx: &mut App) -> AnyElement {
+    div()
+      .min_w_0()
+      .max_w(px(TRIGGER_DROPDOWN_SELECT_WIDTH - 40.0))
+      .flex_1()
+      .overflow_hidden()
+      .text_sm()
+      .text_ellipsis()
+      .child(self.label.clone())
+      .into_any_element()
+  }
+
+  fn render_selected(&self, _window: &mut Window, _cx: &mut App) -> AnyElement {
+    div()
+      .min_w_0()
+      .flex_1()
+      .overflow_hidden()
+      .text_sm()
+      .text_ellipsis()
+      .child(self.label.clone())
+      .into_any_element()
   }
 }
 
@@ -606,8 +649,8 @@ impl AuthCallbackTarget {
 pub struct GitPage {
   focus_handle: FocusHandle,
   api: ApiClient,
-  repo_select: Entity<SelectState<SearchableVec<RecentRepoItem>>>,
-  branch_select: Entity<SelectState<SearchableVec<BranchSelectItem>>>,
+  repo_dropdown_items: Vec<RecentRepoItem>,
+  branch_dropdown_items: Vec<BranchSelectItem>,
   file_list: Entity<ListState<GitFileListDelegate>>,
   history_tree: Entity<TreeState>,
   window_handle: AnyWindowHandle,
@@ -1328,29 +1371,12 @@ impl GitPage {
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     let recent = ConfigStore::load_recent_repositories();
     let selected_repo = recent.first().map(|repo| repo.path.clone());
-    let items: Vec<RecentRepoItem> = recent
+    let repo_dropdown_items: Vec<RecentRepoItem> = recent
       .iter()
-      .map(|repo| RecentRepoItem::new(repo, selected_repo.as_ref()))
+      .map(|repo| RecentRepoItem::new(repo, selected_repo.as_deref()))
       .collect();
-    let repo_select =
-      cx.new(|cx| SelectState::new(SearchableVec::new(items), None, window, cx).searchable(true));
-    let branch_select = cx.new(|cx| {
-      SelectState::new(
-        SearchableVec::new(Vec::<BranchSelectItem>::new()),
-        None,
-        window,
-        cx,
-      )
-      .searchable(true)
-    });
     let file_list = cx.new(|cx| ListState::new(GitFileListDelegate::new(), window, cx));
     let history_tree = cx.new(|cx| TreeState::new(cx));
-
-    if let Some(repo) = selected_repo.as_ref() {
-      repo_select.update(cx, |state, cx| {
-        state.set_selected_value(repo, window, cx);
-      });
-    }
 
     let commit_input = cx.new(|cx| {
       InputState::new(window, cx)
@@ -1361,8 +1387,8 @@ impl GitPage {
     let mut view = Self {
       focus_handle: cx.focus_handle(),
       api: WorkspaceApi::global(cx).api.clone(),
-      repo_select,
-      branch_select,
+      repo_dropdown_items,
+      branch_dropdown_items: Vec::new(),
       file_list,
       history_tree,
       window_handle: window.window_handle(),
@@ -1415,8 +1441,6 @@ impl GitPage {
       operation_error: None,
     };
 
-    view.subscribe_to_repo_select(cx);
-    view.subscribe_to_branch_select(cx);
     view.subscribe_to_file_list(cx);
     view.reload_status(cx);
     view.refresh_branches(cx);
@@ -1429,23 +1453,6 @@ impl GitPage {
 
   #[cfg(test)]
   fn new_for_test(window: &mut Window, cx: &mut Context<Self>) -> Self {
-    let repo_select = cx.new(|cx| {
-      SelectState::new(
-        SearchableVec::new(Vec::<RecentRepoItem>::new()),
-        None,
-        window,
-        cx,
-      )
-    });
-    let branch_select = cx.new(|cx| {
-      SelectState::new(
-        SearchableVec::new(Vec::<BranchSelectItem>::new()),
-        None,
-        window,
-        cx,
-      )
-      .searchable(true)
-    });
     let file_list = cx.new(|cx| ListState::new(GitFileListDelegate::new(), window, cx));
     let history_tree = cx.new(|cx| TreeState::new(cx));
     let commit_input = cx.new(|cx| {
@@ -1457,8 +1464,8 @@ impl GitPage {
     let mut view = Self {
       focus_handle: cx.focus_handle(),
       api: ApiClient::new(),
-      repo_select,
-      branch_select,
+      repo_dropdown_items: Vec::new(),
+      branch_dropdown_items: Vec::new(),
       file_list,
       history_tree,
       window_handle: window.window_handle(),
@@ -1511,39 +1518,22 @@ impl GitPage {
       operation_error: None,
     };
 
-    view.subscribe_to_repo_select(cx);
-    view.subscribe_to_branch_select(cx);
     view.subscribe_to_file_list(cx);
     view
-  }
-
-  fn subscribe_to_repo_select(&mut self, cx: &mut Context<Self>) {
-    cx.subscribe(
-      &self.repo_select,
-      move |this, _state, event: &SelectEvent<SearchableVec<RecentRepoItem>>, cx| {
-        if let SelectEvent::Confirm(Some(repo)) = event {
-          this.handle_repo_select_confirm(repo.clone(), cx);
-        }
-      },
-    )
-    .detach();
-  }
-
-  fn subscribe_to_branch_select(&mut self, cx: &mut Context<Self>) {
-    cx.subscribe(
-      &self.branch_select,
-      move |this, _state, event: &SelectEvent<SearchableVec<BranchSelectItem>>, cx| {
-        if let SelectEvent::Confirm(Some(branch)) = event {
-          this.handle_branch_select_confirm(branch.clone(), cx);
-        }
-      },
-    )
-    .detach();
   }
 
   fn handle_repo_select_confirm(&mut self, repo_root: PathBuf, cx: &mut Context<Self>) {
     self.set_selected_repo(repo_root, cx);
     self.ensure_page_shortcut_focus(cx);
+  }
+
+  fn repo_select_handler(&self, cx: &Context<Self>) -> Rc<dyn Fn(PathBuf, &mut Window, &mut App)> {
+    let view = cx.entity();
+    Rc::new(move |repo_root, _, cx| {
+      let _ = view.update(cx, |this, cx| {
+        this.handle_repo_select_confirm(repo_root, cx);
+      });
+    })
   }
 
   fn handle_branch_select_confirm(&mut self, branch: BranchRef, cx: &mut Context<Self>) {
@@ -1572,6 +1562,18 @@ impl GitPage {
     });
 
     self.branch_task = Some(task);
+  }
+
+  fn branch_select_handler(
+    &self,
+    cx: &Context<Self>,
+  ) -> Rc<dyn Fn(BranchRef, &mut Window, &mut App)> {
+    let view = cx.entity();
+    Rc::new(move |branch, _, cx| {
+      let _ = view.update(cx, |this, cx| {
+        this.handle_branch_select_confirm(branch, cx);
+      });
+    })
   }
 
   fn subscribe_to_file_list(&mut self, cx: &mut Context<Self>) {
@@ -1640,7 +1642,7 @@ impl GitPage {
     cx.notify();
   }
 
-  fn refresh_repo_select(&mut self, cx: &mut Context<Self>) {
+  fn refresh_repo_select(&mut self, _cx: &mut Context<Self>) {
     let selected_repo = self.selected_repo.clone();
     let mut recent = ConfigStore::load_recent_repositories();
     if let Some(selected_repo_path) = selected_repo.as_ref()
@@ -1656,29 +1658,12 @@ impl GitPage {
 
     let items: Vec<RecentRepoItem> = recent
       .iter()
-      .map(|repo| RecentRepoItem::new(repo, selected_repo.as_ref()))
+      .map(|repo| RecentRepoItem::new(repo, selected_repo.as_deref()))
       .collect();
-    let window_handle = self.window_handle;
-
-    let select = cx.update_window(window_handle, |_, window, cx| {
-      let select =
-        cx.new(|cx| SelectState::new(SearchableVec::new(items), None, window, cx).searchable(true));
-      if let Some(repo) = selected_repo.as_ref() {
-        select.update(cx, |state, cx| {
-          state.set_selected_value(repo, window, cx);
-        });
-      }
-      select
-    });
-
-    if let Ok(select) = select {
-      self.repo_select = select;
-      self.subscribe_to_repo_select(cx);
-    }
+    self.repo_dropdown_items = items;
   }
 
-  fn sync_repo_select_with_path(&self, repo_root: &Path, cx: &mut Context<Self>) {
-    let repo_select = self.repo_select.clone();
+  fn sync_repo_select_with_path(&mut self, repo_root: &Path, _cx: &mut Context<Self>) {
     let repo_root = repo_root.to_path_buf();
     let mut recent = ConfigStore::load_recent_repositories();
     if !recent.iter().any(|repo| repo.path == repo_root) {
@@ -1691,30 +1676,14 @@ impl GitPage {
     }
     let items = recent
       .iter()
-      .map(|repo| RecentRepoItem::new(repo, Some(&repo_root)))
+      .map(|repo| RecentRepoItem::new(repo, Some(repo_root.as_path())))
       .collect::<Vec<_>>();
-    let window_handle = self.window_handle;
-    let _ = cx.update_window(window_handle, |_, window, cx| {
-      repo_select.update(cx, |state, cx| {
-        state.set_items(SearchableVec::new(items), window, cx);
-        state.set_selected_value(&repo_root, window, cx);
-      });
-    });
+    self.repo_dropdown_items = items;
   }
 
   fn clear_branch_select(&mut self, cx: &mut Context<Self>) {
-    let branch_select = self.branch_select.clone();
-    let window_handle = self.window_handle;
-    let _ = cx.update_window(window_handle, |_, window, cx| {
-      branch_select.update(cx, |state, cx| {
-        state.set_items(
-          SearchableVec::new(Vec::<BranchSelectItem>::new()),
-          window,
-          cx,
-        );
-        state.set_selected_index(None, window, cx);
-      });
-    });
+    self.branch_dropdown_items.clear();
+    cx.notify();
   }
 
   fn refresh_branches(&mut self, cx: &mut Context<Self>) {
@@ -1726,7 +1695,6 @@ impl GitPage {
     self.branch_refresh_generation = self.branch_refresh_generation.wrapping_add(1);
     let refresh_generation = self.branch_refresh_generation;
     let requested_repo = repo_root.clone();
-    let window_handle = self.window_handle;
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || {
         let branches = list_branches(&repo_root).ok()?;
@@ -1746,17 +1714,6 @@ impl GitPage {
       let selected = Self::selected_branch_from_status(current.as_ref());
       let items = Self::branch_select_items(branches, selected.as_ref(), detached_label.as_deref());
 
-      let select = cx.update_window(window_handle, |_, window, cx| {
-        let select = cx
-          .new(|cx| SelectState::new(SearchableVec::new(items), None, window, cx).searchable(true));
-        if let Some(selected) = selected.as_ref() {
-          select.update(cx, |state, cx| {
-            state.set_selected_value(selected, window, cx);
-          });
-        }
-        select
-      });
-
       let _ = this.update(cx, |this, cx| {
         if !Self::should_apply_branch_refresh(
           this.selected_repo.as_deref(),
@@ -1766,10 +1723,8 @@ impl GitPage {
         ) {
           return;
         }
-        if let Ok(select) = select {
-          this.branch_select = select;
-          this.subscribe_to_branch_select(cx);
-        }
+        this.branch_dropdown_items = items.clone();
+        cx.notify();
       });
     });
 
@@ -2514,7 +2469,6 @@ impl GitPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    let mut selected_branch: Option<BranchRef> = None;
     let mut should_post_action_refresh = true;
     let result = match action {
       CommandPaletteAction::OpenRepository => {
@@ -2795,24 +2749,7 @@ impl GitPage {
             format!("Repository not found: {}", repo_root.display()).into();
           return Err(message);
         }
-        self.set_selected_repo(repo_root.clone(), cx);
-        let mut recent = ConfigStore::load_recent_repositories();
-        if !recent.iter().any(|repo| repo.path == repo_root) {
-          recent.insert(
-            0,
-            RecentRepository {
-              path: repo_root.clone(),
-            },
-          );
-        }
-        let items = recent
-          .iter()
-          .map(|repo| RecentRepoItem::new(repo, Some(&repo_root)))
-          .collect::<Vec<_>>();
-        self.repo_select.update(cx, |state, cx| {
-          state.set_items(SearchableVec::new(items), window, cx);
-          state.set_selected_value(&repo_root, window, cx);
-        });
+        self.set_selected_repo(repo_root, cx);
         Ok(())
       }
       CommandPaletteAction::SwitchBranch(branch) => {
@@ -2826,7 +2763,6 @@ impl GitPage {
             CommandPaletteBranchKind::Remote => BranchKind::Remote,
           },
         };
-        selected_branch = Some(branch_ref.clone());
         switch_branch(&root_path, &branch_ref)
       }
       CommandPaletteAction::CreateBranch { name } => {
@@ -2837,7 +2773,6 @@ impl GitPage {
           name: name.clone(),
           kind: BranchKind::Local,
         };
-        selected_branch = Some(branch_ref.clone());
         create_branch(&root_path, &name).and_then(|_| switch_branch(&root_path, &branch_ref))
       }
       CommandPaletteAction::CreateBranchFrom { name, base } => {
@@ -2855,7 +2790,6 @@ impl GitPage {
           name: name.clone(),
           kind: BranchKind::Local,
         };
-        selected_branch = Some(new_branch.clone());
         create_branch_from(&root_path, &name, &branch_ref)
           .and_then(|_| switch_branch(&root_path, &new_branch))
       }
@@ -3110,16 +3044,6 @@ impl GitPage {
     if let Err(err) = result {
       let message: SharedString = format!("Action failed: {err}").into();
       return Err(message);
-    }
-
-    if let Some(selected_branch) = selected_branch {
-      let branch_select = self.branch_select.clone();
-      let window_handle = self.window_handle;
-      let _ = cx.update_window(window_handle, |_, window, cx| {
-        branch_select.update(cx, |state, cx| {
-          state.set_selected_value(&selected_branch, window, cx);
-        });
-      });
     }
 
     if should_post_action_refresh {
@@ -5044,21 +4968,38 @@ impl GitPage {
       .into_any_element()
   }
 
-  fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_header(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let push_pull_loading = self.push_pull_in_progress;
-    let select = Select::new(&self.repo_select)
-      .placeholder("Select repository...")
-      .search_placeholder("Search repositories...")
-      .menu_width(px(360.))
-      .w(px(360.));
+    let on_repo_select = self.repo_select_handler(cx);
+    let on_branch_select = self.branch_select_handler(cx);
+    let repo_options = self.repo_dropdown_items.clone();
+    let branch_options = self.branch_dropdown_items.clone();
 
-    let branch_select = Select::new(&self.branch_select)
-      .placeholder("Select branch...")
-      .search_placeholder("Search branches...")
-      .menu_width(px(300.))
-      .w(px(240.))
-      .disabled(self.selected_repo.is_none());
+    let repo_dropdown = dropdown_select(
+      DropdownSelectConfig::new("git-header-repo-select")
+        .trigger_label("Repository")
+        .trigger_height(px(PAGE_HEADER_HEIGHT - 1.))
+        .placeholder("Select repository...")
+        .search_placeholder("Search repositories...")
+        .options(repo_options)
+        .width(px(TRIGGER_DROPDOWN_SELECT_WIDTH))
+        .menu_width(px(TRIGGER_DROPDOWN_SELECT_WIDTH))
+        .on_select(on_repo_select),
+    );
+
+    let branch_dropdown = dropdown_select(
+      DropdownSelectConfig::new("git-header-branch-select")
+        .trigger_label("Branch")
+        .trigger_height(px(PAGE_HEADER_HEIGHT - 1.))
+        .placeholder("Select branch...")
+        .search_placeholder("Search branches...")
+        .options(branch_options)
+        .width(px(TRIGGER_DROPDOWN_SELECT_WIDTH))
+        .menu_width(px(TRIGGER_DROPDOWN_SELECT_WIDTH))
+        .disabled(self.selected_repo.is_none())
+        .on_select(on_branch_select),
+    );
 
     let branch_info = self.branch_status.as_ref().map(|status| {
       let ahead = status.ahead;
@@ -5153,17 +5094,16 @@ impl GitPage {
 
     let header_left = div()
       .flex()
+      .h_full()
       .items_center()
       .gap_3()
       .child(
         div()
-          .text_sm()
-          .text_color(theme.foreground)
-          .child("Repository"),
+          .flex()
+          .items_center()
+          .child(repo_dropdown)
+          .child(branch_dropdown),
       )
-      .child(select)
-      .child(div().text_sm().text_color(theme.foreground).child("Branch"))
-      .child(branch_select)
       .when_some(branch_info, |this, info| this.child(info))
       .child(fetch_button);
 
@@ -5171,7 +5111,7 @@ impl GitPage {
       .h(px(PAGE_HEADER_HEIGHT))
       .min_h(px(PAGE_HEADER_HEIGHT))
       .max_h(px(PAGE_HEADER_HEIGHT))
-      .px_3()
+      .pr_3()
       .flex()
       .items_center()
       .justify_start()
@@ -5800,11 +5740,7 @@ impl GitPage {
     )
   }
 
-  fn hunk_action_top(
-    line_height: gpui::Pixels,
-    display_line: usize,
-    scroll_offset: f32,
-  ) -> gpui::Pixels {
+  fn hunk_action_top(line_height: Pixels, display_line: usize, scroll_offset: f32) -> Pixels {
     line_height * (display_line as f32 - scroll_offset)
   }
 
@@ -6271,7 +6207,7 @@ impl Render for GitPage {
       .on_action(cx.listener(GitPage::close_find_action))
       .on_action(cx.listener(GitPage::open_repository_action))
       .on_action(cx.listener(GitPage::commit_changes_action))
-      .child(self.render_header(cx))
+      .child(self.render_header(window, cx))
       .child(
         ui::h_resizable("git-page-split")
           .child(
@@ -6315,18 +6251,25 @@ mod tests {
   }
 
   #[test]
-  fn format_git_dir_label_returns_parent_path() {
-    let path = Path::new("src/features/renamed_file.rs");
-    assert_eq!(format_git_dir_label(path).as_ref(), "src/features");
+  fn format_git_path_label_parts_splits_prefix_and_name() {
+    let path = Path::new("desktop/crates/workspace/src/git_page.rs");
+    let (prefix, name) = format_git_path_label_parts(path);
+
+    assert_eq!(prefix.as_ref(), "desktop/crates/workspace/src/");
+    assert_eq!(name.as_ref(), "git_page.rs");
   }
 
   #[test]
-  fn format_git_dir_label_handles_root_file_and_newlines() {
-    let root_file = Path::new("main.rs");
-    assert_eq!(format_git_dir_label(root_file).as_ref(), "");
+  fn recent_repo_item_splits_prefix_and_name() {
+    let repo = RecentRepository {
+      path: PathBuf::from("/Users/joris/workspace/reviu"),
+    };
+    let item = RecentRepoItem::new(&repo, Some(Path::new("/Users/joris/workspace/reviu")));
 
-    let path = Path::new("src/feature\ns/file.rs");
-    assert_eq!(format_git_dir_label(path).as_ref(), "src/features");
+    assert_eq!(item.path, PathBuf::from("/Users/joris/workspace/reviu"));
+    assert_eq!(item.prefix.as_ref(), "/Users/joris/workspace/");
+    assert_eq!(item.name.as_ref(), "reviu");
+    assert!(item.is_selected);
   }
 
   #[test]
@@ -6584,19 +6527,16 @@ mod tests {
       detached_label.as_deref(),
     );
     this.branch_status = Some(branch_status);
+    this.branch_dropdown_items = items;
+    cx.notify();
+  }
 
-    let branch_select = this.branch_select.clone();
-    let window_handle = this.window_handle;
-    let _ = cx.update_window(window_handle, move |_, window, cx| {
-      branch_select.update(cx, |state, cx| {
-        state.set_items(SearchableVec::new(items), window, cx);
-        if let Some(selected) = selected.as_ref() {
-          state.set_selected_value(selected, window, cx);
-        } else {
-          state.set_selected_index(None, window, cx);
-        }
-      });
-    });
+  fn selected_branch_from_dropdown(this: &GitPage) -> Option<BranchRef> {
+    this
+      .branch_dropdown_items
+      .iter()
+      .find(|item| item.is_current)
+      .map(|item| item.branch.clone())
   }
 
   async fn await_git_page_background_tasks(
@@ -7514,9 +7454,7 @@ mod tests {
         .any(|branch| branch.kind == BranchKind::Local && branch.name == "feature")
     );
 
-    let selected_branch = git_page.read_with(cx, |this, cx| {
-      this.branch_select.read(cx).selected_value().cloned()
-    });
+    let selected_branch = git_page.read_with(cx, |this, _cx| selected_branch_from_dropdown(this));
     assert_eq!(
       selected_branch,
       Some(BranchRef {
@@ -7620,9 +7558,7 @@ mod tests {
     let status = current_branch_status(&repo.path).expect("read status");
     assert_eq!(status.name, "HEAD");
 
-    let selected_branch = git_page.read_with(cx, |this, cx| {
-      this.branch_select.read(cx).selected_value().cloned()
-    });
+    let selected_branch = git_page.read_with(cx, |this, _cx| selected_branch_from_dropdown(this));
     assert_eq!(
       selected_branch,
       Some(GitPage::detached_branch_select_value())
@@ -7660,14 +7596,17 @@ mod tests {
 
     await_git_page_background_tasks(git_page.clone(), cx).await;
 
-    let (selected_repo, selected_in_header) = git_page.read_with(cx, |this, cx| {
+    let (selected_repo, header_contains_repo) = git_page.read_with(cx, |this, _cx| {
       (
         this.selected_repo.clone(),
-        this.repo_select.read(cx).selected_value().cloned(),
+        this
+          .repo_dropdown_items
+          .iter()
+          .any(|item| item.path == repo_b.path),
       )
     });
     assert_eq!(selected_repo, Some(repo_b.path.clone()));
-    assert_eq!(selected_in_header, Some(repo_b.path.clone()));
+    assert!(header_contains_repo);
   }
 
   #[gpui::test]
@@ -11344,13 +11283,13 @@ mod tests {
       branch_task.await;
     }
 
-    let (branch_name, selected_branch) = git_page.read_with(cx, |this, cx| {
+    let (branch_name, selected_branch) = git_page.read_with(cx, |this, _cx| {
       (
         this
           .branch_status
           .as_ref()
           .map(|status| status.name.clone()),
-        this.branch_select.read(cx).selected_value().cloned(),
+        selected_branch_from_dropdown(this),
       )
     });
     assert_eq!(branch_name.as_deref(), Some("HEAD"));
@@ -11396,9 +11335,7 @@ mod tests {
     });
     branch_task.await;
 
-    let selected_branch = git_page.read_with(cx, |this, cx| {
-      this.branch_select.read(cx).selected_value().cloned()
-    });
+    let selected_branch = git_page.read_with(cx, |this, _cx| selected_branch_from_dropdown(this));
     assert_eq!(
       selected_branch,
       Some(BranchRef {
@@ -11454,7 +11391,7 @@ mod tests {
       has_staged_changes,
       selected_file,
       selected_branch,
-    ) = git_page.read_with(cx, |this, cx| {
+    ) = git_page.read_with(cx, |this, _cx| {
       (
         this.status_entries.len(),
         this.branch_status.clone(),
@@ -11465,7 +11402,7 @@ mod tests {
         this.force_push_after_rebase,
         this.has_staged_changes,
         this.selected_file.clone(),
-        this.branch_select.read(cx).selected_value().cloned(),
+        selected_branch_from_dropdown(this),
       )
     });
 
