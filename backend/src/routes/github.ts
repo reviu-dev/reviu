@@ -1,4 +1,4 @@
-import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueParameters, GithubIssueResponse, GithubRepositoryBranchesParameters, GithubRepositoryBranchesResponse, GithubRepositoryParameters, GithubRepositoryReadmeParameters, GithubRepositoryResponse, GithubRepositoryTreeParams, GithubRepositoryTreesResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, SearchIssuesItemResponse, SearchIssuesParams, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse } from '../services/github.js'
+import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueParameters, GithubIssueResponse, GithubRepositoryBranchesParameters, GithubRepositoryBranchesResponse, GithubRepositoryParameters, GithubRepositoryReadmeParameters, GithubRepositoryResponse, GithubRepositoryTreeParams, GithubRepositoryTreesResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, SearchIssuesItemResponse, SearchIssuesParams, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse, UserRepositoriesParams, UserRepositoryResponse } from '../services/github.js'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
@@ -23,6 +23,7 @@ import {
   fetchGithubRepositoryReadme,
   fetchGithubRepositoryTrees,
   fetchGithubSearchIssues,
+  fetchGithubUserRepositories,
   patchGithubPullRequestComment,
 
 } from '../services/github.js'
@@ -205,6 +206,15 @@ interface GithubRepositoryDetails {
     name: NonNullable<GithubRepositoryResponse['license']>['name']
     spdx_id: NonNullable<GithubRepositoryResponse['license']>['spdx_id']
   } | null
+}
+
+interface GithubUserRepository {
+  owner: string
+  repo: string
+  full_name: UserRepositoryResponse['full_name']
+  description: UserRepositoryResponse['description']
+  private: UserRepositoryResponse['private']
+  updated_at: NonNullable<UserRepositoryResponse['updated_at']>
 }
 
 interface GithubRepositoryReadme {
@@ -836,6 +846,35 @@ export const githubRoutes = githubRouter
       if (status === 404) {
         return ctx.json({ content: null } satisfies GithubFileContent, 200)
       }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/repos/me', async (ctx) => {
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: UserRepositoriesParams = {
+        sort: 'updated',
+        direction: 'desc',
+        per_page: 100,
+      }
+
+      const data = await fetchGithubUserRepositories({ token: githubToken, params })
+      const repositories: GithubUserRepository[] = data
+        .map(repo => ({
+          owner: repo.owner.login,
+          repo: repo.name,
+          full_name: repo.full_name,
+          description: repo.description,
+          private: repo.private,
+          updated_at: repo.updated_at ?? '',
+        }))
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+
+      return ctx.json({ repositories }, 200)
+    }
+    catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })

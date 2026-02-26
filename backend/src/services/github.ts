@@ -19,6 +19,7 @@ export type DeletePullRequestCommentParams
 export type PullRequestFilesParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['parameters']
 export type SearchIssuesParams = Endpoints['GET /search/issues']['parameters']
+export type UserRepositoriesParams = Endpoints['GET /user/repos']['parameters']
 export type NotificationsParams = Endpoints['GET /notifications']['parameters']
 export type GetContentParams
   = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['parameters']
@@ -40,6 +41,7 @@ export type PullRequestFileResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['response']['data'][number]
 export type SearchIssuesResponse = Endpoints['GET /search/issues']['response']['data']
 export type SearchIssuesItemResponse = SearchIssuesResponse['items'][number]
+export type UserRepositoryResponse = Endpoints['GET /user/repos']['response']['data'][number]
 export type GetContentResponse
   = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['response']['data']
 export type GithubUserResponse = Endpoints['GET /user']['response']['data']
@@ -92,6 +94,17 @@ export async function fetchGithubSearchIssues(
   { token: string, params: SearchIssuesParams },
 ): Promise<SearchIssuesResponse> {
   const { data } = await request('GET /search/issues', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
+export async function fetchGithubUserRepositories(
+  { token, params }:
+  { token: string, params: UserRepositoriesParams },
+): Promise<UserRepositoryResponse[]> {
+  const { data } = await request('GET /user/repos', {
     ...params,
     headers: githubAuthHeaders(token),
   })
