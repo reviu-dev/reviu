@@ -468,13 +468,12 @@ impl<I: DropdownSelectItem + 'static> RenderOnce for DropdownSelect<I> {
     let trigger = Button::new(self.config.id.clone())
       .custom(
         ButtonCustomVariant::new(cx)
-          .color(theme.background)
+          .color(theme.sidebar)
           .foreground(theme.foreground)
           .border(theme.transparent)
           .hover(theme.secondary_hover)
           .active(theme.secondary),
       )
-      // .compact()
       .rounded_none()
       .border_0()
       .w_full()
