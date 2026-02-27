@@ -5,6 +5,8 @@ import {
   GitCommitHorizontalIcon,
   GitPullRequestIcon,
 } from 'lucide-vue-next'
+import cmd_palette_dark from '../assets/app_screenshots/cmd_palette_dark.png'
+import cmd_palette_light from '../assets/app_screenshots/cmd_palette_light.png'
 </script>
 
 <template>
@@ -15,8 +17,8 @@ import {
       <div class="mt-10 grid grid-cols-1 gap-4 sm:mt-16 lg:grid-cols-6 lg:grid-rows-2">
         <div class="flex p-px lg:col-span-4">
           <div class="w-full overflow-hidden rounded-lg bg-background shadow-sm outline outline-black/5 max-lg:rounded-t-4xl lg:rounded-tl-4xl dark:shadow-none dark:outline-white/15">
-            <img class="h-80 object-cover object-left dark:hidden" src="https://tailwindcss.com/plus-assets/img/component-images/bento-02-releases.png" alt="Keyboard-first workflow preview" />
-            <img class="h-80 object-cover object-left not-dark:hidden" src="https://tailwindcss.com/plus-assets/img/component-images/dark-bento-02-releases.png" alt="Keyboard-first workflow preview" />
+            <img class="h-80 object-cover object-left dark:hidden" :src="cmd_palette_light.src" alt="Keyboard-first workflow preview" />
+            <img class="h-80 object-cover object-left not-dark:hidden" :src="cmd_palette_dark.src" alt="Keyboard-first workflow preview" />
             <div class="p-10">
               <div class="flex items-center gap-2">
                 <CommandIcon class="size-4 text-primary" aria-hidden="true" />
