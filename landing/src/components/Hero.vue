@@ -59,7 +59,7 @@ import git_light from '../assets/app_screenshots/git_light.png'
         <div class="max-w-3xl flex-none sm:max-w-5xl lg:max-w-none">
           <div class="-m-2 rounded-xl bg-gray-900/5 p-2 ring-1 ring-gray-900/10 ring-inset lg:-m-4 lg:rounded-2xl lg:p-4 dark:bg-white/2.5 dark:ring-white/10">
             <img :src="git_light.src" alt="Reviu desktop interface preview" width="2432" height="1442" class="w-304 rounded-[13px] bg-white/0 shadow-xl ring-1 ring-gray-900/10 dark:hidden" />
-            <img :src="git_dark.src" alt="Reviu desktop interface preview" width="2432" height="1442" class="w-304 rounded-[13px] bg-white/5 shadow-2xl ring-white/10 not-dark:hidden" />
+            <img :src="git_dark.src" alt="Reviu desktop interface preview" width="2432" height="1442" class="w-304 rounded-[13px] bg-white/5 shadow-2xl ring-1 ring-white/10 not-dark:hidden" />
           </div>
         </div>
       </div>
