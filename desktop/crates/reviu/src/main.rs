@@ -31,6 +31,8 @@ const MACOS_TRAFFIC_LIGHT_Y: f32 = PAGE_HEADER_HEIGHT / 2.0 - 12.0;
 #[cfg(target_os = "macos")]
 fn macos_titlebar_options() -> TitlebarOptions {
   let mut options = TitleBar::title_bar_options();
+
+  options.title = Some("Reviu".into());
   // Align traffic lights vertically with the 50px global top bar.
   options.traffic_light_position =
     Some(point(px(MACOS_TRAFFIC_LIGHT_X), px(MACOS_TRAFFIC_LIGHT_Y)));

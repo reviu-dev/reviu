@@ -28,7 +28,7 @@ use gpui::{
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable,
   alert::Alert,
-  button::{Button, ButtonVariant, ButtonVariants as _},
+  button::{Button, ButtonGroup, ButtonVariant, ButtonVariants as _},
   h_flex,
   kbd::Kbd,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
@@ -5088,10 +5088,12 @@ impl GitPage {
     let fetch_button = Button::new("git-fetch-button")
       .label("Fetch")
       .icon(UiIconName::RefreshCcw)
+      .outline()
       .loading_icon(Icon::new(UiIconName::RefreshCcw))
       .loading(self.fetch_in_progress)
       .with_variant(ButtonVariant::Secondary)
       .xsmall()
+      .p_2()
       .disabled(self.selected_repo.is_none() || self.fetch_in_progress)
       .tooltip("Fetch updates from remotes")
       .on_click(cx.listener(Self::fetch_action));
@@ -5926,10 +5928,10 @@ impl GitPage {
     let merge_abort_enabled = self.selected_repo.is_some() && self.merge_in_progress;
     let rebase_abort_enabled = self.selected_repo.is_some() && self.rebase_in_progress;
     let changed_files_count = Self::changed_files_count(&self.status_entries);
-    let (label, icon, tooltip) = if all_staged {
-      ("Unstage all", IconName::Minus, "Unstage all files")
+    let (icon, tooltip) = if all_staged {
+      (IconName::Minus, "Unstage all files")
     } else {
-      ("Stage all", IconName::Plus, "Stage all files")
+      (IconName::Plus, "Stage all files")
     };
     let is_history_mode = self.sidebar_mode == GitSidebarMode::History;
     let (mode_label, mode_icon, mode_tooltip) = if is_history_mode {
@@ -6007,31 +6009,33 @@ impl GitPage {
             )
           })
           .when(!is_history_mode, |this| {
-            this
-              .child(
-                Button::new("stage-all-button")
-                  .label(label)
-                  .icon(icon)
-                  .with_variant(ButtonVariant::Secondary)
-                  .xsmall()
-                  .disabled(!sidebar_enabled)
-                  .tooltip(tooltip)
-                  .on_click(cx.listener(Self::toggle_stage_all_action)),
-              )
-              .child(
-                Button::new("restore-all-button")
-                  .label("Restore all")
-                  .icon(IconName::Undo)
-                  .with_variant(ButtonVariant::Secondary)
-                  .xsmall()
-                  .disabled(!restore_all_enabled)
-                  .tooltip("Discard all changes")
-                  .on_click(cx.listener(Self::restore_all_click_action)),
-              )
+            this.child(
+              ButtonGroup::new("button-group")
+                .outline()
+                .child(
+                  Button::new("stage-all-button")
+                    .icon(icon)
+                    .with_variant(ButtonVariant::Secondary)
+                    .xsmall()
+                    .disabled(!sidebar_enabled)
+                    .tooltip(tooltip)
+                    .on_click(cx.listener(Self::toggle_stage_all_action)),
+                )
+                .child(
+                  Button::new("restore-all-button")
+                    .icon(IconName::Undo)
+                    .with_variant(ButtonVariant::Secondary)
+                    .xsmall()
+                    .disabled(!restore_all_enabled)
+                    .tooltip("Discard all changes")
+                    .on_click(cx.listener(Self::restore_all_click_action)),
+                ),
+            )
           })
           .child(
             Button::new("sidebar-mode-toggle-button")
               .label(mode_label)
+              .outline()
               .icon(mode_icon)
               .with_variant(ButtonVariant::Secondary)
               .xsmall()
