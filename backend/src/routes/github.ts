@@ -4,6 +4,8 @@ import type {
   CreatePullRequestCommentReplyParams,
   CreatePullRequestCommentReplyResponse,
   CreatePullRequestCommentResponse,
+  CreatePullRequestReviewParams,
+  CreatePullRequestReviewResponse,
   DeletePullRequestCommentParams,
   GetContentParams,
   GithubIssueDetailsCommentParameters,
@@ -44,6 +46,7 @@ import {
   compareGithubRefs,
   createGithubPullRequestComment,
   createGithubPullRequestCommentReply,
+  createGithubPullRequestReview,
   deleteGithubPullRequestComment,
   fetchGithubCommitFilesAllPages,
   fetchGithubNotifications,
@@ -111,6 +114,21 @@ interface GithubPullRequestReviewComment {
   line: PullRequestCommentResponse['line']
   original_line: PullRequestCommentResponse['original_line']
   side: PullRequestCommentResponse['side']
+}
+
+interface GithubPullRequestReviewUser {
+  login: NonNullable<CreatePullRequestReviewResponse['user']>['login']
+  avatar_url: NonNullable<CreatePullRequestReviewResponse['user']>['avatar_url']
+}
+
+interface GithubPullRequestReview {
+  id: CreatePullRequestReviewResponse['id']
+  body: CreatePullRequestReviewResponse['body']
+  state: CreatePullRequestReviewResponse['state']
+  submitted_at: CreatePullRequestReviewResponse['submitted_at']
+  commit_id: CreatePullRequestReviewResponse['commit_id']
+  html_url: CreatePullRequestReviewResponse['html_url']
+  user: GithubPullRequestReviewUser | null
 }
 
 interface GithubPullRequestDetails {
@@ -325,6 +343,11 @@ const createPullRequestThreadReplyBodySchema = z.object({
   body: z.string().trim().min(1, 'Missing comment body'),
 })
 
+const createPullRequestReviewBodySchema = z.object({
+  event: z.enum(['COMMENT', 'APPROVE', 'REQUEST_CHANGES']),
+  body: z.string().optional(),
+})
+
 function formatGithubUser<U extends { login: string, name?: string | null, avatar_url: string }>(user: U | null) {
   if (!user)
     return null
@@ -362,6 +385,25 @@ function mapGithubPullRequestReviewComment(
     line: comment.line,
     original_line: comment.original_line,
     side: comment.side,
+  }
+}
+
+function mapGithubPullRequestReview(
+  review: CreatePullRequestReviewResponse,
+): GithubPullRequestReview {
+  return {
+    id: review.id,
+    body: review.body,
+    state: review.state,
+    submitted_at: review.submitted_at,
+    commit_id: review.commit_id,
+    html_url: review.html_url,
+    user: review.user
+      ? {
+          login: review.user.login,
+          avatar_url: review.user.avatar_url,
+        }
+      : null,
   }
 }
 
@@ -787,6 +829,48 @@ export const githubRoutes = githubRouter
       return ctx.json({ comments }, 200)
     }
     catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/:id/reviews', zValidator(
+    'json',
+    createPullRequestReviewBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const { event, body } = ctx.req.valid('json')
+    const trimmedBody = body?.trim()
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+
+    const bodyRequired = event === 'COMMENT' || event === 'REQUEST_CHANGES'
+    if (bodyRequired && !trimmedBody) {
+      return ctx.json({ error: 'Missing review body' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: CreatePullRequestReviewParams = {
+        owner: org,
+        repo,
+        pull_number: pullNumber,
+        event,
+        ...(trimmedBody ? { body: trimmedBody } : {}),
+      }
+
+      const data = await createGithubPullRequestReview({ token: githubToken, params })
+      const review = mapGithubPullRequestReview(data)
+      return ctx.json({ review }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })

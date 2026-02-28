@@ -12,6 +12,8 @@ export type PullRequestCommentsParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
 export type CreatePullRequestCommentParams
   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
+export type CreatePullRequestReviewParams
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews']['parameters']
 export type CreatePullRequestCommentReplyParams
   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies']['parameters']
 export type UpdatePullRequestCommentParams
@@ -39,6 +41,8 @@ export type PullRequestCommentResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data'][number]
 export type CreatePullRequestCommentResponse
   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data']
+export type CreatePullRequestReviewResponse
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews']['response']['data']
 export type CreatePullRequestCommentReplyResponse
   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies']['response']['data']
 export type UpdatePullRequestCommentResponse
@@ -279,6 +283,16 @@ export async function createGithubPullRequestComment(
   { token, params }: { token: string, params: CreatePullRequestCommentParams },
 ): Promise<CreatePullRequestCommentResponse> {
   const { data } = await request('POST /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
+export async function createGithubPullRequestReview(
+  { token, params }: { token: string, params: CreatePullRequestReviewParams },
+): Promise<CreatePullRequestReviewResponse> {
+  const { data } = await request('POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews', {
     ...params,
     headers: githubAuthHeaders(token),
   })
