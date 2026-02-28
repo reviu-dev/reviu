@@ -381,6 +381,26 @@ pub struct GithubPullRequestReviewUser {
   pub avatar_url: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubPullRequestIssueCommentUser {
+  pub login: String,
+  #[serde(rename = "avatar_url")]
+  pub avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubPullRequestIssueComment {
+  pub id: u64,
+  pub body: String,
+  #[serde(rename = "created_at")]
+  pub created_at: String,
+  #[serde(rename = "updated_at")]
+  pub updated_at: String,
+  pub user: Option<GithubPullRequestIssueCommentUser>,
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum GithubPullRequestReviewEvent {
@@ -389,12 +409,20 @@ pub enum GithubPullRequestReviewEvent {
   RequestChanges,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum GithubPullRequestReviewState {
+  Approved,
+  #[serde(rename = "CHANGES_REQUESTED")]
+  RequestChanges,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubPullRequestReview {
   pub id: u64,
   pub body: Option<String>,
-  pub state: String,
+  pub state: GithubPullRequestReviewState,
   #[serde(rename = "submitted_at")]
   pub submitted_at: Option<String>,
   #[serde(rename = "commit_id")]
@@ -497,8 +525,10 @@ pub struct GithubPullRequestDetails {
   pub head_ref_name: String,
   pub body: Option<String>,
   pub author: GithubPullRequestAuthor,
+  #[allow(dead_code)]
   pub comments: u64,
   #[serde(rename = "review_comments")]
+  #[allow(dead_code)]
   pub review_comments: u64,
   pub commits: u64,
   pub additions: u64,
@@ -621,8 +651,18 @@ struct GithubPullRequestCommentsResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct GithubPullRequestIssueCommentsResponse {
+  comments: Vec<GithubPullRequestIssueComment>,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubPullRequestCommentResponse {
   comment: GithubPullRequestReviewComment,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestReviewsResponse {
+  reviews: Vec<GithubPullRequestReview>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1158,6 +1198,52 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestCommentsResponse>()?;
     Ok(payload.comments)
+  }
+
+  pub fn fetch_pull_request_issue_comments(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+  ) -> Result<Vec<GithubPullRequestIssueComment>> {
+    let route = format!("/github/pr/{number}/issue-comments");
+    let response = self
+      .authed_request(Method::GET, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubPullRequestIssueCommentsResponse>()?;
+    Ok(payload.comments)
+  }
+
+  pub fn fetch_pull_request_reviews(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+  ) -> Result<Vec<GithubPullRequestReview>> {
+    let route = format!("/github/pr/{number}/reviews");
+    let response = self
+      .authed_request(Method::GET, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubPullRequestReviewsResponse>()?;
+    Ok(payload.reviews)
   }
 
   pub fn update_pull_request_review_comment(
@@ -2285,6 +2371,112 @@ mod tests {
   }
 
   #[test]
+  fn fetch_pull_request_issue_comments_parses_success_payload() {
+    let body = r#"{
+      "comments": [
+        {
+          "id": 11,
+          "body": "Can you add tests?",
+          "created_at": "2026-02-28T10:00:00Z",
+          "updated_at": "2026-02-28T10:05:00Z",
+          "user": { "login": "octocat", "avatar_url": null }
+        }
+      ]
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let comments = api
+      .fetch_pull_request_issue_comments("acme", "widget", 42)
+      .expect("fetch pull request issue comments");
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].id, 11);
+    assert_eq!(comments[0].body, "Can you add tests?");
+    assert_eq!(
+      comments[0].user.as_ref().map(|user| user.login.as_str()),
+      Some("octocat")
+    );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_issue_comments_uses_expected_route_with_query_params() {
+    let body = r#"{"comments":[]}"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_pull_request_issue_comments("acme", "widget", 42)
+      .expect("fetch pull request issue comments");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "GET /github/pr/42/issue-comments?org=acme&repo=widget HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn fetch_pull_request_reviews_parses_success_payload() {
+    let body = r#"{
+      "reviews": [
+        {
+          "id": 123,
+          "body": "Looks good",
+          "state": "APPROVED",
+          "submitted_at": "2026-02-28T12:00:00Z",
+          "commit_id": "1111111111111111111111111111111111111111",
+          "html_url": "https://github.com/acme/widget/pull/42#pullrequestreview-123",
+          "user": { "login": "octocat", "avatar_url": null }
+        }
+      ]
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let reviews = api
+      .fetch_pull_request_reviews("acme", "widget", 42)
+      .expect("fetch pull request reviews");
+    assert_eq!(reviews.len(), 1);
+    assert_eq!(reviews[0].id, 123);
+    assert_eq!(reviews[0].state, GithubPullRequestReviewState::Approved);
+    assert_eq!(
+      reviews[0].user.as_ref().map(|user| user.login.as_str()),
+      Some("octocat")
+    );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_reviews_uses_expected_route_with_query_params() {
+    let body = r#"{"reviews":[]}"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_pull_request_reviews("acme", "widget", 42)
+      .expect("fetch pull request reviews");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "GET /github/pr/42/reviews?org=acme&repo=widget HTTP/1.1"
+    );
+  }
+
+  #[test]
   fn fetch_pull_request_review_comments_parses_success_payload() {
     let body = r#"{
       "comments": [
@@ -2531,7 +2723,7 @@ mod tests {
       .expect("submit pull request review");
 
     assert_eq!(review.id, 123);
-    assert_eq!(review.state, "APPROVED");
+    assert_eq!(review.state, GithubPullRequestReviewState::Approved);
     assert_eq!(review.body.as_deref(), Some("Ship it"));
     assert_eq!(
       review.user.as_ref().map(|user| user.login.as_str()),
@@ -2546,7 +2738,7 @@ mod tests {
       "review": {
         "id": 1,
         "body": "Looks good",
-        "state": "COMMENTED",
+        "state": "APPROVED",
         "submitted_at": "2026-02-28T12:00:00Z",
         "commit_id": "1111111111111111111111111111111111111111",
         "html_url": "https://github.com/acme/widget/pull/42#pullrequestreview-1",
@@ -2976,7 +3168,9 @@ mod tests {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
     let api = make_test_api_client(base_url);
 
-    let err = api.fetch_pull_request_files("acme", "widget", 42, None).err();
+    let err = api
+      .fetch_pull_request_files("acme", "widget", 42, None)
+      .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");
@@ -3001,6 +3195,30 @@ mod tests {
     let err = api
       .fetch_pull_request_review_comments("acme", "widget", 42)
       .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_issue_comments_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .fetch_pull_request_issue_comments("acme", "widget", 42)
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_reviews_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api.fetch_pull_request_reviews("acme", "widget", 42).err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");
