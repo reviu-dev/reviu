@@ -16,23 +16,25 @@ use gfm_markdown_viewer::{
 };
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
 use gpui::{
-  App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, RenderImage, SharedString,
-  Styled, Task, Window, div, img, prelude::*, px,
+  App, Context, Corner, Entity, FocusHandle, Focusable, ParentElement, Render, RenderImage,
+  SharedString, Styled, Task, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable as _, StyledExt,
   avatar::Avatar,
-  button::{Button, ButtonVariants as _},
+  button::{Button, ButtonVariant, ButtonVariants as _},
   clipboard::Clipboard,
   h_flex,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  radio::{Radio, RadioGroup},
   scroll::ScrollableElement,
   skeleton::Skeleton,
   spinner::Spinner,
   tab::{Tab, TabBar},
   tag::Tag,
   text::TextView,
+  tooltip::Tooltip,
   tree::{TreeItem, TreeState, tree},
   v_flex,
 };
@@ -42,16 +44,16 @@ use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DETAILS_PAGE_CONTAINER_MAX_WIDTH,
-  DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler,
-  StatusThemeExt, UiIconName, WindowExt, dropdown_select, file_icon_path_for_name_with_theme,
-  h_resizable, parse_github_url_action, resizable_panel,
+  DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState, Popover,
+  SearchFileEntry, SearchFileHandler, StatusThemeExt, UiIconName, WindowExt, dropdown_select,
+  file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
 };
 
 use crate::{
   ShowCommandPalette, ShowFileSearch,
   api::{
     ApiClient, GithubPullRequestCommit, GithubPullRequestDetails, GithubPullRequestFile,
-    GithubPullRequestReviewComment,
+    GithubPullRequestReviewComment, GithubPullRequestReviewEvent,
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_compact_datetime, format_long_date},
@@ -75,6 +77,8 @@ const PR_TAB_CHANGES_IX: usize = 1;
 const PR_TAB_COMMITS_IX: usize = 2;
 const PR_COMMIT_SELECT_WIDTH: f32 = 260.0;
 const PR_COMMIT_SELECT_MENU_WIDTH: f32 = 420.0;
+const PR_REVIEW_POPOVER_WIDTH: f32 = 500.0;
+const PR_REVIEW_INPUT_HEIGHT_PX: f32 = 100.0;
 
 fn pr_description_scope_id(pr_number: u64) -> usize {
   (pr_number as usize).wrapping_mul(1_000_003).wrapping_add(1)
@@ -156,6 +160,14 @@ fn next_review_comment_navigation_index(
       })
       .unwrap_or(comment_ids.len() - 1),
   })
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum GithubPrReviewDecision {
+  #[default]
+  Comment,
+  Approve,
+  RequestChanges,
 }
 
 #[derive(Clone, Debug)]
@@ -644,6 +656,13 @@ pub struct GithubPrDetailsPage {
   commit_lookup: HashMap<String, GithubPullRequestCommit>,
   commits_list: Entity<ListState<GithubPrCommitListDelegate>>,
   selected_commit_sha: Option<String>,
+  review_input: Entity<InputState>,
+  review_decision: GithubPrReviewDecision,
+  review_popover_open: bool,
+  review_form_reset_pending: bool,
+  submit_review_task: Option<Task<()>>,
+  submit_review_loading: bool,
+  submit_review_error: Option<SharedString>,
   review_comments_task: Option<Task<()>>,
   review_comments_loading: bool,
   review_comments_error: Option<SharedString>,
@@ -913,6 +932,11 @@ impl GithubPrDetailsPage {
       editor.is_read_only = true;
       editor
     });
+    let review_input = cx.new(|cx| {
+      InputState::new(window, cx)
+        .multi_line(true)
+        .placeholder("Add an overall review comment...")
+    });
 
     let mut this = Self {
       focus_handle: cx.focus_handle(),
@@ -929,6 +953,13 @@ impl GithubPrDetailsPage {
       commit_lookup: HashMap::new(),
       commits_list,
       selected_commit_sha: None,
+      review_input,
+      review_decision: GithubPrReviewDecision::default(),
+      review_popover_open: false,
+      review_form_reset_pending: false,
+      submit_review_task: None,
+      submit_review_loading: false,
+      submit_review_error: None,
       review_comments_task: None,
       review_comments_loading: false,
       review_comments_error: None,
@@ -979,6 +1010,20 @@ impl GithubPrDetailsPage {
       }),
       _ => None,
     }
+  }
+
+  fn is_current_user_pr_author(&self, cx: &App) -> bool {
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      return false;
+    };
+    let Some(login) = Self::current_github_login(cx) else {
+      return false;
+    };
+
+    pull_request
+      .author
+      .login
+      .eq_ignore_ascii_case(login.as_str())
   }
 
   fn editable_review_comment_ids(&self, cx: &App) -> HashSet<u64> {
@@ -1071,6 +1116,143 @@ impl GithubPrDetailsPage {
     self.sync_sentry_pr_context();
     self.sync_commits_list(cx);
     self.reload_files_for_current_pull_request(cx);
+  }
+
+  fn review_decision_to_api_event(
+    decision: GithubPrReviewDecision,
+  ) -> GithubPullRequestReviewEvent {
+    match decision {
+      GithubPrReviewDecision::Comment => GithubPullRequestReviewEvent::Comment,
+      GithubPrReviewDecision::Approve => GithubPullRequestReviewEvent::Approve,
+      GithubPrReviewDecision::RequestChanges => GithubPullRequestReviewEvent::RequestChanges,
+    }
+  }
+
+  fn review_decision_requires_body(decision: GithubPrReviewDecision) -> bool {
+    matches!(
+      decision,
+      GithubPrReviewDecision::Comment | GithubPrReviewDecision::RequestChanges
+    )
+  }
+
+  fn review_decision_from_index(index: usize) -> GithubPrReviewDecision {
+    match index {
+      1 => GithubPrReviewDecision::Approve,
+      2 => GithubPrReviewDecision::RequestChanges,
+      _ => GithubPrReviewDecision::Comment,
+    }
+  }
+
+  fn review_decision_index(decision: GithubPrReviewDecision) -> usize {
+    match decision {
+      GithubPrReviewDecision::Comment => 0,
+      GithubPrReviewDecision::Approve => 1,
+      GithubPrReviewDecision::RequestChanges => 2,
+    }
+  }
+
+  fn validate_review_submission(
+    decision: GithubPrReviewDecision,
+    body: &str,
+  ) -> Option<SharedString> {
+    if Self::review_decision_requires_body(decision) && body.trim().is_empty() {
+      return Some("A review comment is required for this review type".into());
+    }
+
+    None
+  }
+
+  fn mark_review_form_reset_pending(&mut self) {
+    self.review_form_reset_pending = true;
+    self.review_decision = GithubPrReviewDecision::Comment;
+    self.submit_review_error = None;
+  }
+
+  fn reset_review_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.review_form_reset_pending = false;
+    self.review_decision = GithubPrReviewDecision::Comment;
+    self.submit_review_error = None;
+    self.review_input.update(cx, |input, cx| {
+      input.set_value("", window, cx);
+    });
+  }
+
+  fn focus_review_input(&self, window: &mut Window) {
+    let review_input = self.review_input.clone();
+    window.on_next_frame(move |window, cx| {
+      review_input.update(cx, |input, cx| {
+        input.focus(window, cx);
+      });
+    });
+  }
+
+  fn submit_pull_request_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.submit_review_loading {
+      return;
+    }
+
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      self.submit_review_error = Some("No pull request selected".into());
+      cx.notify();
+      return;
+    };
+
+    let body = self.review_input.read(cx).value().to_string();
+    let decision = self.review_decision;
+    let author_restricted_decision =
+      self.is_current_user_pr_author(cx) && !matches!(decision, GithubPrReviewDecision::Comment);
+    if author_restricted_decision {
+      self.submit_review_error = Some(
+        "Pull request authors cannot approve or request changes on their own pull requests.".into(),
+      );
+      cx.notify();
+      return;
+    }
+    if let Some(error) = Self::validate_review_submission(decision, body.as_str()) {
+      self.submit_review_error = Some(error);
+      cx.notify();
+      return;
+    }
+
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let event = Self::review_decision_to_api_event(decision);
+    let api = self.api.clone();
+
+    self.submit_review_loading = true;
+    self.submit_review_error = None;
+    cx.notify();
+
+    let task = cx.spawn_in(window, async move |this, cx| {
+      let result =
+        unblock(move || api.submit_pull_request_review(&owner, &repo, number, event, &body)).await;
+
+      let _ = this.update_in(cx, |this, window, cx| {
+        this.submit_review_loading = false;
+
+        match result {
+          Ok(_) => {
+            this.review_popover_open = false;
+            this.reset_review_form(window, cx);
+            this.add_pr_breadcrumb("Submit PR review succeeded", Map::new());
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.submit_review_error = Some(error_message.clone().into());
+            this.add_pr_breadcrumb("Submit PR review failed", Map::new());
+            this.record_pr_error(
+              "github.pr.review.submit",
+              error_message.as_str(),
+              Map::new(),
+            );
+          }
+        }
+        cx.notify();
+      });
+    });
+
+    self.submit_review_task = Some(task);
   }
 
   fn install_diff_editor_review_comment_handlers(&mut self, cx: &mut Context<Self>) {
@@ -2458,6 +2640,10 @@ impl GithubPrDetailsPage {
     self.commits.clear();
     self.commit_lookup.clear();
     self.selected_commit_sha = None;
+    self.review_popover_open = false;
+    self.mark_review_form_reset_pending();
+    self.submit_review_task = None;
+    self.submit_review_loading = false;
     self.sync_commits_list(cx);
     self.review_comments_loading = true;
     self.review_comments_error = None;
@@ -2623,6 +2809,159 @@ impl GithubPrDetailsPage {
     }
   }
 
+  fn render_review_popover(
+    &mut self,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let author_cannot_approve_tooltip =
+      "Pull request authors cannot approve their own pull requests.".to_string();
+    let author_cannot_request_changes_tooltip =
+      "Pull request authors cannot request changes on their own pull requests.".to_string();
+    let is_current_user_pr_author = self.is_current_user_pr_author(cx);
+    let review_body = self.review_input.read(cx).value().to_string();
+    let submit_review_disabled = self.submit_review_loading
+      || self.pull_request.is_none()
+      || (is_current_user_pr_author
+        && !matches!(self.review_decision, GithubPrReviewDecision::Comment))
+      || Self::validate_review_submission(self.review_decision, review_body.as_str()).is_some();
+    let review_decision_index = Self::review_decision_index(self.review_decision);
+    let review_button_disabled = self.pull_request.is_none();
+
+    Popover::new("pr-review-popover")
+      .anchor(Corner::TopRight)
+      .w(px(PR_REVIEW_POPOVER_WIDTH))
+      .open(self.review_popover_open)
+      .on_open_change(cx.listener(|this, open, window, cx| {
+        this.review_popover_open = *open;
+        if *open {
+          if this.review_form_reset_pending {
+            this.reset_review_form(window, cx);
+          }
+          if this.is_current_user_pr_author(cx)
+            && !matches!(this.review_decision, GithubPrReviewDecision::Comment)
+          {
+            this.review_decision = GithubPrReviewDecision::Comment;
+          }
+          this.focus_review_input(window);
+        }
+        cx.notify();
+      }))
+      .trigger(
+        Button::new("pr-review-button")
+          .label("Review")
+          .with_variant(ButtonVariant::Secondary)
+          .outline()
+          .icon(IconName::ChevronDown)
+          .small()
+          .disabled(review_button_disabled),
+      )
+      .child(
+        v_flex()
+          .id("pr-review-popover-content")
+          .w_full()
+          .gap_3()
+          .child(
+            div()
+              .text_sm()
+              .font_medium()
+              .text_color(theme.foreground)
+              .child("Submit review"),
+          )
+          .child(
+            div().w_full().child(
+              Input::new(&self.review_input)
+                .w_full()
+                .h(px(PR_REVIEW_INPUT_HEIGHT_PX)),
+            ),
+          )
+          .child(
+            RadioGroup::vertical("pr-review-decision-group")
+              .selected_index(Some(review_decision_index))
+              .on_click(cx.listener(|this, index: &usize, _, cx| {
+                let next_decision = Self::review_decision_from_index(*index);
+                if this.is_current_user_pr_author(cx)
+                  && !matches!(next_decision, GithubPrReviewDecision::Comment)
+                {
+                  this.review_decision = GithubPrReviewDecision::Comment;
+                  this.submit_review_error = Some(
+                    "Pull request authors cannot approve or request changes on their own pull requests."
+                      .into(),
+                  );
+                  cx.notify();
+                  return;
+                }
+                this.review_decision = next_decision;
+                this.submit_review_error = None;
+                cx.notify();
+              }))
+              .child(Radio::new("pr-review-decision-comment").label("Comment"))
+              .child(
+                Radio::new("pr-review-decision-approve")
+                  .label("Approve")
+                  .disabled(is_current_user_pr_author)
+                  .when(is_current_user_pr_author, |this| {
+                    this.tooltip({
+                      let tooltip = author_cannot_approve_tooltip.clone();
+                      move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)
+                    })
+                  }),
+              )
+              .child(
+                Radio::new("pr-review-decision-request-changes")
+                  .label("Request changes")
+                  .disabled(is_current_user_pr_author)
+                  .when(is_current_user_pr_author, |this| {
+                    this.tooltip({
+                      let tooltip = author_cannot_request_changes_tooltip.clone();
+                      move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)
+                    })
+                  }),
+              ),
+          )
+          .when_some(self.submit_review_error.clone(), |this, error| {
+            this.child(
+              div()
+                .text_xs()
+                .text_color(theme.status_red())
+                .overflow_hidden()
+                .text_ellipsis_start()
+                .child(error),
+            )
+          })
+          .child(
+            h_flex()
+              .items_center()
+              .justify_end()
+              .gap_2()
+              .child(
+                Button::new("pr-review-cancel")
+                  .ghost()
+                  .small()
+                  .label("Cancel")
+                  .disabled(self.submit_review_loading)
+                  .on_click(cx.listener(|this, _, window, cx| {
+                    this.review_popover_open = false;
+                    this.reset_review_form(window, cx);
+                    cx.notify();
+                  })),
+              )
+              .child(
+                Button::new("pr-review-submit")
+                  .primary()
+                  .small()
+                  .label("Submit review")
+                  .loading(self.submit_review_loading)
+                  .disabled(submit_review_disabled)
+                  .on_click(cx.listener(|this, _, window, cx| {
+                    this.submit_pull_request_review(window, cx);
+                  })),
+              ),
+          ),
+      )
+      .into_any_element()
+  }
+
   fn render_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
@@ -2684,6 +3023,10 @@ impl GithubPrDetailsPage {
           .child(meta_skeleton),
       )
     };
+    let right_area = h_flex()
+      .items_center()
+      .gap_2()
+      .child(self.render_review_popover(&theme, cx));
 
     div()
       .px_3()
@@ -2694,7 +3037,14 @@ impl GithubPrDetailsPage {
       .bg(theme.sidebar)
       .border_b_1()
       .border_color(theme.title_bar_border)
-      .child(div().flex().items_center().justify_start().child(left_area))
+      .child(
+        div()
+          .flex()
+          .items_center()
+          .justify_between()
+          .child(left_area)
+          .child(right_area),
+      )
       .child(tab_bar)
   }
 
@@ -3870,7 +4220,10 @@ impl Focusable for GithubPrDetailsPage {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::api::{GithubPullRequestCommit, GithubPullRequestCommitUser, GithubPullRequestFile};
+  use crate::api::{
+    GithubPullRequestCommit, GithubPullRequestCommitUser, GithubPullRequestFile,
+    GithubPullRequestReviewEvent,
+  };
 
   fn make_api_file(
     filename: &str,
@@ -3943,6 +4296,50 @@ mod tests {
       "feat: add filter"
     );
     assert_eq!(commit_subject(""), "No commit message");
+  }
+
+  #[test]
+  fn review_decision_to_api_event_maps_all_variants() {
+    assert_eq!(
+      GithubPrDetailsPage::review_decision_to_api_event(GithubPrReviewDecision::Comment),
+      GithubPullRequestReviewEvent::Comment
+    );
+    assert_eq!(
+      GithubPrDetailsPage::review_decision_to_api_event(GithubPrReviewDecision::Approve),
+      GithubPullRequestReviewEvent::Approve
+    );
+    assert_eq!(
+      GithubPrDetailsPage::review_decision_to_api_event(GithubPrReviewDecision::RequestChanges),
+      GithubPullRequestReviewEvent::RequestChanges
+    );
+  }
+
+  #[test]
+  fn validate_review_submission_requires_body_for_comment_and_request_changes() {
+    assert!(
+      GithubPrDetailsPage::validate_review_submission(GithubPrReviewDecision::Comment, "   ")
+        .is_some()
+    );
+    assert!(
+      GithubPrDetailsPage::validate_review_submission(GithubPrReviewDecision::RequestChanges, "")
+        .is_some()
+    );
+  }
+
+  #[test]
+  fn validate_review_submission_allows_empty_body_for_approve() {
+    assert!(
+      GithubPrDetailsPage::validate_review_submission(GithubPrReviewDecision::Approve, "   ")
+        .is_none()
+    );
+  }
+
+  #[test]
+  fn review_decision_defaults_to_comment() {
+    assert_eq!(
+      GithubPrReviewDecision::default(),
+      GithubPrReviewDecision::Comment
+    );
   }
 
   #[test]
