@@ -53,7 +53,8 @@ use crate::{
   ShowCommandPalette, ShowFileSearch,
   api::{
     ApiClient, GithubPullRequestCommit, GithubPullRequestDetails, GithubPullRequestFile,
-    GithubPullRequestReviewComment, GithubPullRequestReviewEvent,
+    GithubPullRequestIssueComment, GithubPullRequestReview, GithubPullRequestReviewComment,
+    GithubPullRequestReviewEvent, GithubPullRequestReviewState,
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_compact_datetime, format_long_date},
@@ -269,6 +270,195 @@ fn resolve_diff_shas_for_context(
   }
 
   Some((base_sha.to_string(), head_sha.to_string()))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum GithubPrOverviewConversationItemKind {
+  IssueComment,
+  Review,
+  ReviewComment,
+}
+
+#[derive(Clone, Debug)]
+struct GithubPrOverviewConversationItem {
+  kind: GithubPrOverviewConversationItemKind,
+  id: u64,
+  timestamp: String,
+  author_login: String,
+  author_avatar_url: Option<String>,
+  body: Option<String>,
+  path: Option<String>,
+  review_state: Option<GithubPullRequestReviewState>,
+}
+
+fn review_state_display_label(state: GithubPullRequestReviewState) -> &'static str {
+  match state {
+    GithubPullRequestReviewState::Approved => "Approved",
+    GithubPullRequestReviewState::RequestChanges => "Changes requested",
+  }
+}
+
+fn review_state_icon_style(
+  state: GithubPullRequestReviewState,
+  theme: &gpui_component::Theme,
+) -> Option<(UiIconName, gpui::Hsla)> {
+  match state {
+    GithubPullRequestReviewState::Approved => Some((UiIconName::CircleCheck, theme.status_green())),
+    GithubPullRequestReviewState::RequestChanges => Some((UiIconName::CircleSlash, theme.status_red())),
+  }
+}
+
+fn conversation_source_priority(kind: GithubPrOverviewConversationItemKind) -> u8 {
+  match kind {
+    GithubPrOverviewConversationItemKind::IssueComment => 0,
+    GithubPrOverviewConversationItemKind::Review => 1,
+    GithubPrOverviewConversationItemKind::ReviewComment => 2,
+  }
+}
+
+fn build_overview_conversation_items(
+  issue_comments: &[GithubPullRequestIssueComment],
+  reviews: &[GithubPullRequestReview],
+  review_comments: &[GithubPullRequestReviewComment],
+) -> Vec<GithubPrOverviewConversationItem> {
+  let mut items = Vec::new();
+
+  items.extend(issue_comments.iter().map(|comment| {
+    let body = comment.body.trim();
+    GithubPrOverviewConversationItem {
+      kind: GithubPrOverviewConversationItemKind::IssueComment,
+      id: comment.id,
+      timestamp: comment.created_at.clone(),
+      author_login: comment
+        .user
+        .as_ref()
+        .map(|user| user.login.clone())
+        .unwrap_or_else(|| "unknown".to_string()),
+      author_avatar_url: comment
+        .user
+        .as_ref()
+        .and_then(|user| user.avatar_url.clone()),
+      body: Some(if body.is_empty() {
+        "No comment body.".to_string()
+      } else {
+        body.to_string()
+      }),
+      path: None,
+      review_state: None,
+    }
+  }));
+
+  items.extend(reviews.iter().filter_map(|review| {
+    let submitted_at = review.submitted_at.as_ref()?;
+    let body = review
+      .body
+      .as_deref()
+      .map(str::trim)
+      .filter(|value| !value.is_empty())
+      .map(ToString::to_string);
+    Some(GithubPrOverviewConversationItem {
+      kind: GithubPrOverviewConversationItemKind::Review,
+      id: review.id,
+      timestamp: submitted_at.clone(),
+      author_login: review
+        .user
+        .as_ref()
+        .map(|user| user.login.clone())
+        .unwrap_or_else(|| "unknown".to_string()),
+      author_avatar_url: review
+        .user
+        .as_ref()
+        .and_then(|user| user.avatar_url.clone()),
+      body,
+      path: None,
+      review_state: Some(review.state),
+    })
+  }));
+
+  items.extend(review_comments.iter().map(|comment| {
+    let body = comment.body.trim();
+    GithubPrOverviewConversationItem {
+      kind: GithubPrOverviewConversationItemKind::ReviewComment,
+      id: comment.id,
+      timestamp: comment.created_at.clone(),
+      author_login: comment.user.login.clone(),
+      author_avatar_url: comment.user.avatar_url.clone(),
+      body: Some(if body.is_empty() {
+        "No comment body.".to_string()
+      } else {
+        body.to_string()
+      }),
+      path: Some(comment.path.clone()),
+      review_state: None,
+    }
+  }));
+
+  items.sort_by(|a, b| {
+    a.timestamp
+      .cmp(&b.timestamp)
+      .then_with(|| conversation_source_priority(a.kind).cmp(&conversation_source_priority(b.kind)))
+      .then_with(|| a.id.cmp(&b.id))
+  });
+
+  items
+}
+
+fn overview_conversation_scope_id(
+  pr_number: u64,
+  kind: GithubPrOverviewConversationItemKind,
+  id: u64,
+) -> usize {
+  let kind_part = match kind {
+    GithubPrOverviewConversationItemKind::IssueComment => 1usize,
+    GithubPrOverviewConversationItemKind::Review => 2usize,
+    GithubPrOverviewConversationItemKind::ReviewComment => 3usize,
+  };
+  (pr_number as usize)
+    .wrapping_mul(1_000_003)
+    .wrapping_add(kind_part.wrapping_mul(10_007))
+    .wrapping_add(id as usize)
+}
+
+fn overview_conversation_kind_label(kind: GithubPrOverviewConversationItemKind) -> &'static str {
+  match kind {
+    GithubPrOverviewConversationItemKind::IssueComment => "Comment",
+    GithubPrOverviewConversationItemKind::Review => "Review",
+    GithubPrOverviewConversationItemKind::ReviewComment => "Review comment",
+  }
+}
+
+fn overview_stats_badge_labels(pr: &GithubPullRequestDetails) -> Vec<String> {
+  vec![
+    format!("Commits {}", pr.commits),
+    format!("Additions +{}", pr.additions),
+    format!("Deletions -{}", pr.deletions),
+    format!("Files changed {}", pr.changed_files),
+  ]
+}
+
+fn overview_stats_badges(
+  pr: &GithubPullRequestDetails,
+  theme: &gpui_component::Theme,
+) -> Vec<gpui::AnyElement> {
+  let labels = overview_stats_badge_labels(pr);
+  let colors = [
+    theme.status_blue(),
+    theme.status_green(),
+    theme.status_red(),
+    theme.status_orange(),
+  ];
+  labels
+    .into_iter()
+    .zip(colors)
+    .map(|(label, color)| {
+      Tag::secondary()
+        .small()
+        .rounded_full()
+        .text_color(color)
+        .child(label)
+        .into_any_element()
+    })
+    .collect()
 }
 
 #[derive(Clone)]
@@ -663,6 +853,14 @@ pub struct GithubPrDetailsPage {
   submit_review_task: Option<Task<()>>,
   submit_review_loading: bool,
   submit_review_error: Option<SharedString>,
+  issue_comments_task: Option<Task<()>>,
+  issue_comments_loading: bool,
+  issue_comments_error: Option<SharedString>,
+  issue_comments: Vec<GithubPullRequestIssueComment>,
+  reviews_task: Option<Task<()>>,
+  reviews_loading: bool,
+  reviews_error: Option<SharedString>,
+  reviews: Vec<GithubPullRequestReview>,
   review_comments_task: Option<Task<()>>,
   review_comments_loading: bool,
   review_comments_error: Option<SharedString>,
@@ -960,6 +1158,14 @@ impl GithubPrDetailsPage {
       submit_review_task: None,
       submit_review_loading: false,
       submit_review_error: None,
+      issue_comments_task: None,
+      issue_comments_loading: false,
+      issue_comments_error: None,
+      issue_comments: Vec::new(),
+      reviews_task: None,
+      reviews_loading: false,
+      reviews_error: None,
+      reviews: Vec::new(),
       review_comments_task: None,
       review_comments_loading: false,
       review_comments_error: None,
@@ -2643,8 +2849,16 @@ impl GithubPrDetailsPage {
     self.review_popover_open = false;
     self.mark_review_form_reset_pending();
     self.submit_review_task = None;
+    self.issue_comments_task = None;
+    self.reviews_task = None;
     self.submit_review_loading = false;
     self.sync_commits_list(cx);
+    self.issue_comments_loading = true;
+    self.issue_comments_error = None;
+    self.issue_comments.clear();
+    self.reviews_loading = true;
+    self.reviews_error = None;
+    self.reviews.clear();
     self.review_comments_loading = true;
     self.review_comments_error = None;
     self.review_comments.clear();
@@ -2705,6 +2919,72 @@ impl GithubPrDetailsPage {
             this.add_pr_breadcrumb("Load PR details failed", Map::new());
             this.record_pr_error("github.pr.details", error_message.as_str(), Map::new());
             this.sync_review_comments(cx);
+          }
+        }
+        cx.notify();
+      });
+    });
+
+    let issue_comments_api = self.api.clone();
+    let issue_comments_owner = owner.clone();
+    let issue_comments_repo = repo.clone();
+    let issue_comments_task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        issue_comments_api.fetch_pull_request_issue_comments(
+          &issue_comments_owner,
+          &issue_comments_repo,
+          number,
+        )
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(comments) => {
+            this.issue_comments = comments;
+            this.issue_comments_loading = false;
+            this.issue_comments_error = None;
+            this.add_pr_breadcrumb("Load PR issue comments succeeded", Map::new());
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.issue_comments_loading = false;
+            this.issue_comments_error = Some(error_message.clone().into());
+            this.add_pr_breadcrumb("Load PR issue comments failed", Map::new());
+            this.record_pr_error(
+              "github.pr.issue_comments",
+              error_message.as_str(),
+              Map::new(),
+            );
+          }
+        }
+        cx.notify();
+      });
+    });
+
+    let reviews_api = self.api.clone();
+    let reviews_owner = owner.clone();
+    let reviews_repo = repo.clone();
+    let reviews_task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        reviews_api.fetch_pull_request_reviews(&reviews_owner, &reviews_repo, number)
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(reviews) => {
+            this.reviews = reviews;
+            this.reviews_loading = false;
+            this.reviews_error = None;
+            this.add_pr_breadcrumb("Load PR reviews succeeded", Map::new());
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.reviews_loading = false;
+            this.reviews_error = Some(error_message.clone().into());
+            this.add_pr_breadcrumb("Load PR reviews failed", Map::new());
+            this.record_pr_error("github.pr.reviews", error_message.as_str(), Map::new());
           }
         }
         cx.notify();
@@ -2787,6 +3067,8 @@ impl GithubPrDetailsPage {
     });
 
     self.details_task = Some(details_task);
+    self.issue_comments_task = Some(issue_comments_task);
+    self.reviews_task = Some(reviews_task);
     self.review_comments_task = Some(review_comments_task);
     self.commits_task = Some(commits_task);
     self.fetch_pull_request_files_for_context(owner, repo, number, cx);
@@ -3048,6 +3330,180 @@ impl GithubPrDetailsPage {
       .child(tab_bar)
   }
 
+  fn render_details_conversation_panel(
+    &self,
+    pr: &GithubPullRequestDetails,
+    cx: &mut Context<Self>,
+  ) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let items =
+      build_overview_conversation_items(&self.issue_comments, &self.reviews, &self.review_comments);
+    let is_loading =
+      self.issue_comments_loading || self.reviews_loading || self.review_comments_loading;
+    let has_errors = self.issue_comments_error.is_some()
+      || self.reviews_error.is_some()
+      || self.review_comments_error.is_some();
+
+    let pr_page = cx.entity().clone();
+    let link_handler = Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
+      let handled = pr_page.update(cx, |this, cx| this.handle_gfm_link(url, window, cx));
+      if handled {
+        LinkAction::Handled
+      } else {
+        LinkAction::Open
+      }
+    });
+
+    let conversation_content = if items.is_empty() && is_loading {
+      v_flex()
+        .w_full()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .py_6()
+        .child(Spinner::new().small())
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading conversation..."),
+        )
+        .into_any_element()
+    } else if items.is_empty() {
+      v_flex()
+        .w_full()
+        .items_center()
+        .justify_center()
+        .py_6()
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("No comments yet"),
+        )
+        .into_any_element()
+    } else {
+      v_flex()
+        .gap_2()
+        .children(items.into_iter().map(|item| {
+          let timestamp = format_compact_datetime(&item.timestamp);
+          let scope_id = overview_conversation_scope_id(pr.number, item.kind, item.id);
+          let type_label = overview_conversation_kind_label(item.kind);
+          let body = item.body.clone();
+          let markdown_options = MarkdownRenderOptions::with_on_link(link_handler.clone())
+            .with_state(self.description_markdown_state.clone())
+            .with_github_issue_reference_context(
+              pr.repository.owner.as_str(),
+              pr.repository.repo.as_str(),
+            )
+            .with_scope_id(scope_id);
+
+          v_flex()
+            .id(format!(
+              "pr-overview-conversation-{}-{}",
+              conversation_source_priority(item.kind),
+              item.id
+            ))
+            .gap_2()
+            .p_3()
+            .border_1()
+            .border_color(theme.border)
+            .rounded(theme.radius)
+            .child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .flex_wrap()
+                .child(
+                  Avatar::new()
+                    .name(item.author_login.clone())
+                    .when_some(item.author_avatar_url.clone(), |this, url| this.src(url))
+                    .small(),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(item.author_login.clone()),
+                )
+                .child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(timestamp),
+                )
+                .child(Tag::secondary().small().rounded_full().child(type_label)),
+            )
+            .when_some(item.review_state, |this, state| {
+              let label = review_state_display_label(state);
+              let icon_style = review_state_icon_style(state, &theme);
+              this.child(
+                h_flex()
+                  .items_center()
+                  .gap_1()
+                  .when_some(icon_style, |this, (icon, color)| {
+                    this.child(Icon::new(icon).size_3().text_color(color))
+                  })
+                      .child(label),
+              )
+            })
+            .when_some(body, |this, body| {
+              this.child(render_markdown(body.as_str(), &markdown_options, cx))
+            })
+            .when_some(item.path.clone(), |this, path| {
+              this.child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child(format!("File: {path}")),
+              )
+            })
+            .into_any_element()
+        }))
+        .into_any_element()
+    };
+
+    let errors = v_flex()
+      .gap_1()
+      .when_some(self.issue_comments_error.clone(), |this, error| {
+        this.child(
+          div()
+            .text_xs()
+            .text_color(theme.status_red())
+            .child(format!("Issue comments: {error}")),
+        )
+      })
+      .when_some(self.reviews_error.clone(), |this, error| {
+        this.child(
+          div()
+            .text_xs()
+            .text_color(theme.status_red())
+            .child(format!("Reviews: {error}")),
+        )
+      })
+      .when_some(self.review_comments_error.clone(), |this, error| {
+        this.child(
+          div()
+            .text_xs()
+            .text_color(theme.status_red())
+            .child(format!("Review comments: {error}")),
+        )
+      });
+
+    v_flex()
+      .w_full()
+      .gap_2()
+      .child(
+        div()
+          .text_sm()
+          .font_medium()
+          .text_color(theme.foreground)
+          .child("Conversation"),
+      )
+      .when(has_errors, |this| this.child(errors))
+      .child(conversation_content)
+  }
+
   fn render_details(
     &self,
     pr: &GithubPullRequestDetails,
@@ -3068,36 +3524,10 @@ impl GithubPrDetailsPage {
       .filter(|value| !value.trim().is_empty())
       .unwrap_or_else(|| "No description provided.".to_string());
 
-    let stats_badges = h_flex().gap_2().flex_wrap().children([
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .text_color(theme.status_blue())
-        .child(format!("Commits {}", pr.commits)),
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .text_color(theme.status_green())
-        .child(format!("Additions +{}", pr.additions)),
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .text_color(theme.status_red())
-        .child(format!("Deletions -{}", pr.deletions)),
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .text_color(theme.status_orange())
-        .child(format!("Files changed {}", pr.changed_files)),
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .child(format!("Comments {}", pr.comments)),
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .child(format!("Review comments {}", pr.review_comments)),
-    ]);
+    let stats_badges = h_flex()
+      .gap_2()
+      .flex_wrap()
+      .children(overview_stats_badges(pr, &theme));
 
     let labels_row = if pr.labels.is_empty() {
       None
@@ -3130,8 +3560,8 @@ impl GithubPrDetailsPage {
 
     let content = v_flex()
       .w_full()
-      .pb_8()
       .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+      .pb_10()
       .mx_auto()
       .gap_4()
       .child(
@@ -3321,13 +3751,14 @@ impl GithubPrDetailsPage {
                 render_markdown(body.as_str(), &options, cx)
               }),
           ),
-      );
+      )
+      .child(self.render_details_conversation_panel(pr, cx));
 
     div()
       .id("github-pr-overview-scroll")
       .size_full()
       .overflow_y_scrollbar()
-      .child(v_flex().w_full().pt_4().pb_32().px_4().child(content))
+      .child(v_flex().w_full().pt_4().pb_32().child(content))
   }
 
   fn render_files_sidebar(
@@ -4221,8 +4652,11 @@ impl Focusable for GithubPrDetailsPage {
 mod tests {
   use super::*;
   use crate::api::{
-    GithubPullRequestCommit, GithubPullRequestCommitUser, GithubPullRequestFile,
-    GithubPullRequestReviewEvent,
+    GithubPullRequestCommit, GithubPullRequestCommitUser, GithubPullRequestDetails,
+    GithubPullRequestFile, GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser,
+    GithubPullRequestReview, GithubPullRequestReviewComment, GithubPullRequestReviewCommentUser,
+    GithubPullRequestReviewEvent, GithubPullRequestReviewState, GithubPullRequestState,
+    GithubRepository,
   };
 
   fn make_api_file(
@@ -4257,6 +4691,107 @@ mod tests {
       committer: Some(GithubPullRequestCommitUser {
         login: "octocat".to_string(),
         avatar_url: None,
+      }),
+    }
+  }
+
+  fn make_issue_comment(id: u64, created_at: &str, body: &str) -> GithubPullRequestIssueComment {
+    GithubPullRequestIssueComment {
+      id,
+      body: body.to_string(),
+      created_at: created_at.to_string(),
+      updated_at: created_at.to_string(),
+      user: Some(GithubPullRequestIssueCommentUser {
+        login: "octocat".to_string(),
+        avatar_url: None,
+      }),
+    }
+  }
+
+  fn make_review(
+    id: u64,
+    submitted_at: Option<&str>,
+    state: GithubPullRequestReviewState,
+    body: Option<&str>,
+  ) -> GithubPullRequestReview {
+    GithubPullRequestReview {
+      id,
+      body: body.map(str::to_string),
+      state: state,
+      submitted_at: submitted_at.map(str::to_string),
+      commit_id: Some("1111111111111111111111111111111111111111".to_string()),
+      html_url: "https://github.com/acme/widget/pull/42#pullrequestreview-1".to_string(),
+      user: Some(crate::api::GithubPullRequestReviewUser {
+        login: "reviewer".to_string(),
+        avatar_url: None,
+      }),
+    }
+  }
+
+  fn make_review_comment(
+    id: u64,
+    created_at: &str,
+    in_reply_to_id: Option<u64>,
+  ) -> GithubPullRequestReviewComment {
+    GithubPullRequestReviewComment {
+      id,
+      pull_request_review_id: Some(12),
+      diff_hunk: "@@ -1 +1 @@".to_string(),
+      path: "src/main.rs".to_string(),
+      position: Some(1),
+      original_position: Some(1),
+      commit_id: "head123".to_string(),
+      original_commit_id: "base123".to_string(),
+      in_reply_to_id,
+      user: GithubPullRequestReviewCommentUser {
+        login: "octocat".to_string(),
+        avatar_url: None,
+      },
+      body: "Looks good".to_string(),
+      created_at: created_at.to_string(),
+      updated_at: created_at.to_string(),
+      start_line: None,
+      original_start_line: None,
+      start_side: None,
+      line: Some(1),
+      original_line: Some(1),
+      side: Some("RIGHT".to_string()),
+    }
+  }
+
+  fn make_pr_details_for_stats() -> GithubPullRequestDetails {
+    GithubPullRequestDetails {
+      number: 42,
+      title: "Example PR".to_string(),
+      state: GithubPullRequestState::Open,
+      draft: false,
+      created_at: "2026-02-28T10:00:00Z".to_string(),
+      updated_at: "2026-02-28T10:00:00Z".to_string(),
+      merged_at: None,
+      merge_base_sha: "base".to_string(),
+      base_sha: "base".to_string(),
+      head_sha: "head".to_string(),
+      base_ref_name: "main".to_string(),
+      head_ref_name: "feature".to_string(),
+      body: Some("Body".to_string()),
+      author: crate::api::GithubPullRequestAuthor {
+        login: "author".to_string(),
+        avatar_url: None,
+      },
+      comments: 10,
+      review_comments: 11,
+      commits: 3,
+      additions: 20,
+      deletions: 4,
+      changed_files: 2,
+      labels: Vec::new(),
+      repository: GithubRepository {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+      },
+      head_repository: Some(GithubRepository {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
       }),
     }
   }
@@ -4339,6 +4874,97 @@ mod tests {
     assert_eq!(
       GithubPrReviewDecision::default(),
       GithubPrReviewDecision::Comment
+    );
+  }
+
+  #[test]
+  fn build_overview_conversation_items_orders_oldest_to_newest_across_sources() {
+    let issue_comments = vec![make_issue_comment(
+      1,
+      "2026-02-28T11:00:00Z",
+      "Issue comment",
+    )];
+    let reviews = vec![make_review(
+      2,
+      Some("2026-02-28T10:00:00Z"),
+      GithubPullRequestReviewState::Approved,
+      Some("Approved"),
+    )];
+    let review_comments = vec![make_review_comment(3, "2026-02-28T12:00:00Z", None)];
+
+    let items = build_overview_conversation_items(&issue_comments, &reviews, &review_comments);
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0].kind, GithubPrOverviewConversationItemKind::Review);
+    assert_eq!(
+      items[1].kind,
+      GithubPrOverviewConversationItemKind::IssueComment
+    );
+    assert_eq!(
+      items[2].kind,
+      GithubPrOverviewConversationItemKind::ReviewComment
+    );
+  }
+
+  #[test]
+  fn build_overview_conversation_items_excludes_reviews_without_submitted_at() {
+    let reviews = vec![
+      make_review(
+        2,
+        Some("2026-02-28T10:00:00Z"),
+        GithubPullRequestReviewState::Approved,
+        Some("Posted"),
+      ),
+      make_review(
+        3,
+        None,
+        GithubPullRequestReviewState::RequestChanges,
+        Some("Waiting"),
+      ),
+    ];
+
+    let items = build_overview_conversation_items(&[], &reviews, &[]);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, 2);
+    assert_eq!(items[0].kind, GithubPrOverviewConversationItemKind::Review);
+  }
+
+  #[test]
+  fn build_overview_conversation_items_keeps_review_comment_replies() {
+    let review_comments = vec![
+      make_review_comment(1, "2026-02-28T10:00:00Z", None),
+      make_review_comment(2, "2026-02-28T10:01:00Z", Some(1)),
+    ];
+
+    let items = build_overview_conversation_items(&[], &[], &review_comments);
+    let ids = items.iter().map(|item| item.id).collect::<Vec<_>>();
+    assert_eq!(ids, vec![1, 2]);
+  }
+
+  #[test]
+  fn build_overview_conversation_items_does_not_render_review_body_when_missing() {
+    let reviews = vec![make_review(
+      1,
+      Some("2026-02-28T10:00:00Z"),
+      GithubPullRequestReviewState::RequestChanges,
+      None,
+    )];
+
+    let items = build_overview_conversation_items(&[], &reviews, &[]);
+    assert_eq!(items.len(), 1);
+    assert!(items[0].body.is_none());
+  }
+
+  #[test]
+  fn overview_stats_badge_labels_exclude_comments_counts() {
+    let pr = make_pr_details_for_stats();
+    let labels = overview_stats_badge_labels(&pr);
+
+    assert_eq!(labels.len(), 4);
+    assert!(labels.iter().all(|label| !label.starts_with("Comments ")));
+    assert!(
+      labels
+        .iter()
+        .all(|label| !label.starts_with("Review comments "))
     );
   }
 

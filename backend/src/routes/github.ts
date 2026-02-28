@@ -30,6 +30,8 @@ import type {
   PullRequestFileResponse,
   PullRequestParams,
   PullRequestResponse,
+  PullRequestReviewResponse,
+  PullRequestReviewsParams,
   SearchIssuesItemResponse,
   SearchIssuesParams,
   UpdatePullRequestCommentParams,
@@ -54,6 +56,7 @@ import {
   fetchGithubPullRequestComments,
   fetchGithubPullRequestCommitsAllPages,
   fetchGithubPullRequestFilesAllPages,
+  fetchGithubPullRequestReviews,
   fetchGithubPullRequests,
   fetchGithubRepository,
   fetchGithubRepositoryBranches,
@@ -117,18 +120,31 @@ interface GithubPullRequestReviewComment {
 }
 
 interface GithubPullRequestReviewUser {
-  login: NonNullable<CreatePullRequestReviewResponse['user']>['login']
-  avatar_url: NonNullable<CreatePullRequestReviewResponse['user']>['avatar_url']
+  login: NonNullable<PullRequestReviewResponse['user']>['login']
+  avatar_url: NonNullable<PullRequestReviewResponse['user']>['avatar_url']
 }
 
 interface GithubPullRequestReview {
-  id: CreatePullRequestReviewResponse['id']
-  body: CreatePullRequestReviewResponse['body']
-  state: CreatePullRequestReviewResponse['state']
-  submitted_at: CreatePullRequestReviewResponse['submitted_at']
-  commit_id: CreatePullRequestReviewResponse['commit_id']
-  html_url: CreatePullRequestReviewResponse['html_url']
+  id: PullRequestReviewResponse['id']
+  body: PullRequestReviewResponse['body']
+  state: PullRequestReviewResponse['state']
+  submitted_at: PullRequestReviewResponse['submitted_at']
+  commit_id: PullRequestReviewResponse['commit_id']
+  html_url: PullRequestReviewResponse['html_url']
   user: GithubPullRequestReviewUser | null
+}
+
+interface GithubPullRequestIssueCommentUser {
+  login: NonNullable<GithubIssueDetailsCommentResponse['user']>['login']
+  avatar_url: NonNullable<GithubIssueDetailsCommentResponse['user']>['avatar_url']
+}
+
+interface GithubPullRequestIssueComment {
+  id: GithubIssueDetailsCommentResponse['id']
+  body: GithubIssueDetailsCommentResponse['body']
+  created_at: GithubIssueDetailsCommentResponse['created_at']
+  updated_at: GithubIssueDetailsCommentResponse['updated_at']
+  user: GithubPullRequestIssueCommentUser | null
 }
 
 interface GithubPullRequestDetails {
@@ -325,6 +341,10 @@ type GithubReviewCommentResponse
     | CreatePullRequestCommentReplyResponse
     | UpdatePullRequestCommentResponse
 
+type GithubPullRequestReviewResponseSource
+  = | PullRequestReviewResponse
+    | CreatePullRequestReviewResponse
+
 const updatePullRequestCommentBodySchema = z.object({
   body: z.string().trim().min(1, 'Missing comment body'),
 })
@@ -389,7 +409,7 @@ function mapGithubPullRequestReviewComment(
 }
 
 function mapGithubPullRequestReview(
-  review: CreatePullRequestReviewResponse,
+  review: GithubPullRequestReviewResponseSource,
 ): GithubPullRequestReview {
   return {
     id: review.id,
@@ -402,6 +422,23 @@ function mapGithubPullRequestReview(
       ? {
           login: review.user.login,
           avatar_url: review.user.avatar_url,
+        }
+      : null,
+  }
+}
+
+function mapGithubPullRequestIssueComment(
+  comment: GithubIssueDetailsCommentResponse,
+): GithubPullRequestIssueComment {
+  return {
+    id: comment.id,
+    body: comment.body,
+    created_at: comment.created_at,
+    updated_at: comment.updated_at,
+    user: comment.user
+      ? {
+          login: comment.user.login,
+          avatar_url: comment.user.avatar_url,
         }
       : null,
   }
@@ -797,6 +834,65 @@ export const githubRoutes = githubRouter
 
       const mappedCommits = commits.map(mapGithubPullRequestCommit)
       return ctx.json({ commits: mappedCommits }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/pr/:id/issue-comments', async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: GithubIssueDetailsCommentParameters = {
+        owner: org,
+        repo,
+        issue_number: pullNumber,
+        per_page: 100,
+      }
+
+      const data = await fetchGithubRepositoryIssueComments({ token: githubToken, params })
+      const comments: GithubPullRequestIssueComment[] = data.map(mapGithubPullRequestIssueComment)
+
+      return ctx.json({ comments }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/pr/:id/reviews', async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: PullRequestReviewsParams = {
+        owner: org,
+        repo,
+        pull_number: pullNumber,
+        per_page: 100,
+      }
+
+      const data = await fetchGithubPullRequestReviews({ token: githubToken, params })
+
+      const reviews: GithubPullRequestReview[] = data
+        .map(mapGithubPullRequestReview)
+        .filter(review => review.state === 'APPROVED' || review.state === 'CHANGES_REQUESTED')
+
+      return ctx.json({ reviews }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
