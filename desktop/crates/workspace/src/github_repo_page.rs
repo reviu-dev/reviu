@@ -606,7 +606,7 @@ fn github_code_reference_preview_from_content(
         .saturating_add(snippets.len().saturating_sub(1));
       GithubCodeReferencePreview {
         url: Arc::from(reference.url.as_str()),
-        repo: Arc::from(format!("{}/{}", reference.owner, reference.repo)),
+        repo: Arc::from(github_shared::repo_label(&reference.owner, &reference.repo)),
         path: Arc::from(reference.path.as_str()),
         reference: Arc::from(reference.reference.as_str()),
         start_line: reference.start_line,
@@ -3058,7 +3058,7 @@ impl GithubRepoPage {
       if self.owner.as_ref().is_empty() || self.repo.as_ref().is_empty() {
         "Repository".into()
       } else {
-        format!("{}/{}", self.owner, self.repo).into()
+        github_shared::repo_label(self.owner.as_ref(), self.repo.as_ref()).into()
       };
     let pull_requests_count = self.pull_requests.read(cx).delegate().all_rows.len();
     let issues_count = self.issues.read(cx).delegate().all_rows.len();

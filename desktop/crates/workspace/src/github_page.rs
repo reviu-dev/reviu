@@ -26,6 +26,7 @@ use crate::{
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::format_compact_datetime,
+  github_shared,
   github_navigation::{open_pr_target, open_repo_target},
   github_pr_details_page::GithubPrDetailsPageHandle,
   sentry_context,
@@ -87,7 +88,7 @@ impl GithubPullRequestRow {
 
     let q = query.to_lowercase();
     self.pr.title.to_lowercase().contains(&q)
-      || format!("{}/{}", self.owner, self.repo)
+      || github_shared::repo_label(self.owner.as_ref(), self.repo.as_ref())
         .to_lowercase()
         .contains(&q)
   }
@@ -492,7 +493,7 @@ impl ListDelegate for GithubPullRequestListDelegate {
     let status_tag = row.pr.status().tag(&theme);
 
     let updated_at = format_compact_datetime(&row.pr.updated_at);
-    let repo_name = format!("{}/{}", row.owner, row.repo);
+    let repo_name = github_shared::repo_label(row.owner.as_ref(), row.repo.as_ref());
 
     let label_tags = row.pr.labels.iter().take(4).map(|label| {
       Tag::secondary()
@@ -629,7 +630,7 @@ impl GithubPage {
     mut data: Map<String, Value>,
   ) {
     data.insert("error".into(), error.to_string().into());
-    if error.to_ascii_lowercase().contains("unauthorized") {
+    if github_shared::is_unauthorized_error_message(error) {
       sentry_context::record_expected_error(operation, "unauthorized", data);
       return;
     }
@@ -1561,17 +1562,17 @@ mod tests {
     assert!(
       error
         .as_ref()
-        .is_some_and(|value| value.as_ref().contains("unauthorized"))
+        .is_some_and(|value| github_shared::is_unauthorized_error_message(value.as_ref()))
     );
     assert!(
       notifications_error
         .as_ref()
-        .is_some_and(|value| value.as_ref().contains("unauthorized"))
+        .is_some_and(|value| github_shared::is_unauthorized_error_message(value.as_ref()))
     );
     assert!(
       repositories_error
         .as_ref()
-        .is_some_and(|value| value.as_ref().contains("unauthorized"))
+        .is_some_and(|value| github_shared::is_unauthorized_error_message(value.as_ref()))
     );
     assert_eq!(pr_count, 0);
     assert_eq!(notifications_count, 0);
