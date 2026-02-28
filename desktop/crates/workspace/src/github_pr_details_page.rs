@@ -212,10 +212,6 @@ fn files_from_api(files: Vec<GithubPullRequestFile>) -> Vec<Rc<GithubPrFileDiff>
     .collect()
 }
 
-fn short_sha(sha: &str) -> String {
-  sha.chars().take(7).collect()
-}
-
 fn commit_subject(message: &str) -> String {
   message
     .lines()
@@ -557,7 +553,7 @@ impl GithubPrCommitSelectItem {
   }
 
   fn for_commit(commit: &GithubPullRequestCommit, is_selected: bool) -> Self {
-    let short = short_sha(&commit.sha);
+    let short = github_shared::short_sha(&commit.sha);
     let subject = commit_subject(&commit.message);
     let author = commit
       .author
@@ -673,7 +669,7 @@ impl ListDelegate for GithubPrCommitListDelegate {
     let theme = cx.theme().clone();
     let commit = self.rows.get(ix.row)?;
     let subject = commit_subject(&commit.message);
-    let short = short_sha(&commit.sha);
+    let short = github_shared::short_sha(&commit.sha);
     let author = commit
       .author
       .as_ref()
@@ -2433,7 +2429,7 @@ impl GithubPrDetailsPage {
       let revision = reference.reference.clone();
       let start_line = reference.start_line;
       let end_line = reference.end_line;
-      let repo_label = format!("{owner}/{repo}");
+      let repo_label = github_shared::repo_label(&owner, &repo);
       let url = Arc::<str>::from(reference.url.as_str());
       let path_arc = Arc::<str>::from(path.as_str());
       let reference_arc = Arc::<str>::from(revision.as_str());
