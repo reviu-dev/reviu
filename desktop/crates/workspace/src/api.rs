@@ -345,6 +345,28 @@ pub struct GithubPullRequestAuthor {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubPullRequestCommitUser {
+  pub login: String,
+  #[serde(rename = "avatar_url")]
+  pub avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubPullRequestCommit {
+  pub sha: String,
+  pub message: String,
+  #[serde(rename = "authored_at")]
+  pub authored_at: Option<String>,
+  #[serde(rename = "committed_at")]
+  pub committed_at: Option<String>,
+  #[serde(rename = "parent_sha")]
+  pub parent_sha: Option<String>,
+  pub author: Option<GithubPullRequestCommitUser>,
+  pub committer: Option<GithubPullRequestCommitUser>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestReviewCommentUser {
   pub login: String,
   #[serde(rename = "avatar_url")]
@@ -555,6 +577,11 @@ struct GithubPullRequestDetailsResponse {
 #[derive(Debug, Deserialize)]
 struct GithubPullRequestFilesResponse {
   files: Vec<GithubPullRequestFile>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestCommitsResponse {
+  commits: Vec<GithubPullRequestCommit>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1005,8 +1032,36 @@ impl ApiClient {
     owner: &str,
     repo: &str,
     number: u64,
+    commit_sha: Option<&str>,
   ) -> Result<Vec<GithubPullRequestFile>> {
     let route = format!("/github/pr/{number}/files");
+    let mut query = vec![("org", owner), ("repo", repo)];
+    if let Some(commit_sha) = commit_sha {
+      query.push(("commitSha", commit_sha));
+    }
+    let response = self
+      .authed_request(Method::GET, route.as_str())
+      .query(&query)
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubPullRequestFilesResponse>()?;
+    Ok(payload.files)
+  }
+
+  pub fn fetch_pull_request_commits(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+  ) -> Result<Vec<GithubPullRequestCommit>> {
+    let route = format!("/github/pr/{number}/commits");
     let response = self
       .authed_request(Method::GET, route.as_str())
       .query(&[("org", owner), ("repo", repo)])
@@ -1019,8 +1074,8 @@ impl ApiClient {
     if !status.is_success() {
       anyhow::bail!("unexpected status: {}", status);
     }
-    let payload = response.json::<GithubPullRequestFilesResponse>()?;
-    Ok(payload.files)
+    let payload = response.json::<GithubPullRequestCommitsResponse>()?;
+    Ok(payload.commits)
   }
 
   pub fn fetch_github_notifications(&self) -> Result<Vec<GithubNotification>> {
@@ -2058,7 +2113,7 @@ mod tests {
     let api = make_test_api_client(base_url);
 
     let files = api
-      .fetch_pull_request_files("acme", "widget", 42)
+      .fetch_pull_request_files("acme", "widget", 42, None)
       .expect("fetch pull request files");
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].filename, "src/main.rs");
@@ -2068,6 +2123,87 @@ mod tests {
       Some("src/old_main.rs")
     );
     handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_files_includes_commit_sha_query_when_provided() {
+    let body = r#"{"files":[]}"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_pull_request_files("acme", "widget", 42, Some("deadbeef"))
+      .expect("fetch pull request files");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request_line.contains("/github/pr/42/files?org=acme&repo=widget&commitSha=deadbeef"),
+      "unexpected request line: {request_line}"
+    );
+  }
+
+  #[test]
+  fn fetch_pull_request_commits_parses_success_payload() {
+    let body = r#"{
+      "commits": [
+        {
+          "sha": "1111111111111111111111111111111111111111",
+          "message": "feat: add commit filter",
+          "authored_at": "2026-02-27T10:00:00Z",
+          "committed_at": "2026-02-27T10:05:00Z",
+          "parent_sha": "0000000000000000000000000000000000000000",
+          "author": { "login": "octocat", "avatar_url": null },
+          "committer": { "login": "octocat", "avatar_url": null }
+        }
+      ]
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let commits = api
+      .fetch_pull_request_commits("acme", "widget", 42)
+      .expect("fetch pull request commits");
+    assert_eq!(commits.len(), 1);
+    assert_eq!(commits[0].sha, "1111111111111111111111111111111111111111");
+    assert_eq!(commits[0].message, "feat: add commit filter");
+    assert_eq!(
+      commits[0].author.as_ref().map(|user| user.login.as_str()),
+      Some("octocat")
+    );
+    assert_eq!(
+      commits[0].parent_sha.as_deref(),
+      Some("0000000000000000000000000000000000000000")
+    );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_commits_calls_expected_route_with_query_params() {
+    let body = r#"{"commits":[]}"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_pull_request_commits("acme", "widget", 42)
+      .expect("fetch pull request commits");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "GET /github/pr/42/commits?org=acme&repo=widget HTTP/1.1"
+    );
   }
 
   #[test]
@@ -2615,7 +2751,18 @@ mod tests {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
     let api = make_test_api_client(base_url);
 
-    let err = api.fetch_pull_request_files("acme", "widget", 42).err();
+    let err = api.fetch_pull_request_files("acme", "widget", 42, None).err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_commits_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api.fetch_pull_request_commits("acme", "widget", 42).err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");

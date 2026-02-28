@@ -20,13 +20,13 @@ use gpui::{
   Styled, Task, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable as _, StyledExt,
+  ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable as _, StyledExt,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   clipboard::Clipboard,
   h_flex,
   label::Label,
-  list::ListItem,
+  list::{List, ListDelegate, ListEvent, ListItem, ListState},
   scroll::ScrollableElement,
   skeleton::Skeleton,
   spinner::Spinner,
@@ -42,18 +42,19 @@ use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DETAILS_PAGE_CONTAINER_MAX_WIDTH,
-  FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler, StatusThemeExt, UiIconName,
-  WindowExt, file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action,
-  resizable_panel,
+  DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler,
+  StatusThemeExt, UiIconName, WindowExt, dropdown_select, file_icon_path_for_name_with_theme,
+  h_resizable, parse_github_url_action, resizable_panel,
 };
 
 use crate::{
   ShowCommandPalette, ShowFileSearch,
   api::{
-    ApiClient, GithubPullRequestDetails, GithubPullRequestFile, GithubPullRequestReviewComment,
+    ApiClient, GithubPullRequestCommit, GithubPullRequestDetails, GithubPullRequestFile,
+    GithubPullRequestReviewComment,
   },
   auth_state::{AuthState, AuthStateStore},
-  date_format::format_long_date,
+  date_format::{format_compact_datetime, format_long_date},
   file_preview::{is_markdown_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   github_navigation::{
@@ -69,6 +70,11 @@ const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
 const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const DIFF_HEADER_HEIGHT: f32 = 40.0;
+const PR_TAB_OVERVIEW_IX: usize = 0;
+const PR_TAB_CHANGES_IX: usize = 1;
+const PR_TAB_COMMITS_IX: usize = 2;
+const PR_COMMIT_SELECT_WIDTH: f32 = 260.0;
+const PR_COMMIT_SELECT_MENU_WIDTH: f32 = 420.0;
 
 fn pr_description_scope_id(pr_number: u64) -> usize {
   (pr_number as usize).wrapping_mul(1_000_003).wrapping_add(1)
@@ -193,6 +199,280 @@ fn files_from_api(files: Vec<GithubPullRequestFile>) -> Vec<Rc<GithubPrFileDiff>
     .collect()
 }
 
+fn short_sha(sha: &str) -> String {
+  sha.chars().take(7).collect()
+}
+
+fn commit_subject(message: &str) -> String {
+  message
+    .lines()
+    .map(str::trim)
+    .find(|line| !line.is_empty())
+    .unwrap_or("No commit message")
+    .to_string()
+}
+
+fn commit_sort_timestamp(commit: &GithubPullRequestCommit) -> &str {
+  commit
+    .committed_at
+    .as_deref()
+    .or(commit.authored_at.as_deref())
+    .unwrap_or("")
+}
+
+fn sort_commits_desc(commits: &mut [GithubPullRequestCommit]) {
+  commits.sort_by(|a, b| commit_sort_timestamp(b).cmp(commit_sort_timestamp(a)));
+}
+
+fn resolve_diff_shas_for_context(
+  merge_base_sha: &str,
+  base_sha: &str,
+  head_sha: &str,
+  selected_commit_sha: Option<&str>,
+  selected_parent_sha: Option<&str>,
+) -> Option<(String, String)> {
+  if let Some(selected_commit_sha) = selected_commit_sha {
+    let selected_commit_sha = selected_commit_sha.trim();
+    if selected_commit_sha.is_empty() {
+      return None;
+    }
+    let base_sha = selected_parent_sha
+      .map(str::trim)
+      .filter(|sha| !sha.is_empty())
+      .unwrap_or_else(|| base_sha.trim());
+    if base_sha.is_empty() {
+      return None;
+    }
+    return Some((base_sha.to_string(), selected_commit_sha.to_string()));
+  }
+
+  let base_sha = if !merge_base_sha.trim().is_empty() {
+    merge_base_sha.trim()
+  } else {
+    base_sha.trim()
+  };
+  let head_sha = head_sha.trim();
+  if base_sha.is_empty() || head_sha.is_empty() {
+    return None;
+  }
+
+  Some((base_sha.to_string(), head_sha.to_string()))
+}
+
+#[derive(Clone)]
+struct GithubPrCommitSelectItem {
+  sha: Option<String>,
+  label: SharedString,
+  search_text: String,
+  is_selected: bool,
+}
+
+impl GithubPrCommitSelectItem {
+  fn all_changes(is_selected: bool) -> Self {
+    Self {
+      sha: None,
+      label: "All changes".into(),
+      search_text: "all changes".to_string(),
+      is_selected,
+    }
+  }
+
+  fn for_commit(commit: &GithubPullRequestCommit, is_selected: bool) -> Self {
+    let short = short_sha(&commit.sha);
+    let subject = commit_subject(&commit.message);
+    let author = commit
+      .author
+      .as_ref()
+      .map(|user| user.login.as_str())
+      .unwrap_or("unknown");
+    let search_text = format!("{short} {subject} {} {author}", commit.sha);
+    Self {
+      sha: Some(commit.sha.clone()),
+      label: subject.into(),
+      search_text: search_text.to_lowercase(),
+      is_selected,
+    }
+  }
+}
+
+impl DropdownSelectItem for GithubPrCommitSelectItem {
+  type Value = Option<String>;
+
+  fn value(&self) -> &Self::Value {
+    &self.sha
+  }
+
+  fn selected(&self) -> bool {
+    self.is_selected
+  }
+
+  fn matches(&self, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+      return true;
+    }
+
+    self.search_text.contains(query.as_str())
+  }
+
+  fn render_item(&self, _window: &mut Window, _cx: &mut App) -> gpui::AnyElement {
+    h_flex()
+      .max_w(px(PR_COMMIT_SELECT_MENU_WIDTH - 40.0))
+      .min_w_0()
+      .text_sm()
+      .child(
+        div()
+          .min_w_0()
+          .overflow_hidden()
+          .text_ellipsis()
+          .child(self.label.clone()),
+      )
+      .into_any_element()
+  }
+
+  fn render_selected(&self, _window: &mut Window, _cx: &mut App) -> gpui::AnyElement {
+    h_flex()
+      .w_full()
+      .min_w_0()
+      .text_sm()
+      .child(
+        div()
+          .min_w_0()
+          .text_ellipsis()
+          .overflow_hidden()
+          .child(self.label.clone()),
+      )
+      .into_any_element()
+  }
+}
+
+struct GithubPrCommitListDelegate {
+  rows: Vec<Rc<GithubPullRequestCommit>>,
+  selected_index: Option<IndexPath>,
+}
+
+impl GithubPrCommitListDelegate {
+  fn new() -> Self {
+    Self {
+      rows: Vec::new(),
+      selected_index: None,
+    }
+  }
+
+  fn set_rows(&mut self, commits: &[GithubPullRequestCommit], selected_commit_sha: Option<&str>) {
+    self.rows = commits.iter().cloned().map(Rc::new).collect();
+
+    self.selected_index = selected_commit_sha
+      .and_then(|selected_sha| {
+        self
+          .rows
+          .iter()
+          .position(|commit| commit.sha == selected_sha)
+          .map(IndexPath::new)
+      })
+      .or_else(|| (!self.rows.is_empty()).then_some(IndexPath::new(0)));
+  }
+
+  fn row_at(&self, ix: IndexPath) -> Option<Rc<GithubPullRequestCommit>> {
+    self.rows.get(ix.row).cloned()
+  }
+}
+
+impl ListDelegate for GithubPrCommitListDelegate {
+  type Item = ListItem;
+
+  fn items_count(&self, _section: usize, _cx: &App) -> usize {
+    self.rows.len()
+  }
+
+  fn render_item(
+    &mut self,
+    ix: IndexPath,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<Self::Item> {
+    let theme = cx.theme().clone();
+    let commit = self.rows.get(ix.row)?;
+    let subject = commit_subject(&commit.message);
+    let short = short_sha(&commit.sha);
+    let author = commit
+      .author
+      .as_ref()
+      .or(commit.committer.as_ref())
+      .map(|user| user.login.as_str())
+      .unwrap_or("unknown");
+    let date_label = commit
+      .committed_at
+      .as_deref()
+      .or(commit.authored_at.as_deref())
+      .map(format_compact_datetime)
+      .unwrap_or_else(|| "—".into());
+
+    Some(
+      ListItem::new(ix)
+        .selected(Some(ix) == self.selected_index)
+        .w_full()
+        .rounded(theme.radius)
+        .px_3()
+        .py_2()
+        .child(
+          v_flex()
+            .gap_1()
+            .child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                  Tag::secondary()
+                    .small()
+                    .rounded_full()
+                    .text_color(theme.muted_foreground)
+                    .child(short),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .overflow_hidden()
+                    .text_ellipsis_start()
+                    .child(subject),
+                ),
+            )
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(format!("{author} • {date_label}")),
+            ),
+        ),
+    )
+  }
+
+  fn render_empty(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> impl IntoElement {
+    v_flex()
+      .size_full()
+      .items_center()
+      .justify_center()
+      .text_sm()
+      .text_color(cx.theme().muted_foreground)
+      .child("No commits")
+  }
+
+  fn set_selected_index(
+    &mut self,
+    ix: Option<IndexPath>,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) {
+    self.selected_index = ix;
+    cx.notify();
+  }
+}
+
 fn file_for_review_comment_path(
   file_lookup: &HashMap<String, Rc<GithubPrFileDiff>>,
   path: &str,
@@ -216,6 +496,16 @@ fn file_for_review_comment_path(
 struct GithubPrFileContents {
   base: Option<String>,
   head: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct GithubPrDiffRefs {
+  base_owner: String,
+  base_repo: String,
+  base_sha: String,
+  head_owner: String,
+  head_repo: String,
+  head_sha: String,
 }
 
 #[derive(Default)]
@@ -346,12 +636,21 @@ pub struct GithubPrDetailsPage {
   files_task: Option<Task<()>>,
   files_loading: bool,
   files_error: Option<SharedString>,
+  files_request_generation: u64,
+  commits_task: Option<Task<()>>,
+  commits_loading: bool,
+  commits_error: Option<SharedString>,
+  commits: Vec<GithubPullRequestCommit>,
+  commit_lookup: HashMap<String, GithubPullRequestCommit>,
+  commits_list: Entity<ListState<GithubPrCommitListDelegate>>,
+  selected_commit_sha: Option<String>,
   review_comments_task: Option<Task<()>>,
   review_comments_loading: bool,
   review_comments_error: Option<SharedString>,
   review_comments: Vec<GithubPullRequestReviewComment>,
   selected_file_review_comment_ids: Vec<u64>,
   active_review_comment_id: Option<u64>,
+  review_comment_handlers_enabled: bool,
   description_code_reference_requests: Vec<GithubBlobLineReference>,
   review_comment_code_reference_cache: HashMap<String, Option<ReviewCommentCodeReferencePreview>>,
   review_comment_code_reference_tasks: HashMap<String, Task<()>>,
@@ -410,9 +709,9 @@ impl GithubPrOpenTarget {
 
   fn tab_ix(self) -> usize {
     if self.open_changes_tab || self.review_comment_id.is_some() {
-      1
+      PR_TAB_CHANGES_IX
     } else {
-      0
+      PR_TAB_OVERVIEW_IX
     }
   }
 }
@@ -558,6 +857,12 @@ impl GithubPrDetailsPage {
         selected_file.path.to_string().into(),
       );
     }
+    if let Some(selected_commit_sha) = self.selected_commit_sha.as_ref() {
+      data.insert(
+        "selected_commit_sha".into(),
+        selected_commit_sha.clone().into(),
+      );
+    }
     data.insert("active_tab".into(), self.active_tab_ix.into());
     data
   }
@@ -598,10 +903,11 @@ impl GithubPrDetailsPage {
     sentry_context::capture_unexpected_error(operation, &io_error, data);
   }
 
-  pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+  pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     GithubPrDetailsPageHandle::register(cx);
 
     let tree_state = cx.new(|cx| TreeState::new(cx));
+    let commits_list = cx.new(|cx| ListState::new(GithubPrCommitListDelegate::new(), window, cx));
     let diff_editor = cx.new(|cx| {
       let mut editor = Editor::new_with_paths(PathBuf::from("."), PathBuf::from("pr.diff"), cx);
       editor.is_read_only = true;
@@ -615,12 +921,21 @@ impl GithubPrDetailsPage {
       files_task: None,
       files_loading: false,
       files_error: None,
+      files_request_generation: 0,
+      commits_task: None,
+      commits_loading: false,
+      commits_error: None,
+      commits: Vec::new(),
+      commit_lookup: HashMap::new(),
+      commits_list,
+      selected_commit_sha: None,
       review_comments_task: None,
       review_comments_loading: false,
       review_comments_error: None,
       review_comments: Vec::new(),
       selected_file_review_comment_ids: Vec::new(),
       active_review_comment_id: None,
+      review_comment_handlers_enabled: true,
       description_code_reference_requests: Vec::new(),
       review_comment_code_reference_cache: HashMap::new(),
       review_comment_code_reference_tasks: HashMap::new(),
@@ -647,6 +962,8 @@ impl GithubPrDetailsPage {
       error: None,
     };
     this.install_diff_editor_review_comment_handlers(cx);
+    this.sync_commits_list(cx);
+    this.subscribe_to_commits_list(window, cx);
     this
   }
 
@@ -675,6 +992,85 @@ impl GithubPrDetailsPage {
       .filter(|comment| comment.user.login.eq_ignore_ascii_case(&login))
       .map(|comment| comment.id)
       .collect()
+  }
+
+  fn sync_commits_list(&mut self, cx: &mut Context<Self>) {
+    let commits = self.commits.clone();
+    let selected_commit_sha = self.selected_commit_sha.clone();
+    self.commits_list.update(cx, |state, cx| {
+      state
+        .delegate_mut()
+        .set_rows(&commits, selected_commit_sha.as_deref());
+      cx.notify();
+    });
+  }
+
+  fn subscribe_to_commits_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    cx.subscribe_in(
+      &self.commits_list,
+      window,
+      |this, state, event: &ListEvent, window, cx| {
+        if let ListEvent::Confirm(ix) = event {
+          let commit = state.read(cx).delegate().row_at(*ix);
+          if let Some(commit) = commit {
+            this.select_commit_filter(Some(commit.sha.clone()), cx);
+            this.set_active_tab(PR_TAB_CHANGES_IX, window, cx);
+          }
+        }
+      },
+    )
+    .detach();
+  }
+
+  fn build_commit_dropdown_items(
+    commits: &[GithubPullRequestCommit],
+    selected_commit_sha: Option<&str>,
+  ) -> Vec<GithubPrCommitSelectItem> {
+    let selected_commit_sha = selected_commit_sha
+      .map(str::trim)
+      .filter(|sha| !sha.is_empty());
+    let mut items = vec![GithubPrCommitSelectItem::all_changes(
+      selected_commit_sha.is_none(),
+    )];
+    items.extend(commits.iter().map(|commit| {
+      GithubPrCommitSelectItem::for_commit(commit, selected_commit_sha == Some(commit.sha.as_str()))
+    }));
+    items
+  }
+
+  fn commit_select_handler(
+    &self,
+    cx: &Context<Self>,
+  ) -> Rc<dyn Fn(Option<String>, &mut Window, &mut App)> {
+    let view = cx.entity();
+    Rc::new(move |selected_commit_sha, window, cx| {
+      let _ = view.update(cx, |this, cx| {
+        this.select_commit_filter(selected_commit_sha.clone(), cx);
+        this.refocus_page_shortcuts_after_dropdown_select(window, cx);
+      });
+    })
+  }
+
+  fn refocus_page_shortcuts_after_dropdown_select(
+    &self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let focus_handle = self.focus_handle.clone();
+    window.focus(&focus_handle, cx);
+    cx.on_next_frame(window, move |_, window, cx| {
+      window.focus(&focus_handle, cx);
+    });
+  }
+
+  fn select_commit_filter(&mut self, selected_commit_sha: Option<String>, cx: &mut Context<Self>) {
+    if self.selected_commit_sha == selected_commit_sha {
+      return;
+    }
+    self.selected_commit_sha = selected_commit_sha;
+    self.sync_sentry_pr_context();
+    self.sync_commits_list(cx);
+    self.reload_files_for_current_pull_request(cx);
   }
 
   fn install_diff_editor_review_comment_handlers(&mut self, cx: &mut Context<Self>) {
@@ -722,6 +1118,29 @@ impl GithubPrDetailsPage {
     });
   }
 
+  fn sync_review_comment_handlers(&mut self, cx: &mut Context<Self>) {
+    let should_enable = self.selected_commit_sha.is_none();
+    if self.review_comment_handlers_enabled == should_enable {
+      return;
+    }
+
+    self.review_comment_handlers_enabled = should_enable;
+    if should_enable {
+      self.install_diff_editor_review_comment_handlers(cx);
+      return;
+    }
+
+    self.diff_editor.update(cx, |editor, cx| {
+      editor.set_review_comment_edit_handler(None, cx);
+      editor.set_review_comment_delete_handler(None, cx);
+      editor.set_review_comment_create_handler(None, cx);
+      editor.set_review_comment_pr_number(None, cx);
+      editor.set_editable_review_comment_ids(std::iter::empty::<u64>(), cx);
+      editor.set_review_comments(Vec::new(), cx);
+      editor.set_review_comment_code_reference_previews(HashMap::new(), cx);
+    });
+  }
+
   fn handle_gfm_link(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
     if should_open_externally(window) {
       return false;
@@ -749,13 +1168,13 @@ impl GithubPrDetailsPage {
           match same_pr_gfm_navigation(self.active_tab_ix, review_comment_id) {
             SamePrGfmNavigation::ShowOverview { switch_to_overview } => {
               if switch_to_overview {
-                self.set_active_tab(0, window, cx);
+                self.set_active_tab(PR_TAB_OVERVIEW_IX, window, cx);
               }
               return true;
             }
             SamePrGfmNavigation::ScrollComment { switch_to_changes } => {
               if switch_to_changes {
-                self.set_active_tab(1, window, cx);
+                self.set_active_tab(PR_TAB_CHANGES_IX, window, cx);
               }
             }
           }
@@ -900,6 +1319,16 @@ impl GithubPrDetailsPage {
   }
 
   fn submit_review_comment_edit(&mut self, comment_id: u64, body: String, cx: &mut Context<Self>) {
+    if self.selected_commit_sha.is_some() {
+      let message = Arc::<str>::from("Review comments are disabled for commit-level diffs");
+      self.review_comments_error = Some(message.to_string().into());
+      self.diff_editor.update(cx, |editor, cx| {
+        editor.finish_review_comment_edit_submission(comment_id, Some(message.clone()), cx);
+      });
+      cx.notify();
+      return;
+    }
+
     let Some(pull_request) = self.pull_request.as_ref() else {
       self.review_comments_error = Some("No pull request selected".into());
       self.diff_editor.update(cx, |editor, cx| {
@@ -965,6 +1394,16 @@ impl GithubPrDetailsPage {
     request: ReviewCommentCreateRequest,
     cx: &mut Context<Self>,
   ) {
+    if self.selected_commit_sha.is_some() {
+      let message = Arc::<str>::from("Review comments are disabled for commit-level diffs");
+      self.review_comments_error = Some(message.to_string().into());
+      self.diff_editor.update(cx, |editor, cx| {
+        editor.finish_review_comment_create_submission(Some(message.clone()), cx);
+      });
+      cx.notify();
+      return;
+    }
+
     let Some(pull_request) = self.pull_request.as_ref() else {
       self.review_comments_error = Some("No pull request selected".into());
       self.diff_editor.update(cx, |editor, cx| {
@@ -1081,6 +1520,13 @@ impl GithubPrDetailsPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    if self.selected_commit_sha.is_some() {
+      self.review_comments_error =
+        Some("Review comments are disabled for commit-level diffs".into());
+      cx.notify();
+      return;
+    }
+
     if !self.editable_review_comment_ids(cx).contains(&comment_id) {
       return;
     }
@@ -1106,6 +1552,16 @@ impl GithubPrDetailsPage {
   }
 
   fn submit_review_comment_delete(&mut self, comment_id: u64, cx: &mut Context<Self>) {
+    if self.selected_commit_sha.is_some() {
+      self.review_comments_error =
+        Some("Review comments are disabled for commit-level diffs".into());
+      self.diff_editor.update(cx, |editor, cx| {
+        editor.finish_review_comment_delete_submission(comment_id, cx);
+      });
+      cx.notify();
+      return;
+    }
+
     let Some((owner, repo, number)) = self.pull_request.as_ref().map(|pull_request| {
       (
         pull_request.repository.owner.clone(),
@@ -1185,11 +1641,21 @@ impl GithubPrDetailsPage {
     let mut data = Map::new();
     data.insert("active_tab".into(), ix.into());
     self.add_pr_breadcrumb("Changed PR tab", data);
-    if ix == 1 {
+    cx.notify();
+
+    if ix == PR_TAB_CHANGES_IX {
       self.sync_tree_selection(cx);
       window.focus(&self.focus_handle, cx);
+      return;
     }
-    cx.notify();
+
+    if ix == PR_TAB_COMMITS_IX {
+      cx.on_next_frame(window, |this, window, cx| {
+        this.commits_list.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      });
+    }
   }
 
   fn set_selected_file(&mut self, selected: Option<Rc<GithubPrFileDiff>>, cx: &mut Context<Self>) {
@@ -1548,6 +2014,20 @@ impl GithubPrDetailsPage {
   }
 
   fn sync_review_comments(&mut self, cx: &mut Context<Self>) {
+    self.sync_review_comment_handlers(cx);
+    if self.selected_commit_sha.is_some() {
+      self.selected_file_review_comment_ids.clear();
+      self.active_review_comment_id = None;
+      self.diff_editor.update(cx, |editor, cx| {
+        editor.set_review_comment_pr_number(None, cx);
+        editor.set_editable_review_comment_ids(std::iter::empty::<u64>(), cx);
+        editor.set_review_comments(Vec::new(), cx);
+        editor.set_review_comment_code_reference_previews(HashMap::new(), cx);
+      });
+      self.pending_review_comment_link_comment_id = None;
+      return;
+    }
+
     let comments = self.review_comments_for_selected_file();
     self.selected_file_review_comment_ids = comments.iter().map(|comment| comment.id).collect();
     if self
@@ -1717,6 +2197,141 @@ impl GithubPrDetailsPage {
     self.resolve_pending_review_comment_link(cx);
   }
 
+  fn selected_commit(&self) -> Option<&GithubPullRequestCommit> {
+    self
+      .selected_commit_sha
+      .as_ref()
+      .and_then(|sha| self.commit_lookup.get(sha))
+  }
+
+  fn resolve_diff_refs(&self) -> Option<GithubPrDiffRefs> {
+    let pull_request = self.pull_request.as_ref()?;
+    let base_owner = pull_request.repository.owner.clone();
+    let base_repo = pull_request.repository.repo.clone();
+    let head_owner = pull_request
+      .head_repository
+      .as_ref()
+      .map(|repo| repo.owner.clone())
+      .unwrap_or_else(|| base_owner.clone());
+    let head_repo = pull_request
+      .head_repository
+      .as_ref()
+      .map(|repo| repo.repo.clone())
+      .unwrap_or_else(|| base_repo.clone());
+    let selected_commit = self.selected_commit();
+    let (resolved_base_sha, resolved_head_sha) = resolve_diff_shas_for_context(
+      pull_request.merge_base_sha.as_str(),
+      pull_request.base_sha.as_str(),
+      pull_request.head_sha.as_str(),
+      selected_commit.map(|commit| commit.sha.as_str()),
+      selected_commit.and_then(|commit| commit.parent_sha.as_deref()),
+    )?;
+
+    if selected_commit.is_some() {
+      return Some(GithubPrDiffRefs {
+        base_owner: head_owner.clone(),
+        base_repo: head_repo.clone(),
+        base_sha: resolved_base_sha,
+        head_owner,
+        head_repo,
+        head_sha: resolved_head_sha,
+      });
+    }
+
+    Some(GithubPrDiffRefs {
+      base_owner,
+      base_repo,
+      base_sha: resolved_base_sha,
+      head_owner,
+      head_repo,
+      head_sha: resolved_head_sha,
+    })
+  }
+
+  fn reset_files_state(&mut self, cx: &mut Context<Self>) {
+    self.file_loading = false;
+    self.file_error = None;
+    self.files_error = None;
+    self.tree_state.update(cx, |state, cx| {
+      state.set_items(Vec::new(), cx);
+    });
+    self.file_lookup.clear();
+    self.file_contents.clear();
+    self.file_content_tasks.clear();
+    self.selected_tree_id = None;
+    self.set_selected_file(None, cx);
+    self.sync_review_comments(cx);
+  }
+
+  fn reload_files_for_current_pull_request(&mut self, cx: &mut Context<Self>) {
+    let Some(context) = self.current_pr_context.as_ref().cloned() else {
+      return;
+    };
+    self.files_loading = true;
+    self.reset_files_state(cx);
+    self.fetch_pull_request_files_for_context(context.owner, context.repo, context.number, cx);
+    cx.notify();
+  }
+
+  fn fetch_pull_request_files_for_context(
+    &mut self,
+    owner: String,
+    repo: String,
+    number: u64,
+    cx: &mut Context<Self>,
+  ) {
+    self.files_request_generation = self.files_request_generation.wrapping_add(1);
+    let generation = self.files_request_generation;
+    let files_api = self.api.clone();
+    let commit_sha = self.selected_commit_sha.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        files_api.fetch_pull_request_files(&owner, &repo, number, commit_sha.as_deref())
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        if generation != this.files_request_generation {
+          return;
+        }
+        match result {
+          Ok(files) => {
+            this.files_loading = false;
+            this.files_error = None;
+            let files = files_from_api(files);
+            let (items, lookup, selected_index, selected_id) = build_tree_items(&files);
+            this.file_lookup = lookup;
+            this.selected_tree_id = selected_id.clone();
+            this.tree_state.update(cx, |state, cx| {
+              state.set_items(items, cx);
+              state.set_selected_index(selected_index, cx);
+            });
+            let selected = selected_id.and_then(|id| this.file_lookup.get(&id).cloned());
+            this.set_selected_file(selected, cx);
+            this.add_pr_breadcrumb("Load PR files succeeded", Map::new());
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.files_loading = false;
+            this.files_error = Some(error_message.clone().into());
+            this.tree_state.update(cx, |state, cx| {
+              state.set_items(Vec::new(), cx);
+            });
+            this.file_lookup.clear();
+            this.file_contents.clear();
+            this.file_content_tasks.clear();
+            this.selected_tree_id = None;
+            this.set_selected_file(None, cx);
+            this.add_pr_breadcrumb("Load PR files failed", Map::new());
+            this.record_pr_error("github.pr.files", error_message.as_str(), Map::new());
+          }
+        }
+        cx.notify();
+      });
+    });
+    self.files_task = Some(task);
+  }
+
   fn maybe_fetch_selected_file_contents(&mut self, cx: &mut Context<Self>) {
     if let Some(file) = self.selected_file.clone() {
       self.maybe_fetch_file_contents(file, cx);
@@ -1730,33 +2345,15 @@ impl GithubPrDetailsPage {
       return;
     }
 
-    let Some(pull_request) = self.pull_request.as_ref() else {
+    let Some(diff_refs) = self.resolve_diff_refs() else {
       return;
     };
-    let base_sha_for_diff = if !pull_request.merge_base_sha.is_empty() {
-      pull_request.merge_base_sha.clone()
-    } else {
-      pull_request.base_sha.clone()
-    };
-
-    if base_sha_for_diff.is_empty() || pull_request.head_sha.is_empty() {
-      return;
-    }
-
-    let owner = pull_request.repository.owner.clone();
-    let repo = pull_request.repository.repo.clone();
-    let head_owner = pull_request
-      .head_repository
-      .as_ref()
-      .map(|repo| repo.owner.clone())
-      .unwrap_or_else(|| owner.clone());
-    let head_repo = pull_request
-      .head_repository
-      .as_ref()
-      .map(|repo| repo.repo.clone())
-      .unwrap_or_else(|| repo.clone());
-    let base_sha = base_sha_for_diff;
-    let head_sha = pull_request.head_sha.clone();
+    let base_owner = diff_refs.base_owner;
+    let base_repo = diff_refs.base_repo;
+    let base_sha = diff_refs.base_sha;
+    let head_owner = diff_refs.head_owner;
+    let head_repo = diff_refs.head_repo;
+    let head_sha = diff_refs.head_sha;
 
     let base_path = match file.status {
       GithubPrFileStatus::Added => None,
@@ -1776,8 +2373,8 @@ impl GithubPrDetailsPage {
     let task = cx.spawn(async move |this, cx| {
       let base_result = if let Some(path) = base_path.clone() {
         let api = api.clone();
-        let owner = owner.clone();
-        let repo = repo.clone();
+        let owner = base_owner.clone();
+        let repo = base_repo.clone();
         let base_sha = base_sha.clone();
         unblock(move || api.fetch_github_file_content(&owner, &repo, &path, &base_sha)).await
       } else {
@@ -1855,6 +2452,13 @@ impl GithubPrDetailsPage {
     self.pull_request = None;
     self.files_loading = true;
     self.files_error = None;
+    self.files_request_generation = 0;
+    self.commits_loading = true;
+    self.commits_error = None;
+    self.commits.clear();
+    self.commit_lookup.clear();
+    self.selected_commit_sha = None;
+    self.sync_commits_list(cx);
     self.review_comments_loading = true;
     self.review_comments_error = None;
     self.review_comments.clear();
@@ -1952,39 +2556,44 @@ impl GithubPrDetailsPage {
       });
     });
 
-    let files_api = self.api.clone();
-    let files_task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || files_api.fetch_pull_request_files(&owner, &repo, number)).await;
+    let commits_api = self.api.clone();
+    let commits_owner = owner.clone();
+    let commits_repo = repo.clone();
+    let commits_task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        commits_api.fetch_pull_request_commits(&commits_owner, &commits_repo, number)
+      })
+      .await;
 
       let _ = this.update(cx, |this, cx| {
         match result {
-          Ok(files) => {
-            this.files_loading = false;
-            this.files_error = None;
-            let files = files_from_api(files);
-            let (items, lookup, selected_index, selected_id) = build_tree_items(&files);
-            this.file_lookup = lookup;
-            this.selected_tree_id = selected_id.clone();
-            this.tree_state.update(cx, |state, cx| {
-              state.set_items(items, cx);
-              state.set_selected_index(selected_index, cx);
-            });
-            let selected = selected_id.and_then(|id| this.file_lookup.get(&id).cloned());
-            this.set_selected_file(selected, cx);
-            this.add_pr_breadcrumb("Load PR files succeeded", Map::new());
+          Ok(mut commits) => {
+            sort_commits_desc(commits.as_mut_slice());
+            this.commit_lookup = commits
+              .iter()
+              .cloned()
+              .map(|commit| (commit.sha.clone(), commit))
+              .collect();
+            this.commits = commits;
+            if let Some(selected_sha) = this.selected_commit_sha.clone()
+              && !this.commit_lookup.contains_key(&selected_sha)
+            {
+              this.selected_commit_sha = None;
+            }
+            this.commits_loading = false;
+            this.commits_error = None;
+            this.sync_commits_list(cx);
           }
           Err(error) => {
             let error_message = error.to_string();
-            this.files_loading = false;
-            this.files_error = Some(error_message.clone().into());
-            this.tree_state.update(cx, |state, cx| {
-              state.set_items(Vec::new(), cx);
-            });
-            this.file_lookup.clear();
-            this.selected_tree_id = None;
-            this.set_selected_file(None, cx);
-            this.add_pr_breadcrumb("Load PR files failed", Map::new());
-            this.record_pr_error("github.pr.files", error_message.as_str(), Map::new());
+            this.commits_loading = false;
+            this.commits_error = Some(error_message.clone().into());
+            this.commits.clear();
+            this.commit_lookup.clear();
+            this.selected_commit_sha = None;
+            this.sync_commits_list(cx);
+            this.add_pr_breadcrumb("Load PR commits failed", Map::new());
+            this.record_pr_error("github.pr.commits", error_message.as_str(), Map::new());
           }
         }
         cx.notify();
@@ -1993,7 +2602,8 @@ impl GithubPrDetailsPage {
 
     self.details_task = Some(details_task);
     self.review_comments_task = Some(review_comments_task);
-    self.files_task = Some(files_task);
+    self.commits_task = Some(commits_task);
+    self.fetch_pull_request_files_for_context(owner, repo, number, cx);
   }
 
   fn navigate_back(&self, cx: &mut Context<Self>) {
@@ -2024,7 +2634,8 @@ impl GithubPrDetailsPage {
         this.set_active_tab(*ix, window, cx);
       }))
       .child(Tab::new().label("Overview"))
-      .child(Tab::new().label("Changes"));
+      .child(Tab::new().label("Changes"))
+      .child(Tab::new().label("Commits"));
 
     let back_button = || {
       Button::new("pr-back")
@@ -2083,13 +2694,7 @@ impl GithubPrDetailsPage {
       .bg(theme.sidebar)
       .border_b_1()
       .border_color(theme.title_bar_border)
-      .child(
-        div()
-          .flex()
-          .items_center()
-          .justify_start()
-          .child(left_area),
-      )
+      .child(div().flex().items_center().justify_start().child(left_area))
       .child(tab_bar)
   }
 
@@ -2382,6 +2987,9 @@ impl GithubPrDetailsPage {
   ) -> impl IntoElement {
     let theme = cx.theme().clone();
     let count = self.file_lookup.len();
+    let commit_options =
+      Self::build_commit_dropdown_items(&self.commits, self.selected_commit_sha.as_deref());
+    let on_commit_select = self.commit_select_handler(cx);
 
     if let Some(selected_id) = self
       .tree_state
@@ -2397,29 +3005,44 @@ impl GithubPrDetailsPage {
       });
     }
 
-    let header = div()
-      .px_3()
-      .flex()
+    let header = h_flex()
+      .pl_3()
       .items_center()
+      .justify_between()
       .h(px(DIFF_HEADER_HEIGHT))
       .border_b_1()
       .border_color(theme.border)
       .child(
         h_flex()
           .items_center()
-          .w_full()
-          .justify_between()
+          .gap_2()
           .child(div().text_sm().text_color(theme.foreground).child("Files"))
           .child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
+            Tag::secondary()
+              .small()
+              .rounded_full()
               .child(count.to_string()),
           ),
+      )
+      .child(
+        div()
+          .border_l_1()
+          .border_color(theme.border)
+          .child(dropdown_select(
+            DropdownSelectConfig::new("github-pr-commit-select")
+              .placeholder("All changes")
+              .search_placeholder("Search commits...")
+              .options(commit_options)
+              .width(px(PR_COMMIT_SELECT_WIDTH))
+              .menu_width(px(PR_COMMIT_SELECT_MENU_WIDTH))
+              .trigger_height(px(DIFF_HEADER_HEIGHT - 1.))
+              .disabled(self.commits_loading || self.commits_error.is_some())
+              .on_select(on_commit_select),
+          )),
       );
 
     let mut comment_counts = HashMap::new();
-    if !self.review_comments.is_empty() {
+    if self.selected_commit_sha.is_none() && !self.review_comments.is_empty() {
       for comment in &self.review_comments {
         *comment_counts.entry(comment.path.clone()).or_insert(0) += 1;
       }
@@ -2720,7 +3343,7 @@ impl GithubPrDetailsPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.active_tab_ix != 1 {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
       return;
     }
 
@@ -2737,7 +3360,7 @@ impl GithubPrDetailsPage {
   }
 
   fn find_action(&mut self, action: &Find, window: &mut Window, cx: &mut Context<Self>) {
-    if self.active_tab_ix != 1 {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
       return;
     }
 
@@ -2747,7 +3370,7 @@ impl GithubPrDetailsPage {
   }
 
   fn close_find_action(&mut self, action: &CloseFind, window: &mut Window, cx: &mut Context<Self>) {
-    if self.active_tab_ix != 1 {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
       return;
     }
 
@@ -2935,6 +3558,75 @@ impl GithubPrDetailsPage {
         state.scroll_to_item(ix, gpui::ScrollStrategy::Top);
       }
     });
+  }
+
+  fn render_commits_tab(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    let content: gpui::AnyElement = if self.commits_loading {
+      v_flex()
+        .flex_1()
+        .h_full()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(Spinner::new().small())
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading commits..."),
+        )
+        .into_any_element()
+    } else if let Some(error) = self.commits_error.as_ref() {
+      v_flex()
+        .flex_1()
+        .h_full()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(theme.status_red())
+        .child(error.clone())
+        .into_any_element()
+    } else if self.commits.is_empty() {
+      v_flex()
+        .flex_1()
+        .h_full()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child("No commits")
+        .into_any_element()
+    } else {
+      let commits_list = List::new(&self.commits_list)
+        .border_1()
+        .border_color(theme.border)
+        .rounded(theme.radius)
+        .flex_1()
+        .min_h_0()
+        .p(px(8.));
+
+      v_flex()
+        .w_full()
+        .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+        .h_full()
+        .min_h_0()
+        .mx_auto()
+        .py_4()
+        .child(commits_list)
+        .into_any_element()
+    };
+
+    div()
+      .id("github-pr-commits-scroll")
+      .size_full()
+      .overflow_y_scrollbar()
+      .child(content)
   }
 
   fn render_changes_tab(
@@ -3137,10 +3829,21 @@ impl Render for GithubPrDetailsPage {
       .child(self.render_changes_tab(window, cx))
       .into_any_element();
 
-    let content = if self.active_tab_ix == 0 {
+    let commits_content = div()
+      .id("commits-tab")
+      .flex_1()
+      .min_h_0()
+      .child(self.render_commits_tab(window, cx))
+      .into_any_element();
+
+    let content = if self.active_tab_ix == PR_TAB_OVERVIEW_IX {
       overview_content
-    } else {
+    } else if self.active_tab_ix == PR_TAB_CHANGES_IX {
       changes_content
+    } else if self.active_tab_ix == PR_TAB_COMMITS_IX {
+      commits_content
+    } else {
+      overview_content
     };
 
     div()
@@ -3167,7 +3870,7 @@ impl Focusable for GithubPrDetailsPage {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::api::GithubPullRequestFile;
+  use crate::api::{GithubPullRequestCommit, GithubPullRequestCommitUser, GithubPullRequestFile};
 
   fn make_api_file(
     filename: &str,
@@ -3179,6 +3882,29 @@ mod tests {
       status: status.to_string(),
       patch: None,
       previous_filename: previous_filename.map(str::to_string),
+    }
+  }
+
+  fn make_api_commit(
+    sha: &str,
+    message: &str,
+    committed_at: Option<&str>,
+    parent_sha: Option<&str>,
+  ) -> GithubPullRequestCommit {
+    GithubPullRequestCommit {
+      sha: sha.to_string(),
+      message: message.to_string(),
+      authored_at: committed_at.map(str::to_string),
+      committed_at: committed_at.map(str::to_string),
+      parent_sha: parent_sha.map(str::to_string),
+      author: Some(GithubPullRequestCommitUser {
+        login: "octocat".to_string(),
+        avatar_url: None,
+      }),
+      committer: Some(GithubPullRequestCommitUser {
+        login: "octocat".to_string(),
+        avatar_url: None,
+      }),
     }
   }
 
@@ -3208,6 +3934,132 @@ mod tests {
     assert_eq!(map_file_status("changed"), GithubPrFileStatus::Modified);
     assert_eq!(map_file_status("ADDED"), GithubPrFileStatus::Added);
     assert_eq!(map_file_status(" deleted "), GithubPrFileStatus::Deleted);
+  }
+
+  #[test]
+  fn commit_subject_uses_first_non_empty_line() {
+    assert_eq!(
+      commit_subject("\n\nfeat: add filter\n\nbody details"),
+      "feat: add filter"
+    );
+    assert_eq!(commit_subject(""), "No commit message");
+  }
+
+  #[test]
+  fn build_commit_dropdown_items_includes_all_changes_first() {
+    let commits = vec![make_api_commit(
+      "1111111111111111111111111111111111111111",
+      "feat: add filter",
+      Some("2026-02-26T10:00:00Z"),
+      Some("0000000000000000000000000000000000000000"),
+    )];
+    let items = GithubPrDetailsPage::build_commit_dropdown_items(&commits, None);
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].value(), &None);
+    assert!(items[0].selected());
+    assert_eq!(
+      items[1].value().as_deref(),
+      Some("1111111111111111111111111111111111111111")
+    );
+    assert!(!items[1].selected());
+  }
+
+  #[test]
+  fn sort_commits_desc_orders_newest_first() {
+    let mut commits = vec![
+      make_api_commit(
+        "aaaaaaa111111111111111111111111111111111",
+        "older",
+        Some("2026-02-20T10:00:00Z"),
+        Some("p1"),
+      ),
+      make_api_commit(
+        "bbbbbbb222222222222222222222222222222222",
+        "newer",
+        Some("2026-02-25T10:00:00Z"),
+        Some("p2"),
+      ),
+    ];
+
+    sort_commits_desc(commits.as_mut_slice());
+    assert_eq!(commits[0].message, "newer");
+    assert_eq!(commits[1].message, "older");
+  }
+
+  #[test]
+  fn commit_list_delegate_selects_matching_commit_sha() {
+    let commits = vec![
+      make_api_commit(
+        "aaaaaaa111111111111111111111111111111111",
+        "first",
+        Some("2026-02-20T10:00:00Z"),
+        Some("p1"),
+      ),
+      make_api_commit(
+        "bbbbbbb222222222222222222222222222222222",
+        "second",
+        Some("2026-02-21T10:00:00Z"),
+        Some("p2"),
+      ),
+    ];
+
+    let mut delegate = GithubPrCommitListDelegate::new();
+    delegate.set_rows(&commits, Some("bbbbbbb222222222222222222222222222222222"));
+
+    assert_eq!(delegate.selected_index, Some(IndexPath::new(1)));
+    assert_eq!(
+      delegate
+        .row_at(IndexPath::new(1))
+        .map(|commit| commit.sha.clone()),
+      Some("bbbbbbb222222222222222222222222222222222".to_string())
+    );
+  }
+
+  #[test]
+  fn commit_list_delegate_defaults_to_first_when_no_selected_commit() {
+    let commits = vec![
+      make_api_commit(
+        "aaaaaaa111111111111111111111111111111111",
+        "first",
+        Some("2026-02-20T10:00:00Z"),
+        Some("p1"),
+      ),
+      make_api_commit(
+        "bbbbbbb222222222222222222222222222222222",
+        "second",
+        Some("2026-02-21T10:00:00Z"),
+        Some("p2"),
+      ),
+    ];
+
+    let mut delegate = GithubPrCommitListDelegate::new();
+    delegate.set_rows(&commits, None);
+
+    assert_eq!(delegate.selected_index, Some(IndexPath::new(0)));
+  }
+
+  #[test]
+  fn resolve_diff_shas_for_context_uses_commit_parent_when_selected() {
+    let resolved = resolve_diff_shas_for_context(
+      "merge123",
+      "base123",
+      "head123",
+      Some("commit999"),
+      Some("parent888"),
+    );
+    assert_eq!(
+      resolved,
+      Some(("parent888".to_string(), "commit999".to_string()))
+    );
+  }
+
+  #[test]
+  fn resolve_diff_shas_for_context_uses_merge_base_when_no_commit_selected() {
+    let resolved = resolve_diff_shas_for_context("merge123", "base123", "head123", None, None);
+    assert_eq!(
+      resolved,
+      Some(("merge123".to_string(), "head123".to_string()))
+    );
   }
 
   #[test]

@@ -6,6 +6,8 @@ export type CompareParams
   = Endpoints['GET /repos/{owner}/{repo}/compare/{basehead}']['parameters']
 export type PullRequestParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
+export type PullRequestCommitsParams
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/commits']['parameters']
 export type PullRequestCommentsParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
 export type CreatePullRequestCommentParams
@@ -18,6 +20,8 @@ export type DeletePullRequestCommentParams
   = Endpoints['DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}']['parameters']
 export type PullRequestFilesParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['parameters']
+export type CommitParams
+  = Endpoints['GET /repos/{owner}/{repo}/commits/{ref}']['parameters']
 export type SearchIssuesParams = Endpoints['GET /search/issues']['parameters']
 export type UserRepositoriesParams = Endpoints['GET /user/repos']['parameters']
 export type NotificationsParams = Endpoints['GET /notifications']['parameters']
@@ -29,6 +33,8 @@ export type PullRequestResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls']['response']['data'][number]
 export type PullRequestDetailsResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['response']['data']
+export type PullRequestCommitResponse
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/commits']['response']['data'][number]
 export type PullRequestCommentResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data'][number]
 export type CreatePullRequestCommentResponse
@@ -39,6 +45,8 @@ export type UpdatePullRequestCommentResponse
   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['response']['data']
 export type PullRequestFileResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['response']['data'][number]
+export type CommitResponse = Endpoints['GET /repos/{owner}/{repo}/commits/{ref}']['response']['data']
+export type CommitFileResponse = NonNullable<CommitResponse['files']>[number]
 export type SearchIssuesResponse = Endpoints['GET /search/issues']['response']['data']
 export type SearchIssuesItemResponse = SearchIssuesResponse['items'][number]
 export type UserRepositoryResponse = Endpoints['GET /user/repos']['response']['data'][number]
@@ -122,6 +130,47 @@ export async function fetchGithubPullRequest(
   return data
 }
 
+export async function fetchGithubPullRequestCommitsPage(
+  { token, params }:
+  { token: string, params: PullRequestCommitsParams },
+): Promise<PullRequestCommitResponse[]> {
+  const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}/commits', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
+export async function fetchGithubPullRequestCommitsAllPages(
+  { token, params, perPage = 100}: {
+    token: string
+    params: Omit<PullRequestCommitsParams, 'per_page' | 'page'>
+    perPage?: number
+  },
+): Promise<PullRequestCommitResponse[]> {
+  const commits: PullRequestCommitResponse[] = []
+  let page = 1
+
+  while (true) {
+    const data = await fetchGithubPullRequestCommitsPage({
+      token,
+      params: {
+        ...params,
+        per_page: perPage,
+        page,
+      },
+    })
+    commits.push(...data)
+
+    if (data.length < perPage) {
+      break
+    }
+    page += 1
+  }
+
+  return commits
+}
+
 export async function compareGithubRefs(
   { token, params }:
   { token: string, params: CompareParams },
@@ -166,6 +215,48 @@ export async function fetchGithubPullRequestFilesAllPages(
     files.push(...data)
 
     if (data.length < perPage) {
+      break
+    }
+    page += 1
+  }
+
+  return files
+}
+
+export async function fetchGithubCommit(
+  { token, params }:
+  { token: string, params: CommitParams },
+): Promise<CommitResponse> {
+  const { data } = await request('GET /repos/{owner}/{repo}/commits/{ref}', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
+export async function fetchGithubCommitFilesAllPages(
+  { token, params, perPage = 100}: {
+    token: string
+    params: Omit<CommitParams, 'per_page' | 'page'>
+    perPage?: number
+  },
+): Promise<CommitFileResponse[]> {
+  const files: CommitFileResponse[] = []
+  let page = 1
+
+  while (true) {
+    const commit = await fetchGithubCommit({
+      token,
+      params: {
+        ...params,
+        per_page: perPage,
+        page,
+      },
+    })
+    const pageFiles = commit.files ?? []
+    files.push(...pageFiles)
+
+    if (pageFiles.length < perPage) {
       break
     }
     page += 1

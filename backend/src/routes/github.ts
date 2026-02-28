@@ -1,4 +1,40 @@
-import type { CompareParams, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, DeletePullRequestCommentParams, GetContentParams, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueParameters, GithubIssueResponse, GithubRepositoryBranchesParameters, GithubRepositoryBranchesResponse, GithubRepositoryParameters, GithubRepositoryReadmeParameters, GithubRepositoryResponse, GithubRepositoryTreeParams, GithubRepositoryTreesResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestDetailsResponse, PullRequestParams, PullRequestResponse, SearchIssuesItemResponse, SearchIssuesParams, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse, UserRepositoriesParams, UserRepositoryResponse } from '../services/github.js'
+import type {
+  CompareParams,
+  CreatePullRequestCommentParams,
+  CreatePullRequestCommentReplyParams,
+  CreatePullRequestCommentReplyResponse,
+  CreatePullRequestCommentResponse,
+  DeletePullRequestCommentParams,
+  GetContentParams,
+  GithubIssueDetailsCommentParameters,
+  GithubIssueDetailsCommentResponse,
+  GithubIssueDetailsParameters,
+  GithubIssueParameters,
+  GithubIssueResponse,
+  GithubRepositoryBranchesParameters,
+  GithubRepositoryBranchesResponse,
+  GithubRepositoryParameters,
+  GithubRepositoryReadmeParameters,
+  GithubRepositoryResponse,
+  GithubRepositoryTreeParams,
+  GithubRepositoryTreesResponse,
+  ListPullsParams,
+  NotificationResponse,
+  NotificationsParams,
+  PullRequestCommentResponse,
+  PullRequestCommentsParams,
+  PullRequestCommitResponse,
+  PullRequestDetailsResponse,
+  PullRequestFileResponse,
+  PullRequestParams,
+  PullRequestResponse,
+  SearchIssuesItemResponse,
+  SearchIssuesParams,
+  UpdatePullRequestCommentParams,
+  UpdatePullRequestCommentResponse,
+  UserRepositoriesParams,
+  UserRepositoryResponse,
+} from '../services/github.js'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
@@ -9,9 +45,11 @@ import {
   createGithubPullRequestComment,
   createGithubPullRequestCommentReply,
   deleteGithubPullRequestComment,
+  fetchGithubCommitFilesAllPages,
   fetchGithubNotifications,
   fetchGithubPullRequest,
   fetchGithubPullRequestComments,
+  fetchGithubPullRequestCommitsAllPages,
   fetchGithubPullRequestFilesAllPages,
   fetchGithubPullRequests,
   fetchGithubRepository,
@@ -25,7 +63,6 @@ import {
   fetchGithubSearchIssues,
   fetchGithubUserRepositories,
   patchGithubPullRequestComment,
-
 } from '../services/github.js'
 
 interface GithubRepository {
@@ -100,6 +137,28 @@ interface GithubPullRequestDetails {
   labels: PullRequestDetailsResponse['labels']
   repository: GithubRepository
   head_repository: GithubRepository
+}
+
+interface GithubPullRequestCommitUser {
+  login: NonNullable<PullRequestCommitResponse['author']>['login']
+  avatar_url: NonNullable<PullRequestCommitResponse['author']>['avatar_url']
+}
+
+interface GithubPullRequestCommit {
+  sha: PullRequestCommitResponse['sha']
+  message: PullRequestCommitResponse['commit']['message']
+  authored_at: NonNullable<PullRequestCommitResponse['commit']['author']>['date'] | null
+  committed_at: NonNullable<PullRequestCommitResponse['commit']['committer']>['date'] | null
+  parent_sha: PullRequestCommitResponse['parents'][number]['sha'] | null
+  author: GithubPullRequestCommitUser | null
+  committer: GithubPullRequestCommitUser | null
+}
+
+interface GithubPullRequestFile {
+  filename: PullRequestFileResponse['filename']
+  status: PullRequestFileResponse['status']
+  patch: PullRequestFileResponse['patch']
+  previous_filename: PullRequestFileResponse['previous_filename']
 }
 
 interface GithubNotificationRepositoryOwner {
@@ -303,6 +362,49 @@ function mapGithubPullRequestReviewComment(
     line: comment.line,
     original_line: comment.original_line,
     side: comment.side,
+  }
+}
+
+function mapGithubPullRequestCommitUser(
+  user: PullRequestCommitResponse['author'] | PullRequestCommitResponse['committer'],
+): GithubPullRequestCommitUser | null {
+  if (!user) {
+    return null
+  }
+
+  return {
+    login: user.login,
+    avatar_url: user.avatar_url,
+  }
+}
+
+function mapGithubPullRequestCommit(
+  commit: PullRequestCommitResponse,
+): GithubPullRequestCommit {
+  return {
+    sha: commit.sha,
+    message: commit.commit.message,
+    authored_at: commit.commit.author?.date ?? null,
+    committed_at: commit.commit.committer?.date ?? null,
+    parent_sha: commit.parents.at(0)?.sha ?? null,
+    author: mapGithubPullRequestCommitUser(commit.author),
+    committer: mapGithubPullRequestCommitUser(commit.committer),
+  }
+}
+
+interface GithubPullRequestFileSource {
+  filename: string
+  status: string
+  patch?: string | null
+  previous_filename?: string | null
+}
+
+function mapGithubPullRequestFile(file: GithubPullRequestFileSource): GithubPullRequestFile {
+  return {
+    filename: file.filename,
+    status: file.status as GithubPullRequestFile['status'],
+    patch: file.patch ?? undefined,
+    previous_filename: file.previous_filename ?? undefined,
   }
 }
 
@@ -595,6 +697,7 @@ export const githubRoutes = githubRouter
   .get('/pr/:id/files', async (ctx) => {
     const { org, repo } = ctx.req.query()
     const pullNumber = Number(ctx.req.param('id'))
+    const commitSha = ctx.req.query('commitSha')?.trim()
 
     if (!org || !repo || Number.isNaN(pullNumber)) {
       return ctx.json({ error: 'Missing org, repo, or id' }, 400)
@@ -604,13 +707,54 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const files = await fetchGithubPullRequestFilesAllPages({ token: githubToken, params: {
-        owner: org,
-        repo,
-        pull_number: pullNumber,
-      } })
+      const files = commitSha
+        ? await fetchGithubCommitFilesAllPages({
+            token: githubToken,
+            params: {
+              owner: org,
+              repo,
+              ref: commitSha,
+            },
+          })
+        : await fetchGithubPullRequestFilesAllPages({
+            token: githubToken,
+            params: {
+              owner: org,
+              repo,
+              pull_number: pullNumber,
+            },
+          })
+      const mappedFiles = files.map(mapGithubPullRequestFile)
 
-      return ctx.json({ files }, 200)
+      return ctx.json({ files: mappedFiles }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/pr/:id/commits', async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const commits = await fetchGithubPullRequestCommitsAllPages({
+        token: githubToken,
+        params: {
+          owner: org,
+          repo,
+          pull_number: pullNumber,
+        },
+      })
+
+      const mappedCommits = commits.map(mapGithubPullRequestCommit)
+      return ctx.json({ commits: mappedCommits }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
