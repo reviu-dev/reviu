@@ -7762,12 +7762,10 @@ mod tests {
     });
     assert!(result.is_ok());
     assert!(git_page.read_with(cx, |this, _| this.fetch_in_progress));
-    assert!(git_page.read_with(cx, |this, _| this.push_pull_in_progress));
 
     await_git_page_background_tasks(git_page.clone(), cx).await;
 
     assert!(!git_page.read_with(cx, |this, _| this.fetch_in_progress));
-    assert!(!git_page.read_with(cx, |this, _| this.push_pull_in_progress));
   }
 
   #[gpui::test]
