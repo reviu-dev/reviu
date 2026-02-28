@@ -289,6 +289,16 @@ struct GithubPrOverviewConversationItem {
   body: Option<String>,
   path: Option<String>,
   review_state: Option<GithubPullRequestReviewState>,
+  replies: Vec<GithubPrOverviewConversationReply>,
+}
+
+#[derive(Clone, Debug)]
+struct GithubPrOverviewConversationReply {
+  id: u64,
+  timestamp: String,
+  author_login: String,
+  author_avatar_url: Option<String>,
+  body: String,
 }
 
 fn review_state_display_label(state: GithubPullRequestReviewState) -> &'static str {
@@ -313,6 +323,31 @@ fn conversation_source_priority(kind: GithubPrOverviewConversationItemKind) -> u
     GithubPrOverviewConversationItemKind::IssueComment => 0,
     GithubPrOverviewConversationItemKind::Review => 1,
     GithubPrOverviewConversationItemKind::ReviewComment => 2,
+  }
+}
+
+fn resolve_review_comment_thread_root_id(
+  comment: &GithubPullRequestReviewComment,
+  comments_by_id: &HashMap<u64, &GithubPullRequestReviewComment>,
+) -> u64 {
+  let mut root_id = comment.id;
+  let mut parent = comment.in_reply_to_id;
+  for _ in 0..64 {
+    let Some(parent_id) = parent else {
+      break;
+    };
+    if parent_id == root_id {
+      break;
+    }
+    root_id = parent_id;
+    parent = comments_by_id
+      .get(&parent_id)
+      .and_then(|value| value.in_reply_to_id);
+  }
+  if comments_by_id.contains_key(&root_id) {
+    root_id
+  } else {
+    comment.id
   }
 }
 
@@ -345,6 +380,7 @@ fn build_overview_conversation_items(
       }),
       path: None,
       review_state: None,
+      replies: Vec::new(),
     }
   }));
 
@@ -372,26 +408,67 @@ fn build_overview_conversation_items(
       body,
       path: None,
       review_state: Some(review.state),
+      replies: Vec::new(),
     })
   }));
 
-  items.extend(review_comments.iter().map(|comment| {
-    let body = comment.body.trim();
-    GithubPrOverviewConversationItem {
+  let comments_by_id: HashMap<u64, &GithubPullRequestReviewComment> =
+    review_comments.iter().map(|comment| (comment.id, comment)).collect();
+  let mut threads: HashMap<u64, Vec<&GithubPullRequestReviewComment>> = HashMap::new();
+  for comment in review_comments {
+    let root_id = resolve_review_comment_thread_root_id(comment, &comments_by_id);
+    threads.entry(root_id).or_default().push(comment);
+  }
+
+  for mut thread_comments in threads.into_values() {
+    thread_comments.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+
+    let root_comment = thread_comments
+      .iter()
+      .find(|comment| comment.in_reply_to_id.is_none())
+      .copied()
+      .or_else(|| thread_comments.first().copied());
+    let Some(root_comment) = root_comment else {
+      continue;
+    };
+
+    let body = root_comment.body.trim();
+    let replies = thread_comments
+      .iter()
+      .copied()
+      .filter(|comment| comment.id != root_comment.id)
+      .map(|comment| GithubPrOverviewConversationReply {
+        id: comment.id,
+        timestamp: comment.created_at.clone(),
+        author_login: comment.user.login.clone(),
+        author_avatar_url: comment.user.avatar_url.clone(),
+        body: {
+          let body = comment.body.trim();
+          if body.is_empty() {
+            "No comment body.".to_string()
+          } else {
+            body.to_string()
+          }
+        },
+      })
+      .collect();
+
+    items.push(GithubPrOverviewConversationItem {
       kind: GithubPrOverviewConversationItemKind::ReviewComment,
-      id: comment.id,
-      timestamp: comment.created_at.clone(),
-      author_login: comment.user.login.clone(),
-      author_avatar_url: comment.user.avatar_url.clone(),
+      id: root_comment.id,
+      timestamp: root_comment.created_at.clone(),
+      author_login: root_comment.user.login.clone(),
+      author_avatar_url: root_comment.user.avatar_url.clone(),
       body: Some(if body.is_empty() {
         "No comment body.".to_string()
       } else {
         body.to_string()
       }),
-      path: Some(comment.path.clone()),
+      path: Some(root_comment.path.clone()),
       review_state: None,
-    }
-  }));
+      replies,
+    });
+  }
 
   items.sort_by(|a, b| {
     a.timestamp
@@ -3388,8 +3465,10 @@ impl GithubPrDetailsPage {
         .children(items.into_iter().map(|item| {
           let timestamp = format_compact_datetime(&item.timestamp);
           let scope_id = overview_conversation_scope_id(pr.number, item.kind, item.id);
+          let parent_item_id = item.id;
           let type_label = overview_conversation_kind_label(item.kind);
           let body = item.body.clone();
+          let replies = item.replies.clone();
           let markdown_options = MarkdownRenderOptions::with_on_link(link_handler.clone())
             .with_state(self.description_markdown_state.clone())
             .with_github_issue_reference_context(
@@ -3456,6 +3535,67 @@ impl GithubPrDetailsPage {
                   .text_xs()
                   .text_color(theme.muted_foreground)
                   .child(format!("File: {path}")),
+              )
+            })
+            .when(!replies.is_empty(), |this| {
+              this.child(
+                v_flex()
+                  .gap_2()
+                  .pl_3()
+                  .border_l_1()
+                  .border_color(theme.border)
+                  .children(replies.into_iter().map(|reply| {
+                    let reply_timestamp = format_compact_datetime(&reply.timestamp);
+                    let reply_scope_id = scope_id
+                      .wrapping_mul(1_000_003)
+                      .wrapping_add(reply.id as usize);
+                    let reply_markdown_options =
+                      MarkdownRenderOptions::with_on_link(link_handler.clone())
+                        .with_state(self.description_markdown_state.clone())
+                        .with_github_issue_reference_context(
+                          pr.repository.owner.as_str(),
+                          pr.repository.repo.as_str(),
+                        )
+                        .with_scope_id(reply_scope_id);
+
+                    v_flex()
+                      .id(format!(
+                        "pr-overview-conversation-reply-{}-{}",
+                        parent_item_id, reply.id
+                      ))
+                      .gap_1()
+                      .child(
+                        h_flex()
+                          .items_center()
+                          .gap_2()
+                          .flex_wrap()
+                          .child(
+                            Avatar::new()
+                              .name(reply.author_login.clone())
+                              .when_some(reply.author_avatar_url.clone(), |this, url| this.src(url))
+                              .small(),
+                          )
+                          .child(
+                            div()
+                              .text_sm()
+                              .text_color(theme.foreground)
+                              .child(reply.author_login.clone()),
+                          )
+                          .child(
+                            div()
+                              .text_xs()
+                              .text_color(theme.muted_foreground)
+                              .child(reply_timestamp),
+                          )
+                          .child(Tag::secondary().small().rounded_full().child("Reply")),
+                      )
+                      .child(render_markdown(
+                        reply.body.as_str(),
+                        &reply_markdown_options,
+                        cx,
+                      ))
+                      .into_any_element()
+                  })),
               )
             })
             .into_any_element()
@@ -4936,8 +5076,25 @@ mod tests {
     ];
 
     let items = build_overview_conversation_items(&[], &[], &review_comments);
-    let ids = items.iter().map(|item| item.id).collect::<Vec<_>>();
-    assert_eq!(ids, vec![1, 2]);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, 1);
+    assert_eq!(items[0].replies.len(), 1);
+    assert_eq!(items[0].replies[0].id, 2);
+  }
+
+  #[test]
+  fn build_overview_conversation_items_groups_nested_reply_chains_on_root_comment() {
+    let review_comments = vec![
+      make_review_comment(1, "2026-02-28T10:00:00Z", None),
+      make_review_comment(2, "2026-02-28T10:01:00Z", Some(1)),
+      make_review_comment(3, "2026-02-28T10:02:00Z", Some(2)),
+    ];
+
+    let items = build_overview_conversation_items(&[], &[], &review_comments);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, 1);
+    let reply_ids = items[0].replies.iter().map(|reply| reply.id).collect::<Vec<_>>();
+    assert_eq!(reply_ids, vec![2, 3]);
   }
 
   #[test]
