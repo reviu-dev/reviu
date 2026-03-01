@@ -3190,6 +3190,7 @@ impl GithubPrDetailsPage {
             this.schedule_code_reference_fetches(description_requests.iter(), cx);
             this.sync_review_comments(cx);
             this.maybe_fetch_selected_file_contents(cx);
+            this.prefetch_overview_root_review_comment_files(cx);
           }
           Err(error) => {
             let error_message = error.to_string();
