@@ -50,11 +50,24 @@ pub(crate) fn is_unauthorized_error_message(error: &str) -> bool {
   error.to_ascii_lowercase().contains("unauthorized")
 }
 
+pub(crate) fn logins_match_case_insensitive(left: &str, right: &str) -> bool {
+  left.eq_ignore_ascii_case(right)
+}
+
+pub(crate) fn normalize_non_empty_text(value: &str) -> Option<String> {
+  let trimmed = value.trim();
+  if trimmed.is_empty() {
+    None
+  } else {
+    Some(trimmed.to_string())
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::{
-    is_unauthorized_error_message, issue_url, line_snippets_from_content, pr_url, repo_label,
-    short_sha,
+    is_unauthorized_error_message, issue_url, line_snippets_from_content,
+    logins_match_case_insensitive, normalize_non_empty_text, pr_url, repo_label, short_sha,
   };
 
   #[test]
@@ -109,5 +122,20 @@ mod tests {
     assert!(is_unauthorized_error_message("unauthorized"));
     assert!(is_unauthorized_error_message("HTTP 401 Unauthorized"));
     assert!(!is_unauthorized_error_message("unexpected status: 500"));
+  }
+
+  #[test]
+  fn login_comparison_is_case_insensitive() {
+    assert!(logins_match_case_insensitive("OctoCat", "octocat"));
+    assert!(!logins_match_case_insensitive("octocat", "hubot"));
+  }
+
+  #[test]
+  fn normalize_non_empty_text_trims_and_rejects_blank_values() {
+    assert_eq!(
+      normalize_non_empty_text("  hello world  "),
+      Some("hello world".to_string())
+    );
+    assert_eq!(normalize_non_empty_text(" \n\t "), None);
   }
 }
