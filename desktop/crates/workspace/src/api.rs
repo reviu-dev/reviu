@@ -2419,7 +2419,10 @@ mod tests {
       .expect("lock request line")
       .clone()
       .unwrap_or_default();
-    assert_eq!(request_line, "PATCH /github/repos/acme/widget/issues/77 HTTP/1.1");
+    assert_eq!(
+      request_line,
+      "PATCH /github/repos/acme/widget/issues/77 HTTP/1.1"
+    );
   }
 
   #[test]
@@ -2667,7 +2670,10 @@ mod tests {
       .expect("lock request line")
       .clone()
       .unwrap_or_default();
-    assert_eq!(request_line, "PATCH /github/pr/42?org=acme&repo=widget HTTP/1.1");
+    assert_eq!(
+      request_line,
+      "PATCH /github/pr/42?org=acme&repo=widget HTTP/1.1"
+    );
   }
 
   #[test]
@@ -3566,7 +3572,9 @@ mod tests {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
     let api = make_test_api_client(base_url);
 
-    let err = api.update_issue_description("acme", "widget", 77, "Body").err();
+    let err = api
+      .update_issue_description("acme", "widget", 77, "Body")
+      .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");

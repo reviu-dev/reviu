@@ -3495,100 +3495,100 @@ impl Editor {
         let is_reply_submitting = self.review_comment_reply_submitting;
         let reply_block: gpui::AnyElement =
           if let Some(input_state) = self.review_comment_reply_input.clone() {
-          let cancel_editor = editor_entity.clone();
-          let save_editor = editor_entity.clone();
-          let reply_error = self.review_comment_reply_error.clone();
-          v_flex()
-            .on_action(cx.listener(Self::on_review_comment_reply_input_escape))
-            .pt(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
-            .pb(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
-            .gap(px(REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX))
-            .border_t(px(REVIEW_COMMENT_REPLY_BORDER_TOP_PX))
-            .border_color(theme.border)
-            .child(
-              h_flex()
-                .items_center()
-                .gap_2()
-                .child(div().text_sm().text_color(theme.foreground).child("You")),
-            )
-            .child(
-              v_flex()
-                .gap(px(REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX))
-                .child(
-                  Input::new(&input_state)
-                    .disabled(is_reply_submitting)
-                    .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
-                )
-                .child(
-                  h_flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .child(
-                      div()
-                        .flex_1()
-                        .min_w_0()
-                        .when_some(reply_error, |this, error| {
-                          this.child(
+            let cancel_editor = editor_entity.clone();
+            let save_editor = editor_entity.clone();
+            let reply_error = self.review_comment_reply_error.clone();
+            v_flex()
+              .on_action(cx.listener(Self::on_review_comment_reply_input_escape))
+              .pt(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
+              .pb(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
+              .gap(px(REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX))
+              .border_t(px(REVIEW_COMMENT_REPLY_BORDER_TOP_PX))
+              .border_color(theme.border)
+              .child(
+                h_flex()
+                  .items_center()
+                  .gap_2()
+                  .child(div().text_sm().text_color(theme.foreground).child("You")),
+              )
+              .child(
+                v_flex()
+                  .gap(px(REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX))
+                  .child(
+                    Input::new(&input_state)
+                      .disabled(is_reply_submitting)
+                      .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
+                  )
+                  .child(
+                    h_flex()
+                      .items_center()
+                      .justify_between()
+                      .gap_2()
+                      .child(
+                        div()
+                          .flex_1()
+                          .min_w_0()
+                          .when_some(reply_error, |this, error| {
+                            this.child(
+                              div()
+                                .text_xs()
+                                .text_color(theme.status_red())
+                                .overflow_hidden()
+                                .text_ellipsis_start()
+                                .child(error.as_ref().to_string()),
+                            )
+                          }),
+                      )
+                      .child(
+                        h_flex()
+                          .items_center()
+                          .gap_2()
+                          .child(
                             div()
-                              .text_xs()
-                              .text_color(theme.status_red())
-                              .overflow_hidden()
-                              .text_ellipsis_start()
-                              .child(error.as_ref().to_string()),
+                              .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                              })
+                              .child(
+                                Button::new(format!("review-comment-reply-cancel-{}", reply_to_id))
+                                  .ghost()
+                                  .xsmall()
+                                  .compact()
+                                  .label("Cancel")
+                                  .disabled(is_reply_submitting)
+                                  .on_click(move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    cancel_editor.update(cx, |editor, cx| {
+                                      editor.cancel_review_comment_reply(cx);
+                                    });
+                                  }),
+                              ),
                           )
-                        }),
-                    )
-                    .child(
-                      h_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                          div()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                              cx.stop_propagation();
-                            })
-                            .child(
-                              Button::new(format!("review-comment-reply-cancel-{}", reply_to_id))
-                                .ghost()
-                                .xsmall()
-                                .compact()
-                                .label("Cancel")
-                                .disabled(is_reply_submitting)
-                                .on_click(move |_, _, cx| {
-                                  cx.stop_propagation();
-                                  cancel_editor.update(cx, |editor, cx| {
-                                    editor.cancel_review_comment_reply(cx);
-                                  });
-                                }),
-                            ),
-                        )
-                        .child(
-                          div()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                              cx.stop_propagation();
-                            })
-                            .child(
-                              Button::new(format!("review-comment-reply-save-{}", reply_to_id))
-                                .xsmall()
-                                .compact()
-                                .label("Save")
-                                .disabled(!can_save_review_comment_reply || is_reply_submitting)
-                                .on_click(move |_, window, cx| {
-                                  cx.stop_propagation();
-                                  save_editor.update(cx, |editor, cx| {
-                                    editor.save_review_comment_reply(window, cx);
-                                  });
-                                }),
-                            ),
-                        ),
-                    ),
-                ),
-            )
-            .into_any_element()
-        } else {
-          div().into_any_element()
-        };
+                          .child(
+                            div()
+                              .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                              })
+                              .child(
+                                Button::new(format!("review-comment-reply-save-{}", reply_to_id))
+                                  .xsmall()
+                                  .compact()
+                                  .label("Save")
+                                  .disabled(!can_save_review_comment_reply || is_reply_submitting)
+                                  .on_click(move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    save_editor.update(cx, |editor, cx| {
+                                      editor.save_review_comment_reply(window, cx);
+                                    });
+                                  }),
+                              ),
+                          ),
+                      ),
+                  ),
+              )
+              .into_any_element()
+          } else {
+            div().into_any_element()
+          };
 
         thread_messages = thread_messages.child(reply_block);
       }
