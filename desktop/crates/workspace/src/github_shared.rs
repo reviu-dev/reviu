@@ -167,6 +167,9 @@ mod tests {
 
   #[test]
   fn next_trimmed_text_update_allows_empty_string_to_clear_value() {
-    assert_eq!(next_trimmed_text_update("   ", "hello world"), Some(String::new()));
+    assert_eq!(
+      next_trimmed_text_update("   ", "hello world"),
+      Some(String::new())
+    );
   }
 }
