@@ -26,10 +26,9 @@ use crate::{
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::format_compact_datetime,
-  github_shared,
   github_navigation::{open_pr_target, open_repo_target},
   github_pr_details_page::GithubPrDetailsPageHandle,
-  sentry_context,
+  github_shared, sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 
