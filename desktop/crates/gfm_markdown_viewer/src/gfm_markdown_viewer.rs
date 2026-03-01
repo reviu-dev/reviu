@@ -18,7 +18,7 @@ use comrak::{
   parse_document,
 };
 use gpui::{
-  AnyElement, App, Bounds, ClipboardItem, CursorStyle, DispatchPhase, Element, ElementId,
+  AnyElement, App, Bounds, ClipboardItem, CursorStyle, DispatchPhase, Div, Element, ElementId,
   FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, ImageCacheError,
   ImgResourceLoader, InspectorElementId, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
   MouseUpEvent, ObjectFit, Pixels, RenderImage, Resource, SharedString, StrikethroughStyle,
@@ -1238,7 +1238,7 @@ fn short_github_reference(reference: &str) -> String {
 pub fn render_github_code_reference_preview_card(
   preview: &GithubCodeReferencePreview,
   cx: &App,
-) -> AnyElement {
+) -> Div {
   let theme = cx.theme();
   let link_color = github_link_color(theme.background);
   let mut preview_id_hasher = DefaultHasher::new();
@@ -1394,7 +1394,6 @@ pub fn render_github_code_reference_preview_card(
             ),
         ),
     )
-    .into_any_element()
 }
 
 pub fn estimate_github_code_reference_preview_height_px(
