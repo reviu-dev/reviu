@@ -67,6 +67,11 @@ export type GithubIssueDetailsResponse = Endpoints['GET /repos/{owner}/{repo}/is
 export type GithubIssueDetailsParameters = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}']['parameters']
 export type GithubIssueDetailsCommentResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}/comments']['response']['data'][number]
 export type GithubIssueDetailsCommentParameters = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}/comments']['parameters']
+export type CreateIssueCommentParams = Endpoints['POST /repos/{owner}/{repo}/issues/{issue_number}/comments']['parameters']
+export type CreateIssueCommentResponse = Endpoints['POST /repos/{owner}/{repo}/issues/{issue_number}/comments']['response']['data']
+export type UpdateIssueCommentParams = Endpoints['PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}']['parameters']
+export type UpdateIssueCommentResponse = Endpoints['PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}']['response']['data']
+export type DeleteIssueCommentParams = Endpoints['DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}']['parameters']
 export type GithubRepositoryResponse = Endpoints['GET /repos/{owner}/{repo}']['response']['data']
 export type GithubRepositoryParameters = Endpoints['GET /repos/{owner}/{repo}']['parameters']
 export type GithubRepositoryTreesResponse = Endpoints['GET /repos/{owner}/{repo}/git/trees/{tree_sha}']['response']['data']
@@ -403,6 +408,38 @@ export async function fetchGithubRepositoryIssueComments(
     headers: githubAuthHeaders(token),
   })
   return data
+}
+
+export async function createGithubIssueComment(
+  { token, params }:
+  { token: string, params: CreateIssueCommentParams },
+): Promise<CreateIssueCommentResponse> {
+  const { data } = await request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
+export async function patchGithubIssueComment(
+  { token, params }:
+  { token: string, params: UpdateIssueCommentParams },
+): Promise<UpdateIssueCommentResponse> {
+  const { data } = await request('PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
+export async function deleteGithubIssueComment(
+  { token, params }:
+  { token: string, params: DeleteIssueCommentParams },
+): Promise<void> {
+  await request('DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
 }
 
 export async function fetchGithubRepositoryTrees(

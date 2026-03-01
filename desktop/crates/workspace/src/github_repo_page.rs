@@ -37,17 +37,17 @@ use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage,
-  DETAILS_PAGE_CONTAINER_MAX_WIDTH, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileHandler,
-  StatusThemeExt as _, UiIconName, WindowExt, file_icon_path_for_name_with_theme, h_resizable,
-  parse_github_url_action, resizable_panel,
+  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
+  DETAILS_PAGE_CONTAINER_MAX_WIDTH, FILE_ICON_SIZE_PX, Input, InputState, SearchFileEntry,
+  SearchFileHandler, StatusThemeExt as _, UiIconName, WindowExt,
+  file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
 };
 
 use crate::{
   ShowCommandPalette, ShowFileSearch,
   api::{
-    ApiClient, GithubIssue, GithubIssueDetails, GithubIssueStateReason, GithubIssueUser,
-    GithubPullRequest, GithubRepositoryDetails,
+    ApiClient, GithubIssue, GithubIssueDetails, GithubIssueDetailsComment, GithubIssueStateReason,
+    GithubIssueUser, GithubPullRequest, GithubRepositoryDetails,
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_compact_datetime, format_long_date_opt},
@@ -467,6 +467,58 @@ fn issue_comment_markdown_body_or_fallback(body: Option<&str>) -> SharedString {
     .into()
 }
 
+fn current_github_login(cx: &App) -> Option<String> {
+  match AuthStateStore::get(cx) {
+    AuthState::Authenticated(user) => user
+      .github_login
+      .or_else(|| github_shared::normalize_non_empty_text(user.name.as_str())),
+    _ => None,
+  }
+}
+
+fn issue_details_comment_owned_by_login(comment: &GithubIssueDetailsComment, login: &str) -> bool {
+  comment
+    .user
+    .as_ref()
+    .is_some_and(|user| github_shared::logins_match_case_insensitive(user.login.as_str(), login))
+}
+
+fn upsert_issue_details_comment_local(
+  comments: &mut Vec<GithubIssueDetailsComment>,
+  comment: GithubIssueDetailsComment,
+) {
+  if let Some(existing) = comments
+    .iter_mut()
+    .find(|existing| existing.id == comment.id)
+  {
+    *existing = comment;
+    return;
+  }
+  comments.push(comment);
+}
+
+fn remove_issue_details_comment_local(
+  comments: &mut Vec<GithubIssueDetailsComment>,
+  comment_id: u64,
+) -> Option<(usize, GithubIssueDetailsComment)> {
+  let (index, removed) = comments
+    .iter()
+    .enumerate()
+    .find(|(_, comment)| comment.id == comment_id)
+    .map(|(index, comment)| (index, comment.clone()))?;
+  comments.remove(index);
+  Some((index, removed))
+}
+
+fn restore_issue_details_comment_local(
+  comments: &mut Vec<GithubIssueDetailsComment>,
+  index: usize,
+  comment: GithubIssueDetailsComment,
+) {
+  let insert_index = index.min(comments.len());
+  comments.insert(insert_index, comment);
+}
+
 fn issue_description_scope_id(issue_id: u64) -> usize {
   (issue_id as usize).wrapping_mul(1_000_003).wrapping_add(1)
 }
@@ -528,6 +580,7 @@ fn readme_image_base_url(
 const ISSUE_DETAILS_SHEET_WIDTH_PX: f32 = 850.0;
 const ISSUE_DETAILS_SHEET_MIN_WIDTH_PX: f32 = 600.0;
 const ISSUE_DETAILS_SHEET_MAX_WIDTH_PX: f32 = 1200.0;
+const ISSUE_COMMENT_INPUT_HEIGHT_PX: f32 = 100.0;
 
 #[derive(Clone)]
 struct IssueSheetResizeDrag;
@@ -1063,6 +1116,14 @@ struct GithubIssueDetailsSheetView {
   pending_comment_scroll_id: Option<u64>,
   pending_comment_scroll_attempts: u8,
   request_generation: u64,
+  comment_input: Option<Entity<InputState>>,
+  comment_input_submitting: bool,
+  comment_input_error: Option<SharedString>,
+  edit_input: Option<Entity<InputState>>,
+  editing_comment_id: Option<u64>,
+  edit_initial_body: Option<String>,
+  edit_submitting: bool,
+  edit_error: Option<SharedString>,
 }
 
 impl GithubIssueDetailsSheetView {
@@ -1093,6 +1154,14 @@ impl GithubIssueDetailsSheetView {
       pending_comment_scroll_id: issue_comment_id,
       pending_comment_scroll_attempts: if issue_comment_id.is_some() { 4 } else { 0 },
       request_generation: 0,
+      comment_input: None,
+      comment_input_submitting: false,
+      comment_input_error: None,
+      edit_input: None,
+      editing_comment_id: None,
+      edit_initial_body: None,
+      edit_submitting: false,
+      edit_error: None,
     };
     this.load_issue(owner, repo, issue_number, cx);
     this
@@ -1110,6 +1179,12 @@ impl GithubIssueDetailsSheetView {
     self.description_references.clear();
     self.comment_references.clear();
     self.request_generation = self.request_generation.saturating_add(1);
+    self.comment_input_submitting = false;
+    self.comment_input_error = None;
+    self.editing_comment_id = None;
+    self.edit_initial_body = None;
+    self.edit_submitting = false;
+    self.edit_error = None;
     let generation = self.request_generation;
 
     let api = self.api.clone();
@@ -1304,6 +1379,308 @@ impl GithubIssueDetailsSheetView {
       _ => false,
     }
   }
+
+  fn editable_issue_comment_ids(&self, cx: &App) -> HashSet<u64> {
+    let Some(login) = current_github_login(cx) else {
+      return HashSet::new();
+    };
+    let Some(issue) = self.issue.as_ref() else {
+      return HashSet::new();
+    };
+
+    issue
+      .comments
+      .iter()
+      .filter_map(|comment| {
+        issue_details_comment_owned_by_login(comment, login.as_str()).then_some(comment.id)
+      })
+      .collect()
+  }
+
+  fn ensure_comment_input(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<InputState> {
+    if let Some(input) = self.comment_input.as_ref() {
+      return input.clone();
+    }
+
+    let input = cx.new(|cx| {
+      InputState::new(window, cx)
+        .multi_line(true)
+        .rows(6)
+        .placeholder("Add comment...")
+    });
+    self.comment_input = Some(input.clone());
+    input
+  }
+
+  fn ensure_edit_input(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<InputState> {
+    if let Some(input) = self.edit_input.as_ref() {
+      return input.clone();
+    }
+
+    let input = cx.new(|cx| {
+      InputState::new(window, cx)
+        .multi_line(true)
+        .rows(6)
+        .placeholder("Edit comment...")
+    });
+    self.edit_input = Some(input.clone());
+    input
+  }
+
+  fn clear_edit_state(&mut self) {
+    self.editing_comment_id = None;
+    self.edit_initial_body = None;
+    self.edit_submitting = false;
+    self.edit_error = None;
+  }
+
+  fn upsert_issue_comment(&mut self, comment: crate::api::GithubIssueDetailsComment) {
+    let Some(issue) = self.issue.as_mut() else {
+      return;
+    };
+    upsert_issue_details_comment_local(&mut issue.comments, comment);
+  }
+
+  fn start_issue_comment_edit(
+    &mut self,
+    comment_id: u64,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.comment_input_submitting || self.edit_submitting {
+      return;
+    }
+    if !self.editable_issue_comment_ids(cx).contains(&comment_id) {
+      return;
+    }
+    let Some(issue) = self.issue.as_ref() else {
+      return;
+    };
+    let Some(comment) = issue
+      .comments
+      .iter()
+      .find(|comment| comment.id == comment_id)
+    else {
+      return;
+    };
+    let initial_body = comment.body.clone().unwrap_or_default();
+
+    let input = self.ensure_edit_input(window, cx);
+    let initial_body_for_input = initial_body.clone();
+    input.update(cx, |state, cx| {
+      state.set_value(initial_body_for_input.clone(), window, cx);
+    });
+    let input_for_focus = input.clone();
+    window.on_next_frame(move |window, cx| {
+      input_for_focus.update(cx, |state, cx| {
+        state.focus(window, cx);
+      });
+    });
+
+    self.editing_comment_id = Some(comment_id);
+    self.edit_initial_body = Some(initial_body);
+    self.edit_error = None;
+    cx.notify();
+  }
+
+  fn cancel_issue_comment_edit(&mut self, cx: &mut Context<Self>) {
+    if self.edit_submitting || self.editing_comment_id.is_none() {
+      return;
+    }
+    self.clear_edit_state();
+    cx.notify();
+  }
+
+  fn submit_issue_comment_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.comment_input_submitting || self.edit_submitting {
+      return;
+    }
+    let Some(input) = self.comment_input.as_ref() else {
+      return;
+    };
+    let Some(body) = github_shared::normalize_non_empty_text(input.read(cx).value().as_str())
+    else {
+      return;
+    };
+
+    self.comment_input_submitting = true;
+    self.comment_input_error = None;
+    cx.notify();
+
+    let owner = self.owner.clone();
+    let repo = self.repo.clone();
+    let issue_number = self.issue_number;
+    let api = self.api.clone();
+    let task = cx.spawn_in(window, async move |this, cx| {
+      let result =
+        unblock(move || api.create_issue_comment(&owner, &repo, issue_number, body.as_str())).await;
+
+      let _ = this.update_in(cx, |this, window, cx| {
+        this.comment_input_submitting = false;
+        match result {
+          Ok(comment) => {
+            this.upsert_issue_comment(comment);
+            this.comment_input_error = None;
+            if let Some(input_state) = this.comment_input.clone() {
+              input_state.update(cx, |state, cx| {
+                state.set_value("", window, cx);
+              });
+            }
+          }
+          Err(error) => {
+            this.comment_input_error = Some(error.to_string().into());
+          }
+        }
+        cx.notify();
+      });
+    });
+    self.task = Some(task);
+  }
+
+  fn submit_issue_comment_edit(&mut self, cx: &mut Context<Self>) {
+    if self.comment_input_submitting || self.edit_submitting {
+      return;
+    }
+    let Some(comment_id) = self.editing_comment_id else {
+      return;
+    };
+    if !self.editable_issue_comment_ids(cx).contains(&comment_id) {
+      return;
+    }
+    let Some(input) = self.edit_input.as_ref() else {
+      return;
+    };
+    let Some(initial_body) = self.edit_initial_body.as_deref() else {
+      return;
+    };
+    let raw_value = input.read(cx).value().to_string();
+    let Some(next_body) = ({
+      let next_body = github_shared::normalize_non_empty_text(raw_value.as_str());
+      match next_body {
+        Some(ref value) if value == initial_body.trim() => None,
+        other => other,
+      }
+    }) else {
+      self.clear_edit_state();
+      cx.notify();
+      return;
+    };
+
+    self.edit_submitting = true;
+    self.edit_error = None;
+    cx.notify();
+
+    let owner = self.owner.clone();
+    let repo = self.repo.clone();
+    let issue_number = self.issue_number;
+    let api = self.api.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.update_issue_comment(&owner, &repo, issue_number, comment_id, next_body.as_str())
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.edit_submitting = false;
+        match result {
+          Ok(comment) => {
+            this.upsert_issue_comment(comment);
+            this.clear_edit_state();
+          }
+          Err(error) => {
+            this.edit_error = Some(error.to_string().into());
+          }
+        }
+        cx.notify();
+      });
+    });
+    self.task = Some(task);
+  }
+
+  fn confirm_issue_comment_delete(
+    &mut self,
+    comment_id: u64,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.comment_input_submitting || self.edit_submitting {
+      return;
+    }
+    if !self.editable_issue_comment_ids(cx).contains(&comment_id) {
+      return;
+    }
+
+    let title: SharedString = "Delete comment?".into();
+    let message: SharedString = "This comment will be permanently deleted.".into();
+    let view = cx.entity();
+
+    window.open_dialog(cx, move |dialog, _, _| {
+      let view = view.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text("Delete")
+        .cancel_text("Cancel")
+        .destructive()
+        .on_confirm(move |_, _, cx| {
+          view.update(cx, |this, cx| {
+            this.submit_issue_comment_delete(comment_id, cx);
+          });
+          true
+        })
+        .build(dialog)
+    });
+  }
+
+  fn submit_issue_comment_delete(&mut self, comment_id: u64, cx: &mut Context<Self>) {
+    if self.comment_input_submitting || self.edit_submitting {
+      return;
+    }
+    let Some(issue) = self.issue.as_mut() else {
+      return;
+    };
+    let Some((removed_index, removed_comment)) =
+      remove_issue_details_comment_local(&mut issue.comments, comment_id)
+    else {
+      return;
+    };
+    self.comment_input_submitting = true;
+    self.comment_input_error = None;
+    cx.notify();
+
+    let owner = self.owner.clone();
+    let repo = self.repo.clone();
+    let issue_number = self.issue_number;
+    let api = self.api.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.delete_issue_comment(&owner, &repo, issue_number, comment_id)).await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.comment_input_submitting = false;
+        if let Err(error) = result {
+          if let Some(issue) = this.issue.as_mut() {
+            restore_issue_details_comment_local(
+              &mut issue.comments,
+              removed_index,
+              removed_comment.clone(),
+            );
+          }
+          this.comment_input_error = Some(error.to_string().into());
+        } else if this.editing_comment_id == Some(comment_id) {
+          this.clear_edit_state();
+        }
+        cx.notify();
+      });
+    });
+    self.task = Some(task);
+  }
 }
 
 impl Focusable for GithubIssueDetailsSheetView {
@@ -1377,22 +1754,28 @@ impl Render for GithubIssueDetailsSheetView {
           .rounded_full()
           .child(label.name.clone())
       });
+      let editable_issue_comment_ids = self.editable_issue_comment_ids(cx);
+      let comment_submission_in_flight = self.comment_input_submitting || self.edit_submitting;
+      let editing_comment_id = self.editing_comment_id;
+      let issue_details_page = cx.entity().clone();
+      let comment_input = self.ensure_comment_input(window, cx);
 
       let mut comments_rows = v_flex().gap_2();
       let mut pending_comment_anchor: Option<ScrollAnchor> = None;
       let mut pending_comment_found = false;
       for comment in &issue.comments {
+        let comment_id = comment.id;
         let comment_author = issue_user_display_name(comment.user.as_ref());
         let comment_created_at = format_compact_datetime(&comment.created_at);
         let comment_updated_at = format_compact_datetime(&comment.updated_at);
         let comment_body = issue_comment_markdown_body_or_fallback(comment.body.as_deref());
         let comment_previews = self
           .comment_references
-          .get(&comment.id)
+          .get(&comment_id)
           .and_then(|references| {
             github_code_reference_preview_map(references, &self.code_reference_cache)
           });
-        let comment_anchor = if self.pending_comment_scroll_id == Some(comment.id) {
+        let comment_anchor = if self.pending_comment_scroll_id == Some(comment_id) {
           pending_comment_found = true;
           let anchor = ScrollAnchor::for_handle(self.scroll_handle.clone());
           pending_comment_anchor = Some(anchor.clone());
@@ -1400,10 +1783,123 @@ impl Render for GithubIssueDetailsSheetView {
         } else {
           None
         };
+        let is_editable = editable_issue_comment_ids.contains(&comment_id);
+        let is_editing = editing_comment_id == Some(comment_id);
+        let edit_button = if is_editable && !comment_submission_in_flight && !is_editing {
+          let page = issue_details_page.clone();
+          Some(
+            Button::new(format!("issue-sheet-comment-edit-{}", comment_id))
+              .ghost()
+              .xsmall()
+              .compact()
+              .icon(UiIconName::SquarePen)
+              .tooltip("Edit comment")
+              .on_click(move |_, window, cx| {
+                page.update(cx, |this, cx| {
+                  this.start_issue_comment_edit(comment_id, window, cx);
+                });
+              })
+              .into_any_element(),
+          )
+        } else {
+          None
+        };
+        let delete_button = if is_editable && !comment_submission_in_flight {
+          let page = issue_details_page.clone();
+          Some(
+            Button::new(format!("issue-sheet-comment-delete-{}", comment_id))
+              .ghost()
+              .xsmall()
+              .compact()
+              .icon(IconName::Delete)
+              .tooltip("Delete comment")
+              .on_click(move |_, window, cx| {
+                page.update(cx, |this, cx| {
+                  this.confirm_issue_comment_delete(comment_id, window, cx);
+                });
+              })
+              .into_any_element(),
+          )
+        } else {
+          None
+        };
+
+        let comment_body_element = if is_editing {
+          if let Some(input_state) = self.edit_input.clone() {
+            let can_save = self
+              .edit_initial_body
+              .as_deref()
+              .and_then(|initial| {
+                let raw_value = input_state.read(cx).value().to_string();
+                let next_body = github_shared::normalize_non_empty_text(raw_value.as_str())?;
+                (next_body != initial.trim()).then_some(next_body)
+              })
+              .is_some();
+            let page_for_cancel = issue_details_page.clone();
+            let page_for_save = issue_details_page.clone();
+            v_flex()
+              .gap_2()
+              .child(
+                div().w_full().child(
+                  Input::new(&input_state)
+                    .disabled(self.edit_submitting)
+                    .h(px(ISSUE_COMMENT_INPUT_HEIGHT_PX)),
+                ),
+              )
+              .when_some(self.edit_error.clone(), |this, error| {
+                this.child(div().text_xs().text_color(theme.status_red()).child(error))
+              })
+              .child(
+                h_flex()
+                  .items_center()
+                  .justify_end()
+                  .gap_2()
+                  .child(
+                    Button::new(format!("issue-sheet-comment-edit-cancel-{}", comment_id))
+                      .ghost()
+                      .xsmall()
+                      .compact()
+                      .label("Cancel")
+                      .on_click(move |_, _, cx| {
+                        page_for_cancel.update(cx, |this, cx| {
+                          this.cancel_issue_comment_edit(cx);
+                        });
+                      }),
+                  )
+                  .child(
+                    Button::new(format!("issue-sheet-comment-edit-save-{}", comment_id))
+                      .xsmall()
+                      .compact()
+                      .label("Save")
+                      .disabled(!can_save || comment_submission_in_flight)
+                      .on_click(move |_, _, cx| {
+                        page_for_save.update(cx, |this, cx| {
+                          this.submit_issue_comment_edit(cx);
+                        });
+                      }),
+                  ),
+              )
+              .into_any_element()
+          } else {
+            div().into_any_element()
+          }
+        } else {
+          let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler.clone())
+            .with_state(self.markdown_state.clone())
+            .with_github_issue_reference_context(
+              issue.repository.owner.as_str(),
+              issue.repository.repo.as_str(),
+            )
+            .with_scope_id(issue_comment_scope_id(issue.id, comment_id));
+          if let Some(previews) = comment_previews {
+            options = options.with_github_code_reference_previews(previews);
+          }
+          render_markdown(comment_body.as_ref(), &options, cx)
+        };
 
         comments_rows = comments_rows.child(
           v_flex()
-            .id(format!("github-issue-comment-{}", comment.id))
+            .id(format!("github-issue-comment-{}", comment_id))
             .anchor_scroll(comment_anchor)
             .gap_2()
             .p_3()
@@ -1413,24 +1909,37 @@ impl Render for GithubIssueDetailsSheetView {
             .child(
               h_flex()
                 .items_center()
+                .justify_between()
                 .gap_2()
                 .child(
-                  Avatar::new()
-                    .name(comment_author.clone())
-                    .when_some(
-                      comment
-                        .user
-                        .as_ref()
-                        .and_then(|user| user.avatar_url.clone()),
-                      |this, url| this.src(url),
+                  h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                      Avatar::new()
+                        .name(comment_author.clone())
+                        .when_some(
+                          comment
+                            .user
+                            .as_ref()
+                            .and_then(|user| user.avatar_url.clone()),
+                          |this, url| this.src(url),
+                        )
+                        .small(),
                     )
-                    .small(),
+                    .child(
+                      div()
+                        .text_sm()
+                        .text_color(theme.foreground)
+                        .child(comment_author.clone()),
+                    ),
                 )
                 .child(
-                  div()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .child(comment_author.clone()),
+                  h_flex()
+                    .items_center()
+                    .gap_1()
+                    .when_some(edit_button, |this, button| this.child(button))
+                    .when_some(delete_button, |this, button| this.child(button)),
                 ),
             )
             .child(
@@ -1441,19 +1950,7 @@ impl Render for GithubIssueDetailsSheetView {
                   "Created {comment_created_at} • Updated {comment_updated_at}"
                 )),
             )
-            .child({
-              let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler.clone())
-                .with_state(self.markdown_state.clone())
-                .with_github_issue_reference_context(
-                  issue.repository.owner.as_str(),
-                  issue.repository.repo.as_str(),
-                )
-                .with_scope_id(issue_comment_scope_id(issue.id, comment.id));
-              if let Some(previews) = comment_previews.clone() {
-                options = options.with_github_code_reference_previews(previews);
-              }
-              render_markdown(comment_body.as_ref(), &options, cx)
-            }),
+            .child(comment_body_element),
         );
       }
 
@@ -1570,7 +2067,43 @@ impl Render for GithubIssueDetailsSheetView {
                   .child("No comments yet"),
               )
             })
-            .when(!issue.comments.is_empty(), |this| this.child(comments_rows)),
+            .when(!issue.comments.is_empty(), |this| this.child(comments_rows))
+            .child(
+              v_flex()
+                .gap_2()
+                .pt_2()
+                .child(
+                  div()
+                    .w_full()
+                    .child(Input::new(&comment_input).h(px(ISSUE_COMMENT_INPUT_HEIGHT_PX))),
+                )
+                .when_some(self.comment_input_error.clone(), |this, error| {
+                  this.child(div().text_xs().text_color(theme.status_red()).child(error))
+                })
+                .child(
+                  h_flex().items_center().justify_end().gap_2().child(
+                    Button::new("issue-sheet-comment-create")
+                      .xsmall()
+                      .compact()
+                      .label("Comment")
+                      .disabled(
+                        comment_submission_in_flight
+                          || github_shared::normalize_non_empty_text(
+                            comment_input.read(cx).value().as_str(),
+                          )
+                          .is_none(),
+                      )
+                      .on_click({
+                        let page = issue_details_page.clone();
+                        move |_, window, cx| {
+                          page.update(cx, |this, cx| {
+                            this.submit_issue_comment_create(window, cx);
+                          });
+                        }
+                      }),
+                  ),
+                ),
+            ),
         )
         .into_any_element()
     } else {
@@ -3108,25 +3641,21 @@ impl GithubRepoPage {
       .border_b_1()
       .border_color(theme.title_bar_border)
       .child(
-        div()
-          .flex()
-          .items_center()
-          .justify_between()
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(
-                Button::new("repo-back")
-                  .icon(IconName::ArrowLeft)
-                  .ghost()
-                  .compact()
-                  .on_click(|_, _, cx| {
-                    Self::open_github_home(cx);
-                  }),
-              )
-              .child(div().text_sm().font_medium().child(repo_label)),
-          ),
+        div().flex().items_center().justify_between().child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child(
+              Button::new("repo-back")
+                .icon(IconName::ArrowLeft)
+                .ghost()
+                .compact()
+                .on_click(|_, _, cx| {
+                  Self::open_github_home(cx);
+                }),
+            )
+            .child(div().text_sm().font_medium().child(repo_label)),
+        ),
       )
       .child(tab_bar)
   }
@@ -3883,7 +4412,27 @@ impl Focusable for GithubRepoPage {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::api::{GithubIssueDetailsComment, GithubRepository, GithubRepositoryTreeEntry};
+  use crate::api::{
+    GithubIssueDetailsComment, GithubIssueUser, GithubRepository, GithubRepositoryTreeEntry,
+  };
+
+  fn make_issue_comment(
+    id: u64,
+    body: Option<&str>,
+    login: Option<&str>,
+  ) -> GithubIssueDetailsComment {
+    GithubIssueDetailsComment {
+      id,
+      body: body.map(str::to_string),
+      created_at: "2024-01-03T00:00:00Z".to_string(),
+      updated_at: "2024-01-04T00:00:00Z".to_string(),
+      user: login.map(|login| GithubIssueUser {
+        login: login.to_string(),
+        name: None,
+        avatar_url: None,
+      }),
+    }
+  }
 
   fn test_issue_details_with_code_links() -> GithubIssueDetails {
     GithubIssueDetails {
@@ -4179,6 +4728,53 @@ mod tests {
     assert_eq!(comment_refs.len(), 1);
     assert_eq!(comment_refs[0].start_line, 3);
     assert!(comments.get(&8).is_none());
+  }
+
+  #[test]
+  fn issue_details_comment_owned_by_login_is_case_insensitive() {
+    let comment = make_issue_comment(1, Some("Body"), Some("octocat"));
+    assert!(issue_details_comment_owned_by_login(&comment, "OCTOCAT"));
+    assert!(!issue_details_comment_owned_by_login(&comment, "hubot"));
+  }
+
+  #[test]
+  fn issue_details_comment_owned_by_login_requires_comment_user() {
+    let comment = make_issue_comment(1, Some("Body"), None);
+    assert!(!issue_details_comment_owned_by_login(&comment, "octocat"));
+  }
+
+  #[test]
+  fn upsert_issue_details_comment_local_updates_existing_and_appends_missing() {
+    let mut comments = vec![make_issue_comment(1, Some("Initial"), Some("octocat"))];
+    let updated = make_issue_comment(1, Some("Updated"), Some("octocat"));
+    upsert_issue_details_comment_local(&mut comments, updated.clone());
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].body, updated.body);
+
+    upsert_issue_details_comment_local(
+      &mut comments,
+      make_issue_comment(2, Some("Another"), Some("octocat")),
+    );
+    assert_eq!(comments.len(), 2);
+    assert_eq!(comments[1].id, 2);
+  }
+
+  #[test]
+  fn remove_and_restore_issue_details_comment_local_supports_delete_rollback() {
+    let mut comments = vec![
+      make_issue_comment(1, Some("First"), Some("octocat")),
+      make_issue_comment(2, Some("Second"), Some("octocat")),
+    ];
+    let (index, removed) =
+      remove_issue_details_comment_local(&mut comments, 1).expect("comment removed");
+    assert_eq!(index, 0);
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].id, 2);
+
+    restore_issue_details_comment_local(&mut comments, index, removed);
+    assert_eq!(comments.len(), 2);
+    assert_eq!(comments[0].id, 1);
+    assert_eq!(comments[1].id, 2);
   }
 
   #[test]

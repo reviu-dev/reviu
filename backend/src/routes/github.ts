@@ -1,11 +1,14 @@
 import type {
   CompareParams,
+  CreateIssueCommentParams,
+  CreateIssueCommentResponse,
   CreatePullRequestCommentParams,
   CreatePullRequestCommentReplyParams,
   CreatePullRequestCommentReplyResponse,
   CreatePullRequestCommentResponse,
   CreatePullRequestReviewParams,
   CreatePullRequestReviewResponse,
+  DeleteIssueCommentParams,
   DeletePullRequestCommentParams,
   GetContentParams,
   GithubIssueDetailsCommentParameters,
@@ -34,6 +37,8 @@ import type {
   PullRequestReviewsParams,
   SearchIssuesItemResponse,
   SearchIssuesParams,
+  UpdateIssueCommentParams,
+  UpdateIssueCommentResponse,
   UpdatePullRequestCommentParams,
   UpdatePullRequestCommentResponse,
   UserRepositoriesParams,
@@ -46,9 +51,11 @@ import z from 'zod'
 import { authMiddleware } from '../middlewares/auth.js'
 import {
   compareGithubRefs,
+  createGithubIssueComment,
   createGithubPullRequestComment,
   createGithubPullRequestCommentReply,
   createGithubPullRequestReview,
+  deleteGithubIssueComment,
   deleteGithubPullRequestComment,
   fetchGithubCommitFilesAllPages,
   fetchGithubNotifications,
@@ -68,6 +75,7 @@ import {
   fetchGithubRepositoryTrees,
   fetchGithubSearchIssues,
   fetchGithubUserRepositories,
+  patchGithubIssueComment,
   patchGithubPullRequestComment,
 } from '../services/github.js'
 
@@ -341,11 +349,20 @@ type GithubReviewCommentResponse
     | CreatePullRequestCommentReplyResponse
     | UpdatePullRequestCommentResponse
 
+type GithubIssueCommentResponseSource
+  = | GithubIssueDetailsCommentResponse
+    | CreateIssueCommentResponse
+    | UpdateIssueCommentResponse
+
 type GithubPullRequestReviewResponseSource
   = | PullRequestReviewResponse
     | CreatePullRequestReviewResponse
 
 const updatePullRequestCommentBodySchema = z.object({
+  body: z.string().trim().min(1, 'Missing comment body'),
+})
+
+const issueCommentBodySchema = z.object({
   body: z.string().trim().min(1, 'Missing comment body'),
 })
 
@@ -441,6 +458,18 @@ function mapGithubPullRequestIssueComment(
           avatar_url: comment.user.avatar_url,
         }
       : null,
+  }
+}
+
+function mapGithubIssueComment(
+  comment: GithubIssueCommentResponseSource,
+): GithubIssueDetailsComment {
+  return {
+    id: comment.id,
+    body: comment.body,
+    created_at: comment.created_at,
+    updated_at: comment.updated_at,
+    user: formatGithubUser(comment.user),
   }
 }
 
@@ -1481,13 +1510,7 @@ export const githubRoutes = githubRouter
         closed_at: data.closed_at,
         labels: data.labels,
         body: data.body,
-        comments: issueComments.map(comment => ({
-          id: comment.id,
-          body: comment.body,
-          created_at: comment.created_at,
-          updated_at: comment.updated_at,
-          user: formatGithubUser(comment.user),
-        })),
+        comments: issueComments.map(mapGithubIssueComment),
         user: formatGithubUser(data.user),
         repository: {
           owner,
@@ -1498,6 +1521,107 @@ export const githubRoutes = githubRouter
       return ctx.json({ issue }, 200)
     }
     catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/repos/:owner/:repo/issues/:issue_number/comments', zValidator(
+    'json',
+    issueCommentBodySchema,
+  ), async (ctx) => {
+    const { owner, repo, issue_number } = ctx.req.param()
+    const issueNumber = Number(issue_number)
+    const { body } = ctx.req.valid('json')
+
+    if (!owner || !repo || Number.isNaN(issueNumber)) {
+      return ctx.json({ error: 'Missing owner, repo, or issue number' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: CreateIssueCommentParams = {
+        owner,
+        repo,
+        issue_number: issueNumber,
+        body,
+      }
+
+      const data = await createGithubIssueComment({ token: githubToken, params })
+      const comment = mapGithubIssueComment(data)
+      return ctx.json({ comment }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .patch('/repos/:owner/:repo/issues/:issue_number/comments/:comment_id', zValidator(
+    'json',
+    issueCommentBodySchema,
+  ), async (ctx) => {
+    const { owner, repo, issue_number, comment_id } = ctx.req.param()
+    const issueNumber = Number(issue_number)
+    const commentId = Number(comment_id)
+    const { body } = ctx.req.valid('json')
+
+    if (!owner || !repo || Number.isNaN(issueNumber) || Number.isNaN(commentId)) {
+      return ctx.json({ error: 'Missing owner, repo, issue number, or comment id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: UpdateIssueCommentParams = {
+        owner,
+        repo,
+        comment_id: commentId,
+        body,
+      }
+
+      const data = await patchGithubIssueComment({ token: githubToken, params })
+      const comment = mapGithubIssueComment(data)
+      return ctx.json({ comment }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .delete('/repos/:owner/:repo/issues/:issue_number/comments/:comment_id', async (ctx) => {
+    const { owner, repo, issue_number, comment_id } = ctx.req.param()
+    const issueNumber = Number(issue_number)
+    const commentId = Number(comment_id)
+
+    if (!owner || !repo || Number.isNaN(issueNumber) || Number.isNaN(commentId)) {
+      return ctx.json({ error: 'Missing owner, repo, issue number, or comment id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: DeleteIssueCommentParams = {
+        owner,
+        repo,
+        comment_id: commentId,
+      }
+
+      await deleteGithubIssueComment({ token: githubToken, params })
+      return ctx.json({ success: true }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })

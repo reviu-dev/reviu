@@ -630,6 +630,11 @@ struct GithubIssueDetailsResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct GithubIssueCommentResponse {
+  comment: GithubIssueDetailsComment,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubPullRequestDetailsResponse {
   #[serde(rename = "pullRequest")]
   pull_request: GithubPullRequestDetails,
@@ -672,6 +677,11 @@ struct GithubPullRequestReviewResponse {
 
 #[derive(Debug, Serialize)]
 struct UpdateGithubPullRequestCommentRequest<'a> {
+  body: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateGithubIssueCommentRequest<'a> {
   body: &'a str,
 }
 
@@ -1085,6 +1095,75 @@ impl ApiClient {
     }
     let payload = response.json::<GithubIssueDetailsResponse>()?;
     Ok(payload.issue)
+  }
+
+  pub fn create_issue_comment(
+    &self,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    body: &str,
+  ) -> Result<GithubIssueDetailsComment> {
+    let route = format!("/github/repos/{owner}/{repo}/issues/{issue_number}/comments");
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .json(&UpdateGithubIssueCommentRequest { body })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubIssueCommentResponse>()?;
+    Ok(payload.comment)
+  }
+
+  pub fn update_issue_comment(
+    &self,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    comment_id: u64,
+    body: &str,
+  ) -> Result<GithubIssueDetailsComment> {
+    let route = format!("/github/repos/{owner}/{repo}/issues/{issue_number}/comments/{comment_id}");
+    let response = self
+      .authed_request(Method::PATCH, route.as_str())
+      .json(&UpdateGithubIssueCommentRequest { body })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("PATCH", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubIssueCommentResponse>()?;
+    Ok(payload.comment)
+  }
+
+  pub fn delete_issue_comment(
+    &self,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    comment_id: u64,
+  ) -> Result<()> {
+    let route = format!("/github/repos/{owner}/{repo}/issues/{issue_number}/comments/{comment_id}");
+    let response = self.authed_request(Method::DELETE, route.as_str()).send()?;
+    let status = response.status();
+    Self::record_http_status("DELETE", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    Ok(())
   }
 
   pub fn fetch_pull_request_details(
@@ -2211,6 +2290,157 @@ mod tests {
   }
 
   #[test]
+  fn create_issue_comment_parses_success_payload() {
+    let body = r#"{
+      "comment": {
+        "id": 9002,
+        "body": "New issue comment",
+        "created_at": "2026-02-20T10:00:00Z",
+        "updated_at": "2026-02-20T10:05:00Z",
+        "user": {
+          "login": "octocat",
+          "name": "The Octocat",
+          "avatar_url": "https://example.com/octocat.png"
+        }
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let comment = api
+      .create_issue_comment("acme", "widget", 77, "New issue comment")
+      .expect("create issue comment");
+    assert_eq!(comment.id, 9002);
+    assert_eq!(comment.body.as_deref(), Some("New issue comment"));
+    assert_eq!(
+      comment.user.as_ref().map(|user| user.login.as_str()),
+      Some("octocat")
+    );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn create_issue_comment_uses_expected_route() {
+    let body = r#"{
+      "comment": {
+        "id": 9002,
+        "body": "New issue comment",
+        "created_at": "2026-02-20T10:00:00Z",
+        "updated_at": "2026-02-20T10:05:00Z",
+        "user": null
+      }
+    }"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .create_issue_comment("acme", "widget", 77, "New issue comment")
+      .expect("create issue comment");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "POST /github/repos/acme/widget/issues/77/comments HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn update_issue_comment_parses_success_payload() {
+    let body = r#"{
+      "comment": {
+        "id": 9002,
+        "body": "Updated issue comment",
+        "created_at": "2026-02-20T10:00:00Z",
+        "updated_at": "2026-02-20T11:00:00Z",
+        "user": {
+          "login": "octocat",
+          "name": "The Octocat",
+          "avatar_url": "https://example.com/octocat.png"
+        }
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let comment = api
+      .update_issue_comment("acme", "widget", 77, 9002, "Updated issue comment")
+      .expect("update issue comment");
+    assert_eq!(comment.id, 9002);
+    assert_eq!(comment.body.as_deref(), Some("Updated issue comment"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn update_issue_comment_uses_expected_route() {
+    let body = r#"{
+      "comment": {
+        "id": 9002,
+        "body": "Updated issue comment",
+        "created_at": "2026-02-20T10:00:00Z",
+        "updated_at": "2026-02-20T11:00:00Z",
+        "user": null
+      }
+    }"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .update_issue_comment("acme", "widget", 77, 9002, "Updated issue comment")
+      .expect("update issue comment");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "PATCH /github/repos/acme/widget/issues/77/comments/9002 HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn delete_issue_comment_returns_ok_on_success() {
+    let (base_url, handle) = start_single_response_server("200 OK", "{}");
+    let api = make_test_api_client(base_url);
+
+    api
+      .delete_issue_comment("acme", "widget", 77, 9002)
+      .expect("delete issue comment");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn delete_issue_comment_uses_expected_route() {
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", "{}");
+    let api = make_test_api_client(base_url);
+
+    api
+      .delete_issue_comment("acme", "widget", 77, 9002)
+      .expect("delete issue comment");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "DELETE /github/repos/acme/widget/issues/77/comments/9002 HTTP/1.1"
+    );
+  }
+
+  #[test]
   fn fetch_pull_request_details_parses_success_payload() {
     let body = r#"{
       "pullRequest": {
@@ -3147,6 +3377,43 @@ mod tests {
     let err = api
       .fetch_github_repository_issue_details("acme", "widget", 77)
       .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn create_issue_comment_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .create_issue_comment("acme", "widget", 77, "New issue comment")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn update_issue_comment_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .update_issue_comment("acme", "widget", 77, 9002, "Updated issue comment")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn delete_issue_comment_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api.delete_issue_comment("acme", "widget", 77, 9002).err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");
