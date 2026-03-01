@@ -12,7 +12,8 @@ use editor::{
 };
 use gfm_markdown_viewer::{
   GithubBlobLineReference, GithubCodeReferencePreview, LinkAction, MarkdownRenderOptions,
-  MarkdownRenderState, extract_github_blob_line_references, render_markdown,
+  MarkdownRenderState, extract_github_blob_line_references,
+  render_github_code_reference_preview_card, render_markdown,
 };
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
 use gpui::{
@@ -268,6 +269,78 @@ fn resolve_diff_shas_for_context(
   Some((base_sha.to_string(), head_sha.to_string()))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewCommentPreviewSide {
+  Left,
+  Right,
+}
+
+fn positive_line_number(value: Option<i64>) -> Option<usize> {
+  value.and_then(|value| (value > 0).then_some(value as usize))
+}
+
+fn normalize_line_range(start: Option<i64>, end: Option<i64>) -> Option<(usize, usize)> {
+  let start = positive_line_number(start);
+  let end = positive_line_number(end);
+  let (start, end) = match (start, end) {
+    (Some(start), Some(end)) => (start, end),
+    (Some(start), None) => (start, start),
+    (None, Some(end)) => (end, end),
+    (None, None) => return None,
+  };
+
+  Some(if start <= end {
+    (start, end)
+  } else {
+    (end, start)
+  })
+}
+
+fn review_comment_preview_line_range(
+  comment: &GithubPullRequestReviewComment,
+) -> Option<(usize, usize)> {
+  normalize_line_range(
+    comment.start_line.or(comment.line),
+    comment.line.or(comment.start_line),
+  )
+  .or_else(|| {
+    normalize_line_range(
+      comment.original_start_line.or(comment.original_line),
+      comment.original_line.or(comment.original_start_line),
+    )
+  })
+}
+
+fn review_comment_preview_side(
+  comment: &GithubPullRequestReviewComment,
+) -> ReviewCommentPreviewSide {
+  let side = comment
+    .side
+    .as_deref()
+    .or(comment.start_side.as_deref())
+    .unwrap_or("RIGHT");
+  if side.eq_ignore_ascii_case("LEFT") {
+    ReviewCommentPreviewSide::Left
+  } else {
+    ReviewCommentPreviewSide::Right
+  }
+}
+
+fn github_blob_url(
+  owner: &str,
+  repo: &str,
+  reference: &str,
+  path: &str,
+  start_line: usize,
+  end_line: usize,
+) -> String {
+  if start_line == end_line {
+    format!("https://github.com/{owner}/{repo}/blob/{reference}/{path}#L{start_line}")
+  } else {
+    format!("https://github.com/{owner}/{repo}/blob/{reference}/{path}#L{start_line}-L{end_line}")
+  }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum GithubPrOverviewConversationItemKind {
   IssueComment,
@@ -283,7 +356,6 @@ struct GithubPrOverviewConversationItem {
   author_login: String,
   author_avatar_url: Option<String>,
   body: Option<String>,
-  path: Option<String>,
   review_state: Option<GithubPullRequestReviewState>,
   replies: Vec<GithubPrOverviewConversationReply>,
 }
@@ -310,7 +382,9 @@ fn review_state_icon_style(
 ) -> Option<(UiIconName, gpui::Hsla)> {
   match state {
     GithubPullRequestReviewState::Approved => Some((UiIconName::CircleCheck, theme.status_green())),
-    GithubPullRequestReviewState::RequestChanges => Some((UiIconName::CircleSlash, theme.status_red())),
+    GithubPullRequestReviewState::RequestChanges => {
+      Some((UiIconName::CircleSlash, theme.status_red()))
+    }
   }
 }
 
@@ -347,6 +421,26 @@ fn resolve_review_comment_thread_root_id(
   }
 }
 
+fn overview_root_review_comment_ids(
+  review_comments: &[GithubPullRequestReviewComment],
+) -> Vec<u64> {
+  let comments_by_id: HashMap<u64, &GithubPullRequestReviewComment> = review_comments
+    .iter()
+    .map(|comment| (comment.id, comment))
+    .collect();
+  let mut root_ids = Vec::new();
+  let mut seen = HashSet::new();
+
+  for comment in review_comments {
+    let root_id = resolve_review_comment_thread_root_id(comment, &comments_by_id);
+    if seen.insert(root_id) {
+      root_ids.push(root_id);
+    }
+  }
+
+  root_ids
+}
+
 fn build_overview_conversation_items(
   issue_comments: &[GithubPullRequestIssueComment],
   reviews: &[GithubPullRequestReview],
@@ -374,7 +468,6 @@ fn build_overview_conversation_items(
       } else {
         body.to_string()
       }),
-      path: None,
       review_state: None,
       replies: Vec::new(),
     }
@@ -402,14 +495,15 @@ fn build_overview_conversation_items(
         .as_ref()
         .and_then(|user| user.avatar_url.clone()),
       body,
-      path: None,
       review_state: Some(review.state),
       replies: Vec::new(),
     })
   }));
 
-  let comments_by_id: HashMap<u64, &GithubPullRequestReviewComment> =
-    review_comments.iter().map(|comment| (comment.id, comment)).collect();
+  let comments_by_id: HashMap<u64, &GithubPullRequestReviewComment> = review_comments
+    .iter()
+    .map(|comment| (comment.id, comment))
+    .collect();
   let mut threads: HashMap<u64, Vec<&GithubPullRequestReviewComment>> = HashMap::new();
   for comment in review_comments {
     let root_id = resolve_review_comment_thread_root_id(comment, &comments_by_id);
@@ -417,7 +511,11 @@ fn build_overview_conversation_items(
   }
 
   for mut thread_comments in threads.into_values() {
-    thread_comments.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+    thread_comments.sort_by(|a, b| {
+      a.created_at
+        .cmp(&b.created_at)
+        .then_with(|| a.id.cmp(&b.id))
+    });
 
     let root_comment = thread_comments
       .iter()
@@ -460,7 +558,6 @@ fn build_overview_conversation_items(
       } else {
         body.to_string()
       }),
-      path: Some(root_comment.path.clone()),
       review_state: None,
       replies,
     });
@@ -2358,6 +2455,112 @@ impl GithubPrDetailsPage {
       .unwrap_or_default()
   }
 
+  fn prefetch_overview_root_review_comment_files(&mut self, cx: &mut Context<Self>) {
+    if self.review_comments.is_empty() || self.file_lookup.is_empty() {
+      return;
+    }
+
+    let mut seen_paths = HashSet::new();
+    for root_id in overview_root_review_comment_ids(&self.review_comments) {
+      let Some(comment) = self
+        .review_comments
+        .iter()
+        .find(|comment| comment.id == root_id)
+      else {
+        continue;
+      };
+      let Some(file) = self.file_for_review_comment_path(comment.path.as_str()) else {
+        continue;
+      };
+      let canonical_path = file.path.to_string();
+      if !seen_paths.insert(canonical_path) {
+        continue;
+      }
+      self.maybe_fetch_file_contents(file, cx);
+    }
+  }
+
+  fn overview_root_review_comment_preview(
+    &self,
+    comment_id: u64,
+  ) -> Option<GithubCodeReferencePreview> {
+    let comments_by_id: HashMap<u64, &GithubPullRequestReviewComment> = self
+      .review_comments
+      .iter()
+      .map(|comment| (comment.id, comment))
+      .collect();
+    let comment = comments_by_id.get(&comment_id).copied()?;
+    let root_id = resolve_review_comment_thread_root_id(comment, &comments_by_id);
+    if root_id != comment_id {
+      return None;
+    }
+
+    let file = self.file_for_review_comment_path(comment.path.as_str())?;
+    let contents = self.file_contents.get(file.path.as_ref())?;
+    let (start_line, end_line) = review_comment_preview_line_range(comment)?;
+    let diff_refs = self.resolve_diff_refs()?;
+
+    let preferred_source = match review_comment_preview_side(comment) {
+      ReviewCommentPreviewSide::Left => contents.base.as_ref().map(|content| {
+        (
+          content.as_str(),
+          diff_refs.base_owner.clone(),
+          diff_refs.base_repo.clone(),
+          diff_refs.base_sha.clone(),
+        )
+      }),
+      ReviewCommentPreviewSide::Right => contents.head.as_ref().map(|content| {
+        (
+          content.as_str(),
+          diff_refs.head_owner.clone(),
+          diff_refs.head_repo.clone(),
+          diff_refs.head_sha.clone(),
+        )
+      }),
+    };
+
+    let fallback_source = match review_comment_preview_side(comment) {
+      ReviewCommentPreviewSide::Left => contents.head.as_ref().map(|content| {
+        (
+          content.as_str(),
+          diff_refs.head_owner.clone(),
+          diff_refs.head_repo.clone(),
+          diff_refs.head_sha.clone(),
+        )
+      }),
+      ReviewCommentPreviewSide::Right => contents.base.as_ref().map(|content| {
+        (
+          content.as_str(),
+          diff_refs.base_owner.clone(),
+          diff_refs.base_repo.clone(),
+          diff_refs.base_sha.clone(),
+        )
+      }),
+    };
+
+    let (content, owner, repo, reference) = preferred_source.or(fallback_source)?;
+    let snippets = github_shared::line_snippets_from_content(content, start_line, end_line)?;
+    let actual_end_line = start_line.saturating_add(snippets.len().saturating_sub(1));
+    let url = github_blob_url(
+      owner.as_str(),
+      repo.as_str(),
+      reference.as_str(),
+      comment.path.as_str(),
+      start_line,
+      actual_end_line,
+    );
+
+    Some(GithubCodeReferencePreview {
+      url: Arc::<str>::from(url),
+      repo: Arc::<str>::from(github_shared::repo_label(owner.as_str(), repo.as_str())),
+      path: Arc::<str>::from(comment.path.as_str()),
+      reference: Arc::<str>::from(reference),
+      start_line,
+      end_line: actual_end_line,
+      snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
+    })
+  }
+
   fn cached_review_comment_code_reference_previews(
     &self,
     requests: &HashMap<u64, Vec<GithubBlobLineReference>>,
@@ -2769,6 +2972,7 @@ impl GithubPrDetailsPage {
             });
             let selected = selected_id.and_then(|id| this.file_lookup.get(&id).cloned());
             this.set_selected_file(selected, cx);
+            this.prefetch_overview_root_review_comment_files(cx);
             this.add_pr_breadcrumb("Load PR files succeeded", Map::new());
           }
           Err(error) => {
@@ -2854,25 +3058,28 @@ impl GithubPrDetailsPage {
 
       let _ = this.update(cx, |this, cx| {
         this.file_content_tasks.remove(&key_for_task);
+        let is_selected_file = this.selected_tree_id.as_deref() == Some(key_for_task.as_str());
         let (base, head) = match (base_result, head_result) {
           (Ok(base), Ok(head)) => (base, head),
           _ => {
-            if this.selected_tree_id.as_deref() == Some(key_for_task.as_str()) {
+            if is_selected_file {
               this.file_loading = false;
               this.file_error = Some("Failed to load file contents".into());
             }
+            cx.notify();
             return;
           }
         };
 
         if base.is_none() && head.is_none() {
-          if this.selected_tree_id.as_deref() == Some(key_for_task.as_str()) {
+          if is_selected_file {
             this.file_loading = false;
             this.file_error = Some("File contents unavailable".into());
           }
           this
             .file_contents
             .insert(key_for_task.clone(), GithubPrFileContents { base, head });
+          cx.notify();
           return;
         }
 
@@ -2880,13 +3087,13 @@ impl GithubPrDetailsPage {
           .file_contents
           .insert(key_for_task.clone(), GithubPrFileContents { base, head });
 
-        if this.selected_tree_id.as_deref() == Some(key_for_task.as_str())
+        if is_selected_file
           && let Some(file) = this.file_lookup.get(&key_for_task).cloned()
           && let Some(contents) = this.file_contents.get(&key_for_task).cloned()
         {
           this.apply_full_diff(&file, &contents, cx);
-          cx.notify();
         }
+        cx.notify();
       });
     });
 
@@ -3081,6 +3288,7 @@ impl GithubPrDetailsPage {
             this.review_comments_error = None;
             this.add_pr_breadcrumb("Load PR comments succeeded", Map::new());
             this.sync_review_comments(cx);
+            this.prefetch_overview_root_review_comment_files(cx);
           }
           Err(error) => {
             let error_message = error.to_string();
@@ -3465,6 +3673,13 @@ impl GithubPrDetailsPage {
           let type_label = overview_conversation_kind_label(item.kind);
           let body = item.body.clone();
           let replies = item.replies.clone();
+          let review_comment_preview =
+            if item.kind == GithubPrOverviewConversationItemKind::ReviewComment {
+              self.overview_root_review_comment_preview(item.id)
+            } else {
+              None
+            };
+
           let markdown_options = MarkdownRenderOptions::with_on_link(link_handler.clone())
             .with_state(self.description_markdown_state.clone())
             .with_github_issue_reference_context(
@@ -3479,121 +3694,128 @@ impl GithubPrDetailsPage {
               conversation_source_priority(item.kind),
               item.id
             ))
-            .gap_2()
-            .p_3()
             .border_1()
             .border_color(theme.border)
             .rounded(theme.radius)
+            .when_some(review_comment_preview, |this, preview| {
+              this.child(
+                render_github_code_reference_preview_card(&preview, cx)
+                  .my_0()
+                  .border_b_1()
+                  .border_t_0()
+                  .border_x_0()
+                  .rounded_none(),
+              )
+            })
             .child(
-              h_flex()
-                .items_center()
+              v_flex()
                 .gap_2()
-                .flex_wrap()
+                .p_3()
                 .child(
-                  Avatar::new()
-                    .name(item.author_login.clone())
-                    .when_some(item.author_avatar_url.clone(), |this, url| this.src(url))
-                    .small(),
+                  h_flex()
+                    .items_center()
+                    .gap_2()
+                    .flex_wrap()
+                    .child(
+                      Avatar::new()
+                        .name(item.author_login.clone())
+                        .when_some(item.author_avatar_url.clone(), |this, url| this.src(url))
+                        .small(),
+                    )
+                    .child(
+                      div()
+                        .text_sm()
+                        .text_color(theme.foreground)
+                        .child(item.author_login.clone()),
+                    )
+                    .child(
+                      div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(timestamp),
+                    )
+                    .child(Tag::secondary().small().rounded_full().child(type_label)),
                 )
-                .child(
-                  div()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .child(item.author_login.clone()),
-                )
-                .child(
-                  div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(timestamp),
-                )
-                .child(Tag::secondary().small().rounded_full().child(type_label)),
-            )
-            .when_some(item.review_state, |this, state| {
-              let label = review_state_display_label(state);
-              let icon_style = review_state_icon_style(state, &theme);
-              this.child(
-                h_flex()
-                  .items_center()
-                  .gap_1()
-                  .when_some(icon_style, |this, (icon, color)| {
-                    this.child(Icon::new(icon).size_3().text_color(color))
-                  })
-                      .child(label),
-              )
-            })
-            .when_some(body, |this, body| {
-              this.child(render_markdown(body.as_str(), &markdown_options, cx))
-            })
-            .when_some(item.path.clone(), |this, path| {
-              this.child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child(format!("File: {path}")),
-              )
-            })
-            .when(!replies.is_empty(), |this| {
-              this.child(
-                v_flex()
-                  .gap_2()
-                  .pl_3()
-                  .border_l_1()
-                  .border_color(theme.border)
-                  .children(replies.into_iter().map(|reply| {
-                    let reply_timestamp = format_compact_datetime(&reply.timestamp);
-                    let reply_scope_id = scope_id
-                      .wrapping_mul(1_000_003)
-                      .wrapping_add(reply.id as usize);
-                    let reply_markdown_options =
-                      MarkdownRenderOptions::with_on_link(link_handler.clone())
-                        .with_state(self.description_markdown_state.clone())
-                        .with_github_issue_reference_context(
-                          pr.repository.owner.as_str(),
-                          pr.repository.repo.as_str(),
-                        )
-                        .with_scope_id(reply_scope_id);
-
-                    v_flex()
-                      .id(format!(
-                        "pr-overview-conversation-reply-{}-{}",
-                        parent_item_id, reply.id
-                      ))
+                .when_some(item.review_state, |this, state| {
+                  let label = review_state_display_label(state);
+                  let icon_style = review_state_icon_style(state, &theme);
+                  this.child(
+                    h_flex()
+                      .items_center()
                       .gap_1()
-                      .child(
-                        h_flex()
-                          .items_center()
-                          .gap_2()
-                          .flex_wrap()
+                      .when_some(icon_style, |this, (icon, color)| {
+                        this.child(Icon::new(icon).size_3().text_color(color))
+                      })
+                      .child(label),
+                  )
+                })
+                .when_some(body, |this, body| {
+                  this.child(render_markdown(body.as_str(), &markdown_options, cx))
+                })
+                .when(!replies.is_empty(), |this| {
+                  this.child(
+                    v_flex()
+                      .gap_2()
+                      .pl_3()
+                      .border_l_1()
+                      .border_color(theme.border)
+                      .children(replies.into_iter().map(|reply| {
+                        let reply_timestamp = format_compact_datetime(&reply.timestamp);
+                        let reply_scope_id = scope_id
+                          .wrapping_mul(1_000_003)
+                          .wrapping_add(reply.id as usize);
+                        let reply_markdown_options =
+                          MarkdownRenderOptions::with_on_link(link_handler.clone())
+                            .with_state(self.description_markdown_state.clone())
+                            .with_github_issue_reference_context(
+                              pr.repository.owner.as_str(),
+                              pr.repository.repo.as_str(),
+                            )
+                            .with_scope_id(reply_scope_id);
+
+                        v_flex()
+                          .id(format!(
+                            "pr-overview-conversation-reply-{}-{}",
+                            parent_item_id, reply.id
+                          ))
+                          .gap_1()
                           .child(
-                            Avatar::new()
-                              .name(reply.author_login.clone())
-                              .when_some(reply.author_avatar_url.clone(), |this, url| this.src(url))
-                              .small(),
+                            h_flex()
+                              .items_center()
+                              .gap_2()
+                              .flex_wrap()
+                              .child(
+                                Avatar::new()
+                                  .name(reply.author_login.clone())
+                                  .when_some(reply.author_avatar_url.clone(), |this, url| {
+                                    this.src(url)
+                                  })
+                                  .small(),
+                              )
+                              .child(
+                                div()
+                                  .text_sm()
+                                  .text_color(theme.foreground)
+                                  .child(reply.author_login.clone()),
+                              )
+                              .child(
+                                div()
+                                  .text_xs()
+                                  .text_color(theme.muted_foreground)
+                                  .child(reply_timestamp),
+                              )
+                              .child(Tag::secondary().small().rounded_full().child("Reply")),
                           )
-                          .child(
-                            div()
-                              .text_sm()
-                              .text_color(theme.foreground)
-                              .child(reply.author_login.clone()),
-                          )
-                          .child(
-                            div()
-                              .text_xs()
-                              .text_color(theme.muted_foreground)
-                              .child(reply_timestamp),
-                          )
-                          .child(Tag::secondary().small().rounded_full().child("Reply")),
-                      )
-                      .child(render_markdown(
-                        reply.body.as_str(),
-                        &reply_markdown_options,
-                        cx,
-                      ))
-                      .into_any_element()
-                  })),
-              )
-            })
+                          .child(render_markdown(
+                            reply.body.as_str(),
+                            &reply_markdown_options,
+                            cx,
+                          ))
+                          .into_any_element()
+                      })),
+                  )
+                }),
+            )
             .into_any_element()
         }))
         .into_any_element()
@@ -4895,6 +5117,123 @@ mod tests {
     }
   }
 
+  #[test]
+  fn review_comment_preview_line_range_prefers_primary_fields() {
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.start_line = Some(8);
+    comment.line = Some(11);
+    comment.original_start_line = Some(2);
+    comment.original_line = Some(4);
+
+    assert_eq!(review_comment_preview_line_range(&comment), Some((8, 11)));
+  }
+
+  #[test]
+  fn review_comment_preview_line_range_falls_back_to_original_fields() {
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.start_line = None;
+    comment.line = None;
+    comment.original_start_line = Some(14);
+    comment.original_line = Some(16);
+
+    assert_eq!(review_comment_preview_line_range(&comment), Some((14, 16)));
+  }
+
+  #[test]
+  fn review_comment_preview_line_range_normalizes_order_and_rejects_non_positive_values() {
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.start_line = Some(21);
+    comment.line = Some(19);
+    assert_eq!(review_comment_preview_line_range(&comment), Some((19, 21)));
+
+    comment.start_line = Some(0);
+    comment.line = Some(-2);
+    comment.original_start_line = Some(0);
+    comment.original_line = Some(-1);
+    assert_eq!(review_comment_preview_line_range(&comment), None);
+  }
+
+  #[test]
+  fn review_comment_preview_side_explicit_left_maps_to_left() {
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.side = Some("LEFT".to_string());
+    assert_eq!(
+      review_comment_preview_side(&comment),
+      ReviewCommentPreviewSide::Left
+    );
+  }
+
+  #[test]
+  fn review_comment_preview_side_unknown_value_defaults_to_right() {
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.side = Some("DIAGONAL".to_string());
+    assert_eq!(
+      review_comment_preview_side(&comment),
+      ReviewCommentPreviewSide::Right
+    );
+  }
+
+  #[test]
+  fn review_comment_preview_side_missing_value_defaults_to_right() {
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.side = None;
+    comment.start_side = None;
+    assert_eq!(
+      review_comment_preview_side(&comment),
+      ReviewCommentPreviewSide::Right
+    );
+  }
+
+  #[test]
+  fn overview_root_review_comment_ids_collapses_threads_to_root_only() {
+    let review_comments = vec![
+      make_review_comment(1, "2026-02-28T10:00:00Z", None),
+      make_review_comment(2, "2026-02-28T10:01:00Z", Some(1)),
+      make_review_comment(3, "2026-02-28T10:02:00Z", Some(2)),
+    ];
+
+    let roots = overview_root_review_comment_ids(&review_comments);
+    assert_eq!(roots, vec![1]);
+    assert!(!roots.contains(&2));
+    assert!(!roots.contains(&3));
+  }
+
+  #[test]
+  fn overview_root_review_comment_ids_keeps_distinct_thread_roots() {
+    let review_comments = vec![
+      make_review_comment(1, "2026-02-28T10:00:00Z", None),
+      make_review_comment(2, "2026-02-28T10:01:00Z", Some(1)),
+      make_review_comment(10, "2026-02-28T10:02:00Z", None),
+      make_review_comment(11, "2026-02-28T10:03:00Z", Some(10)),
+    ];
+
+    let roots = overview_root_review_comment_ids(&review_comments);
+    assert_eq!(roots, vec![1, 10]);
+  }
+
+  #[test]
+  fn overview_root_review_comment_ids_uses_orphan_reply_as_its_own_root() {
+    let review_comments = vec![make_review_comment(7, "2026-02-28T10:00:00Z", Some(999))];
+    let roots = overview_root_review_comment_ids(&review_comments);
+    assert_eq!(roots, vec![7]);
+  }
+
+  #[test]
+  fn github_blob_url_formats_single_line_anchor() {
+    assert_eq!(
+      github_blob_url("acme", "widget", "main", "src/main.rs", 7, 7),
+      "https://github.com/acme/widget/blob/main/src/main.rs#L7"
+    );
+  }
+
+  #[test]
+  fn github_blob_url_formats_multi_line_anchor() {
+    assert_eq!(
+      github_blob_url("acme", "widget", "main", "src/main.rs", 7, 9),
+      "https://github.com/acme/widget/blob/main/src/main.rs#L7-L9"
+    );
+  }
+
   fn make_pr_details_for_stats() -> GithubPullRequestDetails {
     GithubPullRequestDetails {
       number: 42,
@@ -5089,7 +5428,11 @@ mod tests {
     let items = build_overview_conversation_items(&[], &[], &review_comments);
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].id, 1);
-    let reply_ids = items[0].replies.iter().map(|reply| reply.id).collect::<Vec<_>>();
+    let reply_ids = items[0]
+      .replies
+      .iter()
+      .map(|reply| reply.id)
+      .collect::<Vec<_>>();
     assert_eq!(reply_ids, vec![2, 3]);
   }
 
