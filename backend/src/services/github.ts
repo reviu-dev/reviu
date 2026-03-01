@@ -12,6 +12,8 @@ export type PullRequestCommentsParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
 export type PullRequestReviewsParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews']['parameters']
+export type UpdatePullRequestParams
+  = Endpoints['PATCH /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
 export type CreatePullRequestCommentParams
   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
 export type CreatePullRequestReviewParams
@@ -43,6 +45,8 @@ export type PullRequestCommentResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data'][number]
 export type PullRequestReviewResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews']['response']['data'][number]
+export type UpdatePullRequestResponse
+  = Endpoints['PATCH /repos/{owner}/{repo}/pulls/{pull_number}']['response']['data']
 export type CreatePullRequestCommentResponse
   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data']
 export type CreatePullRequestReviewResponse
@@ -65,6 +69,8 @@ export type GithubIssueResponse = Endpoints['GET /repos/{owner}/{repo}/issues'][
 export type GithubIssueParameters = Endpoints['GET /repos/{owner}/{repo}/issues']['parameters']
 export type GithubIssueDetailsResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}']['response']['data']
 export type GithubIssueDetailsParameters = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}']['parameters']
+export type UpdateIssueParams = Endpoints['PATCH /repos/{owner}/{repo}/issues/{issue_number}']['parameters']
+export type UpdateIssueResponse = Endpoints['PATCH /repos/{owner}/{repo}/issues/{issue_number}']['response']['data']
 export type GithubIssueDetailsCommentResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}/comments']['response']['data'][number]
 export type GithubIssueDetailsCommentParameters = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}/comments']['parameters']
 export type CreateIssueCommentParams = Endpoints['POST /repos/{owner}/{repo}/issues/{issue_number}/comments']['parameters']
@@ -137,6 +143,17 @@ export async function fetchGithubPullRequest(
   { token: string, params: PullRequestParams },
 ): Promise<PullRequestDetailsResponse> {
   const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
+export async function patchGithubPullRequest(
+  { token, params }:
+  { token: string, params: UpdatePullRequestParams },
+): Promise<UpdatePullRequestResponse> {
+  const { data } = await request('PATCH /repos/{owner}/{repo}/pulls/{pull_number}', {
     ...params,
     headers: githubAuthHeaders(token),
   })
@@ -393,6 +410,17 @@ export async function fetchGithubRepositoryIssue(
   { token: string, params: GithubIssueDetailsParameters },
 ): Promise<GithubIssueDetailsResponse> {
   const { data } = await request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
+    ...params,
+    headers: githubAuthHeaders(token),
+  })
+  return data
+}
+
+export async function patchGithubIssue(
+  { token, params }:
+  { token: string, params: UpdateIssueParams },
+): Promise<UpdateIssueResponse> {
+  const { data } = await request('PATCH /repos/{owner}/{repo}/issues/{issue_number}', {
     ...params,
     headers: githubAuthHeaders(token),
   })

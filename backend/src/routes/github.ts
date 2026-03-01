@@ -39,8 +39,12 @@ import type {
   SearchIssuesParams,
   UpdateIssueCommentParams,
   UpdateIssueCommentResponse,
+  UpdateIssueParams,
+  UpdateIssueResponse,
   UpdatePullRequestCommentParams,
   UpdatePullRequestCommentResponse,
+  UpdatePullRequestParams,
+  UpdatePullRequestResponse,
   UserRepositoriesParams,
   UserRepositoryResponse,
 } from '../services/github.js'
@@ -75,7 +79,9 @@ import {
   fetchGithubRepositoryTrees,
   fetchGithubSearchIssues,
   fetchGithubUserRepositories,
+  patchGithubIssue,
   patchGithubIssueComment,
+  patchGithubPullRequest,
   patchGithubPullRequestComment,
 } from '../services/github.js'
 
@@ -181,6 +187,12 @@ interface GithubPullRequestDetails {
   head_repository: GithubRepository
 }
 
+interface GithubPullRequestDescriptionUpdate {
+  number: UpdatePullRequestResponse['number']
+  body: UpdatePullRequestResponse['body']
+  updated_at: UpdatePullRequestResponse['updated_at']
+}
+
 interface GithubPullRequestCommitUser {
   login: NonNullable<PullRequestCommitResponse['author']>['login']
   avatar_url: NonNullable<PullRequestCommitResponse['author']>['avatar_url']
@@ -283,6 +295,13 @@ interface GithubIssueDetails {
   repository: GithubRepository
 }
 
+interface GithubIssueDescriptionUpdate {
+  id: UpdateIssueResponse['id']
+  number: UpdateIssueResponse['number']
+  body: UpdateIssueResponse['body']
+  updated_at: UpdateIssueResponse['updated_at']
+}
+
 interface GithubRepositoryDetails {
   name: GithubRepositoryResponse['name']
   full_name: GithubRepositoryResponse['full_name']
@@ -364,6 +383,10 @@ const updatePullRequestCommentBodySchema = z.object({
 
 const issueCommentBodySchema = z.object({
   body: z.string().trim().min(1, 'Missing comment body'),
+})
+
+const updateDescriptionBodySchema = z.object({
+  body: z.string().transform(value => value.trim()),
 })
 
 const createPullRequestLineCommentBodySchema = z.object({
@@ -470,6 +493,27 @@ function mapGithubIssueComment(
     created_at: comment.created_at,
     updated_at: comment.updated_at,
     user: formatGithubUser(comment.user),
+  }
+}
+
+function mapGithubPullRequestDescriptionUpdate(
+  pullRequest: UpdatePullRequestResponse,
+): GithubPullRequestDescriptionUpdate {
+  return {
+    number: pullRequest.number,
+    body: pullRequest.body,
+    updated_at: pullRequest.updated_at,
+  }
+}
+
+function mapGithubIssueDescriptionUpdate(
+  issue: UpdateIssueResponse,
+): GithubIssueDescriptionUpdate {
+  return {
+    id: issue.id,
+    number: issue.number,
+    body: issue.body,
+    updated_at: issue.updated_at,
   }
 }
 
@@ -799,6 +843,41 @@ export const githubRoutes = githubRouter
       return ctx.json({ pullRequest }, 200)
     }
     catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .patch('/pr/:id', zValidator(
+    'json',
+    updateDescriptionBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const { body } = ctx.req.valid('json')
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: UpdatePullRequestParams = {
+        owner: org,
+        repo,
+        pull_number: pullNumber,
+        body,
+      }
+
+      const data = await patchGithubPullRequest({ token: githubToken, params })
+      const pullRequest = mapGithubPullRequestDescriptionUpdate(data)
+      return ctx.json({ pullRequest }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })
@@ -1521,6 +1600,41 @@ export const githubRoutes = githubRouter
       return ctx.json({ issue }, 200)
     }
     catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .patch('/repos/:owner/:repo/issues/:issue_number', zValidator(
+    'json',
+    updateDescriptionBodySchema,
+  ), async (ctx) => {
+    const { owner, repo, issue_number } = ctx.req.param()
+    const issueNumber = Number(issue_number)
+    const { body } = ctx.req.valid('json')
+
+    if (!owner || !repo || Number.isNaN(issueNumber)) {
+      return ctx.json({ error: 'Missing owner, repo, or issue number' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: UpdateIssueParams = {
+        owner,
+        repo,
+        issue_number: issueNumber,
+        body,
+      }
+
+      const data = await patchGithubIssue({ token: githubToken, params })
+      const issue = mapGithubIssueDescriptionUpdate(data)
+      return ctx.json({ issue }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })
