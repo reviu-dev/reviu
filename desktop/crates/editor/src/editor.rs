@@ -31,7 +31,6 @@ use gpui_component::{
   h_flex,
   input::{Escape as InputEscape, Input, InputEvent, InputState},
   resizable::{h_resizable, resizable_panel},
-  skeleton::Skeleton,
   v_flex,
 };
 use parking_lot::RwLock;
@@ -2894,49 +2893,6 @@ impl Editor {
       .into_any_element()
   }
 
-  fn review_comment_composer_skeleton(&self, line_height: Pixels) -> gpui::AnyElement {
-    let actions_height_px = REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX.max(line_height / px(1.0));
-    let skeleton_line_height_px = (line_height / px(1.0)).clamp(12.0, 20.0);
-    let textarea_line_width_px =
-      (REVIEW_COMMENT_FIXED_WIDTH_PX - REVIEW_COMMENT_HORIZONTAL_PADDING_PX).max(48.0);
-    let line_width_factors = [0.47, 0.69, 0.59, 0.52, 0.7, 0.66];
-    let mut textarea_lines = v_flex()
-      .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX))
-      .gap_2();
-    for width_factor in line_width_factors {
-      textarea_lines = textarea_lines.child(
-        Skeleton::new()
-          .w(px((textarea_line_width_px * width_factor).max(48.0)))
-          .h(px(skeleton_line_height_px))
-          .rounded_md(),
-      );
-    }
-
-    v_flex()
-      .gap(px(REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX))
-      .child(textarea_lines)
-      .child(
-        h_flex()
-          .items_center()
-          .justify_end()
-          .gap_2()
-          .child(
-            Skeleton::new()
-              .w(px(56.0))
-              .h(px(actions_height_px))
-              .rounded_md()
-              .secondary(),
-          )
-          .child(
-            Skeleton::new()
-              .w(px(56.0))
-              .h(px(actions_height_px))
-              .rounded_md(),
-          ),
-      )
-      .into_any_element()
-  }
-
   fn review_comment_overlay_x_offset(&self) -> Pixels {
     review_comment_overlay_x_offset_for_scroll(self.scroll_handle.offset().x)
   }
@@ -3200,9 +3156,8 @@ impl Editor {
       let mut thread_messages = v_flex();
       for (index, message) in layout.messages.iter().enumerate() {
         let is_last_message = Some(message.id) == last_message_id;
-        let body: gpui::AnyElement = if self.review_comment_edit_submitting_id == Some(message.id) {
-          self.review_comment_composer_skeleton(line_height)
-        } else if self.editing_review_comment_id == Some(message.id) {
+        let is_edit_submitting = self.review_comment_edit_submitting_id == Some(message.id);
+        let body: gpui::AnyElement = if self.editing_review_comment_id == Some(message.id) {
           if let Some(input_state) = self.review_comment_edit_input.clone() {
             let cancel_editor = editor_entity.clone();
             let save_editor = editor_entity.clone();
@@ -3214,7 +3169,11 @@ impl Editor {
             v_flex()
               .on_action(cx.listener(Self::on_review_comment_edit_input_escape))
               .gap_2()
-              .child(Input::new(&input_state).h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)))
+              .child(
+                Input::new(&input_state)
+                  .disabled(is_edit_submitting)
+                  .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
+              )
               .child(
                 h_flex()
                   .items_center()
@@ -3250,6 +3209,7 @@ impl Editor {
                               .xsmall()
                               .compact()
                               .label("Cancel")
+                              .disabled(is_edit_submitting)
                               .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
                                 cancel_editor.update(cx, |editor, cx| {
@@ -3268,7 +3228,7 @@ impl Editor {
                               .xsmall()
                               .compact()
                               .label("Save")
-                              .disabled(!can_save_review_comment_edit)
+                              .disabled(!can_save_review_comment_edit || is_edit_submitting)
                               .on_click(move |_, window, cx| {
                                 cx.stop_propagation();
                                 save_editor.update(cx, |editor, cx| {
@@ -3532,22 +3492,9 @@ impl Editor {
         let reply_to_id = self
           .replying_to_review_comment_id
           .expect("reply target should exist when rendering thread reply composer");
-        let reply_block: gpui::AnyElement = if self.review_comment_reply_submitting {
-          v_flex()
-            .pt(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
-            .pb(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
-            .gap(px(REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX))
-            .border_t(px(REVIEW_COMMENT_REPLY_BORDER_TOP_PX))
-            .border_color(theme.border)
-            .child(
-              h_flex()
-                .items_center()
-                .gap_2()
-                .child(div().text_sm().text_color(theme.foreground).child("You")),
-            )
-            .child(self.review_comment_composer_skeleton(line_height))
-            .into_any_element()
-        } else if let Some(input_state) = self.review_comment_reply_input.clone() {
+        let is_reply_submitting = self.review_comment_reply_submitting;
+        let reply_block: gpui::AnyElement =
+          if let Some(input_state) = self.review_comment_reply_input.clone() {
           let cancel_editor = editor_entity.clone();
           let save_editor = editor_entity.clone();
           let reply_error = self.review_comment_reply_error.clone();
@@ -3567,7 +3514,11 @@ impl Editor {
             .child(
               v_flex()
                 .gap(px(REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX))
-                .child(Input::new(&input_state).h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)))
+                .child(
+                  Input::new(&input_state)
+                    .disabled(is_reply_submitting)
+                    .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
+                )
                 .child(
                   h_flex()
                     .items_center()
@@ -3603,6 +3554,7 @@ impl Editor {
                                 .xsmall()
                                 .compact()
                                 .label("Cancel")
+                                .disabled(is_reply_submitting)
                                 .on_click(move |_, _, cx| {
                                   cx.stop_propagation();
                                   cancel_editor.update(cx, |editor, cx| {
@@ -3621,7 +3573,7 @@ impl Editor {
                                 .xsmall()
                                 .compact()
                                 .label("Save")
-                                .disabled(!can_save_review_comment_reply)
+                                .disabled(!can_save_review_comment_reply || is_reply_submitting)
                                 .on_click(move |_, window, cx| {
                                   cx.stop_propagation();
                                   save_editor.update(cx, |editor, cx| {
@@ -3635,7 +3587,7 @@ impl Editor {
             )
             .into_any_element()
         } else {
-          self.review_comment_composer_skeleton(line_height)
+          div().into_any_element()
         };
 
         thread_messages = thread_messages.child(reply_block);
@@ -3753,31 +3705,11 @@ impl Editor {
     {
       let composer_top = line_height * (first_display_line as f32 - self.scroll_offset_y);
       let composer_height = line_height * line_count as f32;
-      let composer_card = if self.review_comment_create_submitting {
-        Some(
-          div()
-            .w(px(REVIEW_COMMENT_FIXED_WIDTH_PX))
-            .bg(theme.sidebar)
-            .border(px(REVIEW_COMMENT_CARD_BORDER_PX))
-            .border_color(theme.border)
-            .rounded_md()
-            .cursor(CursorStyle::Arrow)
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-              cx.stop_propagation();
-            })
-            .child(
-              v_flex()
-                .pl(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
-                .pr(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
-                .pt(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
-                .pb(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
-                .child(self.review_comment_composer_skeleton(line_height)),
-            ),
-        )
-      } else if let Some(input_state) = self.review_comment_create_input.clone() {
+      let composer_card = if let Some(input_state) = self.review_comment_create_input.clone() {
         let cancel_editor = editor_entity.clone();
         let save_editor = editor_entity.clone();
         let can_save = self.review_comment_create_handler.is_some();
+        let is_create_submitting = self.review_comment_create_submitting;
         let create_error = self.review_comment_create_error.clone();
         Some(
           div()
@@ -3798,7 +3730,11 @@ impl Editor {
                 .pt(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
                 .pb(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
                 .gap(px(REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX))
-                .child(Input::new(&input_state).h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)))
+                .child(
+                  Input::new(&input_state)
+                    .disabled(is_create_submitting)
+                    .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
+                )
                 .child(
                   h_flex()
                     .items_center()
@@ -3834,6 +3770,7 @@ impl Editor {
                                 .xsmall()
                                 .compact()
                                 .label("Cancel")
+                                .disabled(is_create_submitting)
                                 .on_click(move |_, _, cx| {
                                   cx.stop_propagation();
                                   cancel_editor.update(cx, |editor, cx| {
@@ -3852,7 +3789,7 @@ impl Editor {
                                 .xsmall()
                                 .compact()
                                 .label("Save")
-                                .disabled(!can_save)
+                                .disabled(!can_save || is_create_submitting)
                                 .on_click(move |_, window, cx| {
                                   cx.stop_propagation();
                                   save_editor.update(cx, |editor, cx| {
