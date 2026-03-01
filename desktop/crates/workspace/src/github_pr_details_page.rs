@@ -53,10 +53,10 @@ use ui::{
 use crate::{
   ShowCommandPalette, ShowFileSearch,
   api::{
-    ApiClient, GithubIssueDetailsComment, GithubPullRequestCommit, GithubPullRequestDetails,
-    GithubPullRequestFile, GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser,
-    GithubPullRequestReview, GithubPullRequestReviewComment, GithubPullRequestReviewEvent,
-    GithubPullRequestReviewState,
+    ApiClient, GithubIssueDetailsComment, GithubPullRequestCommit,
+    GithubPullRequestDescriptionUpdate, GithubPullRequestDetails, GithubPullRequestFile,
+    GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser, GithubPullRequestReview,
+    GithubPullRequestReviewComment, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_compact_datetime, format_long_date},
@@ -83,6 +83,7 @@ const PR_COMMIT_SELECT_MENU_WIDTH: f32 = 420.0;
 const PR_REVIEW_POPOVER_WIDTH: f32 = 500.0;
 const PR_REVIEW_INPUT_HEIGHT_PX: f32 = 100.0;
 const OVERVIEW_COMMENT_INPUT_HEIGHT_PX: f32 = 100.0;
+const OVERVIEW_DESCRIPTION_INPUT_HEIGHT_PX: f32 = 500.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OverviewCommentKind {
@@ -620,6 +621,18 @@ fn next_overview_comment_body(raw_value: &str, initial_value: &str) -> Option<St
   } else {
     Some(next_body)
   }
+}
+
+fn next_pr_description_body(raw_value: &str, initial_value: &str) -> Option<String> {
+  github_shared::next_trimmed_text_update(raw_value, initial_value)
+}
+
+fn apply_pull_request_description_update_local(
+  pull_request: &mut GithubPullRequestDetails,
+  update: GithubPullRequestDescriptionUpdate,
+) {
+  pull_request.body = update.body;
+  pull_request.updated_at = update.updated_at;
 }
 
 fn review_comment_owned_by_login(comment: &GithubPullRequestReviewComment, login: &str) -> bool {
@@ -1199,6 +1212,11 @@ pub struct GithubPrDetailsPage {
   review_comment_code_reference_cache: HashMap<String, Option<ReviewCommentCodeReferencePreview>>,
   review_comment_code_reference_tasks: HashMap<String, Task<()>>,
   pending_review_comment_link_comment_id: Option<u64>,
+  pr_description_edit_input: Option<Entity<InputState>>,
+  pr_description_editing: bool,
+  pr_description_initial_body: Option<String>,
+  pr_description_submitting: bool,
+  pr_description_error: Option<SharedString>,
   file_loading: bool,
   file_error: Option<SharedString>,
   tree_state: Entity<TreeState>,
@@ -1522,6 +1540,11 @@ impl GithubPrDetailsPage {
       review_comment_code_reference_cache: HashMap::new(),
       review_comment_code_reference_tasks: HashMap::new(),
       pending_review_comment_link_comment_id: None,
+      pr_description_edit_input: None,
+      pr_description_editing: false,
+      pr_description_initial_body: None,
+      pr_description_submitting: false,
+      pr_description_error: None,
       file_loading: false,
       file_error: None,
       tree_state,
@@ -1602,10 +1625,149 @@ impl GithubPrDetailsPage {
       .collect()
   }
 
+  fn ensure_pr_description_edit_input(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<InputState> {
+    if let Some(input) = self.pr_description_edit_input.as_ref() {
+      return input.clone();
+    }
+
+    let input = cx.new(|cx| {
+      InputState::new(window, cx)
+        .multi_line(true)
+        .rows(6)
+        .placeholder("Edit description...")
+    });
+    self.pr_description_edit_input = Some(input.clone());
+    input
+  }
+
+  fn clear_pr_description_edit_state(&mut self) {
+    self.pr_description_editing = false;
+    self.pr_description_initial_body = None;
+    self.pr_description_submitting = false;
+    self.pr_description_error = None;
+  }
+
+  fn start_pr_description_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.pr_description_submitting || self.overview_comment_submission_in_flight() {
+      return;
+    }
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      return;
+    };
+
+    let initial_body = pull_request.body.clone().unwrap_or_default();
+    let input = self.ensure_pr_description_edit_input(window, cx);
+    let initial_body_for_input = initial_body.clone();
+    input.update(cx, |state, cx| {
+      state.set_value(initial_body_for_input.clone(), window, cx);
+    });
+
+    let input_for_focus = input.clone();
+    window.on_next_frame(move |window, cx| {
+      input_for_focus.update(cx, |state, cx| {
+        state.focus(window, cx);
+      });
+    });
+
+    self.pr_description_editing = true;
+    self.pr_description_initial_body = Some(initial_body);
+    self.pr_description_error = None;
+    cx.notify();
+  }
+
+  fn cancel_pr_description_edit(&mut self, cx: &mut Context<Self>) {
+    if self.pr_description_submitting || !self.pr_description_editing {
+      return;
+    }
+    self.clear_pr_description_edit_state();
+    cx.notify();
+  }
+
+  fn submit_pr_description_edit(&mut self, cx: &mut Context<Self>) {
+    if self.pr_description_submitting
+      || !self.pr_description_editing
+      || self.overview_comment_submission_in_flight()
+    {
+      return;
+    }
+    let Some((owner, repo, number)) = self.pull_request.as_ref().map(|pull_request| {
+      (
+        pull_request.repository.owner.clone(),
+        pull_request.repository.repo.clone(),
+        pull_request.number,
+      )
+    }) else {
+      self.pr_description_error = Some("No pull request selected".into());
+      cx.notify();
+      return;
+    };
+    let Some(input) = self.pr_description_edit_input.as_ref() else {
+      return;
+    };
+    let initial_body = self
+      .pr_description_initial_body
+      .as_deref()
+      .unwrap_or_default()
+      .to_string();
+    let raw_value = input.read(cx).value().to_string();
+    let Some(next_body) = next_pr_description_body(raw_value.as_str(), initial_body.as_str())
+    else {
+      self.clear_pr_description_edit_state();
+      cx.notify();
+      return;
+    };
+
+    self.pr_description_submitting = true;
+    self.pr_description_error = None;
+    cx.notify();
+
+    let api = self.api.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.update_pull_request_description(&owner, &repo, number, next_body.as_str())
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.pr_description_submitting = false;
+        match result {
+          Ok(update) => {
+            if let Some(pull_request) = this.pull_request.as_mut() {
+              apply_pull_request_description_update_local(pull_request, update);
+            }
+            if let Some(pull_request) = this.pull_request.as_ref() {
+              this.description_code_reference_requests =
+                Self::description_code_reference_requests_for_pull_request(pull_request);
+              let description_requests = this.description_code_reference_requests.clone();
+              this.schedule_code_reference_fetches(description_requests.iter(), cx);
+            }
+            this.clear_pr_description_edit_state();
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.pr_description_error = Some(error_message.clone().into());
+            this.record_pr_error(
+              "github.pr.description.update",
+              error_message.as_str(),
+              Map::new(),
+            );
+          }
+        }
+        cx.notify();
+      });
+    });
+    self.details_task = Some(task);
+  }
+
   fn overview_comment_submission_in_flight(&self) -> bool {
     self.overview_issue_comment_submitting
       || self.overview_edit_submitting
       || self.overview_reply_submitting
+      || self.pr_description_submitting
   }
 
   fn overview_comment_body_for_target(&self, target: OverviewCommentTarget) -> Option<String> {
@@ -3860,6 +4022,10 @@ impl GithubPrDetailsPage {
     self.review_comment_code_reference_cache.clear();
     self.review_comment_code_reference_tasks.clear();
     self.pending_review_comment_link_comment_id = open_target.review_comment_id;
+    self.pr_description_editing = false;
+    self.pr_description_initial_body = None;
+    self.pr_description_submitting = false;
+    self.pr_description_error = None;
     self.file_loading = false;
     self.file_error = None;
     self.tree_state.update(cx, |state, cx| {
@@ -5208,8 +5374,9 @@ impl GithubPrDetailsPage {
     };
 
     let pr_page = cx.entity().clone();
+    let pr_page_for_links = pr_page.clone();
     let description_link_handler = Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
-      let handled = pr_page.update(cx, |this, cx| this.handle_gfm_link(url, window, cx));
+      let handled = pr_page_for_links.update(cx, |this, cx| this.handle_gfm_link(url, window, cx));
       if handled {
         LinkAction::Handled
       } else {
@@ -5387,13 +5554,97 @@ impl GithubPrDetailsPage {
         v_flex()
           .gap_2()
           .child(
-            div()
-              .text_sm()
-              .font_medium()
-              .text_color(theme.foreground)
-              .child("Description"),
+            h_flex()
+              .items_center()
+              .justify_between()
+              .gap_2()
+              .child(
+                div()
+                  .text_sm()
+                  .font_medium()
+                  .text_color(theme.foreground)
+                  .child("Description"),
+              )
+              .child(
+                Button::new(format!("pr-description-edit-{}", pr.number))
+                  .ghost()
+                  .xsmall()
+                  .compact()
+                  .icon(UiIconName::SquarePen)
+                  .tooltip("Edit description")
+                  .disabled(
+                    self.pr_description_editing || self.overview_comment_submission_in_flight(),
+                  )
+                  .on_click({
+                    let page = pr_page.clone();
+                    move |_, window, cx| {
+                      page.update(cx, |this, cx| {
+                        this.start_pr_description_edit(window, cx);
+                      });
+                    }
+                  }),
+              ),
           )
-          .child(
+          .child(if self.pr_description_editing {
+            if let Some(input_state) = self.pr_description_edit_input.clone() {
+              let can_save = self
+                .pr_description_initial_body
+                .as_deref()
+                .and_then(|initial| {
+                  let raw_value = input_state.read(cx).value().to_string();
+                  next_pr_description_body(raw_value.as_str(), initial)
+                })
+                .is_some();
+              let page_for_cancel = pr_page.clone();
+              let page_for_save = pr_page.clone();
+              v_flex()
+                .gap_2()
+                .child(
+                  div().w_full().child(
+                    Input::new(&input_state)
+                      .disabled(self.pr_description_submitting)
+                      .h(px(OVERVIEW_DESCRIPTION_INPUT_HEIGHT_PX)),
+                  ),
+                )
+                .when_some(self.pr_description_error.clone(), |this, error| {
+                  this.child(div().text_xs().text_color(theme.status_red()).child(error))
+                })
+                .child(
+                  h_flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                      Button::new(format!("pr-description-edit-cancel-{}", pr.number))
+                        .ghost()
+                        .xsmall()
+                        .compact()
+                        .label("Cancel")
+                        .disabled(self.pr_description_submitting)
+                        .on_click(move |_, _, cx| {
+                          page_for_cancel.update(cx, |this, cx| {
+                            this.cancel_pr_description_edit(cx);
+                          });
+                        }),
+                    )
+                    .child(
+                      Button::new(format!("pr-description-edit-save-{}", pr.number))
+                        .xsmall()
+                        .compact()
+                        .label("Save")
+                        .disabled(!can_save || self.overview_comment_submission_in_flight())
+                        .on_click(move |_, _, cx| {
+                          page_for_save.update(cx, |this, cx| {
+                            this.submit_pr_description_edit(cx);
+                          });
+                        }),
+                    ),
+                )
+                .into_any_element()
+            } else {
+              div().into_any_element()
+            }
+          } else {
             div()
               .border_1()
               .border_color(theme.border)
@@ -5411,8 +5662,9 @@ impl GithubPrDetailsPage {
                   options = options.with_github_code_reference_previews(previews);
                 }
                 render_markdown(body.as_str(), &options, cx)
-              }),
-          ),
+              })
+              .into_any_element()
+          }),
       )
       .child(self.render_details_conversation_panel(pr, cx));
 
@@ -6314,11 +6566,11 @@ impl Focusable for GithubPrDetailsPage {
 mod tests {
   use super::*;
   use crate::api::{
-    GithubPullRequestCommit, GithubPullRequestCommitUser, GithubPullRequestDetails,
-    GithubPullRequestFile, GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser,
-    GithubPullRequestReview, GithubPullRequestReviewComment, GithubPullRequestReviewCommentUser,
-    GithubPullRequestReviewEvent, GithubPullRequestReviewState, GithubPullRequestState,
-    GithubRepository,
+    GithubPullRequestCommit, GithubPullRequestCommitUser, GithubPullRequestDescriptionUpdate,
+    GithubPullRequestDetails, GithubPullRequestFile, GithubPullRequestIssueComment,
+    GithubPullRequestIssueCommentUser, GithubPullRequestReview, GithubPullRequestReviewComment,
+    GithubPullRequestReviewCommentUser, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
+    GithubPullRequestState, GithubRepository,
   };
 
   fn make_api_file(
@@ -6501,6 +6753,49 @@ mod tests {
     assert!(issue_comment_owned_by_login(&comment, "OCTOCAT"));
     comment.user = None;
     assert!(!issue_comment_owned_by_login(&comment, "octocat"));
+  }
+
+  #[test]
+  fn next_pr_description_body_returns_none_when_value_is_unchanged_after_trim() {
+    assert_eq!(
+      next_pr_description_body("  Existing description  ", "Existing description"),
+      None
+    );
+  }
+
+  #[test]
+  fn apply_pull_request_description_update_local_updates_body_and_updated_at() {
+    let mut pull_request = make_pr_details_for_stats();
+    let update = GithubPullRequestDescriptionUpdate {
+      number: pull_request.number,
+      body: Some("Updated description".to_string()),
+      updated_at: "2026-03-01T11:10:00Z".to_string(),
+    };
+
+    apply_pull_request_description_update_local(&mut pull_request, update);
+    assert_eq!(pull_request.body.as_deref(), Some("Updated description"));
+    assert_eq!(pull_request.updated_at, "2026-03-01T11:10:00Z");
+  }
+
+  #[test]
+  fn description_code_reference_requests_for_pull_request_recomputes_after_description_update() {
+    let mut pull_request = make_pr_details_for_stats();
+    pull_request.body =
+      Some("[old](https://github.com/acme/widget/blob/main/src/old.rs#L2-L3)".to_string());
+    let update = GithubPullRequestDescriptionUpdate {
+      number: pull_request.number,
+      body: Some("[new](https://github.com/acme/widget/blob/main/src/new.rs#L8-L9)".to_string()),
+      updated_at: "2026-03-01T11:30:00Z".to_string(),
+    };
+
+    apply_pull_request_description_update_local(&mut pull_request, update);
+    let requests =
+      GithubPrDetailsPage::description_code_reference_requests_for_pull_request(&pull_request);
+
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "src/new.rs");
+    assert_eq!(requests[0].start_line, 8);
+    assert_eq!(requests[0].end_line, 9);
   }
 
   #[test]

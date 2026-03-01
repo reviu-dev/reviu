@@ -46,8 +46,9 @@ use ui::{
 use crate::{
   ShowCommandPalette, ShowFileSearch,
   api::{
-    ApiClient, GithubIssue, GithubIssueDetails, GithubIssueDetailsComment, GithubIssueStateReason,
-    GithubIssueUser, GithubPullRequest, GithubRepositoryDetails,
+    ApiClient, GithubIssue, GithubIssueDescriptionUpdate, GithubIssueDetails,
+    GithubIssueDetailsComment, GithubIssueStateReason, GithubIssueUser, GithubPullRequest,
+    GithubRepositoryDetails,
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_compact_datetime, format_long_date_opt},
@@ -483,6 +484,18 @@ fn issue_details_comment_owned_by_login(comment: &GithubIssueDetailsComment, log
     .is_some_and(|user| github_shared::logins_match_case_insensitive(user.login.as_str(), login))
 }
 
+fn next_issue_description_body(raw_value: &str, initial_value: &str) -> Option<String> {
+  github_shared::next_trimmed_text_update(raw_value, initial_value)
+}
+
+fn apply_issue_description_update_local(
+  issue: &mut GithubIssueDetails,
+  update: GithubIssueDescriptionUpdate,
+) {
+  issue.body = update.body;
+  issue.updated_at = update.updated_at;
+}
+
 fn upsert_issue_details_comment_local(
   comments: &mut Vec<GithubIssueDetailsComment>,
   comment: GithubIssueDetailsComment,
@@ -581,6 +594,7 @@ const ISSUE_DETAILS_SHEET_WIDTH_PX: f32 = 850.0;
 const ISSUE_DETAILS_SHEET_MIN_WIDTH_PX: f32 = 600.0;
 const ISSUE_DETAILS_SHEET_MAX_WIDTH_PX: f32 = 1200.0;
 const ISSUE_COMMENT_INPUT_HEIGHT_PX: f32 = 100.0;
+const ISSUE_DESCRIPTION_INPUT_HEIGHT_PX: f32 = 500.0;
 
 #[derive(Clone)]
 struct IssueSheetResizeDrag;
@@ -1124,6 +1138,11 @@ struct GithubIssueDetailsSheetView {
   edit_initial_body: Option<String>,
   edit_submitting: bool,
   edit_error: Option<SharedString>,
+  description_edit_input: Option<Entity<InputState>>,
+  description_editing: bool,
+  description_initial_body: Option<String>,
+  description_submitting: bool,
+  description_error: Option<SharedString>,
 }
 
 impl GithubIssueDetailsSheetView {
@@ -1162,6 +1181,11 @@ impl GithubIssueDetailsSheetView {
       edit_initial_body: None,
       edit_submitting: false,
       edit_error: None,
+      description_edit_input: None,
+      description_editing: false,
+      description_initial_body: None,
+      description_submitting: false,
+      description_error: None,
     };
     this.load_issue(owner, repo, issue_number, cx);
     this
@@ -1185,6 +1209,10 @@ impl GithubIssueDetailsSheetView {
     self.edit_initial_body = None;
     self.edit_submitting = false;
     self.edit_error = None;
+    self.description_editing = false;
+    self.description_initial_body = None;
+    self.description_submitting = false;
+    self.description_error = None;
     let generation = self.request_generation;
 
     let api = self.api.clone();
@@ -1435,11 +1463,37 @@ impl GithubIssueDetailsSheetView {
     input
   }
 
+  fn ensure_description_edit_input(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<InputState> {
+    if let Some(input) = self.description_edit_input.as_ref() {
+      return input.clone();
+    }
+
+    let input = cx.new(|cx| {
+      InputState::new(window, cx)
+        .multi_line(true)
+        .rows(6)
+        .placeholder("Edit description...")
+    });
+    self.description_edit_input = Some(input.clone());
+    input
+  }
+
   fn clear_edit_state(&mut self) {
     self.editing_comment_id = None;
     self.edit_initial_body = None;
     self.edit_submitting = false;
     self.edit_error = None;
+  }
+
+  fn clear_description_edit_state(&mut self) {
+    self.description_editing = false;
+    self.description_initial_body = None;
+    self.description_submitting = false;
+    self.description_error = None;
   }
 
   fn upsert_issue_comment(&mut self, comment: crate::api::GithubIssueDetailsComment) {
@@ -1449,13 +1503,103 @@ impl GithubIssueDetailsSheetView {
     upsert_issue_details_comment_local(&mut issue.comments, comment);
   }
 
+  fn start_issue_description_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.comment_input_submitting || self.edit_submitting || self.description_submitting {
+      return;
+    }
+    let Some(issue) = self.issue.as_ref() else {
+      return;
+    };
+
+    let initial_body = issue.body.clone().unwrap_or_default();
+    let input = self.ensure_description_edit_input(window, cx);
+    let initial_body_for_input = initial_body.clone();
+    input.update(cx, |state, cx| {
+      state.set_value(initial_body_for_input.clone(), window, cx);
+    });
+    let input_for_focus = input.clone();
+    window.on_next_frame(move |window, cx| {
+      input_for_focus.update(cx, |state, cx| {
+        state.focus(window, cx);
+      });
+    });
+
+    self.description_editing = true;
+    self.description_initial_body = Some(initial_body);
+    self.description_error = None;
+    cx.notify();
+  }
+
+  fn cancel_issue_description_edit(&mut self, cx: &mut Context<Self>) {
+    if self.description_submitting || !self.description_editing {
+      return;
+    }
+    self.clear_description_edit_state();
+    cx.notify();
+  }
+
+  fn submit_issue_description_edit(&mut self, cx: &mut Context<Self>) {
+    if self.comment_input_submitting
+      || self.edit_submitting
+      || self.description_submitting
+      || !self.description_editing
+    {
+      return;
+    }
+    let Some(input) = self.description_edit_input.as_ref() else {
+      return;
+    };
+    let initial_body = self.description_initial_body.as_deref().unwrap_or_default();
+    let raw_value = input.read(cx).value().to_string();
+    let Some(next_body) = next_issue_description_body(raw_value.as_str(), initial_body) else {
+      self.clear_description_edit_state();
+      cx.notify();
+      return;
+    };
+
+    self.description_submitting = true;
+    self.description_error = None;
+    cx.notify();
+
+    let owner = self.owner.clone();
+    let repo = self.repo.clone();
+    let issue_number = self.issue_number;
+    let api = self.api.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.update_issue_description(&owner, &repo, issue_number, &next_body))
+          .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.description_submitting = false;
+        match result {
+          Ok(update) => {
+            if let Some(issue) = this.issue.as_mut() {
+              apply_issue_description_update_local(issue, update);
+              let description = issue_markdown_body_or_fallback(issue.body.as_deref());
+              this.description_references =
+                extract_github_blob_line_references(description.as_ref());
+              this.schedule_issue_code_reference_fetches(this.request_generation, cx);
+            }
+            this.clear_description_edit_state();
+          }
+          Err(error) => {
+            this.description_error = Some(error.to_string().into());
+          }
+        }
+        cx.notify();
+      });
+    });
+    self.task = Some(task);
+  }
+
   fn start_issue_comment_edit(
     &mut self,
     comment_id: u64,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.comment_input_submitting || self.edit_submitting {
+    if self.comment_input_submitting || self.edit_submitting || self.description_submitting {
       return;
     }
     if !self.editable_issue_comment_ids(cx).contains(&comment_id) {
@@ -1500,7 +1644,7 @@ impl GithubIssueDetailsSheetView {
   }
 
   fn submit_issue_comment_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if self.comment_input_submitting || self.edit_submitting {
+    if self.comment_input_submitting || self.edit_submitting || self.description_submitting {
       return;
     }
     let Some(input) = self.comment_input.as_ref() else {
@@ -1546,7 +1690,7 @@ impl GithubIssueDetailsSheetView {
   }
 
   fn submit_issue_comment_edit(&mut self, cx: &mut Context<Self>) {
-    if self.comment_input_submitting || self.edit_submitting {
+    if self.comment_input_submitting || self.edit_submitting || self.description_submitting {
       return;
     }
     let Some(comment_id) = self.editing_comment_id else {
@@ -1611,7 +1755,7 @@ impl GithubIssueDetailsSheetView {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.comment_input_submitting || self.edit_submitting {
+    if self.comment_input_submitting || self.edit_submitting || self.description_submitting {
       return;
     }
     if !self.editable_issue_comment_ids(cx).contains(&comment_id) {
@@ -1639,7 +1783,7 @@ impl GithubIssueDetailsSheetView {
   }
 
   fn submit_issue_comment_delete(&mut self, comment_id: u64, cx: &mut Context<Self>) {
-    if self.comment_input_submitting || self.edit_submitting {
+    if self.comment_input_submitting || self.edit_submitting || self.description_submitting {
       return;
     }
     let Some(issue) = self.issue.as_mut() else {
@@ -1755,7 +1899,8 @@ impl Render for GithubIssueDetailsSheetView {
           .child(label.name.clone())
       });
       let editable_issue_comment_ids = self.editable_issue_comment_ids(cx);
-      let comment_submission_in_flight = self.comment_input_submitting || self.edit_submitting;
+      let comment_submission_in_flight =
+        self.comment_input_submitting || self.edit_submitting || self.description_submitting;
       let editing_comment_id = self.editing_comment_id;
       let issue_details_page = cx.entity().clone();
       let comment_input = self.ensure_comment_input(window, cx);
@@ -2033,8 +2178,90 @@ impl Render for GithubIssueDetailsSheetView {
         .child(
           v_flex()
             .gap_2()
-            .child(div().text_sm().font_semibold().child("Description"))
             .child(
+              h_flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(div().text_sm().font_semibold().child("Description"))
+                .child(
+                  Button::new(format!("issue-sheet-description-edit-{}", issue.id))
+                    .ghost()
+                    .xsmall()
+                    .compact()
+                    .icon(UiIconName::SquarePen)
+                    .tooltip("Edit description")
+                    .disabled(comment_submission_in_flight || self.description_editing)
+                    .on_click({
+                      let page = issue_details_page.clone();
+                      move |_, window, cx| {
+                        page.update(cx, |this, cx| {
+                          this.start_issue_description_edit(window, cx);
+                        });
+                      }
+                    }),
+                ),
+            )
+            .child(if self.description_editing {
+              if let Some(input_state) = self.description_edit_input.clone() {
+                let can_save = self
+                  .description_initial_body
+                  .as_deref()
+                  .and_then(|initial| {
+                    let raw_value = input_state.read(cx).value().to_string();
+                    next_issue_description_body(raw_value.as_str(), initial)
+                  })
+                  .is_some();
+                let page_for_cancel = issue_details_page.clone();
+                let page_for_save = issue_details_page.clone();
+                v_flex()
+                  .gap_2()
+                  .child(
+                    div().w_full().child(
+                      Input::new(&input_state)
+                        .disabled(self.description_submitting)
+                        .h(px(ISSUE_DESCRIPTION_INPUT_HEIGHT_PX)),
+                    ),
+                  )
+                  .when_some(self.description_error.clone(), |this, error| {
+                    this.child(div().text_xs().text_color(theme.status_red()).child(error))
+                  })
+                  .child(
+                    h_flex()
+                      .items_center()
+                      .justify_end()
+                      .gap_2()
+                      .child(
+                        Button::new(format!("issue-sheet-description-cancel-{}", issue.id))
+                          .ghost()
+                          .xsmall()
+                          .compact()
+                          .label("Cancel")
+                          .disabled(self.description_submitting)
+                          .on_click(move |_, _, cx| {
+                            page_for_cancel.update(cx, |this, cx| {
+                              this.cancel_issue_description_edit(cx);
+                            });
+                          }),
+                      )
+                      .child(
+                        Button::new(format!("issue-sheet-description-save-{}", issue.id))
+                          .xsmall()
+                          .compact()
+                          .label("Save")
+                          .disabled(!can_save || self.description_submitting)
+                          .on_click(move |_, _, cx| {
+                            page_for_save.update(cx, |this, cx| {
+                              this.submit_issue_description_edit(cx);
+                            });
+                          }),
+                      ),
+                  )
+                  .into_any_element()
+              } else {
+                div().into_any_element()
+              }
+            } else {
               div()
                 .border_1()
                 .border_color(theme.border)
@@ -2052,8 +2279,9 @@ impl Render for GithubIssueDetailsSheetView {
                     options = options.with_github_code_reference_previews(previews);
                   }
                   render_markdown(body.as_ref(), &options, cx)
-                }),
-            ),
+                })
+                .into_any_element()
+            }),
         )
         .child(
           v_flex()
@@ -4413,7 +4641,8 @@ impl Focusable for GithubRepoPage {
 mod tests {
   use super::*;
   use crate::api::{
-    GithubIssueDetailsComment, GithubIssueUser, GithubRepository, GithubRepositoryTreeEntry,
+    GithubIssueDescriptionUpdate, GithubIssueDetailsComment, GithubIssueUser, GithubRepository,
+    GithubRepositoryTreeEntry,
   };
 
   fn make_issue_comment(
@@ -4741,6 +4970,52 @@ mod tests {
   fn issue_details_comment_owned_by_login_requires_comment_user() {
     let comment = make_issue_comment(1, Some("Body"), None);
     assert!(!issue_details_comment_owned_by_login(&comment, "octocat"));
+  }
+
+  #[test]
+  fn next_issue_description_body_returns_none_when_value_is_unchanged_after_trim() {
+    assert_eq!(
+      next_issue_description_body(
+        "  Existing issue description  ",
+        "Existing issue description"
+      ),
+      None
+    );
+  }
+
+  #[test]
+  fn apply_issue_description_update_local_updates_body_and_updated_at() {
+    let mut issue = test_issue_details_with_code_links();
+    let update = GithubIssueDescriptionUpdate {
+      id: issue.id,
+      number: issue.number,
+      body: Some("Updated issue description".to_string()),
+      updated_at: "2026-03-01T12:00:00Z".to_string(),
+    };
+
+    apply_issue_description_update_local(&mut issue, update);
+    assert_eq!(issue.body.as_deref(), Some("Updated issue description"));
+    assert_eq!(issue.updated_at, "2026-03-01T12:00:00Z");
+  }
+
+  #[test]
+  fn issue_description_references_recompute_without_touching_comment_references() {
+    let mut issue = test_issue_details_with_code_links();
+    let update = GithubIssueDescriptionUpdate {
+      id: issue.id,
+      number: issue.number,
+      body: Some("https://github.com/acme/widget/blob/main/src/new.rs#L9-L11".to_string()),
+      updated_at: "2026-03-01T12:30:00Z".to_string(),
+    };
+
+    apply_issue_description_update_local(&mut issue, update);
+    let (description, comments) = issue_code_reference_requests(&issue);
+
+    assert_eq!(description.len(), 1);
+    assert_eq!(description[0].path, "src/new.rs");
+    assert_eq!(description[0].start_line, 9);
+    assert_eq!(description[0].end_line, 11);
+    assert_eq!(comments.get(&7).map(Vec::len), Some(1));
   }
 
   #[test]

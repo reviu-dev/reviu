@@ -63,11 +63,21 @@ pub(crate) fn normalize_non_empty_text(value: &str) -> Option<String> {
   }
 }
 
+pub(crate) fn next_trimmed_text_update(raw_value: &str, initial_value: &str) -> Option<String> {
+  let next_value = raw_value.trim();
+  if next_value == initial_value.trim() {
+    None
+  } else {
+    Some(next_value.to_string())
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::{
     is_unauthorized_error_message, issue_url, line_snippets_from_content,
-    logins_match_case_insensitive, normalize_non_empty_text, pr_url, repo_label, short_sha,
+    logins_match_case_insensitive, next_trimmed_text_update, normalize_non_empty_text, pr_url,
+    repo_label, short_sha,
   };
 
   #[test]
@@ -137,5 +147,26 @@ mod tests {
       Some("hello world".to_string())
     );
     assert_eq!(normalize_non_empty_text(" \n\t "), None);
+  }
+
+  #[test]
+  fn next_trimmed_text_update_returns_none_when_value_is_unchanged_after_trim() {
+    assert_eq!(
+      next_trimmed_text_update("  hello world  ", "hello world"),
+      None
+    );
+  }
+
+  #[test]
+  fn next_trimmed_text_update_returns_trimmed_value_when_changed() {
+    assert_eq!(
+      next_trimmed_text_update("  hello reviu  ", "hello world"),
+      Some("hello reviu".to_string())
+    );
+  }
+
+  #[test]
+  fn next_trimmed_text_update_allows_empty_string_to_clear_value() {
+    assert_eq!(next_trimmed_text_update("   ", "hello world"), Some(String::new()));
   }
 }

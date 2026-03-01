@@ -225,6 +225,16 @@ pub struct GithubIssueDetails {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubIssueDescriptionUpdate {
+  pub id: u64,
+  pub number: u64,
+  pub body: Option<String>,
+  #[serde(rename = "updated_at")]
+  pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct GithubRepositoryDetailsOwner {
   pub login: String,
   #[serde(rename = "avatar_url")]
@@ -541,6 +551,15 @@ pub struct GithubPullRequestDetails {
   pub head_repository: Option<GithubRepository>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubPullRequestDescriptionUpdate {
+  pub number: u64,
+  pub body: Option<String>,
+  #[serde(rename = "updated_at")]
+  pub updated_at: String,
+}
+
 impl GithubPullRequestDetails {
   pub fn status(&self) -> GithubPullRequestStatus {
     if self.merged_at.is_some() {
@@ -635,9 +654,20 @@ struct GithubIssueCommentResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct GithubIssueDescriptionUpdateResponse {
+  issue: GithubIssueDescriptionUpdate,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubPullRequestDetailsResponse {
   #[serde(rename = "pullRequest")]
   pull_request: GithubPullRequestDetails,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestDescriptionUpdateResponse {
+  #[serde(rename = "pullRequest")]
+  pull_request: GithubPullRequestDescriptionUpdate,
 }
 
 #[derive(Debug, Deserialize)]
@@ -682,6 +712,11 @@ struct UpdateGithubPullRequestCommentRequest<'a> {
 
 #[derive(Debug, Serialize)]
 struct UpdateGithubIssueCommentRequest<'a> {
+  body: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct UpdateGithubDescriptionRequest<'a> {
   body: &'a str,
 }
 
@@ -1097,6 +1132,30 @@ impl ApiClient {
     Ok(payload.issue)
   }
 
+  pub fn update_issue_description(
+    &self,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    body: &str,
+  ) -> Result<GithubIssueDescriptionUpdate> {
+    let route = format!("/github/repos/{owner}/{repo}/issues/{issue_number}");
+    let response = self
+      .authed_request(Method::PATCH, route.as_str())
+      .json(&UpdateGithubDescriptionRequest { body })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("PATCH", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubIssueDescriptionUpdateResponse>()?;
+    Ok(payload.issue)
+  }
+
   pub fn create_issue_comment(
     &self,
     owner: &str,
@@ -1186,6 +1245,31 @@ impl ApiClient {
       anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubPullRequestDetailsResponse>()?;
+    Ok(payload.pull_request)
+  }
+
+  pub fn update_pull_request_description(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    body: &str,
+  ) -> Result<GithubPullRequestDescriptionUpdate> {
+    let route = format!("/github/pr/{number}");
+    let response = self
+      .authed_request(Method::PATCH, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&UpdateGithubDescriptionRequest { body })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("PATCH", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubPullRequestDescriptionUpdateResponse>()?;
     Ok(payload.pull_request)
   }
 
@@ -2290,6 +2374,55 @@ mod tests {
   }
 
   #[test]
+  fn update_issue_description_parses_success_payload() {
+    let body = r#"{
+      "issue": {
+        "id": 501,
+        "number": 77,
+        "body": "Updated issue description",
+        "updated_at": "2026-02-22T09:30:00Z"
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let issue = api
+      .update_issue_description("acme", "widget", 77, "Updated issue description")
+      .expect("update issue description");
+    assert_eq!(issue.id, 501);
+    assert_eq!(issue.number, 77);
+    assert_eq!(issue.body.as_deref(), Some("Updated issue description"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn update_issue_description_uses_expected_route() {
+    let body = r#"{
+      "issue": {
+        "id": 501,
+        "number": 77,
+        "body": "",
+        "updated_at": "2026-02-22T09:30:00Z"
+      }
+    }"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .update_issue_description("acme", "widget", 77, "")
+      .expect("update issue description");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(request_line, "PATCH /github/repos/acme/widget/issues/77 HTTP/1.1");
+  }
+
+  #[test]
   fn create_issue_comment_parses_success_payload() {
     let body = r#"{
       "comment": {
@@ -2489,6 +2622,52 @@ mod tests {
       "widget-fork"
     );
     handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn update_pull_request_description_parses_success_payload() {
+    let body = r#"{
+      "pullRequest": {
+        "number": 42,
+        "body": "Updated PR description",
+        "updated_at": "2026-02-15T13:00:00Z"
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let pull_request = api
+      .update_pull_request_description("acme", "widget", 42, "Updated PR description")
+      .expect("update pull request description");
+    assert_eq!(pull_request.number, 42);
+    assert_eq!(pull_request.body.as_deref(), Some("Updated PR description"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn update_pull_request_description_uses_expected_route() {
+    let body = r#"{
+      "pullRequest": {
+        "number": 42,
+        "body": "",
+        "updated_at": "2026-02-15T13:00:00Z"
+      }
+    }"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .update_pull_request_description("acme", "widget", 42, "")
+      .expect("update pull request description");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(request_line, "PATCH /github/pr/42?org=acme&repo=widget HTTP/1.1");
   }
 
   #[test]
@@ -3383,6 +3562,17 @@ mod tests {
   }
 
   #[test]
+  fn update_issue_description_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api.update_issue_description("acme", "widget", 77, "Body").err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
   fn create_issue_comment_returns_unauthorized_error() {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
     let api = make_test_api_client(base_url);
@@ -3425,6 +3615,19 @@ mod tests {
     let api = make_test_api_client(base_url);
 
     let err = api.fetch_pull_request_details("acme", "widget", 42).err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn update_pull_request_description_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .update_pull_request_description("acme", "widget", 42, "Body")
+      .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");
