@@ -209,17 +209,14 @@ fn as_gfm_code_reference_preview(
   }
 }
 
-fn line_is_markdown_link_to_url(trimmed: &str, url: &str) -> bool {
+fn markdown_link_target(trimmed: &str) -> Option<&str> {
   if !trimmed.starts_with('[') || !trimmed.ends_with(')') {
-    return false;
+    return None;
   }
   let Some((_, rest)) = trimmed.split_once("](") else {
-    return false;
+    return None;
   };
-  let Some(link_target) = rest.strip_suffix(')') else {
-    return false;
-  };
-  link_target == url
+  rest.strip_suffix(')')
 }
 
 fn review_comment_markdown_scope_id(comment_id: u64) -> usize {
@@ -1201,6 +1198,9 @@ impl Editor {
       return vec![ReviewCommentBodySegment::Markdown(body.to_string())];
     }
 
+    let preview_by_url: HashMap<&str, &ReviewCommentCodeReferencePreview> =
+      previews.iter().map(|preview| (preview.url.as_ref(), preview)).collect();
+
     let mut segments = Vec::new();
     let mut markdown_lines = Vec::new();
     let flush_markdown = |segments: &mut Vec<ReviewCommentBodySegment>, lines: &mut Vec<String>| {
@@ -1213,12 +1213,18 @@ impl Editor {
 
     for line in body.lines() {
       let trimmed = line.trim();
-      let preview = previews.iter().find(|preview| {
-        let url = preview.url.as_ref();
-        trimmed == url
-          || trimmed == format!("<{url}>")
-          || line_is_markdown_link_to_url(trimmed, url)
-      });
+      let preview = if trimmed.is_empty() {
+        None
+      } else if let Some(inner) = trimmed
+        .strip_prefix('<')
+        .and_then(|inner| inner.strip_suffix('>'))
+      {
+        preview_by_url.get(inner).copied()
+      } else {
+        let markdown_link_preview =
+          markdown_link_target(trimmed).and_then(|target| preview_by_url.get(target).copied());
+        markdown_link_preview.or_else(|| preview_by_url.get(trimmed).copied())
+      };
 
       if let Some(preview) = preview {
         flush_markdown(&mut segments, &mut markdown_lines);
@@ -7148,17 +7154,14 @@ pub mod tests {
   }
 
   #[test]
-  fn line_is_markdown_link_to_url_matches_exact_target() {
+  fn markdown_link_target_extracts_exact_target() {
     let url = "https://github.com/acme/widget/blob/main/docker-compose.yml#L11";
-    assert!(line_is_markdown_link_to_url(
-      &format!("[compose]({url})"),
-      url
-    ));
-    assert!(!line_is_markdown_link_to_url(
-      "[compose](https://github.com/acme/other)",
-      url
-    ));
-    assert!(!line_is_markdown_link_to_url(url, url));
+    assert_eq!(markdown_link_target(&format!("[compose]({url})")), Some(url));
+    assert_eq!(
+      markdown_link_target("[compose](https://github.com/acme/other)"),
+      Some("https://github.com/acme/other")
+    );
+    assert_eq!(markdown_link_target(url), None);
   }
 
   #[test]
