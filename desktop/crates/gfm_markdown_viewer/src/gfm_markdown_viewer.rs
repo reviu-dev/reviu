@@ -1,5 +1,5 @@
 use std::{
-  collections::{HashMap, HashSet, VecDeque},
+  collections::{HashMap, HashSet},
   fs,
   hash::{DefaultHasher, Hash, Hasher},
   ops::Range,
@@ -31,6 +31,11 @@ use once_cell::sync::Lazy;
 use reqwest::header::CONTENT_TYPE;
 use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, TokenType, languages};
 use tree_sitter::{Node as TsNode, Parser as TsParser};
+
+use crate::parsed_cache::parse_markdown_for_render;
+use crate::preview_segments::{MarkdownRenderSegment, split_markdown_preview_segments};
+#[cfg(test)]
+use crate::parsed_cache::{PARSED_MARKDOWN_CACHE_MAX_ENTRIES, ParsedMarkdownCache};
 
 type BlockRenderFn = dyn Fn(AnyElement, &App) -> AnyElement + Send + Sync;
 type HeadingRenderFn = dyn Fn(u8, AnyElement, &App) -> AnyElement + Send + Sync;
@@ -379,14 +384,10 @@ const MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX: f32 = 8.0;
 const MARKDOWN_CODE_REFERENCE_ROW_GAP_PX: f32 = 8.0;
 const MARKDOWN_INLINE_IMAGE_MAX_HEIGHT_PX: f32 = 420.0;
 const MARKDOWN_IMAGE_HARD_BREAK_SPACER_PX: f32 = 14.0;
-const PARSED_MARKDOWN_CACHE_MAX_ENTRIES: usize = 256;
-const PARSED_MARKDOWN_CACHE_MAX_SOURCE_LEN: usize = 100_000;
 const MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX: f32 =
   MARKDOWN_CODE_BLOCK_PADDING_TOP_PX + MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX + 2.0;
 static BADGE_IMAGE_SOURCE_CACHE: Lazy<Mutex<HashMap<String, BadgeResolveState>>> =
   Lazy::new(|| Mutex::new(HashMap::new()));
-static PARSED_MARKDOWN_CACHE: Lazy<Mutex<ParsedMarkdownCache>> =
-  Lazy::new(|| Mutex::new(ParsedMarkdownCache::default()));
 
 #[derive(Clone, Debug)]
 enum BadgeImageSource {
@@ -413,49 +414,6 @@ enum Segment {
 #[derive(Clone)]
 pub struct ParsedMarkdown {
   blocks: Arc<Vec<Block>>,
-}
-
-#[derive(Default)]
-struct ParsedMarkdownCache {
-  entries: HashMap<Arc<str>, ParsedMarkdown>,
-  lru_keys: VecDeque<Arc<str>>,
-}
-
-impl ParsedMarkdownCache {
-  fn get(&mut self, source: &str) -> Option<ParsedMarkdown> {
-    let parsed = self.entries.get(source).cloned()?;
-    self.touch(source);
-    Some(parsed)
-  }
-
-  fn insert(&mut self, source: Arc<str>, parsed: ParsedMarkdown) {
-    if self.entries.contains_key(source.as_ref()) {
-      self.touch(source.as_ref());
-      return;
-    }
-
-    self.entries.insert(source.clone(), parsed);
-    self.lru_keys.push_back(source);
-    self.evict_excess();
-  }
-
-  fn touch(&mut self, source: &str) {
-    let Some(ix) = self.lru_keys.iter().position(|key| key.as_ref() == source) else {
-      return;
-    };
-    if let Some(key) = self.lru_keys.remove(ix) {
-      self.lru_keys.push_back(key);
-    }
-  }
-
-  fn evict_excess(&mut self) {
-    while self.entries.len() > PARSED_MARKDOWN_CACHE_MAX_ENTRIES {
-      let Some(oldest_key) = self.lru_keys.pop_front() else {
-        break;
-      };
-      self.entries.remove(oldest_key.as_ref());
-    }
-  }
 }
 
 pub fn parse_gfm(source: &str) -> Vec<Block> {
@@ -487,30 +445,6 @@ pub fn parse_markdown(source: &str) -> ParsedMarkdown {
   }
 }
 
-fn parse_markdown_for_render(source: &str) -> ParsedMarkdown {
-  if source.len() > PARSED_MARKDOWN_CACHE_MAX_SOURCE_LEN {
-    return parse_markdown(source);
-  }
-
-  if let Ok(mut cache) = PARSED_MARKDOWN_CACHE.lock()
-    && let Some(parsed) = cache.get(source)
-  {
-    return parsed;
-  }
-
-  let parsed = parse_markdown(source);
-  let cache_key: Arc<str> = Arc::from(source);
-
-  if let Ok(mut cache) = PARSED_MARKDOWN_CACHE.lock() {
-    if let Some(existing) = cache.get(source) {
-      return existing;
-    }
-    cache.insert(cache_key, parsed.clone());
-  }
-
-  parsed
-}
-
 pub fn render_parsed_markdown(
   parsed: &ParsedMarkdown,
   options: &MarkdownRenderOptions,
@@ -522,7 +456,7 @@ pub fn render_parsed_markdown(
 }
 
 pub fn estimate_markdown_height_px(source: &str, wrap_columns: usize, line_height_px: f32) -> f32 {
-  let parsed = parse_markdown(source);
+  let parsed = parse_markdown_for_render(source);
   estimate_parsed_markdown_height_px(&parsed, wrap_columns, line_height_px)
 }
 
@@ -1144,82 +1078,10 @@ pub fn extract_github_blob_line_references(text: &str) -> Vec<GithubBlobLineRefe
   references
 }
 
-fn line_is_markdown_link_to_url(trimmed: &str, url: &str) -> bool {
-  if !trimmed.starts_with('[') || !trimmed.ends_with(')') {
-    return false;
-  }
-  let Some((_, rest)) = trimmed.split_once("](") else {
-    return false;
-  };
-  let Some(link_target) = rest.strip_suffix(')') else {
-    return false;
-  };
-  link_target == url
-}
-
 fn markdown_source_scope_id(source: &str, state: &MarkdownRenderState) -> usize {
   let mut hasher = DefaultHasher::new();
   source.hash(&mut hasher);
   scoped_id_for_state(hasher.finish() as usize, state)
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum MarkdownRenderSegment {
-  Markdown(String),
-  Preview(GithubCodeReferencePreview),
-}
-
-fn split_markdown_preview_segments(
-  source: &str,
-  previews: &HashMap<Arc<str>, GithubCodeReferencePreview>,
-) -> Vec<MarkdownRenderSegment> {
-  if source.is_empty() || previews.is_empty() {
-    return vec![MarkdownRenderSegment::Markdown(source.to_string())];
-  }
-
-  let mut segments = Vec::new();
-  let mut markdown = String::new();
-  let mut has_preview = false;
-
-  for raw_line in source.split_inclusive('\n') {
-    let line = raw_line.strip_suffix('\n').unwrap_or(raw_line);
-    let trimmed = line.trim();
-    let line_preview = if trimmed.is_empty() {
-      None
-    } else if let Some(inner) = trimmed
-      .strip_prefix('<')
-      .and_then(|inner| inner.strip_suffix('>'))
-    {
-      previews.get(inner).cloned()
-    } else {
-      let markdown_link_preview = previews
-        .iter()
-        .find(|(url, _)| line_is_markdown_link_to_url(trimmed, url.as_ref()))
-        .map(|(_, preview)| preview.clone());
-      markdown_link_preview.or_else(|| previews.get(trimmed).cloned())
-    };
-
-    if let Some(preview) = line_preview {
-      if !markdown.is_empty() {
-        segments.push(MarkdownRenderSegment::Markdown(markdown.clone()));
-        markdown.clear();
-      }
-      segments.push(MarkdownRenderSegment::Preview(preview));
-      has_preview = true;
-    } else {
-      markdown.push_str(raw_line);
-    }
-  }
-
-  if !markdown.is_empty() {
-    segments.push(MarkdownRenderSegment::Markdown(markdown));
-  }
-
-  if !has_preview {
-    return vec![MarkdownRenderSegment::Markdown(source.to_string())];
-  }
-
-  segments
 }
 
 fn short_github_reference(reference: &str) -> String {
@@ -6450,7 +6312,7 @@ Apres"#,
       cache.insert(Arc::from(source.as_str()), parse_markdown(source.as_str()));
     }
 
-    assert!(cache.entries.len() <= PARSED_MARKDOWN_CACHE_MAX_ENTRIES);
+    assert!(cache.len() <= PARSED_MARKDOWN_CACHE_MAX_ENTRIES);
     assert!(cache.get("source-0").is_none());
     assert!(
       cache
