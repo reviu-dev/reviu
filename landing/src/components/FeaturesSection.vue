@@ -63,7 +63,7 @@ const features: Feature[] = [
         <h2 class="text-base/7 font-semibold text-primary">Features</h2>
         <p class="mt-2 text-5xl font-semibold tracking-tight text-balance text-foreground sm:text-6xl">Everything in Free for local Git.<br />Pro for GitHub workflows.</p>
         <p class="mx-auto mt-6 max-w-2xl text-lg/8 text-muted-foreground">
-          Start with local Git and keyboard-first review workflows, then unlock GitHub notifications, repository browsing, pull request reviews, and issues with Reviu Pro for $20/month.
+          Start with local Git and keyboard-first review workflows, then unlock GitHub notifications, repository browsing, pull request reviews, and issues with Reviu Pro for $19/month.
         </p>
       </div>
       <div class="mx-auto mt-16 grid max-w-6xl grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">

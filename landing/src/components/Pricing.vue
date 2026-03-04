@@ -44,9 +44,9 @@ const tiers = [
     <div class="mx-auto max-w-7xl px-6 lg:px-8">
       <div class="mx-auto max-w-4xl text-center">
         <h2 class="text-base/7 font-semibold text-primary">Pricing</h2>
-        <p class="mt-2 text-5xl font-semibold tracking-tight text-balance text-gray-900 sm:text-6xl dark:text-white">Simple pricing for local Git and GitHub workflows.</p>
+        <p class="mt-2 text-5xl font-semibold tracking-tight text-balance text-foreground sm:text-6xl">Simple pricing for local Git and GitHub workflows.</p>
       </div>
-      <p class="mx-auto mt-6 max-w-2xl text-center text-lg font-medium text-pretty text-gray-600 sm:text-xl/8 dark:text-gray-400">Use Free for full local Git workflows, then upgrade to Pro at $20/month when you need GitHub notifications, repositories, PR reviews, and issues.</p>
+      <p class="mx-auto mt-6 max-w-2xl text-center text-lg font-medium text-pretty text-gray-600 sm:text-xl/8 dark:text-gray-400">Use Free for full local Git workflows, then upgrade to Pro at $19/month when you need GitHub notifications, repositories, PR reviews, and issues.</p>
       <div class="isolate mx-auto lg:px-20 xl:px-40 mt-10 grid max-w-md grid-cols-1 gap-8 lg:mx-0 lg:max-w-none lg:grid-cols-2">
         <div v-for="tier in tiers" :key="tier.id" class="group/tier rounded-3xl p-8 ring-1 xl:p-10 bg-background ring-muted dark:data-featured:ring-2 data-featured:ring-primary" :data-featured="tier.featured ? 'true' : undefined">
           <div class="flex items-center gap-2">
@@ -55,6 +55,9 @@ const tiers = [
           </div>
           <p class="mt-4 text-sm/6 text-muted-foreground ">{{ tier.description }}</p>
           <p class="mt-6 text-4xl font-semibold tracking-tight text-foreground">{{ tier.price }}</p>
+          <template v-if="tier.id === 'pro'">
+            <p class="mt-2 text-sm/6 text-muted-foreground">14-day free trial, no payment method required.</p>
+          </template>
           <a
             v-if="tier.available"
             :href="tier.href"

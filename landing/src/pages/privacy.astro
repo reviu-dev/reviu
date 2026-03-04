@@ -1,0 +1,157 @@
+---
+import Layout from "../layouts/Layout.astro";
+
+const lastUpdated = "March 4, 2026";
+---
+
+<Layout>
+  <main class="py-20 sm:py-24">
+    <section class="mx-auto max-w-4xl px-6 lg:px-8">
+      <a
+        href="/"
+        class="inline-flex items-center rounded-md bg-background px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50"
+      >
+        ← Back
+      </a>
+      <h1
+        class="mt-6 text-4xl font-semibold tracking-tight text-foreground sm:text-5xl"
+      >
+        Privacy Policy
+      </h1>
+      <p class="mt-4 text-sm/6 text-muted-foreground">
+        Last updated: {lastUpdated}
+      </p>
+
+      <h2 class="mt-12 text-2xl font-semibold text-foreground">
+        1. Data Controller
+      </h2>
+      <ul class="mt-4 space-y-2 text-sm/7 text-muted-foreground">
+        <li>
+          <span class="font-medium text-foreground">Controller:</span>
+          <code>{"{{LEGAL_ENTITY_NAME}}"}</code>
+        </li>
+        <li>
+          <span class="font-medium text-foreground">Address:</span>
+          <code>{"{{REGISTERED_ADDRESS}}"}</code>
+        </li>
+        <li>
+          <span class="font-medium text-foreground">Privacy contact:</span>
+          <code>{"{{PRIVACY_CONTACT_EMAIL}}"}</code>
+        </li>
+      </ul>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        2. Data We Process
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        Depending on your use of Reviu, we may process:
+      </p>
+      <ul class="mt-3 list-disc space-y-2 pl-6 text-sm/7 text-muted-foreground">
+        <li>
+          Contact details you provide (for example, support email messages).
+        </li>
+        <li>
+          Account and subscription metadata related to billing and plan status.
+        </li>
+        <li>
+          Technical usage metrics for product improvement and reliability.
+        </li>
+      </ul>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        3. Purposes and Legal Bases (EEA/UK)
+      </h2>
+      <ul class="mt-4 list-disc space-y-2 pl-6 text-sm/7 text-muted-foreground">
+        <li>Provide and operate the service (performance of a contract).</li>
+        <li>
+          Handle support and service communications (legitimate interests and/or
+          contract).
+        </li>
+        <li>
+          Maintain security, abuse prevention, and reliability (legitimate
+          interests).
+        </li>
+        <li>
+          Comply with accounting, tax, and legal obligations (legal obligation).
+        </li>
+      </ul>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        4. Analytics (Umami, Cookieless)
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        We use Umami analytics in cookieless mode for aggregate traffic
+        insights. We do not use non-essential analytics cookies for this setup.
+      </p>
+      <p class="mt-2 text-sm/7 text-muted-foreground">
+        If analytics implementation changes in the future and non-essential
+        cookies are introduced, this policy and consent handling will be updated
+        accordingly.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        5. Billing and Payment (Polar)
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        We use Polar as our subscription and billing provider. Payment details
+        are processed by Polar and its payment partners according to their
+        security and compliance standards.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        6. Hosting and Infrastructure
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        Reviu is hosted on infrastructure provided by Hetzner.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        7. Data Sharing
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        We do not sell personal data. We may share data with service providers
+        only as needed to provide the service, process subscriptions, secure
+        infrastructure, and comply with legal obligations.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        8. International Transfers
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        If personal data is transferred outside your jurisdiction, we use
+        appropriate safeguards where required by law.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">9. Retention</h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        We retain personal data only as long as necessary for service delivery,
+        legal compliance, dispute resolution, and enforcement of agreements.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        10. Your Rights (EEA/UK)
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        Subject to applicable law, you may request access, rectification,
+        deletion, restriction, objection, and portability of your personal data.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        11. US and California Privacy Notice
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        If US state privacy laws apply to your data, you may have rights to
+        know, access, delete, and correct personal information, and to exercise
+        non-discrimination rights when using those rights.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">12. Contact</h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        Privacy requests: <code>{"{{PRIVACY_CONTACT_EMAIL}}"}</code>
+      </p>
+      <p class="mt-2 text-sm/7 text-muted-foreground">
+        General support: <code>{"{{SUPPORT_EMAIL}}"}</code>
+      </p>
+    </section>
+  </main>
+</Layout>
