@@ -2,7 +2,7 @@
 import { CheckIcon, SparklesIcon } from 'lucide-vue-next'
 import { useIntersectionObserver } from '../composables/useIntersectionObserver'
 
-const { isVisible } = useIntersectionObserver(0.4)
+const { isVisible } = useIntersectionObserver(0.3)
 
 const tiers = [
   {

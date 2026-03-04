@@ -1,4 +1,3 @@
-
 <script setup lang="ts">
 import {
   BellIcon,
@@ -8,9 +7,10 @@ import {
   GitPullRequestIcon,
   SplitIcon,
 } from 'lucide-vue-next'
+
 import { useIntersectionObserver } from '../composables/useIntersectionObserver'
 
-const { isVisible } = useIntersectionObserver(0.5)
+const { isVisible } = useIntersectionObserver(0.3)
 
 type Feature = {
   name: string
