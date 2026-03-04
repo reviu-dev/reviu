@@ -57,8 +57,8 @@ const scrollToPricing = () => {
           </span>
         </div>
         <div id="download" class="mt-10 flex flex-wrap items-center gap-x-6 gap-y-3">
-          <a href="#download" class="rounded-md bg-primary px-3.5 py-2.5 text-sm font-semibold text-white shadow-xs hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">Download for macOS (Apple Silicon)</a>
-          <a href="#pricing" class="text-sm/6 font-semibold text-foreground" @click.prevent="scrollToPricing">See Pro pricing <span aria-hidden="true">→</span></a>
+          <a href="#download" class="rounded-md bg-primary px-3.5 py-2.5 text-sm font-semibold text-white shadow-xs hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary hover:scale-105 transition-transform">Download for macOS (Apple Silicon)</a>
+          <a href="#pricing" class="text-sm/6 font-semibold text-foreground hover:bg-muted/50 px-3 py-2 rounded-md" @click.prevent="scrollToPricing">See Pro pricing <span aria-hidden="true">→</span></a>
         </div>
       </div>
       <div class="mx-auto mt-16 flex max-w-2xl sm:mt-24 lg:mt-0 lg:mr-0 lg:ml-10 lg:max-w-none lg:flex-none xl:ml-32">

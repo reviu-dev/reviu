@@ -62,7 +62,7 @@ const tiers = [
             v-if="tier.available"
             :href="tier.href"
             :aria-describedby="`tier-${tier.id}`"
-            class="mt-6 block w-full rounded-md bg-primary px-3 py-2 text-center text-sm/6 font-semibold text-white shadow-xs hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary group-data-featured/tier:focus-visible:outline-white/75 dark:shadow-none"
+            class="mt-6 block hover:scale-105 transition-transform w-full rounded-md bg-primary px-3 py-2 text-center text-sm/6 font-semibold text-white shadow-xs hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary group-data-featured/tier:focus-visible:outline-white/75 dark:shadow-none"
           >
             {{ tier.cta }}
           </a>
