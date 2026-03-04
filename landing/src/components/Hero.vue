@@ -4,8 +4,11 @@ import {
   GitPullRequestIcon,
   KeyboardIcon,
 } from 'lucide-vue-next'
+import { useIntersectionObserver } from '../composables/useIntersectionObserver'
 import git_dark from '../assets/app_screenshots/git_dark.png'
 import git_light from '../assets/app_screenshots/git_light.png'
+
+const { isVisible } = useIntersectionObserver(0.1)
 
 const scrollToPricing = () => {
   document.getElementById('pricing')?.scrollIntoView({
@@ -16,7 +19,7 @@ const scrollToPricing = () => {
 </script>
 
 <template>
-  <div class="relative isolate overflow-hidden">
+  <div ref="targetRef" class="relative isolate overflow-hidden">
     <svg class="absolute inset-0 -z-10 size-full mask-[radial-gradient(100%_100%_at_top_right,white,transparent)] stroke-gray-200 dark:stroke-white/10" aria-hidden="true">
       <defs>
         <pattern id="983e3e4c-de6d-4c3f-8d64-b9761d1534cc" width="200" height="200" x="50%" y="-1" patternUnits="userSpaceOnUse">
@@ -33,16 +36,35 @@ const scrollToPricing = () => {
     </div>
     <div class="mx-auto max-w-7xl px-6 pt-10 pb-24 sm:pb-32 lg:flex lg:px-8 lg:py-40">
       <div class="mx-auto max-w-2xl shrink-0 lg:mx-0 lg:pt-8">
-        <p class="text-6xl font-semibold text-foreground ">Rev<span class="text-primary">iu</span></p>
+        <p 
+          class="text-6xl font-semibold text-foreground transition-all duration-700 ease-out transform"
+          :class="[isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8']"
+        >
+          Rev<span class="text-primary">iu</span>
+        </p>
         
-        <div class="mt-24 sm:mt-32 lg:mt-16">
+        <div 
+          class="mt-24 sm:mt-32 lg:mt-16 transition-all duration-700 ease-out transform delay-100"
+          :class="[isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8']"
+        >
           <span class="inline-flex rounded-full bg-primary/10 px-3 py-1 text-sm/6 font-semibold text-primary ring-1 ring-primary/20 ring-inset dark:ring-primary/25">Git client + GitHub workflows</span>
         </div>
-        <h1 class="mt-10 text-5xl font-semibold tracking-tight text-pretty text-foreground sm:text-7xl">A free Git client built for fast reviews.</h1>
-        <p class="mt-8 text-lg font-medium text-pretty text-muted-foreground sm:text-xl/8">
+        <h1 
+          class="mt-10 text-5xl font-semibold tracking-tight text-pretty text-foreground sm:text-7xl transition-all duration-700 ease-out transform delay-200"
+          :class="[isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8']"
+        >
+          A free Git client built for fast reviews.
+        </h1>
+        <p 
+          class="mt-8 text-lg font-medium text-pretty text-muted-foreground sm:text-xl/8 transition-all duration-700 ease-out transform delay-300"
+          :class="[isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8']"
+        >
           Fast desktop Git review editor with real-time diffs and syntax highlighting. Upgrade to Reviu Pro for GitHub notifications, repos, PRs, and issues.
         </p>
-        <div class="mt-8 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm/6 text-muted-foreground">
+        <div 
+          class="mt-8 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm/6 text-muted-foreground transition-all duration-700 ease-out transform delay-500"
+          :class="[isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8']"
+        >
           <span class="inline-flex items-center gap-2">
             <KeyboardIcon class="size-4 text-primary" aria-hidden="true" />
             Keyboard-first
@@ -56,12 +78,19 @@ const scrollToPricing = () => {
             PR review in-app
           </span>
         </div>
-        <div id="download" class="mt-10 flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div 
+          id="download" 
+          class="mt-10 flex flex-wrap items-center gap-x-6 gap-y-3 transition-all duration-700 ease-out transform delay-700"
+          :class="[isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8']"
+        >
           <a href="#download" class="rounded-md bg-primary px-3.5 py-2.5 text-sm font-semibold text-white shadow-xs hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary hover:scale-105 transition-transform">Download for macOS (Apple Silicon)</a>
           <a href="#pricing" class="text-sm/6 font-semibold text-foreground hover:bg-muted/50 px-3 py-2 rounded-md" @click.prevent="scrollToPricing">See Pro pricing <span aria-hidden="true">→</span></a>
         </div>
       </div>
-      <div class="mx-auto mt-16 flex max-w-2xl sm:mt-24 lg:mt-0 lg:mr-0 lg:ml-10 lg:max-w-none lg:flex-none xl:ml-32">
+      <div 
+        class="mx-auto mt-16 flex max-w-2xl sm:mt-24 lg:mt-0 lg:mr-0 lg:ml-10 lg:max-w-none lg:flex-none xl:ml-32 transition-all duration-1000 ease-out transform delay-500"
+        :class="[isVisible ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-8']"
+      >
         <div class="max-w-3xl flex-none sm:max-w-5xl lg:max-w-none">
           <div class="-m-2 rounded-xl bg-gray-900/5 p-2 ring-1 ring-gray-900/10 ring-inset lg:-m-4 lg:rounded-2xl lg:p-4 dark:bg-white/2.5 dark:ring-white/10">
             <img :src="git_light.src" alt="Reviu desktop interface preview" width="2432" height="1442" class="w-304 rounded-[13px] bg-white/0 shadow-xl ring-1 ring-gray-900/10 dark:hidden" />
