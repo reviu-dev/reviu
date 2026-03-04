@@ -34,12 +34,12 @@ const navigation = [
 <template>
   <footer >
     <div class="mx-auto max-w-7xl px-6 py-12 md:flex md:items-center md:justify-between lg:px-8">
-      <div class="flex justify-center gap-x-6 md:order-2">
+      <!-- <div class="flex justify-center gap-x-6 md:order-2">
         <a v-for="item in navigation" :key="item.name" :href="item.href" class="text-muted-foreground hover:text-foreground">
           <span class="sr-only">{{ item.name }}</span>
           <component :is="item.icon" class="size-6" aria-hidden="true" />
         </a>
-      </div>
+      </div> -->
       <p class="mt-8 text-center text-sm/6 text-muted-foreground md:order-1 md:mt-0">&copy; 2026 Joris Gallot, Inc. All rights reserved.</p>
     </div>
   </footer>

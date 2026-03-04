@@ -6,6 +6,13 @@ import {
 } from 'lucide-vue-next'
 import git_dark from '../assets/app_screenshots/git_dark.png'
 import git_light from '../assets/app_screenshots/git_light.png'
+
+const scrollToPricing = () => {
+  document.getElementById('pricing')?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'center',
+  })
+}
 </script>
 
 <template>
@@ -33,7 +40,7 @@ import git_light from '../assets/app_screenshots/git_light.png'
         </div>
         <h1 class="mt-10 text-5xl font-semibold tracking-tight text-pretty text-foreground sm:text-7xl">A free Git client built for fast reviews.</h1>
         <p class="mt-8 text-lg font-medium text-pretty text-muted-foreground sm:text-xl/8">
-          Fast desktop Git reviews editor with real-time diffs and syntax highlighting. Upgrade to Reviu Pro for GitHub notifications, repos, PRs, and issues.
+          Fast desktop Git review editor with real-time diffs and syntax highlighting. Upgrade to Reviu Pro for GitHub notifications, repos, PRs, and issues.
         </p>
         <div class="mt-8 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm/6 text-muted-foreground">
           <span class="inline-flex items-center gap-2">
@@ -49,10 +56,9 @@ import git_light from '../assets/app_screenshots/git_light.png'
             PR review in-app
           </span>
         </div>
-        <p class="mt-6 text-sm/6 font-medium text-foreground">Reviu Pro: $20/month for GitHub integration.</p>
         <div id="download" class="mt-10 flex flex-wrap items-center gap-x-6 gap-y-3">
           <a href="#download" class="rounded-md bg-primary px-3.5 py-2.5 text-sm font-semibold text-white shadow-xs hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary">Download for macOS (Apple Silicon)</a>
-          <a href="#pricing" class="text-sm/6 font-semibold text-foreground">See Pro pricing <span aria-hidden="true">→</span></a>
+          <a href="#pricing" class="text-sm/6 font-semibold text-foreground" @click.prevent="scrollToPricing">See Pro pricing <span aria-hidden="true">→</span></a>
         </div>
       </div>
       <div class="mx-auto mt-16 flex max-w-2xl sm:mt-24 lg:mt-0 lg:mr-0 lg:ml-10 lg:max-w-none lg:flex-none xl:ml-32">
