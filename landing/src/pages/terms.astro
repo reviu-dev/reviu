@@ -1,0 +1,127 @@
+---
+import Layout from "../layouts/Layout.astro";
+
+const lastUpdated = "March 4, 2026";
+---
+
+<Layout>
+  <main class="py-20 sm:py-24">
+    <section class="mx-auto max-w-4xl px-6 lg:px-8">
+      <a
+        href="/"
+        class="inline-flex items-center rounded-md bg-background px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50"
+      >
+        ← Back
+      </a>
+      <h1
+        class="mt-6 text-4xl font-semibold tracking-tight text-foreground sm:text-5xl"
+      >
+        Terms of Service
+      </h1>
+      <p class="mt-4 text-sm/6 text-muted-foreground">
+        Last updated: {lastUpdated}
+      </p>
+
+      <h2 class="mt-12 text-2xl font-semibold text-foreground">
+        1. Acceptance
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        By accessing or using Reviu, you agree to these Terms of Service.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        2. Service Overview
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        Reviu provides a desktop Git client with a Free plan and a Pro
+        subscription for GitHub-related workflows.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        3. Subscriptions and Trial
+      </h2>
+      <ul class="mt-4 list-disc space-y-2 pl-6 text-sm/7 text-muted-foreground">
+        <li>Pro price: $19 per month.</li>
+        <li>Pro includes a 14-day free trial.</li>
+        <li>No payment method is required to start the free trial.</li>
+        <li>
+          After the trial, a paid subscription starts only when you add payment
+          details.
+        </li>
+        <li>
+          Once activated, the subscription auto-renews monthly until canceled.
+        </li>
+        <li>
+          Cancellation takes effect at the end of the current billing period.
+        </li>
+      </ul>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        4. Billing Provider
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        Subscription billing is handled through Polar and its payment partners.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        5. Refund Policy
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        Payments are non-refundable, except where refunds are required by
+        mandatory applicable law.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        6. Acceptable Use
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        You agree not to misuse the service, interfere with service operations,
+        or use Reviu in violation of applicable laws.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        7. Third-Party Services
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        Reviu integrates with third-party platforms and infrastructure
+        providers, including GitHub, Polar, and Hetzner. Availability and
+        behavior may depend on those services.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        8. Disclaimer and Limitation of Liability
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        Reviu is provided on an "as is" and "as available" basis. To the maximum
+        extent permitted by law, Reviu disclaims warranties and limits liability
+        for indirect, incidental, special, and consequential damages.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        9. Termination
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        We may suspend or terminate access for serious violations of these Terms
+        or legal requirements.
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">
+        10. Governing Law and Venue
+      </h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        Governing law: <code>{"{{GOVERNING_LAW}}"}</code>
+      </p>
+      <p class="mt-2 text-sm/7 text-muted-foreground">
+        Competent courts: <code>{"{{JURISDICTION_COURTS}}"}</code>
+      </p>
+
+      <h2 class="mt-10 text-2xl font-semibold text-foreground">11. Contact</h2>
+      <p class="mt-4 text-sm/7 text-muted-foreground">
+        Legal contact: <code>{"{{LEGAL_CONTACT_EMAIL}}"}</code>
+      </p>
+      <p class="mt-2 text-sm/7 text-muted-foreground">
+        Support: <code>{"{{SUPPORT_EMAIL}}"}</code>
+      </p>
+    </section>
+  </main>
+</Layout>
