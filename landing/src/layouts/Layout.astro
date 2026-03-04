@@ -2,17 +2,6 @@
 import "../styles/global.css";
 ---
 
-<script is:inline>
-  const getThemePreference = () => {
-    return window.matchMedia("(prefers-color-scheme: dark)").matches
-      ? "dark"
-      : "light";
-  };
-
-  const isDark = getThemePreference() === "dark";
-  document.documentElement.classList[isDark ? "add" : "remove"]("dark");
-</script>
-
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
