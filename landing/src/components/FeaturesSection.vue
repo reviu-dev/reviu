@@ -8,6 +8,9 @@ import {
   GitPullRequestIcon,
   SplitIcon,
 } from 'lucide-vue-next'
+import { useIntersectionObserver } from '../composables/useIntersectionObserver'
+
+const { isVisible } = useIntersectionObserver(0.5)
 
 type Feature = {
   name: string
@@ -57,9 +60,12 @@ const features: Feature[] = [
 </script>
 
 <template>
-  <section id="features" class="py-24 sm:py-32">
+  <section ref="targetRef" id="features" class="py-24 sm:py-32">
     <div class="mx-auto max-w-7xl px-6 lg:px-8">
-      <div class="mx-auto max-w-3xl text-center">
+      <div 
+        class="mx-auto max-w-3xl text-center transition-all duration-700 ease-out transform"
+        :class="[isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8']"
+      >
         <h2 class="text-base/7 font-semibold text-primary">Features</h2>
         <p class="mt-2 text-5xl font-semibold tracking-tight text-balance text-foreground sm:text-6xl">Everything in Free for local Git.<br />Pro for GitHub workflows.</p>
         <p class="mx-auto mt-6 max-w-2xl text-lg/8 text-muted-foreground">
@@ -67,7 +73,13 @@ const features: Feature[] = [
         </p>
       </div>
       <div class="mx-auto mt-16 grid max-w-6xl grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-        <article v-for="feature in features" :key="feature.name" class="rounded-2xl bg-background p-6 ring-1 ring-muted">
+        <article 
+          v-for="(feature, index) in features" 
+          :key="feature.name" 
+          class="rounded-2xl bg-background p-6 ring-1 ring-muted transition-all duration-700 ease-out transform"
+          :class="[isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8']"
+          :style="{ transitionDelay: `${index * 100 + 200}ms` }"
+        >
           <div class="flex items-center justify-between gap-4">
             <component :is="feature.icon" class="size-5 text-primary" aria-hidden="true" />
             <span

@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { CheckIcon, SparklesIcon } from 'lucide-vue-next'
+import { useIntersectionObserver } from '../composables/useIntersectionObserver'
+
+const { isVisible } = useIntersectionObserver(0.4)
 
 const tiers = [
   {
@@ -40,15 +43,25 @@ const tiers = [
 </script>
 
 <template>
-  <section id="pricing" class="group/tiers py-24 sm:py-32">
+  <section ref="targetRef" id="pricing" class="group/tiers py-24 sm:py-32">
     <div class="mx-auto max-w-7xl px-6 lg:px-8">
-      <div class="mx-auto max-w-4xl text-center">
+      <div 
+        class="mx-auto max-w-4xl text-center transition-all duration-700 ease-out transform"
+        :class="[isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8']"
+      >
         <h2 class="text-base/7 font-semibold text-primary">Pricing</h2>
         <p class="mt-2 text-5xl font-semibold tracking-tight text-balance text-foreground sm:text-6xl">Simple pricing for local Git and GitHub workflows.</p>
+        <p class="mx-auto mt-6 max-w-2xl text-center text-lg font-medium text-pretty text-gray-600 sm:text-xl/8 dark:text-gray-400">Use Free for full local Git workflows, then upgrade to Pro at $19/month when you need GitHub notifications, repositories, PR reviews, and issues.</p>
       </div>
-      <p class="mx-auto mt-6 max-w-2xl text-center text-lg font-medium text-pretty text-gray-600 sm:text-xl/8 dark:text-gray-400">Use Free for full local Git workflows, then upgrade to Pro at $19/month when you need GitHub notifications, repositories, PR reviews, and issues.</p>
       <div class="isolate mx-auto lg:px-20 xl:px-40 mt-10 grid max-w-md grid-cols-1 gap-8 lg:mx-0 lg:max-w-none lg:grid-cols-2">
-        <div v-for="tier in tiers" :key="tier.id" class="group/tier rounded-3xl p-8 ring-1 xl:p-10 bg-background ring-muted dark:data-featured:ring-2 data-featured:ring-primary" :data-featured="tier.featured ? 'true' : undefined">
+        <div 
+          v-for="(tier, index) in tiers" 
+          :key="tier.id" 
+          class="group/tier rounded-3xl p-8 ring-1 xl:p-10 bg-background ring-muted dark:data-featured:ring-2 data-featured:ring-primary transition-all duration-700 ease-out transform"
+          :class="[isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8']"
+          :style="{ transitionDelay: `${index * 150 + 200}ms` }"
+          :data-featured="tier.featured ? 'true' : undefined"
+        >
           <div class="flex items-center gap-2">
             <h3 :id="`tier-${tier.id}`" class="text-lg/8 font-semibold text-foreground group-data-featured/tier:text-primary">{{ tier.name }}</h3>
             <SparklesIcon v-if="tier.featured" class="size-4 text-primary" aria-hidden="true" />
