@@ -33,9 +33,9 @@ use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, TokenType, languages
 use tree_sitter::{Node as TsNode, Parser as TsParser};
 
 use crate::parsed_cache::parse_markdown_for_render;
-use crate::preview_segments::{MarkdownRenderSegment, split_markdown_preview_segments};
 #[cfg(test)]
 use crate::parsed_cache::{PARSED_MARKDOWN_CACHE_MAX_ENTRIES, ParsedMarkdownCache};
+use crate::preview_segments::{MarkdownRenderSegment, split_markdown_preview_segments};
 
 type BlockRenderFn = dyn Fn(AnyElement, &App) -> AnyElement + Send + Sync;
 type HeadingRenderFn = dyn Fn(u8, AnyElement, &App) -> AnyElement + Send + Sync;
@@ -708,9 +708,7 @@ fn parse_comrak(source: &str) -> Vec<Block> {
     }
 
     if is_centered_close {
-      if centered_div_depth > 0 {
-        centered_div_depth -= 1;
-      }
+      centered_div_depth = centered_div_depth.saturating_sub(1);
       if centered_div_depth == 0 && !centered_div_blocks.is_empty() {
         blocks.push(Block::Aligned {
           center: true,
@@ -2023,17 +2021,36 @@ fn inline_contains_image(inline: &Inline) -> bool {
   }
 }
 
-fn inline_image_data(
-  inline: &Inline,
-) -> Option<(
-  String,
-  String,
-  Option<String>,
-  Option<String>,
-  Option<String>,
-  Option<String>,
-  Option<String>,
-)> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InlineImageData {
+  url: String,
+  alt: String,
+  link_url: Option<String>,
+  width_hint: Option<String>,
+  height_hint: Option<String>,
+  dark_url: Option<String>,
+  light_url: Option<String>,
+}
+
+impl InlineImageData {
+  fn themed_url(&self, is_dark_mode: bool) -> String {
+    select_markdown_image_url_for_theme(
+      &self.url,
+      self.dark_url.as_deref(),
+      self.light_url.as_deref(),
+      is_dark_mode,
+    )
+  }
+
+  fn with_parent_link(mut self, link_url: &str) -> Self {
+    if self.link_url.is_none() {
+      self.link_url = Some(link_url.to_string());
+    }
+    self
+  }
+}
+
+fn inline_image_data(inline: &Inline) -> Option<InlineImageData> {
   match inline {
     Inline::Image {
       url,
@@ -2043,52 +2060,29 @@ fn inline_image_data(
       dark_url,
       light_url,
       ..
-    } => Some((
-      url.clone(),
-      alt.clone(),
-      None,
-      width.clone(),
-      height.clone(),
-      dark_url.clone(),
-      light_url.clone(),
-    )),
+    } => Some(InlineImageData {
+      url: url.clone(),
+      alt: alt.clone(),
+      link_url: None,
+      width_hint: width.clone(),
+      height_hint: height.clone(),
+      dark_url: dark_url.clone(),
+      light_url: light_url.clone(),
+    }),
     Inline::Link {
       url: link_url,
       content,
       ..
     } => {
       for child in content {
-        if let Some((
-          url,
-          alt,
-          child_link,
-          child_width,
-          child_height,
-          child_dark_url,
-          child_light_url,
-        )) = inline_image_data(child)
-        {
-          return Some((
-            url,
-            alt,
-            Some(child_link.unwrap_or_else(|| link_url.clone())),
-            child_width,
-            child_height,
-            child_dark_url,
-            child_light_url,
-          ));
+        if let Some(image) = inline_image_data(child) {
+          return Some(image.with_parent_link(link_url));
         }
       }
       None
     }
     Inline::Strong(content) | Inline::Emphasis(content) | Inline::Strikethrough(content) => {
-      for child in content {
-        if let Some((url, alt, link, width, height, dark_url, light_url)) = inline_image_data(child)
-        {
-          return Some((url, alt, link, width, height, dark_url, light_url));
-        }
-      }
-      None
+      content.iter().find_map(inline_image_data)
     }
     _ => None,
   }
@@ -2111,17 +2105,7 @@ fn split_inlines_by_hard_breaks(inlines: &[Inline]) -> Vec<Vec<Inline>> {
   rows
 }
 
-fn single_inline_image_data(
-  inlines: &[Inline],
-) -> Option<(
-  String,
-  String,
-  Option<String>,
-  Option<String>,
-  Option<String>,
-  Option<String>,
-  Option<String>,
-)> {
+fn single_inline_image_data(inlines: &[Inline]) -> Option<InlineImageData> {
   if inlines.len() != 1 {
     return None;
   }
@@ -2143,23 +2127,18 @@ fn render_table_cell_inlines(
   let is_dark_mode = cx.theme().mode.is_dark();
 
   for inline in inlines {
-    if let Some((url, alt, _, _, _, dark_url, light_url)) = inline_image_data(inline) {
+    if let Some(image_data) = inline_image_data(inline) {
       if !text_chunk.is_empty() {
         row = row.child(render_inline_text(&text_chunk, options, cx, ctx));
         text_chunk.clear();
       }
 
-      let badge_label = if alt.is_empty() {
+      let badge_label = if image_data.alt.is_empty() {
         "image".to_string()
       } else {
-        alt
+        image_data.alt.clone()
       };
-      let themed_url = select_markdown_image_url_for_theme(
-        &url,
-        dark_url.as_deref(),
-        light_url.as_deref(),
-        is_dark_mode,
-      );
+      let themed_url = image_data.themed_url(is_dark_mode);
       let badge_url = resolve_markdown_image_url(
         &themed_url,
         options.image_base_url.as_ref().map(SharedString::as_ref),
@@ -2225,6 +2204,23 @@ fn render_badge_placeholder(label: &str) -> AnyElement {
 enum MarkdownImageDimension {
   Pixels(f32),
   Fraction(f32),
+}
+
+#[derive(Clone)]
+struct MarkdownImageRenderContext<'a> {
+  on_link: Option<Arc<LinkHandlerFn>>,
+  interactive: bool,
+  is_dark_mode: bool,
+  image_base_url: Option<&'a str>,
+}
+
+impl MarkdownImageRenderContext<'_> {
+  fn resolve_url(&self, image_data: &InlineImageData) -> String {
+    resolve_markdown_image_url(
+      &image_data.themed_url(self.is_dark_mode),
+      self.image_base_url,
+    )
+  }
 }
 
 fn parse_markdown_image_dimension(dimension_hint: Option<&str>) -> Option<MarkdownImageDimension> {
@@ -2385,42 +2381,34 @@ fn attach_image_link_handler(
 }
 
 fn render_inline_image(
-  url: &str,
-  dark_url: Option<&str>,
-  light_url: Option<&str>,
-  alt: &str,
-  width_hint: Option<&str>,
-  height_hint: Option<&str>,
-  link_url: Option<&str>,
-  on_link: Option<Arc<LinkHandlerFn>>,
-  interactive: bool,
-  is_dark_mode: bool,
-  image_base_url: Option<&str>,
+  image_data: &InlineImageData,
+  context: &MarkdownImageRenderContext<'_>,
 ) -> AnyElement {
-  let themed_url = select_markdown_image_url_for_theme(url, dark_url, light_url, is_dark_mode);
-  let resolved_url = resolve_markdown_image_url(&themed_url, image_base_url);
-  let image = render_image_node(&resolved_url, alt, width_hint, height_hint).into_any_element();
-  attach_image_link_handler(image, &resolved_url, link_url, on_link, interactive)
+  let resolved_url = context.resolve_url(image_data);
+  let image = render_image_node(
+    &resolved_url,
+    &image_data.alt,
+    image_data.width_hint.as_deref(),
+    image_data.height_hint.as_deref(),
+  )
+  .into_any_element();
+  attach_image_link_handler(
+    image,
+    &resolved_url,
+    image_data.link_url.as_deref(),
+    context.on_link.clone(),
+    context.interactive,
+  )
 }
 
 fn render_block_image(
-  url: &str,
-  dark_url: Option<&str>,
-  light_url: Option<&str>,
-  alt: &str,
-  width_hint: Option<&str>,
-  height_hint: Option<&str>,
-  link_url: Option<&str>,
-  on_link: Option<Arc<LinkHandlerFn>>,
-  interactive: bool,
-  is_dark_mode: bool,
-  image_base_url: Option<&str>,
+  image_data: &InlineImageData,
+  context: &MarkdownImageRenderContext<'_>,
 ) -> AnyElement {
-  let themed_url = select_markdown_image_url_for_theme(url, dark_url, light_url, is_dark_mode);
-  let resolved_url = resolve_markdown_image_url(&themed_url, image_base_url);
+  let resolved_url = context.resolve_url(image_data);
   let mut hasher = DefaultHasher::new();
   resolved_url.hash(&mut hasher);
-  link_url.hash(&mut hasher);
+  image_data.link_url.hash(&mut hasher);
   let image_scroll_id: SharedString =
     format!("markdown-inline-image-scroll-{:x}", hasher.finish()).into();
 
@@ -2428,11 +2416,17 @@ fn render_block_image(
     .id(image_scroll_id)
     .w_full()
     .child(attach_image_link_handler(
-      render_block_image_node(&resolved_url, alt, width_hint, height_hint).into_any_element(),
+      render_block_image_node(
+        &resolved_url,
+        &image_data.alt,
+        image_data.width_hint.as_deref(),
+        image_data.height_hint.as_deref(),
+      )
+      .into_any_element(),
       &resolved_url,
-      link_url,
-      on_link,
-      interactive,
+      image_data.link_url.as_deref(),
+      context.on_link.clone(),
+      context.interactive,
     ))
     .into_any_element()
 }
@@ -2470,22 +2464,14 @@ fn render_inline_with_images(
   ctx: &mut RenderContext,
 ) -> AnyElement {
   let is_dark_mode = cx.theme().mode.is_dark();
-  if let Some((url, alt, link, width, height, dark_url, light_url)) =
-    single_inline_image_data(inlines)
-  {
-    return render_block_image(
-      &url,
-      dark_url.as_deref(),
-      light_url.as_deref(),
-      &alt,
-      width.as_deref(),
-      height.as_deref(),
-      link.as_deref(),
-      options.on_link.clone(),
-      interactive,
-      is_dark_mode,
-      options.image_base_url.as_ref().map(SharedString::as_ref),
-    );
+  let image_render_context = MarkdownImageRenderContext {
+    on_link: options.on_link.clone(),
+    interactive,
+    is_dark_mode,
+    image_base_url: options.image_base_url.as_ref().map(SharedString::as_ref),
+  };
+  if let Some(image_data) = single_inline_image_data(inlines) {
+    return render_block_image(&image_data, &image_render_context);
   }
 
   let rows = split_inlines_by_hard_breaks(inlines);
@@ -2498,8 +2484,7 @@ fn render_inline_with_images(
     let mut text_chunk: Vec<Inline> = Vec::new();
 
     for inline in row {
-      if let Some((url, alt, link, width, height, dark_url, light_url)) = inline_image_data(inline)
-      {
+      if let Some(image_data) = inline_image_data(inline) {
         if !text_chunk.is_empty() {
           row_container = row_container.child(render_inline_selectable_text(
             &text_chunk,
@@ -2510,19 +2495,8 @@ fn render_inline_with_images(
           ));
           text_chunk.clear();
         }
-        row_container = row_container.child(render_inline_image(
-          &url,
-          dark_url.as_deref(),
-          light_url.as_deref(),
-          &alt,
-          width.as_deref(),
-          height.as_deref(),
-          link.as_deref(),
-          options.on_link.clone(),
-          interactive,
-          is_dark_mode,
-          options.image_base_url.as_ref().map(SharedString::as_ref),
-        ));
+        row_container =
+          row_container.child(render_inline_image(&image_data, &image_render_context));
         row_has_content = true;
       } else {
         text_chunk.push(inline.clone());
@@ -4554,17 +4528,15 @@ fn html_element_to_inlines(element: &HtmlElement) -> Vec<Inline> {
     "picture" => {
       let children = html_nodes_to_inlines(&element.children);
       let (picture_dark_url, picture_light_url) = html_picture_theme_urls(element);
-      if let Some((url, alt, _, width, height, dark_url, light_url)) =
-        children.iter().find_map(inline_image_data)
-      {
+      if let Some(image_data) = children.iter().find_map(inline_image_data) {
         vec![Inline::Image {
-          url,
+          url: image_data.url,
           title: None,
-          alt,
-          width,
-          height,
-          dark_url: picture_dark_url.or(dark_url),
-          light_url: picture_light_url.or(light_url),
+          alt: image_data.alt,
+          width: image_data.width_hint,
+          height: image_data.height_hint,
+          dark_url: picture_dark_url.or(image_data.dark_url),
+          light_url: picture_light_url.or(image_data.light_url),
         }]
       } else {
         children
@@ -5194,6 +5166,20 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
   }
 
   #[test]
+  fn ignores_orphan_centered_div_close_tag() {
+    let blocks = parse_gfm("Before\n\n</div>\n\nAfter");
+    assert_eq!(blocks.len(), 2);
+    assert!(matches!(
+      &blocks[0],
+      Block::Paragraph(inlines) if inline_to_plain_text(inlines) == "Before"
+    ));
+    assert!(matches!(
+      &blocks[1],
+      Block::Paragraph(inlines) if inline_to_plain_text(inlines) == "After"
+    ));
+  }
+
+  #[test]
   fn parses_centered_picture_with_br_padding() {
     let source = r#"<p align="center">
   <br>
@@ -5430,15 +5416,15 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
     let image = inline_image_data(&inline);
     assert_eq!(
       image,
-      Some((
-        "https://img.shields.io/example.svg".to_string(),
-        "badge".to_string(),
-        Some("https://example.com".to_string()),
-        Some("120px".to_string()),
-        None,
-        Some("https://img.shields.io/example-dark.svg".to_string()),
-        Some("https://img.shields.io/example-light.svg".to_string()),
-      ))
+      Some(InlineImageData {
+        url: "https://img.shields.io/example.svg".to_string(),
+        alt: "badge".to_string(),
+        link_url: Some("https://example.com".to_string()),
+        width_hint: Some("120px".to_string()),
+        height_hint: None,
+        dark_url: Some("https://img.shields.io/example-dark.svg".to_string()),
+        light_url: Some("https://img.shields.io/example-light.svg".to_string()),
+      })
     );
   }
 

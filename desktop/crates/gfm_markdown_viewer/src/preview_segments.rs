@@ -12,9 +12,7 @@ fn markdown_link_target(trimmed: &str) -> Option<&str> {
   if !trimmed.starts_with('[') || !trimmed.ends_with(')') {
     return None;
   }
-  let Some((_, rest)) = trimmed.split_once("](") else {
-    return None;
-  };
+  let (_, rest) = trimmed.split_once("](")?;
   rest.strip_suffix(')')
 }
 
@@ -48,7 +46,9 @@ pub(crate) fn split_markdown_preview_segments(
 
     if let Some(preview) = line_preview {
       if !markdown.is_empty() {
-        segments.push(MarkdownRenderSegment::Markdown(std::mem::take(&mut markdown)));
+        segments.push(MarkdownRenderSegment::Markdown(std::mem::take(
+          &mut markdown,
+        )));
       }
       segments.push(MarkdownRenderSegment::Preview(preview));
       has_preview = true;
@@ -66,4 +66,26 @@ pub(crate) fn split_markdown_preview_segments(
   }
 
   segments
+}
+
+#[cfg(test)]
+mod tests {
+  use super::markdown_link_target;
+
+  #[test]
+  fn markdown_link_target_extracts_target() {
+    assert_eq!(
+      markdown_link_target("[preview](https://github.com/acme/widget)"),
+      Some("https://github.com/acme/widget")
+    );
+  }
+
+  #[test]
+  fn markdown_link_target_rejects_invalid_markup() {
+    assert_eq!(
+      markdown_link_target("[preview] https://github.com/acme/widget"),
+      None
+    );
+    assert_eq!(markdown_link_target("https://github.com/acme/widget"), None);
+  }
 }

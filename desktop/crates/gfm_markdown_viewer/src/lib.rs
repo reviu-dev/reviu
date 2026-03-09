@@ -1,6 +1,6 @@
+mod gfm_markdown_viewer;
 mod parsed_cache;
 mod preview_segments;
-mod gfm_markdown_viewer;
 
 pub use gfm_markdown_viewer::{
   GithubBlobLineReference, GithubCodeReferencePreview, GithubIssueReferenceContext, LinkAction,
