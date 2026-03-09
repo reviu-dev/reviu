@@ -2837,7 +2837,7 @@ impl GithubRepoPage {
                       f32::from(window.viewport_size().width),
                       f32::from(event.event.position.x),
                     );
-                    let _ = repo_page.update(cx, |this, cx| {
+                    repo_page.update(cx, |this, cx| {
                       if (this.issue_sheet_width_px - next_width).abs() <= f32::EPSILON {
                         return;
                       }

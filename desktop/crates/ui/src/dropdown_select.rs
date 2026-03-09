@@ -347,12 +347,18 @@ impl<I: DropdownSelectItem + 'static> DropdownSelectListDelegate<I> {
       .map(|option| option.value().clone())
   }
 
+  fn selected_enabled_option(&self) -> Option<I> {
+    let ix = self.selected_index?;
+    let option = self.filtered_options.get(ix.row)?.clone();
+    (!option.disabled()).then_some(option)
+  }
+
   fn dismiss_popover(&self, window: &mut Window, cx: &mut Context<ListState<Self>>) {
     let Some(popover) = self.popover.as_ref().and_then(|popover| popover.upgrade()) else {
       return;
     };
 
-    let _ = popover.update(cx, |popover, cx| {
+    popover.update(cx, |popover, cx| {
       popover.dismiss(window, cx);
     });
   }
@@ -420,14 +426,10 @@ impl<I: DropdownSelectItem + 'static> ListDelegate for DropdownSelectListDelegat
   fn confirm(&mut self, _: bool, window: &mut Window, cx: &mut Context<ListState<Self>>) {
     self.dismiss_popover(window, cx);
 
-    if let Some(ix) = self.selected_index {
-      if let Some(option) = self.filtered_options.get(ix.row).cloned() {
-        if !option.disabled() {
-          if let Some(handler) = self.on_select.clone() {
-            handler(option.value().clone(), window, cx);
-          }
-        }
-      }
+    if let Some(option) = self.selected_enabled_option()
+      && let Some(handler) = self.on_select.clone()
+    {
+      handler(option.value().clone(), window, cx);
     }
   }
 
@@ -549,7 +551,7 @@ impl<I: DropdownSelectItem + 'static> RenderOnce for DropdownSelect<I> {
 
     let options_for_delegate = options.clone();
     let on_select_for_delegate = on_select.clone();
-    let _ = list_state.update(
+    list_state.update(
       cx,
       |state: &mut ListState<DropdownSelectListDelegate<I>>, cx| {
         state.set_searchable(searchable, cx);
@@ -574,7 +576,7 @@ impl<I: DropdownSelectItem + 'static> RenderOnce for DropdownSelect<I> {
     .trigger(trigger)
     .content(move |_, window, cx| {
       let popover_weak = cx.entity().downgrade();
-      let _ = list_state.update(
+      list_state.update(
         cx,
         |state: &mut ListState<DropdownSelectListDelegate<I>>, cx| {
           state.delegate_mut().set_popover(popover_weak);
@@ -665,5 +667,41 @@ mod tests {
 
     assert_eq!(delegate.selected_index, Some(IndexPath::new(1)));
     assert_eq!(delegate.selected_value(), Some("repo-b"));
+  }
+
+  #[test]
+  fn selected_enabled_option_returns_selected_option() {
+    let options = vec![
+      DropdownSelectOption::new("repo-a", "reviu"),
+      DropdownSelectOption::new("repo-b", "git-playground"),
+    ];
+
+    let mut delegate = DropdownSelectListDelegate::new(options, None);
+    delegate.selected_index = Some(IndexPath::new(1));
+
+    assert_eq!(
+      delegate
+        .selected_enabled_option()
+        .map(|option| option.value),
+      Some("repo-b")
+    );
+  }
+
+  #[test]
+  fn selected_enabled_option_skips_disabled_option() {
+    let options = vec![
+      DropdownSelectOption::new("repo-a", "reviu").disabled(true),
+      DropdownSelectOption::new("repo-b", "git-playground"),
+    ];
+
+    let mut delegate = DropdownSelectListDelegate::new(options, None);
+    delegate.selected_index = Some(IndexPath::new(0));
+
+    assert_eq!(
+      delegate
+        .selected_enabled_option()
+        .map(|option| option.value),
+      None
+    );
   }
 }

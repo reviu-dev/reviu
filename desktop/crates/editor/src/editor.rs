@@ -213,9 +213,7 @@ fn markdown_link_target(trimmed: &str) -> Option<&str> {
   if !trimmed.starts_with('[') || !trimmed.ends_with(')') {
     return None;
   }
-  let Some((_, rest)) = trimmed.split_once("](") else {
-    return None;
-  };
+  let (_, rest) = trimmed.split_once("](")?;
   rest.strip_suffix(')')
 }
 
@@ -1198,8 +1196,10 @@ impl Editor {
       return vec![ReviewCommentBodySegment::Markdown(body.to_string())];
     }
 
-    let preview_by_url: HashMap<&str, &ReviewCommentCodeReferencePreview> =
-      previews.iter().map(|preview| (preview.url.as_ref(), preview)).collect();
+    let preview_by_url: HashMap<&str, &ReviewCommentCodeReferencePreview> = previews
+      .iter()
+      .map(|preview| (preview.url.as_ref(), preview))
+      .collect();
 
     let mut segments = Vec::new();
     let mut markdown_lines = Vec::new();
@@ -7156,7 +7156,10 @@ pub mod tests {
   #[test]
   fn markdown_link_target_extracts_exact_target() {
     let url = "https://github.com/acme/widget/blob/main/docker-compose.yml#L11";
-    assert_eq!(markdown_link_target(&format!("[compose]({url})")), Some(url));
+    assert_eq!(
+      markdown_link_target(&format!("[compose]({url})")),
+      Some(url)
+    );
     assert_eq!(
       markdown_link_target("[compose](https://github.com/acme/other)"),
       Some("https://github.com/acme/other")

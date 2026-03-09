@@ -77,6 +77,9 @@ const HISTORY_AUTHOR_MAX_WIDTH: f32 = 180.0;
 const DETACHED_BRANCH_SELECT_SENTINEL: &str = "__reviu_detached_head__";
 const TRIGGER_DROPDOWN_SELECT_WIDTH: f32 = 350.0;
 
+type RepoSelectHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
+type BranchSelectHandler = Rc<dyn Fn(BranchRef, &mut Window, &mut App)>;
+
 actions!(
   workspace,
   [
@@ -1539,10 +1542,10 @@ impl GitPage {
     });
   }
 
-  fn repo_select_handler(&self, cx: &Context<Self>) -> Rc<dyn Fn(PathBuf, &mut Window, &mut App)> {
+  fn repo_select_handler(&self, cx: &Context<Self>) -> RepoSelectHandler {
     let view = cx.entity();
     Rc::new(move |repo_root, window, cx| {
-      let _ = view.update(cx, |this, cx| {
+      view.update(cx, |this, cx| {
         this.handle_repo_select_confirm(repo_root, cx);
         this.refocus_page_shortcuts_after_dropdown_select(window, cx);
       });
@@ -1577,13 +1580,10 @@ impl GitPage {
     self.branch_task = Some(task);
   }
 
-  fn branch_select_handler(
-    &self,
-    cx: &Context<Self>,
-  ) -> Rc<dyn Fn(BranchRef, &mut Window, &mut App)> {
+  fn branch_select_handler(&self, cx: &Context<Self>) -> BranchSelectHandler {
     let view = cx.entity();
     Rc::new(move |branch, window, cx| {
-      let _ = view.update(cx, |this, cx| {
+      view.update(cx, |this, cx| {
         this.handle_branch_select_confirm(branch, cx);
         this.refocus_page_shortcuts_after_dropdown_select(window, cx);
       });

@@ -85,6 +85,8 @@ const PR_REVIEW_INPUT_HEIGHT_PX: f32 = 100.0;
 const OVERVIEW_COMMENT_INPUT_HEIGHT_PX: f32 = 100.0;
 const OVERVIEW_DESCRIPTION_INPUT_HEIGHT_PX: f32 = 500.0;
 
+type CommitSelectHandler = Rc<dyn Fn(Option<String>, &mut Window, &mut App)>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OverviewCommentKind {
   Issue,
@@ -99,7 +101,13 @@ struct OverviewCommentTarget {
 
 enum OverviewCommentUpdateResult {
   Issue(GithubPullRequestIssueComment),
-  Review(GithubPullRequestReviewComment),
+  Review(Box<GithubPullRequestReviewComment>),
+}
+
+impl OverviewCommentUpdateResult {
+  fn review(comment: GithubPullRequestReviewComment) -> Self {
+    Self::Review(Box::new(comment))
+  }
 }
 
 fn pr_description_scope_id(pr_number: u64) -> usize {
@@ -1967,13 +1975,10 @@ impl GithubPrDetailsPage {
     items
   }
 
-  fn commit_select_handler(
-    &self,
-    cx: &Context<Self>,
-  ) -> Rc<dyn Fn(Option<String>, &mut Window, &mut App)> {
+  fn commit_select_handler(&self, cx: &Context<Self>) -> CommitSelectHandler {
     let view = cx.entity();
     Rc::new(move |selected_commit_sha, window, cx| {
-      let _ = view.update(cx, |this, cx| {
+      view.update(cx, |this, cx| {
         this.select_commit_filter(selected_commit_sha.clone(), cx);
         this.refocus_page_shortcuts_after_dropdown_select(window, cx);
       });
@@ -2823,7 +2828,7 @@ impl GithubPrDetailsPage {
             target.id,
             next_body.as_str(),
           )
-          .map(OverviewCommentUpdateResult::Review),
+          .map(OverviewCommentUpdateResult::review),
       })
       .await;
 
@@ -2835,7 +2840,7 @@ impl GithubPrDetailsPage {
             this.clear_overview_edit_state();
           }
           Ok(OverviewCommentUpdateResult::Review(comment)) => {
-            this.upsert_review_comment(comment);
+            this.upsert_review_comment(*comment);
             this.sync_review_comments(cx);
             this.clear_overview_edit_state();
           }
@@ -3041,13 +3046,11 @@ impl GithubPrDetailsPage {
                 error_message.as_str(),
                 Map::new(),
               );
-            } else {
-              if this
-                .overview_edit_target
-                .is_some_and(|edit_target| edit_target.id == target.id)
-              {
-                this.clear_overview_edit_state();
-              }
+            } else if this
+              .overview_edit_target
+              .is_some_and(|edit_target| edit_target.id == target.id)
+            {
+              this.clear_overview_edit_state();
             }
             this.sync_review_comments(cx);
             cx.notify();
@@ -6670,6 +6673,21 @@ mod tests {
       line: Some(1),
       original_line: Some(1),
       side: Some("RIGHT".to_string()),
+    }
+  }
+
+  #[test]
+  fn overview_comment_update_result_review_preserves_comment() {
+    let comment = make_review_comment(42, "2026-02-28T10:00:00Z", None);
+
+    let result = OverviewCommentUpdateResult::review(comment);
+
+    match result {
+      OverviewCommentUpdateResult::Review(review) => {
+        assert_eq!(review.id, 42);
+        assert_eq!(review.path, "src/main.rs");
+      }
+      OverviewCommentUpdateResult::Issue(_) => panic!("expected review variant"),
     }
   }
 
