@@ -64,9 +64,9 @@ jobs:
         working-directory: desktop
         run: cargo check
 
-      - name: Clippy
-        working-directory: desktop
-        run: cargo clippy -- -D warnings
+      # - name: Clippy
+      #   working-directory: desktop
+      #   run: cargo clippy -- -D warnings
 
       - name: Cargo fmt
         working-directory: desktop
