@@ -10,9 +10,6 @@ jobs:
   landing_deploy:
     name: Landing - Deploy
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: landing
     steps:
       - uses: actions/checkout@v6
 
