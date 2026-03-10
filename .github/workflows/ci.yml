@@ -139,3 +139,7 @@ jobs:
       - name: Typecheck
         working-directory: landing
         run: pnpm typecheck
+
+      - name: Build
+        working-directory: landing
+        run: pnpm build
