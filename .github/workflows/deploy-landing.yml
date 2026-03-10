@@ -1,0 +1,36 @@
+name: Deploy Landing
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  landing_deploy:
+    name: Landing - Deploy
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: landing
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup
+
+      - name: Trigger Dokploy Deployment
+        env:
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          DOKPLOY_LANDING_APP_ID: ${{ secrets.DOKPLOY_LANDING_APP_ID }}
+        run: |
+          curl -X 'POST' \
+          'https://dokploy.jorisgallot.dev/api/trpc/application.deploy' \
+          -H 'accept: application/json' \
+          -H "x-api-key: $DOKPLOY_API_KEY" \
+          -H 'Content-Type: application/json' \
+          -d "{
+              \"json\":{
+                  \"applicationId\": \"$DOKPLOY_LANDING_APP_ID\"
+              }
+          }"
