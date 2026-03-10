@@ -26,6 +26,14 @@ jobs:
           cache: pnpm
           cache-dependency-path: landing/pnpm-lock.yaml
 
+      - name: Install dependencies
+        working-directory: landing
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        working-directory: landing
+        run: pnpm build
+
       - name: Trigger Dokploy Deployment
         env:
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
