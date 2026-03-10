@@ -168,6 +168,49 @@ jobs:
         run: |
           set -euo pipefail
 
+          json_field() {
+            /usr/bin/python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"
+          }
+
+          submit_and_validate_notarization() {
+            local artifact_path="$1"
+            local artifact_label="$2"
+            local submit_output_path="$3"
+            local log_output_path="$4"
+
+            if ! xcrun notarytool submit "${artifact_path}" \
+              --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
+              --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
+              --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
+              --wait \
+              --output-format json | tee "${submit_output_path}"; then
+              echo "notarytool submit failed for ${artifact_label}" >&2
+              exit 1
+            fi
+
+            local submission_id
+            submission_id="$(json_field "${submit_output_path}" id)"
+            local submission_status
+            submission_status="$(json_field "${submit_output_path}" status)"
+
+            echo "Notarization status for ${artifact_label}: ${submission_status} (submission ${submission_id})"
+
+            if [[ "${submission_status}" != "Accepted" ]]; then
+              echo "Fetching Apple notarization log for ${artifact_label}..." >&2
+              if xcrun notarytool log "${submission_id}" \
+                --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
+                --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
+                --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
+                "${log_output_path}"; then
+                echo "Apple notarization log for ${artifact_label}:"
+                cat "${log_output_path}"
+              else
+                echo "Unable to download Apple notarization log for ${artifact_label}." >&2
+              fi
+              exit 1
+            fi
+          }
+
           app_path="desktop/target/release/bundle/osx/Reviu.app"
           if [[ ! -d "${app_path}" ]]; then
             echo "Expected app bundle not found: ${app_path}" >&2
@@ -188,14 +231,17 @@ jobs:
           /usr/bin/codesign --verify --deep --strict --verbose=2 "${app_path}"
 
           app_zip_path="${RUNNER_TEMP}/Reviu.app.zip"
+          submit_output_path="${RUNNER_TEMP}/Reviu.app.notary-submit.json"
+          notary_log_path="${RUNNER_TEMP}/Reviu.app.notary-log.json"
           rm -f "${app_zip_path}"
+          rm -f "${submit_output_path}" "${notary_log_path}"
           ditto -c -k --keepParent "${app_path}" "${app_zip_path}"
 
-          xcrun notarytool submit "${app_zip_path}" \
-            --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
-            --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
-            --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
-            --wait
+          submit_and_validate_notarization \
+            "${app_zip_path}" \
+            "Reviu.app.zip" \
+            "${submit_output_path}" \
+            "${notary_log_path}"
 
           xcrun stapler staple "${app_path}"
           xcrun stapler validate "${app_path}"
@@ -222,6 +268,49 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          json_field() {
+            /usr/bin/python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"
+          }
+
+          submit_and_validate_notarization() {
+            local artifact_path="$1"
+            local artifact_label="$2"
+            local submit_output_path="$3"
+            local log_output_path="$4"
+
+            if ! xcrun notarytool submit "${artifact_path}" \
+              --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
+              --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
+              --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
+              --wait \
+              --output-format json | tee "${submit_output_path}"; then
+              echo "notarytool submit failed for ${artifact_label}" >&2
+              exit 1
+            fi
+
+            local submission_id
+            submission_id="$(json_field "${submit_output_path}" id)"
+            local submission_status
+            submission_status="$(json_field "${submit_output_path}" status)"
+
+            echo "Notarization status for ${artifact_label}: ${submission_status} (submission ${submission_id})"
+
+            if [[ "${submission_status}" != "Accepted" ]]; then
+              echo "Fetching Apple notarization log for ${artifact_label}..." >&2
+              if xcrun notarytool log "${submission_id}" \
+                --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
+                --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
+                --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
+                "${log_output_path}"; then
+                echo "Apple notarization log for ${artifact_label}:"
+                cat "${log_output_path}"
+              else
+                echo "Unable to download Apple notarization log for ${artifact_label}." >&2
+              fi
+              exit 1
+            fi
+          }
 
           app_path="desktop/target/release/bundle/osx/Reviu.app"
           if [[ ! -d "${app_path}" ]]; then
@@ -259,11 +348,14 @@ jobs:
 
           /usr/bin/codesign --verify --verbose=2 "${dmg_path}"
 
-          xcrun notarytool submit "${dmg_path}" \
-            --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
-            --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
-            --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
-            --wait
+          dmg_submit_output_path="${RUNNER_TEMP}/Reviu.dmg.notary-submit.json"
+          dmg_notary_log_path="${RUNNER_TEMP}/Reviu.dmg.notary-log.json"
+          rm -f "${dmg_submit_output_path}" "${dmg_notary_log_path}"
+          submit_and_validate_notarization \
+            "${dmg_path}" \
+            "${dmg_name}" \
+            "${dmg_submit_output_path}" \
+            "${dmg_notary_log_path}"
 
           xcrun stapler staple "${dmg_path}"
           xcrun stapler validate "${dmg_path}"
