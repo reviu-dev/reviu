@@ -1,6 +1,7 @@
 FROM node:lts AS build
 WORKDIR /app
 COPY . .
+RUN npm install -g pnpm@10.28.2
 RUN pnpm i
 RUN pnpm build
 
