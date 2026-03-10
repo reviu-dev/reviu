@@ -14,10 +14,20 @@ jobs:
       run:
         working-directory: landing
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - name: Setup Environment
-        uses: ./.github/actions/setup
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: landing/package.json
+          cache: true
+
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: landing/package.json
+          cache: pnpm
+          cache-dependency-path: landing/pnpm-lock.yaml
 
       - name: Trigger Dokploy Deployment
         env:
