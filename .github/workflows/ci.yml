@@ -28,6 +28,8 @@ jobs:
               - 'desktop/**'
             backend:
               - 'backend/**'
+            landing:
+              - 'landing/**'
 
   desktop:
     name: Desktop
@@ -108,3 +110,32 @@ jobs:
       - name: Eslint
         working-directory: backend
         run: pnpm lint
+
+  landing:
+    name: Landing
+    needs: changes
+    if: needs.changes.outputs.landing == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: landing/package.json
+          cache: true
+
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: landing/package.json
+          cache: pnpm
+          cache-dependency-path: landing/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: landing
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: landing
+        run: pnpm typecheck
