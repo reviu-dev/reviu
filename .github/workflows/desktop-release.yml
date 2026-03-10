@@ -359,7 +359,7 @@ jobs:
 
           xcrun stapler staple "${dmg_path}"
           xcrun stapler validate "${dmg_path}"
-          /usr/bin/spctl --assess --type open --context context:primary-signature --verbose=4 "${dmg_path}"
+          /usr/sbin/spctl --assess --type open --context context:primary-signature --verbose=4 "${dmg_path}"
 
           sha256="$(shasum -a 256 "${dmg_path}" | awk '{print $1}')"
           size="$(stat -f%z "${dmg_path}")"
