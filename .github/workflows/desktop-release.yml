@@ -100,9 +100,16 @@ jobs:
             exit 1
           fi
 
-      - name: Setup Sentry CLI
+      - name: Install Sentry CLI
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
-        uses: getsentry/action-setup-sentry-cli@v2
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/sentry-cli/bin"
+          mkdir -p "${install_dir}"
+          curl -sL https://sentry.io/get-cli/ | INSTALL_DIR="${install_dir}" bash
+          echo "${install_dir}" >> "${GITHUB_PATH}"
+          "${install_dir}/sentry-cli" --version
 
       - name: Create Sentry release (idempotent)
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
