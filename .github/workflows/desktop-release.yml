@@ -20,6 +20,7 @@ env:
   SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
   SENTRY_ORG: joris-gallot
   SENTRY_PROJECT: reviu-desktop
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   release-desktop:
@@ -399,8 +400,6 @@ jobs:
           files: |
             ${{ steps.package_assets.outputs.dmg_path }}
             ${{ steps.package_assets.outputs.manifest_path }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Finalize Sentry release (idempotent)
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
