@@ -23,10 +23,15 @@ env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
-  release-desktop:
-    name: Release Desktop
+  prepare-release:
+    name: Prepare Release
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
-    runs-on: macos-14
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.release_meta.outputs.should_release }}
+      version: ${{ steps.release_meta.outputs.version }}
+      tag: ${{ steps.release_meta.outputs.tag }}
+      sentry_release: ${{ steps.release_meta.outputs.sentry_release }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -47,6 +52,7 @@ jobs:
             echo "should_release=true" >> "${GITHUB_OUTPUT}"
             echo "version=${version}" >> "${GITHUB_OUTPUT}"
             echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+            echo "sentry_release=reviu@${version}" >> "${GITHUB_OUTPUT}"
           else
             echo "should_release=false" >> "${GITHUB_OUTPUT}"
           fi
@@ -56,23 +62,43 @@ jobs:
         run: |
           echo "Commit subject does not match ^release: pattern, skipping release steps."
 
-      - name: Setup Rust
-        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
-        uses: dtolnay/rust-toolchain@stable
+  build-macos:
+    name: Build macOS (${{ matrix.arch }})
+    needs: prepare-release
+    if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            manifest_arch: aarch64
+            target: aarch64-apple-darwin
+            runner: macos-26
+          - arch: x86_64
+            manifest_arch: x86_64
+            target: x86_64-apple-darwin
+            runner: macos-26
+    env:
+      VERSION: ${{ needs.prepare-release.outputs.version }}
+      TAG: ${{ needs.prepare-release.outputs.tag }}
+      SENTRY_RELEASE: ${{ needs.prepare-release.outputs.sentry_release }}
+      TARGET: ${{ matrix.target }}
+      MANIFEST_ARCH: ${{ matrix.manifest_arch }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Export Sentry release name
-        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "SENTRY_RELEASE=reviu@${{ steps.release_meta.outputs.version }}" >> "${GITHUB_ENV}"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Install cargo-bundle
-        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
         run: cargo install cargo-bundle --locked
 
-      - name: Validate macOS signing, notarization and Sentry secrets
-        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+      - name: Validate macOS release secrets
         shell: bash
         run: |
           set -euo pipefail
@@ -102,7 +128,6 @@ jobs:
           fi
 
       - name: Install Sentry CLI
-        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -112,31 +137,68 @@ jobs:
           echo "${install_dir}" >> "${GITHUB_PATH}"
           "${install_dir}/sentry-cli" --version
 
-      - name: Create Sentry release (idempotent)
-        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+      - name: Write notarization helper
         shell: bash
         run: |
           set -euo pipefail
-          if sentry-cli releases info "${SENTRY_RELEASE}" >/dev/null 2>&1; then
-            echo "Sentry release ${SENTRY_RELEASE} already exists."
-          else
-            sentry-cli releases new "${SENTRY_RELEASE}"
+          helper_path="${RUNNER_TEMP}/submit_and_validate_notarization.sh"
+          cat > "${helper_path}" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          artifact_path="$1"
+          artifact_label="$2"
+          submit_output_path="$3"
+          log_output_path="$4"
+
+          json_field() {
+            /usr/bin/python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"
+          }
+
+          if ! xcrun notarytool submit "${artifact_path}" \
+            --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
+            --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
+            --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
+            --wait \
+            --output-format json | tee "${submit_output_path}"; then
+            echo "notarytool submit failed for ${artifact_label}" >&2
+            exit 1
           fi
 
+          submission_id="$(json_field "${submit_output_path}" id)"
+          submission_status="$(json_field "${submit_output_path}" status)"
+
+          echo "Notarization status for ${artifact_label}: ${submission_status} (submission ${submission_id})"
+
+          if [[ "${submission_status}" != "Accepted" ]]; then
+            echo "Fetching Apple notarization log for ${artifact_label}..." >&2
+            if xcrun notarytool log "${submission_id}" \
+              --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
+              --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
+              --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
+              "${log_output_path}"; then
+              echo "Apple notarization log for ${artifact_label}:"
+              cat "${log_output_path}"
+            else
+              echo "Unable to download Apple notarization log for ${artifact_label}." >&2
+            fi
+            exit 1
+          fi
+          EOF
+          chmod +x "${helper_path}"
+
       - name: Build macOS app bundle
-        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
         working-directory: desktop
         timeout-minutes: 20
-        run: cargo bundle -p reviu --release
+        run: cargo bundle -p reviu --release --target "${TARGET}"
 
       - name: Import Apple Developer ID certificate
-        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
 
           certificate_path="${RUNNER_TEMP}/reviu-signing-cert.p12"
-          keychain_path="${RUNNER_TEMP}/reviu-signing.keychain-db"
+          keychain_path="${RUNNER_TEMP}/reviu-signing-${TARGET}.keychain-db"
           keychain_password="$(openssl rand -hex 32)"
 
           printf '%s' "${APPLE_CERTIFICATE_P12_BASE64}" | base64 --decode > "${certificate_path}" 2>/dev/null || \
@@ -165,56 +227,12 @@ jobs:
           echo "APPLE_KEYCHAIN_PASSWORD=${keychain_password}" >> "${GITHUB_ENV}"
 
       - name: Sign and notarize macOS app bundle
-        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
-        timeout-minutes: 2
+        timeout-minutes: 5
         shell: bash
         run: |
           set -euo pipefail
 
-          json_field() {
-            /usr/bin/python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"
-          }
-
-          submit_and_validate_notarization() {
-            local artifact_path="$1"
-            local artifact_label="$2"
-            local submit_output_path="$3"
-            local log_output_path="$4"
-
-            if ! xcrun notarytool submit "${artifact_path}" \
-              --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
-              --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
-              --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
-              --wait \
-              --output-format json | tee "${submit_output_path}"; then
-              echo "notarytool submit failed for ${artifact_label}" >&2
-              exit 1
-            fi
-
-            local submission_id
-            submission_id="$(json_field "${submit_output_path}" id)"
-            local submission_status
-            submission_status="$(json_field "${submit_output_path}" status)"
-
-            echo "Notarization status for ${artifact_label}: ${submission_status} (submission ${submission_id})"
-
-            if [[ "${submission_status}" != "Accepted" ]]; then
-              echo "Fetching Apple notarization log for ${artifact_label}..." >&2
-              if xcrun notarytool log "${submission_id}" \
-                --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
-                --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
-                --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
-                "${log_output_path}"; then
-                echo "Apple notarization log for ${artifact_label}:"
-                cat "${log_output_path}"
-              else
-                echo "Unable to download Apple notarization log for ${artifact_label}." >&2
-              fi
-              exit 1
-            fi
-          }
-
-          app_path="desktop/target/release/bundle/osx/Reviu.app"
+          app_path="desktop/target/${TARGET}/release/bundle/osx/Reviu.app"
           if [[ ! -d "${app_path}" ]]; then
             echo "Expected app bundle not found: ${app_path}" >&2
             exit 1
@@ -233,16 +251,15 @@ jobs:
 
           /usr/bin/codesign --verify --deep --strict --verbose=2 "${app_path}"
 
-          app_zip_path="${RUNNER_TEMP}/Reviu.app.zip"
-          submit_output_path="${RUNNER_TEMP}/Reviu.app.notary-submit.json"
-          notary_log_path="${RUNNER_TEMP}/Reviu.app.notary-log.json"
-          rm -f "${app_zip_path}"
-          rm -f "${submit_output_path}" "${notary_log_path}"
+          app_zip_path="${RUNNER_TEMP}/Reviu-${TARGET}.app.zip"
+          submit_output_path="${RUNNER_TEMP}/Reviu-${TARGET}.app.notary-submit.json"
+          notary_log_path="${RUNNER_TEMP}/Reviu-${TARGET}.app.notary-log.json"
+          rm -f "${app_zip_path}" "${submit_output_path}" "${notary_log_path}"
           ditto -c -k --keepParent "${app_path}" "${app_zip_path}"
 
-          submit_and_validate_notarization \
+          "${RUNNER_TEMP}/submit_and_validate_notarization.sh" \
             "${app_zip_path}" \
-            "Reviu.app.zip" \
+            "Reviu.app.zip (${TARGET})" \
             "${submit_output_path}" \
             "${notary_log_path}"
 
@@ -251,82 +268,34 @@ jobs:
           rm -f "${app_zip_path}"
 
       - name: Upload Sentry debug files
-        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
-          app_path="desktop/target/release/bundle/osx/Reviu.app"
+          app_path="desktop/target/${TARGET}/release/bundle/osx/Reviu.app"
           if [[ ! -d "${app_path}" ]]; then
             echo "Expected app bundle not found for Sentry debug upload: ${app_path}" >&2
             exit 1
           fi
           sentry-cli debug-files upload "${app_path}"
 
-      - name: Create DMG and desktop update manifest
-        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+      - name: Create DMG and manifest fragment
         id: package_assets
-        env:
-          VERSION: ${{ steps.release_meta.outputs.version }}
-          TAG: ${{ steps.release_meta.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
 
-          json_field() {
-            /usr/bin/python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"
-          }
-
-          submit_and_validate_notarization() {
-            local artifact_path="$1"
-            local artifact_label="$2"
-            local submit_output_path="$3"
-            local log_output_path="$4"
-
-            if ! xcrun notarytool submit "${artifact_path}" \
-              --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
-              --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
-              --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
-              --wait \
-              --output-format json | tee "${submit_output_path}"; then
-              echo "notarytool submit failed for ${artifact_label}" >&2
-              exit 1
-            fi
-
-            local submission_id
-            submission_id="$(json_field "${submit_output_path}" id)"
-            local submission_status
-            submission_status="$(json_field "${submit_output_path}" status)"
-
-            echo "Notarization status for ${artifact_label}: ${submission_status} (submission ${submission_id})"
-
-            if [[ "${submission_status}" != "Accepted" ]]; then
-              echo "Fetching Apple notarization log for ${artifact_label}..." >&2
-              if xcrun notarytool log "${submission_id}" \
-                --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
-                --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
-                --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
-                "${log_output_path}"; then
-                echo "Apple notarization log for ${artifact_label}:"
-                cat "${log_output_path}"
-              else
-                echo "Unable to download Apple notarization log for ${artifact_label}." >&2
-              fi
-              exit 1
-            fi
-          }
-
-          app_path="desktop/target/release/bundle/osx/Reviu.app"
+          app_path="desktop/target/${TARGET}/release/bundle/osx/Reviu.app"
           if [[ ! -d "${app_path}" ]]; then
             echo "Expected app bundle not found: ${app_path}" >&2
             exit 1
           fi
 
-          output_dir="dist/release/macos"
+          output_dir="dist/release/macos/${TARGET}"
           mkdir -p "${output_dir}"
 
-          dmg_name="Reviu-${VERSION}-macos-aarch64.dmg"
+          dmg_name="Reviu-${VERSION}-macos-${MANIFEST_ARCH}.dmg"
           dmg_path="${output_dir}/${dmg_name}"
-          manifest_path="${output_dir}/desktop-update.manifest.json"
+          metadata_path="${output_dir}/desktop-update.${MANIFEST_ARCH}.json"
 
           staging_dir="$(mktemp -d)"
           cp -R "${app_path}" "${staging_dir}/Reviu.app"
@@ -351,10 +320,10 @@ jobs:
 
           /usr/bin/codesign --verify --verbose=2 "${dmg_path}"
 
-          dmg_submit_output_path="${RUNNER_TEMP}/Reviu.dmg.notary-submit.json"
-          dmg_notary_log_path="${RUNNER_TEMP}/Reviu.dmg.notary-log.json"
+          dmg_submit_output_path="${RUNNER_TEMP}/Reviu-${TARGET}.dmg.notary-submit.json"
+          dmg_notary_log_path="${RUNNER_TEMP}/Reviu-${TARGET}.dmg.notary-log.json"
           rm -f "${dmg_submit_output_path}" "${dmg_notary_log_path}"
-          submit_and_validate_notarization \
+          "${RUNNER_TEMP}/submit_and_validate_notarization.sh" \
             "${dmg_path}" \
             "${dmg_name}" \
             "${dmg_submit_output_path}" \
@@ -367,54 +336,131 @@ jobs:
           sha256="$(shasum -a 256 "${dmg_path}" | awk '{print $1}')"
           size="$(stat -f%z "${dmg_path}")"
           artifact_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${dmg_name}"
-          release_notes_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-          cat > "${manifest_path}" <<EOF
+          cat > "${metadata_path}" <<EOF
           {
-            "version": "${VERSION}",
-            "minimumSupportedVersion": "0.0.0",
-            "releaseNotesUrl": "${release_notes_url}",
-            "artifacts": [
-              {
-                "platform": "macos",
-                "arch": "aarch64",
-                "url": "${artifact_url}",
-                "sha256": "${sha256}",
-                "size": ${size}
-              }
-            ]
+            "platform": "macos",
+            "arch": "${MANIFEST_ARCH}",
+            "url": "${artifact_url}",
+            "sha256": "${sha256}",
+            "size": ${size}
           }
           EOF
 
           echo "dmg_path=${dmg_path}" >> "${GITHUB_OUTPUT}"
-          echo "manifest_path=${manifest_path}" >> "${GITHUB_OUTPUT}"
+          echo "metadata_path=${metadata_path}" >> "${GITHUB_OUTPUT}"
 
-      - name: Create or update GitHub release
-        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
-        uses: softprops/action-gh-release@v2
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ steps.release_meta.outputs.tag }}
-          target_commitish: ${{ github.event.workflow_run.head_sha }}
-          name: Reviu ${{ steps.release_meta.outputs.tag }}
-          generate_release_notes: true
-          overwrite_files: true
-          fail_on_unmatched_files: true
-          files: |
+          name: desktop-release-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
             ${{ steps.package_assets.outputs.dmg_path }}
-            ${{ steps.package_assets.outputs.manifest_path }}
-
-      - name: Finalize Sentry release (idempotent)
-        if: ${{ steps.release_meta.outputs.should_release == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          sentry-cli releases finalize "${SENTRY_RELEASE}" || true
+            ${{ steps.package_assets.outputs.metadata_path }}
 
       - name: Cleanup signing keychain
-        if: ${{ always() && steps.release_meta.outputs.should_release == 'true' }}
+        if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ -n "${APPLE_KEYCHAIN_PATH:-}" ]]; then
             security delete-keychain "${APPLE_KEYCHAIN_PATH}" || true
           fi
+
+  publish-release:
+    name: Publish Release
+    needs:
+      - prepare-release
+      - build-macos
+    if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare-release.outputs.version }}
+      TAG: ${{ needs.prepare-release.outputs.tag }}
+      SENTRY_RELEASE: ${{ needs.prepare-release.outputs.sentry_release }}
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v5
+        with:
+          pattern: desktop-release-*
+          merge-multiple: true
+          path: dist/release/macos
+
+      - name: Install Sentry CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_dir="${RUNNER_TEMP}/sentry-cli/bin"
+          mkdir -p "${install_dir}"
+          curl -sL https://sentry.io/get-cli/ | INSTALL_DIR="${install_dir}" bash
+          echo "${install_dir}" >> "${GITHUB_PATH}"
+          "${install_dir}/sentry-cli" --version
+
+      - name: Create Sentry release (idempotent)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if sentry-cli releases info "${SENTRY_RELEASE}" >/dev/null 2>&1; then
+            echo "Sentry release ${SENTRY_RELEASE} already exists."
+          else
+            sentry-cli releases new "${SENTRY_RELEASE}"
+          fi
+
+      - name: Build aggregated desktop update manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          output_dir="dist/release/macos"
+          manifest_path="${output_dir}/desktop-update.manifest.json"
+          release_notes_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+          artifacts_json="$(
+            /usr/bin/python3 - <<'PY'
+            import glob
+            import json
+
+            files = sorted(
+              path
+              for path in glob.glob("dist/release/macos/**/*.json", recursive=True)
+              if path.endswith(".json") and "desktop-update." in path
+            )
+            if not files:
+              raise SystemExit("No desktop manifest fragments found")
+
+            artifacts = [json.load(open(path)) for path in files]
+            artifacts.sort(key=lambda item: item["arch"])
+            print(json.dumps(artifacts))
+            PY
+          )"
+
+          cat > "${manifest_path}" <<EOF
+          {
+            "version": "${VERSION}",
+            "minimumSupportedVersion": "0.0.0",
+            "releaseNotesUrl": "${release_notes_url}",
+            "artifacts": ${artifacts_json}
+          }
+          EOF
+
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.event.workflow_run.head_sha }}
+          name: Reviu ${{ env.TAG }}
+          generate_release_notes: true
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/release/macos/**/*.dmg
+            dist/release/macos/desktop-update.manifest.json
+
+      - name: Finalize Sentry release (idempotent)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sentry-cli releases finalize "${SENTRY_RELEASE}" || true
