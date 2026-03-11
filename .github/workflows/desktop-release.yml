@@ -75,10 +75,10 @@ jobs:
             manifest_arch: aarch64
             target: aarch64-apple-darwin
             runner: macos-26
-          - arch: x86_64
-            manifest_arch: x86_64
-            target: x86_64-apple-darwin
-            runner: macos-26
+          # - arch: x86_64
+          #   manifest_arch: x86_64
+          #   target: x86_64-apple-darwin
+          #   runner: macos-26
     env:
       VERSION: ${{ needs.prepare-release.outputs.version }}
       TAG: ${{ needs.prepare-release.outputs.tag }}
