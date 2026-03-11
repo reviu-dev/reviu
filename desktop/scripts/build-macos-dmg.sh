@@ -65,6 +65,29 @@ assert_signing_identity() {
   fi
 }
 
+embed_app_icon() {
+  local app_path="$1"
+  local icon_source_path="$2"
+  local app_name="$3"
+  local plist_buddy="/usr/libexec/PlistBuddy"
+  local plist_path="${app_path}/Contents/Info.plist"
+  local resources_dir="${app_path}/Contents/Resources"
+
+  if [[ ! -f "${icon_source_path}" ]]; then
+    die "App icon not found: ${icon_source_path}"
+  fi
+
+  if [[ ! -x "${plist_buddy}" ]]; then
+    die "PlistBuddy is required to embed the app icon"
+  fi
+
+  mkdir -p "${resources_dir}"
+  cp "${icon_source_path}" "${resources_dir}/${app_name}.icns"
+
+  "${plist_buddy}" -c "Delete :CFBundleIconFile" "${plist_path}" >/dev/null 2>&1 || true
+  "${plist_buddy}" -c "Add :CFBundleIconFile string ${app_name}" "${plist_path}"
+}
+
 json_field() {
   /usr/bin/python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"
 }
@@ -194,6 +217,7 @@ main() {
   local desktop_dir="${repo_root}/desktop"
   local runner_temp="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
   local app_path="${desktop_dir}/target/${target}/release/bundle/osx/${app_name}.app"
+  local icon_source_path="${desktop_dir}/crates/reviu/assets/reviu.icns"
   local output_dir="${repo_root}/dist/release/macos/${target}"
   local dmg_name="${app_name}-${version}-macos-${arch}.dmg"
   local dmg_path="${output_dir}/${dmg_name}"
@@ -247,6 +271,8 @@ main() {
   if [[ ! -d "${app_path}" ]]; then
     die "Expected app bundle not found: ${app_path}"
   fi
+
+  embed_app_icon "${app_path}" "${icon_source_path}" "${app_name}"
 
   rm -rf "${output_dir}"
   mkdir -p "${output_dir}"
