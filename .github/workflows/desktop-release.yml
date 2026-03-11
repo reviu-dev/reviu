@@ -165,6 +165,7 @@ jobs:
 
       - name: Sign and notarize macOS app bundle
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
+        timeout-minutes: 2
         shell: bash
         run: |
           set -euo pipefail
