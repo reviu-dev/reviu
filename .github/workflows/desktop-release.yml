@@ -137,61 +137,6 @@ jobs:
           echo "${install_dir}" >> "${GITHUB_PATH}"
           "${install_dir}/sentry-cli" --version
 
-      - name: Write notarization helper
-        shell: bash
-        run: |
-          set -euo pipefail
-          helper_path="${RUNNER_TEMP}/submit_and_validate_notarization.sh"
-          cat > "${helper_path}" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          artifact_path="$1"
-          artifact_label="$2"
-          submit_output_path="$3"
-          log_output_path="$4"
-
-          json_field() {
-            /usr/bin/python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"
-          }
-
-          if ! xcrun notarytool submit "${artifact_path}" \
-            --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
-            --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
-            --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
-            --wait \
-            --output-format json | tee "${submit_output_path}"; then
-            echo "notarytool submit failed for ${artifact_label}" >&2
-            exit 1
-          fi
-
-          submission_id="$(json_field "${submit_output_path}" id)"
-          submission_status="$(json_field "${submit_output_path}" status)"
-
-          echo "Notarization status for ${artifact_label}: ${submission_status} (submission ${submission_id})"
-
-          if [[ "${submission_status}" != "Accepted" ]]; then
-            echo "Fetching Apple notarization log for ${artifact_label}..." >&2
-            if xcrun notarytool log "${submission_id}" \
-              --apple-id "${APPLE_NOTARYTOOL_APPLE_ID}" \
-              --password "${APPLE_NOTARYTOOL_APP_PASSWORD}" \
-              --team-id "${APPLE_NOTARYTOOL_TEAM_ID}" \
-              "${log_output_path}"; then
-              echo "Apple notarization log for ${artifact_label}:"
-              cat "${log_output_path}"
-            else
-              echo "Unable to download Apple notarization log for ${artifact_label}." >&2
-            fi
-            exit 1
-          fi
-          EOF
-          chmod +x "${helper_path}"
-
-      - name: Build macOS app bundle
-        working-directory: desktop
-        timeout-minutes: 20
-        run: cargo bundle -p reviu --release --target "${TARGET}"
-
       - name: Import Apple Developer ID certificate
         shell: bash
         run: |
@@ -226,46 +171,12 @@ jobs:
           echo "APPLE_KEYCHAIN_PATH=${keychain_path}" >> "${GITHUB_ENV}"
           echo "APPLE_KEYCHAIN_PASSWORD=${keychain_password}" >> "${GITHUB_ENV}"
 
-      - name: Sign and notarize macOS app bundle
-        timeout-minutes: 5
+      - name: Sign, notarize and package macOS release
+        timeout-minutes: 25
         shell: bash
         run: |
           set -euo pipefail
-
-          app_path="desktop/target/${TARGET}/release/bundle/osx/Reviu.app"
-          if [[ ! -d "${app_path}" ]]; then
-            echo "Expected app bundle not found: ${app_path}" >&2
-            exit 1
-          fi
-
-          security unlock-keychain -p "${APPLE_KEYCHAIN_PASSWORD}" "${APPLE_KEYCHAIN_PATH}"
-
-          /usr/bin/codesign \
-            --force \
-            --deep \
-            --options runtime \
-            --timestamp \
-            --sign "${APPLE_SIGNING_IDENTITY}" \
-            --keychain "${APPLE_KEYCHAIN_PATH}" \
-            "${app_path}"
-
-          /usr/bin/codesign --verify --deep --strict --verbose=2 "${app_path}"
-
-          app_zip_path="${RUNNER_TEMP}/Reviu-${TARGET}.app.zip"
-          submit_output_path="${RUNNER_TEMP}/Reviu-${TARGET}.app.notary-submit.json"
-          notary_log_path="${RUNNER_TEMP}/Reviu-${TARGET}.app.notary-log.json"
-          rm -f "${app_zip_path}" "${submit_output_path}" "${notary_log_path}"
-          ditto -c -k --keepParent "${app_path}" "${app_zip_path}"
-
-          "${RUNNER_TEMP}/submit_and_validate_notarization.sh" \
-            "${app_zip_path}" \
-            "Reviu.app.zip (${TARGET})" \
-            "${submit_output_path}" \
-            "${notary_log_path}"
-
-          xcrun stapler staple "${app_path}"
-          xcrun stapler validate "${app_path}"
-          rm -f "${app_zip_path}"
+          bash ./desktop/scripts/build-macos-dmg.sh "${VERSION}" "${MANIFEST_ARCH}" "${TARGET}"
 
       - name: Upload Sentry debug files
         shell: bash
@@ -278,86 +189,14 @@ jobs:
           fi
           sentry-cli debug-files upload "${app_path}"
 
-      - name: Create DMG and manifest fragment
-        id: package_assets
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          app_path="desktop/target/${TARGET}/release/bundle/osx/Reviu.app"
-          if [[ ! -d "${app_path}" ]]; then
-            echo "Expected app bundle not found: ${app_path}" >&2
-            exit 1
-          fi
-
-          output_dir="dist/release/macos/${TARGET}"
-          mkdir -p "${output_dir}"
-
-          dmg_name="Reviu-${VERSION}-macos-${MANIFEST_ARCH}.dmg"
-          dmg_path="${output_dir}/${dmg_name}"
-          metadata_path="${output_dir}/desktop-update.${MANIFEST_ARCH}.json"
-
-          staging_dir="$(mktemp -d)"
-          cp -R "${app_path}" "${staging_dir}/Reviu.app"
-
-          hdiutil create \
-            -volname "Reviu" \
-            -srcfolder "${staging_dir}" \
-            -ov \
-            -format UDZO \
-            "${dmg_path}"
-
-          rm -rf "${staging_dir}"
-
-          security unlock-keychain -p "${APPLE_KEYCHAIN_PASSWORD}" "${APPLE_KEYCHAIN_PATH}"
-
-          /usr/bin/codesign \
-            --force \
-            --timestamp \
-            --sign "${APPLE_SIGNING_IDENTITY}" \
-            --keychain "${APPLE_KEYCHAIN_PATH}" \
-            "${dmg_path}"
-
-          /usr/bin/codesign --verify --verbose=2 "${dmg_path}"
-
-          dmg_submit_output_path="${RUNNER_TEMP}/Reviu-${TARGET}.dmg.notary-submit.json"
-          dmg_notary_log_path="${RUNNER_TEMP}/Reviu-${TARGET}.dmg.notary-log.json"
-          rm -f "${dmg_submit_output_path}" "${dmg_notary_log_path}"
-          "${RUNNER_TEMP}/submit_and_validate_notarization.sh" \
-            "${dmg_path}" \
-            "${dmg_name}" \
-            "${dmg_submit_output_path}" \
-            "${dmg_notary_log_path}"
-
-          xcrun stapler staple "${dmg_path}"
-          xcrun stapler validate "${dmg_path}"
-          /usr/sbin/spctl --assess --type open --context context:primary-signature --verbose=4 "${dmg_path}"
-
-          sha256="$(shasum -a 256 "${dmg_path}" | awk '{print $1}')"
-          size="$(stat -f%z "${dmg_path}")"
-          artifact_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${dmg_name}"
-
-          cat > "${metadata_path}" <<EOF
-          {
-            "platform": "macos",
-            "arch": "${MANIFEST_ARCH}",
-            "url": "${artifact_url}",
-            "sha256": "${sha256}",
-            "size": ${size}
-          }
-          EOF
-
-          echo "dmg_path=${dmg_path}" >> "${GITHUB_OUTPUT}"
-          echo "metadata_path=${metadata_path}" >> "${GITHUB_OUTPUT}"
-
       - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
           name: desktop-release-${{ matrix.arch }}
           if-no-files-found: error
           path: |
-            ${{ steps.package_assets.outputs.dmg_path }}
-            ${{ steps.package_assets.outputs.metadata_path }}
+            dist/release/macos/${{ matrix.target }}/Reviu-${{ env.VERSION }}-macos-${{ matrix.manifest_arch }}.dmg
+            dist/release/macos/${{ matrix.target }}/desktop-update.${{ matrix.manifest_arch }}.json
 
       - name: Cleanup signing keychain
         if: ${{ always() }}
