@@ -126,6 +126,7 @@ jobs:
       - name: Build macOS app bundle
         if: ${{ steps.release_meta.outputs.should_release == 'true' }}
         working-directory: desktop
+        timeout-minutes: 20
         run: cargo bundle -p reviu --release
 
       - name: Import Apple Developer ID certificate
