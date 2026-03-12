@@ -14,6 +14,7 @@
 - `backend/`: Hono API + Better Auth (GitHub) + Polar billing.
 - `landing/`: Astro + Vue marketing site.
 - Git test playground: `/Users/joris/workspace/git-playground/`.
+- dashboard: Vue + vue-shadcn + tailwind
 
 ## Feature -> code map
 
@@ -73,3 +74,8 @@
 - Auth: Better Auth (GitHub OAuth) + Polar subscriptions.
 - Auth OpenAPI schema:
   - `http://localhost:3000/api/auth/open-api/generate-schema`
+
+## Dashboard
+
+- If you need to add new component from shadcn you can do `pnpm dlx shadcn-vue@latest add <component>` in the dashboard folder
+- Use vueuse for utils functions
