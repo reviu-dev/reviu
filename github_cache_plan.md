@@ -8,703 +8,496 @@ Build a production-ready cache layer for the GitHub backend that:
 - keeps the desktop app reactive
 - preserves access control for private repositories
 - supports horizontal scaling across backend instances
-- is ready for a hybrid OAuth user token + GitHub App model
+- stays compatible with an OAuth-only deployment
+- leaves a clean path toward optional GitHub App adoption later
 
-## Current State
+## Current Architecture
 
-Today the backend mostly proxies GitHub requests directly from [backend/src/routes/github.ts](/Users/joris/workspace/reviu/backend/src/routes/github.ts) to [backend/src/services/github.ts](/Users/joris/workspace/reviu/backend/src/services/github.ts).
+The GitHub backend is now organized under `backend/src/plugins/github/`:
 
-There is one temporary in-memory cache for:
+- `cache/github-cache.ts`: generic cache engine
+- `cache/github-cache-policy.ts`: route policy and tag helpers
+- `cache/github-cache-runtime.ts`: shared GitHub cache singleton
+- `service.ts`: GitHub API wrappers
+- `formatter.ts`: response mapping
+- `types.ts`: GitHub endpoint and app types
+- `backend/src/routes/github.ts`: HTTP routes
+- `backend/src/lib/redis.ts`: Redis-backed cache store with in-memory fallback
 
-- `GET /github/pr/latest`
-- `GET /github/pr/need-reviews`
+## What Is Already Implemented
 
-That implementation is useful as a proof of direction, but it is not production-ready because it is:
+### Shared Cache Runtime
 
-- process-local
-- not shared across instances
-- not invalidated by mutations
-- not backed by Redis
-- not revalidated with `ETag` or `If-None-Match`
+Implemented:
 
-The desktop currently loads many GitHub endpoints in parallel:
+- Redis-backed shared store
+- in-process `inflight` dedupe per backend instance
+- stale-while-revalidate behavior
+- tag-based invalidation
+- structured cache logs
+- in-memory fallback when Redis is unavailable at runtime
 
-- GitHub home loads pull requests, notifications, and repositories
-- repository pages load repository details, branches, readme, code tree, issues, and PRs
-- PR pages load PR details, files, commits, issue comments, reviews, review comments, and file contents
+Current files:
 
-This means a route-level cache is not enough. We need a shared cache policy at the GitHub service layer.
+- `backend/src/plugins/github/cache/github-cache.ts`
+- `backend/src/plugins/github/cache/github-cache-runtime.ts`
+- `backend/src/lib/redis.ts`
 
-## High-Level Architecture
+### Current Cached Routes
 
-The production architecture should use:
-
-- Redis as the shared cache store
-- a small in-process `inflight` map per backend instance to deduplicate concurrent misses
-- conditional revalidation against GitHub using `ETag` and `If-None-Match`
-- tag-based invalidation after mutations
-- stale-while-revalidate behavior for read routes
-
-### Why Redis
-
-Redis is the right default for this backend because:
-
-- the backend is a long-lived Node server, not a serverless function
-- we need shared state across instances
-- we need low-latency reads
-- we need distributed lock patterns to avoid stampedes
-- we need explicit invalidation and tag indexes
-
-### Recommended Redis Client
-
-Use `ioredis`.
-
-Reasoning:
-
-- better fit for a long-lived Node backend
-- mature reconnect behavior
-- good support for pipelines and lock patterns
-- better default choice here than HTTP-based Redis clients designed for serverless runtimes
-
-Recommended connection defaults:
-
-- `lazyConnect: true`
-- `maxRetriesPerRequest: 1`
-- `enableOfflineQueue: false`
-- bounded `retryStrategy`
-
-## Cache Scopes
-
-We want 3 scopes.
-
-### 1. Viewer Scope
-
-Cache entries bound to one signed-in user.
-
-Use for:
-
-- notifications
-- current user repositories
-- "my open PRs"
-- "need review" PR search
-- any data whose response depends on the current user identity rather than only repo visibility
-
-Key shape:
-
-`gh:viewer:{userId}:{resourceKey}`
-
-Properties:
-
-- never shared across users
-- uses OAuth user token
-- shortest TTLs
-
-### 2. Installation Scope
-
-Cache entries bound to a GitHub App installation.
-
-Use for:
-
-- private repo and org data once we have a GitHub App installation token
-- repo-level and PR-level data that should be shared across authorized users of the same installation
-
-Key shape:
-
-`gh:inst:{installationId}:{resourceKey}`
-
-Properties:
-
-- shared only within the installation
-- safest way to share private repo cache
-- target scope for most repo and PR reads in the final architecture
-
-### 3. Public Scope
-
-Cache entries for public resources that are safe to share globally.
-
-Use for:
-
-- public repository metadata
-- public readme, trees, branches, PR lists, issue lists
-- immutable file contents fetched by commit SHA
-
-Key shape:
-
-`gh:public:{resourceKey}`
-
-Properties:
-
-- globally shareable
-- longest useful TTLs
-- best place to get large cache wins for immutable Git objects
-
-## Authentication Model
-
-The production target should be hybrid, with OAuth as the baseline that always works:
-
-- OAuth user tokens for viewer-scoped routes
-- OAuth user tokens as the default fallback for repo-scoped routes
-- GitHub App installation tokens only when the repo or org has installed the app
-
-Important product rule:
-
-- no GitHub read route should require a GitHub App installation in order to function
-- public repositories must remain accessible without asking an admin to install the app
-- private repositories must continue to work through the user's OAuth token even when the app is not installed
-
-### Why Not Full GitHub App Immediately
-
-Some important routes are user-centric and should remain user-scoped:
+These routes already go through the shared cache and return `x-reviu-cache`:
 
 - `GET /github/notifications`
 - `GET /github/repos/me`
 - `GET /github/pr/latest`
 - `GET /github/pr/need-reviews`
+- `GET /github/pr/:id`
+- `GET /github/pr/:id/files`
+- `GET /github/pr/:id/reviews`
+- `GET /github/repos/:owner/:repo`
+- `GET /github/repos/:owner/:repo/readme`
+- `GET /github/repos/:owner/:repo/branches`
 
-These are tied to the authenticated user and do not map cleanly to a repo installation scope.
+Current route wiring lives in:
 
-### When GitHub App Becomes Better
+- `backend/src/routes/github.ts`
 
-GitHub App is the better choice for repo and PR routes when we want:
+### Current Invalidation
 
-- separate rate-limit budget from user OAuth tokens
-- fine-grained repository permissions
-- short-lived scoped tokens
-- repo or org level installs
-- webhook-driven invalidation
-- access that is not coupled to one employee's token
+Mutations already invalidate matching tags after success for:
 
-GitHub App is therefore an optimization and scaling layer, not the primary compatibility path.
+- PR body update
+- PR review creation
+- PR review comment create / reply / edit / delete
+- issue body update
+- issue comment create / edit / delete
 
-### Viability Constraint
+### Current Conditional Revalidation
 
-It is not realistic to assume that every public repository owner or organization admin will install the Reviu GitHub App.
+`ETag` / `Last-Modified` revalidation is implemented for:
 
-That means:
+- `GET /github/pr/:id`
+- `GET /github/pr/:id/reviews`
+- `GET /github/repos/:owner/:repo`
+- `GET /github/repos/:owner/:repo/readme`
+- `GET /github/repos/:owner/:repo/branches`
 
-- public repo support must not depend on app installation
-- private repo support should not be blocked on app installation either
-- the cache system must work well even in an OAuth-only deployment
+Current service helpers:
 
-The app should improve:
+- `fetchGithubPullRequestConditionally`
+- `fetchGithubPullRequestReviewsConditionally`
+- `fetchGithubRepositoryConditionally`
+- `fetchGithubRepositoryReadmeConditionally`
+- `fetchGithubRepositoryBranchesConditionally`
 
-- cache sharing for private repos
-- webhook-driven freshness
-- rate-limit resilience for heavy team usage
+Note:
 
-But it should never be required for baseline product functionality.
+- `GET /github/pr/:id/files` is cached, but not conditionally revalidated yet.
+- Reason: it aggregates paginated GitHub responses, so a single upstream `ETag` is not a clean validator for the full assembled payload.
+
+### Current Tests
+
+Focused Vitest coverage exists for:
+
+- fresh hit
+- stale serve + background refresh
+- stale fallback on upstream error
+- tag invalidation
+- `304 Not Modified` revalidation path
+- policy key/tag generation
+
+Current test files:
+
+- `backend/src/plugins/github/cache/github-cache.test.ts`
+- `backend/src/plugins/github/cache/github-cache-policy.test.ts`
+
+## Cache Model
+
+### Scopes
+
+We keep 3 cache scopes in the design.
+
+#### 1. Viewer Scope
+
+Use for responses bound to the signed-in user.
+
+Examples:
+
+- notifications
+- current user repositories
+- search-based "my PRs" endpoints
+- private repo data while we are still OAuth-only
+
+Key shape:
+
+`gh:cache:viewer:{userId}:{resourceKey}`
+
+Properties:
+
+- never shared across users
+- works with OAuth user token
+- safest default scope today
+
+#### 2. Installation Scope
+
+Target scope for future GitHub App installation tokens.
+
+Examples:
+
+- private repo and PR reads for installed repos
+- shared cache across authorized members of the same installation
+
+Key shape:
+
+`gh:cache:installation:{installationId}:{resourceKey}`
+
+Properties:
+
+- not implemented yet
+- future-safe target for private shared cache
+
+#### 3. Public Scope
+
+Target scope for globally shareable public resources.
+
+Examples:
+
+- public repository metadata
+- public readme
+- trees by SHA
+- file content by commit SHA
+
+Key shape:
+
+`gh:cache:public:{resourceKey}`
+
+Properties:
+
+- not implemented yet
+- should only be used after repo visibility is known to be public
+
+## Authentication Model
+
+The target remains hybrid, but the baseline must always work with OAuth alone.
+
+### Baseline Rule
+
+- GitHub OAuth user tokens must remain sufficient for baseline product functionality.
+- No public repo route should require GitHub App installation.
+- No private repo route should hard-fail only because the app is not installed.
 
 ### Practical Decision
 
-Short term:
+Current backend behavior:
 
-- keep OAuth user tokens for all routes
-- implement Redis cache now
-- support public and private repositories without any GitHub App installation requirement
-- keep private repo cache viewer-scoped until GitHub App is added
-- allow public repo cache to be shared globally even when the source fetch came from an OAuth user token
+- OAuth user token for everything
+- viewer-scoped cache everywhere
 
-Target state:
+Future target:
 
-- keep viewer routes on OAuth
-- use GitHub App installation tokens for repo and PR routes when the app is installed
-- keep OAuth fallback for repo and PR routes when the app is not installed
-- move private repo cache from viewer scope to installation scope only for installed repos
+- viewer routes stay on OAuth
+- repo/PR routes can use GitHub App installation tokens when available
+- repo/PR routes keep OAuth fallback when app is not installed
 
 ## Cache Entry Model
 
-Each cache entry should store:
+Current cache entries store:
 
 - `payload`
-- `etag`
-- `lastModified`
+- `tags`
 - `fetchedAt`
 - `freshUntil`
 - `staleUntil`
-- `scope`
-- `authSource` (`oauth_user` or `github_app_installation`)
-- `statusCode`
-- minimal GitHub rate-limit metadata for observability
+- `etag`
+- `lastModified`
 
-Example TypeScript shape:
+Current TypeScript shape:
 
 ```ts
 export interface GithubCacheEntry<T> {
   payload: T
-  etag?: string
-  lastModified?: string
+  tags: string[]
   fetchedAt: number
   freshUntil: number
   staleUntil: number
-  scope: 'viewer' | 'installation' | 'public'
-  authSource: 'oauth_user' | 'github_app_installation'
-  statusCode: number
-  githubRateLimit?: {
-    limit?: number
-    remaining?: number
-    reset?: number
-    resource?: string
-  }
-}
-```
-
-## Service Layer Design
-
-Introduce a single cache abstraction in the backend service layer instead of duplicating logic in route handlers.
-
-Suggested files:
-
-- `backend/src/lib/redis.ts`
-- `backend/src/lib/github-cache.ts`
-- `backend/src/lib/github-cache-policy.ts`
-
-Core API:
-
-```ts
-type GithubCacheScope = 'viewer' | 'installation' | 'public'
-
-interface GithubCachedRequestOptions<T> {
-  key: string
-  scope: GithubCacheScope
-  ttlMs: number
-  staleMs: number
-  tags: string[]
-  loader: (cached?: GithubCacheEntry<T>) => Promise<GithubUpstreamResult<T>>
-}
-
-interface GithubUpstreamResult<T> {
-  payload: T
   etag?: string
   lastModified?: string
-  statusCode: number
-  notModified?: boolean
-  githubRateLimit?: {
-    limit?: number
-    remaining?: number
-    reset?: number
-    resource?: string
-  }
 }
 ```
 
-Behavior:
+### Planned Extension
 
-1. Read Redis.
-2. If entry is fresh, return it immediately.
-3. If entry is stale-but-allowed, return stale and trigger background refresh if a lock can be acquired.
-4. If missing, acquire a short Redis lock and fetch upstream.
-5. Use local `inflight` dedupe per process to collapse concurrent misses.
-6. Revalidate with `If-None-Match` if `etag` exists.
-7. If GitHub returns `304`, refresh timestamps without replacing payload.
-8. If GitHub returns `403`, `429`, or `5xx` and stale exists, serve stale.
-9. On success, store payload and update tag indexes.
+We should later extend the entry or the structured logs with minimal rate-limit metadata:
+
+- `x-ratelimit-limit`
+- `x-ratelimit-remaining`
+- `x-ratelimit-used`
+- `x-ratelimit-reset`
+- `x-ratelimit-resource`
+
+This should be treated as observability data, not as the core cache mechanism.
+
+## Why `ETag` and `Last-Modified` Matter
+
+They let us revalidate an expired cache entry without downloading the full payload again.
+
+Flow:
+
+1. store response payload plus `etag` and/or `last-modified`
+2. when refreshing, send `If-None-Match` and/or `If-Modified-Since`
+3. if GitHub replies `304 Not Modified`, keep the current payload
+4. only refresh cache freshness timestamps
+
+This complements stale-while-revalidate:
+
+- fast response to the client
+- lower payload transfer
+- less avoidable upstream work
+
+## Why `x-ratelimit-*` Headers Matter
+
+These headers are useful, but they do not replace the cache or conditional revalidation.
+
+Good use:
+
+- log them
+- expose them in debug headers or metrics
+- understand which routes hit which GitHub rate-limit resource bucket
+- adapt TTLs or degraded behavior when `remaining` gets very low
+
+Bad use:
+
+- polling `GET /rate_limit` routinely
+- driving the whole cache strategy only from rate-limit counters
+
+Recommended rule:
+
+- use the rate-limit headers returned on normal GitHub responses
+- avoid routine calls to `GET /rate_limit`
 
 ## Redis Data Model
 
-### Cache Value
+### Cache Values
 
 Primary key:
 
 `gh:cache:{scopeKey}:{resourceKey}`
 
-Serialized value:
+Value:
 
-- JSON string of `GithubCacheEntry<T>`
+- serialized JSON `GithubCacheEntry<T>`
 
 ### Tag Indexes
 
-Maintain one Redis set per tag:
+One Redis set per tag:
 
 - `gh:tag:{tag}` -> set of cache keys
 
-This lets us invalidate groups of entries after mutations.
-
 ### Locks
 
-Use short-lived Redis locks to avoid stampedes:
+Short-lived lock key:
 
-- `gh:lock:{scopeKey}:{resourceKey}`
+- `gh:lock:{cacheKey}`
 
-Lock TTL:
+Current lock TTL:
 
-- around `5s` to `10s`
+- around `5s`
 
 ## Route Policy Matrix
 
-These values are the initial recommendation, not a permanent contract.
+This matrix reflects current status plus target direction.
 
-| Backend route | Scope now | Scope target | Auth target | Fresh TTL | Stale window | Tags |
+| Backend route | Current status | Current scope | Revalidation | Fresh TTL | Stale window | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `GET /github/notifications` | viewer | viewer | OAuth user | 10s | 30s | `viewer:{userId}` |
-| `GET /github/repos/me` | viewer | viewer | OAuth user | 60s | 5m | `viewer:{userId}` |
-| `GET /github/pr/latest` | viewer | viewer | OAuth user | 60s | 5m | `viewer:{userId}` |
-| `GET /github/pr/need-reviews` | viewer | viewer | OAuth user | 60s | 5m | `viewer:{userId}` |
-| `GET /github/repos/:owner/:repo` | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 5m | 30m | `repo:{owner}/{repo}` |
-| `GET /github/repos/:owner/:repo/readme?ref=` | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 5m | 30m | `repo:{owner}/{repo}`, `ref:{owner}/{repo}:{ref}` |
-| `GET /github/repos/:owner/:repo/branches` | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 60s | 10m | `repo:{owner}/{repo}` |
-| `GET /github/repos/:owner/:repo/trees/:tree_sha` | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 10m | 24h | `repo:{owner}/{repo}`, `tree:{owner}/{repo}:{tree_sha}` |
-| `GET /github/repos/:owner/:repo/pr` | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 30s | 5m | `repo:{owner}/{repo}` |
-| `GET /github/repos/:owner/:repo/issues` | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 30s | 5m | `repo:{owner}/{repo}` |
-| `GET /github/repos/:owner/:repo/issues/:issue_number` | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 15s | 2m | `repo:{owner}/{repo}`, `issue:{owner}/{repo}:{issueNumber}` |
-| `GET /github/pr/:id` | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 15s | 2m | `repo:{owner}/{repo}`, `pr:{owner}/{repo}:{number}` |
-| `GET /github/pr/:id/files` | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 5m | 1h | `repo:{owner}/{repo}`, `pr:{owner}/{repo}:{number}` |
-| `GET /github/pr/:id/commits` | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 60s | 10m | `repo:{owner}/{repo}`, `pr:{owner}/{repo}:{number}` |
-| `GET /github/pr/:id/issue-comments` | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 15s | 2m | `repo:{owner}/{repo}`, `pr:{owner}/{repo}:{number}` |
-| `GET /github/pr/:id/reviews` | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 15s | 2m | `repo:{owner}/{repo}`, `pr:{owner}/{repo}:{number}` |
-| `GET /github/pr/:id/comments` | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 15s | 2m | `repo:{owner}/{repo}`, `pr:{owner}/{repo}:{number}` |
-| `GET /github/file?org=&repo=&path=&ref=` where `ref` is branch | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 60s | 10m | `repo:{owner}/{repo}`, `ref:{owner}/{repo}:{ref}` |
-| `GET /github/file?org=&repo=&path=&ref=` where `ref` is SHA | viewer | public or installation or viewer | OAuth user by default, GitHub App when installed | 24h | 7d | `repo:{owner}/{repo}`, `blob:{owner}/{repo}:{ref}` |
+| `GET /github/notifications` | implemented | viewer | no | 15s | 60s | user-scoped |
+| `GET /github/repos/me` | implemented | viewer | no | 60s | 5m | user-scoped |
+| `GET /github/pr/latest` | implemented | viewer | no | 60s | 5m | search bucket sensitive |
+| `GET /github/pr/need-reviews` | implemented | viewer | no | 60s | 5m | search bucket sensitive |
+| `GET /github/pr/:id` | implemented | viewer | yes | 20s | 2m | compare call still happens on refresh |
+| `GET /github/pr/:id/files` | implemented | viewer | no | 30s | 5m | 10m / 60m when `commitSha` is set |
+| `GET /github/pr/:id/commits` | pending | viewer | no | target 60s | target 10m | next candidate |
+| `GET /github/pr/:id/issue-comments` | pending | viewer | no | target 15s | target 2m | next candidate |
+| `GET /github/pr/:id/reviews` | implemented | viewer | yes | 20s | 2m | ETag-backed |
+| `GET /github/pr/:id/comments` | pending | viewer | no | target 15s | target 2m | next candidate |
+| `GET /github/repos/:owner/:repo` | implemented | viewer | yes | 2m | 10m | public promotion later |
+| `GET /github/repos/:owner/:repo/readme` | implemented | viewer | yes | 2m | 10m | 5m / 30m when `ref` is explicit |
+| `GET /github/repos/:owner/:repo/branches` | implemented | viewer | yes | 60s | 5m | ETag-backed |
+| `GET /github/repos/:owner/:repo/trees/:tree_sha` | pending | viewer | no | target 10m | target 24h | good public-scope candidate |
+| `GET /github/repos/:owner/:repo/pr` | pending | viewer | no | target 30s | target 5m | good next repo list candidate |
+| `GET /github/repos/:owner/:repo/issues` | pending | viewer | no | target 30s | target 5m | good next repo list candidate |
+| `GET /github/repos/:owner/:repo/issues/:issue_number` | pending | viewer | no | target 15s | target 2m | target with issue comments |
+| `GET /github/file?org=&repo=&path=&ref=` | pending | viewer | no | target 60s or 24h | target 10m or 7d | by SHA should eventually become best cache target |
 
-## Immutable vs Mutable Data
+## Tag Strategy
 
-This distinction matters more than "public vs private".
+Current tags are centralized in:
 
-### Best Cache Targets
+- `backend/src/plugins/github/cache/github-cache-policy.ts`
 
-These give the highest cache win:
+Examples:
 
-- file content by commit SHA
-- trees by SHA
-- commit files by SHA
-- readme by commit or branch if ETag-backed
-
-### Medium Value Targets
-
-- repository details
-- branches
-- PR list
-- issue list
-
-### Short-Lived Targets
-
-- PR details
-- issue details
-- reviews
-- comments
-- notifications
-
-## Conditional Revalidation
-
-Every GitHub read helper in [backend/src/services/github.ts](/Users/joris/workspace/reviu/backend/src/services/github.ts) should be updated to optionally return:
-
-- response payload
-- HTTP status
-- response headers
-
-We need headers for:
-
-- `etag`
-- `last-modified`
-- `x-ratelimit-limit`
-- `x-ratelimit-remaining`
-- `x-ratelimit-reset`
-- `x-ratelimit-resource`
-
-On refresh:
-
-- if a cache entry has `etag`, send `If-None-Match`
-- if GitHub responds `304`, do not replace payload
-- only refresh `fetchedAt`, `freshUntil`, and `staleUntil`
-
-This is important because GitHub recommends conditional requests as a way to reduce unnecessary API work and lower rate-limit pressure.
+- `viewer:{userId}:notifications`
+- `viewer:{userId}:repos-me`
+- `viewer:{userId}:pr-search`
+- `pull-request:{owner}/{repo}:{number}`
+- `pull-request:{owner}/{repo}:{number}:files`
+- `pull-request:{owner}/{repo}:{number}:reviews`
+- `issue:{owner}/{repo}:{number}`
+- `repo:{owner}/{repo}:details`
+- `repo:{owner}/{repo}:readme`
+- `repo:{owner}/{repo}:branches`
 
 ## Invalidation Strategy
 
-Mutations should invalidate cache by tags immediately after success.
+Mutations should continue to invalidate narrowly scoped tags immediately after success.
 
-### Pull Requests
+### Already Implemented
 
-After:
+PR mutations invalidate combinations of:
 
-- `PATCH /github/pr/:id`
-- `POST /github/pr/:id/reviews`
-- `POST /github/pr/:id/comments`
-- `POST /github/pr/:prId/comments/:commentId/replies`
-- `PATCH /github/pr/:id/comments/:commentId`
-- `DELETE /github/pr/:id/comments/:commentId`
+- PR search tags
+- repo pull-request tags
+- PR detail tags
+- PR comment tags
+- PR review tags
 
-Invalidate:
+Issue mutations invalidate combinations of:
 
-- `pr:{owner}/{repo}:{number}`
-- `repo:{owner}/{repo}`
+- repo issue tags
+- issue detail tags
+- issue comment tags
 
-Optional:
+### Still Missing
 
-- `viewer:{userId}` for `pr/latest` and `pr/need-reviews` if we want near-immediate home refresh
+When we cache more read routes, invalidation must be extended to:
 
-### Issues
-
-After:
-
-- `PATCH /github/repos/:owner/:repo/issues/:issue_number`
-- `POST /github/repos/:owner/:repo/issues/:issue_number/comments`
-- `PATCH /github/repos/:owner/:repo/issues/:issue_number/comments/:comment_id`
-- `DELETE /github/repos/:owner/:repo/issues/:issue_number/comments/:comment_id`
-
-Invalidate:
-
-- `issue:{owner}/{repo}:{issueNumber}`
-- `repo:{owner}/{repo}`
-
-### Branch-Sensitive Reads
-
-When branch or repo metadata changes through webhooks in the future, also invalidate:
-
-- `ref:{owner}/{repo}:{ref}`
-- `tree:{owner}/{repo}:{treeSha}`
-- `blob:{owner}/{repo}:{sha}`
-
-## Security Rules
-
-### Private Data Must Not Leak
-
-Rules:
-
-- never share viewer-scoped entries across users
-- never promote a private repo response into public scope
-- never use a global cache key until the repository is known to be public
-- negative caching for `404` on private resources must stay scoped to viewer or installation
-
-### Public Promotion
-
-For repository routes, once the repo is confirmed public, entries can be stored in `public` scope.
-
-This promotion must be allowed even if the upstream fetch used an OAuth user token.
-
-In other words:
-
-- public cacheability is determined by repo visibility
-- not by whether the source request used OAuth or GitHub App auth
-
-For private repositories:
-
-- keep using viewer scope until GitHub App is available
-- then move to installation scope only if the repo is actually installed in the GitHub App
+- PR commits
+- PR issue comments
+- PR review comments list
+- repo PR list
+- repo issue list
+- issue details route
 
 ## Observability
 
-Every cached route should expose enough data to understand behavior in production.
+### Already Implemented
 
-### Response Headers
+- `x-reviu-cache: hit | miss | stale`
+- structured cache logs when a cache entry resolves
+- warning logs on refresh failure and invalidation failure
 
-Add debug headers in non-production or behind a feature flag:
+### Next Observability Step
 
-- `x-reviu-cache: hit | miss | stale | revalidated | bypass`
-- `x-reviu-cache-scope: viewer | installation | public`
+Add rate-limit metadata capture in `backend/src/plugins/github/service.ts`:
+
+- read `x-ratelimit-limit`
+- read `x-ratelimit-remaining`
+- read `x-ratelimit-used`
+- read `x-ratelimit-reset`
+- read `x-ratelimit-resource`
+
+Recommended behavior:
+
+- attach them to structured logs
+- optionally expose a subset in debug headers
+- avoid calling `GET /rate_limit` routinely
+
+Potential debug headers:
+
 - `x-github-ratelimit-remaining`
 - `x-github-ratelimit-resource`
 
-### Structured Logs
-
-Log at info or debug level:
-
-- cache key group
-- scope
-- cache result
-- GitHub status
-- lock acquired or not
-- stale served or not
-- revalidation path
-
-### Metrics
-
-Track:
-
-- hit rate per route
-- miss rate per route
-- stale serve count
-- revalidation success count
-- GitHub request count
-- GitHub `403`, `429`, and `5xx`
-- lock contention
-
 ## Failure Behavior
-
-Production-ready means degraded service, not blank failure, when GitHub or Redis is unstable.
 
 ### If GitHub Fails
 
-If GitHub returns:
+Current behavior:
 
-- `403`
-- `429`
-- `5xx`
-
-and stale cache exists:
-
-- serve stale
-- log degraded mode
-
-If no stale exists:
-
-- return upstream failure as today
+- if stale cache exists and refresh fails, serve stale
+- if no usable cache exists, return upstream failure
 
 ### If Redis Fails
 
-The backend should continue to function without Redis:
+Current behavior:
 
-- bypass cache
-- still use process-local `inflight` dedupe
-- log degraded cache mode
+- fallback to in-memory store
+- keep serving requests
+- log degraded Redis behavior
 
-Redis outage must not break the GitHub feature entirely.
+Redis outage should not break GitHub features entirely.
 
-## GitHub App Rollout Plan
+## Next Implementation Steps
 
-### Phase 1
+### 1. Finish Heavy Read Routes
 
-- keep current OAuth session flow
-- add Redis-backed cache
-- make the cache architecture fully work in an OAuth-only deployment
-- keep private repo data viewer-scoped
-- allow public repo data to populate shared public cache
+Cache the next expensive routes:
 
-### Phase 1.5
+- `GET /github/pr/:id/commits`
+- `GET /github/pr/:id/issue-comments`
+- `GET /github/pr/:id/comments`
+- `GET /github/repos/:owner/:repo/pr`
+- `GET /github/repos/:owner/:repo/issues`
+- `GET /github/repos/:owner/:repo/issues/:issue_number`
+- `GET /github/repos/:owner/:repo/trees/:tree_sha`
+- `GET /github/file`
 
-- add auth-selection logic for repo routes:
-  - if repo is public, use OAuth fetch and store in public scope
-  - if repo is private and app is not installed, use OAuth fetch and store in viewer scope
-  - if repo is private and app is installed, use GitHub App fetch and store in installation scope
+### 2. Add Rate-Limit Observability
 
-### Phase 2
+Extend service helpers to parse and surface:
 
-- add GitHub App install support
-- store installation mapping per repo or org
-- fetch installation tokens for repo and PR routes when available
-- move private repo cache from viewer scope to installation scope for installed repos only
-- never require installation for public repo access
-- never hard-fail a repo route only because the app is not installed
+- `x-ratelimit-limit`
+- `x-ratelimit-remaining`
+- `x-ratelimit-used`
+- `x-ratelimit-reset`
+- `x-ratelimit-resource`
 
-### Phase 3
+First target:
 
-- add GitHub App webhooks
-- invalidate cache on:
-  - push
-  - pull_request
-  - pull_request_review
-  - pull_request_review_comment
-  - issues
-  - issue_comment
-  - installation_repositories
-- reduce TTLs less aggressively because webhook invalidation improves freshness
+- logs only
 
-## Implementation Plan
+Second target:
 
-### Step 1
+- optional debug headers and/or metrics
 
-Add Redis client and configuration:
+### 3. Add Public-Scope Promotion
 
-- `backend/src/lib/redis.ts`
-- env vars for Redis URL and optional auth
+Once repo visibility is known to be public:
 
-### Step 2
+- allow repo reads to populate `public` scope
+- keep private reads in `viewer` scope until GitHub App exists
 
-Create generic cache module:
+Important rule:
 
-- `backend/src/lib/github-cache.ts`
+- never promote a private response into public scope
 
-Responsibilities:
+### 4. Add Installation Scope Later
 
-- key building
-- Redis read and write
-- local inflight dedupe
-- stale-while-revalidate
-- lock handling
-- tag index management
-- invalidation by tag
+If GitHub App is added:
 
-### Step 3
-
-Refactor GitHub service wrappers in [backend/src/services/github.ts](/Users/joris/workspace/reviu/backend/src/services/github.ts) to return metadata, not only `data`.
-
-### Step 4
-
-Replace the temporary local cache in [backend/src/routes/github.ts](/Users/joris/workspace/reviu/backend/src/routes/github.ts) with calls into the shared cache module.
-
-### Step 5
-
-Apply route policies from the matrix above.
-
-### Step 6
-
-Add invalidation to all mutation endpoints.
-
-### Step 7
-
-Add observability:
-
-- debug headers
-- logs
-- counters
-
-### Step 8
-
-Add optional GitHub App integration for repo and PR routes, with OAuth fallback preserved.
-
-## Testing Plan
-
-We should add backend tests for the cache module and route integration.
-
-### Unit Tests
-
-Test:
-
-- fresh hit returns cached payload
-- stale hit returns stale and schedules refresh
-- `ETag` revalidation stores refreshed timestamps on `304`
-- stale fallback on upstream error
-- lock behavior prevents stampedes
-- invalidation by tag removes matching keys
-- viewer and public scopes do not collide
-
-### Integration Tests
-
-Test:
-
-- repo route caches and reuses payload
-- PR route invalidates after mutation
-- file route gets long TTL when `ref` is a SHA
-- Redis unavailable path still works by bypassing cache
+- keep OAuth as fallback
+- use installation tokens for installed private repos
+- move eligible private repo reads from viewer scope to installation scope
+- use webhooks for better invalidation
 
 ## Non-Goals
 
-Not in the first iteration:
+Not part of the current iteration:
 
-- caching write responses as source of truth
-- trying to share all private repo data globally
-- making route handlers manually manage Redis
-- replacing desktop local UI caches
+- making GitHub App mandatory
+- globally sharing private repo data
+- turning write responses into the source of truth
+- replacing desktop-side local caches
 
 ## Final Recommendation
 
-The target design is:
+The backend direction remains:
 
 - Redis-backed shared cache
-- 3 scopes: `viewer`, `installation`, `public`
-- hybrid auth model: OAuth as baseline, GitHub App as optional optimization
-- conditional revalidation with `ETag`
-- tag-based invalidation after mutations
+- viewer-first compatibility
+- tag-based invalidation
 - stale-while-revalidate for responsiveness
-- graceful degradation if Redis or GitHub is unhealthy
+- conditional revalidation with `ETag`
+- rate-limit observability through response headers
+- optional future GitHub App support, never required for baseline product use
 
-The product must remain fully usable without any GitHub App installation.
-
-GitHub App should be treated as:
-
-- an optimization for private repos and heavy team usage
-- a better source for webhook-driven invalidation
-- a way to improve rate-limit posture
-
-It should not be treated as a prerequisite for public repo support or baseline repo access.
-
-This gives the backend a clear path from the current temporary cache to a production-ready architecture without blocking on GitHub App adoption.
-
-## References
-
-- [GitHub rate limits for the REST API](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)
-- [GitHub best practices for using the REST API](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api)
-- [Differences between GitHub Apps and OAuth apps](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/differences-between-github-apps-and-oauth-apps)
-- [Using webhooks with GitHub Apps](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/using-webhooks-with-github-apps)
-- [Hono middleware docs](https://hono.dev/docs/guides/middleware)
-- [Hono ETag middleware](https://hono.dev/docs/middleware/builtin/etag)
-- [ioredis README](https://github.com/redis/ioredis)
+This keeps the product usable today while giving a clean path toward better rate-limit posture and stronger cache sharing later.
