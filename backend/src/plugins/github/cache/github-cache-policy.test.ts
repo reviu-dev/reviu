@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import {
   createGithubNotificationsCachePolicy,
-  createGithubPullRequestFilesCachePolicy,
+  createGithubPullRequestCommentsCachePolicy,
+  createGithubPullRequestCommitsCachePolicy,
   createGithubPullRequestDetailsCachePolicy,
+  createGithubPullRequestFilesCachePolicy,
+  createGithubPullRequestIssueCommentsCachePolicy,
   createGithubPullRequestSearchCachePolicy,
   createGithubRepositoryReadmeCachePolicy,
   getGithubIssueMutationTags,
@@ -55,6 +58,39 @@ describe('github cache policy', () => {
       ttlMs: 600_000,
       staleMs: 3_600_000,
       tags: ['pull-request:openai/reviu:42:files'],
+    })
+  })
+
+  it('builds the pull request commits cache policy', () => {
+    expect(createGithubPullRequestCommitsCachePolicy('user-1', 'OpenAI', 'Reviu', 42)).toEqual({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'pull-request:openai/reviu:42:commits',
+      ttlMs: 60_000,
+      staleMs: 600_000,
+      tags: ['pull-request:openai/reviu:42:commits'],
+    })
+  })
+
+  it('builds the pull request issue comments cache policy', () => {
+    expect(createGithubPullRequestIssueCommentsCachePolicy('user-1', 'OpenAI', 'Reviu', 42)).toEqual({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'pull-request:openai/reviu:42:issue-comments',
+      ttlMs: 15_000,
+      staleMs: 120_000,
+      tags: ['issue:openai/reviu:42:comments'],
+    })
+  })
+
+  it('builds the pull request review comments cache policy', () => {
+    expect(createGithubPullRequestCommentsCachePolicy('user-1', 'OpenAI', 'Reviu', 42)).toEqual({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'pull-request:openai/reviu:42:comments',
+      ttlMs: 15_000,
+      staleMs: 120_000,
+      tags: ['pull-request:openai/reviu:42:comments'],
     })
   })
 

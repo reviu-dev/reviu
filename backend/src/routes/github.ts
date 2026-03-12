@@ -17,9 +17,6 @@ import type {
   GithubPullRequest,
   GithubPullRequestDetails,
   GithubPullRequestDetailsAuthor,
-  GithubPullRequestIssueComment,
-  GithubPullRequestReview,
-  GithubPullRequestReviewComment,
   GithubRepositoryBranch,
   GithubRepositoryBranchesParameters,
   GithubRepositoryDetails,
@@ -48,8 +45,11 @@ import { logger } from '../lib/logger.js'
 import { authMiddleware } from '../middlewares/auth.js'
 import {
   createGithubNotificationsCachePolicy,
+  createGithubPullRequestCommentsCachePolicy,
+  createGithubPullRequestCommitsCachePolicy,
   createGithubPullRequestDetailsCachePolicy,
   createGithubPullRequestFilesCachePolicy,
+  createGithubPullRequestIssueCommentsCachePolicy,
   createGithubPullRequestReviewsCachePolicy,
   createGithubPullRequestSearchCachePolicy,
   createGithubRepositoryBranchesCachePolicy,
@@ -361,6 +361,62 @@ async function fetchPullRequestFilesWithCache(
   })
 }
 
+async function fetchPullRequestCommitsWithCache(
+  userId: string,
+  githubToken: string,
+  org: string,
+  repo: string,
+  pullNumber: number,
+) {
+  const cachePolicy = createGithubPullRequestCommitsCachePolicy(userId, org, repo, pullNumber)
+
+  return githubCache.getOrLoad({
+    ...cachePolicy,
+    load: async () => {
+      const commits = await fetchGithubPullRequestCommitsAllPages({
+        token: githubToken,
+        params: {
+          owner: org,
+          repo,
+          pull_number: pullNumber,
+        },
+      })
+
+      return {
+        payload: commits.map(mapGithubPullRequestCommit),
+      }
+    },
+  })
+}
+
+async function fetchPullRequestIssueCommentsWithCache(
+  userId: string,
+  githubToken: string,
+  org: string,
+  repo: string,
+  pullNumber: number,
+) {
+  const cachePolicy = createGithubPullRequestIssueCommentsCachePolicy(userId, org, repo, pullNumber)
+
+  return githubCache.getOrLoad({
+    ...cachePolicy,
+    load: async () => {
+      const params: GithubIssueDetailsCommentParameters = {
+        owner: org,
+        repo,
+        issue_number: pullNumber,
+        per_page: 100,
+      }
+
+      const data = await fetchGithubRepositoryIssueComments({ token: githubToken, params })
+
+      return {
+        payload: data.map(mapGithubPullRequestIssueComment),
+      }
+    },
+  })
+}
+
 async function fetchPullRequestReviewsWithCache(
   userId: string,
   githubToken: string,
@@ -403,6 +459,34 @@ async function fetchPullRequestReviewsWithCache(
         payload: reviews,
         etag: response.etag,
         lastModified: response.lastModified,
+      }
+    },
+  })
+}
+
+async function fetchPullRequestCommentsWithCache(
+  userId: string,
+  githubToken: string,
+  org: string,
+  repo: string,
+  pullNumber: number,
+) {
+  const cachePolicy = createGithubPullRequestCommentsCachePolicy(userId, org, repo, pullNumber)
+
+  return githubCache.getOrLoad({
+    ...cachePolicy,
+    load: async () => {
+      const params: PullRequestCommentsParams = {
+        owner: org,
+        repo,
+        pull_number: pullNumber,
+        per_page: 100,
+      }
+
+      const data = await fetchGithubPullRequestComments({ token: githubToken, params })
+
+      return {
+        payload: data.map(mapGithubPullRequestReviewComment),
       }
     },
   })
@@ -752,17 +836,9 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const commits = await fetchGithubPullRequestCommitsAllPages({
-        token: githubToken,
-        params: {
-          owner: org,
-          repo,
-          pull_number: pullNumber,
-        },
-      })
-
-      const mappedCommits = commits.map(mapGithubPullRequestCommit)
-      return ctx.json({ commits: mappedCommits }, 200)
+      const result = await fetchPullRequestCommitsWithCache(user.id, githubToken, org, repo, pullNumber)
+      ctx.header('x-reviu-cache', result.cacheStatus)
+      return ctx.json({ commits: result.payload }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
@@ -780,17 +856,9 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const params: GithubIssueDetailsCommentParameters = {
-        owner: org,
-        repo,
-        issue_number: pullNumber,
-        per_page: 100,
-      }
-
-      const data = await fetchGithubRepositoryIssueComments({ token: githubToken, params })
-      const comments: GithubPullRequestIssueComment[] = data.map(mapGithubPullRequestIssueComment)
-
-      return ctx.json({ comments }, 200)
+      const result = await fetchPullRequestIssueCommentsWithCache(user.id, githubToken, org, repo, pullNumber)
+      ctx.header('x-reviu-cache', result.cacheStatus)
+      return ctx.json({ comments: result.payload }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
@@ -828,19 +896,9 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const params: PullRequestCommentsParams = {
-        owner: org,
-        repo,
-        pull_number: pullNumber,
-        per_page: 100,
-      }
-
-      const data = await fetchGithubPullRequestComments({ token: githubToken, params })
-
-      const comments: GithubPullRequestReviewComment[]
-        = data.map(mapGithubPullRequestReviewComment)
-
-      return ctx.json({ comments }, 200)
+      const result = await fetchPullRequestCommentsWithCache(user.id, githubToken, org, repo, pullNumber)
+      ctx.header('x-reviu-cache', result.cacheStatus)
+      return ctx.json({ comments: result.payload }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)

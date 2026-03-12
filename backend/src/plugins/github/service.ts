@@ -59,6 +59,7 @@ import type {
   UserRepositoryResponse,
 } from './types.js'
 import { request } from '@octokit/request'
+import { logger } from '../../lib/logger.js'
 
 function githubAuthHeaders(token: string, extraHeaders?: Record<string, string>): RequestHeaders {
   return {
@@ -82,15 +83,30 @@ export interface GithubConditionalResponse<Route extends keyof Endpoints> {
   lastModified?: string
 }
 
+export interface GithubRateLimitInfo {
+  limit?: number
+  remaining?: number
+  used?: number
+  reset?: number
+  resource?: string
+}
+
+const GITHUB_RATE_LIMIT_NEAR_THRESHOLD = 0.1
+
 interface GithubErrorLike {
   status?: number
   response?: {
-    headers?: Record<string, string | number | string[] | undefined>
+    headers?: GithubResponseHeaders
   }
 }
 
+type GithubResponseHeaders = Record<string, string | number | string[] | undefined>
+type GithubRequestOptions<Route extends keyof Endpoints> = Route extends keyof Endpoints
+  ? Endpoints[Route]['parameters'] & RequestParameters
+  : RequestParameters
+
 function readGithubHeader(
-  headers: Record<string, string | number | string[] | undefined> | undefined,
+  headers: GithubResponseHeaders | undefined,
   name: string,
 ) {
   const headerValue = headers?.[name]
@@ -103,6 +119,123 @@ function readGithubHeader(
   }
 
   return headerValue
+}
+
+function parseGithubNumericHeader(value: string | undefined) {
+  if (!value) {
+    return undefined
+  }
+
+  const parsedValue = Number.parseInt(value, 10)
+  return Number.isNaN(parsedValue) ? undefined : parsedValue
+}
+
+export function extractGithubRateLimitInfo(headers: GithubResponseHeaders | undefined): GithubRateLimitInfo | null {
+  const limit = parseGithubNumericHeader(readGithubHeader(headers, 'x-ratelimit-limit'))
+  const remaining = parseGithubNumericHeader(readGithubHeader(headers, 'x-ratelimit-remaining'))
+  const used = parseGithubNumericHeader(readGithubHeader(headers, 'x-ratelimit-used'))
+  const reset = parseGithubNumericHeader(readGithubHeader(headers, 'x-ratelimit-reset'))
+  const resource = readGithubHeader(headers, 'x-ratelimit-resource')
+
+  if (limit == null && remaining == null && used == null && reset == null && !resource) {
+    return null
+  }
+
+  return {
+    limit,
+    remaining,
+    used,
+    reset,
+    resource,
+  }
+}
+
+export function isGithubRateLimitNearLimit(
+  githubRateLimit: GithubRateLimitInfo,
+  threshold = GITHUB_RATE_LIMIT_NEAR_THRESHOLD,
+) {
+  if (githubRateLimit.limit == null || githubRateLimit.remaining == null || githubRateLimit.limit <= 0) {
+    return false
+  }
+
+  return githubRateLimit.remaining / githubRateLimit.limit < threshold
+}
+
+function logGithubRateLimit(route: string, status: number, headers: GithubResponseHeaders | undefined) {
+  const githubRateLimit = extractGithubRateLimitInfo(headers)
+  if (!githubRateLimit) {
+    return
+  }
+
+  const isNearLimit = isGithubRateLimitNearLimit(githubRateLimit)
+
+  if (isNearLimit) {
+    const log = logger.warn.bind(logger)
+
+    log({
+      route,
+      status,
+      githubRateLimit,
+    }, 'GitHub rate limit status')
+  }
+}
+
+function buildGithubRequestOptions<Route extends keyof Endpoints>(
+  token: string,
+  params?: Endpoints[Route]['parameters'],
+  headers?: Record<string, string>,
+): GithubRequestOptions<Route> {
+  return {
+    ...(params ?? {}),
+    headers: githubAuthHeaders(token, headers),
+  } as GithubRequestOptions<Route>
+}
+
+async function requestGithubData<Route extends keyof Endpoints>(
+  route: Route,
+  {
+    token,
+    params,
+    headers,
+  }: {
+    token: string
+    params?: Endpoints[Route]['parameters']
+    headers?: Record<string, string>
+  },
+): Promise<Endpoints[Route]['response']['data']> {
+  try {
+    const response = await request(route, buildGithubRequestOptions<Route>(token, params, headers))
+    logGithubRateLimit(route, response.status, response.headers)
+    return response.data as Endpoints[Route]['response']['data']
+  }
+  catch (error) {
+    const githubError = error as GithubErrorLike
+    logGithubRateLimit(route, githubError.status ?? 0, githubError.response?.headers)
+    throw error
+  }
+}
+
+async function requestGithubWithoutData<Route extends keyof Endpoints>(
+  route: Route,
+  {
+    token,
+    params,
+    headers,
+  }: {
+    token: string
+    params?: Endpoints[Route]['parameters']
+    headers?: Record<string, string>
+  },
+): Promise<void> {
+  try {
+    const response = await request(route, buildGithubRequestOptions<Route>(token, params, headers))
+    logGithubRateLimit(route, response.status, response.headers)
+  }
+  catch (error) {
+    const githubError = error as GithubErrorLike
+    logGithubRateLimit(route, githubError.status ?? 0, githubError.response?.headers)
+    throw error
+  }
 }
 
 async function requestGithubConditionally<Route extends keyof Endpoints>(
@@ -120,15 +253,15 @@ async function requestGithubConditionally<Route extends keyof Endpoints>(
   }
 
   try {
-    const options = {
-      ...params,
-      headers: githubAuthHeaders(token, {
+    const response = await request(route, buildGithubRequestOptions<Route>(
+      token,
+      params,
+      {
         ...headers,
         ...conditionalHeaders,
-      }),
-    } as Route extends keyof Endpoints ? Endpoints[Route]['parameters'] & RequestParameters : RequestParameters
-
-    const response = await request(route, options)
+      },
+    ))
+    logGithubRateLimit(route, response.status, response.headers)
 
     return {
       data: response.data as Endpoints[Route]['response']['data'] | null,
@@ -139,6 +272,7 @@ async function requestGithubConditionally<Route extends keyof Endpoints>(
   }
   catch (error) {
     const githubError = error as GithubErrorLike
+    logGithubRateLimit(route, githubError.status ?? 0, githubError.response?.headers)
     if (githubError.status === 304) {
       return {
         data: null,
@@ -156,55 +290,50 @@ export async function fetchGithubNotifications(
   { token, params }:
   { token: string, params: NotificationsParams },
 ): Promise<NotificationResponse[]> {
-  const { data } = await request('GET /notifications', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /notifications', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubPullRequests(
   { token, params }:
   { token: string, params: ListPullsParams },
 ): Promise<PullRequestResponse[]> {
-  const { data } = await request('GET /repos/{owner}/{repo}/pulls', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}/pulls', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubSearchIssues(
   { token, params }:
   { token: string, params: SearchIssuesParams },
 ): Promise<SearchIssuesResponse> {
-  const { data } = await request('GET /search/issues', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /search/issues', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubUserRepositories(
   { token, params }:
   { token: string, params: UserRepositoriesParams },
 ): Promise<UserRepositoryResponse[]> {
-  const { data } = await request('GET /user/repos', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /user/repos', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubPullRequest(
   { token, params }:
   { token: string, params: PullRequestParams },
 ): Promise<PullRequestDetailsResponse> {
-  const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubPullRequestConditionally(
@@ -220,22 +349,20 @@ export async function patchGithubPullRequest(
   { token, params }:
   { token: string, params: UpdatePullRequestParams },
 ): Promise<UpdatePullRequestResponse> {
-  const { data } = await request('PATCH /repos/{owner}/{repo}/pulls/{pull_number}', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('PATCH /repos/{owner}/{repo}/pulls/{pull_number}', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubPullRequestCommitsPage(
   { token, params }:
   { token: string, params: PullRequestCommitsParams },
 ): Promise<PullRequestCommitResponse[]> {
-  const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}/commits', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}/pulls/{pull_number}/commits', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubPullRequestCommitsAllPages(
@@ -272,22 +399,20 @@ export async function compareGithubRefs(
   { token, params }:
   { token: string, params: CompareParams },
 ) {
-  const { data } = await request('GET /repos/{owner}/{repo}/compare/{basehead}', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}/compare/{basehead}', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubPullRequestFilesPage(
   { token, params }:
   { token: string, params: PullRequestFilesParams },
 ): Promise<PullRequestFileResponse[]> {
-  const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}/files', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}/pulls/{pull_number}/files', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubPullRequestFilesAllPages(
@@ -324,11 +449,10 @@ export async function fetchGithubCommit(
   { token, params }:
   { token: string, params: CommitParams },
 ): Promise<CommitResponse> {
-  const { data } = await request('GET /repos/{owner}/{repo}/commits/{ref}', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}/commits/{ref}', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubCommitFilesAllPages(
@@ -365,21 +489,19 @@ export async function fetchGithubCommitFilesAllPages(
 export async function fetchGithubPullRequestComments(
   { token, params }: { token: string, params: PullRequestCommentsParams },
 ): Promise<PullRequestCommentResponse[]> {
-  const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubPullRequestReviews(
   { token, params }: { token: string, params: PullRequestReviewsParams },
 ): Promise<PullRequestReviewResponse[]> {
-  const { data } = await request('GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubPullRequestReviewsConditionally(
@@ -394,80 +516,74 @@ export async function fetchGithubPullRequestReviewsConditionally(
 export async function createGithubPullRequestComment(
   { token, params }: { token: string, params: CreatePullRequestCommentParams },
 ): Promise<CreatePullRequestCommentResponse> {
-  const { data } = await request('POST /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('POST /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function createGithubPullRequestReview(
   { token, params }: { token: string, params: CreatePullRequestReviewParams },
 ): Promise<CreatePullRequestReviewResponse> {
-  const { data } = await request('POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function createGithubPullRequestCommentReply(
   { token, params }: { token: string, params: CreatePullRequestCommentReplyParams },
 ): Promise<CreatePullRequestCommentReplyResponse> {
-  const { data } = await request('POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function patchGithubPullRequestComment(
   { token, params }: { token: string, params: UpdatePullRequestCommentParams },
 ): Promise<UpdatePullRequestCommentResponse> {
-  const { data } = await request('PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function deleteGithubPullRequestComment(
   { token, params}: { token: string, params: DeletePullRequestCommentParams },
 ): Promise<void> {
-  await request('DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  await requestGithubWithoutData('DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}', {
+    token,
+    params,
   })
 }
 
 export async function fetchGithubRepositoryContent(
   { token, params}: { token: string, params: GetContentParams },
 ): Promise<GetContentResponse> {
-  const { data } = await request('GET /repos/{owner}/{repo}/contents/{path}', {
-    ...params,
-    headers: githubAuthHeaders(token, {
+  return requestGithubData('GET /repos/{owner}/{repo}/contents/{path}', {
+    token,
+    params,
+    headers: {
       accept: 'application/vnd.github.raw+json',
-    }),
+    },
   })
-  return data
 }
 
 export async function fetchGithubViewer({ token }: { token: string }): Promise<GithubUserResponse> {
-  const { data } = await request('GET /user', {
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /user', {
+    token,
   })
-  return data
 }
 
 export async function fetchGithubRepository(
   { token, params }:
   { token: string, params: GithubRepositoryParameters },
 ): Promise<GithubRepositoryResponse> {
-  const { data } = await request('GET /repos/{owner}/{repo}', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubRepositoryConditionally(
@@ -483,75 +599,69 @@ export async function fetchGithubRepositoryIssues(
   { token, params }:
   { token: string, params: GithubIssueParameters },
 ): Promise<GithubIssueResponse[]> {
-  const { data } = await request('GET /repos/{owner}/{repo}/issues', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}/issues', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubRepositoryIssue(
   { token, params }:
   { token: string, params: GithubIssueDetailsParameters },
 ): Promise<GithubIssueDetailsResponse> {
-  const { data } = await request('GET /repos/{owner}/{repo}/issues/{issue_number}', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}/issues/{issue_number}', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function patchGithubIssue(
   { token, params }:
   { token: string, params: UpdateIssueParams },
 ): Promise<UpdateIssueResponse> {
-  const { data } = await request('PATCH /repos/{owner}/{repo}/issues/{issue_number}', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('PATCH /repos/{owner}/{repo}/issues/{issue_number}', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubRepositoryIssueComments(
   { token, params }:
   { token: string, params: GithubIssueDetailsCommentParameters },
 ): Promise<GithubIssueDetailsCommentResponse[]> {
-  const { data } = await request('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function createGithubIssueComment(
   { token, params }:
   { token: string, params: CreateIssueCommentParams },
 ): Promise<CreateIssueCommentResponse> {
-  const { data } = await request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function patchGithubIssueComment(
   { token, params }:
   { token: string, params: UpdateIssueCommentParams },
 ): Promise<UpdateIssueCommentResponse> {
-  const { data } = await request('PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function deleteGithubIssueComment(
   { token, params }:
   { token: string, params: DeleteIssueCommentParams },
 ): Promise<void> {
-  await request('DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  await requestGithubWithoutData('DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}', {
+    token,
+    params,
   })
 }
 
@@ -559,22 +669,20 @@ export async function fetchGithubRepositoryTrees(
   { token, params }:
   { token: string, params: GithubRepositoryTreeParams },
 ): Promise<GithubRepositoryTreesResponse> {
-  const { data } = await request('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubRepositoryBranches(
   { token, params }:
   { token: string, params: GithubRepositoryBranchesParameters },
 ): Promise<GithubRepositoryBranchesResponse[]> {
-  const { data } = await request('GET /repos/{owner}/{repo}/branches', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}/branches', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubRepositoryBranchesConditionally(
@@ -590,11 +698,10 @@ export async function fetchGithubRepositoryReadme(
   { token, params }:
   { token: string, params: GithubRepositoryReadmeParameters },
 ): Promise<GithubRepositoryReadmeResponse> {
-  const { data } = await request('GET /repos/{owner}/{repo}/readme', {
-    ...params,
-    headers: githubAuthHeaders(token),
+  return requestGithubData('GET /repos/{owner}/{repo}/readme', {
+    token,
+    params,
   })
-  return data
 }
 
 export async function fetchGithubRepositoryReadmeConditionally(
