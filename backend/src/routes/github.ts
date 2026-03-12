@@ -54,7 +54,12 @@ import {
   createGithubPullRequestSearchCachePolicy,
   createGithubRepositoryBranchesCachePolicy,
   createGithubRepositoryDetailsCachePolicy,
+  createGithubRepositoryFileCachePolicy,
+  createGithubRepositoryIssueDetailsCachePolicy,
+  createGithubRepositoryIssuesCachePolicy,
+  createGithubRepositoryPullRequestsCachePolicy,
   createGithubRepositoryReadmeCachePolicy,
+  createGithubRepositoryTreeCachePolicy,
   createGithubUserRepositoriesCachePolicy,
   getGithubIssueMutationTags,
   getGithubPullRequestMutationTags,
@@ -673,6 +678,236 @@ async function fetchRepositoryBranchesWithCache(
   })
 }
 
+async function fetchRepositoryPullRequestsWithCache(
+  userId: string,
+  githubToken: string,
+  owner: string,
+  repo: string,
+) {
+  const cachePolicy = createGithubRepositoryPullRequestsCachePolicy(userId, owner, repo)
+
+  return githubCache.getOrLoad({
+    ...cachePolicy,
+    load: async () => {
+      const params: ListPullsParams = {
+        owner,
+        repo,
+        state: 'all',
+        sort: 'updated',
+        direction: 'desc',
+        per_page: 20,
+      }
+
+      const data = await fetchGithubPullRequests({ token: githubToken, params })
+
+      return {
+        payload: data.map(pull => ({
+          number: pull.number,
+          title: pull.title,
+          state: pull.state,
+          draft: Boolean(pull.draft),
+          merged_at: pull.merged_at,
+          updated_at: pull.updated_at,
+          labels: pull.labels.map(label => ({ name: label.name })),
+          repository: {
+            owner,
+            repo,
+          },
+        } satisfies GithubPullRequest)),
+      }
+    },
+  })
+}
+
+async function fetchRepositoryIssuesWithCache(
+  userId: string,
+  githubToken: string,
+  owner: string,
+  repo: string,
+) {
+  const cachePolicy = createGithubRepositoryIssuesCachePolicy(userId, owner, repo)
+
+  return githubCache.getOrLoad({
+    ...cachePolicy,
+    load: async () => {
+      const params: GithubIssueParameters = {
+        owner,
+        repo,
+        state: 'all',
+        sort: 'updated',
+        direction: 'desc',
+        per_page: 20,
+      }
+
+      const data = await fetchGithubRepositoryIssues({ token: githubToken, params })
+
+      return {
+        payload: data.filter(issue => !issue.pull_request).map(issue => ({
+          id: issue.id,
+          number: issue.number,
+          title: issue.title,
+          state: issue.state,
+          state_reason: issue.state_reason,
+          created_at: issue.created_at,
+          updated_at: issue.updated_at,
+          closed_at: issue.closed_at,
+          labels: issue.labels,
+          user: formatGithubUser(issue.user),
+          repository: {
+            owner,
+            repo,
+          },
+        } satisfies GithubIssue)),
+      }
+    },
+  })
+}
+
+async function fetchRepositoryIssueDetailsWithCache(
+  userId: string,
+  githubToken: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+) {
+  const cachePolicy = createGithubRepositoryIssueDetailsCachePolicy(userId, owner, repo, issueNumber)
+
+  return githubCache.getOrLoad({
+    ...cachePolicy,
+    load: async () => {
+      const paramsIssue: GithubIssueDetailsParameters = {
+        owner,
+        repo,
+        issue_number: issueNumber,
+      }
+
+      const paramsComments: GithubIssueDetailsCommentParameters = {
+        owner,
+        repo,
+        issue_number: issueNumber,
+        per_page: 100,
+      }
+
+      const [data, issueComments] = await Promise.all([
+        fetchGithubRepositoryIssue({ token: githubToken, params: paramsIssue }),
+        fetchGithubRepositoryIssueComments({ token: githubToken, params: paramsComments }),
+      ])
+
+      return {
+        payload: {
+          id: data.id,
+          number: data.number,
+          title: data.title,
+          state: data.state,
+          state_reason: data.state_reason,
+          created_at: data.created_at,
+          updated_at: data.updated_at,
+          closed_at: data.closed_at,
+          labels: data.labels,
+          body: data.body,
+          comments: issueComments.map(mapGithubIssueComment),
+          user: formatGithubUser(data.user),
+          repository: {
+            owner,
+            repo,
+          },
+        } satisfies GithubIssueDetails,
+      }
+    },
+  })
+}
+
+async function fetchRepositoryTreeWithCache(
+  userId: string,
+  githubToken: string,
+  owner: string,
+  repo: string,
+  treeSha: string,
+  recursive?: string,
+) {
+  const cachePolicy = createGithubRepositoryTreeCachePolicy(userId, owner, repo, treeSha, recursive)
+
+  return githubCache.getOrLoad({
+    ...cachePolicy,
+    load: async () => {
+      const params: GithubRepositoryTreeParams = {
+        owner,
+        repo,
+        tree_sha: treeSha,
+        ...(recursive !== undefined ? { recursive } : {}),
+      }
+
+      const data = await fetchGithubRepositoryTrees({ token: githubToken, params })
+
+      return {
+        payload: {
+          sha: data.sha,
+          url: data.url,
+          truncated: data.truncated,
+          tree: data.tree,
+        } satisfies GithubRepositoryTree,
+      }
+    },
+  })
+}
+
+async function fetchRepositoryFileWithCache(
+  userId: string,
+  githubToken: string,
+  owner: string,
+  repo: string,
+  path: string,
+  ref: string,
+) {
+  const cachePolicy = createGithubRepositoryFileCachePolicy(userId, owner, repo, path, ref)
+
+  return githubCache.getOrLoad({
+    ...cachePolicy,
+    load: async () => {
+      const params: GetContentParams = {
+        owner,
+        repo,
+        path,
+        ref,
+      }
+
+      try {
+        const data = await fetchGithubRepositoryContent({ token: githubToken, params })
+
+        let content: string | null = null
+
+        if (typeof data === 'string') {
+          content = data
+        }
+        else if (Buffer.isBuffer(data)) {
+          content = data.toString('utf8')
+        }
+        else if (data && typeof data === 'object' && 'content' in data) {
+          const payload = data as { content?: string, encoding?: string }
+          if (typeof payload.content === 'string') {
+            const encoding = payload.encoding === 'base64' ? 'base64' : 'utf8'
+            content = Buffer.from(payload.content, encoding).toString('utf8')
+          }
+        }
+
+        return {
+          payload: { content } satisfies GithubFileContent,
+        }
+      }
+      catch (error) {
+        const status = (error as { status?: number }).status
+        if (status === 404) {
+          return {
+            payload: { content: null } satisfies GithubFileContent,
+          }
+        }
+
+        throw error
+      }
+    },
+  })
+}
+
 async function invalidateGithubCacheTags(tags: string[]) {
   try {
     await githubCache.invalidateTags(tags)
@@ -1148,33 +1383,9 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const params: GetContentParams = {
-        owner: org,
-        repo,
-        path,
-        ref,
-      }
-
-      const data = await fetchGithubRepositoryContent({ token: githubToken, params })
-
-      let content: string | null = null
-
-      if (typeof data === 'string') {
-        content = data
-      }
-      else if (Buffer.isBuffer(data)) {
-        content = data.toString('utf8')
-      }
-      else if (data && typeof data === 'object' && 'content' in data) {
-        const payload = data as { content?: string, encoding?: string }
-        if (typeof payload.content === 'string') {
-          const encoding = payload.encoding === 'base64' ? 'base64' : 'utf8'
-          content = Buffer.from(payload.content, encoding).toString('utf8')
-        }
-      }
-
-      const payload: GithubFileContent = { content }
-      return ctx.json(payload, 200)
+      const result = await fetchRepositoryFileWithCache(user.id, githubToken, org, repo, path, ref)
+      ctx.header('x-reviu-cache', result.cacheStatus)
+      return ctx.json(result.payload, 200)
     }
     catch (error) {
       const status = (error as { status?: number }).status
@@ -1263,23 +1474,9 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const params: GithubRepositoryTreeParams = {
-        owner,
-        repo,
-        tree_sha,
-        ...(recursive !== undefined ? { recursive } : {}),
-      }
-
-      const data = await fetchGithubRepositoryTrees({ token: githubToken, params })
-
-      const tree: GithubRepositoryTree = {
-        sha: data.sha,
-        url: data.url,
-        truncated: data.truncated,
-        tree: data.tree,
-      }
-
-      return ctx.json(tree, 200)
+      const result = await fetchRepositoryTreeWithCache(user.id, githubToken, owner, repo, tree_sha, recursive)
+      ctx.header('x-reviu-cache', result.cacheStatus)
+      return ctx.json(result.payload, 200)
     }
     catch (error) {
       const status = (error as { status?: number }).status
@@ -1296,32 +1493,9 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const params: ListPullsParams = {
-        owner,
-        repo,
-        state: 'all',
-        sort: 'updated',
-        direction: 'desc',
-        per_page: 20,
-      }
-
-      const data = await fetchGithubPullRequests({ token: githubToken, params })
-
-      const pullRequests: GithubPullRequest[] = data.map(pull => ({
-        number: pull.number,
-        title: pull.title,
-        state: pull.state,
-        draft: Boolean(pull.draft),
-        merged_at: pull.merged_at,
-        updated_at: pull.updated_at,
-        labels: pull.labels.map(label => ({ name: label.name })),
-        repository: {
-          owner,
-          repo,
-        },
-      }))
-
-      return ctx.json({ pullRequests }, 200)
+      const result = await fetchRepositoryPullRequestsWithCache(user.id, githubToken, owner, repo)
+      ctx.header('x-reviu-cache', result.cacheStatus)
+      return ctx.json({ pullRequests: result.payload }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
@@ -1334,35 +1508,9 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const params: GithubIssueParameters = {
-        owner,
-        repo,
-        state: 'all',
-        sort: 'updated',
-        direction: 'desc',
-        per_page: 20,
-      }
-
-      const data = await fetchGithubRepositoryIssues({ token: githubToken, params })
-
-      const issues: GithubIssue[] = data.filter(issue => !issue.pull_request).map(issue => ({
-        id: issue.id,
-        number: issue.number,
-        title: issue.title,
-        state: issue.state,
-        state_reason: issue.state_reason,
-        created_at: issue.created_at,
-        updated_at: issue.updated_at,
-        closed_at: issue.closed_at,
-        labels: issue.labels,
-        user: formatGithubUser(issue.user),
-        repository: {
-          owner,
-          repo,
-        },
-      }))
-
-      return ctx.json({ issues }, 200)
+      const result = await fetchRepositoryIssuesWithCache(user.id, githubToken, owner, repo)
+      ctx.header('x-reviu-cache', result.cacheStatus)
+      return ctx.json({ issues: result.payload }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
@@ -1381,44 +1529,9 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const paramsIssue: GithubIssueDetailsParameters = {
-        owner,
-        repo,
-        issue_number: issueNumber,
-      }
-
-      const paramsComments: GithubIssueDetailsCommentParameters = {
-        owner,
-        repo,
-        issue_number: issueNumber,
-        per_page: 100,
-      }
-
-      const [data, issueComments] = await Promise.all([
-        fetchGithubRepositoryIssue({ token: githubToken, params: paramsIssue }),
-        fetchGithubRepositoryIssueComments({ token: githubToken, params: paramsComments }),
-      ])
-
-      const issue: GithubIssueDetails = {
-        id: data.id,
-        number: data.number,
-        title: data.title,
-        state: data.state,
-        state_reason: data.state_reason,
-        created_at: data.created_at,
-        updated_at: data.updated_at,
-        closed_at: data.closed_at,
-        labels: data.labels,
-        body: data.body,
-        comments: issueComments.map(mapGithubIssueComment),
-        user: formatGithubUser(data.user),
-        repository: {
-          owner,
-          repo,
-        },
-      }
-
-      return ctx.json({ issue }, 200)
+      const result = await fetchRepositoryIssueDetailsWithCache(user.id, githubToken, owner, repo, issueNumber)
+      ctx.header('x-reviu-cache', result.cacheStatus)
+      return ctx.json({ issue: result.payload }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)

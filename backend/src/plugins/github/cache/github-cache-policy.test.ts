@@ -7,8 +7,13 @@ import {
   createGithubPullRequestDetailsCachePolicy,
   createGithubPullRequestFilesCachePolicy,
   createGithubPullRequestIssueCommentsCachePolicy,
+  createGithubRepositoryFileCachePolicy,
+  createGithubRepositoryIssueDetailsCachePolicy,
+  createGithubRepositoryIssuesCachePolicy,
+  createGithubRepositoryPullRequestsCachePolicy,
   createGithubPullRequestSearchCachePolicy,
   createGithubRepositoryReadmeCachePolicy,
+  createGithubRepositoryTreeCachePolicy,
   getGithubIssueMutationTags,
   getGithubPullRequestMutationTags,
 } from './github-cache-policy.js'
@@ -102,6 +107,61 @@ describe('github cache policy', () => {
       ttlMs: 300_000,
       staleMs: 1_800_000,
       tags: ['repo:openai/reviu:readme'],
+    })
+  })
+
+  it('builds the repository pull requests cache policy', () => {
+    expect(createGithubRepositoryPullRequestsCachePolicy('user-1', 'OpenAI', 'Reviu')).toEqual({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'repo:openai/reviu:pull-requests',
+      ttlMs: 30_000,
+      staleMs: 300_000,
+      tags: ['repo:openai/reviu:pull-requests'],
+    })
+  })
+
+  it('builds the repository issues cache policy', () => {
+    expect(createGithubRepositoryIssuesCachePolicy('user-1', 'OpenAI', 'Reviu')).toEqual({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'repo:openai/reviu:issues',
+      ttlMs: 30_000,
+      staleMs: 300_000,
+      tags: ['repo:openai/reviu:issues'],
+    })
+  })
+
+  it('builds the repository issue details cache policy with issue and comment tags', () => {
+    expect(createGithubRepositoryIssueDetailsCachePolicy('user-1', 'OpenAI', 'Reviu', 7)).toEqual({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'repo:openai/reviu:issue:7',
+      ttlMs: 15_000,
+      staleMs: 120_000,
+      tags: ['issue:openai/reviu:7', 'issue:openai/reviu:7:comments'],
+    })
+  })
+
+  it('builds the repository tree cache policy', () => {
+    expect(createGithubRepositoryTreeCachePolicy('user-1', 'OpenAI', 'Reviu', 'abc123', '1')).toEqual({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'repo:openai/reviu:tree:abc123:recursive:1',
+      ttlMs: 600_000,
+      staleMs: 86_400_000,
+      tags: ['repo:openai/reviu:tree:abc123'],
+    })
+  })
+
+  it('builds a long-lived file cache policy for blob sha refs', () => {
+    expect(createGithubRepositoryFileCachePolicy('user-1', 'OpenAI', 'Reviu', 'src/main.ts', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')).toEqual({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'repo:openai/reviu:file:blob:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:path:src%2Fmain.ts',
+      ttlMs: 86_400_000,
+      staleMs: 604_800_000,
+      tags: ['repo:openai/reviu:file:blob:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
     })
   })
 
