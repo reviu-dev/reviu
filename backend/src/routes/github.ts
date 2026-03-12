@@ -1,59 +1,79 @@
 import type {
   CompareParams,
   CreateIssueCommentParams,
-  CreateIssueCommentResponse,
   CreatePullRequestCommentParams,
   CreatePullRequestCommentReplyParams,
-  CreatePullRequestCommentReplyResponse,
-  CreatePullRequestCommentResponse,
   CreatePullRequestReviewParams,
-  CreatePullRequestReviewResponse,
   DeleteIssueCommentParams,
   DeletePullRequestCommentParams,
   GetContentParams,
+  GithubFileContent,
+  GithubIssue,
+  GithubIssueDetails,
   GithubIssueDetailsCommentParameters,
-  GithubIssueDetailsCommentResponse,
   GithubIssueDetailsParameters,
   GithubIssueParameters,
-  GithubIssueResponse,
+  GithubNotification,
+  GithubPullRequest,
+  GithubPullRequestDetails,
+  GithubPullRequestDetailsAuthor,
+  GithubPullRequestIssueComment,
+  GithubPullRequestReview,
+  GithubPullRequestReviewComment,
+  GithubRepositoryBranch,
   GithubRepositoryBranchesParameters,
-  GithubRepositoryBranchesResponse,
+  GithubRepositoryDetails,
   GithubRepositoryParameters,
+  GithubRepositoryReadme,
   GithubRepositoryReadmeParameters,
-  GithubRepositoryResponse,
+  GithubRepositoryTree,
   GithubRepositoryTreeParams,
-  GithubRepositoryTreesResponse,
+  GithubUserRepository,
   ListPullsParams,
-  NotificationResponse,
   NotificationsParams,
-  PullRequestCommentResponse,
   PullRequestCommentsParams,
-  PullRequestCommitResponse,
-  PullRequestDetailsResponse,
-  PullRequestFileResponse,
   PullRequestParams,
-  PullRequestResponse,
-  PullRequestReviewResponse,
   PullRequestReviewsParams,
-  SearchIssuesItemResponse,
   SearchIssuesParams,
   UpdateIssueCommentParams,
-  UpdateIssueCommentResponse,
   UpdateIssueParams,
-  UpdateIssueResponse,
   UpdatePullRequestCommentParams,
-  UpdatePullRequestCommentResponse,
   UpdatePullRequestParams,
-  UpdatePullRequestResponse,
   UserRepositoriesParams,
-  UserRepositoryResponse,
-} from '../services/github.js'
+} from '../plugins/github/types.js'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
-import z from 'zod'
-import { githubCache } from '../lib/github-cache-runtime.js'
+import { logger } from '../lib/logger.js'
 import { authMiddleware } from '../middlewares/auth.js'
+import {
+  createGithubNotificationsCachePolicy,
+  createGithubPullRequestSearchCachePolicy,
+  createGithubUserRepositoriesCachePolicy,
+  getGithubIssueMutationTags,
+  getGithubPullRequestMutationTags,
+} from '../plugins/github/cache/github-cache-policy.js'
+import { githubCache } from '../plugins/github/cache/github-cache-runtime.js'
+import {
+  formatGithubUser,
+  mapGithubIssueComment,
+  mapGithubIssueDescriptionUpdate,
+  mapGithubPullRequestCommit,
+  mapGithubPullRequestDescriptionUpdate,
+  mapGithubPullRequestFile,
+  mapGithubPullRequestIssueComment,
+  mapGithubPullRequestReview,
+  mapGithubPullRequestReviewComment,
+  mapSearchIssueItemToPullRequest,
+} from '../plugins/github/formatter.js'
+import {
+  createPullRequestLineCommentBodySchema,
+  createPullRequestReviewBodySchema,
+  createPullRequestThreadReplyBodySchema,
+  issueCommentBodySchema,
+  updateDescriptionBodySchema,
+  updatePullRequestCommentBodySchema,
+} from '../plugins/github/schemas.js'
 import {
   compareGithubRefs,
   createGithubIssueComment,
@@ -84,541 +104,22 @@ import {
   patchGithubIssueComment,
   patchGithubPullRequest,
   patchGithubPullRequestComment,
-} from '../services/github.js'
-
-interface GithubRepository {
-  owner: string
-  repo: string
-}
-
-interface GithubPullRequest {
-  number: PullRequestResponse['number']
-  title: PullRequestResponse['title']
-  state: PullRequestResponse['state']
-  draft: NonNullable<PullRequestResponse['draft']>
-  merged_at: PullRequestResponse['merged_at']
-  updated_at: PullRequestResponse['updated_at']
-  labels: { name: string }[]
-  repository: GithubRepository
-}
-
-interface GithubPullRequestDetailsAuthor {
-  login: PullRequestDetailsResponse['user']['login']
-  avatar_url: PullRequestDetailsResponse['user']['avatar_url']
-}
-
-interface GithubPullRequestReviewCommentUser {
-  login: PullRequestCommentResponse['user']['login']
-  avatar_url: PullRequestCommentResponse['user']['avatar_url']
-}
-
-interface GithubPullRequestReviewComment {
-  id: PullRequestCommentResponse['id']
-  pull_request_review_id: PullRequestCommentResponse['pull_request_review_id']
-  diff_hunk: PullRequestCommentResponse['diff_hunk']
-  path: PullRequestCommentResponse['path']
-  position: PullRequestCommentResponse['position']
-  original_position: PullRequestCommentResponse['original_position']
-  commit_id: PullRequestCommentResponse['commit_id']
-  original_commit_id: PullRequestCommentResponse['original_commit_id']
-  in_reply_to_id: PullRequestCommentResponse['in_reply_to_id']
-  user: GithubPullRequestReviewCommentUser
-  body: PullRequestCommentResponse['body']
-  created_at: PullRequestCommentResponse['created_at']
-  updated_at: PullRequestCommentResponse['updated_at']
-  start_line: PullRequestCommentResponse['start_line']
-  original_start_line: PullRequestCommentResponse['original_start_line']
-  start_side: PullRequestCommentResponse['start_side']
-  line: PullRequestCommentResponse['line']
-  original_line: PullRequestCommentResponse['original_line']
-  side: PullRequestCommentResponse['side']
-}
-
-interface GithubPullRequestReviewUser {
-  login: NonNullable<PullRequestReviewResponse['user']>['login']
-  avatar_url: NonNullable<PullRequestReviewResponse['user']>['avatar_url']
-}
-
-interface GithubPullRequestReview {
-  id: PullRequestReviewResponse['id']
-  body: PullRequestReviewResponse['body']
-  state: PullRequestReviewResponse['state']
-  submitted_at: PullRequestReviewResponse['submitted_at']
-  commit_id: PullRequestReviewResponse['commit_id']
-  html_url: PullRequestReviewResponse['html_url']
-  user: GithubPullRequestReviewUser | null
-}
-
-interface GithubPullRequestIssueCommentUser {
-  login: NonNullable<GithubIssueDetailsCommentResponse['user']>['login']
-  avatar_url: NonNullable<GithubIssueDetailsCommentResponse['user']>['avatar_url']
-}
-
-interface GithubPullRequestIssueComment {
-  id: GithubIssueDetailsCommentResponse['id']
-  body: GithubIssueDetailsCommentResponse['body']
-  created_at: GithubIssueDetailsCommentResponse['created_at']
-  updated_at: GithubIssueDetailsCommentResponse['updated_at']
-  user: GithubPullRequestIssueCommentUser | null
-}
-
-interface GithubPullRequestDetails {
-  number: PullRequestDetailsResponse['number']
-  title: PullRequestDetailsResponse['title']
-  state: PullRequestDetailsResponse['state']
-  draft: NonNullable<PullRequestDetailsResponse['draft']>
-  created_at: PullRequestDetailsResponse['created_at']
-  updated_at: PullRequestDetailsResponse['updated_at']
-  merged_at: PullRequestDetailsResponse['merged_at']
-  merge_base_sha: string
-  base_sha: PullRequestDetailsResponse['base']['sha']
-  head_sha: PullRequestDetailsResponse['head']['sha']
-  base_ref_name: PullRequestDetailsResponse['base']['ref']
-  head_ref_name: PullRequestDetailsResponse['head']['ref']
-  body: PullRequestDetailsResponse['body']
-  author: GithubPullRequestDetailsAuthor
-  comments: PullRequestDetailsResponse['comments']
-  review_comments: PullRequestDetailsResponse['review_comments']
-  commits: PullRequestDetailsResponse['commits']
-  additions: PullRequestDetailsResponse['additions']
-  deletions: PullRequestDetailsResponse['deletions']
-  changed_files: PullRequestDetailsResponse['changed_files']
-  labels: PullRequestDetailsResponse['labels']
-  repository: GithubRepository
-  head_repository: GithubRepository
-}
-
-interface GithubPullRequestDescriptionUpdate {
-  number: UpdatePullRequestResponse['number']
-  body: UpdatePullRequestResponse['body']
-  updated_at: UpdatePullRequestResponse['updated_at']
-}
-
-interface GithubPullRequestCommitUser {
-  login: NonNullable<PullRequestCommitResponse['author']>['login']
-  avatar_url: NonNullable<PullRequestCommitResponse['author']>['avatar_url']
-}
-
-interface GithubPullRequestCommit {
-  sha: PullRequestCommitResponse['sha']
-  message: PullRequestCommitResponse['commit']['message']
-  authored_at: NonNullable<PullRequestCommitResponse['commit']['author']>['date'] | null
-  committed_at: NonNullable<PullRequestCommitResponse['commit']['committer']>['date'] | null
-  parent_sha: PullRequestCommitResponse['parents'][number]['sha'] | null
-  author: GithubPullRequestCommitUser | null
-  committer: GithubPullRequestCommitUser | null
-}
-
-interface GithubPullRequestFile {
-  filename: PullRequestFileResponse['filename']
-  status: PullRequestFileResponse['status']
-  patch: PullRequestFileResponse['patch']
-  previous_filename: PullRequestFileResponse['previous_filename']
-}
-
-interface GithubNotificationRepositoryOwner {
-  login: NotificationResponse['repository']['owner']['login']
-  avatar_url: NotificationResponse['repository']['owner']['avatar_url']
-}
-
-interface GithubNotificationRepository {
-  name: NotificationResponse['repository']['name']
-  full_name: NotificationResponse['repository']['full_name']
-  owner: GithubNotificationRepositoryOwner
-}
-
-interface GithubNotificationSubject {
-  title: NotificationResponse['subject']['title']
-  type: NotificationResponse['subject']['type']
-  url: NotificationResponse['subject']['url']
-  latest_comment_url: NotificationResponse['subject']['latest_comment_url']
-}
-
-interface GithubNotification {
-  id: NotificationResponse['id']
-  repository: GithubNotificationRepository
-  subject: GithubNotificationSubject
-  reason: NotificationResponse['reason']
-  unread: NotificationResponse['unread']
-  updated_at: NotificationResponse['updated_at']
-  last_read_at: NotificationResponse['last_read_at']
-  url: NotificationResponse['url']
-  subscription_url: NotificationResponse['subscription_url']
-}
-
-interface GithubIssue {
-  id: GithubIssueResponse['id']
-  number: GithubIssueResponse['number']
-  title: GithubIssueResponse['title']
-  state: GithubIssueResponse['state']
-  state_reason: GithubIssueResponse['state_reason']
-  created_at: GithubIssueResponse['created_at']
-  updated_at: GithubIssueResponse['updated_at']
-  closed_at: GithubIssueResponse['closed_at'] | null
-  labels: GithubIssueResponse['labels']
-  user: {
-    login: NonNullable<GithubIssueResponse['user']>['login']
-    name?: NonNullable<GithubIssueResponse['user']>['name']
-    avatar_url: NonNullable<GithubIssueResponse['user']>['avatar_url']
-  } | null
-  repository: GithubRepository
-}
-
-interface GithubIssueDetailsComment {
-  id: GithubIssueDetailsCommentResponse['id']
-  body: GithubIssueDetailsCommentResponse['body']
-  created_at: GithubIssueDetailsCommentResponse['created_at']
-  updated_at: GithubIssueDetailsCommentResponse['updated_at']
-  user: {
-    login: NonNullable<GithubIssueDetailsCommentResponse['user']>['login']
-    name?: NonNullable<GithubIssueDetailsCommentResponse['user']>['name']
-    avatar_url: NonNullable<GithubIssueDetailsCommentResponse['user']>['avatar_url']
-  } | null
-}
-
-interface GithubIssueDetails {
-  id: GithubIssueResponse['id']
-  number: GithubIssueResponse['number']
-  title: GithubIssueResponse['title']
-  body: GithubIssueResponse['body']
-  state: GithubIssueResponse['state']
-  state_reason: GithubIssueResponse['state_reason']
-  created_at: GithubIssueResponse['created_at']
-  updated_at: GithubIssueResponse['updated_at']
-  closed_at: GithubIssueResponse['closed_at'] | null
-  labels: GithubIssueResponse['labels']
-  comments: GithubIssueDetailsComment[]
-  user: {
-    login: NonNullable<GithubIssueResponse['user']>['login']
-    name?: NonNullable<GithubIssueResponse['user']>['name']
-    avatar_url: NonNullable<GithubIssueResponse['user']>['avatar_url']
-  } | null
-  repository: GithubRepository
-}
-
-interface GithubIssueDescriptionUpdate {
-  id: UpdateIssueResponse['id']
-  number: UpdateIssueResponse['number']
-  body: UpdateIssueResponse['body']
-  updated_at: UpdateIssueResponse['updated_at']
-}
-
-interface GithubRepositoryDetails {
-  name: GithubRepositoryResponse['name']
-  full_name: GithubRepositoryResponse['full_name']
-  description: GithubRepositoryResponse['description']
-  homepage: GithubRepositoryResponse['homepage']
-  language: GithubRepositoryResponse['language']
-  default_branch: GithubRepositoryResponse['default_branch']
-  stargazers_count: GithubRepositoryResponse['stargazers_count']
-  forks_count: GithubRepositoryResponse['forks_count']
-  subscribers_count: GithubRepositoryResponse['subscribers_count']
-  open_issues_count: GithubRepositoryResponse['open_issues_count']
-  size: GithubRepositoryResponse['size']
-  pushed_at: GithubRepositoryResponse['pushed_at']
-  html_url: GithubRepositoryResponse['html_url']
-  owner: {
-    login: GithubRepositoryResponse['owner']['login']
-    name?: GithubRepositoryResponse['owner']['name']
-    avatar_url: GithubRepositoryResponse['owner']['avatar_url']
-  }
-  license: {
-    key: NonNullable<GithubRepositoryResponse['license']>['key']
-    name: NonNullable<GithubRepositoryResponse['license']>['name']
-    spdx_id: NonNullable<GithubRepositoryResponse['license']>['spdx_id']
-  } | null
-}
-
-interface GithubUserRepository {
-  owner: string
-  repo: string
-  full_name: UserRepositoryResponse['full_name']
-  description: UserRepositoryResponse['description']
-  private: UserRepositoryResponse['private']
-  updated_at: NonNullable<UserRepositoryResponse['updated_at']>
-}
-
-interface GithubRepositoryReadme {
-  content: string | null
-  path: string | null
-}
-
-interface GithubRepositoryTree {
-  sha: GithubRepositoryTreesResponse['sha']
-  url?: GithubRepositoryTreesResponse['url']
-  truncated: GithubRepositoryTreesResponse['truncated']
-  tree: GithubRepositoryTreesResponse['tree']
-}
-
-interface GithubRepositoryBranch {
-  name: GithubRepositoryBranchesResponse['name']
-  commit: {
-    sha: GithubRepositoryBranchesResponse['commit']['sha']
-    url: GithubRepositoryBranchesResponse['commit']['url']
-  }
-  protected: GithubRepositoryBranchesResponse['protected']
-}
-
-interface GithubFileContent {
-  content: string | null
-}
-
-type GithubReviewCommentResponse
-  = | PullRequestCommentResponse
-    | CreatePullRequestCommentResponse
-    | CreatePullRequestCommentReplyResponse
-    | UpdatePullRequestCommentResponse
-
-type GithubIssueCommentResponseSource
-  = | GithubIssueDetailsCommentResponse
-    | CreateIssueCommentResponse
-    | UpdateIssueCommentResponse
-
-type GithubPullRequestReviewResponseSource
-  = | PullRequestReviewResponse
-    | CreatePullRequestReviewResponse
-
-const updatePullRequestCommentBodySchema = z.object({
-  body: z.string().trim().min(1, 'Missing comment body'),
-})
-
-const issueCommentBodySchema = z.object({
-  body: z.string().trim().min(1, 'Missing comment body'),
-})
-
-const updateDescriptionBodySchema = z.object({
-  body: z.string().transform(value => value.trim()),
-})
-
-const createPullRequestLineCommentBodySchema = z.object({
-  body: z.string().trim().min(1, 'Missing comment body'),
-  path: z.string().trim().min(1, 'Missing comment path'),
-  commitId: z.string().trim().min(1, 'Missing comment commit id'),
-  line: z.number().int().positive(),
-  side: z.enum(['LEFT', 'RIGHT']),
-  startLine: z.number().int().positive().optional(),
-  startSide: z.enum(['LEFT', 'RIGHT']).optional(),
-})
-
-const createPullRequestThreadReplyBodySchema = z.object({
-  body: z.string().trim().min(1, 'Missing comment body'),
-})
-
-const createPullRequestReviewBodySchema = z.object({
-  event: z.enum(['COMMENT', 'APPROVE', 'REQUEST_CHANGES']),
-  body: z.string().optional(),
-})
-
-function formatGithubUser<U extends { login: string, name?: string | null, avatar_url: string }>(user: U | null) {
-  if (!user)
-    return null
-
-  return {
-    login: user.login,
-    name: user.name,
-    avatar_url: user.avatar_url,
-  }
-}
-
-function mapGithubPullRequestReviewComment(
-  comment: GithubReviewCommentResponse,
-): GithubPullRequestReviewComment {
-  return {
-    id: comment.id,
-    pull_request_review_id: comment.pull_request_review_id,
-    diff_hunk: comment.diff_hunk,
-    path: comment.path,
-    position: comment.position,
-    original_position: comment.original_position,
-    commit_id: comment.commit_id,
-    original_commit_id: comment.original_commit_id,
-    in_reply_to_id: comment.in_reply_to_id,
-    user: {
-      login: comment.user.login,
-      avatar_url: comment.user.avatar_url,
-    },
-    body: comment.body,
-    created_at: comment.created_at,
-    updated_at: comment.updated_at,
-    start_line: comment.start_line,
-    original_start_line: comment.original_start_line,
-    start_side: comment.start_side,
-    line: comment.line,
-    original_line: comment.original_line,
-    side: comment.side,
-  }
-}
-
-function mapGithubPullRequestReview(
-  review: GithubPullRequestReviewResponseSource,
-): GithubPullRequestReview {
-  return {
-    id: review.id,
-    body: review.body,
-    state: review.state,
-    submitted_at: review.submitted_at,
-    commit_id: review.commit_id,
-    html_url: review.html_url,
-    user: review.user
-      ? {
-          login: review.user.login,
-          avatar_url: review.user.avatar_url,
-        }
-      : null,
-  }
-}
-
-function mapGithubPullRequestIssueComment(
-  comment: GithubIssueDetailsCommentResponse,
-): GithubPullRequestIssueComment {
-  return {
-    id: comment.id,
-    body: comment.body,
-    created_at: comment.created_at,
-    updated_at: comment.updated_at,
-    user: comment.user
-      ? {
-          login: comment.user.login,
-          avatar_url: comment.user.avatar_url,
-        }
-      : null,
-  }
-}
-
-function mapGithubIssueComment(
-  comment: GithubIssueCommentResponseSource,
-): GithubIssueDetailsComment {
-  return {
-    id: comment.id,
-    body: comment.body,
-    created_at: comment.created_at,
-    updated_at: comment.updated_at,
-    user: formatGithubUser(comment.user),
-  }
-}
-
-function mapGithubPullRequestDescriptionUpdate(
-  pullRequest: UpdatePullRequestResponse,
-): GithubPullRequestDescriptionUpdate {
-  return {
-    number: pullRequest.number,
-    body: pullRequest.body,
-    updated_at: pullRequest.updated_at,
-  }
-}
-
-function mapGithubIssueDescriptionUpdate(
-  issue: UpdateIssueResponse,
-): GithubIssueDescriptionUpdate {
-  return {
-    id: issue.id,
-    number: issue.number,
-    body: issue.body,
-    updated_at: issue.updated_at,
-  }
-}
-
-function mapGithubPullRequestCommitUser(
-  user: PullRequestCommitResponse['author'] | PullRequestCommitResponse['committer'],
-): GithubPullRequestCommitUser | null {
-  if (!user) {
-    return null
-  }
-
-  return {
-    login: user.login,
-    avatar_url: user.avatar_url,
-  }
-}
-
-function mapGithubPullRequestCommit(
-  commit: PullRequestCommitResponse,
-): GithubPullRequestCommit {
-  return {
-    sha: commit.sha,
-    message: commit.commit.message,
-    authored_at: commit.commit.author?.date ?? null,
-    committed_at: commit.commit.committer?.date ?? null,
-    parent_sha: commit.parents.at(0)?.sha ?? null,
-    author: mapGithubPullRequestCommitUser(commit.author),
-    committer: mapGithubPullRequestCommitUser(commit.committer),
-  }
-}
-
-interface GithubPullRequestFileSource {
-  filename: string
-  status: string
-  patch?: string | null
-  previous_filename?: string | null
-}
-
-function mapGithubPullRequestFile(file: GithubPullRequestFileSource): GithubPullRequestFile {
-  return {
-    filename: file.filename,
-    status: file.status as GithubPullRequestFile['status'],
-    patch: file.patch ?? undefined,
-    previous_filename: file.previous_filename ?? undefined,
-  }
-}
+} from '../plugins/github/service.js'
 
 const LATEST_PULL_REQUESTS_QUERY = 'author:@me is:pr is:open archived:false'
 const NEED_REVIEWS_PULL_REQUESTS_QUERY = 'review-requested:@me is:pr is:open archived:false'
 const LATEST_PULL_REQUESTS_LIMIT = 20
-const LATEST_PULL_REQUESTS_CACHE_TTL_MS = 60_000
-const LATEST_PULL_REQUESTS_CACHE_STALE_MS = 5 * 60_000
-
-function parseGithubRepositoryUrl(repositoryUrl: string): GithubRepository | null {
-  try {
-    const pathParts = new URL(repositoryUrl).pathname.split('/').filter(Boolean)
-    if (pathParts.length < 3 || pathParts[0] !== 'repos') {
-      return null
-    }
-
-    const owner = pathParts[1]
-    const repo = pathParts[2]
-    if (!owner || !repo) {
-      return null
-    }
-
-    return { owner, repo }
-  }
-  catch {
-    return null
-  }
-}
-
-function mapSearchIssueItemToPullRequest(item: SearchIssuesItemResponse): GithubPullRequest | null {
-  const repository = parseGithubRepositoryUrl(item.repository_url)
-  if (!repository || !item.pull_request) {
-    return null
-  }
-
-  return {
-    number: item.number,
-    title: item.title,
-    state: item.state as PullRequestResponse['state'],
-    draft: Boolean(item.draft),
-    merged_at: item.pull_request.merged_at ?? null,
-    updated_at: item.updated_at,
-    labels: item.labels
-      .flatMap(label => (typeof label.name === 'string' && label.name.trim().length > 0 ? [{ name: label.name }] : [])),
-    repository,
-  }
-}
 
 async function fetchPullRequestsSearchWithCache(
   userId: string,
-  cacheKey: string,
   githubToken: string,
+  variant: 'latest' | 'need-review',
   query: string,
 ) {
+  const cachePolicy = createGithubPullRequestSearchCachePolicy(userId, variant)
+
   return githubCache.getOrLoad({
-    scope: 'viewer',
-    scopeId: userId,
-    resourceKey: cacheKey,
-    ttlMs: LATEST_PULL_REQUESTS_CACHE_TTL_MS,
-    staleMs: LATEST_PULL_REQUESTS_CACHE_STALE_MS,
-    tags: [`viewer:${userId}`],
+    ...cachePolicy,
     load: async () => {
       const params: SearchIssuesParams = {
         q: query,
@@ -638,16 +139,15 @@ async function fetchPullRequestsSearchWithCache(
   })
 }
 
-const githubRouter = new Hono()
+async function fetchNotificationsWithCache(
+  userId: string,
+  githubToken: string,
+) {
+  const cachePolicy = createGithubNotificationsCachePolicy(userId)
 
-githubRouter.use('*', authMiddleware)
-
-export const githubRoutes = githubRouter
-  .get('/notifications', async (ctx) => {
-    const user = ctx.get('user')!
-    const githubToken = user.github.accessToken
-
-    try {
+  return githubCache.getOrLoad({
+    ...cachePolicy,
+    load: async () => {
       const params: NotificationsParams = {
         per_page: 50,
         all: false,
@@ -655,7 +155,7 @@ export const githubRoutes = githubRouter
 
       const data = await fetchGithubNotifications({ token: githubToken, params })
 
-      const notifications: GithubNotification[] = data.map(notification => ({
+      return data.map(notification => ({
         id: notification.id,
         repository: {
           name: notification.repository.name,
@@ -677,9 +177,64 @@ export const githubRoutes = githubRouter
         last_read_at: notification.last_read_at,
         url: notification.url,
         subscription_url: notification.subscription_url,
-      }))
+      } satisfies GithubNotification))
+    },
+  })
+}
 
-      return ctx.json({ notifications }, 200)
+async function fetchUserRepositoriesWithCache(
+  userId: string,
+  githubToken: string,
+) {
+  const cachePolicy = createGithubUserRepositoriesCachePolicy(userId)
+
+  return githubCache.getOrLoad({
+    ...cachePolicy,
+    load: async () => {
+      const params: UserRepositoriesParams = {
+        sort: 'updated',
+        direction: 'desc',
+        per_page: 100,
+      }
+
+      const data = await fetchGithubUserRepositories({ token: githubToken, params })
+
+      return data
+        .map(repo => ({
+          owner: repo.owner.login,
+          repo: repo.name,
+          full_name: repo.full_name,
+          description: repo.description,
+          private: repo.private,
+          updated_at: repo.updated_at ?? '',
+        } satisfies GithubUserRepository))
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+    },
+  })
+}
+
+async function invalidateGithubCacheTags(tags: string[]) {
+  try {
+    await githubCache.invalidateTags(tags)
+  }
+  catch (error) {
+    logger.warn({ error, tags }, 'Failed to invalidate GitHub cache tags')
+  }
+}
+
+const githubRouter = new Hono()
+
+githubRouter.use('*', authMiddleware)
+
+export const githubRoutes = githubRouter
+  .get('/notifications', async (ctx) => {
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const result = await fetchNotificationsWithCache(user.id, githubToken)
+      ctx.header('x-reviu-cache', result.cacheStatus)
+      return ctx.json({ notifications: result.payload }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
@@ -691,8 +246,8 @@ export const githubRoutes = githubRouter
     try {
       const result = await fetchPullRequestsSearchWithCache(
         user.id,
-        'search:latest-pull-requests',
         githubToken,
+        'latest',
         LATEST_PULL_REQUESTS_QUERY,
       )
       ctx.header('x-reviu-cache', result.cacheStatus)
@@ -709,8 +264,8 @@ export const githubRoutes = githubRouter
     try {
       const result = await fetchPullRequestsSearchWithCache(
         user.id,
-        'search:need-review-pull-requests',
         githubToken,
+        'need-review',
         NEED_REVIEWS_PULL_REQUESTS_QUERY,
       )
       ctx.header('x-reviu-cache', result.cacheStatus)
@@ -827,6 +382,12 @@ export const githubRoutes = githubRouter
       }
 
       const data = await patchGithubPullRequest({ token: githubToken, params })
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+      }))
       const pullRequest = mapGithubPullRequestDescriptionUpdate(data)
       return ctx.json({ pullRequest }, 200)
     }
@@ -1024,6 +585,13 @@ export const githubRoutes = githubRouter
       }
 
       const data = await createGithubPullRequestReview({ token: githubToken, params })
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+        includeReviews: true,
+      }))
       const review = mapGithubPullRequestReview(data)
       return ctx.json({ review }, 200)
     }
@@ -1073,6 +641,13 @@ export const githubRoutes = githubRouter
       }
 
       const data = await createGithubPullRequestComment({ token: githubToken, params })
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+        includeComments: true,
+      }))
 
       const comment = mapGithubPullRequestReviewComment(data)
       return ctx.json({ comment }, 200)
@@ -1111,6 +686,13 @@ export const githubRoutes = githubRouter
       }
 
       const data = await createGithubPullRequestCommentReply({ token: githubToken, params })
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+        includeComments: true,
+      }))
 
       const comment = mapGithubPullRequestReviewComment(data)
       return ctx.json({ comment }, 200)
@@ -1143,6 +725,13 @@ export const githubRoutes = githubRouter
       }
 
       await deleteGithubPullRequestComment({ token: githubToken, params })
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+        includeComments: true,
+      }))
 
       return ctx.json({ success: true }, 200)
     }
@@ -1179,6 +768,13 @@ export const githubRoutes = githubRouter
       }
 
       const data = await patchGithubPullRequestComment({ token: githubToken, params })
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+        includeComments: true,
+      }))
 
       const comment = mapGithubPullRequestReviewComment(data)
       return ctx.json({ comment }, 200)
@@ -1243,25 +839,9 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const params: UserRepositoriesParams = {
-        sort: 'updated',
-        direction: 'desc',
-        per_page: 100,
-      }
-
-      const data = await fetchGithubUserRepositories({ token: githubToken, params })
-      const repositories: GithubUserRepository[] = data
-        .map(repo => ({
-          owner: repo.owner.login,
-          repo: repo.name,
-          full_name: repo.full_name,
-          description: repo.description,
-          private: repo.private,
-          updated_at: repo.updated_at ?? '',
-        }))
-        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-
-      return ctx.json({ repositories }, 200)
+      const result = await fetchUserRepositoriesWithCache(user.id, githubToken)
+      ctx.header('x-reviu-cache', result.cacheStatus)
+      return ctx.json({ repositories: result.payload }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
@@ -1584,6 +1164,11 @@ export const githubRoutes = githubRouter
       }
 
       const data = await patchGithubIssue({ token: githubToken, params })
+      await invalidateGithubCacheTags(getGithubIssueMutationTags({
+        owner,
+        repo,
+        issueNumber,
+      }))
       const issue = mapGithubIssueDescriptionUpdate(data)
       return ctx.json({ issue }, 200)
     }
@@ -1619,6 +1204,12 @@ export const githubRoutes = githubRouter
       }
 
       const data = await createGithubIssueComment({ token: githubToken, params })
+      await invalidateGithubCacheTags(getGithubIssueMutationTags({
+        owner,
+        repo,
+        issueNumber,
+        includeComments: true,
+      }))
       const comment = mapGithubIssueComment(data)
       return ctx.json({ comment }, 200)
     }
@@ -1655,6 +1246,12 @@ export const githubRoutes = githubRouter
       }
 
       const data = await patchGithubIssueComment({ token: githubToken, params })
+      await invalidateGithubCacheTags(getGithubIssueMutationTags({
+        owner,
+        repo,
+        issueNumber,
+        includeComments: true,
+      }))
       const comment = mapGithubIssueComment(data)
       return ctx.json({ comment }, 200)
     }
@@ -1686,6 +1283,12 @@ export const githubRoutes = githubRouter
       }
 
       await deleteGithubIssueComment({ token: githubToken, params })
+      await invalidateGithubCacheTags(getGithubIssueMutationTags({
+        owner,
+        repo,
+        issueNumber,
+        includeComments: true,
+      }))
       return ctx.json({ success: true }, 200)
     }
     catch (error) {

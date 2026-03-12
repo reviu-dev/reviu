@@ -1,0 +1,386 @@
+import type { Endpoints } from '@octokit/types'
+
+export type ListPullsParams = Endpoints['GET /repos/{owner}/{repo}/pulls']['parameters']
+export type CompareParams
+  = Endpoints['GET /repos/{owner}/{repo}/compare/{basehead}']['parameters']
+export type PullRequestParams
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
+export type PullRequestCommitsParams
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/commits']['parameters']
+export type PullRequestCommentsParams
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
+export type PullRequestReviewsParams
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews']['parameters']
+export type UpdatePullRequestParams
+  = Endpoints['PATCH /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
+export type CreatePullRequestCommentParams
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
+export type CreatePullRequestReviewParams
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews']['parameters']
+export type CreatePullRequestCommentReplyParams
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies']['parameters']
+export type UpdatePullRequestCommentParams
+  = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['parameters']
+export type DeletePullRequestCommentParams
+  = Endpoints['DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}']['parameters']
+export type PullRequestFilesParams
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['parameters']
+export type CommitParams
+  = Endpoints['GET /repos/{owner}/{repo}/commits/{ref}']['parameters']
+export type SearchIssuesParams = Endpoints['GET /search/issues']['parameters']
+export type UserRepositoriesParams = Endpoints['GET /user/repos']['parameters']
+export type NotificationsParams = Endpoints['GET /notifications']['parameters']
+export type GetContentParams
+  = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['parameters']
+
+export type NotificationResponse = Endpoints['GET /notifications']['response']['data'][number]
+export type PullRequestResponse
+  = Endpoints['GET /repos/{owner}/{repo}/pulls']['response']['data'][number]
+export type PullRequestDetailsResponse
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['response']['data']
+export type PullRequestCommitResponse
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/commits']['response']['data'][number]
+export type PullRequestCommentResponse
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data'][number]
+export type PullRequestReviewResponse
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews']['response']['data'][number]
+export type UpdatePullRequestResponse
+  = Endpoints['PATCH /repos/{owner}/{repo}/pulls/{pull_number}']['response']['data']
+export type CreatePullRequestCommentResponse
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data']
+export type CreatePullRequestReviewResponse
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews']['response']['data']
+export type CreatePullRequestCommentReplyResponse
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies']['response']['data']
+export type UpdatePullRequestCommentResponse
+  = Endpoints['PATCH /repos/{owner}/{repo}/pulls/comments/{comment_id}']['response']['data']
+export type PullRequestFileResponse
+  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['response']['data'][number]
+export type CommitResponse = Endpoints['GET /repos/{owner}/{repo}/commits/{ref}']['response']['data']
+export type CommitFileResponse = NonNullable<CommitResponse['files']>[number]
+export type SearchIssuesResponse = Endpoints['GET /search/issues']['response']['data']
+export type SearchIssuesItemResponse = SearchIssuesResponse['items'][number]
+export type UserRepositoryResponse = Endpoints['GET /user/repos']['response']['data'][number]
+export type GetContentResponse
+  = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['response']['data']
+export type GithubUserResponse = Endpoints['GET /user']['response']['data']
+export type GithubIssueResponse = Endpoints['GET /repos/{owner}/{repo}/issues']['response']['data'][number]
+export type GithubIssueParameters = Endpoints['GET /repos/{owner}/{repo}/issues']['parameters']
+export type GithubIssueDetailsResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}']['response']['data']
+export type GithubIssueDetailsParameters = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}']['parameters']
+export type UpdateIssueParams = Endpoints['PATCH /repos/{owner}/{repo}/issues/{issue_number}']['parameters']
+export type UpdateIssueResponse = Endpoints['PATCH /repos/{owner}/{repo}/issues/{issue_number}']['response']['data']
+export type GithubIssueDetailsCommentResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}/comments']['response']['data'][number]
+export type GithubIssueDetailsCommentParameters = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}/comments']['parameters']
+export type CreateIssueCommentParams = Endpoints['POST /repos/{owner}/{repo}/issues/{issue_number}/comments']['parameters']
+export type CreateIssueCommentResponse = Endpoints['POST /repos/{owner}/{repo}/issues/{issue_number}/comments']['response']['data']
+export type UpdateIssueCommentParams = Endpoints['PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}']['parameters']
+export type UpdateIssueCommentResponse = Endpoints['PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}']['response']['data']
+export type DeleteIssueCommentParams = Endpoints['DELETE /repos/{owner}/{repo}/issues/comments/{comment_id}']['parameters']
+export type GithubRepositoryResponse = Endpoints['GET /repos/{owner}/{repo}']['response']['data']
+export type GithubRepositoryParameters = Endpoints['GET /repos/{owner}/{repo}']['parameters']
+export type GithubRepositoryTreesResponse = Endpoints['GET /repos/{owner}/{repo}/git/trees/{tree_sha}']['response']['data']
+export type GithubRepositoryTreeParams = Endpoints['GET /repos/{owner}/{repo}/git/trees/{tree_sha}']['parameters']
+export type GithubRepositoryBranchesResponse = Endpoints['GET /repos/{owner}/{repo}/branches']['response']['data'][number]
+export type GithubRepositoryBranchesParameters = Endpoints['GET /repos/{owner}/{repo}/branches']['parameters']
+export type GithubRepositoryReadmeResponse = Endpoints['GET /repos/{owner}/{repo}/readme']['response']['data']
+export type GithubRepositoryReadmeParameters = Endpoints['GET /repos/{owner}/{repo}/readme']['parameters']
+
+export interface GithubRepository {
+  owner: string
+  repo: string
+}
+
+export interface GithubPullRequest {
+  number: PullRequestResponse['number']
+  title: PullRequestResponse['title']
+  state: PullRequestResponse['state']
+  draft: NonNullable<PullRequestResponse['draft']>
+  merged_at: PullRequestResponse['merged_at']
+  updated_at: PullRequestResponse['updated_at']
+  labels: { name: string }[]
+  repository: GithubRepository
+}
+
+export interface GithubPullRequestDetailsAuthor {
+  login: PullRequestDetailsResponse['user']['login']
+  avatar_url: PullRequestDetailsResponse['user']['avatar_url']
+}
+
+export interface GithubPullRequestReviewCommentUser {
+  login: PullRequestCommentResponse['user']['login']
+  avatar_url: PullRequestCommentResponse['user']['avatar_url']
+}
+
+export interface GithubPullRequestReviewComment {
+  id: PullRequestCommentResponse['id']
+  pull_request_review_id: PullRequestCommentResponse['pull_request_review_id']
+  diff_hunk: PullRequestCommentResponse['diff_hunk']
+  path: PullRequestCommentResponse['path']
+  position: PullRequestCommentResponse['position']
+  original_position: PullRequestCommentResponse['original_position']
+  commit_id: PullRequestCommentResponse['commit_id']
+  original_commit_id: PullRequestCommentResponse['original_commit_id']
+  in_reply_to_id: PullRequestCommentResponse['in_reply_to_id']
+  user: GithubPullRequestReviewCommentUser
+  body: PullRequestCommentResponse['body']
+  created_at: PullRequestCommentResponse['created_at']
+  updated_at: PullRequestCommentResponse['updated_at']
+  start_line: PullRequestCommentResponse['start_line']
+  original_start_line: PullRequestCommentResponse['original_start_line']
+  start_side: PullRequestCommentResponse['start_side']
+  line: PullRequestCommentResponse['line']
+  original_line: PullRequestCommentResponse['original_line']
+  side: PullRequestCommentResponse['side']
+}
+
+export interface GithubPullRequestReviewUser {
+  login: NonNullable<PullRequestReviewResponse['user']>['login']
+  avatar_url: NonNullable<PullRequestReviewResponse['user']>['avatar_url']
+}
+
+export interface GithubPullRequestReview {
+  id: PullRequestReviewResponse['id']
+  body: PullRequestReviewResponse['body']
+  state: PullRequestReviewResponse['state']
+  submitted_at: PullRequestReviewResponse['submitted_at']
+  commit_id: PullRequestReviewResponse['commit_id']
+  html_url: PullRequestReviewResponse['html_url']
+  user: GithubPullRequestReviewUser | null
+}
+
+export interface GithubPullRequestIssueCommentUser {
+  login: NonNullable<GithubIssueDetailsCommentResponse['user']>['login']
+  avatar_url: NonNullable<GithubIssueDetailsCommentResponse['user']>['avatar_url']
+}
+
+export interface GithubPullRequestIssueComment {
+  id: GithubIssueDetailsCommentResponse['id']
+  body: GithubIssueDetailsCommentResponse['body']
+  created_at: GithubIssueDetailsCommentResponse['created_at']
+  updated_at: GithubIssueDetailsCommentResponse['updated_at']
+  user: GithubPullRequestIssueCommentUser | null
+}
+
+export interface GithubPullRequestDetails {
+  number: PullRequestDetailsResponse['number']
+  title: PullRequestDetailsResponse['title']
+  state: PullRequestDetailsResponse['state']
+  draft: NonNullable<PullRequestDetailsResponse['draft']>
+  created_at: PullRequestDetailsResponse['created_at']
+  updated_at: PullRequestDetailsResponse['updated_at']
+  merged_at: PullRequestDetailsResponse['merged_at']
+  merge_base_sha: string
+  base_sha: PullRequestDetailsResponse['base']['sha']
+  head_sha: PullRequestDetailsResponse['head']['sha']
+  base_ref_name: PullRequestDetailsResponse['base']['ref']
+  head_ref_name: PullRequestDetailsResponse['head']['ref']
+  body: PullRequestDetailsResponse['body']
+  author: GithubPullRequestDetailsAuthor
+  comments: PullRequestDetailsResponse['comments']
+  review_comments: PullRequestDetailsResponse['review_comments']
+  commits: PullRequestDetailsResponse['commits']
+  additions: PullRequestDetailsResponse['additions']
+  deletions: PullRequestDetailsResponse['deletions']
+  changed_files: PullRequestDetailsResponse['changed_files']
+  labels: PullRequestDetailsResponse['labels']
+  repository: GithubRepository
+  head_repository: GithubRepository
+}
+
+export interface GithubPullRequestDescriptionUpdate {
+  number: UpdatePullRequestResponse['number']
+  body: UpdatePullRequestResponse['body']
+  updated_at: UpdatePullRequestResponse['updated_at']
+}
+
+export interface GithubPullRequestCommitUser {
+  login: NonNullable<PullRequestCommitResponse['author']>['login']
+  avatar_url: NonNullable<PullRequestCommitResponse['author']>['avatar_url']
+}
+
+export interface GithubPullRequestCommit {
+  sha: PullRequestCommitResponse['sha']
+  message: PullRequestCommitResponse['commit']['message']
+  authored_at: NonNullable<PullRequestCommitResponse['commit']['author']>['date'] | null
+  committed_at: NonNullable<PullRequestCommitResponse['commit']['committer']>['date'] | null
+  parent_sha: PullRequestCommitResponse['parents'][number]['sha'] | null
+  author: GithubPullRequestCommitUser | null
+  committer: GithubPullRequestCommitUser | null
+}
+
+export interface GithubPullRequestFile {
+  filename: PullRequestFileResponse['filename']
+  status: PullRequestFileResponse['status']
+  patch: PullRequestFileResponse['patch']
+  previous_filename: PullRequestFileResponse['previous_filename']
+}
+
+export interface GithubNotificationRepositoryOwner {
+  login: NotificationResponse['repository']['owner']['login']
+  avatar_url: NotificationResponse['repository']['owner']['avatar_url']
+}
+
+export interface GithubNotificationRepository {
+  name: NotificationResponse['repository']['name']
+  full_name: NotificationResponse['repository']['full_name']
+  owner: GithubNotificationRepositoryOwner
+}
+
+export interface GithubNotificationSubject {
+  title: NotificationResponse['subject']['title']
+  type: NotificationResponse['subject']['type']
+  url: NotificationResponse['subject']['url']
+  latest_comment_url: NotificationResponse['subject']['latest_comment_url']
+}
+
+export interface GithubNotification {
+  id: NotificationResponse['id']
+  repository: GithubNotificationRepository
+  subject: GithubNotificationSubject
+  reason: NotificationResponse['reason']
+  unread: NotificationResponse['unread']
+  updated_at: NotificationResponse['updated_at']
+  last_read_at: NotificationResponse['last_read_at']
+  url: NotificationResponse['url']
+  subscription_url: NotificationResponse['subscription_url']
+}
+
+export interface GithubIssue {
+  id: GithubIssueResponse['id']
+  number: GithubIssueResponse['number']
+  title: GithubIssueResponse['title']
+  state: GithubIssueResponse['state']
+  state_reason: GithubIssueResponse['state_reason']
+  created_at: GithubIssueResponse['created_at']
+  updated_at: GithubIssueResponse['updated_at']
+  closed_at: GithubIssueResponse['closed_at'] | null
+  labels: GithubIssueResponse['labels']
+  user: {
+    login: NonNullable<GithubIssueResponse['user']>['login']
+    name?: NonNullable<GithubIssueResponse['user']>['name']
+    avatar_url: NonNullable<GithubIssueResponse['user']>['avatar_url']
+  } | null
+  repository: GithubRepository
+}
+
+export interface GithubIssueDetailsComment {
+  id: GithubIssueDetailsCommentResponse['id']
+  body: GithubIssueDetailsCommentResponse['body']
+  created_at: GithubIssueDetailsCommentResponse['created_at']
+  updated_at: GithubIssueDetailsCommentResponse['updated_at']
+  user: {
+    login: NonNullable<GithubIssueDetailsCommentResponse['user']>['login']
+    name?: NonNullable<GithubIssueDetailsCommentResponse['user']>['name']
+    avatar_url: NonNullable<GithubIssueDetailsCommentResponse['user']>['avatar_url']
+  } | null
+}
+
+export interface GithubIssueDetails {
+  id: GithubIssueResponse['id']
+  number: GithubIssueResponse['number']
+  title: GithubIssueResponse['title']
+  body: GithubIssueResponse['body']
+  state: GithubIssueResponse['state']
+  state_reason: GithubIssueResponse['state_reason']
+  created_at: GithubIssueResponse['created_at']
+  updated_at: GithubIssueResponse['updated_at']
+  closed_at: GithubIssueResponse['closed_at'] | null
+  labels: GithubIssueResponse['labels']
+  comments: GithubIssueDetailsComment[]
+  user: {
+    login: NonNullable<GithubIssueResponse['user']>['login']
+    name?: NonNullable<GithubIssueResponse['user']>['name']
+    avatar_url: NonNullable<GithubIssueResponse['user']>['avatar_url']
+  } | null
+  repository: GithubRepository
+}
+
+export interface GithubIssueDescriptionUpdate {
+  id: UpdateIssueResponse['id']
+  number: UpdateIssueResponse['number']
+  body: UpdateIssueResponse['body']
+  updated_at: UpdateIssueResponse['updated_at']
+}
+
+export interface GithubRepositoryDetails {
+  name: GithubRepositoryResponse['name']
+  full_name: GithubRepositoryResponse['full_name']
+  description: GithubRepositoryResponse['description']
+  homepage: GithubRepositoryResponse['homepage']
+  language: GithubRepositoryResponse['language']
+  default_branch: GithubRepositoryResponse['default_branch']
+  stargazers_count: GithubRepositoryResponse['stargazers_count']
+  forks_count: GithubRepositoryResponse['forks_count']
+  subscribers_count: GithubRepositoryResponse['subscribers_count']
+  open_issues_count: GithubRepositoryResponse['open_issues_count']
+  size: GithubRepositoryResponse['size']
+  pushed_at: GithubRepositoryResponse['pushed_at']
+  html_url: GithubRepositoryResponse['html_url']
+  owner: {
+    login: GithubRepositoryResponse['owner']['login']
+    name?: GithubRepositoryResponse['owner']['name']
+    avatar_url: GithubRepositoryResponse['owner']['avatar_url']
+  }
+  license: {
+    key: NonNullable<GithubRepositoryResponse['license']>['key']
+    name: NonNullable<GithubRepositoryResponse['license']>['name']
+    spdx_id: NonNullable<GithubRepositoryResponse['license']>['spdx_id']
+  } | null
+}
+
+export interface GithubUserRepository {
+  owner: string
+  repo: string
+  full_name: UserRepositoryResponse['full_name']
+  description: UserRepositoryResponse['description']
+  private: UserRepositoryResponse['private']
+  updated_at: NonNullable<UserRepositoryResponse['updated_at']>
+}
+
+export interface GithubRepositoryReadme {
+  content: string | null
+  path: string | null
+}
+
+export interface GithubRepositoryTree {
+  sha: GithubRepositoryTreesResponse['sha']
+  url?: GithubRepositoryTreesResponse['url']
+  truncated: GithubRepositoryTreesResponse['truncated']
+  tree: GithubRepositoryTreesResponse['tree']
+}
+
+export interface GithubRepositoryBranch {
+  name: GithubRepositoryBranchesResponse['name']
+  commit: {
+    sha: GithubRepositoryBranchesResponse['commit']['sha']
+    url: GithubRepositoryBranchesResponse['commit']['url']
+  }
+  protected: GithubRepositoryBranchesResponse['protected']
+}
+
+export interface GithubFileContent {
+  content: string | null
+}
+
+export interface GithubPullRequestFileSource {
+  filename: string
+  status: string
+  patch?: string | null
+  previous_filename?: string | null
+}
+
+export type GithubReviewCommentResponse
+  = | PullRequestCommentResponse
+    | CreatePullRequestCommentResponse
+    | CreatePullRequestCommentReplyResponse
+    | UpdatePullRequestCommentResponse
+
+export type GithubIssueCommentResponseSource
+  = | GithubIssueDetailsCommentResponse
+    | CreateIssueCommentResponse
+    | UpdateIssueCommentResponse
+
+export type GithubPullRequestReviewResponseSource
+  = | PullRequestReviewResponse
+    | CreatePullRequestReviewResponse

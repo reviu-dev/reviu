@@ -1,4 +1,4 @@
-import { logger } from './logger.js'
+import { logger } from '../../../lib/logger.js'
 
 export type GithubCacheScope = 'viewer' | 'installation' | 'public'
 export type GithubCacheStatus = 'hit' | 'miss' | 'stale'

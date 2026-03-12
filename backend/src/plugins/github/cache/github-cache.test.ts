@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { logger } from '../../../lib/logger.js'
 import { createGithubCache, MemoryGithubCacheStore } from './github-cache.js'
-import { logger } from './logger.js'
 
 describe('github cache', () => {
   afterEach(() => {

@@ -1,8 +1,8 @@
-import type { GithubCacheStore } from './github-cache.js'
+import type { GithubCacheStore } from '../plugins/github/cache/github-cache.js'
 
 import { Redis } from 'ioredis'
+import { MemoryGithubCacheStore } from '../plugins/github/cache/github-cache.js'
 import { env } from './env.js'
-import { MemoryGithubCacheStore } from './github-cache.js'
 import { logger } from './logger.js'
 
 const RELEASE_LOCK_SCRIPT = `

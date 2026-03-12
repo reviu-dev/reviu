@@ -3,7 +3,7 @@ import { Hono } from 'hono'
 import { auth } from '../lib/auth.js'
 import { env } from '../lib/env.js'
 import { authMiddleware } from '../middlewares/auth.js'
-import { fetchGithubViewer } from '../services/github.js'
+import { fetchGithubViewer } from '../plugins/github/service.js'
 
 const userRouter = new Hono()
 
