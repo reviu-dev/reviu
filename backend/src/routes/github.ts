@@ -52,6 +52,7 @@ import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import z from 'zod'
+import { githubCache } from '../lib/github-cache-runtime.js'
 import { authMiddleware } from '../middlewares/auth.js'
 import {
   compareGithubRefs,
@@ -564,16 +565,7 @@ const LATEST_PULL_REQUESTS_QUERY = 'author:@me is:pr is:open archived:false'
 const NEED_REVIEWS_PULL_REQUESTS_QUERY = 'review-requested:@me is:pr is:open archived:false'
 const LATEST_PULL_REQUESTS_LIMIT = 20
 const LATEST_PULL_REQUESTS_CACHE_TTL_MS = 60_000
-
-interface PullRequestSearchCacheEntry {
-  pullRequests: GithubPullRequest[]
-  expiresAt: number
-}
-
-const latestPullRequestsCache = new Map<string, PullRequestSearchCacheEntry>()
-const latestPullRequestsInflight = new Map<string, Promise<GithubPullRequest[]>>()
-const needReviewsPullRequestsCache = new Map<string, PullRequestSearchCacheEntry>()
-const needReviewsPullRequestsInflight = new Map<string, Promise<GithubPullRequest[]>>()
+const LATEST_PULL_REQUESTS_CACHE_STALE_MS = 5 * 60_000
 
 function parseGithubRepositoryUrl(repositoryUrl: string): GithubRepository | null {
   try {
@@ -615,70 +607,35 @@ function mapSearchIssueItemToPullRequest(item: SearchIssuesItemResponse): Github
 }
 
 async function fetchPullRequestsSearchWithCache(
-  cache: Map<string, PullRequestSearchCacheEntry>,
-  inflight: Map<string, Promise<GithubPullRequest[]>>,
+  userId: string,
   cacheKey: string,
   githubToken: string,
   query: string,
 ) {
-  const now = Date.now()
-  const cachedEntry = cache.get(cacheKey)
-
-  if (cachedEntry && cachedEntry.expiresAt > now) {
-    return cachedEntry.pullRequests
-  }
-
-  const inflightRequest = inflight.get(cacheKey)
-  if (inflightRequest) {
-    try {
-      return await inflightRequest
-    }
-    catch (error) {
-      if (cachedEntry) {
-        return cachedEntry.pullRequests
+  return githubCache.getOrLoad({
+    scope: 'viewer',
+    scopeId: userId,
+    resourceKey: cacheKey,
+    ttlMs: LATEST_PULL_REQUESTS_CACHE_TTL_MS,
+    staleMs: LATEST_PULL_REQUESTS_CACHE_STALE_MS,
+    tags: [`viewer:${userId}`],
+    load: async () => {
+      const params: SearchIssuesParams = {
+        q: query,
+        sort: 'updated',
+        order: 'desc',
+        per_page: LATEST_PULL_REQUESTS_LIMIT,
       }
-      throw error
-    }
-  }
 
-  const loadPullRequests = (async () => {
-    const params: SearchIssuesParams = {
-      q: query,
-      sort: 'updated',
-      order: 'desc',
-      per_page: LATEST_PULL_REQUESTS_LIMIT,
-    }
-
-    const data = await fetchGithubSearchIssues({ token: githubToken, params })
-    const pullRequests = data.items
-      .flatMap((item) => {
-        const pullRequest = mapSearchIssueItemToPullRequest(item)
-        return pullRequest ? [pullRequest] : []
-      })
-      .slice(0, LATEST_PULL_REQUESTS_LIMIT)
-
-    cache.set(cacheKey, {
-      pullRequests,
-      expiresAt: Date.now() + LATEST_PULL_REQUESTS_CACHE_TTL_MS,
-    })
-
-    return pullRequests
-  })()
-
-  inflight.set(cacheKey, loadPullRequests)
-
-  try {
-    return await loadPullRequests
-  }
-  catch (error) {
-    if (cachedEntry) {
-      return cachedEntry.pullRequests
-    }
-    throw error
-  }
-  finally {
-    inflight.delete(cacheKey)
-  }
+      const data = await fetchGithubSearchIssues({ token: githubToken, params })
+      return data.items
+        .flatMap((item) => {
+          const pullRequest = mapSearchIssueItemToPullRequest(item)
+          return pullRequest ? [pullRequest] : []
+        })
+        .slice(0, LATEST_PULL_REQUESTS_LIMIT)
+    },
+  })
 }
 
 const githubRouter = new Hono()
@@ -732,14 +689,14 @@ export const githubRoutes = githubRouter
     const user = ctx.get('user')!
     const githubToken = user.github.accessToken
     try {
-      const pullRequests = await fetchPullRequestsSearchWithCache(
-        latestPullRequestsCache,
-        latestPullRequestsInflight,
+      const result = await fetchPullRequestsSearchWithCache(
         user.id,
+        'search:latest-pull-requests',
         githubToken,
         LATEST_PULL_REQUESTS_QUERY,
       )
-      return ctx.json({ pullRequests }, 200)
+      ctx.header('x-reviu-cache', result.cacheStatus)
+      return ctx.json({ pullRequests: result.payload }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
@@ -750,14 +707,14 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const pullRequests = await fetchPullRequestsSearchWithCache(
-        needReviewsPullRequestsCache,
-        needReviewsPullRequestsInflight,
+      const result = await fetchPullRequestsSearchWithCache(
         user.id,
+        'search:need-review-pull-requests',
         githubToken,
         NEED_REVIEWS_PULL_REQUESTS_QUERY,
       )
-      return ctx.json({ pullRequests }, 200)
+      ctx.header('x-reviu-cache', result.cacheStatus)
+      return ctx.json({ pullRequests: result.payload }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)

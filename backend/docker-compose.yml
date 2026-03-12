@@ -9,3 +9,9 @@ services:
       - POSTGRES_DB=app
     ports:
       - '5433:5432'
+  redis:
+    container_name: redis
+    image: redis:8.6.1
+    restart: always
+    ports:
+      - '6379:6379'

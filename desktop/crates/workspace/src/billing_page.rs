@@ -456,7 +456,7 @@ impl BillingPage {
                   .text_xl()
                   .font_semibold()
                   .text_color(theme.foreground)
-                  .child("$20"),
+                  .child("$19"),
               )
               .child(
                 div()
