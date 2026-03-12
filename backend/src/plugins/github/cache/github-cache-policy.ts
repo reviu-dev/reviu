@@ -17,9 +17,29 @@ const GITHUB_USER_REPOSITORIES_CACHE_TTL_MS = 60_000 // 60s
 const GITHUB_USER_REPOSITORIES_CACHE_STALE_MS = 5 * 60_000 // 5min
 const GITHUB_PULL_REQUEST_SEARCH_CACHE_TTL_MS = 60_000 // 60s
 const GITHUB_PULL_REQUEST_SEARCH_CACHE_STALE_MS = 5 * 60_000 // 5min
+const GITHUB_PULL_REQUEST_DETAILS_CACHE_TTL_MS = 20_000 // 20s
+const GITHUB_PULL_REQUEST_DETAILS_CACHE_STALE_MS = 2 * 60_000 // 2min
+const GITHUB_PULL_REQUEST_FILES_CACHE_TTL_MS = 30_000 // 30s
+const GITHUB_PULL_REQUEST_FILES_CACHE_STALE_MS = 5 * 60_000 // 5min
+const GITHUB_PULL_REQUEST_FILES_BY_COMMIT_CACHE_TTL_MS = 10 * 60_000 // 10min
+const GITHUB_PULL_REQUEST_FILES_BY_COMMIT_CACHE_STALE_MS = 60 * 60_000 // 60min
+const GITHUB_PULL_REQUEST_REVIEWS_CACHE_TTL_MS = 20_000 // 20s
+const GITHUB_PULL_REQUEST_REVIEWS_CACHE_STALE_MS = 2 * 60_000 // 2min
+const GITHUB_REPOSITORY_DETAILS_CACHE_TTL_MS = 2 * 60_000 // 2min
+const GITHUB_REPOSITORY_DETAILS_CACHE_STALE_MS = 10 * 60_000 // 10min
+const GITHUB_REPOSITORY_README_CACHE_TTL_MS = 2 * 60_000 // 2min
+const GITHUB_REPOSITORY_README_CACHE_STALE_MS = 10 * 60_000 // 10min
+const GITHUB_REPOSITORY_README_BY_REF_CACHE_TTL_MS = 5 * 60_000 // 5min
+const GITHUB_REPOSITORY_README_BY_REF_CACHE_STALE_MS = 30 * 60_000 // 30min
+const GITHUB_REPOSITORY_BRANCHES_CACHE_TTL_MS = 60_000 // 60s
+const GITHUB_REPOSITORY_BRANCHES_CACHE_STALE_MS = 5 * 60_000 // 5min
 
 function normalizeRepositoryKey(owner: string, repo: string) {
   return `${owner.toLowerCase()}/${repo.toLowerCase()}`
+}
+
+function normalizeCacheSegment(value: string) {
+  return encodeURIComponent(value.trim())
 }
 
 function uniq(tags: string[]) {
@@ -65,12 +85,28 @@ export function getGithubPullRequestReviewsTag(owner: string, repo: string, pull
   return `pull-request:${normalizeRepositoryKey(owner, repo)}:${pullNumber}:reviews`
 }
 
+export function getGithubPullRequestFilesTag(owner: string, repo: string, pullNumber: number) {
+  return `pull-request:${normalizeRepositoryKey(owner, repo)}:${pullNumber}:files`
+}
+
 export function getGithubIssueTag(owner: string, repo: string, issueNumber: number) {
   return `issue:${normalizeRepositoryKey(owner, repo)}:${issueNumber}`
 }
 
 export function getGithubIssueCommentsTag(owner: string, repo: string, issueNumber: number) {
   return `issue:${normalizeRepositoryKey(owner, repo)}:${issueNumber}:comments`
+}
+
+export function getGithubRepositoryDetailsTag(owner: string, repo: string) {
+  return `repo:${normalizeRepositoryKey(owner, repo)}:details`
+}
+
+export function getGithubRepositoryReadmeTag(owner: string, repo: string) {
+  return `repo:${normalizeRepositoryKey(owner, repo)}:readme`
+}
+
+export function getGithubRepositoryBranchesTag(owner: string, repo: string) {
+  return `repo:${normalizeRepositoryKey(owner, repo)}:branches`
 }
 
 export function createGithubNotificationsCachePolicy(userId: string): GithubCachePolicy {
@@ -113,6 +149,127 @@ export function createGithubPullRequestSearchCachePolicy(
       getGithubPullRequestSearchTag(userId),
       getGithubPullRequestSearchVariantTag(userId, variant),
     ],
+  }
+}
+
+export function createGithubPullRequestDetailsCachePolicy(
+  userId: string,
+  owner: string,
+  repo: string,
+  pullNumber: number,
+): GithubCachePolicy {
+  const repositoryKey = normalizeRepositoryKey(owner, repo)
+
+  return {
+    scope: 'viewer',
+    scopeId: userId,
+    resourceKey: `pull-request:${repositoryKey}:${pullNumber}:details`,
+    ttlMs: GITHUB_PULL_REQUEST_DETAILS_CACHE_TTL_MS,
+    staleMs: GITHUB_PULL_REQUEST_DETAILS_CACHE_STALE_MS,
+    tags: [getGithubPullRequestTag(owner, repo, pullNumber)],
+  }
+}
+
+export function createGithubPullRequestFilesCachePolicy(
+  userId: string,
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  commitSha?: string,
+): GithubCachePolicy {
+  const repositoryKey = normalizeRepositoryKey(owner, repo)
+  const scopeSuffix = commitSha
+    ? `commit:${normalizeCacheSegment(commitSha)}`
+    : 'latest'
+
+  return {
+    scope: 'viewer',
+    scopeId: userId,
+    resourceKey: `pull-request:${repositoryKey}:${pullNumber}:files:${scopeSuffix}`,
+    ttlMs: commitSha
+      ? GITHUB_PULL_REQUEST_FILES_BY_COMMIT_CACHE_TTL_MS
+      : GITHUB_PULL_REQUEST_FILES_CACHE_TTL_MS,
+    staleMs: commitSha
+      ? GITHUB_PULL_REQUEST_FILES_BY_COMMIT_CACHE_STALE_MS
+      : GITHUB_PULL_REQUEST_FILES_CACHE_STALE_MS,
+    tags: [getGithubPullRequestFilesTag(owner, repo, pullNumber)],
+  }
+}
+
+export function createGithubPullRequestReviewsCachePolicy(
+  userId: string,
+  owner: string,
+  repo: string,
+  pullNumber: number,
+): GithubCachePolicy {
+  const repositoryKey = normalizeRepositoryKey(owner, repo)
+
+  return {
+    scope: 'viewer',
+    scopeId: userId,
+    resourceKey: `pull-request:${repositoryKey}:${pullNumber}:reviews`,
+    ttlMs: GITHUB_PULL_REQUEST_REVIEWS_CACHE_TTL_MS,
+    staleMs: GITHUB_PULL_REQUEST_REVIEWS_CACHE_STALE_MS,
+    tags: [getGithubPullRequestReviewsTag(owner, repo, pullNumber)],
+  }
+}
+
+export function createGithubRepositoryDetailsCachePolicy(
+  userId: string,
+  owner: string,
+  repo: string,
+): GithubCachePolicy {
+  const repositoryKey = normalizeRepositoryKey(owner, repo)
+
+  return {
+    scope: 'viewer',
+    scopeId: userId,
+    resourceKey: `repo:${repositoryKey}:details`,
+    ttlMs: GITHUB_REPOSITORY_DETAILS_CACHE_TTL_MS,
+    staleMs: GITHUB_REPOSITORY_DETAILS_CACHE_STALE_MS,
+    tags: [getGithubRepositoryDetailsTag(owner, repo)],
+  }
+}
+
+export function createGithubRepositoryReadmeCachePolicy(
+  userId: string,
+  owner: string,
+  repo: string,
+  ref?: string,
+): GithubCachePolicy {
+  const repositoryKey = normalizeRepositoryKey(owner, repo)
+  const normalizedRef = ref?.trim()
+
+  return {
+    scope: 'viewer',
+    scopeId: userId,
+    resourceKey: normalizedRef
+      ? `repo:${repositoryKey}:readme:ref:${normalizeCacheSegment(normalizedRef)}`
+      : `repo:${repositoryKey}:readme`,
+    ttlMs: normalizedRef
+      ? GITHUB_REPOSITORY_README_BY_REF_CACHE_TTL_MS
+      : GITHUB_REPOSITORY_README_CACHE_TTL_MS,
+    staleMs: normalizedRef
+      ? GITHUB_REPOSITORY_README_BY_REF_CACHE_STALE_MS
+      : GITHUB_REPOSITORY_README_CACHE_STALE_MS,
+    tags: [getGithubRepositoryReadmeTag(owner, repo)],
+  }
+}
+
+export function createGithubRepositoryBranchesCachePolicy(
+  userId: string,
+  owner: string,
+  repo: string,
+): GithubCachePolicy {
+  const repositoryKey = normalizeRepositoryKey(owner, repo)
+
+  return {
+    scope: 'viewer',
+    scopeId: userId,
+    resourceKey: `repo:${repositoryKey}:branches`,
+    ttlMs: GITHUB_REPOSITORY_BRANCHES_CACHE_TTL_MS,
+    staleMs: GITHUB_REPOSITORY_BRANCHES_CACHE_STALE_MS,
+    tags: [getGithubRepositoryBranchesTag(owner, repo)],
   }
 }
 

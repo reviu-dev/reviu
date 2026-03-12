@@ -19,7 +19,9 @@ describe('github cache', () => {
 
     const load = async () => {
       loadCount += 1
-      return [`value-${loadCount}`]
+      return {
+        payload: [`value-${loadCount}`],
+      }
     }
 
     const first = await cache.getOrLoad({
@@ -74,7 +76,9 @@ describe('github cache', () => {
 
     const load = async () => {
       loadCount += 1
-      return [`value-${loadCount}`]
+      return {
+        payload: [`value-${loadCount}`],
+      }
     }
 
     await cache.getOrLoad({
@@ -137,7 +141,9 @@ describe('github cache', () => {
       ttlMs: 60_000,
       staleMs: 300_000,
       tags: ['viewer:user-1'],
-      load: async () => ['value-1'],
+      load: async () => ({
+        payload: ['value-1'],
+      }),
     })
 
     currentTime += 60_001
@@ -170,7 +176,9 @@ describe('github cache', () => {
 
     const load = async () => {
       loadCount += 1
-      return [`value-${loadCount}`]
+      return {
+        payload: [`value-${loadCount}`],
+      }
     }
 
     await cache.getOrLoad({
@@ -198,6 +206,60 @@ describe('github cache', () => {
     expect(reloaded).toEqual({
       payload: ['value-2'],
       cacheStatus: 'miss',
+    })
+    expect(loadCount).toBe(2)
+  })
+
+  it('revalidates an expired entry when GitHub returns not modified', async () => {
+    let currentTime = 1_000
+    let loadCount = 0
+    const cache = createGithubCache({
+      store: new MemoryGithubCacheStore(),
+      now: () => currentTime,
+    })
+
+    const load = async ({ cachedEntry }: { cachedEntry: { etag?: string } | null }) => {
+      loadCount += 1
+
+      if (cachedEntry) {
+        expect(cachedEntry.etag).toBe('"pull-request-v1"')
+        return {
+          notModified: true as const,
+          etag: '"pull-request-v1"',
+        }
+      }
+
+      return {
+        payload: ['value-1'],
+        etag: '"pull-request-v1"',
+      }
+    }
+
+    await cache.getOrLoad({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'pull-request:42',
+      ttlMs: 60_000,
+      staleMs: 300_000,
+      tags: ['viewer:user-1'],
+      load,
+    })
+
+    currentTime += 360_001
+
+    const revalidated = await cache.getOrLoad({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'pull-request:42',
+      ttlMs: 60_000,
+      staleMs: 300_000,
+      tags: ['viewer:user-1'],
+      load,
+    })
+
+    expect(revalidated).toEqual({
+      payload: ['value-1'],
+      cacheStatus: 'hit',
     })
     expect(loadCount).toBe(2)
   })

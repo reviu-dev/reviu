@@ -9,6 +9,8 @@ export interface GithubCacheEntry<T> {
   fetchedAt: number
   freshUntil: number
   staleUntil: number
+  etag?: string
+  lastModified?: string
 }
 
 export interface GithubCacheStore {
@@ -31,13 +33,31 @@ export interface GithubCacheGetOrLoadOptions<T> {
   lockTtlMs?: number
   waitForRefreshMs?: number
   tags?: string[]
-  load: () => Promise<T>
+  load: (context: GithubCacheLoadContext<T>) => Promise<GithubCacheLoaderResult<T>>
 }
 
 export interface GithubCacheLoadResult<T> {
   payload: T
   cacheStatus: GithubCacheStatus
 }
+
+export interface GithubCacheLoadContext<T> {
+  cachedEntry: GithubCacheEntry<T> | null
+}
+
+export interface GithubCacheLoadedPayload<T> {
+  payload: T
+  etag?: string
+  lastModified?: string
+}
+
+export interface GithubCacheNotModifiedPayload {
+  notModified: true
+  etag?: string
+  lastModified?: string
+}
+
+export type GithubCacheLoaderResult<T> = GithubCacheLoadedPayload<T> | GithubCacheNotModifiedPayload
 
 interface MemoryValue {
   value: string
@@ -174,6 +194,12 @@ function parseCacheEntry<T>(rawValue: string | null): GithubCacheEntry<T> | null
   }
 }
 
+function isNotModifiedPayload<T>(
+  value: GithubCacheLoaderResult<T>,
+): value is GithubCacheNotModifiedPayload {
+  return 'notModified' in value && value.notModified === true
+}
+
 class GithubCacheManager {
   private readonly inflight = new Map<string, Promise<GithubCacheLoadResult<unknown>>>()
   private readonly backgroundRefreshes = new Map<string, Promise<void>>()
@@ -247,7 +273,7 @@ class GithubCacheManager {
       }
     }
 
-    return this.loadAndStore(cacheKey, options)
+    return this.loadAndStore(cacheKey, entry, options)
   }
 
   private scheduleRefresh<T>(cacheKey: string, options: GithubCacheGetOrLoadOptions<T>) {
@@ -266,8 +292,38 @@ class GithubCacheManager {
       }
 
       try {
-        const payload = await options.load()
-        await this.writeEntry(cacheKey, payload, options.ttlMs, options.staleMs, options.tags ?? [])
+        const cachedEntry = await this.readEntry<T>(cacheKey)
+        if (!cachedEntry) {
+          return
+        }
+
+        const loadResult = await options.load({ cachedEntry })
+        if (isNotModifiedPayload(loadResult)) {
+          await this.writeEntry(
+            cacheKey,
+            cachedEntry.payload,
+            options.ttlMs,
+            options.staleMs,
+            options.tags ?? [],
+            {
+              etag: loadResult.etag ?? cachedEntry.etag,
+              lastModified: loadResult.lastModified ?? cachedEntry.lastModified,
+            },
+          )
+          return
+        }
+
+        await this.writeEntry(
+          cacheKey,
+          loadResult.payload,
+          options.ttlMs,
+          options.staleMs,
+          options.tags ?? [],
+          {
+            etag: loadResult.etag,
+            lastModified: loadResult.lastModified,
+          },
+        )
       }
       catch (error) {
         logger.warn({ error, cacheKey }, 'Failed to refresh stale GitHub cache entry')
@@ -285,6 +341,7 @@ class GithubCacheManager {
 
   private async loadAndStore<T>(
     cacheKey: string,
+    cachedEntry: GithubCacheEntry<T> | null,
     options: GithubCacheGetOrLoadOptions<T>,
   ): Promise<GithubCacheLoadResult<T>> {
     const lockKey = buildLockKey(cacheKey)
@@ -304,11 +361,46 @@ class GithubCacheManager {
     }
 
     try {
-      const payload = await options.load()
-      await this.writeEntry(cacheKey, payload, options.ttlMs, options.staleMs, options.tags ?? [])
+      const currentEntry = await this.readEntry<T>(cacheKey)
+      const loadResult = await options.load({ cachedEntry: currentEntry })
+
+      if (isNotModifiedPayload(loadResult)) {
+        if (!currentEntry) {
+          throw new Error(`GitHub cache loader returned notModified without an existing entry for ${cacheKey}`)
+        }
+
+        await this.writeEntry(
+          cacheKey,
+          currentEntry.payload,
+          options.ttlMs,
+          options.staleMs,
+          options.tags ?? [],
+          {
+            etag: loadResult.etag ?? currentEntry.etag,
+            lastModified: loadResult.lastModified ?? currentEntry.lastModified,
+          },
+        )
+
+        return {
+          payload: currentEntry.payload,
+          cacheStatus: 'hit',
+        }
+      }
+
+      await this.writeEntry(
+        cacheKey,
+        loadResult.payload,
+        options.ttlMs,
+        options.staleMs,
+        options.tags ?? [],
+        {
+          etag: loadResult.etag,
+          lastModified: loadResult.lastModified,
+        },
+      )
 
       return {
-        payload,
+        payload: loadResult.payload,
         cacheStatus: 'miss',
       }
     }
@@ -379,6 +471,10 @@ class GithubCacheManager {
     ttlMs: number,
     staleMs: number,
     tags: string[],
+    metadata?: {
+      etag?: string
+      lastModified?: string
+    },
   ) {
     const previousEntry = await this.readEntry<unknown>(cacheKey)
     const uniqueTags = [...new Set(tags)].sort()
@@ -391,6 +487,8 @@ class GithubCacheManager {
       fetchedAt,
       freshUntil,
       staleUntil: freshUntil + staleMs,
+      etag: metadata?.etag,
+      lastModified: metadata?.lastModified,
     }
 
     await this.store.set(cacheKey, JSON.stringify(nextEntry))

@@ -1,10 +1,154 @@
-import type { CommitFileResponse, CommitParams, CommitResponse, CompareParams, CreateIssueCommentParams, CreateIssueCommentResponse, CreatePullRequestCommentParams, CreatePullRequestCommentReplyParams, CreatePullRequestCommentReplyResponse, CreatePullRequestCommentResponse, CreatePullRequestReviewParams, CreatePullRequestReviewResponse, DeleteIssueCommentParams, DeletePullRequestCommentParams, GetContentParams, GetContentResponse, GithubIssueDetailsCommentParameters, GithubIssueDetailsCommentResponse, GithubIssueDetailsParameters, GithubIssueDetailsResponse, GithubIssueParameters, GithubIssueResponse, GithubRepositoryBranchesParameters, GithubRepositoryBranchesResponse, GithubRepositoryParameters, GithubRepositoryReadmeParameters, GithubRepositoryReadmeResponse, GithubRepositoryResponse, GithubRepositoryTreeParams, GithubRepositoryTreesResponse, GithubUserResponse, ListPullsParams, NotificationResponse, NotificationsParams, PullRequestCommentResponse, PullRequestCommentsParams, PullRequestCommitResponse, PullRequestCommitsParams, PullRequestDetailsResponse, PullRequestFileResponse, PullRequestFilesParams, PullRequestParams, PullRequestResponse, PullRequestReviewResponse, PullRequestReviewsParams, SearchIssuesParams, SearchIssuesResponse, UpdateIssueCommentParams, UpdateIssueCommentResponse, UpdateIssueParams, UpdateIssueResponse, UpdatePullRequestCommentParams, UpdatePullRequestCommentResponse, UpdatePullRequestParams, UpdatePullRequestResponse, UserRepositoriesParams, UserRepositoryResponse } from './types.js'
+import type { Endpoints, RequestHeaders, RequestParameters } from '@octokit/types'
+import type {
+  CommitFileResponse,
+  CommitParams,
+  CommitResponse,
+  CompareParams,
+  CreateIssueCommentParams,
+  CreateIssueCommentResponse,
+  CreatePullRequestCommentParams,
+  CreatePullRequestCommentReplyParams,
+  CreatePullRequestCommentReplyResponse,
+  CreatePullRequestCommentResponse,
+  CreatePullRequestReviewParams,
+  CreatePullRequestReviewResponse,
+  DeleteIssueCommentParams,
+  DeletePullRequestCommentParams,
+  GetContentParams,
+  GetContentResponse,
+  GithubIssueDetailsCommentParameters,
+  GithubIssueDetailsCommentResponse,
+  GithubIssueDetailsParameters,
+  GithubIssueDetailsResponse,
+  GithubIssueParameters,
+  GithubIssueResponse,
+  GithubRepositoryBranchesParameters,
+  GithubRepositoryBranchesResponse,
+  GithubRepositoryParameters,
+  GithubRepositoryReadmeParameters,
+  GithubRepositoryReadmeResponse,
+  GithubRepositoryResponse,
+  GithubRepositoryTreeParams,
+  GithubRepositoryTreesResponse,
+  GithubUserResponse,
+  ListPullsParams,
+  NotificationResponse,
+  NotificationsParams,
+  PullRequestCommentResponse,
+  PullRequestCommentsParams,
+  PullRequestCommitResponse,
+  PullRequestCommitsParams,
+  PullRequestDetailsResponse,
+  PullRequestFileResponse,
+  PullRequestFilesParams,
+  PullRequestParams,
+  PullRequestResponse,
+  PullRequestReviewResponse,
+  PullRequestReviewsParams,
+  SearchIssuesParams,
+  SearchIssuesResponse,
+  UpdateIssueCommentParams,
+  UpdateIssueCommentResponse,
+  UpdateIssueParams,
+  UpdateIssueResponse,
+  UpdatePullRequestCommentParams,
+  UpdatePullRequestCommentResponse,
+  UpdatePullRequestParams,
+  UpdatePullRequestResponse,
+  UserRepositoriesParams,
+  UserRepositoryResponse,
+} from './types.js'
 import { request } from '@octokit/request'
 
-function githubAuthHeaders(token: string, extraHeaders?: Record<string, string>) {
+function githubAuthHeaders(token: string, extraHeaders?: Record<string, string>): RequestHeaders {
   return {
     authorization: `Bearer ${token}`,
     ...extraHeaders,
+  }
+}
+
+export interface GithubConditionalRequestOptions<Route extends keyof Endpoints> {
+  token: string
+  params: Endpoints[Route]['parameters']
+  etag?: string
+  lastModified?: string
+  headers?: Record<string, string>
+}
+
+export interface GithubConditionalResponse<Route extends keyof Endpoints> {
+  data: Endpoints[Route]['response']['data'] | null
+  notModified: boolean
+  etag?: string
+  lastModified?: string
+}
+
+interface GithubErrorLike {
+  status?: number
+  response?: {
+    headers?: Record<string, string | number | string[] | undefined>
+  }
+}
+
+function readGithubHeader(
+  headers: Record<string, string | number | string[] | undefined> | undefined,
+  name: string,
+) {
+  const headerValue = headers?.[name]
+  if (Array.isArray(headerValue)) {
+    return headerValue[0]
+  }
+
+  if (typeof headerValue === 'number') {
+    return String(headerValue)
+  }
+
+  return headerValue
+}
+
+async function requestGithubConditionally<Route extends keyof Endpoints>(
+  route: Route,
+  { token, params, etag, lastModified, headers }: GithubConditionalRequestOptions<Route>,
+): Promise<GithubConditionalResponse<Route>> {
+  const conditionalHeaders: Record<string, string> = {}
+
+  if (etag) {
+    conditionalHeaders['if-none-match'] = etag
+  }
+
+  if (lastModified) {
+    conditionalHeaders['if-modified-since'] = lastModified
+  }
+
+  try {
+    const options = {
+      ...params,
+      headers: githubAuthHeaders(token, {
+        ...headers,
+        ...conditionalHeaders,
+      }),
+    } as Route extends keyof Endpoints ? Endpoints[Route]['parameters'] & RequestParameters : RequestParameters
+
+    const response = await request(route, options)
+
+    return {
+      data: response.data as Endpoints[Route]['response']['data'] | null,
+      notModified: false,
+      etag: readGithubHeader(response.headers, 'etag'),
+      lastModified: readGithubHeader(response.headers, 'last-modified'),
+    }
+  }
+  catch (error) {
+    const githubError = error as GithubErrorLike
+    if (githubError.status === 304) {
+      return {
+        data: null,
+        notModified: true,
+        etag: readGithubHeader(githubError.response?.headers, 'etag'),
+        lastModified: readGithubHeader(githubError.response?.headers, 'last-modified'),
+      }
+    }
+
+    throw error
   }
 }
 
@@ -61,6 +205,15 @@ export async function fetchGithubPullRequest(
     headers: githubAuthHeaders(token),
   })
   return data
+}
+
+export async function fetchGithubPullRequestConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/pulls/{pull_number}'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/pulls/{pull_number}'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}/pulls/{pull_number}'>(
+    'GET /repos/{owner}/{repo}/pulls/{pull_number}',
+    options,
+  )
 }
 
 export async function patchGithubPullRequest(
@@ -229,6 +382,15 @@ export async function fetchGithubPullRequestReviews(
   return data
 }
 
+export async function fetchGithubPullRequestReviewsConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews'>(
+    'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews',
+    options,
+  )
+}
+
 export async function createGithubPullRequestComment(
   { token, params }: { token: string, params: CreatePullRequestCommentParams },
 ): Promise<CreatePullRequestCommentResponse> {
@@ -306,6 +468,15 @@ export async function fetchGithubRepository(
     headers: githubAuthHeaders(token),
   })
   return data
+}
+
+export async function fetchGithubRepositoryConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}'>(
+    'GET /repos/{owner}/{repo}',
+    options,
+  )
 }
 
 export async function fetchGithubRepositoryIssues(
@@ -406,6 +577,15 @@ export async function fetchGithubRepositoryBranches(
   return data
 }
 
+export async function fetchGithubRepositoryBranchesConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/branches'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/branches'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}/branches'>(
+    'GET /repos/{owner}/{repo}/branches',
+    options,
+  )
+}
+
 export async function fetchGithubRepositoryReadme(
   { token, params }:
   { token: string, params: GithubRepositoryReadmeParameters },
@@ -415,4 +595,13 @@ export async function fetchGithubRepositoryReadme(
     headers: githubAuthHeaders(token),
   })
   return data
+}
+
+export async function fetchGithubRepositoryReadmeConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/readme'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/readme'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}/readme'>(
+    'GET /repos/{owner}/{repo}/readme',
+    options,
+  )
 }

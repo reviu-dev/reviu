@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import {
   createGithubNotificationsCachePolicy,
+  createGithubPullRequestFilesCachePolicy,
+  createGithubPullRequestDetailsCachePolicy,
   createGithubPullRequestSearchCachePolicy,
+  createGithubRepositoryReadmeCachePolicy,
   getGithubIssueMutationTags,
   getGithubPullRequestMutationTags,
 } from './github-cache-policy.js'
@@ -30,6 +33,39 @@ describe('github cache policy', () => {
         'viewer:user-1:pr-search',
         'viewer:user-1:pr-search:need-review',
       ],
+    })
+  })
+
+  it('builds the pull request details cache policy', () => {
+    expect(createGithubPullRequestDetailsCachePolicy('user-1', 'OpenAI', 'Reviu', 42)).toEqual({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'pull-request:openai/reviu:42:details',
+      ttlMs: 20_000,
+      staleMs: 120_000,
+      tags: ['pull-request:openai/reviu:42'],
+    })
+  })
+
+  it('builds a commit-specific files cache policy with a longer ttl', () => {
+    expect(createGithubPullRequestFilesCachePolicy('user-1', 'OpenAI', 'Reviu', 42, 'ABC123')).toEqual({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'pull-request:openai/reviu:42:files:commit:ABC123',
+      ttlMs: 600_000,
+      staleMs: 3_600_000,
+      tags: ['pull-request:openai/reviu:42:files'],
+    })
+  })
+
+  it('builds a ref-specific readme cache policy', () => {
+    expect(createGithubRepositoryReadmeCachePolicy('user-1', 'OpenAI', 'Reviu', 'feature/cache')).toEqual({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'repo:openai/reviu:readme:ref:feature%2Fcache',
+      ttlMs: 300_000,
+      staleMs: 1_800_000,
+      tags: ['repo:openai/reviu:readme'],
     })
   })
 
