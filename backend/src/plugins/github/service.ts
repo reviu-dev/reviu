@@ -416,6 +416,15 @@ export async function fetchGithubPullRequestCommitsPage(
   })
 }
 
+export async function fetchGithubCommitConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/commits/{ref}'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/commits/{ref}'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}/commits/{ref}'>(
+    'GET /repos/{owner}/{repo}/commits/{ref}',
+    options,
+  )
+}
+
 export async function fetchGithubPullRequestCommitsAllPages(
   { token, params, perPage = 100}: {
     token: string
@@ -544,6 +553,15 @@ export async function fetchGithubPullRequestComments(
     token,
     params,
   })
+}
+
+export async function fetchGithubPullRequestCommentsConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/pulls/{pull_number}/comments'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/pulls/{pull_number}/comments'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}/pulls/{pull_number}/comments'>(
+    'GET /repos/{owner}/{repo}/pulls/{pull_number}/comments',
+    options,
+  )
 }
 
 export async function fetchGithubPullRequestReviews(

@@ -1,6 +1,12 @@
 import type { Context } from 'hono'
 import type { GithubCachePolicy } from '../plugins/github/cache/github-cache-policy.js'
-import type { GithubCacheLoadResult } from '../plugins/github/cache/github-cache.js'
+import type {
+  GithubCacheLoadedPayload,
+  GithubCacheLoadResult,
+  GithubCacheNotModifiedPayload,
+  GithubCacheValidator,
+  GithubCacheValidators,
+} from '../plugins/github/cache/github-cache.js'
 import type {
   CompareParams,
   CreateIssueCommentParams,
@@ -111,9 +117,10 @@ import {
   createGithubPullRequestReview,
   deleteGithubIssueComment,
   deleteGithubPullRequestComment,
+  fetchGithubCommitConditionally,
   fetchGithubCommitFilesAllPages,
   fetchGithubNotifications,
-  fetchGithubPullRequestComments,
+  fetchGithubPullRequestCommentsConditionally,
   fetchGithubPullRequestCommitsAllPages,
   fetchGithubPullRequestConditionally,
   fetchGithubPullRequestFilesAllPages,
@@ -122,7 +129,6 @@ import {
   fetchGithubRepositoryBranchesConditionally,
   fetchGithubRepositoryConditionally,
   fetchGithubRepositoryContentConditionally,
-  fetchGithubRepositoryIssueComments,
   fetchGithubRepositoryIssueCommentsConditionally,
   fetchGithubRepositoryIssueConditionally,
   fetchGithubRepositoryIssuesConditionally,
@@ -139,6 +145,8 @@ import {
 const LATEST_PULL_REQUESTS_QUERY = 'author:@me is:pr is:open archived:false'
 const NEED_REVIEWS_PULL_REQUESTS_QUERY = 'review-requested:@me is:pr is:open archived:false'
 const LATEST_PULL_REQUESTS_LIMIT = 20
+const GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY = 'pullRequest'
+const GITHUB_PULL_REQUEST_FILES_COMMIT_VALIDATOR_KEY = 'commit'
 
 function withGithubMetrics<T>(
   userId: string,
@@ -154,6 +162,50 @@ function setGithubCacheHeaders(
 ) {
   ctx.header('x-reviu-cache', result.cacheStatus)
   ctx.header('x-reviu-cache-scope', result.scope)
+}
+
+function getCachedValidator(
+  cachedEntry: { etag?: string, lastModified?: string, validators?: Record<string, { etag?: string, lastModified?: string }> } | null,
+  key: string,
+) {
+  return cachedEntry?.validators?.[key] ?? {
+    etag: cachedEntry?.etag,
+    lastModified: cachedEntry?.lastModified,
+  }
+}
+
+function buildNamedValidator(
+  key: string,
+  validator: GithubCacheValidator,
+): GithubCacheValidators {
+  return {
+    [key]: validator,
+  }
+}
+
+function buildNotModifiedCacheResult(
+  key: string,
+  validator: GithubCacheValidator,
+): GithubCacheNotModifiedPayload {
+  return {
+    notModified: true,
+    etag: validator.etag,
+    lastModified: validator.lastModified,
+    validators: buildNamedValidator(key, validator),
+  }
+}
+
+function buildLoadedCacheResult<T>(
+  key: string,
+  validator: GithubCacheValidator,
+  payload: T,
+): GithubCacheLoadedPayload<T> {
+  return {
+    payload,
+    etag: validator.etag,
+    lastModified: validator.lastModified,
+    validators: buildNamedValidator(key, validator),
+  }
 }
 
 async function resolveRepositoryReadCachePolicy(
@@ -438,28 +490,86 @@ async function fetchPullRequestFilesWithCache(
   return withGithubMetrics(userId, cachePolicy.operation, () =>
     githubCache.getOrLoad<GithubPullRequestFile[]>({
       ...cachePolicy,
-      load: async () => {
-        const files = commitSha
-          ? await fetchGithubCommitFilesAllPages({
-              token: githubToken,
-              params: {
-                owner: org,
-                repo,
-                ref: commitSha,
-              },
-            })
-          : await fetchGithubPullRequestFilesAllPages({
-              token: githubToken,
-              params: {
-                owner: org,
-                repo,
-                pull_number: pullNumber,
-              },
-            })
+      load: async ({ cachedEntry }) => {
+        if (commitSha) {
+          const cachedCommitValidator = getCachedValidator(cachedEntry, GITHUB_PULL_REQUEST_FILES_COMMIT_VALIDATOR_KEY)
+          const commitResponse = await fetchGithubCommitConditionally({
+            token: githubToken,
+            params: {
+              owner: org,
+              repo,
+              ref: commitSha,
+            },
+            etag: cachedCommitValidator.etag,
+            lastModified: cachedCommitValidator.lastModified,
+          })
 
-        return {
-          payload: files.map(mapGithubPullRequestFile),
+          const nextCommitValidator = {
+            etag: commitResponse.etag ?? cachedCommitValidator.etag,
+            lastModified: commitResponse.lastModified ?? cachedCommitValidator.lastModified,
+          } satisfies GithubCacheValidator
+
+          if (commitResponse.notModified) {
+            return buildNotModifiedCacheResult(
+              GITHUB_PULL_REQUEST_FILES_COMMIT_VALIDATOR_KEY,
+              nextCommitValidator,
+            )
+          }
+
+          const files = await fetchGithubCommitFilesAllPages({
+            token: githubToken,
+            params: {
+              owner: org,
+              repo,
+              ref: commitSha,
+            },
+          })
+
+          return buildLoadedCacheResult(
+            GITHUB_PULL_REQUEST_FILES_COMMIT_VALIDATOR_KEY,
+            nextCommitValidator,
+            files.map(mapGithubPullRequestFile),
+          )
         }
+
+        const cachedPullRequestValidator = getCachedValidator(cachedEntry, GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY)
+        const pullRequestResponse = await fetchGithubPullRequestConditionally({
+          token: githubToken,
+          params: {
+            owner: org,
+            repo,
+            pull_number: pullNumber,
+          },
+          etag: cachedPullRequestValidator.etag,
+          lastModified: cachedPullRequestValidator.lastModified,
+        })
+
+        const nextPullRequestValidator = {
+          etag: pullRequestResponse.etag ?? cachedPullRequestValidator.etag,
+          lastModified: pullRequestResponse.lastModified ?? cachedPullRequestValidator.lastModified,
+        } satisfies GithubCacheValidator
+
+        if (pullRequestResponse.notModified) {
+          return buildNotModifiedCacheResult(
+            GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY,
+            nextPullRequestValidator,
+          )
+        }
+
+        const files = await fetchGithubPullRequestFilesAllPages({
+          token: githubToken,
+          params: {
+            owner: org,
+            repo,
+            pull_number: pullNumber,
+          },
+        })
+
+        return buildLoadedCacheResult(
+          GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY,
+          nextPullRequestValidator,
+          files.map(mapGithubPullRequestFile),
+        )
       },
     }))
 }
@@ -477,7 +587,31 @@ async function fetchPullRequestCommitsWithCache(
   return withGithubMetrics(userId, cachePolicy.operation, () =>
     githubCache.getOrLoad<GithubPullRequestCommit[]>({
       ...cachePolicy,
-      load: async () => {
+      load: async ({ cachedEntry }) => {
+        const cachedPullRequestValidator = getCachedValidator(cachedEntry, GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY)
+        const pullRequestResponse = await fetchGithubPullRequestConditionally({
+          token: githubToken,
+          params: {
+            owner: org,
+            repo,
+            pull_number: pullNumber,
+          },
+          etag: cachedPullRequestValidator.etag,
+          lastModified: cachedPullRequestValidator.lastModified,
+        })
+
+        const nextPullRequestValidator = {
+          etag: pullRequestResponse.etag ?? cachedPullRequestValidator.etag,
+          lastModified: pullRequestResponse.lastModified ?? cachedPullRequestValidator.lastModified,
+        } satisfies GithubCacheValidator
+
+        if (pullRequestResponse.notModified) {
+          return buildNotModifiedCacheResult(
+            GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY,
+            nextPullRequestValidator,
+          )
+        }
+
         const commits = await fetchGithubPullRequestCommitsAllPages({
           token: githubToken,
           params: {
@@ -487,9 +621,11 @@ async function fetchPullRequestCommitsWithCache(
           },
         })
 
-        return {
-          payload: commits.map(mapGithubPullRequestCommit),
-        }
+        return buildLoadedCacheResult(
+          GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY,
+          nextPullRequestValidator,
+          commits.map(mapGithubPullRequestCommit),
+        )
       },
     }))
 }
@@ -507,7 +643,7 @@ async function fetchPullRequestIssueCommentsWithCache(
   return withGithubMetrics(userId, cachePolicy.operation, () =>
     githubCache.getOrLoad<GithubPullRequestIssueComment[]>({
       ...cachePolicy,
-      load: async () => {
+      load: async ({ cachedEntry }) => {
         const params: GithubIssueDetailsCommentParameters = {
           owner: org,
           repo,
@@ -515,10 +651,25 @@ async function fetchPullRequestIssueCommentsWithCache(
           per_page: 100,
         }
 
-        const data = await fetchGithubRepositoryIssueComments({ token: githubToken, params })
+        const response = await fetchGithubRepositoryIssueCommentsConditionally({
+          token: githubToken,
+          params,
+          etag: cachedEntry?.etag,
+          lastModified: cachedEntry?.lastModified,
+        })
+
+        if (response.notModified) {
+          return {
+            notModified: true as const,
+            etag: response.etag,
+            lastModified: response.lastModified,
+          }
+        }
 
         return {
-          payload: data.map(mapGithubPullRequestIssueComment),
+          payload: response.data!.map(mapGithubPullRequestIssueComment),
+          etag: response.etag,
+          lastModified: response.lastModified,
         }
       },
     }))
@@ -586,7 +737,7 @@ async function fetchPullRequestCommentsWithCache(
   return withGithubMetrics(userId, cachePolicy.operation, () =>
     githubCache.getOrLoad<GithubPullRequestReviewComment[]>({
       ...cachePolicy,
-      load: async () => {
+      load: async ({ cachedEntry }) => {
         const params: PullRequestCommentsParams = {
           owner: org,
           repo,
@@ -594,10 +745,25 @@ async function fetchPullRequestCommentsWithCache(
           per_page: 100,
         }
 
-        const data = await fetchGithubPullRequestComments({ token: githubToken, params })
+        const response = await fetchGithubPullRequestCommentsConditionally({
+          token: githubToken,
+          params,
+          etag: cachedEntry?.etag,
+          lastModified: cachedEntry?.lastModified,
+        })
+
+        if (response.notModified) {
+          return {
+            notModified: true as const,
+            etag: response.etag,
+            lastModified: response.lastModified,
+          }
+        }
 
         return {
-          payload: data.map(mapGithubPullRequestReviewComment),
+          payload: response.data!.map(mapGithubPullRequestReviewComment),
+          etag: response.etag,
+          lastModified: response.lastModified,
         }
       },
     }))
