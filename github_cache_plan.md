@@ -86,6 +86,7 @@ Current behavior:
 - the collector keeps in-memory deltas per process
 - deltas flush to Postgres every `15s` by default
 - shutdown flush is attempted before process exit
+- Postgres retention is now handled separately from the live flush loop
 - admin overview flushes pending metrics first, then reads Postgres
 - if the Postgres read fails, admin overview falls back to the in-memory collector
 
@@ -231,9 +232,25 @@ Current behavior:
 
 Current limitation:
 
-- there is no long-term retention/pruning policy yet
 - there is no per-route drilldown API yet
 - writes still happen per process, then merge in Postgres on flush
+
+### Metrics Retention
+
+Retention v1 is now implemented with simple time-based pruning:
+
+- minute-bucket metric tables are pruned with `DELETE WHERE bucket_start < cutoff`
+- current rate-limit state is pruned with `DELETE WHERE updated_at < cutoff`
+- retention is configurable through:
+  - `GITHUB_METRICS_RETENTION_DAYS` (default `30`)
+  - `GITHUB_RATE_LIMIT_STATE_RETENTION_DAYS` (default `14`)
+- the intended production path is an external scheduler or Dokploy cron running:
+  - `node dist/scripts/prune-github-metrics.js`
+
+Important operational rule:
+
+- periodic flush stays in-process because the collector is process-local memory
+- prune belongs in cron; the live flush loop does not
 
 ### Debug Headers
 
@@ -331,8 +348,6 @@ Future target:
 
 Still missing:
 
-- retention policy for persisted metric tables
-- pruning or rollup job for older buckets
 - optional materialized or pre-aggregated views if the dashboard window grows
 - operational runbook for `db:push` / migrations and failure monitoring
 
@@ -397,14 +412,14 @@ Needed:
 - decide whether to cache the full merged thread or segment it
 - keep invalidation behavior predictable for very large discussions
 
-### 3. Add Metrics Retention and Query Hygiene
+### 3. Improve Metrics Query Hygiene
 
-Now that metrics persist, the next ops step is lifecycle management.
+Now that retention exists, the next ops step is keeping overview queries cheap as history grows.
 
 Needed:
 
-- define retention for minute buckets
-- prune or roll up older data
+- monitor prune duration and deleted row counts in production
+- consider rollups if the dashboard needs windows much larger than minute buckets support comfortably
 - watch admin route latency as tables grow
 
 ### 4. Improve Dashboard Drilldown
@@ -447,5 +462,6 @@ The backend now has a solid `v1.5` cache posture:
 - conditional revalidation where it already pays off
 - rate-limit observability
 - Postgres-backed admin dashboard visibility
+- daily-retention pruning via external scheduler
 
 The biggest remaining step is no longer “add cache” or “persist metrics”. It is now “use the persisted data to improve cache policy and revalidation where it buys the most”.

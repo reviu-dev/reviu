@@ -1,3 +1,4 @@
+import type { SQL } from 'drizzle-orm'
 import type { GithubCacheScope } from '../cache/github-cache.js'
 import type {
   GithubCacheMetricsOverview,
@@ -73,6 +74,21 @@ interface PersistedOverviewInput {
 
 let flushInterval: NodeJS.Timeout | null = null
 let flushPromise: Promise<void> | null = null
+
+export interface GithubMetricsPruneCutoffs {
+  metricsCutoff: Date
+  rateLimitStateCutoff: Date
+  metricsRetentionDays: number
+  rateLimitStateRetentionDays: number
+}
+
+export interface GithubMetricsPruneResult extends GithubMetricsPruneCutoffs {
+  deletedOperationMetrics: number
+  deletedResourceMetrics: number
+  deletedUserMetrics: number
+  deletedRateLimitStates: number
+  totalDeleted: number
+}
 
 function createEmptyCounters(): GithubMetricsCounters {
   return {
@@ -158,6 +174,89 @@ function mergeCounters(target: GithubMetricsCounters, source: GithubMetricsCount
 
 function excludedColumn<T extends { name: string }>(column: T) {
   return sql.raw(`excluded.${column.name}`)
+}
+
+function daysToMilliseconds(days: number) {
+  return days * 24 * 60 * 60_000
+}
+
+async function executeDeleteWithCount(query: SQL) {
+  const result = await db.execute<{ count: number }>(query)
+  return Number(result.rows[0]?.count ?? 0)
+}
+
+export function buildGithubMetricsPruneCutoffs(
+  {
+    now = Date.now(),
+    metricsRetentionDays = env.GITHUB_METRICS_RETENTION_DAYS,
+    rateLimitStateRetentionDays = env.GITHUB_RATE_LIMIT_STATE_RETENTION_DAYS,
+  }: {
+    now?: number
+    metricsRetentionDays?: number
+    rateLimitStateRetentionDays?: number
+  } = {},
+): GithubMetricsPruneCutoffs {
+  return {
+    metricsCutoff: new Date(now - daysToMilliseconds(metricsRetentionDays)),
+    rateLimitStateCutoff: new Date(now - daysToMilliseconds(rateLimitStateRetentionDays)),
+    metricsRetentionDays,
+    rateLimitStateRetentionDays,
+  }
+}
+
+export async function pruneGithubMetrics(
+  options: {
+    now?: number
+    metricsRetentionDays?: number
+    rateLimitStateRetentionDays?: number
+  } = {},
+): Promise<GithubMetricsPruneResult> {
+  const cutoffs = buildGithubMetricsPruneCutoffs(options)
+
+  const deletedOperationMetrics = await executeDeleteWithCount(sql<{ count: number }>`
+    with deleted as (
+      delete from github_operation_metric_minute
+      where bucket_start < ${cutoffs.metricsCutoff}
+      returning 1
+    )
+    select count(*)::int as count from deleted
+  `)
+
+  const deletedResourceMetrics = await executeDeleteWithCount(sql<{ count: number }>`
+    with deleted as (
+      delete from github_resource_metric_minute
+      where bucket_start < ${cutoffs.metricsCutoff}
+      returning 1
+    )
+    select count(*)::int as count from deleted
+  `)
+
+  const deletedUserMetrics = await executeDeleteWithCount(sql<{ count: number }>`
+    with deleted as (
+      delete from github_user_metric_minute
+      where bucket_start < ${cutoffs.metricsCutoff}
+      returning 1
+    )
+    select count(*)::int as count from deleted
+  `)
+
+  const deletedRateLimitStates = await executeDeleteWithCount(sql<{ count: number }>`
+    with deleted as (
+      delete from github_rate_limit_state
+      where updated_at < ${cutoffs.rateLimitStateCutoff}
+      returning 1
+    )
+    select count(*)::int as count from deleted
+  `)
+
+  return {
+    ...cutoffs,
+    deletedOperationMetrics,
+    deletedResourceMetrics,
+    deletedUserMetrics,
+    deletedRateLimitStates,
+    totalDeleted: deletedOperationMetrics + deletedResourceMetrics + deletedUserMetrics + deletedRateLimitStates,
+  }
 }
 
 export function buildGithubMetricsOverviewFromPersistedRows(

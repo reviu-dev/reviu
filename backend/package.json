@@ -14,7 +14,9 @@
     "db:push": "drizzle-kit push",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "github:metrics:prune": "node dist/scripts/prune-github-metrics.js",
+    "github:metrics:prune:dev": "tsx src/scripts/prune-github-metrics.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.9",
