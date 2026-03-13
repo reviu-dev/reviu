@@ -83,22 +83,11 @@ function handleSuccess() {
 
 <template>
   <div class="container mx-auto space-y-6">
-    <div>
-      <h1 class="text-3xl font-bold">
-        Admin Dashboard
-      </h1>
-      <p class="text-muted-foreground mt-2">
-        Manage users, roles, and permissions
-      </p>
-    </div>
+    <h1 class="text-3xl font-bold">
+      Manage Users
+    </h1>
 
     <Card>
-      <CardHeader>
-        <CardTitle>User Management</CardTitle>
-        <CardDescription>
-          View, create, edit, and manage all users in the system
-        </CardDescription>
-      </CardHeader>
       <CardContent>
         <UserTable
           ref="userTableRef"
