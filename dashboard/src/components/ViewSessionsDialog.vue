@@ -121,7 +121,7 @@ function handleOpenChange(open: boolean) {
 
 <template>
   <Dialog :open="open" @update:open="handleOpenChange">
-    <DialogContent class="sm:max-w-[800px]">
+    <DialogContent class="sm:max-w-[800px] max-h-[calc(100vh-4rem)] overflow-y-auto">
       <DialogHeader>
         <DialogTitle>User Sessions</DialogTitle>
         <DialogDescription>
