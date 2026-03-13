@@ -32,7 +32,7 @@ export const useAuthStore = createGlobalState(
 
     function resetState() {
       me.value = undefined
-      token.value = undefined
+      token.value = null
     }
 
     function setToken(t: string) {
@@ -45,8 +45,9 @@ export const useAuthStore = createGlobalState(
       {
         resetOnExecute: false,
         onSuccess: async (res) => {
+          firstLoad.value = false
+
           if (!res?.ok) {
-            firstLoad.value = false
             handleUserRedirect()
             resetState()
             return
@@ -55,12 +56,19 @@ export const useAuthStore = createGlobalState(
           const user = await res.json()
 
           me.value = user
-          firstLoad.value = false
 
           handleUserRedirect(me.value)
         },
       },
     )
+
+    watch(token, () => {
+      if (!token.value) {
+        return
+      }
+
+      refetchMe()
+    })
 
     async function signout() {
       await Promise.all([

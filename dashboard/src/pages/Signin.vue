@@ -5,25 +5,25 @@ import { betterAuthClient } from '@/lib/auth-client'
 import { authClient } from '@/services/auth'
 import { useAuthStore } from '@/stores/auth'
 
-const { setToken, refetchMe } = useAuthStore()
+const { setToken } = useAuthStore()
 
 onMounted(async () => {
   const queryParams = new URLSearchParams(window.location.search)
   const code = queryParams.get('code')
 
-  if (code) {
-    const res = await authClient.exchange.$post({ json: { code } })
-
-    if (!res.ok) {
-      console.error('Failed to exchange code for token')
-      return
-    }
-
-    const { token } = await res.json()
-
-    setToken(token)
-    refetchMe()
+  if (!code) {
+    return
   }
+
+  const res = await authClient.exchange.$post({ json: { code } })
+
+  if (!res.ok) {
+    return
+  }
+
+  const { token } = await res.json()
+
+  setToken(token)
 })
 
 async function signIn() {
