@@ -834,7 +834,7 @@ impl ApiClient {
     let request = SocialSignInRequest {
       provider: "github",
       disable_redirect: true,
-      callback_url: "/auth/callback",
+      callback_url: "/auth/desktop/callback",
     };
     let url = self.get_api_url("/api/auth/sign-in/social");
     let response = self.client.post(url).json(&request).send()?;
