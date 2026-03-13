@@ -53,7 +53,7 @@ export const useAuthStore = createGlobalState(
       const authRoutes = ['/signin']
       const currentRoutePath = new URL(window.location.href).pathname
 
-      if (user && authRoutes.includes(currentRoutePath)) {
+      if (user?.role === 'admin' && authRoutes.includes(currentRoutePath)) {
         return router.push({ name: 'Home' })
       }
 

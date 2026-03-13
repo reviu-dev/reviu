@@ -4,6 +4,7 @@ import type {
   GithubCacheLoadedPayload,
   GithubCacheLoadResult,
   GithubCacheNotModifiedPayload,
+  GithubCachePaginationMetadata,
   GithubCacheValidator,
   GithubCacheValidators,
 } from '../plugins/github/cache/github-cache.js'
@@ -120,6 +121,7 @@ import {
   fetchGithubCommitConditionally,
   fetchGithubCommitFilesAllPages,
   fetchGithubNotifications,
+  fetchGithubPullRequestCommentsAllPages,
   fetchGithubPullRequestCommentsConditionally,
   fetchGithubPullRequestCommitsAllPages,
   fetchGithubPullRequestConditionally,
@@ -129,6 +131,7 @@ import {
   fetchGithubRepositoryBranchesConditionally,
   fetchGithubRepositoryConditionally,
   fetchGithubRepositoryContentConditionally,
+  fetchGithubRepositoryIssueCommentsAllPages,
   fetchGithubRepositoryIssueCommentsConditionally,
   fetchGithubRepositoryIssueConditionally,
   fetchGithubRepositoryIssuesConditionally,
@@ -171,6 +174,30 @@ function getCachedValidator(
   return cachedEntry?.validators?.[key] ?? {
     etag: cachedEntry?.etag,
     lastModified: cachedEntry?.lastModified,
+  }
+}
+
+function getCachedPaginationMetadata(
+  cachedEntry: { pagination?: GithubCachePaginationMetadata } | null,
+): GithubCachePaginationMetadata | null {
+  return cachedEntry?.pagination ?? null
+}
+
+function canConditionallyRevalidateSinglePageCollection(
+  pagination: GithubCachePaginationMetadata | null,
+) {
+  return Boolean(pagination && !pagination.truncated && pagination.pageCount <= 1)
+}
+
+function buildPaginationMetadata(
+  pageCount: number,
+  itemCount: number,
+  truncated: boolean,
+): GithubCachePaginationMetadata {
+  return {
+    pageCount,
+    itemCount,
+    truncated,
   }
 }
 
@@ -644,6 +671,8 @@ async function fetchPullRequestIssueCommentsWithCache(
     githubCache.getOrLoad<GithubPullRequestIssueComment[]>({
       ...cachePolicy,
       load: async ({ cachedEntry }) => {
+        const cachedPagination = getCachedPaginationMetadata(cachedEntry)
+        const canUseConditionalComments = canConditionallyRevalidateSinglePageCollection(cachedPagination)
         const params: GithubIssueDetailsCommentParameters = {
           owner: org,
           repo,
@@ -651,25 +680,61 @@ async function fetchPullRequestIssueCommentsWithCache(
           per_page: 100,
         }
 
-        const response = await fetchGithubRepositoryIssueCommentsConditionally({
-          token: githubToken,
-          params,
-          etag: cachedEntry?.etag,
-          lastModified: cachedEntry?.lastModified,
-        })
+        if (canUseConditionalComments) {
+          const response = await fetchGithubRepositoryIssueCommentsConditionally({
+            token: githubToken,
+            params,
+            etag: cachedEntry?.etag,
+            lastModified: cachedEntry?.lastModified,
+          })
 
-        if (response.notModified) {
+          if (response.notModified) {
+            return {
+              notModified: true as const,
+              etag: response.etag,
+              lastModified: response.lastModified,
+              pagination: cachedPagination ?? undefined,
+            }
+          }
+
+          const paginatedComments = await fetchGithubRepositoryIssueCommentsAllPages({
+            token: githubToken,
+            params: {
+              owner: org,
+              repo,
+              issue_number: pullNumber,
+            },
+            initialPageItems: response.data!,
+          })
+
           return {
-            notModified: true as const,
+            payload: paginatedComments.items.map(mapGithubPullRequestIssueComment),
             etag: response.etag,
             lastModified: response.lastModified,
+            pagination: buildPaginationMetadata(
+              paginatedComments.pageCount,
+              paginatedComments.itemCount,
+              paginatedComments.truncated,
+            ),
           }
         }
 
+        const paginatedComments = await fetchGithubRepositoryIssueCommentsAllPages({
+          token: githubToken,
+          params: {
+            owner: org,
+            repo,
+            issue_number: pullNumber,
+          },
+        })
+
         return {
-          payload: response.data!.map(mapGithubPullRequestIssueComment),
-          etag: response.etag,
-          lastModified: response.lastModified,
+          payload: paginatedComments.items.map(mapGithubPullRequestIssueComment),
+          pagination: buildPaginationMetadata(
+            paginatedComments.pageCount,
+            paginatedComments.itemCount,
+            paginatedComments.truncated,
+          ),
         }
       },
     }))
@@ -738,6 +803,8 @@ async function fetchPullRequestCommentsWithCache(
     githubCache.getOrLoad<GithubPullRequestReviewComment[]>({
       ...cachePolicy,
       load: async ({ cachedEntry }) => {
+        const cachedPagination = getCachedPaginationMetadata(cachedEntry)
+        const canUseConditionalComments = canConditionallyRevalidateSinglePageCollection(cachedPagination)
         const params: PullRequestCommentsParams = {
           owner: org,
           repo,
@@ -745,25 +812,61 @@ async function fetchPullRequestCommentsWithCache(
           per_page: 100,
         }
 
-        const response = await fetchGithubPullRequestCommentsConditionally({
-          token: githubToken,
-          params,
-          etag: cachedEntry?.etag,
-          lastModified: cachedEntry?.lastModified,
-        })
+        if (canUseConditionalComments) {
+          const response = await fetchGithubPullRequestCommentsConditionally({
+            token: githubToken,
+            params,
+            etag: cachedEntry?.etag,
+            lastModified: cachedEntry?.lastModified,
+          })
 
-        if (response.notModified) {
+          if (response.notModified) {
+            return {
+              notModified: true as const,
+              etag: response.etag,
+              lastModified: response.lastModified,
+              pagination: cachedPagination ?? undefined,
+            }
+          }
+
+          const paginatedComments = await fetchGithubPullRequestCommentsAllPages({
+            token: githubToken,
+            params: {
+              owner: org,
+              repo,
+              pull_number: pullNumber,
+            },
+            initialPageItems: response.data!,
+          })
+
           return {
-            notModified: true as const,
+            payload: paginatedComments.items.map(mapGithubPullRequestReviewComment),
             etag: response.etag,
             lastModified: response.lastModified,
+            pagination: buildPaginationMetadata(
+              paginatedComments.pageCount,
+              paginatedComments.itemCount,
+              paginatedComments.truncated,
+            ),
           }
         }
 
+        const paginatedComments = await fetchGithubPullRequestCommentsAllPages({
+          token: githubToken,
+          params: {
+            owner: org,
+            repo,
+            pull_number: pullNumber,
+          },
+        })
+
         return {
-          payload: response.data!.map(mapGithubPullRequestReviewComment),
-          etag: response.etag,
-          lastModified: response.lastModified,
+          payload: paginatedComments.items.map(mapGithubPullRequestReviewComment),
+          pagination: buildPaginationMetadata(
+            paginatedComments.pageCount,
+            paginatedComments.itemCount,
+            paginatedComments.truncated,
+          ),
         }
       },
     }))
@@ -1119,21 +1222,38 @@ async function fetchRepositoryIssueDetailsWithCache(
           lastModified: cachedEntry?.lastModified,
         }
         const cachedIssueCommentsValidator = cachedEntry?.validators?.[GITHUB_ISSUE_DETAILS_COMMENTS_VALIDATOR_KEY]
+        const cachedCommentsPagination = getCachedPaginationMetadata(cachedEntry)
+        const canUseConditionalIssueComments = canConditionallyRevalidateSinglePageCollection(cachedCommentsPagination)
 
-        const [issueResponse, issueCommentsResponse] = await Promise.all([
-          fetchGithubRepositoryIssueConditionally({
-            token: githubToken,
-            params: paramsIssue,
-            etag: cachedIssueValidator.etag,
-            lastModified: cachedIssueValidator.lastModified,
-          }),
-          fetchGithubRepositoryIssueCommentsConditionally({
-            token: githubToken,
-            params: paramsComments,
-            etag: cachedIssueCommentsValidator?.etag,
-            lastModified: cachedIssueCommentsValidator?.lastModified,
-          }),
-        ])
+        const issueResponse = await fetchGithubRepositoryIssueConditionally({
+          token: githubToken,
+          params: paramsIssue,
+          etag: cachedIssueValidator.etag,
+          lastModified: cachedIssueValidator.lastModified,
+        })
+
+        const issueCommentsResponse = canUseConditionalIssueComments
+          ? await fetchGithubRepositoryIssueCommentsConditionally({
+              token: githubToken,
+              params: paramsComments,
+              etag: cachedIssueCommentsValidator?.etag,
+              lastModified: cachedIssueCommentsValidator?.lastModified,
+            })
+          : null
+
+        const paginatedIssueComments = issueCommentsResponse?.notModified
+          ? null
+          : await fetchGithubRepositoryIssueCommentsAllPages({
+              token: githubToken,
+              params: {
+                owner,
+                repo,
+                issue_number: issueNumber,
+              },
+              ...(issueCommentsResponse?.data
+                ? { initialPageItems: issueCommentsResponse.data }
+                : {}),
+            })
 
         const nextValidators = buildGithubIssueDetailsValidators({
           issue: {
@@ -1141,21 +1261,22 @@ async function fetchRepositoryIssueDetailsWithCache(
             lastModified: issueResponse.lastModified ?? cachedIssueValidator.lastModified,
           },
           issueComments: {
-            etag: issueCommentsResponse.etag ?? cachedIssueCommentsValidator?.etag,
-            lastModified: issueCommentsResponse.lastModified ?? cachedIssueCommentsValidator?.lastModified,
+            etag: issueCommentsResponse?.etag ?? cachedIssueCommentsValidator?.etag,
+            lastModified: issueCommentsResponse?.lastModified ?? cachedIssueCommentsValidator?.lastModified,
           },
         })
 
-        if (issueResponse.notModified && issueCommentsResponse.notModified) {
+        if (issueResponse.notModified && issueCommentsResponse?.notModified) {
           return {
             notModified: true as const,
             etag: nextValidators[GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY]?.etag,
             lastModified: nextValidators[GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY]?.lastModified,
             validators: nextValidators,
+            pagination: cachedCommentsPagination ?? undefined,
           }
         }
 
-        if (!cachedEntry && (issueResponse.notModified || issueCommentsResponse.notModified)) {
+        if (!cachedEntry && (issueResponse.notModified || issueCommentsResponse?.notModified)) {
           throw new Error('GitHub issue details revalidation requires an existing cache entry')
         }
 
@@ -1164,7 +1285,7 @@ async function fetchRepositoryIssueDetailsWithCache(
           repo,
           cachedPayload: cachedEntry?.payload ?? null,
           issue: issueResponse.notModified ? null : issueResponse.data!,
-          issueComments: issueCommentsResponse.notModified ? null : issueCommentsResponse.data!,
+          issueComments: paginatedIssueComments?.items ?? null,
         })
 
         return {
@@ -1172,6 +1293,13 @@ async function fetchRepositoryIssueDetailsWithCache(
           etag: nextValidators[GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY]?.etag,
           lastModified: nextValidators[GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY]?.lastModified,
           validators: nextValidators,
+          pagination: paginatedIssueComments
+            ? buildPaginationMetadata(
+                paginatedIssueComments.pageCount,
+                paginatedIssueComments.itemCount,
+                paginatedIssueComments.truncated,
+              )
+            : cachedCommentsPagination ?? undefined,
         }
       },
     }))

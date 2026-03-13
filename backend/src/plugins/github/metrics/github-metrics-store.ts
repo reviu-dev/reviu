@@ -42,6 +42,11 @@ interface GithubMetricsOperationAggregate extends GithubMetricsCounters {
   scope?: GithubCacheScope
   ttlMs?: number
   staleMs?: number
+  paginatedLoads: number
+  totalPageCount: number
+  totalItemCount: number
+  truncatedCount: number
+  totalPaginationDurationMs: number
   lastSeenAt: number
 }
 
@@ -171,6 +176,11 @@ export function buildGithubMetricsOverviewFromPersistedRows(
         operation: row.operation,
         scope: row.scope,
         ...aggregate,
+        paginatedLoads: row.paginatedLoads,
+        totalPageCount: row.totalPageCount,
+        totalItemCount: row.totalItemCount,
+        truncatedCount: row.truncatedCount,
+        totalPaginationDurationMs: row.totalPaginationDurationMs,
         ttlMs: row.ttlMs ?? undefined,
         staleMs: row.staleMs ?? undefined,
         lastSeenAt: normalizeTimestamp(row.lastSeenAt),
@@ -312,6 +322,11 @@ export function buildGithubMetricsOverviewFromPersistedRows(
         avgGithubDurationMs: counters.upstreamCalls > 0
           ? counters.totalGithubDurationMs / counters.upstreamCalls
           : null,
+        paginatedLoads: 0,
+        avgPageCount: null,
+        avgItemCount: null,
+        truncatedCount: 0,
+        avgPaginationDurationMs: null,
       })),
     cacheStatusSeries,
     githubResourceSeries: resourceSeries.sort((a, b) => a.bucketStart - b.bucketStart || a.resource.localeCompare(b.resource)),
@@ -339,6 +354,17 @@ export function buildGithubMetricsOverviewFromPersistedRows(
           : null,
         avgGithubDurationMs: operation.upstreamCalls > 0
           ? operation.totalGithubDurationMs / operation.upstreamCalls
+          : null,
+        paginatedLoads: operation.paginatedLoads,
+        avgPageCount: operation.paginatedLoads > 0
+          ? operation.totalPageCount / operation.paginatedLoads
+          : null,
+        avgItemCount: operation.paginatedLoads > 0
+          ? operation.totalItemCount / operation.paginatedLoads
+          : null,
+        truncatedCount: operation.truncatedCount,
+        avgPaginationDurationMs: operation.paginatedLoads > 0
+          ? operation.totalPaginationDurationMs / operation.paginatedLoads
           : null,
         ttlMs: operation.ttlMs ?? null,
         staleMs: operation.staleMs ?? null,
@@ -386,6 +412,11 @@ async function persistOperationMetrics(metrics: GithubPersistedOperationMetric[]
       nearLimitEvents: metric.nearLimitEvents,
       totalBackendDurationMs: metric.totalBackendDurationMs,
       totalGithubDurationMs: metric.totalGithubDurationMs,
+      paginatedLoads: metric.paginatedLoads,
+      totalPageCount: metric.totalPageCount,
+      totalItemCount: metric.totalItemCount,
+      truncatedCount: metric.truncatedCount,
+      totalPaginationDurationMs: metric.totalPaginationDurationMs,
       ttlMs: metric.ttlMs,
       staleMs: metric.staleMs,
       lastSeenAt: new Date(metric.lastSeenAt),
@@ -407,6 +438,11 @@ async function persistOperationMetrics(metrics: GithubPersistedOperationMetric[]
         nearLimitEvents: sql`${githubOperationMetricMinute.nearLimitEvents} + ${excludedColumn(githubOperationMetricMinute.nearLimitEvents)}`,
         totalBackendDurationMs: sql`${githubOperationMetricMinute.totalBackendDurationMs} + ${excludedColumn(githubOperationMetricMinute.totalBackendDurationMs)}`,
         totalGithubDurationMs: sql`${githubOperationMetricMinute.totalGithubDurationMs} + ${excludedColumn(githubOperationMetricMinute.totalGithubDurationMs)}`,
+        paginatedLoads: sql`${githubOperationMetricMinute.paginatedLoads} + ${excludedColumn(githubOperationMetricMinute.paginatedLoads)}`,
+        totalPageCount: sql`${githubOperationMetricMinute.totalPageCount} + ${excludedColumn(githubOperationMetricMinute.totalPageCount)}`,
+        totalItemCount: sql`${githubOperationMetricMinute.totalItemCount} + ${excludedColumn(githubOperationMetricMinute.totalItemCount)}`,
+        truncatedCount: sql`${githubOperationMetricMinute.truncatedCount} + ${excludedColumn(githubOperationMetricMinute.truncatedCount)}`,
+        totalPaginationDurationMs: sql`${githubOperationMetricMinute.totalPaginationDurationMs} + ${excludedColumn(githubOperationMetricMinute.totalPaginationDurationMs)}`,
         ttlMs: excludedColumn(githubOperationMetricMinute.ttlMs),
         staleMs: excludedColumn(githubOperationMetricMinute.staleMs),
         lastSeenAt: sql`greatest(${githubOperationMetricMinute.lastSeenAt}, ${excludedColumn(githubOperationMetricMinute.lastSeenAt)})`,
@@ -669,6 +705,11 @@ export async function readGithubMetricsOverviewFromDatabase(
       nearLimitEvents: row.nearLimitEvents,
       totalBackendDurationMs: row.totalBackendDurationMs,
       totalGithubDurationMs: row.totalGithubDurationMs,
+      paginatedLoads: row.paginatedLoads,
+      totalPageCount: row.totalPageCount,
+      totalItemCount: row.totalItemCount,
+      truncatedCount: row.truncatedCount,
+      totalPaginationDurationMs: row.totalPaginationDurationMs,
       ttlMs: row.ttlMs,
       staleMs: row.staleMs,
       lastSeenAt: normalizeTimestamp(row.lastSeenAt),

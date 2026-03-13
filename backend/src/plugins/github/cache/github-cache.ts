@@ -12,6 +12,12 @@ export interface GithubCacheValidator {
 
 export type GithubCacheValidators = Record<string, GithubCacheValidator>
 
+export interface GithubCachePaginationMetadata {
+  pageCount: number
+  itemCount: number
+  truncated: boolean
+}
+
 export interface GithubCacheEntry<T> {
   payload: T
   tags: string[]
@@ -21,6 +27,7 @@ export interface GithubCacheEntry<T> {
   etag?: string
   lastModified?: string
   validators?: GithubCacheValidators
+  pagination?: GithubCachePaginationMetadata
 }
 
 export interface GithubCacheStore {
@@ -64,6 +71,7 @@ export interface GithubCachePrimeOptions<T> {
   etag?: string
   lastModified?: string
   validators?: GithubCacheValidators
+  pagination?: GithubCachePaginationMetadata
 }
 
 export interface GithubCacheLoadContext<T> {
@@ -75,6 +83,7 @@ export interface GithubCacheLoadedPayload<T> {
   etag?: string
   lastModified?: string
   validators?: GithubCacheValidators
+  pagination?: GithubCachePaginationMetadata
 }
 
 export interface GithubCacheNotModifiedPayload {
@@ -82,6 +91,7 @@ export interface GithubCacheNotModifiedPayload {
   etag?: string
   lastModified?: string
   validators?: GithubCacheValidators
+  pagination?: GithubCachePaginationMetadata
 }
 
 export type GithubCacheLoaderResult<T> = GithubCacheLoadedPayload<T> | GithubCacheNotModifiedPayload
@@ -312,6 +322,7 @@ class GithubCacheManager {
         etag: options.etag,
         lastModified: options.lastModified,
         validators: options.validators,
+        pagination: options.pagination,
       },
     )
   }
@@ -383,6 +394,7 @@ class GithubCacheManager {
               etag: loadResult.etag ?? cachedEntry.etag,
               lastModified: loadResult.lastModified ?? cachedEntry.lastModified,
               validators: mergeValidators(cachedEntry.validators, loadResult.validators),
+              pagination: loadResult.pagination ?? cachedEntry.pagination,
             },
           )
           return
@@ -398,6 +410,7 @@ class GithubCacheManager {
             etag: loadResult.etag,
             lastModified: loadResult.lastModified,
             validators: loadResult.validators,
+            pagination: loadResult.pagination,
           },
         )
       }
@@ -456,6 +469,7 @@ class GithubCacheManager {
             etag: loadResult.etag ?? currentEntry.etag,
             lastModified: loadResult.lastModified ?? currentEntry.lastModified,
             validators: mergeValidators(currentEntry.validators, loadResult.validators),
+            pagination: loadResult.pagination ?? currentEntry.pagination,
           },
         )
 
@@ -476,6 +490,7 @@ class GithubCacheManager {
           etag: loadResult.etag,
           lastModified: loadResult.lastModified,
           validators: loadResult.validators,
+          pagination: loadResult.pagination,
         },
       )
 
@@ -575,6 +590,7 @@ class GithubCacheManager {
       etag?: string
       lastModified?: string
       validators?: GithubCacheValidators
+      pagination?: GithubCachePaginationMetadata
     },
   ) {
     const previousEntry = await this.readEntry<unknown>(cacheKey)
@@ -591,6 +607,7 @@ class GithubCacheManager {
       etag: metadata?.etag,
       lastModified: metadata?.lastModified,
       validators: metadata?.validators,
+      pagination: metadata?.pagination,
     }
 
     await this.store.set(cacheKey, JSON.stringify(nextEntry))

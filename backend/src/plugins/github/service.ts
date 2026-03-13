@@ -93,7 +93,16 @@ export interface GithubRateLimitInfo {
   resource?: string
 }
 
+export interface GithubPaginatedCollectionResult<T> {
+  items: T[]
+  pageCount: number
+  itemCount: number
+  truncated: boolean
+}
+
 const GITHUB_RATE_LIMIT_NEAR_THRESHOLD = 0.1
+const GITHUB_PAGINATED_COLLECTION_MAX_PAGES = 10
+const GITHUB_PAGINATED_COLLECTION_MAX_ITEMS = 1000
 
 interface GithubErrorLike {
   status?: number
@@ -201,6 +210,29 @@ function recordGithubRequestMetric(
     durationMs,
     notModified,
     rateLimit: extractGithubRateLimitInfo(headers),
+  })
+}
+
+function recordGithubPaginationMetric(
+  pageCount: number,
+  itemCount: number,
+  truncated: boolean,
+  durationMs: number,
+) {
+  const context = getGithubMetricsContext()
+
+  if (!context?.operation || !context.scope) {
+    return
+  }
+
+  githubMetricsCollector.recordPaginationEvent({
+    userId: context.userId,
+    operation: context.operation,
+    scope: context.scope,
+    pageCount,
+    itemCount,
+    truncated,
+    durationMs,
   })
 }
 
@@ -325,6 +357,117 @@ async function requestGithubConditionally<Route extends keyof Endpoints>(
 
     recordGithubRequestMetric(route, githubError.status ?? 0, githubError.response?.headers, durationMs)
     throw error
+  }
+}
+
+async function fetchGithubCollectionAllPages<T, Params extends { per_page?: number, page?: number }>(
+  fetchPage: (args: { token: string, params: Params }) => Promise<T[]>,
+  {
+    token,
+    params,
+    perPage = 100,
+    maxPages = GITHUB_PAGINATED_COLLECTION_MAX_PAGES,
+    maxItems = GITHUB_PAGINATED_COLLECTION_MAX_ITEMS,
+    initialPageItems,
+  }: {
+    token: string
+    params: Omit<Params, 'per_page' | 'page'>
+    perPage?: number
+    maxPages?: number
+    maxItems?: number
+    initialPageItems?: T[]
+  },
+): Promise<GithubPaginatedCollectionResult<T>> {
+  const startedAt = Date.now()
+  const items: T[] = []
+  let pageCount = 0
+  let truncated = false
+
+  if (initialPageItems) {
+    pageCount = 1
+
+    if (initialPageItems.length > maxItems) {
+      items.push(...initialPageItems.slice(0, maxItems))
+      truncated = true
+    }
+    else {
+      items.push(...initialPageItems)
+    }
+
+    if (initialPageItems.length < perPage || truncated) {
+      recordGithubPaginationMetric(
+        pageCount,
+        items.length,
+        truncated,
+        Date.now() - startedAt,
+      )
+
+      return {
+        items,
+        pageCount,
+        itemCount: items.length,
+        truncated,
+      }
+    }
+  }
+
+  for (let page = initialPageItems ? 2 : 1; page <= maxPages; page += 1) {
+    const pageItems = await fetchPage({
+      token,
+      params: {
+        ...params,
+        per_page: perPage,
+        page,
+      } as Params,
+    })
+
+    pageCount += 1
+
+    const remainingCapacity = maxItems - items.length
+    if (remainingCapacity <= 0) {
+      truncated = true
+      break
+    }
+
+    if (pageItems.length > remainingCapacity) {
+      items.push(...pageItems.slice(0, remainingCapacity))
+      truncated = true
+      break
+    }
+
+    items.push(...pageItems)
+
+    if (pageItems.length < perPage) {
+      break
+    }
+
+    if (page === maxPages) {
+      truncated = true
+    }
+  }
+
+  if (truncated) {
+    logger.warn({
+      operation: getGithubMetricsContext()?.operation ?? null,
+      pageCount,
+      itemCount: items.length,
+      maxItems,
+      maxPages,
+    }, 'GitHub paginated collection was truncated at configured limits')
+  }
+
+  recordGithubPaginationMetric(
+    pageCount,
+    items.length,
+    truncated,
+    Date.now() - startedAt,
+  )
+
+  return {
+    items,
+    pageCount,
+    itemCount: items.length,
+    truncated,
   }
 }
 
@@ -564,6 +707,26 @@ export async function fetchGithubPullRequestCommentsConditionally(
   )
 }
 
+export async function fetchGithubPullRequestCommentsAllPages(
+  { token, params, perPage = 100, maxPages = GITHUB_PAGINATED_COLLECTION_MAX_PAGES, maxItems = GITHUB_PAGINATED_COLLECTION_MAX_ITEMS, initialPageItems }: {
+    token: string
+    params: Omit<PullRequestCommentsParams, 'per_page' | 'page'>
+    perPage?: number
+    maxPages?: number
+    maxItems?: number
+    initialPageItems?: PullRequestCommentResponse[]
+  },
+): Promise<GithubPaginatedCollectionResult<PullRequestCommentResponse>> {
+  return fetchGithubCollectionAllPages(fetchGithubPullRequestComments, {
+    token,
+    params,
+    perPage,
+    maxPages,
+    maxItems,
+    initialPageItems,
+  })
+}
+
 export async function fetchGithubPullRequestReviews(
   { token, params }: { token: string, params: PullRequestReviewsParams },
 ): Promise<PullRequestReviewResponse[]> {
@@ -744,6 +907,26 @@ export async function fetchGithubRepositoryIssueCommentsConditionally(
     'GET /repos/{owner}/{repo}/issues/{issue_number}/comments',
     options,
   )
+}
+
+export async function fetchGithubRepositoryIssueCommentsAllPages(
+  { token, params, perPage = 100, maxPages = GITHUB_PAGINATED_COLLECTION_MAX_PAGES, maxItems = GITHUB_PAGINATED_COLLECTION_MAX_ITEMS, initialPageItems }: {
+    token: string
+    params: Omit<GithubIssueDetailsCommentParameters, 'per_page' | 'page'>
+    perPage?: number
+    maxPages?: number
+    maxItems?: number
+    initialPageItems?: GithubIssueDetailsCommentResponse[]
+  },
+): Promise<GithubPaginatedCollectionResult<GithubIssueDetailsCommentResponse>> {
+  return fetchGithubCollectionAllPages(fetchGithubRepositoryIssueComments, {
+    token,
+    params,
+    perPage,
+    maxPages,
+    maxItems,
+    initialPageItems,
+  })
 }
 
 export async function createGithubIssueComment(

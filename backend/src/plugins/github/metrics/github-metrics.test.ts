@@ -113,6 +113,11 @@ describe('github metrics collector', () => {
         nearLimitEvents: 1,
         avgBackendDurationMs: (18 + 4 + 6) / 3,
         avgGithubDurationMs: (42 + 11) / 2,
+        paginatedLoads: 0,
+        avgPageCount: null,
+        avgItemCount: null,
+        truncatedCount: 0,
+        avgPaginationDurationMs: null,
       },
     ])
 
@@ -319,6 +324,11 @@ describe('github metrics collector', () => {
         nearLimitEvents: 0,
         avgBackendDurationMs: 3,
         avgGithubDurationMs: null,
+        paginatedLoads: 0,
+        avgPageCount: null,
+        avgItemCount: null,
+        truncatedCount: 0,
+        avgPaginationDurationMs: null,
       },
       {
         scope: 'viewer',
@@ -337,6 +347,11 @@ describe('github metrics collector', () => {
         nearLimitEvents: 0,
         avgBackendDurationMs: 12,
         avgGithubDurationMs: 30,
+        paginatedLoads: 0,
+        avgPageCount: null,
+        avgItemCount: null,
+        truncatedCount: 0,
+        avgPaginationDurationMs: null,
       },
     ])
   })
@@ -374,6 +389,11 @@ describe('github metrics collector', () => {
         nearLimitEvents: 0,
         totalBackendDurationMs: 5,
         totalGithubDurationMs: 0,
+        paginatedLoads: 0,
+        totalPageCount: 0,
+        totalItemCount: 0,
+        truncatedCount: 0,
+        totalPaginationDurationMs: 0,
         ttlMs: 120_000,
         staleMs: 600_000,
         lastSeenAt: 60_000,

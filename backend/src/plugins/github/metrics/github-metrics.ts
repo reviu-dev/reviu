@@ -24,6 +24,17 @@ export interface GithubApiMetricEvent {
   rateLimit?: GithubRateLimitInfo | null
 }
 
+export interface GithubPaginationMetricEvent {
+  at?: number
+  userId?: string
+  operation: string
+  scope?: GithubCacheScope
+  pageCount: number
+  itemCount: number
+  truncated: boolean
+  durationMs: number
+}
+
 export interface GithubCacheMetricsOverviewQuery {
   now?: number
   windowMs?: number
@@ -48,6 +59,11 @@ interface GithubMetricsOperationAggregate extends GithubMetricsCounters {
   scope?: GithubCacheScope
   ttlMs?: number
   staleMs?: number
+  paginatedLoads: number
+  totalPageCount: number
+  totalItemCount: number
+  truncatedCount: number
+  totalPaginationDurationMs: number
   lastSeenAt: number
 }
 
@@ -105,6 +121,11 @@ export interface GithubPersistedOperationMetric {
   nearLimitEvents: number
   totalBackendDurationMs: number
   totalGithubDurationMs: number
+  paginatedLoads: number
+  totalPageCount: number
+  totalItemCount: number
+  truncatedCount: number
+  totalPaginationDurationMs: number
   ttlMs: number | null
   staleMs: number | null
   lastSeenAt: number
@@ -166,6 +187,11 @@ function mergePersistedOperationMetric(
   target.nearLimitEvents += source.nearLimitEvents
   target.totalBackendDurationMs += source.totalBackendDurationMs
   target.totalGithubDurationMs += source.totalGithubDurationMs
+  target.paginatedLoads += source.paginatedLoads
+  target.totalPageCount += source.totalPageCount
+  target.totalItemCount += source.totalItemCount
+  target.truncatedCount += source.truncatedCount
+  target.totalPaginationDurationMs += source.totalPaginationDurationMs
   target.ttlMs = source.ttlMs ?? target.ttlMs
   target.staleMs = source.staleMs ?? target.staleMs
   target.lastSeenAt = Math.max(target.lastSeenAt, source.lastSeenAt)
@@ -236,6 +262,11 @@ export interface GithubCacheMetricsOverview {
     nearLimitEvents: number
     avgBackendDurationMs: number | null
     avgGithubDurationMs: number | null
+    paginatedLoads: number
+    avgPageCount: number | null
+    avgItemCount: number | null
+    truncatedCount: number
+    avgPaginationDurationMs: number | null
   }>
   cacheStatusSeries: Array<{
     bucketStart: number
@@ -543,6 +574,35 @@ export class GithubMetricsCollector {
     }
   }
 
+  recordPaginationEvent(event: GithubPaginationMetricEvent) {
+    const at = event.at ?? this.now()
+    if (!event.scope) {
+      return
+    }
+
+    const bucketStart = this.getBucketStart(at)
+    const bucket = this.getOrCreateBucket(at)
+    const operation = this.getOrCreateOperation(bucket, event.operation, event.scope, at)
+    const pendingOperation = this.getOrCreatePendingOperation(bucketStart, event.operation, event.scope, at)
+
+    operation.paginatedLoads += 1
+    operation.totalPageCount += event.pageCount
+    operation.totalItemCount += event.itemCount
+    operation.totalPaginationDurationMs += event.durationMs
+    operation.lastSeenAt = at
+
+    pendingOperation.paginatedLoads += 1
+    pendingOperation.totalPageCount += event.pageCount
+    pendingOperation.totalItemCount += event.itemCount
+    pendingOperation.totalPaginationDurationMs += event.durationMs
+    pendingOperation.lastSeenAt = at
+
+    if (event.truncated) {
+      operation.truncatedCount += 1
+      pendingOperation.truncatedCount += 1
+    }
+  }
+
   drainPersistedMetrics(): GithubMetricsPersistedSnapshot {
     const snapshot: GithubMetricsPersistedSnapshot = {
       bucketMs: this.bucketMs,
@@ -741,6 +801,11 @@ export class GithubMetricsCollector {
           avgGithubDurationMs: counters.upstreamCalls > 0
             ? counters.totalGithubDurationMs / counters.upstreamCalls
             : null,
+          paginatedLoads: 0,
+          avgPageCount: null,
+          avgItemCount: null,
+          truncatedCount: 0,
+          avgPaginationDurationMs: null,
         })),
       cacheStatusSeries: buckets.map(bucket => ({
         bucketStart: bucket.bucketStart,
@@ -780,6 +845,17 @@ export class GithubMetricsCollector {
             : null,
           avgGithubDurationMs: operation.upstreamCalls > 0
             ? operation.totalGithubDurationMs / operation.upstreamCalls
+            : null,
+          paginatedLoads: operation.paginatedLoads,
+          avgPageCount: operation.paginatedLoads > 0
+            ? operation.totalPageCount / operation.paginatedLoads
+            : null,
+          avgItemCount: operation.paginatedLoads > 0
+            ? operation.totalItemCount / operation.paginatedLoads
+            : null,
+          truncatedCount: operation.truncatedCount,
+          avgPaginationDurationMs: operation.paginatedLoads > 0
+            ? operation.totalPaginationDurationMs / operation.paginatedLoads
             : null,
           ttlMs: operation.ttlMs ?? null,
           staleMs: operation.staleMs ?? null,
@@ -850,6 +926,11 @@ export class GithubMetricsCollector {
       operation,
       scope,
       ...createEmptyCounters(),
+      paginatedLoads: 0,
+      totalPageCount: 0,
+      totalItemCount: 0,
+      truncatedCount: 0,
+      totalPaginationDurationMs: 0,
       lastSeenAt: at,
     }
     bucket.operations.set(operationKey, nextOperation)
@@ -922,6 +1003,11 @@ export class GithubMetricsCollector {
       nearLimitEvents: 0,
       totalBackendDurationMs: 0,
       totalGithubDurationMs: 0,
+      paginatedLoads: 0,
+      totalPageCount: 0,
+      totalItemCount: 0,
+      truncatedCount: 0,
+      totalPaginationDurationMs: 0,
       ttlMs: null,
       staleMs: null,
       lastSeenAt: at,
