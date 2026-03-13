@@ -348,6 +348,15 @@ export async function fetchGithubPullRequests(
   })
 }
 
+export async function fetchGithubPullRequestsConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/pulls'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/pulls'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}/pulls'>(
+    'GET /repos/{owner}/{repo}/pulls',
+    options,
+  )
+}
+
 export async function fetchGithubSearchIssues(
   { token, params }:
   { token: string, params: SearchIssuesParams },
@@ -612,6 +621,21 @@ export async function fetchGithubRepositoryContent(
   })
 }
 
+export async function fetchGithubRepositoryContentConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/contents/{path}'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/contents/{path}'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}/contents/{path}'>(
+    'GET /repos/{owner}/{repo}/contents/{path}',
+    {
+      ...options,
+      headers: {
+        accept: 'application/vnd.github.raw+json',
+        ...options.headers,
+      },
+    },
+  )
+}
+
 export async function fetchGithubViewer({ token }: { token: string }): Promise<GithubUserResponse> {
   return requestGithubData('GET /user', {
     token,
@@ -647,6 +671,15 @@ export async function fetchGithubRepositoryIssues(
   })
 }
 
+export async function fetchGithubRepositoryIssuesConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/issues'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/issues'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}/issues'>(
+    'GET /repos/{owner}/{repo}/issues',
+    options,
+  )
+}
+
 export async function fetchGithubRepositoryIssue(
   { token, params }:
   { token: string, params: GithubIssueDetailsParameters },
@@ -655,6 +688,15 @@ export async function fetchGithubRepositoryIssue(
     token,
     params,
   })
+}
+
+export async function fetchGithubRepositoryIssueConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/issues/{issue_number}'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/issues/{issue_number}'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}/issues/{issue_number}'>(
+    'GET /repos/{owner}/{repo}/issues/{issue_number}',
+    options,
+  )
 }
 
 export async function patchGithubIssue(
@@ -715,6 +757,15 @@ export async function fetchGithubRepositoryTrees(
     token,
     params,
   })
+}
+
+export async function fetchGithubRepositoryTreesConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/git/trees/{tree_sha}'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/git/trees/{tree_sha}'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}/git/trees/{tree_sha}'>(
+    'GET /repos/{owner}/{repo}/git/trees/{tree_sha}',
+    options,
+  )
 }
 
 export async function fetchGithubRepositoryBranches(

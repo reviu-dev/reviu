@@ -112,15 +112,15 @@ import {
   fetchGithubPullRequestConditionally,
   fetchGithubPullRequestFilesAllPages,
   fetchGithubPullRequestReviewsConditionally,
-  fetchGithubPullRequests,
+  fetchGithubPullRequestsConditionally,
   fetchGithubRepositoryBranchesConditionally,
   fetchGithubRepositoryConditionally,
-  fetchGithubRepositoryContent,
-  fetchGithubRepositoryIssue,
+  fetchGithubRepositoryContentConditionally,
   fetchGithubRepositoryIssueComments,
-  fetchGithubRepositoryIssues,
+  fetchGithubRepositoryIssueConditionally,
+  fetchGithubRepositoryIssuesConditionally,
   fetchGithubRepositoryReadmeConditionally,
-  fetchGithubRepositoryTrees,
+  fetchGithubRepositoryTreesConditionally,
   fetchGithubSearchIssues,
   fetchGithubUserRepositories,
   patchGithubIssue,
@@ -807,7 +807,7 @@ async function fetchRepositoryPullRequestsWithCache(
   return withGithubMetrics(userId, cachePolicy.operation, () =>
     githubCache.getOrLoad<GithubPullRequest[]>({
       ...cachePolicy,
-      load: async () => {
+      load: async ({ cachedEntry }) => {
         const params: ListPullsParams = {
           owner,
           repo,
@@ -817,10 +817,23 @@ async function fetchRepositoryPullRequestsWithCache(
           per_page: 20,
         }
 
-        const data = await fetchGithubPullRequests({ token: githubToken, params })
+        const response = await fetchGithubPullRequestsConditionally({
+          token: githubToken,
+          params,
+          etag: cachedEntry?.etag,
+          lastModified: cachedEntry?.lastModified,
+        })
+
+        if (response.notModified) {
+          return {
+            notModified: true as const,
+            etag: response.etag,
+            lastModified: response.lastModified,
+          }
+        }
 
         return {
-          payload: data.map(pull => ({
+          payload: response.data!.map(pull => ({
             number: pull.number,
             title: pull.title,
             state: pull.state,
@@ -833,6 +846,8 @@ async function fetchRepositoryPullRequestsWithCache(
               repo,
             },
           } satisfies GithubPullRequest)),
+          etag: response.etag,
+          lastModified: response.lastModified,
         }
       },
     }))
@@ -850,7 +865,7 @@ async function fetchRepositoryIssuesWithCache(
   return withGithubMetrics(userId, cachePolicy.operation, () =>
     githubCache.getOrLoad<GithubIssue[]>({
       ...cachePolicy,
-      load: async () => {
+      load: async ({ cachedEntry }) => {
         const params: GithubIssueParameters = {
           owner,
           repo,
@@ -860,10 +875,23 @@ async function fetchRepositoryIssuesWithCache(
           per_page: 20,
         }
 
-        const data = await fetchGithubRepositoryIssues({ token: githubToken, params })
+        const response = await fetchGithubRepositoryIssuesConditionally({
+          token: githubToken,
+          params,
+          etag: cachedEntry?.etag,
+          lastModified: cachedEntry?.lastModified,
+        })
+
+        if (response.notModified) {
+          return {
+            notModified: true as const,
+            etag: response.etag,
+            lastModified: response.lastModified,
+          }
+        }
 
         return {
-          payload: data.filter(issue => !issue.pull_request).map(issue => ({
+          payload: response.data!.filter(issue => !issue.pull_request).map(issue => ({
             id: issue.id,
             number: issue.number,
             title: issue.title,
@@ -879,6 +907,8 @@ async function fetchRepositoryIssuesWithCache(
               repo,
             },
           } satisfies GithubIssue)),
+          etag: response.etag,
+          lastModified: response.lastModified,
         }
       },
     }))
@@ -897,7 +927,7 @@ async function fetchRepositoryIssueDetailsWithCache(
   return withGithubMetrics(userId, cachePolicy.operation, () =>
     githubCache.getOrLoad<GithubIssueDetails>({
       ...cachePolicy,
-      load: async () => {
+      load: async ({ cachedEntry }) => {
         const paramsIssue: GithubIssueDetailsParameters = {
           owner,
           repo,
@@ -911,8 +941,24 @@ async function fetchRepositoryIssueDetailsWithCache(
           per_page: 100,
         }
 
+        // The issue payload is the change signal for the aggregated issue+comments cache entry.
+        const issueResponse = await fetchGithubRepositoryIssueConditionally({
+          token: githubToken,
+          params: paramsIssue,
+          etag: cachedEntry?.etag,
+          lastModified: cachedEntry?.lastModified,
+        })
+
+        if (issueResponse.notModified) {
+          return {
+            notModified: true as const,
+            etag: issueResponse.etag,
+            lastModified: issueResponse.lastModified,
+          }
+        }
+
         const [data, issueComments] = await Promise.all([
-          fetchGithubRepositoryIssue({ token: githubToken, params: paramsIssue }),
+          Promise.resolve(issueResponse.data!),
           fetchGithubRepositoryIssueComments({ token: githubToken, params: paramsComments }),
         ])
 
@@ -935,6 +981,8 @@ async function fetchRepositoryIssueDetailsWithCache(
               repo,
             },
           } satisfies GithubIssueDetails,
+          etag: issueResponse.etag,
+          lastModified: issueResponse.lastModified,
         }
       },
     }))
@@ -954,7 +1002,7 @@ async function fetchRepositoryTreeWithCache(
   return withGithubMetrics(userId, cachePolicy.operation, () =>
     githubCache.getOrLoad<GithubRepositoryTree>({
       ...cachePolicy,
-      load: async () => {
+      load: async ({ cachedEntry }) => {
         const params: GithubRepositoryTreeParams = {
           owner,
           repo,
@@ -962,7 +1010,22 @@ async function fetchRepositoryTreeWithCache(
           ...(recursive !== undefined ? { recursive } : {}),
         }
 
-        const data = await fetchGithubRepositoryTrees({ token: githubToken, params })
+        const response = await fetchGithubRepositoryTreesConditionally({
+          token: githubToken,
+          params,
+          etag: cachedEntry?.etag,
+          lastModified: cachedEntry?.lastModified,
+        })
+
+        if (response.notModified) {
+          return {
+            notModified: true as const,
+            etag: response.etag,
+            lastModified: response.lastModified,
+          }
+        }
+
+        const data = response.data!
 
         return {
           payload: {
@@ -971,6 +1034,8 @@ async function fetchRepositoryTreeWithCache(
             truncated: data.truncated,
             tree: data.tree,
           } satisfies GithubRepositoryTree,
+          etag: response.etag,
+          lastModified: response.lastModified,
         }
       },
     }))
@@ -990,7 +1055,7 @@ async function fetchRepositoryFileWithCache(
   return withGithubMetrics(userId, cachePolicy.operation, () =>
     githubCache.getOrLoad<GithubFileContent>({
       ...cachePolicy,
-      load: async () => {
+      load: async ({ cachedEntry }) => {
         const params: GetContentParams = {
           owner,
           repo,
@@ -999,7 +1064,22 @@ async function fetchRepositoryFileWithCache(
         }
 
         try {
-          const data = await fetchGithubRepositoryContent({ token: githubToken, params })
+          const response = await fetchGithubRepositoryContentConditionally({
+            token: githubToken,
+            params,
+            etag: cachedEntry?.etag,
+            lastModified: cachedEntry?.lastModified,
+          })
+
+          if (response.notModified) {
+            return {
+              notModified: true as const,
+              etag: response.etag,
+              lastModified: response.lastModified,
+            }
+          }
+
+          const data = response.data!
 
           let content: string | null = null
 
@@ -1019,6 +1099,8 @@ async function fetchRepositoryFileWithCache(
 
           return {
             payload: { content } satisfies GithubFileContent,
+            etag: response.etag,
+            lastModified: response.lastModified,
           }
         }
         catch (error) {
