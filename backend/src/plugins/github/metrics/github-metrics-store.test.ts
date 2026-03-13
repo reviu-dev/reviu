@@ -218,6 +218,11 @@ describe('github metrics store', () => {
       errorCount: 0,
       nearLimitEvents: 1,
       usersNearLimit: 1,
+      paginatedLoads: 0,
+      avgPageCount: null,
+      avgItemCount: null,
+      truncatedCount: 0,
+      avgPaginationDurationMs: null,
     })
 
     expect(overview.scopeSummary).toEqual([
@@ -329,6 +334,73 @@ describe('github metrics store', () => {
         userId: 'user-1',
         resource: 'core',
         remainingPct: 0.8,
+      }),
+    ])
+  })
+
+  it('aggregates pagination metrics from persisted rows', () => {
+    const overview = buildGithubMetricsOverviewFromPersistedRows({
+      now: 180_000,
+      windowMs: 120_000,
+      limit: 10,
+      operationMetrics: [
+        {
+          bucketStart: 120_000,
+          operation: 'pull_request.comments',
+          scope: 'viewer',
+          requests: 2,
+          hits: 0,
+          staleHits: 0,
+          misses: 2,
+          upstreamCalls: 2,
+          notModified: 0,
+          errorCount: 0,
+          nearLimitEvents: 0,
+          totalBackendDurationMs: 40,
+          totalGithubDurationMs: 160,
+          paginatedLoads: 2,
+          totalPageCount: 5,
+          totalItemCount: 360,
+          truncatedCount: 1,
+          totalPaginationDurationMs: 200,
+          ttlMs: 30_000,
+          staleMs: 120_000,
+          lastSeenAt: 120_100,
+        },
+      ],
+      resourceMetrics: [],
+      userMetrics: [],
+      rateLimitStates: [],
+    })
+
+    expect(overview.summary).toEqual(expect.objectContaining({
+      paginatedLoads: 2,
+      avgPageCount: 2.5,
+      avgItemCount: 180,
+      truncatedCount: 1,
+      avgPaginationDurationMs: 100,
+    }))
+
+    expect(overview.scopeSummary).toEqual([
+      expect.objectContaining({
+        scope: 'viewer',
+        paginatedLoads: 2,
+        avgPageCount: 2.5,
+        avgItemCount: 180,
+        truncatedCount: 1,
+        avgPaginationDurationMs: 100,
+      }),
+    ])
+
+    expect(overview.routes).toEqual([
+      expect.objectContaining({
+        operation: 'pull_request.comments',
+        scope: 'viewer',
+        paginatedLoads: 2,
+        avgPageCount: 2.5,
+        avgItemCount: 180,
+        truncatedCount: 1,
+        avgPaginationDurationMs: 100,
       }),
     ])
   })

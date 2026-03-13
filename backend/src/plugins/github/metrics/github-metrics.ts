@@ -244,6 +244,11 @@ export interface GithubCacheMetricsOverview {
     errorCount: number
     nearLimitEvents: number
     usersNearLimit: number
+    paginatedLoads: number
+    avgPageCount: number | null
+    avgItemCount: number | null
+    truncatedCount: number
+    avgPaginationDurationMs: number | null
   }
   scopeSummary: Array<{
     scope: GithubCacheScope
@@ -303,6 +308,11 @@ export interface GithubCacheMetricsOverview {
     nearLimitEvents: number
     avgBackendDurationMs: number | null
     avgGithubDurationMs: number | null
+    paginatedLoads: number
+    avgPageCount: number | null
+    avgItemCount: number | null
+    truncatedCount: number
+    avgPaginationDurationMs: number | null
     ttlMs: number | null
     staleMs: number | null
     lastSeenAt: number
@@ -350,6 +360,39 @@ function createEmptyCounters(): GithubMetricsCounters {
     totalBackendDurationMs: 0,
     totalGithubDurationMs: 0,
   }
+}
+
+function createEmptyOperationAggregate(
+  operation: string,
+  scope: GithubCacheScope | undefined,
+  lastSeenAt: number,
+): GithubMetricsOperationAggregate {
+  return {
+    operation,
+    scope,
+    ...createEmptyCounters(),
+    paginatedLoads: 0,
+    totalPageCount: 0,
+    totalItemCount: 0,
+    truncatedCount: 0,
+    totalPaginationDurationMs: 0,
+    lastSeenAt,
+  }
+}
+
+function mergeOperationAggregate(
+  target: GithubMetricsOperationAggregate,
+  source: GithubMetricsOperationAggregate,
+) {
+  mergeCounters(target, source)
+  target.paginatedLoads += source.paginatedLoads
+  target.totalPageCount += source.totalPageCount
+  target.totalItemCount += source.totalItemCount
+  target.truncatedCount += source.truncatedCount
+  target.totalPaginationDurationMs += source.totalPaginationDurationMs
+  target.ttlMs = source.ttlMs ?? target.ttlMs
+  target.staleMs = source.staleMs ?? target.staleMs
+  target.lastSeenAt = Math.max(target.lastSeenAt, source.lastSeenAt)
 }
 
 function calculateRate(numerator: number, denominator: number) {
@@ -677,7 +720,7 @@ export class GithubMetricsCollector {
 
     const totals = createEmptyCounters()
     const operations = new Map<string, GithubMetricsOperationAggregate>()
-    const scopeSummary = new Map<GithubCacheScope, GithubMetricsCounters>()
+    const scopeSummary = new Map<GithubCacheScope, GithubMetricsOperationAggregate>()
     const users = new Map<string, GithubMetricsUserAggregate>()
     const resourceSeries: GithubCacheMetricsOverview['githubResourceSeries'] = []
 
@@ -703,11 +746,8 @@ export class GithubMetricsCollector {
           continue
         }
 
-        mergeCounters(current, aggregate)
+        mergeOperationAggregate(current, aggregate)
         current.scope = aggregate.scope ?? current.scope
-        current.ttlMs = aggregate.ttlMs ?? current.ttlMs
-        current.staleMs = aggregate.staleMs ?? current.staleMs
-        current.lastSeenAt = Math.max(current.lastSeenAt, aggregate.lastSeenAt)
       }
 
       for (const aggregate of bucket.operations.values()) {
@@ -715,8 +755,12 @@ export class GithubMetricsCollector {
           continue
         }
 
-        const current = scopeSummary.get(aggregate.scope) ?? createEmptyCounters()
-        mergeCounters(current, aggregate)
+        const current = scopeSummary.get(aggregate.scope) ?? createEmptyOperationAggregate(
+          aggregate.operation,
+          aggregate.scope,
+          aggregate.lastSeenAt,
+        )
+        mergeOperationAggregate(current, aggregate)
         scopeSummary.set(aggregate.scope, current)
       }
 
@@ -759,6 +803,21 @@ export class GithubMetricsCollector {
         .map(rateLimit => rateLimit.userId),
     ).size
 
+    const paginationTotals = [...operations.values()].reduce((totals, operation) => {
+      totals.paginatedLoads += operation.paginatedLoads
+      totals.totalPageCount += operation.totalPageCount
+      totals.totalItemCount += operation.totalItemCount
+      totals.truncatedCount += operation.truncatedCount
+      totals.totalPaginationDurationMs += operation.totalPaginationDurationMs
+      return totals
+    }, {
+      paginatedLoads: 0,
+      totalPageCount: 0,
+      totalItemCount: 0,
+      truncatedCount: 0,
+      totalPaginationDurationMs: 0,
+    })
+
     return {
       from,
       to: now,
@@ -777,6 +836,17 @@ export class GithubMetricsCollector {
         errorCount: totals.errors,
         nearLimitEvents: totals.nearLimitEvents,
         usersNearLimit,
+        paginatedLoads: paginationTotals.paginatedLoads,
+        avgPageCount: paginationTotals.paginatedLoads > 0
+          ? paginationTotals.totalPageCount / paginationTotals.paginatedLoads
+          : null,
+        avgItemCount: paginationTotals.paginatedLoads > 0
+          ? paginationTotals.totalItemCount / paginationTotals.paginatedLoads
+          : null,
+        truncatedCount: paginationTotals.truncatedCount,
+        avgPaginationDurationMs: paginationTotals.paginatedLoads > 0
+          ? paginationTotals.totalPaginationDurationMs / paginationTotals.paginatedLoads
+          : null,
       },
       scopeSummary: [...scopeSummary.entries()]
         .sort((a, b) => sortScopes(a[0], b[0]))
@@ -801,11 +871,17 @@ export class GithubMetricsCollector {
           avgGithubDurationMs: counters.upstreamCalls > 0
             ? counters.totalGithubDurationMs / counters.upstreamCalls
             : null,
-          paginatedLoads: 0,
-          avgPageCount: null,
-          avgItemCount: null,
-          truncatedCount: 0,
-          avgPaginationDurationMs: null,
+          paginatedLoads: counters.paginatedLoads,
+          avgPageCount: counters.paginatedLoads > 0
+            ? counters.totalPageCount / counters.paginatedLoads
+            : null,
+          avgItemCount: counters.paginatedLoads > 0
+            ? counters.totalItemCount / counters.paginatedLoads
+            : null,
+          truncatedCount: counters.truncatedCount,
+          avgPaginationDurationMs: counters.paginatedLoads > 0
+            ? counters.totalPaginationDurationMs / counters.paginatedLoads
+            : null,
         })),
       cacheStatusSeries: buckets.map(bucket => ({
         bucketStart: bucket.bucketStart,

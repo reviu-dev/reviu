@@ -89,6 +89,39 @@ function createEmptyCounters(): GithubMetricsCounters {
   }
 }
 
+function createEmptyOperationAggregate(
+  operation: string,
+  scope: GithubCacheScope | undefined,
+  lastSeenAt: number,
+): GithubMetricsOperationAggregate {
+  return {
+    operation,
+    scope,
+    ...createEmptyCounters(),
+    paginatedLoads: 0,
+    totalPageCount: 0,
+    totalItemCount: 0,
+    truncatedCount: 0,
+    totalPaginationDurationMs: 0,
+    lastSeenAt,
+  }
+}
+
+function mergeOperationAggregate(
+  target: GithubMetricsOperationAggregate,
+  source: GithubMetricsOperationAggregate,
+) {
+  mergeCounters(target, source)
+  target.paginatedLoads += source.paginatedLoads
+  target.totalPageCount += source.totalPageCount
+  target.totalItemCount += source.totalItemCount
+  target.truncatedCount += source.truncatedCount
+  target.totalPaginationDurationMs += source.totalPaginationDurationMs
+  target.ttlMs = source.ttlMs ?? target.ttlMs
+  target.staleMs = source.staleMs ?? target.staleMs
+  target.lastSeenAt = Math.max(target.lastSeenAt, source.lastSeenAt)
+}
+
 function calculateRate(numerator: number, denominator: number) {
   if (denominator <= 0) {
     return 0
@@ -143,7 +176,7 @@ export function buildGithubMetricsOverviewFromPersistedRows(
   const normalizedLimit = Math.max(limit, 1)
   const bucketSummaries = new Map<number, GithubMetricsCounters>()
   const operations = new Map<string, GithubMetricsOperationAggregate>()
-  const scopeSummary = new Map<GithubCacheScope, GithubMetricsCounters>()
+  const scopeSummary = new Map<GithubCacheScope, GithubMetricsOperationAggregate>()
   const users = new Map<string, GithubMetricsUserAggregate>()
   const resourceSeries: GithubCacheMetricsOverview['githubResourceSeries'] = []
 
@@ -187,14 +220,39 @@ export function buildGithubMetricsOverviewFromPersistedRows(
       })
     }
     else {
-      mergeCounters(currentOperation, aggregate)
-      currentOperation.ttlMs = row.ttlMs ?? currentOperation.ttlMs
-      currentOperation.staleMs = row.staleMs ?? currentOperation.staleMs
-      currentOperation.lastSeenAt = Math.max(currentOperation.lastSeenAt, normalizeTimestamp(row.lastSeenAt))
+      mergeOperationAggregate(currentOperation, {
+        operation: row.operation,
+        scope: row.scope,
+        ...aggregate,
+        paginatedLoads: row.paginatedLoads,
+        totalPageCount: row.totalPageCount,
+        totalItemCount: row.totalItemCount,
+        truncatedCount: row.truncatedCount,
+        totalPaginationDurationMs: row.totalPaginationDurationMs,
+        ttlMs: row.ttlMs ?? undefined,
+        staleMs: row.staleMs ?? undefined,
+        lastSeenAt: normalizeTimestamp(row.lastSeenAt),
+      })
     }
 
-    const currentScopeSummary = scopeSummary.get(row.scope) ?? createEmptyCounters()
-    mergeCounters(currentScopeSummary, aggregate)
+    const currentScopeSummary = scopeSummary.get(row.scope) ?? createEmptyOperationAggregate(
+      row.operation,
+      row.scope,
+      normalizeTimestamp(row.lastSeenAt),
+    )
+    mergeOperationAggregate(currentScopeSummary, {
+      operation: row.operation,
+      scope: row.scope,
+      ...aggregate,
+      paginatedLoads: row.paginatedLoads,
+      totalPageCount: row.totalPageCount,
+      totalItemCount: row.totalItemCount,
+      truncatedCount: row.truncatedCount,
+      totalPaginationDurationMs: row.totalPaginationDurationMs,
+      ttlMs: row.ttlMs ?? undefined,
+      staleMs: row.staleMs ?? undefined,
+      lastSeenAt: normalizeTimestamp(row.lastSeenAt),
+    })
     scopeSummary.set(row.scope, currentScopeSummary)
   }
 
@@ -280,6 +338,21 @@ export function buildGithubMetricsOverviewFromPersistedRows(
       .map(state => state.userId),
   ).size
 
+  const paginationTotals = [...operations.values()].reduce((totals, operation) => {
+    totals.paginatedLoads += operation.paginatedLoads
+    totals.totalPageCount += operation.totalPageCount
+    totals.totalItemCount += operation.totalItemCount
+    totals.truncatedCount += operation.truncatedCount
+    totals.totalPaginationDurationMs += operation.totalPaginationDurationMs
+    return totals
+  }, {
+    paginatedLoads: 0,
+    totalPageCount: 0,
+    totalItemCount: 0,
+    truncatedCount: 0,
+    totalPaginationDurationMs: 0,
+  })
+
   return {
     from,
     to: now,
@@ -298,6 +371,17 @@ export function buildGithubMetricsOverviewFromPersistedRows(
       errorCount: totals.errors,
       nearLimitEvents: totals.nearLimitEvents,
       usersNearLimit,
+      paginatedLoads: paginationTotals.paginatedLoads,
+      avgPageCount: paginationTotals.paginatedLoads > 0
+        ? paginationTotals.totalPageCount / paginationTotals.paginatedLoads
+        : null,
+      avgItemCount: paginationTotals.paginatedLoads > 0
+        ? paginationTotals.totalItemCount / paginationTotals.paginatedLoads
+        : null,
+      truncatedCount: paginationTotals.truncatedCount,
+      avgPaginationDurationMs: paginationTotals.paginatedLoads > 0
+        ? paginationTotals.totalPaginationDurationMs / paginationTotals.paginatedLoads
+        : null,
     },
     scopeSummary: [...scopeSummary.entries()]
       .sort((a, b) => sortScopes(a[0], b[0]))
@@ -322,11 +406,17 @@ export function buildGithubMetricsOverviewFromPersistedRows(
         avgGithubDurationMs: counters.upstreamCalls > 0
           ? counters.totalGithubDurationMs / counters.upstreamCalls
           : null,
-        paginatedLoads: 0,
-        avgPageCount: null,
-        avgItemCount: null,
-        truncatedCount: 0,
-        avgPaginationDurationMs: null,
+        paginatedLoads: counters.paginatedLoads,
+        avgPageCount: counters.paginatedLoads > 0
+          ? counters.totalPageCount / counters.paginatedLoads
+          : null,
+        avgItemCount: counters.paginatedLoads > 0
+          ? counters.totalItemCount / counters.paginatedLoads
+          : null,
+        truncatedCount: counters.truncatedCount,
+        avgPaginationDurationMs: counters.paginatedLoads > 0
+          ? counters.totalPaginationDurationMs / counters.paginatedLoads
+          : null,
       })),
     cacheStatusSeries,
     githubResourceSeries: resourceSeries.sort((a, b) => a.bucketStart - b.bucketStart || a.resource.localeCompare(b.resource)),

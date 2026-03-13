@@ -93,6 +93,11 @@ describe('github metrics collector', () => {
       errorCount: 0,
       nearLimitEvents: 1,
       usersNearLimit: 1,
+      paginatedLoads: 0,
+      avgPageCount: null,
+      avgItemCount: null,
+      truncatedCount: 0,
+      avgPaginationDurationMs: null,
     })
 
     expect(overview.scopeSummary).toEqual([
@@ -353,6 +358,71 @@ describe('github metrics collector', () => {
         truncatedCount: 0,
         avgPaginationDurationMs: null,
       },
+    ])
+  })
+
+  it('aggregates pagination metrics into summary, scope, and routes', () => {
+    const collector = createGithubMetricsCollector({
+      now: () => 180_000,
+    })
+
+    collector.recordPaginationEvent({
+      at: 120_000,
+      userId: 'user-1',
+      operation: 'pull_request.comments',
+      scope: 'viewer',
+      pageCount: 3,
+      itemCount: 240,
+      truncated: true,
+      durationMs: 120,
+    })
+
+    collector.recordPaginationEvent({
+      at: 120_500,
+      userId: 'user-1',
+      operation: 'pull_request.comments',
+      scope: 'viewer',
+      pageCount: 2,
+      itemCount: 120,
+      truncated: false,
+      durationMs: 80,
+    })
+
+    const overview = collector.getOverview({
+      now: 180_000,
+      windowMs: 5 * 60_000,
+      limit: 10,
+    })
+
+    expect(overview.summary).toEqual(expect.objectContaining({
+      paginatedLoads: 2,
+      avgPageCount: 2.5,
+      avgItemCount: 180,
+      truncatedCount: 1,
+      avgPaginationDurationMs: 100,
+    }))
+
+    expect(overview.scopeSummary).toEqual([
+      expect.objectContaining({
+        scope: 'viewer',
+        paginatedLoads: 2,
+        avgPageCount: 2.5,
+        avgItemCount: 180,
+        truncatedCount: 1,
+        avgPaginationDurationMs: 100,
+      }),
+    ])
+
+    expect(overview.routes).toEqual([
+      expect.objectContaining({
+        operation: 'pull_request.comments',
+        scope: 'viewer',
+        paginatedLoads: 2,
+        avgPageCount: 2.5,
+        avgItemCount: 180,
+        truncatedCount: 1,
+        avgPaginationDurationMs: 100,
+      }),
     ])
   })
 

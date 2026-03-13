@@ -70,6 +70,10 @@ const compactNumberFormatter = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 1,
 })
 
+const averageNumberFormatter = new Intl.NumberFormat('en-US', {
+  maximumFractionDigits: 1,
+})
+
 const percentFormatter = new Intl.NumberFormat('en-US', {
   style: 'percent',
   maximumFractionDigits: 1,
@@ -112,7 +116,7 @@ async function fetchOverview() {
     const response = await adminClient['github-cache'].overview.$get({
       query: {
         windowMinutes: String(Number(selectedWindowMinutes.value)),
-        limit: '12',
+        limit: '20',
       },
     })
 
@@ -225,7 +229,58 @@ const summaryCards = computed(() => {
   ]
 })
 
+const paginationCards = computed(() => {
+  const summary = overview.value?.summary
+  if (!summary) {
+    return []
+  }
+
+  const truncationRate = summary.paginatedLoads > 0
+    ? summary.truncatedCount / summary.paginatedLoads
+    : null
+
+  return [
+    {
+      label: 'Paginated rebuilds',
+      value: formatCount(summary.paginatedLoads),
+      detail: `${formatDuration(summary.avgPaginationDurationMs)} average rebuild`,
+    },
+    {
+      label: 'Average pages',
+      value: formatAverage(summary.avgPageCount),
+      detail: `${formatAverage(summary.avgItemCount)} average items`,
+    },
+    {
+      label: 'Truncated rebuilds',
+      value: formatCount(summary.truncatedCount),
+      detail: truncationRate == null ? 'No paginated loads' : `${formatPercent(truncationRate)} of paginated loads`,
+    },
+    {
+      label: 'Pagination headroom',
+      value: summary.truncatedCount > 0 ? 'Capped' : 'Clear',
+      detail: summary.truncatedCount > 0
+        ? 'At least one aggregate hit the configured cap'
+        : 'No aggregate hit the configured cap',
+    },
+  ]
+})
+
 const scopeCards = computed(() => overview.value?.scopeSummary ?? [])
+
+const paginatedRoutes = computed(() => {
+  return [...(overview.value?.routes ?? [])]
+    .filter(route => route.paginatedLoads > 0)
+    .toSorted((left, right) => {
+      return right.truncatedCount - left.truncatedCount
+        || (right.avgItemCount ?? 0) - (left.avgItemCount ?? 0)
+        || right.paginatedLoads - left.paginatedLoads
+        || left.operation.localeCompare(right.operation)
+    })
+})
+
+const truncatedRoutes = computed(() => {
+  return paginatedRoutes.value.filter(route => route.truncatedCount > 0)
+})
 
 function formatCount(value: number | null | undefined) {
   if (value == null) {
@@ -233,6 +288,14 @@ function formatCount(value: number | null | undefined) {
   }
 
   return compactNumberFormatter.format(value)
+}
+
+function formatAverage(value: number | null | undefined) {
+  if (value == null) {
+    return '—'
+  }
+
+  return averageNumberFormatter.format(value)
 }
 
 function formatPercent(value: number | null | undefined) {
@@ -444,31 +507,80 @@ function formatScopeLabel(scope: GithubCacheOverview['scopeSummary'][number]['sc
               {{ formatCount(scope.requests) }} requests, {{ formatCount(scope.upstreamCalls) }} upstream calls
             </CardDescription>
           </CardHeader>
-          <CardContent class="grid gap-3 sm:grid-cols-3">
-            <div class="space-y-1">
-              <div class="text-muted-foreground text-xs uppercase tracking-[0.18em]">
-                Hit rate
+          <CardContent class="space-y-4">
+            <div class="grid gap-3 sm:grid-cols-3">
+              <div class="space-y-1">
+                <div class="text-muted-foreground text-xs uppercase tracking-[0.18em]">
+                  Hit rate
+                </div>
+                <div class="text-xl font-semibold">
+                  {{ formatPercent(scope.hitRate) }}
+                </div>
               </div>
-              <div class="text-xl font-semibold">
-                {{ formatPercent(scope.hitRate) }}
+              <div class="space-y-1">
+                <div class="text-muted-foreground text-xs uppercase tracking-[0.18em]">
+                  Saved
+                </div>
+                <div class="text-xl font-semibold">
+                  {{ formatCount(scope.githubCallsSaved) }}
+                </div>
+              </div>
+              <div class="space-y-1">
+                <div class="text-muted-foreground text-xs uppercase tracking-[0.18em]">
+                  GitHub avg
+                </div>
+                <div class="text-xl font-semibold">
+                  {{ formatDuration(scope.avgGithubDurationMs) }}
+                </div>
               </div>
             </div>
-            <div class="space-y-1">
-              <div class="text-muted-foreground text-xs uppercase tracking-[0.18em]">
-                Saved
+
+            <div class="border-border/60 grid gap-3 border-t pt-4 sm:grid-cols-3">
+              <div class="space-y-1">
+                <div class="text-muted-foreground text-xs uppercase tracking-[0.18em]">
+                  Paginated
+                </div>
+                <div class="text-base font-semibold">
+                  {{ formatCount(scope.paginatedLoads) }}
+                </div>
               </div>
-              <div class="text-xl font-semibold">
-                {{ formatCount(scope.githubCallsSaved) }}
+              <div class="space-y-1">
+                <div class="text-muted-foreground text-xs uppercase tracking-[0.18em]">
+                  Avg pages
+                </div>
+                <div class="text-base font-semibold">
+                  {{ formatAverage(scope.avgPageCount) }}
+                </div>
+              </div>
+              <div class="space-y-1">
+                <div class="text-muted-foreground text-xs uppercase tracking-[0.18em]">
+                  Truncated
+                </div>
+                <div class="text-base font-semibold">
+                  {{ formatCount(scope.truncatedCount) }}
+                </div>
               </div>
             </div>
-            <div class="space-y-1">
-              <div class="text-muted-foreground text-xs uppercase tracking-[0.18em]">
-                GitHub avg
-              </div>
-              <div class="text-xl font-semibold">
-                {{ formatDuration(scope.avgGithubDurationMs) }}
-              </div>
-            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div class="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+        <Card
+          v-for="card in paginationCards"
+          :key="card.label"
+          class="border-border/60 bg-card/80 backdrop-blur"
+        >
+          <CardHeader class="pb-2">
+            <CardDescription class="text-xs uppercase tracking-[0.18em]">
+              {{ card.label }}
+            </CardDescription>
+            <CardTitle class="text-3xl">
+              {{ card.value }}
+            </CardTitle>
+          </CardHeader>
+          <CardContent class="text-muted-foreground text-sm">
+            {{ card.detail }}
           </CardContent>
         </Card>
       </div>
@@ -558,6 +670,128 @@ function formatScopeLabel(scope: GithubCacheOverview['scopeSummary'][number]['sc
         </Card>
       </div>
 
+      <div class="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
+        <Card class="border-border/60">
+          <CardHeader>
+            <CardTitle>Heavy Paginated Aggregates</CardTitle>
+            <CardDescription>
+              Top tracked routes building multi-page collections in the current window. Use this table to spot the operations that need tighter TTLs, better caps, or product-level pagination.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table v-if="paginatedRoutes.length > 0">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Operation</TableHead>
+                  <TableHead>Scope</TableHead>
+                  <TableHead>Loads</TableHead>
+                  <TableHead>Avg pages</TableHead>
+                  <TableHead>Avg items</TableHead>
+                  <TableHead>Truncated</TableHead>
+                  <TableHead>Rebuild avg</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow
+                  v-for="route in paginatedRoutes"
+                  :key="`paginated:${route.operation}:${route.scope ?? 'unscoped'}`"
+                >
+                  <TableCell class="max-w-[320px]">
+                    <div class="flex flex-col gap-1">
+                      <span class="font-medium">{{ route.operation }}</span>
+                      <span class="text-muted-foreground text-xs">
+                        last seen {{ formatDateTime(route.lastSeenAt) }}
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      v-if="route.scope"
+                      :variant="scopeVariant(route.scope)"
+                    >
+                      {{ route.scope }}
+                    </Badge>
+                    <span v-else class="text-muted-foreground text-xs">—</span>
+                  </TableCell>
+                  <TableCell>{{ formatCount(route.paginatedLoads) }}</TableCell>
+                  <TableCell>{{ formatAverage(route.avgPageCount) }}</TableCell>
+                  <TableCell>{{ formatAverage(route.avgItemCount) }}</TableCell>
+                  <TableCell>
+                    <Badge :variant="route.truncatedCount > 0 ? 'destructive' : 'outline'">
+                      {{ formatCount(route.truncatedCount) }}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>{{ formatDuration(route.avgPaginationDurationMs) }}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+            <div
+              v-else
+              class="text-muted-foreground py-8 text-sm"
+            >
+              No paginated collection rebuilds were recorded in this window.
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card class="border-border/60">
+          <CardHeader>
+            <CardTitle>Truncated Collections</CardTitle>
+            <CardDescription>
+              Top tracked aggregates that hit the current safety cap. These are the first candidates for product-level pagination or route-specific caps.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table v-if="truncatedRoutes.length > 0">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Operation</TableHead>
+                  <TableHead>Scope</TableHead>
+                  <TableHead>Hits</TableHead>
+                  <TableHead>Avg items</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow
+                  v-for="route in truncatedRoutes"
+                  :key="`truncated:${route.operation}:${route.scope ?? 'unscoped'}`"
+                >
+                  <TableCell class="max-w-[260px]">
+                    <div class="flex flex-col gap-1">
+                      <span class="font-medium">{{ route.operation }}</span>
+                      <span class="text-muted-foreground text-xs">
+                        {{ formatDuration(route.avgPaginationDurationMs) }} average rebuild
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      v-if="route.scope"
+                      :variant="scopeVariant(route.scope)"
+                    >
+                      {{ route.scope }}
+                    </Badge>
+                    <span v-else class="text-muted-foreground text-xs">—</span>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="destructive">
+                      {{ formatCount(route.truncatedCount) }}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>{{ formatAverage(route.avgItemCount) }}</TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+            <div
+              v-else
+              class="text-muted-foreground py-8 text-sm"
+            >
+              No collection hit the configured pagination cap in this window.
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       <div class="grid gap-4 xl:grid-cols-[1.6fr_1fr]">
         <Card class="border-border/60">
           <CardHeader>
@@ -588,9 +822,23 @@ function formatScopeLabel(scope: GithubCacheOverview['scopeSummary'][number]['sc
                   <TableCell class="max-w-[320px]">
                     <div class="flex flex-col gap-1">
                       <span class="font-medium">{{ route.operation }}</span>
-                      <span class="text-muted-foreground text-xs">
-                        stale window {{ formatDuration(route.staleMs) }}
-                      </span>
+                      <div class="flex flex-wrap items-center gap-2 text-xs">
+                        <span class="text-muted-foreground">
+                          stale window {{ formatDuration(route.staleMs) }}
+                        </span>
+                        <Badge
+                          v-if="route.paginatedLoads > 0"
+                          variant="outline"
+                        >
+                          {{ formatCount(route.paginatedLoads) }} paginated
+                        </Badge>
+                        <Badge
+                          v-if="route.truncatedCount > 0"
+                          variant="destructive"
+                        >
+                          {{ formatCount(route.truncatedCount) }} truncated
+                        </Badge>
+                      </div>
                     </div>
                   </TableCell>
                   <TableCell>
