@@ -7,11 +7,11 @@ import {
   createGithubPullRequestDetailsCachePolicy,
   createGithubPullRequestFilesCachePolicy,
   createGithubPullRequestIssueCommentsCachePolicy,
+  createGithubPullRequestSearchCachePolicy,
   createGithubRepositoryFileCachePolicy,
   createGithubRepositoryIssueDetailsCachePolicy,
   createGithubRepositoryIssuesCachePolicy,
   createGithubRepositoryPullRequestsCachePolicy,
-  createGithubPullRequestSearchCachePolicy,
   createGithubRepositoryReadmeCachePolicy,
   createGithubRepositoryTreeCachePolicy,
   getGithubIssueMutationTags,
@@ -21,6 +21,7 @@ import {
 describe('github cache policy', () => {
   it('builds the notifications cache policy for a viewer', () => {
     expect(createGithubNotificationsCachePolicy('user-1')).toEqual({
+      operation: 'viewer.notifications',
       scope: 'viewer',
       scopeId: 'user-1',
       resourceKey: 'notifications',
@@ -32,6 +33,7 @@ describe('github cache policy', () => {
 
   it('builds the pull request search cache policy with broad and variant tags', () => {
     expect(createGithubPullRequestSearchCachePolicy('user-1', 'need-review')).toEqual({
+      operation: 'viewer.pull_requests.need_review',
       scope: 'viewer',
       scopeId: 'user-1',
       resourceKey: 'search:need-review-pull-requests',
@@ -46,6 +48,7 @@ describe('github cache policy', () => {
 
   it('builds the pull request details cache policy', () => {
     expect(createGithubPullRequestDetailsCachePolicy('user-1', 'OpenAI', 'Reviu', 42)).toEqual({
+      operation: 'pull_request.details',
       scope: 'viewer',
       scopeId: 'user-1',
       resourceKey: 'pull-request:openai/reviu:42:details',
@@ -57,6 +60,7 @@ describe('github cache policy', () => {
 
   it('builds a commit-specific files cache policy with a longer ttl', () => {
     expect(createGithubPullRequestFilesCachePolicy('user-1', 'OpenAI', 'Reviu', 42, 'ABC123')).toEqual({
+      operation: 'pull_request.files.commit',
       scope: 'viewer',
       scopeId: 'user-1',
       resourceKey: 'pull-request:openai/reviu:42:files:commit:ABC123',
@@ -68,6 +72,7 @@ describe('github cache policy', () => {
 
   it('builds the pull request commits cache policy', () => {
     expect(createGithubPullRequestCommitsCachePolicy('user-1', 'OpenAI', 'Reviu', 42)).toEqual({
+      operation: 'pull_request.commits',
       scope: 'viewer',
       scopeId: 'user-1',
       resourceKey: 'pull-request:openai/reviu:42:commits',
@@ -79,6 +84,7 @@ describe('github cache policy', () => {
 
   it('builds the pull request issue comments cache policy', () => {
     expect(createGithubPullRequestIssueCommentsCachePolicy('user-1', 'OpenAI', 'Reviu', 42)).toEqual({
+      operation: 'pull_request.issue_comments',
       scope: 'viewer',
       scopeId: 'user-1',
       resourceKey: 'pull-request:openai/reviu:42:issue-comments',
@@ -90,6 +96,7 @@ describe('github cache policy', () => {
 
   it('builds the pull request review comments cache policy', () => {
     expect(createGithubPullRequestCommentsCachePolicy('user-1', 'OpenAI', 'Reviu', 42)).toEqual({
+      operation: 'pull_request.comments',
       scope: 'viewer',
       scopeId: 'user-1',
       resourceKey: 'pull-request:openai/reviu:42:comments',
@@ -101,6 +108,7 @@ describe('github cache policy', () => {
 
   it('builds a ref-specific readme cache policy', () => {
     expect(createGithubRepositoryReadmeCachePolicy('user-1', 'OpenAI', 'Reviu', 'feature/cache')).toEqual({
+      operation: 'repository.readme.ref',
       scope: 'viewer',
       scopeId: 'user-1',
       resourceKey: 'repo:openai/reviu:readme:ref:feature%2Fcache',
@@ -112,6 +120,7 @@ describe('github cache policy', () => {
 
   it('builds the repository pull requests cache policy', () => {
     expect(createGithubRepositoryPullRequestsCachePolicy('user-1', 'OpenAI', 'Reviu')).toEqual({
+      operation: 'repository.pull_requests',
       scope: 'viewer',
       scopeId: 'user-1',
       resourceKey: 'repo:openai/reviu:pull-requests',
@@ -123,6 +132,7 @@ describe('github cache policy', () => {
 
   it('builds the repository issues cache policy', () => {
     expect(createGithubRepositoryIssuesCachePolicy('user-1', 'OpenAI', 'Reviu')).toEqual({
+      operation: 'repository.issues',
       scope: 'viewer',
       scopeId: 'user-1',
       resourceKey: 'repo:openai/reviu:issues',
@@ -134,6 +144,7 @@ describe('github cache policy', () => {
 
   it('builds the repository issue details cache policy with issue and comment tags', () => {
     expect(createGithubRepositoryIssueDetailsCachePolicy('user-1', 'OpenAI', 'Reviu', 7)).toEqual({
+      operation: 'repository.issue_details',
       scope: 'viewer',
       scopeId: 'user-1',
       resourceKey: 'repo:openai/reviu:issue:7',
@@ -145,6 +156,7 @@ describe('github cache policy', () => {
 
   it('builds the repository tree cache policy', () => {
     expect(createGithubRepositoryTreeCachePolicy('user-1', 'OpenAI', 'Reviu', 'abc123', '1')).toEqual({
+      operation: 'repository.tree.recursive',
       scope: 'viewer',
       scopeId: 'user-1',
       resourceKey: 'repo:openai/reviu:tree:abc123:recursive:1',
@@ -156,6 +168,7 @@ describe('github cache policy', () => {
 
   it('builds a long-lived file cache policy for blob sha refs', () => {
     expect(createGithubRepositoryFileCachePolicy('user-1', 'OpenAI', 'Reviu', 'src/main.ts', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')).toEqual({
+      operation: 'repository.file.blob',
       scope: 'viewer',
       scopeId: 'user-1',
       resourceKey: 'repo:openai/reviu:file:blob:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:path:src%2Fmain.ts',

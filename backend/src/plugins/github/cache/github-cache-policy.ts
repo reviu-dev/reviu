@@ -3,6 +3,7 @@ import type { GithubCacheScope } from './github-cache.js'
 export type GithubPullRequestSearchCacheVariant = 'latest' | 'need-review'
 
 export interface GithubCachePolicy {
+  operation: string
   scope: GithubCacheScope
   scopeId?: string
   resourceKey: string
@@ -147,6 +148,7 @@ export function getGithubRepositoryFileTag(owner: string, repo: string, ref: str
 
 export function createGithubNotificationsCachePolicy(userId: string): GithubCachePolicy {
   return {
+    operation: 'viewer.notifications',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: 'notifications',
@@ -158,6 +160,7 @@ export function createGithubNotificationsCachePolicy(userId: string): GithubCach
 
 export function createGithubUserRepositoriesCachePolicy(userId: string): GithubCachePolicy {
   return {
+    operation: 'viewer.repositories',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: 'repos:me',
@@ -176,6 +179,9 @@ export function createGithubPullRequestSearchCachePolicy(
     : 'search:need-review-pull-requests'
 
   return {
+    operation: variant === 'latest'
+      ? 'viewer.pull_requests.latest'
+      : 'viewer.pull_requests.need_review',
     scope: 'viewer',
     scopeId: userId,
     resourceKey,
@@ -197,6 +203,7 @@ export function createGithubPullRequestDetailsCachePolicy(
   const repositoryKey = normalizeRepositoryKey(owner, repo)
 
   return {
+    operation: 'pull_request.details',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: `pull-request:${repositoryKey}:${pullNumber}:details`,
@@ -219,6 +226,7 @@ export function createGithubPullRequestFilesCachePolicy(
     : 'latest'
 
   return {
+    operation: commitSha ? 'pull_request.files.commit' : 'pull_request.files',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: `pull-request:${repositoryKey}:${pullNumber}:files:${scopeSuffix}`,
@@ -241,6 +249,7 @@ export function createGithubPullRequestCommitsCachePolicy(
   const repositoryKey = normalizeRepositoryKey(owner, repo)
 
   return {
+    operation: 'pull_request.commits',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: `pull-request:${repositoryKey}:${pullNumber}:commits`,
@@ -259,6 +268,7 @@ export function createGithubPullRequestIssueCommentsCachePolicy(
   const repositoryKey = normalizeRepositoryKey(owner, repo)
 
   return {
+    operation: 'pull_request.issue_comments',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: `pull-request:${repositoryKey}:${pullNumber}:issue-comments`,
@@ -277,6 +287,7 @@ export function createGithubPullRequestCommentsCachePolicy(
   const repositoryKey = normalizeRepositoryKey(owner, repo)
 
   return {
+    operation: 'pull_request.comments',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: `pull-request:${repositoryKey}:${pullNumber}:comments`,
@@ -295,6 +306,7 @@ export function createGithubPullRequestReviewsCachePolicy(
   const repositoryKey = normalizeRepositoryKey(owner, repo)
 
   return {
+    operation: 'pull_request.reviews',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: `pull-request:${repositoryKey}:${pullNumber}:reviews`,
@@ -312,6 +324,7 @@ export function createGithubRepositoryDetailsCachePolicy(
   const repositoryKey = normalizeRepositoryKey(owner, repo)
 
   return {
+    operation: 'repository.details',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: `repo:${repositoryKey}:details`,
@@ -331,6 +344,9 @@ export function createGithubRepositoryReadmeCachePolicy(
   const normalizedRef = ref?.trim()
 
   return {
+    operation: normalizedRef
+      ? 'repository.readme.ref'
+      : 'repository.readme',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: normalizedRef
@@ -354,6 +370,7 @@ export function createGithubRepositoryBranchesCachePolicy(
   const repositoryKey = normalizeRepositoryKey(owner, repo)
 
   return {
+    operation: 'repository.branches',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: `repo:${repositoryKey}:branches`,
@@ -371,6 +388,7 @@ export function createGithubRepositoryPullRequestsCachePolicy(
   const repositoryKey = normalizeRepositoryKey(owner, repo)
 
   return {
+    operation: 'repository.pull_requests',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: `repo:${repositoryKey}:pull-requests`,
@@ -388,6 +406,7 @@ export function createGithubRepositoryIssuesCachePolicy(
   const repositoryKey = normalizeRepositoryKey(owner, repo)
 
   return {
+    operation: 'repository.issues',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: `repo:${repositoryKey}:issues`,
@@ -406,6 +425,7 @@ export function createGithubRepositoryIssueDetailsCachePolicy(
   const repositoryKey = normalizeRepositoryKey(owner, repo)
 
   return {
+    operation: 'repository.issue_details',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: `repo:${repositoryKey}:issue:${issueNumber}`,
@@ -428,6 +448,9 @@ export function createGithubRepositoryTreeCachePolicy(
   const repositoryKey = normalizeRepositoryKey(owner, repo)
 
   return {
+    operation: recursive === undefined
+      ? 'repository.tree'
+      : 'repository.tree.recursive',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: recursive === undefined
@@ -452,6 +475,7 @@ export function createGithubRepositoryFileCachePolicy(
   const normalizedPath = normalizeCacheSegment(path)
 
   return {
+    operation: bySha ? 'repository.file.blob' : 'repository.file',
     scope: 'viewer',
     scopeId: userId,
     resourceKey: `repo:${repositoryKey}:file:${bySha ? 'blob' : 'ref'}:${normalizedRef}:path:${normalizedPath}`,

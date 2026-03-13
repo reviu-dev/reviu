@@ -1,30 +1,36 @@
-import type { AuthType } from '../lib/auth.js'
+import type { AuthType, UserContext } from '../lib/auth.js'
 import { createMiddleware } from 'hono/factory'
 import { auth } from '../lib/auth.js'
 
-export const authMiddleware = createMiddleware(async (c, next) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers })
+export function authMiddleware(role: 'user' | 'admin' = 'user') {
+  return createMiddleware<{ Variables: { user: UserContext } }>(async (c, next) => {
+    const session = await auth.api.getSession({ headers: c.req.raw.headers })
 
-  const user = (session?.user as AuthType['user']) ?? null
+    const user = (session?.user as AuthType['user']) ?? null
 
-  if (!user) {
-    return c.json({ error: 'Unauthorized' }, 401)
-  }
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401)
+    }
 
-  const ghAccessToken = await auth.api.getAccessToken({
-    body: {
-      providerId: 'github',
-    },
-    headers: c.req.raw.headers,
-  })
+    if (role === 'admin' && user.role !== 'admin') {
+      return c.json({ error: 'Forbidden' }, 403)
+    }
 
-  const polarState = await auth.api.state(
-    {
+    const ghAccessToken = await auth.api.getAccessToken({
+      body: {
+        providerId: 'github',
+      },
       headers: c.req.raw.headers,
-    },
-  )
+    })
 
-  c.set('user', { ...user, github: ghAccessToken, polar: polarState })
+    const polarState = await auth.api.state(
+      {
+        headers: c.req.raw.headers,
+      },
+    )
 
-  await next()
-})
+    c.set('user', { ...user, github: ghAccessToken, polar: polarState })
+
+    await next()
+  })
+}

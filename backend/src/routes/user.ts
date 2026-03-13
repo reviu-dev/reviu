@@ -8,7 +8,7 @@ import { fetchGithubViewer } from '../plugins/github/service.js'
 const userRouter = new Hono()
 
 export const userRoutes = userRouter
-  .get('/me', authMiddleware, async (ctx) => {
+  .get('/me', authMiddleware(), async (ctx) => {
     const user = ctx.get('user')!
 
     const activeSubscription = user.polar.activeSubscriptions.find(sub => sub.productId === env.POLAR_SUBSCRIPTION_PRODUCT_ID) ?? null

@@ -60,6 +60,8 @@ import type {
 } from './types.js'
 import { request } from '@octokit/request'
 import { logger } from '../../lib/logger.js'
+import { getGithubMetricsContext } from './metrics/github-metrics-context.js'
+import { githubMetricsCollector } from './metrics/github-metrics.js'
 
 function githubAuthHeaders(token: string, extraHeaders?: Record<string, string>): RequestHeaders {
   return {
@@ -180,6 +182,27 @@ function logGithubRateLimit(route: string, status: number, headers: GithubRespon
   }
 }
 
+function recordGithubRequestMetric(
+  route: string,
+  status: number,
+  headers: GithubResponseHeaders | undefined,
+  durationMs: number,
+  notModified = false,
+) {
+  const context = getGithubMetricsContext()
+  const operation = context?.operation ?? route
+
+  githubMetricsCollector.recordGithubApiEvent({
+    userId: context?.userId,
+    operation,
+    route,
+    status,
+    durationMs,
+    notModified,
+    rateLimit: extractGithubRateLimitInfo(headers),
+  })
+}
+
 function buildGithubRequestOptions<Route extends keyof Endpoints>(
   token: string,
   params?: Endpoints[Route]['parameters'],
@@ -203,14 +226,20 @@ async function requestGithubData<Route extends keyof Endpoints>(
     headers?: Record<string, string>
   },
 ): Promise<Endpoints[Route]['response']['data']> {
+  const startedAt = Date.now()
+
   try {
     const response = await request(route, buildGithubRequestOptions<Route>(token, params, headers))
+    const durationMs = Date.now() - startedAt
     logGithubRateLimit(route, response.status, response.headers)
+    recordGithubRequestMetric(route, response.status, response.headers, durationMs)
     return response.data as Endpoints[Route]['response']['data']
   }
   catch (error) {
     const githubError = error as GithubErrorLike
+    const durationMs = Date.now() - startedAt
     logGithubRateLimit(route, githubError.status ?? 0, githubError.response?.headers)
+    recordGithubRequestMetric(route, githubError.status ?? 0, githubError.response?.headers, durationMs)
     throw error
   }
 }
@@ -227,13 +256,19 @@ async function requestGithubWithoutData<Route extends keyof Endpoints>(
     headers?: Record<string, string>
   },
 ): Promise<void> {
+  const startedAt = Date.now()
+
   try {
     const response = await request(route, buildGithubRequestOptions<Route>(token, params, headers))
+    const durationMs = Date.now() - startedAt
     logGithubRateLimit(route, response.status, response.headers)
+    recordGithubRequestMetric(route, response.status, response.headers, durationMs)
   }
   catch (error) {
     const githubError = error as GithubErrorLike
+    const durationMs = Date.now() - startedAt
     logGithubRateLimit(route, githubError.status ?? 0, githubError.response?.headers)
+    recordGithubRequestMetric(route, githubError.status ?? 0, githubError.response?.headers, durationMs)
     throw error
   }
 }
@@ -243,6 +278,7 @@ async function requestGithubConditionally<Route extends keyof Endpoints>(
   { token, params, etag, lastModified, headers }: GithubConditionalRequestOptions<Route>,
 ): Promise<GithubConditionalResponse<Route>> {
   const conditionalHeaders: Record<string, string> = {}
+  const startedAt = Date.now()
 
   if (etag) {
     conditionalHeaders['if-none-match'] = etag
@@ -261,7 +297,9 @@ async function requestGithubConditionally<Route extends keyof Endpoints>(
         ...conditionalHeaders,
       },
     ))
+    const durationMs = Date.now() - startedAt
     logGithubRateLimit(route, response.status, response.headers)
+    recordGithubRequestMetric(route, response.status, response.headers, durationMs)
 
     return {
       data: response.data as Endpoints[Route]['response']['data'] | null,
@@ -272,8 +310,10 @@ async function requestGithubConditionally<Route extends keyof Endpoints>(
   }
   catch (error) {
     const githubError = error as GithubErrorLike
+    const durationMs = Date.now() - startedAt
     logGithubRateLimit(route, githubError.status ?? 0, githubError.response?.headers)
     if (githubError.status === 304) {
+      recordGithubRequestMetric(route, 304, githubError.response?.headers, durationMs, true)
       return {
         data: null,
         notModified: true,
@@ -282,6 +322,7 @@ async function requestGithubConditionally<Route extends keyof Endpoints>(
       }
     }
 
+    recordGithubRequestMetric(route, githubError.status ?? 0, githubError.response?.headers, durationMs)
     throw error
   }
 }

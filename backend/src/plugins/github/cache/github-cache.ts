@@ -1,4 +1,6 @@
 import { logger } from '../../../lib/logger.js'
+import { getGithubMetricsContext } from '../metrics/github-metrics-context.js'
+import { githubMetricsCollector } from '../metrics/github-metrics.js'
 
 export type GithubCacheScope = 'viewer' | 'installation' | 'public'
 export type GithubCacheStatus = 'hit' | 'miss' | 'stale'
@@ -25,6 +27,7 @@ export interface GithubCacheStore {
 }
 
 export interface GithubCacheGetOrLoadOptions<T> {
+  operation?: string
   scope: GithubCacheScope
   scopeId?: string
   resourceKey: string
@@ -210,11 +213,13 @@ class GithubCacheManager {
   ) {}
 
   async getOrLoad<T>(options: GithubCacheGetOrLoadOptions<T>): Promise<GithubCacheLoadResult<T>> {
+    const startedAt = this.now()
     const cacheKey = buildCacheKey(options.scope, options.resourceKey, options.scopeId)
     const inflight = this.inflight.get(cacheKey) as Promise<GithubCacheLoadResult<T>> | undefined
     if (inflight) {
       const result = await inflight
       this.logCacheResolution(options, cacheKey, result.cacheStatus)
+      this.recordCacheResolution(options, result.cacheStatus, startedAt)
       return result
     }
 
@@ -224,6 +229,7 @@ class GithubCacheManager {
     try {
       const result = await task
       this.logCacheResolution(options, cacheKey, result.cacheStatus)
+      this.recordCacheResolution(options, result.cacheStatus, startedAt)
       return result
     }
     finally {
@@ -514,5 +520,28 @@ class GithubCacheManager {
       scope: options.scope,
       scopeId: options.scopeId ?? null,
     }, 'GitHub cache resolved')
+  }
+
+  private recordCacheResolution<T>(
+    options: GithubCacheGetOrLoadOptions<T>,
+    cacheStatus: GithubCacheStatus,
+    startedAt: number,
+  ) {
+    const context = getGithubMetricsContext()
+    const operation = context?.operation ?? options.operation
+
+    if (!operation) {
+      return
+    }
+
+    githubMetricsCollector.recordCacheEvent({
+      userId: context?.userId,
+      operation,
+      scope: options.scope,
+      cacheStatus,
+      ttlMs: options.ttlMs,
+      staleMs: options.staleMs,
+      durationMs: Math.max(this.now() - startedAt, 0),
+    })
   }
 }
