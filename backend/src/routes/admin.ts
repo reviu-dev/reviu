@@ -2,7 +2,9 @@ import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { db } from '../db/index.js'
+import { logger } from '../lib/logger.js'
 import { authMiddleware } from '../middlewares/auth.js'
+import { flushGithubMetricsNow, readGithubMetricsOverviewFromDatabase } from '../plugins/github/metrics/github-metrics-store.js'
 import { githubMetricsCollector } from '../plugins/github/metrics/github-metrics.js'
 
 const adminRouter = new Hono()
@@ -37,10 +39,23 @@ export const adminRoutes = adminRouter
     zValidator('query', overviewQuerySchema),
     async (ctx) => {
       const { windowMinutes, limit } = ctx.req.valid('query')
-      const overview = githubMetricsCollector.getOverview({
-        windowMs: windowMinutes * 60_000,
-        limit,
-      })
+      const windowMs = windowMinutes * 60_000
+      let overview
+
+      try {
+        await flushGithubMetricsNow()
+        overview = await readGithubMetricsOverviewFromDatabase({
+          windowMs,
+          limit,
+        })
+      }
+      catch (error) {
+        logger.warn({ error }, 'Falling back to in-memory GitHub metrics overview')
+        overview = githubMetricsCollector.getOverview({
+          windowMs,
+          limit,
+        })
+      }
 
       const userIds = [...new Set([
         ...overview.users.map(item => item.userId),

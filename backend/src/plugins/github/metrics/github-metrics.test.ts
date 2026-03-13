@@ -340,4 +340,67 @@ describe('github metrics collector', () => {
       },
     ])
   })
+
+  it('drains persisted metrics without losing the live in-memory overview', () => {
+    const collector = createGithubMetricsCollector({
+      now: () => 60_000,
+    })
+
+    collector.recordCacheEvent({
+      at: 60_000,
+      userId: 'user-1',
+      operation: 'repository.readme',
+      scope: 'public',
+      cacheStatus: 'hit',
+      ttlMs: 120_000,
+      staleMs: 600_000,
+      durationMs: 5,
+    })
+
+    const snapshot = collector.drainPersistedMetrics()
+
+    expect(snapshot.operationMetrics).toEqual([
+      {
+        bucketStart: 60_000,
+        operation: 'repository.readme',
+        scope: 'public',
+        requests: 1,
+        hits: 1,
+        staleHits: 0,
+        misses: 0,
+        upstreamCalls: 0,
+        notModified: 0,
+        errorCount: 0,
+        nearLimitEvents: 0,
+        totalBackendDurationMs: 5,
+        totalGithubDurationMs: 0,
+        ttlMs: 120_000,
+        staleMs: 600_000,
+        lastSeenAt: 60_000,
+      },
+    ])
+
+    expect(collector.drainPersistedMetrics()).toEqual({
+      bucketMs: 60_000,
+      operationMetrics: [],
+      resourceMetrics: [],
+      userMetrics: [],
+      rateLimitStates: [],
+    })
+
+    const overview = collector.getOverview({
+      now: 60_000,
+      windowMs: 5 * 60_000,
+      limit: 10,
+    })
+
+    expect(overview.summary.requests).toBe(1)
+    expect(overview.scopeSummary).toEqual([
+      expect.objectContaining({
+        scope: 'public',
+        requests: 1,
+        hits: 1,
+      }),
+    ])
+  })
 })

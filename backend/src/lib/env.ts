@@ -15,6 +15,7 @@ const envSchema = z.object({
   GITHUB_OAUTH_CLIENT_ID: z.string(),
   REDIS_HOST: z.string(),
   REDIS_PORT: z.coerce.number(),
+  GITHUB_METRICS_FLUSH_INTERVAL_MS: z.coerce.number().positive().default(15_000),
   POLAR_ACCESS_TOKEN: z.string(),
   POLAR_SUCCESS_URL: z.url(),
   POLAR_SUBSCRIPTION_PRODUCT_ID: z.string(),

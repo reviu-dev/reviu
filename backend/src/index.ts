@@ -2,6 +2,7 @@ import process from 'node:process'
 import { serve } from '@hono/node-server'
 import { app } from './app.js'
 import { logger } from './lib/logger.js'
+import { flushGithubMetricsNow, startGithubMetricsPersistence, stopGithubMetricsPersistence } from './plugins/github/metrics/github-metrics-store.js'
 import './lib/env.js'
 
 const server = serve({
@@ -11,16 +12,46 @@ const server = serve({
   logger.info(`Server is running on ${info.port}`)
 })
 
+startGithubMetricsPersistence()
+
+let shuttingDown = false
+
+function closeServer() {
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error)
+        return
+      }
+
+      resolve()
+    })
+  })
+}
+
+async function shutdown(exitCode: number) {
+  if (shuttingDown) {
+    return
+  }
+
+  shuttingDown = true
+  stopGithubMetricsPersistence()
+
+  try {
+    await closeServer()
+    await flushGithubMetricsNow()
+  }
+  catch (error) {
+    logger.error({ error }, 'Failed to shutdown server cleanly')
+    process.exit(1)
+  }
+
+  process.exit(exitCode)
+}
+
 process.on('SIGINT', () => {
-  server.close()
-  process.exit(0)
+  void shutdown(0)
 })
 process.on('SIGTERM', () => {
-  server.close((err) => {
-    if (err) {
-      console.error(err)
-      process.exit(1)
-    }
-    process.exit(0)
-  })
+  void shutdown(0)
 })

@@ -91,6 +91,115 @@ interface GithubMetricsBucket {
   resources: Map<string, GithubMetricsResourceAggregate>
 }
 
+export interface GithubPersistedOperationMetric {
+  bucketStart: number
+  operation: string
+  scope: GithubCacheScope
+  requests: number
+  hits: number
+  staleHits: number
+  misses: number
+  upstreamCalls: number
+  notModified: number
+  errorCount: number
+  nearLimitEvents: number
+  totalBackendDurationMs: number
+  totalGithubDurationMs: number
+  ttlMs: number | null
+  staleMs: number | null
+  lastSeenAt: number
+}
+
+export interface GithubPersistedResourceMetric {
+  bucketStart: number
+  resource: string
+  upstreamCalls: number
+  notModified: number
+  errorCount: number
+  nearLimitEvents: number
+}
+
+export interface GithubPersistedUserMetric {
+  bucketStart: number
+  userId: string
+  requests: number
+  upstreamCalls: number
+  nearLimitEvents: number
+  lowestRemainingPct: number | null
+  lastOperation: string | null
+  lastSeenAt: number
+}
+
+export interface GithubPersistedRateLimitState {
+  userId: string
+  resource: string
+  remaining: number | null
+  limit: number | null
+  used: number | null
+  reset: number | null
+  remainingPct: number | null
+  lastOperation: string | null
+  lastRoute: string | null
+  lastStatus: number
+  updatedAt: number
+}
+
+export interface GithubMetricsPersistedSnapshot {
+  bucketMs: number
+  operationMetrics: GithubPersistedOperationMetric[]
+  resourceMetrics: GithubPersistedResourceMetric[]
+  userMetrics: GithubPersistedUserMetric[]
+  rateLimitStates: GithubPersistedRateLimitState[]
+}
+
+function mergePersistedOperationMetric(
+  target: GithubPersistedOperationMetric,
+  source: GithubPersistedOperationMetric,
+) {
+  target.requests += source.requests
+  target.hits += source.hits
+  target.staleHits += source.staleHits
+  target.misses += source.misses
+  target.upstreamCalls += source.upstreamCalls
+  target.notModified += source.notModified
+  target.errorCount += source.errorCount
+  target.nearLimitEvents += source.nearLimitEvents
+  target.totalBackendDurationMs += source.totalBackendDurationMs
+  target.totalGithubDurationMs += source.totalGithubDurationMs
+  target.ttlMs = source.ttlMs ?? target.ttlMs
+  target.staleMs = source.staleMs ?? target.staleMs
+  target.lastSeenAt = Math.max(target.lastSeenAt, source.lastSeenAt)
+}
+
+function mergePersistedResourceMetric(
+  target: GithubPersistedResourceMetric,
+  source: GithubPersistedResourceMetric,
+) {
+  target.upstreamCalls += source.upstreamCalls
+  target.notModified += source.notModified
+  target.errorCount += source.errorCount
+  target.nearLimitEvents += source.nearLimitEvents
+}
+
+function mergePersistedUserMetric(
+  target: GithubPersistedUserMetric,
+  source: GithubPersistedUserMetric,
+) {
+  const shouldReplaceLastOperation = source.lastSeenAt >= target.lastSeenAt
+
+  target.requests += source.requests
+  target.upstreamCalls += source.upstreamCalls
+  target.nearLimitEvents += source.nearLimitEvents
+  target.lastSeenAt = Math.max(target.lastSeenAt, source.lastSeenAt)
+  target.lastOperation = shouldReplaceLastOperation
+    ? source.lastOperation
+    : target.lastOperation
+
+  if (source.lowestRemainingPct != null && (target.lowestRemainingPct == null || source.lowestRemainingPct < target.lowestRemainingPct)) {
+    target.lowestRemainingPct = source.lowestRemainingPct
+  }
+}
+
 export interface GithubCacheMetricsOverview {
   from: number
   to: number
@@ -272,6 +381,10 @@ export function createGithubMetricsCollector(
 export class GithubMetricsCollector {
   private readonly buckets = new Map<number, GithubMetricsBucket>()
   private readonly currentRateLimits = new Map<string, GithubRateLimitState>()
+  private readonly pendingOperationMetrics = new Map<string, GithubPersistedOperationMetric>()
+  private readonly pendingResourceMetrics = new Map<string, GithubPersistedResourceMetric>()
+  private readonly pendingUserMetrics = new Map<string, GithubPersistedUserMetric>()
+  private readonly pendingRateLimitStates = new Map<string, GithubPersistedRateLimitState>()
 
   constructor(
     private readonly now: () => number,
@@ -281,8 +394,10 @@ export class GithubMetricsCollector {
 
   recordCacheEvent(event: GithubCacheMetricEvent) {
     const at = event.at ?? this.now()
+    const bucketStart = this.getBucketStart(at)
     const bucket = this.getOrCreateBucket(at)
     const operation = this.getOrCreateOperation(bucket, event.operation, event.scope, at)
+    const pendingOperation = this.getOrCreatePendingOperation(bucketStart, event.operation, event.scope, at)
 
     bucket.summary.requests += 1
     bucket.summary.totalBackendDurationMs += event.durationMs
@@ -294,33 +409,52 @@ export class GithubMetricsCollector {
     operation.staleMs = event.staleMs
     operation.lastSeenAt = at
 
+    pendingOperation.requests += 1
+    pendingOperation.totalBackendDurationMs += event.durationMs
+    pendingOperation.ttlMs = event.ttlMs
+    pendingOperation.staleMs = event.staleMs
+    pendingOperation.lastSeenAt = at
+
     if (event.cacheStatus === 'hit') {
       bucket.summary.hit += 1
       operation.hit += 1
+      pendingOperation.hits += 1
     }
     else if (event.cacheStatus === 'stale') {
       bucket.summary.stale += 1
       operation.stale += 1
+      pendingOperation.staleHits += 1
     }
     else {
       bucket.summary.miss += 1
       operation.miss += 1
+      pendingOperation.misses += 1
     }
 
     if (event.userId) {
       const user = this.getOrCreateUser(bucket, event.userId, at)
+      const pendingUser = this.getOrCreatePendingUser(bucketStart, event.userId, at)
       user.requests += 1
       user.lastOperation = event.operation
       user.lastSeenAt = at
+
+      pendingUser.requests += 1
+      pendingUser.lastOperation = event.operation
+      pendingUser.lastSeenAt = at
     }
   }
 
   recordGithubApiEvent(event: GithubApiMetricEvent) {
     const at = event.at ?? this.now()
+    const bucketStart = this.getBucketStart(at)
     const bucket = this.getOrCreateBucket(at)
     const operation = this.getOrCreateOperation(bucket, event.operation, event.scope, at)
     const resource = event.rateLimit?.resource ?? 'unknown'
     const resourceAggregate = this.getOrCreateResource(bucket, resource)
+    const pendingOperation = event.scope
+      ? this.getOrCreatePendingOperation(bucketStart, event.operation, event.scope, at)
+      : null
+    const pendingResource = this.getOrCreatePendingResource(bucketStart, resource)
     const nearLimit = isNearLimit(event.rateLimit)
     const error = event.status >= 400 && event.status !== 304
 
@@ -331,58 +465,140 @@ export class GithubMetricsCollector {
     operation.totalGithubDurationMs += event.durationMs
     operation.lastSeenAt = at
 
+    if (pendingOperation) {
+      pendingOperation.upstreamCalls += 1
+      pendingOperation.totalGithubDurationMs += event.durationMs
+      pendingOperation.lastSeenAt = at
+    }
+
     resourceAggregate.upstreamCalls += 1
+    pendingResource.upstreamCalls += 1
 
     if (event.notModified) {
       bucket.summary.notModified += 1
       operation.notModified += 1
       resourceAggregate.notModified += 1
+      pendingOperation && pendingOperation.notModified++
+      pendingResource.notModified += 1
     }
 
     if (error) {
       bucket.summary.errors += 1
       operation.errors += 1
       resourceAggregate.errors += 1
+      pendingOperation && pendingOperation.errorCount++
+      pendingResource.errorCount += 1
     }
 
     if (nearLimit) {
       bucket.summary.nearLimitEvents += 1
       operation.nearLimitEvents += 1
       resourceAggregate.nearLimitEvents += 1
+      pendingOperation && pendingOperation.nearLimitEvents++
+      pendingResource.nearLimitEvents += 1
     }
 
     if (event.userId) {
       const user = this.getOrCreateUser(bucket, event.userId, at)
+      const pendingUser = this.getOrCreatePendingUser(bucketStart, event.userId, at)
       user.upstreamCalls += 1
       user.lastOperation = event.operation
       user.lastSeenAt = at
 
+      pendingUser.upstreamCalls += 1
+      pendingUser.lastOperation = event.operation
+      pendingUser.lastSeenAt = at
+
       if (nearLimit) {
         user.nearLimitEvents += 1
+        pendingUser.nearLimitEvents += 1
       }
 
       const remainingPct = calculateRemainingPct(event.rateLimit)
       if (remainingPct != null && (user.lowestRemainingPct == null || remainingPct < user.lowestRemainingPct)) {
         user.lowestRemainingPct = remainingPct
       }
+      if (remainingPct != null && (pendingUser.lowestRemainingPct == null || remainingPct < pendingUser.lowestRemainingPct)) {
+        pendingUser.lowestRemainingPct = remainingPct
+      }
 
       if (event.rateLimit) {
-        this.currentRateLimits.set(
-          `${event.userId}:${resource}`,
-          {
-            userId: event.userId,
-            resource,
-            remaining: event.rateLimit.remaining ?? null,
-            limit: event.rateLimit.limit ?? null,
-            used: event.rateLimit.used ?? null,
-            reset: event.rateLimit.reset ?? null,
-            remainingPct,
-            lastOperation: event.operation,
-            lastRoute: event.route,
-            lastStatus: event.status,
-            updatedAt: at,
-          },
-        )
+        const rateLimitState = {
+          userId: event.userId,
+          resource,
+          remaining: event.rateLimit.remaining ?? null,
+          limit: event.rateLimit.limit ?? null,
+          used: event.rateLimit.used ?? null,
+          reset: event.rateLimit.reset ?? null,
+          remainingPct,
+          lastOperation: event.operation,
+          lastRoute: event.route,
+          lastStatus: event.status,
+          updatedAt: at,
+        } satisfies GithubPersistedRateLimitState
+
+        this.currentRateLimits.set(`${event.userId}:${resource}`, rateLimitState)
+        this.pendingRateLimitStates.set(`${event.userId}:${resource}`, rateLimitState)
+      }
+    }
+  }
+
+  drainPersistedMetrics(): GithubMetricsPersistedSnapshot {
+    const snapshot: GithubMetricsPersistedSnapshot = {
+      bucketMs: this.bucketMs,
+      operationMetrics: [...this.pendingOperationMetrics.values()].map(metric => ({ ...metric })),
+      resourceMetrics: [...this.pendingResourceMetrics.values()].map(metric => ({ ...metric })),
+      userMetrics: [...this.pendingUserMetrics.values()].map(metric => ({ ...metric })),
+      rateLimitStates: [...this.pendingRateLimitStates.values()].map(metric => ({ ...metric })),
+    }
+
+    this.pendingOperationMetrics.clear()
+    this.pendingResourceMetrics.clear()
+    this.pendingUserMetrics.clear()
+    this.pendingRateLimitStates.clear()
+
+    return snapshot
+  }
+
+  requeuePersistedMetrics(snapshot: GithubMetricsPersistedSnapshot) {
+    for (const metric of snapshot.operationMetrics) {
+      const key = `${metric.bucketStart}:${buildOperationAggregateKey(metric.operation, metric.scope)}`
+      const current = this.pendingOperationMetrics.get(key)
+      if (current) {
+        mergePersistedOperationMetric(current, metric)
+        continue
+      }
+
+      this.pendingOperationMetrics.set(key, { ...metric })
+    }
+
+    for (const metric of snapshot.resourceMetrics) {
+      const key = `${metric.bucketStart}:${metric.resource}`
+      const current = this.pendingResourceMetrics.get(key)
+      if (current) {
+        mergePersistedResourceMetric(current, metric)
+        continue
+      }
+
+      this.pendingResourceMetrics.set(key, { ...metric })
+    }
+
+    for (const metric of snapshot.userMetrics) {
+      const key = `${metric.bucketStart}:${metric.userId}`
+      const current = this.pendingUserMetrics.get(key)
+      if (current) {
+        mergePersistedUserMetric(current, metric)
+        continue
+      }
+
+      this.pendingUserMetrics.set(key, { ...metric })
+    }
+
+    for (const metric of snapshot.rateLimitStates) {
+      const key = `${metric.userId}:${metric.resource}`
+      const current = this.pendingRateLimitStates.get(key)
+      if (!current || metric.updatedAt >= current.updatedAt) {
+        this.pendingRateLimitStates.set(key, { ...metric })
       }
     }
   }
@@ -595,7 +811,7 @@ export class GithubMetricsCollector {
   private getOrCreateBucket(at: number) {
     this.prune(at)
 
-    const bucketStart = Math.floor(at / this.bucketMs) * this.bucketMs
+    const bucketStart = this.getBucketStart(at)
     const current = this.buckets.get(bucketStart)
     if (current) {
       return current
@@ -611,6 +827,10 @@ export class GithubMetricsCollector {
 
     this.buckets.set(bucketStart, nextBucket)
     return nextBucket
+  }
+
+  private getBucketStart(at: number) {
+    return Math.floor(at / this.bucketMs) * this.bucketMs
   }
 
   private getOrCreateOperation(
@@ -673,6 +893,85 @@ export class GithubMetricsCollector {
 
     bucket.resources.set(resource, nextResource)
     return nextResource
+  }
+
+  private getOrCreatePendingOperation(
+    bucketStart: number,
+    operation: string,
+    scope: GithubCacheScope,
+    at: number,
+  ) {
+    const operationKey = `${bucketStart}:${buildOperationAggregateKey(operation, scope)}`
+    const current = this.pendingOperationMetrics.get(operationKey)
+    if (current) {
+      current.lastSeenAt = at
+      return current
+    }
+
+    const nextOperation: GithubPersistedOperationMetric = {
+      bucketStart,
+      operation,
+      scope,
+      requests: 0,
+      hits: 0,
+      staleHits: 0,
+      misses: 0,
+      upstreamCalls: 0,
+      notModified: 0,
+      errorCount: 0,
+      nearLimitEvents: 0,
+      totalBackendDurationMs: 0,
+      totalGithubDurationMs: 0,
+      ttlMs: null,
+      staleMs: null,
+      lastSeenAt: at,
+    }
+
+    this.pendingOperationMetrics.set(operationKey, nextOperation)
+    return nextOperation
+  }
+
+  private getOrCreatePendingResource(bucketStart: number, resource: string) {
+    const resourceKey = `${bucketStart}:${resource}`
+    const current = this.pendingResourceMetrics.get(resourceKey)
+    if (current) {
+      return current
+    }
+
+    const nextResource: GithubPersistedResourceMetric = {
+      bucketStart,
+      resource,
+      upstreamCalls: 0,
+      notModified: 0,
+      errorCount: 0,
+      nearLimitEvents: 0,
+    }
+
+    this.pendingResourceMetrics.set(resourceKey, nextResource)
+    return nextResource
+  }
+
+  private getOrCreatePendingUser(bucketStart: number, userId: string, at: number) {
+    const userKey = `${bucketStart}:${userId}`
+    const current = this.pendingUserMetrics.get(userKey)
+    if (current) {
+      current.lastSeenAt = at
+      return current
+    }
+
+    const nextUser: GithubPersistedUserMetric = {
+      bucketStart,
+      userId,
+      requests: 0,
+      upstreamCalls: 0,
+      nearLimitEvents: 0,
+      lowestRemainingPct: null,
+      lastOperation: null,
+      lastSeenAt: at,
+    }
+
+    this.pendingUserMetrics.set(userKey, nextUser)
+    return nextUser
   }
 
   private prune(now: number) {
