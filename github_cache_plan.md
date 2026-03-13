@@ -22,8 +22,10 @@ The GitHub backend is organized under `backend/src/plugins/github/`:
 - `service.ts`: GitHub API wrappers, conditional requests, rate-limit extraction
 - `metrics/github-metrics.ts`: in-process metrics collector for cache and GitHub pressure
 - `metrics/github-metrics-context.ts`: async request context (`userId`, `operation`, `scope`)
+- `metrics/github-metrics-store.ts`: Postgres persistence, periodic flush, DB overview reader
 - `backend/src/routes/github.ts`: GitHub HTTP routes
 - `backend/src/routes/admin.ts`: admin overview route for dashboard
+- `backend/src/db/schemas/github_metrics.ts`: persisted GitHub metrics tables
 - `backend/src/lib/redis.ts`: Redis-backed cache store with in-memory fallback
 
 ## What Is Implemented
@@ -67,7 +69,31 @@ Current behavior:
 
 - `GET /github/repos/me` updates visibility markers from repo list payloads
 - `GET /github/repos/:owner/:repo` updates visibility markers from repo details
+- `GET /github/pr/:id` updates visibility markers from `base.repo.private`
 - a public repo details fetch primes the `public` cache entry so the next user can reuse it
+
+### Metrics Persistence
+
+Metrics are now persisted to Postgres:
+
+- operation metrics by minute
+- GitHub resource metrics by minute
+- per-user pressure metrics by minute
+- current rate-limit state per `userId + resource`
+
+Current behavior:
+
+- the collector keeps in-memory deltas per process
+- deltas flush to Postgres every `15s` by default
+- shutdown flush is attempted before process exit
+- admin overview flushes pending metrics first, then reads Postgres
+- if the Postgres read fails, admin overview falls back to the in-memory collector
+
+Persistence goal achieved:
+
+- dashboard continuity across backend restarts
+- durable history for TTL tuning
+- user joins still happen directly from Postgres
 
 ### Conditional Revalidation
 
@@ -111,6 +137,12 @@ All of these routes already go through the shared cache:
 
 These repo reads now auto-promote from `viewer` to `public` when repo visibility is known public:
 
+- `GET /github/pr/:id`
+- `GET /github/pr/:id/files`
+- `GET /github/pr/:id/commits`
+- `GET /github/pr/:id/issue-comments`
+- `GET /github/pr/:id/reviews`
+- `GET /github/pr/:id/comments`
 - `GET /github/repos/:owner/:repo`
 - `GET /github/repos/:owner/:repo/readme`
 - `GET /github/repos/:owner/:repo/branches`
@@ -125,7 +157,6 @@ Routes that remain viewer-only by design:
 - notifications
 - `repos/me`
 - search-based user PR endpoints
-- all PR detail routes for now
 
 ### Invalidation
 
@@ -182,11 +213,17 @@ Current overview includes:
 - users under pressure
 - current rate-limit snapshots
 
+Current behavior:
+
+- route reads now come from Postgres-backed aggregates
+- pending in-memory deltas are flushed before the admin read
+- the dashboard survives backend restarts once the metrics tables exist
+
 Current limitation:
 
-- the collector is still process-local
-- metrics are not yet persisted to Redis or Postgres
-- dashboard data resets on backend restart
+- there is no long-term retention/pruning policy yet
+- there is no per-route drilldown API yet
+- writes still happen per process, then merge in Postgres on flush
 
 ### Debug Headers
 
@@ -205,12 +242,12 @@ This matrix reflects the current code, not the original target-only plan.
 | `GET /github/repos/me` | implemented | viewer | no | 60s | 5m | also updates public visibility registry |
 | `GET /github/pr/latest` | implemented | viewer | no | 60s | 5m | search bucket sensitive |
 | `GET /github/pr/need-reviews` | implemented | viewer | no | 60s | 5m | search bucket sensitive |
-| `GET /github/pr/:id` | implemented | viewer | yes | 20s | 2m | ETag-backed |
-| `GET /github/pr/:id/files` | implemented | viewer | no | 30s | 5m | `commitSha` variant gets longer TTL |
-| `GET /github/pr/:id/commits` | implemented | viewer | no | 60s | 10m | read-only but still user-authorized |
-| `GET /github/pr/:id/issue-comments` | implemented | viewer | no | 15s | 2m | tied to PR discussion flow |
-| `GET /github/pr/:id/reviews` | implemented | viewer | yes | 20s | 2m | ETag-backed |
-| `GET /github/pr/:id/comments` | implemented | viewer | no | 15s | 2m | review comments list |
+| `GET /github/pr/:id` | implemented | viewer or public | yes | 20s | 2m | ETag-backed, now public-promotable |
+| `GET /github/pr/:id/files` | implemented | viewer or public | no | 30s | 5m | `commitSha` variant gets longer TTL |
+| `GET /github/pr/:id/commits` | implemented | viewer or public | no | 60s | 10m | public promotion active |
+| `GET /github/pr/:id/issue-comments` | implemented | viewer or public | no | 15s | 2m | public promotion active |
+| `GET /github/pr/:id/reviews` | implemented | viewer or public | yes | 20s | 2m | ETag-backed, public promotion active |
+| `GET /github/pr/:id/comments` | implemented | viewer or public | no | 15s | 2m | public promotion active |
 | `GET /github/repos/:owner/:repo` | implemented | viewer or public | yes | 2m | 10m | public response primes public cache |
 | `GET /github/repos/:owner/:repo/readme` | implemented | viewer or public | yes | 2m | 10m | explicit ref gets separate key |
 | `GET /github/repos/:owner/:repo/branches` | implemented | viewer or public | yes | 60s | 5m | ETag-backed |
@@ -280,13 +317,14 @@ Future target:
 
 ## Current Gaps
 
-### Metrics Persistence
+### Metrics Operations
 
 Still missing:
 
-- Redis-backed metrics aggregation
-- periodic flush to Postgres for historical analysis
-- dashboard continuity across backend restarts
+- retention policy for persisted metric tables
+- pruning or rollup job for older buckets
+- optional materialized or pre-aggregated views if the dashboard window grows
+- operational runbook for `db:push` / migrations and failure monitoring
 
 ### Wider Conditional Revalidation
 
@@ -303,9 +341,9 @@ Still missing for some expensive read routes:
 
 Still missing:
 
-- stronger observability around how often routes resolve to `viewer` vs `public`
-- maybe dashboard filters by scope and route
+- stronger observability around visibility resolution misses
 - maybe public-cache debug traces when a viewer miss primes public cache
+- maybe explicit viewer-to-public promotion counters
 
 ### Installation Scope
 
@@ -317,29 +355,29 @@ Not implemented yet:
 
 ## Next Implementation Steps
 
-### 1. Persist Metrics
-
-Move the in-process collector toward Redis-backed aggregation, then optionally flush to Postgres for longer retention.
-
-Why this is next:
-
-- the dashboard is now useful
-- but its data is ephemeral
-- persistent metrics are needed for real TTL tuning over time
-
-### 2. Expand Conditional Revalidation Where It Pays Off
+### 1. Expand Conditional Revalidation Where It Pays Off
 
 Candidates:
 
 - repo PR list
 - repo issue list
 - repo issue details
-- file reads where upstream validators are stable enough
+- tree and file reads when upstream validators are reliable enough
 
 Goal:
 
-- reduce payload transfer and upstream work on refresh
-- keep SWR responsiveness
+- reduce upstream payload transfer on refresh
+- keep SWR fast while lowering GitHub pressure further
+
+### 2. Add Metrics Retention and Query Hygiene
+
+Now that metrics persist, the next ops step is lifecycle management.
+
+Needed:
+
+- define retention for minute buckets
+- prune or roll up older data
+- watch admin route latency as tables grow
 
 ### 3. Improve Dashboard Drilldown
 
@@ -349,6 +387,7 @@ Useful additions:
 - filter by operation
 - per-route history
 - explicit public/viewer ratio over time
+- maybe table views for routes with high upstream-to-request ratio
 
 ### 4. Add Installation Scope Later
 
@@ -379,6 +418,6 @@ The backend now has a solid `v1.5` cache posture:
 - stale-while-revalidate responsiveness
 - conditional revalidation where it already pays off
 - rate-limit observability
-- admin dashboard visibility
+- Postgres-backed admin dashboard visibility
 
-The biggest remaining step is no longer “add cache”; it is “make the cache observable and durable enough to tune confidently over time”.
+The biggest remaining step is no longer “add cache” or “persist metrics”. It is now “use the persisted data to improve cache policy and revalidation where it buys the most”.
