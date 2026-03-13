@@ -23,7 +23,6 @@ app.use(
   '*',
   cors({
     origin: getTrustedOrigins(),
-    credentials: true,
   }),
 )
 

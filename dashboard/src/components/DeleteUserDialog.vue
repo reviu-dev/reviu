@@ -12,7 +12,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { authClient } from '@/lib/auth-client'
+import { betterAuthClient } from '@/lib/auth-client'
 
 const props = defineProps<{
   open: boolean
@@ -32,7 +32,7 @@ async function handleDelete() {
 
   isLoading.value = true
 
-  const result = await authClient.admin.removeUser({
+  const result = await betterAuthClient.admin.removeUser({
     userId: props.user.id,
   })
 

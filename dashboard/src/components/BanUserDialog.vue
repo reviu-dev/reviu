@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { authClient } from '@/lib/auth-client'
+import { betterAuthClient } from '@/lib/auth-client'
 
 const props = defineProps<{
   open: boolean
@@ -48,7 +48,7 @@ async function handleBan() {
 
   const banExpiresIn = banDays.value ? banDays.value * 24 * 60 * 60 : undefined
 
-  const result = await authClient.admin.banUser({
+  const result = await betterAuthClient.admin.banUser({
     userId: props.user.id,
     banReason: banReason.value || undefined,
     banExpiresIn,

@@ -19,7 +19,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { authClient } from '@/lib/auth-client'
+import { betterAuthClient } from '@/lib/auth-client'
 
 const props = defineProps<{
   open: boolean
@@ -36,7 +36,7 @@ const { state: sessions, isLoading, execute: refetchSessions } = useAsyncState(
     if (!props.userId)
       return []
 
-    const result = await authClient.admin.listUserSessions({
+    const result = await betterAuthClient.admin.listUserSessions({
       userId: props.userId,
     })
 
@@ -68,7 +68,7 @@ watch(
 )
 
 async function revokeSession(sessionToken: string) {
-  const result = await authClient.admin.revokeUserSession({
+  const result = await betterAuthClient.admin.revokeUserSession({
     sessionToken,
   })
 
@@ -88,7 +88,7 @@ async function revokeAllSessions() {
   if (!props.userId)
     return
 
-  const result = await authClient.admin.revokeUserSessions({
+  const result = await betterAuthClient.admin.revokeUserSessions({
     userId: props.userId,
   })
 

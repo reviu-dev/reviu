@@ -20,7 +20,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 
-import { authClient } from '@/lib/auth-client'
+import { betterAuthClient } from '@/lib/auth-client'
 
 defineProps<{
   open: boolean
@@ -50,7 +50,7 @@ async function handleSubmit() {
 
   isLoading.value = true
 
-  const result = await authClient.admin.createUser({
+  const result = await betterAuthClient.admin.createUser({
     email: form.value.email,
     password: form.value.password,
     name: form.value.name,

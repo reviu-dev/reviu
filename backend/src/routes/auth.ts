@@ -3,7 +3,8 @@ import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import z from 'zod'
 import { auth } from '../lib/auth.js'
-import { consumeAuthCode, issueAuthCode } from '../services/auth.js'
+import { env } from '../lib/env.js'
+import { consumeAuthCode, issueAuthCode } from '../plugins/auth/service.js'
 
 const authRouter = new Hono()
 
@@ -24,7 +25,7 @@ export const authRoutes = authRouter
 
     return c.json({ token }, 200)
   })
-  .get('/callback', async (c) => {
+  .get('/desktop/callback', async (c) => {
     const session = await auth.api.getSession({ headers: c.req.raw.headers })
 
     if (!session) {
@@ -35,6 +36,18 @@ export const authRoutes = authRouter
     const code = issueAuthCode(token)
 
     return c.redirect(`reviu://auth/callback?code=${code}`)
+  })
+  .get('/web/callback', async (c) => {
+    const session = await auth.api.getSession({ headers: c.req.raw.headers })
+
+    if (!session) {
+      return c.text('No session found', 401)
+    }
+
+    const { session: { token } } = session
+    const code = issueAuthCode(token)
+
+    return c.redirect(`${env.WEB_DASHBOARD_URL}/signin?code=${code}`)
   })
   .get('/subscription', async (c) => {
     return c.redirect('reviu://subscription/callback')

@@ -19,6 +19,7 @@ const envSchema = z.object({
   POLAR_SUCCESS_URL: z.url(),
   POLAR_SUBSCRIPTION_PRODUCT_ID: z.string(),
   DESKTOP_UPDATE_MANIFEST_URL: z.url(),
+  WEB_DASHBOARD_URL: z.url(),
 })
 
 export const env = envSchema.parse(process.env)

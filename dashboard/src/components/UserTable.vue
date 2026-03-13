@@ -32,7 +32,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { authClient } from '@/lib/auth-client'
+import { betterAuthClient } from '@/lib/auth-client'
 import { getInitials } from '@/lib/utils'
 
 const emit = defineEmits<{
@@ -57,7 +57,7 @@ const isInitialLoad = ref(true)
 const { state: usersData, execute: refetchUsers } = useAsyncState(
   async () => {
     const offset = (currentPage.value - 1) * pageSize.value
-    const result = await authClient.admin.listUsers({
+    const result = await betterAuthClient.admin.listUsers({
       query: {
         limit: pageSize.value,
         offset,

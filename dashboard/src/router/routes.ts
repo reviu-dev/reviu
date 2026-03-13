@@ -7,6 +7,14 @@ export const routes: RouteRecordRaw[] = [
     redirect: { name: 'GithubCache' },
   },
   {
+    name: 'Signin',
+    path: '/signin',
+    component: () => import('@/pages/Signin.vue'),
+    meta: {
+      layout: 'auth',
+    },
+  },
+  {
     name: 'GithubCache',
     path: '/github-cache',
     component: () => import('@/pages/GithubCache.vue'),

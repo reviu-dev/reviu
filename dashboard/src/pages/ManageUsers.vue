@@ -11,7 +11,7 @@ import EditUserDialog from '@/components/EditUserDialog.vue'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import UserTable from '@/components/UserTable.vue'
 import ViewSessionsDialog from '@/components/ViewSessionsDialog.vue'
-import { authClient } from '@/lib/auth-client'
+import { betterAuthClient } from '@/lib/auth-client'
 
 const createUserDialogOpen = ref(false)
 const editUserDialogOpen = ref(false)
@@ -51,7 +51,7 @@ function handleBanUser(user: UserWithRole) {
 }
 
 async function handleUnbanUser(userId: string) {
-  const result = await authClient.admin.unbanUser({
+  const result = await betterAuthClient.admin.unbanUser({
     userId,
   })
 

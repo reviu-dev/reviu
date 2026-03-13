@@ -19,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { authClient } from '@/lib/auth-client'
+import { betterAuthClient } from '@/lib/auth-client'
 
 const props = defineProps<{
   open: boolean
@@ -50,7 +50,7 @@ async function handleSubmit() {
 
   isLoading.value = true
 
-  const result = await authClient.admin.setRole({
+  const result = await betterAuthClient.admin.setRole({
     userId: props.user.id,
     role: selectedRole.value as 'user' | 'admin',
   })
