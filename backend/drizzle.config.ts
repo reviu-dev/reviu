@@ -7,7 +7,7 @@ const pgUrl = `postgres://${env.PG_USER}:${env.PG_PASSWORD}@${env.PG_HOST}:${env
 
 export default defineConfig({
   out: './drizzle',
-  schema: './src/db/schema.ts',
+  schema: './src/db/schemas/index.ts',
   dialect: 'postgresql',
   dbCredentials: {
     url: pgUrl,
