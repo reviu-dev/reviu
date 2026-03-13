@@ -5,6 +5,13 @@ import { githubMetricsCollector } from '../metrics/github-metrics.js'
 export type GithubCacheScope = 'viewer' | 'installation' | 'public'
 export type GithubCacheStatus = 'hit' | 'miss' | 'stale'
 
+export interface GithubCacheValidator {
+  etag?: string
+  lastModified?: string
+}
+
+export type GithubCacheValidators = Record<string, GithubCacheValidator>
+
 export interface GithubCacheEntry<T> {
   payload: T
   tags: string[]
@@ -13,6 +20,7 @@ export interface GithubCacheEntry<T> {
   staleUntil: number
   etag?: string
   lastModified?: string
+  validators?: GithubCacheValidators
 }
 
 export interface GithubCacheStore {
@@ -55,6 +63,7 @@ export interface GithubCachePrimeOptions<T> {
   payload: T
   etag?: string
   lastModified?: string
+  validators?: GithubCacheValidators
 }
 
 export interface GithubCacheLoadContext<T> {
@@ -65,12 +74,14 @@ export interface GithubCacheLoadedPayload<T> {
   payload: T
   etag?: string
   lastModified?: string
+  validators?: GithubCacheValidators
 }
 
 export interface GithubCacheNotModifiedPayload {
   notModified: true
   etag?: string
   lastModified?: string
+  validators?: GithubCacheValidators
 }
 
 export type GithubCacheLoaderResult<T> = GithubCacheLoadedPayload<T> | GithubCacheNotModifiedPayload
@@ -216,6 +227,31 @@ function isNotModifiedPayload<T>(
   return 'notModified' in value && value.notModified === true
 }
 
+function mergeValidators(
+  current?: GithubCacheValidators,
+  next?: GithubCacheValidators,
+): GithubCacheValidators | undefined {
+  if (!current && !next) {
+    return undefined
+  }
+
+  const merged = new Map<string, GithubCacheValidator>()
+
+  for (const [key, value] of Object.entries(current ?? {})) {
+    merged.set(key, { ...value })
+  }
+
+  for (const [key, value] of Object.entries(next ?? {})) {
+    const existing = merged.get(key) ?? {}
+    merged.set(key, {
+      etag: value.etag ?? existing.etag,
+      lastModified: value.lastModified ?? existing.lastModified,
+    })
+  }
+
+  return Object.fromEntries(merged)
+}
+
 class GithubCacheManager {
   private readonly inflight = new Map<string, Promise<GithubCacheLoadResult<unknown>>>()
   private readonly backgroundRefreshes = new Map<string, Promise<void>>()
@@ -275,6 +311,7 @@ class GithubCacheManager {
       {
         etag: options.etag,
         lastModified: options.lastModified,
+        validators: options.validators,
       },
     )
   }
@@ -345,6 +382,7 @@ class GithubCacheManager {
             {
               etag: loadResult.etag ?? cachedEntry.etag,
               lastModified: loadResult.lastModified ?? cachedEntry.lastModified,
+              validators: mergeValidators(cachedEntry.validators, loadResult.validators),
             },
           )
           return
@@ -359,6 +397,7 @@ class GithubCacheManager {
           {
             etag: loadResult.etag,
             lastModified: loadResult.lastModified,
+            validators: loadResult.validators,
           },
         )
       }
@@ -416,6 +455,7 @@ class GithubCacheManager {
           {
             etag: loadResult.etag ?? currentEntry.etag,
             lastModified: loadResult.lastModified ?? currentEntry.lastModified,
+            validators: mergeValidators(currentEntry.validators, loadResult.validators),
           },
         )
 
@@ -435,6 +475,7 @@ class GithubCacheManager {
         {
           etag: loadResult.etag,
           lastModified: loadResult.lastModified,
+          validators: loadResult.validators,
         },
       )
 
@@ -533,6 +574,7 @@ class GithubCacheManager {
     metadata?: {
       etag?: string
       lastModified?: string
+      validators?: GithubCacheValidators
     },
   ) {
     const previousEntry = await this.readEntry<unknown>(cacheKey)
@@ -548,6 +590,7 @@ class GithubCacheManager {
       staleUntil: freshUntil + staleMs,
       etag: metadata?.etag,
       lastModified: metadata?.lastModified,
+      validators: metadata?.validators,
     }
 
     await this.store.set(cacheKey, JSON.stringify(nextEntry))

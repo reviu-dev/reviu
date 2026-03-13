@@ -719,6 +719,15 @@ export async function fetchGithubRepositoryIssueComments(
   })
 }
 
+export async function fetchGithubRepositoryIssueCommentsConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/issues/{issue_number}/comments'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/issues/{issue_number}/comments'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}/issues/{issue_number}/comments'>(
+    'GET /repos/{owner}/{repo}/issues/{issue_number}/comments',
+    options,
+  )
+}
+
 export async function createGithubIssueComment(
   { token, params }:
   { token: string, params: CreateIssueCommentParams },

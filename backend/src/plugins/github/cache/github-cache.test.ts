@@ -311,4 +311,88 @@ describe('github cache', () => {
     })
     expect(loadCount).toBe(2)
   })
+
+  it('preserves named validators across not-modified revalidation', async () => {
+    let currentTime = 1_000
+    let loadCount = 0
+    const cache = createGithubCache({
+      store: new MemoryGithubCacheStore(),
+      now: () => currentTime,
+    })
+
+    const load = async ({
+      cachedEntry,
+    }: {
+      cachedEntry: {
+        validators?: Record<string, { etag?: string }>
+      } | null
+    }) => {
+      loadCount += 1
+
+      if (loadCount === 1) {
+        return {
+          payload: ['value-1'],
+          etag: '"issue-v1"',
+          validators: {
+            issue: {
+              etag: '"issue-v1"',
+            },
+            issueComments: {
+              etag: '"comments-v1"',
+            },
+          },
+        }
+      }
+
+      expect(cachedEntry?.validators).toEqual({
+        issue: {
+          etag: '"issue-v1"',
+        },
+        issueComments: {
+          etag: '"comments-v1"',
+        },
+      })
+
+      return {
+        notModified: true as const,
+        validators: {
+          issue: {
+            etag: '"issue-v1"',
+          },
+          issueComments: {
+            etag: '"comments-v1"',
+          },
+        },
+      }
+    }
+
+    await cache.getOrLoad({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'issue:42',
+      ttlMs: 60_000,
+      staleMs: 300_000,
+      tags: ['viewer:user-1'],
+      load,
+    })
+
+    currentTime += 360_001
+
+    const revalidated = await cache.getOrLoad({
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'issue:42',
+      ttlMs: 60_000,
+      staleMs: 300_000,
+      tags: ['viewer:user-1'],
+      load,
+    })
+
+    expect(revalidated).toEqual({
+      payload: ['value-1'],
+      cacheStatus: 'hit',
+      scope: 'viewer',
+    })
+    expect(loadCount).toBe(2)
+  })
 })

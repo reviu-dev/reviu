@@ -88,6 +88,12 @@ import {
   mapGithubPullRequestReviewComment,
   mapSearchIssueItemToPullRequest,
 } from '../plugins/github/formatter.js'
+import {
+  buildGithubIssueDetailsValidators,
+  GITHUB_ISSUE_DETAILS_COMMENTS_VALIDATOR_KEY,
+  GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY,
+  mergeGithubIssueDetailsPayload,
+} from '../plugins/github/issue-details.js'
 import { runWithGithubMetricsContext } from '../plugins/github/metrics/github-metrics-context.js'
 import {
   createPullRequestLineCommentBodySchema,
@@ -117,6 +123,7 @@ import {
   fetchGithubRepositoryConditionally,
   fetchGithubRepositoryContentConditionally,
   fetchGithubRepositoryIssueComments,
+  fetchGithubRepositoryIssueCommentsConditionally,
   fetchGithubRepositoryIssueConditionally,
   fetchGithubRepositoryIssuesConditionally,
   fetchGithubRepositoryReadmeConditionally,
@@ -941,48 +948,64 @@ async function fetchRepositoryIssueDetailsWithCache(
           per_page: 100,
         }
 
-        // The issue payload is the change signal for the aggregated issue+comments cache entry.
-        const issueResponse = await fetchGithubRepositoryIssueConditionally({
-          token: githubToken,
-          params: paramsIssue,
+        const cachedIssueValidator = cachedEntry?.validators?.[GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY] ?? {
           etag: cachedEntry?.etag,
           lastModified: cachedEntry?.lastModified,
+        }
+        const cachedIssueCommentsValidator = cachedEntry?.validators?.[GITHUB_ISSUE_DETAILS_COMMENTS_VALIDATOR_KEY]
+
+        const [issueResponse, issueCommentsResponse] = await Promise.all([
+          fetchGithubRepositoryIssueConditionally({
+            token: githubToken,
+            params: paramsIssue,
+            etag: cachedIssueValidator.etag,
+            lastModified: cachedIssueValidator.lastModified,
+          }),
+          fetchGithubRepositoryIssueCommentsConditionally({
+            token: githubToken,
+            params: paramsComments,
+            etag: cachedIssueCommentsValidator?.etag,
+            lastModified: cachedIssueCommentsValidator?.lastModified,
+          }),
+        ])
+
+        const nextValidators = buildGithubIssueDetailsValidators({
+          issue: {
+            etag: issueResponse.etag ?? cachedIssueValidator.etag,
+            lastModified: issueResponse.lastModified ?? cachedIssueValidator.lastModified,
+          },
+          issueComments: {
+            etag: issueCommentsResponse.etag ?? cachedIssueCommentsValidator?.etag,
+            lastModified: issueCommentsResponse.lastModified ?? cachedIssueCommentsValidator?.lastModified,
+          },
         })
 
-        if (issueResponse.notModified) {
+        if (issueResponse.notModified && issueCommentsResponse.notModified) {
           return {
             notModified: true as const,
-            etag: issueResponse.etag,
-            lastModified: issueResponse.lastModified,
+            etag: nextValidators[GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY]?.etag,
+            lastModified: nextValidators[GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY]?.lastModified,
+            validators: nextValidators,
           }
         }
 
-        const [data, issueComments] = await Promise.all([
-          Promise.resolve(issueResponse.data!),
-          fetchGithubRepositoryIssueComments({ token: githubToken, params: paramsComments }),
-        ])
+        if (!cachedEntry && (issueResponse.notModified || issueCommentsResponse.notModified)) {
+          throw new Error('GitHub issue details revalidation requires an existing cache entry')
+        }
+
+        const payload = mergeGithubIssueDetailsPayload({
+          owner,
+          repo,
+          cachedPayload: cachedEntry?.payload ?? null,
+          issue: issueResponse.notModified ? null : issueResponse.data!,
+          issueComments: issueCommentsResponse.notModified ? null : issueCommentsResponse.data!,
+        })
 
         return {
-          payload: {
-            id: data.id,
-            number: data.number,
-            title: data.title,
-            state: data.state,
-            state_reason: data.state_reason,
-            created_at: data.created_at,
-            updated_at: data.updated_at,
-            closed_at: data.closed_at,
-            labels: data.labels,
-            body: data.body,
-            comments: issueComments.map(mapGithubIssueComment),
-            user: formatGithubUser(data.user),
-            repository: {
-              owner,
-              repo,
-            },
-          } satisfies GithubIssueDetails,
-          etag: issueResponse.etag,
-          lastModified: issueResponse.lastModified,
+          payload,
+          etag: nextValidators[GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY]?.etag,
+          lastModified: nextValidators[GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY]?.lastModified,
+          validators: nextValidators,
         }
       },
     }))
