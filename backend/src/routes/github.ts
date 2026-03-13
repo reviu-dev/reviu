@@ -1,3 +1,6 @@
+import type { Context } from 'hono'
+import type { GithubCachePolicy } from '../plugins/github/cache/github-cache-policy.js'
+import type { GithubCacheLoadResult } from '../plugins/github/cache/github-cache.js'
 import type {
   CompareParams,
   CreateIssueCommentParams,
@@ -45,7 +48,7 @@ import type {
 } from '../plugins/github/types.js'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
-import { Hono, type Context } from 'hono'
+import { Hono } from 'hono'
 import { logger } from '../lib/logger.js'
 import { authMiddleware } from '../middlewares/auth.js'
 import {
@@ -68,10 +71,9 @@ import {
   createGithubUserRepositoriesCachePolicy,
   getGithubIssueMutationTags,
   getGithubPullRequestMutationTags,
-  type GithubCachePolicy,
+
   withGithubPublicScope,
 } from '../plugins/github/cache/github-cache-policy.js'
-import type { GithubCacheLoadResult } from '../plugins/github/cache/github-cache.js'
 import { githubCache } from '../plugins/github/cache/github-cache-runtime.js'
 import { githubRepositoryVisibility } from '../plugins/github/cache/github-repository-visibility-runtime.js'
 import {
