@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { z } from 'zod'
 
-import { env } from '../lib/env.js'
+import { env } from '../../lib/env.js'
 
 const semverSchema = z.string().trim().regex(/^v?\d+\.\d+\.\d+$/)
 const desktopPlatformSchema = z.enum(['macos', 'linux', 'windows'])

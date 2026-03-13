@@ -5,7 +5,7 @@ import { z } from 'zod'
 import {
   checkDesktopUpdate,
   normalizeSemver,
-} from '../services/desktop_update.js'
+} from '../plugins/desktop_update/service.js'
 
 const desktopPlatformSchema = z.enum(['macos', 'linux', 'windows'])
 const desktopArchSchema = z.enum(['x86_64', 'aarch64'])
