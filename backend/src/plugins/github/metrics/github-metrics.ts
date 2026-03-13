@@ -16,6 +16,7 @@ export interface GithubApiMetricEvent {
   at?: number
   userId?: string
   operation: string
+  scope?: GithubCacheScope
   route: string
   status: number
   durationMs: number
@@ -109,6 +110,24 @@ export interface GithubCacheMetricsOverview {
     nearLimitEvents: number
     usersNearLimit: number
   }
+  scopeSummary: Array<{
+    scope: GithubCacheScope
+    requests: number
+    hits: number
+    staleHits: number
+    misses: number
+    hitRate: number
+    staleRate: number
+    missRate: number
+    upstreamCalls: number
+    githubCallsSaved: number
+    notModified: number
+    notModifiedRate: number
+    errorCount: number
+    nearLimitEvents: number
+    avgBackendDurationMs: number | null
+    avgGithubDurationMs: number | null
+  }>
   cacheStatusSeries: Array<{
     bucketStart: number
     hit: number
@@ -201,6 +220,15 @@ function calculateRate(numerator: number, denominator: number) {
   return numerator / denominator
 }
 
+function buildOperationAggregateKey(operation: string, scope?: GithubCacheScope) {
+  return `${operation}:${scope ?? 'unscoped'}`
+}
+
+function sortScopes(left: GithubCacheScope, right: GithubCacheScope) {
+  const order: GithubCacheScope[] = ['public', 'viewer', 'installation']
+  return order.indexOf(left) - order.indexOf(right)
+}
+
 function calculateRemainingPct(rateLimit: GithubRateLimitInfo | null | undefined) {
   if (!rateLimit || rateLimit.limit == null || rateLimit.remaining == null || rateLimit.limit <= 0) {
     return null
@@ -254,7 +282,7 @@ export class GithubMetricsCollector {
   recordCacheEvent(event: GithubCacheMetricEvent) {
     const at = event.at ?? this.now()
     const bucket = this.getOrCreateBucket(at)
-    const operation = this.getOrCreateOperation(bucket, event.operation, at)
+    const operation = this.getOrCreateOperation(bucket, event.operation, event.scope, at)
 
     bucket.summary.requests += 1
     bucket.summary.totalBackendDurationMs += event.durationMs
@@ -290,7 +318,7 @@ export class GithubMetricsCollector {
   recordGithubApiEvent(event: GithubApiMetricEvent) {
     const at = event.at ?? this.now()
     const bucket = this.getOrCreateBucket(at)
-    const operation = this.getOrCreateOperation(bucket, event.operation, at)
+    const operation = this.getOrCreateOperation(bucket, event.operation, event.scope, at)
     const resource = event.rateLimit?.resource ?? 'unknown'
     const resourceAggregate = this.getOrCreateResource(bucket, resource)
     const nearLimit = isNearLimit(event.rateLimit)
@@ -373,6 +401,7 @@ export class GithubMetricsCollector {
 
     const totals = createEmptyCounters()
     const operations = new Map<string, GithubMetricsOperationAggregate>()
+    const scopeSummary = new Map<GithubCacheScope, GithubMetricsCounters>()
     const users = new Map<string, GithubMetricsUserAggregate>()
     const resourceSeries: GithubCacheMetricsOverview['githubResourceSeries'] = []
 
@@ -391,9 +420,10 @@ export class GithubMetricsCollector {
       }
 
       for (const aggregate of bucket.operations.values()) {
-        const current = operations.get(aggregate.operation)
+        const aggregateKey = buildOperationAggregateKey(aggregate.operation, aggregate.scope)
+        const current = operations.get(aggregateKey)
         if (!current) {
-          operations.set(aggregate.operation, { ...aggregate })
+          operations.set(aggregateKey, { ...aggregate })
           continue
         }
 
@@ -402,6 +432,16 @@ export class GithubMetricsCollector {
         current.ttlMs = aggregate.ttlMs ?? current.ttlMs
         current.staleMs = aggregate.staleMs ?? current.staleMs
         current.lastSeenAt = Math.max(current.lastSeenAt, aggregate.lastSeenAt)
+      }
+
+      for (const aggregate of bucket.operations.values()) {
+        if (!aggregate.scope) {
+          continue
+        }
+
+        const current = scopeSummary.get(aggregate.scope) ?? createEmptyCounters()
+        mergeCounters(current, aggregate)
+        scopeSummary.set(aggregate.scope, current)
       }
 
       for (const aggregate of bucket.users.values()) {
@@ -462,6 +502,30 @@ export class GithubMetricsCollector {
         nearLimitEvents: totals.nearLimitEvents,
         usersNearLimit,
       },
+      scopeSummary: [...scopeSummary.entries()]
+        .sort((a, b) => sortScopes(a[0], b[0]))
+        .map(([scope, counters]) => ({
+          scope,
+          requests: counters.requests,
+          hits: counters.hit,
+          staleHits: counters.stale,
+          misses: counters.miss,
+          hitRate: calculateRate(counters.hit, counters.requests),
+          staleRate: calculateRate(counters.stale, counters.requests),
+          missRate: calculateRate(counters.miss, counters.requests),
+          upstreamCalls: counters.upstreamCalls,
+          githubCallsSaved: Math.max(counters.requests - counters.upstreamCalls, 0),
+          notModified: counters.notModified,
+          notModifiedRate: calculateRate(counters.notModified, counters.upstreamCalls),
+          errorCount: counters.errors,
+          nearLimitEvents: counters.nearLimitEvents,
+          avgBackendDurationMs: counters.requests > 0
+            ? counters.totalBackendDurationMs / counters.requests
+            : null,
+          avgGithubDurationMs: counters.upstreamCalls > 0
+            ? counters.totalGithubDurationMs / counters.upstreamCalls
+            : null,
+        })),
       cacheStatusSeries: buckets.map(bucket => ({
         bucketStart: bucket.bucketStart,
         hit: bucket.summary.hit,
@@ -549,8 +613,14 @@ export class GithubMetricsCollector {
     return nextBucket
   }
 
-  private getOrCreateOperation(bucket: GithubMetricsBucket, operation: string, at: number) {
-    const current = bucket.operations.get(operation)
+  private getOrCreateOperation(
+    bucket: GithubMetricsBucket,
+    operation: string,
+    scope: GithubCacheScope | undefined,
+    at: number,
+  ) {
+    const operationKey = buildOperationAggregateKey(operation, scope)
+    const current = bucket.operations.get(operationKey)
     if (current) {
       current.lastSeenAt = at
       return current
@@ -558,10 +628,11 @@ export class GithubMetricsCollector {
 
     const nextOperation: GithubMetricsOperationAggregate = {
       operation,
+      scope,
       ...createEmptyCounters(),
       lastSeenAt: at,
     }
-    bucket.operations.set(operation, nextOperation)
+    bucket.operations.set(operationKey, nextOperation)
     return nextOperation
   }
 

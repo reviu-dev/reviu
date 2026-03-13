@@ -22,6 +22,7 @@ describe('github metrics collector', () => {
       at: 60_050,
       userId: 'user-1',
       operation: 'pull_request.details',
+      scope: 'viewer',
       route: 'GET /repos/{owner}/{repo}/pulls/{pull_number}',
       status: 200,
       durationMs: 42,
@@ -58,6 +59,7 @@ describe('github metrics collector', () => {
       at: 120_100,
       userId: 'user-2',
       operation: 'viewer.pull_requests.need_review',
+      scope: 'viewer',
       route: 'GET /search/issues',
       status: 304,
       durationMs: 11,
@@ -92,6 +94,27 @@ describe('github metrics collector', () => {
       nearLimitEvents: 1,
       usersNearLimit: 1,
     })
+
+    expect(overview.scopeSummary).toEqual([
+      {
+        scope: 'viewer',
+        requests: 3,
+        hits: 1,
+        staleHits: 1,
+        misses: 1,
+        hitRate: 1 / 3,
+        staleRate: 1 / 3,
+        missRate: 1 / 3,
+        upstreamCalls: 2,
+        githubCallsSaved: 1,
+        notModified: 1,
+        notModifiedRate: 1 / 2,
+        errorCount: 0,
+        nearLimitEvents: 1,
+        avgBackendDurationMs: (18 + 4 + 6) / 3,
+        avgGithubDurationMs: (42 + 11) / 2,
+      },
+    ])
 
     expect(overview.cacheStatusSeries).toEqual([
       {
@@ -207,6 +230,113 @@ describe('github metrics collector', () => {
         lastRoute: 'GET /repos/{owner}/{repo}/pulls/{pull_number}',
         lastStatus: 200,
         updatedAt: 60_050,
+      },
+    ])
+  })
+
+  it('keeps viewer and public aggregates separate for the same operation', () => {
+    const collector = createGithubMetricsCollector({
+      now: () => 120_000,
+    })
+
+    collector.recordCacheEvent({
+      at: 60_000,
+      userId: 'user-1',
+      operation: 'repository.readme',
+      scope: 'viewer',
+      cacheStatus: 'miss',
+      ttlMs: 120_000,
+      staleMs: 600_000,
+      durationMs: 12,
+    })
+
+    collector.recordGithubApiEvent({
+      at: 60_050,
+      userId: 'user-1',
+      operation: 'repository.readme',
+      scope: 'viewer',
+      route: 'GET /repos/{owner}/{repo}/readme',
+      status: 200,
+      durationMs: 30,
+      rateLimit: {
+        limit: 5_000,
+        remaining: 4_000,
+        resource: 'core',
+      },
+    })
+
+    collector.recordCacheEvent({
+      at: 60_100,
+      userId: 'user-2',
+      operation: 'repository.readme',
+      scope: 'public',
+      cacheStatus: 'hit',
+      ttlMs: 120_000,
+      staleMs: 600_000,
+      durationMs: 3,
+    })
+
+    const overview = collector.getOverview({
+      now: 120_000,
+      windowMs: 5 * 60_000,
+      limit: 10,
+    })
+
+    expect(overview.routes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        operation: 'repository.readme',
+        scope: 'viewer',
+        requests: 1,
+        hits: 0,
+        misses: 1,
+        upstreamCalls: 1,
+      }),
+      expect.objectContaining({
+        operation: 'repository.readme',
+        scope: 'public',
+        requests: 1,
+        hits: 1,
+        misses: 0,
+        upstreamCalls: 0,
+      }),
+    ]))
+
+    expect(overview.scopeSummary).toEqual([
+      {
+        scope: 'public',
+        requests: 1,
+        hits: 1,
+        staleHits: 0,
+        misses: 0,
+        hitRate: 1,
+        staleRate: 0,
+        missRate: 0,
+        upstreamCalls: 0,
+        githubCallsSaved: 1,
+        notModified: 0,
+        notModifiedRate: 0,
+        errorCount: 0,
+        nearLimitEvents: 0,
+        avgBackendDurationMs: 3,
+        avgGithubDurationMs: null,
+      },
+      {
+        scope: 'viewer',
+        requests: 1,
+        hits: 0,
+        staleHits: 0,
+        misses: 1,
+        hitRate: 0,
+        staleRate: 0,
+        missRate: 1,
+        upstreamCalls: 1,
+        githubCallsSaved: 0,
+        notModified: 0,
+        notModifiedRate: 0,
+        errorCount: 0,
+        nearLimitEvents: 0,
+        avgBackendDurationMs: 12,
+        avgGithubDurationMs: 30,
       },
     ])
   })

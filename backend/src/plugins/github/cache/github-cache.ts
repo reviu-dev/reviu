@@ -1,5 +1,5 @@
 import { logger } from '../../../lib/logger.js'
-import { getGithubMetricsContext } from '../metrics/github-metrics-context.js'
+import { getGithubMetricsContext, runWithGithubMetricsContext } from '../metrics/github-metrics-context.js'
 import { githubMetricsCollector } from '../metrics/github-metrics.js'
 
 export type GithubCacheScope = 'viewer' | 'installation' | 'public'
@@ -42,6 +42,7 @@ export interface GithubCacheGetOrLoadOptions<T> {
 export interface GithubCacheLoadResult<T> {
   payload: T
   cacheStatus: GithubCacheStatus
+  scope: GithubCacheScope
 }
 
 export interface GithubCachePrimeOptions<T> {
@@ -296,6 +297,7 @@ class GithubCacheManager {
       return {
         payload: entry.payload,
         cacheStatus: 'hit',
+        scope: options.scope,
       }
     }
 
@@ -304,6 +306,7 @@ class GithubCacheManager {
       return {
         payload: entry.payload,
         cacheStatus: 'stale',
+        scope: options.scope,
       }
     }
 
@@ -331,7 +334,7 @@ class GithubCacheManager {
           return
         }
 
-        const loadResult = await options.load({ cachedEntry })
+        const loadResult = await this.executeLoad(options, cachedEntry)
         if (isNotModifiedPayload(loadResult)) {
           await this.writeEntry(
             cacheKey,
@@ -387,6 +390,7 @@ class GithubCacheManager {
       const waitedEntry = await this.waitForEntry<T>(
         cacheKey,
         options.waitForRefreshMs ?? Math.min(lockTtlMs, 1_000),
+        options.scope,
       )
 
       if (waitedEntry) {
@@ -396,7 +400,7 @@ class GithubCacheManager {
 
     try {
       const currentEntry = await this.readEntry<T>(cacheKey)
-      const loadResult = await options.load({ cachedEntry: currentEntry })
+      const loadResult = await this.executeLoad(options, currentEntry)
 
       if (isNotModifiedPayload(loadResult)) {
         if (!currentEntry) {
@@ -418,6 +422,7 @@ class GithubCacheManager {
         return {
           payload: currentEntry.payload,
           cacheStatus: 'hit',
+          scope: options.scope,
         }
       }
 
@@ -436,6 +441,7 @@ class GithubCacheManager {
       return {
         payload: loadResult.payload,
         cacheStatus: 'miss',
+        scope: options.scope,
       }
     }
     catch (error) {
@@ -445,6 +451,7 @@ class GithubCacheManager {
         return {
           payload: staleEntry.payload,
           cacheStatus: 'stale',
+          scope: options.scope,
         }
       }
 
@@ -460,6 +467,7 @@ class GithubCacheManager {
   private async waitForEntry<T>(
     cacheKey: string,
     waitForRefreshMs: number,
+    scope: GithubCacheScope,
   ): Promise<GithubCacheLoadResult<T> | null> {
     const deadline = this.now() + waitForRefreshMs
 
@@ -471,6 +479,7 @@ class GithubCacheManager {
         return {
           payload: entry.payload,
           cacheStatus: 'hit',
+          scope,
         }
       }
 
@@ -478,6 +487,7 @@ class GithubCacheManager {
         return {
           payload: entry.payload,
           cacheStatus: 'stale',
+          scope,
         }
       }
 
@@ -497,6 +507,21 @@ class GithubCacheManager {
 
     await this.store.del([cacheKey])
     return null
+  }
+
+  private async executeLoad<T>(
+    options: GithubCacheGetOrLoadOptions<T>,
+    cachedEntry: GithubCacheEntry<T> | null,
+  ) {
+    const currentContext = getGithubMetricsContext() ?? {}
+
+    return runWithGithubMetricsContext(
+      {
+        ...currentContext,
+        scope: options.scope,
+      },
+      () => options.load({ cachedEntry }),
+    )
   }
 
   private async writeEntry<T>(

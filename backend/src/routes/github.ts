@@ -40,7 +40,7 @@ import type {
 } from '../plugins/github/types.js'
 import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { logger } from '../lib/logger.js'
 import { authMiddleware } from '../middlewares/auth.js'
 import {
@@ -63,8 +63,10 @@ import {
   createGithubUserRepositoriesCachePolicy,
   getGithubIssueMutationTags,
   getGithubPullRequestMutationTags,
+  type GithubCachePolicy,
   withGithubPublicScope,
 } from '../plugins/github/cache/github-cache-policy.js'
+import type { GithubCacheLoadResult } from '../plugins/github/cache/github-cache.js'
 import { githubCache } from '../plugins/github/cache/github-cache-runtime.js'
 import { githubRepositoryVisibility } from '../plugins/github/cache/github-repository-visibility-runtime.js'
 import {
@@ -132,14 +134,16 @@ function withGithubMetrics<T>(
   return runWithGithubMetricsContext({ userId, operation }, callback)
 }
 
+function setGithubCacheHeaders(
+  ctx: Context,
+  result: Pick<GithubCacheLoadResult<unknown>, 'cacheStatus' | 'scope'>,
+) {
+  ctx.header('x-reviu-cache', result.cacheStatus)
+  ctx.header('x-reviu-cache-scope', result.scope)
+}
+
 async function resolveRepositoryReadCachePolicy(
-  cachePolicy: ReturnType<
-    | typeof createGithubRepositoryDetailsCachePolicy
-    | typeof createGithubRepositoryReadmeCachePolicy
-    | typeof createGithubRepositoryBranchesCachePolicy
-    | typeof createGithubRepositoryTreeCachePolicy
-    | typeof createGithubRepositoryFileCachePolicy
-  >,
+  cachePolicy: GithubCachePolicy,
   owner: string,
   repo: string,
 ) {
@@ -769,10 +773,11 @@ async function fetchRepositoryPullRequestsWithCache(
   owner: string,
   repo: string,
 ) {
-  const cachePolicy = createGithubRepositoryPullRequestsCachePolicy(userId, owner, repo)
+  const baseCachePolicy = createGithubRepositoryPullRequestsCachePolicy(userId, owner, repo)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, owner, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
+    githubCache.getOrLoad<GithubPullRequest[]>({
       ...cachePolicy,
       load: async () => {
         const params: ListPullsParams = {
@@ -811,10 +816,11 @@ async function fetchRepositoryIssuesWithCache(
   owner: string,
   repo: string,
 ) {
-  const cachePolicy = createGithubRepositoryIssuesCachePolicy(userId, owner, repo)
+  const baseCachePolicy = createGithubRepositoryIssuesCachePolicy(userId, owner, repo)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, owner, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
+    githubCache.getOrLoad<GithubIssue[]>({
       ...cachePolicy,
       load: async () => {
         const params: GithubIssueParameters = {
@@ -857,10 +863,11 @@ async function fetchRepositoryIssueDetailsWithCache(
   repo: string,
   issueNumber: number,
 ) {
-  const cachePolicy = createGithubRepositoryIssueDetailsCachePolicy(userId, owner, repo, issueNumber)
+  const baseCachePolicy = createGithubRepositoryIssueDetailsCachePolicy(userId, owner, repo, issueNumber)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, owner, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
+    githubCache.getOrLoad<GithubIssueDetails>({
       ...cachePolicy,
       load: async () => {
         const paramsIssue: GithubIssueDetailsParameters = {
@@ -1020,7 +1027,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchNotificationsWithCache(user.id, githubToken)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json({ notifications: result.payload }, 200)
     }
     catch (error) {
@@ -1037,7 +1044,7 @@ export const githubRoutes = githubRouter
         'latest',
         LATEST_PULL_REQUESTS_QUERY,
       )
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json({ pullRequests: result.payload }, 200)
     }
     catch (error) {
@@ -1055,7 +1062,7 @@ export const githubRoutes = githubRouter
         'need-review',
         NEED_REVIEWS_PULL_REQUESTS_QUERY,
       )
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json({ pullRequests: result.payload }, 200)
     }
     catch (error) {
@@ -1075,7 +1082,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchPullRequestDetailsWithCache(user.id, githubToken, org, repo, pullNumber)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json({ pullRequest: result.payload }, 200)
     }
     catch (error) {
@@ -1144,7 +1151,7 @@ export const githubRoutes = githubRouter
         pullNumber,
         commitSha,
       )
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json({ files: result.payload }, 200)
     }
     catch (error) {
@@ -1164,7 +1171,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchPullRequestCommitsWithCache(user.id, githubToken, org, repo, pullNumber)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json({ commits: result.payload }, 200)
     }
     catch (error) {
@@ -1184,7 +1191,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchPullRequestIssueCommentsWithCache(user.id, githubToken, org, repo, pullNumber)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json({ comments: result.payload }, 200)
     }
     catch (error) {
@@ -1204,7 +1211,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchPullRequestReviewsWithCache(user.id, githubToken, org, repo, pullNumber)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json({ reviews: result.payload }, 200)
     }
     catch (error) {
@@ -1224,7 +1231,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchPullRequestCommentsWithCache(user.id, githubToken, org, repo, pullNumber)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json({ comments: result.payload }, 200)
     }
     catch (error) {
@@ -1476,7 +1483,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchRepositoryFileWithCache(user.id, githubToken, org, repo, path, ref)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json(result.payload, 200)
     }
     catch (error) {
@@ -1493,7 +1500,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchUserRepositoriesWithCache(user.id, githubToken)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json({ repositories: result.payload }, 200)
     }
     catch (error) {
@@ -1508,7 +1515,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchRepositoryDetailsWithCache(user.id, githubToken, owner, repo)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json(result.payload, 200)
     }
     catch (error) {
@@ -1528,7 +1535,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchRepositoryReadmeWithCache(user.id, githubToken, owner, repo, ref)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json(result.payload, 200)
     }
     catch (error) {
@@ -1547,7 +1554,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchRepositoryBranchesWithCache(user.id, githubToken, owner, repo)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json(result.payload, 200)
     }
     catch (error) {
@@ -1567,7 +1574,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchRepositoryTreeWithCache(user.id, githubToken, owner, repo, tree_sha, recursive)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json(result.payload, 200)
     }
     catch (error) {
@@ -1586,7 +1593,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchRepositoryPullRequestsWithCache(user.id, githubToken, owner, repo)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json({ pullRequests: result.payload }, 200)
     }
     catch (error) {
@@ -1601,7 +1608,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchRepositoryIssuesWithCache(user.id, githubToken, owner, repo)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json({ issues: result.payload }, 200)
     }
     catch (error) {
@@ -1622,7 +1629,7 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await fetchRepositoryIssueDetailsWithCache(user.id, githubToken, owner, repo, issueNumber)
-      ctx.header('x-reviu-cache', result.cacheStatus)
+      setGithubCacheHeaders(ctx, result)
       return ctx.json({ issue: result.payload }, 200)
     }
     catch (error) {

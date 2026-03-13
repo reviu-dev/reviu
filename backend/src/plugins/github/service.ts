@@ -195,6 +195,7 @@ function recordGithubRequestMetric(
   githubMetricsCollector.recordGithubApiEvent({
     userId: context?.userId,
     operation,
+    scope: context?.scope,
     route,
     status,
     durationMs,

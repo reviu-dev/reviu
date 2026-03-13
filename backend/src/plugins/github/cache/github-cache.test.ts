@@ -47,10 +47,12 @@ describe('github cache', () => {
     expect(first).toEqual({
       payload: ['value-1'],
       cacheStatus: 'miss',
+      scope: 'viewer',
     })
     expect(second).toEqual({
       payload: ['value-1'],
       cacheStatus: 'hit',
+      scope: 'viewer',
     })
     expect(loadCount).toBe(1)
     expect(loggerInfoSpy).toHaveBeenCalledWith(
@@ -106,6 +108,7 @@ describe('github cache', () => {
     expect(stale).toEqual({
       payload: ['value-1'],
       cacheStatus: 'stale',
+      scope: 'viewer',
     })
 
     await cache.waitForIdle()
@@ -123,6 +126,7 @@ describe('github cache', () => {
     expect(refreshed).toEqual({
       payload: ['value-2'],
       cacheStatus: 'hit',
+      scope: 'viewer',
     })
     expect(loadCount).toBe(2)
   })
@@ -163,6 +167,7 @@ describe('github cache', () => {
     expect(stale).toEqual({
       payload: ['value-1'],
       cacheStatus: 'stale',
+      scope: 'viewer',
     })
 
     await cache.waitForIdle()
@@ -206,6 +211,7 @@ describe('github cache', () => {
     expect(reloaded).toEqual({
       payload: ['value-2'],
       cacheStatus: 'miss',
+      scope: 'viewer',
     })
     expect(loadCount).toBe(2)
   })
@@ -246,6 +252,7 @@ describe('github cache', () => {
         full_name: 'OpenAI/Reviu',
       },
       cacheStatus: 'hit',
+      scope: 'public',
     })
     expect(load).not.toHaveBeenCalled()
   })
@@ -300,6 +307,7 @@ describe('github cache', () => {
     expect(revalidated).toEqual({
       payload: ['value-1'],
       cacheStatus: 'hit',
+      scope: 'viewer',
     })
     expect(loadCount).toBe(2)
   })

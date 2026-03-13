@@ -225,6 +225,8 @@ const summaryCards = computed(() => {
   ]
 })
 
+const scopeCards = computed(() => overview.value?.scopeSummary ?? [])
+
 function formatCount(value: number | null | undefined) {
   if (value == null) {
     return '—'
@@ -296,6 +298,30 @@ function pressureVariant(remainingPct: number | null | undefined) {
   }
 
   return 'outline'
+}
+
+function scopeVariant(scope: GithubCacheOverview['scopeSummary'][number]['scope']) {
+  if (scope === 'public') {
+    return 'default'
+  }
+
+  if (scope === 'viewer') {
+    return 'secondary'
+  }
+
+  return 'outline'
+}
+
+function formatScopeLabel(scope: GithubCacheOverview['scopeSummary'][number]['scope']) {
+  if (scope === 'public') {
+    return 'Public scope'
+  }
+
+  if (scope === 'viewer') {
+    return 'Viewer scope'
+  }
+
+  return 'Installation scope'
 }
 </script>
 
@@ -396,6 +422,57 @@ function pressureVariant(remainingPct: number | null | undefined) {
         </Card>
       </div>
 
+      <div
+        v-if="scopeCards.length > 0"
+        class="grid gap-4 xl:grid-cols-3"
+      >
+        <Card
+          v-for="scope in scopeCards"
+          :key="scope.scope"
+          class="border-border/60 bg-card/80 backdrop-blur"
+        >
+          <CardHeader class="pb-2">
+            <div class="flex items-center justify-between gap-3">
+              <CardTitle class="text-base">
+                {{ formatScopeLabel(scope.scope) }}
+              </CardTitle>
+              <Badge :variant="scopeVariant(scope.scope)">
+                {{ scope.scope }}
+              </Badge>
+            </div>
+            <CardDescription>
+              {{ formatCount(scope.requests) }} requests, {{ formatCount(scope.upstreamCalls) }} upstream calls
+            </CardDescription>
+          </CardHeader>
+          <CardContent class="grid gap-3 sm:grid-cols-3">
+            <div class="space-y-1">
+              <div class="text-muted-foreground text-xs uppercase tracking-[0.18em]">
+                Hit rate
+              </div>
+              <div class="text-xl font-semibold">
+                {{ formatPercent(scope.hitRate) }}
+              </div>
+            </div>
+            <div class="space-y-1">
+              <div class="text-muted-foreground text-xs uppercase tracking-[0.18em]">
+                Saved
+              </div>
+              <div class="text-xl font-semibold">
+                {{ formatCount(scope.githubCallsSaved) }}
+              </div>
+            </div>
+            <div class="space-y-1">
+              <div class="text-muted-foreground text-xs uppercase tracking-[0.18em]">
+                GitHub avg
+              </div>
+              <div class="text-xl font-semibold">
+                {{ formatDuration(scope.avgGithubDurationMs) }}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       <div class="grid gap-4 xl:grid-cols-2">
         <Card class="overflow-hidden border-border/60">
           <CardHeader>
@@ -486,7 +563,7 @@ function pressureVariant(remainingPct: number | null | undefined) {
           <CardHeader>
             <CardTitle>Routes Needing Tuning</CardTitle>
             <CardDescription>
-              Operations that consume the most GitHub upstream calls or still keep a high miss rate.
+              Operations split by cache scope, so the same route can appear once for viewer traffic and once for public traffic.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -494,6 +571,7 @@ function pressureVariant(remainingPct: number | null | undefined) {
               <TableHeader>
                 <TableRow>
                   <TableHead>Operation</TableHead>
+                  <TableHead>Scope</TableHead>
                   <TableHead>Requests</TableHead>
                   <TableHead>Hit</TableHead>
                   <TableHead>Upstream</TableHead>
@@ -505,23 +583,24 @@ function pressureVariant(remainingPct: number | null | undefined) {
               <TableBody>
                 <TableRow
                   v-for="route in overview.routes"
-                  :key="route.operation"
+                  :key="`${route.operation}:${route.scope ?? 'unscoped'}`"
                 >
                   <TableCell class="max-w-[320px]">
                     <div class="flex flex-col gap-1">
                       <span class="font-medium">{{ route.operation }}</span>
-                      <div class="flex flex-wrap gap-2">
-                        <Badge
-                          v-if="route.scope"
-                          variant="outline"
-                        >
-                          {{ route.scope }}
-                        </Badge>
-                        <span class="text-muted-foreground text-xs">
-                          stale window {{ formatDuration(route.staleMs) }}
-                        </span>
-                      </div>
+                      <span class="text-muted-foreground text-xs">
+                        stale window {{ formatDuration(route.staleMs) }}
+                      </span>
                     </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      v-if="route.scope"
+                      :variant="scopeVariant(route.scope)"
+                    >
+                      {{ route.scope }}
+                    </Badge>
+                    <span v-else class="text-muted-foreground text-xs">—</span>
                   </TableCell>
                   <TableCell>{{ formatCount(route.requests) }}</TableCell>
                   <TableCell>{{ formatPercent(route.hitRate) }}</TableCell>
