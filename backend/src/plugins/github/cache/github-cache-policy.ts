@@ -12,6 +12,14 @@ export interface GithubCachePolicy {
   tags: string[]
 }
 
+export function withGithubPublicScope(policy: GithubCachePolicy): GithubCachePolicy {
+  return {
+    ...policy,
+    scope: 'public',
+    scopeId: undefined,
+  }
+}
+
 const GITHUB_NOTIFICATIONS_CACHE_TTL_MS = 15_000 // 15s
 const GITHUB_NOTIFICATIONS_CACHE_STALE_MS = 60_000 // 60s
 const GITHUB_USER_REPOSITORIES_CACHE_TTL_MS = 60_000 // 60s

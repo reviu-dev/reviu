@@ -16,6 +16,7 @@ import {
   createGithubRepositoryTreeCachePolicy,
   getGithubIssueMutationTags,
   getGithubPullRequestMutationTags,
+  withGithubPublicScope,
 } from './github-cache-policy.js'
 
 describe('github cache policy', () => {
@@ -175,6 +176,20 @@ describe('github cache policy', () => {
       ttlMs: 86_400_000,
       staleMs: 604_800_000,
       tags: ['repo:openai/reviu:file:blob:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'],
+    })
+  })
+
+  it('promotes a viewer cache policy to public scope without changing the resource identity', () => {
+    expect(withGithubPublicScope(
+      createGithubRepositoryReadmeCachePolicy('user-1', 'OpenAI', 'Reviu'),
+    )).toEqual({
+      operation: 'repository.readme',
+      scope: 'public',
+      scopeId: undefined,
+      resourceKey: 'repo:openai/reviu:readme',
+      ttlMs: 120_000,
+      staleMs: 600_000,
+      tags: ['repo:openai/reviu:readme'],
     })
   })
 

@@ -306,6 +306,7 @@ export interface GithubIssueDescriptionUpdate {
 export interface GithubRepositoryDetails {
   name: GithubRepositoryResponse['name']
   full_name: GithubRepositoryResponse['full_name']
+  private: GithubRepositoryResponse['private']
   description: GithubRepositoryResponse['description']
   homepage: GithubRepositoryResponse['homepage']
   language: GithubRepositoryResponse['language']

@@ -44,6 +44,18 @@ export interface GithubCacheLoadResult<T> {
   cacheStatus: GithubCacheStatus
 }
 
+export interface GithubCachePrimeOptions<T> {
+  scope: GithubCacheScope
+  scopeId?: string
+  resourceKey: string
+  ttlMs: number
+  staleMs: number
+  tags?: string[]
+  payload: T
+  etag?: string
+  lastModified?: string
+}
+
 export interface GithubCacheLoadContext<T> {
   cachedEntry: GithubCacheEntry<T> | null
 }
@@ -248,6 +260,22 @@ class GithubCacheManager {
     }
 
     await this.store.del([...keys, ...tags.map(buildTagKey)])
+  }
+
+  async prime<T>(options: GithubCachePrimeOptions<T>): Promise<void> {
+    const cacheKey = buildCacheKey(options.scope, options.resourceKey, options.scopeId)
+
+    await this.writeEntry(
+      cacheKey,
+      options.payload,
+      options.ttlMs,
+      options.staleMs,
+      options.tags ?? [],
+      {
+        etag: options.etag,
+        lastModified: options.lastModified,
+      },
+    )
   }
 
   async waitForIdle(): Promise<void> {

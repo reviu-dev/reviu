@@ -63,8 +63,10 @@ import {
   createGithubUserRepositoriesCachePolicy,
   getGithubIssueMutationTags,
   getGithubPullRequestMutationTags,
+  withGithubPublicScope,
 } from '../plugins/github/cache/github-cache-policy.js'
 import { githubCache } from '../plugins/github/cache/github-cache-runtime.js'
+import { githubRepositoryVisibility } from '../plugins/github/cache/github-repository-visibility-runtime.js'
 import {
   formatGithubUser,
   mapGithubIssueComment,
@@ -128,6 +130,49 @@ function withGithubMetrics<T>(
   callback: () => Promise<T>,
 ) {
   return runWithGithubMetricsContext({ userId, operation }, callback)
+}
+
+async function resolveRepositoryReadCachePolicy(
+  cachePolicy: ReturnType<
+    | typeof createGithubRepositoryDetailsCachePolicy
+    | typeof createGithubRepositoryReadmeCachePolicy
+    | typeof createGithubRepositoryBranchesCachePolicy
+    | typeof createGithubRepositoryTreeCachePolicy
+    | typeof createGithubRepositoryFileCachePolicy
+  >,
+  owner: string,
+  repo: string,
+) {
+  const isKnownPublic = await githubRepositoryVisibility.isKnownPublic(owner, repo)
+  return isKnownPublic ? withGithubPublicScope(cachePolicy) : cachePolicy
+}
+
+async function syncRepositoryPublicVisibility(
+  owner: string,
+  repo: string,
+  isPrivate: boolean,
+) {
+  try {
+    if (isPrivate) {
+      await githubRepositoryVisibility.clear(owner, repo)
+      return
+    }
+
+    await githubRepositoryVisibility.markPublic(owner, repo)
+  }
+  catch (error) {
+    logger.warn({ error, owner, repo }, 'Failed to sync GitHub repository public visibility')
+  }
+}
+
+async function syncUserRepositoriesPublicVisibility(repositories: GithubUserRepository[]) {
+  await Promise.allSettled(
+    repositories.map(repository => syncRepositoryPublicVisibility(
+      repository.owner,
+      repository.repo,
+      repository.private,
+    )),
+  )
 }
 
 async function fetchPullRequestsSearchWithCache(
@@ -214,7 +259,7 @@ async function fetchUserRepositoriesWithCache(
 ) {
   const cachePolicy = createGithubUserRepositoriesCachePolicy(userId)
 
-  return withGithubMetrics(userId, cachePolicy.operation, () =>
+  const result = await withGithubMetrics(userId, cachePolicy.operation, () =>
     githubCache.getOrLoad({
       ...cachePolicy,
       load: async () => {
@@ -240,6 +285,10 @@ async function fetchUserRepositoriesWithCache(
         }
       },
     }))
+
+  await syncUserRepositoriesPublicVisibility(result.payload)
+
+  return result
 }
 
 async function fetchPullRequestDetailsWithCache(
@@ -521,10 +570,11 @@ async function fetchRepositoryDetailsWithCache(
   owner: string,
   repo: string,
 ) {
-  const cachePolicy = createGithubRepositoryDetailsCachePolicy(userId, owner, repo)
+  const baseCachePolicy = createGithubRepositoryDetailsCachePolicy(userId, owner, repo)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, owner, repo)
 
-  return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
+  const result = await withGithubMetrics(userId, cachePolicy.operation, () =>
+    githubCache.getOrLoad<GithubRepositoryDetails>({
       ...cachePolicy,
       load: async ({ cachedEntry }) => {
         const params: GithubRepositoryParameters = {
@@ -553,6 +603,7 @@ async function fetchRepositoryDetailsWithCache(
           payload: {
             name: data.name,
             full_name: data.full_name,
+            private: data.private,
             description: data.description,
             homepage: data.homepage,
             language: data.language,
@@ -582,6 +633,17 @@ async function fetchRepositoryDetailsWithCache(
         }
       },
     }))
+
+  await syncRepositoryPublicVisibility(owner, repo, result.payload.private)
+
+  if (!result.payload.private && cachePolicy.scope !== 'public' && result.cacheStatus !== 'stale') {
+    await githubCache.prime({
+      ...withGithubPublicScope(baseCachePolicy),
+      payload: result.payload,
+    })
+  }
+
+  return result
 }
 
 async function fetchRepositoryReadmeWithCache(
@@ -591,10 +653,11 @@ async function fetchRepositoryReadmeWithCache(
   repo: string,
   ref?: string,
 ) {
-  const cachePolicy = createGithubRepositoryReadmeCachePolicy(userId, owner, repo, ref)
+  const baseCachePolicy = createGithubRepositoryReadmeCachePolicy(userId, owner, repo, ref)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, owner, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
+    githubCache.getOrLoad<GithubRepositoryReadme>({
       ...cachePolicy,
       load: async ({ cachedEntry }) => {
         const params: GithubRepositoryReadmeParameters = {
@@ -656,10 +719,11 @@ async function fetchRepositoryBranchesWithCache(
   owner: string,
   repo: string,
 ) {
-  const cachePolicy = createGithubRepositoryBranchesCachePolicy(userId, owner, repo)
+  const baseCachePolicy = createGithubRepositoryBranchesCachePolicy(userId, owner, repo)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, owner, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
+    githubCache.getOrLoad<GithubRepositoryBranch[]>({
       ...cachePolicy,
       load: async ({ cachedEntry }) => {
         const params: GithubRepositoryBranchesParameters = {
@@ -849,10 +913,11 @@ async function fetchRepositoryTreeWithCache(
   treeSha: string,
   recursive?: string,
 ) {
-  const cachePolicy = createGithubRepositoryTreeCachePolicy(userId, owner, repo, treeSha, recursive)
+  const baseCachePolicy = createGithubRepositoryTreeCachePolicy(userId, owner, repo, treeSha, recursive)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, owner, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
+    githubCache.getOrLoad<GithubRepositoryTree>({
       ...cachePolicy,
       load: async () => {
         const params: GithubRepositoryTreeParams = {
@@ -884,10 +949,11 @@ async function fetchRepositoryFileWithCache(
   path: string,
   ref: string,
 ) {
-  const cachePolicy = createGithubRepositoryFileCachePolicy(userId, owner, repo, path, ref)
+  const baseCachePolicy = createGithubRepositoryFileCachePolicy(userId, owner, repo, path, ref)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, owner, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
+    githubCache.getOrLoad<GithubFileContent>({
       ...cachePolicy,
       load: async () => {
         const params: GetContentParams = {

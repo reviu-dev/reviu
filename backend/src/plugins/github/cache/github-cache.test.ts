@@ -210,6 +210,46 @@ describe('github cache', () => {
     expect(loadCount).toBe(2)
   })
 
+  it('serves a primed public entry without reloading GitHub', async () => {
+    const cache = createGithubCache({
+      store: new MemoryGithubCacheStore(),
+    })
+
+    await cache.prime({
+      scope: 'public',
+      resourceKey: 'repo:openai/reviu:details',
+      ttlMs: 60_000,
+      staleMs: 300_000,
+      tags: ['repo:openai/reviu'],
+      payload: {
+        full_name: 'OpenAI/Reviu',
+      },
+    })
+
+    const load = vi.fn(async () => ({
+      payload: {
+        full_name: 'should-not-load',
+      },
+    }))
+
+    const result = await cache.getOrLoad({
+      scope: 'public',
+      resourceKey: 'repo:openai/reviu:details',
+      ttlMs: 60_000,
+      staleMs: 300_000,
+      tags: ['repo:openai/reviu'],
+      load,
+    })
+
+    expect(result).toEqual({
+      payload: {
+        full_name: 'OpenAI/Reviu',
+      },
+      cacheStatus: 'hit',
+    })
+    expect(load).not.toHaveBeenCalled()
+  })
+
   it('revalidates an expired entry when GitHub returns not modified', async () => {
     let currentTime = 1_000
     let loadCount = 0
