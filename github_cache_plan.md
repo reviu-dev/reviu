@@ -104,11 +104,21 @@ Persistence goal achieved:
 - `GET /github/repos/:owner/:repo`
 - `GET /github/repos/:owner/:repo/readme`
 - `GET /github/repos/:owner/:repo/branches`
+- `GET /github/repos/:owner/:repo/pr`
+- `GET /github/repos/:owner/:repo/issues`
+- `GET /github/repos/:owner/:repo/issues/:issue_number`
+- `GET /github/repos/:owner/:repo/trees/:tree_sha`
+- `GET /github/file`
 
 Notes:
 
 - `GET /github/pr/:id/files` is cached but not conditionally revalidated yet because it aggregates paginated responses
-- tree, file, issue list, issue details, and repo PR list are currently cached without conditional revalidation
+- `GET /github/repos/:owner/:repo/issues/:issue_number` now uses a strong aggregate strategy:
+  - revalidate the issue resource
+  - revalidate the issue comments resource
+  - keep the aggregate only when both return `304`
+  - rebuild the aggregate when either side changes
+- current issue details payload still fetches only the first `100` comments (`per_page: 100`), so very large issues remain a known limitation
 
 ### Cached Routes
 
@@ -251,11 +261,11 @@ This matrix reflects the current code, not the original target-only plan.
 | `GET /github/repos/:owner/:repo` | implemented | viewer or public | yes | 2m | 10m | public response primes public cache |
 | `GET /github/repos/:owner/:repo/readme` | implemented | viewer or public | yes | 2m | 10m | explicit ref gets separate key |
 | `GET /github/repos/:owner/:repo/branches` | implemented | viewer or public | yes | 60s | 5m | ETag-backed |
-| `GET /github/repos/:owner/:repo/pr` | implemented | viewer or public | no | 30s | 5m | public list promotion active |
-| `GET /github/repos/:owner/:repo/issues` | implemented | viewer or public | no | 30s | 5m | public list promotion active |
-| `GET /github/repos/:owner/:repo/issues/:issue_number` | implemented | viewer or public | no | 15s | 2m | includes issue comments |
-| `GET /github/repos/:owner/:repo/trees/:tree_sha` | implemented | viewer or public | no | 10m | 24h | very strong public-cache candidate |
-| `GET /github/file?org=&repo=&path=&ref=` | implemented | viewer or public | no | 60s or 24h | 10m or 7d | blob SHA variant is the best cache target |
+| `GET /github/repos/:owner/:repo/pr` | implemented | viewer or public | yes | 30s | 5m | conditional list revalidation active |
+| `GET /github/repos/:owner/:repo/issues` | implemented | viewer or public | yes | 30s | 5m | conditional list revalidation active |
+| `GET /github/repos/:owner/:repo/issues/:issue_number` | implemented | viewer or public | yes | 15s | 2m | strong aggregate revalidation on issue + comments; still limited to first 100 comments |
+| `GET /github/repos/:owner/:repo/trees/:tree_sha` | implemented | viewer or public | yes | 10m | 24h | conditional revalidation active |
+| `GET /github/file?org=&repo=&path=&ref=` | implemented | viewer or public | yes | 60s or 24h | 10m or 7d | blob SHA variant is still the best cache target |
 
 ## Redis Data Model
 
@@ -330,12 +340,19 @@ Still missing:
 
 Still missing for some expensive read routes:
 
-- repo PR list
-- repo issue list
-- repo issue details
-- repo tree
-- file by ref or SHA
+- PR files
+- PR commits
+- PR review comments
+- PR issue comments
 - possibly selected PR list-like endpoints if worth it
+
+### Issue Details Pagination
+
+Still missing:
+
+- pagination for issue comments in `GET /github/repos/:owner/:repo/issues/:issue_number`
+- aggregation beyond the first `100` comments
+- a policy decision on whether very large issue threads should stay fully materialized in one cache entry
 
 ### Public Promotion Quality
 
@@ -359,17 +376,28 @@ Not implemented yet:
 
 Candidates:
 
-- repo PR list
-- repo issue list
-- repo issue details
-- tree and file reads when upstream validators are reliable enough
+- PR files
+- PR commits
+- PR review comments
+- PR issue comments
+- any remaining multi-call read paths where validators are usable
 
 Goal:
 
 - reduce upstream payload transfer on refresh
 - keep SWR fast while lowering GitHub pressure further
 
-### 2. Add Metrics Retention and Query Hygiene
+### 2. Handle Large Issue Threads Better
+
+Now that issue details have strong aggregate revalidation, the next correctness gap is comment pagination.
+
+Needed:
+
+- paginate issue comments beyond `per_page: 100`
+- decide whether to cache the full merged thread or segment it
+- keep invalidation behavior predictable for very large discussions
+
+### 3. Add Metrics Retention and Query Hygiene
 
 Now that metrics persist, the next ops step is lifecycle management.
 
@@ -379,7 +407,7 @@ Needed:
 - prune or roll up older data
 - watch admin route latency as tables grow
 
-### 3. Improve Dashboard Drilldown
+### 4. Improve Dashboard Drilldown
 
 Useful additions:
 
@@ -389,7 +417,7 @@ Useful additions:
 - explicit public/viewer ratio over time
 - maybe table views for routes with high upstream-to-request ratio
 
-### 4. Add Installation Scope Later
+### 5. Add Installation Scope Later
 
 If GitHub App is introduced:
 
