@@ -193,6 +193,20 @@ describe('github cache policy', () => {
     })
   })
 
+  it('promotes a pull request cache policy to public scope without changing pull request tags', () => {
+    expect(withGithubPublicScope(
+      createGithubPullRequestDetailsCachePolicy('user-1', 'OpenAI', 'Reviu', 42),
+    )).toEqual({
+      operation: 'pull_request.details',
+      scope: 'public',
+      scopeId: undefined,
+      resourceKey: 'pull-request:openai/reviu:42:details',
+      ttlMs: 20_000,
+      staleMs: 120_000,
+      tags: ['pull-request:openai/reviu:42'],
+    })
+  })
+
   it('builds normalized pull request invalidation tags', () => {
     expect(getGithubPullRequestMutationTags({
       userId: 'user-1',

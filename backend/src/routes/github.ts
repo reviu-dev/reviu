@@ -15,8 +15,13 @@ import type {
   GithubIssueParameters,
   GithubNotification,
   GithubPullRequest,
+  GithubPullRequestCommit,
   GithubPullRequestDetails,
   GithubPullRequestDetailsAuthor,
+  GithubPullRequestFile,
+  GithubPullRequestIssueComment,
+  GithubPullRequestReview,
+  GithubPullRequestReviewComment,
   GithubRepositoryBranch,
   GithubRepositoryBranchesParameters,
   GithubRepositoryDetails,
@@ -302,10 +307,12 @@ async function fetchPullRequestDetailsWithCache(
   repo: string,
   pullNumber: number,
 ) {
-  const cachePolicy = createGithubPullRequestDetailsCachePolicy(userId, org, repo, pullNumber)
+  const baseCachePolicy = createGithubPullRequestDetailsCachePolicy(userId, org, repo, pullNumber)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, org, repo)
+  let resolvedRepositoryPrivate: boolean | null = null
 
-  return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
+  const result = await withGithubMetrics(userId, cachePolicy.operation, () =>
+    githubCache.getOrLoad<GithubPullRequestDetails>({
       ...cachePolicy,
       load: async ({ cachedEntry }) => {
         const params: PullRequestParams = {
@@ -330,6 +337,7 @@ async function fetchPullRequestDetailsWithCache(
         }
 
         const data = response.data!
+        resolvedRepositoryPrivate = data.base.repo.private
         const author: GithubPullRequestDetailsAuthor = {
           login: data.user.login,
           avatar_url: data.user.avatar_url,
@@ -392,6 +400,19 @@ async function fetchPullRequestDetailsWithCache(
         }
       },
     }))
+
+  if (resolvedRepositoryPrivate != null) {
+    await syncRepositoryPublicVisibility(org, repo, resolvedRepositoryPrivate)
+  }
+
+  if (resolvedRepositoryPrivate === false && cachePolicy.scope !== 'public' && result.cacheStatus !== 'stale') {
+    await githubCache.prime({
+      ...withGithubPublicScope(baseCachePolicy),
+      payload: result.payload,
+    })
+  }
+
+  return result
 }
 
 async function fetchPullRequestFilesWithCache(
@@ -402,10 +423,11 @@ async function fetchPullRequestFilesWithCache(
   pullNumber: number,
   commitSha?: string,
 ) {
-  const cachePolicy = createGithubPullRequestFilesCachePolicy(userId, org, repo, pullNumber, commitSha)
+  const baseCachePolicy = createGithubPullRequestFilesCachePolicy(userId, org, repo, pullNumber, commitSha)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, org, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
+    githubCache.getOrLoad<GithubPullRequestFile[]>({
       ...cachePolicy,
       load: async () => {
         const files = commitSha
@@ -440,10 +462,11 @@ async function fetchPullRequestCommitsWithCache(
   repo: string,
   pullNumber: number,
 ) {
-  const cachePolicy = createGithubPullRequestCommitsCachePolicy(userId, org, repo, pullNumber)
+  const baseCachePolicy = createGithubPullRequestCommitsCachePolicy(userId, org, repo, pullNumber)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, org, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
+    githubCache.getOrLoad<GithubPullRequestCommit[]>({
       ...cachePolicy,
       load: async () => {
         const commits = await fetchGithubPullRequestCommitsAllPages({
@@ -469,10 +492,11 @@ async function fetchPullRequestIssueCommentsWithCache(
   repo: string,
   pullNumber: number,
 ) {
-  const cachePolicy = createGithubPullRequestIssueCommentsCachePolicy(userId, org, repo, pullNumber)
+  const baseCachePolicy = createGithubPullRequestIssueCommentsCachePolicy(userId, org, repo, pullNumber)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, org, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
+    githubCache.getOrLoad<GithubPullRequestIssueComment[]>({
       ...cachePolicy,
       load: async () => {
         const params: GithubIssueDetailsCommentParameters = {
@@ -498,10 +522,11 @@ async function fetchPullRequestReviewsWithCache(
   repo: string,
   pullNumber: number,
 ) {
-  const cachePolicy = createGithubPullRequestReviewsCachePolicy(userId, org, repo, pullNumber)
+  const baseCachePolicy = createGithubPullRequestReviewsCachePolicy(userId, org, repo, pullNumber)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, org, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
+    githubCache.getOrLoad<GithubPullRequestReview[]>({
       ...cachePolicy,
       load: async ({ cachedEntry }) => {
         const params: PullRequestReviewsParams = {
@@ -546,10 +571,11 @@ async function fetchPullRequestCommentsWithCache(
   repo: string,
   pullNumber: number,
 ) {
-  const cachePolicy = createGithubPullRequestCommentsCachePolicy(userId, org, repo, pullNumber)
+  const baseCachePolicy = createGithubPullRequestCommentsCachePolicy(userId, org, repo, pullNumber)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, org, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
+    githubCache.getOrLoad<GithubPullRequestReviewComment[]>({
       ...cachePolicy,
       load: async () => {
         const params: PullRequestCommentsParams = {
