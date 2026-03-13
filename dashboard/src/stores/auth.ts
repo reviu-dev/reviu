@@ -1,18 +1,50 @@
-import type { AsyncReturnType } from 'type-fest'
 import { createGlobalState, useAsyncState, useLocalStorage } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { betterAuthClient } from '@/lib/auth-client'
 import { usersClient } from '@/services/user'
 
-type MeResponse = AsyncReturnType<AsyncReturnType<typeof usersClient.me.$get>['json']>
-export type User = NonNullable<AsyncReturnType<typeof usersClient.me.$get>>
-export const JWT_KEY = 'bearer_token'
+interface User {
+  subscription: {
+    portalUrl: string
+    activeSubscription: {
+      id: string
+      createdAt: Date
+      modifiedAt: Date | null
+      customFieldData?:
+        | { [k: string]: string | number | boolean | Date | null }
+        | undefined
+      metadata: { [k: string]: string | number | boolean }
+      status: 'active' | 'trialing'
+      amount: number
+      currency: string
+      currentPeriodStart: Date
+      currentPeriodEnd: Date | null
+      trialStart: Date | null
+      trialEnd: Date | null
+      cancelAtPeriodEnd: boolean
+      canceledAt: Date | null
+      startedAt: Date | null
+      endsAt: Date | null
+      productId: string
+      discountId: string | null
+    } | null
+  }
+  githubLogin: string | null
+  id: string
+  name: string
+  email: string
+  emailVerified: boolean
+  image?: string | null | undefined
+  role: 'user' | 'admin'
+}
+
+export const LS_BEARER_KEY = 'bearer_token'
 
 export const useAuthStore = createGlobalState(
   <UserRequired extends boolean = false>() => {
     const me = ref<User>()
-    const token = useLocalStorage<string>(JWT_KEY, null)
+    const token = useLocalStorage<string>(LS_BEARER_KEY, null)
     const firstLoad = ref(true)
 
     const router = useRouter()
@@ -55,7 +87,7 @@ export const useAuthStore = createGlobalState(
 
           const user = await res.json()
 
-          me.value = user
+          me.value = user as User
 
           handleUserRedirect(me.value)
         },

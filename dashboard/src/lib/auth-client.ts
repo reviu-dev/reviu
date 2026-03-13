@@ -1,6 +1,6 @@
 import { adminClient } from 'better-auth/client/plugins'
 import { createAuthClient } from 'better-auth/vue'
-import { JWT_KEY } from '@/stores/auth'
+import { LS_BEARER_KEY } from '@/stores/auth'
 import { env } from './env'
 
 export const betterAuthClient = createAuthClient({
@@ -9,7 +9,7 @@ export const betterAuthClient = createAuthClient({
     credentials: 'omit',
     auth: {
       type: 'Bearer',
-      token: () => localStorage.getItem(JWT_KEY) ?? '',
+      token: () => localStorage.getItem(LS_BEARER_KEY) ?? '',
     },
   },
   plugins: [

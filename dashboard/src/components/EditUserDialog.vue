@@ -58,7 +58,7 @@ async function handleSubmit() {
 
   isLoading.value = true
 
-  const result = await authClient.admin.updateUser({
+  const result = await betterAuthClient.admin.updateUser({
     userId: props.user.id,
     data: {
       name: form.value.name,
