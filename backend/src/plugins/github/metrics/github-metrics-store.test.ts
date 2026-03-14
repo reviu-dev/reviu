@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 
 let buildGithubMetricsOverviewFromPersistedRows: typeof import('./github-metrics-store.js').buildGithubMetricsOverviewFromPersistedRows
+let buildGithubMetricsOperationDrilldownFromPersistedRows: typeof import('./github-metrics-store.js').buildGithubMetricsOperationDrilldownFromPersistedRows
 
 beforeAll(async () => {
   process.env.NODE_ENV = 'development'
@@ -21,7 +22,10 @@ beforeAll(async () => {
   process.env.DESKTOP_UPDATE_MANIFEST_URL ??= 'http://localhost:3000/desktop/updates'
   process.env.WEB_DASHBOARD_URL ??= 'http://localhost:5173'
 
-  ;({ buildGithubMetricsOverviewFromPersistedRows } = await import('./github-metrics-store.js'))
+  ;({
+    buildGithubMetricsOverviewFromPersistedRows,
+    buildGithubMetricsOperationDrilldownFromPersistedRows,
+  } = await import('./github-metrics-store.js'))
 })
 
 describe('github metrics store', () => {
@@ -401,6 +405,109 @@ describe('github metrics store', () => {
         avgItemCount: 180,
         truncatedCount: 1,
         avgPaginationDurationMs: 100,
+      }),
+    ])
+  })
+
+  it('builds a persisted drilldown series for a selected operation', () => {
+    const drilldown = buildGithubMetricsOperationDrilldownFromPersistedRows({
+      now: 180_000,
+      windowMs: 120_000,
+      operation: 'pull_request.comments',
+      scope: 'viewer',
+      operationMetrics: [
+        {
+          bucketStart: 120_000,
+          operation: 'pull_request.comments',
+          scope: 'viewer',
+          requests: 1,
+          hits: 0,
+          staleHits: 0,
+          misses: 1,
+          upstreamCalls: 1,
+          notModified: 0,
+          errorCount: 0,
+          nearLimitEvents: 0,
+          totalBackendDurationMs: 20,
+          totalGithubDurationMs: 50,
+          paginatedLoads: 1,
+          totalPageCount: 3,
+          totalItemCount: 240,
+          truncatedCount: 1,
+          totalPaginationDurationMs: 120,
+          ttlMs: 15_000,
+          staleMs: 120_000,
+          lastSeenAt: 120_050,
+        },
+        {
+          bucketStart: 180_000,
+          operation: 'pull_request.comments',
+          scope: 'viewer',
+          requests: 1,
+          hits: 1,
+          staleHits: 0,
+          misses: 0,
+          upstreamCalls: 0,
+          notModified: 0,
+          errorCount: 0,
+          nearLimitEvents: 0,
+          totalBackendDurationMs: 5,
+          totalGithubDurationMs: 0,
+          paginatedLoads: 0,
+          totalPageCount: 0,
+          totalItemCount: 0,
+          truncatedCount: 0,
+          totalPaginationDurationMs: 0,
+          ttlMs: 15_000,
+          staleMs: 120_000,
+          lastSeenAt: 180_000,
+        },
+      ],
+      bucketMs: 60_000,
+    })
+
+    expect(drilldown.selection).toEqual({
+      operation: 'pull_request.comments',
+      scope: 'viewer',
+    })
+
+    expect(drilldown.summary).toEqual(expect.objectContaining({
+      operation: 'pull_request.comments',
+      scope: 'viewer',
+      requests: 2,
+      hits: 1,
+      misses: 1,
+      upstreamCalls: 1,
+      paginatedLoads: 1,
+      avgPageCount: 3,
+      avgItemCount: 240,
+      truncatedCount: 1,
+      avgPaginationDurationMs: 120,
+      ttlMs: 15_000,
+      staleMs: 120_000,
+    }))
+
+    expect(drilldown.series).toEqual([
+      expect.objectContaining({
+        bucketStart: 120_000,
+        requests: 1,
+        hit: 0,
+        miss: 1,
+        upstreamCalls: 1,
+        paginatedLoads: 1,
+        avgPageCount: 3,
+        avgItemCount: 240,
+        truncatedCount: 1,
+      }),
+      expect.objectContaining({
+        bucketStart: 180_000,
+        requests: 1,
+        hit: 1,
+        miss: 0,
+        upstreamCalls: 0,
+        paginatedLoads: 0,
+        avgPageCount: null,
+        truncatedCount: 0,
       }),
     ])
   })

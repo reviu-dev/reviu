@@ -426,6 +426,112 @@ describe('github metrics collector', () => {
     ])
   })
 
+  it('builds an operation drilldown series for a selected route', () => {
+    const collector = createGithubMetricsCollector({
+      now: () => 180_000,
+    })
+
+    collector.recordCacheEvent({
+      at: 120_000,
+      userId: 'user-1',
+      operation: 'pull_request.comments',
+      scope: 'viewer',
+      cacheStatus: 'miss',
+      ttlMs: 15_000,
+      staleMs: 120_000,
+      durationMs: 20,
+    })
+
+    collector.recordGithubApiEvent({
+      at: 120_050,
+      userId: 'user-1',
+      operation: 'pull_request.comments',
+      scope: 'viewer',
+      route: 'GET /repos/{owner}/{repo}/pulls/{pull_number}/comments',
+      status: 200,
+      durationMs: 45,
+      rateLimit: {
+        limit: 5_000,
+        remaining: 4_100,
+        resource: 'core',
+      },
+    })
+
+    collector.recordPaginationEvent({
+      at: 120_070,
+      userId: 'user-1',
+      operation: 'pull_request.comments',
+      scope: 'viewer',
+      pageCount: 3,
+      itemCount: 220,
+      truncated: true,
+      durationMs: 90,
+    })
+
+    collector.recordCacheEvent({
+      at: 180_000,
+      userId: 'user-1',
+      operation: 'pull_request.comments',
+      scope: 'viewer',
+      cacheStatus: 'hit',
+      ttlMs: 15_000,
+      staleMs: 120_000,
+      durationMs: 5,
+    })
+
+    const drilldown = collector.getOperationDrilldown({
+      now: 180_000,
+      windowMs: 5 * 60_000,
+      operation: 'pull_request.comments',
+      scope: 'viewer',
+    })
+
+    expect(drilldown.selection).toEqual({
+      operation: 'pull_request.comments',
+      scope: 'viewer',
+    })
+
+    expect(drilldown.summary).toEqual(expect.objectContaining({
+      operation: 'pull_request.comments',
+      scope: 'viewer',
+      requests: 2,
+      hits: 1,
+      misses: 1,
+      upstreamCalls: 1,
+      paginatedLoads: 1,
+      avgPageCount: 3,
+      avgItemCount: 220,
+      truncatedCount: 1,
+      avgPaginationDurationMs: 90,
+      ttlMs: 15_000,
+      staleMs: 120_000,
+    }))
+
+    expect(drilldown.series).toEqual([
+      expect.objectContaining({
+        bucketStart: 120_000,
+        requests: 1,
+        hit: 0,
+        miss: 1,
+        upstreamCalls: 1,
+        paginatedLoads: 1,
+        avgPageCount: 3,
+        avgItemCount: 220,
+        truncatedCount: 1,
+      }),
+      expect.objectContaining({
+        bucketStart: 180_000,
+        requests: 1,
+        hit: 1,
+        miss: 0,
+        upstreamCalls: 0,
+        paginatedLoads: 0,
+        avgPageCount: null,
+        truncatedCount: 0,
+      }),
+    ])
+  })
+
   it('drains persisted metrics without losing the live in-memory overview', () => {
     const collector = createGithubMetricsCollector({
       now: () => 60_000,

@@ -38,9 +38,12 @@ import {
 import { adminClient } from '@/services/admin'
 
 type AdminOverviewResponse = Awaited<ReturnType<(typeof adminClient)['github-cache']['overview']['$get']>>
+type AdminDrilldownResponse = Awaited<ReturnType<(typeof adminClient)['github-cache']['drilldown']['$get']>>
 type GithubCacheOverview = Awaited<ReturnType<AdminOverviewResponse['json']>>
+type GithubCacheDrilldown = Awaited<ReturnType<AdminDrilldownResponse['json']>>
 type CacheChartRow = GithubCacheOverview['cacheStatusSeries'][number] & { date: Date }
 type ResourceChartRow = { date: Date } & Record<string, number | Date>
+type DrilldownChartRow = GithubCacheDrilldown['series'][number] & { date: Date }
 
 const WINDOW_OPTIONS = [
   { label: '15 min', value: '15' },
@@ -62,8 +65,14 @@ const overview = ref<GithubCacheOverview | null>(null)
 const isLoading = ref(false)
 const errorMessage = ref<string | null>(null)
 const lastFetchedAt = ref<number | null>(null)
+const drilldown = ref<GithubCacheDrilldown | null>(null)
+const isDrilldownLoading = ref(false)
+const drilldownErrorMessage = ref<string | null>(null)
+const selectedOperation = ref('')
+const selectedScope = ref<'all' | GithubCacheOverview['scopeSummary'][number]['scope']>('all')
 
 let requestId = 0
+let drilldownRequestId = 0
 
 const compactNumberFormatter = new Intl.NumberFormat('en-US', {
   notation: 'compact',
@@ -103,6 +112,25 @@ const cacheChartConfig = {
   miss: {
     label: 'Miss',
     color: 'var(--chart-5)',
+  },
+} satisfies ChartConfig
+
+const drilldownChartConfig = {
+  hit: {
+    label: 'Hit',
+    color: 'var(--chart-2)',
+  },
+  stale: {
+    label: 'Stale',
+    color: 'var(--chart-4)',
+  },
+  miss: {
+    label: 'Miss',
+    color: 'var(--chart-5)',
+  },
+  upstreamCalls: {
+    label: 'Upstream',
+    color: 'var(--chart-1)',
   },
 } satisfies ChartConfig
 
@@ -147,9 +175,61 @@ async function fetchOverview() {
   }
 }
 
+async function fetchDrilldown() {
+  if (!selectedOperation.value) {
+    drilldown.value = null
+    drilldownErrorMessage.value = null
+    return
+  }
+
+  const currentRequestId = ++drilldownRequestId
+
+  isDrilldownLoading.value = true
+  drilldownErrorMessage.value = null
+
+  try {
+    const response = await adminClient['github-cache'].drilldown.$get({
+      query: {
+        windowMinutes: String(Number(selectedWindowMinutes.value)),
+        operation: selectedOperation.value,
+        ...(selectedScope.value === 'all' ? {} : { scope: selectedScope.value }),
+      },
+    })
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null) as { error?: string, message?: string } | null
+      throw new Error(payload?.error ?? payload?.message ?? 'Failed to load GitHub cache drilldown')
+    }
+
+    const data = await response.json()
+    if (currentRequestId !== drilldownRequestId) {
+      return
+    }
+
+    drilldown.value = data
+  }
+  catch (error) {
+    if (currentRequestId !== drilldownRequestId) {
+      return
+    }
+
+    drilldown.value = null
+    drilldownErrorMessage.value = error instanceof Error ? error.message : 'Unknown error'
+  }
+  finally {
+    if (currentRequestId === drilldownRequestId) {
+      isDrilldownLoading.value = false
+    }
+  }
+}
+
 watch(selectedWindowMinutes, () => {
   fetchOverview()
 }, { immediate: true })
+
+watch([selectedWindowMinutes, selectedOperation, selectedScope], () => {
+  void fetchDrilldown()
+})
 
 const cacheChartData = computed<CacheChartRow[]>(() => {
   return (overview.value?.cacheStatusSeries ?? []).map(item => ({
@@ -197,6 +277,13 @@ const resourceChartData = computed<ResourceChartRow[]>(() => {
   }
 
   return [...rows.entries()].toSorted((a, b) => a[0] - b[0]).map(([, value]) => value)
+})
+
+const drilldownChartData = computed<DrilldownChartRow[]>(() => {
+  return (drilldown.value?.series ?? []).map(item => ({
+    ...item,
+    date: new Date(item.bucketStart),
+  }))
 })
 
 const summaryCards = computed(() => {
@@ -267,6 +354,62 @@ const paginationCards = computed(() => {
 
 const scopeCards = computed(() => overview.value?.scopeSummary ?? [])
 
+const drilldownOperationOptions = computed(() => {
+  const options = new Set<string>()
+
+  for (const route of overview.value?.routes ?? []) {
+    options.add(route.operation)
+  }
+
+  return [...options].toSorted((left, right) => left.localeCompare(right))
+})
+
+const drilldownScopeOptions = computed(() => {
+  if (!selectedOperation.value) {
+    return []
+  }
+
+  const scopes = new Set<GithubCacheOverview['scopeSummary'][number]['scope']>()
+
+  for (const route of overview.value?.routes ?? []) {
+    if (route.operation === selectedOperation.value && route.scope) {
+      scopes.add(route.scope)
+    }
+  }
+
+  return [...scopes].toSorted((left, right) => left.localeCompare(right))
+})
+
+const drilldownSummaryCards = computed(() => {
+  const summary = drilldown.value?.summary
+  if (!summary) {
+    return []
+  }
+
+  return [
+    {
+      label: 'Requests',
+      value: formatCount(summary.requests),
+      detail: `${formatCount(summary.upstreamCalls)} upstream`,
+    },
+    {
+      label: 'Hit rate',
+      value: formatPercent(summary.hitRate),
+      detail: `${formatPercent(summary.notModifiedRate)} 304 rate`,
+    },
+    {
+      label: 'Paginated rebuilds',
+      value: formatCount(summary.paginatedLoads),
+      detail: `${formatCount(summary.truncatedCount)} truncated`,
+    },
+    {
+      label: 'Policy',
+      value: formatDuration(summary.ttlMs),
+      detail: `stale ${formatDuration(summary.staleMs)}`,
+    },
+  ]
+})
+
 const paginatedRoutes = computed(() => {
   return [...(overview.value?.routes ?? [])]
     .filter(route => route.paginatedLoads > 0)
@@ -281,6 +424,52 @@ const paginatedRoutes = computed(() => {
 const truncatedRoutes = computed(() => {
   return paginatedRoutes.value.filter(route => route.truncatedCount > 0)
 })
+
+function syncDrilldownSelection() {
+  const routes = overview.value?.routes ?? []
+
+  if (routes.length === 0) {
+    selectedOperation.value = ''
+    selectedScope.value = 'all'
+    drilldown.value = null
+    return
+  }
+
+  if (!selectedOperation.value || !drilldownOperationOptions.value.includes(selectedOperation.value)) {
+    selectedOperation.value = routes[0]?.operation ?? ''
+  }
+
+  if (selectedScope.value !== 'all' && !drilldownScopeOptions.value.includes(selectedScope.value)) {
+    selectedScope.value = 'all'
+  }
+}
+
+watch(() => overview.value?.routes, () => {
+  syncDrilldownSelection()
+}, { immediate: true })
+
+watch(selectedOperation, () => {
+  if (selectedScope.value !== 'all' && !drilldownScopeOptions.value.includes(selectedScope.value)) {
+    selectedScope.value = 'all'
+  }
+})
+
+function selectRouteDrilldown(
+  operation: string,
+  scope: GithubCacheOverview['routes'][number]['scope'],
+) {
+  selectedOperation.value = operation
+  selectedScope.value = scope ?? 'all'
+}
+
+function isSelectedRoute(
+  operation: string,
+  scope: GithubCacheOverview['routes'][number]['scope'],
+) {
+  return selectedOperation.value === operation
+    && selectedScope.value !== 'all'
+    && selectedScope.value === (scope ?? 'all')
+}
 
 function formatCount(value: number | null | undefined) {
   if (value == null) {
@@ -670,6 +859,212 @@ function formatScopeLabel(scope: GithubCacheOverview['scopeSummary'][number]['sc
         </Card>
       </div>
 
+      <Card class="border-border/60">
+        <CardHeader class="gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div class="space-y-1">
+            <CardTitle>Route Drilldown</CardTitle>
+            <CardDescription>
+              Inspect one cached operation over time to tune TTL, stale windows, and pagination caps with route-level data.
+            </CardDescription>
+          </div>
+
+          <div class="flex flex-wrap items-end gap-3">
+            <div class="space-y-1">
+              <div class="text-muted-foreground text-xs font-medium uppercase tracking-[0.18em]">
+                Operation
+              </div>
+              <Select v-model="selectedOperation">
+                <SelectTrigger class="w-[260px]">
+                  <SelectValue placeholder="Select operation" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem
+                    v-for="operation in drilldownOperationOptions"
+                    :key="operation"
+                    :value="operation"
+                  >
+                    {{ operation }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div class="space-y-1">
+              <div class="text-muted-foreground text-xs font-medium uppercase tracking-[0.18em]">
+                Scope
+              </div>
+              <Select v-model="selectedScope">
+                <SelectTrigger class="w-[180px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">
+                    All scopes
+                  </SelectItem>
+                  <SelectItem
+                    v-for="scope in drilldownScopeOptions"
+                    :key="scope"
+                    :value="scope"
+                  >
+                    {{ formatScopeLabel(scope) }}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent class="space-y-4">
+          <div
+            v-if="drilldownErrorMessage"
+            class="text-destructive text-sm"
+          >
+            {{ drilldownErrorMessage }}
+          </div>
+
+          <div
+            v-if="isDrilldownLoading && !drilldown"
+            class="grid gap-4 md:grid-cols-2 2xl:grid-cols-4"
+          >
+            <Skeleton
+              v-for="index in 4"
+              :key="`drilldown-skeleton-${index}`"
+              class="h-28"
+            />
+          </div>
+
+          <template v-else-if="drilldown?.summary">
+            <div class="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+              <Card
+                v-for="card in drilldownSummaryCards"
+                :key="card.label"
+                class="border-border/60 bg-card/60"
+              >
+                <CardHeader class="pb-2">
+                  <CardDescription class="text-xs uppercase tracking-[0.18em]">
+                    {{ card.label }}
+                  </CardDescription>
+                  <CardTitle class="text-2xl">
+                    {{ card.value }}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent class="text-muted-foreground text-sm">
+                  {{ card.detail }}
+                </CardContent>
+              </Card>
+            </div>
+
+            <div class="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
+              <Card class="overflow-hidden border-border/60">
+                <CardHeader>
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <CardTitle>{{ drilldown.summary.operation }}</CardTitle>
+                      <CardDescription>
+                        {{ selectedScope === 'all' ? 'All scopes' : formatScopeLabel(selectedScope) }}
+                      </CardDescription>
+                    </div>
+                    <Badge
+                      :variant="selectedScope === 'all' ? 'outline' : scopeVariant(selectedScope)"
+                    >
+                      {{ selectedScope === 'all' ? 'all' : selectedScope }}
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <ChartContainer
+                    :config="drilldownChartConfig"
+                    class="min-h-[320px] w-full"
+                  >
+                    <VisXYContainer :data="drilldownChartData">
+                      <VisGroupedBar
+                        :x="(d: DrilldownChartRow) => d.date"
+                        :y="[
+                          (d: DrilldownChartRow) => d.hit,
+                          (d: DrilldownChartRow) => d.stale,
+                          (d: DrilldownChartRow) => d.miss,
+                        ]"
+                        :color="[
+                          drilldownChartConfig.hit.color,
+                          drilldownChartConfig.stale.color,
+                          drilldownChartConfig.miss.color,
+                        ]"
+                      />
+                      <VisLine
+                        :x="(d: DrilldownChartRow) => d.date"
+                        :y="(d: DrilldownChartRow) => d.upstreamCalls"
+                        :color="drilldownChartConfig.upstreamCalls.color"
+                        curve-type="monotoneX"
+                      />
+                      <VisAxis type="x" />
+                      <VisAxis type="y" />
+                      <ChartTooltip />
+                      <ChartCrosshair
+                        :template="
+                          componentToString(drilldownChartConfig, ChartTooltipContent, {
+                            labelFormatter: formatBucketLabel,
+                          })
+                        "
+                        :color="[
+                          drilldownChartConfig.hit.color,
+                          drilldownChartConfig.stale.color,
+                          drilldownChartConfig.miss.color,
+                          drilldownChartConfig.upstreamCalls.color,
+                        ]"
+                      />
+                    </VisXYContainer>
+                  </ChartContainer>
+                </CardContent>
+              </Card>
+
+              <Card class="border-border/60">
+                <CardHeader>
+                  <CardTitle>Bucket Details</CardTitle>
+                  <CardDescription>
+                    Per-bucket activity for the selected route. This is the quickest way to see whether misses or rebuilds cluster in specific periods.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Bucket</TableHead>
+                        <TableHead>Req</TableHead>
+                        <TableHead>Upstream</TableHead>
+                        <TableHead>Pages</TableHead>
+                        <TableHead>Trunc.</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      <TableRow
+                        v-for="point in drilldown.series"
+                        :key="point.bucketStart"
+                      >
+                        <TableCell>{{ formatBucketLabel(point.bucketStart) }}</TableCell>
+                        <TableCell>{{ formatCount(point.requests) }}</TableCell>
+                        <TableCell>{{ formatCount(point.upstreamCalls) }}</TableCell>
+                        <TableCell>{{ formatAverage(point.avgPageCount) }}</TableCell>
+                        <TableCell>
+                          <Badge :variant="point.truncatedCount > 0 ? 'destructive' : 'outline'">
+                            {{ formatCount(point.truncatedCount) }}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </div>
+          </template>
+
+          <div
+            v-else
+            class="text-muted-foreground py-6 text-sm"
+          >
+            No drilldown data is available for the selected route in this window.
+          </div>
+        </CardContent>
+      </Card>
+
       <div class="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
         <Card class="border-border/60">
           <CardHeader>
@@ -695,6 +1090,9 @@ function formatScopeLabel(scope: GithubCacheOverview['scopeSummary'][number]['sc
                 <TableRow
                   v-for="route in paginatedRoutes"
                   :key="`paginated:${route.operation}:${route.scope ?? 'unscoped'}`"
+                  class="cursor-pointer"
+                  :class="{ 'bg-muted/40': isSelectedRoute(route.operation, route.scope) }"
+                  @click="selectRouteDrilldown(route.operation, route.scope)"
                 >
                   <TableCell class="max-w-[320px]">
                     <div class="flex flex-col gap-1">
@@ -755,6 +1153,9 @@ function formatScopeLabel(scope: GithubCacheOverview['scopeSummary'][number]['sc
                 <TableRow
                   v-for="route in truncatedRoutes"
                   :key="`truncated:${route.operation}:${route.scope ?? 'unscoped'}`"
+                  class="cursor-pointer"
+                  :class="{ 'bg-muted/40': isSelectedRoute(route.operation, route.scope) }"
+                  @click="selectRouteDrilldown(route.operation, route.scope)"
                 >
                   <TableCell class="max-w-[260px]">
                     <div class="flex flex-col gap-1">
@@ -818,6 +1219,9 @@ function formatScopeLabel(scope: GithubCacheOverview['scopeSummary'][number]['sc
                 <TableRow
                   v-for="route in overview.routes"
                   :key="`${route.operation}:${route.scope ?? 'unscoped'}`"
+                  class="cursor-pointer"
+                  :class="{ 'bg-muted/40': isSelectedRoute(route.operation, route.scope) }"
+                  @click="selectRouteDrilldown(route.operation, route.scope)"
                 >
                   <TableCell class="max-w-[320px]">
                     <div class="flex flex-col gap-1">

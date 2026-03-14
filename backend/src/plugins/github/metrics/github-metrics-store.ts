@@ -1,14 +1,17 @@
 import type { SQL } from 'drizzle-orm'
 import type { GithubCacheScope } from '../cache/github-cache.js'
 import type {
+  GithubCacheMetricsOperationDrilldown,
+  GithubCacheMetricsOperationDrilldownQuery,
   GithubCacheMetricsOverview,
+  GithubCacheMetricsRouteSummary,
   GithubMetricsPersistedSnapshot,
   GithubPersistedOperationMetric,
   GithubPersistedRateLimitState,
   GithubPersistedResourceMetric,
   GithubPersistedUserMetric,
 } from './github-metrics.js'
-import { and, desc, gte, lte, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, lte, sql } from 'drizzle-orm'
 import { db } from '../../../db/index.js'
 import {
   githubOperationMetricMinute,
@@ -136,6 +139,94 @@ function mergeOperationAggregate(
   target.ttlMs = source.ttlMs ?? target.ttlMs
   target.staleMs = source.staleMs ?? target.staleMs
   target.lastSeenAt = Math.max(target.lastSeenAt, source.lastSeenAt)
+}
+
+function matchesOperationFilter(
+  aggregate: Pick<GithubMetricsOperationAggregate, 'operation' | 'scope'>,
+  query: Pick<GithubCacheMetricsOperationDrilldownQuery, 'operation' | 'scope'>,
+) {
+  if (aggregate.operation !== query.operation) {
+    return false
+  }
+
+  if (query.scope == null) {
+    return true
+  }
+
+  return aggregate.scope === query.scope
+}
+
+function buildRouteSummary(operation: GithubMetricsOperationAggregate): GithubCacheMetricsRouteSummary {
+  return {
+    operation: operation.operation,
+    scope: operation.scope ?? null,
+    requests: operation.requests,
+    hits: operation.hit,
+    staleHits: operation.stale,
+    misses: operation.miss,
+    hitRate: calculateRate(operation.hit, operation.requests),
+    staleRate: calculateRate(operation.stale, operation.requests),
+    missRate: calculateRate(operation.miss, operation.requests),
+    upstreamCalls: operation.upstreamCalls,
+    githubCallsSaved: Math.max(operation.requests - operation.upstreamCalls, 0),
+    notModified: operation.notModified,
+    notModifiedRate: calculateRate(operation.notModified, operation.upstreamCalls),
+    errorCount: operation.errors,
+    nearLimitEvents: operation.nearLimitEvents,
+    avgBackendDurationMs: operation.requests > 0
+      ? operation.totalBackendDurationMs / operation.requests
+      : null,
+    avgGithubDurationMs: operation.upstreamCalls > 0
+      ? operation.totalGithubDurationMs / operation.upstreamCalls
+      : null,
+    paginatedLoads: operation.paginatedLoads,
+    avgPageCount: operation.paginatedLoads > 0
+      ? operation.totalPageCount / operation.paginatedLoads
+      : null,
+    avgItemCount: operation.paginatedLoads > 0
+      ? operation.totalItemCount / operation.paginatedLoads
+      : null,
+    truncatedCount: operation.truncatedCount,
+    avgPaginationDurationMs: operation.paginatedLoads > 0
+      ? operation.totalPaginationDurationMs / operation.paginatedLoads
+      : null,
+    ttlMs: operation.ttlMs ?? null,
+    staleMs: operation.staleMs ?? null,
+    lastSeenAt: operation.lastSeenAt,
+  }
+}
+
+function buildOperationSeriesPoint(
+  bucketStart: number,
+  operation: GithubMetricsOperationAggregate,
+) {
+  return {
+    bucketStart,
+    requests: operation.requests,
+    hit: operation.hit,
+    stale: operation.stale,
+    miss: operation.miss,
+    upstreamCalls: operation.upstreamCalls,
+    notModified: operation.notModified,
+    errors: operation.errors,
+    paginatedLoads: operation.paginatedLoads,
+    avgPageCount: operation.paginatedLoads > 0
+      ? operation.totalPageCount / operation.paginatedLoads
+      : null,
+    avgItemCount: operation.paginatedLoads > 0
+      ? operation.totalItemCount / operation.paginatedLoads
+      : null,
+    truncatedCount: operation.truncatedCount,
+    avgBackendDurationMs: operation.requests > 0
+      ? operation.totalBackendDurationMs / operation.requests
+      : null,
+    avgGithubDurationMs: operation.upstreamCalls > 0
+      ? operation.totalGithubDurationMs / operation.upstreamCalls
+      : null,
+    avgPaginationDurationMs: operation.paginatedLoads > 0
+      ? operation.totalPaginationDurationMs / operation.paginatedLoads
+      : null,
+  }
 }
 
 function calculateRate(numerator: number, denominator: number) {
@@ -522,43 +613,7 @@ export function buildGithubMetricsOverviewFromPersistedRows(
     routes: [...operations.values()]
       .sort((a, b) => b.upstreamCalls - a.upstreamCalls || b.requests - a.requests || a.operation.localeCompare(b.operation))
       .slice(0, normalizedLimit)
-      .map(operation => ({
-        operation: operation.operation,
-        scope: operation.scope ?? null,
-        requests: operation.requests,
-        hits: operation.hit,
-        staleHits: operation.stale,
-        misses: operation.miss,
-        hitRate: calculateRate(operation.hit, operation.requests),
-        staleRate: calculateRate(operation.stale, operation.requests),
-        missRate: calculateRate(operation.miss, operation.requests),
-        upstreamCalls: operation.upstreamCalls,
-        githubCallsSaved: Math.max(operation.requests - operation.upstreamCalls, 0),
-        notModified: operation.notModified,
-        notModifiedRate: calculateRate(operation.notModified, operation.upstreamCalls),
-        errorCount: operation.errors,
-        nearLimitEvents: operation.nearLimitEvents,
-        avgBackendDurationMs: operation.requests > 0
-          ? operation.totalBackendDurationMs / operation.requests
-          : null,
-        avgGithubDurationMs: operation.upstreamCalls > 0
-          ? operation.totalGithubDurationMs / operation.upstreamCalls
-          : null,
-        paginatedLoads: operation.paginatedLoads,
-        avgPageCount: operation.paginatedLoads > 0
-          ? operation.totalPageCount / operation.paginatedLoads
-          : null,
-        avgItemCount: operation.paginatedLoads > 0
-          ? operation.totalItemCount / operation.paginatedLoads
-          : null,
-        truncatedCount: operation.truncatedCount,
-        avgPaginationDurationMs: operation.paginatedLoads > 0
-          ? operation.totalPaginationDurationMs / operation.paginatedLoads
-          : null,
-        ttlMs: operation.ttlMs ?? null,
-        staleMs: operation.staleMs ?? null,
-        lastSeenAt: operation.lastSeenAt,
-      })),
+      .map(buildRouteSummary),
     users: [...users.values()]
       .sort((a, b) => {
         const leftPct = a.lowestRemainingPct ?? Number.POSITIVE_INFINITY
@@ -577,6 +632,96 @@ export function buildGithubMetricsOverviewFromPersistedRows(
         lastSeenAt: user.lastSeenAt,
       })),
     currentRateLimits: normalizedRateLimitStates.slice(0, normalizedLimit),
+  }
+}
+
+export function buildGithubMetricsOperationDrilldownFromPersistedRows(
+  {
+    now = Date.now(),
+    windowMs = DEFAULT_OVERVIEW_WINDOW_MS,
+    bucketMs = DEFAULT_BUCKET_MS,
+    operationMetrics,
+    operation,
+    scope,
+  }: {
+    now?: number
+    windowMs?: number
+    bucketMs?: number
+    operationMetrics: GithubPersistedOperationMetric[]
+    operation: string
+    scope?: GithubCacheScope
+  },
+): GithubCacheMetricsOperationDrilldown {
+  const from = now - Math.max(windowMs, bucketMs)
+  const bucketAggregates = new Map<number, GithubMetricsOperationAggregate>()
+  let summaryAggregate: GithubMetricsOperationAggregate | null = null
+
+  for (const row of operationMetrics) {
+    const bucketStart = normalizeTimestamp(row.bucketStart)
+    if (bucketStart < from || bucketStart > now) {
+      continue
+    }
+
+    if (!matchesOperationFilter({ operation: row.operation, scope: row.scope }, { operation, scope })) {
+      continue
+    }
+
+    const aggregate: GithubMetricsOperationAggregate = {
+      operation: row.operation,
+      scope: row.scope,
+      requests: row.requests,
+      hit: row.hits,
+      stale: row.staleHits,
+      miss: row.misses,
+      upstreamCalls: row.upstreamCalls,
+      notModified: row.notModified,
+      errors: row.errorCount,
+      nearLimitEvents: row.nearLimitEvents,
+      totalBackendDurationMs: row.totalBackendDurationMs,
+      totalGithubDurationMs: row.totalGithubDurationMs,
+      paginatedLoads: row.paginatedLoads,
+      totalPageCount: row.totalPageCount,
+      totalItemCount: row.totalItemCount,
+      truncatedCount: row.truncatedCount,
+      totalPaginationDurationMs: row.totalPaginationDurationMs,
+      ttlMs: row.ttlMs ?? undefined,
+      staleMs: row.staleMs ?? undefined,
+      lastSeenAt: normalizeTimestamp(row.lastSeenAt),
+    }
+
+    const currentBucketAggregate = bucketAggregates.get(bucketStart)
+    if (!currentBucketAggregate) {
+      bucketAggregates.set(bucketStart, aggregate)
+    }
+    else {
+      mergeOperationAggregate(currentBucketAggregate, aggregate)
+      currentBucketAggregate.scope = scope ?? currentBucketAggregate.scope
+    }
+
+    if (!summaryAggregate) {
+      summaryAggregate = { ...aggregate }
+    }
+    else {
+      mergeOperationAggregate(summaryAggregate, aggregate)
+    }
+  }
+
+  if (summaryAggregate && scope == null) {
+    summaryAggregate.scope = undefined
+  }
+
+  return {
+    from,
+    to: now,
+    bucketMs,
+    selection: {
+      operation,
+      scope: scope ?? null,
+    },
+    summary: summaryAggregate ? buildRouteSummary(summaryAggregate) : null,
+    series: [...bucketAggregates.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([bucketStart, aggregate]) => buildOperationSeriesPoint(bucketStart, aggregate)),
   }
 }
 
@@ -933,6 +1078,71 @@ export async function readGithubMetricsOverviewFromDatabase(
       lastRoute: row.lastRoute,
       lastStatus: row.lastStatus,
       updatedAt: normalizeTimestamp(row.updatedAt),
+    })),
+  })
+}
+
+export async function readGithubMetricsOperationDrilldownFromDatabase(
+  {
+    now = Date.now(),
+    windowMs = DEFAULT_OVERVIEW_WINDOW_MS,
+    operation,
+    scope,
+  }: {
+    now?: number
+    windowMs?: number
+    operation: string
+    scope?: GithubCacheScope
+  },
+) {
+  const boundedWindowMs = Math.max(windowMs, DEFAULT_BUCKET_MS)
+  const from = now - boundedWindowMs
+  const whereCondition = scope == null
+    ? and(
+        eq(githubOperationMetricMinute.operation, operation),
+        gte(githubOperationMetricMinute.bucketStart, new Date(from)),
+        lte(githubOperationMetricMinute.bucketStart, new Date(now)),
+      )
+    : and(
+        eq(githubOperationMetricMinute.operation, operation),
+        eq(githubOperationMetricMinute.scope, scope),
+        gte(githubOperationMetricMinute.bucketStart, new Date(from)),
+        lte(githubOperationMetricMinute.bucketStart, new Date(now)),
+      )
+
+  const operationRows = await db
+    .select()
+    .from(githubOperationMetricMinute)
+    .where(whereCondition)
+
+  return buildGithubMetricsOperationDrilldownFromPersistedRows({
+    now,
+    windowMs: boundedWindowMs,
+    bucketMs: DEFAULT_BUCKET_MS,
+    operation,
+    scope,
+    operationMetrics: operationRows.map(row => ({
+      bucketStart: normalizeTimestamp(row.bucketStart),
+      operation: row.operation,
+      scope: row.scope as GithubCacheScope,
+      requests: row.requests,
+      hits: row.hits,
+      staleHits: row.staleHits,
+      misses: row.misses,
+      upstreamCalls: row.upstreamCalls,
+      notModified: row.notModified,
+      errorCount: row.errorCount,
+      nearLimitEvents: row.nearLimitEvents,
+      totalBackendDurationMs: row.totalBackendDurationMs,
+      totalGithubDurationMs: row.totalGithubDurationMs,
+      paginatedLoads: row.paginatedLoads,
+      totalPageCount: row.totalPageCount,
+      totalItemCount: row.totalItemCount,
+      truncatedCount: row.truncatedCount,
+      totalPaginationDurationMs: row.totalPaginationDurationMs,
+      ttlMs: row.ttlMs,
+      staleMs: row.staleMs,
+      lastSeenAt: normalizeTimestamp(row.lastSeenAt),
     })),
   })
 }
