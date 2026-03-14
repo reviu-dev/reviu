@@ -2,16 +2,22 @@ import { pick } from 'es-toolkit'
 import { Hono } from 'hono'
 import { auth } from '../lib/auth.js'
 import { env } from '../lib/env.js'
-import { authMiddleware } from '../middlewares/auth.js'
+import { authMiddlewareUser } from '../middlewares/auth.js'
 import { fetchGithubViewer } from '../plugins/github/service.js'
 
 const userRouter = new Hono()
 
 export const userRoutes = userRouter
-  .get('/me', authMiddleware(), async (ctx) => {
+  .get('/me', authMiddlewareUser, async (ctx) => {
     const user = ctx.get('user')!
 
-    const activeSubscription = user.polar.activeSubscriptions.find(sub => sub.productId === env.POLAR_SUBSCRIPTION_PRODUCT_ID) ?? null
+    const polarState = await auth.api.state(
+      {
+        headers: ctx.req.raw.headers,
+      },
+    )
+
+    const activeSubscription = polarState.activeSubscriptions.find(sub => sub.productId === env.POLAR_SUBSCRIPTION_PRODUCT_ID) ?? null
 
     const { url: portalUrl } = await auth.api.portal({
       body: {

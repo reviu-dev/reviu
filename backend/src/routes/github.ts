@@ -57,7 +57,7 @@ import { Buffer } from 'node:buffer'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { logger } from '../lib/logger.js'
-import { authMiddleware } from '../middlewares/auth.js'
+import { authMiddlewarePro } from '../middlewares/auth.js'
 import {
   createGithubNotificationsCachePolicy,
   createGithubPullRequestCommentsCachePolicy,
@@ -1445,7 +1445,7 @@ async function invalidateGithubCacheTags(tags: string[]) {
 
 const githubRouter = new Hono()
 
-githubRouter.use('*', authMiddleware())
+githubRouter.use('*', authMiddlewarePro)
 
 export const githubRoutes = githubRouter
   .get('/notifications', async (ctx) => {

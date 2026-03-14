@@ -21,6 +21,7 @@ const envSchema = z.object({
   POLAR_ACCESS_TOKEN: z.string(),
   POLAR_SUCCESS_URL: z.url(),
   POLAR_SUBSCRIPTION_PRODUCT_ID: z.string(),
+  POLAR_WEBHOOK_SECRET: z.string(),
   DESKTOP_UPDATE_MANIFEST_URL: z.url(),
   WEB_DASHBOARD_URL: z.url(),
 })

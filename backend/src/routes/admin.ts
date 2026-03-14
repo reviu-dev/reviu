@@ -3,7 +3,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { db } from '../db/index.js'
 import { logger } from '../lib/logger.js'
-import { authMiddleware } from '../middlewares/auth.js'
+import { authMiddlewareAdmin } from '../middlewares/auth.js'
 import {
   flushGithubMetricsNow,
   readGithubMetricsOperationDrilldownFromDatabase,
@@ -41,7 +41,7 @@ async function getUsersById(userIds: string[]) {
   return new Map(rows.map(row => [row.id, row]))
 }
 
-adminRouter.use('*', authMiddleware('admin'))
+adminRouter.use('*', authMiddlewareAdmin)
 
 export const adminRoutes = adminRouter
   .get(
