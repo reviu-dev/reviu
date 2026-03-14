@@ -36,33 +36,47 @@ const visualStatus = computed<'ok' | 'degraded' | 'error' | 'loading'>(() => {
 })
 
 const alertVariant = computed<AlertVariants['variant']>(() => {
-  return visualStatus.value === 'error' ? 'destructive' : 'default'
+  const variantMap: Record<string, AlertVariants['variant']> = {
+    ok: 'default',
+    degraded: 'degraded',
+    error: 'destructive',
+    loading: 'default',
+  }
+
+  return variantMap[visualStatus.value] || 'default'
 })
 
 const statusIcon = computed(() => {
-  switch (visualStatus.value) {
-    case 'ok':
-      return CircleCheckBig
-    case 'degraded':
-      return CircleAlert
-    case 'error':
-      return CircleAlert
-    default:
-      return LoaderCircle
+  const iconMap: Record<string, any> = {
+    ok: CircleCheckBig,
+    degraded: CircleAlert,
+    error: CircleAlert,
+    loading: LoaderCircle,
   }
+
+  return iconMap[visualStatus.value] || LoaderCircle
+})
+
+const statusIconClass = computed(() => {
+  const classMap: Record<string, string> = {
+    ok: 'text-emerald-500!',
+    degraded: 'text-amber-500!',
+    error: 'text-red-400!',
+    loading: 'text-muted-foreground',
+  }
+
+  return classMap[visualStatus.value] || 'text-muted-foreground'
 })
 
 const title = computed(() => {
-  switch (visualStatus.value) {
-    case 'ok':
-      return 'Healthcheck OK'
-    case 'degraded':
-      return 'Healthcheck degraded'
-    case 'error':
-      return 'Healthcheck error'
-    default:
-      return 'Checking health'
+  const titleMap: Record<string, string> = {
+    ok: 'Healthcheck OK',
+    degraded: 'Healthcheck degraded',
+    error: 'Healthcheck error',
+    loading: 'Checking health',
   }
+
+  return titleMap[visualStatus.value] || 'Checking health'
 })
 
 const description = computed(() => {
@@ -137,7 +151,9 @@ onBeforeUnmount(() => {
   >
     <component
       :is="statusIcon"
-      class="mt-0.5" :class="[
+      class="mt-0.5"
+      :class="[
+        statusIconClass,
         visualStatus === 'loading' ? 'animate-spin' : '',
       ]"
     />

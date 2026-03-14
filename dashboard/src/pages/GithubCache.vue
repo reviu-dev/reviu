@@ -708,7 +708,7 @@ function formatScopeLabel(scope: GithubCacheOverview['scopeSummary'][number]['sc
     </div>
 
     <template v-if="overview">
-      <div class="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+      <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card
           v-for="card in summaryCards"
           :key="card.label"
@@ -808,7 +808,7 @@ function formatScopeLabel(scope: GithubCacheOverview['scopeSummary'][number]['sc
         </Card>
       </div>
 
-      <div class="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+      <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card
           v-for="card in paginationCards"
           :key="card.label"
