@@ -101,7 +101,11 @@ Persistence goal achieved:
 `ETag` / `Last-Modified` conditional revalidation is implemented for:
 
 - `GET /github/pr/:id`
+- `GET /github/pr/:id/files`
+- `GET /github/pr/:id/commits`
+- `GET /github/pr/:id/issue-comments`
 - `GET /github/pr/:id/reviews`
+- `GET /github/pr/:id/comments`
 - `GET /github/repos/:owner/:repo`
 - `GET /github/repos/:owner/:repo/readme`
 - `GET /github/repos/:owner/:repo/branches`
@@ -113,13 +117,18 @@ Persistence goal achieved:
 
 Notes:
 
-- `GET /github/pr/:id/files` is cached but not conditionally revalidated yet because it aggregates paginated responses
+- paginated PR collections now use explicit change signals:
+  - `pr/:id/files` revalidates against the PR validator, or the commit validator when `commitSha` is provided
+  - `pr/:id/commits` revalidates against the PR validator
+  - `pr/:id/issue-comments` and `pr/:id/comments` revalidate directly against their own resource validators
 - `GET /github/repos/:owner/:repo/issues/:issue_number` now uses a strong aggregate strategy:
   - revalidate the issue resource
   - revalidate the issue comments resource
   - keep the aggregate only when both return `304`
   - rebuild the aggregate when either side changes
-- current issue details payload still fetches only the first `100` comments (`per_page: 100`), so very large issues remain a known limitation
+- paginated issue comments and PR comments now fetch all pages up to a bounded cap:
+  - current cap is `10` pages / `1000` items
+  - above the cap, the aggregate is intentionally truncated, logged, and tracked in metrics
 
 ### Cached Routes
 
@@ -213,6 +222,7 @@ Important rule:
 Current admin route:
 
 - `GET /admin/github-cache/overview`
+- `GET /admin/github-cache/drilldown`
 
 Current overview includes:
 
@@ -224,6 +234,20 @@ Current overview includes:
 - users under pressure
 - current rate-limit snapshots
 
+Current drilldown includes:
+
+- one selected `operation`
+- optional `scope`
+- route-level summary
+- per-bucket history for `hit`, `stale`, `miss`, `upstream`, pagination, and truncation
+
+Current dashboard behavior also includes:
+
+- click-through drilldown from `Routes Needing Tuning`
+- click-through drilldown from `Heavy Paginated Aggregates`
+- click-through drilldown from `Truncated Collections`
+- scope selector to compare `viewer` vs `public` behavior for the same operation
+
 Current behavior:
 
 - route reads now come from Postgres-backed aggregates
@@ -232,7 +256,6 @@ Current behavior:
 
 Current limitation:
 
-- there is no per-route drilldown API yet
 - writes still happen per process, then merge in Postgres on flush
 
 ### Metrics Retention
@@ -270,17 +293,17 @@ This matrix reflects the current code, not the original target-only plan.
 | `GET /github/pr/latest` | implemented | viewer | no | 60s | 5m | search bucket sensitive |
 | `GET /github/pr/need-reviews` | implemented | viewer | no | 60s | 5m | search bucket sensitive |
 | `GET /github/pr/:id` | implemented | viewer or public | yes | 20s | 2m | ETag-backed, now public-promotable |
-| `GET /github/pr/:id/files` | implemented | viewer or public | no | 30s | 5m | `commitSha` variant gets longer TTL |
-| `GET /github/pr/:id/commits` | implemented | viewer or public | no | 60s | 10m | public promotion active |
-| `GET /github/pr/:id/issue-comments` | implemented | viewer or public | no | 15s | 2m | public promotion active |
+| `GET /github/pr/:id/files` | implemented | viewer or public | yes | 30s | 5m | uses PR validator, or commit validator when `commitSha` is provided |
+| `GET /github/pr/:id/commits` | implemented | viewer or public | yes | 60s | 10m | uses PR validator as the aggregate signal |
+| `GET /github/pr/:id/issue-comments` | implemented | viewer or public | yes | 15s | 2m | direct comments validator |
 | `GET /github/pr/:id/reviews` | implemented | viewer or public | yes | 20s | 2m | ETag-backed, public promotion active |
-| `GET /github/pr/:id/comments` | implemented | viewer or public | no | 15s | 2m | public promotion active |
+| `GET /github/pr/:id/comments` | implemented | viewer or public | yes | 15s | 2m | direct review-comments validator |
 | `GET /github/repos/:owner/:repo` | implemented | viewer or public | yes | 2m | 10m | public response primes public cache |
 | `GET /github/repos/:owner/:repo/readme` | implemented | viewer or public | yes | 2m | 10m | explicit ref gets separate key |
 | `GET /github/repos/:owner/:repo/branches` | implemented | viewer or public | yes | 60s | 5m | ETag-backed |
 | `GET /github/repos/:owner/:repo/pr` | implemented | viewer or public | yes | 30s | 5m | conditional list revalidation active |
 | `GET /github/repos/:owner/:repo/issues` | implemented | viewer or public | yes | 30s | 5m | conditional list revalidation active |
-| `GET /github/repos/:owner/:repo/issues/:issue_number` | implemented | viewer or public | yes | 15s | 2m | strong aggregate revalidation on issue + comments; still limited to first 100 comments |
+| `GET /github/repos/:owner/:repo/issues/:issue_number` | implemented | viewer or public | yes | 15s | 2m | strong aggregate revalidation on issue + comments; paginated up to `10` pages / `1000` items |
 | `GET /github/repos/:owner/:repo/trees/:tree_sha` | implemented | viewer or public | yes | 10m | 24h | conditional revalidation active |
 | `GET /github/file?org=&repo=&path=&ref=` | implemented | viewer or public | yes | 60s or 24h | 10m or 7d | blob SHA variant is still the best cache target |
 
@@ -353,21 +376,20 @@ Still missing:
 
 ### Wider Conditional Revalidation
 
-Still missing for some expensive read routes:
+Currently covered on the heavy routes above.
 
-- PR files
-- PR commits
-- PR review comments
-- PR issue comments
-- possibly selected PR list-like endpoints if worth it
+Still worth revisiting later only if metrics justify it:
+
+- any new aggregate read paths introduced later
+- more granular multi-page strategies if one validator becomes too coarse
 
 ### Issue Details Pagination
 
 Still missing:
 
-- pagination for issue comments in `GET /github/repos/:owner/:repo/issues/:issue_number`
-- aggregation beyond the first `100` comments
+- product-visible `truncated` metadata in API responses
 - a policy decision on whether very large issue threads should stay fully materialized in one cache entry
+- possibly route-specific caps if some aggregates need different headroom
 
 ### Public Promotion Quality
 
@@ -391,25 +413,22 @@ Not implemented yet:
 
 Candidates:
 
-- PR files
-- PR commits
-- PR review comments
-- PR issue comments
-- any remaining multi-call read paths where validators are usable
+- any future multi-call read paths where validators are usable
+- finer-grained validators if one aggregate shows poor 304 reuse in metrics
 
 Goal:
 
 - reduce upstream payload transfer on refresh
 - keep SWR fast while lowering GitHub pressure further
 
-### 2. Handle Large Issue Threads Better
+### 2. Handle Large Threads Better
 
-Now that issue details have strong aggregate revalidation, the next correctness gap is comment pagination.
+Now that issue and PR comments paginate correctly up to a bounded cap, the next gap is making truncation explicit to product clients.
 
 Needed:
 
-- paginate issue comments beyond `per_page: 100`
-- decide whether to cache the full merged thread or segment it
+- expose `truncated` metadata to desktop/web clients
+- decide whether to cache the full merged thread or segment it for very large discussions
 - keep invalidation behavior predictable for very large discussions
 
 ### 3. Improve Metrics Query Hygiene
@@ -426,10 +445,8 @@ Needed:
 
 Useful additions:
 
-- filter by scope
-- filter by operation
-- per-route history
 - explicit public/viewer ratio over time
+- resource overlays when correlated with a selected operation become available
 - maybe table views for routes with high upstream-to-request ratio
 
 ### 5. Add Installation Scope Later
