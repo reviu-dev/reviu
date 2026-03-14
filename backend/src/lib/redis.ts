@@ -91,6 +91,20 @@ async function getRedisClient(): Promise<Redis | null> {
   return redisConnectPromise
 }
 
+export async function assertRedisHealthy(): Promise<void> {
+  const client = await getRedisClient()
+
+  if (!client) {
+    throw new Error('Redis unavailable, using in-memory fallback cache')
+  }
+
+  const result = await client.ping()
+
+  if (result !== 'PONG') {
+    throw new Error(`Unexpected Redis ping response: ${result}`)
+  }
+}
+
 class RedisGithubCacheStore implements GithubCacheStore {
   private readonly fallback = new MemoryGithubCacheStore()
 
