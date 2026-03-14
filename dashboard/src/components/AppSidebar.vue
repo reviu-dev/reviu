@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { DatabaseZap, Users } from 'lucide-vue-next'
+import HealthcheckAlert from '@/components/HealthcheckAlert.vue'
 import {
   Sidebar,
   SidebarContent,
@@ -41,6 +42,13 @@ const navItems = [
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+
+      <SidebarGroup>
+        <SidebarGroupLabel>System</SidebarGroupLabel>
+        <SidebarGroupContent>
+          <HealthcheckAlert />
         </SidebarGroupContent>
       </SidebarGroup>
     </SidebarContent>
