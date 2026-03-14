@@ -643,7 +643,7 @@ function formatScopeLabel(scope: GithubCacheOverview['scopeSummary'][number]['sc
         </p>
       </div>
 
-      <div class="flex flex-wrap items-center gap-3">
+      <div class="flex flex-wrap items-end gap-3">
         <div class="space-y-1">
           <div class="text-muted-foreground text-xs font-medium uppercase tracking-[0.18em]">
             Window
