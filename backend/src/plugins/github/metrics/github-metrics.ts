@@ -1042,8 +1042,8 @@ export class GithubMetricsCollector {
             : null,
           truncatedCount: counters.truncatedCount,
           avgPaginationDurationMs: counters.paginatedLoads > 0
-          ? counters.totalPaginationDurationMs / counters.paginatedLoads
-          : null,
+            ? counters.totalPaginationDurationMs / counters.paginatedLoads
+            : null,
         })),
       scopeSeries: scopeSeries.sort((a, b) => a.bucketStart - b.bucketStart || sortScopes(a.scope, b.scope)),
       cacheStatusSeries: buckets.map(bucket => ({
