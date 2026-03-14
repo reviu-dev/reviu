@@ -730,7 +730,7 @@ function formatScopeLabel(scope: GithubCacheOverview['scopeSummary'][number]['sc
 
       <div
         v-if="scopeCards.length > 0"
-        class="grid gap-4 xl:grid-cols-3"
+        class="grid gap-4 xl:grid-cols-2"
       >
         <Card
           v-for="scope in scopeCards"
