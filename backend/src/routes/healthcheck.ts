@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { authMiddlewareAdmin } from '../middlewares/auth.js'
 
 type HealthServiceStatus = 'ok' | 'degraded' | 'error'
 
@@ -13,11 +14,6 @@ interface HealthcheckResponse {
     db: HealthServiceResponse
     redis: HealthServiceResponse
   }
-}
-
-interface HealthcheckDependencies {
-  checkDatabase: () => Promise<void>
-  checkRedis: () => Promise<void>
 }
 
 async function checkDatabaseHealth(): Promise<void> {
@@ -38,44 +34,39 @@ function toErrorMessage(error: unknown): string {
   return 'Unknown error'
 }
 
-export function createHealthcheckRoutes({
-  checkDatabase = checkDatabaseHealth,
-  checkRedis = checkRedisHealth,
-}: Partial<HealthcheckDependencies> = {}) {
-  const healthcheckRouter = new Hono()
+const healthcheckRouter = new Hono()
 
-  return healthcheckRouter.get('/', async (ctx) => {
-    const [dbResult, redisResult] = await Promise.allSettled([
-      checkDatabase(),
-      checkRedis(),
-    ])
+healthcheckRouter.use(authMiddlewareAdmin)
 
-    const services: HealthcheckResponse['services'] = {
-      db: dbResult.status === 'fulfilled'
-        ? { status: 'ok' }
-        : {
-            status: 'error',
-            error: toErrorMessage(dbResult.reason),
-          },
-      redis: redisResult.status === 'fulfilled'
-        ? { status: 'ok' }
-        : {
-            status: 'degraded',
-            error: toErrorMessage(redisResult.reason),
-          },
-    }
+export const healthcheckRoutes = healthcheckRouter.get('/', async (ctx) => {
+  const [dbResult, redisResult] = await Promise.allSettled([
+    checkDatabaseHealth(),
+    checkRedisHealth(),
+  ])
 
-    const response: HealthcheckResponse = {
-      status: services.db.status === 'error'
-        ? 'error'
-        : services.redis.status === 'degraded'
-          ? 'degraded'
-          : 'ok',
-      services,
-    }
+  const services: HealthcheckResponse['services'] = {
+    db: dbResult.status === 'fulfilled'
+      ? { status: 'ok' }
+      : {
+          status: 'error',
+          error: toErrorMessage(dbResult.reason),
+        },
+    redis: redisResult.status === 'fulfilled'
+      ? { status: 'ok' }
+      : {
+          status: 'degraded',
+          error: toErrorMessage(redisResult.reason),
+        },
+  }
 
-    return ctx.json(response, response.status === 'error' ? 500 : 200)
-  })
-}
+  const response: HealthcheckResponse = {
+    status: services.db.status === 'error'
+      ? 'error'
+      : services.redis.status === 'degraded'
+        ? 'degraded'
+        : 'ok',
+    services,
+  }
 
-export const healthcheckRoutes = createHealthcheckRoutes()
+  return ctx.json(response, response.status === 'error' ? 500 : 200)
+})
