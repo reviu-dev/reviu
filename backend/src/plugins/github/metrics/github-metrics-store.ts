@@ -367,7 +367,9 @@ export function buildGithubMetricsOverviewFromPersistedRows(
   const bucketSummaries = new Map<number, GithubMetricsCounters>()
   const operations = new Map<string, GithubMetricsOperationAggregate>()
   const scopeSummary = new Map<GithubCacheScope, GithubMetricsOperationAggregate>()
+  const bucketScopeSummaries = new Map<number, Map<GithubCacheScope, GithubMetricsOperationAggregate>>()
   const users = new Map<string, GithubMetricsUserAggregate>()
+  const scopeSeries: GithubCacheMetricsOverview['scopeSeries'] = []
   const resourceSeries: GithubCacheMetricsOverview['githubResourceSeries'] = []
 
   for (const row of operationMetrics) {
@@ -444,6 +446,28 @@ export function buildGithubMetricsOverviewFromPersistedRows(
       lastSeenAt: normalizeTimestamp(row.lastSeenAt),
     })
     scopeSummary.set(row.scope, currentScopeSummary)
+
+    const currentBucketScopeSummaries = bucketScopeSummaries.get(bucketStart) ?? new Map<GithubCacheScope, GithubMetricsOperationAggregate>()
+    const currentBucketScope = currentBucketScopeSummaries.get(row.scope) ?? createEmptyOperationAggregate(
+      row.operation,
+      row.scope,
+      normalizeTimestamp(row.lastSeenAt),
+    )
+    mergeOperationAggregate(currentBucketScope, {
+      operation: row.operation,
+      scope: row.scope,
+      ...aggregate,
+      paginatedLoads: row.paginatedLoads,
+      totalPageCount: row.totalPageCount,
+      totalItemCount: row.totalItemCount,
+      truncatedCount: row.truncatedCount,
+      totalPaginationDurationMs: row.totalPaginationDurationMs,
+      ttlMs: row.ttlMs ?? undefined,
+      staleMs: row.staleMs ?? undefined,
+      lastSeenAt: normalizeTimestamp(row.lastSeenAt),
+    })
+    currentBucketScopeSummaries.set(row.scope, currentBucketScope)
+    bucketScopeSummaries.set(bucketStart, currentBucketScopeSummaries)
   }
 
   for (const row of resourceMetrics) {
@@ -509,6 +533,23 @@ export function buildGithubMetricsOverviewFromPersistedRows(
         errors: counters.errors,
       }
     })
+
+  for (const [bucketStart, scopes] of bucketScopeSummaries.entries()) {
+    scopeSeries.push(
+      ...[...scopes.entries()]
+        .sort((a, b) => sortScopes(a[0], b[0]))
+        .map(([scope, counters]) => ({
+          bucketStart,
+          scope,
+          requests: counters.requests,
+          upstreamCalls: counters.upstreamCalls,
+          githubCallsSaved: Math.max(counters.requests - counters.upstreamCalls, 0),
+          hit: counters.hit,
+          stale: counters.stale,
+          miss: counters.miss,
+        })),
+    )
+  }
 
   const normalizedRateLimitStates = rateLimitStates
     .filter(state => normalizeTimestamp(state.updatedAt) >= from)
@@ -608,6 +649,7 @@ export function buildGithubMetricsOverviewFromPersistedRows(
           ? counters.totalPaginationDurationMs / counters.paginatedLoads
           : null,
       })),
+    scopeSeries: scopeSeries.sort((a, b) => a.bucketStart - b.bucketStart || sortScopes(a.scope, b.scope)),
     cacheStatusSeries,
     githubResourceSeries: resourceSeries.sort((a, b) => a.bucketStart - b.bucketStart || a.resource.localeCompare(b.resource)),
     routes: [...operations.values()]

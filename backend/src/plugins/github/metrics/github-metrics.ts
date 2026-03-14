@@ -280,6 +280,16 @@ export interface GithubCacheMetricsOverview {
     truncatedCount: number
     avgPaginationDurationMs: number | null
   }>
+  scopeSeries: Array<{
+    bucketStart: number
+    scope: GithubCacheScope
+    requests: number
+    upstreamCalls: number
+    githubCallsSaved: number
+    hit: number
+    stale: number
+    miss: number
+  }>
   cacheStatusSeries: Array<{
     bucketStart: number
     hit: number
@@ -848,11 +858,13 @@ export class GithubMetricsCollector {
     const totals = createEmptyCounters()
     const operations = new Map<string, GithubMetricsOperationAggregate>()
     const scopeSummary = new Map<GithubCacheScope, GithubMetricsOperationAggregate>()
+    const scopeSeries: GithubCacheMetricsOverview['scopeSeries'] = []
     const users = new Map<string, GithubMetricsUserAggregate>()
     const resourceSeries: GithubCacheMetricsOverview['githubResourceSeries'] = []
 
     for (const bucket of buckets) {
       mergeCounters(totals, bucket.summary)
+      const bucketScopeSummary = new Map<GithubCacheScope, GithubMetricsOperationAggregate>()
 
       for (const resource of bucket.resources.values()) {
         resourceSeries.push({
@@ -889,7 +901,30 @@ export class GithubMetricsCollector {
         )
         mergeOperationAggregate(current, aggregate)
         scopeSummary.set(aggregate.scope, current)
+
+        const currentBucketScope = bucketScopeSummary.get(aggregate.scope) ?? createEmptyOperationAggregate(
+          aggregate.operation,
+          aggregate.scope,
+          aggregate.lastSeenAt,
+        )
+        mergeOperationAggregate(currentBucketScope, aggregate)
+        bucketScopeSummary.set(aggregate.scope, currentBucketScope)
       }
+
+      scopeSeries.push(
+        ...[...bucketScopeSummary.entries()]
+          .sort((a, b) => sortScopes(a[0], b[0]))
+          .map(([scope, counters]) => ({
+            bucketStart: bucket.bucketStart,
+            scope,
+            requests: counters.requests,
+            upstreamCalls: counters.upstreamCalls,
+            githubCallsSaved: Math.max(counters.requests - counters.upstreamCalls, 0),
+            hit: counters.hit,
+            stale: counters.stale,
+            miss: counters.miss,
+          })),
+      )
 
       for (const aggregate of bucket.users.values()) {
         const current = users.get(aggregate.userId)
@@ -1007,9 +1042,10 @@ export class GithubMetricsCollector {
             : null,
           truncatedCount: counters.truncatedCount,
           avgPaginationDurationMs: counters.paginatedLoads > 0
-            ? counters.totalPaginationDurationMs / counters.paginatedLoads
-            : null,
+          ? counters.totalPaginationDurationMs / counters.paginatedLoads
+          : null,
         })),
+      scopeSeries: scopeSeries.sort((a, b) => a.bucketStart - b.bucketStart || sortScopes(a.scope, b.scope)),
       cacheStatusSeries: buckets.map(bucket => ({
         bucketStart: bucket.bucketStart,
         hit: bucket.summary.hit,

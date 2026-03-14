@@ -278,6 +278,39 @@ describe('github metrics store', () => {
       },
     ])
 
+    expect(overview.scopeSeries).toEqual([
+      {
+        bucketStart: 60_000,
+        scope: 'public',
+        requests: 2,
+        upstreamCalls: 1,
+        githubCallsSaved: 1,
+        hit: 1,
+        stale: 0,
+        miss: 1,
+      },
+      {
+        bucketStart: 120_000,
+        scope: 'public',
+        requests: 1,
+        upstreamCalls: 0,
+        githubCallsSaved: 1,
+        hit: 1,
+        stale: 0,
+        miss: 0,
+      },
+      {
+        bucketStart: 120_000,
+        scope: 'viewer',
+        requests: 1,
+        upstreamCalls: 1,
+        githubCallsSaved: 0,
+        hit: 0,
+        stale: 1,
+        miss: 0,
+      },
+    ])
+
     expect(overview.routes).toEqual([
       expect.objectContaining({
         operation: 'repository.readme',

@@ -42,8 +42,13 @@ type AdminDrilldownResponse = Awaited<ReturnType<(typeof adminClient)['github-ca
 type GithubCacheOverview = Awaited<ReturnType<AdminOverviewResponse['json']>>
 type GithubCacheDrilldown = Awaited<ReturnType<AdminDrilldownResponse['json']>>
 type CacheChartRow = GithubCacheOverview['cacheStatusSeries'][number] & { date: Date }
+type ScopeChartRow = { date: Date } & Record<string, number | Date>
 type ResourceChartRow = { date: Date } & Record<string, number | Date>
 type DrilldownChartRow = GithubCacheDrilldown['series'][number] & { date: Date }
+type RouteEfficiencyRow = GithubCacheOverview['routes'][number] & {
+  upstreamRate: number
+  savedRate: number
+}
 
 const WINDOW_OPTIONS = [
   { label: '15 min', value: '15' },
@@ -279,6 +284,37 @@ const resourceChartData = computed<ResourceChartRow[]>(() => {
   return [...rows.entries()].toSorted((a, b) => a[0] - b[0]).map(([, value]) => value)
 })
 
+const scopeKeys = computed(() => {
+  return (overview.value?.scopeSummary ?? []).map(item => item.scope)
+})
+
+const scopeTrafficChartConfig = computed<ChartConfig>(() => {
+  return Object.fromEntries(
+    scopeKeys.value.map((scope, index) => [
+      scope,
+      {
+        label: formatScopeLabel(scope),
+        color: CHART_PALETTE[index % CHART_PALETTE.length],
+      },
+    ]),
+  )
+})
+
+const scopeTrafficChartData = computed<ScopeChartRow[]>(() => {
+  const rows = new Map<number, ScopeChartRow>()
+
+  for (const item of overview.value?.scopeSeries ?? []) {
+    const current = rows.get(item.bucketStart) ?? {
+      date: new Date(item.bucketStart),
+    }
+
+    current[item.scope] = Number(current[item.scope] ?? 0) + item.requests
+    rows.set(item.bucketStart, current)
+  }
+
+  return [...rows.entries()].toSorted((a, b) => a[0] - b[0]).map(([, value]) => value)
+})
+
 const drilldownChartData = computed<DrilldownChartRow[]>(() => {
   return (drilldown.value?.series ?? []).map(item => ({
     ...item,
@@ -423,6 +459,24 @@ const paginatedRoutes = computed(() => {
 
 const truncatedRoutes = computed(() => {
   return paginatedRoutes.value.filter(route => route.truncatedCount > 0)
+})
+
+const upstreamHeavyRoutes = computed<RouteEfficiencyRow[]>(() => {
+  return [...(overview.value?.routes ?? [])]
+    .filter(route => route.requests > 0)
+    .map(route => ({
+      ...route,
+      upstreamRate: route.upstreamCalls / route.requests,
+      savedRate: route.githubCallsSaved / route.requests,
+    }))
+    .toSorted((left, right) => {
+      return right.upstreamRate - left.upstreamRate
+        || right.upstreamCalls - left.upstreamCalls
+        || left.hitRate - right.hitRate
+        || right.truncatedCount - left.truncatedCount
+        || left.operation.localeCompare(right.operation)
+    })
+    .slice(0, 8)
 })
 
 function syncDrilldownSelection() {
@@ -855,6 +909,105 @@ function formatScopeLabel(scope: GithubCacheOverview['scopeSummary'][number]['sc
                 />
               </VisXYContainer>
             </ChartContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div class="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
+        <Card class="overflow-hidden border-border/60">
+          <CardHeader>
+            <CardTitle>Scope Traffic Mix</CardTitle>
+            <CardDescription>
+              Request volume by cache scope over time. This makes it easier to see whether public promotion is actually absorbing traffic instead of leaving reads in viewer scope.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ChartContainer
+              :config="scopeTrafficChartConfig"
+              class="min-h-[320px] w-full"
+            >
+              <VisXYContainer :data="scopeTrafficChartData">
+                <VisLine
+                  v-for="scope in scopeKeys"
+                  :key="scope"
+                  :x="(d: ScopeChartRow) => d.date as Date"
+                  :y="(d: ScopeChartRow) => Number(d[scope] ?? 0)"
+                  :color="scopeTrafficChartConfig[scope]?.color"
+                  curve-type="monotoneX"
+                />
+                <VisAxis type="x" />
+                <VisAxis type="y" />
+                <ChartTooltip />
+                <ChartCrosshair
+                  :template="
+                    componentToString(scopeTrafficChartConfig, ChartTooltipContent, {
+                      labelFormatter: formatBucketLabel,
+                    })
+                  "
+                  :color="scopeKeys.map(scope => scopeTrafficChartConfig[scope]?.color)"
+                />
+              </VisXYContainer>
+            </ChartContainer>
+          </CardContent>
+        </Card>
+
+        <Card class="border-border/60">
+          <CardHeader>
+            <CardTitle>Upstream-Heavy Routes</CardTitle>
+            <CardDescription>
+              Routes with the highest GitHub call pressure per request. These are the fastest wins for TTL tuning, public promotion, or better revalidation reuse.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Operation</TableHead>
+                  <TableHead>Scope</TableHead>
+                  <TableHead>Upstream / req</TableHead>
+                  <TableHead>Saved</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow
+                  v-for="route in upstreamHeavyRoutes"
+                  :key="`upstream-heavy:${route.operation}:${route.scope ?? 'unscoped'}`"
+                  class="cursor-pointer"
+                  :class="{ 'bg-muted/40': isSelectedRoute(route.operation, route.scope) }"
+                  @click="selectRouteDrilldown(route.operation, route.scope)"
+                >
+                  <TableCell class="max-w-[260px]">
+                    <div class="flex flex-col gap-1">
+                      <span class="font-medium">{{ route.operation }}</span>
+                      <span class="text-muted-foreground text-xs">
+                        {{ formatDuration(route.avgGithubDurationMs) }} GitHub avg
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      v-if="route.scope"
+                      :variant="scopeVariant(route.scope)"
+                    >
+                      {{ route.scope }}
+                    </Badge>
+                    <span v-else class="text-muted-foreground text-xs">—</span>
+                  </TableCell>
+                  <TableCell>{{ formatPercent(route.upstreamRate) }}</TableCell>
+                  <TableCell>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span>{{ formatPercent(route.savedRate) }}</span>
+                      <Badge
+                        v-if="route.truncatedCount > 0"
+                        variant="destructive"
+                      >
+                        truncated
+                      </Badge>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
           </CardContent>
         </Card>
       </div>

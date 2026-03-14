@@ -126,6 +126,29 @@ describe('github metrics collector', () => {
       },
     ])
 
+    expect(overview.scopeSeries).toEqual([
+      {
+        bucketStart: 60_000,
+        scope: 'viewer',
+        requests: 2,
+        upstreamCalls: 1,
+        githubCallsSaved: 1,
+        hit: 1,
+        stale: 0,
+        miss: 1,
+      },
+      {
+        bucketStart: 120_000,
+        scope: 'viewer',
+        requests: 1,
+        upstreamCalls: 1,
+        githubCallsSaved: 0,
+        hit: 0,
+        stale: 1,
+        miss: 0,
+      },
+    ])
+
     expect(overview.cacheStatusSeries).toEqual([
       {
         bucketStart: 60_000,

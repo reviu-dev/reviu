@@ -228,6 +228,7 @@ Current overview includes:
 
 - summary totals
 - scope summary (`viewer`, `public`, later `installation`)
+- scope traffic series over time
 - cache status series over time
 - GitHub resource series over time
 - route aggregates
@@ -247,6 +248,8 @@ Current dashboard behavior also includes:
 - click-through drilldown from `Heavy Paginated Aggregates`
 - click-through drilldown from `Truncated Collections`
 - scope selector to compare `viewer` vs `public` behavior for the same operation
+- a `Scope Traffic Mix` chart to see whether public scope is absorbing traffic
+- an `Upstream-Heavy Routes` table to rank routes by GitHub calls per request
 
 Current behavior:
 
