@@ -1,13 +1,13 @@
 import process from 'node:process'
 import { serve } from '@hono/node-server'
 import { app } from './app.js'
+import { env } from './lib/env.js'
 import { logger } from './lib/logger.js'
 import { flushGithubMetricsNow, startGithubMetricsPersistence, stopGithubMetricsPersistence } from './plugins/github/metrics/github-metrics-store.js'
-import './lib/env.js'
 
 const server = serve({
   fetch: app.fetch,
-  port: 3000,
+  port: env.PORT,
 }, (info) => {
   logger.info(`Server is running on ${info.port}`)
 })
