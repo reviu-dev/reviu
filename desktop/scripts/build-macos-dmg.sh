@@ -228,6 +228,7 @@ main() {
   local app_notary_log_path="${runner_temp}/${app_name}-${target}.app.notary-log.json"
   local dmg_submit_output_path="${runner_temp}/${app_name}-${target}.dmg.notary-submit.json"
   local dmg_notary_log_path="${runner_temp}/${app_name}-${target}.dmg.notary-log.json"
+  local api_base_url="https://api.reviu.dev"
   local dmg_root
   local rw_dmg_path
   local attach_info
@@ -251,9 +252,11 @@ main() {
     fi
 
     log "Building ${app_name} ${version} for ${arch} (${target})"
+    log "Embedding desktop API base URL: ${api_base_url}"
     (
       cd "${desktop_dir}"
-      cargo bundle -p reviu --release --target "${target}"
+      API_BASE_URL="${api_base_url}" \
+        cargo bundle -p reviu --release --target "${target}"
     )
   else
     log "Skipping cargo bundle build"

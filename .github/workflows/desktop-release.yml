@@ -85,6 +85,7 @@ jobs:
       SENTRY_RELEASE: ${{ needs.prepare-release.outputs.sentry_release }}
       TARGET: ${{ matrix.target }}
       MANIFEST_ARCH: ${{ matrix.manifest_arch }}
+      API_BASE_URL: https://api.reviu.dev
     steps:
       - uses: actions/checkout@v6
         with:
