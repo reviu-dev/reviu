@@ -36,8 +36,6 @@ function toErrorMessage(error: unknown): string {
 
 const healthcheckRouter = new Hono()
 
-healthcheckRouter.use(authMiddlewareAdmin)
-
 export const healthcheckRoutes = healthcheckRouter.get('/', async (ctx) => {
   const [dbResult, redisResult] = await Promise.allSettled([
     checkDatabaseHealth(),
