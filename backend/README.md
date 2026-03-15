@@ -1,9 +1,17 @@
 # Desktop
 
+## Setup
+
 ```
-npm install
-npm run dev
+docker compose up -d
 ```
+
+```
+pnpm install
+pnpm dev
+```
+
+## Better auth swagger
 
 ```
 open http://localhost:3000/api/auth/reference
