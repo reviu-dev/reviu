@@ -17,6 +17,7 @@ jobs:
     outputs:
       desktop: ${{ steps.filter.outputs.desktop }}
       backend: ${{ steps.filter.outputs.backend }}
+      landing: ${{ steps.filter.outputs.landing }}
     steps:
       - uses: actions/checkout@v6
 
