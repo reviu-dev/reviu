@@ -7,6 +7,12 @@ cargo bundle -p reviu --release
 open target/release/bundle/osx/Reviu.app
 ```
 
+For a production bundle, inject the backend URL at compile time:
+
+```sh
+API_BASE_URL=https://api.reviu.dev cargo bundle -p reviu --release
+```
+
 ## Release CD
 
 Desktop release publication is automated by [`/.github/workflows/desktop-release.yml`](../.github/workflows/desktop-release.yml).
