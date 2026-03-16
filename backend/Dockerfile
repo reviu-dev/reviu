@@ -32,4 +32,4 @@ ENV PORT=4000
 USER hono
 EXPOSE 4000
 
-CMD ["node", "/app/dist/index.js"]
+CMD ["node", "/app/dist/src/index.js"]
