@@ -27,11 +27,8 @@ impl AuthStateStore {
       .unwrap_or(AuthState::Unknown)
   }
 
-  pub fn has_active_subscription(cx: &App) -> bool {
-    matches!(
-      Self::get(cx),
-      AuthState::Authenticated(user) if user.subscription.active_subscription.is_some()
-    )
+  pub fn has_pro_access(cx: &App) -> bool {
+    state_has_pro_access(&Self::get(cx))
   }
 
   pub fn set(cx: &mut App, state: AuthState) {
@@ -47,5 +44,73 @@ impl Default for AuthStateStore {
     Self {
       state: Arc::new(Mutex::new(AuthState::Unknown)),
     }
+  }
+}
+
+fn state_has_pro_access(state: &AuthState) -> bool {
+  matches!(state, AuthState::Authenticated(user) if user.has_pro_access())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{AuthState, state_has_pro_access};
+  use crate::api::{
+    CustomerStateSubscription, CustomerStateSubscriptionStatus, User, UserRole, UserSubscription,
+  };
+
+  fn make_subscription() -> CustomerStateSubscription {
+    CustomerStateSubscription {
+      id: "sub_123".to_string(),
+      created_at: "2026-01-01T00:00:00Z".to_string(),
+      modified_at: None,
+      status: CustomerStateSubscriptionStatus::Active,
+      amount: 2_000,
+      currency: "usd".to_string(),
+      recurring_interval: "month".to_string(),
+      current_period_start: "2026-01-01T00:00:00Z".to_string(),
+      current_period_end: Some("2099-01-01T00:00:00Z".to_string()),
+      trial_start: None,
+      trial_end: None,
+      cancel_at_period_end: false,
+      canceled_at: None,
+      started_at: Some("2026-01-01T00:00:00Z".to_string()),
+      ends_at: None,
+      product_id: "prod_123".to_string(),
+    }
+  }
+
+  fn make_user(role: UserRole, active_subscription: Option<CustomerStateSubscription>) -> User {
+    User {
+      id: "user_123".to_string(),
+      name: "Joris".to_string(),
+      email: "joris@example.com".to_string(),
+      email_verified: true,
+      image: None,
+      github_login: Some("joris-gallot".to_string()),
+      role,
+      subscription: UserSubscription {
+        portal_url: None,
+        active_subscription,
+      },
+    }
+  }
+
+  #[test]
+  fn state_has_pro_access_allows_admin_without_subscription() {
+    let state = AuthState::Authenticated(Box::new(make_user(UserRole::Admin, None)));
+
+    assert!(state_has_pro_access(&state));
+  }
+
+  #[test]
+  fn state_has_pro_access_requires_subscription_for_regular_users() {
+    let no_subscription = AuthState::Authenticated(Box::new(make_user(UserRole::User, None)));
+    let with_subscription = AuthState::Authenticated(Box::new(make_user(
+      UserRole::User,
+      Some(make_subscription()),
+    )));
+
+    assert!(!state_has_pro_access(&no_subscription));
+    assert!(state_has_pro_access(&with_subscription));
   }
 }

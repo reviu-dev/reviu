@@ -116,7 +116,7 @@ impl WorkspaceRoute {
   }
 
   pub fn can_access_github(cx: &App) -> bool {
-    AuthStateStore::has_active_subscription(cx)
+    AuthStateStore::has_pro_access(cx)
   }
 
   pub fn open_settings(cx: &mut App) {
@@ -445,7 +445,7 @@ impl WorkspaceView {
   }
 
   fn open_github_home(cx: &mut App) {
-    if AuthStateStore::has_active_subscription(cx) {
+    if AuthStateStore::has_pro_access(cx) {
       GithubPageHandle::refresh(cx);
       WorkspaceRoute::open_github(cx);
     } else {

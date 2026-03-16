@@ -1016,7 +1016,7 @@ impl GithubPage {
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        if AuthStateStore::has_active_subscription(cx) {
+        if AuthStateStore::has_pro_access(cx) {
           self.focus_on_next_render = true;
           self.refresh_pull_requests(cx);
           WorkspaceRoute::open_github(cx);

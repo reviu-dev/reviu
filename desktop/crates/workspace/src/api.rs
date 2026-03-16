@@ -141,6 +141,12 @@ pub struct User {
   pub subscription: UserSubscription,
 }
 
+impl User {
+  pub fn has_pro_access(&self) -> bool {
+    matches!(self.role, UserRole::Admin) || self.subscription.active_subscription.is_some()
+  }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestLabel {
   pub name: String,
@@ -796,7 +802,10 @@ struct DesktopUpdateCheckRequest<'a> {
 
 impl ApiClient {
   pub fn new() -> Self {
-    let base_url = resolve_api_base_url(std::env::var("API_BASE_URL").ok(), option_env!("API_BASE_URL"));
+    let base_url = resolve_api_base_url(
+      std::env::var("API_BASE_URL").ok(),
+      option_env!("API_BASE_URL"),
+    );
     Self::new_with_base_url(base_url)
   }
 
@@ -3428,6 +3437,38 @@ mod tests {
         .map(|sub| sub.product_id.as_str()),
       Some("prod_123")
     );
+    assert!(matches!(user.role, UserRole::User));
+    assert!(user.has_pro_access());
+
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_me_parses_admin_role_as_pro_access_without_subscription() {
+    let body = r#"{
+      "id": "user_admin",
+      "name": "Admin",
+      "email": "admin@example.com",
+      "emailVerified": true,
+      "image": null,
+      "githubLogin": "admin-user",
+      "role": "admin",
+      "subscription": {
+        "portalUrl": null,
+        "activeSubscription": null
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let user = api
+      .fetch_me()
+      .expect("fetch me")
+      .expect("authenticated user");
+
+    assert!(matches!(user.role, UserRole::Admin));
+    assert!(user.subscription.active_subscription.is_none());
+    assert!(user.has_pro_access());
 
     handle.join().expect("join server thread");
   }
