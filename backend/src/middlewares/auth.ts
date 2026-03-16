@@ -2,7 +2,7 @@ import type { AuthType, UserContext } from '../lib/auth.js'
 import { createMiddleware } from 'hono/factory'
 import { auth } from '../lib/auth.js'
 
-function authMiddleware(role: 'user' | 'admin' | 'pro') {
+function authMiddleware(roleRequired: 'user' | 'admin' | 'pro') {
   return createMiddleware<{ Variables: { user: UserContext } }>(async (c, next) => {
     const session = await auth.api.getSession({ headers: c.req.raw.headers })
 
@@ -12,11 +12,11 @@ function authMiddleware(role: 'user' | 'admin' | 'pro') {
       return c.json({ error: 'Unauthorized' }, 401)
     }
 
-    if (role === 'admin' && user.role !== 'admin') {
+    if (roleRequired === 'admin' && user.role !== 'admin') {
       return c.json({ error: 'Forbidden' }, 403)
     }
 
-    if (role === 'pro' && !user.proGrantedAt) {
+    if (roleRequired === 'pro' && !user.proGrantedAt && user.role !== 'admin') {
       return c.json({ error: 'Forbidden' }, 403)
     }
 
