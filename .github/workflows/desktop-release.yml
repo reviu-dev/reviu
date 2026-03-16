@@ -262,16 +262,25 @@ jobs:
             /usr/bin/python3 - <<'PY'
             import glob
             import json
+            from pathlib import Path
 
             files = sorted(
               path
               for path in glob.glob("dist/release/macos/**/*.json", recursive=True)
-              if path.endswith(".json") and "desktop-update." in path
+              if Path(path).name.startswith("desktop-update.")
+              and Path(path).name != "desktop-update.manifest.json"
             )
             if not files:
               raise SystemExit("No desktop manifest fragments found")
 
-            artifacts = [json.load(open(path)) for path in files]
+            artifacts = []
+            for path in files:
+              payload = json.load(open(path))
+              if isinstance(payload, dict) and isinstance(payload.get("artifacts"), list):
+                artifacts.extend(payload["artifacts"])
+              else:
+                artifacts.append(payload)
+
             artifacts.sort(key=lambda item: item["arch"])
             print(json.dumps(artifacts))
             PY

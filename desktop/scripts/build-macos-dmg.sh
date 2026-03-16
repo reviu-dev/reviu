@@ -14,7 +14,7 @@ fi
 
 usage() {
   cat <<EOF
-Usage: $0 [--no-notarize] <version> <arch> <target>
+Usage: $0 [--no-notarize] <version> <manifest_arch> <target>
 
 Build a signed macOS app bundle and DMG for Reviu.
 
@@ -90,6 +90,33 @@ embed_app_icon() {
 
 json_field() {
   /usr/bin/python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"
+}
+
+write_metadata_manifest() {
+  local metadata_path="$1"
+  local version="$2"
+  local release_notes_url="$3"
+  local manifest_arch="$4"
+  local artifact_url="$5"
+  local sha256="$6"
+  local size="$7"
+
+  cat > "${metadata_path}" <<EOF
+{
+  "version": "${version}",
+  "minimumSupportedVersion": "0.0.0",
+  "releaseNotesUrl": "${release_notes_url}",
+  "artifacts": [
+    {
+      "platform": "macos",
+      "arch": "${manifest_arch}",
+      "url": "${artifact_url}",
+      "sha256": "${sha256}",
+      "size": ${size}
+    }
+  ]
+}
+EOF
 }
 
 apply_dmg_layout() {
@@ -208,7 +235,7 @@ main() {
   fi
 
   local version="$1"
-  local arch="$2"
+  local manifest_arch="$2"
   local target="$3"
   local tag="v${version}"
   local app_name="Reviu"
@@ -219,10 +246,11 @@ main() {
   local app_path="${desktop_dir}/target/${target}/release/bundle/osx/${app_name}.app"
   local icon_source_path="${desktop_dir}/crates/reviu/assets/reviu.icns"
   local output_dir="${repo_root}/dist/release/macos/${target}"
-  local dmg_name="${app_name}-${version}-macos-${arch}.dmg"
+  local dmg_name="${app_name}-${version}-macos-${manifest_arch}.dmg"
   local dmg_path="${output_dir}/${dmg_name}"
-  local metadata_path="${output_dir}/desktop-update.${arch}.json"
+  local metadata_path="${output_dir}/desktop-update.${manifest_arch}.json"
   local artifact_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${dmg_name}"
+  local release_notes_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
   local app_zip_path="${runner_temp}/${app_name}-${target}.app.zip"
   local app_submit_output_path="${runner_temp}/${app_name}-${target}.app.notary-submit.json"
   local app_notary_log_path="${runner_temp}/${app_name}-${target}.app.notary-log.json"
@@ -251,7 +279,7 @@ main() {
       die "cargo-bundle not found. Install it with: cargo install cargo-bundle"
     fi
 
-    log "Building ${app_name} ${version} for ${arch} (${target})"
+    log "Building ${app_name} ${version} for ${manifest_arch} (${target})"
     log "Embedding desktop API base URL: ${api_base_url}"
     (
       cd "${desktop_dir}"
@@ -401,18 +429,19 @@ main() {
   local size
   size="$(wc -c < "${dmg_path}" | tr -d '[:space:]')"
 
-  cat > "${metadata_path}" <<EOF
-{
-  "platform": "macos",
-  "arch": "${arch}",
-  "url": "${artifact_url}",
-  "sha256": "${sha256}",
-  "size": ${size}
-}
-EOF
+  write_metadata_manifest \
+    "${metadata_path}" \
+    "${version}" \
+    "${release_notes_url}" \
+    "${manifest_arch}" \
+    "${artifact_url}" \
+    "${sha256}" \
+    "${size}"
 
   echo "Created DMG: ${dmg_path}"
   echo "Created metadata: ${metadata_path}"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
