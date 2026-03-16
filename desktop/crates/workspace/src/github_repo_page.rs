@@ -90,8 +90,8 @@ fn format_repo_size(size_kb: u64) -> SharedString {
   format!("{} KB", size_kb).into()
 }
 
-fn github_page_navigation(has_active_subscription: bool) -> (WorkspacePage, bool) {
-  if has_active_subscription {
+fn github_page_navigation(has_pro_access: bool) -> (WorkspacePage, bool) {
+  if has_pro_access {
     (WorkspacePage::Github, true)
   } else {
     (WorkspacePage::Billing, false)
@@ -102,8 +102,8 @@ fn should_show_overview_loading_state(repository_loading: bool, has_repository: 
   repository_loading && !has_repository
 }
 
-fn repo_palette_open_target(has_active_subscription: bool) -> WorkspacePage {
-  if has_active_subscription {
+fn repo_palette_open_target(has_pro_access: bool) -> WorkspacePage {
+  if has_pro_access {
     WorkspacePage::GithubRepo
   } else {
     WorkspacePage::Billing
@@ -2455,7 +2455,7 @@ impl GithubRepoPageHandle {
     target: GithubRepoOpenTarget,
     cx: &mut App,
   ) {
-    if !AuthStateStore::has_active_subscription(cx) {
+    if !AuthStateStore::has_pro_access(cx) {
       WorkspaceRoute::open_billing(cx);
       cx.refresh_windows();
       return;
@@ -2478,8 +2478,7 @@ impl GithubRepoPageHandle {
 
 impl GithubRepoPage {
   fn open_github_home(cx: &mut App) {
-    let (target, should_refresh) =
-      github_page_navigation(AuthStateStore::has_active_subscription(cx));
+    let (target, should_refresh) = github_page_navigation(AuthStateStore::has_pro_access(cx));
 
     if should_refresh {
       GithubPageHandle::refresh(cx);
@@ -3725,7 +3724,7 @@ impl GithubRepoPage {
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        if AuthStateStore::has_active_subscription(cx) {
+        if AuthStateStore::has_pro_access(cx) {
           GithubPageHandle::refresh(cx);
           WorkspaceRoute::open_github(cx);
         } else {
@@ -3741,7 +3740,7 @@ impl GithubRepoPage {
         issue_number,
         issue_comment_id,
       } => {
-        match repo_palette_open_target(AuthStateStore::has_active_subscription(cx)) {
+        match repo_palette_open_target(AuthStateStore::has_pro_access(cx)) {
           WorkspacePage::GithubRepo => {
             self.load_repository(
               owner,

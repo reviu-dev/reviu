@@ -1389,7 +1389,7 @@ impl GithubPrDetailsPageHandle {
     open_target: GithubPrOpenTarget,
     cx: &mut App,
   ) {
-    if !AuthStateStore::has_active_subscription(cx) {
+    if !AuthStateStore::has_pro_access(cx) {
       WorkspaceRoute::open_billing(cx);
       cx.refresh_windows();
       return;
@@ -4240,7 +4240,7 @@ impl GithubPrDetailsPage {
   fn navigate_back(&self, cx: &mut Context<Self>) {
     match &self.back_target {
       GithubPrBackTarget::GithubHome => {
-        if AuthStateStore::has_active_subscription(cx) {
+        if AuthStateStore::has_pro_access(cx) {
           GithubPageHandle::refresh(cx);
           WorkspaceRoute::open_github(cx);
         } else {
@@ -6119,7 +6119,7 @@ impl GithubPrDetailsPage {
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        if AuthStateStore::has_active_subscription(cx) {
+        if AuthStateStore::has_pro_access(cx) {
           GithubPageHandle::refresh(cx);
           WorkspaceRoute::open_github(cx);
         } else {
@@ -6135,7 +6135,7 @@ impl GithubPrDetailsPage {
         open_changes_tab,
         review_comment_id,
       } => {
-        if !AuthStateStore::has_active_subscription(cx) {
+        if !AuthStateStore::has_pro_access(cx) {
           WorkspaceRoute::open_billing(cx);
           cx.refresh_windows();
           return Ok(());

@@ -2495,7 +2495,7 @@ impl GitPage {
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        if AuthStateStore::has_active_subscription(cx) {
+        if AuthStateStore::has_pro_access(cx) {
           GithubPageHandle::refresh(cx);
           WorkspaceRoute::open_github(cx);
         } else {
