@@ -51,6 +51,7 @@ async function getRedisClient(): Promise<Redis | null> {
     redisClient = new Redis(env.REDIS_PORT, env.REDIS_HOST, {
       lazyConnect: true,
       maxRetriesPerRequest: 1,
+      password: env.REDIS_PASSWORD,
       enableOfflineQueue: false,
       retryStrategy(times: number) {
         return Math.min(times * 50, 2_000)

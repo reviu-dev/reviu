@@ -3,15 +3,19 @@ services:
     container_name: postgres
     image: postgres:18.1
     restart: always
-    environment:
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=app
+    env_file: 
+      - .env
     ports:
       - '5433:5432'
   redis:
     container_name: redis
     image: redis:8.6.1
     restart: always
+    env_file: 
+      - .env
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD}
     ports:
       - '6379:6379'
