@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { resolve } from 'node:path'
 import process from 'node:process'
 import knex from 'knex'
 import { pino, stdSerializers } from 'pino'
@@ -11,6 +12,15 @@ const logger = pino({
   },
 })
 
+const migrationsDirectory = resolve(import.meta.dirname, '../migrations')
+
+const isDev = env.NODE_ENV === 'development'
+const loadExtensions = ['.js']
+
+if (isDev) {
+  loadExtensions.push('.ts')
+}
+
 const config: Knex.Config = {
   client: 'pg',
   connection: {
@@ -22,7 +32,8 @@ const config: Knex.Config = {
     charset: 'utf8mb4',
   },
   migrations: {
-    loadExtensions: ['.js', '.ts'],
+    directory: migrationsDirectory,
+    loadExtensions,
   },
 }
 

@@ -5,7 +5,10 @@ FROM base AS builder
 RUN apk add --no-cache gcompat
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml tsconfig.json src ./
+COPY package.json pnpm-lock.yaml tsconfig.json ./
+COPY src ./src
+COPY migrations ./migrations
+COPY scripts ./scripts
 
 RUN npm i -g corepack@latest && corepack enable
 
