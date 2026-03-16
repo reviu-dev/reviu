@@ -10,6 +10,15 @@ const DEFAULT_API_BASE_URL: &str = "http://localhost:3000";
 const KEYCHAIN_SERVICE: &str = "reviu_auth";
 const KEYCHAIN_USERNAME: &str = "bearer";
 
+fn resolve_api_base_url(
+  runtime_api_base_url: Option<String>,
+  build_api_base_url: Option<&'static str>,
+) -> String {
+  runtime_api_base_url
+    .or_else(|| build_api_base_url.map(str::to_string))
+    .unwrap_or_else(|| DEFAULT_API_BASE_URL.to_string())
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubNotificationRepositoryOwner {
@@ -787,8 +796,7 @@ struct DesktopUpdateCheckRequest<'a> {
 
 impl ApiClient {
   pub fn new() -> Self {
-    let base_url =
-      std::env::var("API_BASE_URL").unwrap_or_else(|_| DEFAULT_API_BASE_URL.to_string());
+    let base_url = resolve_api_base_url(std::env::var("API_BASE_URL").ok(), option_env!("API_BASE_URL"));
     Self::new_with_base_url(base_url)
   }
 
@@ -1634,6 +1642,30 @@ mod tests {
         .expect("build client"),
       bearer_token: Arc::new(Mutex::new(None)),
     }
+  }
+
+  #[test]
+  fn resolve_api_base_url_prefers_runtime_override() {
+    assert_eq!(
+      resolve_api_base_url(
+        Some("https://runtime.reviu.dev".to_string()),
+        Some("https://build.reviu.dev")
+      ),
+      "https://runtime.reviu.dev"
+    );
+  }
+
+  #[test]
+  fn resolve_api_base_url_uses_build_time_value_when_runtime_is_missing() {
+    assert_eq!(
+      resolve_api_base_url(None, Some("https://build.reviu.dev")),
+      "https://build.reviu.dev"
+    );
+  }
+
+  #[test]
+  fn resolve_api_base_url_falls_back_to_localhost() {
+    assert_eq!(resolve_api_base_url(None, None), DEFAULT_API_BASE_URL);
   }
 
   fn start_single_response_server(status: &str, body: &str) -> (String, thread::JoinHandle<()>) {
