@@ -1,5 +1,4 @@
 import { Hono } from 'hono'
-import { authMiddlewareAdmin } from '../middlewares/auth.js'
 
 type HealthServiceStatus = 'ok' | 'degraded' | 'error'
 

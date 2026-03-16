@@ -3,7 +3,7 @@ services:
     container_name: postgres
     image: postgres:18.1
     restart: always
-    env_file: 
+    env_file:
       - .env
     ports:
       - '5433:5432'
@@ -11,7 +11,7 @@ services:
     container_name: redis
     image: redis:8.6.1
     restart: always
-    env_file: 
+    env_file:
       - .env
     command: >
       redis-server
