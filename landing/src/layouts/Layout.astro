@@ -31,7 +31,10 @@ const {
   structuredData = [],
 } = Astro.props as Props;
 
-const pageTitle = title === defaultTitle ? title : `${title} | Reviu`;
+const pageTitle =
+  pathname === "/" || title === defaultTitle
+    ? defaultTitle
+    : `${defaultTitle} - ${title}`;
 const canonicalUrl = new URL(pathname, site).toString();
 const imagePath = typeof image === "string" ? image : image.src;
 const imageUrl = new URL(imagePath, site).toString();
