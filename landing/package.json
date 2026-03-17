@@ -23,7 +23,9 @@
     "vue": "^3.5.27"
   },
   "devDependencies": {
+    "@julr/vite-plugin-validate-env": "^2.2.2",
     "typescript": "^5.9.3",
-    "vue-tsc": "^3.2.5"
+    "vue-tsc": "^3.2.5",
+    "zod": "^4.3.6"
   }
 }

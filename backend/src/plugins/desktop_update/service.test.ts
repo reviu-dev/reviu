@@ -100,7 +100,7 @@ describe('desktop update service', () => {
       minimumSupportedVersion: '0.0.4-alpha.0',
       releaseNotesUrl: 'https://github.com/joris-gallot/reviu/releases/tag/v0.0.4-alpha.1',
       artifact: {
-        url: 'https://github.com/joris-gallot/reviu/releases/download/v0.0.4-alpha.1/Reviu-0.0.4-alpha.1-macos-aarch64.dmg',
+        url: 'http://localhost:3000/desktop/update/download/release/v0.0.4-alpha.1/Reviu-0.0.4-alpha.1-macos-aarch64.dmg',
         sha256: 'aa1dd070755c9e97e4b785d310bf7cef1f440dd8f624580d3974ddc82dee92d5',
         size: 17222631,
       },

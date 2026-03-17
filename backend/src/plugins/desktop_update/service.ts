@@ -24,6 +24,20 @@ const desktopUpdateManifestSchema = z.object({
 })
 
 const DESKTOP_UPDATE_MANIFEST_CACHE_TTL_MS = 5 * 60 * 1000
+const DESKTOP_UPDATE_RELEASE_OWNER = 'joris-gallot'
+const DESKTOP_UPDATE_RELEASE_REPO = 'reviu'
+const DESKTOP_UPDATE_MANIFEST_FILE_NAME = 'desktop-update.manifest.json'
+
+interface GithubReleaseAssetRef {
+  id: number
+  name: string
+  content_type?: string | null
+  size: number
+}
+
+interface GithubReleaseRef {
+  assets: GithubReleaseAssetRef[]
+}
 
 interface CachedDesktopUpdateManifest {
   value: DesktopUpdateManifest
@@ -74,6 +88,87 @@ export function normalizeSemver(value: string): string | null {
   return clean(value.trim())
 }
 
+function githubHeaders(accept: string) {
+  return {
+    'Authorization': `Bearer ${env.GITHUB_TOKEN}`,
+    'Accept': accept,
+    'X-GitHub-Api-Version': '2022-11-28',
+  }
+}
+
+function releaseTagFromVersion(version: string) {
+  return `v${version}`
+}
+
+function extractAssetFileName(url: string) {
+  try {
+    const parsedUrl = new URL(url)
+    const fileName = parsedUrl.pathname.split('/').pop()?.trim()
+    return fileName || null
+  }
+  catch {
+    return null
+  }
+}
+
+function buildDesktopUpdateReleaseDownloadUrl(tag: string, fileName: string) {
+  return new URL(
+    `desktop/update/download/release/${encodeURIComponent(tag)}/${encodeURIComponent(fileName)}`,
+    env.BASE_URL.endsWith('/') ? env.BASE_URL : `${env.BASE_URL}/`,
+  ).toString()
+}
+
+function findReleaseAssetByName(release: GithubReleaseRef, fileName: string) {
+  const asset = release.assets.find(candidate => candidate.name === fileName)
+
+  if (!asset) {
+    throw new Error(`Asset not found: ${fileName}`)
+  }
+
+  return asset
+}
+
+async function fetchReleaseAssetData(asset: GithubReleaseAssetRef) {
+  const assetRes = await request(
+    'GET /repos/{owner}/{repo}/releases/assets/{asset_id}',
+    {
+      owner: DESKTOP_UPDATE_RELEASE_OWNER,
+      repo: DESKTOP_UPDATE_RELEASE_REPO,
+      asset_id: asset.id,
+      headers: githubHeaders('application/octet-stream'),
+    },
+  )
+
+  if (!(assetRes.data instanceof ArrayBuffer)) {
+    throw new TypeError('Unexpected asset response type')
+  }
+
+  return {
+    fileName: asset.name,
+    contentType: asset.content_type || 'application/octet-stream',
+    size: asset.size,
+    data: assetRes.data,
+  }
+}
+
+function resolveMatchingDesktopArtifact(
+  manifest: DesktopUpdateManifest,
+  input: Pick<DesktopUpdateCheckInput, 'platform' | 'arch'>,
+) {
+  const matchedArtifact = manifest.artifacts.find(candidate =>
+    candidate.platform === input.platform
+    && candidate.arch === input.arch,
+  )
+
+  if (!matchedArtifact) {
+    throw new Error(
+      `No desktop update artifact for platform=${input.platform} arch=${input.arch}`,
+    )
+  }
+
+  return matchedArtifact
+}
+
 export function parseDesktopUpdateManifest(payload: unknown): DesktopUpdateManifest {
   const parsedManifest = desktopUpdateManifestSchema.safeParse(payload)
 
@@ -107,6 +202,38 @@ export function parseDesktopUpdateManifest(payload: unknown): DesktopUpdateManif
   } satisfies DesktopUpdateManifest
 }
 
+async function fetchLatestReleaseMetadata() {
+  return request(
+    'GET /repos/{owner}/{repo}/releases/latest',
+    {
+      owner: DESKTOP_UPDATE_RELEASE_OWNER,
+      repo: DESKTOP_UPDATE_RELEASE_REPO,
+      headers: githubHeaders('application/vnd.github+json'),
+    },
+  )
+}
+
+async function fetchReleaseMetadataByTag(tag: string) {
+  return request(
+    'GET /repos/{owner}/{repo}/releases/tags/{tag}',
+    {
+      owner: DESKTOP_UPDATE_RELEASE_OWNER,
+      repo: DESKTOP_UPDATE_RELEASE_REPO,
+      tag,
+      headers: githubHeaders('application/vnd.github+json'),
+    },
+  )
+}
+
+async function fetchManifestFromRelease(release: GithubReleaseRef): Promise<DesktopUpdateManifest> {
+  const manifestAsset = findReleaseAssetByName(release, DESKTOP_UPDATE_MANIFEST_FILE_NAME)
+  const manifestData = await fetchReleaseAssetData(manifestAsset)
+  const text = Buffer.from(manifestData.data).toString('utf-8')
+  const json = JSON.parse(text)
+
+  return parseDesktopUpdateManifest(json)
+}
+
 async function loadDevelopmentManifestFromFile(): Promise<DesktopUpdateManifest> {
   const manifestPath = new URL('../../dev/desktop-update.manifest.json', import.meta.url)
 
@@ -134,51 +261,8 @@ async function loadDevelopmentManifestFromFile(): Promise<DesktopUpdateManifest>
 }
 
 async function fetchProductionManifestFromRemote(): Promise<DesktopUpdateManifest> {
-  const owner = 'joris-gallot'
-  const repo = 'reviu'
-  const fileName = 'desktop-update.manifest.json'
-
-  const releaseRes = await request(
-    'GET /repos/{owner}/{repo}/releases/latest',
-    {
-      owner,
-      repo,
-      headers: {
-        'Authorization': `Bearer ${env.GITHUB_TOKEN}`,
-        'Accept': 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-    },
-  )
-
-  const asset = releaseRes.data.assets.find(a => a.name === fileName)
-
-  if (!asset) {
-    throw new Error(`Asset not found: ${fileName}`)
-  }
-
-  const assetRes = await request(
-    'GET /repos/{owner}/{repo}/releases/assets/{asset_id}',
-    {
-      owner,
-      repo,
-      asset_id: asset.id,
-      headers: {
-        'Authorization': `Bearer ${env.GITHUB_TOKEN}`,
-        'Accept': 'application/octet-stream',
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-    },
-  )
-
-  if (!(assetRes.data instanceof ArrayBuffer)) {
-    throw new TypeError('Unexpected asset response type')
-  }
-
-  const text = Buffer.from(assetRes.data).toString('utf-8')
-  const json = JSON.parse(text)
-
-  return parseDesktopUpdateManifest(json)
+  const releaseRes = await fetchLatestReleaseMetadata()
+  return fetchManifestFromRelease(releaseRes.data)
 }
 
 export async function fetchDesktopUpdateManifest() {
@@ -217,19 +301,18 @@ export function resolveDesktopUpdateCheck(
 
   let artifact: DesktopUpdateCheckResult['artifact'] = null
   if (updateAvailable) {
-    const matchedArtifact = manifest.artifacts.find(candidate =>
-      candidate.platform === input.platform
-      && candidate.arch === input.arch,
-    )
+    const matchedArtifact = resolveMatchingDesktopArtifact(manifest, input)
+    const assetFileName = extractAssetFileName(matchedArtifact.url)
 
-    if (!matchedArtifact) {
-      throw new Error(
-        `No desktop update artifact for platform=${input.platform} arch=${input.arch}`,
-      )
+    if (!assetFileName) {
+      throw new Error(`Invalid desktop update artifact url: ${matchedArtifact.url}`)
     }
 
     artifact = {
-      url: matchedArtifact.url,
+      url: buildDesktopUpdateReleaseDownloadUrl(
+        releaseTagFromVersion(manifest.version),
+        assetFileName,
+      ),
       sha256: matchedArtifact.sha256,
       size: matchedArtifact.size,
     }
@@ -251,6 +334,28 @@ export async function checkDesktopUpdate(
 ) {
   const manifest = await fetchDesktopUpdateManifest()
   return resolveDesktopUpdateCheck(manifest, input)
+}
+
+export async function downloadDesktopUpdateReleaseAsset(tag: string, fileName: string) {
+  const releaseRes = await fetchReleaseMetadataByTag(tag)
+  const asset = findReleaseAssetByName(releaseRes.data, fileName)
+  return fetchReleaseAssetData(asset)
+}
+
+export async function downloadLatestDesktopUpdateAsset(
+  input: Pick<DesktopUpdateCheckInput, 'platform' | 'arch'>,
+) {
+  const releaseRes = await fetchLatestReleaseMetadata()
+  const manifest = await fetchManifestFromRelease(releaseRes.data)
+  const matchedArtifact = resolveMatchingDesktopArtifact(manifest, input)
+  const assetFileName = extractAssetFileName(matchedArtifact.url)
+
+  if (!assetFileName) {
+    throw new Error(`Invalid desktop update artifact url: ${matchedArtifact.url}`)
+  }
+
+  const asset = findReleaseAssetByName(releaseRes.data, assetFileName)
+  return fetchReleaseAssetData(asset)
 }
 
 export function clearDesktopUpdateManifestCache() {

@@ -7,8 +7,10 @@ import {
 import { useIntersectionObserver } from '../composables/useIntersectionObserver'
 import git_dark from '../assets/app_screenshots/git_dark.png'
 import git_light from '../assets/app_screenshots/git_light.png'
+import { latestAppleSiliconDownloadUrl } from '../../constants'
 
 const { isVisible } = useIntersectionObserver(0.1)
+
 
 const scrollToPricing = () => {
   document.getElementById('pricing')?.scrollIntoView({
@@ -83,7 +85,7 @@ const scrollToPricing = () => {
           class="mt-10 flex flex-wrap items-center gap-x-6 gap-y-3 transition-all duration-700 ease-out transform delay-700"
           :class="[isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8']"
         >
-          <a href="#download" class="rounded-md bg-primary px-3.5 py-2.5 text-sm font-semibold text-white shadow-xs hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary hover:scale-105 transition-transform">Download for macOS (Apple Silicon)</a>
+          <a :href="latestAppleSiliconDownloadUrl" class="rounded-md bg-primary px-3.5 py-2.5 text-sm font-semibold text-white shadow-xs hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary hover:scale-105 transition-transform">Download for macOS (Apple Silicon)</a>
           <a href="#pricing" class="text-sm/6 font-semibold text-foreground hover:bg-muted/50 px-3 py-2 rounded-md" @click.prevent="scrollToPricing">See Pro pricing <span aria-hidden="true">→</span></a>
         </div>
       </div>
