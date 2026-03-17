@@ -3935,7 +3935,7 @@ mod tests {
       "minimumSupportedVersion": "0.1.0",
       "releaseNotesUrl": "https://reviu.dev/releases/0.2.0",
       "artifact": {
-        "url": "https://reviu.dev/downloads/latest",
+        "url": "https://api.reviu.dev/desktop/update/download/release/v0.2.0/Reviu-0.2.0-macos-aarch64.dmg",
         "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         "size": 1024
       }
@@ -3960,7 +3960,7 @@ mod tests {
         .artifact
         .as_ref()
         .map(|artifact| artifact.url.as_str()),
-      Some("https://reviu.dev/downloads/latest")
+      Some("https://api.reviu.dev/desktop/update/download/release/v0.2.0/Reviu-0.2.0-macos-aarch64.dmg")
     );
     handle.join().expect("join server thread");
   }

@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { CheckIcon, SparklesIcon } from 'lucide-vue-next'
 import { useIntersectionObserver } from '../composables/useIntersectionObserver'
-
+import { latestAppleSiliconDownloadUrl } from '../../constants'
 const { isVisible } = useIntersectionObserver(0.3)
 
 const tiers = [
   {
     name: 'Free',
     id: 'free',
-    href: '#download',
+    href: latestAppleSiliconDownloadUrl,
     available: true,
     price: '$0',
     description: 'Full local Git client for everyday development and review workflows.',
