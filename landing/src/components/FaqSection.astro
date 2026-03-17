@@ -1,0 +1,47 @@
+---
+interface FaqItem {
+  question: string;
+  answer: string;
+}
+
+const { faqItems } = Astro.props as { faqItems: FaqItem[] };
+---
+
+<section
+  id="faq"
+  class="py-24 sm:py-32"
+  data-reveal-root
+  data-reveal-threshold="0.3"
+>
+  <div class="mx-auto max-w-5xl px-6 lg:px-8">
+    <div class="reviu-reveal mx-auto max-w-3xl text-center">
+      <h2 class="text-base/7 font-semibold text-primary">FAQ</h2>
+      <p
+        class="mt-2 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-5xl"
+      >
+        Quick answers before you download Reviu
+      </p>
+      <p class="mt-6 text-lg/8 text-muted-foreground">
+        The essentials on pricing, platforms, and GitHub workflows.
+      </p>
+    </div>
+
+    <div class="mt-12 space-y-4">
+      {
+        faqItems.map((item, index) => (
+          <details
+            class="reviu-reveal rounded-2xl border border-border bg-background"
+            style={`--reveal-delay: ${index * 100 + 150}ms;`}
+          >
+            <summary class="cursor-pointer list-none text-lg font-semibold text-foreground p-6">
+              {item.question}
+            </summary>
+            <p class="px-6 pb-6 text-sm/7 text-muted-foreground">
+              {item.answer}
+            </p>
+          </details>
+        ))
+      }
+    </div>
+  </div>
+</section>

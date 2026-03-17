@@ -1,6 +1,46 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .reviu-motion .reviu-reveal,
+  .reviu-motion .reviu-reveal-right {
+    will-change: opacity, transform;
+    transition-property: opacity, transform;
+    transition-duration: 700ms;
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+    transition-delay: var(--reveal-delay, 0ms);
+  }
+
+  .reviu-motion .reviu-reveal {
+    opacity: 0;
+    transform: translate3d(0, 2rem, 0);
+  }
+
+  .reviu-motion .reviu-reveal-right {
+    opacity: 0;
+    transform: translate3d(2rem, 0, 0);
+    transition-duration: 1000ms;
+  }
+
+  .reviu-motion .reviu-reveal.is-visible,
+  .reviu-motion .reviu-reveal-right.is-visible {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+
+  .reviu-hover-lift {
+    transition: transform 200ms ease, background-color 200ms ease;
+  }
+
+  .reviu-hover-lift:hover {
+    transform: scale(1.05);
+  }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
