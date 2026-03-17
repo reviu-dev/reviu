@@ -1,6 +1,7 @@
+import { Buffer } from 'node:buffer'
 import { readFile } from 'node:fs/promises'
+import { request } from '@octokit/request'
 import { z } from 'zod'
-
 import { env } from '../../lib/env.js'
 
 const semverSchema = z.string().trim().regex(/^v?\d+\.\d+\.\d+$/)
@@ -167,19 +168,51 @@ async function loadDevelopmentManifestFromFile(): Promise<DesktopUpdateManifest>
 }
 
 async function fetchProductionManifestFromRemote(): Promise<DesktopUpdateManifest> {
-  if (!env.DESKTOP_UPDATE_MANIFEST_URL) {
-    throw new Error('Missing DESKTOP_UPDATE_MANIFEST_URL in production')
+  const owner = 'joris-gallot'
+  const repo = 'reviu'
+  const fileName = 'desktop-update.aarch64.json'
+
+  const releaseRes = await request(
+    'GET /repos/{owner}/{repo}/releases/latest',
+    {
+      owner,
+      repo,
+      headers: {
+        'Authorization': `Bearer ${env.GITHUB_TOKEN}`,
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    },
+  )
+
+  const asset = releaseRes.data.assets.find(a => a.name === fileName)
+
+  if (!asset) {
+    throw new Error(`Asset not found: ${fileName}`)
   }
 
-  const response = await fetch(env.DESKTOP_UPDATE_MANIFEST_URL)
-  if (!response.ok) {
-    throw new Error(
-      `Desktop update manifest fetch failed with status ${response.status}`,
-    )
+  const assetRes = await request(
+    'GET /repos/{owner}/{repo}/releases/assets/{asset_id}',
+    {
+      owner,
+      repo,
+      asset_id: asset.id,
+      headers: {
+        'Authorization': `Bearer ${env.GITHUB_TOKEN}`,
+        'Accept': 'application/octet-stream',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    },
+  )
+
+  if (!(assetRes.data instanceof ArrayBuffer)) {
+    throw new TypeError('Unexpected asset response type')
   }
 
-  const manifestResponse = await response.json()
-  return parseManifestPayload(manifestResponse)
+  const text = Buffer.from(assetRes.data).toString('utf-8')
+  const json = JSON.parse(text)
+
+  return parseManifestPayload(json)
 }
 
 export async function fetchDesktopUpdateManifest() {
