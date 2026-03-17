@@ -72,6 +72,58 @@ fn update_selected_index<D: ListDelegate>(
   cx.notify();
 }
 
+fn pull_request_label_row(labels: impl IntoIterator<Item = Tag>) -> impl IntoElement {
+  h_flex()
+    .h_6()
+    .items_center()
+    .min_w_0()
+    .overflow_hidden()
+    .gap_1()
+    .children(labels)
+}
+
+fn github_pull_request_row_body(
+  row: &GithubPullRequestRow,
+  theme: &gpui_component::Theme,
+) -> impl IntoElement {
+  let status_tag = row.pr.status().tag(theme);
+  let updated_at = format_compact_datetime(&row.pr.updated_at);
+  let repo_name = github_shared::repo_label(row.owner.as_ref(), row.repo.as_ref());
+
+  let label_tags = row.pr.labels.iter().take(4).map(|label| {
+    Tag::secondary()
+      .small()
+      .rounded_full()
+      .child(label.name.clone())
+  });
+
+  v_flex()
+    .gap_1()
+    .child(
+      h_flex()
+        .items_center()
+        .gap_2()
+        .child(
+          div()
+            .min_w_0()
+            .flex_1()
+            .child(Label::new(row.pr.title.clone()).truncate()),
+        )
+        .child(status_tag),
+    )
+    .child(
+      h_flex()
+        .gap_2()
+        .items_center()
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(format!("#{}", row.pr.number))
+        .child(repo_name)
+        .child(format!("Updated {}", updated_at)),
+    )
+    .child(pull_request_label_row(label_tags))
+}
+
 #[derive(Clone, Debug)]
 struct GithubPullRequestRow {
   pr: Rc<GithubPullRequest>,
@@ -484,53 +536,15 @@ impl ListDelegate for GithubPullRequestListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let theme = cx.theme().clone();
     let base_item = list_base_item(ix, self.selected_index);
-
     let row = self.matched_rows.get(ix.row)?;
-
-    let status_tag = row.pr.status().tag(&theme);
-
-    let updated_at = format_compact_datetime(&row.pr.updated_at);
-    let repo_name = github_shared::repo_label(row.owner.as_ref(), row.repo.as_ref());
-
-    let label_tags = row.pr.labels.iter().take(4).map(|label| {
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .child(label.name.clone())
-    });
+    let theme = cx.theme().clone();
 
     Some(
-      base_item.px_2().py_2().child(
-        v_flex()
-          .gap_1()
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(
-                div()
-                  .min_w_0()
-                  .flex_1()
-                  .child(Label::new(row.pr.title.clone()).truncate()),
-              )
-              .child(status_tag),
-          )
-          .child(
-            h_flex()
-              .gap_2()
-              .items_center()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(format!("#{}", row.pr.number))
-              .child(repo_name)
-              .child(format!("Updated {}", updated_at)),
-          )
-          .when(!row.pr.labels.is_empty(), |this| {
-            this.child(h_flex().gap_1().flex_wrap().children(label_tags))
-          }),
-      ),
+      base_item
+        .px_2()
+        .py_2()
+        .child(github_pull_request_row_body(row, &theme)),
     )
   }
 
@@ -1292,6 +1306,15 @@ mod tests {
   };
 
   fn make_pull_request_row(title: &str, owner: &str, repo: &str) -> GithubPullRequestRow {
+    make_pull_request_row_with_labels(title, owner, repo, &["test"])
+  }
+
+  fn make_pull_request_row_with_labels(
+    title: &str,
+    owner: &str,
+    repo: &str,
+    labels: &[&str],
+  ) -> GithubPullRequestRow {
     GithubPullRequestRow {
       pr: Rc::new(GithubPullRequest {
         number: 1,
@@ -1300,9 +1323,12 @@ mod tests {
         merged_at: None,
         draft: false,
         updated_at: "2026-02-15T12:00:00Z".to_string(),
-        labels: vec![GithubPullRequestLabel {
-          name: "test".to_string(),
-        }],
+        labels: labels
+          .iter()
+          .map(|label| GithubPullRequestLabel {
+            name: (*label).to_string(),
+          })
+          .collect(),
         repository: GithubRepository {
           owner: owner.to_string(),
           repo: repo.to_string(),
@@ -1354,6 +1380,30 @@ mod tests {
         cx.set_global(AuthStateStore::default());
       }
     });
+  }
+
+  struct TestProbeView {
+    labeled: GithubPullRequestRow,
+    unlabeled: GithubPullRequestRow,
+  }
+
+  impl Render for TestProbeView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+      let theme = cx.theme().clone();
+
+      v_flex()
+        .gap_2()
+        .child(
+          div()
+            .debug_selector(|| "labeled".to_string())
+            .child(github_pull_request_row_body(&self.labeled, &theme)),
+        )
+        .child(
+          div()
+            .debug_selector(|| "unlabeled".to_string())
+            .child(github_pull_request_row_body(&self.unlabeled, &theme)),
+        )
+    }
   }
 
   async fn await_github_page_background_tasks(
@@ -1502,6 +1552,29 @@ mod tests {
       delegate.matched_rows[0].notification.repository.full_name,
       "acme/backend"
     );
+  }
+
+  #[gpui::test]
+  fn pull_request_delegate_rows_keep_a_stable_height(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let labeled =
+      make_pull_request_row_with_labels("Labeled pull request", "acme", "portal", &["bug"]);
+    let unlabeled =
+      make_pull_request_row_with_labels("Unlabeled pull request", "acme", "portal", &[]);
+    let (_view, cx) = cx.add_window_view(|_, _| TestProbeView { labeled, unlabeled });
+
+    let labeled_height = cx
+      .debug_bounds("labeled")
+      .expect("labeled bounds")
+      .size
+      .height;
+    let unlabeled_height = cx
+      .debug_bounds("unlabeled")
+      .expect("unlabeled bounds")
+      .size
+      .height;
+
+    assert_eq!(labeled_height, unlabeled_height);
   }
 
   #[gpui::test]
