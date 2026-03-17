@@ -2,7 +2,6 @@
 import HeroSection from "../components/HeroSection.astro";
 import FeaturesSection from "../components/FeaturesSection.astro";
 import PricingSection from "../components/PricingSection.astro";
-import FaqSection from "../components/FaqSection.astro";
 import SiteFooter from "../components/SiteFooter.astro";
 import Layout from "../layouts/Layout.astro";
 
@@ -10,32 +9,32 @@ const title = "Git Client for macOS and GitHub Pull Request Review";
 const description =
   "Reviu is a desktop Git client for macOS with keyboard-first local workflows, fast diffs, and GitHub notifications, repos, pull request reviews, and issues in Reviu Pro.";
 
-const faqItems = [
-  {
-    question: "What is Reviu?",
-    answer:
-      "Reviu is a desktop Git client for macOS focused on fast review workflows, keyboard-first navigation, local diffs, and GitHub context in one app.",
-  },
-  {
-    question: "Is Reviu a GitHub desktop client?",
-    answer:
-      "Yes. Reviu combines local Git workflows with GitHub notifications, repository browsing, pull request reviews, and issue context as part of Reviu Pro.",
-  },
-  {
-    question: "Can I review GitHub pull requests in Reviu?",
-    answer:
-      "Reviu Pro includes desktop pull request review with inline and split diffs, markdown and SVG previews, plus create, edit, reply, and delete comment actions.",
-  },
-  {
-    question: "Is Reviu free?",
-    answer:
-      "Yes. Reviu includes a free plan for local Git workflows such as branch switching, fetch, push, staging, commit, stash, cherry-pick, and rebase flows.",
-  },
-  {
-    question: "Which platforms does Reviu support?",
-    answer:
-      "Current public landing messaging is focused on macOS with Apple Silicon support.",
-  },
+const faqItems: { question: string; answer: string }[] = [
+  // {
+  //   question: "What is Reviu?",
+  //   answer:
+  //     "Reviu is a desktop Git client for macOS focused on fast review workflows, keyboard-first navigation, local diffs, and GitHub context in one app.",
+  // },
+  // {
+  //   question: "Is Reviu a GitHub desktop client?",
+  //   answer:
+  //     "Yes. Reviu combines local Git workflows with GitHub notifications, repository browsing, pull request reviews, and issue context as part of Reviu Pro.",
+  // },
+  // {
+  //   question: "Can I review GitHub pull requests in Reviu?",
+  //   answer:
+  //     "Reviu Pro includes desktop pull request review with inline and split diffs, markdown and SVG previews, plus create, edit, reply, and delete comment actions.",
+  // },
+  // {
+  //   question: "Is Reviu free?",
+  //   answer:
+  //     "Yes. Reviu includes a free plan for local Git workflows such as branch switching, fetch, push, staging, commit, stash, cherry-pick, and rebase flows.",
+  // },
+  // {
+  //   question: "Which platforms does Reviu support?",
+  //   answer:
+  //     "Current public landing messaging is focused on macOS with Apple Silicon support.",
+  // },
 ];
 
 const structuredData = [
@@ -96,7 +95,7 @@ const structuredData = [
     <HeroSection />
     <FeaturesSection />
     <PricingSection />
-    <FaqSection faqItems={faqItems} />
+    <!-- <FaqSection faqItems={faqItems} /> -->
     <SiteFooter />
   </main>
 </Layout>
