@@ -71,7 +71,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: arm64
+          - arch: aarch64
             manifest_arch: aarch64
             target: aarch64-apple-darwin
             runner: macos-26
@@ -177,7 +177,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash ./desktop/scripts/build-macos-dmg.sh "${VERSION}" "${MANIFEST_ARCH}" "${TARGET}"
+          bash ./desktop/scripts/build-macos-dmg.sh "${VERSION}" "${MANIFEST_ARCH}"
 
       - name: Upload Sentry debug files
         shell: bash

@@ -14,7 +14,7 @@ fi
 
 usage() {
   cat <<EOF
-Usage: $0 [--no-notarize] <version> <manifest_arch> <target>
+Usage: $0 [--no-notarize] <version> <manifest_arch>
 
 Build a signed macOS app bundle and DMG for Reviu.
 
@@ -35,6 +35,39 @@ log() {
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "'$1' is required"
+}
+
+is_supported_manifest_arch() {
+  case "$1" in
+    aarch64|x86_64)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+validate_manifest_arch() {
+  local manifest_arch="$1"
+
+  if ! is_supported_manifest_arch "${manifest_arch}"; then
+    die "Unsupported manifest_arch: ${manifest_arch}. Expected one of: aarch64, x86_64"
+  fi
+}
+
+resolve_target_from_manifest_arch() {
+  case "$1" in
+    aarch64)
+      echo "aarch64-apple-darwin"
+      ;;
+    x86_64)
+      echo "x86_64-apple-darwin"
+      ;;
+    *)
+      die "Unsupported manifest_arch: $1. Expected one of: aarch64, x86_64"
+      ;;
+  esac
 }
 
 require_env() {
@@ -229,14 +262,19 @@ main() {
     esac
   done
 
-  if [[ $# -ne 3 ]]; then
+  if [[ $# -ne 2 ]]; then
     usage
     exit 1
   fi
 
   local version="$1"
   local manifest_arch="$2"
-  local target="$3"
+
+  validate_manifest_arch "${manifest_arch}"
+
+  local target
+  target="$(resolve_target_from_manifest_arch "${manifest_arch}")"
+
   local tag="v${version}"
   local app_name="Reviu"
   local volume_name="Reviu"
@@ -248,7 +286,7 @@ main() {
   local output_dir="${repo_root}/dist/release/macos/${target}"
   local dmg_name="${app_name}-${version}-macos-${manifest_arch}.dmg"
   local dmg_path="${output_dir}/${dmg_name}"
-  local metadata_path="${output_dir}/desktop-update.${manifest_arch}.json"
+  local metadata_path="${output_dir}/desktop-update.manifest.json"
   local artifact_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${dmg_name}"
   local release_notes_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
   local app_zip_path="${runner_temp}/${app_name}-${target}.app.zip"
