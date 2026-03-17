@@ -77,6 +77,56 @@ fn update_selected_index<D: ListDelegate>(
   cx.notify();
 }
 
+fn pull_request_label_row(labels: impl IntoIterator<Item = Tag>) -> impl IntoElement {
+  h_flex()
+    .h_6()
+    .items_center()
+    .min_w_0()
+    .overflow_hidden()
+    .gap_1()
+    .children(labels)
+}
+
+fn github_repo_pull_request_row_body(
+  row: &GithubRepoPullRequestRow,
+  theme: &gpui_component::Theme,
+) -> impl IntoElement {
+  let status_tag = row.pr.status().tag(theme);
+  let updated_at = format_compact_datetime(&row.pr.updated_at);
+
+  let label_tags = row.pr.labels.iter().take(4).map(|label| {
+    Tag::secondary()
+      .small()
+      .rounded_full()
+      .child(label.name.clone())
+  });
+
+  v_flex()
+    .gap_1()
+    .child(
+      h_flex()
+        .items_center()
+        .gap_2()
+        .child(
+          div()
+            .min_w_0()
+            .flex_1()
+            .child(Label::new(row.pr.title.clone()).truncate()),
+        )
+        .child(status_tag),
+    )
+    .child(
+      h_flex()
+        .gap_2()
+        .items_center()
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(format!("#{}", row.pr.number))
+        .child(format!("Updated {}", updated_at)),
+    )
+    .child(pull_request_label_row(label_tags))
+}
+
 fn format_repo_size(size_kb: u64) -> SharedString {
   const KB_PER_MB: u64 = 1024;
   const KB_PER_GB: u64 = 1024 * 1024;
@@ -808,56 +858,15 @@ impl ListDelegate for GithubRepoPullRequestListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let theme = cx.theme().clone();
     let base_item = list_base_item(ix, self.selected_index);
-
     let row = self.matched_rows.get(ix.row)?;
-
-    let status_tag = row.pr.status().tag(&theme);
-    let updated_at = format_compact_datetime(&row.pr.updated_at);
-
-    let label_tags = row.pr.labels.iter().take(4).map(|label| {
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .child(label.name.clone())
-    });
+    let theme = cx.theme().clone();
 
     Some(
-      base_item.px_2().py_2().child(
-        v_flex()
-          .gap_1()
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(
-                div()
-                  .min_w_0()
-                  .flex_1()
-                  .child(Label::new(row.pr.title.clone()).truncate()),
-              )
-              .child(status_tag),
-          )
-          .child(
-            h_flex()
-              .gap_2()
-              .items_center()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(format!("#{}", row.pr.number))
-              .child(format!("Updated {}", updated_at)),
-          )
-          .when(!row.pr.labels.is_empty(), |this| {
-            this.child(
-              h_flex()
-                .min_w_0()
-                .overflow_hidden()
-                .gap_1()
-                .children(label_tags),
-            )
-          }),
-      ),
+      base_item
+        .px_2()
+        .py_2()
+        .child(github_repo_pull_request_row_body(row, &theme)),
     )
   }
 
@@ -4640,9 +4649,10 @@ impl Focusable for GithubRepoPage {
 mod tests {
   use super::*;
   use crate::api::{
-    GithubIssueDescriptionUpdate, GithubIssueDetailsComment, GithubIssueUser, GithubRepository,
-    GithubRepositoryTreeEntry,
+    GithubIssueDescriptionUpdate, GithubIssueDetailsComment, GithubIssueUser,
+    GithubPullRequestLabel, GithubPullRequestState, GithubRepository, GithubRepositoryTreeEntry,
   };
+  use gpui::TestAppContext;
 
   fn make_issue_comment(
     id: u64,
@@ -4700,6 +4710,61 @@ mod tests {
     }
   }
 
+  fn init_gpui_test(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+  }
+
+  struct TestProbeView {
+    labeled: GithubRepoPullRequestRow,
+    unlabeled: GithubRepoPullRequestRow,
+  }
+
+  impl Render for TestProbeView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+      let theme = cx.theme().clone();
+
+      v_flex()
+        .gap_2()
+        .child(
+          div()
+            .debug_selector(|| "labeled".to_string())
+            .child(github_repo_pull_request_row_body(&self.labeled, &theme)),
+        )
+        .child(
+          div()
+            .debug_selector(|| "unlabeled".to_string())
+            .child(github_repo_pull_request_row_body(&self.unlabeled, &theme)),
+        )
+    }
+  }
+
+  fn make_repo_pull_request_row(
+    title: &str,
+    number: u64,
+    labels: &[&str],
+  ) -> GithubRepoPullRequestRow {
+    GithubRepoPullRequestRow {
+      pr: Rc::new(GithubPullRequest {
+        number,
+        title: title.to_string(),
+        state: GithubPullRequestState::Open,
+        merged_at: None,
+        draft: false,
+        updated_at: "2026-02-15T12:00:00Z".to_string(),
+        labels: labels
+          .iter()
+          .map(|label| GithubPullRequestLabel {
+            name: (*label).to_string(),
+          })
+          .collect(),
+        repository: GithubRepository {
+          owner: "acme".to_string(),
+          repo: "widget".to_string(),
+        },
+      }),
+    }
+  }
+
   #[test]
   fn github_page_navigation_targets_github_and_refresh_when_subscription_is_active() {
     assert_eq!(github_page_navigation(true), (WorkspacePage::Github, true));
@@ -4724,6 +4789,27 @@ mod tests {
   fn repo_palette_open_target_follows_subscription_state() {
     assert_eq!(repo_palette_open_target(true), WorkspacePage::GithubRepo);
     assert_eq!(repo_palette_open_target(false), WorkspacePage::Billing);
+  }
+
+  #[gpui::test]
+  fn repo_pull_request_delegate_rows_keep_a_stable_height(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let labeled = make_repo_pull_request_row("Labeled pull request", 1, &["bug"]);
+    let unlabeled = make_repo_pull_request_row("Unlabeled pull request", 2, &[]);
+    let (_view, cx) = cx.add_window_view(|_, _| TestProbeView { labeled, unlabeled });
+
+    let labeled_height = cx
+      .debug_bounds("labeled")
+      .expect("labeled bounds")
+      .size
+      .height;
+    let unlabeled_height = cx
+      .debug_bounds("unlabeled")
+      .expect("unlabeled bounds")
+      .size
+      .height;
+
+    assert_eq!(labeled_height, unlabeled_height);
   }
 
   #[test]
