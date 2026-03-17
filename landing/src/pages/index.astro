@@ -1,14 +1,102 @@
 ---
-import Hero from "../components/Hero.vue";
-import FeaturesSection from "../components/FeaturesSection.vue";
-import Pricing from "../components/Pricing.vue";
-import Footer from "../components/Footer.vue";
+import HeroSection from "../components/HeroSection.astro";
+import FeaturesSection from "../components/FeaturesSection.astro";
+import PricingSection from "../components/PricingSection.astro";
+import FaqSection from "../components/FaqSection.astro";
+import SiteFooter from "../components/SiteFooter.astro";
 import Layout from "../layouts/Layout.astro";
+
+const title = "Git Client for macOS and GitHub Pull Request Review";
+const description =
+  "Reviu is a desktop Git client for macOS with keyboard-first local workflows, fast diffs, and GitHub notifications, repos, pull request reviews, and issues in Reviu Pro.";
+
+const faqItems = [
+  {
+    question: "What is Reviu?",
+    answer:
+      "Reviu is a desktop Git client for macOS focused on fast review workflows, keyboard-first navigation, local diffs, and GitHub context in one app.",
+  },
+  {
+    question: "Is Reviu a GitHub desktop client?",
+    answer:
+      "Yes. Reviu combines local Git workflows with GitHub notifications, repository browsing, pull request reviews, and issue context as part of Reviu Pro.",
+  },
+  {
+    question: "Can I review GitHub pull requests in Reviu?",
+    answer:
+      "Reviu Pro includes desktop pull request review with inline and split diffs, markdown and SVG previews, plus create, edit, reply, and delete comment actions.",
+  },
+  {
+    question: "Is Reviu free?",
+    answer:
+      "Yes. Reviu includes a free plan for local Git workflows such as branch switching, fetch, push, staging, commit, stash, cherry-pick, and rebase flows.",
+  },
+  {
+    question: "Which platforms does Reviu support?",
+    answer:
+      "Current public landing messaging is focused on macOS with Apple Silicon support.",
+  },
+];
+
+const structuredData = [
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    name: "Reviu",
+    applicationCategory: "DeveloperApplication",
+    operatingSystem: "macOS",
+    url: "https://reviu.dev/",
+    description,
+    offers: [
+      {
+        "@type": "Offer",
+        name: "Reviu Free",
+        price: "0",
+        priceCurrency: "USD",
+      },
+      {
+        "@type": "Offer",
+        name: "Reviu Pro",
+        price: "19",
+        priceCurrency: "USD",
+      },
+    ],
+    featureList: [
+      "Keyboard-first Git command palette",
+      "Advanced local Git operations",
+      "Inline and split diff review",
+      "GitHub notifications",
+      "GitHub repository browsing",
+      "GitHub pull request review",
+      "GitHub issues context",
+    ],
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: faqItems.map((item) => ({
+      "@type": "Question",
+      name: item.question,
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: item.answer,
+      },
+    })),
+  },
+];
 ---
 
-<Layout>
-  <Hero client:only />
-  <FeaturesSection client:only />
-  <Pricing client:only />
-  <Footer client:only />
+<Layout
+  title={title}
+  description={description}
+  pathname="/"
+  structuredData={structuredData}
+>
+  <main>
+    <HeroSection />
+    <FeaturesSection />
+    <PricingSection />
+    <FaqSection faqItems={faqItems} />
+    <SiteFooter />
+  </main>
 </Layout>

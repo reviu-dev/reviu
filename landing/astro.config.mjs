@@ -1,13 +1,12 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import { ValidateEnv } from '@julr/vite-plugin-validate-env'
-import vue from '@astrojs/vue';
 import { z } from 'zod';
 import tailwindcss from '@tailwindcss/vite';
 
 // https://astro.build/config
 export default defineConfig({
-  integrations: [vue()],
+  site: 'https://reviu.dev',
   vite: {
     plugins: [
       tailwindcss(), 

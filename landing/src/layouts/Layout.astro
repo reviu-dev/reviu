@@ -1,23 +1,142 @@
 ---
 import "../styles/global.css";
+import gitLight from "../assets/app_screenshots/git_light.png";
+
+interface StructuredData {
+  [key: string]: unknown;
+}
+
+interface Props {
+  title?: string;
+  description?: string;
+  pathname?: string;
+  image?: string | { src: string };
+  robots?: string;
+  type?: "website" | "article";
+  structuredData?: StructuredData | StructuredData[];
+}
+
+const site = Astro.site ?? new URL("https://reviu.dev");
+const defaultTitle = "Reviu";
+const defaultDescription =
+  "Reviu is a keyboard-first Git client for macOS with fast local diffs, advanced Git workflows, and GitHub pull request review in Reviu Pro.";
+
+const {
+  title = defaultTitle,
+  description = defaultDescription,
+  pathname = Astro.url.pathname,
+  image = gitLight,
+  robots = "index,follow",
+  type = "website",
+  structuredData = [],
+} = Astro.props as Props;
+
+const pageTitle = title === defaultTitle ? title : `${title} | Reviu`;
+const canonicalUrl = new URL(pathname, site).toString();
+const imagePath = typeof image === "string" ? image : image.src;
+const imageUrl = new URL(imagePath, site).toString();
+const structuredDataItems = Array.isArray(structuredData)
+  ? structuredData
+  : [structuredData];
 ---
 
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width" />
+    <meta name="description" content={description} />
+    <meta name="robots" content={robots} />
+    <meta name="theme-color" content="#2563EB" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="shortcut icon" href="/favicon.ico" />
     <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-title" content="Reviu" />
     <link rel="manifest" href="/site.webmanifest" />
+    <link rel="canonical" href={canonicalUrl} />
+    <link rel="sitemap" href={new URL("/sitemap.xml", site).toString()} />
     <meta name="generator" content={Astro.generator} />
-    <title>Reviu</title>
+    <meta property="og:site_name" content="Reviu" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:type" content={type} />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonicalUrl} />
+    <meta property="og:image" content={imageUrl} />
+    <meta
+      property="og:image:alt"
+      content="Screenshot of the Reviu desktop Git client."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={pageTitle} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={imageUrl} />
+    <title>{pageTitle}</title>
+    <script is:inline>
+      document.documentElement.classList.add("reviu-motion");
+    </script>
+    {
+      structuredDataItems
+        .filter((item) => Object.keys(item).length > 0)
+        .map((item) => (
+          <script
+            is:inline
+            type="application/ld+json"
+            set:html={JSON.stringify(item)}
+          />
+        ))
+    }
   </head>
   <body class="bg-background">
     <slot />
+    <script is:inline>
+      const revealSelector = ".reviu-reveal, .reviu-reveal-right";
+      const showRoot = (root) => {
+        root.querySelectorAll(revealSelector).forEach((element) => {
+          element.classList.add("is-visible");
+        });
+      };
+
+      const revealRoots = Array.from(
+        document.querySelectorAll("[data-reveal-root]"),
+      );
+
+      if (
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+        !("IntersectionObserver" in window)
+      ) {
+        revealRoots.forEach(showRoot);
+      } else {
+        const observers = new Map();
+
+        revealRoots.forEach((root) => {
+          const threshold = Number.parseFloat(
+            root.dataset.revealThreshold ?? "0.1",
+          );
+          const key = threshold.toFixed(2);
+
+          if (!observers.has(key)) {
+            const observer = new IntersectionObserver(
+              (entries) => {
+                entries.forEach((entry) => {
+                  if (!entry.isIntersecting) return;
+
+                  showRoot(entry.target);
+                  observer.unobserve(entry.target);
+                });
+              },
+              { threshold },
+            );
+
+            observers.set(key, observer);
+          }
+
+          observers.get(key).observe(root);
+        });
+      }
+    </script>
     <script
+      is:inline
       defer
       src="https://analytics.jorisgallot.dev/j.js"
       data-website-id="4da481f3-4f4e-4aa1-a3b3-3d4ab7602bb8"></script>
