@@ -1,37 +1,29 @@
 import { Buffer } from 'node:buffer'
 import { readFile } from 'node:fs/promises'
 import { request } from '@octokit/request'
+import { clean, lt } from 'semver'
 import { z } from 'zod'
 import { env } from '../../lib/env.js'
 
-const semverSchema = z.string().trim().regex(/^v?\d+\.\d+\.\d+$/)
 const desktopPlatformSchema = z.enum(['macos', 'linux', 'windows'])
 const desktopArchSchema = z.enum(['x86_64', 'aarch64'])
-const sha256Schema = z.string().trim().regex(/^[a-f0-9]{64}$/i)
 
 const desktopUpdateArtifactSchema = z.object({
   platform: desktopPlatformSchema,
   arch: desktopArchSchema,
   url: z.url(),
-  sha256: sha256Schema,
+  sha256: z.string(),
   size: z.number().int().positive(),
 })
 
 const desktopUpdateManifestSchema = z.object({
-  version: semverSchema,
-  minimumSupportedVersion: semverSchema,
+  version: z.string().trim(),
+  minimumSupportedVersion: z.string().trim(),
   releaseNotesUrl: z.url(),
   artifacts: z.array(desktopUpdateArtifactSchema).min(1),
 })
 
 const DESKTOP_UPDATE_MANIFEST_CACHE_TTL_MS = 5 * 60 * 1000
-
-interface ParsedSemver {
-  major: number
-  minor: number
-  patch: number
-  normalized: string
-}
 
 interface CachedDesktopUpdateManifest {
   value: DesktopUpdateManifest
@@ -78,40 +70,13 @@ export interface DesktopUpdateCheckResult {
 
 let desktopUpdateManifestCache: CachedDesktopUpdateManifest | null = null
 
-export function parseSemver(value: string): ParsedSemver | null {
-  const parsed = semverSchema.safeParse(value)
-  if (!parsed.success) {
-    return null
-  }
-
-  const normalized = parsed.data.startsWith('v')
-    ? parsed.data.slice(1)
-    : parsed.data
-  const [major, minor, patch] = normalized.split('.').map(Number)
-  return {
-    major,
-    minor,
-    patch,
-    normalized: `${major}.${minor}.${patch}`,
-  }
+export function normalizeSemver(value: string): string | null {
+  return clean(value.trim())
 }
 
-export function compareSemver(left: ParsedSemver, right: ParsedSemver) {
-  if (left.major !== right.major) {
-    return Math.sign(left.major - right.major)
-  }
-  if (left.minor !== right.minor) {
-    return Math.sign(left.minor - right.minor)
-  }
-  return Math.sign(left.patch - right.patch)
-}
-
-export function normalizeSemver(value: string) {
-  return parseSemver(value)?.normalized ?? null
-}
-
-async function parseManifestPayload(payload: unknown): Promise<DesktopUpdateManifest> {
+export function parseDesktopUpdateManifest(payload: unknown): DesktopUpdateManifest {
   const parsedManifest = desktopUpdateManifestSchema.safeParse(payload)
+
   if (!parsedManifest.success) {
     throw new Error('Invalid desktop update manifest payload')
   }
@@ -120,6 +85,7 @@ async function parseManifestPayload(payload: unknown): Promise<DesktopUpdateMani
   if (!version) {
     throw new Error('Invalid desktop update manifest version')
   }
+
   const minimumSupportedVersion = normalizeSemver(
     parsedManifest.data.minimumSupportedVersion,
   )
@@ -164,13 +130,13 @@ async function loadDevelopmentManifestFromFile(): Promise<DesktopUpdateManifest>
     )
   }
 
-  return parseManifestPayload(parsed)
+  return parseDesktopUpdateManifest(parsed)
 }
 
 async function fetchProductionManifestFromRemote(): Promise<DesktopUpdateManifest> {
   const owner = 'joris-gallot'
   const repo = 'reviu'
-  const fileName = 'desktop-update.aarch64.json'
+  const fileName = 'desktop-update.manifest.json'
 
   const releaseRes = await request(
     'GET /repos/{owner}/{repo}/releases/latest',
@@ -212,7 +178,7 @@ async function fetchProductionManifestFromRemote(): Promise<DesktopUpdateManifes
   const text = Buffer.from(assetRes.data).toString('utf-8')
   const json = JSON.parse(text)
 
-  return parseManifestPayload(json)
+  return parseDesktopUpdateManifest(json)
 }
 
 export async function fetchDesktopUpdateManifest() {
@@ -237,21 +203,17 @@ export async function fetchDesktopUpdateManifest() {
   return manifest
 }
 
-export async function checkDesktopUpdate(
+export function resolveDesktopUpdateCheck(
+  manifest: DesktopUpdateManifest,
   input: DesktopUpdateCheckInput,
-) {
-  const normalizedCurrentVersion = normalizeSemver(input.currentVersion)
-  if (!normalizedCurrentVersion) {
-    throw new Error('Invalid current version')
+): DesktopUpdateCheckResult {
+  const current = normalizeSemver(input.currentVersion)
+  if (!current) {
+    throw new Error(`Invalid currentVersion: ${input.currentVersion}`)
   }
 
-  const manifest = await fetchDesktopUpdateManifest()
-
-  const current = parseSemver(normalizedCurrentVersion)!
-  const latest = parseSemver(manifest.version)!
-  const minimumSupported = parseSemver(manifest.minimumSupportedVersion)!
-  const updateAvailable = compareSemver(current, latest) < 0
-  const forceUpdate = compareSemver(current, minimumSupported) < 0
+  const updateAvailable = lt(current, manifest.version)
+  const forceUpdate = lt(current, manifest.minimumSupportedVersion)
 
   let artifact: DesktopUpdateCheckResult['artifact'] = null
   if (updateAvailable) {
@@ -276,12 +238,19 @@ export async function checkDesktopUpdate(
   return {
     updateAvailable,
     forceUpdate,
-    currentVersion: normalizedCurrentVersion,
+    currentVersion: current,
     latestVersion: manifest.version,
     minimumSupportedVersion: manifest.minimumSupportedVersion,
     releaseNotesUrl: manifest.releaseNotesUrl,
     artifact,
   } satisfies DesktopUpdateCheckResult
+}
+
+export async function checkDesktopUpdate(
+  input: DesktopUpdateCheckInput,
+) {
+  const manifest = await fetchDesktopUpdateManifest()
+  return resolveDesktopUpdateCheck(manifest, input)
 }
 
 export function clearDesktopUpdateManifestCache() {
