@@ -14,10 +14,10 @@ const readDistFile = async (relativePath) => {
 test('homepage ships crawlable metadata and content', async () => {
   const html = await readDistFile('index.html')
 
-  assert.match(html, /<title>Git Client for macOS and GitHub Pull Request Review \| Reviu<\/title>/)
+  assert.match(html, /<title>Reviu<\/title>/)
   assert.match(html, /<meta name="description" content="Reviu is a desktop Git client for macOS/)
   assert.match(html, /<link rel="canonical" href="https:\/\/reviu\.dev\/"/)
-  assert.match(html, /<meta property="og:title" content="Git Client for macOS and GitHub Pull Request Review \| Reviu"/)
+  assert.match(html, /<meta property="og:title" content="Reviu"/)
   assert.match(html, /<meta name="twitter:card" content="summary_large_image"/)
   assert.match(html, /SoftwareApplication/)
   assert.match(html, /FAQPage/)
@@ -38,6 +38,8 @@ test('legal pages are marked noindex', async () => {
   const privacy = await readDistFile('privacy/index.html')
   const terms = await readDistFile('terms/index.html')
 
+  assert.match(privacy, /<title>Reviu - Privacy Policy<\/title>/)
+  assert.match(terms, /<title>Reviu - Terms of Service<\/title>/)
   assert.match(privacy, /<meta name="robots" content="noindex,follow"/)
   assert.match(terms, /<meta name="robots" content="noindex,follow"/)
 })
