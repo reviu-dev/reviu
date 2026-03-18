@@ -23,6 +23,7 @@ test('homepage ships crawlable metadata and content', async () => {
   assert.match(html, /FAQPage/)
   assert.match(html, /A free Git client built for fast reviews\./)
   assert.match(html, /srcset=/)
+  assert.match(html, /--fit: contain;/)
   assert.doesNotMatch(html, /client="only"/)
 })
 
