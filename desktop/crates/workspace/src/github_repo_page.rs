@@ -2119,8 +2119,8 @@ impl Render for GithubIssueDetailsSheetView {
         .w_full()
         .gap_3()
         .pt_3()
-        .pl_6()
         .pb_8()
+        .px_6()
         .child(
           div()
             .text_lg()
