@@ -128,6 +128,19 @@ fn editor_code_font_family(cx: &App) -> SharedString {
   cx.theme().mono_font_family.clone()
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct VerticalScrollMetrics {
+  pub viewport_lines: f32,
+  pub scroll_padding: f32,
+  pub max_scroll: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CursorRevealPolicy {
+  WhenHidden,
+  WithPadding,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffViewMode {
   Inline,
@@ -975,6 +988,7 @@ impl Editor {
     self.hovered_conflict_start_line = None;
     self.last_mouse_position = None;
     self.scroll_offset_y = 0.0;
+    self.reset_horizontal_scroll_state();
   }
 
   pub fn set_diffs(&mut self, diffs: Option<DiffSet>, cx: &mut Context<Self>) {
@@ -1165,6 +1179,102 @@ impl Editor {
 
   pub(crate) fn gutter_line_number_right_padding(&self) -> Pixels {
     px(GUTTER_LINE_NUMBER_BASE_RIGHT_PADDING_PX + self.gutter_create_button_extra_width_px())
+  }
+
+  pub(crate) fn vertical_scroll_metrics_for_height(
+    viewport_height: Pixels,
+    line_height: Pixels,
+    total_lines: usize,
+  ) -> VerticalScrollMetrics {
+    let viewport_lines = if line_height > px(0.0) {
+      (viewport_height / line_height).max(1.0)
+    } else {
+      1.0
+    };
+    let max_padding = (viewport_lines - 1.0).max(0.0);
+    let scroll_padding = (SCROLL_PADDING as f32).min(max_padding);
+    let max_scroll = (total_lines as f32 - viewport_lines + scroll_padding).max(0.0);
+
+    VerticalScrollMetrics {
+      viewport_lines,
+      scroll_padding,
+      max_scroll,
+    }
+  }
+
+  pub(crate) fn clamp_vertical_scroll_for_height(
+    scroll_offset_y: f32,
+    viewport_height: Pixels,
+    line_height: Pixels,
+    total_lines: usize,
+  ) -> f32 {
+    if total_lines == 0 {
+      0.0
+    } else {
+      let metrics =
+        Self::vertical_scroll_metrics_for_height(viewport_height, line_height, total_lines);
+      scroll_offset_y.clamp(0.0, metrics.max_scroll)
+    }
+  }
+
+  pub(crate) fn viewport_range_for_height(
+    scroll_offset_y: f32,
+    viewport_height: Pixels,
+    line_height: Pixels,
+    total_lines: usize,
+  ) -> Range<usize> {
+    if total_lines == 0 {
+      return 0..0;
+    }
+
+    let scroll_offset = Self::clamp_vertical_scroll_for_height(
+      scroll_offset_y,
+      viewport_height,
+      line_height,
+      total_lines,
+    );
+    let mut visible_line_count = ((viewport_height / line_height).ceil() as usize).max(1);
+    if has_fractional_scroll(scroll_offset) {
+      visible_line_count += 1;
+    }
+
+    let start_line = (scroll_offset.floor() as usize).min(total_lines.saturating_sub(1));
+    let end_line = (start_line + visible_line_count).min(total_lines);
+    start_line..end_line
+  }
+
+  fn vertical_scroll_metrics(
+    &self,
+    line_height: Pixels,
+    total_lines: usize,
+  ) -> VerticalScrollMetrics {
+    Self::vertical_scroll_metrics_for_height(self.viewport_height, line_height, total_lines)
+  }
+
+  fn clamp_vertical_scroll(
+    &self,
+    scroll_offset_y: f32,
+    line_height: Pixels,
+    total_lines: usize,
+  ) -> f32 {
+    Self::clamp_vertical_scroll_for_height(
+      scroll_offset_y,
+      self.viewport_height,
+      line_height,
+      total_lines,
+    )
+  }
+
+  fn reset_horizontal_scroll_state(&mut self) {
+    self.max_line_width = px(DEFAULT_MAX_LINE_WIDTH);
+    self.last_scroll_x = px(0.0);
+    self.scroll_handle.set_offset(point(px(0.0), px(0.0)));
+  }
+
+  pub(crate) fn set_horizontal_scroll_offset(&mut self, scroll_x: Pixels) {
+    let clamped = self.clamp_horizontal_scroll_x(scroll_x);
+    self.scroll_handle.set_offset(point(clamped, px(0.0)));
+    self.last_scroll_x = clamped;
   }
 
   fn review_comment_body_hash(body: &str) -> u64 {
@@ -2320,11 +2430,8 @@ impl Editor {
       return false;
     }
 
-    let viewport_lines = (self.viewport_height / line_height).max(1.0);
-    let max_padding = (viewport_lines - 1.0).max(0.0);
-    let scroll_padding = (SCROLL_PADDING as f32).min(max_padding);
-    let max_scroll = (total_lines as f32 - viewport_lines + scroll_padding).max(0.0);
-    let target = (display_line as f32 - scroll_padding).clamp(0.0, max_scroll);
+    let metrics = self.vertical_scroll_metrics(line_height, total_lines);
+    let target = (display_line as f32 - metrics.scroll_padding).clamp(0.0, metrics.max_scroll);
     let start = self.scroll_offset_y;
     let delta = target - start;
 
@@ -2683,13 +2790,10 @@ impl Editor {
     };
 
     let total_lines = projection.lines.len();
-    let viewport_lines = (self.viewport_height / line_height).max(1.0);
-    let max_padding = (viewport_lines - 1.0).max(0.0);
-    let scroll_padding = (SCROLL_PADDING as f32).min(max_padding);
-    let max_scroll = (total_lines as f32 - viewport_lines + scroll_padding).max(0.0);
-
-    let target = (display_line as f32 - scroll_padding).max(0.0);
-    let target = target.min(max_scroll);
+    let metrics = self.vertical_scroll_metrics(line_height, total_lines);
+    let target = (display_line as f32 - metrics.scroll_padding)
+      .max(0.0)
+      .min(metrics.max_scroll);
     let start = self.scroll_offset_y;
     let delta = target - start;
     if delta.abs() <= REVIEW_COMMENT_SCROLL_MIN_DELTA {
@@ -4071,14 +4175,11 @@ impl Editor {
     self.set_projection(Some(projection));
 
     let total_lines = self.display_line_count(doc_line_count);
-    if total_lines == 0 {
-      self.scroll_offset_y = 0.0;
-    } else {
-      let max_scroll = (total_lines.saturating_sub(1)) as f32;
-      if self.scroll_offset_y > max_scroll {
-        self.scroll_offset_y = max_scroll;
-      }
-    }
+    self.scroll_offset_y = self.clamp_vertical_scroll(
+      self.scroll_offset_y,
+      self.measured_editor_line_height(),
+      total_lines,
+    );
 
     cx.notify();
   }
@@ -4674,6 +4775,7 @@ impl Editor {
     self.last_highlights_version = 0;
     self.last_highlights_epoch = 0;
     self.scroll_offset_y = 0.0;
+    self.reset_horizontal_scroll_state();
     cx.notify();
   }
 
@@ -5068,16 +5170,12 @@ impl Editor {
   }
 
   pub(crate) fn viewport_range(&self, line_height: Pixels, total_lines: usize) -> Range<usize> {
-    if total_lines == 0 {
-      return 0..0;
-    }
-    let mut visible_line_count = ((self.viewport_height / line_height).ceil() as usize).max(1);
-    if has_fractional_scroll(self.scroll_offset_y) {
-      visible_line_count += 1;
-    }
-    let start_line = (self.scroll_offset_y.floor() as usize).min(total_lines.saturating_sub(1));
-    let end_line = (start_line + visible_line_count).min(total_lines);
-    start_line..end_line
+    Self::viewport_range_for_height(
+      self.scroll_offset_y,
+      self.viewport_height,
+      line_height,
+      total_lines,
+    )
   }
 
   pub(crate) fn doc_range_for_display_viewport(&self, viewport: Range<usize>) -> Range<usize> {
@@ -5140,7 +5238,11 @@ impl Editor {
     doc_start..(doc_end + 1)
   }
 
-  pub(crate) fn ensure_cursor_visible(&mut self, _window: &Window, cx: &mut Context<Self>) {
+  fn ensure_cursor_visible_with_policy(
+    &mut self,
+    policy: CursorRevealPolicy,
+    cx: &mut Context<Self>,
+  ) {
     let document = self.document.read(cx);
     let cursor_offset = self.cursor_offset();
     let doc_line_count = document.len_lines();
@@ -5159,26 +5261,36 @@ impl Editor {
       (cursor_line, column, Some(cursor_doc_line))
     };
     let total_lines = self.display_line_count(doc_line_count);
-
-    // Calculate how many lines are visible in the viewport
     let line_height = self.measured_editor_line_height();
-    let viewport_lines = (self.viewport_height / line_height).max(1.0);
-    let max_padding = (viewport_lines - 1.0).max(0.0);
-    let scroll_padding = (SCROLL_PADDING as f32).min(max_padding);
+    let metrics = self.vertical_scroll_metrics(line_height, total_lines);
+    self.scroll_offset_y =
+      self.clamp_vertical_scroll(self.scroll_offset_y, line_height, total_lines);
 
     let cursor_line_f = cursor_line as f32;
     let cursor_top = cursor_line_f;
     let cursor_bottom = cursor_line_f + 1.0;
     let view_top = self.scroll_offset_y;
-    let view_bottom = view_top + viewport_lines;
-    let padded_top = view_top + scroll_padding;
-    let padded_bottom = view_bottom - scroll_padding;
+    let view_bottom = view_top + metrics.viewport_lines;
+    let padded_top = view_top + metrics.scroll_padding;
+    let padded_bottom = view_bottom - metrics.scroll_padding;
 
-    // Keep the cursor inside the padded viewport.
-    if cursor_top < padded_top {
-      self.scroll_offset_y = (cursor_top - scroll_padding).max(0.0);
-    } else if cursor_bottom > padded_bottom {
-      self.scroll_offset_y = (cursor_bottom + scroll_padding - viewport_lines).max(0.0);
+    match policy {
+      CursorRevealPolicy::WhenHidden => {
+        if cursor_top < view_top {
+          self.scroll_offset_y = (cursor_top - metrics.scroll_padding).max(0.0);
+        } else if cursor_bottom > view_bottom {
+          self.scroll_offset_y =
+            (cursor_bottom + metrics.scroll_padding - metrics.viewport_lines).max(0.0);
+        }
+      }
+      CursorRevealPolicy::WithPadding => {
+        if cursor_top < padded_top {
+          self.scroll_offset_y = (cursor_top - metrics.scroll_padding).max(0.0);
+        } else if cursor_bottom > padded_bottom {
+          self.scroll_offset_y =
+            (cursor_bottom + metrics.scroll_padding - metrics.viewport_lines).max(0.0);
+        }
+      }
     }
 
     // Ensure cursor is visible horizontally
@@ -5208,24 +5320,34 @@ impl Editor {
         let visible_start_x = -current_scroll_x;
         let visible_end_x = -current_scroll_x + viewport_width;
 
-        // Check if cursor is too far left
-        if cursor_x < visible_start_x + horizontal_padding {
-          let new_scroll_x =
-            self.clamp_horizontal_scroll_x(-(cursor_x - horizontal_padding).max(px(0.0)));
-          self.scroll_handle.set_offset(point(new_scroll_x, px(0.0)));
+        let needs_left_reveal = match policy {
+          CursorRevealPolicy::WhenHidden => cursor_x < visible_start_x,
+          CursorRevealPolicy::WithPadding => cursor_x < visible_start_x + horizontal_padding,
+        };
+        if needs_left_reveal {
+          self.set_horizontal_scroll_offset(-(cursor_x - horizontal_padding).max(px(0.0)));
         }
 
-        // Check if cursor is too far right
-        if cursor_x > visible_end_x - horizontal_padding {
-          let new_scroll_x =
-            self.clamp_horizontal_scroll_x(-(cursor_x - viewport_width + horizontal_padding));
-          self.scroll_handle.set_offset(point(new_scroll_x, px(0.0)));
+        let needs_right_reveal = match policy {
+          CursorRevealPolicy::WhenHidden => cursor_x > visible_end_x,
+          CursorRevealPolicy::WithPadding => cursor_x > visible_end_x - horizontal_padding,
+        };
+        if needs_right_reveal {
+          self.set_horizontal_scroll_offset(-(cursor_x - viewport_width + horizontal_padding));
         }
       }
     }
 
-    let max_scroll = (total_lines as f32 - viewport_lines + scroll_padding).max(0.0);
-    self.scroll_offset_y = self.scroll_offset_y.clamp(0.0, max_scroll);
+    self.scroll_offset_y =
+      self.clamp_vertical_scroll(self.scroll_offset_y, line_height, total_lines);
+  }
+
+  pub(crate) fn ensure_cursor_visible(&mut self, _window: &Window, cx: &mut Context<Self>) {
+    self.ensure_cursor_visible_with_policy(CursorRevealPolicy::WithPadding, cx);
+  }
+
+  fn ensure_cursor_visible_when_hidden(&mut self, cx: &mut Context<Self>) {
+    self.ensure_cursor_visible_with_policy(CursorRevealPolicy::WhenHidden, cx);
   }
 
   pub(crate) fn horizontal_viewport_width(&self) -> Pixels {
@@ -6644,7 +6766,8 @@ impl EntityInputHandler for Editor {
     self.record_transaction(transaction_id, selection_before, selection_after);
 
     self.is_dirty = true;
-    self.ensure_cursor_visible(window, cx);
+    let _ = window;
+    self.ensure_cursor_visible_when_hidden(cx);
     cx.notify();
     self.schedule_diff_recompute(cx);
   }
@@ -6723,7 +6846,8 @@ impl EntityInputHandler for Editor {
     self.selected_range = Self::clamp_range_to_len(selected_range, doc_len_after);
 
     self.is_dirty = true;
-    self.ensure_cursor_visible(window, cx);
+    let _ = window;
+    self.ensure_cursor_visible_when_hidden(cx);
     cx.notify();
     self.schedule_diff_recompute(cx);
   }
@@ -7926,6 +8050,37 @@ pub mod tests {
       end_gap: None,
       groups: HashMap::new(),
     })
+  }
+
+  fn projection_with_doc_lines(line_count: usize) -> Projection {
+    let mut lines = Vec::with_capacity(line_count);
+    let mut display_to_doc = Vec::with_capacity(line_count);
+    let mut doc_to_display = Vec::with_capacity(line_count);
+    let mut visible_doc_lines = Vec::with_capacity(line_count);
+
+    for line in 0..line_count {
+      lines.push(DisplayLine::Doc {
+        doc_line: line,
+        old_line: Some(line),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      });
+      display_to_doc.push(Some(line));
+      doc_to_display.push(Some(line));
+      visible_doc_lines.push(line);
+    }
+
+    Projection {
+      lines,
+      display_to_doc,
+      doc_to_display,
+      visible_doc_lines,
+      start_gap: None,
+      end_gap: None,
+      groups: HashMap::new(),
+    }
   }
 
   #[gpui::test]
@@ -9142,6 +9297,102 @@ pub mod tests {
       assert_eq!(editor.clamp_horizontal_scroll_x(px(48.0)), px(0.0));
       assert_eq!(editor.clamp_horizontal_scroll_x(px(-200.0)), px(-200.0));
       assert_eq!(editor.clamp_horizontal_scroll_x(px(-460.0)), px(-400.0));
+    });
+  }
+
+  #[gpui::test]
+  fn test_reset_after_replace_resets_horizontal_scroll_state(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "hello");
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.max_line_width = px(300.0);
+      editor.last_scroll_x = px(-120.0);
+      editor.scroll_handle.set_offset(point(px(-120.0), px(0.0)));
+
+      editor.reset_after_replace();
+
+      assert_eq!(editor.max_line_width, px(DEFAULT_MAX_LINE_WIDTH));
+      assert_eq!(editor.last_scroll_x, px(0.0));
+      assert_eq!(editor.scroll_handle.offset().x, px(0.0));
+    });
+  }
+
+  #[gpui::test]
+  fn test_viewport_range_clamps_invalid_scroll_offset(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 10);
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.viewport_height = px(100.0);
+      editor.editor_line_height = px(20.0);
+      editor.scroll_offset_y = 9.0;
+
+      assert_eq!(editor.viewport_range(px(20.0), 10), 8..10);
+    });
+  }
+
+  #[gpui::test]
+  fn test_apply_projection_result_clamps_to_viewport_scroll_limit(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 10);
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.viewport_height = px(100.0);
+      editor.editor_line_height = px(20.0);
+      editor.scroll_offset_y = 9.0;
+
+      editor.apply_projection_result(projection_with_doc_lines(10), 10, cx);
+
+      assert_eq!(editor.scroll_offset_y, 8.0);
+    });
+  }
+
+  #[gpui::test]
+  fn test_reveal_cursor_when_hidden_keeps_visible_cursor_stationary(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 12);
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.viewport_height = px(100.0);
+      editor.editor_line_height = px(20.0);
+      editor.scroll_offset_y = 2.0;
+
+      let line_start = editor.document().read(cx).line_to_char(2);
+      editor.move_to(line_start, cx);
+      editor.ensure_cursor_visible_when_hidden(cx);
+
+      assert_eq!(editor.scroll_offset_y, 2.0);
+    });
+  }
+
+  #[gpui::test]
+  fn test_reveal_cursor_when_hidden_restores_padding_once_offscreen(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 12);
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.viewport_height = px(100.0);
+      editor.editor_line_height = px(20.0);
+      editor.scroll_offset_y = 3.0;
+
+      let line_start = editor.document().read(cx).line_to_char(9);
+      editor.move_to(line_start, cx);
+      editor.ensure_cursor_visible_when_hidden(cx);
+
+      assert_eq!(editor.scroll_offset_y, 8.0);
+    });
+  }
+
+  #[gpui::test]
+  fn test_reveal_cursor_with_padding_keeps_navigation_margin(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 12);
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.viewport_height = px(100.0);
+      editor.editor_line_height = px(20.0);
+      editor.scroll_offset_y = 2.0;
+
+      let line_start = editor.document().read(cx).line_to_char(2);
+      editor.move_to(line_start, cx);
+      editor.ensure_cursor_visible_with_policy(CursorRevealPolicy::WithPadding, cx);
+
+      assert_eq!(editor.scroll_offset_y, 0.0);
     });
   }
 

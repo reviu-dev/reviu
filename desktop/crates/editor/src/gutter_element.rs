@@ -18,15 +18,10 @@ const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
 const DIAGONAL_STRIPE_WIDTH: f32 = 1.0;
 const PIXEL_SCROLL_DIVISOR: f32 = 20.0;
 const LINE_SCROLL_MULTIPLIER: f32 = 3.0;
-const FRACTIONAL_SCROLL_EPSILON: f32 = 0.001;
 const SCROLL_AXIS_RATIO: f32 = 1.1;
 const SCROLL_AXIS_SWITCH_RATIO: f32 = 1.4;
 const SCROLL_AXIS_TIMEOUT_MS: u64 = 150;
 const CONFLICT_MARKER_ALPHA_MULTIPLIER: f32 = 1.35;
-
-fn has_fractional_scroll(scroll_offset: f32) -> bool {
-  (scroll_offset - scroll_offset.floor()) > FRACTIONAL_SCROLL_EPSILON
-}
 
 fn line_y(
   bounds_top: Pixels,
@@ -229,14 +224,12 @@ impl Element for GutterElement {
       let scroll_hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
       let line_number_right_padding = editor.gutter_line_number_right_padding();
 
-      // Calculate viewport (same logic as EditorElement)
-      let mut visible_line_count = ((bounds.size.height / line_height).ceil() as usize).max(1);
-      if has_fractional_scroll(scroll_offset) {
-        visible_line_count += 1;
-      }
-      let start_line = (scroll_offset.floor() as usize).min(total_lines.saturating_sub(1));
-      let end_line = (start_line + visible_line_count).min(total_lines);
-      let viewport = start_line..end_line;
+      let viewport = Editor::viewport_range_for_height(
+        scroll_offset,
+        bounds.size.height,
+        line_height,
+        total_lines,
+      );
 
       let mut group_kinds = HashMap::new();
       let mut group_border_colors = HashMap::new();
@@ -762,28 +755,23 @@ impl Element for GutterElement {
           };
 
           if axis == ScrollAxis::Horizontal {
-            let new_scroll_x =
-              editor.clamp_horizontal_scroll_x(editor.scroll_handle.offset().x + delta_x_px);
-            editor
-              .scroll_handle
-              .set_offset(point(new_scroll_x, px(0.0)));
-            editor.last_scroll_x = new_scroll_x;
+            editor.set_horizontal_scroll_offset(editor.scroll_handle.offset().x + delta_x_px);
             cx.notify();
             return;
           }
 
-          let new_scroll = (editor.scroll_offset_y + delta_y)
-            .max(0.0)
-            .min((total_lines.saturating_sub(1)) as f32);
-
-          editor.scroll_offset_y = new_scroll;
+          editor.scroll_offset_y = Editor::clamp_vertical_scroll_for_height(
+            editor.scroll_offset_y + delta_y,
+            bounds.size.height,
+            line_height,
+            total_lines,
+          );
           let clamped_scroll_x = editor.clamp_horizontal_scroll_x(editor.last_scroll_x);
           if editor.scroll_handle.offset().x != clamped_scroll_x {
-            editor
-              .scroll_handle
-              .set_offset(point(clamped_scroll_x, px(0.0)));
+            editor.set_horizontal_scroll_offset(clamped_scroll_x);
+          } else {
+            editor.last_scroll_x = clamped_scroll_x;
           }
-          editor.last_scroll_x = clamped_scroll_x;
           let viewport = editor.viewport_range(line_height, total_lines);
           let doc_viewport = editor.doc_range_for_display_viewport(viewport.clone());
           editor.document.update(cx, |doc, cx| {
