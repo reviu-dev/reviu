@@ -3071,7 +3071,12 @@ impl GithubPrDetailsPage {
 
     if ix == PR_TAB_CHANGES_IX {
       self.sync_tree_selection(cx);
-      window.focus(&self.focus_handle, cx);
+      self.focus_changes_tree(window, cx);
+      cx.on_next_frame(window, |this, window, cx| {
+        if this.active_tab_ix == PR_TAB_CHANGES_IX {
+          this.focus_changes_tree(window, cx);
+        }
+      });
       return;
     }
 
@@ -3082,6 +3087,12 @@ impl GithubPrDetailsPage {
         });
       });
     }
+  }
+
+  fn focus_changes_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.tree_state.update(cx, |state, cx| {
+      state.focus(window, cx);
+    });
   }
 
   fn set_selected_file(&mut self, selected: Option<Rc<GithubPrFileDiff>>, cx: &mut Context<Self>) {
@@ -6575,6 +6586,17 @@ mod tests {
     GithubPullRequestReviewCommentUser, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
     GithubPullRequestState, GithubRepository,
   };
+  use crate::workspace::WorkspaceApi;
+  use gpui::TestAppContext;
+
+  fn init_gpui_test(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      gpui_component::init(cx);
+      if !cx.has_global::<WorkspaceApi>() {
+        cx.set_global(WorkspaceApi::new());
+      }
+    });
+  }
 
   fn make_api_file(
     filename: &str,
@@ -6610,6 +6632,40 @@ mod tests {
         avatar_url: None,
       }),
     }
+  }
+
+  #[gpui::test]
+  fn set_active_tab_changes_focuses_file_tree(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    let files = files_from_api(vec![
+      make_api_file("src/main.rs", "modified", None),
+      make_api_file("src/lib.rs", "modified", None),
+    ]);
+    let (items, lookup, selected_index, selected_id) = build_tree_items(&files);
+
+    page.update_in(cx, |this, window, cx| {
+      this.file_lookup = lookup;
+      this.selected_tree_id = selected_id.clone();
+      this.selected_file = selected_id
+        .as_ref()
+        .and_then(|id| this.file_lookup.get(id).cloned());
+      this.tree_state.update(cx, |state, cx| {
+        state.set_items(items, cx);
+        state.set_selected_index(selected_index, cx);
+      });
+
+      let external_focus = cx.focus_handle();
+      let page_focus = this.focus_handle.clone();
+      window.focus(&external_focus, cx);
+
+      this.set_active_tab(PR_TAB_CHANGES_IX, window, cx);
+
+      let focused = window.focused(cx).expect("changes tree should take focus");
+      assert_ne!(focused, external_focus);
+      assert_ne!(focused, page_focus);
+    });
   }
 
   fn make_issue_comment(id: u64, created_at: &str, body: &str) -> GithubPullRequestIssueComment {
