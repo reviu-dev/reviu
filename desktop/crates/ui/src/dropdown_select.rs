@@ -150,7 +150,13 @@ impl<T: Clone + PartialEq + 'static> DropdownSelectItem for DropdownSelectOption
             .child(prefix),
         )
       })
-      .child(div().flex_shrink_0().text_sm().child(self.label.clone()))
+      .child(
+        div()
+          .flex_shrink_0()
+          .text_sm()
+          .text_color(cx.theme().foreground)
+          .child(self.label.clone()),
+      )
       .into_any_element()
   }
 }

@@ -524,7 +524,12 @@ impl DropdownSelectItem for RecentRepoItem {
           .text_color(cx.theme().muted_foreground)
           .child(self.prefix.clone()),
       )
-      .child(div().flex_shrink().child(self.name.clone()))
+      .child(
+        div()
+          .flex_shrink()
+          .text_color(cx.theme().foreground)
+          .child(self.name.clone()),
+      )
       .into_any_element()
   }
 }
@@ -587,12 +592,13 @@ impl DropdownSelectItem for BranchSelectItem {
       .into_any_element()
   }
 
-  fn render_selected(&self, _window: &mut Window, _cx: &mut App) -> AnyElement {
+  fn render_selected(&self, _window: &mut Window, cx: &mut App) -> AnyElement {
     div()
       .min_w_0()
       .flex_1()
       .overflow_hidden()
       .text_sm()
+      .text_color(cx.theme().foreground)
       .text_ellipsis()
       .child(self.label.clone())
       .into_any_element()
