@@ -784,7 +784,10 @@ async function fetchPullRequestReviewsWithCache(
 
         const reviews = response.data!
           .map(mapGithubPullRequestReview)
-          .filter(review => review.state === 'APPROVED' || review.state === 'CHANGES_REQUESTED')
+          .filter(review =>
+            review.state === 'APPROVED'
+            || review.state === 'CHANGES_REQUESTED'
+            || review.state === 'COMMENTED')
 
         return {
           payload: reviews,
