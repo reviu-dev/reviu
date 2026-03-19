@@ -12,6 +12,7 @@ icon = ["assets/reviu.icns"]
 [dependencies]
 editor = { workspace = true }
 gpui = { workspace = true }
+gpui_platform = { workspace = true }
 gpui-component = { workspace = true }
 gpui-component-assets = { workspace = true }
 ui = { workspace = true }

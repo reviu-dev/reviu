@@ -3960,7 +3960,9 @@ mod tests {
         .artifact
         .as_ref()
         .map(|artifact| artifact.url.as_str()),
-      Some("https://api.reviu.dev/desktop/update/download/release/v0.2.0/Reviu-0.2.0-macos-aarch64.dmg")
+      Some(
+        "https://api.reviu.dev/desktop/update/download/release/v0.2.0/Reviu-0.2.0-macos-aarch64.dmg"
+      )
     );
     handle.join().expect("join server thread");
   }

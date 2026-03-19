@@ -509,7 +509,7 @@ impl BillingPage {
       )
       .child(
         Button::new("billing-sign-in")
-          .icon(IconName::GitHub)
+          .icon(IconName::Github)
           .label("Sign in with GitHub")
           .small()
           .on_click(|_, _, cx| {
