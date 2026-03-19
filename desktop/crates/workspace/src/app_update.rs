@@ -11,6 +11,8 @@ use gpui::{App, Global};
 use reqwest::blocking::Client;
 use sha2::{Digest, Sha256};
 
+use crate::AppProfile;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpdateArtifact {
   pub url: String,
@@ -266,7 +268,11 @@ pub fn open_installer(artifact_path: &Path) -> Result<()> {
 
 fn updates_directory() -> Result<PathBuf> {
   let base = config_dir().context("missing system config directory")?;
-  Ok(base.join("reviu").join("updates"))
+  Ok(updates_directory_for_profile(base, AppProfile::current()))
+}
+
+fn updates_directory_for_profile(base: PathBuf, profile: AppProfile) -> PathBuf {
+  base.join(profile.storage_dir_name()).join("updates")
 }
 
 fn artifact_file_name(update: &AvailableAppUpdate) -> String {
@@ -376,5 +382,19 @@ mod tests {
       AppUpdateStore::clear_available_update(cx);
       assert!(AppUpdateStore::try_state(cx).is_none());
     });
+  }
+
+  #[test]
+  fn updates_directory_uses_profile_namespace() {
+    let base = PathBuf::from("/tmp/reviu-updates");
+
+    assert_eq!(
+      updates_directory_for_profile(base.clone(), AppProfile::Prod),
+      PathBuf::from("/tmp/reviu-updates/reviu/updates")
+    );
+    assert_eq!(
+      updates_directory_for_profile(base, AppProfile::Dev),
+      PathBuf::from("/tmp/reviu-updates/reviu.dev/updates")
+    );
   }
 }

@@ -6,11 +6,12 @@ use gpui::{
   Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, IconName, Sizable as _, StyledExt, Theme, ThemeMode,
-  notification::Notification,
+  ActiveTheme as _, Disableable, IconName, Sizable as _, Theme, ThemeMode,
+  notification::Notification, tag::Tag,
 };
 use smol::unblock;
 
+use crate::AppProfile;
 use crate::AuthCallbackTarget;
 use crate::about_page::AboutPage;
 use crate::api::ApiClient;
@@ -575,15 +576,13 @@ impl WorkspaceView {
       right = right.child(auth_control);
     }
 
-    bar
-      .child(
-        div()
-          .text_sm()
-          .font_medium()
-          .text_color(theme.foreground)
-          .child("Reviu"),
-      )
-      .child(right)
+    let left = if let Some(label) = AppProfile::current().header_tag_label() {
+      div().child(Tag::secondary().small().rounded_full().child(label))
+    } else {
+      div()
+    };
+
+    bar.child(left).child(right)
   }
 }
 

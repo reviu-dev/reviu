@@ -4,6 +4,7 @@ actions!(workspace, [CloseWorkspacePage]);
 
 mod about_page;
 mod api;
+mod app_profile;
 mod app_update;
 mod auth_state;
 mod billing_page;
@@ -23,6 +24,7 @@ mod sentry_context;
 mod settings_page;
 mod workspace;
 
+pub use app_profile::AppProfile;
 pub use git_page::{
   AuthCallbackTarget, CommitChanges, OpenRepository, SaveFile, ShowCommandPalette, ShowFileSearch,
 };

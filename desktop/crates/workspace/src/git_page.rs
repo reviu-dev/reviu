@@ -26,7 +26,7 @@ use gpui::{
   SharedString, Styled, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable,
+  ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable, StyledExt,
   alert::Alert,
   button::{Button, ButtonGroup, ButtonVariant, ButtonVariants as _},
   h_flex,
@@ -76,6 +76,10 @@ const HISTORY_MAX_COMMITS: usize = 200;
 const HISTORY_AUTHOR_MAX_WIDTH: f32 = 180.0;
 const DETACHED_BRANCH_SELECT_SENTINEL: &str = "__reviu_detached_head__";
 const TRIGGER_DROPDOWN_SELECT_WIDTH: f32 = 350.0;
+const EMPTY_REPOSITORY_TITLE: &str = "Select a repository";
+const EMPTY_REPOSITORY_HINT_PREFIX: &str = "Press";
+const EMPTY_REPOSITORY_HINT_SUFFIX: &str = "to add a repository.";
+const EMPTY_REPOSITORY_ACTION_LABEL: &str = "Add Repository";
 
 type RepoSelectHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 type BranchSelectHandler = Rc<dyn Fn(BranchRef, &mut Window, &mut App)>;
@@ -5184,6 +5188,59 @@ impl GitPage {
       .into_any_element()
   }
 
+  fn open_repository_shortcut() -> Keystroke {
+    Keystroke::parse("cmd-o").expect("valid open repository shortcut")
+  }
+
+  fn should_render_repository_split(selected_repo: Option<&Path>) -> bool {
+    selected_repo.is_some()
+  }
+
+  fn render_repository_empty_state(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    div()
+      .size_full()
+      .flex()
+      .bg(theme.background)
+      .items_center()
+      .justify_center()
+      .child(
+        div()
+          .id("git-repository-empty-state")
+          .flex()
+          .flex_col()
+          .items_center()
+          .gap_3()
+          .child(
+            div()
+              .text_base()
+              .font_medium()
+              .text_color(theme.foreground)
+              .child(EMPTY_REPOSITORY_TITLE),
+          )
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child(EMPTY_REPOSITORY_HINT_PREFIX)
+              .child(Kbd::new(Self::open_repository_shortcut()))
+              .child(EMPTY_REPOSITORY_HINT_SUFFIX),
+          )
+          .child(
+            Button::new("git-empty-state-open-repository")
+              .label(EMPTY_REPOSITORY_ACTION_LABEL)
+              .icon(IconName::FolderOpen)
+              .with_variant(ButtonVariant::Secondary)
+              .on_click(cx.listener(move |this, _, window, cx| {
+                this.start_open_repository(window, cx);
+              })),
+          ),
+      )
+      .into_any_element()
+  }
+
   fn render_loading_state(&self, message: &str, cx: &mut Context<Self>) -> AnyElement {
     let message = message.to_string();
     let theme = cx.theme().clone();
@@ -6141,7 +6198,7 @@ impl GitPage {
 
   fn render_editor_area(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     if self.selected_repo.is_none() {
-      return self.render_empty_state("Select a repository to view changes", cx);
+      return self.render_repository_empty_state(cx);
     }
 
     if let Some(todo_view) = self.interactive_rebase_todo_view.clone() {
@@ -6245,6 +6302,20 @@ impl GitPage {
 
 impl Render for GitPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let content = if Self::should_render_repository_split(self.selected_repo.as_deref()) {
+      ui::h_resizable("git-page-split")
+        .child(
+          ui::resizable_panel()
+            .size(px(SIDEBAR_DEFAULT_WIDTH))
+            .size_range(px(SIDEBAR_MIN_WIDTH)..px(SIDEBAR_MAX_WIDTH))
+            .child(self.render_sidebar(window, cx)),
+        )
+        .child(ui::resizable_panel().child(self.render_editor_area(window, cx)))
+        .into_any_element()
+    } else {
+      self.render_repository_empty_state(cx)
+    };
+
     div()
       .size_full()
       .flex()
@@ -6258,16 +6329,7 @@ impl Render for GitPage {
       .on_action(cx.listener(GitPage::open_repository_action))
       .on_action(cx.listener(GitPage::commit_changes_action))
       .child(self.render_header(window, cx))
-      .child(
-        ui::h_resizable("git-page-split")
-          .child(
-            ui::resizable_panel()
-              .size(px(SIDEBAR_DEFAULT_WIDTH))
-              .size_range(px(SIDEBAR_MIN_WIDTH)..px(SIDEBAR_MAX_WIDTH))
-              .child(self.render_sidebar(window, cx)),
-          )
-          .child(ui::resizable_panel().child(self.render_editor_area(window, cx))),
-      )
+      .child(content)
   }
 }
 
@@ -11623,6 +11685,24 @@ mod tests {
       true
     ));
     assert!(!GitPage::should_show_editor_loading_state(None, false));
+  }
+
+  #[test]
+  fn repository_split_is_hidden_when_no_repo_is_selected() {
+    assert!(!GitPage::should_render_repository_split(None));
+    assert!(GitPage::should_render_repository_split(Some(Path::new(
+      "/tmp/reviu-selected-repo"
+    ))));
+  }
+
+  #[test]
+  fn repository_empty_state_uses_expected_copy_and_shortcut() {
+    assert_eq!(EMPTY_REPOSITORY_TITLE, "Select a repository");
+    assert_eq!(EMPTY_REPOSITORY_ACTION_LABEL, "Add Repository");
+    assert_eq!(
+      GitPage::open_repository_shortcut(),
+      Keystroke::parse("cmd-o").expect("valid shortcut")
+    );
   }
 
   #[test]
