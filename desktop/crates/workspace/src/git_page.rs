@@ -6279,26 +6279,30 @@ impl GitPage {
           .child(
             div().flex_1().min_h_0().child(
               ui::h_resizable("git-page-markdown-preview")
-                .child(ui::resizable_panel().child(
-                  div()
-                    .size_full()
-                    .min_w(px(0.0))
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .debug_selector(|| GIT_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR.to_string())
-                    .child(editor_view),
-                ))
-                .child(ui::resizable_panel().child(
-                  div()
-                    .size_full()
-                    .min_w(px(0.0))
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .debug_selector(|| GIT_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR.to_string())
-                    .child(preview_content),
-                )),
+                .child(
+                  ui::resizable_panel().child(
+                    div()
+                      .size_full()
+                      .min_w(px(0.0))
+                      .min_h_0()
+                      .flex()
+                      .flex_col()
+                      .debug_selector(|| GIT_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR.to_string())
+                      .child(editor_view),
+                  ),
+                )
+                .child(
+                  ui::resizable_panel().child(
+                    div()
+                      .size_full()
+                      .min_w(px(0.0))
+                      .min_h_0()
+                      .flex()
+                      .flex_col()
+                      .debug_selector(|| GIT_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR.to_string())
+                      .child(preview_content),
+                  ),
+                ),
             ),
           )
           .into_any_element();
