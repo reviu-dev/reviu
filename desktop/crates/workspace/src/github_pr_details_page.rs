@@ -53,10 +53,12 @@ use ui::{
 use crate::{
   ShowCommandPalette, ShowFileSearch,
   api::{
-    ApiClient, GithubIssueDetailsComment, GithubPullRequestCommit,
+    ApiClient, ApiError, GithubIssueDetailsComment, GithubPullRequestCommit,
     GithubPullRequestDescriptionUpdate, GithubPullRequestDetails, GithubPullRequestFile,
-    GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser, GithubPullRequestReview,
-    GithubPullRequestReviewComment, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
+    GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser, GithubPullRequestMergeMethod,
+    GithubPullRequestMergeReadiness, GithubPullRequestMergeReadinessStatus,
+    GithubPullRequestMergeResult, GithubPullRequestReview, GithubPullRequestReviewComment,
+    GithubPullRequestReviewEvent, GithubPullRequestReviewState,
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_compact_datetime, format_long_date},
@@ -80,6 +82,8 @@ const PR_TAB_CHANGES_IX: usize = 1;
 const PR_TAB_COMMITS_IX: usize = 2;
 const PR_COMMIT_SELECT_WIDTH: f32 = 260.0;
 const PR_COMMIT_SELECT_MENU_WIDTH: f32 = 420.0;
+const PR_MERGE_POPOVER_WIDTH: f32 = 520.0;
+const PR_MERGE_MESSAGE_INPUT_HEIGHT_PX: f32 = 100.0;
 const PR_REVIEW_POPOVER_WIDTH: f32 = 500.0;
 const PR_REVIEW_INPUT_HEIGHT_PX: f32 = 100.0;
 const OVERVIEW_COMMENT_INPUT_HEIGHT_PX: f32 = 100.0;
@@ -202,6 +206,18 @@ enum GithubPrReviewDecision {
   Comment,
   Approve,
   RequestChanges,
+}
+
+fn merge_method_label(method: GithubPullRequestMergeMethod) -> &'static str {
+  match method {
+    GithubPullRequestMergeMethod::Merge => "Create a merge commit",
+    GithubPullRequestMergeMethod::Squash => "Squash and merge",
+    GithubPullRequestMergeMethod::Rebase => "Rebase and merge",
+  }
+}
+
+fn merge_method_supports_commit_message(method: GithubPullRequestMergeMethod) -> bool {
+  !matches!(method, GithubPullRequestMergeMethod::Rebase)
 }
 
 #[derive(Clone, Debug)]
@@ -1186,6 +1202,18 @@ pub struct GithubPrDetailsPage {
   commit_lookup: HashMap<String, GithubPullRequestCommit>,
   commits_list: Entity<ListState<GithubPrCommitListDelegate>>,
   selected_commit_sha: Option<String>,
+  merge_readiness_task: Option<Task<()>>,
+  merge_readiness_loading: bool,
+  merge_readiness_error: Option<SharedString>,
+  merge_readiness: Option<GithubPullRequestMergeReadiness>,
+  merge_popover_open: bool,
+  merge_form_reset_pending: bool,
+  merge_method: GithubPullRequestMergeMethod,
+  merge_commit_title_input: Entity<InputState>,
+  merge_commit_message_input: Entity<InputState>,
+  merge_submit_task: Option<Task<()>>,
+  merge_submit_loading: bool,
+  merge_submit_error: Option<SharedString>,
   review_input: Entity<InputState>,
   review_decision: GithubPrReviewDecision,
   review_popover_open: bool,
@@ -1500,6 +1528,14 @@ impl GithubPrDetailsPage {
     let tree_state = cx.new(|cx| TreeState::new(cx));
     let commits_list = cx.new(|cx| ListState::new(GithubPrCommitListDelegate::new(), window, cx));
     let diff_editor = Self::build_detached_diff_editor("__reviu_github_pr_placeholder__.diff", cx);
+    let merge_commit_title_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Commit title (optional)"));
+    let merge_commit_message_input = cx.new(|cx| {
+      InputState::new(window, cx)
+        .multi_line(true)
+        .rows(5)
+        .placeholder("Commit message (optional)")
+    });
     let review_input = cx.new(|cx| {
       InputState::new(window, cx)
         .multi_line(true)
@@ -1527,6 +1563,18 @@ impl GithubPrDetailsPage {
       commit_lookup: HashMap::new(),
       commits_list,
       selected_commit_sha: None,
+      merge_readiness_task: None,
+      merge_readiness_loading: false,
+      merge_readiness_error: None,
+      merge_readiness: None,
+      merge_popover_open: false,
+      merge_form_reset_pending: true,
+      merge_method: GithubPullRequestMergeMethod::Merge,
+      merge_commit_title_input,
+      merge_commit_message_input,
+      merge_submit_task: None,
+      merge_submit_loading: false,
+      merge_submit_error: None,
       review_input,
       review_decision: GithubPrReviewDecision::default(),
       review_popover_open: false,
@@ -1609,6 +1657,208 @@ impl GithubPrDetailsPage {
       }),
       _ => None,
     }
+  }
+
+  fn mark_merge_form_reset_pending(&mut self) {
+    self.merge_form_reset_pending = true;
+    self.merge_submit_error = None;
+  }
+
+  fn sync_merge_method_with_readiness(&mut self) {
+    let Some(readiness) = self.merge_readiness.as_ref() else {
+      return;
+    };
+
+    let method_available = readiness
+      .available_methods
+      .iter()
+      .any(|method| *method == self.merge_method);
+
+    if !method_available {
+      self.merge_method = readiness
+        .default_method
+        .or_else(|| readiness.available_methods.first().copied())
+        .unwrap_or(GithubPullRequestMergeMethod::Merge);
+    }
+  }
+
+  fn reset_merge_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.merge_form_reset_pending = false;
+    self.sync_merge_method_with_readiness();
+    self.merge_submit_error = None;
+    self.merge_commit_title_input.update(cx, |input, cx| {
+      input.set_value("", window, cx);
+    });
+    self.merge_commit_message_input.update(cx, |input, cx| {
+      input.set_value("", window, cx);
+    });
+  }
+
+  fn selected_merge_method(&self) -> Option<GithubPullRequestMergeMethod> {
+    self.merge_readiness.as_ref().and_then(|readiness| {
+      readiness
+        .available_methods
+        .iter()
+        .any(|method| *method == self.merge_method)
+        .then_some(self.merge_method)
+    })
+  }
+
+  fn current_open_target(&self) -> GithubPrOpenTarget {
+    GithubPrOpenTarget::new(self.active_tab_ix == PR_TAB_CHANGES_IX, None)
+  }
+
+  fn is_pull_request_merged(&self) -> bool {
+    self
+      .pull_request
+      .as_ref()
+      .is_some_and(|pull_request| pull_request.merged_at.is_some())
+  }
+
+  fn reload_merge_readiness_for_current_pull_request(&mut self, cx: &mut Context<Self>) {
+    let Some(context) = self.current_pr_context.as_ref().cloned() else {
+      return;
+    };
+    self.fetch_merge_readiness_for_context(context.owner, context.repo, context.number, cx);
+  }
+
+  fn reload_current_pull_request(&mut self, cx: &mut Context<Self>) {
+    let Some(context) = self.current_pr_context.as_ref().cloned() else {
+      return;
+    };
+    let active_tab_ix = self.active_tab_ix;
+    let open_target = self.current_open_target();
+    self.load_pull_request(context.owner, context.repo, context.number, open_target, cx);
+    self.active_tab_ix = active_tab_ix;
+  }
+
+  fn fetch_merge_readiness_for_context(
+    &mut self,
+    owner: String,
+    repo: String,
+    number: u64,
+    cx: &mut Context<Self>,
+  ) {
+    self.merge_readiness_loading = true;
+    self.merge_readiness_error = None;
+    self.merge_readiness = None;
+    let merge_api = self.api.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || merge_api.fetch_pull_request_merge_readiness(&owner, &repo, number)).await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(readiness) => {
+            this.merge_readiness_loading = false;
+            this.merge_readiness_error = None;
+            this.merge_readiness = Some(readiness);
+            this.sync_merge_method_with_readiness();
+            this.add_pr_breadcrumb("Load PR merge readiness succeeded", Map::new());
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.merge_readiness_loading = false;
+            this.merge_readiness_error = Some(error_message.clone().into());
+            this.merge_readiness = None;
+            this.add_pr_breadcrumb("Load PR merge readiness failed", Map::new());
+            this.record_pr_error(
+              "github.pr.merge_readiness",
+              error_message.as_str(),
+              Map::new(),
+            );
+          }
+        }
+        cx.notify();
+      });
+    });
+    self.merge_readiness_task = Some(task);
+  }
+
+  fn submit_pull_request_merge(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    if self.merge_submit_loading {
+      return;
+    }
+
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      self.merge_submit_error = Some("No pull request selected".into());
+      return;
+    };
+
+    let Some(readiness) = self.merge_readiness.as_ref() else {
+      self.merge_submit_error = Some("Merge readiness is not available yet.".into());
+      return;
+    };
+
+    let Some(method) = self.selected_merge_method() else {
+      self.merge_submit_error = Some("No merge method is available.".into());
+      return;
+    };
+
+    if !readiness.can_merge_now {
+      self.merge_submit_error = Some(readiness.message.clone().into());
+      return;
+    }
+
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let expected_head_sha = readiness.current_head_sha.clone();
+    let commit_title = self.merge_commit_title_input.read(cx).value().to_string();
+    let commit_message = self.merge_commit_message_input.read(cx).value().to_string();
+    let api = self.api.clone();
+    self.merge_submit_loading = true;
+    self.merge_submit_error = None;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.merge_pull_request(
+          &owner,
+          &repo,
+          number,
+          method,
+          &expected_head_sha,
+          Some(commit_title.as_str()),
+          Some(commit_message.as_str()),
+        )
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.merge_submit_loading = false;
+        match result {
+          Ok(GithubPullRequestMergeResult { merged: true, .. }) => {
+            this.merge_popover_open = false;
+            this.mark_merge_form_reset_pending();
+            this.add_pr_breadcrumb("Merge pull request succeeded", Map::new());
+            this.reload_current_pull_request(cx);
+            if AuthStateStore::has_pro_access(cx) {
+              GithubPageHandle::refresh(cx);
+            }
+            cx.refresh_windows();
+          }
+          Ok(result) => {
+            this.merge_submit_error = Some(result.message.into());
+          }
+          Err(error) => {
+            let should_reload_merge_readiness = error
+              .downcast_ref::<ApiError>()
+              .and_then(ApiError::status_code_u16)
+              .is_some_and(|status| status == 405 || status == 409);
+            let error_message = error.to_string();
+            this.merge_submit_error = Some(error_message.clone().into());
+            this.add_pr_breadcrumb("Merge pull request failed", Map::new());
+            this.record_pr_error("github.pr.merge", error_message.as_str(), Map::new());
+            if should_reload_merge_readiness {
+              this.reload_merge_readiness_for_current_pull_request(cx);
+            }
+          }
+        }
+        cx.notify();
+      });
+    });
+
+    self.merge_submit_task = Some(task);
   }
 
   fn is_current_user_pr_author(&self, cx: &App) -> bool {
@@ -4016,6 +4266,14 @@ impl GithubPrDetailsPage {
     self.commits.clear();
     self.commit_lookup.clear();
     self.selected_commit_sha = None;
+    self.merge_readiness_task = None;
+    self.merge_readiness_loading = true;
+    self.merge_readiness_error = None;
+    self.merge_readiness = None;
+    self.merge_popover_open = false;
+    self.merge_submit_task = None;
+    self.merge_submit_loading = false;
+    self.mark_merge_form_reset_pending();
     self.review_popover_open = false;
     self.mark_review_form_reset_pending();
     self.submit_review_task = None;
@@ -4256,6 +4514,7 @@ impl GithubPrDetailsPage {
     self.reviews_task = Some(reviews_task);
     self.review_comments_task = Some(review_comments_task);
     self.commits_task = Some(commits_task);
+    self.fetch_merge_readiness_for_context(owner.clone(), repo.clone(), number, cx);
     self.fetch_pull_request_files_for_context(owner, repo, number, cx);
   }
 
@@ -4274,6 +4533,204 @@ impl GithubPrDetailsPage {
         GithubRepoPageHandle::show(owner.clone(), repo.clone(), cx);
       }
     }
+  }
+
+  fn render_merge_popover(
+    &mut self,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let merge_readiness = self.merge_readiness.clone();
+    let merge_status = merge_readiness
+      .as_ref()
+      .map(|readiness| readiness.status)
+      .unwrap_or(GithubPullRequestMergeReadinessStatus::Checking);
+    let available_methods = merge_readiness
+      .as_ref()
+      .map(|readiness| readiness.available_methods.clone())
+      .unwrap_or_default();
+    let selected_method = self.selected_merge_method();
+    let selected_method_index = selected_method.and_then(|method| {
+      available_methods
+        .iter()
+        .position(|candidate| *candidate == method)
+    });
+    let can_submit_merge = self.merge_readiness.as_ref().is_some_and(|readiness| {
+      readiness.can_merge_now
+        && readiness
+          .available_methods
+          .iter()
+          .any(|method| Some(*method) == selected_method)
+    });
+    let show_commit_fields = selected_method.is_some_and(merge_method_supports_commit_message);
+    let merge_button_disabled = self.pull_request.is_none();
+    let merge_message = self
+      .merge_submit_error
+      .clone()
+      .or_else(|| self.merge_readiness_error.clone())
+      .or_else(|| {
+        merge_readiness
+          .as_ref()
+          .map(|readiness| readiness.message.clone().into())
+      });
+
+    Popover::new("pr-merge-popover")
+      .anchor(Corner::TopRight)
+      .w(px(PR_MERGE_POPOVER_WIDTH))
+      .open(self.merge_popover_open)
+      .on_open_change(cx.listener(|this, open, window, cx| {
+        this.merge_popover_open = *open;
+        if *open && this.merge_form_reset_pending {
+          this.reset_merge_form(window, cx);
+        }
+        cx.notify();
+      }))
+      .trigger(
+        Button::new("pr-merge-button")
+          .label("Merge")
+          .with_variant(ButtonVariant::Secondary)
+          .outline()
+          .icon(UiIconName::GitMerge)
+          .small()
+          .disabled(merge_button_disabled),
+      )
+      .child(
+        v_flex()
+          .id("pr-merge-popover-content")
+          .w_full()
+          .gap_3()
+          .child(
+            div()
+              .text_sm()
+              .font_medium()
+              .text_color(theme.foreground)
+              .child("Merge pull request"),
+          )
+          .when(self.merge_readiness_loading && self.merge_readiness.is_none(), |this| {
+            this.child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .child(Spinner::new().small())
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("Checking merge readiness..."),
+                ),
+            )
+          })
+          .when(
+            !available_methods.is_empty()
+              && matches!(
+                merge_status,
+                GithubPullRequestMergeReadinessStatus::Ready
+                  | GithubPullRequestMergeReadinessStatus::Blocked
+              ),
+            |this| {
+              let methods_for_click = available_methods.clone();
+              let mut group = RadioGroup::vertical("pr-merge-method-group")
+                .selected_index(selected_method_index)
+                .on_click(cx.listener(move |this, index: &usize, _, cx| {
+                  if let Some(method) = methods_for_click.get(*index).copied() {
+                    this.merge_method = method;
+                    this.merge_submit_error = None;
+                    cx.notify();
+                  }
+                }));
+
+              for method in &available_methods {
+                let id = match method {
+                  GithubPullRequestMergeMethod::Merge => "pr-merge-method-merge",
+                  GithubPullRequestMergeMethod::Squash => "pr-merge-method-squash",
+                  GithubPullRequestMergeMethod::Rebase => "pr-merge-method-rebase",
+                };
+                group = group.child(Radio::new(id).label(merge_method_label(*method)));
+              }
+
+              this
+                .child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Choose how GitHub should merge this pull request."),
+                )
+                .child(group)
+            },
+          )
+          .when(show_commit_fields, |this| {
+            this
+              .child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child("Leave the fields empty to let GitHub generate the default commit title and message."),
+              )
+              .child(
+                div()
+                  .w_full()
+                  .debug_selector(|| "github-pr-merge-title-input".to_string())
+                  .child(Input::new(&self.merge_commit_title_input).w_full()),
+              )
+              .child(
+                div()
+                  .w_full()
+                  .debug_selector(|| "github-pr-merge-message-input".to_string())
+                  .child(
+                    Input::new(&self.merge_commit_message_input)
+                      .w_full()
+                      .h(px(PR_MERGE_MESSAGE_INPUT_HEIGHT_PX)),
+                  ),
+              )
+          })
+          .when_some(merge_message, |this, message| {
+            let color = if self.merge_submit_error.is_some() || self.merge_readiness_error.is_some()
+            {
+              theme.status_red()
+            } else if matches!(merge_status, GithubPullRequestMergeReadinessStatus::Ready) {
+              theme.muted_foreground
+            } else {
+              theme.status_orange()
+            };
+
+            this.child(
+              div()
+                .text_xs()
+                .text_color(color)
+                .child(message),
+            )
+          })
+          .child(
+            h_flex()
+              .items_center()
+              .justify_end()
+              .gap_2()
+              .child(
+                Button::new("pr-merge-cancel")
+                  .ghost()
+                  .small()
+                  .label("Cancel")
+                  .disabled(self.merge_submit_loading)
+                  .on_click(cx.listener(|this, _, window, cx| {
+                    this.merge_popover_open = false;
+                    this.reset_merge_form(window, cx);
+                    cx.notify();
+                  })),
+              )
+              .child(
+                Button::new("pr-merge-submit")
+                  .primary()
+                  .small()
+                  .label("Merge pull request")
+                  .loading(self.merge_submit_loading)
+                  .disabled(!can_submit_merge)
+                  .on_click(cx.listener(|this, _, window, cx| {
+                    this.submit_pull_request_merge(window, cx);
+                  })),
+              ),
+          ),
+      )
+      .into_any_element()
   }
 
   fn render_review_popover(
@@ -4493,7 +4950,19 @@ impl GithubPrDetailsPage {
     let right_area = h_flex()
       .items_center()
       .gap_2()
-      .child(self.render_review_popover(&theme, cx));
+      .when(!self.is_pull_request_merged(), |this| {
+        this
+          .child(
+            div()
+              .debug_selector(|| "github-pr-merge-button".to_string())
+              .child(self.render_merge_popover(&theme, cx)),
+          )
+          .child(
+            div()
+              .debug_selector(|| "github-pr-review-button".to_string())
+              .child(self.render_review_popover(&theme, cx)),
+          )
+      });
 
     div()
       .px_3()
@@ -6619,9 +7088,11 @@ mod tests {
   use crate::api::{
     GithubPullRequestCommit, GithubPullRequestCommitUser, GithubPullRequestDescriptionUpdate,
     GithubPullRequestDetails, GithubPullRequestFile, GithubPullRequestIssueComment,
-    GithubPullRequestIssueCommentUser, GithubPullRequestReview, GithubPullRequestReviewComment,
-    GithubPullRequestReviewCommentUser, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
-    GithubPullRequestState, GithubRepository,
+    GithubPullRequestIssueCommentUser, GithubPullRequestMergeMethod,
+    GithubPullRequestMergeReadiness, GithubPullRequestMergeReadinessStatus,
+    GithubPullRequestReview, GithubPullRequestReviewComment, GithubPullRequestReviewCommentUser,
+    GithubPullRequestReviewEvent, GithubPullRequestReviewState, GithubPullRequestState,
+    GithubRepository,
   };
   use crate::workspace::WorkspaceApi;
   use gpui::TestAppContext;
@@ -6671,6 +7142,44 @@ mod tests {
         login: "octocat".to_string(),
         avatar_url: None,
       }),
+    }
+  }
+
+  fn make_merge_readiness(
+    status: GithubPullRequestMergeReadinessStatus,
+    methods: Vec<GithubPullRequestMergeMethod>,
+  ) -> GithubPullRequestMergeReadiness {
+    GithubPullRequestMergeReadiness {
+      status,
+      message: match status {
+        GithubPullRequestMergeReadinessStatus::Ready => {
+          "This pull request is ready to merge.".to_string()
+        }
+        GithubPullRequestMergeReadinessStatus::Blocked => {
+          "This pull request is blocked by required checks.".to_string()
+        }
+        GithubPullRequestMergeReadinessStatus::Checking => {
+          "GitHub is still computing whether this pull request can be merged.".to_string()
+        }
+        GithubPullRequestMergeReadinessStatus::Forbidden => {
+          "You do not have permission to merge this pull request.".to_string()
+        }
+        GithubPullRequestMergeReadinessStatus::Draft => {
+          "This pull request is still marked as a draft.".to_string()
+        }
+        GithubPullRequestMergeReadinessStatus::Closed => "This pull request is closed.".to_string(),
+        GithubPullRequestMergeReadinessStatus::Merged => {
+          "This pull request has already been merged.".to_string()
+        }
+      },
+      current_head_sha: "head123".to_string(),
+      default_method: methods.first().copied(),
+      can_merge_now: status == GithubPullRequestMergeReadinessStatus::Ready && !methods.is_empty(),
+      viewer_can_merge: true,
+      mergeable_state: Some("clean".to_string()),
+      rebaseable: Some(true),
+      auto_merge_enabled: false,
+      available_methods: methods,
     }
   }
 
@@ -6752,6 +7261,48 @@ mod tests {
     assert!(editor_bounds.height > gpui::px(0.0));
     assert!(preview_bounds.width > gpui::px(0.0));
     assert!(preview_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  fn merge_button_renders_for_loaded_pull_request(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.merge_readiness = Some(make_merge_readiness(
+        GithubPullRequestMergeReadinessStatus::Ready,
+        vec![GithubPullRequestMergeMethod::Merge],
+      ));
+      cx.notify();
+    });
+
+    let button_bounds = cx
+      .debug_bounds("github-pr-merge-button")
+      .expect("merge button bounds")
+      .size;
+    assert!(button_bounds.width > gpui::px(0.0));
+    assert!(button_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  fn merge_and_review_buttons_do_not_render_for_merged_pull_request(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      let mut pull_request = make_pr_details_for_stats();
+      pull_request.merged_at = Some("2026-03-19T21:20:00Z".to_string());
+      this.pull_request = Some(pull_request);
+      this.merge_readiness = Some(make_merge_readiness(
+        GithubPullRequestMergeReadinessStatus::Merged,
+        vec![],
+      ));
+      cx.notify();
+    });
+
+    assert!(cx.debug_bounds("github-pr-merge-button").is_none());
+    assert!(cx.debug_bounds("github-pr-review-button").is_none());
   }
 
   fn make_issue_comment(id: u64, created_at: &str, body: &str) -> GithubPullRequestIssueComment {
@@ -7212,6 +7763,35 @@ mod tests {
       GithubPrReviewDecision::default(),
       GithubPrReviewDecision::Comment
     );
+  }
+
+  #[test]
+  fn merge_method_label_covers_all_variants() {
+    assert_eq!(
+      merge_method_label(GithubPullRequestMergeMethod::Merge),
+      "Create a merge commit"
+    );
+    assert_eq!(
+      merge_method_label(GithubPullRequestMergeMethod::Squash),
+      "Squash and merge"
+    );
+    assert_eq!(
+      merge_method_label(GithubPullRequestMergeMethod::Rebase),
+      "Rebase and merge"
+    );
+  }
+
+  #[test]
+  fn merge_method_supports_commit_message_hides_fields_for_rebase_only() {
+    assert!(merge_method_supports_commit_message(
+      GithubPullRequestMergeMethod::Merge
+    ));
+    assert!(merge_method_supports_commit_message(
+      GithubPullRequestMergeMethod::Squash
+    ));
+    assert!(!merge_method_supports_commit_message(
+      GithubPullRequestMergeMethod::Rebase
+    ));
   }
 
   #[test]
