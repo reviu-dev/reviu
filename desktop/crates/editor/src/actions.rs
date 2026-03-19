@@ -59,8 +59,6 @@ fn should_handle_backspace_in_display_space(editor: &Editor, cx: &Context<Editor
 pub fn enter(editor: &mut Editor, _: &Enter, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
   editor.replace_text_in_range(None, "\n", window, cx);
-
-  editor.ensure_cursor_visible(window, cx);
 }
 
 pub fn tab(editor: &mut Editor, _: &Tab, window: &mut Window, cx: &mut Context<Editor>) {

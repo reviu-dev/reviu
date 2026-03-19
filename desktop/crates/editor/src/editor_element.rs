@@ -18,8 +18,7 @@ use git::DiffLineKind;
 use crate::{
   document::Document,
   editor::{
-    ConflictLineKind, DEFAULT_MAX_LINE_WIDTH, DisplayCursor, Editor, GroupOverlay, SCROLL_PADDING,
-    ScrollAxis,
+    ConflictLineKind, DEFAULT_MAX_LINE_WIDTH, DisplayCursor, Editor, GroupOverlay, ScrollAxis,
   },
   projection::{
     ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
@@ -39,7 +38,6 @@ const NEWLINE_SELECTION_WIDTH: f32 = 4.0;
 const PIXEL_SCROLL_DIVISOR: f32 = 20.0;
 // Scroll sensitivity for line-based scrolling (mouse wheel)
 const LINE_SCROLL_MULTIPLIER: f32 = 3.0;
-const FRACTIONAL_SCROLL_EPSILON: f32 = 0.001;
 const SCROLL_AXIS_RATIO: f32 = 1.1;
 const SCROLL_AXIS_SWITCH_RATIO: f32 = 1.4;
 const SCROLL_AXIS_TIMEOUT_MS: u64 = 150;
@@ -57,10 +55,6 @@ fn clamp_to_char_boundary(text: &str, byte_offset: usize) -> usize {
     byte_offset -= 1;
   }
   byte_offset
-}
-
-fn has_fractional_scroll(scroll_offset: f32) -> bool {
-  (scroll_offset - scroll_offset.floor()) > FRACTIONAL_SCROLL_EPSILON
 }
 
 fn indent_guide_byte_ranges(text: &str, tab_spaces: usize) -> Vec<Range<usize>> {
@@ -822,19 +816,7 @@ impl EditorElement {
     scroll_offset: f32,
     total_lines: usize,
   ) -> Range<usize> {
-    if total_lines == 0 {
-      return 0..0;
-    }
-
-    let mut visible_line_count = ((bounds.size.height / line_height).ceil() as usize).max(1);
-    if has_fractional_scroll(scroll_offset) {
-      visible_line_count += 1;
-    }
-
-    let start_line = (scroll_offset.floor() as usize).min(total_lines.saturating_sub(1));
-    let end_line = (start_line + visible_line_count).min(total_lines);
-
-    start_line..end_line
+    Editor::viewport_range_for_height(scroll_offset, bounds.size.height, line_height, total_lines)
   }
 
   fn is_primary(&self) -> bool {
@@ -2010,30 +1992,23 @@ impl Element for EditorElement {
             };
 
             if axis == ScrollAxis::Horizontal {
-              let new_scroll_x =
-                editor.clamp_horizontal_scroll_x(editor.scroll_handle.offset().x + delta_x_px);
-              editor
-                .scroll_handle
-                .set_offset(point(new_scroll_x, px(0.0)));
-              editor.last_scroll_x = new_scroll_x;
+              editor.set_horizontal_scroll_offset(editor.scroll_handle.offset().x + delta_x_px);
               cx.notify();
               return;
             }
 
-            let viewport_lines = (bounds.size.height / line_height).max(1.0);
-            let max_padding = (viewport_lines - 1.0).max(0.0);
-            let scroll_padding = (SCROLL_PADDING as f32).min(max_padding);
-            let max_scroll = (total_lines as f32 - viewport_lines + scroll_padding).max(0.0);
-            let new_scroll = (editor.scroll_offset_y + delta_y).max(0.0).min(max_scroll);
-
-            editor.scroll_offset_y = new_scroll;
+            editor.scroll_offset_y = Editor::clamp_vertical_scroll_for_height(
+              editor.scroll_offset_y + delta_y,
+              bounds.size.height,
+              line_height,
+              total_lines,
+            );
             let clamped_scroll_x = editor.clamp_horizontal_scroll_x(editor.last_scroll_x);
             if editor.scroll_handle.offset().x != clamped_scroll_x {
-              editor
-                .scroll_handle
-                .set_offset(point(clamped_scroll_x, px(0.0)));
+              editor.set_horizontal_scroll_offset(clamped_scroll_x);
+            } else {
+              editor.last_scroll_x = clamped_scroll_x;
             }
-            editor.last_scroll_x = clamped_scroll_x;
             let viewport = editor.viewport_range(line_height, total_lines);
             let doc_viewport = editor.doc_range_for_display_viewport(viewport.clone());
             editor.document.update(cx, |doc, cx| {
@@ -2288,8 +2263,8 @@ mod tests {
 
     let viewport = element.calculate_viewport(bounds, line_height, scroll_offset, total_lines);
 
-    // Should clamp to total_lines
-    assert_eq!(viewport, 90..100);
+    // Clamp to the maximum reachable scroll position for the viewport height.
+    assert_eq!(viewport, 83..100);
   }
 
   #[gpui::test]
@@ -2335,8 +2310,8 @@ mod tests {
 
     let viewport = element.calculate_viewport(bounds, line_height, scroll_offset, total_lines);
 
-    // Should clamp start_line to total_lines - 1
-    assert_eq!(viewport, 99..100);
+    // Clamp to the maximum reachable scroll position for the viewport height.
+    assert_eq!(viewport, 83..100);
   }
 
   #[gpui::test]
