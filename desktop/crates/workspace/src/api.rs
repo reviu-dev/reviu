@@ -463,9 +463,12 @@ pub enum GithubPullRequestReviewEvent {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum GithubPullRequestReviewState {
+  Commented,
   Approved,
   #[serde(rename = "CHANGES_REQUESTED")]
   RequestChanges,
+  Dismissed,
+  Pending,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -3575,6 +3578,38 @@ mod tests {
       review.user.as_ref().map(|user| user.login.as_str()),
       Some("octocat")
     );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn submit_pull_request_review_parses_commented_review_payload() {
+    let body = r#"{
+      "review": {
+        "id": 124,
+        "body": "Looks good to me",
+        "state": "COMMENTED",
+        "submitted_at": "2026-02-28T12:05:00Z",
+        "commit_id": "1111111111111111111111111111111111111111",
+        "html_url": "https://github.com/acme/widget/pull/42#pullrequestreview-124",
+        "user": { "login": "octocat", "avatar_url": null }
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let review = api
+      .submit_pull_request_review(
+        "acme",
+        "widget",
+        42,
+        GithubPullRequestReviewEvent::Comment,
+        "Looks good to me",
+      )
+      .expect("submit pull request review");
+
+    assert_eq!(review.id, 124);
+    assert_eq!(review.state, GithubPullRequestReviewState::Commented);
+    assert_eq!(review.body.as_deref(), Some("Looks good to me"));
     handle.join().expect("join server thread");
   }
 

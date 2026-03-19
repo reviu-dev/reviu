@@ -420,8 +420,11 @@ struct GithubPrOverviewConversationReply {
 
 fn review_state_display_label(state: GithubPullRequestReviewState) -> &'static str {
   match state {
+    GithubPullRequestReviewState::Commented => "Commented",
     GithubPullRequestReviewState::Approved => "Approved",
     GithubPullRequestReviewState::RequestChanges => "Changes requested",
+    GithubPullRequestReviewState::Dismissed => "Dismissed",
+    GithubPullRequestReviewState::Pending => "Pending",
   }
 }
 
@@ -430,10 +433,15 @@ fn review_state_icon_style(
   theme: &gpui_component::Theme,
 ) -> Option<(UiIconName, gpui::Hsla)> {
   match state {
+    GithubPullRequestReviewState::Commented => None,
     GithubPullRequestReviewState::Approved => Some((UiIconName::CircleCheck, theme.status_green())),
     GithubPullRequestReviewState::RequestChanges => {
       Some((UiIconName::CircleSlash, theme.status_red()))
     }
+    GithubPullRequestReviewState::Dismissed => {
+      Some((UiIconName::CircleSlash, theme.status_orange()))
+    }
+    GithubPullRequestReviewState::Pending => None,
   }
 }
 
@@ -545,7 +553,8 @@ fn build_overview_conversation_items(
         .as_ref()
         .and_then(|user| user.avatar_url.clone()),
       body,
-      review_state: Some(review.state),
+      review_state: (!matches!(review.state, GithubPullRequestReviewState::Commented))
+        .then_some(review.state),
       replies: Vec::new(),
       thread_comment_ids: Vec::new(),
     })
@@ -702,6 +711,18 @@ fn upsert_review_comment_local(
   comments.push(comment);
 }
 
+fn upsert_review_local(
+  reviews: &mut Vec<GithubPullRequestReview>,
+  review: GithubPullRequestReview,
+) {
+  if let Some(existing) = reviews.iter_mut().find(|existing| existing.id == review.id) {
+    *existing = review;
+    return;
+  }
+
+  reviews.push(review);
+}
+
 fn remove_issue_comment_local(
   comments: &mut Vec<GithubPullRequestIssueComment>,
   comment_id: u64,
@@ -757,6 +778,13 @@ fn allows_overview_review_reply_action(
 ) -> bool {
   kind == GithubPrOverviewConversationItemKind::ReviewComment
     && is_last_review_thread_message(thread_comment_ids, comment_id)
+}
+
+fn overview_root_is_editing(
+  editing_target: Option<OverviewCommentTarget>,
+  root_target: Option<OverviewCommentTarget>,
+) -> bool {
+  root_target.is_some() && editing_target == root_target
 }
 
 fn overview_conversation_scope_id(
@@ -1722,6 +1750,54 @@ impl GithubPrDetailsPage {
     self.fetch_merge_readiness_for_context(context.owner, context.repo, context.number, cx);
   }
 
+  fn refresh_reviews_for_current_pull_request(
+    &mut self,
+    set_loading: bool,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(context) = self.current_pr_context.as_ref().cloned() else {
+      return;
+    };
+
+    if set_loading {
+      self.reviews_loading = true;
+      self.reviews_error = None;
+    }
+
+    let api = self.api.clone();
+    let owner = context.owner;
+    let repo = context.repo;
+    let number = context.number;
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.fetch_pull_request_reviews(&owner, &repo, number)).await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(reviews) => {
+            this.reviews = reviews;
+            this.reviews_loading = false;
+            this.reviews_error = None;
+            this.add_pr_breadcrumb("Refresh PR reviews succeeded", Map::new());
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.reviews_loading = false;
+            this.reviews_error = Some(error_message.clone().into());
+            this.add_pr_breadcrumb("Refresh PR reviews failed", Map::new());
+            this.record_pr_error(
+              "github.pr.reviews.refresh",
+              error_message.as_str(),
+              Map::new(),
+            );
+          }
+        }
+        cx.notify();
+      });
+    });
+
+    self.reviews_task = Some(task);
+  }
+
   fn reload_current_pull_request(&mut self, cx: &mut Context<Self>) {
     let Some(context) = self.current_pr_context.as_ref().cloned() else {
       return;
@@ -2388,10 +2464,16 @@ impl GithubPrDetailsPage {
         this.submit_review_loading = false;
 
         match result {
-          Ok(_) => {
+          Ok(review) => {
             this.review_popover_open = false;
             this.reset_review_form(window, cx);
+            upsert_review_local(&mut this.reviews, review);
+            this.refresh_reviews_for_current_pull_request(false, cx);
             this.add_pr_breadcrumb("Submit PR review succeeded", Map::new());
+            if AuthStateStore::has_pro_access(cx) {
+              GithubPageHandle::refresh(cx);
+            }
+            cx.refresh_windows();
           }
           Err(error) => {
             let error_message = error.to_string();
@@ -5064,7 +5146,7 @@ impl GithubPrDetailsPage {
             }),
             GithubPrOverviewConversationItemKind::Review => None,
           };
-          let root_is_editing = editing_target == root_target;
+          let root_is_editing = overview_root_is_editing(editing_target, root_target);
           let root_is_reply_target = replying_target == Some(item.id);
           let root_is_last_review_message =
             allows_overview_review_reply_action(item.kind, &thread_comment_ids, item.id);
@@ -5170,7 +5252,6 @@ impl GithubPrDetailsPage {
           } else {
             None
           };
-
           let root_body = if root_is_editing {
             if let Some(input_state) = self.overview_edit_input.clone() {
               let can_save = self
@@ -5230,9 +5311,15 @@ impl GithubPrDetailsPage {
               div().into_any_element()
             }
           } else if let Some(body) = body {
-            render_markdown(body.as_str(), &markdown_options, cx)
+            div()
+              .w_full()
+              .min_w_0()
+              .child(render_markdown(body.as_str(), &markdown_options, cx))
+              .into_any_element()
           } else {
             div()
+              .w_full()
+              .min_w_0()
               .text_sm()
               .text_color(theme.muted_foreground)
               .child("No comment body.")
@@ -5594,7 +5681,15 @@ impl GithubPrDetailsPage {
                             div().into_any_element()
                           }
                         } else {
-                          render_markdown(reply.body.as_str(), &reply_markdown_options, cx)
+                          div()
+                            .w_full()
+                            .min_w_0()
+                            .child(render_markdown(
+                              reply.body.as_str(),
+                              &reply_markdown_options,
+                              cx,
+                            ))
+                            .into_any_element()
                         };
 
                         let reply_reply_composer = if reply_is_reply_target {
@@ -7564,6 +7659,28 @@ mod tests {
   }
 
   #[test]
+  fn overview_root_is_editing_requires_a_real_root_target() {
+    assert!(!overview_root_is_editing(None, None));
+    assert!(!overview_root_is_editing(
+      Some(OverviewCommentTarget {
+        kind: OverviewCommentKind::Issue,
+        id: 1,
+      }),
+      None,
+    ));
+    assert!(overview_root_is_editing(
+      Some(OverviewCommentTarget {
+        kind: OverviewCommentKind::Issue,
+        id: 1,
+      }),
+      Some(OverviewCommentTarget {
+        kind: OverviewCommentKind::Issue,
+        id: 1,
+      }),
+    ));
+  }
+
+  #[test]
   fn upsert_issue_comment_local_updates_existing_and_appends_missing() {
     let mut comments = vec![make_issue_comment(1, "2026-02-28T10:00:00Z", "Initial")];
     let mut updated = make_issue_comment(1, "2026-02-28T10:01:00Z", "Updated");
@@ -7792,6 +7909,29 @@ mod tests {
     assert!(!merge_method_supports_commit_message(
       GithubPullRequestMergeMethod::Rebase
     ));
+  }
+
+  #[test]
+  fn review_state_display_label_supports_commented_reviews() {
+    assert_eq!(
+      review_state_display_label(GithubPullRequestReviewState::Commented),
+      "Commented"
+    );
+  }
+
+  #[test]
+  fn build_overview_conversation_items_hides_state_label_for_commented_reviews() {
+    let reviews = vec![make_review(
+      2,
+      Some("2026-02-28T10:00:00Z"),
+      GithubPullRequestReviewState::Commented,
+      Some("Looks good to me"),
+    )];
+
+    let items = build_overview_conversation_items(&[], &reviews, &[]);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].body.as_deref(), Some("Looks good to me"));
+    assert_eq!(items[0].review_state, None);
   }
 
   #[test]
