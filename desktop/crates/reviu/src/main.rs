@@ -11,14 +11,13 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use ui::{AppAssets, PAGE_HEADER_HEIGHT};
 use workspace::{
-  AuthCallbackTarget, CloseWorkspacePage, CommitChanges, OpenRepository, ShowCommandPalette,
-  ShowFileSearch, WorkspaceView,
+  AppProfile, AuthCallbackTarget, CloseWorkspacePage, CommitChanges, OpenRepository,
+  ShowCommandPalette, ShowFileSearch, WorkspaceView,
 };
 
 mod app_root;
 const INITIAL_WINDOW_WIDTH: f32 = 1200.0;
 const INITIAL_WINDOW_HEIGHT: f32 = 800.0;
-const REVIU_URL_SCHEME: &str = "reviu";
 const SENTRY_DSN: &str =
   "https://a816f0ac9d37d42ec72719de4770c538@o1155685.ingest.us.sentry.io/4510920248918016";
 const SENTRY_ENABLE_DEV_ENV: &str = "SENTRY_ENABLE_DEV";
@@ -40,6 +39,7 @@ fn macos_titlebar_options() -> TitlebarOptions {
 }
 
 fn main() {
+  let app_profile = AppProfile::current();
   let traces_sample_rate = if cfg!(debug_assertions) { 1.0 } else { 0.1 };
   let dsn = if sentry_enabled() {
     Some(SENTRY_DSN.parse().expect("Invalid Sentry DSN"))
@@ -151,7 +151,7 @@ fn main() {
       })
       .unwrap();
 
-    std::mem::drop(cx.register_url_scheme(REVIU_URL_SCHEME));
+    std::mem::drop(cx.register_url_scheme(app_profile.url_scheme()));
     cx.spawn(async move |cx| {
       loop {
         cx.background_executor()
@@ -278,8 +278,16 @@ fn contains_sensitive_fragment(value: &str) -> bool {
     || value.contains("authorization")
 }
 
+fn current_desktop_url_scheme() -> &'static str {
+  AppProfile::current().url_scheme()
+}
+
 fn extract_auth_code(url: &str) -> Option<String> {
-  let url = url.strip_prefix(REVIU_URL_SCHEME)?;
+  extract_auth_code_for_scheme(url, current_desktop_url_scheme())
+}
+
+fn extract_auth_code_for_scheme(url: &str, scheme: &str) -> Option<String> {
+  let url = url.strip_prefix(scheme)?;
   let url = url.strip_prefix("://")?;
   let (path, query) = url.split_once('?')?;
   if path != "auth/callback" {
@@ -295,7 +303,11 @@ fn extract_auth_code(url: &str) -> Option<String> {
 }
 
 fn is_subscription_callback(url: &str) -> bool {
-  let Some(url) = url.strip_prefix(REVIU_URL_SCHEME) else {
+  is_subscription_callback_for_scheme(url, current_desktop_url_scheme())
+}
+
+fn is_subscription_callback_for_scheme(url: &str, scheme: &str) -> bool {
+  let Some(url) = url.strip_prefix(scheme) else {
     return false;
   };
   let Some(url) = url.strip_prefix("://") else {
@@ -309,9 +321,9 @@ fn is_subscription_callback(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
   use super::{
-    contains_sensitive_fragment, extract_auth_code, is_sensitive_header, is_sensitive_key,
-    is_subscription_callback, is_truthy_env_value, redact_sensitive_event_data,
-    resolved_sentry_release_from, sentry_enabled_for,
+    contains_sensitive_fragment, extract_auth_code_for_scheme, is_sensitive_header,
+    is_sensitive_key, is_subscription_callback_for_scheme, is_truthy_env_value,
+    redact_sensitive_event_data, resolved_sentry_release_from, sentry_enabled_for,
   };
   use sentry::protocol::{Event, Request, Value};
   use std::borrow::Cow;
@@ -423,29 +435,52 @@ mod tests {
 
   #[test]
   fn extract_auth_code_reads_code_from_auth_callback_url() {
-    let code = extract_auth_code("reviu://auth/callback?code=abc123&state=test");
+    let code =
+      extract_auth_code_for_scheme("reviu://auth/callback?code=abc123&state=test", "reviu");
     assert_eq!(code.as_deref(), Some("abc123"));
   }
 
   #[test]
   fn extract_auth_code_rejects_non_auth_callback_url() {
-    let code = extract_auth_code("reviu://subscription/callback");
+    let code = extract_auth_code_for_scheme("reviu://subscription/callback", "reviu");
     assert_eq!(code, None);
   }
 
   #[test]
   fn is_subscription_callback_accepts_plain_and_query_urls() {
-    assert!(is_subscription_callback("reviu://subscription/callback"));
-    assert!(is_subscription_callback(
-      "reviu://subscription/callback?checkout_id=123"
+    assert!(is_subscription_callback_for_scheme(
+      "reviu://subscription/callback",
+      "reviu"
+    ));
+    assert!(is_subscription_callback_for_scheme(
+      "reviu://subscription/callback?checkout_id=123",
+      "reviu"
     ));
   }
 
   #[test]
   fn is_subscription_callback_rejects_other_urls() {
-    assert!(!is_subscription_callback(
-      "reviu://auth/callback?code=abc123"
+    assert!(!is_subscription_callback_for_scheme(
+      "reviu://auth/callback?code=abc123",
+      "reviu"
     ));
-    assert!(!is_subscription_callback("https://example.com"));
+    assert!(!is_subscription_callback_for_scheme(
+      "https://example.com",
+      "reviu"
+    ));
+  }
+
+  #[test]
+  fn extract_auth_code_supports_dev_scheme() {
+    let code = extract_auth_code_for_scheme("reviu-dev://auth/callback?code=dev123", "reviu-dev");
+    assert_eq!(code.as_deref(), Some("dev123"));
+  }
+
+  #[test]
+  fn is_subscription_callback_supports_dev_scheme() {
+    assert!(is_subscription_callback_for_scheme(
+      "reviu-dev://subscription/callback",
+      "reviu-dev"
+    ));
   }
 }

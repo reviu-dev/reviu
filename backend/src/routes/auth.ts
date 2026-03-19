@@ -5,6 +5,7 @@ import z from 'zod'
 import { auth } from '../lib/auth.js'
 import { env } from '../lib/env.js'
 import { consumeAuthCode, issueAuthCode } from '../plugins/auth/service.js'
+import { desktopDeepLinkUrl } from './auth-redirect.js'
 
 const authRouter = new Hono()
 
@@ -35,7 +36,7 @@ export const authRoutes = authRouter
     const { session: { token } } = session
     const code = issueAuthCode(token)
 
-    return c.redirect(`reviu://auth/callback?code=${code}`)
+    return c.redirect(desktopDeepLinkUrl(`/auth/callback?code=${code}`))
   })
   .get('/web/callback', async (c) => {
     const session = await auth.api.getSession({ headers: c.req.raw.headers })
@@ -50,5 +51,5 @@ export const authRoutes = authRouter
     return c.redirect(`${env.WEB_DASHBOARD_URL}/signin?code=${code}`)
   })
   .get('/subscription', async (c) => {
-    return c.redirect('reviu://subscription/callback')
+    return c.redirect(desktopDeepLinkUrl('/subscription/callback'))
   })

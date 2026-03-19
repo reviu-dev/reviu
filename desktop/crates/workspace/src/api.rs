@@ -4,10 +4,10 @@ use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
+use crate::AppProfile;
 use crate::sentry_context;
 
 const DEFAULT_API_BASE_URL: &str = "http://localhost:3000";
-const KEYCHAIN_SERVICE: &str = "reviu_auth";
 const KEYCHAIN_USERNAME: &str = "bearer";
 
 fn resolve_api_base_url(
@@ -828,7 +828,7 @@ impl ApiClient {
   }
 
   pub fn keychain_service(&self) -> &str {
-    KEYCHAIN_SERVICE
+    AppProfile::current().keychain_service()
   }
 
   pub fn keychain_username(&self) -> &'static str {
@@ -1675,6 +1675,12 @@ mod tests {
   #[test]
   fn resolve_api_base_url_falls_back_to_localhost() {
     assert_eq!(resolve_api_base_url(None, None), DEFAULT_API_BASE_URL);
+  }
+
+  #[test]
+  fn keychain_service_uses_profile_namespace() {
+    assert_eq!(AppProfile::Prod.keychain_service(), "reviu_auth");
+    assert_eq!(AppProfile::Dev.keychain_service(), "reviu_auth.dev");
   }
 
   fn start_single_response_server(status: &str, body: &str) -> (String, thread::JoinHandle<()>) {

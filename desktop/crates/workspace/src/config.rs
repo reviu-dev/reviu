@@ -9,8 +9,11 @@ use std::{
 use dirs::config_dir;
 use rusqlite::{Connection, params};
 
+use crate::AppProfile;
+
 const CONFIG_DIR_NAME: &str = "reviu";
 const CONFIG_DB_NAME: &str = "reviu.sqlite";
+const DEV_CONFIG_DB_NAME: &str = "reviu.dev.sqlite";
 
 #[derive(Clone, Copy)]
 struct ConfigTable {
@@ -68,11 +71,7 @@ impl ConfigStore {
       return path;
     }
 
-    if let Some(base) = config_dir() {
-      base.join(CONFIG_DIR_NAME).join(CONFIG_DB_NAME)
-    } else {
-      PathBuf::from(CONFIG_DB_NAME)
-    }
+    config_db_path_for_profile(config_dir(), AppProfile::current())
   }
 
   #[cfg(test)]
@@ -310,6 +309,22 @@ impl ConfigStore {
   }
 }
 
+fn config_db_path_for_profile(base: Option<PathBuf>, profile: AppProfile) -> PathBuf {
+  if let Some(base) = base {
+    return base
+      .join(match profile {
+        AppProfile::Prod => CONFIG_DIR_NAME,
+        AppProfile::Dev => profile.storage_dir_name(),
+      })
+      .join(CONFIG_DB_NAME);
+  }
+
+  PathBuf::from(match profile {
+    AppProfile::Prod => CONFIG_DB_NAME,
+    AppProfile::Dev => DEV_CONFIG_DB_NAME,
+  })
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -364,5 +379,31 @@ mod tests {
     assert!(loaded.indent_rainbow);
 
     ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn config_db_path_uses_profile_namespace() {
+    let base = PathBuf::from("/tmp/reviu-config");
+
+    assert_eq!(
+      config_db_path_for_profile(Some(base.clone()), AppProfile::Prod),
+      PathBuf::from("/tmp/reviu-config/reviu/reviu.sqlite")
+    );
+    assert_eq!(
+      config_db_path_for_profile(Some(base), AppProfile::Dev),
+      PathBuf::from("/tmp/reviu-config/reviu.dev/reviu.sqlite")
+    );
+  }
+
+  #[test]
+  fn config_db_path_uses_profile_specific_fallback_file_names() {
+    assert_eq!(
+      config_db_path_for_profile(None, AppProfile::Prod),
+      PathBuf::from("reviu.sqlite")
+    );
+    assert_eq!(
+      config_db_path_for_profile(None, AppProfile::Dev),
+      PathBuf::from("reviu.dev.sqlite")
+    );
   }
 }
