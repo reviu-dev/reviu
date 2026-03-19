@@ -1418,7 +1418,10 @@ impl GithubPrDetailsPageHandle {
 }
 
 impl GithubPrDetailsPage {
-  fn build_detached_diff_editor(path: impl Into<PathBuf>, cx: &mut Context<Self>) -> Entity<Editor> {
+  fn build_detached_diff_editor(
+    path: impl Into<PathBuf>,
+    cx: &mut Context<Self>,
+  ) -> Entity<Editor> {
     let editor_path = path.into();
     let load_root = PathBuf::from(".");
     let load_path = PathBuf::from(".reviu-github-pr-preview").join(&editor_path);
@@ -5691,9 +5694,14 @@ impl GithubPrDetailsPage {
       .id("github-pr-overview-scroll")
       .size_full()
       .overflow_y_scrollbar()
-      .mx_auto()
-      .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
-      .child(div().pt_10().pb_32().child(content))
+      .child(
+        div()
+          .pt_10()
+          .pb_32()
+          .child(content)
+          .mx_auto()
+          .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH)),
+      )
   }
 
   fn render_files_sidebar(
@@ -6457,30 +6465,30 @@ impl GithubPrDetailsPage {
           .min_h_0()
           .child(
             h_resizable("github-pr-markdown-preview")
-              .child(resizable_panel().child(
-                div()
-                  .size_full()
-                  .min_w(px(0.0))
-                  .min_h_0()
-                  .flex()
-                  .flex_col()
-                  .debug_selector(|| {
-                    GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR.to_string()
-                  })
-                  .child(self.diff_editor.clone()),
-              ))
-              .child(resizable_panel().child(
-                div()
-                  .size_full()
-                  .min_w(px(0.0))
-                  .min_h_0()
-                  .flex()
-                  .flex_col()
-                  .debug_selector(|| {
-                    GITHUB_PR_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR.to_string()
-                  })
-                  .child(preview_panel),
-              )),
+              .child(
+                resizable_panel().child(
+                  div()
+                    .size_full()
+                    .min_w(px(0.0))
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .debug_selector(|| GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR.to_string())
+                    .child(self.diff_editor.clone()),
+                ),
+              )
+              .child(
+                resizable_panel().child(
+                  div()
+                    .size_full()
+                    .min_w(px(0.0))
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .debug_selector(|| GITHUB_PR_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR.to_string())
+                    .child(preview_panel),
+                ),
+              ),
           )
           .into_any_element()
       } else {
