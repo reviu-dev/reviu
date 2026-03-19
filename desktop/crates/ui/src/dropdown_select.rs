@@ -515,6 +515,7 @@ impl<I: DropdownSelectItem + 'static> RenderOnce for DropdownSelect<I> {
                 div()
                   .min_w_0()
                   .text_sm()
+                  .text_color(theme.foreground)
                   .overflow_hidden()
                   .when_some(selected_title, |this, title| this.child(title))
                   .when(!has_selected_title, |this| {

@@ -956,11 +956,12 @@ impl DropdownSelectItem for GithubPrCommitSelectItem {
       .into_any_element()
   }
 
-  fn render_selected(&self, _window: &mut Window, _cx: &mut App) -> gpui::AnyElement {
+  fn render_selected(&self, _window: &mut Window, cx: &mut App) -> gpui::AnyElement {
     h_flex()
       .w_full()
       .min_w_0()
       .text_sm()
+      .text_color(cx.theme().foreground)
       .child(
         div()
           .min_w_0()
@@ -8929,6 +8930,38 @@ mod tests {
       Some("1111111111111111111111111111111111111111")
     );
     assert!(!items[1].selected());
+  }
+
+  #[test]
+  fn build_commit_dropdown_items_marks_selected_commit() {
+    let commits = vec![
+      make_api_commit(
+        "1111111111111111111111111111111111111111",
+        "feat: add filter",
+        Some("2026-02-26T10:00:00Z"),
+        Some("0000000000000000000000000000000000000000"),
+      ),
+      make_api_commit(
+        "2222222222222222222222222222222222222222",
+        "fix: adjust theme colors",
+        Some("2026-02-26T11:00:00Z"),
+        Some("1111111111111111111111111111111111111111"),
+      ),
+    ];
+
+    let items = GithubPrDetailsPage::build_commit_dropdown_items(
+      &commits,
+      Some("2222222222222222222222222222222222222222"),
+    );
+
+    assert_eq!(items.len(), 3);
+    assert!(!items[0].selected());
+    assert!(!items[1].selected());
+    assert!(items[2].selected());
+    assert_eq!(
+      items[2].value().as_deref(),
+      Some("2222222222222222222222222222222222222222")
+    );
   }
 
   #[test]
