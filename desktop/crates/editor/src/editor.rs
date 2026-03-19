@@ -5298,43 +5298,50 @@ impl Editor {
       Some(doc_line) => self.line_layouts.get(&doc_line).cloned(),
       None => self.virtual_line_layouts.get(&cursor_line).cloned(),
     };
+    let line_text = match cursor_doc_line {
+      Some(doc_line) => Some(
+        document
+          .line_content(doc_line)
+          .map(|cow| cow.into_owned())
+          .unwrap_or_default(),
+      ),
+      None => self.display_line_text(cursor_line, cx),
+    };
 
-    if let Some(shaped_line) = shaped_line {
-      let line_text = match cursor_doc_line {
-        Some(doc_line) => document.line_content(doc_line).map(|cow| cow.into_owned()),
-        None => self.display_line_text(cursor_line, cx),
+    if let Some(line_text) = line_text {
+      let line_len = line_text.chars().count();
+      let cursor_in_line = cursor_column.min(line_len);
+      let cursor_x = shaped_line
+        .as_ref()
+        .map(|shaped_line| {
+          let cursor_byte = char_offset_to_byte_offset(&line_text, cursor_in_line);
+          shaped_line.x_for_index(cursor_byte)
+        })
+        .unwrap_or_else(|| self.estimated_cursor_x(cursor_in_line));
+
+      let horizontal_padding = self.gutter_width() + px(EXTRA_EDITOR_WIDTH);
+      let current_scroll_x = self.scroll_handle.offset().x;
+      let viewport_width = self.horizontal_viewport_width();
+
+      // Note: scroll_x is negative when scrolled right (0 = left edge, -100 = scrolled 100px right)
+      // visible area in absolute coordinates: [-current_scroll_x, -current_scroll_x + viewport_width]
+      let visible_start_x = -current_scroll_x;
+      let visible_end_x = -current_scroll_x + viewport_width;
+
+      let needs_left_reveal = match policy {
+        CursorRevealPolicy::WhenHidden => cursor_x < visible_start_x,
+        CursorRevealPolicy::WithPadding => cursor_x < visible_start_x + horizontal_padding,
       };
+      if needs_left_reveal {
+        self.set_horizontal_scroll_offset(-(cursor_x - horizontal_padding).max(px(0.0)));
+      }
 
-      if let Some(line_text) = line_text {
-        let line_len = line_text.chars().count();
-        let cursor_in_line = cursor_column.min(line_len);
-        let cursor_byte = char_offset_to_byte_offset(&line_text, cursor_in_line);
-        let cursor_x = shaped_line.x_for_index(cursor_byte);
-
-        let horizontal_padding = self.gutter_width() + px(EXTRA_EDITOR_WIDTH);
-        let current_scroll_x = self.scroll_handle.offset().x;
-        let viewport_width = self.horizontal_viewport_width();
-
-        // Note: scroll_x is negative when scrolled right (0 = left edge, -100 = scrolled 100px right)
-        // visible area in absolute coordinates: [-current_scroll_x, -current_scroll_x + viewport_width]
-        let visible_start_x = -current_scroll_x;
-        let visible_end_x = -current_scroll_x + viewport_width;
-
-        let needs_left_reveal = match policy {
-          CursorRevealPolicy::WhenHidden => cursor_x < visible_start_x,
-          CursorRevealPolicy::WithPadding => cursor_x < visible_start_x + horizontal_padding,
-        };
-        if needs_left_reveal {
-          self.set_horizontal_scroll_offset(-(cursor_x - horizontal_padding).max(px(0.0)));
-        }
-
-        let needs_right_reveal = match policy {
-          CursorRevealPolicy::WhenHidden => cursor_x > visible_end_x,
-          CursorRevealPolicy::WithPadding => cursor_x > visible_end_x - horizontal_padding,
-        };
-        if needs_right_reveal {
-          self.set_horizontal_scroll_offset(-(cursor_x - viewport_width + horizontal_padding));
-        }
+      let needs_right_reveal = match policy {
+        CursorRevealPolicy::WhenHidden => cursor_x > visible_end_x,
+        CursorRevealPolicy::WithPadding => cursor_x > visible_end_x - horizontal_padding,
+      };
+      if needs_right_reveal {
+        self.set_horizontal_scroll_offset(-(cursor_x - viewport_width + horizontal_padding));
       }
     }
 
@@ -5357,6 +5364,10 @@ impl Editor {
     } else {
       self.viewport_width
     }
+  }
+
+  fn estimated_cursor_x(&self, cursor_column: usize) -> Pixels {
+    self.measured_editor_char_width() * cursor_column as f32
   }
 
   pub(crate) fn clamp_horizontal_scroll_x(&self, scroll_x: Pixels) -> Pixels {
@@ -9393,6 +9404,45 @@ pub mod tests {
       editor.ensure_cursor_visible_with_policy(CursorRevealPolicy::WithPadding, cx);
 
       assert_eq!(editor.scroll_offset_y, 0.0);
+    });
+  }
+
+  #[gpui::test]
+  fn test_reveal_cursor_when_hidden_restores_horizontal_scroll_without_layout_cache(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "abc");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.viewport_width = px(100.0);
+      editor.max_line_width = px(300.0);
+      editor.scroll_handle.set_offset(point(px(-120.0), px(0.0)));
+      editor.move_to(0, cx);
+      editor.line_layouts.clear();
+
+      editor.ensure_cursor_visible_when_hidden(cx);
+
+      assert_eq!(editor.scroll_handle.offset().x, px(0.0));
+    });
+  }
+
+  #[gpui::test]
+  fn test_reveal_cursor_when_hidden_restores_horizontal_scroll_on_trailing_empty_line(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "abc\n");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.viewport_width = px(100.0);
+      editor.max_line_width = px(300.0);
+      editor.scroll_handle.set_offset(point(px(-120.0), px(0.0)));
+      let doc_len = editor.document().read(cx).len();
+      editor.move_to(doc_len, cx);
+      editor.line_layouts.clear();
+
+      editor.ensure_cursor_visible_when_hidden(cx);
+
+      assert_eq!(editor.scroll_handle.offset().x, px(0.0));
     });
   }
 
