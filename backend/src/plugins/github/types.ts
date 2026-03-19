@@ -29,6 +29,16 @@ export type PullRequestFilesParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['parameters']
 export type CommitParams
   = Endpoints['GET /repos/{owner}/{repo}/commits/{ref}']['parameters']
+export type CommitCheckRunsParams
+  = Endpoints['GET /repos/{owner}/{repo}/commits/{ref}/check-runs']['parameters']
+export type CommitCombinedStatusParams
+  = Endpoints['GET /repos/{owner}/{repo}/commits/{ref}/status']['parameters']
+export type WorkflowRunsParams
+  = Endpoints['GET /repos/{owner}/{repo}/actions/runs']['parameters']
+export type WorkflowRunJobsParams
+  = Endpoints['GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs']['parameters']
+export type BranchRulesParams
+  = Endpoints['GET /repos/{owner}/{repo}/rules/branches/{branch}']['parameters']
 export type SearchIssuesParams = Endpoints['GET /search/issues']['parameters']
 export type UserRepositoriesParams = Endpoints['GET /user/repos']['parameters']
 export type NotificationsParams = Endpoints['GET /notifications']['parameters']
@@ -62,6 +72,16 @@ export type PullRequestFileResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['response']['data'][number]
 export type CommitResponse = Endpoints['GET /repos/{owner}/{repo}/commits/{ref}']['response']['data']
 export type CommitFileResponse = NonNullable<CommitResponse['files']>[number]
+export type CommitCheckRunsResponse
+  = Endpoints['GET /repos/{owner}/{repo}/commits/{ref}/check-runs']['response']['data']
+export type CommitCombinedStatusResponse
+  = Endpoints['GET /repos/{owner}/{repo}/commits/{ref}/status']['response']['data']
+export type WorkflowRunsResponse
+  = Endpoints['GET /repos/{owner}/{repo}/actions/runs']['response']['data']
+export type WorkflowRunJobsResponse
+  = Endpoints['GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs']['response']['data']
+export type BranchRulesResponse
+  = Endpoints['GET /repos/{owner}/{repo}/rules/branches/{branch}']['response']['data']
 export type SearchIssuesResponse = Endpoints['GET /search/issues']['response']['data']
 export type SearchIssuesItemResponse = SearchIssuesResponse['items'][number]
 export type UserRepositoryResponse = Endpoints['GET /user/repos']['response']['data'][number]
@@ -221,6 +241,99 @@ export interface GithubPullRequestMergeResult {
   sha: MergePullRequestResponse['sha']
   message: MergePullRequestResponse['message']
   method: GithubPullRequestMergeMethod
+}
+
+export type GithubPullRequestChecksRollupState = 'success' | 'pending' | 'failure'
+
+export interface GithubPullRequestWorkflowStep {
+  number: number
+  name: string
+  status: string | null
+  conclusion: string | null
+  state: GithubPullRequestChecksRollupState
+  started_at: string | null
+  completed_at: string | null
+}
+
+export interface GithubPullRequestWorkflowJob {
+  id: number
+  name: string
+  status: string | null
+  conclusion: string | null
+  state: GithubPullRequestChecksRollupState
+  started_at: string | null
+  completed_at: string | null
+  html_url: string | null
+  required: boolean
+  steps: GithubPullRequestWorkflowStep[]
+}
+
+export interface GithubPullRequestWorkflowRun {
+  id: number
+  name: string | null
+  display_title: string | null
+  event: string
+  status: string | null
+  conclusion: string | null
+  state: GithubPullRequestChecksRollupState
+  created_at: string
+  updated_at: string
+  run_started_at: string | null
+  run_number: number
+  run_attempt: number | null
+  html_url: string | null
+  jobs: GithubPullRequestWorkflowJob[]
+}
+
+export interface GithubPullRequestCheckRun {
+  id: number
+  name: string
+  status: string | null
+  conclusion: string | null
+  state: GithubPullRequestChecksRollupState
+  started_at: string | null
+  completed_at: string | null
+  html_url: string | null
+  details_url: string | null
+  required: boolean
+  app_name: string | null
+  app_slug: string | null
+  title: string | null
+  summary: string | null
+  text: string | null
+  annotations_count: number
+}
+
+export interface GithubPullRequestLegacyStatus {
+  id: number
+  context: string
+  status: string
+  state: GithubPullRequestChecksRollupState
+  description: string | null
+  target_url: string | null
+  created_at: string
+  updated_at: string
+  required: boolean
+}
+
+export interface GithubPullRequestChecksSummary {
+  head_sha: PullRequestDetailsResponse['head']['sha']
+  overall_state: GithubPullRequestChecksRollupState
+  required_state: GithubPullRequestChecksRollupState
+  total_checks: number
+  successful_checks: number
+  failed_checks: number
+  pending_checks: number
+  required_checks_total: number
+  required_checks_passed: number
+  required_checks_failed: number
+  required_checks_pending: number
+  required_contexts: string[]
+  missing_required_contexts: string[]
+  requires_up_to_date_branch: boolean
+  actions_runs: GithubPullRequestWorkflowRun[]
+  other_checks: GithubPullRequestCheckRun[]
+  legacy_statuses: GithubPullRequestLegacyStatus[]
 }
 
 export interface GithubPullRequestDescriptionUpdate {

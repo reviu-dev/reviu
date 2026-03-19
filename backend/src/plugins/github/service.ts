@@ -1,5 +1,11 @@
 import type { Endpoints, RequestHeaders, RequestParameters } from '@octokit/types'
 import type {
+  BranchRulesParams,
+  BranchRulesResponse,
+  CommitCheckRunsParams,
+  CommitCheckRunsResponse,
+  CommitCombinedStatusParams,
+  CommitCombinedStatusResponse,
   CommitFileResponse,
   CommitParams,
   CommitResponse,
@@ -59,6 +65,10 @@ import type {
   UpdatePullRequestResponse,
   UserRepositoriesParams,
   UserRepositoryResponse,
+  WorkflowRunJobsParams,
+  WorkflowRunJobsResponse,
+  WorkflowRunsParams,
+  WorkflowRunsResponse,
 } from './types.js'
 import { request } from '@octokit/request'
 import { logger } from '../../lib/logger.js'
@@ -665,6 +675,56 @@ export async function fetchGithubCommit(
   { token: string, params: CommitParams },
 ): Promise<CommitResponse> {
   return requestGithubData('GET /repos/{owner}/{repo}/commits/{ref}', {
+    token,
+    params,
+  })
+}
+
+export async function fetchGithubCommitCheckRuns(
+  { token, params }:
+  { token: string, params: CommitCheckRunsParams },
+): Promise<CommitCheckRunsResponse> {
+  return requestGithubData('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', {
+    token,
+    params,
+  })
+}
+
+export async function fetchGithubCombinedStatusForRef(
+  { token, params }:
+  { token: string, params: CommitCombinedStatusParams },
+): Promise<CommitCombinedStatusResponse> {
+  return requestGithubData('GET /repos/{owner}/{repo}/commits/{ref}/status', {
+    token,
+    params,
+  })
+}
+
+export async function fetchGithubWorkflowRuns(
+  { token, params }:
+  { token: string, params: WorkflowRunsParams },
+): Promise<WorkflowRunsResponse> {
+  return requestGithubData('GET /repos/{owner}/{repo}/actions/runs', {
+    token,
+    params,
+  })
+}
+
+export async function fetchGithubWorkflowRunJobs(
+  { token, params }:
+  { token: string, params: WorkflowRunJobsParams },
+): Promise<WorkflowRunJobsResponse> {
+  return requestGithubData('GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs', {
+    token,
+    params,
+  })
+}
+
+export async function fetchGithubBranchRules(
+  { token, params }:
+  { token: string, params: BranchRulesParams },
+): Promise<BranchRulesResponse> {
+  return requestGithubData('GET /repos/{owner}/{repo}/rules/branches/{branch}', {
     token,
     params,
   })

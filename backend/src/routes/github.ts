@@ -25,6 +25,7 @@ import type {
   GithubIssueParameters,
   GithubNotification,
   GithubPullRequest,
+  GithubPullRequestChecksSummary,
   GithubPullRequestCommit,
   GithubPullRequestDetails,
   GithubPullRequestDetailsAuthor,
@@ -105,6 +106,7 @@ import {
   mergeGithubIssueDetailsPayload,
 } from '../plugins/github/issue-details.js'
 import { runWithGithubMetricsContext } from '../plugins/github/metrics/github-metrics-context.js'
+import { fetchGithubPullRequestChecksSummary } from '../plugins/github/pull-request-checks.js'
 import { fetchGithubPullRequestMergeReadiness } from '../plugins/github/pull-request-merge.js'
 import {
   createPullRequestLineCommentBodySchema,
@@ -1589,6 +1591,39 @@ export const githubRoutes = githubRouter
         }))
 
       return ctx.json({ mergeReadiness } satisfies { mergeReadiness: GithubPullRequestMergeReadiness }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/pr/:id/checks', async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const checks = await withGithubMetrics(user.id, 'pull_request.checks', () =>
+        fetchGithubPullRequestChecksSummary({
+          token: githubToken,
+          params: {
+            owner: org,
+            repo,
+            pull_number: pullNumber,
+          },
+        }))
+
+      return ctx.json({ checks } satisfies { checks: GithubPullRequestChecksSummary }, 200)
     }
     catch (error) {
       const status = (error as { status?: number }).status
