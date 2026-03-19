@@ -80,6 +80,8 @@ const EMPTY_REPOSITORY_TITLE: &str = "Select a repository";
 const EMPTY_REPOSITORY_HINT_PREFIX: &str = "Press";
 const EMPTY_REPOSITORY_HINT_SUFFIX: &str = "to add a repository.";
 const EMPTY_REPOSITORY_ACTION_LABEL: &str = "Add Repository";
+const GIT_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str = "git-markdown-preview-editor-pane";
+const GIT_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str = "git-markdown-preview-render-pane";
 
 type RepoSelectHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 type BranchSelectHandler = Rc<dyn Fn(BranchRef, &mut Window, &mut App)>;
@@ -6275,9 +6277,29 @@ impl GitPage {
           .flex_col()
           .child(self.render_editor_header(&editor, cx))
           .child(
-            ui::h_resizable("git-page-markdown-preview")
-              .child(ui::resizable_panel().child(editor_view))
-              .child(ui::resizable_panel().child(preview_content)),
+            div().flex_1().min_h_0().child(
+              ui::h_resizable("git-page-markdown-preview")
+                .child(ui::resizable_panel().child(
+                  div()
+                    .size_full()
+                    .min_w(px(0.0))
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .debug_selector(|| GIT_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR.to_string())
+                    .child(editor_view),
+                ))
+                .child(ui::resizable_panel().child(
+                  div()
+                    .size_full()
+                    .min_w(px(0.0))
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .debug_selector(|| GIT_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR.to_string())
+                    .child(preview_content),
+                )),
+            ),
           )
           .into_any_element();
       }
@@ -10358,6 +10380,47 @@ mod tests {
     assert_eq!(selected_file, Some(rel_path.to_path_buf()));
     assert!(!is_read_only);
     assert_eq!(contents, "v2\n");
+  }
+
+  #[gpui::test]
+  fn markdown_preview_keeps_editor_and_preview_panes_visible(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempDir::new("git-page-markdown-preview-layout");
+    let editor_root = TempDir::new("git-page-markdown-preview-editor-root");
+    let rel_path = PathBuf::from("README.md");
+    let markdown = "# Preview\n\nThe markdown preview pane should stay visible.\n";
+    std::fs::write(repo.path.join(&rel_path), markdown).expect("write markdown file");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    git_page.update_in(cx, |this, _window, cx| {
+      let editor_root = editor_root.path.clone();
+      let file_path = repo.path.join(&rel_path);
+      let rel_path = rel_path.clone();
+      let loaded = Editor::load_file_for_editor(&editor_root, &file_path);
+      let editor =
+        cx.new(move |cx| Editor::new_with_loaded_file(editor_root, file_path, loaded, cx));
+
+      this.selected_repo = Some(repo.path.clone());
+      this.selected_file = Some(rel_path);
+      this.show_markdown_preview = true;
+      this.editor = Some(editor);
+      cx.notify();
+    });
+
+    let editor_bounds = cx
+      .debug_bounds(GIT_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR)
+      .expect("editor preview pane bounds")
+      .size;
+    let preview_bounds = cx
+      .debug_bounds(GIT_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR)
+      .expect("render preview pane bounds")
+      .size;
+
+    assert!(editor_bounds.width > gpui::px(0.0));
+    assert!(editor_bounds.height > gpui::px(0.0));
+    assert!(preview_bounds.width > gpui::px(0.0));
+    assert!(preview_bounds.height > gpui::px(0.0));
   }
 
   #[gpui::test]
