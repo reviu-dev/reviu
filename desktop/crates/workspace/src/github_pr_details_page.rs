@@ -84,6 +84,10 @@ const PR_REVIEW_POPOVER_WIDTH: f32 = 500.0;
 const PR_REVIEW_INPUT_HEIGHT_PX: f32 = 100.0;
 const OVERVIEW_COMMENT_INPUT_HEIGHT_PX: f32 = 100.0;
 const OVERVIEW_DESCRIPTION_INPUT_HEIGHT_PX: f32 = 500.0;
+const GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str =
+  "github-pr-markdown-preview-editor-pane";
+const GITHUB_PR_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str =
+  "github-pr-markdown-preview-render-pane";
 
 type CommitSelectHandler = Rc<dyn Fn(Option<String>, &mut Window, &mut App)>;
 
@@ -1414,6 +1418,20 @@ impl GithubPrDetailsPageHandle {
 }
 
 impl GithubPrDetailsPage {
+  fn build_detached_diff_editor(path: impl Into<PathBuf>, cx: &mut Context<Self>) -> Entity<Editor> {
+    let editor_path = path.into();
+    let load_root = PathBuf::from(".");
+    let load_path = PathBuf::from(".reviu-github-pr-preview").join(&editor_path);
+    let loaded = Editor::load_file_for_editor(&load_root, &load_path);
+    let detached_root = PathBuf::from(".reviu-github-pr-editor-root");
+
+    cx.new(move |cx| {
+      let mut editor = Editor::new_with_loaded_file(detached_root, editor_path, loaded, cx);
+      editor.is_read_only = true;
+      editor
+    })
+  }
+
   fn sentry_pr_data(&self) -> Map<String, Value> {
     let mut data = Map::new();
     if let Some(context) = self.current_pr_context.as_ref() {
@@ -1478,11 +1496,7 @@ impl GithubPrDetailsPage {
 
     let tree_state = cx.new(|cx| TreeState::new(cx));
     let commits_list = cx.new(|cx| ListState::new(GithubPrCommitListDelegate::new(), window, cx));
-    let diff_editor = cx.new(|cx| {
-      let mut editor = Editor::new_with_paths(PathBuf::from("."), PathBuf::from("pr.diff"), cx);
-      editor.is_read_only = true;
-      editor
-    });
+    let diff_editor = Self::build_detached_diff_editor("__reviu_github_pr_placeholder__.diff", cx);
     let review_input = cx.new(|cx| {
       InputState::new(window, cx)
         .multi_line(true)
@@ -3162,13 +3176,7 @@ impl GithubPrDetailsPage {
       return;
     }
 
-    let repo_root = PathBuf::from(".");
-    let desired_path_for_editor = desired_path.clone();
-    self.diff_editor = cx.new(|cx| {
-      let mut editor = Editor::new_with_paths(repo_root, desired_path_for_editor, cx);
-      editor.is_read_only = true;
-      editor
-    });
+    self.diff_editor = Self::build_detached_diff_editor(desired_path, cx);
     self.install_diff_editor_review_comment_handlers(cx);
   }
 
@@ -6449,8 +6457,30 @@ impl GithubPrDetailsPage {
           .min_h_0()
           .child(
             h_resizable("github-pr-markdown-preview")
-              .child(resizable_panel().child(self.diff_editor.clone()))
-              .child(resizable_panel().child(preview_panel)),
+              .child(resizable_panel().child(
+                div()
+                  .size_full()
+                  .min_w(px(0.0))
+                  .min_h_0()
+                  .flex()
+                  .flex_col()
+                  .debug_selector(|| {
+                    GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR.to_string()
+                  })
+                  .child(self.diff_editor.clone()),
+              ))
+              .child(resizable_panel().child(
+                div()
+                  .size_full()
+                  .min_w(px(0.0))
+                  .min_h_0()
+                  .flex()
+                  .flex_col()
+                  .debug_selector(|| {
+                    GITHUB_PR_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR.to_string()
+                  })
+                  .child(preview_panel),
+              )),
           )
           .into_any_element()
       } else {
@@ -6594,6 +6624,9 @@ mod tests {
       if !cx.has_global::<WorkspaceApi>() {
         cx.set_global(WorkspaceApi::new());
       }
+      if !cx.has_global::<AuthStateStore>() {
+        cx.set_global(AuthStateStore::default());
+      }
     });
   }
 
@@ -6665,6 +6698,52 @@ mod tests {
       assert_ne!(focused, external_focus);
       assert_ne!(focused, page_focus);
     });
+  }
+
+  #[gpui::test]
+  fn changes_markdown_preview_keeps_editor_and_preview_panes_visible(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let markdown = "# Preview\n\nPR markdown preview should stay visible.\n";
+    let file = files_from_api(vec![make_api_file("README.md", "modified", None)])
+      .into_iter()
+      .next()
+      .expect("markdown file");
+    let file_key = file.path.to_string();
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.active_tab_ix = PR_TAB_CHANGES_IX;
+      this.files_loading = false;
+      this.file_loading = false;
+      this.files_error = None;
+      this.file_error = None;
+      this.file_lookup.insert(file_key.clone(), file.clone());
+      this.file_contents.insert(
+        file_key.clone(),
+        GithubPrFileContents {
+          base: Some(String::new()),
+          head: Some(markdown.to_string()),
+        },
+      );
+      this.set_selected_file(Some(file.clone()), cx);
+      this.show_markdown_preview = true;
+      this.sync_diff_view(cx);
+      cx.notify();
+    });
+
+    let editor_bounds = cx
+      .debug_bounds(GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR)
+      .expect("pr preview editor pane bounds")
+      .size;
+    let preview_bounds = cx
+      .debug_bounds(GITHUB_PR_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR)
+      .expect("pr preview render pane bounds")
+      .size;
+
+    assert!(editor_bounds.width > gpui::px(0.0));
+    assert!(editor_bounds.height > gpui::px(0.0));
+    assert!(preview_bounds.width > gpui::px(0.0));
+    assert!(preview_bounds.height > gpui::px(0.0));
   }
 
   fn make_issue_comment(id: u64, created_at: &str, body: &str) -> GithubPullRequestIssueComment {
