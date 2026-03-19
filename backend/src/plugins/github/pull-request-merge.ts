@@ -5,7 +5,6 @@ import type {
   PullRequestDetailsResponse,
   PullRequestParams,
 } from './types.js'
-import { logger } from '../../lib/logger.js'
 import { fetchGithubPullRequest, fetchGithubRepository } from './service.js'
 
 const MERGEABILITY_RETRY_ATTEMPTS = 3
@@ -213,50 +212,13 @@ export async function fetchGithubPullRequestMergeReadiness(
       })
     }
 
-    const effectiveRepositoryMetadata = resolveRepositoryMergeMetadata(
-      pullRequest,
-      repositoryMetadata,
-    )
     lastReadiness = buildGithubPullRequestMergeReadiness(pullRequest, repositoryMetadata)
-
-    if (lastReadiness.status === 'forbidden') {
-      logger.warn({
-        owner: params.owner,
-        repo: params.repo,
-        pullNumber: params.pull_number,
-        attempt: attempt + 1,
-        pullRequestState: pullRequest.state,
-        draft: pullRequest.draft,
-        merged: pullRequest.merged,
-        mergedAt: pullRequest.merged_at,
-        mergeable: pullRequest.mergeable,
-        mergeableState: pullRequest.mergeable_state ?? null,
-        rebaseable: pullRequest.rebaseable ?? null,
-        repoMetadataSource: effectiveRepositoryMetadata.source,
-        repoPermissions: effectiveRepositoryMetadata.permissions,
-        repoMergeSettings: {
-          allowMergeCommit: effectiveRepositoryMetadata.allow_merge_commit,
-          allowSquashMerge: effectiveRepositoryMetadata.allow_squash_merge,
-          allowRebaseMerge: effectiveRepositoryMetadata.allow_rebase_merge,
-        },
-        availableMethods: lastReadiness.available_methods,
-        viewerCanMerge: lastReadiness.viewer_can_merge,
-      }, 'GitHub merge readiness resolved to forbidden')
-    }
 
     if (pullRequest.mergeable != null || lastReadiness.status !== 'checking') {
       return lastReadiness
     }
 
     if (attempt < MERGEABILITY_RETRY_ATTEMPTS - 1) {
-      logger.info({
-        owner: params.owner,
-        repo: params.repo,
-        pullNumber: params.pull_number,
-        attempt: attempt + 1,
-        mergeable: pullRequest.mergeable,
-        mergeableState: pullRequest.mergeable_state ?? null,
-      }, 'GitHub mergeability is still pending; retrying merge readiness')
       await sleep(MERGEABILITY_RETRY_DELAY_MS)
     }
   }

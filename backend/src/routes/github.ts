@@ -1585,20 +1585,6 @@ export const githubRoutes = githubRouter
           },
         }))
 
-      if (mergeReadiness.status === 'forbidden') {
-        logger.warn({
-          userId: user.id,
-          owner: org,
-          repo,
-          pullNumber,
-          readinessStatus: mergeReadiness.status,
-          readinessMessage: mergeReadiness.message,
-          viewerCanMerge: mergeReadiness.viewer_can_merge,
-          mergeableState: mergeReadiness.mergeable_state,
-          availableMethods: mergeReadiness.available_methods,
-        }, 'GitHub merge readiness returned forbidden to desktop client')
-      }
-
       return ctx.json({ mergeReadiness } satisfies { mergeReadiness: GithubPullRequestMergeReadiness }, 200)
     }
     catch (error) {
