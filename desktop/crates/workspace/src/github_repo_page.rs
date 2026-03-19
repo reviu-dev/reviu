@@ -173,6 +173,10 @@ const REPO_TAB_README_IX: usize = 1;
 const REPO_TAB_CODE_IX: usize = 2;
 const REPO_TAB_PULL_REQUESTS_IX: usize = 3;
 const REPO_TAB_ISSUES_IX: usize = 4;
+const GITHUB_REPO_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str =
+  "github-repo-markdown-preview-editor-pane";
+const GITHUB_REPO_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str =
+  "github-repo-markdown-preview-render-pane";
 
 #[derive(Clone, Debug)]
 struct GithubRepoCodeFile {
@@ -2486,6 +2490,20 @@ impl GithubRepoPageHandle {
 }
 
 impl GithubRepoPage {
+  fn build_detached_code_editor(path: impl Into<PathBuf>, cx: &mut Context<Self>) -> Entity<Editor> {
+    let editor_path = path.into();
+    let load_root = PathBuf::from(".");
+    let load_path = PathBuf::from(".reviu-github-repo-preview").join(&editor_path);
+    let loaded = Editor::load_file_for_editor(&load_root, &load_path);
+    let detached_root = PathBuf::from(".reviu-github-repo-editor-root");
+
+    cx.new(move |cx| {
+      let mut editor = Editor::new_with_loaded_file(detached_root, editor_path, loaded, cx);
+      editor.is_read_only = true;
+      editor
+    })
+  }
+
   fn open_github_home(cx: &mut App) {
     let (target, should_refresh) = github_page_navigation(AuthStateStore::has_pro_access(cx));
 
@@ -2519,11 +2537,7 @@ impl GithubRepoPage {
     });
     let issues =
       cx.new(|cx| ListState::new(GithubRepoIssueListDelegate::new(), window, cx).searchable(true));
-    let code_editor = cx.new(|cx| {
-      let mut editor = Editor::new_with_paths(PathBuf::from("."), PathBuf::from("."), cx);
-      editor.is_read_only = true;
-      editor
-    });
+    let code_editor = Self::build_detached_code_editor("__reviu_github_repo_placeholder__.txt", cx);
 
     let api = WorkspaceApi::global(cx).api.clone();
     let mut this = Self {
@@ -3421,13 +3435,7 @@ impl GithubRepoPage {
       return;
     }
 
-    let repo_root = PathBuf::from(".");
-    let desired_path_for_editor = desired_path.clone();
-    self.code_editor = cx.new(|cx| {
-      let mut editor = Editor::new_with_paths(repo_root, desired_path_for_editor, cx);
-      editor.is_read_only = true;
-      editor
-    });
+    self.code_editor = Self::build_detached_code_editor(desired_path, cx);
   }
 
   fn clear_code_editor(&mut self, cx: &mut Context<Self>) {
@@ -4419,8 +4427,30 @@ impl GithubRepoPage {
           .min_h_0()
           .child(
             h_resizable("github-repo-code-markdown-preview")
-              .child(resizable_panel().child(self.code_editor.clone()))
-              .child(resizable_panel().child(preview_panel)),
+              .child(resizable_panel().child(
+                div()
+                  .size_full()
+                  .min_w(px(0.0))
+                  .min_h_0()
+                  .flex()
+                  .flex_col()
+                  .debug_selector(|| {
+                    GITHUB_REPO_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR.to_string()
+                  })
+                  .child(self.code_editor.clone()),
+              ))
+              .child(resizable_panel().child(
+                div()
+                  .size_full()
+                  .min_w(px(0.0))
+                  .min_h_0()
+                  .flex()
+                  .flex_col()
+                  .debug_selector(|| {
+                    GITHUB_REPO_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR.to_string()
+                  })
+                  .child(preview_panel),
+              )),
           )
           .into_any_element()
       } else {
@@ -4652,6 +4682,7 @@ mod tests {
     GithubIssueDescriptionUpdate, GithubIssueDetailsComment, GithubIssueUser,
     GithubPullRequestLabel, GithubPullRequestState, GithubRepository, GithubRepositoryTreeEntry,
   };
+  use crate::workspace::WorkspaceApi;
   use gpui::TestAppContext;
 
   fn make_issue_comment(
@@ -4711,7 +4742,12 @@ mod tests {
   }
 
   fn init_gpui_test(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(|cx| {
+      gpui_component::init(cx);
+      if !cx.has_global::<WorkspaceApi>() {
+        cx.set_global(WorkspaceApi::new());
+      }
+    });
   }
 
   struct TestProbeView {
@@ -4810,6 +4846,48 @@ mod tests {
       .height;
 
     assert_eq!(labeled_height, unlabeled_height);
+  }
+
+  #[gpui::test]
+  fn repo_markdown_preview_keeps_editor_and_preview_panes_visible(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let markdown = "# Preview\n\nRepository markdown preview should stay visible.\n";
+    let file = Rc::new(GithubRepoCodeFile {
+      path: "README.md".into(),
+      sha: "deadbeef".into(),
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubRepoPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.owner = "acme".into();
+      this.repo = "widget".into();
+      this.active_tab_ix = REPO_TAB_CODE_IX;
+      this.code_files_loading = false;
+      this.code_file_loading = false;
+      this.code_files_error = None;
+      this.code_file_error = None;
+      this.code_lookup
+        .insert(file.path.to_string(), file.clone());
+      this.code_selected_file = Some(file.clone());
+      this.show_markdown_preview = true;
+      this.ensure_code_editor_for_path(file.path.as_ref(), cx);
+      this.apply_code_editor_content(markdown, cx);
+      cx.notify();
+    });
+
+    let editor_bounds = cx
+      .debug_bounds(GITHUB_REPO_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR)
+      .expect("repo preview editor pane bounds")
+      .size;
+    let preview_bounds = cx
+      .debug_bounds(GITHUB_REPO_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR)
+      .expect("repo preview render pane bounds")
+      .size;
+
+    assert!(editor_bounds.width > gpui::px(0.0));
+    assert!(editor_bounds.height > gpui::px(0.0));
+    assert!(preview_bounds.width > gpui::px(0.0));
+    assert!(preview_bounds.height > gpui::px(0.0));
   }
 
   #[test]
