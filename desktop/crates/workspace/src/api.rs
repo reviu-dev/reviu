@@ -646,6 +646,156 @@ pub struct GithubPullRequestMergeResult {
   pub method: GithubPullRequestMergeMethod,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GithubPullRequestChecksRollupState {
+  Success,
+  Pending,
+  Failure,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubPullRequestWorkflowStep {
+  pub number: u64,
+  pub name: String,
+  pub status: Option<String>,
+  pub conclusion: Option<String>,
+  pub state: GithubPullRequestChecksRollupState,
+  #[serde(rename = "started_at")]
+  pub started_at: Option<String>,
+  #[serde(rename = "completed_at")]
+  pub completed_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubPullRequestWorkflowJob {
+  pub id: u64,
+  pub name: String,
+  pub status: Option<String>,
+  pub conclusion: Option<String>,
+  pub state: GithubPullRequestChecksRollupState,
+  #[serde(rename = "started_at")]
+  pub started_at: Option<String>,
+  #[serde(rename = "completed_at")]
+  pub completed_at: Option<String>,
+  #[serde(rename = "html_url")]
+  pub html_url: Option<String>,
+  pub required: bool,
+  pub steps: Vec<GithubPullRequestWorkflowStep>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubPullRequestWorkflowRun {
+  pub id: u64,
+  pub name: Option<String>,
+  #[serde(rename = "display_title")]
+  pub display_title: Option<String>,
+  pub event: String,
+  pub status: Option<String>,
+  pub conclusion: Option<String>,
+  pub state: GithubPullRequestChecksRollupState,
+  #[serde(rename = "created_at")]
+  pub created_at: String,
+  #[serde(rename = "updated_at")]
+  pub updated_at: String,
+  #[serde(rename = "run_started_at")]
+  pub run_started_at: Option<String>,
+  #[serde(rename = "run_number")]
+  pub run_number: u64,
+  #[serde(rename = "run_attempt")]
+  pub run_attempt: Option<u64>,
+  #[serde(rename = "html_url")]
+  pub html_url: Option<String>,
+  pub jobs: Vec<GithubPullRequestWorkflowJob>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubPullRequestCheckRun {
+  pub id: u64,
+  pub name: String,
+  pub status: Option<String>,
+  pub conclusion: Option<String>,
+  pub state: GithubPullRequestChecksRollupState,
+  #[serde(rename = "started_at")]
+  pub started_at: Option<String>,
+  #[serde(rename = "completed_at")]
+  pub completed_at: Option<String>,
+  #[serde(rename = "html_url")]
+  pub html_url: Option<String>,
+  #[serde(rename = "details_url")]
+  pub details_url: Option<String>,
+  pub required: bool,
+  #[serde(rename = "app_name")]
+  pub app_name: Option<String>,
+  #[serde(rename = "app_slug")]
+  pub app_slug: Option<String>,
+  pub title: Option<String>,
+  pub summary: Option<String>,
+  pub text: Option<String>,
+  #[serde(rename = "annotations_count")]
+  pub annotations_count: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubPullRequestLegacyStatus {
+  pub id: u64,
+  pub context: String,
+  pub status: String,
+  pub state: GithubPullRequestChecksRollupState,
+  pub description: Option<String>,
+  #[serde(rename = "target_url")]
+  pub target_url: Option<String>,
+  #[serde(rename = "created_at")]
+  pub created_at: String,
+  #[serde(rename = "updated_at")]
+  pub updated_at: String,
+  pub required: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubPullRequestChecksSummary {
+  #[serde(rename = "head_sha")]
+  pub head_sha: String,
+  #[serde(rename = "overall_state")]
+  pub overall_state: GithubPullRequestChecksRollupState,
+  #[serde(rename = "required_state")]
+  pub required_state: GithubPullRequestChecksRollupState,
+  #[serde(rename = "total_checks")]
+  pub total_checks: u64,
+  #[serde(rename = "successful_checks")]
+  pub successful_checks: u64,
+  #[serde(rename = "failed_checks")]
+  pub failed_checks: u64,
+  #[serde(rename = "pending_checks")]
+  pub pending_checks: u64,
+  #[serde(rename = "required_checks_total")]
+  pub required_checks_total: u64,
+  #[serde(rename = "required_checks_passed")]
+  pub required_checks_passed: u64,
+  #[serde(rename = "required_checks_failed")]
+  pub required_checks_failed: u64,
+  #[serde(rename = "required_checks_pending")]
+  pub required_checks_pending: u64,
+  #[serde(rename = "required_contexts")]
+  pub required_contexts: Vec<String>,
+  #[serde(rename = "missing_required_contexts")]
+  pub missing_required_contexts: Vec<String>,
+  #[serde(rename = "requires_up_to_date_branch")]
+  pub requires_up_to_date_branch: bool,
+  #[serde(rename = "actions_runs")]
+  pub actions_runs: Vec<GithubPullRequestWorkflowRun>,
+  #[serde(rename = "other_checks")]
+  pub other_checks: Vec<GithubPullRequestCheckRun>,
+  #[serde(rename = "legacy_statuses")]
+  pub legacy_statuses: Vec<GithubPullRequestLegacyStatus>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubPullRequestDescriptionUpdate {
@@ -775,6 +925,11 @@ struct GithubPullRequestMergeReadinessResponse {
 struct GithubPullRequestMergeResultResponse {
   #[serde(rename = "mergeResult")]
   merge_result: GithubPullRequestMergeResult,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestChecksSummaryResponse {
+  checks: GithubPullRequestChecksSummary,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1404,6 +1559,29 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestMergeReadinessResponse>()?;
     Ok(payload.merge_readiness)
+  }
+
+  pub fn fetch_pull_request_checks(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+  ) -> Result<GithubPullRequestChecksSummary> {
+    let route = format!("/github/pr/{number}/checks");
+    let response = self
+      .authed_request(Method::GET, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<GithubPullRequestChecksSummaryResponse>()?;
+    Ok(payload.checks)
   }
 
   pub fn update_pull_request_description(
@@ -2930,6 +3108,168 @@ mod tests {
     assert_eq!(
       request_line,
       "GET /github/pr/42/merge-readiness?org=acme&repo=widget HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn fetch_pull_request_checks_parses_success_payload() {
+    let body = r#"{
+      "checks": {
+        "head_sha": "head123",
+        "overall_state": "failure",
+        "required_state": "pending",
+        "total_checks": 4,
+        "successful_checks": 2,
+        "failed_checks": 1,
+        "pending_checks": 1,
+        "required_checks_total": 3,
+        "required_checks_passed": 1,
+        "required_checks_failed": 1,
+        "required_checks_pending": 1,
+        "required_contexts": ["build", "lint", "deploy"],
+        "missing_required_contexts": ["deploy"],
+        "requires_up_to_date_branch": true,
+        "actions_runs": [
+          {
+            "id": 100,
+            "name": "CI",
+            "display_title": "CI",
+            "event": "pull_request",
+            "status": "completed",
+            "conclusion": "success",
+            "state": "success",
+            "created_at": "2026-03-19T10:00:00Z",
+            "updated_at": "2026-03-19T10:05:00Z",
+            "run_started_at": "2026-03-19T10:00:30Z",
+            "run_number": 12,
+            "run_attempt": 1,
+            "html_url": "https://github.com/acme/widget/actions/runs/100",
+            "jobs": [
+              {
+                "id": 200,
+                "name": "build",
+                "status": "completed",
+                "conclusion": "success",
+                "state": "success",
+                "started_at": "2026-03-19T10:00:30Z",
+                "completed_at": "2026-03-19T10:02:00Z",
+                "html_url": "https://github.com/acme/widget/actions/runs/100/job/200",
+                "required": true,
+                "steps": [
+                  {
+                    "number": 1,
+                    "name": "Install",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "state": "success",
+                    "started_at": "2026-03-19T10:00:31Z",
+                    "completed_at": "2026-03-19T10:00:50Z"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "other_checks": [
+          {
+            "id": 301,
+            "name": "lint",
+            "status": "completed",
+            "conclusion": "failure",
+            "state": "failure",
+            "started_at": "2026-03-19T10:01:00Z",
+            "completed_at": "2026-03-19T10:03:00Z",
+            "html_url": "https://github.com/acme/widget/runs/301",
+            "details_url": "https://github.com/acme/widget/runs/301",
+            "required": true,
+            "app_name": "Reviewdog",
+            "app_slug": "reviewdog",
+            "title": "Lint",
+            "summary": "Lint failed",
+            "text": "unused variable",
+            "annotations_count": 2
+          }
+        ],
+        "legacy_statuses": [
+          {
+            "id": 401,
+            "context": "security/brakeman",
+            "status": "success",
+            "state": "success",
+            "description": "Security checks passed",
+            "target_url": "https://ci.example.com/401",
+            "created_at": "2026-03-19T10:00:00Z",
+            "updated_at": "2026-03-19T10:04:00Z",
+            "required": false
+          }
+        ]
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let checks = api
+      .fetch_pull_request_checks("acme", "widget", 42)
+      .expect("fetch pull request checks");
+
+    assert_eq!(checks.head_sha, "head123");
+    assert_eq!(
+      checks.overall_state,
+      GithubPullRequestChecksRollupState::Failure
+    );
+    assert_eq!(
+      checks.required_state,
+      GithubPullRequestChecksRollupState::Pending
+    );
+    assert_eq!(checks.missing_required_contexts, vec!["deploy"]);
+    assert_eq!(checks.actions_runs.len(), 1);
+    assert_eq!(checks.actions_runs[0].jobs.len(), 1);
+    assert_eq!(checks.actions_runs[0].jobs[0].steps.len(), 1);
+    assert_eq!(checks.other_checks.len(), 1);
+    assert_eq!(checks.legacy_statuses.len(), 1);
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_checks_uses_expected_route() {
+    let body = r#"{
+      "checks": {
+        "head_sha": "head123",
+        "overall_state": "success",
+        "required_state": "success",
+        "total_checks": 0,
+        "successful_checks": 0,
+        "failed_checks": 0,
+        "pending_checks": 0,
+        "required_checks_total": 0,
+        "required_checks_passed": 0,
+        "required_checks_failed": 0,
+        "required_checks_pending": 0,
+        "required_contexts": [],
+        "missing_required_contexts": [],
+        "requires_up_to_date_branch": false,
+        "actions_runs": [],
+        "other_checks": [],
+        "legacy_statuses": []
+      }
+    }"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_pull_request_checks("acme", "widget", 42)
+      .expect("fetch pull request checks");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "GET /github/pr/42/checks?org=acme&repo=widget HTTP/1.1"
     );
   }
 
