@@ -472,7 +472,6 @@ impl<I: DropdownSelectItem + 'static> RenderOnce for DropdownSelect<I> {
         ButtonCustomVariant::new(cx)
           .color(theme.sidebar)
           .foreground(theme.foreground)
-          .border(theme.transparent)
           .hover(theme.secondary_hover)
           .active(theme.secondary),
       )

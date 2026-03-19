@@ -1087,8 +1087,8 @@ impl CommandPaletteCommand {
         Icon::new(IconName::Plus)
       }
       CommandPaletteCommandId::OpenGitPage => Icon::new(UiIconName::GitBranch),
-      CommandPaletteCommandId::OpenGithubPage => Icon::new(IconName::GitHub),
-      CommandPaletteCommandId::OpenGithubFromUrl => Icon::new(IconName::GitHub),
+      CommandPaletteCommandId::OpenGithubPage => Icon::new(IconName::Github),
+      CommandPaletteCommandId::OpenGithubFromUrl => Icon::new(IconName::Github),
       CommandPaletteCommandId::OpenGitHistorySidebar => Icon::new(UiIconName::History),
       CommandPaletteCommandId::OpenGitChangesSidebar => Icon::new(UiIconName::FileCode),
       CommandPaletteCommandId::OpenGitConfigPage => Self::git_config_icon(),

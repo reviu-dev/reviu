@@ -539,7 +539,7 @@ impl WorkspaceView {
       .on_click(cx.listener(Self::global_update_download_action));
 
     let sign_in_button = Button::new("workspace-global-sign-in")
-      .icon(IconName::GitHub)
+      .icon(IconName::Github)
       .label("Sign in with GitHub")
       .ghost()
       .gap_2()

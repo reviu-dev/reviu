@@ -165,7 +165,7 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
             {
               menu = menu.item(
                 PopupMenuItem::new("GitHub")
-                  .icon(IconName::GitHub)
+                  .icon(IconName::Github)
                   .on_click(move |_, window, cx| {
                     handler(window, cx);
                   }),

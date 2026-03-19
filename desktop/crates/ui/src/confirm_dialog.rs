@@ -70,7 +70,7 @@ impl ConfirmDialog {
   }
 
   pub fn build(self, dialog: Dialog) -> Dialog {
-    let mut props = DialogButtonProps::default();
+    let mut props = DialogButtonProps::default().show_cancel(true);
     if let Some(text) = self.confirm_text {
       props = props.ok_text(text);
     }
@@ -86,7 +86,6 @@ impl ConfirmDialog {
 
     let mut dialog = dialog
       .title(self.title)
-      .confirm()
       .child(self.message)
       .overlay_closable(true)
       .button_props(props);

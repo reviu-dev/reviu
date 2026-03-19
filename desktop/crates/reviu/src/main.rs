@@ -1,8 +1,8 @@
 use app_root::AppRoot;
 use editor::*;
 use gpui::{
-  App, Application, Bounds, Focusable, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions,
-  point, prelude::*, px, size,
+  App, Bounds, Focusable, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, point,
+  prelude::*, px, size,
 };
 use gpui_component::{Root, TitleBar};
 use reqwest_client::ReqwestClient;
@@ -63,7 +63,7 @@ fn main() {
   });
 
   let (open_url_tx, open_url_rx) = mpsc::channel::<Vec<String>>();
-  let app = Application::new().with_assets(AppAssets);
+  let app = gpui_platform::application().with_assets(AppAssets);
   app.on_open_urls({
     let open_url_tx = open_url_tx.clone();
     move |urls| {
