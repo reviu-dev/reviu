@@ -3877,6 +3877,28 @@ impl GitPage {
     });
   }
 
+  fn focus_history_sidebar_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.history_tree.read(cx).selected_index().is_none()
+      && let Some(first_row) = self.history_rows_cache.first()
+    {
+      let first_id = format!("history-commit:{}", first_row.commit.oid);
+      self.history_tree.update(cx, |state, cx| {
+        let item = TreeItem::new(first_id.clone(), first_id.clone());
+        state.set_selected_item(Some(&item), cx);
+        if let Some(ix) = state.selected_index() {
+          state.scroll_to_item(ix, gpui::ScrollStrategy::Top);
+        }
+      });
+    }
+
+    self.history_tree.update(cx, |state, cx| {
+      if let Some(ix) = state.selected_index() {
+        state.scroll_to_item(ix, gpui::ScrollStrategy::Top);
+      }
+      state.focus(window, cx);
+    });
+  }
+
   fn focus_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     window.focus(&self.focus_handle, cx);
   }
@@ -3909,8 +3931,12 @@ impl GitPage {
       return;
     }
 
-    // Keep page-level shortcuts active in History mode without focusing the tree.
-    self.focus_page(window, cx);
+    self.focus_history_sidebar_tree(window, cx);
+    cx.on_next_frame(window, |this, window, cx| {
+      if this.sidebar_mode == GitSidebarMode::History {
+        this.focus_history_sidebar_tree(window, cx);
+      }
+    });
   }
 
   fn set_sidebar_mode(
@@ -7163,13 +7189,56 @@ mod tests {
   }
 
   #[gpui::test]
-  fn set_sidebar_mode_history_keeps_page_focus_for_shortcuts(cx: &mut TestAppContext) {
+  fn focus_history_sidebar_tree_selects_first_commit_and_takes_focus(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
 
     git_page.update_in(cx, |this, window, cx| {
+      this.history_commits = vec![make_commit("c1", &[]), make_commit("c2", &["c1"])];
+      this.refresh_history_list(cx);
+
+      let external_focus = cx.focus_handle();
+      let page_focus = this.focus_handle.clone();
+      window.focus(&external_focus, cx);
+
+      this.focus_history_sidebar_tree(window, cx);
+
+      let focused = window.focused(cx).expect("history tree should take focus");
+      assert_ne!(focused, external_focus);
+      assert_ne!(focused, page_focus);
+      assert_eq!(
+        this
+          .history_tree
+          .read(cx)
+          .selected_entry()
+          .map(|entry| entry.item().id.to_string())
+          .as_deref(),
+        Some("history-commit:c1")
+      );
+    });
+  }
+
+  #[gpui::test]
+  fn set_sidebar_mode_history_focuses_history_tree(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-history-sidebar-focus");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.history_commits = vec![make_commit("c1", &[])];
+      this.refresh_history_list(cx);
+
+      let external_focus = cx.focus_handle();
+      let page_focus = this.focus_handle.clone();
+      window.focus(&external_focus, cx);
+
       this.set_sidebar_mode(GitSidebarMode::History, window, cx);
-      assert!(this.focus_handle.contains_focused(window, cx));
+
+      let focused = window.focused(cx).expect("history tree should take focus");
+      assert_ne!(focused, external_focus);
+      assert_ne!(focused, page_focus);
     });
   }
 
