@@ -2490,7 +2490,10 @@ impl GithubRepoPageHandle {
 }
 
 impl GithubRepoPage {
-  fn build_detached_code_editor(path: impl Into<PathBuf>, cx: &mut Context<Self>) -> Entity<Editor> {
+  fn build_detached_code_editor(
+    path: impl Into<PathBuf>,
+    cx: &mut Context<Self>,
+  ) -> Entity<Editor> {
     let editor_path = path.into();
     let load_root = PathBuf::from(".");
     let load_path = PathBuf::from(".reviu-github-repo-preview").join(&editor_path);
@@ -4427,30 +4430,34 @@ impl GithubRepoPage {
           .min_h_0()
           .child(
             h_resizable("github-repo-code-markdown-preview")
-              .child(resizable_panel().child(
-                div()
-                  .size_full()
-                  .min_w(px(0.0))
-                  .min_h_0()
-                  .flex()
-                  .flex_col()
-                  .debug_selector(|| {
-                    GITHUB_REPO_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR.to_string()
-                  })
-                  .child(self.code_editor.clone()),
-              ))
-              .child(resizable_panel().child(
-                div()
-                  .size_full()
-                  .min_w(px(0.0))
-                  .min_h_0()
-                  .flex()
-                  .flex_col()
-                  .debug_selector(|| {
-                    GITHUB_REPO_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR.to_string()
-                  })
-                  .child(preview_panel),
-              )),
+              .child(
+                resizable_panel().child(
+                  div()
+                    .size_full()
+                    .min_w(px(0.0))
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .debug_selector(|| {
+                      GITHUB_REPO_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR.to_string()
+                    })
+                    .child(self.code_editor.clone()),
+                ),
+              )
+              .child(
+                resizable_panel().child(
+                  div()
+                    .size_full()
+                    .min_w(px(0.0))
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .debug_selector(|| {
+                      GITHUB_REPO_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR.to_string()
+                    })
+                    .child(preview_panel),
+                ),
+              ),
           )
           .into_any_element()
       } else {
@@ -4866,8 +4873,7 @@ mod tests {
       this.code_file_loading = false;
       this.code_files_error = None;
       this.code_file_error = None;
-      this.code_lookup
-        .insert(file.path.to_string(), file.clone());
+      this.code_lookup.insert(file.path.to_string(), file.clone());
       this.code_selected_file = Some(file.clone());
       this.show_markdown_preview = true;
       this.ensure_code_editor_for_path(file.path.as_ref(), cx);
