@@ -32,6 +32,8 @@ import type {
   GithubRepositoryTreesResponse,
   GithubUserResponse,
   ListPullsParams,
+  MergePullRequestParams,
+  MergePullRequestResponse,
   NotificationResponse,
   NotificationsParams,
   PullRequestCommentResponse,
@@ -544,6 +546,16 @@ export async function patchGithubPullRequest(
   { token: string, params: UpdatePullRequestParams },
 ): Promise<UpdatePullRequestResponse> {
   return requestGithubData('PATCH /repos/{owner}/{repo}/pulls/{pull_number}', {
+    token,
+    params,
+  })
+}
+
+export async function mergeGithubPullRequest(
+  { token, params }:
+  { token: string, params: MergePullRequestParams },
+): Promise<MergePullRequestResponse> {
+  return requestGithubData('PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge', {
     token,
     params,
   })

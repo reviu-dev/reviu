@@ -5,11 +5,22 @@ export const DESKTOP_DEEP_LINK_SCHEME: Record<typeof env.NODE_ENV, string> = {
   production: 'reviu',
 }
 
-export function desktopDeepLinkUrl(
+export function desktopDeepLinkSchemeForNodeEnv(nodeEnv: typeof env.NODE_ENV) {
+  return DESKTOP_DEEP_LINK_SCHEME[nodeEnv]
+}
+
+export function desktopDeepLinkUrlForNodeEnv(
+  nodeEnv: typeof env.NODE_ENV,
   path: string,
 ) {
   const normalizedPath = path.replace(/^\/+/, '')
-  const desktopDeepLinkScheme = DESKTOP_DEEP_LINK_SCHEME[env.NODE_ENV]
+  const desktopDeepLinkScheme = desktopDeepLinkSchemeForNodeEnv(nodeEnv)
 
   return `${desktopDeepLinkScheme}://${normalizedPath}`
+}
+
+export function desktopDeepLinkUrl(
+  path: string,
+) {
+  return desktopDeepLinkUrlForNodeEnv(env.NODE_ENV, path)
 }

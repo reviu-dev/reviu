@@ -2,6 +2,7 @@ use anyhow::Result;
 use reqwest::blocking::Client;
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crate::AppProfile;
@@ -9,6 +10,31 @@ use crate::sentry_context;
 
 const DEFAULT_API_BASE_URL: &str = "http://localhost:3000";
 const KEYCHAIN_USERNAME: &str = "bearer";
+
+#[derive(Debug)]
+pub struct ApiError {
+  status: Option<StatusCode>,
+  message: String,
+}
+
+impl ApiError {
+  pub fn status_code_u16(&self) -> Option<u16> {
+    self.status.map(|status| status.as_u16())
+  }
+}
+
+impl fmt::Display for ApiError {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write!(f, "{}", self.message)
+  }
+}
+
+impl std::error::Error for ApiError {}
+
+#[derive(Debug, Deserialize)]
+struct ApiErrorResponse {
+  error: String,
+}
 
 fn resolve_api_base_url(
   runtime_api_base_url: Option<String>,
@@ -526,6 +552,26 @@ pub enum GithubPullRequestStatus {
   Draft,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GithubPullRequestMergeMethod {
+  Merge,
+  Squash,
+  Rebase,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GithubPullRequestMergeReadinessStatus {
+  Checking,
+  Ready,
+  Blocked,
+  Forbidden,
+  Draft,
+  Closed,
+  Merged,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestDetails {
   pub number: u64,
@@ -564,6 +610,37 @@ pub struct GithubPullRequestDetails {
   pub repository: GithubRepository,
   #[serde(rename = "head_repository")]
   pub head_repository: Option<GithubRepository>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubPullRequestMergeReadiness {
+  pub status: GithubPullRequestMergeReadinessStatus,
+  pub message: String,
+  #[serde(rename = "current_head_sha")]
+  pub current_head_sha: String,
+  #[serde(rename = "available_methods")]
+  pub available_methods: Vec<GithubPullRequestMergeMethod>,
+  #[serde(rename = "default_method")]
+  pub default_method: Option<GithubPullRequestMergeMethod>,
+  #[serde(rename = "can_merge_now")]
+  pub can_merge_now: bool,
+  #[serde(rename = "viewer_can_merge")]
+  pub viewer_can_merge: bool,
+  #[serde(rename = "mergeable_state")]
+  pub mergeable_state: Option<String>,
+  pub rebaseable: Option<bool>,
+  #[serde(rename = "auto_merge_enabled")]
+  pub auto_merge_enabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubPullRequestMergeResult {
+  pub merged: bool,
+  pub sha: String,
+  pub message: String,
+  pub method: GithubPullRequestMergeMethod,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -686,6 +763,18 @@ struct GithubPullRequestDescriptionUpdateResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct GithubPullRequestMergeReadinessResponse {
+  #[serde(rename = "mergeReadiness")]
+  merge_readiness: GithubPullRequestMergeReadiness,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestMergeResultResponse {
+  #[serde(rename = "mergeResult")]
+  merge_result: GithubPullRequestMergeResult,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubPullRequestFilesResponse {
   files: Vec<GithubPullRequestFile>,
 }
@@ -759,6 +848,17 @@ struct CreateGithubPullRequestReviewRequest<'a> {
   event: GithubPullRequestReviewEvent,
   #[serde(skip_serializing_if = "Option::is_none")]
   body: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateGithubPullRequestMergeRequest<'a> {
+  method: GithubPullRequestMergeMethod,
+  #[serde(rename = "expectedHeadSha")]
+  expected_head_sha: &'a str,
+  #[serde(rename = "commitTitle", skip_serializing_if = "Option::is_none")]
+  commit_title: Option<&'a str>,
+  #[serde(rename = "commitMessage", skip_serializing_if = "Option::is_none")]
+  commit_message: Option<&'a str>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -845,6 +945,21 @@ impl ApiClient {
 
   fn record_http_status(method: &str, route: &str, status: StatusCode) {
     sentry_context::record_http_status(method, route, status.as_u16());
+  }
+
+  fn api_error_from_response(response: reqwest::blocking::Response) -> anyhow::Error {
+    let status = response.status();
+    let message = response
+      .json::<ApiErrorResponse>()
+      .ok()
+      .map(|payload| payload.error)
+      .unwrap_or_else(|| format!("unexpected status: {}", status));
+
+    ApiError {
+      status: Some(status),
+      message,
+    }
+    .into()
   }
 
   pub fn sign_in_with_github(&self) -> Result<Option<String>> {
@@ -1265,6 +1380,29 @@ impl ApiClient {
     Ok(payload.pull_request)
   }
 
+  pub fn fetch_pull_request_merge_readiness(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+  ) -> Result<GithubPullRequestMergeReadiness> {
+    let route = format!("/github/pr/{number}/merge-readiness");
+    let response = self
+      .authed_request(Method::GET, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<GithubPullRequestMergeReadinessResponse>()?;
+    Ok(payload.merge_readiness)
+  }
+
   pub fn update_pull_request_description(
     &self,
     owner: &str,
@@ -1288,6 +1426,45 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestDescriptionUpdateResponse>()?;
     Ok(payload.pull_request)
+  }
+
+  pub fn merge_pull_request(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    method: GithubPullRequestMergeMethod,
+    expected_head_sha: &str,
+    commit_title: Option<&str>,
+    commit_message: Option<&str>,
+  ) -> Result<GithubPullRequestMergeResult> {
+    let route = format!("/github/pr/{number}/merge");
+    let trimmed_title = commit_title
+      .map(str::trim)
+      .filter(|value| !value.is_empty());
+    let trimmed_message = commit_message
+      .map(str::trim)
+      .filter(|value| !value.is_empty());
+    let response = self
+      .authed_request(Method::PUT, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&CreateGithubPullRequestMergeRequest {
+        method,
+        expected_head_sha,
+        commit_title: trimmed_title,
+        commit_message: trimmed_message,
+      })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("PUT", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<GithubPullRequestMergeResultResponse>()?;
+    Ok(payload.merge_result)
   }
 
   pub fn fetch_pull_request_files(
@@ -2675,6 +2852,85 @@ mod tests {
   }
 
   #[test]
+  fn fetch_pull_request_merge_readiness_parses_success_payload() {
+    let body = r#"{
+      "mergeReadiness": {
+        "status": "ready",
+        "message": "This pull request is ready to merge.",
+        "current_head_sha": "head123",
+        "available_methods": ["merge", "squash", "rebase"],
+        "default_method": "merge",
+        "can_merge_now": true,
+        "viewer_can_merge": true,
+        "mergeable_state": "clean",
+        "rebaseable": true,
+        "auto_merge_enabled": false
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let readiness = api
+      .fetch_pull_request_merge_readiness("acme", "widget", 42)
+      .expect("fetch pull request merge readiness");
+
+    assert_eq!(
+      readiness.status,
+      GithubPullRequestMergeReadinessStatus::Ready
+    );
+    assert_eq!(readiness.current_head_sha, "head123");
+    assert_eq!(
+      readiness.available_methods,
+      vec![
+        GithubPullRequestMergeMethod::Merge,
+        GithubPullRequestMergeMethod::Squash,
+        GithubPullRequestMergeMethod::Rebase
+      ]
+    );
+    assert_eq!(
+      readiness.default_method,
+      Some(GithubPullRequestMergeMethod::Merge)
+    );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_merge_readiness_uses_expected_route() {
+    let body = r#"{
+      "mergeReadiness": {
+        "status": "checking",
+        "message": "Pending",
+        "current_head_sha": "head123",
+        "available_methods": [],
+        "default_method": null,
+        "can_merge_now": false,
+        "viewer_can_merge": false,
+        "mergeable_state": null,
+        "rebaseable": null,
+        "auto_merge_enabled": false
+      }
+    }"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_pull_request_merge_readiness("acme", "widget", 42)
+      .expect("fetch pull request merge readiness");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "GET /github/pr/42/merge-readiness?org=acme&repo=widget HTTP/1.1"
+    );
+  }
+
+  #[test]
   fn update_pull_request_description_parses_success_payload() {
     let body = r#"{
       "pullRequest": {
@@ -2748,6 +3004,134 @@ mod tests {
       files[0].previous_filename.as_deref(),
       Some("src/old_main.rs")
     );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn merge_pull_request_parses_success_payload() {
+    let body = r#"{
+      "mergeResult": {
+        "merged": true,
+        "sha": "merged123",
+        "message": "Pull Request successfully merged",
+        "method": "squash"
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let result = api
+      .merge_pull_request(
+        "acme",
+        "widget",
+        42,
+        GithubPullRequestMergeMethod::Squash,
+        "head123",
+        Some("Squash title"),
+        Some("Squash message"),
+      )
+      .expect("merge pull request");
+
+    assert!(result.merged);
+    assert_eq!(result.sha, "merged123");
+    assert_eq!(result.method, GithubPullRequestMergeMethod::Squash);
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn merge_pull_request_serializes_method_head_sha_and_optional_message_fields() {
+    let body = r#"{
+      "mergeResult": {
+        "merged": true,
+        "sha": "merged123",
+        "message": "Pull Request successfully merged",
+        "method": "merge"
+      }
+    }"#;
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .merge_pull_request(
+        "acme",
+        "widget",
+        42,
+        GithubPullRequestMergeMethod::Merge,
+        "head123",
+        Some("  Merge title  "),
+        Some("  Merge message  "),
+      )
+      .expect("merge pull request");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("\"method\":\"merge\""));
+    assert!(request.contains("\"expectedHeadSha\":\"head123\""));
+    assert!(request.contains("\"commitTitle\":\"Merge title\""));
+    assert!(request.contains("\"commitMessage\":\"Merge message\""));
+  }
+
+  #[test]
+  fn merge_pull_request_omits_empty_title_and_message_fields() {
+    let body = r#"{
+      "mergeResult": {
+        "merged": true,
+        "sha": "merged123",
+        "message": "Pull Request successfully merged",
+        "method": "rebase"
+      }
+    }"#;
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .merge_pull_request(
+        "acme",
+        "widget",
+        42,
+        GithubPullRequestMergeMethod::Rebase,
+        "head123",
+        Some("   "),
+        Some(""),
+      )
+      .expect("merge pull request");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("\"method\":\"rebase\""));
+    assert!(!request.contains("\"commitTitle\""));
+    assert!(!request.contains("\"commitMessage\""));
+  }
+
+  #[test]
+  fn merge_pull_request_surfaces_backend_error_message() {
+    let body = r#"{"error":"Base branch moved; refresh and try again."}"#;
+    let (base_url, handle) = start_single_response_server("409 CONFLICT", body);
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .merge_pull_request(
+        "acme",
+        "widget",
+        42,
+        GithubPullRequestMergeMethod::Merge,
+        "head123",
+        None,
+        None,
+      )
+      .expect_err("merge pull request should fail");
+
+    assert_eq!(err.to_string(), "Base branch moved; refresh and try again.");
+    let api_error = err.downcast_ref::<ApiError>().expect("api error");
+    assert_eq!(api_error.status_code_u16(), Some(409));
     handle.join().expect("join server thread");
   }
 

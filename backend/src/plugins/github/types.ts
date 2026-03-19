@@ -13,6 +13,8 @@ export type PullRequestReviewsParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews']['parameters']
 export type UpdatePullRequestParams
   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
+export type MergePullRequestParams
+  = Endpoints['PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge']['parameters']
 export type CreatePullRequestCommentParams
   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
 export type CreatePullRequestReviewParams
@@ -46,6 +48,8 @@ export type PullRequestReviewResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews']['response']['data'][number]
 export type UpdatePullRequestResponse
   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/{pull_number}']['response']['data']
+export type MergePullRequestResponse
+  = Endpoints['PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge']['response']['data']
 export type CreatePullRequestCommentResponse
   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['response']['data']
 export type CreatePullRequestReviewResponse
@@ -186,6 +190,37 @@ export interface GithubPullRequestDetails {
   labels: PullRequestDetailsResponse['labels']
   repository: GithubRepository
   head_repository: GithubRepository
+}
+
+export type GithubPullRequestMergeMethod = NonNullable<MergePullRequestParams['merge_method']>
+
+export type GithubPullRequestMergeReadinessStatus
+  = | 'checking'
+    | 'ready'
+    | 'blocked'
+    | 'forbidden'
+    | 'draft'
+    | 'closed'
+    | 'merged'
+
+export interface GithubPullRequestMergeReadiness {
+  status: GithubPullRequestMergeReadinessStatus
+  message: string
+  current_head_sha: PullRequestDetailsResponse['head']['sha']
+  available_methods: GithubPullRequestMergeMethod[]
+  default_method: GithubPullRequestMergeMethod | null
+  can_merge_now: boolean
+  viewer_can_merge: boolean
+  mergeable_state: PullRequestDetailsResponse['mergeable_state'] | null
+  rebaseable: PullRequestDetailsResponse['rebaseable']
+  auto_merge_enabled: boolean
+}
+
+export interface GithubPullRequestMergeResult {
+  merged: MergePullRequestResponse['merged']
+  sha: MergePullRequestResponse['sha']
+  message: MergePullRequestResponse['message']
+  method: GithubPullRequestMergeMethod
 }
 
 export interface GithubPullRequestDescriptionUpdate {

@@ -30,6 +30,8 @@ import type {
   GithubPullRequestDetailsAuthor,
   GithubPullRequestFile,
   GithubPullRequestIssueComment,
+  GithubPullRequestMergeReadiness,
+  GithubPullRequestMergeResult,
   GithubPullRequestReview,
   GithubPullRequestReviewComment,
   GithubRepositoryBranch,
@@ -42,6 +44,7 @@ import type {
   GithubRepositoryTreeParams,
   GithubUserRepository,
   ListPullsParams,
+  MergePullRequestParams,
   NotificationsParams,
   PullRequestCommentsParams,
   PullRequestParams,
@@ -102,11 +105,13 @@ import {
   mergeGithubIssueDetailsPayload,
 } from '../plugins/github/issue-details.js'
 import { runWithGithubMetricsContext } from '../plugins/github/metrics/github-metrics-context.js'
+import { fetchGithubPullRequestMergeReadiness } from '../plugins/github/pull-request-merge.js'
 import {
   createPullRequestLineCommentBodySchema,
   createPullRequestReviewBodySchema,
   createPullRequestThreadReplyBodySchema,
   issueCommentBodySchema,
+  mergePullRequestBodySchema,
   updateDescriptionBodySchema,
   updatePullRequestCommentBodySchema,
 } from '../plugins/github/schemas.js'
@@ -139,6 +144,7 @@ import {
   fetchGithubRepositoryTreesConditionally,
   fetchGithubSearchIssues,
   fetchGithubUserRepositories,
+  mergeGithubPullRequest,
   patchGithubIssue,
   patchGithubIssueComment,
   patchGithubPullRequest,
@@ -1554,6 +1560,117 @@ export const githubRoutes = githubRouter
       if (status === 403 || status === 404 || status === 422) {
         return ctx.json({ error: (error as Error).message }, status)
       }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/pr/:id/merge-readiness', async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const mergeReadiness = await withGithubMetrics(user.id, 'pull_request.merge_readiness', () =>
+        fetchGithubPullRequestMergeReadiness({
+          token: githubToken,
+          params: {
+            owner: org,
+            repo,
+            pull_number: pullNumber,
+          },
+        }))
+
+      if (mergeReadiness.status === 'forbidden') {
+        logger.warn({
+          userId: user.id,
+          owner: org,
+          repo,
+          pullNumber,
+          readinessStatus: mergeReadiness.status,
+          readinessMessage: mergeReadiness.message,
+          viewerCanMerge: mergeReadiness.viewer_can_merge,
+          mergeableState: mergeReadiness.mergeable_state,
+          availableMethods: mergeReadiness.available_methods,
+        }, 'GitHub merge readiness returned forbidden to desktop client')
+      }
+
+      return ctx.json({ mergeReadiness } satisfies { mergeReadiness: GithubPullRequestMergeReadiness }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .put('/pr/:id/merge', zValidator(
+    'json',
+    mergePullRequestBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const {
+      method,
+      expectedHeadSha,
+      commitTitle,
+      commitMessage,
+    } = ctx.req.valid('json')
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+    const trimmedCommitTitle = commitTitle?.trim()
+    const trimmedCommitMessage = commitMessage?.trim()
+
+    try {
+      const params: MergePullRequestParams = {
+        owner: org,
+        repo,
+        pull_number: pullNumber,
+        sha: expectedHeadSha,
+        merge_method: method,
+        ...(trimmedCommitTitle ? { commit_title: trimmedCommitTitle } : {}),
+        ...(trimmedCommitMessage ? { commit_message: trimmedCommitMessage } : {}),
+      }
+
+      const data = await withGithubMetrics(user.id, 'pull_request.merge', () =>
+        mergeGithubPullRequest({
+          token: githubToken,
+          params,
+        }))
+
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+      }))
+
+      const mergeResult = {
+        merged: data.merged,
+        sha: data.sha,
+        message: data.message,
+        method,
+      } satisfies GithubPullRequestMergeResult
+
+      return ctx.json({ mergeResult }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 405 || status === 409 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })

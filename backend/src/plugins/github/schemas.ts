@@ -30,3 +30,10 @@ export const createPullRequestReviewBodySchema = z.object({
   event: z.enum(['COMMENT', 'APPROVE', 'REQUEST_CHANGES']),
   body: z.string().optional(),
 })
+
+export const mergePullRequestBodySchema = z.object({
+  method: z.enum(['merge', 'squash', 'rebase']),
+  expectedHeadSha: z.string().trim().min(1, 'Missing expected head sha'),
+  commitTitle: z.string().optional(),
+  commitMessage: z.string().optional(),
+})
