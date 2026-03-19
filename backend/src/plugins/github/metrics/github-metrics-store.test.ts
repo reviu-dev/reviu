@@ -4,24 +4,6 @@ let buildGithubMetricsOverviewFromPersistedRows: typeof import('./github-metrics
 let buildGithubMetricsOperationDrilldownFromPersistedRows: typeof import('./github-metrics-store.js').buildGithubMetricsOperationDrilldownFromPersistedRows
 
 beforeAll(async () => {
-  process.env.NODE_ENV = 'development'
-  process.env.BASE_URL ??= 'http://localhost:3000'
-  process.env.PG_USER ??= 'postgres'
-  process.env.PG_PASSWORD ??= 'postgres'
-  process.env.PG_HOST ??= 'localhost'
-  process.env.PG_PORT ??= '5432'
-  process.env.PG_DATABASE ??= 'app'
-  process.env.AUTH_SECRET ??= 'test-secret'
-  process.env.GITHUB_OAUTH_CLIENT_SECRET ??= 'test-secret'
-  process.env.GITHUB_OAUTH_CLIENT_ID ??= 'test-client-id'
-  process.env.REDIS_HOST ??= 'localhost'
-  process.env.REDIS_PORT ??= '6379'
-  process.env.POLAR_ACCESS_TOKEN ??= 'polar-token'
-  process.env.POLAR_SUCCESS_URL ??= 'http://localhost:3000/polar/success'
-  process.env.POLAR_SUBSCRIPTION_PRODUCT_ID ??= 'product-id'
-  process.env.DESKTOP_UPDATE_MANIFEST_URL ??= 'http://localhost:3000/desktop/updates'
-  process.env.WEB_DASHBOARD_URL ??= 'http://localhost:5173'
-
   ;({
     buildGithubMetricsOverviewFromPersistedRows,
     buildGithubMetricsOperationDrilldownFromPersistedRows,
