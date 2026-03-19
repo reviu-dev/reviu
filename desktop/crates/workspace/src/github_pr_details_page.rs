@@ -4564,7 +4564,7 @@ impl GithubPrDetailsPage {
         .into_any_element()
     } else {
       v_flex()
-        .gap_2()
+        .gap_4()
         .children(items.into_iter().map(|item| {
           let timestamp = format_compact_datetime(&item.timestamp);
           let scope_id = overview_conversation_scope_id(pr.number, item.kind, item.id);
@@ -5403,9 +5403,6 @@ impl GithubPrDetailsPage {
 
     let content = v_flex()
       .w_full()
-      .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
-      .pb_10()
-      .mx_auto()
       .gap_4()
       .child(
         h_flex()
@@ -5686,7 +5683,9 @@ impl GithubPrDetailsPage {
       .id("github-pr-overview-scroll")
       .size_full()
       .overflow_y_scrollbar()
-      .child(v_flex().w_full().pt_4().pb_32().child(content))
+      .mx_auto()
+      .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+      .child(div().pt_10().pb_32().child(content))
   }
 
   fn render_files_sidebar(
