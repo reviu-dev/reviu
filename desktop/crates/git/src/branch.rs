@@ -168,11 +168,14 @@ pub fn switch_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
 
-  let (refname, checkout_target) = match branch.kind {
-    BranchKind::Local => (
-      format!("refs/heads/{}", branch.name),
-      format!("refs/heads/{}", branch.name),
-    ),
+  let (refname, target_oid) = match branch.kind {
+    BranchKind::Local => {
+      let refname = format!("refs/heads/{}", branch.name);
+      let oid = repo
+        .refname_to_id(&refname)
+        .with_context(|| format!("resolve local branch {:?}", branch.name))?;
+      (refname, oid)
+    }
     BranchKind::Remote => {
       let remote_ref = format!("refs/remotes/{}", branch.name);
       let oid = repo
@@ -193,20 +196,25 @@ pub fn switch_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
         let _ = local_branch.set_upstream(Some(&branch.name));
       }
 
-      (
-        format!("refs/heads/{}", local_name),
-        format!("refs/heads/{}", local_name),
-      )
+      let refname = format!("refs/heads/{}", local_name);
+      let oid = repo
+        .refname_to_id(&refname)
+        .with_context(|| format!("resolve local branch {:?}", local_name))?;
+      (refname, oid)
     }
   };
 
+  let object = repo
+    .find_object(target_oid, None)
+    .with_context(|| format!("find target object for {:?}", refname))?;
+  let mut checkout = CheckoutBuilder::new();
+  checkout.safe();
+  repo
+    .checkout_tree(&object, Some(&mut checkout))
+    .with_context(|| format!("checkout target tree for {:?}", refname))?;
   repo
     .set_head(&refname)
     .with_context(|| format!("set HEAD to {:?}", refname))?;
-  let mut checkout = CheckoutBuilder::new();
-  checkout.safe();
-  repo.checkout_head(Some(&mut checkout))?;
-  repo.set_head(&checkout_target)?;
   Ok(())
 }
 
@@ -790,6 +798,7 @@ pub fn pop_stash(repo_root: &Path, index: usize) -> Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::list_repo_status;
   use git2::RemoteCallbacks;
   use git2::build::CheckoutBuilder;
   use std::{
@@ -966,6 +975,50 @@ mod tests {
 
     let status = current_branch_status(&repo.path).expect("branch status");
     assert_eq!(status.name, "feature");
+  }
+
+  #[test]
+  fn switch_branch_keeps_repo_status_clean_when_target_branch_is_clean() {
+    let repo = TempRepo::init("branch-switch-clean-status");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "main\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(&repo.path, rel_path, "feature\n", "feature commit");
+    let feature_entries = list_repo_status(&repo.path).expect("status on feature branch");
+    assert!(
+      feature_entries.is_empty(),
+      "feature branch should stay clean after commit, got: {feature_entries:?}"
+    );
+
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    let base_entries = list_repo_status(&repo.path).expect("status on base branch");
+    assert!(
+      base_entries.is_empty(),
+      "base branch should stay clean after switch, got: {base_entries:?}"
+    );
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(rel_path)).expect("read checked out file"),
+      "main\n"
+    );
   }
 
   #[test]
