@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -82,6 +83,41 @@ pub fn list_repo_status(repo_root: &Path) -> Result<Vec<RepoStatusEntry>> {
 
   entries.sort_by(|a, b| a.path.cmp(&b.path));
   Ok(entries)
+}
+
+pub fn list_repo_worktree_files(repo_root: &Path) -> Result<Vec<PathBuf>> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let mut files = BTreeSet::new();
+
+  let index = repo.index().context("open git index")?;
+  for entry in index.iter() {
+    let rel_path = PathBuf::from(String::from_utf8_lossy(entry.path.as_ref()).into_owned());
+    if repo_root.join(&rel_path).is_file() {
+      files.insert(rel_path);
+    }
+  }
+
+  let mut opts = StatusOptions::new();
+  opts
+    .include_untracked(true)
+    .recurse_untracked_dirs(true)
+    .update_index(true)
+    .include_ignored(false);
+  let statuses = repo
+    .statuses(Some(&mut opts))
+    .context("read repository statuses")?;
+  for entry in statuses.iter() {
+    let Some(path) = entry.path() else {
+      continue;
+    };
+    let rel_path = PathBuf::from(path);
+    if repo_root.join(&rel_path).is_file() {
+      files.insert(rel_path);
+    }
+  }
+
+  Ok(files.into_iter().collect())
 }
 
 pub fn stage_file(repo_root: &Path, rel_path: &Path) -> Result<()> {
@@ -488,5 +524,30 @@ mod tests {
     assert_eq!(entries[0].path, rel_path);
     assert_eq!(entries[0].status, RepoStatusKind::Deleted);
     assert_eq!(entries[0].stage, RepoStage::Staged);
+  }
+
+  #[test]
+  fn list_repo_worktree_files_includes_tracked_and_untracked_but_skips_ignored() {
+    let temp = TempDir::new("status-worktree-files");
+    init_repo(&temp.path);
+    std::fs::write(temp.path.join(".gitignore"), "ignored/\n").expect("write gitignore");
+    let tracked = Path::new("tracked.txt");
+    commit_file(&temp.path, tracked, "tracked\n", "initial");
+
+    std::fs::create_dir_all(temp.path.join("src")).expect("create untracked dir");
+    std::fs::write(temp.path.join("src/lib.rs"), "pub fn lib() {}\n").expect("write untracked");
+    std::fs::create_dir_all(temp.path.join("ignored")).expect("create ignored dir");
+    std::fs::write(temp.path.join("ignored/secret.txt"), "ignored\n").expect("write ignored");
+
+    let files = list_repo_worktree_files(temp.path.as_path()).expect("list repo worktree files");
+
+    assert_eq!(
+      files,
+      vec![
+        PathBuf::from(".gitignore"),
+        PathBuf::from("src/lib.rs"),
+        PathBuf::from("tracked.txt"),
+      ]
+    );
   }
 }

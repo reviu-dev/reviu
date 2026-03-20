@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
 use git2::{
   BranchType, CherrypickOptions, Cred, ErrorCode, FetchOptions, Rebase, RemoteCallbacks,
-  Repository, RepositoryState, ResetType, Signature, StashFlags,
+  Repository, RepositoryState, ResetType, Signature, StashFlags, StatusOptions,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +25,12 @@ pub struct BranchStatus {
   pub ahead: usize,
   pub behind: usize,
   pub has_upstream: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GithubRemoteRepo {
+  pub owner: String,
+  pub repo: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,6 +112,24 @@ pub fn current_branch_status(repo_root: &Path) -> Result<BranchStatus> {
   })
 }
 
+pub fn current_head_sha(repo_root: &Path) -> Result<Option<String>> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  Ok(
+    repo
+      .head()
+      .ok()
+      .and_then(|head| head.target())
+      .map(|oid| oid.to_string()),
+  )
+}
+
+pub fn current_github_remote_repo(repo_root: &Path) -> Result<Option<GithubRemoteRepo>> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  resolve_github_remote_repo(&repo)
+}
+
 pub fn detached_head_label(repo_root: &Path) -> Result<String> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
@@ -164,6 +188,75 @@ pub fn fetch(repo_root: &Path) -> Result<()> {
   Ok(())
 }
 
+pub fn sync_current_branch_to_head(
+  repo_root: &Path,
+  branch_name: &str,
+  target_head_sha: &str,
+) -> Result<()> {
+  let branch_name = branch_name.trim();
+  if branch_name.is_empty() {
+    bail!("branch name is empty");
+  }
+
+  let target_head_sha = target_head_sha.trim();
+  if target_head_sha.is_empty() {
+    bail!("target head sha is empty");
+  }
+
+  ensure_worktree_clean(repo_root)?;
+  fetch(repo_root)?;
+
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let head = repo.head().context("read HEAD reference")?;
+  if !head.is_branch() {
+    bail!("current HEAD is detached");
+  }
+
+  let current_branch = head.shorthand().unwrap_or("HEAD");
+  if current_branch != branch_name {
+    bail!("current branch {current_branch:?} does not match expected branch {branch_name:?}");
+  }
+
+  let current_oid = head.target().context("read HEAD target")?;
+  let target_oid =
+    git2::Oid::from_str(target_head_sha).context("parse target pull request head sha")?;
+  if current_oid == target_oid {
+    return Ok(());
+  }
+
+  repo
+    .find_commit(target_oid)
+    .with_context(|| format!("find target commit {target_head_sha} after fetch"))?;
+
+  if !repo
+    .graph_descendant_of(target_oid, current_oid)
+    .context("compare current branch and target pull request head")?
+  {
+    bail!("target pull request head is not a fast-forward from the current branch");
+  }
+
+  let branch = repo
+    .find_branch(branch_name, BranchType::Local)
+    .with_context(|| format!("find local branch {branch_name:?}"))?;
+  branch
+    .into_reference()
+    .set_target(target_oid, "reviu: sync to PR head")
+    .context("advance local branch to pull request head")?;
+
+  let branch_refname = format!("refs/heads/{branch_name}");
+  repo
+    .set_head(&branch_refname)
+    .context("point HEAD at synced local branch")?;
+  let mut checkout = CheckoutBuilder::new();
+  checkout.force();
+  repo
+    .checkout_head(Some(&mut checkout))
+    .context("checkout synced pull request head")?;
+
+  Ok(())
+}
+
 pub fn switch_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
@@ -216,6 +309,106 @@ pub fn switch_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
     .set_head(&refname)
     .with_context(|| format!("set HEAD to {:?}", refname))?;
   Ok(())
+}
+
+fn ensure_worktree_clean(repo_root: &Path) -> Result<()> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let mut opts = StatusOptions::new();
+  opts
+    .include_untracked(true)
+    .recurse_untracked_dirs(true)
+    .include_ignored(false);
+  let statuses = repo
+    .statuses(Some(&mut opts))
+    .context("read worktree status")?;
+  if statuses.iter().any(|entry| !entry.status().is_empty()) {
+    bail!("local changes detected");
+  }
+  Ok(())
+}
+
+fn resolve_github_remote_repo(repo: &Repository) -> Result<Option<GithubRemoteRepo>> {
+  if let Some(url) = preferred_remote_url(repo)?
+    && let Some(parsed) = parse_github_remote_repo(url.as_str())
+  {
+    return Ok(Some(parsed));
+  }
+
+  let remotes = repo.remotes().context("list remotes")?;
+  for remote_name in remotes.iter().flatten() {
+    let Ok(remote) = repo.find_remote(remote_name) else {
+      continue;
+    };
+    if let Some(url) = remote.url()
+      && let Some(parsed) = parse_github_remote_repo(url)
+    {
+      return Ok(Some(parsed));
+    }
+  }
+
+  Ok(None)
+}
+
+fn preferred_remote_url(repo: &Repository) -> Result<Option<String>> {
+  if let Ok(head) = repo.head()
+    && head.is_branch()
+  {
+    let local_name = head.shorthand().unwrap_or("HEAD");
+    if local_name != "HEAD"
+      && let Ok(local_branch) = repo.find_branch(local_name, BranchType::Local)
+      && let Ok(upstream) = local_branch.upstream()
+    {
+      let upstream_name = upstream.name()?.unwrap_or("");
+      if !upstream_name.is_empty() {
+        let remote_name = upstream_name.split('/').next().unwrap_or("origin");
+        if let Ok(remote) = repo.find_remote(remote_name)
+          && let Some(url) = remote.url()
+        {
+          return Ok(Some(url.to_string()));
+        }
+      }
+    }
+  }
+
+  if let Ok(remote) = repo.find_remote("origin")
+    && let Some(url) = remote.url()
+  {
+    return Ok(Some(url.to_string()));
+  }
+
+  Ok(None)
+}
+
+fn parse_github_remote_repo(url: &str) -> Option<GithubRemoteRepo> {
+  let url = url.trim().trim_end_matches('/');
+  let path = if let Some(path) = url.strip_prefix("https://github.com/") {
+    path
+  } else if let Some(path) = url.strip_prefix("http://github.com/") {
+    path
+  } else if let Some(path) = url.strip_prefix("ssh://git@github.com/") {
+    path
+  } else if let Some(path) = url.strip_prefix("git@github.com:") {
+    path
+  } else {
+    return None;
+  };
+
+  let path = path
+    .trim_end_matches('/')
+    .strip_suffix(".git")
+    .unwrap_or(path);
+  let mut parts = path.split('/').filter(|part| !part.is_empty());
+  let owner = parts.next()?;
+  let repo = parts.next()?;
+  if parts.next().is_some() {
+    return None;
+  }
+
+  Some(GithubRemoteRepo {
+    owner: owner.to_string(),
+    repo: repo.to_string(),
+  })
 }
 
 pub fn checkout_detached_target(repo_root: &Path, target: &str) -> Result<()> {
@@ -1211,6 +1404,139 @@ mod tests {
       .expect("read remote-tracking branch after fetch");
     assert_ne!(before, after);
     assert_eq!(after, expected);
+  }
+
+  #[test]
+  fn current_github_remote_repo_prefers_upstream_remote() {
+    let remote = TempBareRepo::init("branch-github-remote-origin");
+    let local = TempRepo::init("branch-github-remote-local");
+
+    let _ = commit_text_file(&local.path, Path::new("README.md"), "v1\n", "initial");
+    let local_repo = Repository::open(&local.path).expect("open local repo");
+    local_repo
+      .remote("origin", remote.path.to_str().expect("origin path utf8"))
+      .expect("add origin remote");
+    local_repo
+      .remote("fork", "git@github.com:acme/widget.git")
+      .expect("add fork remote");
+
+    let branch_name = current_branch_status(&local.path)
+      .expect("read local branch status")
+      .name;
+    push_branch_to_remote(&local.path, &branch_name, "origin");
+
+    let mut local_branch = local_repo
+      .find_branch(&branch_name, BranchType::Local)
+      .expect("find local branch");
+    let head_oid = local_repo
+      .head()
+      .expect("read local head")
+      .target()
+      .expect("local head target");
+    local_repo
+      .reference(
+        &format!("refs/remotes/fork/{branch_name}"),
+        head_oid,
+        true,
+        "test fork upstream",
+      )
+      .expect("create fork remote-tracking ref");
+    local_branch
+      .set_upstream(Some(&format!("fork/{branch_name}")))
+      .expect("set upstream to fork");
+
+    let remote_repo =
+      current_github_remote_repo(&local.path).expect("resolve current github remote repo");
+    assert_eq!(
+      remote_repo,
+      Some(GithubRemoteRepo {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+      })
+    );
+  }
+
+  #[test]
+  fn sync_current_branch_to_head_fast_forwards_clean_branch() {
+    let remote = TempBareRepo::init("branch-sync-pr-head-remote");
+    let source = TempRepo::init("branch-sync-pr-head-source");
+    let clone_dir = TempDir::new("branch-sync-pr-head-clone");
+
+    let _ = commit_text_file(&source.path, Path::new("README.md"), "v1\n", "initial");
+    let source_repo = Repository::open(&source.path).expect("open source repo");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin remote");
+
+    let branch_name = current_branch_status(&source.path)
+      .expect("read source branch status")
+      .name;
+    push_branch_to_remote(&source.path, &branch_name, "origin");
+
+    let clone_repo = Repository::clone(
+      remote.path.to_str().expect("remote path utf8"),
+      &clone_dir.path,
+    )
+    .expect("clone remote");
+    let mut clone_branch = clone_repo
+      .find_branch(&branch_name, BranchType::Local)
+      .expect("find clone branch");
+    clone_branch
+      .set_upstream(Some(&format!("origin/{branch_name}")))
+      .expect("set clone upstream");
+
+    let target_oid = commit_text_file(&source.path, Path::new("README.md"), "v2\n", "update");
+    push_branch_to_remote(&source.path, &branch_name, "origin");
+
+    let before = current_head_sha(&clone_dir.path)
+      .expect("read clone head before sync")
+      .expect("clone head should exist");
+    assert_ne!(before, target_oid.to_string());
+
+    sync_current_branch_to_head(&clone_dir.path, &branch_name, &target_oid.to_string())
+      .expect("sync branch to pull request head");
+
+    let after = current_head_sha(&clone_dir.path)
+      .expect("read clone head after sync")
+      .expect("clone head should exist");
+    assert_eq!(after, target_oid.to_string());
+    assert_eq!(
+      std::fs::read_to_string(clone_dir.path.join("README.md")).expect("read synced file"),
+      "v2\n"
+    );
+  }
+
+  #[test]
+  fn sync_current_branch_to_head_rejects_dirty_worktree() {
+    let remote = TempBareRepo::init("branch-sync-pr-head-dirty-remote");
+    let source = TempRepo::init("branch-sync-pr-head-dirty-source");
+    let clone_dir = TempDir::new("branch-sync-pr-head-dirty-clone");
+
+    let _ = commit_text_file(&source.path, Path::new("README.md"), "v1\n", "initial");
+    let source_repo = Repository::open(&source.path).expect("open source repo");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin remote");
+
+    let branch_name = current_branch_status(&source.path)
+      .expect("read source branch status")
+      .name;
+    push_branch_to_remote(&source.path, &branch_name, "origin");
+
+    let _clone_repo = Repository::clone(
+      remote.path.to_str().expect("remote path utf8"),
+      &clone_dir.path,
+    )
+    .expect("clone remote");
+
+    let target_oid = commit_text_file(&source.path, Path::new("README.md"), "v2\n", "update");
+    push_branch_to_remote(&source.path, &branch_name, "origin");
+
+    std::fs::write(clone_dir.path.join("local.txt"), "dirty\n").expect("write dirty file");
+
+    let error = sync_current_branch_to_head(&clone_dir.path, &branch_name, &target_oid.to_string())
+      .expect_err("dirty worktree should reject sync");
+    assert!(error.to_string().contains("local changes detected"));
   }
 
   #[test]

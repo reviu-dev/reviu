@@ -1,5 +1,5 @@
 use std::{
-  collections::{BTreeMap, HashMap, HashSet},
+  collections::{BTreeMap, BTreeSet, HashMap, HashSet},
   path::{Path, PathBuf},
   rc::Rc,
   sync::Arc,
@@ -15,7 +15,10 @@ use gfm_markdown_viewer::{
   MarkdownRenderState, extract_github_blob_line_references,
   render_github_code_reference_preview_card, render_markdown,
 };
-use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
+use git::{
+  DiffKind, DiffSet, FileDiff, compute_buffer_diff, current_github_remote_repo, current_head_sha,
+  list_repo_status, list_repo_worktree_files, sync_current_branch_to_head,
+};
 use gpui::{
   App, Context, Corner, Entity, FocusHandle, Focusable, MouseButton, ParentElement, Render,
   RenderImage, SharedString, Styled, Task, Window, div, img, prelude::*, px,
@@ -32,6 +35,7 @@ use gpui_component::{
   scroll::ScrollableElement,
   skeleton::Skeleton,
   spinner::Spinner,
+  switch::Switch,
   tab::{Tab, TabBar},
   tag::Tag,
   text::TextView,
@@ -53,6 +57,7 @@ use ui::{
 
 use crate::{
   ShowCommandPalette, ShowFileSearch,
+  active_local_repo::{ActiveLocalRepo, ActiveLocalRepoStore},
   api::{
     ApiClient, ApiError, GithubIssueDetailsComment, GithubPullRequestCheckRun,
     GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary, GithubPullRequestCommit,
@@ -62,6 +67,7 @@ use crate::{
     GithubPullRequestMergeReadinessStatus, GithubPullRequestMergeResult, GithubPullRequestReview,
     GithubPullRequestReviewComment, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
     GithubPullRequestWorkflowJob, GithubPullRequestWorkflowRun, GithubPullRequestWorkflowStep,
+    GithubRepository,
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_compact_datetime, format_long_date},
@@ -229,6 +235,11 @@ struct GithubPrFileDiff {
   path: SharedString,
   old_path: Option<SharedString>,
   status: GithubPrFileStatus,
+}
+
+#[derive(Clone, Debug)]
+struct GithubPrLocalProjectFile {
+  path: SharedString,
 }
 
 fn map_file_status(status: &str) -> GithubPrFileStatus {
@@ -1126,7 +1137,7 @@ struct FileTreeNode {
   name: String,
   path: String,
   children: BTreeMap<String, FileTreeNode>,
-  file: Option<Rc<GithubPrFileDiff>>,
+  file: Option<()>,
 }
 
 impl FileTreeNode {
@@ -1144,19 +1155,26 @@ impl FileTreeNode {
   }
 }
 
-type FileTreeBuildResult = (
+type FileTreeBuildResult<T> = (
   Vec<TreeItem>,
-  HashMap<String, Rc<GithubPrFileDiff>>,
+  HashMap<String, Rc<T>>,
   Option<usize>,
   Option<String>,
 );
 
-fn build_tree_items(files: &[Rc<GithubPrFileDiff>]) -> FileTreeBuildResult {
+fn build_path_tree_items_with_expansion<T, F>(
+  files: &[Rc<T>],
+  path_for: F,
+  expanded_folder_paths: Option<&HashSet<String>>,
+) -> FileTreeBuildResult<T>
+where
+  F: Fn(&T) -> &str,
+{
   fn insert_node(
     map: &mut BTreeMap<String, FileTreeNode>,
     parts: &[&str],
     prefix: &str,
-    file: Rc<GithubPrFileDiff>,
+    has_file: bool,
   ) {
     let Some((head, tail)) = parts.split_first() else {
       return;
@@ -1173,22 +1191,24 @@ fn build_tree_items(files: &[Rc<GithubPrFileDiff>]) -> FileTreeBuildResult {
       .or_insert_with(|| FileTreeNode::new(head.to_string(), path.clone()));
 
     if tail.is_empty() {
-      node.file = Some(file);
+      if has_file {
+        node.file = Some(());
+      }
       return;
     }
 
     let node_path = node.path.clone();
-    insert_node(&mut node.children, tail, &node_path, file);
+    insert_node(&mut node.children, tail, &node_path, has_file);
   }
 
   let mut root: BTreeMap<String, FileTreeNode> = BTreeMap::new();
-  let mut file_lookup: HashMap<String, Rc<GithubPrFileDiff>> = HashMap::new();
+  let mut file_lookup: HashMap<String, Rc<T>> = HashMap::new();
 
   for file in files {
-    let path = file.path.as_ref();
+    let path = path_for(file.as_ref());
     file_lookup.insert(path.to_string(), file.clone());
     let parts: Vec<&str> = path.split('/').collect();
-    insert_node(&mut root, &parts, "", file.clone());
+    insert_node(&mut root, &parts, "", true);
   }
 
   let mut order = Vec::new();
@@ -1203,7 +1223,7 @@ fn build_tree_items(files: &[Rc<GithubPrFileDiff>]) -> FileTreeBuildResult {
 
   let items = root_nodes
     .into_iter()
-    .map(|node| build_tree_item(node, &mut order, &mut first_file_id))
+    .map(|node| build_tree_item(node, &mut order, &mut first_file_id, expanded_folder_paths))
     .collect::<Vec<_>>();
 
   let selected_index = first_file_id
@@ -1213,10 +1233,71 @@ fn build_tree_items(files: &[Rc<GithubPrFileDiff>]) -> FileTreeBuildResult {
   (items, file_lookup, selected_index, first_file_id)
 }
 
+fn build_path_tree_items<T, F>(files: &[Rc<T>], path_for: F) -> FileTreeBuildResult<T>
+where
+  F: Fn(&T) -> &str,
+{
+  build_path_tree_items_with_expansion(files, path_for, None)
+}
+
+fn build_tree_items(files: &[Rc<GithubPrFileDiff>]) -> FileTreeBuildResult<GithubPrFileDiff> {
+  build_path_tree_items(files, |file| file.path.as_ref())
+}
+
+fn build_local_project_tree_items(
+  files: &[Rc<GithubPrLocalProjectFile>],
+) -> FileTreeBuildResult<GithubPrLocalProjectFile> {
+  build_path_tree_items(files, |file| file.path.as_ref())
+}
+
+fn expanded_folder_paths_for_changed_files<'a, I>(paths: I) -> HashSet<String>
+where
+  I: IntoIterator<Item = &'a str>,
+{
+  let mut expanded = HashSet::new();
+  for path in paths {
+    let mut prefix = String::new();
+    let parts = path.split('/').collect::<Vec<_>>();
+    for folder in parts.iter().take(parts.len().saturating_sub(1)) {
+      if prefix.is_empty() {
+        prefix.push_str(folder);
+      } else {
+        prefix.push('/');
+        prefix.push_str(folder);
+      }
+      expanded.insert(prefix.clone());
+    }
+  }
+  expanded
+}
+
+fn build_tree_items_from_paths(
+  paths: &[String],
+  expanded_folder_paths: Option<&HashSet<String>>,
+) -> (Vec<TreeItem>, Option<usize>, Option<String>) {
+  let files = paths
+    .iter()
+    .map(|path| {
+      Rc::new(GithubPrLocalProjectFile {
+        path: path.clone().into(),
+      })
+    })
+    .collect::<Vec<_>>();
+  let (items, _, selected_index, selected_id) =
+    build_path_tree_items_with_expansion(&files, |file| file.path.as_ref(), expanded_folder_paths);
+  (items, selected_index, selected_id)
+}
+
+fn build_search_file_entry(path: &str) -> SearchFileEntry {
+  let label = path.replace(['\n', '\r'], "");
+  SearchFileEntry::new(PathBuf::from(label.clone()), label)
+}
+
 fn build_tree_item(
   node: FileTreeNode,
   order: &mut Vec<String>,
   first_file_id: &mut Option<String>,
+  expanded_folder_paths: Option<&HashSet<String>>,
 ) -> TreeItem {
   let mut child_nodes: Vec<FileTreeNode> = node.children.into_values().collect();
   child_nodes.sort_by(|a, b| {
@@ -1229,9 +1310,12 @@ fn build_tree_item(
   if !child_nodes.is_empty() {
     let children = child_nodes
       .into_iter()
-      .map(|child| build_tree_item(child, order, first_file_id))
+      .map(|child| build_tree_item(child, order, first_file_id, expanded_folder_paths))
       .collect::<Vec<_>>();
-    item = item.children(children).expanded(true);
+    let is_expanded = expanded_folder_paths
+      .map(|paths| paths.contains(&node.path))
+      .unwrap_or(true);
+    item = item.children(children).expanded(is_expanded);
   }
 
   order.push(node.path.clone());
@@ -1319,11 +1403,25 @@ pub struct GithubPrDetailsPage {
   file_loading: bool,
   file_error: Option<SharedString>,
   tree_state: Entity<TreeState>,
+  show_local_project_files: bool,
+  saved_pr_selected_tree_id: Option<String>,
   file_lookup: HashMap<String, Rc<GithubPrFileDiff>>,
+  local_project_lookup: HashMap<String, Rc<GithubPrLocalProjectFile>>,
+  local_project_loaded_repo_root: Option<PathBuf>,
+  local_project_tree_loading: bool,
+  local_project_tree_error: Option<SharedString>,
+  local_project_files_task: Option<Task<()>>,
+  local_project_update_task: Option<Task<()>>,
+  local_project_update_loading: bool,
+  local_project_update_error: Option<SharedString>,
+  local_project_open_file_task: Option<Task<()>>,
+  local_project_open_file_generation: u64,
   file_contents: HashMap<String, GithubPrFileContents>,
   file_content_tasks: HashMap<String, Task<()>>,
   selected_file: Option<Rc<GithubPrFileDiff>>,
   selected_tree_id: Option<String>,
+  selected_local_project_file: Option<Rc<GithubPrLocalProjectFile>>,
+  selected_local_project_tree_id: Option<String>,
   diff_editor: Entity<Editor>,
   diff_view: DiffViewMode,
   show_markdown_preview: bool,
@@ -1343,6 +1441,14 @@ struct CurrentPrContext {
   owner: String,
   repo: String,
   number: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum GithubPrLocalProjectAvailability {
+  Hidden,
+  Ready { repo_root: PathBuf },
+  NeedsUpdate { repo_root: PathBuf },
+  Dirty { repo_root: PathBuf },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1684,11 +1790,25 @@ impl GithubPrDetailsPage {
       file_loading: false,
       file_error: None,
       tree_state,
+      show_local_project_files: false,
+      saved_pr_selected_tree_id: None,
       file_lookup: HashMap::new(),
+      local_project_lookup: HashMap::new(),
+      local_project_loaded_repo_root: None,
+      local_project_tree_loading: false,
+      local_project_tree_error: None,
+      local_project_files_task: None,
+      local_project_update_task: None,
+      local_project_update_loading: false,
+      local_project_update_error: None,
+      local_project_open_file_task: None,
+      local_project_open_file_generation: 0,
       file_contents: HashMap::new(),
       file_content_tasks: HashMap::new(),
       selected_file: None,
       selected_tree_id: None,
+      selected_local_project_file: None,
+      selected_local_project_tree_id: None,
       diff_editor,
       diff_view: DiffViewMode::Inline,
       show_markdown_preview: false,
@@ -1720,6 +1840,538 @@ impl GithubPrDetailsPage {
       }),
       _ => None,
     }
+  }
+
+  fn pr_source_repository(pull_request: &GithubPullRequestDetails) -> &GithubRepository {
+    pull_request
+      .head_repository
+      .as_ref()
+      .unwrap_or(&pull_request.repository)
+  }
+
+  fn local_project_availability(&self, cx: &App) -> GithubPrLocalProjectAvailability {
+    if self.selected_commit_sha.is_some() {
+      return GithubPrLocalProjectAvailability::Hidden;
+    }
+
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      return GithubPrLocalProjectAvailability::Hidden;
+    };
+    let Some(local_repo) = ActiveLocalRepoStore::get(cx) else {
+      return GithubPrLocalProjectAvailability::Hidden;
+    };
+
+    let source_repo = Self::pr_source_repository(pull_request);
+    let Some(local_owner) = local_repo.github_owner.as_deref() else {
+      return GithubPrLocalProjectAvailability::Hidden;
+    };
+    let Some(local_name) = local_repo.github_repo.as_deref() else {
+      return GithubPrLocalProjectAvailability::Hidden;
+    };
+    if !local_owner.eq_ignore_ascii_case(source_repo.owner.as_str())
+      || !local_name.eq_ignore_ascii_case(source_repo.repo.as_str())
+    {
+      return GithubPrLocalProjectAvailability::Hidden;
+    }
+
+    if local_repo.current_branch.as_deref() != Some(pull_request.head_ref_name.as_str()) {
+      return GithubPrLocalProjectAvailability::Hidden;
+    }
+
+    let Some(local_head_sha) = local_repo.head_sha.as_deref() else {
+      return GithubPrLocalProjectAvailability::Hidden;
+    };
+    if local_head_sha == pull_request.head_sha {
+      return GithubPrLocalProjectAvailability::Ready {
+        repo_root: local_repo.repo_root,
+      };
+    }
+
+    if local_repo.has_uncommitted_changes {
+      GithubPrLocalProjectAvailability::Dirty {
+        repo_root: local_repo.repo_root,
+      }
+    } else {
+      GithubPrLocalProjectAvailability::NeedsUpdate {
+        repo_root: local_repo.repo_root,
+      }
+    }
+  }
+
+  fn local_project_mode_active(&self, cx: &App) -> bool {
+    self.show_local_project_files
+      && matches!(
+        self.local_project_availability(cx),
+        GithubPrLocalProjectAvailability::Ready { .. }
+      )
+  }
+
+  fn visible_tree_paths(&self, cx: &App) -> Vec<String> {
+    if self.local_project_mode_active(cx) {
+      let mut paths = BTreeSet::new();
+      paths.extend(self.local_project_lookup.keys().cloned());
+      paths.extend(self.file_lookup.keys().cloned());
+      return paths.into_iter().collect();
+    }
+
+    let mut paths = self.file_lookup.keys().cloned().collect::<Vec<_>>();
+    paths.sort();
+    paths
+  }
+
+  fn active_file_count(&self, cx: &App) -> usize {
+    self.visible_tree_paths(cx).len()
+  }
+
+  fn active_file_search_entries(&self, cx: &App) -> Vec<SearchFileEntry> {
+    let mut entries = self
+      .visible_tree_paths(cx)
+      .into_iter()
+      .map(|path| build_search_file_entry(path.as_str()))
+      .collect::<Vec<_>>();
+    entries.sort_by(|a, b| a.label.as_ref().cmp(b.label.as_ref()));
+    entries
+  }
+
+  fn current_selected_tree_path(&self) -> Option<String> {
+    self
+      .selected_file
+      .as_ref()
+      .map(|file| file.path.to_string())
+      .or_else(|| {
+        self
+          .selected_local_project_file
+          .as_ref()
+          .map(|file| file.path.to_string())
+      })
+  }
+
+  fn select_visible_tree_path(&mut self, path: &str, cx: &mut Context<Self>) {
+    if let Some(file) = self.file_lookup.get(path).cloned() {
+      self.set_selected_file(Some(file), cx);
+      return;
+    }
+
+    if let Some(file) = self.local_project_lookup.get(path).cloned() {
+      self.set_selected_local_project_file(Some(file), cx);
+      return;
+    }
+
+    if self.selected_file.is_some() {
+      self.set_selected_file(None, cx);
+    } else if self.selected_local_project_file.is_some() {
+      self.set_selected_local_project_file(None, cx);
+    }
+  }
+
+  fn set_tree_items_with_selection(
+    &mut self,
+    items: Vec<TreeItem>,
+    preferred_id: Option<String>,
+    fallback_index: Option<usize>,
+    cx: &mut Context<Self>,
+  ) -> Option<String> {
+    let mut resolved_id = None;
+    self.tree_state.update(cx, |state, cx| {
+      state.set_items(items, cx);
+
+      if let Some(preferred_id) = preferred_id.as_ref() {
+        let tree_item = TreeItem::new(preferred_id.clone(), preferred_id.clone());
+        state.set_selected_item(Some(&tree_item), cx);
+        if let Some(ix) = state.selected_index() {
+          state.scroll_to_item(ix, gpui::ScrollStrategy::Top);
+          resolved_id = Some(preferred_id.clone());
+          return;
+        }
+      }
+
+      state.set_selected_index(fallback_index, cx);
+      if let Some(ix) = state.selected_index() {
+        state.scroll_to_item(ix, gpui::ScrollStrategy::Top);
+        resolved_id = state
+          .selected_entry()
+          .map(|entry| entry.item().id.to_string());
+      }
+    });
+    resolved_id
+  }
+
+  fn sync_changes_tree_state(&mut self, cx: &mut Context<Self>) {
+    let visible_paths = self.visible_tree_paths(cx);
+    let expanded_folder_paths = self.local_project_mode_active(cx).then(|| {
+      expanded_folder_paths_for_changed_files(self.file_lookup.keys().map(|path| path.as_str()))
+    });
+    let (items, fallback_index, fallback_id) =
+      build_tree_items_from_paths(&visible_paths, expanded_folder_paths.as_ref());
+    let preferred_id = self
+      .saved_pr_selected_tree_id
+      .clone()
+      .or_else(|| self.current_selected_tree_path())
+      .filter(|id| visible_paths.contains(id))
+      .or(fallback_id);
+    let resolved_id = self.set_tree_items_with_selection(items, preferred_id, fallback_index, cx);
+    self.saved_pr_selected_tree_id = None;
+    match resolved_id {
+      Some(path) => self.select_visible_tree_path(path.as_str(), cx),
+      None => {
+        self.selected_tree_id = None;
+        self.selected_local_project_tree_id = None;
+        if self.selected_file.is_some() {
+          self.set_selected_file(None, cx);
+        } else if self.selected_local_project_file.is_some() {
+          self.set_selected_local_project_file(None, cx);
+        }
+      }
+    }
+  }
+
+  fn sync_local_project_tree_state(&mut self, cx: &mut Context<Self>) {
+    self.sync_changes_tree_state(cx);
+  }
+
+  fn maybe_load_local_project_files_if_needed(&mut self, repo_root: &Path, cx: &mut Context<Self>) {
+    if self.local_project_loaded_repo_root.as_deref() == Some(repo_root) {
+      if self.local_project_tree_loading || self.local_project_files_task.is_some() {
+        return;
+      }
+      if !self.local_project_lookup.is_empty() || self.local_project_tree_error.is_some() {
+        self.sync_local_project_tree_state(cx);
+        return;
+      }
+    }
+
+    self.load_local_project_files(repo_root.to_path_buf(), cx);
+  }
+
+  fn load_local_project_files(&mut self, repo_root: PathBuf, cx: &mut Context<Self>) {
+    if self.local_project_loaded_repo_root.as_ref() == Some(&repo_root)
+      && (self.local_project_tree_loading || self.local_project_files_task.is_some())
+    {
+      return;
+    }
+
+    self.local_project_loaded_repo_root = Some(repo_root.clone());
+    self.local_project_tree_loading = true;
+    self.local_project_tree_error = None;
+    self.local_project_files_task = None;
+    self.local_project_lookup.clear();
+    self.selected_local_project_file = None;
+    self.selected_local_project_tree_id = None;
+    self.local_project_open_file_task = None;
+    self.local_project_open_file_generation =
+      self.local_project_open_file_generation.wrapping_add(1);
+
+    if self.show_local_project_files {
+      self.tree_state.update(cx, |state, cx| {
+        state.set_items(Vec::new(), cx);
+        state.set_selected_index(None, cx);
+      });
+      self.clear_diff_editor(cx);
+    }
+
+    let requested_repo_root = repo_root.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let repo_root_for_load = requested_repo_root.clone();
+      let result = unblock(move || list_repo_worktree_files(&repo_root_for_load)).await;
+
+      let _ = this.update(cx, |this, cx| {
+        if this.local_project_loaded_repo_root.as_ref() != Some(&requested_repo_root) {
+          return;
+        }
+
+        this.local_project_files_task = None;
+        this.local_project_tree_loading = false;
+
+        match result {
+          Ok(paths) => {
+            let files = paths
+              .into_iter()
+              .map(|path| {
+                Rc::new(GithubPrLocalProjectFile {
+                  path: path.to_string_lossy().replace(['\n', '\r'], "").into(),
+                })
+              })
+              .collect::<Vec<_>>();
+            let (_, lookup, _, _) = build_local_project_tree_items(&files);
+            this.local_project_lookup = lookup;
+            this.local_project_tree_error = None;
+            if this.local_project_mode_active(cx) {
+              this.sync_local_project_tree_state(cx);
+            }
+          }
+          Err(error) => {
+            this.local_project_lookup.clear();
+            this.local_project_tree_error = Some(error.to_string().into());
+            if this.local_project_mode_active(cx) {
+              this.tree_state.update(cx, |state, cx| {
+                state.set_items(Vec::new(), cx);
+                state.set_selected_index(None, cx);
+              });
+              this.set_selected_local_project_file(None, cx);
+            }
+          }
+        }
+
+        cx.notify();
+      });
+    });
+
+    self.local_project_files_task = Some(task);
+    cx.notify();
+  }
+
+  fn sync_local_project_tree_selection(&mut self, cx: &mut Context<Self>) {
+    let Some(file) = self.selected_local_project_file.as_ref() else {
+      return;
+    };
+
+    let key = file.path.as_ref().to_string();
+    let tree_item = TreeItem::new(key.clone(), key.clone());
+    self.tree_state.update(cx, |state, cx| {
+      state.set_selected_item(Some(&tree_item), cx);
+      if let Some(ix) = state.selected_index() {
+        state.scroll_to_item(ix, gpui::ScrollStrategy::Top);
+      }
+    });
+  }
+
+  fn set_selected_local_project_file(
+    &mut self,
+    selected: Option<Rc<GithubPrLocalProjectFile>>,
+    cx: &mut Context<Self>,
+  ) {
+    let current_id = self
+      .selected_local_project_file
+      .as_ref()
+      .map(|file| file.path.clone());
+    let next_id = selected.as_ref().map(|file| file.path.clone());
+    if current_id == next_id {
+      return;
+    }
+
+    self.selected_local_project_file = selected.clone();
+    self.selected_local_project_tree_id = selected.as_ref().map(|file| file.path.to_string());
+    self.selected_file = None;
+    self.selected_tree_id = None;
+    self.active_review_comment_id = None;
+    self.selected_file_review_comment_ids.clear();
+    self.sync_sentry_pr_context();
+    if !self.selected_file_is_markdown() && !self.selected_file_is_svg() {
+      self.show_markdown_preview = false;
+    }
+    self.svg_preview = None;
+    self.svg_preview_source = None;
+    self.file_error = None;
+    self.local_project_open_file_generation =
+      self.local_project_open_file_generation.wrapping_add(1);
+    self.local_project_open_file_task = None;
+
+    let Some(file) = selected else {
+      self.file_loading = false;
+      self.clear_diff_editor(cx);
+      self.sync_diff_view(cx);
+      self.sync_review_comments(cx);
+      cx.notify();
+      return;
+    };
+
+    let Some(repo_root) = self.local_project_loaded_repo_root.clone() else {
+      self.file_loading = false;
+      self.file_error = Some("Local project unavailable".into());
+      self.clear_diff_editor(cx);
+      self.sync_review_comments(cx);
+      cx.notify();
+      return;
+    };
+
+    self.sync_local_project_tree_selection(cx);
+    self.file_loading = true;
+    self.file_error = None;
+    self.clear_diff_editor(cx);
+
+    let generation = self.local_project_open_file_generation;
+    let requested_repo_root = repo_root.clone();
+    let requested_rel_path = PathBuf::from(file.path.as_ref());
+    let requested_key = file.path.to_string();
+    let requested_absolute_path = requested_repo_root.join(&requested_rel_path);
+    let task = cx.spawn(async move |this, cx| {
+      let repo_root_for_load = requested_repo_root.clone();
+      let absolute_path_for_load = requested_absolute_path.clone();
+      let loaded =
+        unblock(move || Editor::load_file_for_editor(&repo_root_for_load, &absolute_path_for_load))
+          .await;
+
+      let _ = this.update(cx, move |this, cx| {
+        if this.local_project_open_file_generation != generation {
+          return;
+        }
+        if this.local_project_loaded_repo_root.as_ref() != Some(&requested_repo_root) {
+          return;
+        }
+        if this
+          .selected_local_project_file
+          .as_ref()
+          .map(|file| file.path.as_ref())
+          != Some(requested_key.as_str())
+        {
+          return;
+        }
+
+        let editor_repo_root = requested_repo_root.clone();
+        let editor_file_path = requested_absolute_path.clone();
+        this.diff_editor = cx.new(move |cx| {
+          Editor::new_with_loaded_file(editor_repo_root, editor_file_path, loaded, cx)
+        });
+        this.diff_editor.update(cx, |editor, cx| {
+          editor.reset_after_replace();
+          editor.reset_selection(cx);
+          editor.set_diffs(None, cx);
+          editor.is_read_only = true;
+        });
+        this.file_loading = false;
+        this.file_error = None;
+        this.sync_diff_view(cx);
+        cx.notify();
+      });
+    });
+    self.local_project_open_file_task = Some(task);
+    self.sync_review_comments(cx);
+    cx.notify();
+  }
+
+  fn selected_local_project_file_is_markdown(&self) -> bool {
+    self
+      .selected_local_project_file
+      .as_ref()
+      .map(|file| is_markdown_path(Path::new(file.path.as_ref())))
+      .unwrap_or(false)
+  }
+
+  fn selected_local_project_file_is_svg(&self) -> bool {
+    self
+      .selected_local_project_file
+      .as_ref()
+      .map(|file| is_svg_path(Path::new(file.path.as_ref())))
+      .unwrap_or(false)
+  }
+
+  fn set_show_local_project_files(&mut self, enabled: bool, cx: &mut Context<Self>) {
+    if self.show_local_project_files == enabled {
+      return;
+    }
+
+    let previous_selection = self.current_selected_tree_path();
+
+    if enabled {
+      let GithubPrLocalProjectAvailability::Ready { repo_root } =
+        self.local_project_availability(cx)
+      else {
+        return;
+      };
+      self.saved_pr_selected_tree_id = previous_selection;
+      self.show_local_project_files = true;
+      self.local_project_update_error = None;
+      self.maybe_load_local_project_files_if_needed(repo_root.as_path(), cx);
+      if !self.local_project_tree_loading {
+        self.sync_changes_tree_state(cx);
+      }
+      cx.notify();
+      return;
+    }
+
+    self.saved_pr_selected_tree_id = previous_selection;
+    self.show_local_project_files = false;
+    self.local_project_open_file_task = None;
+    self.local_project_open_file_generation =
+      self.local_project_open_file_generation.wrapping_add(1);
+    self.file_loading = false;
+    self.file_error = None;
+    self.sync_changes_tree_state(cx);
+    cx.notify();
+  }
+
+  fn sync_active_local_repo_store_for_repo(
+    &self,
+    repo_root: &Path,
+    current_branch: Option<&str>,
+    cx: &mut Context<Self>,
+  ) {
+    let github_remote = current_github_remote_repo(repo_root).ok().flatten();
+    let has_uncommitted_changes = list_repo_status(repo_root)
+      .map(|entries| !entries.is_empty())
+      .unwrap_or(false);
+    ActiveLocalRepoStore::set(
+      cx,
+      Some(ActiveLocalRepo {
+        repo_root: repo_root.to_path_buf(),
+        github_owner: github_remote.as_ref().map(|remote| remote.owner.clone()),
+        github_repo: github_remote.as_ref().map(|remote| remote.repo.clone()),
+        current_branch: current_branch.map(str::to_string),
+        head_sha: current_head_sha(repo_root).ok().flatten(),
+        has_uncommitted_changes,
+      }),
+    );
+  }
+
+  fn update_local_branch_to_pr_head(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.local_project_update_loading {
+      return;
+    }
+
+    let GithubPrLocalProjectAvailability::NeedsUpdate { repo_root } =
+      self.local_project_availability(cx)
+    else {
+      return;
+    };
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      return;
+    };
+
+    let branch_name = pull_request.head_ref_name.clone();
+    let target_head_sha = pull_request.head_sha.clone();
+    self.local_project_update_loading = true;
+    self.local_project_update_error = None;
+    cx.notify();
+
+    let task = cx.spawn_in(window, async move |this, cx| {
+      let repo_root_for_update = repo_root.clone();
+      let branch_name_for_update = branch_name.clone();
+      let target_head_sha_for_update = target_head_sha.clone();
+      let result = unblock(move || {
+        sync_current_branch_to_head(
+          &repo_root_for_update,
+          &branch_name_for_update,
+          &target_head_sha_for_update,
+        )
+      })
+      .await;
+
+      let _ = this.update_in(cx, |this, _, cx| {
+        this.local_project_update_task = None;
+        this.local_project_update_loading = false;
+
+        match result {
+          Ok(()) => {
+            this.local_project_update_error = None;
+            this.sync_active_local_repo_store_for_repo(
+              repo_root.as_path(),
+              Some(branch_name.as_str()),
+              cx,
+            );
+            if this.show_local_project_files {
+              this.load_local_project_files(repo_root.clone(), cx);
+            }
+          }
+          Err(error) => {
+            this.local_project_update_error = Some(error.to_string().into());
+          }
+        }
+
+        cx.notify();
+      });
+    });
+
+    self.local_project_update_task = Some(task);
   }
 
   fn mark_merge_form_reset_pending(&mut self) {
@@ -2379,7 +3031,12 @@ impl GithubPrDetailsPage {
     if self.selected_commit_sha == selected_commit_sha {
       return;
     }
+    let should_disable_local_project =
+      selected_commit_sha.is_some() && self.show_local_project_files;
     self.selected_commit_sha = selected_commit_sha;
+    if should_disable_local_project {
+      self.set_show_local_project_files(false, cx);
+    }
     self.sync_sentry_pr_context();
     self.sync_commits_list(cx);
     self.reload_files_for_current_pull_request(cx);
@@ -3488,6 +4145,11 @@ impl GithubPrDetailsPage {
 
     self.selected_file = selected.clone();
     self.selected_tree_id = selected.as_ref().map(|file| file.path.to_string());
+    self.selected_local_project_file = None;
+    self.selected_local_project_tree_id = None;
+    self.local_project_open_file_task = None;
+    self.local_project_open_file_generation =
+      self.local_project_open_file_generation.wrapping_add(1);
     self.active_review_comment_id = None;
     self.selected_file_review_comment_ids.clear();
     self.sync_sentry_pr_context();
@@ -3570,6 +4232,10 @@ impl GithubPrDetailsPage {
   }
 
   fn split_disabled_for_selected_file(&self) -> bool {
+    if self.show_local_project_files && self.selected_local_project_file.is_some() {
+      return true;
+    }
+
     self
       .selected_file
       .as_ref()
@@ -3577,6 +4243,10 @@ impl GithubPrDetailsPage {
   }
 
   fn selected_file_is_markdown(&self) -> bool {
+    if self.show_local_project_files && self.selected_local_project_file.is_some() {
+      return self.selected_local_project_file_is_markdown();
+    }
+
     self
       .selected_file
       .as_ref()
@@ -3585,6 +4255,10 @@ impl GithubPrDetailsPage {
   }
 
   fn selected_file_is_svg(&self) -> bool {
+    if self.show_local_project_files && self.selected_local_project_file.is_some() {
+      return self.selected_local_project_file_is_svg();
+    }
+
     self
       .selected_file
       .as_ref()
@@ -4220,15 +4894,9 @@ impl GithubPrDetailsPage {
             this.files_loading = false;
             this.files_error = None;
             let files = files_from_api(files);
-            let (items, lookup, selected_index, selected_id) = build_tree_items(&files);
+            let (_, lookup, _, _) = build_tree_items(&files);
             this.file_lookup = lookup;
-            this.selected_tree_id = selected_id.clone();
-            this.tree_state.update(cx, |state, cx| {
-              state.set_items(items, cx);
-              state.set_selected_index(selected_index, cx);
-            });
-            let selected = selected_id.and_then(|id| this.file_lookup.get(&id).cloned());
-            this.set_selected_file(selected, cx);
+            this.sync_changes_tree_state(cx);
             this.prefetch_overview_root_review_comment_files(cx);
             this.add_pr_breadcrumb("Load PR files succeeded", Map::new());
           }
@@ -4236,14 +4904,10 @@ impl GithubPrDetailsPage {
             let error_message = error.to_string();
             this.files_loading = false;
             this.files_error = Some(error_message.clone().into());
-            this.tree_state.update(cx, |state, cx| {
-              state.set_items(Vec::new(), cx);
-            });
             this.file_lookup.clear();
             this.file_contents.clear();
             this.file_content_tasks.clear();
-            this.selected_tree_id = None;
-            this.set_selected_file(None, cx);
+            this.sync_changes_tree_state(cx);
             this.add_pr_breadcrumb("Load PR files failed", Map::new());
             this.record_pr_error("github.pr.files", error_message.as_str(), Map::new());
           }
@@ -4435,10 +5099,24 @@ impl GithubPrDetailsPage {
     self.tree_state.update(cx, |state, cx| {
       state.set_items(Vec::new(), cx);
     });
+    self.show_local_project_files = false;
+    self.saved_pr_selected_tree_id = None;
     self.file_lookup.clear();
+    self.local_project_lookup.clear();
+    self.local_project_loaded_repo_root = None;
+    self.local_project_tree_loading = false;
+    self.local_project_tree_error = None;
+    self.local_project_files_task = None;
+    self.local_project_update_task = None;
+    self.local_project_update_loading = false;
+    self.local_project_update_error = None;
+    self.local_project_open_file_task = None;
+    self.local_project_open_file_generation = 0;
     self.file_contents.clear();
     self.file_content_tasks.clear();
     self.selected_tree_id = None;
+    self.selected_local_project_file = None;
+    self.selected_local_project_tree_id = None;
     self.set_selected_file(None, cx);
     self.diff_view = DiffViewMode::Inline;
     self.show_markdown_preview = false;
@@ -6356,7 +7034,9 @@ impl GithubPrDetailsPage {
     cx: &mut Context<Self>,
   ) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let count = self.file_lookup.len();
+    let local_project_mode = self.local_project_mode_active(cx);
+    let local_project_availability = self.local_project_availability(cx);
+    let count = self.active_file_count(cx);
     let commit_options =
       Self::build_commit_dropdown_items(&self.commits, self.selected_commit_sha.as_deref());
     let on_commit_select = self.commit_select_handler(cx);
@@ -6366,12 +7046,10 @@ impl GithubPrDetailsPage {
       .read(cx)
       .selected_entry()
       .map(|entry| entry.item().id.to_string())
-      && Some(selected_id.as_str()) != self.selected_tree_id.as_deref()
-      && let Some(file) = self.file_lookup.get(&selected_id).cloned()
+      && Some(selected_id.as_str()) != self.current_selected_tree_path().as_deref()
     {
-      self.selected_tree_id = Some(selected_id.clone());
       cx.on_next_frame(window, move |this, _, cx| {
-        this.set_selected_file(Some(file), cx);
+        this.select_visible_tree_path(selected_id.as_str(), cx);
       });
     }
 
@@ -6411,6 +7089,84 @@ impl GithubPrDetailsPage {
           )),
       );
 
+    let local_project_controls = if matches!(
+      local_project_availability,
+      GithubPrLocalProjectAvailability::Hidden
+    ) {
+      None
+    } else {
+      let (status_text, status_color) = match &local_project_availability {
+        GithubPrLocalProjectAvailability::Ready { .. } => {
+          ("Local branch matches this PR head", theme.muted_foreground)
+        }
+        GithubPrLocalProjectAvailability::NeedsUpdate { .. } => {
+          ("Local branch is not at this PR head", theme.status_orange())
+        }
+        GithubPrLocalProjectAvailability::Dirty { .. } => (
+          "Local branch is not at this PR head and has local changes",
+          theme.status_orange(),
+        ),
+        GithubPrLocalProjectAvailability::Hidden => ("", theme.muted_foreground),
+      };
+      let can_toggle_local_project = matches!(
+        local_project_availability,
+        GithubPrLocalProjectAvailability::Ready { .. }
+      );
+      let view = cx.entity();
+      let update_button = if matches!(
+        local_project_availability,
+        GithubPrLocalProjectAvailability::NeedsUpdate { .. }
+      ) {
+        Some(
+          Button::new("github-pr-local-project-update")
+            .label(if self.local_project_update_loading {
+              "Updating..."
+            } else {
+              "Update to PR head"
+            })
+            .xsmall()
+            .ghost()
+            .disabled(self.local_project_update_loading)
+            .on_click(move |_, window, cx| {
+              view.update(cx, |this, cx| {
+                this.update_local_branch_to_pr_head(window, cx);
+              });
+            }),
+        )
+      } else {
+        None
+      };
+
+      Some(
+        v_flex()
+          .gap_1()
+          .px_3()
+          .py_2()
+          .border_b_1()
+          .border_color(theme.border)
+          .child(
+            h_flex()
+              .items_center()
+              .justify_between()
+              .gap_2()
+              .child(
+                Switch::new("github-pr-local-project-switch")
+                  .label("Show unchanged files")
+                  .checked(local_project_mode)
+                  .disabled(!can_toggle_local_project || self.local_project_update_loading)
+                  .on_click(cx.listener(move |this, checked, _, cx| {
+                    this.set_show_local_project_files(*checked, cx);
+                  })),
+              )
+              .when_some(update_button, |this, button| this.child(button)),
+          )
+          .child(div().text_xs().text_color(status_color).child(status_text))
+          .when_some(self.local_project_update_error.clone(), |this, error| {
+            this.child(div().text_xs().text_color(theme.status_red()).child(error))
+          }),
+      )
+    };
+
     let mut comment_counts = HashMap::new();
     if self.selected_commit_sha.is_none() && !self.review_comments.is_empty() {
       for comment in &self.review_comments {
@@ -6418,7 +7174,32 @@ impl GithubPrDetailsPage {
       }
     }
 
-    let list = if self.files_loading {
+    let list = if local_project_mode && self.local_project_tree_loading {
+      v_flex()
+        .flex_1()
+        .h_full()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(Spinner::new().small())
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading project files..."),
+        )
+        .into_any_element()
+    } else if local_project_mode && self.local_project_tree_error.is_some() {
+      v_flex()
+        .flex_1()
+        .h_full()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(theme.status_red())
+        .child(self.local_project_tree_error.clone().unwrap_or_default())
+        .into_any_element()
+    } else if !local_project_mode && self.files_loading {
       v_flex()
         .flex_1()
         .h_full()
@@ -6433,7 +7214,7 @@ impl GithubPrDetailsPage {
             .child("Loading files..."),
         )
         .into_any_element()
-    } else if self.files_error.is_some() {
+    } else if !local_project_mode && self.files_error.is_some() {
       v_flex()
         .flex_1()
         .h_full()
@@ -6451,7 +7232,11 @@ impl GithubPrDetailsPage {
         .justify_center()
         .text_sm()
         .text_color(theme.muted_foreground)
-        .child("No files changed")
+        .child(if local_project_mode {
+          "No project files found"
+        } else {
+          "No files changed"
+        })
         .into_any_element()
     } else {
       let view = cx.entity();
@@ -6544,12 +7329,10 @@ impl GithubPrDetailsPage {
                   }),
               );
 
-            if !is_folder && this.file_lookup.contains_key(item.id.as_ref()) {
+            if !is_folder {
               let id = item.id.clone();
               row = row.on_click(cx.listener(move |this, _, _, cx| {
-                if let Some(file) = this.file_lookup.get(id.as_ref()).cloned() {
-                  this.set_selected_file(Some(file), cx);
-                }
+                this.select_visible_tree_path(id.as_ref(), cx);
               }));
             }
 
@@ -6566,6 +7349,9 @@ impl GithubPrDetailsPage {
       .bg(theme.sidebar)
       .size_full()
       .child(header)
+      .when_some(local_project_controls, |this, controls| {
+        this.child(controls)
+      })
       .child(div().flex_1().min_h_0().child(list))
   }
 
@@ -6705,6 +7491,174 @@ impl GithubPrDetailsPage {
           .child(toggle_button)
           .when(is_markdown || is_svg, |this| this.child(preview_button)),
       )
+  }
+
+  fn render_local_project_file_header(
+    &self,
+    file: &GithubPrLocalProjectFile,
+    cx: &mut Context<Self>,
+  ) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let path = Path::new(file.path.as_ref());
+    let file_name = path
+      .file_name()
+      .and_then(|name| name.to_str())
+      .unwrap_or(file.path.as_ref())
+      .to_string();
+    let dir_path = path
+      .parent()
+      .and_then(|parent| parent.to_str())
+      .unwrap_or("")
+      .to_string();
+    let icon = file_icon_path_for_name_with_theme(&file_name, &theme)
+      .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
+      .unwrap_or_else(|| {
+        Icon::new(IconName::File)
+          .size_3()
+          .text_color(theme.muted_foreground)
+          .into_any_element()
+      });
+
+    let is_markdown = is_markdown_path(path);
+    let is_svg = is_svg_path(path);
+    let preview_active = (is_markdown || is_svg) && self.show_markdown_preview;
+    let view = cx.entity();
+    let preview_button = Button::new("pr-local-project-preview")
+      .label("Preview")
+      .icon(if preview_active {
+        IconName::EyeOff
+      } else {
+        IconName::Eye
+      })
+      .xsmall()
+      .ghost()
+      .selected(preview_active)
+      .disabled(self.file_loading)
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.toggle_markdown_preview(cx);
+        });
+      });
+
+    div()
+      .h(px(DIFF_HEADER_HEIGHT))
+      .bg(theme.sidebar)
+      .px_3()
+      .flex()
+      .items_center()
+      .justify_between()
+      .border_b_1()
+      .border_color(theme.border)
+      .child(h_flex().items_center().gap_2().child(icon).child({
+        let mut label = Label::new(file_name);
+        if !dir_path.is_empty() {
+          label = label.secondary(format!("- {}", dir_path));
+        }
+        label.truncate()
+      }))
+      .when(is_markdown || is_svg, |this| {
+        this.child(h_flex().items_center().gap_2().child(preview_button))
+      })
+  }
+
+  fn render_selected_editor_content(
+    &mut self,
+    is_markdown: bool,
+    is_svg: bool,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let theme = cx.theme().clone();
+    let preview_active = self.show_markdown_preview && (is_markdown || is_svg);
+
+    if preview_active {
+      let preview_panel = if is_svg {
+        self.update_svg_preview(window, cx);
+        let preview = match self.svg_preview.clone() {
+          Some(Ok(image)) => img(image).max_w_full().max_h_full().into_any_element(),
+          Some(Err(error)) => div()
+            .text_sm()
+            .text_color(theme.status_red())
+            .child(error)
+            .into_any_element(),
+          None => div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Rendering SVG preview...")
+            .into_any_element(),
+        };
+        div()
+          .flex_1()
+          .min_h_0()
+          .min_w(px(0.0))
+          .bg(theme.background)
+          .child(
+            div()
+              .flex_1()
+              .min_h_0()
+              .min_w(px(0.0))
+              .p_4()
+              .items_center()
+              .justify_center()
+              .child(preview),
+          )
+          .into_any_element()
+      } else {
+        let markdown = self.diff_editor.read(cx).document().read(cx);
+        let markdown = markdown.slice_to_string(0..markdown.len());
+        div()
+          .flex_1()
+          .min_h_0()
+          .min_w(px(0.0))
+          .bg(theme.background)
+          .child(
+            div().size_full().pb_4().px_4().child(
+              TextView::markdown("github-pr-markdown-preview-text", markdown)
+                .size_full()
+                .selectable(true)
+                .scrollable(true),
+            ),
+          )
+          .into_any_element()
+      };
+      return div()
+        .flex_1()
+        .min_h_0()
+        .child(
+          h_resizable("github-pr-markdown-preview")
+            .child(
+              resizable_panel().child(
+                div()
+                  .size_full()
+                  .min_w(px(0.0))
+                  .min_h_0()
+                  .flex()
+                  .flex_col()
+                  .debug_selector(|| GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR.to_string())
+                  .child(self.diff_editor.clone()),
+              ),
+            )
+            .child(
+              resizable_panel().child(
+                div()
+                  .size_full()
+                  .min_w(px(0.0))
+                  .min_h_0()
+                  .flex()
+                  .flex_col()
+                  .debug_selector(|| GITHUB_PR_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR.to_string())
+                  .child(preview_panel),
+              ),
+            ),
+        )
+        .into_any_element();
+    }
+
+    div()
+      .flex_1()
+      .min_h_0()
+      .child(self.diff_editor.clone())
+      .into_any_element()
   }
 
   fn show_file_search_action(
@@ -6863,19 +7817,10 @@ impl GithubPrDetailsPage {
   }
 
   fn open_file_search_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if self.file_lookup.is_empty() {
+    let entries = self.active_file_search_entries(cx);
+    if entries.is_empty() {
       return;
     }
-
-    let entries = self
-      .file_lookup
-      .values()
-      .map(|file| {
-        let path = PathBuf::from(file.path.as_ref());
-        let label = file.path.as_ref().replace(['\n', '\r'], "");
-        SearchFileEntry::new(path, label)
-      })
-      .collect::<Vec<_>>();
 
     let view = cx.entity();
     let handler: SearchFileHandler = Arc::new(move |path, window, cx| {
@@ -6900,9 +7845,6 @@ impl GithubPrDetailsPage {
 
   fn select_file_from_palette(&mut self, path: &Path, cx: &mut Context<Self>) {
     let key = path.to_string_lossy().to_string();
-    let Some(file) = self.file_lookup.get(&key).cloned() else {
-      return;
-    };
 
     let tree_item = TreeItem::new(key.clone(), key.clone());
     self.tree_state.update(cx, |state, cx| {
@@ -6912,10 +7854,15 @@ impl GithubPrDetailsPage {
       }
     });
 
-    self.set_selected_file(Some(file), cx);
+    self.select_visible_tree_path(key.as_str(), cx);
   }
 
   fn sync_tree_selection(&mut self, cx: &mut Context<Self>) {
+    if self.show_local_project_files && self.selected_local_project_file.is_some() {
+      self.sync_local_project_tree_selection(cx);
+      return;
+    }
+
     let Some(file) = self.selected_file.as_ref() else {
       return;
     };
@@ -7686,11 +8633,74 @@ impl GithubPrDetailsPage {
     cx: &mut Context<Self>,
   ) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let local_project_mode = self.local_project_mode_active(cx);
     let is_markdown = self.selected_file_is_markdown();
     let is_svg = self.selected_file_is_svg();
-    let preview_active = self.show_markdown_preview && (is_markdown || is_svg);
-
-    let editor_content: gpui::AnyElement = if self.files_loading {
+    let editor_content: gpui::AnyElement = if self.file_loading {
+      if self.selected_local_project_file.is_some() && self.selected_file.is_none() {
+        v_flex()
+          .flex_1()
+          .items_center()
+          .justify_center()
+          .gap_2()
+          .child(Spinner::new().small())
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child("Loading local file..."),
+          )
+          .into_any_element()
+      } else {
+        v_flex()
+          .flex_1()
+          .items_center()
+          .justify_center()
+          .gap_2()
+          .child(Spinner::new().small())
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child("Loading file contents..."),
+          )
+          .into_any_element()
+      }
+    } else if self.file_error.is_some() {
+      v_flex()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(theme.status_red())
+        .child(self.file_error.clone().unwrap_or_default())
+        .into_any_element()
+    } else if self.selected_file.is_some() || self.selected_local_project_file.is_some() {
+      self.render_selected_editor_content(is_markdown, is_svg, window, cx)
+    } else if local_project_mode && self.local_project_tree_loading {
+      v_flex()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(Spinner::new().small())
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading project files..."),
+        )
+        .into_any_element()
+    } else if local_project_mode && self.local_project_tree_error.is_some() {
+      v_flex()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(theme.status_red())
+        .child(self.local_project_tree_error.clone().unwrap_or_default())
+        .into_any_element()
+    } else if !local_project_mode && self.files_loading {
       v_flex()
         .flex_1()
         .items_center()
@@ -7704,30 +8714,7 @@ impl GithubPrDetailsPage {
             .child("Loading diff..."),
         )
         .into_any_element()
-    } else if self.file_loading {
-      v_flex()
-        .flex_1()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .child(Spinner::new().small())
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading file contents..."),
-        )
-        .into_any_element()
-    } else if self.file_error.is_some() {
-      v_flex()
-        .flex_1()
-        .items_center()
-        .justify_center()
-        .text_sm()
-        .text_color(theme.status_red())
-        .child(self.file_error.clone().unwrap_or_default())
-        .into_any_element()
-    } else if self.files_error.is_some() {
+    } else if !local_project_mode && self.files_error.is_some() {
       v_flex()
         .flex_1()
         .items_center()
@@ -7736,95 +8723,15 @@ impl GithubPrDetailsPage {
         .text_color(theme.status_red())
         .child(self.files_error.clone().unwrap_or_default())
         .into_any_element()
-    } else if self.selected_file.is_some() {
-      if preview_active {
-        let preview_panel = if is_svg {
-          self.update_svg_preview(window, cx);
-          let preview = match self.svg_preview.clone() {
-            Some(Ok(image)) => img(image).max_w_full().max_h_full().into_any_element(),
-            Some(Err(error)) => div()
-              .text_sm()
-              .text_color(theme.status_red())
-              .child(error)
-              .into_any_element(),
-            None => div()
-              .text_sm()
-              .text_color(theme.muted_foreground)
-              .child("Rendering SVG preview...")
-              .into_any_element(),
-          };
-          div()
-            .flex_1()
-            .min_h_0()
-            .min_w(px(0.0))
-            .bg(theme.background)
-            .child(
-              div()
-                .flex_1()
-                .min_h_0()
-                .min_w(px(0.0))
-                .p_4()
-                .items_center()
-                .justify_center()
-                .child(preview),
-            )
-            .into_any_element()
-        } else {
-          let markdown = self.diff_editor.read(cx).document().read(cx);
-          let markdown = markdown.slice_to_string(0..markdown.len());
-          div()
-            .flex_1()
-            .min_h_0()
-            .min_w(px(0.0))
-            .bg(theme.background)
-            .child(
-              div().size_full().pb_4().px_4().child(
-                TextView::markdown("github-pr-markdown-preview-text", markdown)
-                  .size_full()
-                  .selectable(true)
-                  .scrollable(true),
-              ),
-            )
-            .into_any_element()
-        };
-        div()
-          .flex_1()
-          .min_h_0()
-          .child(
-            h_resizable("github-pr-markdown-preview")
-              .child(
-                resizable_panel().child(
-                  div()
-                    .size_full()
-                    .min_w(px(0.0))
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .debug_selector(|| GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR.to_string())
-                    .child(self.diff_editor.clone()),
-                ),
-              )
-              .child(
-                resizable_panel().child(
-                  div()
-                    .size_full()
-                    .min_w(px(0.0))
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .debug_selector(|| GITHUB_PR_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR.to_string())
-                    .child(preview_panel),
-                ),
-              ),
-          )
-          .into_any_element()
-      } else {
-        div()
-          .flex_1()
-          .min_h_0()
-          .child(self.diff_editor.clone())
-          .into_any_element()
-      }
+    } else if local_project_mode {
+      div()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child("Select a file to view it")
+        .into_any_element()
     } else {
       div()
         .flex_1()
@@ -7842,6 +8749,14 @@ impl GithubPrDetailsPage {
       .when_some(self.selected_file.as_ref(), |this, file| {
         this.child(self.render_diff_header(file, cx))
       })
+      .when(
+        self.selected_file.is_none() && self.selected_local_project_file.is_some(),
+        |this| {
+          this.when_some(self.selected_local_project_file.as_ref(), |this, file| {
+            this.child(self.render_local_project_file_header(file, cx))
+          })
+        },
+      )
       .child(editor_content);
 
     h_resizable("github-pr-changes")
@@ -7973,7 +8888,22 @@ mod tests {
       if !cx.has_global::<AuthStateStore>() {
         cx.set_global(AuthStateStore::default());
       }
+      if !cx.has_global::<ActiveLocalRepoStore>() {
+        cx.set_global(ActiveLocalRepoStore::default());
+      }
+      ActiveLocalRepoStore::set(cx, None);
     });
+  }
+
+  fn make_active_local_repo(head_sha: &str, has_uncommitted_changes: bool) -> ActiveLocalRepo {
+    ActiveLocalRepo {
+      repo_root: PathBuf::from("/tmp/reviu-tests/acme-widget"),
+      github_owner: Some("acme".to_string()),
+      github_repo: Some("widget".to_string()),
+      current_branch: Some("feature".to_string()),
+      head_sha: Some(head_sha.to_string()),
+      has_uncommitted_changes,
+    }
   }
 
   fn make_api_file(
@@ -8235,6 +9165,237 @@ mod tests {
 
     assert!(cx.debug_bounds("github-pr-merge-button").is_none());
     assert!(cx.debug_bounds("github-pr-review-button").is_none());
+  }
+
+  #[gpui::test]
+  fn local_project_availability_is_ready_when_repo_branch_and_sha_match(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("head", false)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let availability = page.read_with(cx, |this, cx| this.local_project_availability(cx));
+    assert!(matches!(
+      availability,
+      GithubPrLocalProjectAvailability::Ready { .. }
+    ));
+  }
+
+  #[gpui::test]
+  fn local_project_availability_requires_pr_head_sha_match_when_clean(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("stale-head", false)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let availability = page.read_with(cx, |this, cx| this.local_project_availability(cx));
+    assert!(matches!(
+      availability,
+      GithubPrLocalProjectAvailability::NeedsUpdate { .. }
+    ));
+  }
+
+  #[gpui::test]
+  fn local_project_availability_reports_dirty_when_sha_mismatches_and_worktree_is_dirty(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("stale-head", true)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let availability = page.read_with(cx, |this, cx| this.local_project_availability(cx));
+    assert!(matches!(
+      availability,
+      GithubPrLocalProjectAvailability::Dirty { .. }
+    ));
+  }
+
+  #[gpui::test]
+  fn active_file_search_entries_include_pr_and_unchanged_local_files_when_mode_is_active(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("head", false)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.show_local_project_files = true;
+      this.file_lookup.insert(
+        "src/pr_only.rs".to_string(),
+        Rc::new(GithubPrFileDiff {
+          path: "src/pr_only.rs".into(),
+          old_path: None,
+          status: GithubPrFileStatus::Modified,
+        }),
+      );
+      this.local_project_lookup.insert(
+        "src/local.rs".to_string(),
+        Rc::new(GithubPrLocalProjectFile {
+          path: "src/local.rs".into(),
+        }),
+      );
+      this.local_project_lookup.insert(
+        "README.md".to_string(),
+        Rc::new(GithubPrLocalProjectFile {
+          path: "README.md".into(),
+        }),
+      );
+      cx.notify();
+    });
+
+    let labels = page.read_with(cx, |this, cx| {
+      this
+        .active_file_search_entries(cx)
+        .into_iter()
+        .map(|entry| entry.label.to_string())
+        .collect::<Vec<_>>()
+    });
+    assert_eq!(
+      labels,
+      vec![
+        "README.md".to_string(),
+        "src/local.rs".to_string(),
+        "src/pr_only.rs".to_string(),
+      ]
+    );
+  }
+
+  #[gpui::test]
+  fn active_file_search_entries_hide_unchanged_local_files_when_mode_is_inactive(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.file_lookup.insert(
+        "src/pr_only.rs".to_string(),
+        Rc::new(GithubPrFileDiff {
+          path: "src/pr_only.rs".into(),
+          old_path: None,
+          status: GithubPrFileStatus::Modified,
+        }),
+      );
+      this.local_project_lookup.insert(
+        "src/local.rs".to_string(),
+        Rc::new(GithubPrLocalProjectFile {
+          path: "src/local.rs".into(),
+        }),
+      );
+      cx.notify();
+    });
+
+    let labels = page.read_with(cx, |this, cx| {
+      this
+        .active_file_search_entries(cx)
+        .into_iter()
+        .map(|entry| entry.label.to_string())
+        .collect::<Vec<_>>()
+    });
+    assert_eq!(labels, vec!["src/pr_only.rs".to_string()]);
+  }
+
+  #[gpui::test]
+  fn selecting_visible_changed_file_prefers_pr_diff_over_local_copy(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("head", false)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.show_local_project_files = true;
+      this.file_lookup.insert(
+        "src/shared.rs".to_string(),
+        Rc::new(GithubPrFileDiff {
+          path: "src/shared.rs".into(),
+          old_path: None,
+          status: GithubPrFileStatus::Modified,
+        }),
+      );
+      this.local_project_lookup.insert(
+        "src/shared.rs".to_string(),
+        Rc::new(GithubPrLocalProjectFile {
+          path: "src/shared.rs".into(),
+        }),
+      );
+      this.select_visible_tree_path("src/shared.rs", cx);
+    });
+
+    let (selected_file, selected_local_project_file) = page.read_with(cx, |this, _cx| {
+      (
+        this
+          .selected_file
+          .as_ref()
+          .map(|file| file.path.to_string()),
+        this
+          .selected_local_project_file
+          .as_ref()
+          .map(|file| file.path.to_string()),
+      )
+    });
+    assert_eq!(selected_file.as_deref(), Some("src/shared.rs"));
+    assert!(selected_local_project_file.is_none());
+  }
+
+  #[gpui::test]
+  fn selecting_a_commit_disables_local_project_mode(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("head", false)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      let file = Rc::new(GithubPrFileDiff {
+        path: "src/main.rs".into(),
+        old_path: None,
+        status: GithubPrFileStatus::Modified,
+      });
+      this.file_lookup.insert(file.path.to_string(), file);
+      this.show_local_project_files = true;
+      this.selected_local_project_file = Some(Rc::new(GithubPrLocalProjectFile {
+        path: "src/local.rs".into(),
+      }));
+      this.selected_local_project_tree_id = Some("src/local.rs".to_string());
+      this.select_commit_filter(Some("commit-sha".to_string()), cx);
+    });
+
+    let (selected_commit_sha, show_local_project_files, selected_local_project_file) = page
+      .read_with(cx, |this, _cx| {
+        (
+          this.selected_commit_sha.clone(),
+          this.show_local_project_files,
+          this.selected_local_project_file.clone(),
+        )
+      });
+    assert_eq!(selected_commit_sha.as_deref(), Some("commit-sha"));
+    assert!(!show_local_project_files);
+    assert!(selected_local_project_file.is_none());
   }
 
   fn make_issue_comment(id: u64, created_at: &str, body: &str) -> GithubPullRequestIssueComment {
@@ -9157,6 +10318,31 @@ mod tests {
     assert!(lookup.is_empty());
     assert_eq!(selected_index, None);
     assert_eq!(selected_id, None);
+  }
+
+  #[test]
+  fn build_tree_items_from_paths_expands_only_folders_with_changed_files() {
+    let paths = vec![
+      "src/changed.rs".to_string(),
+      "src/nested/also_changed.rs".to_string(),
+      "tests/helper.rs".to_string(),
+      "README.md".to_string(),
+    ];
+    let expanded =
+      expanded_folder_paths_for_changed_files(["src/changed.rs", "src/nested/also_changed.rs"]);
+
+    let (items, selected_index, selected_id) = build_tree_items_from_paths(&paths, Some(&expanded));
+
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0].label.as_ref(), "src");
+    assert!(items[0].is_expanded());
+    assert_eq!(items[0].children[0].label.as_ref(), "nested");
+    assert!(items[0].children[0].is_expanded());
+    assert_eq!(items[1].label.as_ref(), "tests");
+    assert!(!items[1].is_expanded());
+    assert_eq!(items[2].label.as_ref(), "README.md");
+    assert_eq!(selected_id.as_deref(), Some("src/nested/also_changed.rs"));
+    assert_eq!(selected_index, Some(0));
   }
 
   #[test]
