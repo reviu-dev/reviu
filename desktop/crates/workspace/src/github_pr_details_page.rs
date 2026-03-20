@@ -2990,7 +2990,7 @@ impl GithubPrDetailsPage {
     let message: SharedString = "This review comment will be permanently deleted.".into();
     let view = cx.entity();
 
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_alert_dialog(cx, move |alert, _, _| {
       let view = view.clone();
       ConfirmDialog::new(title.clone(), div().child(message.clone()))
         .confirm_text("Delete")
@@ -3002,7 +3002,7 @@ impl GithubPrDetailsPage {
           });
           true
         })
-        .build(dialog)
+        .build(alert)
     });
   }
 
@@ -3326,7 +3326,7 @@ impl GithubPrDetailsPage {
     let message: SharedString = "This comment will be permanently deleted.".into();
     let view = cx.entity();
 
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_alert_dialog(cx, move |alert, _, _| {
       let view = view.clone();
       ConfirmDialog::new(title.clone(), div().child(message.clone()))
         .confirm_text("Delete")
@@ -3338,7 +3338,7 @@ impl GithubPrDetailsPage {
           });
           true
         })
-        .build(dialog)
+        .build(alert)
     });
   }
 

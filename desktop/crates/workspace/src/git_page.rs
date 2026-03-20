@@ -4322,7 +4322,7 @@ impl GitPage {
     let view = cx.entity();
     let rel_path_for_action = rel_path.clone();
 
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_alert_dialog(cx, move |alert, _, _| {
       let view = view.clone();
       let rel_path_for_action = rel_path_for_action.clone();
       ConfirmDialog::new(title.clone(), div().child(message.clone()))
@@ -4335,7 +4335,7 @@ impl GitPage {
           });
           true
         })
-        .build(dialog)
+        .build(alert)
     });
   }
 
@@ -4344,7 +4344,7 @@ impl GitPage {
     let message: SharedString = "Stage all files and mark merge conflicts as resolved?".into();
     let view = cx.entity();
 
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_alert_dialog(cx, move |alert, _, _| {
       let view = view.clone();
       ConfirmDialog::new(title.clone(), div().child(message.clone()))
         .confirm_text("Stage all")
@@ -4355,7 +4355,7 @@ impl GitPage {
           });
           true
         })
-        .build(dialog)
+        .build(alert)
     });
   }
 
@@ -4387,7 +4387,7 @@ impl GitPage {
     let view = cx.entity();
     let rel_path_for_action = rel_path.clone();
 
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_alert_dialog(cx, move |alert, _, _| {
       let view = view.clone();
       let rel_path_for_action = rel_path_for_action.clone();
       ConfirmDialog::new(title.clone(), div().child(message.clone()))
@@ -4401,7 +4401,7 @@ impl GitPage {
           });
           true
         })
-        .build(dialog)
+        .build(alert)
     });
   }
 
@@ -4418,7 +4418,7 @@ impl GitPage {
     };
     let view = cx.entity();
 
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_alert_dialog(cx, move |alert, _, _| {
       let view = view.clone();
       ConfirmDialog::new(title.clone(), div().child(message.clone()))
         .confirm_text("Restore all")
@@ -4430,7 +4430,7 @@ impl GitPage {
           });
           true
         })
-        .build(dialog)
+        .build(alert)
     });
   }
 
