@@ -1,8 +1,18 @@
-use gpui::{AnyElement, App, ClickEvent, IntoElement, ParentElement, SharedString, Window};
+use std::rc::Rc;
+
+use gpui::{AnyElement, App, ClickEvent, IntoElement, SharedString, Window};
 use gpui_component::button::ButtonVariant;
-use gpui_component::dialog::{Dialog, DialogButtonProps};
+use gpui_component::dialog::{AlertDialog, DialogButtonProps};
 
 type ConfirmDialogHandler = dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool;
+
+#[derive(Clone, Debug, PartialEq)]
+struct ResolvedConfirmDialogProps {
+  confirm_text: SharedString,
+  cancel_text: SharedString,
+  confirm_variant: ButtonVariant,
+  cancel_variant: ButtonVariant,
+}
 
 pub struct ConfirmDialog {
   title: SharedString,
@@ -11,8 +21,8 @@ pub struct ConfirmDialog {
   cancel_text: Option<SharedString>,
   confirm_variant: Option<ButtonVariant>,
   cancel_variant: Option<ButtonVariant>,
-  on_confirm: Option<Box<ConfirmDialogHandler>>,
-  on_cancel: Option<Box<ConfirmDialogHandler>>,
+  on_confirm: Option<Rc<ConfirmDialogHandler>>,
+  on_cancel: Option<Rc<ConfirmDialogHandler>>,
 }
 
 impl ConfirmDialog {
@@ -57,7 +67,7 @@ impl ConfirmDialog {
   where
     F: Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static,
   {
-    self.on_confirm = Some(Box::new(on_confirm));
+    self.on_confirm = Some(Rc::new(on_confirm));
     self
   }
 
@@ -65,38 +75,66 @@ impl ConfirmDialog {
   where
     F: Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static,
   {
-    self.on_cancel = Some(Box::new(on_cancel));
+    self.on_cancel = Some(Rc::new(on_cancel));
     self
   }
 
-  pub fn build(self, dialog: Dialog) -> Dialog {
-    let mut props = DialogButtonProps::default().show_cancel(true);
-    if let Some(text) = self.confirm_text {
-      props = props.ok_text(text);
+  fn resolved_props(&self) -> ResolvedConfirmDialogProps {
+    ResolvedConfirmDialogProps {
+      confirm_text: self.confirm_text.clone().unwrap_or_else(|| "OK".into()),
+      cancel_text: self.cancel_text.clone().unwrap_or_else(|| "Cancel".into()),
+      confirm_variant: self.confirm_variant.unwrap_or(ButtonVariant::Primary),
+      cancel_variant: self.cancel_variant.unwrap_or_default(),
     }
-    if let Some(text) = self.cancel_text {
-      props = props.cancel_text(text);
-    }
-    if let Some(variant) = self.confirm_variant {
-      props = props.ok_variant(variant);
-    }
-    if let Some(variant) = self.cancel_variant {
-      props = props.cancel_variant(variant);
-    }
+  }
 
-    let mut dialog = dialog
-      .title(self.title)
-      .child(self.message)
-      .overlay_closable(true)
-      .button_props(props);
+  pub fn build(self, alert: AlertDialog) -> AlertDialog {
+    let props = self.resolved_props();
+
+    let mut props = DialogButtonProps::default()
+      .show_cancel(true)
+      .ok_text(props.confirm_text)
+      .cancel_text(props.cancel_text)
+      .ok_variant(props.confirm_variant)
+      .cancel_variant(props.cancel_variant);
 
     if let Some(on_confirm) = self.on_confirm {
-      dialog = dialog.on_ok(on_confirm);
+      props = props.on_ok(move |event, window, cx| on_confirm(event, window, cx));
     }
     if let Some(on_cancel) = self.on_cancel {
-      dialog = dialog.on_cancel(on_cancel);
+      props = props.on_cancel(move |event, window, cx| on_cancel(event, window, cx));
     }
 
-    dialog
+    alert
+      .title(self.title)
+      .description(self.message)
+      .close_button(true)
+      .overlay_closable(true)
+      .button_props(props)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::ConfirmDialog;
+  use gpui_component::button::ButtonVariant;
+
+  #[test]
+  fn resolved_props_default_to_ok_and_cancel() {
+    let dialog = ConfirmDialog::new("Confirm", "Message");
+    let props = dialog.resolved_props();
+
+    assert_eq!(props.confirm_text.as_ref(), "OK");
+    assert_eq!(props.cancel_text.as_ref(), "Cancel");
+    assert_eq!(props.confirm_variant, ButtonVariant::Primary);
+    assert_eq!(props.cancel_variant, ButtonVariant::default());
+  }
+
+  #[test]
+  fn destructive_confirm_dialog_uses_danger_variant() {
+    let dialog = ConfirmDialog::new("Confirm", "Message").destructive();
+    let props = dialog.resolved_props();
+
+    assert_eq!(props.confirm_variant, ButtonVariant::Danger);
   }
 }
