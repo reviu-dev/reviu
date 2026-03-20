@@ -16,8 +16,9 @@ use gfm_markdown_viewer::{
   render_github_code_reference_preview_card, render_markdown,
 };
 use git::{
-  DiffKind, DiffSet, FileDiff, compute_buffer_diff, current_github_remote_repo, current_head_sha,
-  list_repo_status, list_repo_worktree_files, sync_current_branch_to_head,
+  DiffKind, DiffSet, FileDiff, compute_buffer_diff, create_stash, current_github_remote_repo,
+  current_head_sha, default_stash_message, list_repo_status, list_repo_worktree_files,
+  switch_to_branch_name, sync_current_branch_to_head,
 };
 use gpui::{
   App, Context, Corner, Entity, FocusHandle, Focusable, MouseButton, ParentElement, Render,
@@ -1411,6 +1412,9 @@ pub struct GithubPrDetailsPage {
   local_project_tree_loading: bool,
   local_project_tree_error: Option<SharedString>,
   local_project_files_task: Option<Task<()>>,
+  local_branch_switch_task: Option<Task<()>>,
+  local_branch_switch_loading: bool,
+  local_branch_switch_error: Option<SharedString>,
   local_project_update_task: Option<Task<()>>,
   local_project_update_loading: bool,
   local_project_update_error: Option<SharedString>,
@@ -1446,9 +1450,20 @@ struct CurrentPrContext {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum GithubPrLocalProjectAvailability {
   Hidden,
-  Ready { repo_root: PathBuf },
-  NeedsUpdate { repo_root: PathBuf },
-  Dirty { repo_root: PathBuf },
+  NeedsBranchSwitch {
+    repo_root: PathBuf,
+    current_branch: Option<String>,
+    has_uncommitted_changes: bool,
+  },
+  Ready {
+    repo_root: PathBuf,
+  },
+  NeedsUpdate {
+    repo_root: PathBuf,
+  },
+  Dirty {
+    repo_root: PathBuf,
+  },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1798,6 +1813,9 @@ impl GithubPrDetailsPage {
       local_project_tree_loading: false,
       local_project_tree_error: None,
       local_project_files_task: None,
+      local_branch_switch_task: None,
+      local_branch_switch_loading: false,
+      local_branch_switch_error: None,
       local_project_update_task: None,
       local_project_update_loading: false,
       local_project_update_error: None,
@@ -1875,7 +1893,11 @@ impl GithubPrDetailsPage {
     }
 
     if local_repo.current_branch.as_deref() != Some(pull_request.head_ref_name.as_str()) {
-      return GithubPrLocalProjectAvailability::Hidden;
+      return GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+        repo_root: local_repo.repo_root,
+        current_branch: local_repo.current_branch,
+        has_uncommitted_changes: local_repo.has_uncommitted_changes,
+      };
     }
 
     let Some(local_head_sha) = local_repo.head_sha.as_deref() else {
@@ -2313,6 +2335,125 @@ impl GithubPrDetailsPage {
     );
   }
 
+  fn confirm_switch_local_branch_with_stash(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      return;
+    };
+    let branch_name = pull_request.head_ref_name.clone();
+    let title: SharedString = "Stash changes before switching branches?".into();
+    let message: SharedString = format!(
+      "Create a stash with tracked and untracked files, then switch to {}?",
+      branch_name
+    )
+    .into();
+    let view = cx.entity();
+
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text("Stash and switch")
+        .cancel_text("Cancel")
+        .on_confirm(move |_, window, cx| {
+          view.update(cx, |this, cx| {
+            this.switch_local_branch_to_pr_branch(true, window, cx);
+          });
+          true
+        })
+        .build(alert)
+    });
+  }
+
+  fn prompt_or_switch_local_branch_to_pr_branch(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.local_branch_switch_loading {
+      return;
+    }
+
+    let GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+      has_uncommitted_changes,
+      ..
+    } = self.local_project_availability(cx)
+    else {
+      return;
+    };
+
+    if has_uncommitted_changes {
+      self.confirm_switch_local_branch_with_stash(window, cx);
+    } else {
+      self.switch_local_branch_to_pr_branch(false, window, cx);
+    }
+  }
+
+  fn switch_local_branch_to_pr_branch(
+    &mut self,
+    stash_before_switch: bool,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.local_branch_switch_loading {
+      return;
+    }
+
+    let GithubPrLocalProjectAvailability::NeedsBranchSwitch { repo_root, .. } =
+      self.local_project_availability(cx)
+    else {
+      return;
+    };
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      return;
+    };
+
+    let branch_name = pull_request.head_ref_name.clone();
+    self.local_branch_switch_loading = true;
+    self.local_branch_switch_error = None;
+    self.local_project_update_error = None;
+    cx.notify();
+
+    let task = cx.spawn_in(window, async move |this, cx| {
+      let repo_root_for_action = repo_root.clone();
+      let branch_name_for_action = branch_name.clone();
+      let result = unblock(move || {
+        if stash_before_switch {
+          let stash_message = default_stash_message(&repo_root_for_action).ok();
+          create_stash(&repo_root_for_action, true, stash_message.as_deref())?;
+        }
+        switch_to_branch_name(&repo_root_for_action, &branch_name_for_action)
+      })
+      .await;
+
+      let _ = this.update_in(cx, |this, _, cx| {
+        this.local_branch_switch_task = None;
+        this.local_branch_switch_loading = false;
+
+        match result {
+          Ok(()) => {
+            this.local_branch_switch_error = None;
+            this.sync_active_local_repo_store_for_repo(
+              repo_root.as_path(),
+              Some(branch_name.as_str()),
+              cx,
+            );
+            this.load_local_project_files(repo_root.clone(), cx);
+          }
+          Err(error) => {
+            this.local_branch_switch_error = Some(error.to_string().into());
+          }
+        }
+
+        cx.notify();
+      });
+    });
+
+    self.local_branch_switch_task = Some(task);
+  }
+
   fn update_local_branch_to_pr_head(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if self.local_project_update_loading {
       return;
@@ -2358,9 +2499,7 @@ impl GithubPrDetailsPage {
               Some(branch_name.as_str()),
               cx,
             );
-            if this.show_local_project_files {
-              this.load_local_project_files(repo_root.clone(), cx);
-            }
+            this.load_local_project_files(repo_root.clone(), cx);
           }
           Err(error) => {
             this.local_project_update_error = Some(error.to_string().into());
@@ -5107,6 +5246,9 @@ impl GithubPrDetailsPage {
     self.local_project_tree_loading = false;
     self.local_project_tree_error = None;
     self.local_project_files_task = None;
+    self.local_branch_switch_task = None;
+    self.local_branch_switch_loading = false;
+    self.local_branch_switch_error = None;
     self.local_project_update_task = None;
     self.local_project_update_loading = false;
     self.local_project_update_error = None;
@@ -7096,22 +7238,78 @@ impl GithubPrDetailsPage {
       None
     } else {
       let (status_text, status_color) = match &local_project_availability {
-        GithubPrLocalProjectAvailability::Ready { .. } => {
-          ("Local branch matches this PR head", theme.muted_foreground)
-        }
-        GithubPrLocalProjectAvailability::NeedsUpdate { .. } => {
-          ("Local branch is not at this PR head", theme.status_orange())
-        }
-        GithubPrLocalProjectAvailability::Dirty { .. } => (
-          "Local branch is not at this PR head and has local changes",
+        GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+          current_branch: Some(current_branch),
+          has_uncommitted_changes,
+          ..
+        } => (
+          if *has_uncommitted_changes {
+            format!(
+              "Local changes detected on {}. Stash before switching to this PR branch.",
+              current_branch
+            )
+          } else {
+            format!(
+              "Current branch is {}. Switch to this PR branch to browse unchanged files.",
+              current_branch
+            )
+          },
           theme.status_orange(),
         ),
-        GithubPrLocalProjectAvailability::Hidden => ("", theme.muted_foreground),
+        GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+          current_branch: None,
+          has_uncommitted_changes,
+          ..
+        } => (
+          if *has_uncommitted_changes {
+            "Local changes detected. Stash before switching to this PR branch.".to_string()
+          } else {
+            "Local repo is not on this PR branch.".to_string()
+          },
+          theme.status_orange(),
+        ),
+        GithubPrLocalProjectAvailability::Ready { .. } => (
+          "Local branch matches this PR head".to_string(),
+          theme.muted_foreground,
+        ),
+        GithubPrLocalProjectAvailability::NeedsUpdate { .. } => (
+          "Local branch is not at this PR head".to_string(),
+          theme.status_orange(),
+        ),
+        GithubPrLocalProjectAvailability::Dirty { .. } => (
+          "Local branch is not at this PR head and has local changes".to_string(),
+          theme.status_orange(),
+        ),
+        GithubPrLocalProjectAvailability::Hidden => ("".to_string(), theme.muted_foreground),
       };
       let can_toggle_local_project = matches!(
         local_project_availability,
         GithubPrLocalProjectAvailability::Ready { .. }
       );
+      let view = cx.entity();
+      let switch_branch_button = if matches!(
+        local_project_availability,
+        GithubPrLocalProjectAvailability::NeedsBranchSwitch { .. }
+      ) {
+        Some(
+          Button::new("github-pr-local-project-switch-branch")
+            .label(if self.local_branch_switch_loading {
+              "Switching..."
+            } else {
+              "Switch to PR branch"
+            })
+            .xsmall()
+            .ghost()
+            .disabled(self.local_branch_switch_loading || self.local_project_update_loading)
+            .on_click(move |_, window, cx| {
+              view.update(cx, |this, cx| {
+                this.prompt_or_switch_local_branch_to_pr_branch(window, cx);
+              });
+            }),
+        )
+      } else {
+        None
+      };
       let view = cx.entity();
       let update_button = if matches!(
         local_project_availability,
@@ -7153,14 +7351,22 @@ impl GithubPrDetailsPage {
                 Switch::new("github-pr-local-project-switch")
                   .label("Show unchanged files")
                   .checked(local_project_mode)
-                  .disabled(!can_toggle_local_project || self.local_project_update_loading)
+                  .disabled(
+                    !can_toggle_local_project
+                      || self.local_project_update_loading
+                      || self.local_branch_switch_loading,
+                  )
                   .on_click(cx.listener(move |this, checked, _, cx| {
                     this.set_show_local_project_files(*checked, cx);
                   })),
               )
+              .when_some(switch_branch_button, |this, button| this.child(button))
               .when_some(update_button, |this, button| this.child(button)),
           )
           .child(div().text_xs().text_color(status_color).child(status_text))
+          .when_some(self.local_branch_switch_error.clone(), |this, error| {
+            this.child(div().text_xs().text_color(theme.status_red()).child(error))
+          })
           .when_some(self.local_project_update_error.clone(), |this, error| {
             this.child(div().text_xs().text_color(theme.status_red()).child(error))
           }),
@@ -8896,11 +9102,19 @@ mod tests {
   }
 
   fn make_active_local_repo(head_sha: &str, has_uncommitted_changes: bool) -> ActiveLocalRepo {
+    make_active_local_repo_for_branch("feature", head_sha, has_uncommitted_changes)
+  }
+
+  fn make_active_local_repo_for_branch(
+    current_branch: &str,
+    head_sha: &str,
+    has_uncommitted_changes: bool,
+  ) -> ActiveLocalRepo {
     ActiveLocalRepo {
       repo_root: PathBuf::from("/tmp/reviu-tests/acme-widget"),
       github_owner: Some("acme".to_string()),
       github_repo: Some("widget".to_string()),
-      current_branch: Some("feature".to_string()),
+      current_branch: Some(current_branch.to_string()),
       head_sha: Some(head_sha.to_string()),
       has_uncommitted_changes,
     }
@@ -9226,6 +9440,64 @@ mod tests {
     assert!(matches!(
       availability,
       GithubPrLocalProjectAvailability::Dirty { .. }
+    ));
+  }
+
+  #[gpui::test]
+  fn local_project_availability_requires_branch_switch_when_current_branch_differs(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(
+        cx,
+        Some(make_active_local_repo_for_branch("main", "head", false)),
+      );
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let availability = page.read_with(cx, |this, cx| this.local_project_availability(cx));
+    assert!(matches!(
+      availability,
+      GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+        current_branch: Some(ref branch),
+        has_uncommitted_changes: false,
+        ..
+      } if branch == "main"
+    ));
+  }
+
+  #[gpui::test]
+  fn local_project_availability_requires_branch_switch_and_preserves_dirty_state(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(
+        cx,
+        Some(make_active_local_repo_for_branch("main", "head", true)),
+      );
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let availability = page.read_with(cx, |this, cx| this.local_project_availability(cx));
+    assert!(matches!(
+      availability,
+      GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+        current_branch: Some(ref branch),
+        has_uncommitted_changes: true,
+        ..
+      } if branch == "main"
     ));
   }
 
