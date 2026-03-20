@@ -16,9 +16,9 @@ use gfm_markdown_viewer::{
   render_github_code_reference_preview_card, render_markdown,
 };
 use git::{
-  DiffKind, DiffSet, FileDiff, compute_buffer_diff, create_stash, current_github_remote_repo,
-  current_head_sha, default_stash_message, list_repo_status, list_repo_worktree_files,
-  switch_to_branch_name, sync_current_branch_to_head,
+  DiffKind, DiffSet, FileDiff, GitStore, compute_buffer_diff, create_stash,
+  current_github_remote_repo, current_head_sha, default_stash_message, list_repo_head_files,
+  list_repo_status, switch_to_branch_name, sync_current_branch_to_head,
 };
 use gpui::{
   App, Context, Corner, Entity, FocusHandle, Focusable, MouseButton, ParentElement, Render,
@@ -2088,13 +2088,12 @@ impl GithubPrDetailsPage {
         state.set_items(Vec::new(), cx);
         state.set_selected_index(None, cx);
       });
-      self.clear_diff_editor(cx);
     }
 
     let requested_repo_root = repo_root.clone();
     let task = cx.spawn(async move |this, cx| {
       let repo_root_for_load = requested_repo_root.clone();
-      let result = unblock(move || list_repo_worktree_files(&repo_root_for_load)).await;
+      let result = unblock(move || list_repo_head_files(&repo_root_for_load)).await;
 
       let _ = this.update(cx, |this, cx| {
         if this.local_project_loaded_repo_root.as_ref() != Some(&requested_repo_root) {
@@ -2154,6 +2153,20 @@ impl GithubPrDetailsPage {
       if let Some(ix) = state.selected_index() {
         state.scroll_to_item(ix, gpui::ScrollStrategy::Top);
       }
+    });
+  }
+
+  fn load_local_project_snapshot_into_diff_editor(
+    &mut self,
+    file_path: PathBuf,
+    contents: String,
+    cx: &mut Context<Self>,
+  ) {
+    self.diff_editor = Self::build_detached_diff_editor(file_path, cx);
+    self.diff_editor.update(cx, |editor, cx| {
+      editor.load_readonly_snapshot(contents, None, cx);
+      editor.reset_after_replace();
+      editor.reset_selection(cx);
     });
   }
 
@@ -2219,9 +2232,16 @@ impl GithubPrDetailsPage {
     let task = cx.spawn(async move |this, cx| {
       let repo_root_for_load = requested_repo_root.clone();
       let absolute_path_for_load = requested_absolute_path.clone();
-      let loaded =
-        unblock(move || Editor::load_file_for_editor(&repo_root_for_load, &absolute_path_for_load))
-          .await;
+      let rel_path_for_load = requested_rel_path.clone();
+      let snapshot_contents = unblock(move || {
+        let loaded = Editor::load_file_for_editor(&repo_root_for_load, &absolute_path_for_load);
+        let head_contents = GitStore::new(repo_root_for_load.clone())
+          .load_bases(rel_path_for_load.as_path())
+          .ok()
+          .and_then(|bases| bases.head);
+        head_contents.unwrap_or(loaded.content)
+      })
+      .await;
 
       let _ = this.update(cx, move |this, cx| {
         if this.local_project_open_file_generation != generation {
@@ -2239,17 +2259,11 @@ impl GithubPrDetailsPage {
           return;
         }
 
-        let editor_repo_root = requested_repo_root.clone();
-        let editor_file_path = requested_absolute_path.clone();
-        this.diff_editor = cx.new(move |cx| {
-          Editor::new_with_loaded_file(editor_repo_root, editor_file_path, loaded, cx)
-        });
-        this.diff_editor.update(cx, |editor, cx| {
-          editor.reset_after_replace();
-          editor.reset_selection(cx);
-          editor.set_diffs(None, cx);
-          editor.is_read_only = true;
-        });
+        this.load_local_project_snapshot_into_diff_editor(
+          requested_rel_path.clone(),
+          snapshot_contents,
+          cx,
+        );
         this.file_loading = false;
         this.file_error = None;
         this.sync_diff_view(cx);
@@ -3149,16 +3163,12 @@ impl GithubPrDetailsPage {
     Rc::new(move |selected_commit_sha, window, cx| {
       view.update(cx, |this, cx| {
         this.select_commit_filter(selected_commit_sha.clone(), cx);
-        this.refocus_page_shortcuts_after_dropdown_select(window, cx);
+        this.refocus_page_shortcuts(window, cx);
       });
     })
   }
 
-  fn refocus_page_shortcuts_after_dropdown_select(
-    &self,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
+  fn refocus_page_shortcuts(&self, window: &mut Window, cx: &mut Context<Self>) {
     let focus_handle = self.focus_handle.clone();
     window.focus(&focus_handle, cx);
     cx.on_next_frame(window, move |_, window, cx| {
@@ -8032,16 +8042,7 @@ impl GithubPrDetailsPage {
     let handler: SearchFileHandler = Arc::new(move |path, window, cx| {
       view.update(cx, |view, cx| {
         view.select_file_from_palette(&path, cx);
-      });
-
-      let view_for_focus = view.clone();
-      window.on_next_frame(move |window, cx| {
-        let focus_handle = view_for_focus
-          .read(cx)
-          .diff_editor
-          .read(cx)
-          .focus_handle(cx);
-        window.focus(&focus_handle, cx);
+        view.refocus_page_shortcuts(window, cx);
       });
 
       Ok(())
@@ -9083,7 +9084,9 @@ mod tests {
     GithubPullRequestState, GithubRepository,
   };
   use crate::workspace::WorkspaceApi;
+  use git2::{Repository, Signature};
   use gpui::TestAppContext;
+  use std::time::{SystemTime, UNIX_EPOCH};
 
   fn init_gpui_test(cx: &mut TestAppContext) {
     cx.update(|cx| {
@@ -9117,6 +9120,39 @@ mod tests {
       current_branch: Some(current_branch.to_string()),
       head_sha: Some(head_sha.to_string()),
       has_uncommitted_changes,
+    }
+  }
+
+  fn commit_local_project_file(repo_root: &Path, rel_path: &Path, contents: &str, message: &str) {
+    let repo = Repository::open(repo_root).expect("open repo");
+    std::fs::write(repo_root.join(rel_path), contents).expect("write project file");
+
+    let mut index = repo.index().expect("open git index");
+    index.add_path(rel_path).expect("stage project file");
+    index.write().expect("write git index");
+    let tree_id = index.write_tree().expect("write git tree");
+    let tree = repo.find_tree(tree_id).expect("find git tree");
+    let signature = Signature::now("Reviu Tests", "tests@reviu.local").expect("signature");
+    let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+
+    match parent {
+      Some(parent) => {
+        repo
+          .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &[&parent],
+          )
+          .expect("commit with parent");
+      }
+      None => {
+        repo
+          .commit(Some("HEAD"), &signature, &signature, message, &tree, &[])
+          .expect("initial commit");
+      }
     }
   }
 
@@ -9320,6 +9356,23 @@ mod tests {
       .size;
     assert!(button_bounds.width > gpui::px(0.0));
     assert!(button_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  fn refocus_page_shortcuts_focuses_page_container(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, window, cx| {
+      let external_focus = cx.focus_handle();
+      let page_focus = this.focus_handle.clone();
+      window.focus(&external_focus, cx);
+
+      this.refocus_page_shortcuts(window, cx);
+
+      let focused = window.focused(cx).expect("page should take focus");
+      assert_eq!(focused, page_focus);
+    });
   }
 
   #[gpui::test]
@@ -9631,6 +9684,105 @@ mod tests {
     });
     assert_eq!(selected_file.as_deref(), Some("src/shared.rs"));
     assert!(selected_local_project_file.is_none());
+  }
+
+  #[gpui::test]
+  fn loading_local_project_files_keeps_selected_pr_diff_visible(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      let file = Rc::new(GithubPrFileDiff {
+        path: "src/main.rs".into(),
+        old_path: None,
+        status: GithubPrFileStatus::Modified,
+      });
+      this.show_local_project_files = true;
+      this.file_lookup.insert(file.path.to_string(), file.clone());
+      this.file_contents.insert(
+        file.path.to_string(),
+        GithubPrFileContents {
+          base: Some("old contents\n".to_string()),
+          head: Some("new contents\n".to_string()),
+        },
+      );
+      this.set_selected_file(Some(file), cx);
+      this.load_local_project_files(PathBuf::from("/tmp/reviu-tests/non-repo"), cx);
+    });
+
+    let after = page.read_with(cx, |this, cx| {
+      let editor = this.diff_editor.read(cx);
+      let document = editor.document().read(cx);
+      document.slice_to_string(0..document.len())
+    });
+    assert_eq!(after, "new contents\n");
+  }
+
+  #[gpui::test]
+  async fn selecting_local_project_file_uses_detached_readonly_snapshot(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.executor().allow_parking();
+
+    let unique = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .expect("system time after unix epoch")
+      .as_nanos();
+    let repo_root = std::env::temp_dir().join(format!("reviu-pr-local-project-{unique}"));
+    let file_path = repo_root.join("src/local.rs");
+    std::fs::create_dir_all(
+      file_path
+        .parent()
+        .expect("local project file should have parent directory"),
+    )
+    .expect("create local project directory");
+    Repository::init(&repo_root).expect("init local project git repo");
+    commit_local_project_file(
+      &repo_root,
+      Path::new("src/local.rs"),
+      "fn clean() {}\n",
+      "initial",
+    );
+    std::fs::write(&file_path, "fn local_change() {}\n").expect("write local worktree change");
+
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    let open_task = page.update_in(cx, |this, _window, cx| {
+      this.local_project_loaded_repo_root = Some(repo_root.clone());
+      this.set_selected_local_project_file(
+        Some(Rc::new(GithubPrLocalProjectFile {
+          path: "src/local.rs".into(),
+        })),
+        cx,
+      );
+      this
+        .local_project_open_file_task
+        .take()
+        .expect("local project open task should exist")
+    });
+    open_task.await;
+
+    let (repo_file_is_none, git_store_is_none, is_read_only, diffs_is_none, workdir_path, contents) =
+      page.read_with(cx, |this, cx| {
+        let editor = this.diff_editor.read(cx);
+        let document = editor.document().read(cx);
+        (
+          editor.repo_file.is_none(),
+          editor.git_store.is_none(),
+          editor.is_read_only,
+          editor.diffs.is_none(),
+          editor.workdir_path.clone(),
+          document.slice_to_string(0..document.len()),
+        )
+      });
+
+    assert!(repo_file_is_none);
+    assert!(git_store_is_none);
+    assert!(is_read_only);
+    assert!(diffs_is_none);
+    assert_eq!(workdir_path, PathBuf::from("src/local.rs"));
+    assert_eq!(contents, "fn clean() {}\n");
+
+    std::fs::remove_dir_all(&repo_root).ok();
   }
 
   #[gpui::test]

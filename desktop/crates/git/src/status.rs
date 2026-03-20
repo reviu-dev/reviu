@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use git2::build::CheckoutBuilder;
-use git2::{ErrorCode, IndexAddOption, Repository, Status, StatusOptions};
+use git2::{ErrorCode, IndexAddOption, ObjectType, Repository, Status, StatusOptions, Tree};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RepoStage {
@@ -118,6 +118,54 @@ pub fn list_repo_worktree_files(repo_root: &Path) -> Result<Vec<PathBuf>> {
   }
 
   Ok(files.into_iter().collect())
+}
+
+pub fn list_repo_head_files(repo_root: &Path) -> Result<Vec<PathBuf>> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let head = match repo.head() {
+    Ok(head) => head,
+    Err(_) => return Ok(Vec::new()),
+  };
+  let tree = match head.peel_to_tree() {
+    Ok(tree) => tree,
+    Err(_) => return Ok(Vec::new()),
+  };
+
+  let mut files = BTreeSet::new();
+  collect_tree_files(&repo, &tree, Path::new(""), &mut files)?;
+  Ok(files.into_iter().collect())
+}
+
+fn collect_tree_files(
+  repo: &Repository,
+  tree: &Tree<'_>,
+  prefix: &Path,
+  files: &mut BTreeSet<PathBuf>,
+) -> Result<()> {
+  for entry in tree.iter() {
+    let Some(name) = entry.name() else {
+      continue;
+    };
+    let path = if prefix.as_os_str().is_empty() {
+      PathBuf::from(name)
+    } else {
+      prefix.join(name)
+    };
+
+    match entry.kind() {
+      Some(ObjectType::Blob) => {
+        files.insert(path);
+      }
+      Some(ObjectType::Tree) => {
+        let subtree = repo.find_tree(entry.id()).context("find subtree")?;
+        collect_tree_files(repo, &subtree, &path, files)?;
+      }
+      _ => {}
+    }
+  }
+
+  Ok(())
 }
 
 pub fn stage_file(repo_root: &Path, rel_path: &Path) -> Result<()> {
@@ -320,6 +368,9 @@ mod tests {
 
   fn commit_file(repo_root: &Path, rel_path: &Path, contents: &str, message: &str) {
     let repo = Repository::open(repo_root).expect("open repo");
+    if let Some(parent) = repo_root.join(rel_path).parent() {
+      std::fs::create_dir_all(parent).expect("create parent directory");
+    }
     std::fs::write(repo_root.join(rel_path), contents).expect("write worktree file");
 
     let mut index = repo.index().expect("open index");
@@ -548,6 +599,27 @@ mod tests {
         PathBuf::from("src/lib.rs"),
         PathBuf::from("tracked.txt"),
       ]
+    );
+  }
+
+  #[test]
+  fn list_repo_head_files_uses_head_tree_and_excludes_local_untracked_files() {
+    let temp = TempDir::new("status-head-files");
+    init_repo(&temp.path);
+    let tracked = Path::new("tracked.txt");
+    let nested = Path::new("src/lib.rs");
+    commit_file(&temp.path, tracked, "tracked\n", "initial tracked");
+    commit_file(&temp.path, nested, "pub fn clean() {}\n", "initial nested");
+
+    std::fs::write(temp.path.join(tracked), "local change\n").expect("write local change");
+    std::fs::create_dir_all(temp.path.join("scratch")).expect("create untracked dir");
+    std::fs::write(temp.path.join("scratch/tmp.rs"), "untracked\n").expect("write untracked");
+
+    let files = list_repo_head_files(temp.path.as_path()).expect("list repo head files");
+
+    assert_eq!(
+      files,
+      vec![PathBuf::from("src/lib.rs"), PathBuf::from("tracked.txt"),]
     );
   }
 }
