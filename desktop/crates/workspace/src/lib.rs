@@ -3,6 +3,7 @@ use gpui::actions;
 actions!(workspace, [CloseWorkspacePage]);
 
 mod about_page;
+mod active_local_repo;
 mod api;
 mod app_profile;
 mod app_update;

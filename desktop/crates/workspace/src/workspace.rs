@@ -14,6 +14,7 @@ use smol::unblock;
 use crate::AppProfile;
 use crate::AuthCallbackTarget;
 use crate::about_page::AboutPage;
+use crate::active_local_repo::ActiveLocalRepoStore;
 use crate::api::ApiClient;
 use crate::app_update::{
   AppUpdateNotificationId, AppUpdateState, AppUpdateStore, AvailableAppUpdate, UpdateArtifact,
@@ -236,6 +237,7 @@ impl WorkspaceView {
     cx.set_global(WorkspaceRoute::default());
     cx.set_global(WorkspaceApi::new());
     cx.set_global(AuthStateStore::default());
+    cx.set_global(ActiveLocalRepoStore::default());
     cx.set_global(AppUpdateStore::default());
 
     let settings = ConfigStore::load_app_settings();

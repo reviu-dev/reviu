@@ -12,13 +12,14 @@ use git::{
   HistoryCommitNode, HistoryRevision, InteractiveRebaseTarget, InteractiveRebaseTodoEntry,
   RepoStage, RepoStatusEntry, RepoStatusKind, abort_merge, abort_rebase, amend_commit, apply_stash,
   checkout_detached_target, cherry_pick_commits, commit_changes, continue_rebase, create_branch,
-  create_branch_from, create_stash, current_branch_status, current_history_revision,
-  current_rebase_commit_message, default_stash_message, delete_untracked_file, detached_head_label,
-  diff_set_from_patch, drop_stash, fetch, head_commit_status, is_merge_in_progress,
-  is_rebase_in_progress, list_branches, list_commit_changed_files, list_commit_history,
-  list_interactive_rebase_commits, list_repo_status, list_stashes, load_commit_file_diff,
-  merge_branch, pop_stash, push, rebase_branch, restore_file, skip_rebase, stage_all, stage_file,
-  start_interactive_rebase, switch_branch, undo_last_commit, unstage_all, unstage_file,
+  create_branch_from, create_stash, current_branch_status, current_github_remote_repo,
+  current_head_sha, current_history_revision, current_rebase_commit_message, default_stash_message,
+  delete_untracked_file, detached_head_label, diff_set_from_patch, drop_stash, fetch,
+  head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
+  list_commit_changed_files, list_commit_history, list_interactive_rebase_commits,
+  list_repo_status, list_stashes, load_commit_file_diff, merge_branch, pop_stash, push,
+  rebase_branch, restore_file, skip_rebase, stage_all, stage_file, start_interactive_rebase,
+  switch_branch, undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
@@ -43,6 +44,7 @@ use sentry::protocol::{Map, Value};
 use smol::unblock;
 
 use crate::{
+  active_local_repo::{ActiveLocalRepo, ActiveLocalRepoStore},
   api::ApiClient,
   auth_state::{AuthState, AuthStateStore},
   config::{ConfigStore, RecentRepository},
@@ -822,6 +824,24 @@ impl GitPage {
     );
   }
 
+  fn sync_active_local_repo(&self, cx: &mut Context<Self>) {
+    let snapshot = self.selected_repo.as_ref().map(|repo_root| {
+      let github_remote = current_github_remote_repo(repo_root).ok().flatten();
+      ActiveLocalRepo {
+        repo_root: repo_root.clone(),
+        github_owner: github_remote.as_ref().map(|remote| remote.owner.clone()),
+        github_repo: github_remote.as_ref().map(|remote| remote.repo.clone()),
+        current_branch: self
+          .branch_status
+          .as_ref()
+          .map(|status| status.name.clone()),
+        head_sha: current_head_sha(repo_root).ok().flatten(),
+        has_uncommitted_changes: !self.status_entries.is_empty(),
+      }
+    });
+    ActiveLocalRepoStore::set(cx, snapshot);
+  }
+
   fn should_refresh_file_list(sidebar_mode: GitSidebarMode) -> bool {
     sidebar_mode == GitSidebarMode::Changes
   }
@@ -1041,6 +1061,7 @@ impl GitPage {
     );
     self.can_push = can_push;
     self.can_force_push = can_force_push;
+    self.sync_active_local_repo(cx);
 
     let selected_file_update = Self::selected_file_update(
       self.selected_file.as_deref(),
@@ -1666,6 +1687,7 @@ impl GitPage {
     self.history_commit_files_loading.clear();
     self.pending_history_file_loads.clear();
     self.history_opened_commit_file = None;
+    ActiveLocalRepoStore::set(cx, None);
     ConfigStore::persist_recent_repository(&repo_root);
 
     self.reload_status(cx);
@@ -1854,6 +1876,7 @@ impl GitPage {
       self.history_opened_commit_file = None;
       self.refresh_history_list(cx);
       self.sync_sentry_git_context();
+      ActiveLocalRepoStore::set(cx, None);
       cx.notify();
       return;
     };
@@ -1953,6 +1976,7 @@ impl GitPage {
           if Self::should_refresh_file_list(this.sidebar_mode) {
             this.refresh_file_list(cx);
           }
+          ActiveLocalRepoStore::set(cx, None);
           cx.notify();
         });
         return;
