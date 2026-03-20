@@ -712,6 +712,7 @@ pub struct GitPage {
   history_open_file_task: Option<Task<()>>,
   branch_task: Option<Task<()>>,
   open_file_generation: u64,
+  status_refresh_generation: u64,
   branch_refresh_generation: u64,
   poll_task: Option<Task<()>>,
   commit_input: Entity<InputState>,
@@ -942,6 +943,20 @@ impl GitPage {
     refresh_generation: u64,
   ) -> bool {
     selected_repo == Some(requested_repo) && current_generation == refresh_generation
+  }
+
+  fn should_apply_status_refresh(
+    selected_repo: Option<&Path>,
+    requested_repo: &Path,
+    current_generation: u64,
+    refresh_generation: u64,
+  ) -> bool {
+    selected_repo == Some(requested_repo) && current_generation == refresh_generation
+  }
+
+  fn advance_status_refresh_generation(&mut self) -> u64 {
+    self.status_refresh_generation = self.status_refresh_generation.wrapping_add(1);
+    self.status_refresh_generation
   }
 
   fn should_refresh_editor_for_path(selected_file: Option<&Path>, rel_path: &Path) -> bool {
@@ -1450,6 +1465,7 @@ impl GitPage {
       history_open_file_task: None,
       branch_task: None,
       open_file_generation: 0,
+      status_refresh_generation: 0,
       branch_refresh_generation: 0,
       poll_task: None,
       commit_input,
@@ -1527,6 +1543,7 @@ impl GitPage {
       history_open_file_task: None,
       branch_task: None,
       open_file_generation: 0,
+      status_refresh_generation: 0,
       branch_refresh_generation: 0,
       poll_task: None,
       commit_input,
@@ -1574,6 +1591,7 @@ impl GitPage {
     if Self::is_detached_branch_select_value(&branch) {
       return;
     }
+    self.advance_status_refresh_generation();
     let editor = self.editor.clone();
 
     let task = cx.spawn(async move |this, cx| {
@@ -1844,6 +1862,7 @@ impl GitPage {
       self.history_loading = true;
       cx.notify();
     }
+    let refresh_generation = self.advance_status_refresh_generation();
 
     let task = cx.spawn(async move |this, cx| {
       let requested_repo = repo_root.clone();
@@ -1892,7 +1911,12 @@ impl GitPage {
       )) = status
       else {
         let _ = this.update(cx, |this, cx| {
-          if this.selected_repo.as_ref() != Some(&requested_repo) {
+          if !Self::should_apply_status_refresh(
+            this.selected_repo.as_deref(),
+            requested_repo.as_path(),
+            this.status_refresh_generation,
+            refresh_generation,
+          ) {
             return;
           }
           this.invalidate_open_file_task();
@@ -1935,7 +1959,12 @@ impl GitPage {
       };
 
       let _ = this.update(cx, |this, cx| {
-        if this.selected_repo.as_ref() != Some(&requested_repo) {
+        if !Self::should_apply_status_refresh(
+          this.selected_repo.as_deref(),
+          requested_repo.as_path(),
+          this.status_refresh_generation,
+          refresh_generation,
+        ) {
           return;
         }
         let branch_changed = this.apply_status_snapshot(
@@ -1984,20 +2013,28 @@ impl GitPage {
           .await;
 
         let poll_state = match this.update(cx, |this, _| {
-          (
-            this.selected_repo.clone(),
+          let Some(repo_root) = this.selected_repo.clone() else {
+            return None;
+          };
+          Some((
+            repo_root,
             this.sidebar_mode == GitSidebarMode::History,
             this.history_revision.clone(),
             this.history_commits.is_empty(),
-          )
+            this.advance_status_refresh_generation(),
+          ))
         }) {
-          Ok(value) => value,
+          Ok(Some(value)) => value,
+          Ok(None) => continue,
           Err(_) => return,
         };
-        let (repo_root, include_history, cached_history_revision, history_empty) = poll_state;
-        let Some(repo_root) = repo_root else {
-          continue;
-        };
+        let (
+          repo_root,
+          include_history,
+          cached_history_revision,
+          history_empty,
+          refresh_generation,
+        ) = poll_state;
         let requested_repo = repo_root.clone();
 
         let status = unblock(move || {
@@ -2056,7 +2093,12 @@ impl GitPage {
         };
 
         let _ = this.update(cx, |this, cx| {
-          if this.selected_repo.as_ref() != Some(&requested_repo) {
+          if !Self::should_apply_status_refresh(
+            this.selected_repo.as_deref(),
+            requested_repo.as_path(),
+            this.status_refresh_generation,
+            refresh_generation,
+          ) {
             return;
           }
           let branch_changed = this.apply_status_snapshot(
@@ -2109,6 +2151,7 @@ impl GitPage {
     let cached_history_revision = self.history_revision.clone();
     let history_empty = self.history_commits.is_empty();
     let requested_repo = repo_root.clone();
+    let refresh_generation = self.advance_status_refresh_generation();
     let task = cx.spawn(async move |this, cx| {
       let status = unblock(move || {
         let entries = list_repo_status(&repo_root).ok()?;
@@ -2167,7 +2210,12 @@ impl GitPage {
       };
 
       let _ = this.update(cx, |this, cx| {
-        if this.selected_repo.as_ref() != Some(&requested_repo) {
+        if !Self::should_apply_status_refresh(
+          this.selected_repo.as_deref(),
+          requested_repo.as_path(),
+          this.status_refresh_generation,
+          refresh_generation,
+        ) {
           return;
         }
         let branch_changed = this.apply_status_snapshot(
@@ -2594,6 +2642,7 @@ impl GitPage {
         if !self.should_show_checkout_detached_palette_command() {
           return Err("Checkout detached is currently disabled.".into());
         }
+        self.advance_status_refresh_generation();
         checkout_detached_target(&root_path, &target)
       }
       CommandPaletteAction::Commit => {
@@ -11478,6 +11527,89 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn branch_select_switch_keeps_status_empty_when_target_branch_is_clean(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-branch-switch-clean-status");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "main\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(&repo.path, rel_path, "feature\n", "feature commit");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let initial_reload = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.reload_status(cx);
+      this.status_task.take().expect("initial reload task")
+    });
+    initial_reload.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let initial_entries = git_page.read_with(cx, |this, _| this.status_entries.clone());
+    assert!(
+      initial_entries.is_empty(),
+      "base branch should start clean, got: {initial_entries:?}"
+    );
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.handle_branch_select_confirm(
+        BranchRef {
+          name: "feature".to_string(),
+          kind: BranchKind::Local,
+        },
+        cx,
+      );
+    });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let (entries, branch_name, selected_branch) = git_page.read_with(cx, |this, _| {
+      (
+        this.status_entries.clone(),
+        this
+          .branch_status
+          .as_ref()
+          .map(|status| status.name.clone()),
+        selected_branch_from_dropdown(this),
+      )
+    });
+
+    assert!(
+      entries.is_empty(),
+      "feature branch should stay clean after switch, got: {entries:?}"
+    );
+    assert_eq!(branch_name.as_deref(), Some("feature"));
+    assert_eq!(
+      selected_branch,
+      Some(BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      })
+    );
+  }
+
+  #[gpui::test]
   async fn poll_once_selects_detached_entry_on_external_detached_head(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-poll-once-detached");
@@ -11657,6 +11789,27 @@ mod tests {
       3
     ));
     assert!(!GitPage::should_apply_branch_refresh(None, repo, 3, 3));
+  }
+
+  #[test]
+  fn should_apply_status_refresh_rejects_stale_generation_or_repo_mismatch() {
+    let repo = Path::new("/tmp/repo");
+    let other_repo = Path::new("/tmp/other");
+
+    assert!(GitPage::should_apply_status_refresh(Some(repo), repo, 3, 3));
+    assert!(!GitPage::should_apply_status_refresh(
+      Some(repo),
+      repo,
+      4,
+      3
+    ));
+    assert!(!GitPage::should_apply_status_refresh(
+      Some(other_repo),
+      repo,
+      3,
+      3
+    ));
+    assert!(!GitPage::should_apply_status_refresh(None, repo, 3, 3));
   }
 
   #[test]

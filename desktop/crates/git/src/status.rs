@@ -52,6 +52,7 @@ pub fn list_repo_status(repo_root: &Path) -> Result<Vec<RepoStatusEntry>> {
   opts
     .include_untracked(true)
     .recurse_untracked_dirs(true)
+    .update_index(true)
     .renames_head_to_index(true)
     .renames_index_to_workdir(true)
     .include_ignored(false);
