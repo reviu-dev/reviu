@@ -39,7 +39,7 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
   DETAILS_PAGE_CONTAINER_MAX_WIDTH, FILE_ICON_SIZE_PX, Input, InputState, SearchFileEntry,
-  SearchFileHandler, StatusThemeExt as _, UiIconName, WindowExt,
+  SearchFileHandler, StatusTag, StatusThemeExt as _, UiIconName, WindowExt,
   file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
 };
 
@@ -91,7 +91,7 @@ fn github_repo_pull_request_row_body(
   row: &GithubRepoPullRequestRow,
   theme: &gpui_component::Theme,
 ) -> impl IntoElement {
-  let status_tag = row.pr.status().tag(theme);
+  let status_tag = github_shared::pull_request_status_tag(row.pr.status(), theme);
   let updated_at = format_compact_datetime(&row.pr.updated_at);
 
   let label_tags = row.pr.labels.iter().take(4).map(|label| {
@@ -2139,13 +2139,7 @@ impl Render for GithubIssueDetailsSheetView {
             .text_sm()
             .text_color(theme.muted_foreground)
             .child(format!("#{}", issue.number))
-            .child(
-              Tag::secondary()
-                .small()
-                .rounded_full()
-                .text_color(state_color)
-                .child(state_text),
-            ),
+            .child(StatusTag::new(state_color).child(state_text)),
         )
         .when(!issue.labels.is_empty(), |this| {
           this.child(h_flex().gap_1().flex_wrap().children(label_tags))

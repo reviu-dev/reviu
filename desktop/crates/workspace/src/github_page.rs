@@ -21,9 +21,7 @@ use ui::{
 
 use crate::{
   ShowCommandPalette,
-  api::{
-    ApiClient, GithubNotification, GithubPullRequest, GithubPullRequestStatus, GithubUserRepository,
-  },
+  api::{ApiClient, GithubNotification, GithubPullRequest, GithubUserRepository},
   auth_state::{AuthState, AuthStateStore},
   date_format::format_compact_datetime,
   github_navigation::{open_pr_target, open_repo_target},
@@ -31,33 +29,6 @@ use crate::{
   github_shared, sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
-
-impl GithubPullRequestStatus {
-  pub fn tag(&self, theme: &gpui_component::Theme) -> Tag {
-    match self {
-      GithubPullRequestStatus::Open => Tag::secondary()
-        .small()
-        .rounded_full()
-        .text_color(theme.status_green())
-        .child("Open"),
-      GithubPullRequestStatus::Closed => Tag::secondary()
-        .small()
-        .rounded_full()
-        .text_color(theme.status_red())
-        .child("Closed"),
-      GithubPullRequestStatus::Merged => Tag::secondary()
-        .small()
-        .rounded_full()
-        .text_color(theme.status_violet())
-        .child("Merged"),
-      GithubPullRequestStatus::Draft => Tag::secondary()
-        .small()
-        .rounded_full()
-        .text_color(theme.status_gray())
-        .child("Draft"),
-    }
-  }
-}
 
 fn list_base_item(ix: IndexPath, selected_index: Option<IndexPath>) -> ListItem {
   ListItem::new(ix).selected(Some(ix) == selected_index)
@@ -86,7 +57,7 @@ fn github_pull_request_row_body(
   row: &GithubPullRequestRow,
   theme: &gpui_component::Theme,
 ) -> impl IntoElement {
-  let status_tag = row.pr.status().tag(theme);
+  let status_tag = github_shared::pull_request_status_tag(row.pr.status(), theme);
   let updated_at = format_compact_datetime(&row.pr.updated_at);
   let repo_name = github_shared::repo_label(row.owner.as_ref(), row.repo.as_ref());
 

@@ -46,8 +46,9 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DETAILS_PAGE_CONTAINER_MAX_WIDTH,
   DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState, Popover,
-  SearchFileEntry, SearchFileHandler, StatusThemeExt, UiIconName, WindowExt, dropdown_select,
-  file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
+  SearchFileEntry, SearchFileHandler, StatusTag, StatusThemeExt, UiIconName, WindowExt,
+  dropdown_select, file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action,
+  resizable_panel,
 };
 
 use crate::{
@@ -472,15 +473,7 @@ fn render_checks_state_badge(
   theme: &gpui_component::Theme,
 ) -> gpui::AnyElement {
   let color = checks_rollup_state_color(state, theme);
-  div()
-    .px_2()
-    .py_1()
-    .rounded_full()
-    .border_1()
-    .border_color(color.opacity(0.35))
-    .bg(color.opacity(0.12))
-    .text_xs()
-    .text_color(color)
+  StatusTag::new(color)
     .child(checks_rollup_state_label(state))
     .into_any_element()
 }
@@ -874,14 +867,7 @@ fn overview_stats_badges(
   labels
     .into_iter()
     .zip(colors)
-    .map(|(label, color)| {
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .text_color(color)
-        .child(label)
-        .into_any_element()
-    })
+    .map(|(label, color)| StatusTag::new(color).child(label).into_any_element())
     .collect()
 }
 
@@ -5089,7 +5075,7 @@ impl GithubPrDetailsPage {
     };
 
     let left_area = if let Some(pr) = self.pull_request.as_ref() {
-      let status_tag = pr.status().tag(&theme);
+      let status_tag = github_shared::pull_request_status_tag(pr.status(), &theme);
 
       let title = div()
         .min_w_0()

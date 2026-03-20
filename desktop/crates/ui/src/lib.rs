@@ -5,6 +5,7 @@ mod dropdown_select;
 mod github_url;
 mod icons;
 mod search_file_palette;
+mod status_tag;
 mod status_theme_ext;
 mod theme;
 mod user_menu;
@@ -46,6 +47,7 @@ pub use icons::{
 pub use search_file_palette::{
   SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
 };
+pub use status_tag::StatusTag;
 pub use status_theme_ext::StatusThemeExt;
 pub use theme::Theme;
 pub use user_menu::{UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, user_menu};

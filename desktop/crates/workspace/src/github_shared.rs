@@ -1,3 +1,8 @@
+use gpui::{Hsla, ParentElement as _};
+use ui::{StatusTag, StatusThemeExt as _};
+
+use crate::api::GithubPullRequestStatus;
+
 pub(crate) fn short_sha(sha: &str) -> String {
   sha.chars().take(7).collect()
 }
@@ -12,6 +17,34 @@ pub(crate) fn issue_url(owner: &str, repo: &str, issue_number: u64) -> String {
 
 pub(crate) fn pr_url(owner: &str, repo: &str, pr_number: u64) -> String {
   format!("https://github.com/{owner}/{repo}/pull/{pr_number}")
+}
+
+pub(crate) fn pull_request_status_label(status: GithubPullRequestStatus) -> &'static str {
+  match status {
+    GithubPullRequestStatus::Open => "Open",
+    GithubPullRequestStatus::Closed => "Closed",
+    GithubPullRequestStatus::Merged => "Merged",
+    GithubPullRequestStatus::Draft => "Draft",
+  }
+}
+
+pub(crate) fn pull_request_status_color(
+  status: GithubPullRequestStatus,
+  theme: &gpui_component::Theme,
+) -> Hsla {
+  match status {
+    GithubPullRequestStatus::Open => theme.status_green(),
+    GithubPullRequestStatus::Closed => theme.status_red(),
+    GithubPullRequestStatus::Merged => theme.status_violet(),
+    GithubPullRequestStatus::Draft => theme.status_gray(),
+  }
+}
+
+pub(crate) fn pull_request_status_tag(
+  status: GithubPullRequestStatus,
+  theme: &gpui_component::Theme,
+) -> StatusTag {
+  StatusTag::new(pull_request_status_color(status, theme)).child(pull_request_status_label(status))
 }
 
 pub(crate) fn line_snippets_from_content(
@@ -77,8 +110,9 @@ mod tests {
   use super::{
     is_unauthorized_error_message, issue_url, line_snippets_from_content,
     logins_match_case_insensitive, next_trimmed_text_update, normalize_non_empty_text, pr_url,
-    repo_label, short_sha,
+    pull_request_status_label, repo_label, short_sha,
   };
+  use crate::api::GithubPullRequestStatus;
 
   #[test]
   fn short_sha_truncates_to_seven_characters() {
@@ -105,6 +139,26 @@ mod tests {
     assert_eq!(
       pr_url("acme", "widget", 7),
       "https://github.com/acme/widget/pull/7"
+    );
+  }
+
+  #[test]
+  fn pull_request_status_label_covers_all_variants() {
+    assert_eq!(
+      pull_request_status_label(GithubPullRequestStatus::Open),
+      "Open"
+    );
+    assert_eq!(
+      pull_request_status_label(GithubPullRequestStatus::Closed),
+      "Closed"
+    );
+    assert_eq!(
+      pull_request_status_label(GithubPullRequestStatus::Merged),
+      "Merged"
+    );
+    assert_eq!(
+      pull_request_status_label(GithubPullRequestStatus::Draft),
+      "Draft"
     );
   }
 
