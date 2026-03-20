@@ -548,6 +548,7 @@ impl GithubPullRequestState {
   }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GithubPullRequestStatus {
   Open,
   Closed,
