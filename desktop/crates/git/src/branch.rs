@@ -278,8 +278,8 @@ pub fn switch_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
 
       let local_name = branch
         .name
-        .split('/')
-        .next_back()
+        .split_once('/')
+        .map(|(_, name)| name)
         .unwrap_or(&branch.name)
         .to_string();
       if repo.find_branch(&local_name, BranchType::Local).is_err() {
@@ -311,6 +311,41 @@ pub fn switch_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
   Ok(())
 }
 
+pub fn switch_to_branch_name(repo_root: &Path, branch_name: &str) -> Result<()> {
+  let branch_name = branch_name.trim();
+  if branch_name.is_empty() {
+    bail!("branch name is empty");
+  }
+
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  if repo.find_branch(branch_name, BranchType::Local).is_ok() {
+    return switch_branch(
+      repo_root,
+      &BranchRef {
+        name: branch_name.to_string(),
+        kind: BranchKind::Local,
+      },
+    );
+  }
+
+  fetch(repo_root)?;
+
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let Some(remote_branch_name) = resolve_remote_branch_name(&repo, branch_name)? else {
+    bail!("branch {branch_name:?} was not found locally or on any remote");
+  };
+
+  switch_branch(
+    repo_root,
+    &BranchRef {
+      name: remote_branch_name,
+      kind: BranchKind::Remote,
+    },
+  )
+}
+
 fn ensure_worktree_clean(repo_root: &Path) -> Result<()> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
@@ -326,6 +361,70 @@ fn ensure_worktree_clean(repo_root: &Path) -> Result<()> {
     bail!("local changes detected");
   }
   Ok(())
+}
+
+fn preferred_remote_name(repo: &Repository) -> Result<Option<String>> {
+  if let Ok(head) = repo.head()
+    && head.is_branch()
+    && let Some(local_name) = head.shorthand()
+    && let Ok(local_branch) = repo.find_branch(local_name, BranchType::Local)
+    && let Ok(upstream) = local_branch.upstream()
+    && let Some(upstream_name) = upstream.name()?
+    && let Some(remote_name) = upstream_name
+      .strip_prefix("refs/remotes/")
+      .and_then(|name| name.split('/').next())
+  {
+    return Ok(Some(remote_name.to_string()));
+  }
+
+  if repo.find_remote("origin").is_ok() {
+    return Ok(Some("origin".to_string()));
+  }
+
+  let remotes = repo.remotes().context("list remotes")?;
+  Ok(remotes.iter().flatten().next().map(str::to_string))
+}
+
+fn resolve_remote_branch_name(repo: &Repository, branch_name: &str) -> Result<Option<String>> {
+  let mut candidates = Vec::new();
+
+  if let Some(preferred_remote) = preferred_remote_name(repo)? {
+    candidates.push(format!("{preferred_remote}/{branch_name}"));
+  }
+  if !candidates
+    .iter()
+    .any(|name| name == &format!("origin/{branch_name}"))
+  {
+    candidates.push(format!("origin/{branch_name}"));
+  }
+
+  for candidate in candidates {
+    if repo.find_branch(&candidate, BranchType::Remote).is_ok() {
+      return Ok(Some(candidate));
+    }
+  }
+
+  for branch in repo
+    .branches(Some(BranchType::Remote))
+    .context("list remote branches")?
+  {
+    let (branch, _) = branch?;
+    let Some(name) = branch.name()? else {
+      continue;
+    };
+    if name.ends_with("/HEAD") {
+      continue;
+    }
+    if name
+      .split_once('/')
+      .map(|(_, remote_branch_name)| remote_branch_name == branch_name)
+      .unwrap_or(false)
+    {
+      return Ok(Some(name.to_string()));
+    }
+  }
+
+  Ok(None)
 }
 
 fn resolve_github_remote_repo(repo: &Repository) -> Result<Option<GithubRemoteRepo>> {
@@ -2563,6 +2662,77 @@ mod tests {
       .expect("non-empty upstream")
       .to_string();
     assert_eq!(upstream, "origin/feature");
+  }
+
+  #[test]
+  fn switch_to_branch_name_switches_to_existing_local_branch() {
+    let repo = TempRepo::init("branch-switch-by-name-local");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    create_branch(&repo.path, "feature").expect("create local branch");
+    switch_to_branch_name(&repo.path, "feature").expect("switch to local branch by name");
+
+    let status = current_branch_status(&repo.path).expect("branch status after switch");
+    assert_eq!(status.name, "feature");
+  }
+
+  #[test]
+  fn switch_to_branch_name_fetches_and_switches_to_remote_branch() {
+    let remote = TempBareRepo::init("branch-switch-by-name-remote-origin");
+    let source = TempRepo::init("branch-switch-by-name-remote-source");
+    let clone_dir = TempDir::new("branch-switch-by-name-remote-clone");
+
+    let _ = commit_text_file(&source.path, Path::new("README.md"), "v1\n", "initial");
+    let source_repo = Repository::open(&source.path).expect("open source repo");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add source origin");
+    let base_branch = current_branch_status(&source.path)
+      .expect("read source branch status")
+      .name;
+    push_branch_to_remote(&source.path, &base_branch, "origin");
+
+    create_branch(&source.path, "feature/switch-me").expect("create source feature branch");
+    switch_branch(
+      &source.path,
+      &BranchRef {
+        name: "feature/switch-me".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch source to feature");
+    let _ = commit_text_file(
+      &source.path,
+      Path::new("README.md"),
+      "v2-feature\n",
+      "feature change",
+    );
+    push_branch_to_remote(&source.path, "feature/switch-me", "origin");
+
+    let _clone_repo = Repository::clone(
+      remote.path.to_str().expect("remote path utf8"),
+      &clone_dir.path,
+    )
+    .expect("clone remote");
+
+    switch_to_branch_name(&clone_dir.path, "feature/switch-me")
+      .expect("switch to remote branch by name");
+
+    let status = current_branch_status(&clone_dir.path).expect("branch status after switch");
+    assert_eq!(status.name, "feature/switch-me");
+
+    let clone_repo = Repository::open(&clone_dir.path).expect("open clone repo");
+    let local_feature = clone_repo
+      .find_branch("feature/switch-me", BranchType::Local)
+      .expect("find local feature branch");
+    let upstream = local_feature
+      .upstream()
+      .expect("feature branch upstream")
+      .name()
+      .expect("upstream name")
+      .expect("non-empty upstream")
+      .to_string();
+    assert_eq!(upstream, "origin/feature/switch-me");
   }
 
   #[test]
