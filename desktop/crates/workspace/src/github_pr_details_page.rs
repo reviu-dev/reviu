@@ -16,7 +16,7 @@ use gfm_markdown_viewer::{
   render_github_code_reference_preview_card, render_markdown,
 };
 use git::{
-  DiffKind, DiffSet, FileDiff, GitStore, compute_buffer_diff, create_stash,
+  DiffKind, DiffSet, FileDiff, GitStore, compute_buffer_diff, create_stash, current_branch_status,
   current_github_remote_repo, current_head_sha, default_stash_message, list_repo_head_files,
   list_repo_status, switch_to_branch_name, sync_current_branch_to_head,
 };
@@ -72,6 +72,7 @@ use crate::{
     GithubRepository,
   },
   auth_state::{AuthState, AuthStateStore},
+  config::ConfigStore,
   date_format::{format_compact_datetime, format_long_date},
   file_preview::{is_markdown_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
@@ -1731,6 +1732,10 @@ pub struct GithubPrDetailsPage {
   show_local_project_files: bool,
   saved_pr_selected_tree_id: Option<String>,
   file_lookup: HashMap<String, Rc<GithubPrFileDiff>>,
+  resolved_local_repo: Option<ActiveLocalRepo>,
+  resolved_local_repo_scan_complete: bool,
+  resolved_local_repo_task: Option<Task<()>>,
+  resolved_local_repo_generation: u64,
   local_project_lookup: HashMap<String, Rc<GithubPrLocalProjectFile>>,
   local_project_loaded_repo_root: Option<PathBuf>,
   local_project_tree_loading: bool,
@@ -1828,6 +1833,65 @@ fn resolve_pr_back_target(owner: SharedString, repo: SharedString) -> GithubPrBa
   } else {
     GithubPrBackTarget::Repo { owner, repo }
   }
+}
+
+fn local_repo_matches_pull_request(
+  pull_request: &GithubPullRequestDetails,
+  local_repo: &ActiveLocalRepo,
+) -> bool {
+  let source_repo = GithubPrDetailsPage::pr_source_repository(pull_request);
+  let Some(local_owner) = local_repo.github_owner.as_deref() else {
+    return false;
+  };
+  let Some(local_name) = local_repo.github_repo.as_deref() else {
+    return false;
+  };
+
+  local_owner.eq_ignore_ascii_case(source_repo.owner.as_str())
+    && local_name.eq_ignore_ascii_case(source_repo.repo.as_str())
+}
+
+fn local_repo_snapshot(
+  repo_root: &Path,
+  current_branch_override: Option<&str>,
+) -> Option<ActiveLocalRepo> {
+  let github_remote = current_github_remote_repo(repo_root).ok().flatten();
+  let current_branch = current_branch_override.map(str::to_string).or_else(|| {
+    current_branch_status(repo_root)
+      .ok()
+      .map(|status| status.name)
+  });
+  let head_sha = current_head_sha(repo_root).ok().flatten();
+  let has_uncommitted_changes = list_repo_status(repo_root)
+    .map(|entries| !entries.is_empty())
+    .unwrap_or(false);
+
+  Some(ActiveLocalRepo {
+    repo_root: repo_root.to_path_buf(),
+    github_owner: github_remote.as_ref().map(|remote| remote.owner.clone()),
+    github_repo: github_remote.as_ref().map(|remote| remote.repo.clone()),
+    current_branch,
+    head_sha,
+    has_uncommitted_changes,
+  })
+}
+
+fn find_matching_recent_local_repo(
+  pull_request: &GithubPullRequestDetails,
+  excluded_repo_root: Option<&Path>,
+) -> Option<ActiveLocalRepo> {
+  ConfigStore::load_recent_repositories()
+    .into_iter()
+    .filter(|repo| {
+      excluded_repo_root
+        .map(|excluded| excluded != repo.path.as_path())
+        .unwrap_or(true)
+    })
+    .filter(|repo| repo.path.is_dir())
+    .find_map(|repo| {
+      let snapshot = local_repo_snapshot(repo.path.as_path(), None)?;
+      local_repo_matches_pull_request(pull_request, &snapshot).then_some(snapshot)
+    })
 }
 
 fn next_back_target_for_pr_palette(back_target: &GithubPrBackTarget) -> GithubPrBackTarget {
@@ -2142,6 +2206,10 @@ impl GithubPrDetailsPage {
       show_local_project_files: false,
       saved_pr_selected_tree_id: None,
       file_lookup: HashMap::new(),
+      resolved_local_repo: None,
+      resolved_local_repo_scan_complete: false,
+      resolved_local_repo_task: None,
+      resolved_local_repo_generation: 0,
       local_project_lookup: HashMap::new(),
       local_project_loaded_repo_root: None,
       local_project_tree_loading: false,
@@ -2202,31 +2270,22 @@ impl GithubPrDetailsPage {
       .unwrap_or(&pull_request.repository)
   }
 
-  fn local_project_availability(&self, cx: &App) -> GithubPrLocalProjectAvailability {
-    if self.selected_commit_sha.is_some() {
-      return GithubPrLocalProjectAvailability::Hidden;
-    }
+  fn active_local_repo_for_pull_request(&self, cx: &App) -> Option<ActiveLocalRepo> {
+    let pull_request = self.pull_request.as_ref()?;
+    let local_repo = ActiveLocalRepoStore::get(cx)?;
+    local_repo_matches_pull_request(pull_request, &local_repo).then_some(local_repo)
+  }
 
-    let Some(pull_request) = self.pull_request.as_ref() else {
-      return GithubPrLocalProjectAvailability::Hidden;
-    };
-    let Some(local_repo) = ActiveLocalRepoStore::get(cx) else {
-      return GithubPrLocalProjectAvailability::Hidden;
-    };
+  fn effective_local_repo_for_pull_request(&self, cx: &App) -> Option<ActiveLocalRepo> {
+    self
+      .active_local_repo_for_pull_request(cx)
+      .or_else(|| self.resolved_local_repo.clone())
+  }
 
-    let source_repo = Self::pr_source_repository(pull_request);
-    let Some(local_owner) = local_repo.github_owner.as_deref() else {
-      return GithubPrLocalProjectAvailability::Hidden;
-    };
-    let Some(local_name) = local_repo.github_repo.as_deref() else {
-      return GithubPrLocalProjectAvailability::Hidden;
-    };
-    if !local_owner.eq_ignore_ascii_case(source_repo.owner.as_str())
-      || !local_name.eq_ignore_ascii_case(source_repo.repo.as_str())
-    {
-      return GithubPrLocalProjectAvailability::Hidden;
-    }
-
+  fn local_project_availability_for_repo(
+    pull_request: &GithubPullRequestDetails,
+    local_repo: ActiveLocalRepo,
+  ) -> GithubPrLocalProjectAvailability {
     if local_repo.current_branch.as_deref() != Some(pull_request.head_ref_name.as_str()) {
       return GithubPrLocalProjectAvailability::NeedsBranchSwitch {
         repo_root: local_repo.repo_root,
@@ -2253,6 +2312,124 @@ impl GithubPrDetailsPage {
         repo_root: local_repo.repo_root,
       }
     }
+  }
+
+  fn maybe_refresh_resolved_local_repo_match(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.selected_commit_sha.is_some() || self.pull_request.is_none() {
+      return;
+    }
+
+    if self.active_local_repo_for_pull_request(cx).is_some()
+      || self.resolved_local_repo_scan_complete
+      || self.resolved_local_repo_task.is_some()
+    {
+      return;
+    }
+
+    cx.defer_in(window, |this, _window, cx| {
+      this.refresh_resolved_local_repo_match(cx);
+    });
+  }
+
+  fn refresh_resolved_local_repo_match(&mut self, cx: &mut Context<Self>) {
+    if self.resolved_local_repo_task.is_some() {
+      return;
+    }
+
+    let Some(pull_request) = self.pull_request.clone() else {
+      self.resolved_local_repo = None;
+      self.resolved_local_repo_task = None;
+      self.resolved_local_repo_scan_complete = false;
+      return;
+    };
+
+    if self.active_local_repo_for_pull_request(cx).is_some() {
+      self.resolved_local_repo = None;
+      self.resolved_local_repo_task = None;
+      self.resolved_local_repo_scan_complete = false;
+      return;
+    }
+
+    self.resolved_local_repo_generation = self.resolved_local_repo_generation.wrapping_add(1);
+    let generation = self.resolved_local_repo_generation;
+    self.resolved_local_repo = None;
+    self.resolved_local_repo_scan_complete = false;
+
+    let excluded_repo_root = ActiveLocalRepoStore::get(cx).map(|repo| repo.repo_root);
+    let task = cx.spawn(async move |this, cx| {
+      let pull_request_for_scan = pull_request.clone();
+      let excluded_repo_root_for_scan = excluded_repo_root.clone();
+      let snapshot = unblock(move || {
+        find_matching_recent_local_repo(
+          &pull_request_for_scan,
+          excluded_repo_root_for_scan.as_deref(),
+        )
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        if this.resolved_local_repo_generation != generation {
+          return;
+        }
+
+        this.resolved_local_repo_task = None;
+        this.resolved_local_repo_scan_complete = true;
+        this.resolved_local_repo = snapshot;
+
+        cx.notify();
+      });
+    });
+
+    self.resolved_local_repo_task = Some(task);
+  }
+
+  fn sync_active_local_repo_store_snapshot(
+    &self,
+    snapshot: &ActiveLocalRepo,
+    cx: &mut Context<Self>,
+  ) {
+    if ActiveLocalRepoStore::get(cx)
+      .as_ref()
+      .map(|repo| repo.repo_root.as_path())
+      == Some(snapshot.repo_root.as_path())
+    {
+      ActiveLocalRepoStore::set(cx, Some(snapshot.clone()));
+    }
+  }
+
+  fn sync_resolved_local_repo_snapshot(&mut self, snapshot: &ActiveLocalRepo) {
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      self.resolved_local_repo = None;
+      self.resolved_local_repo_scan_complete = false;
+      return;
+    };
+
+    if local_repo_matches_pull_request(pull_request, snapshot) {
+      self.resolved_local_repo = Some(snapshot.clone());
+      self.resolved_local_repo_scan_complete = true;
+    } else {
+      self.resolved_local_repo = None;
+      self.resolved_local_repo_scan_complete = false;
+    }
+  }
+
+  fn local_project_availability(&self, cx: &App) -> GithubPrLocalProjectAvailability {
+    if self.selected_commit_sha.is_some() {
+      return GithubPrLocalProjectAvailability::Hidden;
+    }
+
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      return GithubPrLocalProjectAvailability::Hidden;
+    };
+    let Some(local_repo) = self.effective_local_repo_for_pull_request(cx) else {
+      return GithubPrLocalProjectAvailability::Hidden;
+    };
+
+    Self::local_project_availability_for_repo(pull_request, local_repo)
   }
 
   fn local_project_mode_active(&self, cx: &App) -> bool {
@@ -2674,29 +2851,6 @@ impl GithubPrDetailsPage {
     cx.notify();
   }
 
-  fn sync_active_local_repo_store_for_repo(
-    &self,
-    repo_root: &Path,
-    current_branch: Option<&str>,
-    cx: &mut Context<Self>,
-  ) {
-    let github_remote = current_github_remote_repo(repo_root).ok().flatten();
-    let has_uncommitted_changes = list_repo_status(repo_root)
-      .map(|entries| !entries.is_empty())
-      .unwrap_or(false);
-    ActiveLocalRepoStore::set(
-      cx,
-      Some(ActiveLocalRepo {
-        repo_root: repo_root.to_path_buf(),
-        github_owner: github_remote.as_ref().map(|remote| remote.owner.clone()),
-        github_repo: github_remote.as_ref().map(|remote| remote.repo.clone()),
-        current_branch: current_branch.map(str::to_string),
-        head_sha: current_head_sha(repo_root).ok().flatten(),
-        has_uncommitted_changes,
-      }),
-    );
-  }
-
   fn confirm_switch_local_branch_with_stash(
     &mut self,
     window: &mut Window,
@@ -2786,7 +2940,11 @@ impl GithubPrDetailsPage {
           let stash_message = default_stash_message(&repo_root_for_action).ok();
           create_stash(&repo_root_for_action, true, stash_message.as_deref())?;
         }
-        switch_to_branch_name(&repo_root_for_action, &branch_name_for_action)
+        switch_to_branch_name(&repo_root_for_action, &branch_name_for_action)?;
+        Ok::<_, anyhow::Error>(local_repo_snapshot(
+          &repo_root_for_action,
+          Some(branch_name_for_action.as_str()),
+        ))
       })
       .await;
 
@@ -2795,13 +2953,12 @@ impl GithubPrDetailsPage {
         this.local_branch_switch_loading = false;
 
         match result {
-          Ok(()) => {
+          Ok(snapshot) => {
             this.local_branch_switch_error = None;
-            this.sync_active_local_repo_store_for_repo(
-              repo_root.as_path(),
-              Some(branch_name.as_str()),
-              cx,
-            );
+            if let Some(snapshot) = snapshot {
+              this.sync_active_local_repo_store_snapshot(&snapshot, cx);
+              this.sync_resolved_local_repo_snapshot(&snapshot);
+            }
             this.load_local_project_files(repo_root.clone(), cx);
           }
           Err(error) => {
@@ -2845,7 +3002,11 @@ impl GithubPrDetailsPage {
           &repo_root_for_update,
           &branch_name_for_update,
           &target_head_sha_for_update,
-        )
+        )?;
+        Ok::<_, anyhow::Error>(local_repo_snapshot(
+          &repo_root_for_update,
+          Some(branch_name_for_update.as_str()),
+        ))
       })
       .await;
 
@@ -2854,13 +3015,12 @@ impl GithubPrDetailsPage {
         this.local_project_update_loading = false;
 
         match result {
-          Ok(()) => {
+          Ok(snapshot) => {
             this.local_project_update_error = None;
-            this.sync_active_local_repo_store_for_repo(
-              repo_root.as_path(),
-              Some(branch_name.as_str()),
-              cx,
-            );
+            if let Some(snapshot) = snapshot {
+              this.sync_active_local_repo_store_snapshot(&snapshot, cx);
+              this.sync_resolved_local_repo_snapshot(&snapshot);
+            }
             this.load_local_project_files(repo_root.clone(), cx);
           }
           Err(error) => {
@@ -5724,6 +5884,10 @@ impl GithubPrDetailsPage {
     self.show_local_project_files = false;
     self.saved_pr_selected_tree_id = None;
     self.file_lookup.clear();
+    self.resolved_local_repo = None;
+    self.resolved_local_repo_scan_complete = false;
+    self.resolved_local_repo_task = None;
+    self.resolved_local_repo_generation = self.resolved_local_repo_generation.wrapping_add(1);
     self.local_project_lookup.clear();
     self.local_project_loaded_repo_root = None;
     self.local_project_tree_loading = false;
@@ -5769,6 +5933,9 @@ impl GithubPrDetailsPage {
             this.description_code_reference_requests =
               Self::description_code_reference_requests_for_pull_request(&pull_request);
             this.pull_request = Some(pull_request);
+            this.resolved_local_repo = None;
+            this.resolved_local_repo_scan_complete = false;
+            this.resolved_local_repo_task = None;
             this.error = None;
             this.add_pr_breadcrumb("Load PR details succeeded", Map::new());
             let description_requests = this.description_code_reference_requests.clone();
@@ -5776,6 +5943,7 @@ impl GithubPrDetailsPage {
             this.sync_review_comments(cx);
             this.maybe_fetch_selected_file_contents(cx);
             this.prefetch_overview_root_review_comment_files(cx);
+            this.refresh_resolved_local_repo_match(cx);
             if this.tree_search_query_normalized().is_some() {
               this.refresh_tree_text_search(cx);
             }
@@ -9634,6 +9802,7 @@ impl GithubPrDetailsPage {
 impl Render for GithubPrDetailsPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
+    self.maybe_refresh_resolved_local_repo_match(window, cx);
 
     let overview_inner: gpui::AnyElement = if let Some(pr) = self.pull_request.as_ref() {
       self.render_details(pr, cx).into_any_element()
@@ -9742,9 +9911,12 @@ mod tests {
     GithubPullRequestState, GithubRepository,
   };
   use crate::workspace::WorkspaceApi;
-  use git2::{Repository, Signature};
+  use git2::{BranchType, Repository, Signature};
   use gpui::TestAppContext;
-  use std::time::{SystemTime, UNIX_EPOCH};
+  use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+  };
 
   fn init_gpui_test(cx: &mut TestAppContext) {
     cx.update(|cx| {
@@ -9760,6 +9932,15 @@ mod tests {
       }
       ActiveLocalRepoStore::set(cx, None);
     });
+  }
+
+  fn unique_test_db_path(label: &str) -> PathBuf {
+    static NEXT_DB_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_DB_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+      "reviu-pr-details-{label}-{}-{id}.sqlite",
+      std::process::id()
+    ))
   }
 
   fn make_active_local_repo(head_sha: &str, has_uncommitted_changes: bool) -> ActiveLocalRepo {
@@ -9812,6 +9993,74 @@ mod tests {
           .expect("initial commit");
       }
     }
+  }
+
+  fn create_local_repo_with_github_remote(
+    owner: &str,
+    repo_name: &str,
+    current_branch: &str,
+    additional_branches: &[&str],
+  ) -> (PathBuf, ActiveLocalRepo) {
+    let unique = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .expect("system time after unix epoch")
+      .as_nanos();
+    let repo_root = std::env::temp_dir().join(format!(
+      "reviu-pr-details-local-repo-{}-{unique}",
+      std::process::id()
+    ));
+
+    std::fs::create_dir_all(repo_root.join("src")).expect("create repo directories");
+    Repository::init(&repo_root).expect("init local repo");
+    commit_local_project_file(
+      &repo_root,
+      Path::new("src/main.rs"),
+      "fn main() {}\n",
+      "initial",
+    );
+
+    let repo = Repository::open(&repo_root).expect("open local repo");
+    repo
+      .remote(
+        "origin",
+        format!("https://github.com/{owner}/{repo_name}.git").as_str(),
+      )
+      .expect("create origin remote");
+    {
+      let head_commit = repo
+        .head()
+        .expect("repo head")
+        .peel_to_commit()
+        .expect("head commit");
+
+      for branch_name in additional_branches
+        .iter()
+        .copied()
+        .chain(std::iter::once(current_branch))
+      {
+        if repo.find_branch(branch_name, BranchType::Local).is_err() {
+          repo
+            .branch(branch_name, &head_commit, false)
+            .expect("create local branch");
+        }
+      }
+    }
+    drop(repo);
+
+    switch_to_branch_name(&repo_root, current_branch).expect("switch to current branch");
+    let snapshot =
+      local_repo_snapshot(&repo_root, None).expect("snapshot local repo with GitHub remote");
+    (repo_root, snapshot)
+  }
+
+  fn make_pr_details_for_local_repo(
+    head_sha: &str,
+    head_ref_name: &str,
+  ) -> GithubPullRequestDetails {
+    let mut pull_request = make_pr_details_for_stats();
+    pull_request.head_sha = head_sha.to_string();
+    pull_request.head_ref_name = head_ref_name.to_string();
+    pull_request
   }
 
   fn make_api_file(
@@ -10280,6 +10529,88 @@ mod tests {
       commands.first().map(|command| command.id),
       Some(ui::CommandPaletteCommandId::SwitchToPrBranch)
     );
+  }
+
+  #[test]
+  fn find_matching_recent_local_repo_returns_recent_repo_matching_pr_source() {
+    let db_path = unique_test_db_path("recent-repo-match");
+    let _ = std::fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path.clone()));
+
+    let (repo_root, snapshot) =
+      create_local_repo_with_github_remote("acme", "widget", "feature", &[]);
+    ConfigStore::persist_recent_repository(&repo_root);
+
+    let matched =
+      find_matching_recent_local_repo(&make_pr_details_for_stats(), None).expect("matching repo");
+    assert_eq!(matched.repo_root, repo_root);
+    assert_eq!(matched.github_owner.as_deref(), Some("acme"));
+    assert_eq!(matched.github_repo.as_deref(), Some("widget"));
+    assert_eq!(matched.current_branch, snapshot.current_branch);
+
+    ConfigStore::set_test_db_path(None);
+    let _ = std::fs::remove_file(&db_path);
+    std::fs::remove_dir_all(&repo_root).ok();
+  }
+
+  #[gpui::test]
+  fn local_project_availability_uses_resolved_recent_repo_when_active_repo_is_missing(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let (repo_root, snapshot) =
+      create_local_repo_with_github_remote("acme", "widget", "main", &["feature"]);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_local_repo(
+        snapshot.head_sha.as_deref().expect("snapshot head sha"),
+        "feature",
+      ));
+      this.resolved_local_repo = Some(snapshot.clone());
+      this.resolved_local_repo_scan_complete = true;
+      cx.notify();
+    });
+
+    let availability = page.read_with(cx, |this, cx| this.local_project_availability(cx));
+    assert!(matches!(
+      availability,
+      GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+        repo_root: ref resolved_repo_root,
+        current_branch: Some(ref branch),
+        has_uncommitted_changes: false,
+      } if resolved_repo_root == &repo_root && branch == "main"
+    ));
+
+    std::fs::remove_dir_all(&repo_root).ok();
+  }
+
+  #[gpui::test]
+  fn command_palette_commands_prepend_switch_when_resolved_recent_repo_needs_branch_switch(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let (repo_root, snapshot) =
+      create_local_repo_with_github_remote("acme", "widget", "main", &["feature"]);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_local_repo(
+        snapshot.head_sha.as_deref().expect("snapshot head sha"),
+        "feature",
+      ));
+      this.resolved_local_repo = Some(snapshot.clone());
+      this.resolved_local_repo_scan_complete = true;
+      cx.notify();
+    });
+
+    let commands = page.read_with(cx, |this, cx| this.command_palette_commands(cx));
+    assert_eq!(
+      commands.first().map(|command| command.id),
+      Some(ui::CommandPaletteCommandId::SwitchToPrBranch)
+    );
+
+    std::fs::remove_dir_all(&repo_root).ok();
   }
 
   #[gpui::test]
