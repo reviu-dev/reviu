@@ -52,9 +52,9 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DETAILS_PAGE_CONTAINER_MAX_WIDTH,
   DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState, Popover,
-  SearchFileEntry, SearchFileHandler, StatusTag, StatusThemeExt, UiIconName, WindowExt,
-  dropdown_select, file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action,
-  resizable_panel,
+  SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusTag, StatusThemeExt, UiIconName,
+  WindowExt, dropdown_select, file_icon_path_for_name_with_theme, h_resizable,
+  parse_github_url_action, resizable_panel, selectable_list_item,
 };
 
 use crate::{
@@ -1228,42 +1228,45 @@ impl ListDelegate for GithubPrCommitListDelegate {
       .unwrap_or_else(|| "—".into());
 
     Some(
-      ListItem::new(ix)
-        .selected(Some(ix) == self.selected_index)
-        .w_full()
-        .rounded(theme.radius)
-        .px_3()
-        .py_2()
-        .child(
-          v_flex()
-            .gap_1()
-            .child(
-              h_flex()
-                .items_center()
-                .gap_2()
-                .child(
-                  Tag::secondary()
-                    .small()
-                    .rounded_full()
-                    .text_color(theme.muted_foreground)
-                    .child(short),
-                )
-                .child(
-                  div()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .overflow_hidden()
-                    .text_ellipsis_start()
-                    .child(subject),
-                ),
-            )
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(format!("{author} • {date_label}")),
-            ),
-        ),
+      selectable_list_item(
+        ix,
+        Some(ix) == self.selected_index,
+        SelectableRowStyle::Inset,
+        &theme,
+      )
+      .w_full()
+      .px_3()
+      .py_2()
+      .child(
+        v_flex()
+          .gap_1()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child(
+                Tag::secondary()
+                  .small()
+                  .rounded_full()
+                  .text_color(theme.muted_foreground)
+                  .child(short),
+              )
+              .child(
+                div()
+                  .text_sm()
+                  .text_color(theme.foreground)
+                  .overflow_hidden()
+                  .text_ellipsis_start()
+                  .child(subject),
+              ),
+          )
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(format!("{author} • {date_label}")),
+          ),
+      ),
     )
   }
 
@@ -8275,106 +8278,102 @@ impl GithubPrDetailsPage {
         .into_any_element()
     } else {
       let view = cx.entity();
-      tree(
-        &self.tree_state,
-        move |ix, entry, _selected, _window, cx| {
-          view.update(cx, |this, cx| {
-            let theme = cx.theme().clone();
-            let item = entry.item();
-            let is_folder = entry.is_folder();
-            let status = if is_folder {
-              None
+      tree(&self.tree_state, move |ix, entry, selected, _window, cx| {
+        view.update(cx, |this, cx| {
+          let theme = cx.theme().clone();
+          let item = entry.item();
+          let is_folder = entry.is_folder();
+          let status = if is_folder {
+            None
+          } else {
+            this
+              .file_lookup
+              .get(item.id.as_ref())
+              .map(|file| file.status)
+          };
+          let status_letter = status.map(status_letter).unwrap_or("");
+          let status_color = status
+            .map(|status| status_color(status, &theme))
+            .unwrap_or(theme.muted_foreground);
+          let comment_count = if is_folder {
+            0
+          } else {
+            comment_counts.get(item.id.as_ref()).copied().unwrap_or(0)
+          };
+          let icon = if is_folder {
+            if entry.is_expanded() {
+              Icon::new(IconName::FolderOpen)
             } else {
-              this
-                .file_lookup
-                .get(item.id.as_ref())
-                .map(|file| file.status)
-            };
-            let status_letter = status.map(status_letter).unwrap_or("");
-            let status_color = status
-              .map(|status| status_color(status, &theme))
-              .unwrap_or(theme.muted_foreground);
-            let comment_count = if is_folder {
-              0
-            } else {
-              comment_counts.get(item.id.as_ref()).copied().unwrap_or(0)
-            };
-            let icon = if is_folder {
-              if entry.is_expanded() {
-                Icon::new(IconName::FolderOpen)
-              } else {
-                Icon::new(IconName::Folder)
-              }
-              .size_3()
-              .text_color(theme.muted_foreground)
-              .into_any_element()
-            } else {
-              file_icon_path_for_name_with_theme(item.label.as_ref(), &theme)
-                .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
-                .unwrap_or_else(|| {
-                  Icon::new(IconName::File)
-                    .size_3()
-                    .text_color(theme.muted_foreground)
-                    .into_any_element()
-                })
-            };
-
-            let indent = px(12.) + px(15.) * entry.depth();
-            let mut row = ListItem::new(ix)
-              .w_full()
-              .rounded(theme.radius)
-              .px_2()
-              .pl(indent)
-              .child(
-                h_flex()
-                  .items_center()
-                  .gap_2()
-                  .when(!is_folder, |this| {
-                    this.child(
-                      div()
-                        .w(px(15.))
-                        .text_xs()
-                        .text_color(status_color)
-                        .child(status_letter),
-                    )
-                  })
-                  .child(icon)
-                  .child(
-                    div()
-                      .flex_1()
-                      .overflow_hidden()
-                      .text_ellipsis_start()
-                      .child(item.label.clone()),
-                  )
-                  .when(comment_count > 0, |this| {
-                    this.child(
-                      h_flex()
-                        .items_center()
-                        .gap_1()
-                        .text_xs()
-                        .pr_2()
-                        .text_color(theme.muted_foreground)
-                        .child(
-                          Icon::new(UiIconName::MessageCircle)
-                            .size_3()
-                            .text_color(theme.muted_foreground),
-                        )
-                        .child(comment_count.to_string()),
-                    )
-                  }),
-              );
-
-            if !is_folder {
-              let id = item.id.clone();
-              row = row.on_click(cx.listener(move |this, _, _, cx| {
-                this.select_visible_tree_path(id.as_ref(), cx);
-              }));
+              Icon::new(IconName::Folder)
             }
+            .size_3()
+            .text_color(theme.muted_foreground)
+            .into_any_element()
+          } else {
+            file_icon_path_for_name_with_theme(item.label.as_ref(), &theme)
+              .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
+              .unwrap_or_else(|| {
+                Icon::new(IconName::File)
+                  .size_3()
+                  .text_color(theme.muted_foreground)
+                  .into_any_element()
+              })
+          };
 
-            row
-          })
-        },
-      )
+          let indent = px(12.) + px(15.) * entry.depth();
+          let mut row = selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme)
+            .w_full()
+            .px_2()
+            .pl(indent)
+            .child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .when(!is_folder, |this| {
+                  this.child(
+                    div()
+                      .w(px(15.))
+                      .text_xs()
+                      .text_color(status_color)
+                      .child(status_letter),
+                  )
+                })
+                .child(icon)
+                .child(
+                  div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .text_ellipsis_start()
+                    .child(item.label.clone()),
+                )
+                .when(comment_count > 0, |this| {
+                  this.child(
+                    h_flex()
+                      .items_center()
+                      .gap_1()
+                      .text_xs()
+                      .pr_2()
+                      .text_color(theme.muted_foreground)
+                      .child(
+                        Icon::new(UiIconName::MessageCircle)
+                          .size_3()
+                          .text_color(theme.muted_foreground),
+                      )
+                      .child(comment_count.to_string()),
+                  )
+                }),
+            );
+
+          if !is_folder {
+            let id = item.id.clone();
+            row = row.on_click(cx.listener(move |this, _, _, cx| {
+              this.select_visible_tree_path(id.as_ref(), cx);
+            }));
+          }
+
+          row
+        })
+      })
       .flex_1()
       .w_full()
       .into_any_element()

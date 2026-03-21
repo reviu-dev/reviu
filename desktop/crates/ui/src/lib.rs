@@ -5,6 +5,7 @@ mod dropdown_select;
 mod github_url;
 mod icons;
 mod search_file_palette;
+mod selectable_row;
 mod status_tag;
 mod status_theme_ext;
 mod theme;
@@ -47,6 +48,7 @@ pub use icons::{
 pub use search_file_palette::{
   SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
 };
+pub use selectable_row::{SelectableRowStyle, selectable_list_item};
 pub use status_tag::StatusTag;
 pub use status_theme_ext::StatusThemeExt;
 pub use theme::Theme;
