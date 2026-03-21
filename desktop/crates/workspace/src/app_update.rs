@@ -1,7 +1,9 @@
 use std::{
+  ffi::OsString,
   fs::{self, File},
   io::Read,
   path::{Path, PathBuf},
+  process::Command,
   sync::{Arc, Mutex},
 };
 
@@ -244,6 +246,7 @@ pub fn download_update_artifact(update: &AvailableAppUpdate) -> Result<ReadyToIn
   })
 }
 
+#[cfg(not(target_os = "macos"))]
 pub fn open_installer(artifact_path: &Path) -> Result<()> {
   #[cfg(target_os = "macos")]
   {
@@ -264,6 +267,194 @@ pub fn open_installer(artifact_path: &Path) -> Result<()> {
     let _ = artifact_path;
     bail!("installer launch is currently supported on macOS only")
   }
+}
+
+pub fn install_update_artifact(ready: &ReadyToInstallAppUpdate) -> Result<()> {
+  #[cfg(target_os = "macos")]
+  {
+    install_update_macos(&ready.artifact_path)
+  }
+
+  #[cfg(not(target_os = "macos"))]
+  {
+    open_installer(&ready.artifact_path)
+  }
+}
+
+#[cfg(target_os = "macos")]
+fn install_update_macos(artifact_path: &Path) -> Result<()> {
+  let installed_app_path = current_installed_app_bundle_path()?;
+  let mount_point = macos_update_mount_point(&ready_version_label(artifact_path));
+  if mount_point.exists() {
+    let _ = fs::remove_dir_all(&mount_point);
+  }
+  fs::create_dir_all(&mount_point).with_context(|| {
+    format!(
+      "failed to create macOS update mount point {}",
+      mount_point.display()
+    )
+  })?;
+
+  let attach_status = Command::new("hdiutil")
+    .arg("attach")
+    .arg("-nobrowse")
+    .arg("-readonly")
+    .arg("-mountpoint")
+    .arg(&mount_point)
+    .arg(artifact_path)
+    .status()
+    .with_context(|| {
+      format!(
+        "failed to mount update artifact {}",
+        artifact_path.display()
+      )
+    })?;
+
+  if !attach_status.success() {
+    bail!(
+      "failed to mount update artifact {}",
+      artifact_path.display()
+    );
+  }
+
+  let _unmounter = MacOsUnmounter {
+    mount_point: mount_point.clone(),
+  };
+  let mounted_app_path = find_mounted_app_bundle(&mount_point, &installed_app_path)?;
+  rsync_app_bundle(&mounted_app_path, &installed_app_path)
+}
+
+#[cfg(target_os = "macos")]
+struct MacOsUnmounter {
+  mount_point: PathBuf,
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacOsUnmounter {
+  fn drop(&mut self) {
+    let _ = Command::new("hdiutil")
+      .arg("detach")
+      .arg("-force")
+      .arg(&self.mount_point)
+      .status();
+    let _ = fs::remove_dir_all(&self.mount_point);
+  }
+}
+
+#[cfg(target_os = "macos")]
+fn current_installed_app_bundle_path() -> Result<PathBuf> {
+  let current_exe = std::env::current_exe().context("failed to resolve current executable")?;
+  app_bundle_path_from_executable_path(&current_exe).with_context(|| {
+    format!(
+      "auto update requires running from a bundled .app, current executable is {}",
+      current_exe.display()
+    )
+  })
+}
+
+#[cfg(target_os = "macos")]
+fn app_bundle_path_from_executable_path(executable_path: &Path) -> Option<PathBuf> {
+  let macos_dir = executable_path.parent()?;
+  if macos_dir.file_name()?.to_str()? != "MacOS" {
+    return None;
+  }
+
+  let contents_dir = macos_dir.parent()?;
+  if contents_dir.file_name()?.to_str()? != "Contents" {
+    return None;
+  }
+
+  let app_bundle = contents_dir.parent()?;
+  (app_bundle.extension()?.to_str()? == "app").then(|| app_bundle.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+fn find_mounted_app_bundle(mount_point: &Path, installed_app_path: &Path) -> Result<PathBuf> {
+  if let Some(app_name) = installed_app_path.file_name() {
+    let candidate = mount_point.join(app_name);
+    if candidate.is_dir() {
+      return Ok(candidate);
+    }
+  }
+
+  let entries = fs::read_dir(mount_point)
+    .with_context(|| format!("failed to inspect mounted update {}", mount_point.display()))?;
+  for entry in entries.flatten() {
+    let path = entry.path();
+    if path.extension().and_then(|ext| ext.to_str()) == Some("app") {
+      return Ok(path);
+    }
+  }
+
+  bail!(
+    "failed to find application bundle in mounted update {}",
+    mount_point.display()
+  )
+}
+
+#[cfg(target_os = "macos")]
+fn rsync_app_bundle(source_app_path: &Path, installed_app_path: &Path) -> Result<()> {
+  let status = Command::new("rsync")
+    .arg("-a")
+    .arg("--delete")
+    .arg("--exclude")
+    .arg("Icon?")
+    .arg(path_with_trailing_slash(source_app_path))
+    .arg(path_with_trailing_slash(installed_app_path))
+    .status()
+    .with_context(|| {
+      format!(
+        "failed to copy updated app bundle from {} to {}",
+        source_app_path.display(),
+        installed_app_path.display()
+      )
+    })?;
+
+  if !status.success() {
+    bail!(
+      "failed to copy updated app bundle from {} to {}",
+      source_app_path.display(),
+      installed_app_path.display()
+    );
+  }
+
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn path_with_trailing_slash(path: &Path) -> OsString {
+  let mut value = path.as_os_str().to_os_string();
+  value.push("/");
+  value
+}
+
+#[cfg(target_os = "macos")]
+fn macos_update_mount_point(label: &str) -> PathBuf {
+  let sanitized_label = label
+    .chars()
+    .map(|ch| {
+      if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '_' {
+        ch
+      } else {
+        '_'
+      }
+    })
+    .collect::<String>();
+  std::env::temp_dir().join(format!(
+    "reviu-update-mount-{}-{}",
+    std::process::id(),
+    sanitized_label
+  ))
+}
+
+#[cfg(target_os = "macos")]
+fn ready_version_label(artifact_path: &Path) -> String {
+  artifact_path
+    .file_stem()
+    .and_then(|stem| stem.to_str())
+    .filter(|stem| !stem.trim().is_empty())
+    .unwrap_or("latest")
+    .to_string()
 }
 
 fn updates_directory() -> Result<PathBuf> {
@@ -396,5 +587,41 @@ mod tests {
       updates_directory_for_profile(base, AppProfile::Dev),
       PathBuf::from("/tmp/reviu-updates/reviu.dev/updates")
     );
+  }
+
+  #[cfg(target_os = "macos")]
+  #[test]
+  fn app_bundle_path_from_executable_path_returns_bundle_root() {
+    assert_eq!(
+      app_bundle_path_from_executable_path(Path::new(
+        "/Applications/Reviu.app/Contents/MacOS/reviu"
+      )),
+      Some(PathBuf::from("/Applications/Reviu.app"))
+    );
+  }
+
+  #[cfg(target_os = "macos")]
+  #[test]
+  fn app_bundle_path_from_executable_path_rejects_non_bundle_paths() {
+    assert_eq!(
+      app_bundle_path_from_executable_path(Path::new("/usr/local/bin/reviu")),
+      None
+    );
+    assert_eq!(
+      app_bundle_path_from_executable_path(Path::new(
+        "/Applications/Reviu.app/Contents/Helpers/reviu"
+      )),
+      None
+    );
+  }
+
+  #[cfg(target_os = "macos")]
+  #[test]
+  fn ready_version_label_uses_file_stem_and_falls_back_for_empty_names() {
+    assert_eq!(
+      ready_version_label(Path::new("/tmp/reviu-0.2.0.dmg")),
+      "reviu-0.2.0"
+    );
+    assert_eq!(ready_version_label(Path::new("")), "latest");
   }
 }
