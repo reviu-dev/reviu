@@ -2,11 +2,11 @@ use std::rc::Rc;
 
 use editor::set_indent_rainbow_enabled;
 use gpui::{
-  AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global, Render, Subscription,
-  Task, Window, div, prelude::*, px,
+  AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global, Keystroke, Render,
+  Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, IconName, Sizable as _, Theme, ThemeMode,
+  ActiveTheme as _, Disableable, IconName, Sizable as _, Theme, ThemeMode, kbd::Kbd,
   notification::Notification, tag::Tag,
 };
 use smol::unblock;
@@ -31,6 +31,7 @@ use crate::github_pr_details_page::GithubPrDetailsPage;
 use crate::github_repo_page::GithubRepoPage;
 use crate::sentry_context;
 use crate::settings_page::SettingsPage;
+use crate::{SHOW_COMMAND_PALETTE_SHORTCUT, ShowCommandPalette};
 use ui::{
   Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, UiIconName, UserMenuConfig, UserMenuPage,
   UserMenuState, UserMenuUser, WindowExt, user_menu,
@@ -233,6 +234,10 @@ pub struct WorkspaceView {
 
 impl WorkspaceView {
   const GLOBAL_BAR_MACOS_LEFT_PADDING: f32 = 85.0;
+
+  fn command_palette_shortcut() -> Keystroke {
+    Keystroke::parse(SHOW_COMMAND_PALETTE_SHORTCUT).expect("valid command palette shortcut")
+  }
 
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     cx.set_global(WorkspaceRoute::default());
@@ -546,6 +551,16 @@ impl WorkspaceView {
         AuthCallbackTarget::start_sign_in(cx);
       });
 
+    let command_palette_button = Button::new("workspace-global-command-palette")
+      .label("Command palette")
+      .ghost()
+      .compact()
+      .small()
+      .child(Kbd::new(Self::command_palette_shortcut()).ml_1())
+      .on_click(|_, window, cx| {
+        window.dispatch_action(Box::new(ShowCommandPalette), cx);
+      });
+
     let bar = div()
       .h(px(GLOBAL_BAR_HEIGHT))
       .max_h(px(GLOBAL_BAR_HEIGHT))
@@ -566,6 +581,7 @@ impl WorkspaceView {
     if show_update_button {
       right = right.child(update_button);
     }
+    right = right.child(command_palette_button);
     if is_unauthenticated {
       right = right.child(sign_in_button);
     }
@@ -634,9 +650,11 @@ mod tests {
     WorkspacePage, WorkspaceView, billing_return_target_for_subscription,
     page_for_subscription_access, user_menu_page_for_workspace_page,
   };
+  use crate::SHOW_COMMAND_PALETTE_SHORTCUT;
   use crate::app_update::{
     AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
   };
+  use gpui::Keystroke;
   use std::path::PathBuf;
   use ui::UserMenuPage;
 
@@ -742,6 +760,14 @@ mod tests {
         }
       ))),
       "Restart to update"
+    );
+  }
+
+  #[test]
+  fn workspace_command_palette_shortcut_matches_global_binding() {
+    assert_eq!(
+      WorkspaceView::command_palette_shortcut(),
+      Keystroke::parse(SHOW_COMMAND_PALETTE_SHORTCUT).expect("valid shortcut")
     );
   }
 }

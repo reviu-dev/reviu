@@ -2,6 +2,8 @@ use gpui::actions;
 
 actions!(workspace, [CloseWorkspacePage]);
 
+pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
+
 mod about_page;
 mod active_local_repo;
 mod api;
