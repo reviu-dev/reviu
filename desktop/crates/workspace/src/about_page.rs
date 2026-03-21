@@ -7,6 +7,7 @@ use gpui::{
 use gpui_component::{
   ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt,
   button::{Button, ButtonVariants as _},
+  h_flex,
   notification::Notification,
   v_flex,
 };
@@ -451,16 +452,18 @@ impl Render for AboutPage {
                 ),
             )
             .child(
-              Button::new("about-check-updates")
-                .small()
-                .icon(UiIconName::RefreshCcw)
-                .label(if self.check_in_progress {
-                  "Checking..."
-                } else {
-                  "Check for updates"
-                })
-                .disabled(self.check_in_progress)
-                .on_click(cx.listener(AboutPage::check_for_updates_action)),
+              h_flex().justify_start().child(
+                Button::new("about-check-updates")
+                  .small()
+                  .icon(UiIconName::RefreshCcw)
+                  .label(if self.check_in_progress {
+                    "Checking..."
+                  } else {
+                    "Check for updates"
+                  })
+                  .disabled(self.check_in_progress)
+                  .on_click(cx.listener(AboutPage::check_for_updates_action)),
+              ),
             )
             .when_some(check_status, |this, (message, color)| {
               this.child(div().text_sm().text_color(color).child(message))

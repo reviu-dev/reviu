@@ -15,7 +15,7 @@ use time::OffsetDateTime;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, DETAILS_PAGE_CONTAINER_MAX_WIDTH, PAGE_HEADER_HEIGHT,
-  StatusThemeExt, UiIconName, WindowExt,
+  StatusTag, StatusThemeExt, UiIconName, WindowExt,
 };
 
 use crate::{
@@ -288,15 +288,21 @@ impl BillingPage {
     }
   }
 
-  fn status_badge(
-    subscription: &CustomerStateSubscription,
-    theme: &gpui_component::Theme,
-  ) -> (SharedString, gpui::Hsla) {
-    match Self::display_status(subscription) {
-      BillingSubscriptionState::Active => ("Active".into(), theme.status_green()),
-      BillingSubscriptionState::Trialing => ("Trialing".into(), theme.status_violet()),
-      BillingSubscriptionState::ToBeCanceled => ("To be canceled".into(), theme.status_orange()),
-      BillingSubscriptionState::Canceled => ("Canceled".into(), theme.status_red()),
+  fn status_label(state: BillingSubscriptionState) -> &'static str {
+    match state {
+      BillingSubscriptionState::Active => "Active",
+      BillingSubscriptionState::Trialing => "Trialing",
+      BillingSubscriptionState::ToBeCanceled => "To be canceled",
+      BillingSubscriptionState::Canceled => "Canceled",
+    }
+  }
+
+  fn status_color(state: BillingSubscriptionState, theme: &gpui_component::Theme) -> gpui::Hsla {
+    match state {
+      BillingSubscriptionState::Active => theme.status_green(),
+      BillingSubscriptionState::Trialing => theme.status_violet(),
+      BillingSubscriptionState::ToBeCanceled => theme.status_orange(),
+      BillingSubscriptionState::Canceled => theme.status_red(),
     }
   }
 
@@ -313,7 +319,7 @@ impl BillingPage {
     portal_url: Option<&str>,
     theme: &gpui_component::Theme,
   ) -> impl IntoElement {
-    let (status_label, status_color) = Self::status_badge(subscription, theme);
+    let status = Self::display_status(subscription);
     let amount = Self::format_amount(subscription.amount, subscription.currency.as_str());
     let plan = format!(
       "{}/{}",
@@ -389,16 +395,7 @@ impl BillingPage {
               ),
           )
           .child(
-            div()
-              .px_2()
-              .py_1()
-              .rounded_full()
-              .border_1()
-              .border_color(status_color.opacity(0.5))
-              .text_xs()
-              .font_medium()
-              .text_color(status_color)
-              .child(status_label),
+            StatusTag::new(Self::status_color(status, theme)).child(Self::status_label(status)),
           ),
       )
       .child(row("Start Date", start_date_value))
@@ -414,13 +411,15 @@ impl BillingPage {
         }),
         |this, portal_url| {
           this.child(
-            Button::new("billing-portal-active")
-              .icon(IconName::ExternalLink)
-              .label("Open billing portal")
-              .small()
-              .on_click(move |_, _, cx| {
-                cx.open_url(&portal_url);
-              }),
+            h_flex().justify_start().child(
+              Button::new("billing-portal-active")
+                .icon(IconName::ExternalLink)
+                .label("Open billing portal")
+                .small()
+                .on_click(move |_, _, cx| {
+                  cx.open_url(&portal_url);
+                }),
+            ),
           )
         },
       )
@@ -473,13 +472,15 @@ impl BillingPage {
           .child("No active subscription found for your account."),
       )
       .child(
-        Button::new("billing-subscribe")
-          .icon(UiIconName::CreditCard)
-          .label("Subscribe")
-          .small()
-          .loading(self.checkout_loading)
-          .disabled(self.checkout_loading || self.refresh_loading)
-          .on_click(cx.listener(Self::subscribe_action)),
+        h_flex().justify_start().child(
+          Button::new("billing-subscribe")
+            .icon(UiIconName::CreditCard)
+            .label("Subscribe")
+            .small()
+            .loading(self.checkout_loading)
+            .disabled(self.checkout_loading || self.refresh_loading)
+            .on_click(cx.listener(Self::subscribe_action)),
+        ),
       )
   }
 
@@ -750,5 +751,25 @@ mod tests {
     canceled.cancel_at_period_end = true;
     canceled.current_period_end = Some("2000-01-01T00:00:00Z".to_string());
     assert_eq!(BillingPage::billing_date_label(&canceled), "Expiry Date");
+  }
+
+  #[test]
+  fn status_label_covers_all_billing_states() {
+    assert_eq!(
+      BillingPage::status_label(BillingSubscriptionState::Active),
+      "Active"
+    );
+    assert_eq!(
+      BillingPage::status_label(BillingSubscriptionState::Trialing),
+      "Trialing"
+    );
+    assert_eq!(
+      BillingPage::status_label(BillingSubscriptionState::ToBeCanceled),
+      "To be canceled"
+    );
+    assert_eq!(
+      BillingPage::status_label(BillingSubscriptionState::Canceled),
+      "Canceled"
+    );
   }
 }
