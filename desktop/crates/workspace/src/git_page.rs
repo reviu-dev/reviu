@@ -88,6 +88,13 @@ const GIT_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str = "git-markdown-preview-r
 type RepoSelectHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 type BranchSelectHandler = Rc<dyn Fn(BranchRef, &mut Window, &mut App)>;
 
+struct GitCommandPaletteContents {
+  commands: Vec<CommandPaletteCommand>,
+  branches: Vec<CommandPaletteBranch>,
+  stashes: Vec<CommandPaletteStash>,
+  default_stash_message: Option<SharedString>,
+}
+
 actions!(
   workspace,
   [
@@ -2366,9 +2373,6 @@ impl GitPage {
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let mut palette_branches = Vec::new();
-    let mut palette_stashes = Vec::new();
-    let mut palette_default_stash_message: Option<SharedString> = None;
     let mut palette_repositories = ConfigStore::load_recent_repositories()
       .into_iter()
       .map(|repo| CommandPaletteRepository {
@@ -2391,6 +2395,13 @@ impl GitPage {
       }
     }
 
+    let GitCommandPaletteContents {
+      commands,
+      branches: palette_branches,
+      stashes: palette_stashes,
+      default_stash_message: palette_default_stash_message,
+    } = self.build_command_palette_contents(palette_repositories.len(), cx);
+
     let view = cx.entity();
     let handler: CommandPaletteHandler = Arc::new(move |action, window, cx| {
       view.update(cx, |view, cx| {
@@ -2398,15 +2409,38 @@ impl GitPage {
       })
     });
 
-    let include_github = matches!(self.auth_state, AuthState::Authenticated(_));
-    let mut commands =
-      CommandPaletteCommand::default_global_commands(CommandPalettePage::Git, include_github);
-
-    if palette_repositories.len() > 1 {
-      commands.push(CommandPaletteCommand::switch_repository());
+    let mut config = CommandPaletteConfig::new(palette_branches, commands, handler)
+      .with_repositories(palette_repositories)
+      .with_stashes(palette_stashes);
+    if let Some(default_stash_message) = palette_default_stash_message {
+      config = config.with_default_stash_message(default_stash_message);
     }
 
-    commands.push(CommandPaletteCommand::open_repository());
+    let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
+    let palette_for_dialog = palette.clone();
+
+    window.open_dialog(cx, move |dialog, _, _| {
+      dialog
+        .p_0()
+        .border_0()
+        .min_h_0()
+        .overlay_closable(true)
+        .keyboard(true)
+        .close_button(false)
+        .child(palette_for_dialog.clone())
+    });
+  }
+
+  fn build_command_palette_contents(
+    &self,
+    palette_repositories_len: usize,
+    cx: &App,
+  ) -> GitCommandPaletteContents {
+    let include_github = matches!(self.auth_state, AuthState::Authenticated(_));
+    let mut commands = Vec::new();
+    let mut stashes = Vec::new();
+    let mut default_stash_message_value = None;
+    let mut branches = Vec::new();
 
     if let Some(root_path) = self.selected_repo.clone() {
       let commit_message = self.commit_input.read(cx).value().to_string();
@@ -2462,11 +2496,11 @@ impl GitPage {
 
       if show_stash_with_untracked {
         commands.push(CommandPaletteCommand::stash_with_untracked());
-        palette_default_stash_message = default_stash_message(&root_path).ok().map(Into::into);
+        default_stash_message_value = default_stash_message(&root_path).ok().map(Into::into);
       }
 
-      if let Ok(stashes) = list_stashes(&root_path) {
-        palette_stashes = stashes
+      if let Ok(repo_stashes) = list_stashes(&root_path) {
+        stashes = repo_stashes
           .into_iter()
           .map(|stash| CommandPaletteStash {
             index: stash.index,
@@ -2475,61 +2509,54 @@ impl GitPage {
           })
           .collect();
 
-        if !palette_stashes.is_empty() {
+        if !stashes.is_empty() {
           commands.push(CommandPaletteCommand::apply_stash());
           commands.push(CommandPaletteCommand::drop_stash());
           commands.push(CommandPaletteCommand::pop_stash());
         }
       }
-    }
 
-    if let Some(root_path) = self.selected_repo.clone()
-      && let Ok(branches) = list_branches(&root_path)
-    {
-      palette_branches = branches
-        .into_iter()
-        .map(|branch| CommandPaletteBranch {
-          name: branch.name.into(),
-          kind: match branch.kind {
-            BranchKind::Local => CommandPaletteBranchKind::Local,
-            BranchKind::Remote => CommandPaletteBranchKind::Remote,
-          },
-        })
-        .collect::<Vec<_>>();
-      commands.push(CommandPaletteCommand::switch_branch());
-      commands.push(CommandPaletteCommand::merge_branch());
-      if self.merge_in_progress {
-        commands.push(CommandPaletteCommand::abort_merge());
-      }
-      commands.push(CommandPaletteCommand::rebase_branch());
-      if self.should_show_interactive_rebase_palette_command() {
-        commands.push(CommandPaletteCommand::interactive_rebase());
-      }
-      if self.rebase_in_progress {
-        commands.push(CommandPaletteCommand::abort_rebase());
+      if let Ok(repo_branches) = list_branches(&root_path) {
+        branches = repo_branches
+          .into_iter()
+          .map(|branch| CommandPaletteBranch {
+            name: branch.name.into(),
+            kind: match branch.kind {
+              BranchKind::Local => CommandPaletteBranchKind::Local,
+              BranchKind::Remote => CommandPaletteBranchKind::Remote,
+            },
+          })
+          .collect::<Vec<_>>();
+        commands.push(CommandPaletteCommand::switch_branch());
+        commands.push(CommandPaletteCommand::merge_branch());
+        if self.merge_in_progress {
+          commands.push(CommandPaletteCommand::abort_merge());
+        }
+        commands.push(CommandPaletteCommand::rebase_branch());
+        if self.should_show_interactive_rebase_palette_command() {
+          commands.push(CommandPaletteCommand::interactive_rebase());
+        }
+        if self.rebase_in_progress {
+          commands.push(CommandPaletteCommand::abort_rebase());
+        }
       }
     }
 
-    let mut config = CommandPaletteConfig::new(palette_branches, commands, handler)
-      .with_repositories(palette_repositories)
-      .with_stashes(palette_stashes);
-    if let Some(default_stash_message) = palette_default_stash_message {
-      config = config.with_default_stash_message(default_stash_message);
+    if palette_repositories_len > 1 {
+      commands.push(CommandPaletteCommand::switch_repository());
     }
+    commands.push(CommandPaletteCommand::open_repository());
+    commands.extend(CommandPaletteCommand::default_global_commands(
+      CommandPalettePage::Git,
+      include_github,
+    ));
 
-    let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
-    let palette_for_dialog = palette.clone();
-
-    window.open_dialog(cx, move |dialog, _, _| {
-      dialog
-        .p_0()
-        .border_0()
-        .min_h_0()
-        .overlay_closable(true)
-        .keyboard(true)
-        .close_button(false)
-        .child(palette_for_dialog.clone())
-    });
+    GitCommandPaletteContents {
+      commands,
+      branches,
+      stashes,
+      default_stash_message: default_stash_message_value,
+    }
   }
 
   fn open_file_search_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -6449,6 +6476,7 @@ mod tests {
   use gpui::TestAppContext;
   use std::sync::atomic::{AtomicU64, Ordering};
   use std::time::{SystemTime, UNIX_EPOCH};
+  use ui::CommandPaletteCommandId;
 
   #[test]
   fn format_git_file_name_label_extracts_file_name() {
@@ -9350,6 +9378,66 @@ mod tests {
       let error = result.expect_err("action should fail without selected repo");
       assert_eq!(error.as_ref(), "No repository selected.");
     }
+  }
+
+  #[gpui::test]
+  fn command_palette_moves_open_commands_after_git_commands(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-command-palette-order");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "initial\n", "initial");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    let command_ids = git_page.update(cx, |this, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this
+        .build_command_palette_contents(2, cx)
+        .commands
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>()
+    });
+
+    let is_open_command = |id: CommandPaletteCommandId| {
+      matches!(
+        id,
+        CommandPaletteCommandId::OpenRepository
+          | CommandPaletteCommandId::OpenGitPage
+          | CommandPaletteCommandId::OpenGithubPage
+          | CommandPaletteCommandId::OpenGithubFromUrl
+          | CommandPaletteCommandId::OpenGitHistorySidebar
+          | CommandPaletteCommandId::OpenGitChangesSidebar
+          | CommandPaletteCommandId::OpenGitConfigPage
+          | CommandPaletteCommandId::OpenSettingsPage
+          | CommandPaletteCommandId::OpenBillingPage
+          | CommandPaletteCommandId::OpenAboutPage
+      )
+    };
+
+    let first_open_ix = command_ids
+      .iter()
+      .position(|id| is_open_command(*id))
+      .expect("should include open commands");
+    let last_non_open_ix = command_ids
+      .iter()
+      .rposition(|id| !is_open_command(*id))
+      .expect("should include git commands");
+
+    assert!(
+      first_open_ix > last_non_open_ix,
+      "open commands should be listed after git commands: {command_ids:?}"
+    );
+
+    let switch_repository_ix = command_ids
+      .iter()
+      .position(|id| *id == CommandPaletteCommandId::SwitchRepository)
+      .expect("should include switch repository");
+    let open_repository_ix = command_ids
+      .iter()
+      .position(|id| *id == CommandPaletteCommandId::OpenRepository)
+      .expect("should include open repository");
+
+    assert_eq!(switch_repository_ix + 1, open_repository_ix);
   }
 
   #[gpui::test]

@@ -679,7 +679,7 @@ impl CommandPaletteCommand {
   pub fn switch_repository() -> Self {
     Self {
       id: CommandPaletteCommandId::SwitchRepository,
-      name: "Switch repo".into(),
+      name: "Switch repository".into(),
       description: Some("Switch to another recent repository".into()),
     }
   }
@@ -2425,6 +2425,14 @@ mod tests {
     assert_eq!(command.id, CommandPaletteCommandId::OpenRepository);
     assert_eq!(command.name.as_ref(), "Open repository");
     assert!(command.matches("open repo"));
+  }
+
+  #[test]
+  fn switch_repository_command_is_available_with_expected_metadata() {
+    let command = CommandPaletteCommand::switch_repository();
+    assert_eq!(command.id, CommandPaletteCommandId::SwitchRepository);
+    assert_eq!(command.name.as_ref(), "Switch repository");
+    assert!(command.matches("recent repository"));
   }
 
   #[test]
