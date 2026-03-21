@@ -106,7 +106,7 @@ fn left_sidebar_kind_for_tab(active_tab_ix: usize) -> GithubPrLeftSidebarKind {
   }
 }
 const PR_COMMIT_SELECT_WIDTH: f32 = 260.0;
-const PR_COMMIT_SELECT_MENU_WIDTH: f32 = 420.0;
+const PR_COMMIT_SELECT_MENU_WIDTH: f32 = 320.0;
 const PR_MERGE_POPOVER_WIDTH: f32 = 520.0;
 const PR_MERGE_MESSAGE_INPUT_HEIGHT_PX: f32 = 100.0;
 const PR_REVIEW_POPOVER_WIDTH: f32 = 500.0;
