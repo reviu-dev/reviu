@@ -90,8 +90,21 @@ const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const DIFF_HEADER_HEIGHT: f32 = 40.0;
 const PR_TAB_OVERVIEW_IX: usize = 0;
 const PR_TAB_CHANGES_IX: usize = 1;
-const PR_TAB_COMMITS_IX: usize = 2;
-const PR_TAB_CHECKS_IX: usize = 3;
+const PR_TAB_CHECKS_IX: usize = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GithubPrLeftSidebarKind {
+  Files,
+  Context,
+}
+
+fn left_sidebar_kind_for_tab(active_tab_ix: usize) -> GithubPrLeftSidebarKind {
+  if active_tab_ix == PR_TAB_CHANGES_IX {
+    GithubPrLeftSidebarKind::Files
+  } else {
+    GithubPrLeftSidebarKind::Context
+  }
+}
 const PR_COMMIT_SELECT_WIDTH: f32 = 260.0;
 const PR_COMMIT_SELECT_MENU_WIDTH: f32 = 420.0;
 const PR_MERGE_POPOVER_WIDTH: f32 = 520.0;
@@ -285,6 +298,27 @@ fn commit_subject(message: &str) -> String {
     .find(|line| !line.is_empty())
     .unwrap_or("No commit message")
     .to_string()
+}
+
+fn pull_request_commit_matches(commit: &GithubPullRequestCommit, query: &str) -> bool {
+  if query.is_empty() {
+    return true;
+  }
+
+  let q = query.to_lowercase();
+  commit.sha.to_lowercase().contains(&q)
+    || github_shared::short_sha(&commit.sha)
+      .to_lowercase()
+      .contains(&q)
+    || commit.message.to_lowercase().contains(&q)
+    || commit
+      .author
+      .as_ref()
+      .is_some_and(|author| author.login.to_lowercase().contains(&q))
+    || commit
+      .committer
+      .as_ref()
+      .is_some_and(|committer| committer.login.to_lowercase().contains(&q))
 }
 
 fn commit_sort_timestamp(commit: &GithubPullRequestCommit) -> &str {
@@ -488,6 +522,143 @@ fn render_checks_state_badge(
   let color = checks_rollup_state_color(state, theme);
   StatusTag::new(color)
     .child(checks_rollup_state_label(state))
+    .into_any_element()
+}
+
+fn render_checks_summary_card(
+  checks: &GithubPullRequestChecksSummary,
+  theme: &gpui_component::Theme,
+  trailing_header_content: Option<gpui::AnyElement>,
+) -> gpui::AnyElement {
+  v_flex()
+    .debug_selector(|| "github-pr-checks-summary-card".to_string())
+    .gap_3()
+    .border_1()
+    .border_color(theme.border)
+    .rounded(theme.radius)
+    .p_3()
+    .child(
+      h_flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .child(
+          div()
+            .text_sm()
+            .font_medium()
+            .text_color(theme.foreground)
+            .child("Checks summary"),
+        )
+        .child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child(render_checks_state_badge(checks.overall_state, theme))
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("Overall"),
+            )
+            .child(render_checks_state_badge(checks.required_state, theme))
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("Required"),
+            )
+            .when_some(trailing_header_content, |this, content| this.child(content)),
+        ),
+    )
+    .child(
+      h_flex()
+        .items_center()
+        .gap_4()
+        .flex_wrap()
+        .child(
+          div()
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("Total checks"),
+            )
+            .child(
+              div()
+                .text_sm()
+                .font_medium()
+                .text_color(theme.foreground)
+                .child(checks.total_checks.to_string()),
+            ),
+        )
+        .child(
+          div()
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("Passing"),
+            )
+            .child(
+              div()
+                .text_sm()
+                .font_medium()
+                .text_color(theme.status_green())
+                .child(checks.successful_checks.to_string()),
+            ),
+        )
+        .child(
+          div()
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("Failing"),
+            )
+            .child(
+              div()
+                .text_sm()
+                .font_medium()
+                .text_color(theme.status_red())
+                .child(checks.failed_checks.to_string()),
+            ),
+        )
+        .child(
+          div()
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("Pending"),
+            )
+            .child(
+              div()
+                .text_sm()
+                .font_medium()
+                .text_color(theme.status_orange())
+                .child(checks.pending_checks.to_string()),
+            ),
+        ),
+    )
+    .child(
+      div()
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child(format!(
+          "{} required contexts • {} passed • {} failing • {} pending",
+          checks.required_checks_total,
+          checks.required_checks_passed,
+          checks.required_checks_failed,
+          checks.required_checks_pending,
+        )),
+    )
+    .when(checks.requires_up_to_date_branch, |this| {
+      this.child(
+        div().text_xs().text_color(theme.muted_foreground).child(
+          "The base branch rules require this pull request to be up to date before merging.",
+        ),
+      )
+    })
     .into_any_element()
 }
 
@@ -973,34 +1144,56 @@ impl DropdownSelectItem for GithubPrCommitSelectItem {
 }
 
 struct GithubPrCommitListDelegate {
-  rows: Vec<Rc<GithubPullRequestCommit>>,
+  all_rows: Vec<Rc<GithubPullRequestCommit>>,
+  matched_rows: Vec<Rc<GithubPullRequestCommit>>,
   selected_index: Option<IndexPath>,
+  selected_commit_sha: Option<SharedString>,
+  query: SharedString,
 }
 
 impl GithubPrCommitListDelegate {
   fn new() -> Self {
     Self {
-      rows: Vec::new(),
+      all_rows: Vec::new(),
+      matched_rows: Vec::new(),
       selected_index: None,
+      selected_commit_sha: None,
+      query: "".into(),
     }
   }
 
   fn set_rows(&mut self, commits: &[GithubPullRequestCommit], selected_commit_sha: Option<&str>) {
-    self.rows = commits.iter().cloned().map(Rc::new).collect();
+    self.all_rows = commits.iter().cloned().map(Rc::new).collect();
+    self.selected_commit_sha = selected_commit_sha.map(|sha| sha.to_string().into());
+    self.prepare(self.query.clone());
+  }
 
-    self.selected_index = selected_commit_sha
+  fn prepare(&mut self, query: impl Into<SharedString>) {
+    self.query = query.into();
+    let q = self.query.as_ref();
+
+    self.matched_rows = self
+      .all_rows
+      .iter()
+      .filter(|commit| pull_request_commit_matches(commit, q))
+      .cloned()
+      .collect();
+
+    self.selected_index = self
+      .selected_commit_sha
+      .as_ref()
       .and_then(|selected_sha| {
         self
-          .rows
+          .matched_rows
           .iter()
-          .position(|commit| commit.sha == selected_sha)
+          .position(|commit| commit.sha == selected_sha.as_ref())
           .map(IndexPath::new)
       })
-      .or_else(|| (!self.rows.is_empty()).then_some(IndexPath::new(0)));
+      .or_else(|| (!self.matched_rows.is_empty()).then_some(IndexPath::new(0)));
   }
 
   fn row_at(&self, ix: IndexPath) -> Option<Rc<GithubPullRequestCommit>> {
-    self.rows.get(ix.row).cloned()
+    self.matched_rows.get(ix.row).cloned()
   }
 }
 
@@ -1008,7 +1201,7 @@ impl ListDelegate for GithubPrCommitListDelegate {
   type Item = ListItem;
 
   fn items_count(&self, _section: usize, _cx: &App) -> usize {
-    self.rows.len()
+    self.matched_rows.len()
   }
 
   fn render_item(
@@ -1018,7 +1211,7 @@ impl ListDelegate for GithubPrCommitListDelegate {
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
-    let commit = self.rows.get(ix.row)?;
+    let commit = self.matched_rows.get(ix.row)?;
     let subject = commit_subject(&commit.message);
     let short = github_shared::short_sha(&commit.sha);
     let author = commit
@@ -1085,7 +1278,11 @@ impl ListDelegate for GithubPrCommitListDelegate {
       .justify_center()
       .text_sm()
       .text_color(cx.theme().muted_foreground)
-      .child("No commits")
+      .child(if self.query.is_empty() {
+        "No commits"
+      } else {
+        "No matching commits"
+      })
   }
 
   fn set_selected_index(
@@ -1096,6 +1293,16 @@ impl ListDelegate for GithubPrCommitListDelegate {
   ) {
     self.selected_index = ix;
     cx.notify();
+  }
+
+  fn perform_search(
+    &mut self,
+    query: &str,
+    _: &mut Window,
+    _: &mut Context<ListState<Self>>,
+  ) -> Task<()> {
+    self.prepare(query.to_owned());
+    Task::ready(())
   }
 }
 
@@ -4508,15 +4715,6 @@ impl GithubPrDetailsPage {
           this.focus_changes_tree(window, cx);
         }
       });
-      return;
-    }
-
-    if ix == PR_TAB_COMMITS_IX {
-      cx.on_next_frame(window, |this, window, cx| {
-        this.commits_list.update(cx, |state, cx| {
-          state.focus(window, cx);
-        });
-      });
     }
   }
 
@@ -6142,7 +6340,6 @@ impl GithubPrDetailsPage {
       }))
       .child(Tab::new().label("Overview"))
       .child(Tab::new().label("Changes"))
-      .child(Tab::new().label("Commits"))
       .child(checks_tab);
 
     let back_button = || {
@@ -6227,6 +6424,343 @@ impl GithubPrDetailsPage {
           .child(right_area),
       )
       .child(tab_bar)
+  }
+
+  fn render_context_sidebar_checks_summary(
+    &self,
+    show_view_checks_button: bool,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let theme = cx.theme().clone();
+
+    if self.checks_loading && self.checks.is_none() {
+      return v_flex()
+        .gap_3()
+        .border_1()
+        .border_color(theme.border)
+        .rounded(theme.radius)
+        .p_3()
+        .child(
+          h_flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .child(
+              div()
+                .text_sm()
+                .font_medium()
+                .text_color(theme.foreground)
+                .child("Checks summary"),
+            )
+            .child(Spinner::new().small()),
+        )
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading checks..."),
+        )
+        .into_any_element();
+    }
+
+    if let Some(error) = self.checks_error.as_ref() {
+      return v_flex()
+        .gap_3()
+        .border_1()
+        .border_color(theme.border)
+        .rounded(theme.radius)
+        .p_3()
+        .child(
+          div()
+            .text_sm()
+            .font_medium()
+            .text_color(theme.foreground)
+            .child("Checks summary"),
+        )
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.status_red())
+            .child(error.clone()),
+        )
+        .into_any_element();
+    }
+
+    if let Some(checks) = self.checks.as_ref() {
+      let view_checks_button = if show_view_checks_button {
+        let view = cx.entity();
+        Some(
+          Button::new("pr-overview-view-checks")
+            .ghost()
+            .xsmall()
+            .label("View check details")
+            .on_click(move |_, window, cx| {
+              view.update(cx, |this, cx| {
+                this.set_active_tab(PR_TAB_CHECKS_IX, window, cx);
+              });
+            }),
+        )
+      } else {
+        None
+      };
+
+      return v_flex()
+        .gap_3()
+        .border_1()
+        .border_color(theme.border)
+        .rounded(theme.radius)
+        .p_3()
+        .child(
+          v_flex()
+            .gap_2()
+            .child(
+              h_flex()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(
+                  div()
+                    .text_sm()
+                    .font_medium()
+                    .text_color(theme.foreground)
+                    .child("Checks summary"),
+                )
+                .when_some(view_checks_button, |this, button| this.child(button)),
+            )
+            .child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .flex_wrap()
+                .child(render_checks_state_badge(checks.overall_state, &theme))
+                .child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Overall"),
+                )
+                .child(render_checks_state_badge(checks.required_state, &theme))
+                .child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Required"),
+                ),
+            ),
+        )
+        .child(
+          h_flex()
+            .items_center()
+            .gap_4()
+            .flex_wrap()
+            .child(
+              div()
+                .child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Total checks"),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .font_medium()
+                    .text_color(theme.foreground)
+                    .child(checks.total_checks.to_string()),
+                ),
+            )
+            .child(
+              div()
+                .child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Passing"),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .font_medium()
+                    .text_color(theme.status_green())
+                    .child(checks.successful_checks.to_string()),
+                ),
+            )
+            .child(
+              div()
+                .child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Failing"),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .font_medium()
+                    .text_color(theme.status_red())
+                    .child(checks.failed_checks.to_string()),
+                ),
+            )
+            .child(
+              div()
+                .child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Pending"),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .font_medium()
+                    .text_color(theme.status_orange())
+                    .child(checks.pending_checks.to_string()),
+                ),
+            ),
+        )
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child(format!(
+              "{} required contexts • {} passed • {} failing • {} pending",
+              checks.required_checks_total,
+              checks.required_checks_passed,
+              checks.required_checks_failed,
+              checks.required_checks_pending,
+            )),
+        )
+        .when(checks.requires_up_to_date_branch, |this| {
+          this.child(div().text_xs().text_color(theme.muted_foreground).child(
+            "The base branch rules require this pull request to be up to date before merging.",
+          ))
+        })
+        .into_any_element();
+    }
+
+    v_flex()
+      .gap_3()
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius)
+      .p_3()
+      .child(
+        div()
+          .text_sm()
+          .font_medium()
+          .text_color(theme.foreground)
+          .child("Checks summary"),
+      )
+      .child(
+        div()
+          .text_sm()
+          .text_color(theme.muted_foreground)
+          .child("Checks are unavailable for this pull request."),
+      )
+      .into_any_element()
+  }
+
+  fn render_context_sidebar_commits(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    let theme = cx.theme().clone();
+
+    if self.commits_loading {
+      return v_flex()
+        .flex_1()
+        .min_h_0()
+        .gap_3()
+        .child(
+          div()
+            .text_sm()
+            .font_medium()
+            .text_color(theme.foreground)
+            .child("Commits"),
+        )
+        .child(
+          v_flex()
+            .flex_1()
+            .min_h_0()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .child(Spinner::new().small())
+            .child(
+              div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child("Loading commits..."),
+            ),
+        )
+        .into_any_element();
+    }
+
+    if let Some(error) = self.commits_error.as_ref() {
+      return v_flex()
+        .flex_1()
+        .min_h_0()
+        .gap_3()
+        .child(
+          div()
+            .text_sm()
+            .font_medium()
+            .text_color(theme.foreground)
+            .child("Commits"),
+        )
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.status_red())
+            .child(error.clone()),
+        )
+        .into_any_element();
+    }
+
+    let commits_list = List::new(&self.commits_list)
+      .search_placeholder("Search commits...")
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius)
+      .size_full()
+      .p(px(8.));
+
+    v_flex()
+      .flex_1()
+      .min_h_0()
+      .gap_3()
+      .child(
+        h_flex()
+          .items_center()
+          .justify_between()
+          .gap_2()
+          .child(
+            div()
+              .text_sm()
+              .font_medium()
+              .text_color(theme.foreground)
+              .child("Commits"),
+          )
+          .child(
+            Tag::secondary()
+              .small()
+              .rounded_full()
+              .child(self.commits.len().to_string()),
+          ),
+      )
+      .child(div().flex_1().min_h_0().child(commits_list))
+      .into_any_element()
+  }
+
+  fn render_context_sidebar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .id("github-pr-context-sidebar")
+      .size_full()
+      .bg(theme.sidebar)
+      .gap_3()
+      .p_3()
+      .child(self.render_context_sidebar_checks_summary(self.active_tab_ix != PR_TAB_CHECKS_IX, cx))
+      .child(self.render_context_sidebar_commits(cx))
+      .into_any_element()
   }
 
   fn render_details_conversation_panel(
@@ -7421,6 +7955,7 @@ impl GithubPrDetailsPage {
       .id("github-pr-overview-scroll")
       .size_full()
       .overflow_y_scrollbar()
+      .px_10()
       .child(
         div()
           .pt_10()
@@ -7854,6 +8389,17 @@ impl GithubPrDetailsPage {
       })
       .child(search_controls)
       .child(div().flex_1().min_h_0().child(list))
+  }
+
+  fn render_left_sidebar(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    match left_sidebar_kind_for_tab(self.active_tab_ix) {
+      GithubPrLeftSidebarKind::Files => self.render_files_sidebar(window, cx).into_any_element(),
+      GithubPrLeftSidebarKind::Context => self.render_context_sidebar(cx),
+    }
   }
 
   fn render_diff_header(
@@ -8805,134 +9351,7 @@ impl GithubPrDetailsPage {
         .mx_auto()
         .py_4()
         .gap_4()
-        .child(
-          v_flex()
-            .debug_selector(|| "github-pr-checks-summary-card".to_string())
-            .gap_3()
-            .border_1()
-            .border_color(theme.border)
-            .rounded(theme.radius)
-            .p_3()
-            .child(
-              h_flex()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .child(
-                  div()
-                    .text_sm()
-                    .font_medium()
-                    .text_color(theme.foreground)
-                    .child("Checks summary"),
-                )
-                .child(
-                  h_flex()
-                    .items_center()
-                    .gap_2()
-                    .child(render_checks_state_badge(checks.overall_state, &theme))
-                    .child(
-                      div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("Overall"),
-                    )
-                    .child(render_checks_state_badge(checks.required_state, &theme))
-                    .child(
-                      div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("Required"),
-                    ),
-                ),
-            )
-            .child(
-              h_flex()
-                .items_center()
-                .gap_4()
-                .flex_wrap()
-                .child(
-                  div()
-                    .child(
-                      div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("Total checks"),
-                    )
-                    .child(
-                      div()
-                        .text_sm()
-                        .font_medium()
-                        .text_color(theme.foreground)
-                        .child(checks.total_checks.to_string()),
-                    ),
-                )
-                .child(
-                  div()
-                    .child(
-                      div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("Passing"),
-                    )
-                    .child(
-                      div()
-                        .text_sm()
-                        .font_medium()
-                        .text_color(theme.status_green())
-                        .child(checks.successful_checks.to_string()),
-                    ),
-                )
-                .child(
-                  div()
-                    .child(
-                      div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("Failing"),
-                    )
-                    .child(
-                      div()
-                        .text_sm()
-                        .font_medium()
-                        .text_color(theme.status_red())
-                        .child(checks.failed_checks.to_string()),
-                    ),
-                )
-                .child(
-                  div()
-                    .child(
-                      div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("Pending"),
-                    )
-                    .child(
-                      div()
-                        .text_sm()
-                        .font_medium()
-                        .text_color(theme.status_orange())
-                        .child(checks.pending_checks.to_string()),
-                    ),
-                ),
-            )
-            .child(
-              div()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child(format!(
-                  "{} required contexts • {} passed • {} failing • {} pending",
-                  checks.required_checks_total,
-                  checks.required_checks_passed,
-                  checks.required_checks_failed,
-                  checks.required_checks_pending,
-                )),
-            )
-            .when(checks.requires_up_to_date_branch, |this| {
-              this.child(div().text_xs().text_color(theme.muted_foreground).child(
-                "The base branch rules require this pull request to be up to date before merging.",
-              ))
-            }),
-        )
+        .child(render_checks_summary_card(&checks, &theme, None))
         .when(has_missing_required_contexts, |this| {
           this.child(
             v_flex()
@@ -9045,75 +9464,6 @@ impl GithubPrDetailsPage {
 
     div()
       .id("github-pr-checks-scroll")
-      .size_full()
-      .overflow_y_scrollbar()
-      .child(content)
-  }
-
-  fn render_commits_tab(
-    &mut self,
-    _window: &mut Window,
-    cx: &mut Context<Self>,
-  ) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
-    let content: gpui::AnyElement = if self.commits_loading {
-      v_flex()
-        .flex_1()
-        .h_full()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .child(Spinner::new().small())
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading commits..."),
-        )
-        .into_any_element()
-    } else if let Some(error) = self.commits_error.as_ref() {
-      v_flex()
-        .flex_1()
-        .h_full()
-        .items_center()
-        .justify_center()
-        .text_sm()
-        .text_color(theme.status_red())
-        .child(error.clone())
-        .into_any_element()
-    } else if self.commits.is_empty() {
-      v_flex()
-        .flex_1()
-        .h_full()
-        .items_center()
-        .justify_center()
-        .text_sm()
-        .text_color(theme.muted_foreground)
-        .child("No commits")
-        .into_any_element()
-    } else {
-      let commits_list = List::new(&self.commits_list)
-        .border_1()
-        .border_color(theme.border)
-        .rounded(theme.radius)
-        .flex_1()
-        .min_h_0()
-        .p(px(8.));
-
-      v_flex()
-        .w_full()
-        .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
-        .h_full()
-        .min_h_0()
-        .mx_auto()
-        .py_4()
-        .child(commits_list)
-        .into_any_element()
-    };
-
-    div()
-      .id("github-pr-commits-scroll")
       .size_full()
       .overflow_y_scrollbar()
       .child(content)
@@ -9251,14 +9601,7 @@ impl GithubPrDetailsPage {
       )
       .child(editor_content);
 
-    h_resizable("github-pr-changes")
-      .child(
-        resizable_panel()
-          .size(px(SIDEBAR_DEFAULT_WIDTH))
-          .size_range(px(SIDEBAR_MIN_WIDTH)..px(SIDEBAR_MAX_WIDTH))
-          .child(self.render_files_sidebar(window, cx)),
-      )
-      .child(resizable_panel().child(editor_panel))
+    editor_panel
   }
 }
 
@@ -9309,13 +9652,6 @@ impl Render for GithubPrDetailsPage {
       .child(self.render_changes_tab(window, cx))
       .into_any_element();
 
-    let commits_content = div()
-      .id("commits-tab")
-      .flex_1()
-      .min_h_0()
-      .child(self.render_commits_tab(window, cx))
-      .into_any_element();
-
     let checks_content = div()
       .id("checks-tab")
       .flex_1()
@@ -9327,26 +9663,37 @@ impl Render for GithubPrDetailsPage {
       overview_content
     } else if self.active_tab_ix == PR_TAB_CHANGES_IX {
       changes_content
-    } else if self.active_tab_ix == PR_TAB_COMMITS_IX {
-      commits_content
-    } else if self.active_tab_ix == PR_TAB_CHECKS_IX {
+    } else if self.active_tab_ix >= PR_TAB_CHECKS_IX {
       checks_content
     } else {
       overview_content
     };
 
+    let right_panel = v_flex()
+      .size_full()
+      .overflow_hidden()
+      .child(self.render_header(cx))
+      .child(v_flex().flex_1().min_h_0().child(content));
+
     div()
       .size_full()
       .flex()
-      .flex_col()
       .bg(theme.background)
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GithubPrDetailsPage::show_command_palette_action))
       .on_action(cx.listener(GithubPrDetailsPage::show_file_search_action))
       .on_action(cx.listener(GithubPrDetailsPage::find_action))
       .on_action(cx.listener(GithubPrDetailsPage::close_find_action))
-      .child(self.render_header(cx))
-      .child(v_flex().flex_1().min_h_0().child(content))
+      .child(
+        h_resizable("github-pr-layout")
+          .child(
+            resizable_panel()
+              .size(px(SIDEBAR_DEFAULT_WIDTH))
+              .size_range(px(SIDEBAR_MIN_WIDTH)..px(SIDEBAR_MAX_WIDTH))
+              .child(self.render_left_sidebar(window, cx)),
+          )
+          .child(resizable_panel().child(right_panel)),
+      )
   }
 }
 
@@ -11075,6 +11422,38 @@ mod tests {
   }
 
   #[test]
+  fn commit_list_delegate_search_filters_by_message_sha_and_author() {
+    let commits = vec![
+      make_api_commit(
+        "aaaaaaa111111111111111111111111111111111",
+        "Fix parser regression",
+        Some("2026-02-20T10:00:00Z"),
+        Some("p1"),
+      ),
+      make_api_commit(
+        "bbbbbbb222222222222222222222222222222222",
+        "Refactor toolbar",
+        Some("2026-02-21T10:00:00Z"),
+        Some("p2"),
+      ),
+    ];
+
+    let mut delegate = GithubPrCommitListDelegate::new();
+    delegate.set_rows(&commits, None);
+
+    delegate.prepare("parser");
+    assert_eq!(delegate.matched_rows.len(), 1);
+    assert_eq!(delegate.matched_rows[0].sha, commits[0].sha);
+
+    delegate.prepare("bbbbbbb");
+    assert_eq!(delegate.matched_rows.len(), 1);
+    assert_eq!(delegate.matched_rows[0].sha, commits[1].sha);
+
+    delegate.prepare("octocat");
+    assert_eq!(delegate.matched_rows.len(), 2);
+  }
+
+  #[test]
   fn resolve_diff_shas_for_context_uses_commit_parent_when_selected() {
     let resolved = resolve_diff_shas_for_context(
       "merge123",
@@ -11207,6 +11586,22 @@ mod tests {
     assert!(lookup.is_empty());
     assert_eq!(selected_index, None);
     assert_eq!(selected_id, None);
+  }
+
+  #[test]
+  fn left_sidebar_kind_routes_changes_to_files_and_other_tabs_to_context() {
+    assert_eq!(
+      left_sidebar_kind_for_tab(PR_TAB_OVERVIEW_IX),
+      GithubPrLeftSidebarKind::Context
+    );
+    assert_eq!(
+      left_sidebar_kind_for_tab(PR_TAB_CHANGES_IX),
+      GithubPrLeftSidebarKind::Files
+    );
+    assert_eq!(
+      left_sidebar_kind_for_tab(PR_TAB_CHECKS_IX),
+      GithubPrLeftSidebarKind::Context
+    );
   }
 
   #[test]
