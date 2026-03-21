@@ -22,7 +22,7 @@ use crate::{
   CloseWorkspacePage, ShowCommandPalette,
   app_update::{
     AppUpdateNotificationId, AppUpdateState, AppUpdateStore, AvailableAppUpdate, UpdateArtifact,
-    current_arch, current_platform, download_update_artifact, open_installer,
+    current_arch, current_platform, download_update_artifact, install_update_artifact,
     resolved_build_version,
   },
   auth_state::{AuthState, AuthStateStore},
@@ -256,17 +256,8 @@ impl AboutPage {
       return;
     }
 
-    if let Some(ready) = AppUpdateStore::try_ready_to_install(cx) {
-      match open_installer(&ready.artifact_path) {
-        Ok(()) => {
-          AppUpdateStore::set_ready_to_install(cx, ready);
-          self.update_check_status = None;
-        }
-        Err(err) => {
-          AppUpdateStore::set_error(cx, Some(ready.update), err.to_string());
-          self.update_check_status = Some(UpdateCheckStatus::Error(err.to_string()));
-        }
-      }
+    if AppUpdateStore::try_ready_to_install(cx).is_some() {
+      cx.restart();
       cx.notify();
       return;
     }
@@ -288,12 +279,12 @@ impl AboutPage {
 
       match download_result {
         Ok(ready) => {
-          let install_path = ready.artifact_path.clone();
-          let install_result = unblock(move || open_installer(&install_path)).await;
+          let install_ready = ready.clone();
+          let install_result = unblock(move || install_update_artifact(&install_ready)).await;
           let _ = this.update(cx, |this, cx| {
-            AppUpdateStore::set_ready_to_install(cx, ready.clone());
             match install_result {
               Ok(()) => {
+                AppUpdateStore::set_ready_to_install(cx, ready.clone());
                 this.update_check_status = None;
               }
               Err(err) => {
@@ -402,7 +393,7 @@ impl Render for AboutPage {
           theme.muted_foreground,
         )),
         Some(AppUpdateState::ReadyToInstall(_)) => Some((
-          "Installer opened. Finish install, then restart Reviu.".to_string(),
+          "Update ready. Restart Reviu to finish applying it.".to_string(),
           theme.status_green(),
         )),
         Some(AppUpdateState::Error { message, .. }) => {

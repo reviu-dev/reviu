@@ -18,7 +18,8 @@ use crate::active_local_repo::ActiveLocalRepoStore;
 use crate::api::ApiClient;
 use crate::app_update::{
   AppUpdateNotificationId, AppUpdateState, AppUpdateStore, AvailableAppUpdate, UpdateArtifact,
-  current_arch, current_platform, download_update_artifact, open_installer, resolved_build_version,
+  current_arch, current_platform, download_update_artifact, install_update_artifact,
+  resolved_build_version,
 };
 use crate::auth_state::{AuthState, AuthStateStore};
 use crate::billing_page::BillingPage;
@@ -345,13 +346,8 @@ impl WorkspaceView {
       return;
     }
 
-    if let Some(ready) = AppUpdateStore::try_ready_to_install(cx) {
-      match open_installer(&ready.artifact_path) {
-        Ok(()) => AppUpdateStore::set_ready_to_install(cx, ready),
-        Err(err) => {
-          AppUpdateStore::set_error(cx, Some(ready.update), err.to_string());
-        }
-      }
+    if AppUpdateStore::try_ready_to_install(cx).is_some() {
+      cx.restart();
       return;
     }
 
@@ -369,15 +365,14 @@ impl WorkspaceView {
 
       match download_result {
         Ok(ready) => {
-          let install_path = ready.artifact_path.clone();
-          let install_result = unblock(move || open_installer(&install_path)).await;
-          let _ = this.update(cx, |_, cx| {
-            AppUpdateStore::set_ready_to_install(cx, ready.clone());
-            match install_result {
-              Ok(()) => {}
-              Err(err) => {
-                AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string());
-              }
+          let install_ready = ready.clone();
+          let install_result = unblock(move || install_update_artifact(&install_ready)).await;
+          let _ = this.update(cx, |_, cx| match install_result {
+            Ok(()) => {
+              AppUpdateStore::set_ready_to_install(cx, ready.clone());
+            }
+            Err(err) => {
+              AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string());
             }
           });
         }
@@ -430,7 +425,7 @@ impl WorkspaceView {
   fn update_button_label(state: Option<AppUpdateState>) -> &'static str {
     match state {
       Some(AppUpdateState::Downloading(_)) => "Downloading...",
-      Some(AppUpdateState::ReadyToInstall(_)) => "Open installer again",
+      Some(AppUpdateState::ReadyToInstall(_)) => "Restart to update",
       _ => "New version available",
     }
   }
@@ -746,7 +741,7 @@ mod tests {
           artifact_path: PathBuf::from("/tmp/reviu-installer.dmg"),
         }
       ))),
-      "Open installer again"
+      "Restart to update"
     );
   }
 }
