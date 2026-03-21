@@ -30,6 +30,7 @@ use gpui_component::{
   button::{Button, ButtonVariant, ButtonVariants as _},
   clipboard::Clipboard,
   h_flex,
+  input::InputEvent,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   radio::{Radio, RadioGroup},
@@ -1123,6 +1124,12 @@ struct GithubPrFileContents {
   head: Option<String>,
 }
 
+#[derive(Default)]
+struct GithubPrTreeSearchResult {
+  matches: HashSet<String>,
+  updated_file_contents: HashMap<String, GithubPrFileContents>,
+}
+
 #[derive(Clone, Debug)]
 struct GithubPrDiffRefs {
   base_owner: String,
@@ -1294,6 +1301,105 @@ fn build_search_file_entry(path: &str) -> SearchFileEntry {
   SearchFileEntry::new(PathBuf::from(label.clone()), label)
 }
 
+fn searchable_text_from_pr_file_contents<'a>(
+  file: &GithubPrFileDiff,
+  contents: &'a GithubPrFileContents,
+) -> Option<&'a str> {
+  match file.status {
+    GithubPrFileStatus::Deleted => contents.base.as_deref().or(contents.head.as_deref()),
+    _ => contents.head.as_deref().or(contents.base.as_deref()),
+  }
+}
+
+fn fetch_pr_file_search_contents(
+  api: &ApiClient,
+  diff_refs: &GithubPrDiffRefs,
+  file: &GithubPrFileDiff,
+) -> GithubPrFileContents {
+  match file.status {
+    GithubPrFileStatus::Deleted => GithubPrFileContents {
+      base: file
+        .old_path
+        .as_ref()
+        .or(Some(&file.path))
+        .and_then(|path| {
+          api
+            .fetch_github_file_content(
+              &diff_refs.base_owner,
+              &diff_refs.base_repo,
+              path.as_ref(),
+              &diff_refs.base_sha,
+            )
+            .ok()
+            .flatten()
+        }),
+      head: None,
+    },
+    _ => GithubPrFileContents {
+      base: None,
+      head: api
+        .fetch_github_file_content(
+          &diff_refs.head_owner,
+          &diff_refs.head_repo,
+          file.path.as_ref(),
+          &diff_refs.head_sha,
+        )
+        .ok()
+        .flatten(),
+    },
+  }
+}
+
+fn perform_tree_text_search(
+  query: &str,
+  scope_paths: &[String],
+  pr_files: &HashMap<String, GithubPrFileDiff>,
+  cached_file_contents: &HashMap<String, GithubPrFileContents>,
+  diff_refs: Option<&GithubPrDiffRefs>,
+  api: &ApiClient,
+  local_repo_root: Option<&Path>,
+) -> GithubPrTreeSearchResult {
+  let mut result = GithubPrTreeSearchResult::default();
+  let local_store = local_repo_root.map(|repo_root| GitStore::new(repo_root.to_path_buf()));
+
+  for path in scope_paths {
+    if let Some(file) = pr_files.get(path) {
+      let contents = if let Some(contents) = cached_file_contents.get(path).cloned() {
+        contents
+      } else if let Some(diff_refs) = diff_refs {
+        let fetched = fetch_pr_file_search_contents(api, diff_refs, file);
+        result
+          .updated_file_contents
+          .insert(path.clone(), fetched.clone());
+        fetched
+      } else {
+        continue;
+      };
+
+      if searchable_text_from_pr_file_contents(file, &contents)
+        .is_some_and(|contents| contents.to_lowercase().contains(query))
+      {
+        result.matches.insert(path.clone());
+      }
+      continue;
+    }
+
+    let Some(local_store) = local_store.as_ref() else {
+      continue;
+    };
+    if local_store
+      .load_bases(Path::new(path))
+      .ok()
+      .and_then(|bases| bases.head)
+      .is_some_and(|contents| contents.to_lowercase().contains(query))
+    {
+      result.matches.insert(path.clone());
+    }
+  }
+
+  result
+}
+
 fn build_tree_item(
   node: FileTreeNode,
   order: &mut Vec<String>,
@@ -1404,6 +1510,14 @@ pub struct GithubPrDetailsPage {
   file_loading: bool,
   file_error: Option<SharedString>,
   tree_state: Entity<TreeState>,
+  tree_search_input: Entity<InputState>,
+  tree_search_query: String,
+  tree_search_matches: Option<HashSet<String>>,
+  tree_search_task: Option<Task<()>>,
+  tree_search_loading: bool,
+  tree_search_error: Option<SharedString>,
+  tree_search_generation: u64,
+  tree_search_reset_pending: bool,
   show_local_project_files: bool,
   saved_pr_selected_tree_id: Option<String>,
   file_lookup: HashMap<String, Rc<GithubPrFileDiff>>,
@@ -1727,6 +1841,8 @@ impl GithubPrDetailsPage {
         .rows(6)
         .placeholder("Add comment...")
     });
+    let tree_search_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Search in file contents..."));
 
     let mut this = Self {
       focus_handle: cx.focus_handle(),
@@ -1805,6 +1921,14 @@ impl GithubPrDetailsPage {
       file_loading: false,
       file_error: None,
       tree_state,
+      tree_search_input,
+      tree_search_query: String::new(),
+      tree_search_matches: None,
+      tree_search_task: None,
+      tree_search_loading: false,
+      tree_search_error: None,
+      tree_search_generation: 0,
+      tree_search_reset_pending: false,
       show_local_project_files: false,
       saved_pr_selected_tree_id: None,
       file_lookup: HashMap::new(),
@@ -1843,6 +1967,7 @@ impl GithubPrDetailsPage {
     this.install_diff_editor_review_comment_handlers(cx);
     this.sync_commits_list(cx);
     this.subscribe_to_commits_list(window, cx);
+    this.subscribe_to_tree_search_input(window, cx);
     this
   }
 
@@ -1928,7 +2053,12 @@ impl GithubPrDetailsPage {
       )
   }
 
-  fn visible_tree_paths(&self, cx: &App) -> Vec<String> {
+  fn tree_search_query_normalized(&self) -> Option<String> {
+    let query = self.tree_search_query.trim();
+    (!query.is_empty()).then(|| query.to_lowercase())
+  }
+
+  fn search_scope_paths(&self, cx: &App) -> Vec<String> {
     if self.local_project_mode_active(cx) {
       let mut paths = BTreeSet::new();
       paths.extend(self.local_project_lookup.keys().cloned());
@@ -1938,6 +2068,16 @@ impl GithubPrDetailsPage {
 
     let mut paths = self.file_lookup.keys().cloned().collect::<Vec<_>>();
     paths.sort();
+    paths
+  }
+
+  fn visible_tree_paths(&self, cx: &App) -> Vec<String> {
+    let mut paths = self.search_scope_paths(cx);
+    if self.tree_search_query_normalized().is_some()
+      && let Some(matches) = self.tree_search_matches.as_ref()
+    {
+      paths.retain(|path| matches.contains(path));
+    }
     paths
   }
 
@@ -2116,20 +2256,18 @@ impl GithubPrDetailsPage {
             let (_, lookup, _, _) = build_local_project_tree_items(&files);
             this.local_project_lookup = lookup;
             this.local_project_tree_error = None;
-            if this.local_project_mode_active(cx) {
-              this.sync_local_project_tree_state(cx);
-            }
+            this.refresh_tree_text_search(cx);
           }
           Err(error) => {
             this.local_project_lookup.clear();
             this.local_project_tree_error = Some(error.to_string().into());
-            if this.local_project_mode_active(cx) {
-              this.tree_state.update(cx, |state, cx| {
-                state.set_items(Vec::new(), cx);
-                state.set_selected_index(None, cx);
-              });
+            if this.local_project_mode_active(cx)
+              && this.selected_local_project_file.is_some()
+              && this.selected_file.is_none()
+            {
               this.set_selected_local_project_file(None, cx);
             }
+            this.refresh_tree_text_search(cx);
           }
         }
 
@@ -2309,7 +2447,7 @@ impl GithubPrDetailsPage {
       self.local_project_update_error = None;
       self.maybe_load_local_project_files_if_needed(repo_root.as_path(), cx);
       if !self.local_project_tree_loading {
-        self.sync_changes_tree_state(cx);
+        self.refresh_tree_text_search(cx);
       }
       cx.notify();
       return;
@@ -2322,7 +2460,7 @@ impl GithubPrDetailsPage {
       self.local_project_open_file_generation.wrapping_add(1);
     self.file_loading = false;
     self.file_error = None;
-    self.sync_changes_tree_state(cx);
+    self.refresh_tree_text_search(cx);
     cx.notify();
   }
 
@@ -3140,6 +3278,109 @@ impl GithubPrDetailsPage {
       },
     )
     .detach();
+  }
+
+  fn subscribe_to_tree_search_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    cx.subscribe_in(
+      &self.tree_search_input,
+      window,
+      |this, state, event: &InputEvent, _window, cx| {
+        if let InputEvent::Change = event {
+          this.set_tree_search_query(state.read(cx).value().to_string(), cx);
+        }
+      },
+    )
+    .detach();
+  }
+
+  fn set_tree_search_query(&mut self, query: String, cx: &mut Context<Self>) {
+    if self.tree_search_query == query {
+      return;
+    }
+
+    self.tree_search_query = query;
+    self.refresh_tree_text_search(cx);
+  }
+
+  fn refresh_tree_text_search(&mut self, cx: &mut Context<Self>) {
+    self.tree_search_generation = self.tree_search_generation.wrapping_add(1);
+    let generation = self.tree_search_generation;
+    self.tree_search_task = None;
+    self.tree_search_error = None;
+
+    let Some(query) = self.tree_search_query_normalized() else {
+      self.tree_search_loading = false;
+      self.tree_search_matches = None;
+      self.sync_changes_tree_state(cx);
+      cx.notify();
+      return;
+    };
+
+    let scope_paths = self.search_scope_paths(cx);
+    if scope_paths.is_empty() {
+      self.tree_search_loading = false;
+      self.tree_search_matches = Some(HashSet::new());
+      self.sync_changes_tree_state(cx);
+      cx.notify();
+      return;
+    }
+
+    let pr_files = scope_paths
+      .iter()
+      .filter_map(|path| {
+        self
+          .file_lookup
+          .get(path)
+          .map(|file| (path.clone(), file.as_ref().clone()))
+      })
+      .collect::<HashMap<_, _>>();
+    let cached_file_contents = self.file_contents.clone();
+    let diff_refs = self.resolve_diff_refs();
+    let api = self.api.clone();
+    let local_repo_root = self
+      .local_project_mode_active(cx)
+      .then(|| self.local_project_loaded_repo_root.clone())
+      .flatten();
+    let previous_matches = self.tree_search_matches.clone();
+
+    self.tree_search_loading = true;
+    if let Some(previous_matches) = previous_matches {
+      self.tree_search_matches = Some(previous_matches);
+    }
+    self.sync_changes_tree_state(cx);
+    cx.notify();
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        perform_tree_text_search(
+          &query,
+          &scope_paths,
+          &pr_files,
+          &cached_file_contents,
+          diff_refs.as_ref(),
+          &api,
+          local_repo_root.as_deref(),
+        )
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        if generation != this.tree_search_generation {
+          return;
+        }
+
+        this.tree_search_task = None;
+        this.tree_search_loading = false;
+        for (path, contents) in result.updated_file_contents {
+          this.file_contents.entry(path).or_insert(contents);
+        }
+        this.tree_search_matches = Some(result.matches);
+        this.sync_changes_tree_state(cx);
+        cx.notify();
+      });
+    });
+
+    self.tree_search_task = Some(task);
   }
 
   fn build_commit_dropdown_items(
@@ -5045,7 +5286,7 @@ impl GithubPrDetailsPage {
             let files = files_from_api(files);
             let (_, lookup, _, _) = build_tree_items(&files);
             this.file_lookup = lookup;
-            this.sync_changes_tree_state(cx);
+            this.refresh_tree_text_search(cx);
             this.prefetch_overview_root_review_comment_files(cx);
             this.add_pr_breadcrumb("Load PR files succeeded", Map::new());
           }
@@ -5056,7 +5297,7 @@ impl GithubPrDetailsPage {
             this.file_lookup.clear();
             this.file_contents.clear();
             this.file_content_tasks.clear();
-            this.sync_changes_tree_state(cx);
+            this.refresh_tree_text_search(cx);
             this.add_pr_breadcrumb("Load PR files failed", Map::new());
             this.record_pr_error("github.pr.files", error_message.as_str(), Map::new());
           }
@@ -5248,6 +5489,13 @@ impl GithubPrDetailsPage {
     self.tree_state.update(cx, |state, cx| {
       state.set_items(Vec::new(), cx);
     });
+    self.tree_search_query.clear();
+    self.tree_search_matches = None;
+    self.tree_search_task = None;
+    self.tree_search_loading = false;
+    self.tree_search_error = None;
+    self.tree_search_generation = 0;
+    self.tree_search_reset_pending = true;
     self.show_local_project_files = false;
     self.saved_pr_selected_tree_id = None;
     self.file_lookup.clear();
@@ -5303,6 +5551,9 @@ impl GithubPrDetailsPage {
             this.sync_review_comments(cx);
             this.maybe_fetch_selected_file_contents(cx);
             this.prefetch_overview_root_review_comment_files(cx);
+            if this.tree_search_query_normalized().is_some() {
+              this.refresh_tree_text_search(cx);
+            }
           }
           Err(error) => {
             let error_message = error.to_string();
@@ -7192,6 +7443,18 @@ impl GithubPrDetailsPage {
     let commit_options =
       Self::build_commit_dropdown_items(&self.commits, self.selected_commit_sha.as_deref());
     let on_commit_select = self.commit_select_handler(cx);
+    let tree_search_active = self.tree_search_query_normalized().is_some();
+
+    if self.tree_search_reset_pending {
+      let tree_search_input = self.tree_search_input.clone();
+      cx.on_next_frame(window, move |this, window, cx| {
+        if this.tree_search_reset_pending {
+          tree_search_input.update(cx, |input, cx| input.set_value("", window, cx));
+          this.tree_search_reset_pending = false;
+          cx.notify();
+        }
+      });
+    }
 
     if let Some(selected_id) = self
       .tree_state
@@ -7383,6 +7646,25 @@ impl GithubPrDetailsPage {
       )
     };
 
+    let search_controls = {
+      let search_status = if let Some(error) = self.tree_search_error.clone() {
+        Some((error, theme.status_red()))
+      } else {
+        None
+      };
+
+      v_flex()
+        .gap_1()
+        .px_3()
+        .py_2()
+        .border_b_1()
+        .border_color(theme.border)
+        .child(Input::new(&self.tree_search_input).w_full())
+        .when_some(search_status, |this, (message, color)| {
+          this.child(div().text_xs().text_color(color).child(message))
+        })
+    };
+
     let mut comment_counts = HashMap::new();
     if self.selected_commit_sha.is_none() && !self.review_comments.is_empty() {
       for comment in &self.review_comments {
@@ -7448,7 +7730,9 @@ impl GithubPrDetailsPage {
         .justify_center()
         .text_sm()
         .text_color(theme.muted_foreground)
-        .child(if local_project_mode {
+        .child(if tree_search_active {
+          "No matching files"
+        } else if local_project_mode {
           "No project files found"
         } else {
           "No files changed"
@@ -7568,6 +7852,7 @@ impl GithubPrDetailsPage {
       .when_some(local_project_controls, |this, controls| {
         this.child(controls)
       })
+      .child(search_controls)
       .child(div().flex_1().min_h_0().child(list))
   }
 
@@ -8931,7 +9216,7 @@ impl GithubPrDetailsPage {
         .child(self.files_error.clone().unwrap_or_default())
         .into_any_element()
     } else if local_project_mode {
-      div()
+      v_flex()
         .flex_1()
         .items_center()
         .justify_center()
@@ -8940,7 +9225,7 @@ impl GithubPrDetailsPage {
         .child("Select a file to view it")
         .into_any_element()
     } else {
-      div()
+      v_flex()
         .flex_1()
         .items_center()
         .justify_center()
@@ -9640,6 +9925,186 @@ mod tests {
         .collect::<Vec<_>>()
     });
     assert_eq!(labels, vec!["src/pr_only.rs".to_string()]);
+  }
+
+  #[gpui::test]
+  fn active_file_search_entries_follow_tree_text_search_matches(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("head", false)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.show_local_project_files = true;
+      this.tree_search_query = "needle".to_string();
+      this.tree_search_matches = Some(HashSet::from([
+        "README.md".to_string(),
+        "src/pr_only.rs".to_string(),
+      ]));
+      this.file_lookup.insert(
+        "src/pr_only.rs".to_string(),
+        Rc::new(GithubPrFileDiff {
+          path: "src/pr_only.rs".into(),
+          old_path: None,
+          status: GithubPrFileStatus::Modified,
+        }),
+      );
+      this.local_project_lookup.insert(
+        "src/local.rs".to_string(),
+        Rc::new(GithubPrLocalProjectFile {
+          path: "src/local.rs".into(),
+        }),
+      );
+      this.local_project_lookup.insert(
+        "README.md".to_string(),
+        Rc::new(GithubPrLocalProjectFile {
+          path: "README.md".into(),
+        }),
+      );
+      cx.notify();
+    });
+
+    let labels = page.read_with(cx, |this, cx| {
+      this
+        .active_file_search_entries(cx)
+        .into_iter()
+        .map(|entry| entry.label.to_string())
+        .collect::<Vec<_>>()
+    });
+    assert_eq!(
+      labels,
+      vec!["README.md".to_string(), "src/pr_only.rs".to_string(),]
+    );
+  }
+
+  #[gpui::test]
+  fn refresh_tree_text_search_keeps_previous_matches_visible_while_loading(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.file_lookup.insert(
+        "src/one.rs".to_string(),
+        Rc::new(GithubPrFileDiff {
+          path: "src/one.rs".into(),
+          old_path: None,
+          status: GithubPrFileStatus::Modified,
+        }),
+      );
+      this.file_lookup.insert(
+        "src/two.rs".to_string(),
+        Rc::new(GithubPrFileDiff {
+          path: "src/two.rs".into(),
+          old_path: None,
+          status: GithubPrFileStatus::Modified,
+        }),
+      );
+      this.tree_search_query = "needle".to_string();
+      this.tree_search_matches = Some(HashSet::from(["src/one.rs".to_string()]));
+
+      this.refresh_tree_text_search(cx);
+
+      assert!(this.tree_search_loading);
+      assert_eq!(
+        this.tree_search_matches,
+        Some(HashSet::from(["src/one.rs".to_string()]))
+      );
+    });
+  }
+
+  #[test]
+  fn perform_tree_text_search_matches_changed_pr_files_from_cached_contents() {
+    let api = WorkspaceApi::new().api;
+    let scope_paths = vec!["src/pr_only.rs".to_string(), "src/other.rs".to_string()];
+    let pr_only = GithubPrFileDiff {
+      path: "src/pr_only.rs".into(),
+      old_path: None,
+      status: GithubPrFileStatus::Modified,
+    };
+    let other = GithubPrFileDiff {
+      path: "src/other.rs".into(),
+      old_path: None,
+      status: GithubPrFileStatus::Modified,
+    };
+    let pr_files = HashMap::from([
+      ("src/pr_only.rs".to_string(), pr_only),
+      ("src/other.rs".to_string(), other),
+    ]);
+    let cached_file_contents = HashMap::from([
+      (
+        "src/pr_only.rs".to_string(),
+        GithubPrFileContents {
+          base: Some("before\n".to_string()),
+          head: Some("needle appears here\n".to_string()),
+        },
+      ),
+      (
+        "src/other.rs".to_string(),
+        GithubPrFileContents {
+          base: Some("before\n".to_string()),
+          head: Some("different content\n".to_string()),
+        },
+      ),
+    ]);
+
+    let result = perform_tree_text_search(
+      "needle",
+      &scope_paths,
+      &pr_files,
+      &cached_file_contents,
+      None,
+      &api,
+      None,
+    );
+
+    assert_eq!(
+      result.matches,
+      HashSet::from(["src/pr_only.rs".to_string(),])
+    );
+    assert!(result.updated_file_contents.is_empty());
+  }
+
+  #[test]
+  fn perform_tree_text_search_matches_local_head_contents_and_skips_untracked() {
+    let unique = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .expect("system time after unix epoch")
+      .as_nanos();
+    let repo_root = std::env::temp_dir().join(format!("reviu-pr-search-local-{unique}"));
+    Repository::init(&repo_root).expect("init local project git repo");
+    commit_local_project_file(
+      &repo_root,
+      Path::new("tracked.txt"),
+      "needle in head\n",
+      "initial tracked",
+    );
+    std::fs::write(repo_root.join("tracked.txt"), "worktree without match\n")
+      .expect("write local worktree change");
+    std::fs::create_dir_all(repo_root.join("scratch")).expect("create scratch dir");
+    std::fs::write(
+      repo_root.join("scratch/tmp.txt"),
+      "needle only in untracked\n",
+    )
+    .expect("write untracked file");
+
+    let api = WorkspaceApi::new().api;
+    let result = perform_tree_text_search(
+      "needle",
+      &["tracked.txt".to_string(), "scratch/tmp.txt".to_string()],
+      &HashMap::new(),
+      &HashMap::new(),
+      None,
+      &api,
+      Some(repo_root.as_path()),
+    );
+
+    assert_eq!(result.matches, HashSet::from(["tracked.txt".to_string(),]));
+    assert!(result.updated_file_contents.is_empty());
+    std::fs::remove_dir_all(&repo_root).ok();
   }
 
   #[gpui::test]
