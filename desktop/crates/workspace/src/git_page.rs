@@ -2638,6 +2638,7 @@ impl GitPage {
         }
         Ok(())
       }
+      CommandPaletteAction::SwitchToPrBranch => Err(anyhow::anyhow!("Command not available.")),
       CommandPaletteAction::OpenSettingsPage => {
         WorkspaceRoute::open_settings(cx);
         cx.refresh_windows();

@@ -2875,6 +2875,30 @@ impl GithubPrDetailsPage {
     self.local_project_update_task = Some(task);
   }
 
+  fn local_project_command_palette_commands(
+    availability: &GithubPrLocalProjectAvailability,
+  ) -> Vec<CommandPaletteCommand> {
+    if matches!(
+      availability,
+      GithubPrLocalProjectAvailability::NeedsBranchSwitch { .. }
+    ) {
+      vec![CommandPaletteCommand::switch_to_pr_branch()]
+    } else {
+      Vec::new()
+    }
+  }
+
+  fn command_palette_commands(&self, cx: &App) -> Vec<CommandPaletteCommand> {
+    let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
+    let mut commands =
+      Self::local_project_command_palette_commands(&self.local_project_availability(cx));
+    commands.extend(CommandPaletteCommand::default_global_commands(
+      CommandPalettePage::GithubPrDetails,
+      include_github,
+    ));
+    commands
+  }
+
   fn mark_merge_form_reset_pending(&mut self) {
     self.merge_form_reset_pending = true;
     self.merge_submit_error = None;
@@ -8750,16 +8774,12 @@ impl GithubPrDetailsPage {
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
-    let commands = CommandPaletteCommand::default_global_commands(
-      CommandPalettePage::GithubPrDetails,
-      include_github,
-    );
+    let commands = self.command_palette_commands(cx);
 
     let view = cx.entity();
-    let handler: CommandPaletteHandler = Arc::new(move |action, _window, cx| {
+    let handler: CommandPaletteHandler = Arc::new(move |action, window, cx| {
       view.update(cx, |view, cx| {
-        view.handle_command_palette_action(action, cx)
+        view.handle_command_palette_action(action, window, cx)
       })
     });
 
@@ -8782,9 +8802,16 @@ impl GithubPrDetailsPage {
   fn handle_command_palette_action(
     &mut self,
     action: CommandPaletteAction,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     match action {
+      CommandPaletteAction::SwitchToPrBranch => {
+        cx.defer_in(window, |this, window, cx| {
+          this.prompt_or_switch_local_branch_to_pr_branch(window, cx);
+        });
+        Ok(())
+      }
       CommandPaletteAction::OpenGitPage => {
         WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
         cx.refresh_windows();
@@ -10183,6 +10210,185 @@ mod tests {
         ..
       } if branch == "main"
     ));
+  }
+
+  #[test]
+  fn local_project_command_palette_commands_include_switch_to_pr_branch_only_when_available() {
+    let commands = GithubPrDetailsPage::local_project_command_palette_commands(
+      &GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+        repo_root: PathBuf::from("/tmp/reviu-repo"),
+        current_branch: Some("main".to_string()),
+        has_uncommitted_changes: true,
+      },
+    );
+    assert_eq!(commands.len(), 1);
+    assert_eq!(
+      commands[0].id,
+      ui::CommandPaletteCommandId::SwitchToPrBranch
+    );
+
+    assert!(
+      GithubPrDetailsPage::local_project_command_palette_commands(
+        &GithubPrLocalProjectAvailability::Hidden
+      )
+      .is_empty()
+    );
+    assert!(
+      GithubPrDetailsPage::local_project_command_palette_commands(
+        &GithubPrLocalProjectAvailability::Ready {
+          repo_root: PathBuf::from("/tmp/reviu-repo"),
+        }
+      )
+      .is_empty()
+    );
+    assert!(
+      GithubPrDetailsPage::local_project_command_palette_commands(
+        &GithubPrLocalProjectAvailability::NeedsUpdate {
+          repo_root: PathBuf::from("/tmp/reviu-repo"),
+        }
+      )
+      .is_empty()
+    );
+    assert!(
+      GithubPrDetailsPage::local_project_command_palette_commands(
+        &GithubPrLocalProjectAvailability::Dirty {
+          repo_root: PathBuf::from("/tmp/reviu-repo"),
+        }
+      )
+      .is_empty()
+    );
+  }
+
+  #[gpui::test]
+  fn command_palette_commands_prepend_switch_to_pr_branch_when_available(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(
+        cx,
+        Some(make_active_local_repo_for_branch("main", "head", false)),
+      );
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let commands = page.read_with(cx, |this, cx| this.command_palette_commands(cx));
+    assert_eq!(
+      commands.first().map(|command| command.id),
+      Some(ui::CommandPaletteCommandId::SwitchToPrBranch)
+    );
+  }
+
+  #[gpui::test]
+  async fn switch_to_pr_branch_palette_action_defers_before_switching_branch(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.executor().allow_parking();
+
+    let unique = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .expect("system time after unix epoch")
+      .as_nanos();
+    let repo_root = std::env::temp_dir().join(format!("reviu-pr-switch-palette-{unique}"));
+    std::fs::create_dir_all(repo_root.join("src")).expect("create repo directories");
+    Repository::init(&repo_root).expect("init repo");
+    commit_local_project_file(
+      &repo_root,
+      Path::new("src/main.rs"),
+      "fn main() {}\n",
+      "initial",
+    );
+
+    let repo = Repository::open(&repo_root).expect("open repo");
+    let head_commit = repo
+      .head()
+      .expect("repo head")
+      .peel_to_commit()
+      .expect("head commit");
+    let current_branch = repo
+      .head()
+      .expect("repo head")
+      .shorthand()
+      .expect("current branch shorthand")
+      .to_string();
+    repo
+      .branch("feature", &head_commit, false)
+      .expect("create feature branch");
+    let head_sha = head_commit.id().to_string();
+
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(
+        cx,
+        Some(ActiveLocalRepo {
+          repo_root: repo_root.clone(),
+          github_owner: Some("acme".to_string()),
+          github_repo: Some("widget".to_string()),
+          current_branch: Some(current_branch),
+          head_sha: Some(head_sha.clone()),
+          has_uncommitted_changes: false,
+        }),
+      );
+    });
+
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let (action_result, switch_task_is_scheduled_immediately) =
+      page.update_in(cx, |this, window, cx| {
+        let result =
+          this.handle_command_palette_action(CommandPaletteAction::SwitchToPrBranch, window, cx);
+        let switch_task_is_scheduled_immediately = this.local_branch_switch_task.is_some();
+        (result, switch_task_is_scheduled_immediately)
+      });
+    assert!(action_result.is_ok());
+    assert!(!switch_task_is_scheduled_immediately);
+
+    cx.run_until_parked();
+
+    let switch_task = page.update_in(cx, |this, _window, _cx| {
+      assert!(
+        this.local_branch_switch_loading,
+        "branch switch should start after deferred command runs"
+      );
+      this
+        .local_branch_switch_task
+        .take()
+        .expect("branch switch task should be present after deferred command runs")
+    });
+    switch_task.await;
+
+    let switched_branch = Repository::open(&repo_root)
+      .expect("reopen repo")
+      .head()
+      .expect("repo head after switch")
+      .shorthand()
+      .expect("branch shorthand after switch")
+      .to_string();
+    assert_eq!(switched_branch, "feature");
+
+    let store_branch = page.read_with(cx, |_, cx| {
+      ActiveLocalRepoStore::get(cx).and_then(|repo| repo.current_branch)
+    });
+    assert_eq!(store_branch.as_deref(), Some("feature"));
+
+    let (switch_loading, switch_error) = page.read_with(cx, |this, _cx| {
+      (
+        this.local_branch_switch_loading,
+        this.local_branch_switch_error.clone(),
+      )
+    });
+    assert!(!switch_loading);
+    assert!(switch_error.is_none());
+
+    std::fs::remove_dir_all(&repo_root).ok();
   }
 
   #[gpui::test]

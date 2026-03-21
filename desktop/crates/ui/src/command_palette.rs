@@ -190,6 +190,7 @@ pub enum CommandPaletteAction {
     open_changes_tab: bool,
     review_comment_id: Option<u64>,
   },
+  SwitchToPrBranch,
   OpenGitHistorySidebar,
   OpenGitChangesSidebar,
   OpenGitConfigPage,
@@ -658,6 +659,7 @@ pub enum CommandPaletteCommandId {
   OpenGitPage,
   OpenGithubPage,
   OpenGithubFromUrl,
+  SwitchToPrBranch,
   OpenGitHistorySidebar,
   OpenGitChangesSidebar,
   OpenGitConfigPage,
@@ -962,6 +964,14 @@ impl CommandPaletteCommand {
     }
   }
 
+  pub fn switch_to_pr_branch() -> Self {
+    Self {
+      id: CommandPaletteCommandId::SwitchToPrBranch,
+      name: "Switch to PR branch".into(),
+      description: Some("Switch the local repository to the current pull request branch".into()),
+    }
+  }
+
   pub fn open_git_history_sidebar() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenGitHistorySidebar,
@@ -1093,6 +1103,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::OpenGitPage => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::OpenGithubPage => Icon::new(IconName::Github),
       CommandPaletteCommandId::OpenGithubFromUrl => Icon::new(IconName::Github),
+      CommandPaletteCommandId::SwitchToPrBranch => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::OpenGitHistorySidebar => Icon::new(UiIconName::History),
       CommandPaletteCommandId::OpenGitChangesSidebar => Icon::new(UiIconName::FileCode),
       CommandPaletteCommandId::OpenGitConfigPage => Self::git_config_icon(),
@@ -1975,6 +1986,9 @@ impl CommandPalette {
           self.set_screen(CommandPaletteScreen::OpenGithubFromUrl, cx, window);
         }
       }
+      CommandPaletteCommandId::SwitchToPrBranch => {
+        self.trigger_action(CommandPaletteAction::SwitchToPrBranch, window, cx);
+      }
       CommandPaletteCommandId::OpenGitConfigPage => {
         self.trigger_action(CommandPaletteAction::OpenGitConfigPage, window, cx);
       }
@@ -2411,6 +2425,14 @@ mod tests {
     assert_eq!(command.id, CommandPaletteCommandId::OpenRepository);
     assert_eq!(command.name.as_ref(), "Open repository");
     assert!(command.matches("open repo"));
+  }
+
+  #[test]
+  fn switch_to_pr_branch_command_is_available_with_expected_metadata() {
+    let command = CommandPaletteCommand::switch_to_pr_branch();
+    assert_eq!(command.id, CommandPaletteCommandId::SwitchToPrBranch);
+    assert_eq!(command.name.as_ref(), "Switch to PR branch");
+    assert!(command.matches("current pull request branch"));
   }
 
   #[test]
