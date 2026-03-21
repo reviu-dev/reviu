@@ -6720,6 +6720,28 @@ mod tests {
     isolate_config_store_for_test();
     cx.update(|cx| {
       gpui_component::init(cx);
+      if !cx.has_global::<WorkspaceApi>() {
+        cx.set_global(WorkspaceApi::new());
+      }
+      if !cx.has_global::<AuthStateStore>() {
+        cx.set_global(AuthStateStore::default());
+      }
+      if !cx.has_global::<ActiveLocalRepoStore>() {
+        cx.set_global(ActiveLocalRepoStore::default());
+      }
+      ActiveLocalRepoStore::set(cx, None);
+    });
+  }
+
+  #[gpui::test]
+  fn init_gpui_test_registers_required_globals(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    cx.update(|cx| {
+      assert!(cx.has_global::<WorkspaceApi>());
+      assert!(cx.has_global::<AuthStateStore>());
+      assert!(cx.has_global::<ActiveLocalRepoStore>());
+      assert_eq!(ActiveLocalRepoStore::get(cx), None);
     });
   }
 
