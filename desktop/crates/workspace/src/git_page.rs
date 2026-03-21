@@ -65,8 +65,8 @@ use ui::{
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteGithubRepoTab, CommandPaletteHandler,
   CommandPalettePage, CommandPaletteRepository, CommandPaletteStash, ConfirmDialog,
   DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState,
-  PAGE_HEADER_HEIGHT, SearchFileEntry, SearchFileHandler, StatusThemeExt, UiIconName, WindowExt,
-  dropdown_select, file_icon_path_for_path_with_theme,
+  PAGE_HEADER_HEIGHT, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusThemeExt,
+  UiIconName, WindowExt, dropdown_select, file_icon_path_for_path_with_theme, selectable_list_item,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
@@ -272,11 +272,18 @@ impl GitFileListDelegate {
   }
 }
 
-fn file_list_base_item(ix: IndexPath, selected_index: Option<IndexPath>) -> ListItem {
-  ListItem::new(ix).selected(
+fn file_list_base_item(
+  ix: IndexPath,
+  selected_index: Option<IndexPath>,
+  theme: &gpui_component::Theme,
+) -> ListItem {
+  selectable_list_item(
+    ix,
     selected_index
       .map(|selected| selected.eq_row(ix))
       .unwrap_or(false),
+    SelectableRowStyle::Inset,
+    theme,
   )
 }
 
@@ -294,7 +301,7 @@ impl ListDelegate for GitFileListDelegate {
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
-    let mut base_item = file_list_base_item(ix, self.selected_index);
+    let mut base_item = file_list_base_item(ix, self.selected_index, &theme);
     let row = self.rows.get(ix.row)?;
     let is_opened = self
       .opened_path
@@ -4910,7 +4917,7 @@ impl GitPage {
                 .cloned();
 
               let Some(row) = row else {
-                return ListItem::new(ix)
+                return selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme)
                   .w_full()
                   .px_2()
                   .pl(indent)
@@ -4951,9 +4958,8 @@ impl GitPage {
                 IconName::ChevronRight
               };
 
-              ListItem::new(ix)
+              selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme)
                 .w_full()
-                .rounded(theme.radius)
                 .pl_2()
                 .pr_3()
                 .pl(indent)
@@ -5015,10 +5021,8 @@ impl GitPage {
               let path = file.path.clone();
               let open_commit_oid = commit_oid.clone();
 
-              ListItem::new(ix)
-                .selected(selected)
+              selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme)
                 .w_full()
-                .rounded(theme.radius)
                 .px_2()
                 .pl(indent)
                 .child(
@@ -5050,9 +5054,8 @@ impl GitPage {
             }
             Some(HistoryTreeNode::LoadHint { oid }) => {
               let load_oid = oid.clone();
-              ListItem::new(ix)
+              selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme)
                 .w_full()
-                .rounded(theme.radius)
                 .px_2()
                 .pl(indent)
                 .child(
@@ -5065,9 +5068,8 @@ impl GitPage {
                   this.queue_history_commit_files_load(load_oid.clone(), window, cx);
                 }))
             }
-            _ => ListItem::new(ix)
+            _ => selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme)
               .w_full()
-              .rounded(theme.radius)
               .px_2()
               .pl(indent)
               .child(

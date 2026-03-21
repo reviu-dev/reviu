@@ -16,7 +16,8 @@ use sentry::protocol::{Map, Value};
 use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT, StatusThemeExt, WindowExt,
+  CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT, SelectableRowStyle,
+  StatusThemeExt, WindowExt, selectable_list_item,
 };
 
 use crate::{
@@ -30,8 +31,17 @@ use crate::{
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 
-fn list_base_item(ix: IndexPath, selected_index: Option<IndexPath>) -> ListItem {
-  ListItem::new(ix).selected(Some(ix) == selected_index)
+fn list_base_item(
+  ix: IndexPath,
+  selected_index: Option<IndexPath>,
+  theme: &gpui_component::Theme,
+) -> ListItem {
+  selectable_list_item(
+    ix,
+    Some(ix) == selected_index,
+    SelectableRowStyle::Inset,
+    theme,
+  )
 }
 
 fn update_selected_index<D: ListDelegate>(
@@ -239,7 +249,7 @@ impl ListDelegate for GithubRepositoryListDelegate {
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
-    let base_item = list_base_item(ix, self.selected_index);
+    let base_item = list_base_item(ix, self.selected_index, &theme);
     let row = self.matched_rows.get(ix.row)?;
     let updated_at = format_compact_datetime(&row.repository.updated_at);
 
@@ -373,7 +383,7 @@ impl ListDelegate for GithubNotificationListDelegate {
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
-    let base_item = list_base_item(ix, self.selected_index);
+    let base_item = list_base_item(ix, self.selected_index, &theme);
     let row = self.matched_rows.get(ix.row)?;
     let notification = &row.notification;
     let updated_at = format_compact_datetime(&notification.updated_at);
@@ -507,9 +517,9 @@ impl ListDelegate for GithubPullRequestListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let base_item = list_base_item(ix, self.selected_index);
     let row = self.matched_rows.get(ix.row)?;
     let theme = cx.theme().clone();
+    let base_item = list_base_item(ix, self.selected_index, &theme);
 
     Some(
       base_item

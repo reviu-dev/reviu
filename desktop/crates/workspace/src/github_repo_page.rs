@@ -39,8 +39,9 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
   DETAILS_PAGE_CONTAINER_MAX_WIDTH, FILE_ICON_SIZE_PX, Input, InputState, SearchFileEntry,
-  SearchFileHandler, StatusTag, StatusThemeExt as _, UiIconName, WindowExt,
+  SearchFileHandler, SelectableRowStyle, StatusTag, StatusThemeExt as _, UiIconName, WindowExt,
   file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
+  selectable_list_item,
 };
 
 use crate::{
@@ -64,8 +65,17 @@ use crate::{
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
 
-fn list_base_item(ix: IndexPath, selected_index: Option<IndexPath>) -> ListItem {
-  ListItem::new(ix).selected(Some(ix) == selected_index)
+fn list_base_item(
+  ix: IndexPath,
+  selected_index: Option<IndexPath>,
+  theme: &gpui_component::Theme,
+) -> ListItem {
+  selectable_list_item(
+    ix,
+    Some(ix) == selected_index,
+    SelectableRowStyle::Inset,
+    theme,
+  )
 }
 
 fn update_selected_index<D: ListDelegate>(
@@ -862,9 +872,9 @@ impl ListDelegate for GithubRepoPullRequestListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let base_item = list_base_item(ix, self.selected_index);
-    let row = self.matched_rows.get(ix.row)?;
     let theme = cx.theme().clone();
+    let base_item = list_base_item(ix, self.selected_index, &theme);
+    let row = self.matched_rows.get(ix.row)?;
 
     Some(
       base_item
@@ -1001,7 +1011,7 @@ impl ListDelegate for GithubRepoIssueListDelegate {
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
-    let base_item = list_base_item(ix, self.selected_index);
+    let base_item = list_base_item(ix, self.selected_index, &theme);
     let row = self.matched_rows.get(ix.row)?;
     let issue = &row.issue;
 
@@ -4178,7 +4188,7 @@ impl GithubRepoPage {
       let view = cx.entity();
       tree(
         &self.code_tree_state,
-        move |ix, entry, _selected, _window, cx| {
+        move |ix, entry, selected, _window, cx| {
           view.update(cx, |this, cx| {
             let theme = cx.theme().clone();
             let item = entry.item();
@@ -4204,9 +4214,8 @@ impl GithubRepoPage {
             };
 
             let indent = px(12.) + px(15.) * entry.depth();
-            let mut row = ListItem::new(ix)
+            let mut row = selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme)
               .w_full()
-              .rounded(theme.radius)
               .px_2()
               .pl(indent)
               .child(

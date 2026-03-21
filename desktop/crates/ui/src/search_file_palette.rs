@@ -1,6 +1,8 @@
 use std::{path::PathBuf, rc::Rc, sync::Arc};
 
-use crate::{FILE_ICON_SIZE_PX, file_icon_path_for_path_with_theme};
+use crate::{
+  FILE_ICON_SIZE_PX, SelectableRowStyle, file_icon_path_for_path_with_theme, selectable_list_item,
+};
 use gpui::{
   AnyElement, App, Context, Div, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
   Render, SharedString, Styled, Subscription, Task, Window, div, img, prelude::*, px,
@@ -23,10 +25,14 @@ fn list_base_item(
 ) -> ListItem {
   let is_last_item = ix.row + 1 == total_items;
 
-  ListItem::new(ix)
-    .h_8()
-    .when(is_last_item, |item| item.rounded_b(theme.radius))
-    .selected(Some(ix) == selected_index)
+  selectable_list_item(
+    ix,
+    Some(ix) == selected_index,
+    SelectableRowStyle::Flush,
+    theme,
+  )
+  .h_8()
+  .when(is_last_item, |item| item.rounded_b(theme.radius))
 }
 
 fn update_selected_index<D: ListDelegate>(

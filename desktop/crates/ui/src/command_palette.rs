@@ -1,7 +1,7 @@
 use std::{rc::Rc, sync::Arc};
 
 use crate::github_url::parse_github_url_action;
-use crate::{UiIconName, file_icon_path_for_name};
+use crate::{SelectableRowStyle, UiIconName, file_icon_path_for_name, selectable_list_item};
 use gpui::{
   App, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
   ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
@@ -27,10 +27,14 @@ fn list_base_item(
 ) -> ListItem {
   let is_last_item = ix.row + 1 == total_items;
 
-  ListItem::new(ix)
-    .h_8()
-    .when(is_last_item, |item| item.rounded_b(theme.radius))
-    .selected(Some(ix) == selected_index)
+  selectable_list_item(
+    ix,
+    Some(ix) == selected_index,
+    SelectableRowStyle::Flush,
+    theme,
+  )
+  .h_8()
+  .when(is_last_item, |item| item.rounded_b(theme.radius))
 }
 
 fn update_selected_index<D: ListDelegate>(
