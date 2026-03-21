@@ -12,7 +12,7 @@ use std::time::Duration;
 use ui::{AppAssets, PAGE_HEADER_HEIGHT};
 use workspace::{
   AppProfile, AuthCallbackTarget, CloseWorkspacePage, CommitChanges, OpenRepository,
-  ShowCommandPalette, ShowFileSearch, WorkspaceView,
+  SHOW_COMMAND_PALETTE_SHORTCUT, ShowCommandPalette, ShowFileSearch, WorkspaceView,
 };
 
 mod app_root;
@@ -120,7 +120,7 @@ fn main() {
       KeyBinding::new("escape", CloseFind, Some("Editor")),
       KeyBinding::new("cmd-enter", CommitChanges, None),
       KeyBinding::new("cmd-o", OpenRepository, None),
-      KeyBinding::new("cmd-shift-p", ShowCommandPalette, None),
+      KeyBinding::new(SHOW_COMMAND_PALETTE_SHORTCUT, ShowCommandPalette, None),
       KeyBinding::new("cmd-p", ShowFileSearch, None),
       KeyBinding::new("cmd-w", CloseWorkspacePage, None),
       KeyBinding::new("home", Home, None),
