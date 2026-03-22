@@ -7256,6 +7256,18 @@ pub mod tests {
       Editor::language_hint_for_path(Path::new("/tmp/vector.hpp")),
       Some("cpp".to_string())
     );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/Program.cs")),
+      Some("csharp".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/script.csx")),
+      Some("csharp".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/App.csproj")),
+      Some("xml".to_string())
+    );
   }
 
   #[test]
