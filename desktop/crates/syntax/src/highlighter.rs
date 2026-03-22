@@ -256,6 +256,7 @@ mod tests {
   use crate::languages::astro::ASTRO_CONFIG;
   use crate::languages::bash::BASH_CONFIG;
   use crate::languages::c::C_CONFIG;
+  use crate::languages::cpp::CPP_CONFIG;
   use crate::languages::go::GO_CONFIG;
   use crate::languages::hcl::HCL_CONFIG;
   use crate::languages::html::HTML_CONFIG;
@@ -315,9 +316,28 @@ mod tests {
     assert!(
       highlights
         .iter()
-        .any(|h| h.token_type == TokenType::Keyword)
+        .any(|h| h.token_type == TokenType::Type)
     );
     assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+  }
+
+  #[test]
+  fn test_highlight_simple_cpp() {
+    let mut highlighter = SyntaxHighlighter::new(&CPP_CONFIG);
+    let result = highlighter.highlight_text(
+      "#include <iostream>\n\nint main() {\n  const auto name = \"Reviu\";\n  std::cout << name << std::endl;\n  return 0;\n}\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Type)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::Keyword));
   }
 
   #[test]

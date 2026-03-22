@@ -7248,6 +7248,14 @@ pub mod tests {
       Editor::language_hint_for_path(Path::new("/tmp/Dockerfile.dev")),
       Some("dockerfile".to_string())
     );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/main.cpp")),
+      Some("cpp".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/vector.hpp")),
+      Some("cpp".to_string())
+    );
   }
 
   #[test]
