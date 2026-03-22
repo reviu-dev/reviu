@@ -1,6 +1,5 @@
-use crate::highlighter::{HIGHLIGHT_NAMES, LanguageConfig};
+use crate::highlighter::{LanguageConfig, build_language_config};
 use once_cell::sync::Lazy;
-use tree_sitter_highlight::HighlightConfiguration;
 use tree_sitter_yaml as _;
 
 unsafe extern "C" {
@@ -8,16 +7,11 @@ unsafe extern "C" {
 }
 
 pub static YAML_CONFIG: Lazy<LanguageConfig> = Lazy::new(|| {
-  let language = unsafe { tree_sitter_yaml() };
-  let query_source = include_str!("../tree-sitter-queries/yaml-highlights.scm");
-
-  let mut config = HighlightConfiguration::new(language, "yaml", query_source, "", "")
-    .expect("Failed to create YAML highlight config");
-
-  config.configure(HIGHLIGHT_NAMES);
-
-  LanguageConfig {
-    name: "yaml",
-    highlight_config: config,
-  }
+  build_language_config(
+    "yaml",
+    unsafe { tree_sitter_yaml() },
+    &[include_str!("../tree-sitter-queries/yaml-highlights.scm")],
+    &[],
+    &[],
+  )
 });

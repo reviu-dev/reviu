@@ -1,24 +1,12 @@
-use crate::highlighter::{HIGHLIGHT_NAMES, LanguageConfig};
+use crate::highlighter::{LanguageConfig, build_language_config};
 use once_cell::sync::Lazy;
-use tree_sitter_highlight::HighlightConfiguration;
 
 pub static RUST_CONFIG: Lazy<LanguageConfig> = Lazy::new(|| {
-  let language = tree_sitter_rust::LANGUAGE.into();
-  let query_source = include_str!("../tree-sitter-queries/rust-highlights.scm");
-
-  let mut config = HighlightConfiguration::new(
-    language,
+  build_language_config(
     "rust",
-    query_source,
-    "", // injections query
-    "", // locals query
+    tree_sitter_rust::LANGUAGE.into(),
+    &[include_str!("../tree-sitter-queries/rust-highlights.scm")],
+    &[],
+    &[],
   )
-  .expect("Failed to create Rust highlight config");
-
-  config.configure(HIGHLIGHT_NAMES);
-
-  LanguageConfig {
-    name: "rust",
-    highlight_config: config,
-  }
 });

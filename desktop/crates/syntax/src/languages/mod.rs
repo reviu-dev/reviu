@@ -14,76 +14,274 @@ pub mod xml;
 pub mod yaml;
 
 use crate::highlighter::LanguageConfig;
+use std::path::Path;
 
-const EXTENSIONS_XML: &[&str] = &[
-  "xml", "svg", "xhtml", "xht", "xsl", "xslt", "xsd", "wsdl", "ares", "axml", "ant", "mxml",
-  "plist", "iml", "idea",
+struct LanguageRegistration {
+  load: fn() -> &'static LanguageConfig,
+  aliases: &'static [&'static str],
+  extensions: &'static [&'static str],
+  file_names: &'static [&'static str],
+  file_name_prefixes: &'static [&'static str],
+}
+
+const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
+  LanguageRegistration {
+    load: bash_config,
+    aliases: &["bash", "sh", "shell", "zsh"],
+    extensions: &["sh", "bash", "zsh"],
+    file_names: &[
+      ".bashrc",
+      ".bash_profile",
+      ".bash_login",
+      ".bash_logout",
+      ".profile",
+      ".zshrc",
+      ".zprofile",
+      ".zshenv",
+      ".zlogin",
+      ".zlogout",
+      ".envrc",
+    ],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: css_config,
+    aliases: &["css", "sass", "less", "postcss"],
+    extensions: &["css"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: scss_config,
+    aliases: &["scss"],
+    extensions: &["scss"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: toml_config,
+    aliases: &["toml"],
+    extensions: &["toml"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: dockerfile_config,
+    aliases: &["dockerfile", "docker"],
+    extensions: &["dockerfile"],
+    file_names: &["dockerfile"],
+    file_name_prefixes: &["dockerfile"],
+  },
+  LanguageRegistration {
+    load: html_config,
+    aliases: &["html"],
+    extensions: &["html", "htm"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: json_config,
+    aliases: &["json", "jsonc"],
+    extensions: &["json", "jsonc"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: markdown_config,
+    aliases: &["markdown", "md", "mdx"],
+    extensions: &["md", "markdown", "mdx"],
+    file_names: &[
+      "readme",
+      "readme.md",
+      "readme.mdx",
+      "changelog",
+      "changelog.md",
+    ],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: python_config,
+    aliases: &["python", "python3", "py"],
+    extensions: &["py", "pyi", "pyw"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: rust_config,
+    aliases: &["rust", "rs"],
+    extensions: &["rs"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: typescript_config,
+    aliases: &["javascript", "js", "typescript", "ts", "tsx", "jsx"],
+    extensions: &["ts", "cts", "mts", "tsx", "js", "cjs", "mjs", "jsx"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: vue_config,
+    aliases: &["vue"],
+    extensions: &["vue"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: xml_config,
+    aliases: &["xml"],
+    extensions: &[
+      "xml", "svg", "xhtml", "xht", "xsl", "xslt", "xsd", "wsdl", "ares", "axml", "ant", "mxml",
+      "plist", "iml", "idea",
+    ],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: yaml_config,
+    aliases: &["yaml", "yml"],
+    extensions: &["yml", "yaml"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
 ];
-const EXTENSIONS_BASH: &[&str] = &["sh", "bash", "zsh"];
-const EXTENSIONS_PYTHON: &[&str] = &["py", "pyi", "pyw"];
-const EXTENSIONS_RUST: &[&str] = &["rs"];
-const EXTENSIONS_TYPESCRIPT: &[&str] = &["ts", "cts", "mts", "tsx", "js", "cjs", "mjs", "jsx"];
-const EXTENSIONS_YAML: &[&str] = &["yml", "yaml"];
-const EXTENSIONS_JSON: &[&str] = &["json", "jsonc"];
-const EXTENSIONS_CSS: &[&str] = &["css"];
-const EXTENSIONS_SCSS: &[&str] = &["scss"];
-const EXTENSIONS_TOML: &[&str] = &["toml"];
-const EXTENSIONS_DOCKERFILE: &[&str] = &["dockerfile"];
-const EXTENSIONS_HTML: &[&str] = &["html", "htm"];
-const EXTENSIONS_MARKDOWN: &[&str] = &["md", "markdown", "mdx"];
-const EXTENSIONS_VUE: &[&str] = &["vue"];
 
-pub fn detect_language_config(extension: &str) -> Option<&'static LanguageConfig> {
-  let extension = extension
-    .trim()
-    .trim_start_matches('.')
-    .to_ascii_lowercase();
-  let extension = extension.as_str();
-  match extension {
-    _ if EXTENSIONS_BASH.contains(&extension) => Some(&*bash::BASH_CONFIG),
-    _ if EXTENSIONS_CSS.contains(&extension) => Some(&*css::CSS_CONFIG),
-    _ if EXTENSIONS_SCSS.contains(&extension) => Some(&*scss::SCSS_CONFIG),
-    _ if EXTENSIONS_TOML.contains(&extension) => Some(&*toml::TOML_CONFIG),
-    _ if EXTENSIONS_DOCKERFILE.contains(&extension) => Some(&*dockerfile::DOCKERFILE_CONFIG),
-    _ if EXTENSIONS_HTML.contains(&extension) => Some(&*html::HTML_CONFIG),
-    _ if EXTENSIONS_JSON.contains(&extension) => Some(&*json::JSON_CONFIG),
-    _ if EXTENSIONS_MARKDOWN.contains(&extension) => Some(&*markdown::MARKDOWN_CONFIG),
-    _ if EXTENSIONS_PYTHON.contains(&extension) => Some(&*python::PYTHON_CONFIG),
-    _ if EXTENSIONS_RUST.contains(&extension) => Some(&*rust::RUST_CONFIG),
-    _ if EXTENSIONS_TYPESCRIPT.contains(&extension) => Some(&*typescript::TYPESCRIPT_CONFIG),
-    _ if EXTENSIONS_VUE.contains(&extension) => Some(&*vue::VUE_CONFIG),
-    _ if EXTENSIONS_XML.contains(&extension) => Some(&*xml::XML_CONFIG),
-    _ if EXTENSIONS_YAML.contains(&extension) => Some(&*yaml::YAML_CONFIG),
-    _ => None,
+pub fn detect_language_config(identifier: &str) -> Option<&'static LanguageConfig> {
+  let raw_identifier = normalize_identifier(identifier)?;
+  find_by_file_name(&raw_identifier).or_else(|| {
+    let stripped_identifier = raw_identifier.trim_start_matches('.');
+    find_by_alias_or_extension(stripped_identifier)
+  })
+}
+
+pub fn detect_language_config_for_path(path: &Path) -> Option<&'static LanguageConfig> {
+  if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
+    let normalized_file_name = file_name.trim().to_ascii_lowercase();
+    if let Some(config) = find_by_file_name(&normalized_file_name) {
+      return Some(config);
+    }
   }
+
+  path
+    .extension()
+    .and_then(|ext| ext.to_str())
+    .and_then(find_by_alias_or_extension)
+}
+
+pub fn detect_language_name_for_path(path: &Path) -> Option<&'static str> {
+  detect_language_config_for_path(path).map(|config| config.name)
 }
 
 pub fn language_config_for_name(name: &str) -> Option<&'static LanguageConfig> {
-  let name = name
+  let normalized_name = normalize_identifier(name)?;
+  let stripped_name = normalized_name.trim_start_matches('.');
+  find_by_alias_or_extension(stripped_name).or_else(|| find_by_file_name(&normalized_name))
+}
+
+fn find_by_file_name(file_name: &str) -> Option<&'static LanguageConfig> {
+  LANGUAGE_REGISTRATIONS.iter().find_map(|registration| {
+    if registration.file_names.contains(&file_name)
+      || registration
+        .file_name_prefixes
+        .iter()
+        .any(|prefix| file_name.starts_with(prefix))
+    {
+      Some((registration.load)())
+    } else {
+      None
+    }
+  })
+}
+
+fn find_by_alias_or_extension(identifier: &str) -> Option<&'static LanguageConfig> {
+  if identifier.is_empty() {
+    return None;
+  }
+
+  let normalized_identifier = identifier.to_ascii_lowercase();
+  LANGUAGE_REGISTRATIONS.iter().find_map(|registration| {
+    if registration
+      .aliases
+      .contains(&normalized_identifier.as_str())
+      || registration
+        .extensions
+        .contains(&normalized_identifier.as_str())
+    {
+      Some((registration.load)())
+    } else {
+      None
+    }
+  })
+}
+
+fn normalize_identifier(identifier: &str) -> Option<String> {
+  let normalized = identifier
     .trim()
     .trim_matches(|c| c == '{' || c == '}')
-    .trim_start_matches('.')
+    .trim()
     .to_ascii_lowercase();
-  match name.as_str() {
-    "bash" | "sh" | "shell" | "zsh" => Some(&*bash::BASH_CONFIG),
-    "css" => Some(&*css::CSS_CONFIG),
-    "scss" => Some(&*scss::SCSS_CONFIG),
-    "toml" => Some(&*toml::TOML_CONFIG),
-    "sass" | "less" | "postcss" => Some(&*css::CSS_CONFIG),
-    "rust" | "rs" => Some(&*rust::RUST_CONFIG),
-    "python" | "python3" | "py" => Some(&*python::PYTHON_CONFIG),
-    "dockerfile" | "docker" => Some(&*dockerfile::DOCKERFILE_CONFIG),
-    "yaml" | "yml" => Some(&*yaml::YAML_CONFIG),
-    "xml" => Some(&*xml::XML_CONFIG),
-    "markdown" | "md" | "mdx" => Some(&*markdown::MARKDOWN_CONFIG),
-    "html" => Some(&*html::HTML_CONFIG),
-    "javascript" | "js" | "typescript" | "ts" | "tsx" | "jsx" => {
-      Some(&*typescript::TYPESCRIPT_CONFIG)
-    }
-    "json" => Some(&*json::JSON_CONFIG),
-    "vue" => Some(&*vue::VUE_CONFIG),
-    _ => detect_language_config(&name),
+
+  if normalized.is_empty() {
+    None
+  } else {
+    Some(normalized)
   }
+}
+
+fn bash_config() -> &'static LanguageConfig {
+  &bash::BASH_CONFIG
+}
+
+fn css_config() -> &'static LanguageConfig {
+  &css::CSS_CONFIG
+}
+
+fn scss_config() -> &'static LanguageConfig {
+  &scss::SCSS_CONFIG
+}
+
+fn toml_config() -> &'static LanguageConfig {
+  &toml::TOML_CONFIG
+}
+
+fn dockerfile_config() -> &'static LanguageConfig {
+  &dockerfile::DOCKERFILE_CONFIG
+}
+
+fn html_config() -> &'static LanguageConfig {
+  &html::HTML_CONFIG
+}
+
+fn json_config() -> &'static LanguageConfig {
+  &json::JSON_CONFIG
+}
+
+fn markdown_config() -> &'static LanguageConfig {
+  &markdown::MARKDOWN_CONFIG
+}
+
+fn python_config() -> &'static LanguageConfig {
+  &python::PYTHON_CONFIG
+}
+
+fn rust_config() -> &'static LanguageConfig {
+  &rust::RUST_CONFIG
+}
+
+fn typescript_config() -> &'static LanguageConfig {
+  &typescript::TYPESCRIPT_CONFIG
+}
+
+fn vue_config() -> &'static LanguageConfig {
+  &vue::VUE_CONFIG
+}
+
+fn xml_config() -> &'static LanguageConfig {
+  &xml::XML_CONFIG
+}
+
+fn yaml_config() -> &'static LanguageConfig {
+  &yaml::YAML_CONFIG
 }
 
 #[cfg(test)]
@@ -171,6 +369,13 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_bash_dotfiles() {
+    assert!(detect_language_config(".bashrc").is_some());
+    assert!(detect_language_config(".zprofile").is_some());
+    assert!(detect_language_config(".envrc").is_some());
+  }
+
+  #[test]
   fn test_detect_xml() {
     assert!(detect_language_config("xml").is_some());
   }
@@ -184,6 +389,30 @@ mod tests {
   #[test]
   fn test_detect_vue() {
     assert!(detect_language_config("vue").is_some());
+  }
+
+  #[test]
+  fn test_detect_readme_by_file_name() {
+    assert_eq!(
+      detect_language_config("README.md").unwrap().name,
+      "markdown"
+    );
+    assert_eq!(
+      detect_language_config("CHANGELOG").unwrap().name,
+      "markdown"
+    );
+  }
+
+  #[test]
+  fn test_detect_dockerfile_variants_by_path() {
+    let config = detect_language_config_for_path(Path::new("/tmp/Dockerfile.dev")).unwrap();
+    assert_eq!(config.name, "dockerfile");
+  }
+
+  #[test]
+  fn test_detect_bash_dotfiles_by_path() {
+    let config = detect_language_config_for_path(Path::new("/tmp/.bashrc")).unwrap();
+    assert_eq!(config.name, "bash");
   }
 
   #[test]
@@ -233,7 +462,22 @@ mod tests {
     let yaml = language_config_for_name("yml").unwrap();
     assert_eq!(yaml.name, "yaml");
 
-    let bash = language_config_for_name("bash").unwrap();
+    let bash = language_config_for_name("{.bash}").unwrap();
     assert_eq!(bash.name, "bash");
+
+    let shell = language_config_for_name("shell").unwrap();
+    assert_eq!(shell.name, "bash");
+  }
+
+  #[test]
+  fn test_detect_language_name_for_path_returns_canonical_name() {
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/script.sh")),
+      Some("bash")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/component.vue")),
+      Some("vue")
+    );
   }
 }
