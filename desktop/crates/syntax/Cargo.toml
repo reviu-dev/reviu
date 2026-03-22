@@ -24,6 +24,7 @@ tree-sitter-dart-orchard.workspace = true
 tree-sitter-svelte-next.workspace = true
 tree-sitter-rust.workspace = true
 tree-sitter-ruby.workspace = true
+tree-sitter-scala.workspace = true
 tree-sitter-php.workspace = true
 tree-sitter-hcl.workspace = true
 tree-sitter-swift.workspace = true

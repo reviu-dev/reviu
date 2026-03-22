@@ -270,6 +270,7 @@ mod tests {
   use crate::languages::php::PHP_CONFIG;
   use crate::languages::ruby::RUBY_CONFIG;
   use crate::languages::rust::RUST_CONFIG;
+  use crate::languages::scala::SCALA_CONFIG;
   use crate::languages::sql::SQL_CONFIG;
   use crate::languages::svelte::SVELTE_CONFIG;
   use crate::languages::swift::SWIFT_CONFIG;
@@ -578,6 +579,25 @@ mod tests {
     );
     assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
     assert!(highlights.iter().any(|h| h.token_type == TokenType::Number));
+  }
+
+  #[test]
+  fn test_highlight_simple_scala() {
+    let mut highlighter = SyntaxHighlighter::new(&SCALA_CONFIG);
+    let result = highlighter.highlight_text(
+      "object Reviu {\n  def greet(name: String): String = s\"Hello $name\"\n}\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::Type));
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
   }
 
   #[test]

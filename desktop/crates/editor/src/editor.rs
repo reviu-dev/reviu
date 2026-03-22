@@ -7329,6 +7329,14 @@ pub mod tests {
       Some("lua".to_string())
     );
     assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/Main.scala")),
+      Some("scala".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/build.sbt")),
+      Some("scala".to_string())
+    );
+    assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/main.swift")),
       Some("swift".to_string())
     );
