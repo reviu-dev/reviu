@@ -34,7 +34,7 @@ use gpui_component::{
   v_flex,
 };
 use parking_lot::RwLock;
-use smol::{Timer, unblock};
+use smol::unblock;
 use syntax::languages;
 use ui::{StatusThemeExt as _, Theme, UiIconName};
 use unicode_segmentation::UnicodeSegmentation;
@@ -2431,11 +2431,12 @@ impl Editor {
     self.find_scroll_epoch = self.find_scroll_epoch.saturating_add(1);
     let scroll_epoch = self.find_scroll_epoch;
     cx.spawn(async move |this, cx| {
-      let started_at = Instant::now();
+      let started_at = cx.background_executor().now();
       loop {
-        Timer::after(FIND_SCROLL_TICK).await;
-        let progress =
-          (started_at.elapsed().as_secs_f32() / FIND_SCROLL_DURATION.as_secs_f32()).min(1.0);
+        cx.background_executor().timer(FIND_SCROLL_TICK).await;
+        let progress = ((cx.background_executor().now() - started_at).as_secs_f32()
+          / FIND_SCROLL_DURATION.as_secs_f32())
+        .min(1.0);
         let eased = ease_out_cubic(progress);
         let next_scroll = start + delta * eased;
         let done = progress >= 1.0;
@@ -2792,10 +2793,12 @@ impl Editor {
     self.review_comment_scroll_epoch = self.review_comment_scroll_epoch.saturating_add(1);
     let scroll_epoch = self.review_comment_scroll_epoch;
     cx.spawn(async move |this, cx| {
-      let started_at = Instant::now();
+      let started_at = cx.background_executor().now();
       loop {
-        Timer::after(REVIEW_COMMENT_SCROLL_TICK).await;
-        let progress = (started_at.elapsed().as_secs_f32()
+        cx.background_executor()
+          .timer(REVIEW_COMMENT_SCROLL_TICK)
+          .await;
+        let progress = ((cx.background_executor().now() - started_at).as_secs_f32()
           / REVIEW_COMMENT_SCROLL_DURATION.as_secs_f32())
         .min(1.0);
         let eased = ease_out_cubic(progress);
@@ -9765,6 +9768,32 @@ pub mod tests {
       editor.find_previous_match_with_line_height(px(20.0), cx);
       assert_eq!(editor.find_active_match, Some(1));
       assert_eq!(editor.selected_range, 8..11);
+    });
+  }
+
+  #[gpui::test]
+  fn test_find_smooth_scroll_uses_test_scheduler_timers(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 80);
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.find_matches = editor.collect_find_matches("Line 60", cx);
+      assert_eq!(editor.find_matches.len(), 1);
+      editor.scroll_offset_y = 0.0;
+      assert!(editor.scroll_to_find_match(editor.find_matches[0].display_line, px(20.0), true, cx));
+    });
+
+    for _ in 0..20 {
+      ctx.cx.executor().advance_clock(FIND_SCROLL_TICK);
+      ctx.cx.run_until_parked();
+    }
+
+    ctx.editor.read_with(&ctx.cx, |editor, cx| {
+      let total_lines = editor.display_line_count(editor.document.read(cx).len_lines());
+      let metrics = editor.vertical_scroll_metrics(px(20.0), total_lines);
+      let target = (editor.find_matches[0].display_line as f32 - metrics.scroll_padding)
+        .clamp(0.0, metrics.max_scroll);
+
+      assert!((editor.scroll_offset_y - target).abs() < f32::EPSILON);
     });
   }
 

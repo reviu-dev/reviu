@@ -1,5 +1,4 @@
 use gpui::Context;
-use smol::Timer;
 use std::time::Duration;
 
 const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
@@ -38,7 +37,7 @@ impl CursorBlink {
 
     let epoch = self.next_blink_epoch();
     cx.spawn(async move |this, cx| {
-      Timer::after(CURSOR_BLINK_INTERVAL).await;
+      cx.background_executor().timer(CURSOR_BLINK_INTERVAL).await;
       this.update(cx, |this, cx| this.resume_cursor_blinking(epoch, cx))
     })
     .detach();
@@ -58,7 +57,7 @@ impl CursorBlink {
 
       let epoch = self.next_blink_epoch();
       cx.spawn(async move |this, cx| {
-        Timer::after(CURSOR_BLINK_INTERVAL).await;
+        cx.background_executor().timer(CURSOR_BLINK_INTERVAL).await;
         if let Some(this) = this.upgrade() {
           this.update(cx, |this, cx| this.blink_cursors(epoch, cx));
         }
@@ -95,5 +94,27 @@ impl CursorBlink {
   /// Check if cursor should be rendered
   pub fn visible(&self) -> bool {
     self.visible
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use gpui::{AppContext, TestAppContext};
+
+  #[gpui::test]
+  fn cursor_blink_uses_test_scheduler_timers(cx: &mut TestAppContext) {
+    let blink = cx.new(CursorBlink::new);
+    cx.run_until_parked();
+
+    assert!(blink.read_with(cx, |blink: &CursorBlink, _| blink.visible()));
+
+    cx.executor().advance_clock(CURSOR_BLINK_INTERVAL);
+    cx.run_until_parked();
+    assert!(!blink.read_with(cx, |blink: &CursorBlink, _| blink.visible()));
+
+    cx.executor().advance_clock(CURSOR_BLINK_INTERVAL);
+    cx.run_until_parked();
+    assert!(blink.read_with(cx, |blink: &CursorBlink, _| blink.visible()));
   }
 }
