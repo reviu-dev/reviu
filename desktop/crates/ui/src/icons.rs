@@ -242,6 +242,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "astro" => Some("file-icons/astro.svg"),
     "ts" | "tsx" | "mts" | "cts" => Some("file-icons/typescript.svg"),
     "js" | "jsx" | "mjs" | "cjs" => Some("file-icons/javascript.svg"),
+    "c" | "h" => Some("file-icons/c.svg"),
     "go" => Some("file-icons/go.svg"),
     "rs" => Some("file-icons/rust.svg"),
     "svelte" => Some("file-icons/svelte.svg"),
@@ -433,6 +434,14 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("Package.swift", false),
       Some("file-icons/swift.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("main.c", false),
+      Some("file-icons/c.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("main.h", false),
+      Some("file-icons/c.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("build.zig.zon", false),

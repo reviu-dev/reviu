@@ -1,5 +1,6 @@
 pub mod astro;
 pub mod bash;
+pub mod c;
 pub mod css;
 pub mod dockerfile;
 pub mod go;
@@ -56,6 +57,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
       ".zlogout",
       ".envrc",
     ],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: c_config,
+    aliases: &["c"],
+    extensions: &["c", "h"],
+    file_names: &[],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
@@ -305,6 +313,10 @@ fn bash_config() -> &'static LanguageConfig {
   &bash::BASH_CONFIG
 }
 
+fn c_config() -> &'static LanguageConfig {
+  &c::C_CONFIG
+}
+
 fn astro_config() -> &'static LanguageConfig {
   &astro::ASTRO_CONFIG
 }
@@ -495,6 +507,12 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_c() {
+    assert!(detect_language_config("c").is_some());
+    assert!(detect_language_config("h").is_some());
+  }
+
+  #[test]
   fn test_detect_astro() {
     assert!(detect_language_config("astro").is_some());
   }
@@ -601,6 +619,12 @@ mod tests {
   }
 
   #[test]
+  fn test_c_config_has_correct_name() {
+    let config = detect_language_config("c").unwrap();
+    assert_eq!(config.name, "c");
+  }
+
+  #[test]
   fn test_hcl_config_has_correct_name() {
     let config = detect_language_config("terraform").unwrap();
     assert_eq!(config.name, "hcl");
@@ -662,6 +686,9 @@ mod tests {
     let terraform = language_config_for_name("terraform").unwrap();
     assert_eq!(terraform.name, "hcl");
 
+    let c = language_config_for_name("c").unwrap();
+    assert_eq!(c.name, "c");
+
     let bash = language_config_for_name("{.bash}").unwrap();
     assert_eq!(bash.name, "bash");
 
@@ -682,6 +709,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.go")),
       Some("go")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/main.c")),
+      Some("c")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.tf")),

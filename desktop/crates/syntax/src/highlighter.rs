@@ -255,6 +255,7 @@ mod tests {
   use super::*;
   use crate::languages::astro::ASTRO_CONFIG;
   use crate::languages::bash::BASH_CONFIG;
+  use crate::languages::c::C_CONFIG;
   use crate::languages::go::GO_CONFIG;
   use crate::languages::hcl::HCL_CONFIG;
   use crate::languages::html::HTML_CONFIG;
@@ -299,6 +300,24 @@ mod tests {
     assert!(result.is_ok());
     let highlights = result.unwrap();
     assert!(!highlights.is_empty());
+  }
+
+  #[test]
+  fn test_highlight_simple_c() {
+    let mut highlighter = SyntaxHighlighter::new(&C_CONFIG);
+    let result = highlighter.highlight_text(
+      "#include <stdio.h>\n\nint main(void) {\n  const char *name = \"Reviu\";\n  printf(\"hello %s\\n\", name);\n  return 0;\n}\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
   }
 
   #[test]
