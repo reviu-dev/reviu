@@ -8,6 +8,7 @@ pub mod markdown;
 pub mod python;
 pub mod rust;
 pub mod scss;
+pub mod svelte;
 pub mod toml;
 pub mod typescript;
 pub mod vue;
@@ -63,6 +64,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: scss_config,
     aliases: &["scss"],
     extensions: &["scss"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: svelte_config,
+    aliases: &["svelte"],
+    extensions: &["svelte"],
     file_names: &[],
     file_name_prefixes: &[],
   },
@@ -252,6 +260,10 @@ fn scss_config() -> &'static LanguageConfig {
   &scss::SCSS_CONFIG
 }
 
+fn svelte_config() -> &'static LanguageConfig {
+  &svelte::SVELTE_CONFIG
+}
+
 fn toml_config() -> &'static LanguageConfig {
   &toml::TOML_CONFIG
 }
@@ -386,6 +398,11 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_svelte() {
+    assert!(detect_language_config("svelte").is_some());
+  }
+
+  #[test]
   fn test_detect_bash_dotfiles() {
     assert!(detect_language_config(".bashrc").is_some());
     assert!(detect_language_config(".zprofile").is_some());
@@ -495,6 +512,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/page.astro")),
       Some("astro")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/Component.svelte")),
+      Some("svelte")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/component.vue")),
