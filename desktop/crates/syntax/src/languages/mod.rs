@@ -114,7 +114,7 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: hcl_config,
     aliases: &["hcl", "terraform", "tf", "tfvars"],
     extensions: &["hcl", "tf", "tfvars"],
-    file_names: &[".terraform.lock.hcl", ".terraformrc", "terraform.rc"],
+    file_names: &[".terraformrc", "terraform.rc"],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
@@ -142,7 +142,7 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: dockerfile_config,
     aliases: &["dockerfile", "docker"],
     extensions: &["dockerfile"],
-    file_names: &["dockerfile"],
+    file_names: &[],
     file_name_prefixes: &["dockerfile"],
   },
   LanguageRegistration {
@@ -184,13 +184,7 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: markdown_config,
     aliases: &["markdown", "md", "mdx"],
     extensions: &["md", "markdown", "mdx"],
-    file_names: &[
-      "readme",
-      "readme.md",
-      "readme.mdx",
-      "changelog",
-      "changelog.md",
-    ],
+    file_names: &["readme", "changelog"],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
@@ -266,21 +260,21 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: yaml_config,
     aliases: &["yaml", "yml"],
     extensions: &["yml", "yaml"],
-    file_names: &["pubspec.yaml", "pubspec.lock", "analysis_options.yaml"],
+    file_names: &["pubspec.lock"],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
     load: zig_config,
     aliases: &["zig"],
     extensions: &["zig"],
-    file_names: &["build.zig", "build.zig.zon"],
+    file_names: &["build.zig.zon"],
     file_name_prefixes: &[],
   },
 ];
 
 pub fn detect_language_config(identifier: &str) -> Option<&'static LanguageConfig> {
   let raw_identifier = normalize_identifier(identifier)?;
-  find_by_file_name(&raw_identifier).or_else(|| {
+  find_by_file_name_or_extension(&raw_identifier).or_else(|| {
     let stripped_identifier = raw_identifier.trim_start_matches('.');
     find_by_alias_or_extension(stripped_identifier)
   })
@@ -289,7 +283,7 @@ pub fn detect_language_config(identifier: &str) -> Option<&'static LanguageConfi
 pub fn detect_language_config_for_path(path: &Path) -> Option<&'static LanguageConfig> {
   if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
     let normalized_file_name = file_name.trim().to_ascii_lowercase();
-    if let Some(config) = find_by_file_name(&normalized_file_name) {
+    if let Some(config) = find_by_file_name_or_extension(&normalized_file_name) {
       return Some(config);
     }
   }
@@ -322,6 +316,20 @@ fn find_by_file_name(file_name: &str) -> Option<&'static LanguageConfig> {
     } else {
       None
     }
+  })
+}
+
+fn find_by_file_name_or_extension(file_name: &str) -> Option<&'static LanguageConfig> {
+  let normalized_file_name = Path::new(file_name)
+    .file_name()
+    .and_then(|name| name.to_str())
+    .unwrap_or(file_name);
+
+  find_by_file_name(normalized_file_name).or_else(|| {
+    Path::new(normalized_file_name)
+      .extension()
+      .and_then(|ext| ext.to_str())
+      .and_then(find_by_alias_or_extension)
   })
 }
 
@@ -574,6 +582,19 @@ mod tests {
       detect_language_config("analysis_options.yaml").unwrap().name,
       "yaml"
     );
+  }
+
+  #[test]
+  fn test_detect_language_config_treats_filename_like_identifiers_as_files() {
+    assert_eq!(detect_language_config("README.md").unwrap().name, "markdown");
+    assert_eq!(detect_language_config("/tmp/pubspec.yaml").unwrap().name, "yaml");
+    assert_eq!(
+      detect_language_config("/tmp/analysis_options.yaml")
+        .unwrap()
+        .name,
+      "yaml"
+    );
+    assert_eq!(detect_language_config("/tmp/build.zig").unwrap().name, "zig");
   }
 
   #[test]
