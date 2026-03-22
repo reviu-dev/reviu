@@ -6,6 +6,7 @@ pub mod go;
 pub mod html;
 pub mod json;
 pub mod markdown;
+pub mod php;
 pub mod python;
 pub mod ruby;
 pub mod rust;
@@ -122,6 +123,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
       "changelog",
       "changelog.md",
     ],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: php_config,
+    aliases: &["php", "php3", "php4", "php5", "phtml"],
+    extensions: &["php", "php3", "php4", "php5", "phtml"],
+    file_names: &[],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
@@ -321,6 +329,10 @@ fn markdown_config() -> &'static LanguageConfig {
   &markdown::MARKDOWN_CONFIG
 }
 
+fn php_config() -> &'static LanguageConfig {
+  &php::PHP_CONFIG
+}
+
 fn python_config() -> &'static LanguageConfig {
   &python::PYTHON_CONFIG
 }
@@ -391,6 +403,12 @@ mod tests {
   fn test_detect_markdown() {
     assert!(detect_language_config("md").is_some());
     assert!(detect_language_config("markdown").is_some());
+  }
+
+  #[test]
+  fn test_detect_php() {
+    assert!(detect_language_config("php").is_some());
+    assert!(detect_language_config("phtml").is_some());
   }
 
   #[test]
@@ -530,6 +548,12 @@ mod tests {
   }
 
   #[test]
+  fn test_php_config_has_correct_name() {
+    let config = detect_language_config("php").unwrap();
+    assert_eq!(config.name, "php");
+  }
+
+  #[test]
   fn test_ruby_config_has_correct_name() {
     let config = detect_language_config("rb").unwrap();
     assert_eq!(config.name, "ruby");
@@ -564,6 +588,9 @@ mod tests {
     let ruby = language_config_for_name("ruby").unwrap();
     assert_eq!(ruby.name, "ruby");
 
+    let php = language_config_for_name("php").unwrap();
+    assert_eq!(php.name, "php");
+
     let yaml = language_config_for_name("yml").unwrap();
     assert_eq!(yaml.name, "yaml");
 
@@ -591,6 +618,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/Gemfile")),
       Some("ruby")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/index.php")),
+      Some("php")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/Component.svelte")),

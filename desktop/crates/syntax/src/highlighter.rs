@@ -257,6 +257,7 @@ mod tests {
   use crate::languages::bash::BASH_CONFIG;
   use crate::languages::go::GO_CONFIG;
   use crate::languages::html::HTML_CONFIG;
+  use crate::languages::php::PHP_CONFIG;
   use crate::languages::ruby::RUBY_CONFIG;
   use crate::languages::rust::RUST_CONFIG;
   use crate::languages::svelte::SVELTE_CONFIG;
@@ -348,6 +349,29 @@ mod tests {
         .any(|h| h.token_type == TokenType::Keyword)
     );
     assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+  }
+
+  #[test]
+  fn test_highlight_simple_php() {
+    let mut highlighter = SyntaxHighlighter::new(&PHP_CONFIG);
+    let result = highlighter.highlight_text(
+      "<?php\nfunction greet($name) {\n  echo \"Hello $name\";\n}\n?><div>Hi</div>\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::PunctuationBracket)
+    );
   }
 
   #[test]
