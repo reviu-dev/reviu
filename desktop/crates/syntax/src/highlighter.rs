@@ -259,6 +259,7 @@ mod tests {
   use crate::languages::cpp::CPP_CONFIG;
   use crate::languages::csharp::CSHARP_CONFIG;
   use crate::languages::dart::DART_CONFIG;
+  use crate::languages::elixir::ELIXIR_CONFIG;
   use crate::languages::go::GO_CONFIG;
   use crate::languages::hcl::HCL_CONFIG;
   use crate::languages::html::HTML_CONFIG;
@@ -269,7 +270,9 @@ mod tests {
   use crate::languages::php::PHP_CONFIG;
   use crate::languages::ruby::RUBY_CONFIG;
   use crate::languages::rust::RUST_CONFIG;
+  use crate::languages::sql::SQL_CONFIG;
   use crate::languages::svelte::SVELTE_CONFIG;
+  use crate::languages::swift::SWIFT_CONFIG;
   use crate::languages::vue::VUE_CONFIG;
   use crate::languages::zig::ZIG_CONFIG;
 
@@ -377,6 +380,29 @@ mod tests {
         .any(|h| h.token_type == TokenType::Keyword)
     );
     assert!(highlights.iter().any(|h| h.token_type == TokenType::Type));
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+  }
+
+  #[test]
+  fn test_highlight_simple_elixir() {
+    let mut highlighter = SyntaxHighlighter::new(&ELIXIR_CONFIG);
+    let result = highlighter.highlight_text(
+      "defmodule Reviu do\n  def greet(name) do\n    \"Hello #{name}\"\n  end\nend\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Function)
+    );
     assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
   }
 
@@ -492,6 +518,46 @@ mod tests {
         .iter()
         .any(|h| h.token_type == TokenType::Variable)
     );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+  }
+
+  #[test]
+  fn test_highlight_simple_sql() {
+    let mut highlighter = SyntaxHighlighter::new(&SQL_CONFIG);
+    let result =
+      highlighter.highlight_text("SELECT id, name FROM users WHERE active = true ORDER BY name;\n");
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Boolean)
+    );
+  }
+
+  #[test]
+  fn test_highlight_simple_swift() {
+    let mut highlighter = SyntaxHighlighter::new(&SWIFT_CONFIG);
+    let result = highlighter.highlight_text(
+      "struct Greeter {\n  let name: String\n\n  func greet() -> String {\n    \"Hello \\(name)\"\n  }\n}\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::Type));
     assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
   }
 

@@ -404,6 +404,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "kt" | "kts" => Some("file-icons/kotlin.svg"),
     "lua" => Some("file-icons/lua.svg"),
     "dart" => Some("file-icons/dart.svg"),
+    "ex" | "exs" => Some("file-icons/elixir.svg"),
     "go" => Some("file-icons/go.svg"),
     "rs" => Some("file-icons/rust.svg"),
     "svelte" => Some("file-icons/svelte.svg"),
@@ -775,6 +776,10 @@ mod tests {
       Some("file-icons/julia.svg")
     );
     assert_eq!(
+      file_icon_path_for_name_str("main.exs", false),
+      Some("file-icons/elixir.svg")
+    );
+    assert_eq!(
       file_icon_path_for_name_str("main.dart", false),
       Some("file-icons/dart.svg")
     );
@@ -797,6 +802,14 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("main.lua", false),
       Some("file-icons/lua.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("query.sql", false),
+      Some("file-icons/sql.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("main.swift", false),
+      Some("file-icons/swift.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("build.gradle.kts", false),

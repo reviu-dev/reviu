@@ -6,6 +6,7 @@ pub mod csharp;
 pub mod css;
 pub mod dart;
 pub mod dockerfile;
+pub mod elixir;
 pub mod go;
 pub mod hcl;
 pub mod html;
@@ -20,7 +21,9 @@ pub mod python;
 pub mod ruby;
 pub mod rust;
 pub mod scss;
+pub mod sql;
 pub mod svelte;
+pub mod swift;
 pub mod toml;
 pub mod typescript;
 pub mod vue;
@@ -105,6 +108,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     file_name_prefixes: &[],
   },
   LanguageRegistration {
+    load: elixir_config,
+    aliases: &["elixir", "ex", "exs"],
+    extensions: &["ex", "exs"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
     load: go_config,
     aliases: &["go"],
     extensions: &["go"],
@@ -126,9 +136,23 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     file_name_prefixes: &[],
   },
   LanguageRegistration {
+    load: sql_config,
+    aliases: &["sql"],
+    extensions: &["sql"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
     load: svelte_config,
     aliases: &["svelte"],
     extensions: &["svelte"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: swift_config,
+    aliases: &["swift"],
+    extensions: &["swift"],
     file_names: &[],
     file_name_prefixes: &[],
   },
@@ -404,6 +428,10 @@ fn dart_config() -> &'static LanguageConfig {
   &dart::DART_CONFIG
 }
 
+fn elixir_config() -> &'static LanguageConfig {
+  &elixir::ELIXIR_CONFIG
+}
+
 fn go_config() -> &'static LanguageConfig {
   &go::GO_CONFIG
 }
@@ -432,8 +460,16 @@ fn scss_config() -> &'static LanguageConfig {
   &scss::SCSS_CONFIG
 }
 
+fn sql_config() -> &'static LanguageConfig {
+  &sql::SQL_CONFIG
+}
+
 fn svelte_config() -> &'static LanguageConfig {
   &svelte::SVELTE_CONFIG
+}
+
+fn swift_config() -> &'static LanguageConfig {
+  &swift::SWIFT_CONFIG
 }
 
 fn toml_config() -> &'static LanguageConfig {
@@ -591,6 +627,13 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_elixir() {
+    assert!(detect_language_config("elixir").is_some());
+    assert!(detect_language_config("ex").is_some());
+    assert!(detect_language_config("exs").is_some());
+  }
+
+  #[test]
   fn test_detect_go() {
     assert!(detect_language_config("go").is_some());
   }
@@ -640,6 +683,16 @@ mod tests {
   #[test]
   fn test_detect_scss() {
     assert!(detect_language_config("scss").is_some());
+  }
+
+  #[test]
+  fn test_detect_sql() {
+    assert!(detect_language_config("sql").is_some());
+  }
+
+  #[test]
+  fn test_detect_swift() {
+    assert!(detect_language_config("swift").is_some());
   }
 
   #[test]
@@ -840,6 +893,12 @@ mod tests {
   }
 
   #[test]
+  fn test_elixir_config_has_correct_name() {
+    let config = detect_language_config("elixir").unwrap();
+    assert_eq!(config.name, "elixir");
+  }
+
+  #[test]
   fn test_java_config_has_correct_name() {
     let config = detect_language_config("java").unwrap();
     assert_eq!(config.name, "java");
@@ -861,6 +920,18 @@ mod tests {
   fn test_lua_config_has_correct_name() {
     let config = detect_language_config("lua").unwrap();
     assert_eq!(config.name, "lua");
+  }
+
+  #[test]
+  fn test_sql_config_has_correct_name() {
+    let config = detect_language_config("sql").unwrap();
+    assert_eq!(config.name, "sql");
+  }
+
+  #[test]
+  fn test_swift_config_has_correct_name() {
+    let config = detect_language_config("swift").unwrap();
+    assert_eq!(config.name, "swift");
   }
 
   #[test]
@@ -943,11 +1014,20 @@ mod tests {
     let dart = language_config_for_name("dart").unwrap();
     assert_eq!(dart.name, "dart");
 
+    let elixir = language_config_for_name("elixir").unwrap();
+    assert_eq!(elixir.name, "elixir");
+
     let bash = language_config_for_name("{.bash}").unwrap();
     assert_eq!(bash.name, "bash");
 
     let shell = language_config_for_name("shell").unwrap();
     assert_eq!(shell.name, "bash");
+
+    let sql = language_config_for_name("sql").unwrap();
+    assert_eq!(sql.name, "sql");
+
+    let swift = language_config_for_name("swift").unwrap();
+    assert_eq!(swift.name, "swift");
   }
 
   #[test]
@@ -971,6 +1051,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.dart")),
       Some("dart")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/main.exs")),
+      Some("elixir")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.cpp")),
@@ -1021,6 +1105,10 @@ mod tests {
       Some("julia")
     );
     assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/query.sql")),
+      Some("sql")
+    );
+    assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/Main.kt")),
       Some("kotlin")
     );
@@ -1031,6 +1119,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.lua")),
       Some("lua")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/main.swift")),
+      Some("swift")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.tf")),
