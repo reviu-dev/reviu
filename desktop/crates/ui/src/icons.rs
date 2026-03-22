@@ -131,9 +131,6 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     (".pnpmfile.cjs", "file-icons/pnpm.svg"),
     (".pnpmfile.js", "file-icons/pnpm.svg"),
     (".pnpmfile.mjs", "file-icons/pnpm.svg"),
-    ("bun.lock", "file-icons/bun.svg"),
-    ("bun.lockb", "file-icons/bun.svg"),
-    ("bunfig.toml", "file-icons/bun.svg"),
     ("go.mod", "file-icons/go-mod.svg"),
     ("go.sum", "file-icons/go-mod.svg"),
     ("go.work", "file-icons/go-mod.svg"),
@@ -158,6 +155,11 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     (".profile", "file-icons/console.svg"),
     (".envrc", "file-icons/console.svg"),
     (".env", "file-icons/tune.svg"),
+    (".vimrc", "file-icons/vim.svg"),
+    ("_vimrc", "file-icons/vim.svg"),
+    (".gvimrc", "file-icons/vim.svg"),
+    ("_gvimrc", "file-icons/vim.svg"),
+    (".ideavimrc", "file-icons/vim.svg"),
     (".eslintrc", "file-icons/eslint.svg"),
     (".eslintignore", "file-icons/eslint.svg"),
     (".ruff.toml", "file-icons/ruff.svg"),
@@ -221,6 +223,22 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     return Some("file-icons/astro-config.svg");
   }
 
+  if name == "jsr.json" {
+    return Some(if is_dark {
+      "file-icons/jsr/dark.svg"
+    } else {
+      "file-icons/jsr/light.svg"
+    });
+  }
+
+  if name == "copilot-instructions.md" {
+    return Some(if is_dark {
+      "file-icons/copilot/dark.svg"
+    } else {
+      "file-icons/copilot/light.svg"
+    });
+  }
+
   if name.starts_with("next.config.") {
     return Some(if is_dark {
       "file-icons/next/dark.svg"
@@ -266,6 +284,14 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
       "file-icons/netlify/dark.svg"
     } else {
       "file-icons/netlify/light.svg"
+    });
+  }
+
+  if name == "bun.lock" || name == "bun.lockb" || name == "bunfig.toml" {
+    return Some(if is_dark {
+      "file-icons/bun/dark.svg"
+    } else {
+      "file-icons/bun/light.svg"
     });
   }
 
@@ -493,7 +519,7 @@ mod tests {
     );
     assert_eq!(
       file_icon_path_for_name_str("bunfig.toml", false),
-      Some("file-icons/bun.svg")
+      Some("file-icons/bun/light.svg")
     );
   }
 
@@ -514,6 +540,10 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str(".envrc", false),
       Some("file-icons/console.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str(".vimrc", false),
+      Some("file-icons/vim.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("deploy.sh", false),
@@ -618,6 +648,10 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("commitlint.config.js", false),
       Some("file-icons/commitlint.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("jsr.json", false),
+      Some("file-icons/jsr/light.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("knip.json", false),
@@ -930,6 +964,30 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("netlify.toml", false),
       Some("file-icons/netlify/light.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("bun.lock", true),
+      Some("file-icons/bun/dark.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("bun.lock", false),
+      Some("file-icons/bun/light.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("copilot-instructions.md", true),
+      Some("file-icons/copilot/dark.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("copilot-instructions.md", false),
+      Some("file-icons/copilot/light.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("jsr.json", true),
+      Some("file-icons/jsr/dark.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("jsr.json", false),
+      Some("file-icons/jsr/light.svg")
     );
   }
 
