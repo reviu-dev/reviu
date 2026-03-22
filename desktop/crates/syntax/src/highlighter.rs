@@ -216,6 +216,7 @@ fn map_highlight_index_to_token_type(idx: usize) -> Option<TokenType> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::languages::bash::BASH_CONFIG;
   use crate::languages::rust::RUST_CONFIG;
 
   #[test]
@@ -242,6 +243,16 @@ mod tests {
         .iter()
         .any(|h| matches!(h.token_type, TokenType::Keyword))
     );
+  }
+
+  #[test]
+  fn test_highlight_simple_bash() {
+    let mut highlighter = SyntaxHighlighter::new(&BASH_CONFIG);
+    let result = highlighter.highlight_text("echo \"$HOME\"\n");
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
   }
 
   #[test]
