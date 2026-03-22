@@ -53,63 +53,9 @@ fn update_selected_index<D: ListDelegate>(
   cx.notify();
 }
 
-fn pull_request_label_row(labels: impl IntoIterator<Item = Tag>) -> impl IntoElement {
-  h_flex()
-    .h_6()
-    .items_center()
-    .min_w_0()
-    .overflow_hidden()
-    .gap_1()
-    .children(labels)
-}
-
-fn github_pull_request_row_body(
-  row: &GithubPullRequestRow,
-  theme: &gpui_component::Theme,
-) -> impl IntoElement {
-  let status_tag = github_shared::pull_request_status_tag(row.pr.status(), theme);
-  let updated_at = format_compact_datetime(&row.pr.updated_at);
-  let repo_name = github_shared::repo_label(row.owner.as_ref(), row.repo.as_ref());
-
-  let label_tags = row.pr.labels.iter().take(4).map(|label| {
-    Tag::secondary()
-      .small()
-      .rounded_full()
-      .child(label.name.clone())
-  });
-
-  v_flex()
-    .gap_1()
-    .child(
-      h_flex()
-        .items_center()
-        .gap_2()
-        .child(
-          div()
-            .min_w_0()
-            .flex_1()
-            .child(Label::new(row.pr.title.clone()).truncate()),
-        )
-        .child(status_tag),
-    )
-    .child(
-      h_flex()
-        .gap_2()
-        .items_center()
-        .text_xs()
-        .text_color(theme.muted_foreground)
-        .child(format!("#{}", row.pr.number))
-        .child(repo_name)
-        .child(format!("Updated {}", updated_at)),
-    )
-    .child(pull_request_label_row(label_tags))
-}
-
 #[derive(Clone, Debug)]
 struct GithubPullRequestRow {
   pr: Rc<GithubPullRequest>,
-  owner: SharedString,
-  repo: SharedString,
 }
 
 impl GithubPullRequestRow {
@@ -120,10 +66,41 @@ impl GithubPullRequestRow {
 
     let q = query.to_lowercase();
     self.pr.title.to_lowercase().contains(&q)
-      || github_shared::repo_label(self.owner.as_ref(), self.repo.as_ref())
+      || github_shared::pull_request_author_display_name(&self.pr.author)
+        .to_lowercase()
+        .contains(&q)
+      || github_shared::repo_label(&self.pr.repository.owner, &self.pr.repository.repo)
         .to_lowercase()
         .contains(&q)
   }
+}
+
+#[derive(Clone, Debug)]
+struct GithubPullRequestSection {
+  repo_label: SharedString,
+  rows: Vec<Rc<GithubPullRequestRow>>,
+}
+
+fn build_pull_request_sections(rows: &[Rc<GithubPullRequestRow>]) -> Vec<GithubPullRequestSection> {
+  let mut sections = Vec::new();
+
+  for row in rows {
+    let repo_label = github_shared::repo_label(&row.pr.repository.owner, &row.pr.repository.repo);
+    if let Some(section) = sections
+      .iter_mut()
+      .find(|section: &&mut GithubPullRequestSection| section.repo_label.as_ref() == repo_label)
+    {
+      section.rows.push(row.clone());
+      continue;
+    }
+
+    sections.push(GithubPullRequestSection {
+      repo_label: repo_label.into(),
+      rows: vec![row.clone()],
+    });
+  }
+
+  sections
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,6 +126,10 @@ impl GithubPullRequestTab {
       2 => Some(GithubPullRequestTab::Notifications),
       _ => None,
     }
+  }
+
+  fn shows_pull_request_author(&self) -> bool {
+    !matches!(self, GithubPullRequestTab::MyOpen)
   }
 }
 
@@ -468,8 +449,10 @@ impl ListDelegate for GithubNotificationListDelegate {
 struct GithubPullRequestListDelegate {
   all_rows: Vec<Rc<GithubPullRequestRow>>,
   matched_rows: Vec<Rc<GithubPullRequestRow>>,
+  sections: Vec<GithubPullRequestSection>,
   selected_index: Option<IndexPath>,
   query: SharedString,
+  show_author: bool,
   loading: bool,
 }
 
@@ -478,8 +461,10 @@ impl GithubPullRequestListDelegate {
     Self {
       all_rows: Vec::new(),
       matched_rows: Vec::new(),
+      sections: Vec::new(),
       selected_index: Some(IndexPath::default()),
       query: "".into(),
+      show_author: true,
       loading: false,
     }
   }
@@ -496,19 +481,61 @@ impl GithubPullRequestListDelegate {
       .collect();
 
     self.matched_rows = rows;
+    self.sections = build_pull_request_sections(&self.matched_rows);
   }
 
   fn set_rows(&mut self, rows: Vec<Rc<GithubPullRequestRow>>) {
     self.all_rows = rows;
     self.prepare(self.query.clone());
   }
+
+  fn row_at(&self, ix: IndexPath) -> Option<Rc<GithubPullRequestRow>> {
+    self
+      .sections
+      .get(ix.section)
+      .and_then(|section| section.rows.get(ix.row))
+      .cloned()
+  }
 }
 
 impl ListDelegate for GithubPullRequestListDelegate {
   type Item = ListItem;
 
-  fn items_count(&self, _section: usize, _cx: &App) -> usize {
-    self.matched_rows.len()
+  fn sections_count(&self, _cx: &App) -> usize {
+    self.sections.len()
+  }
+
+  fn items_count(&self, section: usize, _cx: &App) -> usize {
+    self
+      .sections
+      .get(section)
+      .map_or(0, |section| section.rows.len())
+  }
+
+  fn render_section_header(
+    &mut self,
+    section: usize,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<impl IntoElement> {
+    let section = self.sections.get(section)?;
+
+    Some(
+      h_flex()
+        .items_center()
+        .pb_1()
+        .px_2()
+        .gap_2()
+        .text_sm()
+        .text_color(cx.theme().muted_foreground)
+        .child(Icon::new(IconName::Folder))
+        .child(
+          div()
+            .min_w_0()
+            .flex_1()
+            .child(Label::new(section.repo_label.clone()).truncate()),
+        ),
+    )
   }
 
   fn render_item(
@@ -517,15 +544,20 @@ impl ListDelegate for GithubPullRequestListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let row = self.matched_rows.get(ix.row)?;
+    let row = self.row_at(ix)?;
     let theme = cx.theme().clone();
     let base_item = list_base_item(ix, self.selected_index, &theme);
 
     Some(
       base_item
         .px_2()
-        .py_2()
-        .child(github_pull_request_row_body(row, &theme)),
+        .py_1()
+        .child(github_shared::pull_request_list_row_body(
+          row.pr.as_ref(),
+          &theme,
+          false,
+          self.show_author,
+        )),
     )
   }
 
@@ -698,9 +730,14 @@ impl GithubPage {
       &self.pull_requests,
       move |_this, state, event: &ListEvent, cx| {
         if let ListEvent::Confirm(ix) = event {
-          let row = state.read(cx).delegate().matched_rows.get(ix.row).cloned();
+          let row = state.read(cx).delegate().row_at(*ix);
           if let Some(row) = row {
-            GithubPrDetailsPageHandle::show(row.owner.clone(), row.repo.clone(), row.pr.number, cx);
+            GithubPrDetailsPageHandle::show(
+              row.pr.repository.owner.clone().into(),
+              row.pr.repository.repo.clone().into(),
+              row.pr.number,
+              cx,
+            );
           }
         }
       },
@@ -738,7 +775,9 @@ impl GithubPage {
 
   fn apply_active_pull_request_rows(&mut self, cx: &mut Context<Self>) {
     let rows = self.active_pull_request_rows();
+    let show_author = self.active_pull_request_tab.shows_pull_request_author();
     self.pull_requests.update(cx, |state, cx| {
+      state.delegate_mut().show_author = show_author;
       state.delegate_mut().set_rows(rows);
       cx.notify();
     });
@@ -792,23 +831,11 @@ impl GithubPage {
           Ok((my_open_pull_requests, need_review_pull_requests)) => (
             my_open_pull_requests
               .into_iter()
-              .map(|pr| {
-                Rc::new(GithubPullRequestRow {
-                  owner: pr.repository.owner.clone().into(),
-                  repo: pr.repository.repo.clone().into(),
-                  pr: Rc::new(pr),
-                })
-              })
+              .map(|pr| Rc::new(GithubPullRequestRow { pr: Rc::new(pr) }))
               .collect::<Vec<_>>(),
             need_review_pull_requests
               .into_iter()
-              .map(|pr| {
-                Rc::new(GithubPullRequestRow {
-                  owner: pr.repository.owner.clone().into(),
-                  repo: pr.repository.repo.clone().into(),
-                  pr: Rc::new(pr),
-                })
-              })
+              .map(|pr| Rc::new(GithubPullRequestRow { pr: Rc::new(pr) }))
               .collect::<Vec<_>>(),
             None,
           ),
@@ -1276,8 +1303,8 @@ impl Focusable for GithubPage {
 mod tests {
   use super::*;
   use crate::api::{
-    ApiClient, GithubNotificationRepository, GithubNotificationSubject, GithubPullRequestLabel,
-    GithubPullRequestState, GithubRepository,
+    ApiClient, GithubNotificationRepository, GithubNotificationSubject, GithubPullRequestAuthor,
+    GithubPullRequestLabel, GithubPullRequestState, GithubRepository,
   };
   use gpui::{Entity, TestAppContext};
   use std::{
@@ -1301,9 +1328,16 @@ mod tests {
         number: 1,
         title: title.to_string(),
         state: GithubPullRequestState::Open,
+        created_at: "2026-02-12T12:00:00Z".to_string(),
+        closed_at: None,
         merged_at: None,
         draft: false,
         updated_at: "2026-02-15T12:00:00Z".to_string(),
+        author: GithubPullRequestAuthor {
+          login: "octocat".to_string(),
+          avatar_url: None,
+          is_bot: false,
+        },
         labels: labels
           .iter()
           .map(|label| GithubPullRequestLabel {
@@ -1315,8 +1349,6 @@ mod tests {
           repo: repo.to_string(),
         },
       }),
-      owner: owner.to_string().into(),
-      repo: repo.to_string().into(),
     }
   }
 
@@ -1374,16 +1406,17 @@ mod tests {
 
       v_flex()
         .gap_2()
-        .child(
-          div()
-            .debug_selector(|| "labeled".to_string())
-            .child(github_pull_request_row_body(&self.labeled, &theme)),
-        )
-        .child(
-          div()
-            .debug_selector(|| "unlabeled".to_string())
-            .child(github_pull_request_row_body(&self.unlabeled, &theme)),
-        )
+        .child(div().debug_selector(|| "labeled".to_string()).child(
+          github_shared::pull_request_list_row_body(self.labeled.pr.as_ref(), &theme, false, false),
+        ))
+        .child(div().debug_selector(|| "unlabeled".to_string()).child(
+          github_shared::pull_request_list_row_body(
+            self.unlabeled.pr.as_ref(),
+            &theme,
+            false,
+            false,
+          ),
+        ))
     }
   }
 
@@ -1495,6 +1528,77 @@ mod tests {
     assert!(row.matches("login"));
     assert!(row.matches("acme/portal"));
     assert!(!row.matches("missing"));
+  }
+
+  #[test]
+  fn pull_request_delegate_groups_rows_by_repo_section() {
+    let mut delegate = GithubPullRequestListDelegate::new();
+    delegate.set_rows(vec![
+      Rc::new(make_pull_request_row("Fix login", "acme", "portal")),
+      Rc::new(make_pull_request_row("Improve API", "acme", "backend")),
+      Rc::new(make_pull_request_row("Refactor auth", "acme", "portal")),
+    ]);
+
+    assert_eq!(delegate.matched_rows.len(), 3);
+    assert_eq!(delegate.sections.len(), 2);
+    assert_eq!(delegate.sections[0].repo_label.as_ref(), "acme/portal");
+    assert_eq!(delegate.sections[1].repo_label.as_ref(), "acme/backend");
+    assert_eq!(delegate.sections[0].rows.len(), 2);
+    assert_eq!(delegate.sections[1].rows.len(), 1);
+    assert_eq!(delegate.sections[0].rows[0].pr.title, "Fix login");
+    assert_eq!(delegate.sections[0].rows[1].pr.title, "Refactor auth");
+    assert_eq!(delegate.sections[1].rows[0].pr.title, "Improve API");
+  }
+
+  #[test]
+  fn pull_request_delegate_row_at_uses_section_and_row_indexes() {
+    let mut delegate = GithubPullRequestListDelegate::new();
+    delegate.set_rows(vec![
+      Rc::new(make_pull_request_row("Fix login", "acme", "portal")),
+      Rc::new(make_pull_request_row("Improve API", "acme", "backend")),
+      Rc::new(make_pull_request_row("Refactor auth", "acme", "portal")),
+    ]);
+
+    assert_eq!(
+      delegate
+        .row_at(IndexPath::new(1).section(0))
+        .expect("portal second row")
+        .pr
+        .title,
+      "Refactor auth"
+    );
+    assert_eq!(
+      delegate
+        .row_at(IndexPath::new(0).section(1))
+        .expect("backend first row")
+        .pr
+        .title,
+      "Improve API"
+    );
+    assert!(delegate.row_at(IndexPath::new(2).section(0)).is_none());
+  }
+
+  #[test]
+  fn pull_request_delegate_search_keeps_matching_repo_sections() {
+    let mut delegate = GithubPullRequestListDelegate::new();
+    delegate.set_rows(vec![
+      Rc::new(make_pull_request_row("Fix login", "acme", "portal")),
+      Rc::new(make_pull_request_row("Improve API", "acme", "backend")),
+      Rc::new(make_pull_request_row("Refactor auth", "acme", "portal")),
+    ]);
+
+    delegate.prepare("portal");
+
+    assert_eq!(delegate.matched_rows.len(), 2);
+    assert_eq!(delegate.sections.len(), 1);
+    assert_eq!(delegate.sections[0].repo_label.as_ref(), "acme/portal");
+    assert_eq!(delegate.sections[0].rows.len(), 2);
+  }
+
+  #[test]
+  fn pull_request_tab_author_visibility_matches_home_context() {
+    assert!(!GithubPullRequestTab::MyOpen.shows_pull_request_author());
+    assert!(GithubPullRequestTab::NeedReview.shows_pull_request_author());
   }
 
   #[test]

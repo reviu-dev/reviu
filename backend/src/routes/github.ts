@@ -25,10 +25,10 @@ import type {
   GithubIssueParameters,
   GithubNotification,
   GithubPullRequest,
+  GithubPullRequestAuthor,
   GithubPullRequestChecksSummary,
   GithubPullRequestCommit,
   GithubPullRequestDetails,
-  GithubPullRequestDetailsAuthor,
   GithubPullRequestFile,
   GithubPullRequestIssueComment,
   GithubPullRequestMergeReadiness,
@@ -91,6 +91,7 @@ import {
   formatGithubUser,
   mapGithubIssueComment,
   mapGithubIssueDescriptionUpdate,
+  mapGithubPullRequestAuthor,
   mapGithubPullRequestCommit,
   mapGithubPullRequestDescriptionUpdate,
   mapGithubPullRequestFile,
@@ -434,10 +435,7 @@ async function fetchPullRequestDetailsWithCache(
 
         const data = response.data!
         resolvedRepositoryPrivate = data.base.repo.private
-        const author: GithubPullRequestDetailsAuthor = {
-          login: data.user.login,
-          avatar_url: data.user.avatar_url,
-        }
+        const author: GithubPullRequestAuthor = mapGithubPullRequestAuthor(data.user)
 
         let mergeBaseSha = data.base.sha
         const baseRef = data.base.ref
@@ -1125,8 +1123,11 @@ async function fetchRepositoryPullRequestsWithCache(
             title: pull.title,
             state: pull.state,
             draft: Boolean(pull.draft),
+            created_at: pull.created_at,
+            closed_at: pull.closed_at,
             merged_at: pull.merged_at,
             updated_at: pull.updated_at,
+            author: mapGithubPullRequestAuthor(pull.user),
             labels: pull.labels.map(label => ({ name: label.name })),
             repository: {
               owner,

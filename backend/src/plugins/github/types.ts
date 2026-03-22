@@ -115,20 +115,24 @@ export interface GithubRepository {
   repo: string
 }
 
+export interface GithubPullRequestAuthor {
+  login: NonNullable<PullRequestResponse['user']>['login']
+  avatar_url: NonNullable<PullRequestResponse['user']>['avatar_url'] | null
+  is_bot: boolean
+}
+
 export interface GithubPullRequest {
   number: PullRequestResponse['number']
   title: PullRequestResponse['title']
   state: PullRequestResponse['state']
   draft: NonNullable<PullRequestResponse['draft']>
+  created_at: PullRequestResponse['created_at']
+  closed_at: PullRequestResponse['closed_at']
   merged_at: PullRequestResponse['merged_at']
   updated_at: PullRequestResponse['updated_at']
+  author: GithubPullRequestAuthor
   labels: { name: string }[]
   repository: GithubRepository
-}
-
-export interface GithubPullRequestDetailsAuthor {
-  login: PullRequestDetailsResponse['user']['login']
-  avatar_url: PullRequestDetailsResponse['user']['avatar_url']
 }
 
 export interface GithubPullRequestReviewCommentUser {
@@ -200,7 +204,7 @@ export interface GithubPullRequestDetails {
   base_ref_name: PullRequestDetailsResponse['base']['ref']
   head_ref_name: PullRequestDetailsResponse['head']['ref']
   body: PullRequestDetailsResponse['body']
-  author: GithubPullRequestDetailsAuthor
+  author: GithubPullRequestAuthor
   comments: PullRequestDetailsResponse['comments']
   review_comments: PullRequestDetailsResponse['review_comments']
   commits: PullRequestDetailsResponse['commits']

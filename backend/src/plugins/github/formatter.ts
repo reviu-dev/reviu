@@ -4,6 +4,7 @@ import type {
   GithubIssueDetailsComment,
   GithubIssueDetailsCommentResponse,
   GithubPullRequest,
+  GithubPullRequestAuthor,
   GithubPullRequestCommit,
   GithubPullRequestCommitUser,
   GithubPullRequestDescriptionUpdate,
@@ -30,6 +31,18 @@ export function formatGithubUser<U extends { login: string, name?: string | null
     login: user.login,
     name: user.name,
     avatar_url: user.avatar_url,
+  }
+}
+
+export function mapGithubPullRequestAuthor<
+  U extends { login?: string | null, avatar_url?: string | null, type?: string | null },
+>(user: U | null | undefined): GithubPullRequestAuthor {
+  const login = user?.login?.trim() || 'unknown'
+
+  return {
+    login,
+    avatar_url: user?.avatar_url ?? null,
+    is_bot: user?.type === 'Bot' || login.endsWith('[bot]'),
   }
 }
 
@@ -198,8 +211,11 @@ export function mapSearchIssueItemToPullRequest(item: SearchIssuesItemResponse):
     title: item.title,
     state: item.state as PullRequestResponse['state'],
     draft: Boolean(item.draft),
+    created_at: item.created_at,
+    closed_at: item.closed_at,
     merged_at: item.pull_request.merged_at ?? null,
     updated_at: item.updated_at,
+    author: mapGithubPullRequestAuthor(item.user),
     labels: item.labels
       .flatMap(label => (typeof label.name === 'string' && label.name.trim().length > 0 ? [{ name: label.name }] : [])),
     repository,
