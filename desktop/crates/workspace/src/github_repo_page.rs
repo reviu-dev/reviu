@@ -87,56 +87,6 @@ fn update_selected_index<D: ListDelegate>(
   cx.notify();
 }
 
-fn pull_request_label_row(labels: impl IntoIterator<Item = Tag>) -> impl IntoElement {
-  h_flex()
-    .h_6()
-    .items_center()
-    .min_w_0()
-    .overflow_hidden()
-    .gap_1()
-    .children(labels)
-}
-
-fn github_repo_pull_request_row_body(
-  row: &GithubRepoPullRequestRow,
-  theme: &gpui_component::Theme,
-) -> impl IntoElement {
-  let status_tag = github_shared::pull_request_status_tag(row.pr.status(), theme);
-  let updated_at = format_compact_datetime(&row.pr.updated_at);
-
-  let label_tags = row.pr.labels.iter().take(4).map(|label| {
-    Tag::secondary()
-      .small()
-      .rounded_full()
-      .child(label.name.clone())
-  });
-
-  v_flex()
-    .gap_1()
-    .child(
-      h_flex()
-        .items_center()
-        .gap_2()
-        .child(
-          div()
-            .min_w_0()
-            .flex_1()
-            .child(Label::new(row.pr.title.clone()).truncate()),
-        )
-        .child(status_tag),
-    )
-    .child(
-      h_flex()
-        .gap_2()
-        .items_center()
-        .text_xs()
-        .text_color(theme.muted_foreground)
-        .child(format!("#{}", row.pr.number))
-        .child(format!("Updated {}", updated_at)),
-    )
-    .child(pull_request_label_row(label_tags))
-}
-
 fn format_repo_size(size_kb: u64) -> SharedString {
   const KB_PER_MB: u64 = 1024;
   const KB_PER_GB: u64 = 1024 * 1024;
@@ -811,6 +761,9 @@ impl GithubRepoPullRequestRow {
 
     let q = query.to_lowercase();
     self.pr.title.to_lowercase().contains(&q)
+      || github_shared::pull_request_author_display_name(&self.pr.author)
+        .to_lowercase()
+        .contains(&q)
       || self.pr.number.to_string().contains(&q)
       || self
         .pr
@@ -879,8 +832,13 @@ impl ListDelegate for GithubRepoPullRequestListDelegate {
     Some(
       base_item
         .px_2()
-        .py_2()
-        .child(github_repo_pull_request_row_body(row, &theme)),
+        .py_1()
+        .child(github_shared::pull_request_list_row_body(
+          row.pr.as_ref(),
+          &theme,
+          false,
+          true,
+        )),
     )
   }
 
@@ -4690,7 +4648,8 @@ mod tests {
   use super::*;
   use crate::api::{
     GithubIssueDescriptionUpdate, GithubIssueDetailsComment, GithubIssueUser,
-    GithubPullRequestLabel, GithubPullRequestState, GithubRepository, GithubRepositoryTreeEntry,
+    GithubPullRequestAuthor, GithubPullRequestLabel, GithubPullRequestState, GithubRepository,
+    GithubRepositoryTreeEntry,
   };
   use crate::workspace::WorkspaceApi;
   use gpui::TestAppContext;
@@ -4771,16 +4730,17 @@ mod tests {
 
       v_flex()
         .gap_2()
-        .child(
-          div()
-            .debug_selector(|| "labeled".to_string())
-            .child(github_repo_pull_request_row_body(&self.labeled, &theme)),
-        )
-        .child(
-          div()
-            .debug_selector(|| "unlabeled".to_string())
-            .child(github_repo_pull_request_row_body(&self.unlabeled, &theme)),
-        )
+        .child(div().debug_selector(|| "labeled".to_string()).child(
+          github_shared::pull_request_list_row_body(self.labeled.pr.as_ref(), &theme, false, true),
+        ))
+        .child(div().debug_selector(|| "unlabeled".to_string()).child(
+          github_shared::pull_request_list_row_body(
+            self.unlabeled.pr.as_ref(),
+            &theme,
+            false,
+            true,
+          ),
+        ))
     }
   }
 
@@ -4794,9 +4754,16 @@ mod tests {
         number,
         title: title.to_string(),
         state: GithubPullRequestState::Open,
+        created_at: "2026-02-12T12:00:00Z".to_string(),
+        closed_at: None,
         merged_at: None,
         draft: false,
         updated_at: "2026-02-15T12:00:00Z".to_string(),
+        author: GithubPullRequestAuthor {
+          login: "octocat".to_string(),
+          avatar_url: None,
+          is_bot: false,
+        },
         labels: labels
           .iter()
           .map(|label| GithubPullRequestLabel {

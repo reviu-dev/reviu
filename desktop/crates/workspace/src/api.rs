@@ -367,11 +367,17 @@ pub struct GithubPullRequest {
   pub number: u64,
   pub title: String,
   pub state: GithubPullRequestState,
+  #[serde(rename = "created_at", default)]
+  pub created_at: String,
+  #[serde(rename = "closed_at")]
+  pub closed_at: Option<String>,
   #[serde(rename = "merged_at")]
   pub merged_at: Option<String>,
   pub draft: bool,
   #[serde(rename = "updated_at")]
   pub updated_at: String,
+  #[serde(default)]
+  pub author: GithubPullRequestAuthor,
   pub labels: Vec<GithubPullRequestLabel>,
   pub repository: GithubRepository,
 }
@@ -388,11 +394,14 @@ impl GithubPullRequest {
   }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct GithubPullRequestAuthor {
+  #[serde(default)]
   pub login: String,
   #[serde(rename = "avatar_url")]
   pub avatar_url: Option<String>,
+  #[serde(rename = "is_bot", default)]
+  pub is_bot: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2145,9 +2154,16 @@ mod tests {
       number: 42,
       title: "Test PR".to_string(),
       state,
+      created_at: "2026-02-10T09:00:00Z".to_string(),
+      closed_at: None,
       merged_at: merged_at.map(str::to_string),
       draft,
       updated_at: "2026-02-15T12:00:00Z".to_string(),
+      author: GithubPullRequestAuthor {
+        login: "octocat".to_string(),
+        avatar_url: None,
+        is_bot: false,
+      },
       labels: vec![GithubPullRequestLabel {
         name: "bug".to_string(),
       }],
@@ -2180,6 +2196,7 @@ mod tests {
       author: GithubPullRequestAuthor {
         login: "octocat".to_string(),
         avatar_url: None,
+        is_bot: false,
       },
       comments: 0,
       review_comments: 0,
@@ -2261,9 +2278,16 @@ mod tests {
           "number": 7,
           "title": "Fix login issue",
           "state": "open",
+          "created_at": "2026-02-12T09:30:00Z",
+          "closed_at": null,
           "merged_at": null,
           "draft": false,
           "updated_at": "2026-02-15T12:00:00Z",
+          "author": {
+            "login": "octocat",
+            "avatar_url": "https://example.com/octocat.png",
+            "is_bot": false
+          },
           "labels": [{ "name": "bug" }],
           "repository": { "owner": "acme", "repo": "widget" }
         }
@@ -2279,6 +2303,13 @@ mod tests {
     assert_eq!(prs[0].number, 7);
     assert_eq!(prs[0].title, "Fix login issue");
     assert!(matches!(prs[0].state, GithubPullRequestState::Open));
+    assert_eq!(prs[0].created_at, "2026-02-12T09:30:00Z");
+    assert_eq!(prs[0].author.login, "octocat");
+    assert_eq!(
+      prs[0].author.avatar_url.as_deref(),
+      Some("https://example.com/octocat.png")
+    );
+    assert!(!prs[0].author.is_bot);
     assert_eq!(prs[0].repository.owner, "acme");
     assert_eq!(prs[0].repository.repo, "widget");
     handle.join().expect("join server thread");
@@ -2312,9 +2343,16 @@ mod tests {
           "number": 9,
           "title": "Review requested change",
           "state": "open",
+          "created_at": "2026-02-14T10:15:00Z",
+          "closed_at": null,
           "merged_at": null,
           "draft": false,
           "updated_at": "2026-02-15T13:00:00Z",
+          "author": {
+            "login": "renovate[bot]",
+            "avatar_url": null,
+            "is_bot": true
+          },
           "labels": [{ "name": "enhancement" }],
           "repository": { "owner": "acme", "repo": "portal" }
         }
@@ -2330,6 +2368,9 @@ mod tests {
     assert_eq!(prs[0].number, 9);
     assert_eq!(prs[0].title, "Review requested change");
     assert!(matches!(prs[0].state, GithubPullRequestState::Open));
+    assert_eq!(prs[0].created_at, "2026-02-14T10:15:00Z");
+    assert_eq!(prs[0].author.login, "renovate[bot]");
+    assert!(prs[0].author.is_bot);
     assert_eq!(prs[0].repository.owner, "acme");
     assert_eq!(prs[0].repository.repo, "portal");
     handle.join().expect("join server thread");
@@ -2459,9 +2500,16 @@ mod tests {
           "number": 11,
           "title": "Improve docs",
           "state": "open",
+          "created_at": "2026-02-11T08:00:00Z",
+          "closed_at": null,
           "merged_at": null,
           "draft": false,
           "updated_at": "2026-02-15T12:00:00Z",
+          "author": {
+            "login": "docs-bot[bot]",
+            "avatar_url": null,
+            "is_bot": true
+          },
           "labels": [{ "name": "docs" }],
           "repository": { "owner": "acme", "repo": "widget" }
         }
@@ -2476,6 +2524,9 @@ mod tests {
     assert_eq!(prs.len(), 1);
     assert_eq!(prs[0].number, 11);
     assert_eq!(prs[0].title, "Improve docs");
+    assert_eq!(prs[0].created_at, "2026-02-11T08:00:00Z");
+    assert_eq!(prs[0].author.login, "docs-bot[bot]");
+    assert!(prs[0].author.is_bot);
     assert_eq!(prs[0].repository.owner, "acme");
     assert_eq!(prs[0].repository.repo, "widget");
     handle.join().expect("join server thread");
@@ -2999,7 +3050,7 @@ mod tests {
         "base_ref_name": "main",
         "head_ref_name": "feature/parser",
         "body": "PR body",
-        "author": { "login": "octocat", "avatar_url": null },
+        "author": { "login": "octocat", "avatar_url": null, "is_bot": false },
         "comments": 2,
         "review_comments": 3,
         "commits": 4,
@@ -3019,6 +3070,8 @@ mod tests {
       .expect("fetch pull request details");
     assert_eq!(details.number, 42);
     assert_eq!(details.head_ref_name, "feature/parser");
+    assert_eq!(details.author.login, "octocat");
+    assert!(!details.author.is_bot);
     assert_eq!(details.comments, 2);
     assert_eq!(details.review_comments, 3);
     assert_eq!(

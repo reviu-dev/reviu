@@ -11568,6 +11568,7 @@ mod tests {
       author: crate::api::GithubPullRequestAuthor {
         login: "author".to_string(),
         avatar_url: None,
+        is_bot: false,
       },
       comments: 10,
       review_comments: 11,
