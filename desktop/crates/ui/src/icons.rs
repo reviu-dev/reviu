@@ -146,6 +146,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     ("uv.lock", "file-icons/uv.svg"),
     ("uv.toml", "file-icons/uv.svg"),
     ("rust-toolchain", "file-icons/rust.svg"),
+    (".rprofile", "file-icons/r.svg"),
     (".nvmrc", "file-icons/nodejs.svg"),
     (".node-version", "file-icons/nodejs.svg"),
     (".bashrc", "file-icons/console.svg"),
@@ -403,9 +404,12 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "jl" => Some("file-icons/julia.svg"),
     "kt" | "kts" => Some("file-icons/kotlin.svg"),
     "lua" => Some("file-icons/lua.svg"),
+    "clj" | "cljs" | "cljc" | "edn" => Some("file-icons/clojure.svg"),
     "dart" => Some("file-icons/dart.svg"),
     "ex" | "exs" => Some("file-icons/elixir.svg"),
     "go" => Some("file-icons/go.svg"),
+    "hs" | "lhs" => Some("file-icons/haskell.svg"),
+    "r" => Some("file-icons/r.svg"),
     "rs" => Some("file-icons/rust.svg"),
     "svelte" => Some("file-icons/svelte.svg"),
     "css" => Some("file-icons/css.svg"),
@@ -805,8 +809,24 @@ mod tests {
       Some("file-icons/lua.svg")
     );
     assert_eq!(
+      file_icon_path_for_name_str("core.clj", false),
+      Some("file-icons/clojure.svg")
+    );
+    assert_eq!(
       file_icon_path_for_name_str("query.sql", false),
       Some("file-icons/sql.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("main.hs", false),
+      Some("file-icons/haskell.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("analysis.R", false),
+      Some("file-icons/r.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str(".Rprofile", false),
+      Some("file-icons/r.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("main.swift", false),

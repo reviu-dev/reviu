@@ -7281,6 +7281,10 @@ pub mod tests {
       Some("cmake".to_string())
     );
     assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/core.clj")),
+      Some("clojure".to_string())
+    );
+    assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/Cargo.lock")),
       Some("toml".to_string())
     );
@@ -7309,6 +7313,18 @@ pub mod tests {
       Some("sql".to_string())
     );
     assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/main.hs")),
+      Some("haskell".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/main.ml")),
+      Some("ocaml".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/interface.mli")),
+      Some("ocaml".to_string())
+    );
+    assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/pubspec.yaml")),
       Some("yaml".to_string())
     );
@@ -7319,6 +7335,10 @@ pub mod tests {
     assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/analysis_options.yaml")),
       Some("yaml".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/analysis.R")),
+      Some("r".to_string())
     );
     assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/Main.kt")),
