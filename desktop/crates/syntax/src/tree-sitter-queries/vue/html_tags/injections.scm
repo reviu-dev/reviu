@@ -1,6 +1,9 @@
 ((comment) @injection.content
   (#set! injection.language "comment"))
 
+; Keep these queries compatible with tree-sitter-highlight core predicates/directives.
+; Editor-specific extensions like `lua-match?`, `offset!`, or `gsub!` are not applied here.
+
 ; <style>...</style>
 ; <style blocking> ...</style>
 ; Add "lang" to predicate check so that vue/svelte can inherit this
@@ -8,8 +11,8 @@
 ((style_element
   (start_tag) @_no_type_lang
   (raw_text) @injection.content)
-  (#not-lua-match? @_no_type_lang "%slang%s*=")
-  (#not-lua-match? @_no_type_lang "%stype%s*=")
+  (#not-match? @_no_type_lang "\\slang\\s*=")
+  (#not-match? @_no_type_lang "\\stype\\s*=")
   (#set! injection.language "css"))
 
 ((style_element
@@ -28,20 +31,22 @@
 ((script_element
   (start_tag) @_no_type_lang
   (raw_text) @injection.content)
-  (#not-lua-match? @_no_type_lang "%slang%s*=")
-  (#not-lua-match? @_no_type_lang "%stype%s*=")
+  (#not-match? @_no_type_lang "\\slang\\s*=")
+  (#not-match? @_no_type_lang "\\stype\\s*=")
   (#set! injection.language "javascript"))
 
-; <script type="foo/bar">
-(script_element
+; <script type="text/javascript">
+; <script type="application/javascript">
+((script_element
   (start_tag
     (attribute
       (attribute_name) @_attr
       (#eq? @_attr "type")
       (quoted_attribute_value
-        (attribute_value) @injection.language)))
-  (raw_text) @injection.content
-  (#gsub! @injection.language "(.+)/(.+)" "%2"))
+        (attribute_value) @_type)))
+  (raw_text) @injection.content)
+  (#any-of? @_type "text/javascript" "application/javascript" "text/ecmascript" "application/ecmascript")
+  (#set! injection.language "javascript"))
 
 ; <script type="importmap">
 ((script_element
@@ -75,22 +80,6 @@
   (#eq? @_attr "style")
   (#set! injection.language "css"))
 
-; lit-html style template interpolation
-; <a @click=${e => console.log(e)}>
-; <a @click="${e => console.log(e)}">
-((attribute
-  (quoted_attribute_value
-    (attribute_value) @injection.content))
-  (#lua-match? @injection.content "%${")
-  (#offset! @injection.content 0 2 0 -1)
-  (#set! injection.language "javascript"))
-
-((attribute
-  (attribute_value) @injection.content)
-  (#lua-match? @injection.content "%${")
-  (#offset! @injection.content 0 2 0 -2)
-  (#set! injection.language "javascript"))
-
 ; <input pattern="[0-9]"> or <input pattern=[0-9]>
 (element
   (_
@@ -109,7 +98,7 @@
 ; <input type="checkbox" onchange="this.closest('form').elements.output.value = this.checked">
 (attribute
   (attribute_name) @_name
-  (#lua-match? @_name "^on[a-z]+$")
+  (#match? @_name "^on[a-z]+$")
   (quoted_attribute_value
     (attribute_value) @injection.content)
   (#set! injection.language "javascript"))

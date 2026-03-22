@@ -64,10 +64,15 @@
   (raw_text) @injection.content)
   (#set! injection.language "typescript"))
 
-(directive_attribute
+((directive_attribute
+  [
+    (directive_name)
+    (directive_value)
+    (dynamic_directive_value)
+  ] @_directive
   (quoted_attribute_value
-    (attribute_value) @injection.content
-    (#set! injection.language "typescript")))
+    (attribute_value) @injection.content))
+  (#set! injection.language "typescript"))
 
 (template_element
   (start_tag
