@@ -7257,6 +7257,10 @@ pub mod tests {
       Some("dart".to_string())
     );
     assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/main.exs")),
+      Some("elixir".to_string())
+    );
+    assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/vector.hpp")),
       Some("cpp".to_string())
     );
@@ -7297,6 +7301,10 @@ pub mod tests {
       Some("julia".to_string())
     );
     assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/query.sql")),
+      Some("sql".to_string())
+    );
+    assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/pubspec.yaml")),
       Some("yaml".to_string())
     );
@@ -7319,6 +7327,10 @@ pub mod tests {
     assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/main.lua")),
       Some("lua".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/main.swift")),
+      Some("swift".to_string())
     );
   }
 
