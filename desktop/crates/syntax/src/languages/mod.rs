@@ -20,6 +20,7 @@ pub mod php;
 pub mod python;
 pub mod ruby;
 pub mod rust;
+pub mod scala;
 pub mod scss;
 pub mod sql;
 pub mod svelte;
@@ -255,6 +256,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
       "thorfile",
       "vagrantfile",
     ],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: scala_config,
+    aliases: &["scala"],
+    extensions: &["scala", "sbt", "sc"],
+    file_names: &[],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
@@ -504,6 +512,10 @@ fn ruby_config() -> &'static LanguageConfig {
   &ruby::RUBY_CONFIG
 }
 
+fn scala_config() -> &'static LanguageConfig {
+  &scala::SCALA_CONFIG
+}
+
 fn rust_config() -> &'static LanguageConfig {
   &rust::RUST_CONFIG
 }
@@ -723,6 +735,13 @@ mod tests {
   fn test_detect_ruby() {
     assert!(detect_language_config("rb").is_some());
     assert!(detect_language_config("ruby").is_some());
+  }
+
+  #[test]
+  fn test_detect_scala() {
+    assert!(detect_language_config("scala").is_some());
+    assert!(detect_language_config("sbt").is_some());
+    assert!(detect_language_config("sc").is_some());
   }
 
   #[test]
@@ -947,6 +966,12 @@ mod tests {
   }
 
   #[test]
+  fn test_scala_config_has_correct_name() {
+    let config = detect_language_config("scala").unwrap();
+    assert_eq!(config.name, "scala");
+  }
+
+  #[test]
   fn test_xml_config_has_correct_name() {
     let config = detect_language_config("xml").unwrap();
     assert_eq!(config.name, "xml");
@@ -980,6 +1005,9 @@ mod tests {
 
     let ruby = language_config_for_name("ruby").unwrap();
     assert_eq!(ruby.name, "ruby");
+
+    let scala = language_config_for_name("scala").unwrap();
+    assert_eq!(scala.name, "scala");
 
     let php = language_config_for_name("php").unwrap();
     assert_eq!(php.name, "php");
@@ -1131,6 +1159,14 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/Gemfile")),
       Some("ruby")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/Main.scala")),
+      Some("scala")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/build.sbt")),
+      Some("scala")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/index.php")),

@@ -430,6 +430,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "py" => Some("file-icons/python.svg"),
     "sql" => Some("file-icons/sql.svg"),
     "rb" => Some("file-icons/ruby.svg"),
+    "scala" | "sbt" | "sc" => Some("file-icons/scala.svg"),
     "php" | "phtml" => Some("file-icons/php.svg"),
     "tf" | "tfvars" => Some("file-icons/terraform.svg"),
     "swift" => Some("file-icons/swift.svg"),
@@ -810,6 +811,14 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("main.swift", false),
       Some("file-icons/swift.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("Main.scala", false),
+      Some("file-icons/scala.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("build.sbt", false),
+      Some("file-icons/scala.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("build.gradle.kts", false),
