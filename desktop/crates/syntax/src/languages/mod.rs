@@ -4,6 +4,7 @@ pub mod c;
 pub mod cpp;
 pub mod csharp;
 pub mod css;
+pub mod dart;
 pub mod dockerfile;
 pub mod go;
 pub mod hcl;
@@ -92,6 +93,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: css_config,
     aliases: &["css", "sass", "less", "postcss"],
     extensions: &["css"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: dart_config,
+    aliases: &["dart"],
+    extensions: &["dart"],
     file_names: &[],
     file_name_prefixes: &[],
   },
@@ -258,7 +266,7 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: yaml_config,
     aliases: &["yaml", "yml"],
     extensions: &["yml", "yaml"],
-    file_names: &[],
+    file_names: &["pubspec.yaml", "pubspec.lock", "analysis_options.yaml"],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
@@ -374,6 +382,10 @@ fn astro_config() -> &'static LanguageConfig {
 
 fn css_config() -> &'static LanguageConfig {
   &css::CSS_CONFIG
+}
+
+fn dart_config() -> &'static LanguageConfig {
+  &dart::DART_CONFIG
 }
 
 fn go_config() -> &'static LanguageConfig {
@@ -545,8 +557,23 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_dart() {
+    assert!(detect_language_config("dart").is_some());
+  }
+
+  #[test]
   fn test_detect_go() {
     assert!(detect_language_config("go").is_some());
+  }
+
+  #[test]
+  fn test_detect_dart_file_names() {
+    assert_eq!(detect_language_config("pubspec.yaml").unwrap().name, "yaml");
+    assert_eq!(detect_language_config("pubspec.lock").unwrap().name, "yaml");
+    assert_eq!(
+      detect_language_config("analysis_options.yaml").unwrap().name,
+      "yaml"
+    );
   }
 
   #[test]
@@ -754,6 +781,12 @@ mod tests {
   }
 
   #[test]
+  fn test_dart_config_has_correct_name() {
+    let config = detect_language_config("dart").unwrap();
+    assert_eq!(config.name, "dart");
+  }
+
+  #[test]
   fn test_java_config_has_correct_name() {
     let config = detect_language_config("java").unwrap();
     assert_eq!(config.name, "java");
@@ -845,6 +878,9 @@ mod tests {
     let csharp = language_config_for_name("c#").unwrap();
     assert_eq!(csharp.name, "csharp");
 
+    let dart = language_config_for_name("dart").unwrap();
+    assert_eq!(dart.name, "dart");
+
     let bash = language_config_for_name("{.bash}").unwrap();
     assert_eq!(bash.name, "bash");
 
@@ -871,8 +907,24 @@ mod tests {
       Some("c")
     );
     assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/main.dart")),
+      Some("dart")
+    );
+    assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.cpp")),
       Some("cpp")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/pubspec.yaml")),
+      Some("yaml")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/pubspec.lock")),
+      Some("yaml")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/analysis_options.yaml")),
+      Some("yaml")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/Program.cs")),
