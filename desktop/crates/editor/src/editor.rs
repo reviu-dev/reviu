@@ -7293,6 +7293,10 @@ pub mod tests {
       Some("java".to_string())
     );
     assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/main.jl")),
+      Some("julia".to_string())
+    );
+    assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/pubspec.yaml")),
       Some("yaml".to_string())
     );

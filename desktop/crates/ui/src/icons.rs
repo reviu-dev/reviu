@@ -400,6 +400,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "cs" | "csx" | "csproj" => Some("file-icons/csharp.svg"),
     "sln" => Some("file-icons/visualstudio.svg"),
     "java" => Some("file-icons/java.svg"),
+    "jl" => Some("file-icons/julia.svg"),
     "kt" | "kts" => Some("file-icons/kotlin.svg"),
     "lua" => Some("file-icons/lua.svg"),
     "dart" => Some("file-icons/dart.svg"),
@@ -768,6 +769,10 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("Main.java", false),
       Some("file-icons/java.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("main.jl", false),
+      Some("file-icons/julia.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("main.dart", false),
