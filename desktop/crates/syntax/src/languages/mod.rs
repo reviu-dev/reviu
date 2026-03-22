@@ -1,6 +1,7 @@
 pub mod astro;
 pub mod bash;
 pub mod c;
+pub mod cmake;
 pub mod cpp;
 pub mod csharp;
 pub mod css;
@@ -15,6 +16,7 @@ pub mod json;
 pub mod julia;
 pub mod kotlin;
 pub mod lua;
+pub mod make;
 pub mod markdown;
 pub mod php;
 pub mod python;
@@ -75,6 +77,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     aliases: &["c"],
     extensions: &["c", "h"],
     file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: cmake_config,
+    aliases: &["cmake"],
+    extensions: &["cmake"],
+    file_names: &["cmakelists.txt"],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
@@ -204,6 +213,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     aliases: &["lua"],
     extensions: &["lua"],
     file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: make_config,
+    aliases: &["make", "makefile"],
+    extensions: &["mk", "mak"],
+    file_names: &["makefile", "gnumakefile"],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
@@ -416,6 +432,10 @@ fn c_config() -> &'static LanguageConfig {
   &c::C_CONFIG
 }
 
+fn cmake_config() -> &'static LanguageConfig {
+  &cmake::CMAKE_CONFIG
+}
+
 fn cpp_config() -> &'static LanguageConfig {
   &cpp::CPP_CONFIG
 }
@@ -462,6 +482,10 @@ fn kotlin_config() -> &'static LanguageConfig {
 
 fn lua_config() -> &'static LanguageConfig {
   &lua::LUA_CONFIG
+}
+
+fn make_config() -> &'static LanguageConfig {
+  &make::MAKE_CONFIG
 }
 
 fn scss_config() -> &'static LanguageConfig {
@@ -629,6 +653,13 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_make() {
+    assert!(detect_language_config("make").is_some());
+    assert!(detect_language_config("makefile").is_some());
+    assert!(detect_language_config("mk").is_some());
+  }
+
+  #[test]
   fn test_detect_css() {
     assert!(detect_language_config("css").is_some());
   }
@@ -758,6 +789,11 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_cmake() {
+    assert!(detect_language_config("cmake").is_some());
+  }
+
+  #[test]
   fn test_detect_cpp() {
     assert!(detect_language_config("cpp").is_some());
     assert!(detect_language_config("c++").is_some());
@@ -802,6 +838,20 @@ mod tests {
     assert_eq!(
       detect_language_config(".ruby-version").unwrap().name,
       "ruby"
+    );
+  }
+
+  #[test]
+  fn test_detect_make_file_names() {
+    assert_eq!(detect_language_config("Makefile").unwrap().name, "make");
+    assert_eq!(detect_language_config("GNUmakefile").unwrap().name, "make");
+  }
+
+  #[test]
+  fn test_detect_cmake_file_names() {
+    assert_eq!(
+      detect_language_config("CMakeLists.txt").unwrap().name,
+      "cmake"
     );
   }
 
@@ -888,6 +938,12 @@ mod tests {
   }
 
   #[test]
+  fn test_cmake_config_has_correct_name() {
+    let config = detect_language_config("cmake").unwrap();
+    assert_eq!(config.name, "cmake");
+  }
+
+  #[test]
   fn test_cpp_config_has_correct_name() {
     let config = detect_language_config("cpp").unwrap();
     assert_eq!(config.name, "cpp");
@@ -939,6 +995,12 @@ mod tests {
   fn test_lua_config_has_correct_name() {
     let config = detect_language_config("lua").unwrap();
     assert_eq!(config.name, "lua");
+  }
+
+  #[test]
+  fn test_make_config_has_correct_name() {
+    let config = detect_language_config("make").unwrap();
+    assert_eq!(config.name, "make");
   }
 
   #[test]
@@ -1009,6 +1071,9 @@ mod tests {
     let scala = language_config_for_name("scala").unwrap();
     assert_eq!(scala.name, "scala");
 
+    let make = language_config_for_name("make").unwrap();
+    assert_eq!(make.name, "make");
+
     let php = language_config_for_name("php").unwrap();
     assert_eq!(php.name, "php");
 
@@ -1029,6 +1094,9 @@ mod tests {
 
     let lua = language_config_for_name("lua").unwrap();
     assert_eq!(lua.name, "lua");
+
+    let cmake = language_config_for_name("cmake").unwrap();
+    assert_eq!(cmake.name, "cmake");
 
     let c = language_config_for_name("c").unwrap();
     assert_eq!(c.name, "c");
@@ -1075,6 +1143,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.c")),
       Some("c")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/CMakeLists.txt")),
+      Some("cmake")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.dart")),
@@ -1147,6 +1219,14 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.lua")),
       Some("lua")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/Makefile")),
+      Some("make")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/build.mk")),
+      Some("make")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.swift")),

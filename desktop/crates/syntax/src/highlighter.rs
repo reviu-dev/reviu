@@ -256,6 +256,7 @@ mod tests {
   use crate::languages::astro::ASTRO_CONFIG;
   use crate::languages::bash::BASH_CONFIG;
   use crate::languages::c::C_CONFIG;
+  use crate::languages::cmake::CMAKE_CONFIG;
   use crate::languages::cpp::CPP_CONFIG;
   use crate::languages::csharp::CSHARP_CONFIG;
   use crate::languages::dart::DART_CONFIG;
@@ -267,6 +268,7 @@ mod tests {
   use crate::languages::julia::JULIA_CONFIG;
   use crate::languages::kotlin::KOTLIN_CONFIG;
   use crate::languages::lua::LUA_CONFIG;
+  use crate::languages::make::MAKE_CONFIG;
   use crate::languages::php::PHP_CONFIG;
   use crate::languages::ruby::RUBY_CONFIG;
   use crate::languages::rust::RUST_CONFIG;
@@ -325,6 +327,33 @@ mod tests {
     assert!(!highlights.is_empty());
     assert!(highlights.iter().any(|h| h.token_type == TokenType::Type));
     assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+  }
+
+  #[test]
+  fn test_highlight_simple_cmake() {
+    let mut highlighter = SyntaxHighlighter::new(&CMAKE_CONFIG);
+    let result = highlighter.highlight_text(
+      "cmake_minimum_required(VERSION 3.28)\nproject(Reviu)\nset(CMAKE_CXX_STANDARD 20)\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Function)
+    );
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Variable)
+    );
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Constant)
+    );
   }
 
   #[test]
@@ -523,6 +552,23 @@ mod tests {
   }
 
   #[test]
+  fn test_highlight_simple_make() {
+    let mut highlighter = SyntaxHighlighter::new(&MAKE_CONFIG);
+    let result =
+      highlighter.highlight_text("CC := gcc\nall:\n\t$(CC) main.c -o app\n\t@echo done\n");
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Constant)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+  }
+
+  #[test]
   fn test_highlight_simple_sql() {
     let mut highlighter = SyntaxHighlighter::new(&SQL_CONFIG);
     let result =
@@ -584,9 +630,8 @@ mod tests {
   #[test]
   fn test_highlight_simple_scala() {
     let mut highlighter = SyntaxHighlighter::new(&SCALA_CONFIG);
-    let result = highlighter.highlight_text(
-      "object Reviu {\n  def greet(name: String): String = s\"Hello $name\"\n}\n",
-    );
+    let result = highlighter
+      .highlight_text("object Reviu {\n  def greet(name: String): String = s\"Hello $name\"\n}\n");
 
     assert!(result.is_ok());
     let highlights = result.unwrap();

@@ -7277,6 +7277,10 @@ pub mod tests {
       Some("xml".to_string())
     );
     assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/CMakeLists.txt")),
+      Some("cmake".to_string())
+    );
+    assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/Cargo.lock")),
       Some("toml".to_string())
     );
@@ -7327,6 +7331,14 @@ pub mod tests {
     assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/main.lua")),
       Some("lua".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/Makefile")),
+      Some("make".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/build.mk")),
+      Some("make".to_string())
     );
     assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/Main.scala")),
