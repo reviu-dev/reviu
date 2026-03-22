@@ -2,6 +2,7 @@ pub mod astro;
 pub mod bash;
 pub mod css;
 pub mod dockerfile;
+pub mod go;
 pub mod html;
 pub mod json;
 pub mod markdown;
@@ -57,6 +58,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: css_config,
     aliases: &["css", "sass", "less", "postcss"],
     extensions: &["css"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: go_config,
+    aliases: &["go"],
+    extensions: &["go"],
     file_names: &[],
     file_name_prefixes: &[],
   },
@@ -256,6 +264,10 @@ fn css_config() -> &'static LanguageConfig {
   &css::CSS_CONFIG
 }
 
+fn go_config() -> &'static LanguageConfig {
+  &go::GO_CONFIG
+}
+
 fn scss_config() -> &'static LanguageConfig {
   &scss::SCSS_CONFIG
 }
@@ -361,6 +373,11 @@ mod tests {
   #[test]
   fn test_detect_css() {
     assert!(detect_language_config("css").is_some());
+  }
+
+  #[test]
+  fn test_detect_go() {
+    assert!(detect_language_config("go").is_some());
   }
 
   #[test]
@@ -512,6 +529,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/page.astro")),
       Some("astro")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/main.go")),
+      Some("go")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/Component.svelte")),

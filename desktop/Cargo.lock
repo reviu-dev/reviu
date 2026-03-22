@@ -7360,6 +7360,7 @@ dependencies = [
  "tree-sitter-bash",
  "tree-sitter-css",
  "tree-sitter-dockerfile",
+ "tree-sitter-go",
  "tree-sitter-highlight",
  "tree-sitter-html",
  "tree-sitter-json",
@@ -7995,6 +7996,16 @@ checksum = "ba46310efcac616744ca79aa4b0e228202e388913ebcd4a1ba107072f7f4432a"
 dependencies = [
  "cc",
  "tree-sitter 0.20.10",
+]
+
+[[package]]
+name = "tree-sitter-go"
+version = "0.23.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b13d476345220dbe600147dd444165c5791bf85ef53e28acbedd46112ee18431"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
 ]
 
 [[package]]
