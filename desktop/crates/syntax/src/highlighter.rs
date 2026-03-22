@@ -256,12 +256,14 @@ mod tests {
   use crate::languages::astro::ASTRO_CONFIG;
   use crate::languages::bash::BASH_CONFIG;
   use crate::languages::c::C_CONFIG;
+  use crate::languages::clojure::CLOJURE_CONFIG;
   use crate::languages::cmake::CMAKE_CONFIG;
   use crate::languages::cpp::CPP_CONFIG;
   use crate::languages::csharp::CSHARP_CONFIG;
   use crate::languages::dart::DART_CONFIG;
   use crate::languages::elixir::ELIXIR_CONFIG;
   use crate::languages::go::GO_CONFIG;
+  use crate::languages::haskell::HASKELL_CONFIG;
   use crate::languages::hcl::HCL_CONFIG;
   use crate::languages::html::HTML_CONFIG;
   use crate::languages::java::JAVA_CONFIG;
@@ -269,7 +271,9 @@ mod tests {
   use crate::languages::kotlin::KOTLIN_CONFIG;
   use crate::languages::lua::LUA_CONFIG;
   use crate::languages::make::MAKE_CONFIG;
+  use crate::languages::ocaml::{OCAML_CONFIG, OCAML_INTERFACE_CONFIG};
   use crate::languages::php::PHP_CONFIG;
+  use crate::languages::r::R_CONFIG;
   use crate::languages::ruby::RUBY_CONFIG;
   use crate::languages::rust::RUST_CONFIG;
   use crate::languages::scala::SCALA_CONFIG;
@@ -354,6 +358,17 @@ mod tests {
         .iter()
         .any(|h| h.token_type == TokenType::Constant)
     );
+  }
+
+  #[test]
+  fn test_highlight_simple_clojure() {
+    let mut highlighter = SyntaxHighlighter::new(&CLOJURE_CONFIG);
+    let result = highlighter.highlight_text("(defn greet [name] (str \"Hello \" name))\n");
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
   }
 
   #[test]
@@ -628,6 +643,24 @@ mod tests {
   }
 
   #[test]
+  fn test_highlight_simple_haskell() {
+    let mut highlighter = SyntaxHighlighter::new(&HASKELL_CONFIG);
+    let result = highlighter.highlight_text(
+      "module Reviu where\n\ngreet :: String -> String\ngreet name = \"Hello \" <> name\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+  }
+
+  #[test]
   fn test_highlight_simple_scala() {
     let mut highlighter = SyntaxHighlighter::new(&SCALA_CONFIG);
     let result = highlighter
@@ -683,6 +716,54 @@ mod tests {
         .iter()
         .any(|h| h.token_type == TokenType::PunctuationBracket)
     );
+  }
+
+  #[test]
+  fn test_highlight_simple_ocaml() {
+    let mut highlighter = SyntaxHighlighter::new(&OCAML_CONFIG);
+    let result = highlighter.highlight_text("let greet name = \"Hello \" ^ name\n");
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+  }
+
+  #[test]
+  fn test_highlight_simple_ocaml_interface() {
+    let mut highlighter = SyntaxHighlighter::new(&OCAML_INTERFACE_CONFIG);
+    let result = highlighter.highlight_text("val greet : string -> string\n");
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+  }
+
+  #[test]
+  fn test_highlight_simple_r() {
+    let mut highlighter = SyntaxHighlighter::new(&R_CONFIG);
+    let result =
+      highlighter.highlight_text("greet <- function(name) {\n  paste0(\"Hello \", name)\n}\n");
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
   }
 
   #[test]

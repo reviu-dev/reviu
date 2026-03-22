@@ -1,6 +1,7 @@
 pub mod astro;
 pub mod bash;
 pub mod c;
+pub mod clojure;
 pub mod cmake;
 pub mod cpp;
 pub mod csharp;
@@ -9,6 +10,7 @@ pub mod dart;
 pub mod dockerfile;
 pub mod elixir;
 pub mod go;
+pub mod haskell;
 pub mod hcl;
 pub mod html;
 pub mod java;
@@ -18,8 +20,10 @@ pub mod kotlin;
 pub mod lua;
 pub mod make;
 pub mod markdown;
+pub mod ocaml;
 pub mod php;
 pub mod python;
+pub mod r;
 pub mod ruby;
 pub mod rust;
 pub mod scala;
@@ -111,6 +115,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     file_name_prefixes: &[],
   },
   LanguageRegistration {
+    load: clojure_config,
+    aliases: &["clojure", "clj", "cljs", "cljc", "edn"],
+    extensions: &["clj", "cljs", "cljc", "edn"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
     load: dart_config,
     aliases: &["dart"],
     extensions: &["dart"],
@@ -136,6 +147,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     aliases: &["hcl", "terraform", "tf", "tfvars"],
     extensions: &["hcl", "tf", "tfvars"],
     file_names: &[".terraformrc", "terraform.rc"],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: haskell_config,
+    aliases: &["haskell", "hs"],
+    extensions: &["hs", "lhs"],
+    file_names: &[],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
@@ -237,6 +255,20 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     file_name_prefixes: &[],
   },
   LanguageRegistration {
+    load: ocaml_config,
+    aliases: &["ocaml", "ml"],
+    extensions: &["ml"],
+    file_names: &[".ocamlinit"],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: ocaml_interface_config,
+    aliases: &[],
+    extensions: &["mli"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
     load: php_config,
     aliases: &["php", "php3", "php4", "php5", "phtml"],
     extensions: &["php", "php3", "php4", "php5", "phtml"],
@@ -272,6 +304,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
       "thorfile",
       "vagrantfile",
     ],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: r_config,
+    aliases: &["r"],
+    extensions: &["r"],
+    file_names: &[".rprofile"],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
@@ -452,6 +491,10 @@ fn css_config() -> &'static LanguageConfig {
   &css::CSS_CONFIG
 }
 
+fn clojure_config() -> &'static LanguageConfig {
+  &clojure::CLOJURE_CONFIG
+}
+
 fn dart_config() -> &'static LanguageConfig {
   &dart::DART_CONFIG
 }
@@ -466,6 +509,10 @@ fn go_config() -> &'static LanguageConfig {
 
 fn hcl_config() -> &'static LanguageConfig {
   &hcl::HCL_CONFIG
+}
+
+fn haskell_config() -> &'static LanguageConfig {
+  &haskell::HASKELL_CONFIG
 }
 
 fn java_config() -> &'static LanguageConfig {
@@ -524,12 +571,24 @@ fn markdown_config() -> &'static LanguageConfig {
   &markdown::MARKDOWN_CONFIG
 }
 
+fn ocaml_config() -> &'static LanguageConfig {
+  &ocaml::OCAML_CONFIG
+}
+
+fn ocaml_interface_config() -> &'static LanguageConfig {
+  &ocaml::OCAML_INTERFACE_CONFIG
+}
+
 fn php_config() -> &'static LanguageConfig {
   &php::PHP_CONFIG
 }
 
 fn python_config() -> &'static LanguageConfig {
   &python::PYTHON_CONFIG
+}
+
+fn r_config() -> &'static LanguageConfig {
+  &r::R_CONFIG
 }
 
 fn ruby_config() -> &'static LanguageConfig {
@@ -618,6 +677,21 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_ocaml() {
+    assert!(detect_language_config("ocaml").is_some());
+    assert!(detect_language_config("ml").is_some());
+  }
+
+  #[test]
+  fn test_detect_ocaml_file_names() {
+    assert_eq!(detect_language_config(".ocamlinit").unwrap().name, "ocaml");
+    assert_eq!(
+      detect_language_config("interface.mli").unwrap().name,
+      "ocaml"
+    );
+  }
+
+  #[test]
   fn test_detect_php() {
     assert!(detect_language_config("php").is_some());
     assert!(detect_language_config("phtml").is_some());
@@ -665,6 +739,13 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_clojure() {
+    assert!(detect_language_config("clojure").is_some());
+    assert!(detect_language_config("clj").is_some());
+    assert!(detect_language_config("cljs").is_some());
+  }
+
+  #[test]
   fn test_detect_dart() {
     assert!(detect_language_config("dart").is_some());
   }
@@ -679,6 +760,12 @@ mod tests {
   #[test]
   fn test_detect_go() {
     assert!(detect_language_config("go").is_some());
+  }
+
+  #[test]
+  fn test_detect_haskell() {
+    assert!(detect_language_config("haskell").is_some());
+    assert!(detect_language_config("hs").is_some());
   }
 
   #[test]
@@ -721,6 +808,11 @@ mod tests {
     assert!(detect_language_config("terraform").is_some());
     assert!(detect_language_config("tf").is_some());
     assert!(detect_language_config("tfvars").is_some());
+  }
+
+  #[test]
+  fn test_detect_r() {
+    assert!(detect_language_config("r").is_some());
   }
 
   #[test]
@@ -956,6 +1048,12 @@ mod tests {
   }
 
   #[test]
+  fn test_clojure_config_has_correct_name() {
+    let config = detect_language_config("clojure").unwrap();
+    assert_eq!(config.name, "clojure");
+  }
+
+  #[test]
   fn test_hcl_config_has_correct_name() {
     let config = detect_language_config("terraform").unwrap();
     assert_eq!(config.name, "hcl");
@@ -980,6 +1078,12 @@ mod tests {
   }
 
   #[test]
+  fn test_haskell_config_has_correct_name() {
+    let config = detect_language_config("haskell").unwrap();
+    assert_eq!(config.name, "haskell");
+  }
+
+  #[test]
   fn test_julia_config_has_correct_name() {
     let config = detect_language_config("julia").unwrap();
     assert_eq!(config.name, "julia");
@@ -998,9 +1102,21 @@ mod tests {
   }
 
   #[test]
+  fn test_ocaml_config_has_correct_name() {
+    let config = detect_language_config("ocaml").unwrap();
+    assert_eq!(config.name, "ocaml");
+  }
+
+  #[test]
   fn test_make_config_has_correct_name() {
     let config = detect_language_config("make").unwrap();
     assert_eq!(config.name, "make");
+  }
+
+  #[test]
+  fn test_r_config_has_correct_name() {
+    let config = detect_language_config("r").unwrap();
+    assert_eq!(config.name, "r");
   }
 
   #[test]
@@ -1083,8 +1199,14 @@ mod tests {
     let terraform = language_config_for_name("terraform").unwrap();
     assert_eq!(terraform.name, "hcl");
 
+    let clojure = language_config_for_name("clojure").unwrap();
+    assert_eq!(clojure.name, "clojure");
+
     let java = language_config_for_name("java").unwrap();
     assert_eq!(java.name, "java");
+
+    let haskell = language_config_for_name("haskell").unwrap();
+    assert_eq!(haskell.name, "haskell");
 
     let julia = language_config_for_name("julia").unwrap();
     assert_eq!(julia.name, "julia");
@@ -1094,6 +1216,9 @@ mod tests {
 
     let lua = language_config_for_name("lua").unwrap();
     assert_eq!(lua.name, "lua");
+
+    let ocaml = language_config_for_name("ocaml").unwrap();
+    assert_eq!(ocaml.name, "ocaml");
 
     let cmake = language_config_for_name("cmake").unwrap();
     assert_eq!(cmake.name, "cmake");
@@ -1122,6 +1247,9 @@ mod tests {
     let sql = language_config_for_name("sql").unwrap();
     assert_eq!(sql.name, "sql");
 
+    let r = language_config_for_name("r").unwrap();
+    assert_eq!(r.name, "r");
+
     let swift = language_config_for_name("swift").unwrap();
     assert_eq!(swift.name, "swift");
   }
@@ -1147,6 +1275,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/CMakeLists.txt")),
       Some("cmake")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/core.clj")),
+      Some("clojure")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.dart")),
@@ -1205,6 +1337,18 @@ mod tests {
       Some("julia")
     );
     assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/main.hs")),
+      Some("haskell")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/main.ml")),
+      Some("ocaml")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/interface.mli")),
+      Some("ocaml")
+    );
+    assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/query.sql")),
       Some("sql")
     );
@@ -1219,6 +1363,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.lua")),
       Some("lua")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/analysis.R")),
+      Some("r")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/Makefile")),
