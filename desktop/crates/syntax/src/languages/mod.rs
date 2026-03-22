@@ -11,6 +11,7 @@ pub mod hcl;
 pub mod html;
 pub mod java;
 pub mod json;
+pub mod julia;
 pub mod kotlin;
 pub mod lua;
 pub mod markdown;
@@ -156,6 +157,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: java_config,
     aliases: &["java"],
     extensions: &["java"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: julia_config,
+    aliases: &["julia", "jl"],
+    extensions: &["jl"],
     file_names: &[],
     file_name_prefixes: &[],
   },
@@ -408,6 +416,10 @@ fn java_config() -> &'static LanguageConfig {
   &java::JAVA_CONFIG
 }
 
+fn julia_config() -> &'static LanguageConfig {
+  &julia::JULIA_CONFIG
+}
+
 fn kotlin_config() -> &'static LanguageConfig {
   &kotlin::KOTLIN_CONFIG
 }
@@ -520,7 +532,10 @@ mod tests {
 
   #[test]
   fn test_detect_json_lock_files() {
-    assert_eq!(detect_language_config("composer.lock").unwrap().name, "json");
+    assert_eq!(
+      detect_language_config("composer.lock").unwrap().name,
+      "json"
+    );
     assert_eq!(detect_language_config("Pipfile.lock").unwrap().name, "json");
   }
 
@@ -545,6 +560,12 @@ mod tests {
   #[test]
   fn test_detect_java() {
     assert!(detect_language_config("java").is_some());
+  }
+
+  #[test]
+  fn test_detect_julia() {
+    assert!(detect_language_config("julia").is_some());
+    assert!(detect_language_config("jl").is_some());
   }
 
   #[test]
@@ -579,22 +600,33 @@ mod tests {
     assert_eq!(detect_language_config("pubspec.yaml").unwrap().name, "yaml");
     assert_eq!(detect_language_config("pubspec.lock").unwrap().name, "yaml");
     assert_eq!(
-      detect_language_config("analysis_options.yaml").unwrap().name,
+      detect_language_config("analysis_options.yaml")
+        .unwrap()
+        .name,
       "yaml"
     );
   }
 
   #[test]
   fn test_detect_language_config_treats_filename_like_identifiers_as_files() {
-    assert_eq!(detect_language_config("README.md").unwrap().name, "markdown");
-    assert_eq!(detect_language_config("/tmp/pubspec.yaml").unwrap().name, "yaml");
+    assert_eq!(
+      detect_language_config("README.md").unwrap().name,
+      "markdown"
+    );
+    assert_eq!(
+      detect_language_config("/tmp/pubspec.yaml").unwrap().name,
+      "yaml"
+    );
     assert_eq!(
       detect_language_config("/tmp/analysis_options.yaml")
         .unwrap()
         .name,
       "yaml"
     );
-    assert_eq!(detect_language_config("/tmp/build.zig").unwrap().name, "zig");
+    assert_eq!(
+      detect_language_config("/tmp/build.zig").unwrap().name,
+      "zig"
+    );
   }
 
   #[test]
@@ -814,6 +846,12 @@ mod tests {
   }
 
   #[test]
+  fn test_julia_config_has_correct_name() {
+    let config = detect_language_config("julia").unwrap();
+    assert_eq!(config.name, "julia");
+  }
+
+  #[test]
   fn test_kotlin_config_has_correct_name() {
     let config = detect_language_config("kotlin").unwrap();
     assert_eq!(config.name, "kotlin");
@@ -883,6 +921,9 @@ mod tests {
 
     let java = language_config_for_name("java").unwrap();
     assert_eq!(java.name, "java");
+
+    let julia = language_config_for_name("julia").unwrap();
+    assert_eq!(julia.name, "julia");
 
     let kotlin = language_config_for_name("kotlin").unwrap();
     assert_eq!(kotlin.name, "kotlin");
@@ -974,6 +1015,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/Main.java")),
       Some("java")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/main.jl")),
+      Some("julia")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/Main.kt")),

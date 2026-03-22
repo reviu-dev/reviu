@@ -263,6 +263,7 @@ mod tests {
   use crate::languages::hcl::HCL_CONFIG;
   use crate::languages::html::HTML_CONFIG;
   use crate::languages::java::JAVA_CONFIG;
+  use crate::languages::julia::JULIA_CONFIG;
   use crate::languages::kotlin::KOTLIN_CONFIG;
   use crate::languages::lua::LUA_CONFIG;
   use crate::languages::php::PHP_CONFIG;
@@ -419,6 +420,25 @@ mod tests {
     let mut highlighter = SyntaxHighlighter::new(&JAVA_CONFIG);
     let result = highlighter.highlight_text(
       "package com.reviu;\n\npublic class Main {\n  public static void main(String[] args) {\n    System.out.println(\"Hello Reviu\");\n  }\n}\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::Type));
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+  }
+
+  #[test]
+  fn test_highlight_simple_julia() {
+    let mut highlighter = SyntaxHighlighter::new(&JULIA_CONFIG);
+    let result = highlighter.highlight_text(
+      "module Reviu\n\nstruct Greeter\n  name::String\nend\n\nfunction greet(g::Greeter)\n  return \"Hello $(g.name)\"\nend\n\nend\n",
     );
 
     assert!(result.is_ok());
