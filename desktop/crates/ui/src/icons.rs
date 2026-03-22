@@ -241,6 +241,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "json" | "jsonc" => Some("file-icons/json.svg"),
     "md" | "mdx" => Some("file-icons/markdown.svg"),
     "yml" | "yaml" => Some("file-icons/yaml.svg"),
+    "xml" => Some("file-icons/xml.svg"),
     "svg" => Some("file-icons/svg.svg"),
     "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "bmp" | "ico" | "tif" | "tiff" | "heic"
     | "heif" => Some("file-icons/image.svg"),
@@ -446,6 +447,10 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("deployment.yaml", false),
       Some("file-icons/yaml.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("feed.xml", false),
+      Some("file-icons/xml.svg")
     );
   }
 
