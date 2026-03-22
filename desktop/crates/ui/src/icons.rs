@@ -99,6 +99,9 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     ("settings.gradle", "file-icons/gradle.svg"),
     ("settings.gradle.kts", "file-icons/gradle.svg"),
     ("gradle.properties", "file-icons/gradle.svg"),
+    ("pubspec.yaml", "file-icons/yaml.svg"),
+    ("pubspec.lock", "file-icons/yaml.svg"),
+    ("analysis_options.yaml", "file-icons/yaml.svg"),
     ("nest-cli.json", "file-icons/nest.svg"),
     ("nuget.config", "file-icons/nuget.svg"),
     ("packages.config", "file-icons/nuget.svg"),
@@ -399,6 +402,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "java" => Some("file-icons/java.svg"),
     "kt" | "kts" => Some("file-icons/kotlin.svg"),
     "lua" => Some("file-icons/lua.svg"),
+    "dart" => Some("file-icons/dart.svg"),
     "go" => Some("file-icons/go.svg"),
     "rs" => Some("file-icons/rust.svg"),
     "svelte" => Some("file-icons/svelte.svg"),
@@ -764,6 +768,22 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("Main.java", false),
       Some("file-icons/java.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("main.dart", false),
+      Some("file-icons/dart.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("pubspec.yaml", false),
+      Some("file-icons/yaml.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("pubspec.lock", false),
+      Some("file-icons/yaml.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("analysis_options.yaml", false),
+      Some("file-icons/yaml.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("Main.kt", false),

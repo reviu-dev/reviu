@@ -258,6 +258,7 @@ mod tests {
   use crate::languages::c::C_CONFIG;
   use crate::languages::cpp::CPP_CONFIG;
   use crate::languages::csharp::CSHARP_CONFIG;
+  use crate::languages::dart::DART_CONFIG;
   use crate::languages::go::GO_CONFIG;
   use crate::languages::hcl::HCL_CONFIG;
   use crate::languages::html::HTML_CONFIG;
@@ -345,6 +346,25 @@ mod tests {
     let mut highlighter = SyntaxHighlighter::new(&CSHARP_CONFIG);
     let result = highlighter.highlight_text(
       "using System;\n\nnamespace Reviu.App;\n\npublic sealed class Greeter {\n  public string Greet(string name) {\n    return $\"Hello {name}\";\n  }\n}\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::Type));
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+  }
+
+  #[test]
+  fn test_highlight_simple_dart() {
+    let mut highlighter = SyntaxHighlighter::new(&DART_CONFIG);
+    let result = highlighter.highlight_text(
+      "class Greeter {\n  String greet(String name) {\n    return 'Hello $name';\n  }\n}\n",
     );
 
     assert!(result.is_ok());

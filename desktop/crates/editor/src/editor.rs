@@ -7253,6 +7253,10 @@ pub mod tests {
       Some("cpp".to_string())
     );
     assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/main.dart")),
+      Some("dart".to_string())
+    );
+    assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/vector.hpp")),
       Some("cpp".to_string())
     );
@@ -7287,6 +7291,18 @@ pub mod tests {
     assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/Main.java")),
       Some("java".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/pubspec.yaml")),
+      Some("yaml".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/pubspec.lock")),
+      Some("yaml".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/analysis_options.yaml")),
+      Some("yaml".to_string())
     );
     assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/Main.kt")),
