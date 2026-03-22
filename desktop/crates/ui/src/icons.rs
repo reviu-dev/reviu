@@ -99,10 +99,13 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     ("settings.gradle", "file-icons/gradle.svg"),
     ("settings.gradle.kts", "file-icons/gradle.svg"),
     ("gradle.properties", "file-icons/gradle.svg"),
+    ("nest-cli.json", "file-icons/nest.svg"),
     ("nuget.config", "file-icons/nuget.svg"),
     ("packages.config", "file-icons/nuget.svg"),
     ("packages.lock.json", "file-icons/nuget.svg"),
     ("package.json", "file-icons/npm.svg"),
+    ("knip.json", "file-icons/knip.svg"),
+    ("knip.jsonc", "file-icons/knip.svg"),
     (".editorconfig", "file-icons/editorconfig.svg"),
     ("jsconfig.json", "file-icons/jsconfig.svg"),
     (".npmrc", "file-icons/npm.svg"),
@@ -135,6 +138,8 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     ("go.sum", "file-icons/go-mod.svg"),
     ("go.work", "file-icons/go-mod.svg"),
     ("go.work.sum", "file-icons/go-mod.svg"),
+    ("claude.md", "file-icons/claude.svg"),
+    ("claude.local.md", "file-icons/claude.svg"),
     ("cargo.lock", "file-icons/lock.svg"),
     ("pipfile.lock", "file-icons/lock.svg"),
     ("poetry.lock", "file-icons/poetry.svg"),
@@ -155,6 +160,8 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     (".env", "file-icons/tune.svg"),
     (".eslintrc", "file-icons/eslint.svg"),
     (".eslintignore", "file-icons/eslint.svg"),
+    (".ruff.toml", "file-icons/ruff.svg"),
+    ("ruff.toml", "file-icons/ruff.svg"),
     (".prettierrc", "file-icons/prettier.svg"),
     (".prettierignore", "file-icons/prettier.svg"),
     ("biome.json", "file-icons/biome.svg"),
@@ -214,6 +221,14 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     return Some("file-icons/astro-config.svg");
   }
 
+  if name.starts_with("next.config.") {
+    return Some(if is_dark {
+      "file-icons/next/dark.svg"
+    } else {
+      "file-icons/next/light.svg"
+    });
+  }
+
   if name.starts_with("tsconfig.") {
     return Some("file-icons/tsconfig.svg");
   }
@@ -240,6 +255,22 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
 
   if name.starts_with("tailwind.config.") {
     return Some("file-icons/tailwindcss.svg");
+  }
+
+  if name.starts_with("knip.") || name.starts_with("knip.config.") {
+    return Some("file-icons/knip.svg");
+  }
+
+  if name == "netlify.toml" {
+    return Some(if is_dark {
+      "file-icons/netlify/dark.svg"
+    } else {
+      "file-icons/netlify/light.svg"
+    });
+  }
+
+  if name == "nginx.conf" || name == ".nginx.conf" || name.starts_with("nginx.") {
+    return Some("file-icons/nginx.svg");
   }
 
   if name.starts_with("uno.config.") || name.starts_with("unocss.config.") {
@@ -351,6 +382,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "md" | "mdx" => Some("file-icons/markdown.svg"),
     "yml" | "yaml" => Some("file-icons/yaml.svg"),
     "xml" => Some("file-icons/xml.svg"),
+    "scm" => Some("file-icons/scheme.svg"),
     "xaml" => Some("file-icons/xaml.svg"),
     "svg" => Some("file-icons/svg.svg"),
     "jar" => Some("file-icons/jar.svg"),
@@ -515,6 +547,10 @@ mod tests {
       Some("file-icons/astro-config.svg")
     );
     assert_eq!(
+      file_icon_path_for_name_str("next.config.ts", false),
+      Some("file-icons/next/light.svg")
+    );
+    assert_eq!(
       file_icon_path_for_name_str("eslint.config.js", false),
       Some("file-icons/eslint.svg")
     );
@@ -555,6 +591,14 @@ mod tests {
       Some("file-icons/nuxt.svg")
     );
     assert_eq!(
+      file_icon_path_for_name_str("nest-cli.json", false),
+      Some("file-icons/nest.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str(".ruff.toml", false),
+      Some("file-icons/ruff.svg")
+    );
+    assert_eq!(
       file_icon_path_for_name_str("angular.json", false),
       Some("file-icons/angular.svg")
     );
@@ -573,6 +617,14 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("commitlint.config.js", false),
       Some("file-icons/commitlint.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("knip.json", false),
+      Some("file-icons/knip.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("knip.ts", false),
+      Some("file-icons/knip.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("renovate.json", false),
@@ -597,6 +649,18 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str(".editorconfig", false),
       Some("file-icons/editorconfig.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("CLAUDE.md", false),
+      Some("file-icons/claude.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("CLAUDE.local.md", false),
+      Some("file-icons/claude.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("netlify.toml", false),
+      Some("file-icons/netlify/light.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("nx.json", false),
@@ -775,6 +839,14 @@ mod tests {
       Some("file-icons/xml.svg")
     );
     assert_eq!(
+      file_icon_path_for_name_str("query.scm", false),
+      Some("file-icons/scheme.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("nginx.conf", false),
+      Some("file-icons/nginx.svg")
+    );
+    assert_eq!(
       file_icon_path_for_name_str(".terraformrc", false),
       Some("file-icons/terraform.svg")
     );
@@ -833,6 +905,26 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str(".terraform.lock.hcl", true),
       Some("file-icons/hcl/dark.svg")
+    );
+  }
+
+  #[test]
+  fn resolves_next_and_netlify_icons_with_theme() {
+    assert_eq!(
+      file_icon_path_for_name_str("next.config.ts", true),
+      Some("file-icons/next/dark.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("next.config.ts", false),
+      Some("file-icons/next/light.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("netlify.toml", true),
+      Some("file-icons/netlify/dark.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("netlify.toml", false),
+      Some("file-icons/netlify/light.svg")
     );
   }
 
