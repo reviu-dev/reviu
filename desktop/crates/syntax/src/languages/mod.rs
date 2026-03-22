@@ -11,6 +11,7 @@ pub mod html;
 pub mod java;
 pub mod json;
 pub mod kotlin;
+pub mod lua;
 pub mod markdown;
 pub mod php;
 pub mod python;
@@ -154,6 +155,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: kotlin_config,
     aliases: &["kotlin", "kt", "kts"],
     extensions: &["kt", "kts"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: lua_config,
+    aliases: &["lua"],
+    extensions: &["lua"],
     file_names: &[],
     file_name_prefixes: &[],
   },
@@ -384,6 +392,10 @@ fn kotlin_config() -> &'static LanguageConfig {
   &kotlin::KOTLIN_CONFIG
 }
 
+fn lua_config() -> &'static LanguageConfig {
+  &lua::LUA_CONFIG
+}
+
 fn scss_config() -> &'static LanguageConfig {
   &scss::SCSS_CONFIG
 }
@@ -520,6 +532,11 @@ mod tests {
     assert!(detect_language_config("kotlin").is_some());
     assert!(detect_language_config("kt").is_some());
     assert!(detect_language_config("kts").is_some());
+  }
+
+  #[test]
+  fn test_detect_lua() {
+    assert!(detect_language_config("lua").is_some());
   }
 
   #[test]
@@ -749,6 +766,12 @@ mod tests {
   }
 
   #[test]
+  fn test_lua_config_has_correct_name() {
+    let config = detect_language_config("lua").unwrap();
+    assert_eq!(config.name, "lua");
+  }
+
+  #[test]
   fn test_php_config_has_correct_name() {
     let config = detect_language_config("php").unwrap();
     assert_eq!(config.name, "php");
@@ -809,6 +832,9 @@ mod tests {
 
     let kotlin = language_config_for_name("kotlin").unwrap();
     assert_eq!(kotlin.name, "kotlin");
+
+    let lua = language_config_for_name("lua").unwrap();
+    assert_eq!(lua.name, "lua");
 
     let c = language_config_for_name("c").unwrap();
     assert_eq!(c.name, "c");
@@ -883,6 +909,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/build.gradle.kts")),
       Some("kotlin")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/main.lua")),
+      Some("lua")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.tf")),

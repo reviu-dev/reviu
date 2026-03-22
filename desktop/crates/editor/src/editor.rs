@@ -7296,6 +7296,10 @@ pub mod tests {
       Editor::language_hint_for_path(Path::new("/tmp/script.kts")),
       Some("kotlin".to_string())
     );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/main.lua")),
+      Some("lua".to_string())
+    );
   }
 
   #[test]
