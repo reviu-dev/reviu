@@ -125,7 +125,7 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: toml_config,
     aliases: &["toml"],
     extensions: &["toml"],
-    file_names: &[],
+    file_names: &["cargo.lock", "poetry.lock", "uv.lock"],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
@@ -153,7 +153,7 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: json_config,
     aliases: &["json", "jsonc"],
     extensions: &["json", "jsonc"],
-    file_names: &[],
+    file_names: &["composer.lock", "pipfile.lock"],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
@@ -475,6 +475,12 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_json_lock_files() {
+    assert_eq!(detect_language_config("composer.lock").unwrap().name, "json");
+    assert_eq!(detect_language_config("Pipfile.lock").unwrap().name, "json");
+  }
+
+  #[test]
   fn test_detect_markdown() {
     assert!(detect_language_config("md").is_some());
     assert!(detect_language_config("markdown").is_some());
@@ -523,6 +529,13 @@ mod tests {
   #[test]
   fn test_detect_toml() {
     assert!(detect_language_config("toml").is_some());
+  }
+
+  #[test]
+  fn test_detect_toml_lock_files() {
+    assert_eq!(detect_language_config("Cargo.lock").unwrap().name, "toml");
+    assert_eq!(detect_language_config("poetry.lock").unwrap().name, "toml");
+    assert_eq!(detect_language_config("uv.lock").unwrap().name, "toml");
   }
 
   #[test]
@@ -814,6 +827,22 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/App.csproj")),
       Some("xml")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/Cargo.lock")),
+      Some("toml")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/composer.lock")),
+      Some("json")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/Pipfile.lock")),
+      Some("json")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/poetry.lock")),
+      Some("toml")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/Main.java")),
