@@ -263,6 +263,7 @@ mod tests {
   use crate::languages::html::HTML_CONFIG;
   use crate::languages::java::JAVA_CONFIG;
   use crate::languages::kotlin::KOTLIN_CONFIG;
+  use crate::languages::lua::LUA_CONFIG;
   use crate::languages::php::PHP_CONFIG;
   use crate::languages::ruby::RUBY_CONFIG;
   use crate::languages::rust::RUST_CONFIG;
@@ -428,6 +429,29 @@ mod tests {
         .any(|h| h.token_type == TokenType::Keyword)
     );
     assert!(highlights.iter().any(|h| h.token_type == TokenType::Type));
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+  }
+
+  #[test]
+  fn test_highlight_simple_lua() {
+    let mut highlighter = SyntaxHighlighter::new(&LUA_CONFIG);
+    let result = highlighter.highlight_text(
+      "local function greet(name)\n  print(\"Hello \" .. name)\nend\n\ngreet(\"Reviu\")\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Variable)
+    );
     assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
   }
 
