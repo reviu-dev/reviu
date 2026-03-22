@@ -261,6 +261,7 @@ mod tests {
   use crate::languages::go::GO_CONFIG;
   use crate::languages::hcl::HCL_CONFIG;
   use crate::languages::html::HTML_CONFIG;
+  use crate::languages::java::JAVA_CONFIG;
   use crate::languages::php::PHP_CONFIG;
   use crate::languages::ruby::RUBY_CONFIG;
   use crate::languages::rust::RUST_CONFIG;
@@ -388,6 +389,25 @@ mod tests {
         .iter()
         .any(|h| h.token_type == TokenType::Keyword)
     );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+  }
+
+  #[test]
+  fn test_highlight_simple_java() {
+    let mut highlighter = SyntaxHighlighter::new(&JAVA_CONFIG);
+    let result = highlighter.highlight_text(
+      "package com.reviu;\n\npublic class Main {\n  public static void main(String[] args) {\n    System.out.println(\"Hello Reviu\");\n  }\n}\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::Type));
     assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
   }
 

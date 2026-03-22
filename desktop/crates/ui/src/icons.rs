@@ -246,6 +246,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "cpp" | "cc" | "cxx" | "c++" | "cp" | "hpp" | "hh" | "hxx" | "h++" | "ipp" | "inl" | "tpp"
     | "ixx" | "cppm" | "ccm" | "cxxm" => Some("file-icons/cpp.svg"),
     "cs" | "csx" | "csproj" => Some("file-icons/csharp.svg"),
+    "java" => Some("file-icons/java.svg"),
     "go" => Some("file-icons/go.svg"),
     "rs" => Some("file-icons/rust.svg"),
     "svelte" => Some("file-icons/svelte.svg"),
@@ -465,6 +466,10 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("App.csproj", false),
       Some("file-icons/csharp.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("Main.java", false),
+      Some("file-icons/java.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("build.zig.zon", false),
