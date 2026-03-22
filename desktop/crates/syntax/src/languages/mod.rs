@@ -8,6 +8,7 @@ pub mod dockerfile;
 pub mod go;
 pub mod hcl;
 pub mod html;
+pub mod java;
 pub mod json;
 pub mod markdown;
 pub mod php;
@@ -138,6 +139,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: html_config,
     aliases: &["html"],
     extensions: &["html", "htm"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: java_config,
+    aliases: &["java"],
+    extensions: &["java"],
     file_names: &[],
     file_name_prefixes: &[],
   },
@@ -360,6 +368,10 @@ fn hcl_config() -> &'static LanguageConfig {
   &hcl::HCL_CONFIG
 }
 
+fn java_config() -> &'static LanguageConfig {
+  &java::JAVA_CONFIG
+}
+
 fn scss_config() -> &'static LanguageConfig {
   &scss::SCSS_CONFIG
 }
@@ -478,6 +490,11 @@ mod tests {
   fn test_detect_html() {
     assert!(detect_language_config("html").is_some());
     assert!(detect_language_config("htm").is_some());
+  }
+
+  #[test]
+  fn test_detect_java() {
+    assert!(detect_language_config("java").is_some());
   }
 
   #[test]
@@ -688,6 +705,12 @@ mod tests {
   }
 
   #[test]
+  fn test_java_config_has_correct_name() {
+    let config = detect_language_config("java").unwrap();
+    assert_eq!(config.name, "java");
+  }
+
+  #[test]
   fn test_php_config_has_correct_name() {
     let config = detect_language_config("php").unwrap();
     assert_eq!(config.name, "php");
@@ -743,6 +766,9 @@ mod tests {
     let terraform = language_config_for_name("terraform").unwrap();
     assert_eq!(terraform.name, "hcl");
 
+    let java = language_config_for_name("java").unwrap();
+    assert_eq!(java.name, "java");
+
     let c = language_config_for_name("c").unwrap();
     assert_eq!(c.name, "c");
 
@@ -788,6 +814,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/App.csproj")),
       Some("xml")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/Main.java")),
+      Some("java")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.tf")),
