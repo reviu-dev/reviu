@@ -255,6 +255,7 @@ mod tests {
   use super::*;
   use crate::languages::astro::ASTRO_CONFIG;
   use crate::languages::bash::BASH_CONFIG;
+  use crate::languages::go::GO_CONFIG;
   use crate::languages::html::HTML_CONFIG;
   use crate::languages::rust::RUST_CONFIG;
   use crate::languages::svelte::SVELTE_CONFIG;
@@ -311,6 +312,24 @@ mod tests {
         .iter()
         .any(|h| h.token_type == TokenType::Variable)
     );
+  }
+
+  #[test]
+  fn test_highlight_simple_go() {
+    let mut highlighter = SyntaxHighlighter::new(&GO_CONFIG);
+    let result = highlighter.highlight_text(
+      "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hi\")\n}\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
   }
 
   #[test]
