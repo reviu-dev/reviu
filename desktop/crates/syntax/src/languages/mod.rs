@@ -3,6 +3,7 @@ pub mod bash;
 pub mod css;
 pub mod dockerfile;
 pub mod go;
+pub mod hcl;
 pub mod html;
 pub mod json;
 pub mod markdown;
@@ -69,6 +70,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     aliases: &["go"],
     extensions: &["go"],
     file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: hcl_config,
+    aliases: &["hcl", "terraform", "tf", "tfvars"],
+    extensions: &["hcl", "tf", "tfvars"],
+    file_names: &[".terraform.lock.hcl", ".terraformrc", "terraform.rc"],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
@@ -309,6 +317,10 @@ fn go_config() -> &'static LanguageConfig {
   &go::GO_CONFIG
 }
 
+fn hcl_config() -> &'static LanguageConfig {
+  &hcl::HCL_CONFIG
+}
+
 fn scss_config() -> &'static LanguageConfig {
   &scss::SCSS_CONFIG
 }
@@ -440,6 +452,14 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_hcl() {
+    assert!(detect_language_config("hcl").is_some());
+    assert!(detect_language_config("terraform").is_some());
+    assert!(detect_language_config("tf").is_some());
+    assert!(detect_language_config("tfvars").is_some());
+  }
+
+  #[test]
   fn test_detect_scss() {
     assert!(detect_language_config("scss").is_some());
   }
@@ -513,6 +533,16 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_hcl_file_names() {
+    assert_eq!(
+      detect_language_config(".terraform.lock.hcl").unwrap().name,
+      "hcl"
+    );
+    assert_eq!(detect_language_config(".terraformrc").unwrap().name, "hcl");
+    assert_eq!(detect_language_config("terraform.rc").unwrap().name, "hcl");
+  }
+
+  #[test]
   fn test_detect_xml() {
     assert!(detect_language_config("xml").is_some());
   }
@@ -571,6 +601,12 @@ mod tests {
   }
 
   #[test]
+  fn test_hcl_config_has_correct_name() {
+    let config = detect_language_config("terraform").unwrap();
+    assert_eq!(config.name, "hcl");
+  }
+
+  #[test]
   fn test_php_config_has_correct_name() {
     let config = detect_language_config("php").unwrap();
     assert_eq!(config.name, "php");
@@ -623,6 +659,9 @@ mod tests {
     let yaml = language_config_for_name("yml").unwrap();
     assert_eq!(yaml.name, "yaml");
 
+    let terraform = language_config_for_name("terraform").unwrap();
+    assert_eq!(terraform.name, "hcl");
+
     let bash = language_config_for_name("{.bash}").unwrap();
     assert_eq!(bash.name, "bash");
 
@@ -643,6 +682,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.go")),
       Some("go")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/main.tf")),
+      Some("hcl")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/Gemfile")),

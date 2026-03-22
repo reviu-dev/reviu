@@ -129,6 +129,8 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     (".oxlintrc.json", "file-icons/oxc.svg"),
     (".oxfmtrc.json", "file-icons/oxc.svg"),
     (".oxfmtrc.jsonc", "file-icons/oxc.svg"),
+    (".terraformrc", "file-icons/terraform.svg"),
+    ("terraform.rc", "file-icons/terraform.svg"),
     ("license", "file-icons/license.svg"),
     ("copying", "file-icons/license.svg"),
     ("unlicense", "file-icons/license.svg"),
@@ -225,6 +227,14 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     return Some("file-icons/zig.svg");
   }
 
+  if name == ".terraform.lock.hcl" || ext_eq(&name, "hcl") {
+    return Some(if is_dark {
+      "file-icons/hcl/dark.svg"
+    } else {
+      "file-icons/hcl/light.svg"
+    });
+  }
+
   let ext = Path::new(&name).extension()?.to_str()?;
 
   match ext {
@@ -252,6 +262,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "sql" => Some("file-icons/sql.svg"),
     "rb" => Some("file-icons/ruby.svg"),
     "php" | "phtml" => Some("file-icons/php.svg"),
+    "tf" | "tfvars" => Some("file-icons/terraform.svg"),
     "swift" => Some("file-icons/swift.svg"),
     "zig" => Some("file-icons/zig.svg"),
     "ml" | "mli" | "mll" | "mly" | "opam" => Some("file-icons/ocaml.svg"),
@@ -262,6 +273,13 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     }),
     _ => None,
   }
+}
+
+fn ext_eq(file_name: &str, ext: &str) -> bool {
+  Path::new(file_name)
+    .extension()
+    .and_then(|value| value.to_str())
+    == Some(ext)
 }
 
 pub fn file_icon_for_name(file_name: &str) -> Option<FileIcon> {
@@ -424,6 +442,14 @@ mod tests {
       file_icon_path_for_name_str("dune.mli", false),
       Some("file-icons/ocaml.svg")
     );
+    assert_eq!(
+      file_icon_path_for_name_str("main.tf", false),
+      Some("file-icons/terraform.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("terraform.auto.tfvars", false),
+      Some("file-icons/terraform.svg")
+    );
   }
 
   #[test]
@@ -451,6 +477,26 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("feed.xml", false),
       Some("file-icons/xml.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str(".terraformrc", false),
+      Some("file-icons/terraform.svg")
+    );
+  }
+
+  #[test]
+  fn resolves_hcl_icons_with_theme() {
+    assert_eq!(
+      file_icon_path_for_name_str("main.hcl", true),
+      Some("file-icons/hcl/dark.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("main.hcl", false),
+      Some("file-icons/hcl/light.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str(".terraform.lock.hcl", true),
+      Some("file-icons/hcl/dark.svg")
     );
   }
 

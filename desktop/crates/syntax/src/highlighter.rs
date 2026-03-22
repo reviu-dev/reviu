@@ -256,6 +256,7 @@ mod tests {
   use crate::languages::astro::ASTRO_CONFIG;
   use crate::languages::bash::BASH_CONFIG;
   use crate::languages::go::GO_CONFIG;
+  use crate::languages::hcl::HCL_CONFIG;
   use crate::languages::html::HTML_CONFIG;
   use crate::languages::php::PHP_CONFIG;
   use crate::languages::ruby::RUBY_CONFIG;
@@ -333,6 +334,25 @@ mod tests {
         .any(|h| h.token_type == TokenType::Keyword)
     );
     assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+  }
+
+  #[test]
+  fn test_highlight_simple_hcl() {
+    let mut highlighter = SyntaxHighlighter::new(&HCL_CONFIG);
+    let result = highlighter.highlight_text(
+      "variable \"name\" {\n  default = \"reviu\"\n}\n\nlocals {\n  replicas = 2\n  bucket = \"${var.name}-logs\"\n}\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::Number));
   }
 
   #[test]
