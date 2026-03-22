@@ -17,6 +17,7 @@ pub mod typescript;
 pub mod vue;
 pub mod xml;
 pub mod yaml;
+pub mod zig;
 
 use crate::highlighter::LanguageConfig;
 use std::path::Path;
@@ -201,6 +202,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     file_names: &[],
     file_name_prefixes: &[],
   },
+  LanguageRegistration {
+    load: zig_config,
+    aliases: &["zig"],
+    extensions: &["zig"],
+    file_names: &["build.zig", "build.zig.zon"],
+    file_name_prefixes: &[],
+  },
 ];
 
 pub fn detect_language_config(identifier: &str) -> Option<&'static LanguageConfig> {
@@ -361,6 +369,10 @@ fn yaml_config() -> &'static LanguageConfig {
   &yaml::YAML_CONFIG
 }
 
+fn zig_config() -> &'static LanguageConfig {
+  &zig::ZIG_CONFIG
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -473,6 +485,11 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_zig() {
+    assert!(detect_language_config("zig").is_some());
+  }
+
+  #[test]
   fn test_detect_bash_dotfiles() {
     assert!(detect_language_config(".bashrc").is_some());
     assert!(detect_language_config(".zprofile").is_some());
@@ -487,6 +504,12 @@ mod tests {
       detect_language_config(".ruby-version").unwrap().name,
       "ruby"
     );
+  }
+
+  #[test]
+  fn test_detect_zig_file_names() {
+    assert_eq!(detect_language_config("build.zig").unwrap().name, "zig");
+    assert_eq!(detect_language_config("build.zig.zon").unwrap().name, "zig");
   }
 
   #[test]
@@ -578,6 +601,12 @@ mod tests {
   }
 
   #[test]
+  fn test_zig_config_has_correct_name() {
+    let config = detect_language_config("zig").unwrap();
+    assert_eq!(config.name, "zig");
+  }
+
+  #[test]
   fn test_language_config_for_name_supports_code_fence_language_names() {
     let rust = language_config_for_name("rust").unwrap();
     assert_eq!(rust.name, "rust");
@@ -622,6 +651,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/index.php")),
       Some("php")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/build.zig")),
+      Some("zig")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/Component.svelte")),

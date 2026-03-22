@@ -262,6 +262,7 @@ mod tests {
   use crate::languages::rust::RUST_CONFIG;
   use crate::languages::svelte::SVELTE_CONFIG;
   use crate::languages::vue::VUE_CONFIG;
+  use crate::languages::zig::ZIG_CONFIG;
 
   #[test]
   fn test_highlight_simple_rust() {
@@ -372,6 +373,24 @@ mod tests {
         .iter()
         .any(|h| h.token_type == TokenType::PunctuationBracket)
     );
+  }
+
+  #[test]
+  fn test_highlight_simple_zig() {
+    let mut highlighter = SyntaxHighlighter::new(&ZIG_CONFIG);
+    let result = highlighter.highlight_text(
+      "const std = @import(\"std\");\n\npub fn main() void {\n  std.debug.print(\"hi\\n\", .{});\n}\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
   }
 
   #[test]
