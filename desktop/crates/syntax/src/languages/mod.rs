@@ -1,3 +1,4 @@
+pub mod bash;
 pub mod css;
 pub mod dockerfile;
 pub mod html;
@@ -18,6 +19,7 @@ const EXTENSIONS_XML: &[&str] = &[
   "xml", "svg", "xhtml", "xht", "xsl", "xslt", "xsd", "wsdl", "ares", "axml", "ant", "mxml",
   "plist", "iml", "idea",
 ];
+const EXTENSIONS_BASH: &[&str] = &["sh", "bash", "zsh"];
 const EXTENSIONS_PYTHON: &[&str] = &["py", "pyi", "pyw"];
 const EXTENSIONS_RUST: &[&str] = &["rs"];
 const EXTENSIONS_TYPESCRIPT: &[&str] = &["ts", "cts", "mts", "tsx", "js", "cjs", "mjs", "jsx"];
@@ -38,6 +40,7 @@ pub fn detect_language_config(extension: &str) -> Option<&'static LanguageConfig
     .to_ascii_lowercase();
   let extension = extension.as_str();
   match extension {
+    _ if EXTENSIONS_BASH.contains(&extension) => Some(&*bash::BASH_CONFIG),
     _ if EXTENSIONS_CSS.contains(&extension) => Some(&*css::CSS_CONFIG),
     _ if EXTENSIONS_SCSS.contains(&extension) => Some(&*scss::SCSS_CONFIG),
     _ if EXTENSIONS_TOML.contains(&extension) => Some(&*toml::TOML_CONFIG),
@@ -62,6 +65,7 @@ pub fn language_config_for_name(name: &str) -> Option<&'static LanguageConfig> {
     .trim_start_matches('.')
     .to_ascii_lowercase();
   match name.as_str() {
+    "bash" | "sh" | "shell" | "zsh" => Some(&*bash::BASH_CONFIG),
     "css" => Some(&*css::CSS_CONFIG),
     "scss" => Some(&*scss::SCSS_CONFIG),
     "toml" => Some(&*toml::TOML_CONFIG),
@@ -160,6 +164,13 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_bash() {
+    assert!(detect_language_config("sh").is_some());
+    assert!(detect_language_config("bash").is_some());
+    assert!(detect_language_config("zsh").is_some());
+  }
+
+  #[test]
   fn test_detect_xml() {
     assert!(detect_language_config("xml").is_some());
   }
@@ -206,6 +217,12 @@ mod tests {
   }
 
   #[test]
+  fn test_bash_config_has_correct_name() {
+    let config = detect_language_config("sh").unwrap();
+    assert_eq!(config.name, "bash");
+  }
+
+  #[test]
   fn test_language_config_for_name_supports_code_fence_language_names() {
     let rust = language_config_for_name("rust").unwrap();
     assert_eq!(rust.name, "rust");
@@ -215,5 +232,8 @@ mod tests {
 
     let yaml = language_config_for_name("yml").unwrap();
     assert_eq!(yaml.name, "yaml");
+
+    let bash = language_config_for_name("bash").unwrap();
+    assert_eq!(bash.name, "bash");
   }
 }
