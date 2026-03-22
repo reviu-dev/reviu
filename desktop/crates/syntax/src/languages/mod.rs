@@ -2,6 +2,7 @@ pub mod astro;
 pub mod bash;
 pub mod c;
 pub mod cpp;
+pub mod csharp;
 pub mod css;
 pub mod dockerfile;
 pub mod go;
@@ -74,6 +75,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
       "cpp", "cc", "cxx", "c++", "cp", "hpp", "hh", "hxx", "h++", "ipp", "inl", "tpp", "ixx",
       "cppm", "ccm", "cxxm",
     ],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: csharp_config,
+    aliases: &["csharp", "c#", "cs"],
+    extensions: &["cs", "csx"],
     file_names: &[],
     file_name_prefixes: &[],
   },
@@ -217,7 +225,7 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     aliases: &["xml"],
     extensions: &[
       "xml", "svg", "xhtml", "xht", "xsl", "xslt", "xsd", "wsdl", "ares", "axml", "ant", "mxml",
-      "plist", "iml", "idea",
+      "plist", "iml", "idea", "csproj", "fsproj", "vbproj", "props", "targets", "resx",
     ],
     file_names: &[],
     file_name_prefixes: &[],
@@ -330,6 +338,10 @@ fn c_config() -> &'static LanguageConfig {
 
 fn cpp_config() -> &'static LanguageConfig {
   &cpp::CPP_CONFIG
+}
+
+fn csharp_config() -> &'static LanguageConfig {
+  &csharp::CSHARP_CONFIG
 }
 
 fn astro_config() -> &'static LanguageConfig {
@@ -536,6 +548,14 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_csharp() {
+    assert!(detect_language_config("csharp").is_some());
+    assert!(detect_language_config("c#").is_some());
+    assert!(detect_language_config("cs").is_some());
+    assert!(detect_language_config("csx").is_some());
+  }
+
+  #[test]
   fn test_detect_astro() {
     assert!(detect_language_config("astro").is_some());
   }
@@ -586,6 +606,8 @@ mod tests {
   #[test]
   fn test_detect_xml() {
     assert!(detect_language_config("xml").is_some());
+    assert!(detect_language_config("csproj").is_some());
+    assert!(detect_language_config("props").is_some());
   }
 
   #[test]
@@ -651,6 +673,12 @@ mod tests {
   fn test_cpp_config_has_correct_name() {
     let config = detect_language_config("cpp").unwrap();
     assert_eq!(config.name, "cpp");
+  }
+
+  #[test]
+  fn test_csharp_config_has_correct_name() {
+    let config = detect_language_config("csharp").unwrap();
+    assert_eq!(config.name, "csharp");
   }
 
   #[test]
@@ -721,6 +749,9 @@ mod tests {
     let cpp = language_config_for_name("c++").unwrap();
     assert_eq!(cpp.name, "cpp");
 
+    let csharp = language_config_for_name("c#").unwrap();
+    assert_eq!(csharp.name, "csharp");
+
     let bash = language_config_for_name("{.bash}").unwrap();
     assert_eq!(bash.name, "bash");
 
@@ -749,6 +780,14 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.cpp")),
       Some("cpp")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/Program.cs")),
+      Some("csharp")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/App.csproj")),
+      Some("xml")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.tf")),

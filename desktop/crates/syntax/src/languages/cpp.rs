@@ -7,7 +7,10 @@ pub static CPP_CONFIG: Lazy<LanguageConfig> = Lazy::new(|| {
   build_language_config(
     "cpp",
     tree_sitter_cpp::LANGUAGE.into(),
-    &[tree_sitter_c::HIGHLIGHT_QUERY, tree_sitter_cpp::HIGHLIGHT_QUERY],
+    &[
+      tree_sitter_c::HIGHLIGHT_QUERY,
+      tree_sitter_cpp::HIGHLIGHT_QUERY,
+    ],
     &[],
     &[],
   )
