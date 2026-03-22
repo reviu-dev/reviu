@@ -257,6 +257,7 @@ mod tests {
   use crate::languages::bash::BASH_CONFIG;
   use crate::languages::html::HTML_CONFIG;
   use crate::languages::rust::RUST_CONFIG;
+  use crate::languages::svelte::SVELTE_CONFIG;
   use crate::languages::vue::VUE_CONFIG;
 
   #[test]
@@ -305,6 +306,28 @@ mod tests {
     let highlights = result.unwrap();
     assert!(!highlights.is_empty());
     assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Variable)
+    );
+  }
+
+  #[test]
+  fn test_highlight_simple_svelte() {
+    let mut highlighter = SyntaxHighlighter::new(&SVELTE_CONFIG);
+    let result = highlighter.highlight_text(
+      "<script>\n  let count = 1;\n</script>\n<button class=\"hero\">{count}</button>\n",
+    );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
     assert!(
       highlights
         .iter()

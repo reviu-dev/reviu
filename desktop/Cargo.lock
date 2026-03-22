@@ -7367,6 +7367,7 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-scss",
+ "tree-sitter-svelte-next",
  "tree-sitter-toml-ng",
  "tree-sitter-typescript",
  "tree-sitter-vue",
@@ -8072,6 +8073,16 @@ checksum = "33909a9ca86390ebbf3461e9949c4bbe2767d2d024b486306d27616641d4ba24"
 dependencies = [
  "cc",
  "tree-sitter 0.25.10",
+]
+
+[[package]]
+name = "tree-sitter-svelte-next"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56f88190d0743e897c3e148a7e241aba0a8844b8afe816943851426e3f7b9753"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
 ]
 
 [[package]]

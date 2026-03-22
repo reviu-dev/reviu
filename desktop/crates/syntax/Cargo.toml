@@ -10,6 +10,7 @@ tree-sitter-highlight.workspace = true
 tree-sitter.workspace = true
 tree-sitter-astro-next.workspace = true
 tree-sitter-bash.workspace = true
+tree-sitter-svelte-next.workspace = true
 tree-sitter-rust.workspace = true
 tree-sitter-typescript.workspace = true
 tree-sitter-json.workspace = true
