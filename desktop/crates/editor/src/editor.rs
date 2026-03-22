@@ -35,6 +35,7 @@ use gpui_component::{
 };
 use parking_lot::RwLock;
 use smol::{Timer, unblock};
+use syntax::languages;
 use ui::{StatusThemeExt as _, Theme, UiIconName};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -901,21 +902,7 @@ impl Editor {
   }
 
   fn language_hint_for_path(workdir_path: &Path) -> Option<String> {
-    let file_ext = workdir_path
-      .extension()
-      .and_then(|ext| ext.to_str())
-      .map(|ext| ext.to_ascii_lowercase());
-    let file_name = workdir_path
-      .file_name()
-      .and_then(|name| name.to_str())
-      .map(|name| name.to_ascii_lowercase());
-    if file_name
-      .as_deref()
-      .is_some_and(|name| name.starts_with("dockerfile"))
-    {
-      return Some("dockerfile".to_string());
-    }
-    file_ext.or(file_name)
+    languages::detect_language_name_for_path(workdir_path).map(str::to_owned)
   }
 
   pub fn document(&self) -> &Entity<Document> {
@@ -7249,6 +7236,19 @@ impl Focusable for Editor {
 pub mod tests {
   use super::*;
   use gpui::TestAppContext;
+  use std::path::Path;
+
+  #[test]
+  fn language_hint_for_path_detects_dotfiles_and_dockerfile_variants() {
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/.bashrc")),
+      Some("bash".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/Dockerfile.dev")),
+      Some("dockerfile".to_string())
+    );
+  }
 
   #[test]
   fn parse_github_pr_comment_link_accepts_standard_discussion_fragment() {

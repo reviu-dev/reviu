@@ -1,6 +1,7 @@
 use crate::languages;
 use crate::theme::TokenType;
-use std::ops::Range;
+use std::{borrow::Cow, ops::Range};
+use tree_sitter::Language as TreeSitterLanguage;
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
 pub const HIGHLIGHT_NAMES: &[&str] = &[
@@ -122,6 +123,42 @@ pub struct HighlightSpan {
 pub struct LanguageConfig {
   pub name: &'static str,
   pub highlight_config: HighlightConfiguration,
+}
+
+pub fn build_language_config(
+  name: &'static str,
+  language: TreeSitterLanguage,
+  highlights: &[&'static str],
+  injections: &[&'static str],
+  locals: &[&'static str],
+) -> LanguageConfig {
+  let highlights = join_query_fragments(highlights);
+  let injections = join_query_fragments(injections);
+  let locals = join_query_fragments(locals);
+
+  let mut highlight_config = HighlightConfiguration::new(
+    language,
+    name,
+    highlights.as_ref(),
+    injections.as_ref(),
+    locals.as_ref(),
+  )
+  .unwrap_or_else(|error| panic!("Failed to create {name} highlight config: {error}"));
+
+  highlight_config.configure(HIGHLIGHT_NAMES);
+
+  LanguageConfig {
+    name,
+    highlight_config,
+  }
+}
+
+fn join_query_fragments(fragments: &[&'static str]) -> Cow<'static, str> {
+  match fragments {
+    [] => Cow::Borrowed(""),
+    [fragment] => Cow::Borrowed(fragment),
+    _ => Cow::Owned(fragments.join("\n")),
+  }
 }
 
 /// Syntax highlighting manager
