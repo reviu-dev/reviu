@@ -257,6 +257,7 @@ mod tests {
   use crate::languages::bash::BASH_CONFIG;
   use crate::languages::go::GO_CONFIG;
   use crate::languages::html::HTML_CONFIG;
+  use crate::languages::ruby::RUBY_CONFIG;
   use crate::languages::rust::RUST_CONFIG;
   use crate::languages::svelte::SVELTE_CONFIG;
   use crate::languages::vue::VUE_CONFIG;
@@ -320,6 +321,23 @@ mod tests {
     let result = highlighter.highlight_text(
       "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"hi\")\n}\n",
     );
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Keyword)
+    );
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+  }
+
+  #[test]
+  fn test_highlight_simple_ruby() {
+    let mut highlighter = SyntaxHighlighter::new(&RUBY_CONFIG);
+    let result = highlighter
+      .highlight_text("class Greeter\n  def greet(name)\n    puts \"Hello #{name}\"\n  end\nend\n");
 
     assert!(result.is_ok());
     let highlights = result.unwrap();

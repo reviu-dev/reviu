@@ -7,6 +7,7 @@ pub mod html;
 pub mod json;
 pub mod markdown;
 pub mod python;
+pub mod ruby;
 pub mod rust;
 pub mod scss;
 pub mod svelte;
@@ -128,6 +129,30 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     aliases: &["python", "python3", "py"],
     extensions: &["py", "pyi", "pyw"],
     file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: ruby_config,
+    aliases: &["ruby", "rb"],
+    extensions: &["rb"],
+    file_names: &[
+      ".irbrc",
+      ".pryrc",
+      ".ruby-version",
+      "appraisals",
+      "berksfile",
+      "brewfile",
+      "capfile",
+      "cheffile",
+      "dangerfile",
+      "fastfile",
+      "gemfile",
+      "guardfile",
+      "podfile",
+      "rakefile",
+      "thorfile",
+      "vagrantfile",
+    ],
     file_name_prefixes: &[],
   },
   LanguageRegistration {
@@ -300,6 +325,10 @@ fn python_config() -> &'static LanguageConfig {
   &python::PYTHON_CONFIG
 }
 
+fn ruby_config() -> &'static LanguageConfig {
+  &ruby::RUBY_CONFIG
+}
+
 fn rust_config() -> &'static LanguageConfig {
   &rust::RUST_CONFIG
 }
@@ -403,6 +432,12 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_ruby() {
+    assert!(detect_language_config("rb").is_some());
+    assert!(detect_language_config("ruby").is_some());
+  }
+
+  #[test]
   fn test_detect_bash() {
     assert!(detect_language_config("sh").is_some());
     assert!(detect_language_config("bash").is_some());
@@ -424,6 +459,16 @@ mod tests {
     assert!(detect_language_config(".bashrc").is_some());
     assert!(detect_language_config(".zprofile").is_some());
     assert!(detect_language_config(".envrc").is_some());
+  }
+
+  #[test]
+  fn test_detect_ruby_file_names() {
+    assert_eq!(detect_language_config("Gemfile").unwrap().name, "ruby");
+    assert_eq!(detect_language_config("Rakefile").unwrap().name, "ruby");
+    assert_eq!(
+      detect_language_config(".ruby-version").unwrap().name,
+      "ruby"
+    );
   }
 
   #[test]
@@ -485,6 +530,12 @@ mod tests {
   }
 
   #[test]
+  fn test_ruby_config_has_correct_name() {
+    let config = detect_language_config("rb").unwrap();
+    assert_eq!(config.name, "ruby");
+  }
+
+  #[test]
   fn test_xml_config_has_correct_name() {
     let config = detect_language_config("xml").unwrap();
     assert_eq!(config.name, "xml");
@@ -510,6 +561,9 @@ mod tests {
     let python = language_config_for_name("python").unwrap();
     assert_eq!(python.name, "python");
 
+    let ruby = language_config_for_name("ruby").unwrap();
+    assert_eq!(ruby.name, "ruby");
+
     let yaml = language_config_for_name("yml").unwrap();
     assert_eq!(yaml.name, "yaml");
 
@@ -533,6 +587,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.go")),
       Some("go")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/Gemfile")),
+      Some("ruby")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/Component.svelte")),
