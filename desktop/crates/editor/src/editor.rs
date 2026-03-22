@@ -7288,6 +7288,14 @@ pub mod tests {
       Editor::language_hint_for_path(Path::new("/tmp/Main.java")),
       Some("java".to_string())
     );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/Main.kt")),
+      Some("kotlin".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/script.kts")),
+      Some("kotlin".to_string())
+    );
   }
 
   #[test]

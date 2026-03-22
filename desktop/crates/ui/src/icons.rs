@@ -340,6 +340,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "cs" | "csx" | "csproj" => Some("file-icons/csharp.svg"),
     "sln" => Some("file-icons/visualstudio.svg"),
     "java" => Some("file-icons/java.svg"),
+    "kt" | "kts" => Some("file-icons/kotlin.svg"),
     "go" => Some("file-icons/go.svg"),
     "rs" => Some("file-icons/rust.svg"),
     "svelte" => Some("file-icons/svelte.svg"),
@@ -664,6 +665,14 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("Main.java", false),
       Some("file-icons/java.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("Main.kt", false),
+      Some("file-icons/kotlin.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("build.gradle.kts", false),
+      Some("file-icons/gradle.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("pom.xml", false),

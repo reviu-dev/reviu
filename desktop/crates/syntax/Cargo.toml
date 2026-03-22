@@ -15,6 +15,7 @@ tree-sitter-c.workspace = true
 tree-sitter-cpp.workspace = true
 tree-sitter-c-sharp.workspace = true
 tree-sitter-java.workspace = true
+tree-sitter-kotlin-sg.workspace = true
 tree-sitter-svelte-next.workspace = true
 tree-sitter-rust.workspace = true
 tree-sitter-ruby.workspace = true

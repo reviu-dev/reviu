@@ -10,6 +10,7 @@ pub mod hcl;
 pub mod html;
 pub mod java;
 pub mod json;
+pub mod kotlin;
 pub mod markdown;
 pub mod php;
 pub mod python;
@@ -146,6 +147,13 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: java_config,
     aliases: &["java"],
     extensions: &["java"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: kotlin_config,
+    aliases: &["kotlin", "kt", "kts"],
+    extensions: &["kt", "kts"],
     file_names: &[],
     file_name_prefixes: &[],
   },
@@ -372,6 +380,10 @@ fn java_config() -> &'static LanguageConfig {
   &java::JAVA_CONFIG
 }
 
+fn kotlin_config() -> &'static LanguageConfig {
+  &kotlin::KOTLIN_CONFIG
+}
+
 fn scss_config() -> &'static LanguageConfig {
   &scss::SCSS_CONFIG
 }
@@ -501,6 +513,13 @@ mod tests {
   #[test]
   fn test_detect_java() {
     assert!(detect_language_config("java").is_some());
+  }
+
+  #[test]
+  fn test_detect_kotlin() {
+    assert!(detect_language_config("kotlin").is_some());
+    assert!(detect_language_config("kt").is_some());
+    assert!(detect_language_config("kts").is_some());
   }
 
   #[test]
@@ -724,6 +743,12 @@ mod tests {
   }
 
   #[test]
+  fn test_kotlin_config_has_correct_name() {
+    let config = detect_language_config("kotlin").unwrap();
+    assert_eq!(config.name, "kotlin");
+  }
+
+  #[test]
   fn test_php_config_has_correct_name() {
     let config = detect_language_config("php").unwrap();
     assert_eq!(config.name, "php");
@@ -781,6 +806,9 @@ mod tests {
 
     let java = language_config_for_name("java").unwrap();
     assert_eq!(java.name, "java");
+
+    let kotlin = language_config_for_name("kotlin").unwrap();
+    assert_eq!(kotlin.name, "kotlin");
 
     let c = language_config_for_name("c").unwrap();
     assert_eq!(c.name, "c");
@@ -847,6 +875,14 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/Main.java")),
       Some("java")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/Main.kt")),
+      Some("kotlin")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/build.gradle.kts")),
+      Some("kotlin")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.tf")),
