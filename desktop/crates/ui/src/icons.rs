@@ -82,11 +82,39 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
 
   const EXACT_ICON_FILES: &[(&str, &str)] = &[
     ("dockerfile", "file-icons/docker.svg"),
+    ("makefile", "file-icons/makefile.svg"),
     ("tiltfile", "file-icons/tilt.svg"),
+    ("cmakelists.txt", "file-icons/cmake.svg"),
+    (".clang-format", "file-icons/clangd.svg"),
+    (".clang-tidy", "file-icons/clangd.svg"),
+    ("compile_commands.json", "file-icons/clangd.svg"),
+    ("meson.build", "file-icons/meson.svg"),
+    ("meson_options.txt", "file-icons/meson.svg"),
+    ("xmake.lua", "file-icons/xmake.svg"),
+    ("sconstruct", "file-icons/scons.svg"),
+    ("sconscript", "file-icons/scons.svg"),
+    ("pom.xml", "file-icons/maven.svg"),
+    ("build.gradle", "file-icons/gradle.svg"),
+    ("build.gradle.kts", "file-icons/gradle.svg"),
+    ("settings.gradle", "file-icons/gradle.svg"),
+    ("settings.gradle.kts", "file-icons/gradle.svg"),
+    ("gradle.properties", "file-icons/gradle.svg"),
+    ("nuget.config", "file-icons/nuget.svg"),
+    ("packages.config", "file-icons/nuget.svg"),
+    ("packages.lock.json", "file-icons/nuget.svg"),
+    ("package.json", "file-icons/npm.svg"),
     (".editorconfig", "file-icons/editorconfig.svg"),
+    ("jsconfig.json", "file-icons/jsconfig.svg"),
     (".npmrc", "file-icons/npm.svg"),
     ("package-lock.json", "file-icons/npm.svg"),
     ("npm-shrinkwrap.json", "file-icons/npm.svg"),
+    (".babelrc", "file-icons/babel.svg"),
+    (".swcrc", "file-icons/swc.svg"),
+    (".browserslistrc", "file-icons/browserlist.svg"),
+    ("browserslist", "file-icons/browserlist.svg"),
+    ("lerna.json", "file-icons/lerna.svg"),
+    ("typedoc.json", "file-icons/typedoc.svg"),
+    ("tsdoc.json", "file-icons/tsdoc.svg"),
     (".yarnrc", "file-icons/yarn.svg"),
     (".yarnrc.yml", "file-icons/yarn.svg"),
     ("yarn.lock", "file-icons/yarn.svg"),
@@ -98,6 +126,12 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     ("bun.lock", "file-icons/bun.svg"),
     ("bun.lockb", "file-icons/bun.svg"),
     ("bunfig.toml", "file-icons/bun.svg"),
+    ("go.mod", "file-icons/go-mod.svg"),
+    ("go.sum", "file-icons/go-mod.svg"),
+    ("go.work", "file-icons/go-mod.svg"),
+    ("go.work.sum", "file-icons/go-mod.svg"),
+    ("cargo.lock", "file-icons/lock.svg"),
+    ("rust-toolchain", "file-icons/rust.svg"),
     (".nvmrc", "file-icons/nodejs.svg"),
     (".node-version", "file-icons/nodejs.svg"),
     (".bashrc", "file-icons/console.svg"),
@@ -115,6 +149,18 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     (".prettierignore", "file-icons/prettier.svg"),
     ("biome.json", "file-icons/biome.svg"),
     ("biome.jsonc", "file-icons/biome.svg"),
+    ("composer.json", "file-icons/php.svg"),
+    ("composer.lock", "file-icons/php.svg"),
+    ("phpunit.xml", "file-icons/phpunit.svg"),
+    ("phpunit.xml.dist", "file-icons/phpunit.svg"),
+    ("phpstan.neon", "file-icons/phpstan.svg"),
+    ("phpstan.neon.dist", "file-icons/phpstan.svg"),
+    (".php-cs-fixer.php", "file-icons/php-cs-fixer.svg"),
+    (".php-cs-fixer.dist.php", "file-icons/php-cs-fixer.svg"),
+    ("gemfile.lock", "file-icons/gemfile.svg"),
+    (".rubocop.yml", "file-icons/rubocop.svg"),
+    (".rubocop_todo.yml", "file-icons/rubocop.svg"),
+    (".rspec", "file-icons/rspec.svg"),
     (".postcssrc", "file-icons/postcss.svg"),
     ("dependabot.yml", "file-icons/dependabot.svg"),
     ("dependabot.yaml", "file-icons/dependabot.svg"),
@@ -170,8 +216,20 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     return Some("file-icons/prettier.svg");
   }
 
+  if name.starts_with("babel.config.") {
+    return Some("file-icons/babel.svg");
+  }
+
   if name.starts_with(".postcssrc.") || name.starts_with("postcss.config.") {
     return Some("file-icons/postcss.svg");
+  }
+
+  if name.starts_with("tailwind.config.") {
+    return Some("file-icons/tailwindcss.svg");
+  }
+
+  if name.starts_with(".stylelintrc.") || name.starts_with("stylelint.config.") {
+    return Some("file-icons/stylelint.svg");
   }
 
   if name.starts_with("webpack.config.")
@@ -189,6 +247,22 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     || name.starts_with("jest.preset.")
   {
     return Some("file-icons/jest.svg");
+  }
+
+  if name.starts_with("playwright.config.") {
+    return Some("file-icons/playwright.svg");
+  }
+
+  if name.starts_with("cypress.config.") {
+    return Some("file-icons/cypress.svg");
+  }
+
+  if name.starts_with("rollup.config.") {
+    return Some("file-icons/rollup.svg");
+  }
+
+  if name.starts_with("commitlint.config.") {
+    return Some("file-icons/commitlint.svg");
   }
 
   if name.starts_with("ecosystem.config.") {
@@ -246,6 +320,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "cpp" | "cc" | "cxx" | "c++" | "cp" | "hpp" | "hh" | "hxx" | "h++" | "ipp" | "inl" | "tpp"
     | "ixx" | "cppm" | "ccm" | "cxxm" => Some("file-icons/cpp.svg"),
     "cs" | "csx" | "csproj" => Some("file-icons/csharp.svg"),
+    "sln" => Some("file-icons/visualstudio.svg"),
     "java" => Some("file-icons/java.svg"),
     "go" => Some("file-icons/go.svg"),
     "rs" => Some("file-icons/rust.svg"),
@@ -257,7 +332,10 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "md" | "mdx" => Some("file-icons/markdown.svg"),
     "yml" | "yaml" => Some("file-icons/yaml.svg"),
     "xml" => Some("file-icons/xml.svg"),
+    "xaml" => Some("file-icons/xaml.svg"),
     "svg" => Some("file-icons/svg.svg"),
+    "jar" => Some("file-icons/jar.svg"),
+    "cmake" => Some("file-icons/cmake.svg"),
     "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "bmp" | "ico" | "tif" | "tiff" | "heic"
     | "heif" => Some("file-icons/image.svg"),
     "pdf" => Some("file-icons/pdf.svg"),
@@ -396,6 +474,18 @@ mod tests {
       Some("file-icons/webpack.svg")
     );
     assert_eq!(
+      file_icon_path_for_name_str("babel.config.mjs", false),
+      Some("file-icons/babel.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("tailwind.config.ts", false),
+      Some("file-icons/tailwindcss.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("stylelint.config.js", false),
+      Some("file-icons/stylelint.svg")
+    );
+    assert_eq!(
       file_icon_path_for_name_str("vitest.workspace.ts", false),
       Some("file-icons/vitest.svg")
     );
@@ -410,6 +500,22 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("angular.json", false),
       Some("file-icons/angular.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("playwright.config.ts", false),
+      Some("file-icons/playwright.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("cypress.config.ts", false),
+      Some("file-icons/cypress.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("rollup.config.mjs", false),
+      Some("file-icons/rollup.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("commitlint.config.js", false),
+      Some("file-icons/commitlint.svg")
     );
   }
 
@@ -468,8 +574,80 @@ mod tests {
       Some("file-icons/csharp.svg")
     );
     assert_eq!(
+      file_icon_path_for_name_str("App.sln", false),
+      Some("file-icons/visualstudio.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("App.xaml", false),
+      Some("file-icons/xaml.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("nuget.config", false),
+      Some("file-icons/nuget.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("packages.lock.json", false),
+      Some("file-icons/nuget.svg")
+    );
+    assert_eq!(
       file_icon_path_for_name_str("Main.java", false),
       Some("file-icons/java.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("pom.xml", false),
+      Some("file-icons/maven.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("build.gradle.kts", false),
+      Some("file-icons/gradle.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("app.jar", false),
+      Some("file-icons/jar.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("CMakeLists.txt", false),
+      Some("file-icons/cmake.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("toolchain.cmake", false),
+      Some("file-icons/cmake.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("compile_commands.json", false),
+      Some("file-icons/clangd.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("meson.build", false),
+      Some("file-icons/meson.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("xmake.lua", false),
+      Some("file-icons/xmake.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("SConstruct", false),
+      Some("file-icons/scons.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("go.mod", false),
+      Some("file-icons/go-mod.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("Cargo.lock", false),
+      Some("file-icons/lock.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("Gemfile.lock", false),
+      Some("file-icons/gemfile.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str(".rubocop.yml", false),
+      Some("file-icons/rubocop.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str(".rspec", false),
+      Some("file-icons/rspec.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("build.zig.zon", false),
@@ -519,6 +697,46 @@ mod tests {
       file_icon_path_for_name_str(".terraformrc", false),
       Some("file-icons/terraform.svg")
     );
+    assert_eq!(
+      file_icon_path_for_name_str("package.json", false),
+      Some("file-icons/npm.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("jsconfig.json", false),
+      Some("file-icons/jsconfig.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("go.work.sum", false),
+      Some("file-icons/go-mod.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("composer.json", false),
+      Some("file-icons/php.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("phpunit.xml.dist", false),
+      Some("file-icons/phpunit.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("phpstan.neon", false),
+      Some("file-icons/phpstan.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str(".php-cs-fixer.php", false),
+      Some("file-icons/php-cs-fixer.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("browserslist", false),
+      Some("file-icons/browserlist.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("typedoc.json", false),
+      Some("file-icons/typedoc.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("tsdoc.json", false),
+      Some("file-icons/tsdoc.svg")
+    );
   }
 
   #[test]
@@ -553,6 +771,22 @@ mod tests {
     );
     assert_eq!(
       file_icon_path_for_name_str("Cargo.toml", true),
+      Some("file-icons/toml/dark.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("Cargo.lock", true),
+      Some("file-icons/lock.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("rust-toolchain", true),
+      Some("file-icons/rust.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("rust-toolchain.toml", true),
+      Some("file-icons/toml/dark.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("config.toml", true),
       Some("file-icons/toml/dark.svg")
     );
   }
