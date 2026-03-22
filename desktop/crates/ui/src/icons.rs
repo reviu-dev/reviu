@@ -115,6 +115,11 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     ("lerna.json", "file-icons/lerna.svg"),
     ("typedoc.json", "file-icons/typedoc.svg"),
     ("tsdoc.json", "file-icons/tsdoc.svg"),
+    ("renovate.json", "file-icons/renovate.svg"),
+    ("renovate.json5", "file-icons/renovate.svg"),
+    (".renovaterc", "file-icons/renovate.svg"),
+    (".renovaterc.json", "file-icons/renovate.svg"),
+    (".renovaterc.json5", "file-icons/renovate.svg"),
     (".yarnrc", "file-icons/yarn.svg"),
     (".yarnrc.yml", "file-icons/yarn.svg"),
     ("yarn.lock", "file-icons/yarn.svg"),
@@ -131,6 +136,10 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     ("go.work", "file-icons/go-mod.svg"),
     ("go.work.sum", "file-icons/go-mod.svg"),
     ("cargo.lock", "file-icons/lock.svg"),
+    ("pipfile.lock", "file-icons/lock.svg"),
+    ("poetry.lock", "file-icons/poetry.svg"),
+    ("uv.lock", "file-icons/uv.svg"),
+    ("uv.toml", "file-icons/uv.svg"),
     ("rust-toolchain", "file-icons/rust.svg"),
     (".nvmrc", "file-icons/nodejs.svg"),
     (".node-version", "file-icons/nodejs.svg"),
@@ -143,6 +152,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     (".zlogin", "file-icons/console.svg"),
     (".profile", "file-icons/console.svg"),
     (".envrc", "file-icons/console.svg"),
+    (".env", "file-icons/tune.svg"),
     (".eslintrc", "file-icons/eslint.svg"),
     (".eslintignore", "file-icons/eslint.svg"),
     (".prettierrc", "file-icons/prettier.svg"),
@@ -212,6 +222,10 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     return Some("file-icons/eslint.svg");
   }
 
+  if name.starts_with(".env.") {
+    return Some("file-icons/tune.svg");
+  }
+
   if name.starts_with(".prettierrc.") || name.starts_with("prettier.config.") {
     return Some("file-icons/prettier.svg");
   }
@@ -226,6 +240,10 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
 
   if name.starts_with("tailwind.config.") {
     return Some("file-icons/tailwindcss.svg");
+  }
+
+  if name.starts_with("uno.config.") || name.starts_with("unocss.config.") {
+    return Some("file-icons/unocss.svg");
   }
 
   if name.starts_with(".stylelintrc.") || name.starts_with("stylelint.config.") {
@@ -340,6 +358,8 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     | "heif" => Some("file-icons/image.svg"),
     "pdf" => Some("file-icons/pdf.svg"),
     "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" => Some("file-icons/zip.svg"),
+    "woff" | "woff2" | "ttf" | "otf" | "eot" | "fon" => Some("file-icons/font.svg"),
+    "log" => Some("file-icons/log.svg"),
     "sh" | "bash" | "zsh" | "fish" => Some("file-icons/console.svg"),
     "py" => Some("file-icons/python.svg"),
     "sql" => Some("file-icons/sql.svg"),
@@ -422,6 +442,22 @@ mod tests {
       Some("file-icons/pnpm.svg")
     );
     assert_eq!(
+      file_icon_path_for_name_str("Pipfile.lock", false),
+      Some("file-icons/lock.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("poetry.lock", false),
+      Some("file-icons/poetry.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("uv.lock", false),
+      Some("file-icons/uv.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("uv.toml", false),
+      Some("file-icons/uv.svg")
+    );
+    assert_eq!(
       file_icon_path_for_name_str("bunfig.toml", false),
       Some("file-icons/bun.svg")
     );
@@ -430,7 +466,19 @@ mod tests {
   #[test]
   fn resolves_shell_and_media_icons() {
     assert_eq!(
+      file_icon_path_for_name_str(".env", false),
+      Some("file-icons/tune.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str(".env.example", false),
+      Some("file-icons/tune.svg")
+    );
+    assert_eq!(
       file_icon_path_for_name_str(".zshrc", false),
+      Some("file-icons/console.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str(".envrc", false),
       Some("file-icons/console.svg")
     );
     assert_eq!(
@@ -448,6 +496,14 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("archive.tgz", false),
       Some("file-icons/zip.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("debug.log", false),
+      Some("file-icons/log.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("inter.woff2", false),
+      Some("file-icons/font.svg")
     );
   }
 
@@ -516,6 +572,22 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("commitlint.config.js", false),
       Some("file-icons/commitlint.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("renovate.json", false),
+      Some("file-icons/renovate.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str(".renovaterc.json5", false),
+      Some("file-icons/renovate.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("uno.config.ts", false),
+      Some("file-icons/unocss.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("unocss.config.ts", false),
+      Some("file-icons/unocss.svg")
     );
   }
 

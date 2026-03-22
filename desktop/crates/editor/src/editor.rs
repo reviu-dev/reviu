@@ -7269,6 +7269,22 @@ pub mod tests {
       Some("xml".to_string())
     );
     assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/Cargo.lock")),
+      Some("toml".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/composer.lock")),
+      Some("json".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/Pipfile.lock")),
+      Some("json".to_string())
+    );
+    assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/poetry.lock")),
+      Some("toml".to_string())
+    );
+    assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/Main.java")),
       Some("java".to_string())
     );
