@@ -243,6 +243,8 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     "ts" | "tsx" | "mts" | "cts" => Some("file-icons/typescript.svg"),
     "js" | "jsx" | "mjs" | "cjs" => Some("file-icons/javascript.svg"),
     "c" | "h" => Some("file-icons/c.svg"),
+    "cpp" | "cc" | "cxx" | "c++" | "cp" | "hpp" | "hh" | "hxx" | "h++" | "ipp" | "inl" | "tpp"
+    | "ixx" | "cppm" | "ccm" | "cxxm" => Some("file-icons/cpp.svg"),
     "go" => Some("file-icons/go.svg"),
     "rs" => Some("file-icons/rust.svg"),
     "svelte" => Some("file-icons/svelte.svg"),
@@ -442,6 +444,14 @@ mod tests {
     assert_eq!(
       file_icon_path_for_name_str("main.h", false),
       Some("file-icons/c.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("main.cpp", false),
+      Some("file-icons/cpp.svg")
+    );
+    assert_eq!(
+      file_icon_path_for_name_str("vector.hpp", false),
+      Some("file-icons/cpp.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("build.zig.zon", false),

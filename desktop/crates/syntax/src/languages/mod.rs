@@ -1,6 +1,7 @@
 pub mod astro;
 pub mod bash;
 pub mod c;
+pub mod cpp;
 pub mod css;
 pub mod dockerfile;
 pub mod go;
@@ -63,6 +64,16 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: c_config,
     aliases: &["c"],
     extensions: &["c", "h"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
+  LanguageRegistration {
+    load: cpp_config,
+    aliases: &["cpp", "c++", "cplusplus"],
+    extensions: &[
+      "cpp", "cc", "cxx", "c++", "cp", "hpp", "hh", "hxx", "h++", "ipp", "inl", "tpp", "ixx",
+      "cppm", "ccm", "cxxm",
+    ],
     file_names: &[],
     file_name_prefixes: &[],
   },
@@ -317,6 +328,10 @@ fn c_config() -> &'static LanguageConfig {
   &c::C_CONFIG
 }
 
+fn cpp_config() -> &'static LanguageConfig {
+  &cpp::CPP_CONFIG
+}
+
 fn astro_config() -> &'static LanguageConfig {
   &astro::ASTRO_CONFIG
 }
@@ -513,6 +528,14 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_cpp() {
+    assert!(detect_language_config("cpp").is_some());
+    assert!(detect_language_config("c++").is_some());
+    assert!(detect_language_config("hpp").is_some());
+    assert!(detect_language_config("cc").is_some());
+  }
+
+  #[test]
   fn test_detect_astro() {
     assert!(detect_language_config("astro").is_some());
   }
@@ -625,6 +648,12 @@ mod tests {
   }
 
   #[test]
+  fn test_cpp_config_has_correct_name() {
+    let config = detect_language_config("cpp").unwrap();
+    assert_eq!(config.name, "cpp");
+  }
+
+  #[test]
   fn test_hcl_config_has_correct_name() {
     let config = detect_language_config("terraform").unwrap();
     assert_eq!(config.name, "hcl");
@@ -689,6 +718,9 @@ mod tests {
     let c = language_config_for_name("c").unwrap();
     assert_eq!(c.name, "c");
 
+    let cpp = language_config_for_name("c++").unwrap();
+    assert_eq!(cpp.name, "cpp");
+
     let bash = language_config_for_name("{.bash}").unwrap();
     assert_eq!(bash.name, "bash");
 
@@ -713,6 +745,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.c")),
       Some("c")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/main.cpp")),
+      Some("cpp")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/main.tf")),
