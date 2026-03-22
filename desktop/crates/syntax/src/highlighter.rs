@@ -253,8 +253,11 @@ fn map_highlight_index_to_token_type(idx: usize) -> Option<TokenType> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::languages::astro::ASTRO_CONFIG;
   use crate::languages::bash::BASH_CONFIG;
+  use crate::languages::html::HTML_CONFIG;
   use crate::languages::rust::RUST_CONFIG;
+  use crate::languages::vue::VUE_CONFIG;
 
   #[test]
   fn test_highlight_simple_rust() {
@@ -290,6 +293,23 @@ mod tests {
     assert!(result.is_ok());
     let highlights = result.unwrap();
     assert!(!highlights.is_empty());
+  }
+
+  #[test]
+  fn test_highlight_simple_astro() {
+    let mut highlighter = SyntaxHighlighter::new(&ASTRO_CONFIG);
+    let result = highlighter
+      .highlight_text("---\nconst title = \"Hello\";\n---\n<div class=\"hero\">{title}</div>\n");
+
+    assert!(result.is_ok());
+    let highlights = result.unwrap();
+    assert!(!highlights.is_empty());
+    assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
+    assert!(
+      highlights
+        .iter()
+        .any(|h| h.token_type == TokenType::Variable)
+    );
   }
 
   #[test]
@@ -353,5 +373,54 @@ mod tests {
       Some(TokenType::String)
     );
     assert_eq!(map_highlight_index_to_token_type(999), None);
+  }
+
+  #[test]
+  fn vue_plain_html_attribute_values_highlight_as_a_single_string() {
+    let html = r#"<main class="text-blue-100"></main>"#;
+    let vue = r#"<template><button class="text-blue-100"></button></template>"#;
+
+    let mut html_highlighter = SyntaxHighlighter::new(&HTML_CONFIG);
+    let mut vue_highlighter = SyntaxHighlighter::new(&VUE_CONFIG);
+
+    let html_highlights = html_highlighter.highlight_text(html).unwrap();
+    let vue_highlights = vue_highlighter.highlight_text(vue).unwrap();
+
+    assert_eq!(
+      token_types_for_fragment(html, &html_highlights, "text-blue-100"),
+      vec![TokenType::String]
+    );
+    assert_eq!(
+      token_types_for_fragment(vue, &vue_highlights, "text-blue-100"),
+      vec![TokenType::String]
+    );
+  }
+
+  #[test]
+  fn vue_directive_attribute_values_still_highlight_as_expressions() {
+    let vue = r#"<template><button v-if="count > 10"></button></template>"#;
+    let mut highlighter = SyntaxHighlighter::new(&VUE_CONFIG);
+    let highlights = highlighter.highlight_text(vue).unwrap();
+    let token_types = token_types_for_fragment(vue, &highlights, "count > 10");
+
+    assert!(token_types.contains(&TokenType::Variable));
+    assert!(token_types.contains(&TokenType::Operator));
+    assert!(token_types.contains(&TokenType::Number));
+  }
+
+  fn token_types_for_fragment(
+    text: &str,
+    highlights: &[HighlightSpan],
+    fragment: &str,
+  ) -> Vec<TokenType> {
+    let fragment_start = text.find(fragment).unwrap();
+    let fragment_end = fragment_start + fragment.len();
+    highlights
+      .iter()
+      .filter(|highlight| {
+        highlight.byte_range.start < fragment_end && highlight.byte_range.end > fragment_start
+      })
+      .map(|highlight| highlight.token_type)
+      .collect()
   }
 }

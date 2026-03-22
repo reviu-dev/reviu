@@ -1,3 +1,4 @@
+pub mod astro;
 pub mod bash;
 pub mod css;
 pub mod dockerfile;
@@ -25,6 +26,13 @@ struct LanguageRegistration {
 }
 
 const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
+  LanguageRegistration {
+    load: astro_config,
+    aliases: &["astro"],
+    extensions: &["astro"],
+    file_names: &[],
+    file_name_prefixes: &[],
+  },
   LanguageRegistration {
     load: bash_config,
     aliases: &["bash", "sh", "shell", "zsh"],
@@ -232,6 +240,10 @@ fn bash_config() -> &'static LanguageConfig {
   &bash::BASH_CONFIG
 }
 
+fn astro_config() -> &'static LanguageConfig {
+  &astro::ASTRO_CONFIG
+}
+
 fn css_config() -> &'static LanguageConfig {
   &css::CSS_CONFIG
 }
@@ -369,6 +381,11 @@ mod tests {
   }
 
   #[test]
+  fn test_detect_astro() {
+    assert!(detect_language_config("astro").is_some());
+  }
+
+  #[test]
   fn test_detect_bash_dotfiles() {
     assert!(detect_language_config(".bashrc").is_some());
     assert!(detect_language_config(".zprofile").is_some());
@@ -474,6 +491,10 @@ mod tests {
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/script.sh")),
       Some("bash")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/page.astro")),
+      Some("astro")
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/component.vue")),

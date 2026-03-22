@@ -7356,6 +7356,7 @@ dependencies = [
  "gpui",
  "once_cell",
  "tree-sitter 0.25.10",
+ "tree-sitter-astro-next",
  "tree-sitter-bash",
  "tree-sitter-css",
  "tree-sitter-dockerfile",
@@ -7952,6 +7953,16 @@ dependencies = [
  "regex-syntax",
  "serde_json",
  "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-astro-next"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "794a4a59fc2d88e49b4bc41fef9522d77184a36f4e68bbaf545cd1eb2364c46e"
+dependencies = [
+ "cc",
  "tree-sitter-language",
 ]
 
