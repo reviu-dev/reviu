@@ -1258,7 +1258,7 @@ impl ListDelegate for GithubPrCommitListDelegate {
                   .text_sm()
                   .text_color(theme.foreground)
                   .overflow_hidden()
-                  .text_ellipsis_start()
+                  .text_ellipsis()
                   .child(subject),
               ),
           )
@@ -8561,7 +8561,7 @@ impl GithubPrDetailsPage {
                   div()
                     .flex_1()
                     .overflow_hidden()
-                    .text_ellipsis_start()
+                    .text_ellipsis()
                     .child(item.label.clone()),
                 )
                 .when(comment_count > 0, |this| {
