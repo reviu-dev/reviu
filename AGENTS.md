@@ -49,6 +49,7 @@
 - Search in codebase: `osgrep "query"` (or `rg` when needed).
 - Always use Context7 MCP for library/API docs, setup/config, and codegen guidance.
 - Add tests for each feature/fix.
+- For desktop gpui check gpui-component stories: desktop/gpui-component/crates/story/src/stories
 
 ## Validation commands
 
