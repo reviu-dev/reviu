@@ -232,7 +232,11 @@ pub(crate) fn decode_basic_html_entities(segment: &str) -> String {
     .replace("&#39;", "'")
 }
 
-pub(crate) fn push_html_text_segment(inlines: &mut Vec<Inline>, segment: &str, pending_space: &mut bool) {
+pub(crate) fn push_html_text_segment(
+  inlines: &mut Vec<Inline>,
+  segment: &str,
+  pending_space: &mut bool,
+) {
   let segment = decode_basic_html_entities(segment);
   for ch in segment.chars() {
     if ch.is_whitespace() {
@@ -258,7 +262,11 @@ pub(crate) fn push_html_text_segment(inlines: &mut Vec<Inline>, segment: &str, p
   }
 }
 
-pub(crate) fn push_html_inline(inlines: &mut Vec<Inline>, inline: Inline, pending_space: &mut bool) {
+pub(crate) fn push_html_inline(
+  inlines: &mut Vec<Inline>,
+  inline: Inline,
+  pending_space: &mut bool,
+) {
   match inline {
     Inline::Text(text) => {
       push_html_text_segment(inlines, &text, pending_space);
@@ -284,7 +292,11 @@ pub(crate) fn push_html_inline(inlines: &mut Vec<Inline>, inline: Inline, pendin
   }
 }
 
-pub(crate) fn push_html_inlines(inlines: &mut Vec<Inline>, items: Vec<Inline>, pending_space: &mut bool) {
+pub(crate) fn push_html_inlines(
+  inlines: &mut Vec<Inline>,
+  items: Vec<Inline>,
+  pending_space: &mut bool,
+) {
   for inline in items {
     push_html_inline(inlines, inline, pending_space);
   }
@@ -306,7 +318,10 @@ pub(crate) fn html_inlines_have_visible_content(inlines: &[Inline]) -> bool {
   !inline_to_plain_text(inlines).trim().is_empty()
 }
 
-pub(crate) fn flush_html_inline_buffer_to_blocks(blocks: &mut Vec<Block>, inlines: &mut Vec<Inline>) {
+pub(crate) fn flush_html_inline_buffer_to_blocks(
+  blocks: &mut Vec<Block>,
+  inlines: &mut Vec<Inline>,
+) {
   let merged = merge_adjacent_text(inlines);
   inlines.clear();
   if html_inlines_have_visible_content(&merged) {
@@ -395,7 +410,10 @@ pub(crate) fn html_node_from_tree_sitter(node: TsNode<'_>, source: &str) -> Opti
   }
 }
 
-pub(crate) fn html_element_from_tree_sitter_element(node: TsNode<'_>, source: &str) -> Option<HtmlElement> {
+pub(crate) fn html_element_from_tree_sitter_element(
+  node: TsNode<'_>,
+  source: &str,
+) -> Option<HtmlElement> {
   let mut tag_name = None;
   let mut attrs = Vec::new();
   let mut children = Vec::new();
@@ -466,7 +484,10 @@ pub(crate) fn html_tag_from_tree_sitter(
   Some((tag_name?, attrs))
 }
 
-pub(crate) fn html_attribute_from_tree_sitter(node: TsNode<'_>, source: &str) -> Option<HtmlAttribute> {
+pub(crate) fn html_attribute_from_tree_sitter(
+  node: TsNode<'_>,
+  source: &str,
+) -> Option<HtmlAttribute> {
   let mut name = None;
   let mut value = None;
 

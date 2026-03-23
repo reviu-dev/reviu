@@ -5,6 +5,23 @@ use std::{
   sync::Arc,
 };
 
+use crate::constants::*;
+use crate::height_estimation::*;
+use crate::image::*;
+#[cfg(test)]
+use crate::parse::*;
+#[cfg(test)]
+use crate::parse_html::*;
+use crate::parsed_cache::parse_markdown_for_render;
+#[cfg(test)]
+use crate::parsed_cache::{PARSED_MARKDOWN_CACHE_MAX_ENTRIES, ParsedMarkdownCache};
+use crate::preview_segments::{MarkdownRenderSegment, split_markdown_preview_segments};
+use crate::selection::*;
+use crate::types::*;
+pub use crate::types::{
+  Block, CodeBlock, Details, GithubCodeReferencePreview, GithubIssueReferenceContext, Inline,
+  LinkAction, List, MarkdownRenderState, ParsedMarkdown, Table,
+};
 use gpui::{
   AnyElement, App, CursorStyle, Div, MouseButton, SharedString, Window, div, prelude::*, px,
 };
@@ -15,24 +32,6 @@ use gpui_component::{
 #[cfg(test)]
 use syntax::TokenType;
 use syntax::{HighlightSpan, SyntaxHighlighter, languages};
-use crate::constants::*;
-use crate::height_estimation::*;
-use crate::image::*;
-use crate::parsed_cache::parse_markdown_for_render;
-#[cfg(test)]
-use crate::parsed_cache::{PARSED_MARKDOWN_CACHE_MAX_ENTRIES, ParsedMarkdownCache};
-use crate::preview_segments::{MarkdownRenderSegment, split_markdown_preview_segments};
-pub use crate::types::{
-  Block, CodeBlock, Details, GithubCodeReferencePreview,
-  GithubIssueReferenceContext, Inline, LinkAction, List, MarkdownRenderState,
-  ParsedMarkdown, Table,
-};
-use crate::types::*;
-#[cfg(test)]
-use crate::parse::*;
-#[cfg(test)]
-use crate::parse_html::*;
-use crate::selection::*;
 
 type BlockRenderFn = dyn Fn(AnyElement, &App) -> AnyElement + Send + Sync;
 type HeadingRenderFn = dyn Fn(u8, AnyElement, &App) -> AnyElement + Send + Sync;
@@ -580,11 +579,7 @@ fn render_block(
       let (border_color, alert_header) = if let Some((kind, _remaining)) = &alert {
         let _theme = cx.theme();
         let (color, icon, label) = match kind {
-          GithubAlertKind::Note => (
-            gpui::hsla(0.58, 0.8, 0.55, 1.0),
-            IconName::Info,
-            "Note",
-          ),
+          GithubAlertKind::Note => (gpui::hsla(0.58, 0.8, 0.55, 1.0), IconName::Info, "Note"),
           GithubAlertKind::Tip => (
             gpui::hsla(0.38, 0.7, 0.45, 1.0),
             IconName::CircleCheck,
@@ -1714,7 +1709,6 @@ fn is_issue_reference_suffix_char(ch: char) -> bool {
 
 // HTML parsing functions moved to crate::parse_html
 
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -2587,9 +2581,8 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
       let Block::BlockQuote(children) = &blocks[0] else {
         panic!("expected blockquote for {syntax}");
       };
-      let (kind, _) = detect_github_alert(children).unwrap_or_else(|| {
-        panic!("expected alert detection for {syntax}")
-      });
+      let (kind, _) = detect_github_alert(children)
+        .unwrap_or_else(|| panic!("expected alert detection for {syntax}"));
       assert_eq!(kind, expected, "mismatch for {syntax}");
     }
   }

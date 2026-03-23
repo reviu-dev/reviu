@@ -9,15 +9,17 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose};
 use gpui::{
-  AnyElement, App, Hsla, ImageCacheError, ImgResourceLoader, ObjectFit, RenderImage,
-  Resource, SharedString, Window, div, img, prelude::*, px, relative,
+  AnyElement, App, Hsla, ImageCacheError, ImgResourceLoader, ObjectFit, RenderImage, Resource,
+  SharedString, Window, div, img, prelude::*, px, relative,
 };
 use gpui_component::{ActiveTheme as _, h_flex};
 use once_cell::sync::Lazy;
 use reqwest::header::CONTENT_TYPE;
 
 use crate::constants::*;
-use crate::gfm_markdown_viewer::{LinkHandlerFn, MarkdownRenderOptions, RenderContext, render_inline_text};
+use crate::gfm_markdown_viewer::{
+  LinkHandlerFn, MarkdownRenderOptions, RenderContext, render_inline_text,
+};
 use crate::parse_html::extract_html_attribute;
 use crate::types::*;
 
