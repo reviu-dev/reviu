@@ -24,6 +24,8 @@ use ui::{
   StatusThemeExt, UiIconName, WindowExt, selectable_list_item,
 };
 
+#[cfg(test)]
+use crate::date_format::format_relative_time_at;
 use crate::{
   ShowCommandPalette,
   api::{ApiClient, GithubNotification, GithubPullRequest, GithubUserRepository},
@@ -34,8 +36,6 @@ use crate::{
   github_shared, sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
-#[cfg(test)]
-use crate::date_format::format_relative_time_at;
 
 fn list_base_item(
   ix: IndexPath,
@@ -1360,6 +1360,7 @@ mod tests {
         merged_at: None,
         draft: false,
         updated_at: "2026-02-15T12:00:00Z".to_string(),
+        comments_count: 0,
         author: GithubPullRequestAuthor {
           login: "octocat".to_string(),
           avatar_url: None,
