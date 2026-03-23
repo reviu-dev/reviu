@@ -5,7 +5,8 @@ use std::{
 
 use once_cell::sync::Lazy;
 
-use crate::gfm_markdown_viewer::{ParsedMarkdown, parse_markdown};
+use crate::parse::parse_markdown;
+use crate::types::ParsedMarkdown;
 
 pub(crate) const PARSED_MARKDOWN_CACHE_MAX_ENTRIES: usize = 512;
 const PARSED_MARKDOWN_CACHE_MAX_SOURCE_LEN: usize = 100_000;
