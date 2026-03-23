@@ -983,6 +983,7 @@ impl ListDelegate for GithubRepoIssueListDelegate {
         GithubIssueVisualState::NotPlanned => (UiIconName::CircleSlash, theme.status_gray()),
       };
 
+    let comments_count = issue.comments_count;
     let label_tags = issue.labels.iter().take(4).map(|label| {
       Tag::secondary()
         .small()
@@ -991,7 +992,7 @@ impl ListDelegate for GithubRepoIssueListDelegate {
     });
 
     Some(
-      base_item.px_2().py_1().child(
+      base_item.px_2().py_2().child(
         v_flex()
           .gap_1()
           .child(
@@ -1005,13 +1006,19 @@ impl ListDelegate for GithubRepoIssueListDelegate {
                   .flex_1()
                   .child(Label::new(issue.title.clone()).truncate()),
               )
-              .when(!issue.labels.is_empty(), |this| {
+              .when(comments_count > 0, |this| {
                 this.child(
                   h_flex()
-                    .min_w_0()
-                    .overflow_hidden()
+                    .items_center()
                     .gap_1()
-                    .children(label_tags),
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(
+                      Icon::new(UiIconName::MessageCircle)
+                        .size_3()
+                        .text_color(theme.muted_foreground),
+                    )
+                    .child(comments_count.to_string()),
                 )
               }),
           )
@@ -1038,7 +1045,10 @@ impl ListDelegate for GithubRepoIssueListDelegate {
               .child(format!("opened {opened_at}"))
               .child("·")
               .child(format!("updated {updated_at}")),
-          ),
+          )
+          .when(!issue.labels.is_empty(), |this| {
+            this.child(github_shared::pull_request_label_row(label_tags))
+          }),
       ),
     )
   }

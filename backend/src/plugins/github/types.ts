@@ -448,6 +448,7 @@ export interface GithubIssue {
   updated_at: GithubIssueResponse['updated_at']
   closed_at: GithubIssueResponse['closed_at'] | null
   labels: GithubIssueResponse['labels']
+  comments_count: GithubIssueResponse['comments']
   user: {
     login: NonNullable<GithubIssueResponse['user']>['login']
     name?: NonNullable<GithubIssueResponse['user']>['name']

@@ -1147,6 +1147,7 @@ async function fetchRepositoryIssuesWithCache(
             updated_at: issue.updated_at,
             closed_at: issue.closed_at,
             labels: issue.labels,
+            comments_count: issue.comments,
             user: formatGithubUser(issue.user),
             repository: {
               owner,

@@ -230,6 +230,7 @@ pub struct GithubIssue {
   #[serde(rename = "closed_at")]
   pub closed_at: Option<String>,
   pub labels: Vec<GithubPullRequestLabel>,
+  pub comments_count: u64,
   pub user: Option<GithubIssueUser>,
   pub repository: GithubRepository,
 }
