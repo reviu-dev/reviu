@@ -4578,7 +4578,7 @@ impl GithubRepoPage {
       .size_full()
       .overflow_y_scrollbar()
       .child(
-        v_flex().w_full().px_4().pt_4().pb_24().child(
+        v_flex().w_full().px_4().pt_4().pb_32().child(
           v_flex()
             .w_full()
             .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
