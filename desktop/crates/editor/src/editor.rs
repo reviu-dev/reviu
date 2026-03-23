@@ -3172,12 +3172,19 @@ impl Editor {
             .child(first_message.author.to_string()),
         )
         .when_some(line_label, |this, label| {
-          this.child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(label.as_ref().to_string()),
-          )
+          this
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(label.as_ref().to_string()),
+            )
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("•"),
+            )
         })
         .child(
           div()
@@ -3436,10 +3443,7 @@ impl Editor {
             .pb(px(REVIEW_COMMENT_FIRST_MESSAGE_BOTTOM_PADDING_PX))
             .child(body)
         } else {
-          let message_line_label = message
-            .line_label
-            .clone()
-            .or_else(|| Some(Arc::from(format!("L{}", message.line + 1))));
+          let message_line_label: Option<Arc<str>> = None;
           let message_edit_button = if !review_comment_submission_in_flight
             && self.editable_review_comment_ids.contains(&message.id)
           {
@@ -3557,12 +3561,19 @@ impl Editor {
                         .child(message.author.to_string()),
                     )
                     .when_some(message_line_label, |this, label| {
-                      this.child(
-                        div()
-                          .text_xs()
-                          .text_color(theme.muted_foreground)
-                          .child(label.as_ref().to_string()),
-                      )
+                      this
+                        .child(
+                          div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(label.as_ref().to_string()),
+                        )
+                        .child(
+                          div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("•"),
+                        )
                     })
                     .child(
                       div()
