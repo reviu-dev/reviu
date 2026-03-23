@@ -1071,7 +1071,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::ContinueRebase => Icon::new(IconName::Check),
       CommandPaletteCommandId::SkipRebase => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::Push => Icon::new(IconName::ArrowUp),
-      CommandPaletteCommandId::ForcePush => Icon::new(IconName::TriangleAlert),
+      CommandPaletteCommandId::ForcePush => Icon::new(IconName::ArrowUp),
       CommandPaletteCommandId::UndoLastCommit => Icon::new(IconName::Undo),
       CommandPaletteCommandId::Amend => Icon::new(IconName::Replace),
       CommandPaletteCommandId::StageSelectedFile => Icon::new(IconName::Plus),

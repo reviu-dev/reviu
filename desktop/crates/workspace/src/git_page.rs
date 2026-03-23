@@ -6048,7 +6048,7 @@ impl GitPage {
 
         menu.item(
           PopupMenuItem::new("Force push (with lease)")
-            .icon(IconName::TriangleAlert)
+            .icon(IconName::ArrowUp)
             .disabled(!force_push_enabled)
             .on_click(move |event, window, cx| {
               force_push_view.update(cx, |this, cx| {
