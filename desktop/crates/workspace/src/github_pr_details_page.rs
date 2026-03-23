@@ -6606,7 +6606,8 @@ impl GithubPrDetailsPage {
 
     div()
       .px_3()
-      .py_2()
+      .pt_2()
+      .pb_3()
       .flex()
       .flex_col()
       .gap_1()
@@ -8597,10 +8598,10 @@ impl GithubPrDetailsPage {
       .bg(theme.sidebar)
       .size_full()
       .child(header)
+      .child(search_controls)
       .when_some(local_project_controls, |this, controls| {
         this.child(controls)
       })
-      .child(search_controls)
       .child(div().flex_1().min_h_0().child(list))
   }
 
