@@ -385,6 +385,7 @@ async function fetchUserRepositoriesWithCache(
               full_name: repo.full_name,
               description: repo.description,
               private: repo.private,
+              owner_avatar_url: repo.owner.avatar_url,
               updated_at: repo.updated_at ?? '',
             } satisfies GithubUserRepository))
             .sort((a, b) => b.updated_at.localeCompare(a.updated_at)),

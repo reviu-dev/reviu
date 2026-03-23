@@ -5,7 +5,9 @@ use gpui::{
   Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _, h_flex,
+  ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _,
+  avatar::Avatar,
+  h_flex,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   tab::{Tab, TabBar},
@@ -14,22 +16,26 @@ use gpui_component::{
 };
 use sentry::protocol::{Map, Value};
 use smol::unblock;
+#[cfg(test)]
+use time::OffsetDateTime;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT, SelectableRowStyle,
-  StatusThemeExt, WindowExt, selectable_list_item,
+  StatusThemeExt, UiIconName, WindowExt, selectable_list_item,
 };
 
 use crate::{
   ShowCommandPalette,
   api::{ApiClient, GithubNotification, GithubPullRequest, GithubUserRepository},
   auth_state::{AuthState, AuthStateStore},
-  date_format::format_compact_datetime,
+  date_format::{format_compact_datetime, format_relative_time},
   github_navigation::{open_pr_target, open_repo_target},
   github_pr_details_page::GithubPrDetailsPageHandle,
   github_shared, sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
+#[cfg(test)]
+use crate::date_format::format_relative_time_at;
 
 fn list_base_item(
   ix: IndexPath,
@@ -51,6 +57,15 @@ fn update_selected_index<D: ListDelegate>(
 ) {
   *selected_index = ix;
   cx.notify();
+}
+
+#[cfg(test)]
+fn repository_updated_label_at(updated_at: &str, now: OffsetDateTime) -> SharedString {
+  format!("Updated {}", format_relative_time_at(updated_at, now)).into()
+}
+
+fn repository_updated_label(updated_at: &str) -> SharedString {
+  format!("Updated {}", format_relative_time(updated_at)).into()
 }
 
 #[derive(Clone, Debug)]
@@ -232,7 +247,7 @@ impl ListDelegate for GithubRepositoryListDelegate {
     let theme = cx.theme().clone();
     let base_item = list_base_item(ix, self.selected_index, &theme);
     let row = self.matched_rows.get(ix.row)?;
-    let updated_at = format_compact_datetime(&row.repository.updated_at);
+    let updated_at = repository_updated_label(&row.repository.updated_at);
 
     Some(
       base_item.px_2().py_2().child(
@@ -243,13 +258,25 @@ impl ListDelegate for GithubRepositoryListDelegate {
               .items_center()
               .gap_2()
               .child(
+                Avatar::new()
+                  .name(row.repository.full_name.clone())
+                  .when_some(row.repository.owner_avatar_url.clone(), |this, url| {
+                    this.src(url)
+                  })
+                  .small(),
+              )
+              .child(
                 div()
                   .min_w_0()
                   .flex_1()
                   .child(Label::new(row.repository.full_name.clone()).truncate()),
               )
               .when(row.repository.private, |this| {
-                this.child(Tag::secondary().small().rounded_full().child("Private"))
+                this.child(
+                  Icon::new(UiIconName::Lock)
+                    .size_3()
+                    .text_color(theme.muted_foreground),
+                )
               }),
           )
           .child(
@@ -258,7 +285,7 @@ impl ListDelegate for GithubRepositoryListDelegate {
               .gap_2()
               .text_xs()
               .text_color(theme.muted_foreground)
-              .child(format!("Updated {}", updated_at)),
+              .child(updated_at),
           ),
       ),
     )
@@ -1523,6 +1550,24 @@ mod tests {
   }
 
   #[test]
+  fn repository_updated_label_uses_relative_time() {
+    let now = OffsetDateTime::parse(
+      "2026-02-15T18:00:00Z",
+      &time::format_description::well_known::Rfc3339,
+    )
+    .expect("parse now");
+
+    assert_eq!(
+      repository_updated_label_at("2026-02-14T12:00:00Z", now).as_ref(),
+      "Updated yesterday"
+    );
+    assert_eq!(
+      repository_updated_label_at("2026-02-12T12:00:00Z", now).as_ref(),
+      "Updated 3 days ago"
+    );
+  }
+
+  #[test]
   fn pull_request_row_matches_title_or_repo_case_insensitive() {
     let row = make_pull_request_row("Fix Login Bug", "Acme", "Portal");
     assert!(row.matches("login"));
@@ -1749,7 +1794,7 @@ mod tests {
     let pull_requests_body = r#"{"pullRequests":[{"number":42,"title":"Fix login","state":"open","merged_at":null,"draft":false,"updated_at":"2026-02-15T12:00:00Z","labels":[{"name":"bug"}],"repository":{"owner":"acme","repo":"portal"}}]}"#;
     let need_reviews_body = r#"{"pullRequests":[{"number":55,"title":"Review billing flow","state":"open","merged_at":null,"draft":false,"updated_at":"2026-02-15T12:05:00Z","labels":[{"name":"review"}],"repository":{"owner":"acme","repo":"payments"}}]}"#;
     let notifications_body = r#"{"notifications":[{"id":"n1","repository":{"name":"portal","full_name":"acme/portal","owner":null},"subject":{"title":"Please review","type":"PullRequest","url":null,"latest_comment_url":null},"reason":"mention","unread":true,"updated_at":"2026-02-15T12:10:00Z","last_read_at":null,"url":"https://api.github.test/notif/1","subscription_url":"https://api.github.test/sub/1"}]}"#;
-    let repositories_body = r#"{"repositories":[{"owner":"acme","repo":"portal","full_name":"acme/portal","description":"Main app","private":true,"updated_at":"2026-02-15T12:30:00Z"}]}"#;
+    let repositories_body = r#"{"repositories":[{"owner":"acme","repo":"portal","full_name":"acme/portal","description":"Main app","private":true,"owner_avatar_url":"https://example.com/acme.png","updated_at":"2026-02-15T12:30:00Z"}]}"#;
     let (base_url, handle) = start_path_response_server(vec![
       ("/github/pr/latest", "200 OK", pull_requests_body),
       ("/github/pr/need-reviews", "200 OK", need_reviews_body),

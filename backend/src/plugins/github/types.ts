@@ -488,6 +488,7 @@ export interface GithubUserRepository {
   full_name: UserRepositoryResponse['full_name']
   description: UserRepositoryResponse['description']
   private: UserRepositoryResponse['private']
+  owner_avatar_url: UserRepositoryResponse['owner']['avatar_url'] | null
   updated_at: NonNullable<UserRepositoryResponse['updated_at']>
 }
 
