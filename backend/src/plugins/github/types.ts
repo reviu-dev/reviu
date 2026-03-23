@@ -121,6 +121,45 @@ export interface GithubPullRequestAuthor {
   is_bot: boolean
 }
 
+export interface GithubGraphqlPullRequestActor {
+  __typename?: string | null
+  login?: string | null
+  avatarUrl?: string | null
+}
+
+export interface GithubGraphqlPullRequestNode {
+  number: number
+  title: string
+  state: 'OPEN' | 'CLOSED' | 'MERGED'
+  isDraft: boolean
+  createdAt: string
+  updatedAt: string
+  closedAt: string | null
+  mergedAt: string | null
+  author: GithubGraphqlPullRequestActor | null
+  labels?: {
+    nodes?: Array<{
+      name?: string | null
+    } | null> | null
+  } | null
+  repository: {
+    owner: {
+      login: string
+    }
+    name: string
+  }
+  comments: {
+    totalCount: number
+  }
+  reviews?: {
+    totalCount: number
+  } | null
+}
+
+export interface GithubGraphqlPullRequestResult {
+  pullRequest: GithubPullRequest
+}
+
 export interface GithubPullRequest {
   number: PullRequestResponse['number']
   title: PullRequestResponse['title']
@@ -130,6 +169,7 @@ export interface GithubPullRequest {
   closed_at: PullRequestResponse['closed_at']
   merged_at: PullRequestResponse['merged_at']
   updated_at: PullRequestResponse['updated_at']
+  comments_count: number
   author: GithubPullRequestAuthor
   labels: { name: string }[]
   repository: GithubRepository

@@ -378,6 +378,8 @@ pub struct GithubPullRequest {
   pub draft: bool,
   #[serde(rename = "updated_at")]
   pub updated_at: String,
+  #[serde(rename = "comments_count", default)]
+  pub comments_count: u64,
   #[serde(default)]
   pub author: GithubPullRequestAuthor,
   pub labels: Vec<GithubPullRequestLabel>,
@@ -2161,6 +2163,7 @@ mod tests {
       merged_at: merged_at.map(str::to_string),
       draft,
       updated_at: "2026-02-15T12:00:00Z".to_string(),
+      comments_count: 0,
       author: GithubPullRequestAuthor {
         login: "octocat".to_string(),
         avatar_url: None,
@@ -2285,6 +2288,7 @@ mod tests {
           "merged_at": null,
           "draft": false,
           "updated_at": "2026-02-15T12:00:00Z",
+          "comments_count": 5,
           "author": {
             "login": "octocat",
             "avatar_url": "https://example.com/octocat.png",
@@ -2306,6 +2310,7 @@ mod tests {
     assert_eq!(prs[0].title, "Fix login issue");
     assert!(matches!(prs[0].state, GithubPullRequestState::Open));
     assert_eq!(prs[0].created_at, "2026-02-12T09:30:00Z");
+    assert_eq!(prs[0].comments_count, 5);
     assert_eq!(prs[0].author.login, "octocat");
     assert_eq!(
       prs[0].author.avatar_url.as_deref(),
@@ -2350,6 +2355,7 @@ mod tests {
           "merged_at": null,
           "draft": false,
           "updated_at": "2026-02-15T13:00:00Z",
+          "comments_count": 2,
           "author": {
             "login": "renovate[bot]",
             "avatar_url": null,
@@ -2371,6 +2377,7 @@ mod tests {
     assert_eq!(prs[0].title, "Review requested change");
     assert!(matches!(prs[0].state, GithubPullRequestState::Open));
     assert_eq!(prs[0].created_at, "2026-02-14T10:15:00Z");
+    assert_eq!(prs[0].comments_count, 2);
     assert_eq!(prs[0].author.login, "renovate[bot]");
     assert!(prs[0].author.is_bot);
     assert_eq!(prs[0].repository.owner, "acme");
@@ -2512,6 +2519,7 @@ mod tests {
           "merged_at": null,
           "draft": false,
           "updated_at": "2026-02-15T12:00:00Z",
+          "comments_count": 7,
           "author": {
             "login": "docs-bot[bot]",
             "avatar_url": null,
@@ -2532,6 +2540,7 @@ mod tests {
     assert_eq!(prs[0].number, 11);
     assert_eq!(prs[0].title, "Improve docs");
     assert_eq!(prs[0].created_at, "2026-02-11T08:00:00Z");
+    assert_eq!(prs[0].comments_count, 7);
     assert_eq!(prs[0].author.login, "docs-bot[bot]");
     assert!(prs[0].author.is_bot);
     assert_eq!(prs[0].repository.owner, "acme");

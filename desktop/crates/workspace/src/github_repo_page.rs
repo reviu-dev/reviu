@@ -4759,6 +4759,7 @@ mod tests {
         merged_at: None,
         draft: false,
         updated_at: "2026-02-15T12:00:00Z".to_string(),
+        comments_count: 0,
         author: GithubPullRequestAuthor {
           login: "octocat".to_string(),
           avatar_url: None,

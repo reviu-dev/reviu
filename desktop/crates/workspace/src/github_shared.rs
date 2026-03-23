@@ -148,6 +148,10 @@ pub(crate) fn pull_request_updated_text(pr: &GithubPullRequest) -> SharedString 
   pull_request_updated_text_at(pr, OffsetDateTime::now_utc())
 }
 
+fn pull_request_comments_count_text(pr: &GithubPullRequest) -> Option<SharedString> {
+  (pr.comments_count > 0).then(|| pr.comments_count.to_string().into())
+}
+
 fn pull_request_author_inline(
   author: &GithubPullRequestAuthor,
   theme: &gpui_component::Theme,
@@ -182,6 +186,7 @@ pub(crate) fn pull_request_list_row_body(
 ) -> impl IntoElement {
   let status = pr.status();
   let status_tag = pull_request_status_tag(status, theme);
+  let comments_count_text = pull_request_comments_count_text(pr);
   let repo_name = show_repository.then(|| repo_label(&pr.repository.owner, &pr.repository.repo));
   let activity_text = pull_request_activity_text(pr);
   let updated_text = pull_request_updated_text(pr);
@@ -213,6 +218,21 @@ pub(crate) fn pull_request_list_row_body(
                 .child(Label::new(pr.title.clone()).truncate()),
             ),
         )
+        .when_some(comments_count_text, |this, comments_count_text| {
+          this.child(
+            h_flex()
+              .items_center()
+              .gap_1()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(
+                Icon::new(UiIconName::MessageCircle)
+                  .size_3()
+                  .text_color(theme.muted_foreground),
+              )
+              .child(comments_count_text),
+          )
+        })
         .child(status_tag),
     )
     .child(
@@ -337,8 +357,8 @@ mod tests {
     is_unauthorized_error_message, issue_url, line_snippets_from_content,
     logins_match_case_insensitive, next_trimmed_text_update, normalize_non_empty_text, pr_url,
     pull_request_activity_text_at, pull_request_author_display_name, pull_request_author_is_bot,
-    pull_request_list_row_body, pull_request_status_color, pull_request_status_label,
-    pull_request_updated_text_at, repo_label, short_sha,
+    pull_request_comments_count_text, pull_request_list_row_body, pull_request_status_color,
+    pull_request_status_label, pull_request_updated_text_at, repo_label, short_sha,
   };
   use crate::api::{
     GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel, GithubPullRequestState,
@@ -377,6 +397,7 @@ mod tests {
       merged_at: None,
       draft: false,
       updated_at: "2026-02-14T12:00:00Z".to_string(),
+      comments_count: 0,
       author,
       labels: labels
         .iter()
@@ -628,6 +649,26 @@ mod tests {
     assert_eq!(
       pull_request_updated_text_at(&closed, now).as_ref(),
       "updated 4 days ago"
+    );
+  }
+
+  #[test]
+  fn pull_request_comments_count_text_hides_zero_and_formats_positive_values() {
+    assert_eq!(
+      pull_request_comments_count_text(&make_pull_request(&[])),
+      None
+    );
+
+    let with_comments = GithubPullRequest {
+      comments_count: 12,
+      ..make_pull_request(&[])
+    };
+
+    assert_eq!(
+      pull_request_comments_count_text(&with_comments)
+        .as_ref()
+        .map(ToString::to_string),
+      Some("12".to_string())
     );
   }
 

@@ -21,6 +21,7 @@ function setupEnv() {
     REDIS_HOST: 'localhost',
     REDIS_PORT: '6379',
     REDIS_PASSWORD: 'redis-password',
+    GITHUB_CACHE_ENABLED: 'true',
     GITHUB_TOKEN: 'github-token',
     POLAR_ACCESS_TOKEN: 'polar-token',
     POLAR_SUCCESS_URL: 'http://localhost:3000/polar/success',

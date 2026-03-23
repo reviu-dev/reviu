@@ -22,6 +22,7 @@ import type {
   DeletePullRequestCommentParams,
   GetContentParams,
   GetContentResponse,
+  GithubGraphqlPullRequestNode,
   GithubIssueDetailsCommentParameters,
   GithubIssueDetailsCommentResponse,
   GithubIssueDetailsParameters,
@@ -115,6 +116,68 @@ export interface GithubPaginatedCollectionResult<T> {
 const GITHUB_RATE_LIMIT_NEAR_THRESHOLD = 0.1
 const GITHUB_PAGINATED_COLLECTION_MAX_PAGES = 10
 const GITHUB_PAGINATED_COLLECTION_MAX_ITEMS = 1000
+const GITHUB_GRAPHQL_ROUTE = 'POST /graphql'
+
+const GITHUB_GRAPHQL_PULL_REQUEST_LIST_FIELDS = `
+  number
+  title
+  state
+  isDraft
+  createdAt
+  updatedAt
+  closedAt
+  mergedAt
+  author {
+    __typename
+    login
+    avatarUrl
+  }
+  labels(first: 20) {
+    nodes {
+      name
+    }
+  }
+  repository {
+    owner {
+      login
+    }
+    name
+  }
+  comments {
+    totalCount
+  }
+  reviews(states: [APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED]) {
+    totalCount
+  }
+`
+
+const GITHUB_GRAPHQL_SEARCH_PULL_REQUESTS_QUERY = `
+  query SearchPullRequests($query: String!, $first: Int!) {
+    search(query: $query, type: ISSUE, first: $first) {
+      nodes {
+        ... on PullRequest {
+          ${GITHUB_GRAPHQL_PULL_REQUEST_LIST_FIELDS}
+        }
+      }
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_REPOSITORY_PULL_REQUESTS_QUERY = `
+  query RepositoryPullRequests($owner: String!, $repo: String!, $first: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequests(
+        first: $first
+        states: [OPEN, CLOSED]
+        orderBy: { field: UPDATED_AT, direction: DESC }
+      ) {
+        nodes {
+          ${GITHUB_GRAPHQL_PULL_REQUEST_LIST_FIELDS}
+        }
+      }
+    }
+  }
+`
 
 interface GithubErrorLike {
   status?: number
@@ -127,6 +190,27 @@ type GithubResponseHeaders = Record<string, string | number | string[] | undefin
 type GithubRequestOptions<Route extends keyof Endpoints> = Route extends keyof Endpoints
   ? Endpoints[Route]['parameters'] & RequestParameters
   : RequestParameters
+
+interface GithubGraphqlResponse<T> {
+  data?: T
+  errors?: Array<{
+    message: string
+  }>
+}
+
+interface GithubGraphqlSearchPullRequestsResponse {
+  search: {
+    nodes?: Array<GithubGraphqlPullRequestNode | null> | null
+  }
+}
+
+interface GithubGraphqlRepositoryPullRequestsResponse {
+  repository: {
+    pullRequests: {
+      nodes?: Array<GithubGraphqlPullRequestNode | null> | null
+    }
+  } | null
+}
 
 function readGithubHeader(
   headers: GithubResponseHeaders | undefined,
@@ -314,6 +398,64 @@ async function requestGithubWithoutData<Route extends keyof Endpoints>(
     const durationMs = Date.now() - startedAt
     logGithubRateLimit(route, githubError.status ?? 0, githubError.response?.headers)
     recordGithubRequestMetric(route, githubError.status ?? 0, githubError.response?.headers, durationMs)
+    throw error
+  }
+}
+
+async function requestGithubGraphqlData<T>(
+  {
+    token,
+    query,
+    variables,
+  }: {
+    token: string
+    query: string
+    variables?: Record<string, unknown>
+  },
+): Promise<T> {
+  const startedAt = Date.now()
+
+  try {
+    const response = await request(GITHUB_GRAPHQL_ROUTE, {
+      headers: githubAuthHeaders(token),
+      query,
+      variables,
+    })
+    const payload = response.data as GithubGraphqlResponse<T>
+    if (payload.errors?.length) {
+      throw Object.assign(new Error(payload.errors.map(error => error.message).join('; ')), {
+        status: response.status,
+        response: {
+          headers: response.headers,
+        },
+      })
+    }
+
+    if (!payload.data) {
+      throw Object.assign(new Error('GitHub GraphQL response is missing data'), {
+        status: response.status,
+        response: {
+          headers: response.headers,
+        },
+      })
+    }
+
+    const durationMs = Date.now() - startedAt
+    logGithubRateLimit(GITHUB_GRAPHQL_ROUTE, response.status, response.headers)
+    recordGithubRequestMetric(GITHUB_GRAPHQL_ROUTE, response.status, response.headers, durationMs)
+
+    return payload.data
+  }
+  catch (error) {
+    const githubError = error as GithubErrorLike
+    const durationMs = Date.now() - startedAt
+    logGithubRateLimit(GITHUB_GRAPHQL_ROUTE, githubError.status ?? 0, githubError.response?.headers)
+    recordGithubRequestMetric(
+      GITHUB_GRAPHQL_ROUTE,
+      githubError.status ?? 0,
+      githubError.response?.headers,
+      durationMs,
+    )
     throw error
   }
 }
@@ -522,6 +664,29 @@ export async function fetchGithubSearchIssues(
   })
 }
 
+export async function fetchGithubPullRequestSearchGraphql(
+  {
+    token,
+    query,
+    limit,
+  }: {
+    token: string
+    query: string
+    limit: number
+  },
+): Promise<GithubGraphqlPullRequestNode[]> {
+  const data = await requestGithubGraphqlData<GithubGraphqlSearchPullRequestsResponse>({
+    token,
+    query: GITHUB_GRAPHQL_SEARCH_PULL_REQUESTS_QUERY,
+    variables: {
+      query,
+      first: limit,
+    },
+  })
+
+  return data.search.nodes?.flatMap(node => (node ? [node] : [])) ?? []
+}
+
 export async function fetchGithubUserRepositories(
   { token, params }:
   { token: string, params: UserRepositoriesParams },
@@ -540,6 +705,32 @@ export async function fetchGithubPullRequest(
     token,
     params,
   })
+}
+
+export async function fetchGithubRepositoryPullRequestsGraphql(
+  {
+    token,
+    owner,
+    repo,
+    limit,
+  }: {
+    token: string
+    owner: string
+    repo: string
+    limit: number
+  },
+): Promise<GithubGraphqlPullRequestNode[]> {
+  const data = await requestGithubGraphqlData<GithubGraphqlRepositoryPullRequestsResponse>({
+    token,
+    query: GITHUB_GRAPHQL_REPOSITORY_PULL_REQUESTS_QUERY,
+    variables: {
+      owner,
+      repo,
+      first: limit,
+    },
+  })
+
+  return data.repository?.pullRequests.nodes?.flatMap(node => (node ? [node] : [])) ?? []
 }
 
 export async function fetchGithubPullRequestConditionally(

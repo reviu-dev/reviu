@@ -44,13 +44,11 @@ import type {
   GithubRepositoryTree,
   GithubRepositoryTreeParams,
   GithubUserRepository,
-  ListPullsParams,
   MergePullRequestParams,
   NotificationsParams,
   PullRequestCommentsParams,
   PullRequestParams,
   PullRequestReviewsParams,
-  SearchIssuesParams,
   UpdateIssueCommentParams,
   UpdateIssueParams,
   UpdatePullRequestCommentParams,
@@ -89,6 +87,7 @@ import { githubCache } from '../plugins/github/cache/github-cache-runtime.js'
 import { githubRepositoryVisibility } from '../plugins/github/cache/github-repository-visibility-runtime.js'
 import {
   formatGithubUser,
+  mapGithubGraphqlPullRequest,
   mapGithubIssueComment,
   mapGithubIssueDescriptionUpdate,
   mapGithubPullRequestAuthor,
@@ -98,7 +97,6 @@ import {
   mapGithubPullRequestIssueComment,
   mapGithubPullRequestReview,
   mapGithubPullRequestReviewComment,
-  mapSearchIssueItemToPullRequest,
 } from '../plugins/github/formatter.js'
 import {
   buildGithubIssueDetailsValidators,
@@ -135,7 +133,7 @@ import {
   fetchGithubPullRequestConditionally,
   fetchGithubPullRequestFilesAllPages,
   fetchGithubPullRequestReviewsConditionally,
-  fetchGithubPullRequestsConditionally,
+  fetchGithubPullRequestSearchGraphql,
   fetchGithubRepositoryBranchesConditionally,
   fetchGithubRepositoryConditionally,
   fetchGithubRepositoryContentConditionally,
@@ -143,9 +141,9 @@ import {
   fetchGithubRepositoryIssueCommentsConditionally,
   fetchGithubRepositoryIssueConditionally,
   fetchGithubRepositoryIssuesConditionally,
+  fetchGithubRepositoryPullRequestsGraphql,
   fetchGithubRepositoryReadmeConditionally,
   fetchGithubRepositoryTreesConditionally,
-  fetchGithubSearchIssues,
   fetchGithubUserRepositories,
   mergeGithubPullRequest,
   patchGithubIssue,
@@ -154,8 +152,8 @@ import {
   patchGithubPullRequestComment,
 } from '../plugins/github/service.js'
 
-const LATEST_PULL_REQUESTS_QUERY = 'author:@me is:pr is:open archived:false'
-const NEED_REVIEWS_PULL_REQUESTS_QUERY = 'review-requested:@me is:pr is:open archived:false'
+const LATEST_PULL_REQUESTS_QUERY = 'author:@me is:pr is:open archived:false sort:updated-desc'
+const NEED_REVIEWS_PULL_REQUESTS_QUERY = 'review-requested:@me is:pr is:open archived:false sort:updated-desc'
 const LATEST_PULL_REQUESTS_LIMIT = 20
 const GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY = 'pullRequest'
 const GITHUB_PULL_REQUEST_FILES_COMMIT_VALIDATOR_KEY = 'commit'
@@ -293,21 +291,14 @@ async function fetchPullRequestsSearchWithCache(
     githubCache.getOrLoad({
       ...cachePolicy,
       load: async () => {
-        const params: SearchIssuesParams = {
-          q: query,
-          sort: 'updated',
-          order: 'desc',
-          per_page: LATEST_PULL_REQUESTS_LIMIT,
-        }
+        const nodes = await fetchGithubPullRequestSearchGraphql({
+          token: githubToken,
+          query,
+          limit: LATEST_PULL_REQUESTS_LIMIT,
+        })
 
-        const data = await fetchGithubSearchIssues({ token: githubToken, params })
         return {
-          payload: data.items
-            .flatMap((item) => {
-              const pullRequest = mapSearchIssueItemToPullRequest(item)
-              return pullRequest ? [pullRequest] : []
-            })
-            .slice(0, LATEST_PULL_REQUESTS_LIMIT),
+          payload: nodes.map(node => mapGithubGraphqlPullRequest(node).pullRequest),
         }
       },
     }))
@@ -1093,50 +1084,16 @@ async function fetchRepositoryPullRequestsWithCache(
   return withGithubMetrics(userId, cachePolicy.operation, () =>
     githubCache.getOrLoad<GithubPullRequest[]>({
       ...cachePolicy,
-      load: async ({ cachedEntry }) => {
-        const params: ListPullsParams = {
+      load: async () => {
+        const nodes = await fetchGithubRepositoryPullRequestsGraphql({
+          token: githubToken,
           owner,
           repo,
-          state: 'all',
-          sort: 'updated',
-          direction: 'desc',
-          per_page: 20,
-        }
-
-        const response = await fetchGithubPullRequestsConditionally({
-          token: githubToken,
-          params,
-          etag: cachedEntry?.etag,
-          lastModified: cachedEntry?.lastModified,
+          limit: 20,
         })
 
-        if (response.notModified) {
-          return {
-            notModified: true as const,
-            etag: response.etag,
-            lastModified: response.lastModified,
-          }
-        }
-
         return {
-          payload: response.data!.map(pull => ({
-            number: pull.number,
-            title: pull.title,
-            state: pull.state,
-            draft: Boolean(pull.draft),
-            created_at: pull.created_at,
-            closed_at: pull.closed_at,
-            merged_at: pull.merged_at,
-            updated_at: pull.updated_at,
-            author: mapGithubPullRequestAuthor(pull.user),
-            labels: pull.labels.map(label => ({ name: label.name })),
-            repository: {
-              owner,
-              repo,
-            },
-          } satisfies GithubPullRequest)),
-          etag: response.etag,
-          lastModified: response.lastModified,
+          payload: nodes.map(node => mapGithubGraphqlPullRequest(node).pullRequest),
         }
       },
     }))
@@ -1180,7 +1137,7 @@ async function fetchRepositoryIssuesWithCache(
         }
 
         return {
-          payload: response.data!.filter(issue => !issue.pull_request).map(issue => ({
+          payload: (response.data || []).filter(issue => !issue.pull_request).map(issue => ({
             id: issue.id,
             number: issue.number,
             title: issue.title,

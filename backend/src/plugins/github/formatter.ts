@@ -1,4 +1,6 @@
 import type {
+  GithubGraphqlPullRequestNode,
+  GithubGraphqlPullRequestResult,
   GithubIssueCommentResponseSource,
   GithubIssueDescriptionUpdate,
   GithubIssueDetailsComment,
@@ -31,6 +33,44 @@ export function formatGithubUser<U extends { login: string, name?: string | null
     login: user.login,
     name: user.name,
     avatar_url: user.avatar_url,
+  }
+}
+
+function mapGithubGraphqlPullRequestState(
+  state: GithubGraphqlPullRequestNode['state'],
+): PullRequestResponse['state'] {
+  return state === 'OPEN' ? 'open' : 'closed'
+}
+
+export function mapGithubGraphqlPullRequest(
+  pullRequest: GithubGraphqlPullRequestNode,
+): GithubGraphqlPullRequestResult {
+  const labels = (pullRequest.labels?.nodes ?? [])
+    .flatMap(label => (typeof label?.name === 'string' && label.name.trim().length > 0 ? [{ name: label.name }] : []))
+  const reviewsCount = pullRequest.reviews?.totalCount ?? 0
+
+  return {
+    pullRequest: {
+      number: pullRequest.number,
+      title: pullRequest.title,
+      state: mapGithubGraphqlPullRequestState(pullRequest.state),
+      draft: pullRequest.isDraft,
+      created_at: pullRequest.createdAt,
+      closed_at: pullRequest.closedAt,
+      merged_at: pullRequest.mergedAt,
+      updated_at: pullRequest.updatedAt,
+      comments_count: (pullRequest.comments?.totalCount ?? 0) + reviewsCount,
+      author: mapGithubPullRequestAuthor({
+        login: pullRequest.author?.login ?? undefined,
+        avatar_url: pullRequest.author?.avatarUrl ?? null,
+        type: pullRequest.author?.__typename ?? null,
+      }),
+      labels,
+      repository: {
+        owner: pullRequest.repository.owner.login,
+        repo: pullRequest.repository.name,
+      },
+    },
   }
 }
 
@@ -215,6 +255,7 @@ export function mapSearchIssueItemToPullRequest(item: SearchIssuesItemResponse):
     closed_at: item.closed_at,
     merged_at: item.pull_request.merged_at ?? null,
     updated_at: item.updated_at,
+    comments_count: item.comments ?? 0,
     author: mapGithubPullRequestAuthor(item.user),
     labels: item.labels
       .flatMap(label => (typeof label.name === 'string' && label.name.trim().length > 0 ? [{ name: label.name }] : [])),
