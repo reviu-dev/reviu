@@ -6967,7 +6967,6 @@ impl GithubPrDetailsPage {
       .into_any_element()
   }
 
-
   fn render_overview_add_comment_section(
     &self,
     theme: &gpui_component::Theme,
@@ -7043,7 +7042,11 @@ impl GithubPrDetailsPage {
     let pr_page_for_links = pr_page.clone();
     let link_handler = Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
       let handled = pr_page_for_links.update(cx, |this, cx| this.handle_gfm_link(url, window, cx));
-      if handled { LinkAction::Handled } else { LinkAction::Open }
+      if handled {
+        LinkAction::Handled
+      } else {
+        LinkAction::Open
+      }
     });
 
     let markdown_options = MarkdownRenderOptions::with_on_link(link_handler.clone())
@@ -7072,12 +7075,12 @@ impl GithubPrDetailsPage {
     let root_is_last_review_message =
       allows_overview_review_reply_action(item.kind, &item.thread_comment_ids, item.id);
 
-    let review_comment_preview =
-      if item.kind == GithubPrOverviewConversationItemKind::ReviewComment {
-        self.overview_root_review_comment_preview(item.id)
-      } else {
-        None
-      };
+    let review_comment_preview = if item.kind == GithubPrOverviewConversationItemKind::ReviewComment
+    {
+      self.overview_root_review_comment_preview(item.id)
+    } else {
+      None
+    };
 
     // Root edit button
     let root_edit_button = if root_is_editable && !overview_submission_in_flight {
@@ -7175,11 +7178,13 @@ impl GithubPrDetailsPage {
         let page_for_save = pr_page.clone();
         v_flex()
           .gap_2()
-          .child(div().w_full().child(
-            Input::new(&input_state)
-              .disabled(self.overview_edit_submitting)
-              .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
-          ))
+          .child(
+            div().w_full().child(
+              Input::new(&input_state)
+                .disabled(self.overview_edit_submitting)
+                .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+            ),
+          )
           .when_some(self.overview_edit_error.clone(), |this, error| {
             this.child(div().text_xs().text_color(theme.status_red()).child(error))
           })
@@ -7413,64 +7418,59 @@ impl GithubPrDetailsPage {
                     id: reply.id,
                   };
                   let reply_is_editable = editable_review_comment_ids.contains(&reply.id);
-                  let reply_is_last_message = allows_overview_review_reply_action(
-                    item.kind,
-                    &thread_comment_ids,
-                    reply.id,
-                  );
+                  let reply_is_last_message =
+                    allows_overview_review_reply_action(item.kind, &thread_comment_ids, reply.id);
 
                   // Reply action buttons
-                  let reply_edit_button =
-                    if reply_is_editable && !overview_submission_in_flight {
-                      let page = pr_page.clone();
-                      Some(
-                        div()
-                          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                          .child(
-                            Button::new(format!("pr-overview-reply-edit-{}", reply.id))
-                              .ghost()
-                              .xsmall()
-                              .compact()
-                              .icon(UiIconName::SquarePen)
-                              .tooltip("Edit comment")
-                              .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                page.update(cx, |this, cx| {
-                                  this.start_overview_comment_edit(reply_target, window, cx);
-                                });
-                              }),
-                          )
-                          .into_any_element(),
-                      )
-                    } else {
-                      None
-                    };
+                  let reply_edit_button = if reply_is_editable && !overview_submission_in_flight {
+                    let page = pr_page.clone();
+                    Some(
+                      div()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                          Button::new(format!("pr-overview-reply-edit-{}", reply.id))
+                            .ghost()
+                            .xsmall()
+                            .compact()
+                            .icon(UiIconName::SquarePen)
+                            .tooltip("Edit comment")
+                            .on_click(move |_, window, cx| {
+                              cx.stop_propagation();
+                              page.update(cx, |this, cx| {
+                                this.start_overview_comment_edit(reply_target, window, cx);
+                              });
+                            }),
+                        )
+                        .into_any_element(),
+                    )
+                  } else {
+                    None
+                  };
 
-                  let reply_delete_button =
-                    if reply_is_editable && !overview_submission_in_flight {
-                      let page = pr_page.clone();
-                      Some(
-                        div()
-                          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                          .child(
-                            Button::new(format!("pr-overview-reply-delete-{}", reply.id))
-                              .ghost()
-                              .xsmall()
-                              .compact()
-                              .icon(IconName::Delete)
-                              .tooltip("Delete comment")
-                              .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                page.update(cx, |this, cx| {
-                                  this.confirm_overview_comment_delete(reply_target, window, cx);
-                                });
-                              }),
-                          )
-                          .into_any_element(),
-                      )
-                    } else {
-                      None
-                    };
+                  let reply_delete_button = if reply_is_editable && !overview_submission_in_flight {
+                    let page = pr_page.clone();
+                    Some(
+                      div()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                          Button::new(format!("pr-overview-reply-delete-{}", reply.id))
+                            .ghost()
+                            .xsmall()
+                            .compact()
+                            .icon(IconName::Delete)
+                            .tooltip("Delete comment")
+                            .on_click(move |_, window, cx| {
+                              cx.stop_propagation();
+                              page.update(cx, |this, cx| {
+                                this.confirm_overview_comment_delete(reply_target, window, cx);
+                              });
+                            }),
+                        )
+                        .into_any_element(),
+                    )
+                  } else {
+                    None
+                  };
 
                   let reply_reply_button = if reply_is_last_message
                     && replying_target.is_none()
@@ -7503,73 +7503,72 @@ impl GithubPrDetailsPage {
 
                   // Reply body (edit mode or markdown)
                   let reply_is_editing = editing_target == Some(reply_target);
-                  let reply_body = if reply_is_editing {
-                    if let Some(input_state) = self.overview_edit_input.clone() {
-                      let can_save = self
-                        .overview_edit_initial_body
-                        .as_deref()
-                        .and_then(|initial| {
-                          let raw_value = input_state.read(cx).value().to_string();
-                          next_overview_comment_body(raw_value.as_str(), initial)
-                        })
-                        .is_some();
-                      let page_for_cancel = pr_page.clone();
-                      let page_for_save = pr_page.clone();
-                      v_flex()
-                        .gap_2()
-                        .child(div().w_full().child(
-                          Input::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
-                        ))
-                        .when_some(self.overview_edit_error.clone(), |this, error| {
-                          this.child(
-                            div().text_xs().text_color(theme.status_red()).child(error),
+                  let reply_body =
+                    if reply_is_editing {
+                      if let Some(input_state) = self.overview_edit_input.clone() {
+                        let can_save = self
+                          .overview_edit_initial_body
+                          .as_deref()
+                          .and_then(|initial| {
+                            let raw_value = input_state.read(cx).value().to_string();
+                            next_overview_comment_body(raw_value.as_str(), initial)
+                          })
+                          .is_some();
+                        let page_for_cancel = pr_page.clone();
+                        let page_for_save = pr_page.clone();
+                        v_flex()
+                          .gap_2()
+                          .child(div().w_full().child(
+                            Input::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+                          ))
+                          .when_some(self.overview_edit_error.clone(), |this, error| {
+                            this.child(div().text_xs().text_color(theme.status_red()).child(error))
+                          })
+                          .child(
+                            h_flex()
+                              .items_center()
+                              .justify_end()
+                              .gap_2()
+                              .child(
+                                Button::new(format!("pr-overview-reply-edit-cancel-{}", reply.id))
+                                  .ghost()
+                                  .xsmall()
+                                  .compact()
+                                  .label("Cancel")
+                                  .on_click(move |_, _, cx| {
+                                    page_for_cancel.update(cx, |this, cx| {
+                                      this.cancel_overview_comment_edit(cx);
+                                    });
+                                  }),
+                              )
+                              .child(
+                                Button::new(format!("pr-overview-reply-edit-save-{}", reply.id))
+                                  .xsmall()
+                                  .compact()
+                                  .label("Save")
+                                  .disabled(!can_save || overview_submission_in_flight)
+                                  .on_click(move |_, _, cx| {
+                                    page_for_save.update(cx, |this, cx| {
+                                      this.submit_overview_comment_edit(cx);
+                                    });
+                                  }),
+                              ),
                           )
-                        })
-                        .child(
-                          h_flex()
-                            .items_center()
-                            .justify_end()
-                            .gap_2()
-                            .child(
-                              Button::new(format!("pr-overview-reply-edit-cancel-{}", reply.id))
-                                .ghost()
-                                .xsmall()
-                                .compact()
-                                .label("Cancel")
-                                .on_click(move |_, _, cx| {
-                                  page_for_cancel.update(cx, |this, cx| {
-                                    this.cancel_overview_comment_edit(cx);
-                                  });
-                                }),
-                            )
-                            .child(
-                              Button::new(format!("pr-overview-reply-edit-save-{}", reply.id))
-                                .xsmall()
-                                .compact()
-                                .label("Save")
-                                .disabled(!can_save || overview_submission_in_flight)
-                                .on_click(move |_, _, cx| {
-                                  page_for_save.update(cx, |this, cx| {
-                                    this.submit_overview_comment_edit(cx);
-                                  });
-                                }),
-                            ),
-                        )
-                        .into_any_element()
+                          .into_any_element()
+                      } else {
+                        div().into_any_element()
+                      }
                     } else {
-                      div().into_any_element()
-                    }
-                  } else {
-                    div()
-                      .w_full()
-                      .min_w_0()
-                      .child(render_markdown(
-                        reply.body.as_str(),
-                        &reply_markdown_options,
-                        cx,
-                      ))
-                      .into_any_element()
-                  };
+                      div()
+                        .w_full()
+                        .min_w_0()
+                        .child(render_markdown(
+                          reply.body.as_str(),
+                          &reply_markdown_options,
+                          cx,
+                        ))
+                        .into_any_element()
+                    };
 
                   // Reply reply composer
                   let reply_reply_composer = if replying_target == Some(reply.id) {
@@ -7606,9 +7605,7 @@ impl GithubPrDetailsPage {
                             Input::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
                           ))
                           .when_some(self.overview_reply_error.clone(), |this, error| {
-                            this.child(
-                              div().text_xs().text_color(theme.status_red()).child(error),
-                            )
+                            this.child(div().text_xs().text_color(theme.status_red()).child(error))
                           })
                           .child(
                             h_flex()
@@ -8043,15 +8040,11 @@ impl GithubPrDetailsPage {
               })
               .into_any_element()
           }),
-      )
-      ;
+      );
 
     // Build conversation items and update list state
-    let conversation_items = build_overview_conversation_items(
-      &self.issue_comments,
-      &self.reviews,
-      &self.review_comments,
-    );
+    let conversation_items =
+      build_overview_conversation_items(&self.issue_comments, &self.reviews, &self.review_comments);
     self.overview_conversation_items = conversation_items;
 
     // Also include conversation header in item 0
@@ -8100,23 +8093,26 @@ impl GithubPrDetailsPage {
               .child("Conversation"),
           )
           .when(has_conv_errors, |this| this.child(conv_errors))
-          .when(self.overview_conversation_items.is_empty() && is_conv_loading, |this| {
-            this.child(
-              v_flex()
-                .w_full()
-                .items_center()
-                .justify_center()
-                .gap_2()
-                .py_6()
-                .child(Spinner::new().small())
-                .child(
-                  div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child("Loading conversation..."),
-                ),
-            )
-          })
+          .when(
+            self.overview_conversation_items.is_empty() && is_conv_loading,
+            |this| {
+              this.child(
+                v_flex()
+                  .w_full()
+                  .items_center()
+                  .justify_center()
+                  .gap_2()
+                  .py_6()
+                  .child(Spinner::new().small())
+                  .child(
+                    div()
+                      .text_sm()
+                      .text_color(theme.muted_foreground)
+                      .child("Loading conversation..."),
+                  ),
+              )
+            },
+          )
           .when(
             self.overview_conversation_items.is_empty() && !is_conv_loading,
             |this| {
@@ -8154,36 +8150,42 @@ impl GithubPrDetailsPage {
     let max_w = px(DETAILS_PAGE_CONTAINER_MAX_WIDTH);
     let header = std::cell::RefCell::new(Some(header_el));
 
-    list(
-      self.overview_list.clone(),
-      move |ix, _window, cx| {
-        entity.update(cx, |this, cx| {
-          let theme = cx.theme().clone();
-          let el = if ix == 0 {
-            // Header + description + conversation header
-            header.borrow_mut().take().unwrap_or_else(|| div().into_any_element())
-          } else if ix <= conversation_count {
-            // Conversation item
-            this.render_overview_conversation_item(
-              ix - 1,
-              pr_number,
-              pr_owner.clone(),
-              pr_repo.clone(),
-              cx,
-            )
-          } else {
-            // Add comment section
-            this.render_overview_add_comment_section(&theme, cx)
-          };
+    list(self.overview_list.clone(), move |ix, _window, cx| {
+      entity.update(cx, |this, cx| {
+        let theme = cx.theme().clone();
+        let el = if ix == 0 {
+          // Header + description + conversation header
+          header
+            .borrow_mut()
+            .take()
+            .unwrap_or_else(|| div().into_any_element())
+        } else if ix <= conversation_count {
+          // Conversation item
+          this.render_overview_conversation_item(
+            ix - 1,
+            pr_number,
+            pr_owner.clone(),
+            pr_repo.clone(),
+            cx,
+          )
+        } else {
+          // Add comment section
+          this.render_overview_add_comment_section(&theme, cx)
+        };
 
-          div()
-            .px_10()
-            .pb_4()
-            .child(div().mx_auto().max_w(max_w).pt(if ix == 0 { px(40.) } else { px(0.) }).child(el))
-            .into_any_element()
-        })
-      },
-    )
+        div()
+          .px_10()
+          .pb_4()
+          .child(
+            div()
+              .mx_auto()
+              .max_w(max_w)
+              .pt(if ix == 0 { px(40.) } else { px(0.) })
+              .child(el),
+          )
+          .into_any_element()
+      })
+    })
     .size_full()
   }
 

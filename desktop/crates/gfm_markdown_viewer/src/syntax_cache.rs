@@ -40,11 +40,7 @@ impl SyntaxHighlightCache {
 
   /// Returns true if there are background highlight tasks still in progress.
   pub fn has_pending(&self) -> bool {
-    self
-      .pending
-      .lock()
-      .ok()
-      .map_or(false, |p| !p.is_empty())
+    self.pending.lock().ok().map_or(false, |p| !p.is_empty())
   }
 
   /// Check if there are new highlights available since last check.
