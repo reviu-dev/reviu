@@ -1465,7 +1465,10 @@ impl GithubIssueDetailsSheetView {
                 Avatar::new()
                   .name(comment_author.clone())
                   .when_some(
-                    comment.user.as_ref().and_then(|user| user.avatar_url.clone()),
+                    comment
+                      .user
+                      .as_ref()
+                      .and_then(|user| user.avatar_url.clone()),
                     |this, url| this.src(url),
                   )
                   .small(),
@@ -1528,10 +1531,8 @@ impl GithubIssueDetailsSheetView {
             .label("Comment")
             .disabled(
               comment_submission_in_flight
-                || github_shared::normalize_non_empty_text(
-                  comment_input.read(cx).value().as_str(),
-                )
-                .is_none(),
+                || github_shared::normalize_non_empty_text(comment_input.read(cx).value().as_str())
+                  .is_none(),
             )
             .on_click({
               let page = cx.entity().clone();
@@ -1545,7 +1546,6 @@ impl GithubIssueDetailsSheetView {
       )
       .into_any_element()
   }
-
 
   fn handle_gfm_link(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
     if should_open_externally(window) {
@@ -2130,7 +2130,6 @@ impl Render for GithubIssueDetailsSheetView {
 
       let comment_count = issue.comments.len();
 
-
       let header_el = v_flex()
         .w_full()
         .gap_3()
@@ -2327,27 +2326,23 @@ impl Render for GithubIssueDetailsSheetView {
       let entity = cx.entity().clone();
       let header = std::cell::RefCell::new(Some(header_el));
 
-      gpui::list(
-        self.issue_list.clone(),
-        move |ix, _window, cx| {
-          entity.update(cx, |this, cx| {
-            let theme = cx.theme().clone();
-            let el = if ix == 0 {
-              header.borrow_mut().take().unwrap_or_else(|| div().into_any_element())
-            } else if ix <= comment_count {
-              this.render_issue_comment_item(ix - 1, cx)
-            } else {
-              this.render_issue_add_comment_section(&theme, cx)
-            };
+      gpui::list(self.issue_list.clone(), move |ix, _window, cx| {
+        entity.update(cx, |this, cx| {
+          let theme = cx.theme().clone();
+          let el = if ix == 0 {
+            header
+              .borrow_mut()
+              .take()
+              .unwrap_or_else(|| div().into_any_element())
+          } else if ix <= comment_count {
+            this.render_issue_comment_item(ix - 1, cx)
+          } else {
+            this.render_issue_add_comment_section(&theme, cx)
+          };
 
-            div()
-              .px_6()
-              .pb_3()
-              .child(el)
-              .into_any_element()
-          })
-        },
-      )
+          div().px_6().pb_3().child(el).into_any_element()
+        })
+      })
       .size_full()
       .into_any_element()
     } else {
@@ -4583,7 +4578,7 @@ impl GithubRepoPage {
       .size_full()
       .overflow_y_scrollbar()
       .child(
-        v_flex().w_full().px_4().pt_4().pb_32().child(
+        v_flex().w_full().px_4().pt_4().pb_24().child(
           v_flex()
             .w_full()
             .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
