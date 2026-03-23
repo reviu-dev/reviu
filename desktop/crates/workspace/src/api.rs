@@ -2743,6 +2743,7 @@ mod tests {
           "updated_at": "2026-02-18T11:30:00Z",
           "closed_at": "2026-02-18T11:30:00Z",
           "labels": [{ "name": "bug" }],
+          "comments_count": 3,
           "user": {
             "login": "octocat",
             "name": "The Octocat",
