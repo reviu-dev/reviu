@@ -9,7 +9,8 @@ use gpui::{
   AnyElement, App, CursorStyle, Div, MouseButton, SharedString, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Sizable as _, StyledExt as _, clipboard::Clipboard, h_flex, v_flex,
+  ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, clipboard::Clipboard, h_flex,
+  v_flex,
 };
 #[cfg(test)]
 use syntax::TokenType;
@@ -470,6 +471,42 @@ fn scoped_id_for_state(scope_seed: usize, state: &MarkdownRenderState) -> usize 
   scope_seed ^ state.instance_id.wrapping_mul(0x9E37_79B1usize)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GithubAlertKind {
+  Note,
+  Tip,
+  Important,
+  Warning,
+  Caution,
+}
+
+/// Detects GitHub-style alert syntax in a blockquote: `> [!NOTE]`, `> [!TIP]`, etc.
+/// Returns the alert kind and the remaining text after the marker.
+fn detect_github_alert(children: &[Block]) -> Option<(GithubAlertKind, String)> {
+  let Block::Paragraph(inlines) = children.first()? else {
+    return None;
+  };
+  let Inline::Text(text) = inlines.first()? else {
+    return None;
+  };
+  let trimmed = text.trim_start();
+  let (kind, marker_len) = if trimmed.starts_with("[!NOTE]") {
+    (GithubAlertKind::Note, "[!NOTE]".len())
+  } else if trimmed.starts_with("[!TIP]") {
+    (GithubAlertKind::Tip, "[!TIP]".len())
+  } else if trimmed.starts_with("[!IMPORTANT]") {
+    (GithubAlertKind::Important, "[!IMPORTANT]".len())
+  } else if trimmed.starts_with("[!WARNING]") {
+    (GithubAlertKind::Warning, "[!WARNING]".len())
+  } else if trimmed.starts_with("[!CAUTION]") {
+    (GithubAlertKind::Caution, "[!CAUTION]".len())
+  } else {
+    return None;
+  };
+  let prefix_offset = text.len() - trimmed.len();
+  let remaining = text[prefix_offset + marker_len..].to_string();
+  Some((kind, remaining))
+}
 
 fn render_blocks(
   blocks: &[Block],
@@ -539,11 +576,83 @@ fn render_block(
       render_code_block(code, options, cx, ctx)
     }
     Block::BlockQuote(children) => {
+      let alert = detect_github_alert(children);
+      let (border_color, alert_header) = if let Some((kind, _remaining)) = &alert {
+        let _theme = cx.theme();
+        let (color, icon, label) = match kind {
+          GithubAlertKind::Note => (
+            gpui::hsla(0.58, 0.8, 0.55, 1.0),
+            IconName::Info,
+            "Note",
+          ),
+          GithubAlertKind::Tip => (
+            gpui::hsla(0.38, 0.7, 0.45, 1.0),
+            IconName::CircleCheck,
+            "Tip",
+          ),
+          GithubAlertKind::Important => (
+            gpui::hsla(0.75, 0.7, 0.55, 1.0),
+            IconName::Info,
+            "Important",
+          ),
+          GithubAlertKind::Warning => (
+            gpui::hsla(0.12, 0.8, 0.50, 1.0),
+            IconName::TriangleAlert,
+            "Warning",
+          ),
+          GithubAlertKind::Caution => (
+            gpui::hsla(0.0, 0.75, 0.55, 1.0),
+            IconName::CircleX,
+            "Caution",
+          ),
+        };
+        (
+          color,
+          Some(
+            h_flex()
+              .items_center()
+              .gap_1p5()
+              .pb_1()
+              .child(Icon::new(icon).size_4().text_color(color))
+              .child(
+                div()
+                  .text_sm()
+                  .font_semibold()
+                  .text_color(color)
+                  .child(label),
+              ),
+          ),
+        )
+      } else {
+        (cx.theme().muted_foreground, None)
+      };
+
+      // Build children, stripping the alert marker from the first paragraph
+      let rendered_children = if let Some((_, remaining_first_text)) = &alert {
+        let mut modified_children = children.clone();
+        if let Some(Block::Paragraph(inlines)) = modified_children.first_mut() {
+          if let Some(Inline::Text(text)) = inlines.first_mut() {
+            *text = remaining_first_text.clone();
+            if text.is_empty() {
+              inlines.remove(0);
+              // Also remove leading SoftBreak if present
+              if matches!(inlines.first(), Some(Inline::SoftBreak)) {
+                inlines.remove(0);
+              }
+            }
+          }
+        }
+        render_blocks(&modified_children, options, indent + 1, cx, ctx)
+      } else {
+        render_blocks(children, options, indent + 1, cx, ctx)
+      };
+
       let content = div()
         .border_l_2()
-        .border_color(cx.theme().muted_foreground)
+        .border_color(border_color)
         .pl(px(8.0))
-        .child(render_blocks(children, options, indent + 1, cx, ctx))
+        .when_some(alert_header, |this, header| this.child(header))
+        .child(rendered_children)
         .into_any_element();
       if let Some(override_fn) = options.overrides.block_quote.as_ref() {
         override_fn(content, cx)
@@ -2448,6 +2557,50 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
       }
       _ => panic!("expected blockquote"),
     }
+  }
+
+  #[test]
+  fn detects_github_alert_note() {
+    let blocks = parse_gfm("> [!NOTE]\n> This is a note.");
+    assert_eq!(blocks.len(), 1);
+    let Block::BlockQuote(children) = &blocks[0] else {
+      panic!("expected blockquote");
+    };
+    let alert = detect_github_alert(children);
+    assert!(alert.is_some());
+    let (kind, remaining) = alert.unwrap();
+    assert_eq!(kind, GithubAlertKind::Note);
+    assert!(remaining.trim().is_empty() || remaining.trim() == "");
+  }
+
+  #[test]
+  fn detects_all_github_alert_kinds() {
+    for (syntax, expected) in [
+      ("[!NOTE]", GithubAlertKind::Note),
+      ("[!TIP]", GithubAlertKind::Tip),
+      ("[!IMPORTANT]", GithubAlertKind::Important),
+      ("[!WARNING]", GithubAlertKind::Warning),
+      ("[!CAUTION]", GithubAlertKind::Caution),
+    ] {
+      let source = format!("> {syntax}\n> Content here.");
+      let blocks = parse_gfm(&source);
+      let Block::BlockQuote(children) = &blocks[0] else {
+        panic!("expected blockquote for {syntax}");
+      };
+      let (kind, _) = detect_github_alert(children).unwrap_or_else(|| {
+        panic!("expected alert detection for {syntax}")
+      });
+      assert_eq!(kind, expected, "mismatch for {syntax}");
+    }
+  }
+
+  #[test]
+  fn regular_blockquote_not_detected_as_alert() {
+    let blocks = parse_gfm("> Just a normal quote");
+    let Block::BlockQuote(children) = &blocks[0] else {
+      panic!("expected blockquote");
+    };
+    assert!(detect_github_alert(children).is_none());
   }
 
   #[test]
