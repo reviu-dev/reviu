@@ -170,7 +170,8 @@ pub struct User {
 
 impl User {
   pub fn has_pro_access(&self) -> bool {
-    matches!(self.role, UserRole::Admin | UserRole::Pro) || self.subscription.active_subscription.is_some()
+    matches!(self.role, UserRole::Admin | UserRole::Pro)
+      || self.subscription.active_subscription.is_some()
   }
 }
 
