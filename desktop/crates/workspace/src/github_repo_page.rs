@@ -1104,6 +1104,7 @@ struct GithubIssueDetailsSheetView {
   error: Option<SharedString>,
   task: Option<Task<()>>,
   markdown_state: MarkdownRenderState,
+  syntax_highlight_cache: Arc<gfm_markdown_viewer::SyntaxHighlightCache>,
   code_reference_cache: HashMap<String, Option<GithubCodeReferencePreview>>,
   code_reference_tasks: HashMap<String, Task<()>>,
   description_references: Vec<GithubBlobLineReference>,
@@ -1147,6 +1148,7 @@ impl GithubIssueDetailsSheetView {
       error: None,
       task: None,
       markdown_state: MarkdownRenderState::new(),
+      syntax_highlight_cache: Arc::new(gfm_markdown_viewer::SyntaxHighlightCache::new()),
       code_reference_cache: HashMap::new(),
       code_reference_tasks: HashMap::new(),
       description_references: Vec::new(),
@@ -1818,6 +1820,17 @@ impl Render for GithubIssueDetailsSheetView {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
+    // Poll syntax highlight cache
+    if self.syntax_highlight_cache.take_new_highlights() {
+      cx.notify();
+    } else if self.syntax_highlight_cache.has_pending() {
+      cx.on_next_frame(window, |this, _window, cx| {
+        if this.syntax_highlight_cache.take_new_highlights() {
+          cx.notify();
+        }
+      });
+    }
+
     let content = if self.loading {
       v_flex()
         .size_full()
@@ -2012,6 +2025,7 @@ impl Render for GithubIssueDetailsSheetView {
         } else {
           let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler.clone())
             .with_state(self.markdown_state.clone())
+            .with_syntax_cache(self.syntax_highlight_cache.clone())
             .with_github_issue_reference_context(
               issue.repository.owner.as_str(),
               issue.repository.repo.as_str(),
@@ -2245,6 +2259,7 @@ impl Render for GithubIssueDetailsSheetView {
                 .child({
                   let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler)
                     .with_state(self.markdown_state.clone())
+                    .with_syntax_cache(self.syntax_highlight_cache.clone())
                     .with_github_issue_reference_context(
                       issue.repository.owner.as_str(),
                       issue.repository.repo.as_str(),
@@ -2354,6 +2369,7 @@ pub struct GithubRepoPage {
   readme_path: Option<SharedString>,
   readme_loaded_branch: Option<SharedString>,
   readme_markdown_state: MarkdownRenderState,
+  readme_syntax_highlight_cache: Arc<gfm_markdown_viewer::SyntaxHighlightCache>,
   code_request_generation: u64,
   code_tree_state: Entity<TreeState>,
   code_files_loading: bool,
@@ -2529,6 +2545,7 @@ impl GithubRepoPage {
       readme_path: None,
       readme_loaded_branch: None,
       readme_markdown_state: MarkdownRenderState::new(),
+      readme_syntax_highlight_cache: Arc::new(gfm_markdown_viewer::SyntaxHighlightCache::new()),
       code_request_generation: 0,
       code_tree_state,
       code_files_loading: false,
@@ -4512,6 +4529,7 @@ impl GithubRepoPage {
       );
       let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler)
         .with_state(self.readme_markdown_state.clone())
+        .with_syntax_cache(self.readme_syntax_highlight_cache.clone())
         .with_github_issue_reference_context(self.owner.as_ref(), self.repo.as_ref())
         .with_expanded_code_blocks()
         .with_scope_id(readme_scope_id(
@@ -4615,6 +4633,17 @@ impl Render for GithubRepoPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     self.try_open_pending_issue_sheet(window, cx);
+
+    // Poll syntax highlight cache for readme
+    if self.readme_syntax_highlight_cache.take_new_highlights() {
+      cx.notify();
+    } else if self.readme_syntax_highlight_cache.has_pending() {
+      cx.on_next_frame(window, |this, _window, cx| {
+        if this.readme_syntax_highlight_cache.take_new_highlights() {
+          cx.notify();
+        }
+      });
+    }
 
     let content = match self.active_tab_ix {
       REPO_TAB_OVERVIEW_IX => self.render_overview(cx).into_any_element(),

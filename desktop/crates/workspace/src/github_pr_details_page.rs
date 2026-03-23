@@ -21,8 +21,9 @@ use git::{
   list_repo_status, switch_to_branch_name, sync_current_branch_to_head,
 };
 use gpui::{
-  App, Context, Corner, Entity, FocusHandle, Focusable, MouseButton, ParentElement, Render,
-  RenderImage, SharedString, Styled, Task, Window, div, img, prelude::*, px,
+  AnyElement, App, Context, Corner, Entity, FocusHandle, Focusable, ListAlignment,
+  ListState as GpuiListState, MouseButton, ParentElement, Render, RenderImage, SharedString,
+  Styled, Task, Window, div, img, list, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable as _, StyledExt,
@@ -1759,6 +1760,10 @@ pub struct GithubPrDetailsPage {
   diff_view: DiffViewMode,
   show_markdown_preview: bool,
   description_markdown_state: MarkdownRenderState,
+  syntax_highlight_cache: Arc<gfm_markdown_viewer::SyntaxHighlightCache>,
+  overview_conversation_items: Vec<GithubPrOverviewConversationItem>,
+  overview_list: GpuiListState,
+  overview_list_count: usize,
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
   svg_preview_source: Option<SharedString>,
   svg_preview_task: Option<Task<()>>,
@@ -2233,6 +2238,10 @@ impl GithubPrDetailsPage {
       diff_view: DiffViewMode::Inline,
       show_markdown_preview: false,
       description_markdown_state: MarkdownRenderState::new(),
+      syntax_highlight_cache: Arc::new(gfm_markdown_viewer::SyntaxHighlightCache::new()),
+      overview_conversation_items: Vec::new(),
+      overview_list: GpuiListState::new(0, ListAlignment::Top, px(300.)),
+      overview_list_count: 0,
       svg_preview: None,
       svg_preview_source: None,
       svg_preview_task: None,
@@ -6958,19 +6967,72 @@ impl GithubPrDetailsPage {
       .into_any_element()
   }
 
-  fn render_details_conversation_panel(
+
+  fn render_overview_add_comment_section(
     &self,
-    pr: &GithubPullRequestDetails,
+    theme: &gpui_component::Theme,
     cx: &mut Context<Self>,
-  ) -> impl IntoElement {
+  ) -> AnyElement {
+    v_flex()
+      .gap_2()
+      .pt_2()
+      .pb_32()
+      .child(
+        div()
+          .text_sm()
+          .font_medium()
+          .text_color(theme.foreground)
+          .child("Add comment"),
+      )
+      .child(div().w_full().child(
+        Input::new(&self.overview_issue_comment_input).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+      ))
+      .when_some(self.overview_issue_comment_error.clone(), |this, error| {
+        this.child(div().text_xs().text_color(theme.status_red()).child(error))
+      })
+      .child(
+        h_flex().items_center().justify_end().gap_2().child(
+          Button::new("pr-overview-issue-comment-save")
+            .xsmall()
+            .compact()
+            .label("Comment")
+            .disabled(
+              self.overview_issue_comment_submitting
+                || self.overview_comment_submission_in_flight()
+                || github_shared::normalize_non_empty_text(
+                  self.overview_issue_comment_input.read(cx).value().as_str(),
+                )
+                .is_none(),
+            )
+            .on_click({
+              let page = cx.entity().clone();
+              move |_, window, cx| {
+                page.update(cx, |this, cx| {
+                  this.submit_overview_issue_comment_create(window, cx);
+                });
+              }
+            }),
+        ),
+      )
+      .into_any_element()
+  }
+
+  fn render_overview_conversation_item(
+    &self,
+    ix: usize,
+    pr_number: u64,
+    pr_owner: SharedString,
+    pr_repo: SharedString,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let Some(item) = self.overview_conversation_items.get(ix) else {
+      return div().into_any_element();
+    };
+
     let theme = cx.theme().clone();
-    let items =
-      build_overview_conversation_items(&self.issue_comments, &self.reviews, &self.review_comments);
-    let is_loading =
-      self.issue_comments_loading || self.reviews_loading || self.review_comments_loading;
-    let has_errors = self.issue_comments_error.is_some()
-      || self.reviews_error.is_some()
-      || self.review_comments_error.is_some();
+    let timestamp = format_compact_datetime(&item.timestamp);
+    let type_label = overview_conversation_kind_label(item.kind);
+    let scope_id = overview_conversation_scope_id(pr_number, item.kind, item.id);
     let editable_issue_comment_ids = self.editable_issue_comment_ids(cx);
     let editable_review_comment_ids = self.editable_review_comment_ids(cx);
     let overview_submission_in_flight = self.overview_comment_submission_in_flight();
@@ -6981,840 +7043,677 @@ impl GithubPrDetailsPage {
     let pr_page_for_links = pr_page.clone();
     let link_handler = Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
       let handled = pr_page_for_links.update(cx, |this, cx| this.handle_gfm_link(url, window, cx));
-      if handled {
-        LinkAction::Handled
-      } else {
-        LinkAction::Open
-      }
+      if handled { LinkAction::Handled } else { LinkAction::Open }
     });
 
-    let conversation_content = if items.is_empty() && is_loading {
-      v_flex()
-        .w_full()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .py_6()
-        .child(Spinner::new().small())
-        .child(
+    let markdown_options = MarkdownRenderOptions::with_on_link(link_handler.clone())
+      .with_state(self.description_markdown_state.clone())
+      .with_syntax_cache(self.syntax_highlight_cache.clone())
+      .with_github_issue_reference_context(pr_owner.as_ref(), pr_repo.as_ref())
+      .with_scope_id(scope_id);
+
+    // Determine root comment target and editability
+    let root_target = match item.kind {
+      GithubPrOverviewConversationItemKind::IssueComment => Some(OverviewCommentTarget {
+        kind: OverviewCommentKind::Issue,
+        id: item.id,
+      }),
+      GithubPrOverviewConversationItemKind::ReviewComment => Some(OverviewCommentTarget {
+        kind: OverviewCommentKind::Review,
+        id: item.id,
+      }),
+      GithubPrOverviewConversationItemKind::Review => None,
+    };
+    let root_is_editable = root_target.is_some_and(|target| match target.kind {
+      OverviewCommentKind::Issue => editable_issue_comment_ids.contains(&target.id),
+      OverviewCommentKind::Review => editable_review_comment_ids.contains(&target.id),
+    });
+    let root_is_editing = overview_root_is_editing(editing_target, root_target);
+    let root_is_last_review_message =
+      allows_overview_review_reply_action(item.kind, &item.thread_comment_ids, item.id);
+
+    let review_comment_preview =
+      if item.kind == GithubPrOverviewConversationItemKind::ReviewComment {
+        self.overview_root_review_comment_preview(item.id)
+      } else {
+        None
+      };
+
+    // Root edit button
+    let root_edit_button = if root_is_editable && !overview_submission_in_flight {
+      root_target.map(|target| {
+        let page = pr_page.clone();
+        div()
+          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+          .child(
+            Button::new(format!("pr-overview-comment-edit-{}", target.id))
+              .ghost()
+              .xsmall()
+              .compact()
+              .icon(UiIconName::SquarePen)
+              .tooltip("Edit comment")
+              .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                page.update(cx, |this, cx| {
+                  this.start_overview_comment_edit(target, window, cx);
+                });
+              }),
+          )
+          .into_any_element()
+      })
+    } else {
+      None
+    };
+
+    // Root delete button
+    let root_delete_button = if root_is_editable && !overview_submission_in_flight {
+      root_target.map(|target| {
+        let page = pr_page.clone();
+        div()
+          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+          .child(
+            Button::new(format!("pr-overview-comment-delete-{}", target.id))
+              .ghost()
+              .xsmall()
+              .compact()
+              .icon(IconName::Delete)
+              .tooltip("Delete comment")
+              .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                page.update(cx, |this, cx| {
+                  this.confirm_overview_comment_delete(target, window, cx);
+                });
+              }),
+          )
+          .into_any_element()
+      })
+    } else {
+      None
+    };
+
+    // Root reply button
+    let root_reply_button =
+      if root_is_last_review_message && replying_target.is_none() && !overview_submission_in_flight
+      {
+        let page = pr_page.clone();
+        let item_id = item.id;
+        Some(
           div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading conversation..."),
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+              Button::new(format!("pr-overview-comment-reply-{}", item_id))
+                .ghost()
+                .xsmall()
+                .compact()
+                .icon(UiIconName::MessageCircleReply)
+                .tooltip("Reply")
+                .on_click(move |_, window, cx| {
+                  cx.stop_propagation();
+                  page.update(cx, |this, cx| {
+                    this.start_overview_review_comment_reply(item_id, window, cx);
+                  });
+                }),
+            )
+            .into_any_element(),
         )
-        .into_any_element()
-    } else if items.is_empty() {
-      v_flex()
+      } else {
+        None
+      };
+
+    // Root body (edit mode or markdown)
+    let root_body = if root_is_editing {
+      if let Some(input_state) = self.overview_edit_input.clone() {
+        let can_save = self
+          .overview_edit_initial_body
+          .as_deref()
+          .and_then(|initial| {
+            let raw_value = input_state.read(cx).value().to_string();
+            next_overview_comment_body(raw_value.as_str(), initial)
+          })
+          .is_some();
+        let page_for_cancel = pr_page.clone();
+        let page_for_save = pr_page.clone();
+        v_flex()
+          .gap_2()
+          .child(div().w_full().child(
+            Input::new(&input_state)
+              .disabled(self.overview_edit_submitting)
+              .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+          ))
+          .when_some(self.overview_edit_error.clone(), |this, error| {
+            this.child(div().text_xs().text_color(theme.status_red()).child(error))
+          })
+          .child(
+            h_flex()
+              .items_center()
+              .justify_end()
+              .gap_2()
+              .child(
+                Button::new(format!("pr-overview-edit-cancel-{}", item.id))
+                  .ghost()
+                  .xsmall()
+                  .compact()
+                  .label("Cancel")
+                  .on_click(move |_, _, cx| {
+                    page_for_cancel.update(cx, |this, cx| {
+                      this.cancel_overview_comment_edit(cx);
+                    });
+                  }),
+              )
+              .child(
+                Button::new(format!("pr-overview-edit-save-{}", item.id))
+                  .xsmall()
+                  .compact()
+                  .label("Save")
+                  .disabled(!can_save || overview_submission_in_flight)
+                  .on_click(move |_, _, cx| {
+                    page_for_save.update(cx, |this, cx| {
+                      this.submit_overview_comment_edit(cx);
+                    });
+                  }),
+              ),
+          )
+          .into_any_element()
+      } else {
+        div().into_any_element()
+      }
+    } else if let Some(body) = &item.body {
+      div()
         .w_full()
-        .items_center()
-        .justify_center()
-        .py_6()
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("No comments yet"),
-        )
+        .min_w_0()
+        .child(render_markdown(body.as_str(), &markdown_options, cx))
         .into_any_element()
     } else {
-      v_flex()
-        .gap_4()
-        .children(items.into_iter().map(|item| {
-          let timestamp = format_compact_datetime(&item.timestamp);
-          let scope_id = overview_conversation_scope_id(pr.number, item.kind, item.id);
-          let parent_item_id = item.id;
-          let type_label = overview_conversation_kind_label(item.kind);
-          let body = item.body.clone();
-          let replies = item.replies.clone();
-          let thread_comment_ids = item.thread_comment_ids.clone();
-          let root_target = match item.kind {
-            GithubPrOverviewConversationItemKind::IssueComment => Some(OverviewCommentTarget {
-              kind: OverviewCommentKind::Issue,
-              id: item.id,
-            }),
-            GithubPrOverviewConversationItemKind::ReviewComment => Some(OverviewCommentTarget {
-              kind: OverviewCommentKind::Review,
-              id: item.id,
-            }),
-            GithubPrOverviewConversationItemKind::Review => None,
-          };
-          let root_is_editing = overview_root_is_editing(editing_target, root_target);
-          let root_is_reply_target = replying_target == Some(item.id);
-          let root_is_last_review_message =
-            allows_overview_review_reply_action(item.kind, &thread_comment_ids, item.id);
-          let root_is_editable = root_target.is_some_and(|target| match target.kind {
-            OverviewCommentKind::Issue => editable_issue_comment_ids.contains(&target.id),
-            OverviewCommentKind::Review => editable_review_comment_ids.contains(&target.id),
-          });
-          let review_comment_preview =
-            if item.kind == GithubPrOverviewConversationItemKind::ReviewComment {
-              self.overview_root_review_comment_preview(item.id)
-            } else {
-              None
-            };
+      div()
+        .w_full()
+        .min_w_0()
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child("No comment body.")
+        .into_any_element()
+    };
 
-          let markdown_options = MarkdownRenderOptions::with_on_link(link_handler.clone())
-            .with_state(self.description_markdown_state.clone())
-            .with_github_issue_reference_context(
-              pr.repository.owner.as_str(),
-              pr.repository.repo.as_str(),
+    // Reply composer for root
+    let root_reply_composer = if replying_target == Some(item.id) {
+      if self.overview_reply_submitting {
+        Some(
+          v_flex()
+            .gap_2()
+            .pt_2()
+            .border_t_1()
+            .border_color(theme.border)
+            .child(Spinner::new().small())
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("Replying..."),
             )
-            .with_scope_id(scope_id);
-
-          let root_edit_button = if root_is_editable && !overview_submission_in_flight {
-            root_target.map(|target| {
-              let page = pr_page.clone();
+            .into_any_element(),
+        )
+      } else if let Some(input_state) = self.overview_reply_input.clone() {
+        let can_save =
+          github_shared::normalize_non_empty_text(input_state.read(cx).value().as_str()).is_some();
+        let page_for_cancel = pr_page.clone();
+        let page_for_save = pr_page.clone();
+        Some(
+          v_flex()
+            .gap_2()
+            .pt_2()
+            .border_t_1()
+            .border_color(theme.border)
+            .child(
               div()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                  cx.stop_propagation();
-                })
-                .child(
-                  Button::new(format!("pr-overview-comment-edit-{}", target.id))
-                    .ghost()
-                    .xsmall()
-                    .compact()
-                    .icon(UiIconName::SquarePen)
-                    .tooltip("Edit comment")
-                    .on_click(move |_, window, cx| {
-                      cx.stop_propagation();
-                      page.update(cx, |this, cx| {
-                        this.start_overview_comment_edit(target, window, cx);
-                      });
-                    }),
-                )
-                .into_any_element()
-            })
-          } else {
-            None
-          };
-
-          let root_delete_button = if root_is_editable && !overview_submission_in_flight {
-            root_target.map(|target| {
-              let page = pr_page.clone();
-              div()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                  cx.stop_propagation();
-                })
-                .child(
-                  Button::new(format!("pr-overview-comment-delete-{}", target.id))
-                    .ghost()
-                    .xsmall()
-                    .compact()
-                    .icon(IconName::Delete)
-                    .tooltip("Delete comment")
-                    .on_click(move |_, window, cx| {
-                      cx.stop_propagation();
-                      page.update(cx, |this, cx| {
-                        this.confirm_overview_comment_delete(target, window, cx);
-                      });
-                    }),
-                )
-                .into_any_element()
-            })
-          } else {
-            None
-          };
-
-          let root_reply_button = if root_is_last_review_message
-            && replying_target.is_none()
-            && !overview_submission_in_flight
-          {
-            let page = pr_page.clone();
-            Some(
-              div()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                  cx.stop_propagation();
-                })
-                .child(
-                  Button::new(format!("pr-overview-comment-reply-{}", item.id))
-                    .ghost()
-                    .xsmall()
-                    .compact()
-                    .icon(UiIconName::MessageCircleReply)
-                    .tooltip("Reply")
-                    .on_click(move |_, window, cx| {
-                      cx.stop_propagation();
-                      page.update(cx, |this, cx| {
-                        this.start_overview_review_comment_reply(item.id, window, cx);
-                      });
-                    }),
-                )
-                .into_any_element(),
+                .w_full()
+                .child(Input::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))),
             )
-          } else {
-            None
-          };
-          let root_body = if root_is_editing {
-            if let Some(input_state) = self.overview_edit_input.clone() {
-              let can_save = self
-                .overview_edit_initial_body
-                .as_deref()
-                .and_then(|initial| {
-                  let raw_value = input_state.read(cx).value().to_string();
-                  next_overview_comment_body(raw_value.as_str(), initial)
-                })
-                .is_some();
-              let page_for_cancel = pr_page.clone();
-              let page_for_save = pr_page.clone();
-              v_flex()
+            .when_some(self.overview_reply_error.clone(), |this, error| {
+              this.child(div().text_xs().text_color(theme.status_red()).child(error))
+            })
+            .child(
+              h_flex()
+                .items_center()
+                .justify_end()
                 .gap_2()
                 .child(
-                  div().w_full().child(
-                    Input::new(&input_state)
-                      .disabled(self.overview_edit_submitting)
-                      .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
-                  ),
+                  Button::new(format!("pr-overview-reply-cancel-{}", item.id))
+                    .ghost()
+                    .xsmall()
+                    .compact()
+                    .label("Cancel")
+                    .on_click(move |_, _, cx| {
+                      page_for_cancel.update(cx, |this, cx| {
+                        this.cancel_overview_review_comment_reply(cx);
+                      });
+                    }),
                 )
-                .when_some(self.overview_edit_error.clone(), |this, error| {
-                  this.child(div().text_xs().text_color(theme.status_red()).child(error))
-                })
                 .child(
-                  h_flex()
-                    .items_center()
-                    .justify_end()
-                    .gap_2()
-                    .child(
-                      Button::new(format!("pr-overview-edit-cancel-{}", item.id))
-                        .ghost()
-                        .xsmall()
-                        .compact()
-                        .label("Cancel")
-                        .on_click(move |_, _, cx| {
-                          page_for_cancel.update(cx, |this, cx| {
-                            this.cancel_overview_comment_edit(cx);
-                          });
-                        }),
-                    )
-                    .child(
-                      Button::new(format!("pr-overview-edit-save-{}", item.id))
-                        .xsmall()
-                        .compact()
-                        .label("Save")
-                        .disabled(!can_save || overview_submission_in_flight)
-                        .on_click(move |_, _, cx| {
-                          page_for_save.update(cx, |this, cx| {
-                            this.submit_overview_comment_edit(cx);
-                          });
-                        }),
-                    ),
-                )
-                .into_any_element()
-            } else {
-              div().into_any_element()
-            }
-          } else if let Some(body) = body {
-            div()
-              .w_full()
-              .min_w_0()
-              .child(render_markdown(body.as_str(), &markdown_options, cx))
-              .into_any_element()
-          } else {
-            div()
-              .w_full()
-              .min_w_0()
-              .text_sm()
-              .text_color(theme.muted_foreground)
-              .child("No comment body.")
-              .into_any_element()
-          };
+                  Button::new(format!("pr-overview-reply-save-{}", item.id))
+                    .xsmall()
+                    .compact()
+                    .label("Save")
+                    .disabled(!can_save || overview_submission_in_flight)
+                    .on_click(move |_, _, cx| {
+                      page_for_save.update(cx, |this, cx| {
+                        this.submit_overview_review_comment_reply(cx);
+                      });
+                    }),
+                ),
+            )
+            .into_any_element(),
+        )
+      } else {
+        None
+      }
+    } else {
+      None
+    };
 
-          let root_reply_composer = if root_is_reply_target {
-            if self.overview_reply_submitting {
-              Some(
-                v_flex()
+    let replies = &item.replies;
+    let thread_comment_ids = item.thread_comment_ids.clone();
+
+    v_flex()
+      .id(format!(
+        "pr-overview-conversation-{}-{}",
+        conversation_source_priority(item.kind),
+        item.id
+      ))
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius)
+      .when_some(review_comment_preview, |this, preview| {
+        this.child(
+          render_github_code_reference_preview_card(&preview, cx)
+            .my_0()
+            .border_b_1()
+            .border_t_0()
+            .border_x_0()
+            .rounded_none(),
+        )
+      })
+      .child(
+        v_flex()
+          .gap_2()
+          .p_3()
+          .child(
+            h_flex()
+              .items_center()
+              .justify_between()
+              .gap_2()
+              .child(
+                h_flex()
+                  .items_center()
                   .gap_2()
-                  .pt_2()
-                  .border_t_1()
-                  .border_color(theme.border)
-                  .child(Spinner::new().small())
+                  .flex_wrap()
+                  .child(
+                    Avatar::new()
+                      .name(item.author_login.clone())
+                      .when_some(item.author_avatar_url.clone(), |this, url| this.src(url))
+                      .small(),
+                  )
+                  .child(
+                    div()
+                      .text_sm()
+                      .text_color(theme.foreground)
+                      .child(item.author_login.clone()),
+                  )
                   .child(
                     div()
                       .text_xs()
                       .text_color(theme.muted_foreground)
-                      .child("Replying..."),
+                      .child(timestamp),
                   )
-                  .into_any_element(),
+                  .child(Tag::secondary().small().rounded_full().child(type_label)),
               )
-            } else if let Some(input_state) = self.overview_reply_input.clone() {
-              let can_save =
-                github_shared::normalize_non_empty_text(input_state.read(cx).value().as_str())
-                  .is_some();
-              let page_for_cancel = pr_page.clone();
-              let page_for_save = pr_page.clone();
-              Some(
-                v_flex()
-                  .gap_2()
-                  .pt_2()
-                  .border_t_1()
-                  .border_color(theme.border)
-                  .child(
-                    div()
-                      .w_full()
-                      .child(Input::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))),
-                  )
-                  .when_some(self.overview_reply_error.clone(), |this, error| {
-                    this.child(div().text_xs().text_color(theme.status_red()).child(error))
-                  })
-                  .child(
-                    h_flex()
-                      .items_center()
-                      .justify_end()
-                      .gap_2()
-                      .child(
-                        Button::new(format!("pr-overview-reply-cancel-{}", item.id))
-                          .ghost()
-                          .xsmall()
-                          .compact()
-                          .label("Cancel")
-                          .on_click(move |_, _, cx| {
-                            page_for_cancel.update(cx, |this, cx| {
-                              this.cancel_overview_review_comment_reply(cx);
-                            });
-                          }),
-                      )
-                      .child(
-                        Button::new(format!("pr-overview-reply-save-{}", item.id))
-                          .xsmall()
-                          .compact()
-                          .label("Save")
-                          .disabled(!can_save || overview_submission_in_flight)
-                          .on_click(move |_, _, cx| {
-                            page_for_save.update(cx, |this, cx| {
-                              this.submit_overview_review_comment_reply(cx);
-                            });
-                          }),
-                      ),
-                  )
-                  .into_any_element(),
-              )
-            } else {
-              None
-            }
-          } else {
-            None
-          };
-
-          v_flex()
-            .id(format!(
-              "pr-overview-conversation-{}-{}",
-              conversation_source_priority(item.kind),
-              item.id
-            ))
-            .border_1()
-            .border_color(theme.border)
-            .rounded(theme.radius)
-            .when_some(review_comment_preview, |this, preview| {
-              this.child(
-                render_github_code_reference_preview_card(&preview, cx)
-                  .my_0()
-                  .border_b_1()
-                  .border_t_0()
-                  .border_x_0()
-                  .rounded_none(),
-              )
-            })
-            .child(
+              .child(
+                h_flex()
+                  .items_center()
+                  .gap_1()
+                  .when_some(root_edit_button, |this, button| this.child(button))
+                  .when_some(root_delete_button, |this, button| this.child(button))
+                  .when_some(root_reply_button, |this, button| this.child(button)),
+              ),
+          )
+          .when_some(item.review_state, |this, state| {
+            let label = review_state_display_label(state);
+            let icon_style = review_state_icon_style(state, &theme);
+            this.child(
+              h_flex()
+                .items_center()
+                .gap_1()
+                .when_some(icon_style, |this, (icon, color)| {
+                  this.child(Icon::new(icon).size_3().text_color(color))
+                })
+                .child(label),
+            )
+          })
+          .child(root_body)
+          .when_some(root_reply_composer, |this, composer| this.child(composer))
+          .when(!replies.is_empty(), |this| {
+            this.child(
               v_flex()
                 .gap_2()
-                .p_3()
-                .child(
-                  h_flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .child(
-                      h_flex()
-                        .items_center()
-                        .gap_2()
-                        .flex_wrap()
-                        .child(
-                          Avatar::new()
-                            .name(item.author_login.clone())
-                            .when_some(item.author_avatar_url.clone(), |this, url| this.src(url))
-                            .small(),
-                        )
-                        .child(
-                          div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(item.author_login.clone()),
-                        )
-                        .child(
-                          div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(timestamp),
-                        )
-                        .child(Tag::secondary().small().rounded_full().child(type_label)),
-                    )
-                    .child(
-                      h_flex()
-                        .items_center()
-                        .gap_1()
-                        .when_some(root_edit_button, |this, button| this.child(button))
-                        .when_some(root_delete_button, |this, button| this.child(button))
-                        .when_some(root_reply_button, |this, button| this.child(button)),
-                    ),
-                )
-                .when_some(item.review_state, |this, state| {
-                  let label = review_state_display_label(state);
-                  let icon_style = review_state_icon_style(state, &theme);
-                  this.child(
-                    h_flex()
-                      .items_center()
-                      .gap_1()
-                      .when_some(icon_style, |this, (icon, color)| {
-                        this.child(Icon::new(icon).size_3().text_color(color))
-                      })
-                      .child(label),
-                  )
-                })
-                .child(root_body)
-                .when_some(root_reply_composer, |this, composer| this.child(composer))
-                .when(!replies.is_empty(), |this| {
-                  this.child(
-                    v_flex()
-                      .gap_2()
-                      .pl_3()
-                      .border_l_1()
-                      .border_color(theme.border)
-                      .children(replies.into_iter().map(|reply| {
-                        let reply_timestamp = format_compact_datetime(&reply.timestamp);
-                        let reply_scope_id = scope_id
-                          .wrapping_mul(1_000_003)
-                          .wrapping_add(reply.id as usize);
-                        let reply_target = OverviewCommentTarget {
-                          kind: OverviewCommentKind::Review,
-                          id: reply.id,
-                        };
-                        let reply_is_editing = editing_target == Some(reply_target);
-                        let reply_is_reply_target = replying_target == Some(reply.id);
-                        let reply_is_editable = editable_review_comment_ids.contains(&reply.id);
-                        let reply_is_last_message = allows_overview_review_reply_action(
-                          item.kind,
-                          &thread_comment_ids,
-                          reply.id,
-                        );
-                        let reply_markdown_options =
-                          MarkdownRenderOptions::with_on_link(link_handler.clone())
-                            .with_state(self.description_markdown_state.clone())
-                            .with_github_issue_reference_context(
-                              pr.repository.owner.as_str(),
-                              pr.repository.repo.as_str(),
-                            )
-                            .with_scope_id(reply_scope_id);
+                .pl_3()
+                .border_l_1()
+                .border_color(theme.border)
+                .children(replies.iter().map(|reply| {
+                  let reply_timestamp = format_compact_datetime(&reply.timestamp);
+                  let reply_scope_id = scope_id
+                    .wrapping_mul(1_000_003)
+                    .wrapping_add(reply.id as usize);
+                  let reply_markdown_options =
+                    MarkdownRenderOptions::with_on_link(link_handler.clone())
+                      .with_state(self.description_markdown_state.clone())
+                      .with_syntax_cache(self.syntax_highlight_cache.clone())
+                      .with_github_issue_reference_context(pr_owner.as_ref(), pr_repo.as_ref())
+                      .with_scope_id(reply_scope_id);
 
-                        let reply_edit_button =
-                          if reply_is_editable && !overview_submission_in_flight {
-                            let page = pr_page.clone();
-                            Some(
-                              div()
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                  cx.stop_propagation();
-                                })
-                                .child(
-                                  Button::new(format!("pr-overview-reply-edit-{}", reply.id))
-                                    .ghost()
-                                    .xsmall()
-                                    .compact()
-                                    .icon(UiIconName::SquarePen)
-                                    .tooltip("Edit comment")
-                                    .on_click(move |_, window, cx| {
-                                      cx.stop_propagation();
-                                      page.update(cx, |this, cx| {
-                                        this.start_overview_comment_edit(reply_target, window, cx);
-                                      });
-                                    }),
-                                )
-                                .into_any_element(),
-                            )
-                          } else {
-                            None
-                          };
+                  let reply_target = OverviewCommentTarget {
+                    kind: OverviewCommentKind::Review,
+                    id: reply.id,
+                  };
+                  let reply_is_editable = editable_review_comment_ids.contains(&reply.id);
+                  let reply_is_last_message = allows_overview_review_reply_action(
+                    item.kind,
+                    &thread_comment_ids,
+                    reply.id,
+                  );
 
-                        let reply_delete_button =
-                          if reply_is_editable && !overview_submission_in_flight {
-                            let page = pr_page.clone();
-                            Some(
-                              div()
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                  cx.stop_propagation();
-                                })
-                                .child(
-                                  Button::new(format!("pr-overview-reply-delete-{}", reply.id))
-                                    .ghost()
-                                    .xsmall()
-                                    .compact()
-                                    .icon(IconName::Delete)
-                                    .tooltip("Delete comment")
-                                    .on_click(move |_, window, cx| {
-                                      cx.stop_propagation();
-                                      page.update(cx, |this, cx| {
-                                        this.confirm_overview_comment_delete(
-                                          reply_target,
-                                          window,
-                                          cx,
-                                        );
-                                      });
-                                    }),
-                                )
-                                .into_any_element(),
-                            )
-                          } else {
-                            None
-                          };
-
-                        let reply_reply_button = if reply_is_last_message
-                          && replying_target.is_none()
-                          && !overview_submission_in_flight
-                        {
-                          let page = pr_page.clone();
-                          Some(
-                            div()
-                              .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                  // Reply action buttons
+                  let reply_edit_button =
+                    if reply_is_editable && !overview_submission_in_flight {
+                      let page = pr_page.clone();
+                      Some(
+                        div()
+                          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                          .child(
+                            Button::new(format!("pr-overview-reply-edit-{}", reply.id))
+                              .ghost()
+                              .xsmall()
+                              .compact()
+                              .icon(UiIconName::SquarePen)
+                              .tooltip("Edit comment")
+                              .on_click(move |_, window, cx| {
                                 cx.stop_propagation();
-                              })
-                              .child(
-                                Button::new(format!("pr-overview-reply-action-{}", reply.id))
-                                  .ghost()
-                                  .xsmall()
-                                  .compact()
-                                  .icon(UiIconName::MessageCircleReply)
-                                  .tooltip("Reply")
-                                  .on_click(move |_, window, cx| {
-                                    cx.stop_propagation();
-                                    page.update(cx, |this, cx| {
-                                      this
-                                        .start_overview_review_comment_reply(reply.id, window, cx);
-                                    });
-                                  }),
-                              )
-                              .into_any_element(),
+                                page.update(cx, |this, cx| {
+                                  this.start_overview_comment_edit(reply_target, window, cx);
+                                });
+                              }),
                           )
-                        } else {
-                          None
-                        };
+                          .into_any_element(),
+                      )
+                    } else {
+                      None
+                    };
 
-                        let reply_body = if reply_is_editing {
-                          if self.overview_edit_submitting {
-                            v_flex()
-                              .gap_2()
-                              .child(Spinner::new().small())
-                              .child(
-                                div()
-                                  .text_xs()
-                                  .text_color(theme.muted_foreground)
-                                  .child("Saving..."),
-                              )
-                              .into_any_element()
-                          } else if let Some(input_state) = self.overview_edit_input.clone() {
-                            let can_save = self
-                              .overview_edit_initial_body
-                              .as_deref()
-                              .and_then(|initial| {
-                                let raw_value = input_state.read(cx).value().to_string();
-                                next_overview_comment_body(raw_value.as_str(), initial)
-                              })
-                              .is_some();
-                            let page_for_cancel = pr_page.clone();
-                            let page_for_save = pr_page.clone();
-                            v_flex()
-                              .gap_2()
-                              .child(div().w_full().child(
-                                Input::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
-                              ))
-                              .when_some(self.overview_edit_error.clone(), |this, error| {
-                                this.child(
-                                  div().text_xs().text_color(theme.status_red()).child(error),
-                                )
-                              })
-                              .child(
-                                h_flex()
-                                  .items_center()
-                                  .justify_end()
-                                  .gap_2()
-                                  .child(
-                                    Button::new(format!(
-                                      "pr-overview-reply-edit-cancel-{}",
-                                      reply.id
-                                    ))
-                                    .ghost()
-                                    .xsmall()
-                                    .compact()
-                                    .label("Cancel")
-                                    .on_click(
-                                      move |_, _, cx| {
-                                        page_for_cancel.update(cx, |this, cx| {
-                                          this.cancel_overview_comment_edit(cx);
-                                        });
-                                      },
-                                    ),
-                                  )
-                                  .child(
-                                    Button::new(format!(
-                                      "pr-overview-reply-edit-save-{}",
-                                      reply.id
-                                    ))
-                                    .xsmall()
-                                    .compact()
-                                    .label("Save")
-                                    .disabled(!can_save || overview_submission_in_flight)
-                                    .on_click(
-                                      move |_, _, cx| {
-                                        page_for_save.update(cx, |this, cx| {
-                                          this.submit_overview_comment_edit(cx);
-                                        });
-                                      },
-                                    ),
-                                  ),
-                              )
-                              .into_any_element()
-                          } else {
-                            div().into_any_element()
-                          }
-                        } else {
-                          div()
-                            .w_full()
-                            .min_w_0()
-                            .child(render_markdown(
-                              reply.body.as_str(),
-                              &reply_markdown_options,
-                              cx,
-                            ))
-                            .into_any_element()
-                        };
+                  let reply_delete_button =
+                    if reply_is_editable && !overview_submission_in_flight {
+                      let page = pr_page.clone();
+                      Some(
+                        div()
+                          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                          .child(
+                            Button::new(format!("pr-overview-reply-delete-{}", reply.id))
+                              .ghost()
+                              .xsmall()
+                              .compact()
+                              .icon(IconName::Delete)
+                              .tooltip("Delete comment")
+                              .on_click(move |_, window, cx| {
+                                cx.stop_propagation();
+                                page.update(cx, |this, cx| {
+                                  this.confirm_overview_comment_delete(reply_target, window, cx);
+                                });
+                              }),
+                          )
+                          .into_any_element(),
+                      )
+                    } else {
+                      None
+                    };
 
-                        let reply_reply_composer = if reply_is_reply_target {
-                          if self.overview_reply_submitting {
-                            Some(
-                              v_flex()
-                                .gap_2()
-                                .pt_2()
-                                .border_t_1()
-                                .border_color(theme.border)
-                                .child(Spinner::new().small())
-                                .child(
-                                  div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child("Replying..."),
-                                )
-                                .into_any_element(),
-                            )
-                          } else if let Some(input_state) = self.overview_reply_input.clone() {
-                            let can_save = github_shared::normalize_non_empty_text(
-                              input_state.read(cx).value().as_str(),
-                            )
-                            .is_some();
-                            let page_for_cancel = pr_page.clone();
-                            let page_for_save = pr_page.clone();
-                            Some(
-                              v_flex()
-                                .gap_2()
-                                .pt_2()
-                                .border_t_1()
-                                .border_color(theme.border)
-                                .child(div().w_full().child(
-                                  Input::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
-                                ))
-                                .when_some(self.overview_reply_error.clone(), |this, error| {
-                                  this.child(
-                                    div().text_xs().text_color(theme.status_red()).child(error),
-                                  )
-                                })
-                                .child(
-                                  h_flex()
-                                    .items_center()
-                                    .justify_end()
-                                    .gap_2()
-                                    .child(
-                                      Button::new(format!(
-                                        "pr-overview-reply-composer-cancel-{}",
-                                        reply.id
-                                      ))
-                                      .ghost()
-                                      .xsmall()
-                                      .compact()
-                                      .label("Cancel")
-                                      .on_click(
-                                        move |_, _, cx| {
-                                          page_for_cancel.update(cx, |this, cx| {
-                                            this.cancel_overview_review_comment_reply(cx);
-                                          });
-                                        },
-                                      ),
-                                    )
-                                    .child(
-                                      Button::new(format!(
-                                        "pr-overview-reply-composer-save-{}",
-                                        reply.id
-                                      ))
-                                      .xsmall()
-                                      .compact()
-                                      .label("Save")
-                                      .disabled(!can_save || overview_submission_in_flight)
-                                      .on_click(
-                                        move |_, _, cx| {
-                                          page_for_save.update(cx, |this, cx| {
-                                            this.submit_overview_review_comment_reply(cx);
-                                          });
-                                        },
-                                      ),
-                                    ),
-                                )
-                                .into_any_element(),
-                            )
-                          } else {
-                            None
-                          }
-                        } else {
-                          None
-                        };
+                  let reply_reply_button = if reply_is_last_message
+                    && replying_target.is_none()
+                    && !overview_submission_in_flight
+                  {
+                    let page = pr_page.clone();
+                    let reply_id = reply.id;
+                    Some(
+                      div()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                          Button::new(format!("pr-overview-reply-action-{}", reply_id))
+                            .ghost()
+                            .xsmall()
+                            .compact()
+                            .icon(UiIconName::MessageCircleReply)
+                            .tooltip("Reply")
+                            .on_click(move |_, window, cx| {
+                              cx.stop_propagation();
+                              page.update(cx, |this, cx| {
+                                this.start_overview_review_comment_reply(reply_id, window, cx);
+                              });
+                            }),
+                        )
+                        .into_any_element(),
+                    )
+                  } else {
+                    None
+                  };
 
+                  // Reply body (edit mode or markdown)
+                  let reply_is_editing = editing_target == Some(reply_target);
+                  let reply_body = if reply_is_editing {
+                    if let Some(input_state) = self.overview_edit_input.clone() {
+                      let can_save = self
+                        .overview_edit_initial_body
+                        .as_deref()
+                        .and_then(|initial| {
+                          let raw_value = input_state.read(cx).value().to_string();
+                          next_overview_comment_body(raw_value.as_str(), initial)
+                        })
+                        .is_some();
+                      let page_for_cancel = pr_page.clone();
+                      let page_for_save = pr_page.clone();
+                      v_flex()
+                        .gap_2()
+                        .child(div().w_full().child(
+                          Input::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+                        ))
+                        .when_some(self.overview_edit_error.clone(), |this, error| {
+                          this.child(
+                            div().text_xs().text_color(theme.status_red()).child(error),
+                          )
+                        })
+                        .child(
+                          h_flex()
+                            .items_center()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                              Button::new(format!("pr-overview-reply-edit-cancel-{}", reply.id))
+                                .ghost()
+                                .xsmall()
+                                .compact()
+                                .label("Cancel")
+                                .on_click(move |_, _, cx| {
+                                  page_for_cancel.update(cx, |this, cx| {
+                                    this.cancel_overview_comment_edit(cx);
+                                  });
+                                }),
+                            )
+                            .child(
+                              Button::new(format!("pr-overview-reply-edit-save-{}", reply.id))
+                                .xsmall()
+                                .compact()
+                                .label("Save")
+                                .disabled(!can_save || overview_submission_in_flight)
+                                .on_click(move |_, _, cx| {
+                                  page_for_save.update(cx, |this, cx| {
+                                    this.submit_overview_comment_edit(cx);
+                                  });
+                                }),
+                            ),
+                        )
+                        .into_any_element()
+                    } else {
+                      div().into_any_element()
+                    }
+                  } else {
+                    div()
+                      .w_full()
+                      .min_w_0()
+                      .child(render_markdown(
+                        reply.body.as_str(),
+                        &reply_markdown_options,
+                        cx,
+                      ))
+                      .into_any_element()
+                  };
+
+                  // Reply reply composer
+                  let reply_reply_composer = if replying_target == Some(reply.id) {
+                    if self.overview_reply_submitting {
+                      Some(
                         v_flex()
-                          .id(format!(
-                            "pr-overview-conversation-reply-{}-{}",
-                            parent_item_id, reply.id
+                          .gap_2()
+                          .pt_2()
+                          .border_t_1()
+                          .border_color(theme.border)
+                          .child(Spinner::new().small())
+                          .child(
+                            div()
+                              .text_xs()
+                              .text_color(theme.muted_foreground)
+                              .child("Replying..."),
+                          )
+                          .into_any_element(),
+                      )
+                    } else if let Some(input_state) = self.overview_reply_input.clone() {
+                      let can_save = github_shared::normalize_non_empty_text(
+                        input_state.read(cx).value().as_str(),
+                      )
+                      .is_some();
+                      let page_for_cancel = pr_page.clone();
+                      let page_for_save = pr_page.clone();
+                      Some(
+                        v_flex()
+                          .gap_2()
+                          .pt_2()
+                          .border_t_1()
+                          .border_color(theme.border)
+                          .child(div().w_full().child(
+                            Input::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
                           ))
-                          .gap_1()
+                          .when_some(self.overview_reply_error.clone(), |this, error| {
+                            this.child(
+                              div().text_xs().text_color(theme.status_red()).child(error),
+                            )
+                          })
                           .child(
                             h_flex()
                               .items_center()
-                              .justify_between()
+                              .justify_end()
                               .gap_2()
                               .child(
-                                h_flex()
-                                  .items_center()
-                                  .gap_2()
-                                  .flex_wrap()
-                                  .child(
-                                    Avatar::new()
-                                      .name(reply.author_login.clone())
-                                      .when_some(reply.author_avatar_url.clone(), |this, url| {
-                                        this.src(url)
-                                      })
-                                      .small(),
-                                  )
-                                  .child(
-                                    div()
-                                      .text_sm()
-                                      .text_color(theme.foreground)
-                                      .child(reply.author_login.clone()),
-                                  )
-                                  .child(
-                                    div()
-                                      .text_xs()
-                                      .text_color(theme.muted_foreground)
-                                      .child(reply_timestamp),
-                                  )
-                                  .child(Tag::secondary().small().rounded_full().child("Reply")),
+                                Button::new(format!(
+                                  "pr-overview-reply-composer-cancel-{}",
+                                  reply.id
+                                ))
+                                .ghost()
+                                .xsmall()
+                                .compact()
+                                .label("Cancel")
+                                .on_click(move |_, _, cx| {
+                                  page_for_cancel.update(cx, |this, cx| {
+                                    this.cancel_overview_review_comment_reply(cx);
+                                  });
+                                }),
                               )
                               .child(
-                                h_flex()
-                                  .items_center()
-                                  .gap_1()
-                                  .when_some(reply_edit_button, |this, button| this.child(button))
-                                  .when_some(reply_delete_button, |this, button| this.child(button))
-                                  .when_some(reply_reply_button, |this, button| this.child(button)),
+                                Button::new(format!(
+                                  "pr-overview-reply-composer-save-{}",
+                                  reply.id
+                                ))
+                                .xsmall()
+                                .compact()
+                                .label("Save")
+                                .disabled(!can_save || overview_submission_in_flight)
+                                .on_click(move |_, _, cx| {
+                                  page_for_save.update(cx, |this, cx| {
+                                    this.submit_overview_review_comment_reply(cx);
+                                  });
+                                }),
                               ),
                           )
-                          .child(reply_body)
-                          .when_some(reply_reply_composer, |this, composer| this.child(composer))
-                          .into_any_element()
-                      })),
-                  )
-                }),
-            )
-            .into_any_element()
-        }))
-        .into_any_element()
-    };
+                          .into_any_element(),
+                      )
+                    } else {
+                      None
+                    }
+                  } else {
+                    None
+                  };
 
-    let errors = v_flex()
-      .gap_1()
-      .when_some(self.issue_comments_error.clone(), |this, error| {
-        this.child(
-          div()
-            .text_xs()
-            .text_color(theme.status_red())
-            .child(format!("Issue comments: {error}")),
-        )
-      })
-      .when_some(self.reviews_error.clone(), |this, error| {
-        this.child(
-          div()
-            .text_xs()
-            .text_color(theme.status_red())
-            .child(format!("Reviews: {error}")),
-        )
-      })
-      .when_some(self.review_comments_error.clone(), |this, error| {
-        this.child(
-          div()
-            .text_xs()
-            .text_color(theme.status_red())
-            .child(format!("Review comments: {error}")),
-        )
-      });
-
-    v_flex()
-      .w_full()
-      .gap_2()
-      .child(
-        div()
-          .text_sm()
-          .font_medium()
-          .text_color(theme.foreground)
-          .child("Conversation"),
-      )
-      .when(has_errors, |this| this.child(errors))
-      .child(conversation_content)
-      .child(
-        v_flex()
-          .gap_2()
-          .pt_2()
-          .child(
-            div()
-              .text_sm()
-              .font_medium()
-              .text_color(theme.foreground)
-              .child("Add comment"),
-          )
-          .child(div().w_full().child(
-            Input::new(&self.overview_issue_comment_input).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
-          ))
-          .when_some(self.overview_issue_comment_error.clone(), |this, error| {
-            this.child(div().text_xs().text_color(theme.status_red()).child(error))
-          })
-          .child(
-            h_flex().items_center().justify_end().gap_2().child(
-              Button::new("pr-overview-issue-comment-save")
-                .xsmall()
-                .compact()
-                .label("Comment")
-                .disabled(
-                  self.overview_issue_comment_submitting
-                    || self.overview_comment_submission_in_flight()
-                    || github_shared::normalize_non_empty_text(
-                      self.overview_issue_comment_input.read(cx).value().as_str(),
+                  v_flex()
+                    .id(format!(
+                      "pr-overview-conversation-reply-{}-{}",
+                      item.id, reply.id
+                    ))
+                    .gap_1()
+                    .child(
+                      h_flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                          h_flex()
+                            .items_center()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(
+                              Avatar::new()
+                                .name(reply.author_login.clone())
+                                .when_some(reply.author_avatar_url.clone(), |this, url| {
+                                  this.src(url)
+                                })
+                                .small(),
+                            )
+                            .child(
+                              div()
+                                .text_sm()
+                                .text_color(theme.foreground)
+                                .child(reply.author_login.clone()),
+                            )
+                            .child(
+                              div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(reply_timestamp),
+                            )
+                            .child(Tag::secondary().small().rounded_full().child("Reply")),
+                        )
+                        .child(
+                          h_flex()
+                            .items_center()
+                            .gap_1()
+                            .when_some(reply_edit_button, |this, button| this.child(button))
+                            .when_some(reply_delete_button, |this, button| this.child(button))
+                            .when_some(reply_reply_button, |this, button| this.child(button)),
+                        ),
                     )
-                    .is_none(),
-                )
-                .on_click({
-                  let page = pr_page.clone();
-                  move |_, window, cx| {
-                    page.update(cx, |this, cx| {
-                      this.submit_overview_issue_comment_create(window, cx);
-                    });
-                  }
-                }),
-            ),
-          ),
+                    .child(reply_body)
+                    .when_some(reply_reply_composer, |this, composer| this.child(composer))
+                    .into_any_element()
+                })),
+            )
+          }),
       )
+      .into_any_element()
   }
 
   fn render_details(
-    &self,
+    &mut self,
     pr: &GithubPullRequestDetails,
     cx: &mut Context<Self>,
   ) -> impl IntoElement {
@@ -8131,6 +8030,7 @@ impl GithubPrDetailsPage {
               .child({
                 let mut options = MarkdownRenderOptions::with_on_link(description_link_handler)
                   .with_state(self.description_markdown_state.clone())
+                  .with_syntax_cache(self.syntax_highlight_cache.clone())
                   .with_github_issue_reference_context(
                     pr.repository.owner.as_str(),
                     pr.repository.repo.as_str(),
@@ -8144,21 +8044,147 @@ impl GithubPrDetailsPage {
               .into_any_element()
           }),
       )
-      .child(self.render_details_conversation_panel(pr, cx));
+      ;
 
-    div()
-      .id("github-pr-overview-scroll")
-      .size_full()
-      .overflow_y_scrollbar()
-      .px_10()
+    // Build conversation items and update list state
+    let conversation_items = build_overview_conversation_items(
+      &self.issue_comments,
+      &self.reviews,
+      &self.review_comments,
+    );
+    self.overview_conversation_items = conversation_items;
+
+    // Also include conversation header in item 0
+    let is_conv_loading =
+      self.issue_comments_loading || self.reviews_loading || self.review_comments_loading;
+    let has_conv_errors = self.issue_comments_error.is_some()
+      || self.reviews_error.is_some()
+      || self.review_comments_error.is_some();
+    let conv_errors = v_flex()
+      .gap_1()
+      .when_some(self.issue_comments_error.clone(), |this, error| {
+        this.child(
+          div()
+            .text_xs()
+            .text_color(theme.status_red())
+            .child(format!("Issue comments: {error}")),
+        )
+      })
+      .when_some(self.reviews_error.clone(), |this, error| {
+        this.child(
+          div()
+            .text_xs()
+            .text_color(theme.status_red())
+            .child(format!("Reviews: {error}")),
+        )
+      })
+      .when_some(self.review_comments_error.clone(), |this, error| {
+        this.child(
+          div()
+            .text_xs()
+            .text_color(theme.status_red())
+            .child(format!("Review comments: {error}")),
+        )
+      });
+
+    let header_el = content
       .child(
-        div()
-          .pt_10()
-          .pb_32()
-          .child(content)
-          .mx_auto()
-          .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH)),
+        v_flex()
+          .w_full()
+          .gap_2()
+          .child(
+            div()
+              .text_sm()
+              .font_medium()
+              .text_color(theme.foreground)
+              .child("Conversation"),
+          )
+          .when(has_conv_errors, |this| this.child(conv_errors))
+          .when(self.overview_conversation_items.is_empty() && is_conv_loading, |this| {
+            this.child(
+              v_flex()
+                .w_full()
+                .items_center()
+                .justify_center()
+                .gap_2()
+                .py_6()
+                .child(Spinner::new().small())
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("Loading conversation..."),
+                ),
+            )
+          })
+          .when(
+            self.overview_conversation_items.is_empty() && !is_conv_loading,
+            |this| {
+              this.child(
+                v_flex()
+                  .w_full()
+                  .items_center()
+                  .justify_center()
+                  .py_6()
+                  .child(
+                    div()
+                      .text_sm()
+                      .text_color(theme.muted_foreground)
+                      .child("No comments yet"),
+                  ),
+              )
+            },
+          ),
       )
+      .into_any_element();
+
+    // List layout: item 0 = header/description, items 1..N = comments, item N+1 = add comment
+    let conversation_count = self.overview_conversation_items.len();
+    let total_items = 1 + conversation_count + 1;
+    // Only reset when item count changes to preserve cached heights
+    if self.overview_list_count != total_items {
+      self.overview_list_count = total_items;
+      self.overview_list.reset(total_items);
+    }
+
+    let pr_number = pr.number;
+    let pr_owner: SharedString = pr.repository.owner.clone().into();
+    let pr_repo: SharedString = pr.repository.repo.clone().into();
+    let entity = cx.entity().clone();
+    let max_w = px(DETAILS_PAGE_CONTAINER_MAX_WIDTH);
+    let header = std::cell::RefCell::new(Some(header_el));
+
+    list(
+      self.overview_list.clone(),
+      move |ix, _window, cx| {
+        entity.update(cx, |this, cx| {
+          let theme = cx.theme().clone();
+          let el = if ix == 0 {
+            // Header + description + conversation header
+            header.borrow_mut().take().unwrap_or_else(|| div().into_any_element())
+          } else if ix <= conversation_count {
+            // Conversation item
+            this.render_overview_conversation_item(
+              ix - 1,
+              pr_number,
+              pr_owner.clone(),
+              pr_repo.clone(),
+              cx,
+            )
+          } else {
+            // Add comment section
+            this.render_overview_add_comment_section(&theme, cx)
+          };
+
+          div()
+            .px_10()
+            .pb_4()
+            .child(div().mx_auto().max_w(max_w).pt(if ix == 0 { px(40.) } else { px(0.) }).child(el))
+            .into_any_element()
+        })
+      },
+    )
+    .size_full()
   }
 
   fn render_files_sidebar(
@@ -9804,8 +9830,20 @@ impl Render for GithubPrDetailsPage {
     let theme = cx.theme().clone();
     self.maybe_refresh_resolved_local_repo_match(window, cx);
 
-    let overview_inner: gpui::AnyElement = if let Some(pr) = self.pull_request.as_ref() {
-      self.render_details(pr, cx).into_any_element()
+    // Poll syntax highlight cache — if background highlights completed, schedule re-render
+    if self.syntax_highlight_cache.take_new_highlights() {
+      cx.notify();
+    } else if self.syntax_highlight_cache.has_pending() {
+      // Background highlights still in progress — check again next frame
+      cx.on_next_frame(window, |this, _window, cx| {
+        if this.syntax_highlight_cache.take_new_highlights() {
+          cx.notify();
+        }
+      });
+    }
+
+    let overview_inner: gpui::AnyElement = if let Some(pr) = self.pull_request.clone() {
+      self.render_details(&pr, cx).into_any_element()
     } else if self.error.is_some() {
       v_flex()
         .flex_1()
