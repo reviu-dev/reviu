@@ -84,7 +84,7 @@ export const auth = betterAuth({
 })
 
 export interface AuthType {
-  user: (Merge<typeof auth.$Infer.Session.user, { role: 'user' | 'admin' }>) | null
+  user: (Merge<typeof auth.$Infer.Session.user, { role: 'user' | 'pro' | 'admin' }>) | null
   session: typeof auth.$Infer.Session.session | null
 }
 

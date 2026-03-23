@@ -2,6 +2,8 @@ import type { AuthType, UserContext } from '../lib/auth.js'
 import { createMiddleware } from 'hono/factory'
 import { auth } from '../lib/auth.js'
 
+const FREE_PRO_ROLES: NonNullable<AuthType['user']>['role'][] = ['admin', 'pro']
+
 function authMiddleware(roleRequired: 'user' | 'admin' | 'pro') {
   return createMiddleware<{ Variables: { user: UserContext } }>(async (c, next) => {
     const session = await auth.api.getSession({ headers: c.req.raw.headers })
@@ -16,7 +18,7 @@ function authMiddleware(roleRequired: 'user' | 'admin' | 'pro') {
       return c.json({ error: 'Forbidden' }, 403)
     }
 
-    if (roleRequired === 'pro' && !user.proGrantedAt && user.role !== 'admin') {
+    if (roleRequired === 'pro' && !user.proGrantedAt && !FREE_PRO_ROLES.includes(user.role)) {
       return c.json({ error: 'Forbidden' }, 403)
     }
 

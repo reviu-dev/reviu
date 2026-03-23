@@ -199,6 +199,7 @@ pub(crate) fn sync_auth_state(state: &AuthState) {
           "user.role",
           match user.role {
             crate::api::UserRole::User => "user",
+            crate::api::UserRole::Pro => "pro",
             crate::api::UserRole::Admin => "admin",
           },
         );

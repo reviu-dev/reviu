@@ -103,6 +103,13 @@ mod tests {
   }
 
   #[test]
+  fn state_has_pro_access_allows_pro_role_without_subscription() {
+    let state = AuthState::Authenticated(Box::new(make_user(UserRole::Pro, None)));
+
+    assert!(state_has_pro_access(&state));
+  }
+
+  #[test]
   fn state_has_pro_access_requires_subscription_for_regular_users() {
     let no_subscription = AuthState::Authenticated(Box::new(make_user(UserRole::User, None)));
     let with_subscription = AuthState::Authenticated(Box::new(make_user(
