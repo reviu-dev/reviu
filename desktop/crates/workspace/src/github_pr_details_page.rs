@@ -74,7 +74,7 @@ use crate::{
   },
   auth_state::{AuthState, AuthStateStore},
   config::ConfigStore,
-  date_format::{format_compact_datetime, format_long_date},
+  date_format::{format_compact_datetime, format_long_date, format_relative_time},
   file_preview::{is_markdown_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   github_navigation::{
@@ -87,7 +87,7 @@ use crate::{
 };
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
-const SIDEBAR_MIN_WIDTH: f32 = 250.0;
+const SIDEBAR_MIN_WIDTH: f32 = 350.0;
 const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const DIFF_HEADER_HEIGHT: f32 = 40.0;
 const PR_TAB_OVERVIEW_IX: usize = 0;
@@ -1226,7 +1226,7 @@ impl ListDelegate for GithubPrCommitListDelegate {
       .committed_at
       .as_deref()
       .or(commit.authored_at.as_deref())
-      .map(format_compact_datetime)
+      .map(format_relative_time)
       .unwrap_or_else(|| "—".into());
 
     Some(
@@ -1243,9 +1243,19 @@ impl ListDelegate for GithubPrCommitListDelegate {
         v_flex()
           .gap_1()
           .child(
+            div()
+              .text_sm()
+              .text_color(theme.foreground)
+              .overflow_hidden()
+              .text_ellipsis()
+              .child(subject),
+          )
+          .child(
             h_flex()
+              .gap_1()
               .items_center()
-              .gap_2()
+              .text_xs()
+              .text_color(theme.muted_foreground)
               .child(
                 Tag::secondary()
                   .small()
@@ -1253,20 +1263,9 @@ impl ListDelegate for GithubPrCommitListDelegate {
                   .text_color(theme.muted_foreground)
                   .child(short),
               )
-              .child(
-                div()
-                  .text_sm()
-                  .text_color(theme.foreground)
-                  .overflow_hidden()
-                  .text_ellipsis()
-                  .child(subject),
-              ),
-          )
-          .child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(format!("{author} • {date_label}")),
+              .child(author.to_string())
+              .child("·")
+              .child(date_label),
           ),
       ),
     )
