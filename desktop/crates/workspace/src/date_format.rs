@@ -86,6 +86,10 @@ pub(crate) fn format_relative_time_at(value: &str, now: OffsetDateTime) -> Share
   pluralized_unit(elapsed_years.max(1), "year").into()
 }
 
+pub(crate) fn format_relative_time(value: &str) -> SharedString {
+  format_relative_time_at(value, OffsetDateTime::now_utc())
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

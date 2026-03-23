@@ -192,6 +192,8 @@ pub struct GithubUserRepository {
   pub full_name: String,
   pub description: Option<String>,
   pub private: bool,
+  #[serde(default, rename = "owner_avatar_url")]
+  pub owner_avatar_url: Option<String>,
   #[serde(rename = "updated_at")]
   pub updated_at: String,
 }
@@ -2406,6 +2408,7 @@ mod tests {
           "full_name": "acme/portal",
           "description": "Main app",
           "private": true,
+          "owner_avatar_url": "https://example.com/acme.png",
           "updated_at": "2026-02-20T14:12:00Z"
         }
       ]
@@ -2422,6 +2425,10 @@ mod tests {
     assert_eq!(repositories[0].full_name, "acme/portal");
     assert_eq!(repositories[0].description.as_deref(), Some("Main app"));
     assert!(repositories[0].private);
+    assert_eq!(
+      repositories[0].owner_avatar_url.as_deref(),
+      Some("https://example.com/acme.png")
+    );
     assert_eq!(repositories[0].updated_at, "2026-02-20T14:12:00Z");
     handle.join().expect("join server thread");
   }
