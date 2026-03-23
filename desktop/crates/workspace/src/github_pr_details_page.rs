@@ -74,7 +74,7 @@ use crate::{
   },
   auth_state::{AuthState, AuthStateStore},
   config::ConfigStore,
-  date_format::{format_compact_datetime, format_long_date, format_relative_time},
+  date_format::format_relative_time,
   file_preview::{is_markdown_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   github_navigation::{
@@ -5106,23 +5106,18 @@ impl GithubPrDetailsPage {
           _ => ReviewCommentSide::Right,
         };
 
-        let side_label = resolved_side.unwrap_or("");
         let line_label = {
           let line_label = if let Some(start) = comment.start_line
             && let Some(end) = comment.line
             && start != end
           {
-            Some(
-              format!("L{}-{} {}", start, end, side_label)
-                .trim()
-                .to_string(),
-            )
+            Some(format!("L{}-{}", start, end))
           } else {
             comment
               .line
               .or(comment.start_line)
               .or(resolved_line)
-              .map(|value| format!("L{} {}", value, side_label).trim().to_string())
+              .map(|value| format!("L{}", value))
           };
           line_label.map(|label| Arc::from(label.as_str()))
         };
@@ -5136,7 +5131,7 @@ impl GithubPrDetailsPage {
           avatar_url: comment.user.avatar_url.as_deref().map(Arc::from),
           line_label,
           body: Arc::from(comment.body.as_str()),
-          created_at: Arc::from(format_long_date(&comment.created_at).to_string()),
+          created_at: Arc::from(format_relative_time(&comment.created_at).to_string()),
         })
       })
       .collect()
@@ -7028,7 +7023,7 @@ impl GithubPrDetailsPage {
     };
 
     let theme = cx.theme().clone();
-    let timestamp = format_compact_datetime(&item.timestamp);
+    let timestamp = format_relative_time(&item.timestamp);
     let type_label = overview_conversation_kind_label(item.kind);
     let scope_id = overview_conversation_scope_id(pr_number, item.kind, item.id);
     let editable_issue_comment_ids = self.editable_issue_comment_ids(cx);
@@ -7401,7 +7396,7 @@ impl GithubPrDetailsPage {
                 .border_l_1()
                 .border_color(theme.border)
                 .children(replies.iter().map(|reply| {
-                  let reply_timestamp = format_compact_datetime(&reply.timestamp);
+                  let reply_timestamp = format_relative_time(&reply.timestamp);
                   let reply_scope_id = scope_id
                     .wrapping_mul(1_000_003)
                     .wrapping_add(reply.id as usize);
@@ -7718,9 +7713,9 @@ impl GithubPrDetailsPage {
     let pr_url = github_shared::pr_url(&pr.repository.owner, &pr.repository.repo, pr.number);
     let repo_owner = pr.repository.owner.clone();
     let repo_name = pr.repository.repo.clone();
-    let updated_at = format_long_date(&pr.updated_at);
-    let created_at = format_long_date(&pr.created_at);
-    let merged_at = pr.merged_at.as_deref().map(format_long_date);
+    let updated_at = format_relative_time(&pr.updated_at);
+    let created_at = format_relative_time(&pr.created_at);
+    let merged_at = pr.merged_at.as_deref().map(format_relative_time);
 
     let body = pr
       .body
@@ -9176,7 +9171,7 @@ impl GithubPrDetailsPage {
     let time_label = job
       .started_at
       .as_deref()
-      .map(format_compact_datetime)
+      .map(format_relative_time)
       .unwrap_or_else(|| "Unknown time".into());
 
     v_flex()
@@ -9235,7 +9230,7 @@ impl GithubPrDetailsPage {
                   let step_time = step
                     .started_at
                     .as_deref()
-                    .map(format_compact_datetime)
+                    .map(format_relative_time)
                     .unwrap_or_else(|| "Unknown time".into());
                   h_flex()
                     .items_center()
@@ -9301,7 +9296,7 @@ impl GithubPrDetailsPage {
         .unwrap_or_default(),
       run.event
     );
-    let time_label = format_compact_datetime(
+    let time_label = format_relative_time(
       run
         .run_started_at
         .as_deref()
@@ -9389,7 +9384,7 @@ impl GithubPrDetailsPage {
     let time_label = check
       .started_at
       .as_deref()
-      .map(format_compact_datetime)
+      .map(format_relative_time)
       .unwrap_or_else(|| "Unknown time".into());
 
     v_flex()
@@ -9470,7 +9465,7 @@ impl GithubPrDetailsPage {
       status.target_url.clone(),
       cx,
     );
-    let time_label = format_compact_datetime(status.updated_at.as_str());
+    let time_label = format_relative_time(status.updated_at.as_str());
 
     v_flex()
       .gap_2()
@@ -9571,6 +9566,7 @@ impl GithubPrDetailsPage {
         .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
         .mx_auto()
         .py_4()
+        .px_10()
         .gap_4()
         .child(render_checks_summary_card(&checks, &theme, None))
         .when(has_missing_required_contexts, |this| {
@@ -11625,15 +11621,6 @@ mod tests {
         repo: "widget".to_string(),
       }),
     }
-  }
-
-  #[test]
-  fn format_long_date_returns_long_month_for_iso_values() {
-    assert_eq!(
-      format_long_date("2026-02-15T12:34:56Z").as_ref(),
-      "February 15, 2026"
-    );
-    assert_eq!(format_long_date("2026-02-15").as_ref(), "2026-02-15");
   }
 
   #[test]
