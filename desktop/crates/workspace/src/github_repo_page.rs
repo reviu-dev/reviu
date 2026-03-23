@@ -51,7 +51,7 @@ use crate::{
     GithubRepositoryDetails,
   },
   auth_state::{AuthState, AuthStateStore},
-  date_format::{format_compact_datetime, format_long_date_opt},
+  date_format::{format_compact_datetime, format_long_date_opt, format_relative_time},
   file_preview::{is_markdown_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   github_navigation::{
@@ -973,8 +973,8 @@ impl ListDelegate for GithubRepoIssueListDelegate {
     let issue = &row.issue;
 
     let display_name = issue_user_display_name(issue.user.as_ref());
-    let created_at = format_compact_datetime(&issue.created_at);
-    let updated_at = format_compact_datetime(&issue.updated_at);
+    let opened_at = format_relative_time(&issue.created_at);
+    let updated_at = format_relative_time(&issue.updated_at);
 
     let (state_icon, state_color) =
       match issue_visual_state(&issue.state, issue.state_reason.clone()) {
@@ -982,26 +982,6 @@ impl ListDelegate for GithubRepoIssueListDelegate {
         GithubIssueVisualState::Completed => (UiIconName::CircleCheck, theme.status_violet()),
         GithubIssueVisualState::NotPlanned => (UiIconName::CircleSlash, theme.status_gray()),
       };
-
-    let issue_user = h_flex()
-      .items_center()
-      .gap_2()
-      .child(
-        Avatar::new()
-          .name(display_name.clone())
-          .when_some(
-            issue.user.as_ref().and_then(|user| user.avatar_url.clone()),
-            |this, url| this.src(url),
-          )
-          .small(),
-      )
-      .child(
-        div()
-          .min_w_0()
-          .text_xs()
-          .text_color(theme.muted_foreground)
-          .child(Label::new(display_name).truncate()),
-      );
 
     let label_tags = issue.labels.iter().take(4).map(|label| {
       Tag::secondary()
@@ -1011,7 +991,7 @@ impl ListDelegate for GithubRepoIssueListDelegate {
     });
 
     Some(
-      base_item.px_2().py_2().child(
+      base_item.px_2().py_1().child(
         v_flex()
           .gap_1()
           .child(
@@ -1037,16 +1017,27 @@ impl ListDelegate for GithubRepoIssueListDelegate {
           )
           .child(
             h_flex()
-              .gap_3()
+              .gap_1()
               .items_center()
               .min_w_0()
               .overflow_hidden()
               .text_xs()
               .text_color(theme.muted_foreground)
               .child(format!("#{}", issue.number))
-              .child(issue_user)
-              .child(format!("Opened {}", created_at))
-              .child(format!("Updated {}", updated_at)),
+              .child("·")
+              .child(
+                Avatar::new()
+                  .name(display_name.clone())
+                  .when_some(
+                    issue.user.as_ref().and_then(|user| user.avatar_url.clone()),
+                    |this, url| this.src(url),
+                  )
+                  .xsmall(),
+              )
+              .child(div().text_color(theme.foreground).child(display_name))
+              .child(format!("opened {opened_at}"))
+              .child("·")
+              .child(format!("updated {updated_at}")),
           ),
       ),
     )
@@ -2184,13 +2175,15 @@ impl Render for GithubIssueDetailsSheetView {
             .child(format!("Closed {closed_at}")),
         )
         .child(
-          Button::new("issue-details-open-on-github")
-            .icon(IconName::ExternalLink)
-            .small()
-            .label("Open on GitHub")
-            .on_click(move |_, _, cx| {
-              cx.open_url(&issue_url);
-            }),
+          h_flex().child(
+            Button::new("issue-details-open-on-github")
+              .icon(IconName::ExternalLink)
+              .small()
+              .label("Open on GitHub")
+              .on_click(move |_, _, cx| {
+                cx.open_url(&issue_url);
+              }),
+          ),
         )
         .child(
           v_flex()
