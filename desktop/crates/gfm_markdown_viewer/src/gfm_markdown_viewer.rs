@@ -4,10 +4,7 @@ use std::{
   hash::{DefaultHasher, Hash, Hasher},
   ops::Range,
   path::{Path, PathBuf},
-  sync::{
-    Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
-  },
+  sync::{Arc, Mutex},
   time::Duration,
 };
 
@@ -29,13 +26,22 @@ use gpui_component::{
 };
 use once_cell::sync::Lazy;
 use reqwest::header::CONTENT_TYPE;
-use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, TokenType, languages};
+#[cfg(test)]
+use syntax::TokenType;
+use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, languages};
 use tree_sitter::{Node as TsNode, Parser as TsParser};
 
+use crate::constants::*;
 use crate::parsed_cache::parse_markdown_for_render;
 #[cfg(test)]
 use crate::parsed_cache::{PARSED_MARKDOWN_CACHE_MAX_ENTRIES, ParsedMarkdownCache};
 use crate::preview_segments::{MarkdownRenderSegment, split_markdown_preview_segments};
+pub use crate::types::{
+  Block, CodeBlock, Details, GithubBlobLineReference, GithubCodeReferencePreview,
+  GithubIssueReferenceContext, Inline, LinkAction, List, ListItem, MarkdownRenderState,
+  ParsedMarkdown, Table,
+};
+use crate::types::*;
 
 type BlockRenderFn = dyn Fn(AnyElement, &App) -> AnyElement + Send + Sync;
 type HeadingRenderFn = dyn Fn(u8, AnyElement, &App) -> AnyElement + Send + Sync;
@@ -45,151 +51,7 @@ type ThematicBreakRenderFn = dyn Fn(&App) -> AnyElement + Send + Sync;
 type TableRenderFn = dyn Fn(&Table, &App) -> AnyElement + Send + Sync;
 type LinkHandlerFn = dyn Fn(&str, &mut Window, &mut App) -> LinkAction + Send + Sync;
 
-#[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Block {
-  Paragraph(Vec<Inline>),
-  Heading { level: u8, content: Vec<Inline> },
-  List(List),
-  CodeBlock(CodeBlock),
-  BlockQuote(Vec<Block>),
-  ThematicBreak,
-  Table(Table),
-  Details(Details),
-  Aligned { center: bool, blocks: Vec<Block> },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodeBlock {
-  pub lang: Option<String>,
-  pub value: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct GithubBlobLineReference {
-  pub url: String,
-  pub owner: String,
-  pub repo: String,
-  pub reference: String,
-  pub path: String,
-  pub start_line: usize,
-  pub end_line: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GithubCodeReferencePreview {
-  pub url: Arc<str>,
-  pub repo: Arc<str>,
-  pub path: Arc<str>,
-  pub reference: Arc<str>,
-  pub start_line: usize,
-  pub end_line: usize,
-  pub snippets: Vec<Arc<str>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Table {
-  pub headers: Vec<Vec<Inline>>,
-  pub rows: Vec<Vec<Vec<Inline>>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Details {
-  pub summary: Vec<Inline>,
-  pub blocks: Vec<Block>,
-  pub open: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct List {
-  pub ordered: bool,
-  pub start: Option<u64>,
-  pub items: Vec<ListItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ListItem {
-  pub blocks: Vec<Block>,
-  pub checked: Option<bool>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Inline {
-  Text(String),
-  Link {
-    url: String,
-    title: Option<String>,
-    content: Vec<Inline>,
-  },
-  Image {
-    url: String,
-    title: Option<String>,
-    alt: String,
-    width: Option<String>,
-    height: Option<String>,
-    dark_url: Option<String>,
-    light_url: Option<String>,
-  },
-  Code(String),
-  SoftBreak,
-  HardBreak,
-  Strong(Vec<Inline>),
-  Emphasis(Vec<Inline>),
-  Strikethrough(Vec<Inline>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct HtmlElement {
-  tag: String,
-  attrs: Vec<HtmlAttribute>,
-  children: Vec<HtmlNode>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct HtmlAttribute {
-  name: String,
-  value: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum HtmlNode {
-  Element(HtmlElement),
-  Text(String),
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct InlineStyle {
-  bold: bool,
-  italic: bool,
-  strike: bool,
-  code: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct InlineSpan {
-  range: Range<usize>,
-  style: InlineStyle,
-  link: Option<Arc<str>>,
-  syntax_token: Option<TokenType>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct LinkRange {
-  range: Range<usize>,
-  url: Arc<str>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GithubIssueReferenceContext {
-  pub owner: Arc<str>,
-  pub repo: Arc<str>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LinkAction {
-  Open,
-  Handled,
-}
+// Data types imported from crate::types
 
 #[derive(Clone, Default)]
 pub struct RenderOverrides {
@@ -203,72 +65,8 @@ pub struct RenderOverrides {
   pub table: Option<Arc<TableRenderFn>>,
 }
 
-#[derive(Clone)]
-pub struct MarkdownRenderState {
-  instance_id: usize,
-  details_open: Arc<Mutex<HashMap<usize, bool>>>,
-  selection: Arc<Mutex<Option<ActiveSelection>>>,
-}
-
-impl Default for MarkdownRenderState {
-  fn default() -> Self {
-    static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
-    Self {
-      instance_id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-      details_open: Arc::new(Mutex::new(HashMap::new())),
-      selection: Arc::new(Mutex::new(None)),
-    }
-  }
-}
-
-impl MarkdownRenderState {
-  pub fn new() -> Self {
-    Self::default()
-  }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct SelectionRange {
-  start: usize,
-  end: usize,
-}
-
-impl SelectionRange {
-  fn normalized(self) -> Range<usize> {
-    if self.start <= self.end {
-      self.start..self.end
-    } else {
-      self.end..self.start
-    }
-  }
-
-  fn is_empty(self) -> bool {
-    self.start == self.end
-  }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct SelectionState {
-  anchor: Option<usize>,
-  range: SelectionRange,
-  dragging: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ActiveSelection {
-  text_id: usize,
-  anchor: usize,
-  head: usize,
-  dragging: bool,
-}
-
-fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
-  let mut index = index.min(text.len());
-  while index > 0 && !text.is_char_boundary(index) {
-    index -= 1;
-  }
-  index
-}
+// MarkdownRenderState, SelectionRange, SelectionState, ActiveSelection, clamp_to_char_boundary
+// imported from crate::types
 
 #[derive(Clone, Default)]
 pub struct MarkdownRenderOptions {
@@ -280,6 +78,7 @@ pub struct MarkdownRenderOptions {
   pub github_issue_reference_context: Option<GithubIssueReferenceContext>,
   pub expand_code_blocks: bool,
   pub image_base_url: Option<SharedString>,
+  pub syntax_cache: Option<Arc<crate::syntax_cache::SyntaxHighlightCache>>,
 }
 
 impl MarkdownRenderOptions {
@@ -341,6 +140,14 @@ impl MarkdownRenderOptions {
     self.image_base_url = Some(image_base_url.into());
     self
   }
+
+  pub fn with_syntax_cache(
+    mut self,
+    cache: Arc<crate::syntax_cache::SyntaxHighlightCache>,
+  ) -> Self {
+    self.syntax_cache = Some(cache);
+    self
+  }
 }
 
 pub struct ListItemView {
@@ -349,72 +156,11 @@ pub struct ListItemView {
   pub content: AnyElement,
 }
 
-const TABLE_CELL_HORIZONTAL_PADDING_PX: f32 = 24.0;
-const TABLE_CELL_MIN_WIDTH_PX: f32 = 64.0;
-const TABLE_INLINE_CHAR_WIDTH_PX: f32 = 7.2;
-const TABLE_INLINE_GAP_PX: f32 = 4.0;
-const TABLE_BADGE_WIDTH_PX: f32 = 56.0;
-const LIST_LEFT_PADDING_PX: f32 = 10.0;
-const LIST_MARKER_GAP_PX: f32 = 4.0;
-const MARKDOWN_BASE_BLOCK_GAP_PX: f32 = 8.0;
-const MARKDOWN_HEADING_EXTRA_TOP_MARGIN_PX: f32 = 10.0;
-const MARKDOWN_LIST_ITEM_GAP_PX: f32 = 4.0;
-const MARKDOWN_INDENT_PER_LEVEL_PX: f32 = 12.0;
-const MARKDOWN_CHAR_WIDTH_PX: f32 = 8.8;
-const MARKDOWN_MIN_WRAP_COLUMNS: usize = 8;
-const MARKDOWN_CODE_LINE_HEIGHT_SCALE: f32 = 0.95;
-const MARKDOWN_CODE_BLOCK_PADDING_X_PX: f32 = 12.0;
-const MARKDOWN_CODE_BLOCK_PADDING_TOP_PX: f32 = 8.0;
-const MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX: f32 = 8.0;
-const MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX: f32 = 400.0;
-const MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX: f32 = 2.0;
-const MARKDOWN_CODE_BLOCK_LEADING_SPACE_RENDER_MULTIPLIER: usize = 2;
-const MARKDOWN_CODE_BLOCK_TAB_WIDTH: usize = 4;
-const MARKDOWN_CODE_INDENT_DOT_SIZE_PX: f32 = 2.0;
-const MARKDOWN_CODE_INDENT_DOT_OPACITY: f32 = 0.45;
-const MARKDOWN_CODE_INDENT_DOT_MIN_SPACING_PX: f32 = 5.0;
-const MARKDOWN_CODE_INDENT_DOT_MAX_RENDER_COUNT: usize = 600;
-const MARKDOWN_CODE_INDENT_DOT_DISABLE_ABOVE_TEXT_LEN: usize = 20_000;
-const MARKDOWN_CODE_REFERENCE_CARD_MARGIN_Y_PX: f32 = 8.0;
-const MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX: f32 = 12.0;
-const MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX: f32 = 8.0;
-const MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX: f32 = 6.0;
-const MARKDOWN_CODE_REFERENCE_SNIPPET_ROW_GAP_PX: f32 = 2.0;
-const MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX: f32 = 8.0;
-const MARKDOWN_CODE_REFERENCE_ROW_GAP_PX: f32 = 8.0;
-const MARKDOWN_INLINE_IMAGE_MAX_HEIGHT_PX: f32 = 420.0;
-const MARKDOWN_IMAGE_HARD_BREAK_SPACER_PX: f32 = 14.0;
-const MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX: f32 =
-  MARKDOWN_CODE_BLOCK_PADDING_TOP_PX + MARKDOWN_CODE_BLOCK_PADDING_BOTTOM_PX + 2.0;
+// Constants imported from crate::constants
+// BadgeImageSource, BadgeResolveState, Segment, ParsedMarkdown imported from crate::types
+
 static BADGE_IMAGE_SOURCE_CACHE: Lazy<Mutex<HashMap<String, BadgeResolveState>>> =
   Lazy::new(|| Mutex::new(HashMap::new()));
-
-#[derive(Clone, Debug)]
-enum BadgeImageSource {
-  Remote(String),
-  Local(PathBuf),
-}
-
-#[derive(Clone, Debug)]
-enum BadgeResolveState {
-  Pending,
-  Ready(BadgeImageSource),
-  Failed,
-}
-
-enum Segment {
-  Markdown(String),
-  Details {
-    summary: Option<String>,
-    body: String,
-    open: bool,
-  },
-}
-
-#[derive(Clone)]
-pub struct ParsedMarkdown {
-  blocks: Arc<Vec<Block>>,
-}
 
 pub fn parse_gfm(source: &str) -> Vec<Block> {
   let mut blocks = Vec::new();
@@ -1317,10 +1063,13 @@ fn build_preview_code_spans(
   snippet: &str,
   language_hint: Option<&str>,
 ) -> (SharedString, Vec<InlineSpan>, Vec<LinkRange>) {
-  build_code_block_spans(&CodeBlock {
-    lang: language_hint.map(ToOwned::to_owned),
-    value: snippet.to_string(),
-  })
+  build_code_block_spans(
+    &CodeBlock {
+      lang: language_hint.map(ToOwned::to_owned),
+      value: snippet.to_string(),
+    },
+    None,
+  )
 }
 
 fn render_markdown_with_preview_segments(
@@ -2589,7 +2338,7 @@ fn render_code_block(
   ctx: &mut RenderContext,
 ) -> AnyElement {
   let theme = cx.theme();
-  let (text, spans, link_ranges) = build_code_block_spans(code);
+  let (text, spans, link_ranges) = build_code_block_spans(code, options.syntax_cache.as_ref());
   let min_content_width_px = estimate_code_block_min_content_width_px(text.as_ref());
   let text_id = ctx.next_text_id();
   let content = SelectableText::new(
@@ -2850,7 +2599,17 @@ fn is_plain_text_code_fence_language(lang: Option<&str>) -> bool {
   )
 }
 
-fn build_code_block_spans(code: &CodeBlock) -> (SharedString, Vec<InlineSpan>, Vec<LinkRange>) {
+fn build_code_block_spans(
+  code: &CodeBlock,
+  syntax_cache: Option<&Arc<crate::syntax_cache::SyntaxHighlightCache>>,
+) -> (SharedString, Vec<InlineSpan>, Vec<LinkRange>) {
+  // Check cache first — returns highlighted spans if previously computed
+  if let Some(cache) = syntax_cache {
+    if let Some(cached) = cache.get(code) {
+      return cached;
+    }
+  }
+
   let display_value = code_block_display_value(code);
   let text = SharedString::from(display_value.clone());
   let text_len = text.len();
@@ -2863,6 +2622,22 @@ fn build_code_block_spans(code: &CodeBlock) -> (SharedString, Vec<InlineSpan>, V
     return (text, Vec::new(), Vec::new());
   }
 
+  // If we have a cache, schedule async highlight and return plain spans now
+  if let Some(cache) = syntax_cache {
+    if code_block_language_config(code.lang.as_deref()).is_some() {
+      cache.schedule_highlight(code, &display_value);
+      // Return plain (uncolored) spans — will be replaced on next render after background completes
+      let plain_spans = vec![InlineSpan {
+        range: 0..text_len,
+        style: base_style,
+        link: None,
+        syntax_token: None,
+      }];
+      return (text, plain_spans, Vec::new());
+    }
+  }
+
+  // No cache — synchronous highlight (fallback for preview cards etc.)
   let spans = code_block_language_config(code.lang.as_deref())
     .and_then(|config| {
       let mut highlighter = SyntaxHighlighter::new(config);
@@ -2898,7 +2673,7 @@ fn code_block_language_config(lang: Option<&str>) -> Option<&'static syntax::Lan
   languages::language_config_for_name(lang).or_else(|| languages::detect_language_config(lang))
 }
 
-fn syntax_highlight_spans_for_code(
+pub(crate) fn syntax_highlight_spans_for_code(
   text: &str,
   highlights: &[HighlightSpan],
   base_style: InlineStyle,
@@ -6179,7 +5954,7 @@ Apres"#,
       lang: Some("rust".to_string()),
       value: "fn main() {}\n".to_string(),
     };
-    let (_, spans, _) = build_code_block_spans(&code);
+    let (_, spans, _) = build_code_block_spans(&code, None);
 
     assert!(!spans.is_empty());
     assert!(spans.iter().all(|span| span.style.code));

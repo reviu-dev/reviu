@@ -1,6 +1,9 @@
+pub(crate) mod constants;
 mod gfm_markdown_viewer;
 mod parsed_cache;
 mod preview_segments;
+mod syntax_cache;
+pub(crate) mod types;
 
 pub use gfm_markdown_viewer::{
   GithubBlobLineReference, GithubCodeReferencePreview, GithubIssueReferenceContext, LinkAction,
@@ -10,3 +13,4 @@ pub use gfm_markdown_viewer::{
   parse_github_blob_line_reference, parse_markdown, render_github_code_reference_preview_card,
   render_markdown, render_parsed_markdown,
 };
+pub use syntax_cache::SyntaxHighlightCache;
