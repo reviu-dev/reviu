@@ -56,7 +56,7 @@ fn pull_request_status_icon(
   status: GithubPullRequestStatus,
   theme: &gpui_component::Theme,
 ) -> Icon {
-  Icon::new(UiIconName::GitMerge)
+  Icon::new(UiIconName::GitPullRequestArrow)
     .size_3()
     .text_color(pull_request_status_color(status, theme))
 }
