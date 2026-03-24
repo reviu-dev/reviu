@@ -546,15 +546,18 @@ impl ListDelegate for GithubPullRequestListDelegate {
     cx: &mut Context<ListState<Self>>,
   ) -> Option<impl IntoElement> {
     let section = self.sections.get(section)?;
+    let theme = cx.theme();
 
     Some(
       h_flex()
         .items_center()
-        .pb_1()
+        .py_1()
         .px_2()
         .gap_2()
+        .rounded(theme.radius)
         .text_sm()
-        .text_color(cx.theme().muted_foreground)
+        .bg(theme.sidebar)
+        .text_color(theme.muted_foreground)
         .child(Icon::new(IconName::Folder))
         .child(
           div()
