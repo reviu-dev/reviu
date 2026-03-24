@@ -147,6 +147,7 @@ import {
   fetchGithubRepositoryTreesConditionally,
   fetchGithubUserRepositories,
   markGithubNotificationDone,
+  markGithubNotificationRead,
   mergeGithubPullRequest,
   patchGithubIssue,
   patchGithubIssueComment,
@@ -1441,6 +1442,20 @@ export const githubRoutes = githubRouter
 
     try {
       await markGithubNotificationDone({ token: githubToken, threadId })
+      await invalidateGithubCacheTags([getGithubNotificationsTag(user.id)])
+      return ctx.json({ success: true }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .patch('/notifications/:threadId/read', async (ctx) => {
+    const threadId = ctx.req.param('threadId')
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      await markGithubNotificationRead({ token: githubToken, threadId })
       await invalidateGithubCacheTags([getGithubNotificationsTag(user.id)])
       return ctx.json({ success: true }, 200)
     }

@@ -644,6 +644,15 @@ export async function markGithubNotificationDone(
   })
 }
 
+export async function markGithubNotificationRead(
+  { token, threadId }: { token: string, threadId: string },
+): Promise<void> {
+  await requestGithubWithoutData('PATCH /notifications/threads/{thread_id}', {
+    token,
+    params: { thread_id: Number.parseInt(threadId) },
+  })
+}
+
 export async function fetchGithubPullRequests(
   { token, params }:
   { token: string, params: ListPullsParams },

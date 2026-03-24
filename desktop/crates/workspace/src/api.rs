@@ -1746,6 +1746,20 @@ impl ApiClient {
     Ok(())
   }
 
+  pub fn mark_notification_read(&self, thread_id: &str) -> Result<()> {
+    let route = format!("/github/notifications/{thread_id}/read");
+    let response = self.authed_request(Method::PATCH, route.as_str()).send()?;
+    let status = response.status();
+    Self::record_http_status("PATCH", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    Ok(())
+  }
+
   pub fn fetch_pull_request_review_comments(
     &self,
     owner: &str,
