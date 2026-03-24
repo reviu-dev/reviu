@@ -2334,7 +2334,7 @@ impl Render for GithubIssueDetailsSheetView {
             this.render_issue_add_comment_section(&theme, cx)
           };
 
-          div().px_6().pb_3().child(el).into_any_element()
+          div().px_8().pb_3().child(el).into_any_element()
         })
       })
       .size_full()
@@ -2815,6 +2815,7 @@ impl GithubRepoPage {
         .overlay_closable(true)
         .resizable(true)
         .size(px(width))
+        .px_0()
         .title(format!("Issue #{issue_number}"))
         .on_close({
           let issues_list = issues_list.clone();
