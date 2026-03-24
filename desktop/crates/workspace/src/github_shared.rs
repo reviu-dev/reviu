@@ -1,5 +1,8 @@
-use gpui::{Hsla, ParentElement as _, SharedString, Styled, div, prelude::*};
-use gpui_component::{Icon, Sizable as _, avatar::Avatar, h_flex, label::Label, tag::Tag, v_flex};
+use gpui::{App, Hsla, IntoElement, ParentElement as _, SharedString, Styled, div, prelude::*};
+use gpui_component::{
+  ActiveTheme as _, Icon, IconName, Sizable as _, avatar::Avatar, h_flex, label::Label, tag::Tag,
+  v_flex,
+};
 use time::OffsetDateTime;
 use ui::{StatusTag, StatusThemeExt as _, UiIconName};
 
@@ -7,6 +10,26 @@ use crate::{
   api::{GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestStatus},
   date_format::format_relative_time_at,
 };
+
+pub(crate) fn repo_section_header(label: &SharedString, cx: &App) -> impl IntoElement {
+  let theme = cx.theme();
+  h_flex()
+    .items_center()
+    .py_1()
+    .px_2()
+    .gap_2()
+    .rounded(theme.radius)
+    .text_sm()
+    .bg(theme.sidebar)
+    .text_color(theme.muted_foreground)
+    .child(Icon::new(IconName::Folder))
+    .child(
+      div()
+        .min_w_0()
+        .flex_1()
+        .child(Label::new(label.clone()).truncate()),
+    )
+}
 
 pub(crate) fn short_sha(sha: &str) -> String {
   sha.chars().take(7).collect()

@@ -334,9 +334,40 @@ impl ListDelegate for GithubRepositoryListDelegate {
   }
 }
 
+#[derive(Clone, Debug)]
+struct GithubNotificationSection {
+  repo_label: SharedString,
+  rows: Vec<Rc<GithubNotificationRow>>,
+}
+
+fn build_notification_sections(
+  rows: &[Rc<GithubNotificationRow>],
+) -> Vec<GithubNotificationSection> {
+  let mut sections = Vec::new();
+
+  for row in rows {
+    let repo_label = &row.notification.repository.full_name;
+    if let Some(section) = sections
+      .iter_mut()
+      .find(|section: &&mut GithubNotificationSection| section.repo_label.as_ref() == repo_label)
+    {
+      section.rows.push(row.clone());
+      continue;
+    }
+
+    sections.push(GithubNotificationSection {
+      repo_label: repo_label.clone().into(),
+      rows: vec![row.clone()],
+    });
+  }
+
+  sections
+}
+
 struct GithubNotificationListDelegate {
   all_rows: Vec<Rc<GithubNotificationRow>>,
   matched_rows: Vec<Rc<GithubNotificationRow>>,
+  sections: Vec<GithubNotificationSection>,
   selected_index: Option<IndexPath>,
   query: SharedString,
   loading: bool,
@@ -348,6 +379,7 @@ impl GithubNotificationListDelegate {
     Self {
       all_rows: Vec::new(),
       matched_rows: Vec::new(),
+      sections: Vec::new(),
       selected_index: Some(IndexPath::default()),
       query: "".into(),
       loading: false,
@@ -372,6 +404,15 @@ impl GithubNotificationListDelegate {
       .collect();
 
     self.matched_rows = rows;
+    self.sections = build_notification_sections(&self.matched_rows);
+  }
+
+  fn row_at(&self, ix: IndexPath) -> Option<Rc<GithubNotificationRow>> {
+    self
+      .sections
+      .get(ix.section)
+      .and_then(|section| section.rows.get(ix.row))
+      .cloned()
   }
 
   fn unread_count(&self) -> usize {
@@ -386,8 +427,25 @@ impl GithubNotificationListDelegate {
 impl ListDelegate for GithubNotificationListDelegate {
   type Item = ListItem;
 
-  fn items_count(&self, _section: usize, _cx: &App) -> usize {
-    self.matched_rows.len()
+  fn sections_count(&self, _cx: &App) -> usize {
+    self.sections.len()
+  }
+
+  fn items_count(&self, section: usize, _cx: &App) -> usize {
+    self
+      .sections
+      .get(section)
+      .map_or(0, |section| section.rows.len())
+  }
+
+  fn render_section_header(
+    &mut self,
+    section: usize,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<impl IntoElement> {
+    let section = self.sections.get(section)?;
+    Some(github_shared::repo_section_header(&section.repo_label, cx))
   }
 
   fn render_item(
@@ -398,10 +456,9 @@ impl ListDelegate for GithubNotificationListDelegate {
   ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
     let base_item = list_base_item(ix, self.selected_index, &theme);
-    let row = self.matched_rows.get(ix.row)?;
+    let row = self.row_at(ix)?;
     let notification = &row.notification;
     let updated_at = format_compact_datetime(&notification.updated_at);
-    let repo_name = notification.repository.full_name.clone();
     let subject = notification.subject.title.clone();
     let reason_tag = Tag::secondary()
       .small()
@@ -471,7 +528,6 @@ impl ListDelegate for GithubNotificationListDelegate {
               .gap_2()
               .text_xs()
               .text_color(theme.muted_foreground)
-              .child(repo_name)
               .child(format!("Updated {}", updated_at))
               .child(reason_tag),
           ),
@@ -591,26 +647,7 @@ impl ListDelegate for GithubPullRequestListDelegate {
     cx: &mut Context<ListState<Self>>,
   ) -> Option<impl IntoElement> {
     let section = self.sections.get(section)?;
-    let theme = cx.theme();
-
-    Some(
-      h_flex()
-        .items_center()
-        .py_1()
-        .px_2()
-        .gap_2()
-        .rounded(theme.radius)
-        .text_sm()
-        .bg(theme.sidebar)
-        .text_color(theme.muted_foreground)
-        .child(Icon::new(IconName::Folder))
-        .child(
-          div()
-            .min_w_0()
-            .flex_1()
-            .child(Label::new(section.repo_label.clone()).truncate()),
-        ),
-    )
+    Some(github_shared::repo_section_header(&section.repo_label, cx))
   }
 
   fn render_item(
@@ -1734,13 +1771,14 @@ mod tests {
 
     assert_eq!(delegate.unread_count(), 1);
     assert_eq!(delegate.matched_rows.len(), 2);
+    assert_eq!(delegate.sections.len(), 2);
+    assert_eq!(delegate.sections[0].repo_label.as_ref(), "acme/portal");
+    assert_eq!(delegate.sections[1].repo_label.as_ref(), "acme/backend");
 
     delegate.prepare("backend");
     assert_eq!(delegate.matched_rows.len(), 1);
-    assert_eq!(
-      delegate.matched_rows[0].notification.repository.full_name,
-      "acme/backend"
-    );
+    assert_eq!(delegate.sections.len(), 1);
+    assert_eq!(delegate.sections[0].repo_label.as_ref(), "acme/backend");
   }
 
   #[gpui::test]
