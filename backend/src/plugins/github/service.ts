@@ -635,6 +635,15 @@ export async function fetchGithubNotifications(
   })
 }
 
+export async function markGithubNotificationDone(
+  { token, threadId }: { token: string, threadId: string },
+): Promise<void> {
+  await requestGithubWithoutData('DELETE /notifications/threads/{thread_id}', {
+    token,
+    params: { thread_id: Number.parseInt(threadId) },
+  })
+}
+
 export async function fetchGithubPullRequests(
   { token, params }:
   { token: string, params: ListPullsParams },

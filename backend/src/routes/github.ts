@@ -79,6 +79,7 @@ import {
   createGithubRepositoryTreeCachePolicy,
   createGithubUserRepositoriesCachePolicy,
   getGithubIssueMutationTags,
+  getGithubNotificationsTag,
   getGithubPullRequestMutationTags,
 
   withGithubPublicScope,
@@ -145,6 +146,7 @@ import {
   fetchGithubRepositoryReadmeConditionally,
   fetchGithubRepositoryTreesConditionally,
   fetchGithubUserRepositories,
+  markGithubNotificationDone,
   mergeGithubPullRequest,
   patchGithubIssue,
   patchGithubIssueComment,
@@ -1427,6 +1429,20 @@ export const githubRoutes = githubRouter
       const result = await fetchNotificationsWithCache(user.id, githubToken)
       setGithubCacheHeaders(ctx, result)
       return ctx.json({ notifications: result.payload }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .delete('/notifications/:threadId/done', async (ctx) => {
+    const threadId = ctx.req.param('threadId')
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      await markGithubNotificationDone({ token: githubToken, threadId })
+      await invalidateGithubCacheTags([getGithubNotificationsTag(user.id)])
+      return ctx.json({ success: true }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)

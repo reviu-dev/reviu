@@ -1732,6 +1732,20 @@ impl ApiClient {
     Ok(payload.notifications)
   }
 
+  pub fn mark_notification_done(&self, thread_id: &str) -> Result<()> {
+    let route = format!("/github/notifications/{thread_id}/done");
+    let response = self.authed_request(Method::DELETE, route.as_str()).send()?;
+    let status = response.status();
+    Self::record_http_status("DELETE", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    Ok(())
+  }
+
   pub fn fetch_pull_request_review_comments(
     &self,
     owner: &str,

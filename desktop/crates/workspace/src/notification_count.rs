@@ -19,11 +19,7 @@ impl Default for NotificationCountStore {
 
 impl NotificationCountStore {
   pub fn get(cx: &App) -> usize {
-    cx.global::<Self>()
-      .count
-      .lock()
-      .map(|c| *c)
-      .unwrap_or(0)
+    cx.global::<Self>().count.lock().map(|c| *c).unwrap_or(0)
   }
 
   pub fn set(cx: &mut App, count: usize) {

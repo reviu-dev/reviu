@@ -1,12 +1,13 @@
 use std::{rc::Rc, sync::Arc};
 
 use gpui::{
-  App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, SharedString, Styled,
-  Subscription, Task, Window, div, prelude::*, px,
+  App, Context, Entity, FocusHandle, Focusable, MouseButton, ParentElement, Render, SharedString,
+  Styled, Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _,
   avatar::Avatar,
+  button::{Button, ButtonVariants as _},
   h_flex,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
@@ -339,16 +340,18 @@ struct GithubNotificationListDelegate {
   selected_index: Option<IndexPath>,
   query: SharedString,
   loading: bool,
+  api: ApiClient,
 }
 
 impl GithubNotificationListDelegate {
-  fn new() -> Self {
+  fn new(api: ApiClient) -> Self {
     Self {
       all_rows: Vec::new(),
       matched_rows: Vec::new(),
       selected_index: Some(IndexPath::default()),
       query: "".into(),
       loading: false,
+      api,
     }
   }
 
@@ -405,6 +408,10 @@ impl ListDelegate for GithubNotificationListDelegate {
       .rounded_full()
       .child(notification.reason.clone());
 
+    let notification_id = notification.id.clone();
+    let api = self.api.clone();
+    let list_entity = cx.entity().clone();
+
     Some(
       base_item.px_2().py_2().child(
         v_flex()
@@ -418,6 +425,41 @@ impl ListDelegate for GithubNotificationListDelegate {
                   .min_w_0()
                   .flex_1()
                   .child(Label::new(subject).truncate()),
+              )
+              .child(
+                div()
+                  .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                  .child(
+                    Button::new(format!("notif-done-{}", notification_id))
+                      .ghost()
+                      .xsmall()
+                      .compact()
+                      .icon(IconName::Check)
+                      .tooltip("Mark as done")
+                      .on_click({
+                        let notification_id = notification_id.clone();
+                        move |_, _window, cx| {
+                          cx.stop_propagation();
+                          let api = api.clone();
+                          let thread_id = notification_id.clone();
+
+                          list_entity.update(cx, |state, cx| {
+                            let delegate = state.delegate_mut();
+                            delegate.all_rows.retain(|r| r.notification.id != thread_id);
+                            delegate.prepare(delegate.query.clone());
+                            let unread = delegate.unread_count();
+                            NotificationCountStore::set(cx, unread);
+                            set_dock_badge(unread);
+                            cx.notify();
+                          });
+
+                          cx.spawn(async move |_| {
+                            let _ = unblock(move || api.mark_notification_done(&thread_id)).await;
+                          })
+                          .detach();
+                        }
+                      }),
+                  ),
               )
               .when(notification.unread, |this| {
                 this.child(div().size(px(6.)).rounded_full().bg(theme.status_violet()))
@@ -706,8 +748,9 @@ impl GithubPage {
   fn new_with_api(api: ApiClient, window: &mut Window, cx: &mut Context<Self>) -> Self {
     let repositories =
       cx.new(|cx| ListState::new(GithubRepositoryListDelegate::new(), window, cx).searchable(true));
-    let notifications = cx
-      .new(|cx| ListState::new(GithubNotificationListDelegate::new(), window, cx).searchable(true));
+    let notifications = cx.new(|cx| {
+      ListState::new(GithubNotificationListDelegate::new(api.clone()), window, cx).searchable(true)
+    });
     let pull_requests = cx
       .new(|cx| ListState::new(GithubPullRequestListDelegate::new(), window, cx).searchable(true));
 
@@ -1672,7 +1715,8 @@ mod tests {
 
   #[test]
   fn notification_delegate_prepare_filters_and_counts_unread() {
-    let mut delegate = GithubNotificationListDelegate::new();
+    let mut delegate =
+      GithubNotificationListDelegate::new(ApiClient::new_with_base_url("http://unused"));
     delegate.set_rows(vec![
       Rc::new(make_notification_row(
         "Review request",
