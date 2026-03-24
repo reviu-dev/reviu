@@ -5,6 +5,7 @@ use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Wi
 use gpui_component::{
   Icon, IconName, Sizable as _,
   avatar::Avatar,
+  badge::Badge,
   button::{Button, ButtonVariants as _},
   menu::{DropdownMenu, PopupMenu, PopupMenuItem},
 };
@@ -49,6 +50,7 @@ pub struct UserMenuConfig {
   pub id: SharedString,
   pub state: UserMenuState,
   pub current_page: UserMenuPage,
+  pub notification_count: usize,
   pub on_open_git: Option<UserMenuHandler>,
   pub on_open_github: Option<UserMenuHandler>,
   pub on_open_billing: Option<UserMenuHandler>,
@@ -121,10 +123,16 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
       )
     }
     UserMenuState::Authenticated(user) => {
-      let avatar = Avatar::new()
-        .name(user.name.clone())
-        .when_some(user.image.clone(), |this, image| this.src(image))
-        .small();
+      let notification_count = config.notification_count;
+      let avatar = Badge::new()
+        .count(notification_count)
+        .small()
+        .child(
+          Avatar::new()
+            .name(user.name.clone())
+            .when_some(user.image.clone(), |this, image| this.src(image))
+            .small(),
+        );
       let user_email = user.email.clone();
       let current_page = config.current_page;
       let on_open_git = config.on_open_git.clone();

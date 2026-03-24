@@ -22,6 +22,11 @@ time = { workspace = true }
 sha2 = { workspace = true }
 sentry = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSDockTile"] }
+
 [dev-dependencies]
 git2 = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }

@@ -16,6 +16,9 @@ use gpui_component::{
 };
 use sentry::protocol::{Map, Value};
 use smol::unblock;
+
+use crate::dock_badge::set_dock_badge;
+use crate::notification_count::NotificationCountStore;
 #[cfg(test)]
 use time::OffsetDateTime;
 use ui::{
@@ -949,6 +952,11 @@ impl GithubPage {
         }
 
         this.notifications_error = error;
+
+        let unread = rows.iter().filter(|r| r.notification.unread).count();
+        NotificationCountStore::set(cx, unread);
+        set_dock_badge(unread);
+
         this.notifications.update(cx, |state, cx| {
           state.delegate_mut().loading = false;
           state.delegate_mut().set_rows(rows);
@@ -1422,6 +1430,9 @@ mod tests {
       gpui_component::init(cx);
       if cx.try_global::<AuthStateStore>().is_none() {
         cx.set_global(AuthStateStore::default());
+      }
+      if cx.try_global::<NotificationCountStore>().is_none() {
+        cx.set_global(NotificationCountStore::default());
       }
     });
   }
