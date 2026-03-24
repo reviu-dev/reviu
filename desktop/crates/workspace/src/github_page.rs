@@ -897,6 +897,8 @@ impl GithubPage {
     );
     self._subscriptions.push(repositories_subscription);
 
+    let api = self.api.clone();
+    let notifications_entity = self.notifications.downgrade();
     let notifications_subscription = cx.subscribe(
       &self.notifications,
       move |_this, state, event: &ListEvent, cx| {
@@ -907,10 +909,50 @@ impl GithubPage {
             let full_name = &notification.repository.full_name;
             let (owner, repo) = full_name.split_once('/').unwrap_or((full_name, ""));
 
+            if notification.unread {
+              let thread_id = notification.id.clone();
+              let api = api.clone();
+              let notifications_entity = notifications_entity.clone();
+
+              if let Some(entity) = notifications_entity.upgrade() {
+                entity.update(cx, |state, cx| {
+                  let delegate = state.delegate_mut();
+                  delegate.all_rows = delegate
+                    .all_rows
+                    .iter()
+                    .map(|r| {
+                      if r.notification.id == thread_id {
+                        let mut updated = (*r.notification).clone();
+                        updated.unread = false;
+                        Rc::new(GithubNotificationRow {
+                          notification: Rc::new(updated),
+                        })
+                      } else {
+                        r.clone()
+                      }
+                    })
+                    .collect();
+                  delegate.prepare(delegate.query.clone());
+                  let unread = delegate.unread_count();
+                  NotificationCountStore::set(cx, unread);
+                  set_dock_badge(unread);
+                  cx.notify();
+                });
+              }
+
+              cx.spawn(async move |_, _| {
+                let _ = unblock(move || api.mark_notification_read(&thread_id)).await;
+              })
+              .detach();
+            }
+
             match notification.subject.subject_type.as_str() {
               "PullRequest" => {
-                if let Some(number) =
-                  notification.subject.url.as_deref().and_then(extract_number_from_api_url)
+                if let Some(number) = notification
+                  .subject
+                  .url
+                  .as_deref()
+                  .and_then(extract_number_from_api_url)
                 {
                   open_pr_target(
                     owner.to_string(),
@@ -924,8 +966,11 @@ impl GithubPage {
                 }
               }
               "Issue" => {
-                let issue_number =
-                  notification.subject.url.as_deref().and_then(extract_number_from_api_url);
+                let issue_number = notification
+                  .subject
+                  .url
+                  .as_deref()
+                  .and_then(extract_number_from_api_url);
                 open_repo_target(
                   owner.to_string(),
                   repo.to_string(),
