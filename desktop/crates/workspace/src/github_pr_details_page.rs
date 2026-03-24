@@ -6566,14 +6566,18 @@ impl GithubPrDetailsPage {
         .gap_2()
         .text_sm()
         .text_color(theme.muted_foreground)
-        .child(status_tag)
-        .child(format!("#{}", pr.number));
+        .child(format!("#{}", pr.number))
+        .child(status_tag);
 
-      h_flex()
-        .items_center()
-        .gap_2()
-        .child(back_button())
-        .child(div().flex().items_center().gap_3().child(title).child(meta))
+      h_flex().items_center().gap_2().child(back_button()).child(
+        div()
+          .flex()
+          .items_center()
+          .gap_2()
+          .child(title)
+          .child(Label::new("•").text_color(theme.muted_foreground))
+          .child(meta),
+      )
     } else {
       let title_skeleton = Skeleton::new().w(px(220.)).h_4().rounded_md();
       let meta_skeleton = Skeleton::new().w(px(110.)).h_4().rounded_md().secondary();
