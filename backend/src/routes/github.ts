@@ -316,7 +316,7 @@ async function fetchNotificationsWithCache(
       load: async () => {
         const params: NotificationsParams = {
           per_page: 50,
-          all: false,
+          all: true,
         }
 
         const data = await fetchGithubNotifications({ token: githubToken, params })
