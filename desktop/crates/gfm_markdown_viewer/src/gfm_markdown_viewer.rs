@@ -267,6 +267,7 @@ pub fn render_github_code_reference_preview_card(
                 SelectableTextOptions {
                   interactive: false,
                   show_indentation_dots: true,
+                  show_inline_code_backgrounds: false,
                 },
               )),
           ),
@@ -931,6 +932,7 @@ fn render_inline_selectable_text(
     SelectableTextOptions {
       interactive,
       show_indentation_dots: false,
+      show_inline_code_backgrounds: true,
     },
   )
   .into_any_element()
@@ -1082,6 +1084,7 @@ fn render_code_block(
     SelectableTextOptions {
       interactive: true,
       show_indentation_dots: true,
+      show_inline_code_backgrounds: false,
     },
   );
   let scroll_id: SharedString = format!("markdown-code-block-scroll-{text_id}").into();
@@ -1547,7 +1550,9 @@ impl SpanBuilder {
         Inline::Code(value) => {
           let mut code_style = style;
           code_style.code = true;
+          self.push_text("\u{2009}", style, link.clone());
           self.push_text(value, code_style, link.clone());
+          self.push_text("\u{2009}", style, link.clone());
         }
         Inline::SoftBreak => self.push_text(" ", style, link.clone()),
         Inline::HardBreak => self.push_text("\n", style, link.clone()),
@@ -1920,7 +1925,7 @@ mod tests {
 
     let (text, _, link_ranges) = build_spans(&inlines, &options);
     let rendered = text.as_ref();
-    assert_eq!(rendered, "#11 and #22 #33");
+    assert_eq!(rendered, "\u{2009}#11\u{2009} and #22 #33");
     assert_eq!(link_ranges.len(), 2);
     assert_eq!(&rendered[link_ranges[0].range.clone()], "#22");
     assert_eq!(
@@ -3311,5 +3316,68 @@ Apres"#,
 
     assert_ne!(first_id, second_id);
     assert_eq!(first_next_id, first_id + 1);
+  }
+
+  #[test]
+  fn build_spans_sets_code_style_for_inline_code() {
+    let inlines = vec![
+      Inline::Text("prefix ".to_string()),
+      Inline::Code("code_value".to_string()),
+      Inline::Text(" suffix".to_string()),
+    ];
+    let options = MarkdownRenderOptions::default();
+    let (text, spans, _) = build_spans(&inlines, &options);
+
+    // Thin spaces (\u{2009}) are inserted around inline code for visual padding
+    assert_eq!(text.as_ref(), "prefix \u{2009}code_value\u{2009} suffix");
+
+    let code_spans: Vec<_> = spans.iter().filter(|s| s.style.code).collect();
+    assert_eq!(code_spans.len(), 1);
+    assert_eq!(&text[code_spans[0].range.clone()], "code_value");
+  }
+
+  #[test]
+  fn build_spans_code_spans_do_not_overlap_with_text_spans() {
+    let inlines = vec![
+      Inline::Text("a".to_string()),
+      Inline::Code("b".to_string()),
+      Inline::Text("c".to_string()),
+    ];
+    let options = MarkdownRenderOptions::default();
+    let (text, spans, _) = build_spans(&inlines, &options);
+
+    assert_eq!(text.as_ref(), "a\u{2009}b\u{2009}c");
+    let code_spans: Vec<_> = spans.iter().filter(|s| s.style.code).collect();
+    assert_eq!(code_spans.len(), 1);
+    assert_eq!(&text[code_spans[0].range.clone()], "b");
+  }
+
+  #[test]
+  fn build_spans_inline_code_inside_bold_preserves_both_styles() {
+    let inlines = vec![Inline::Strong(vec![Inline::Code("bold_code".to_string())])];
+    let options = MarkdownRenderOptions::default();
+    let (text, spans, _) = build_spans(&inlines, &options);
+
+    assert_eq!(text.as_ref(), "\u{2009}bold_code\u{2009}");
+    let code_spans: Vec<_> = spans.iter().filter(|s| s.style.code && s.style.bold).collect();
+    assert_eq!(code_spans.len(), 1);
+    assert_eq!(&text[code_spans[0].range.clone()], "bold_code");
+  }
+
+  #[test]
+  fn build_spans_adjacent_inline_code_produces_separate_spans() {
+    let inlines = vec![
+      Inline::Code("first".to_string()),
+      Inline::Text(" ".to_string()),
+      Inline::Code("second".to_string()),
+    ];
+    let options = MarkdownRenderOptions::default();
+    let (text, spans, _) = build_spans(&inlines, &options);
+
+    assert_eq!(text.as_ref(), "\u{2009}first\u{2009} \u{2009}second\u{2009}");
+    let code_spans: Vec<_> = spans.iter().filter(|s| s.style.code).collect();
+    assert_eq!(code_spans.len(), 2);
+    assert_eq!(&text[code_spans[0].range.clone()], "first");
+    assert_eq!(&text[code_spans[1].range.clone()], "second");
   }
 }

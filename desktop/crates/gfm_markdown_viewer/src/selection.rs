@@ -22,6 +22,7 @@ pub(crate) struct SelectableText {
   text_id: usize,
   interactive: bool,
   show_indentation_dots: bool,
+  show_inline_code_backgrounds: bool,
   indentation_dot_indices: Vec<usize>,
   styled_text: StyledText,
   runs_initialized: bool,
@@ -32,6 +33,7 @@ pub(crate) struct SelectableText {
 pub(crate) struct SelectableTextOptions {
   pub interactive: bool,
   pub show_indentation_dots: bool,
+  pub show_inline_code_backgrounds: bool,
 }
 
 impl SelectableText {
@@ -59,6 +61,7 @@ impl SelectableText {
       text_id,
       interactive: options.interactive,
       show_indentation_dots: options.show_indentation_dots,
+      show_inline_code_backgrounds: options.show_inline_code_backgrounds,
       indentation_dot_indices,
       styled_text,
       runs_initialized: false,
@@ -141,6 +144,49 @@ impl SelectableText {
       last_drawn = Some((ix, dot_center_x));
     }
   }
+
+  fn paint_inline_code_backgrounds(
+    &self,
+    text_layout: &gpui::TextLayout,
+    window: &mut Window,
+    cx: &mut App,
+  ) {
+    if !self.show_inline_code_backgrounds {
+      return;
+    }
+    let line_height = text_layout.line_height();
+    let theme = cx.theme();
+    let bg_color = if theme.mode.is_dark() {
+      theme.muted
+    } else {
+      theme.muted_foreground.opacity(0.1)
+    };
+    let h_pad = px(5.);
+    let radius = px(6.);
+    // Shrink height inside line_height to match GitHub's compact code background
+    let v_inset = px(3.);
+
+    for span in &self.spans {
+      if !span.style.code || span.range.is_empty() {
+        continue;
+      }
+      let Some(start_pos) = text_layout.position_for_index(span.range.start) else {
+        continue;
+      };
+      let Some(end_pos) = text_layout.position_for_index(span.range.end) else {
+        continue;
+      };
+
+      // Single-line case only (multi-line inline code is rare)
+      if (end_pos.y - start_pos.y).abs() < px(1.) {
+        let rect = Bounds::from_corners(
+          point(start_pos.x - h_pad, start_pos.y + v_inset),
+          point(end_pos.x + h_pad, start_pos.y + line_height - v_inset),
+        );
+        window.paint_quad(fill(rect, bg_color).corner_radii(radius));
+      }
+    }
+  }
 }
 
 impl Element for SelectableText {
@@ -199,6 +245,7 @@ impl Element for SelectableText {
   ) {
     if !self.interactive {
       let text_layout = self.styled_text.layout().clone();
+      self.paint_inline_code_backgrounds(&text_layout, window, cx);
       self
         .styled_text
         .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
@@ -207,6 +254,7 @@ impl Element for SelectableText {
     }
 
     let text_layout = self.styled_text.layout().clone();
+    self.paint_inline_code_backgrounds(&text_layout, window, cx);
     let link_ranges = self.link_ranges.clone();
     let on_link = self.on_link.clone();
     let render_state = self.render_state.clone();
