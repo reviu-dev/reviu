@@ -1239,7 +1239,7 @@ impl Render for GithubPage {
                 .small()
                 .rounded_full()
                 .child(if unread_count > 0 {
-                  format!("{} unread", unread_count)
+                  unread_count.to_string()
                 } else {
                   notifications_count.to_string()
                 }),
