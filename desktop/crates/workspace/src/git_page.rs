@@ -57,6 +57,8 @@ use crate::{
     InteractiveRebaseTodoView, InteractiveRebaseTodoViewCancelHandler,
     InteractiveRebaseTodoViewConfig, InteractiveRebaseTodoViewHandler,
   },
+  dock_badge::set_dock_badge,
+  notification_count::NotificationCountStore,
   sentry_context,
   workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
 };
@@ -1427,10 +1429,32 @@ impl GitPage {
   }
 
   fn set_auth_state(&mut self, state: AuthState, cx: &mut Context<Self>) {
+    let was_pro = AuthStateStore::has_pro_access(cx);
     self.auth_state = state.clone();
     AuthStateStore::set(cx, state);
+
+    if !was_pro && AuthStateStore::has_pro_access(cx) {
+      self.fetch_initial_notifications(cx);
+    }
+
     cx.refresh_windows();
     cx.notify();
+  }
+
+  fn fetch_initial_notifications(&mut self, cx: &mut Context<Self>) {
+    let api = self.api.clone();
+    cx.spawn(async move |_, cx| {
+      let result = unblock(move || api.fetch_github_notifications()).await;
+      let _ = cx.update(|cx| {
+        if let Ok(notifications) = result {
+          let unread = notifications.iter().filter(|n| n.unread).count();
+          NotificationCountStore::set(cx, unread);
+          set_dock_badge(unread);
+          cx.refresh_windows();
+        }
+      });
+    })
+    .detach();
   }
 
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {

@@ -34,7 +34,7 @@ use crate::{
   ShowCommandPalette,
   api::{ApiClient, GithubNotification, GithubPullRequest, GithubUserRepository},
   auth_state::{AuthState, AuthStateStore},
-  date_format::{format_compact_datetime, format_relative_time},
+  date_format::format_relative_time,
   github_navigation::{open_pr_target, open_repo_target},
   github_pr_details_page::GithubPrDetailsPageHandle,
   github_shared, sentry_context,
@@ -458,7 +458,7 @@ impl ListDelegate for GithubNotificationListDelegate {
     let base_item = list_base_item(ix, self.selected_index, &theme);
     let row = self.row_at(ix)?;
     let notification = &row.notification;
-    let updated_at = format_compact_datetime(&notification.updated_at);
+    let updated_at = format_relative_time(&notification.updated_at);
     let subject = notification.subject.title.clone();
     let reason_tag = Tag::secondary()
       .small()
@@ -1279,7 +1279,6 @@ impl Render for GithubPage {
     let my_open_count = self.my_open_pull_request_rows.len();
     let need_review_count = self.need_review_pull_request_rows.len();
     let unread_count = self.notifications.read(cx).delegate().unread_count();
-    let notifications_count = self.notifications.read(cx).delegate().matched_rows.len();
 
     let pr_tabs = TabBar::new("github-home-pr-tabs")
       .w_full()
@@ -1309,22 +1308,17 @@ impl Render for GithubPage {
         ),
       )
       .child(
-        Tab::new().child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child("Notifications")
-            .child(
+        Tab::new().child(h_flex().items_center().gap_2().child("Notifications").when(
+          unread_count > 0,
+          |this| {
+            this.child(
               Tag::secondary()
                 .small()
                 .rounded_full()
-                .child(if unread_count > 0 {
-                  unread_count.to_string()
-                } else {
-                  notifications_count.to_string()
-                }),
-            ),
-        ),
+                .child(unread_count.to_string()),
+            )
+          },
+        )),
       );
 
     let repositories_count = self.repositories.read(cx).delegate().matched_rows.len();
@@ -1420,9 +1414,12 @@ impl Focusable for GithubPage {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::api::{
-    ApiClient, GithubNotificationRepository, GithubNotificationSubject, GithubPullRequestAuthor,
-    GithubPullRequestLabel, GithubPullRequestState, GithubRepository,
+  use crate::{
+    api::{
+      ApiClient, GithubNotificationRepository, GithubNotificationSubject, GithubPullRequestAuthor,
+      GithubPullRequestLabel, GithubPullRequestState, GithubRepository,
+    },
+    date_format::format_compact_datetime,
   };
   use gpui::{Entity, TestAppContext};
   use std::{
