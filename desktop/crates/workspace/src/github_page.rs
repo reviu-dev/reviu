@@ -483,6 +483,9 @@ impl ListDelegate for GithubNotificationListDelegate {
                   .flex_1()
                   .child(Label::new(subject).truncate()),
               )
+              .when(notification.unread, |this| {
+                this.child(div().size(px(6.)).rounded_full().bg(theme.status_blue()))
+              })
               .child(
                 div()
                   .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -517,10 +520,7 @@ impl ListDelegate for GithubNotificationListDelegate {
                         }
                       }),
                   ),
-              )
-              .when(notification.unread, |this| {
-                this.child(div().size(px(6.)).rounded_full().bg(theme.status_violet()))
-              }),
+              ),
           )
           .child(
             h_flex()
