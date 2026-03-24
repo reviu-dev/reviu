@@ -489,7 +489,7 @@ fn review_state_icon_style(
     GithubPullRequestReviewState::Commented => None,
     GithubPullRequestReviewState::Approved => Some((UiIconName::CircleCheck, theme.status_green())),
     GithubPullRequestReviewState::RequestChanges => {
-      Some((UiIconName::CircleSlash, theme.status_red()))
+      Some((UiIconName::FileDiff, theme.status_red()))
     }
     GithubPullRequestReviewState::Dismissed => {
       Some((UiIconName::CircleSlash, theme.status_orange()))
@@ -1027,14 +1027,6 @@ fn overview_conversation_scope_id(
     .wrapping_mul(1_000_003)
     .wrapping_add(kind_part.wrapping_mul(10_007))
     .wrapping_add(id as usize)
-}
-
-fn overview_conversation_kind_label(kind: GithubPrOverviewConversationItemKind) -> &'static str {
-  match kind {
-    GithubPrOverviewConversationItemKind::IssueComment => "Comment",
-    GithubPrOverviewConversationItemKind::Review => "Review",
-    GithubPrOverviewConversationItemKind::ReviewComment => "Review comment",
-  }
 }
 
 fn overview_stats_badge_labels(pr: &GithubPullRequestDetails) -> Vec<String> {
@@ -7032,7 +7024,6 @@ impl GithubPrDetailsPage {
 
     let theme = cx.theme().clone();
     let timestamp = format_relative_time(&item.timestamp);
-    let type_label = overview_conversation_kind_label(item.kind);
     let scope_id = overview_conversation_scope_id(pr_number, item.kind, item.id);
     let editable_issue_comment_ids = self.editable_issue_comment_ids(cx);
     let editable_review_comment_ids = self.editable_review_comment_ids(cx);
@@ -7326,7 +7317,11 @@ impl GithubPrDetailsPage {
         item.id
       ))
       .border_1()
-      .border_color(theme.border)
+      .border_color(match item.review_state {
+        Some(GithubPullRequestReviewState::Approved) => theme.status_green(),
+        Some(GithubPullRequestReviewState::RequestChanges) => theme.status_red(),
+        _ => theme.border,
+      })
       .rounded(theme.radius)
       .when_some(review_comment_preview, |this, preview| {
         this.child(
@@ -7342,6 +7337,21 @@ impl GithubPrDetailsPage {
         v_flex()
           .gap_2()
           .p_3()
+          .when_some(item.review_state, |this, state| {
+            let label = review_state_display_label(state);
+            let icon_style = review_state_icon_style(state, &theme);
+            this.child(
+              h_flex()
+                .items_center()
+                .gap_1()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .when_some(icon_style, |this, (icon, color)| {
+                  this.child(Icon::new(icon).size_4().text_color(color))
+                })
+                .child(label),
+            )
+          })
           .child(
             h_flex()
               .items_center()
@@ -7370,7 +7380,16 @@ impl GithubPrDetailsPage {
                       .text_color(theme.muted_foreground)
                       .child(timestamp),
                   )
-                  .child(Tag::secondary().small().rounded_full().child(type_label)),
+                  .when(
+                    item.kind == GithubPrOverviewConversationItemKind::ReviewComment,
+                    |this| {
+                      this.child(
+                        Icon::new(UiIconName::ScanEye)
+                          .size_3()
+                          .text_color(theme.muted_foreground),
+                      )
+                    },
+                  ),
               )
               .child(
                 h_flex()
@@ -7381,19 +7400,6 @@ impl GithubPrDetailsPage {
                   .when_some(root_reply_button, |this, button| this.child(button)),
               ),
           )
-          .when_some(item.review_state, |this, state| {
-            let label = review_state_display_label(state);
-            let icon_style = review_state_icon_style(state, &theme);
-            this.child(
-              h_flex()
-                .items_center()
-                .gap_1()
-                .when_some(icon_style, |this, (icon, color)| {
-                  this.child(Icon::new(icon).size_3().text_color(color))
-                })
-                .child(label),
-            )
-          })
           .child(root_body)
           .when_some(root_reply_composer, |this, composer| this.child(composer))
           .when(!replies.is_empty(), |this| {
@@ -7689,8 +7695,7 @@ impl GithubPrDetailsPage {
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
                                 .child(reply_timestamp),
-                            )
-                            .child(Tag::secondary().small().rounded_full().child("Reply")),
+                            ),
                         )
                         .child(
                           h_flex()

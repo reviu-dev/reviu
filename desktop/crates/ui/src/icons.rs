@@ -23,6 +23,9 @@ pub enum UiIconName {
   CircleCheck,
   CircleSlash,
   Lock,
+  ScanEye,
+  GitPullRequestArrow,
+  FileDiff,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -48,6 +51,9 @@ impl IconNamed for UiIconName {
       UiIconName::CircleCheck => "icons/circle-check.svg",
       UiIconName::CircleSlash => "icons/circle-slash.svg",
       UiIconName::Lock => "icons/lock.svg",
+      UiIconName::ScanEye => "icons/scan-eye.svg",
+      UiIconName::GitPullRequestArrow => "icons/git-pull-request-arrow.svg",
+      UiIconName::FileDiff => "icons/file-diff.svg",
     }
     .into()
   }
