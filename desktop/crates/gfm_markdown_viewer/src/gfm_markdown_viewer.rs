@@ -3359,7 +3359,10 @@ Apres"#,
     let (text, spans, _) = build_spans(&inlines, &options);
 
     assert_eq!(text.as_ref(), "\u{2009}bold_code\u{2009}");
-    let code_spans: Vec<_> = spans.iter().filter(|s| s.style.code && s.style.bold).collect();
+    let code_spans: Vec<_> = spans
+      .iter()
+      .filter(|s| s.style.code && s.style.bold)
+      .collect();
     assert_eq!(code_spans.len(), 1);
     assert_eq!(&text[code_spans[0].range.clone()], "bold_code");
   }
@@ -3374,7 +3377,10 @@ Apres"#,
     let options = MarkdownRenderOptions::default();
     let (text, spans, _) = build_spans(&inlines, &options);
 
-    assert_eq!(text.as_ref(), "\u{2009}first\u{2009} \u{2009}second\u{2009}");
+    assert_eq!(
+      text.as_ref(),
+      "\u{2009}first\u{2009} \u{2009}second\u{2009}"
+    );
     let code_spans: Vec<_> = spans.iter().filter(|s| s.style.code).collect();
     assert_eq!(code_spans.len(), 2);
     assert_eq!(&text[code_spans[0].range.clone()], "first");
