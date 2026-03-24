@@ -1539,12 +1539,9 @@ impl Focusable for GithubPage {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{
-    api::{
-      ApiClient, GithubNotificationRepository, GithubNotificationSubject, GithubPullRequestAuthor,
-      GithubPullRequestLabel, GithubPullRequestState, GithubRepository,
-    },
-    date_format::format_compact_datetime,
+  use crate::api::{
+    ApiClient, GithubNotificationRepository, GithubNotificationSubject, GithubPullRequestAuthor,
+    GithubPullRequestLabel, GithubPullRequestState, GithubRepository,
   };
   use gpui::{Entity, TestAppContext};
   use std::{
@@ -1747,23 +1744,6 @@ mod tests {
     });
 
     (address, handle)
-  }
-
-  #[test]
-  fn compact_datetime_formats_rfc3339_values() {
-    assert_eq!(
-      format_compact_datetime("2026-02-15T12:34:56Z").as_ref(),
-      "Feb 15, 2026 12:34"
-    );
-    assert_eq!(
-      format_compact_datetime("2026-02-15T12:34:56+02:00").as_ref(),
-      "Feb 15, 2026 12:34"
-    );
-  }
-
-  #[test]
-  fn compact_datetime_preserves_non_iso_inputs() {
-    assert_eq!(format_compact_datetime("2026-02-15").as_ref(), "2026-02-15");
   }
 
   #[test]

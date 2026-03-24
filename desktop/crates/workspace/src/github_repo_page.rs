@@ -51,7 +51,7 @@ use crate::{
     GithubRepositoryDetails,
   },
   auth_state::{AuthState, AuthStateStore},
-  date_format::{format_compact_datetime, format_long_date_opt, format_relative_time},
+  date_format::{format_long_date_opt, format_relative_time},
   file_preview::{is_markdown_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   github_navigation::{
@@ -1042,9 +1042,9 @@ impl ListDelegate for GithubRepoIssueListDelegate {
                   .xsmall(),
               )
               .child(div().text_color(theme.foreground).child(display_name))
-              .child(format!("opened {opened_at}"))
+              .child(format!("Opened {opened_at}"))
               .child("·")
-              .child(format!("updated {updated_at}")),
+              .child(format!("Updated {updated_at}")),
           )
           .when(!issue.labels.is_empty(), |this| {
             this.child(github_shared::pull_request_label_row(label_tags))
@@ -1304,8 +1304,8 @@ impl GithubIssueDetailsSheetView {
     let theme = cx.theme().clone();
     let comment_id = comment.id;
     let comment_author = issue_user_display_name(comment.user.as_ref());
-    let comment_created_at = format_compact_datetime(&comment.created_at);
-    let comment_updated_at = format_compact_datetime(&comment.updated_at);
+    let comment_created_at = format_relative_time(&comment.created_at);
+    let comment_updated_at = format_relative_time(&comment.updated_at);
     let comment_body = issue_comment_markdown_body_or_fallback(comment.body.as_deref());
     let comment_previews = self
       .comment_references
@@ -2086,13 +2086,9 @@ impl Render for GithubIssueDetailsSheetView {
         .into_any_element()
     } else if let Some(issue) = self.issue.clone() {
       let author_name = issue_user_display_name(issue.user.as_ref());
-      let opened_at = format_compact_datetime(&issue.created_at);
-      let updated_at = format_compact_datetime(&issue.updated_at);
-      let closed_at = issue
-        .closed_at
-        .as_deref()
-        .map(format_compact_datetime)
-        .unwrap_or_else(|| "—".into());
+      let opened_at = format_relative_time(&issue.created_at);
+      let updated_at = format_relative_time(&issue.updated_at);
+      let closed_at = issue.closed_at.as_deref().map(format_relative_time);
       let body = issue_markdown_body_or_fallback(issue.body.as_deref());
       let description_previews =
         github_code_reference_preview_map(&self.description_references, &self.code_reference_cache);
@@ -2149,6 +2145,17 @@ impl Render for GithubIssueDetailsSheetView {
             .gap_2()
             .text_sm()
             .text_color(theme.muted_foreground)
+            .child(
+              Avatar::new()
+                .name(author_name.clone())
+                .when_some(
+                  issue.user.as_ref().and_then(|user| user.avatar_url.clone()),
+                  |this, url| this.src(url),
+                )
+                .small(),
+            )
+            .child(author_name)
+            .child(Label::new("•").text_color(theme.muted_foreground))
             .child(format!("#{}", issue.number))
             .child(StatusTag::new(state_color).child(state_text)),
         )
@@ -2159,30 +2166,14 @@ impl Render for GithubIssueDetailsSheetView {
           h_flex()
             .items_center()
             .gap_2()
-            .child(
-              Avatar::new()
-                .name(author_name.clone())
-                .when_some(
-                  issue.user.as_ref().and_then(|user| user.avatar_url.clone()),
-                  |this, url| this.src(url),
-                )
-                .small(),
-            )
-            .child(
-              div()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child(author_name),
-            ),
-        )
-        .child(
-          v_flex()
-            .gap_1()
             .text_xs()
             .text_color(theme.muted_foreground)
             .child(format!("Opened {opened_at}"))
+            .child("•")
             .child(format!("Updated {updated_at}"))
-            .child(format!("Closed {closed_at}")),
+            .when_some(closed_at, |this, closed_at| {
+              this.child("•").child(format!("Closed {closed_at}"))
+            }),
         )
         .child(
           h_flex().child(
