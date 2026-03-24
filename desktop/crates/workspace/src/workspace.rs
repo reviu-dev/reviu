@@ -1,4 +1,5 @@
 use std::rc::Rc;
+use std::time::Duration;
 
 use editor::set_indent_rainbow_enabled;
 use gpui::{
@@ -24,11 +25,13 @@ use crate::app_update::{
 use crate::auth_state::{AuthState, AuthStateStore};
 use crate::billing_page::BillingPage;
 use crate::config::{AppSettings as PersistedSettings, ConfigStore};
+use crate::dock_badge::set_dock_badge;
 use crate::git_config_page::GitConfigPage;
 use crate::git_page::GitPage;
 use crate::github_page::{GithubPage, GithubPageHandle};
 use crate::github_pr_details_page::GithubPrDetailsPage;
 use crate::github_repo_page::GithubRepoPage;
+use crate::notification_count::NotificationCountStore;
 use crate::sentry_context;
 use crate::settings_page::SettingsPage;
 use crate::{SHOW_COMMAND_PALETTE_SHORTCUT, ShowCommandPalette};
@@ -229,6 +232,7 @@ pub struct WorkspaceView {
   last_page: Option<WorkspacePage>,
   _update_check_task: Option<Task<()>>,
   _update_download_task: Option<Task<()>>,
+  _notification_poll_task: Option<Task<()>>,
   _subscriptions: Vec<Subscription>,
 }
 
@@ -245,6 +249,7 @@ impl WorkspaceView {
     cx.set_global(AuthStateStore::default());
     cx.set_global(ActiveLocalRepoStore::default());
     cx.set_global(AppUpdateStore::default());
+    cx.set_global(NotificationCountStore::default());
 
     let settings = ConfigStore::load_app_settings();
     set_indent_rainbow_enabled(settings.indent_rainbow);
@@ -281,6 +286,7 @@ impl WorkspaceView {
       last_page: None,
       _update_check_task: None,
       _update_download_task: None,
+      _notification_poll_task: None,
       _subscriptions: Vec::new(),
     };
 
@@ -290,6 +296,7 @@ impl WorkspaceView {
     });
     view._subscriptions.push(subscription);
     view.check_for_updates(cx);
+    view.start_notification_polling(cx);
 
     view
   }
@@ -344,6 +351,39 @@ impl WorkspaceView {
     });
 
     self._update_check_task = Some(task);
+  }
+
+  fn start_notification_polling(&mut self, cx: &mut Context<Self>) {
+    let api = WorkspaceApi::global(cx).api.clone();
+    let task = cx.spawn(async move |this, cx| {
+      loop {
+        cx.background_executor()
+          .timer(Duration::from_secs(60))
+          .await;
+
+        let has_access = this
+          .update(cx, |_, cx| AuthStateStore::has_pro_access(cx))
+          .unwrap_or(false);
+
+        if !has_access {
+          continue;
+        }
+
+        let api = api.clone();
+        let result = unblock(move || api.fetch_github_notifications()).await;
+
+        let _ = this.update(cx, |_, cx| {
+          if let Ok(notifications) = result {
+            let unread = notifications.iter().filter(|n| n.unread).count();
+            NotificationCountStore::set(cx, unread);
+            set_dock_badge(unread);
+            cx.refresh_windows();
+          }
+        });
+      }
+    });
+
+    self._notification_poll_task = Some(task);
   }
 
   fn trigger_update_download(&mut self, cx: &mut Context<Self>) {
@@ -501,6 +541,8 @@ impl WorkspaceView {
     });
     let sign_out = Rc::new(|_window: &mut Window, cx: &mut App| {
       AuthCallbackTarget::sign_out(cx);
+      NotificationCountStore::set(cx, 0);
+      set_dock_badge(0);
     });
 
     let auth_control = match auth_state {
@@ -519,6 +561,7 @@ impl WorkspaceView {
             image: user.image.map(Into::into),
           }),
           current_page,
+          notification_count: NotificationCountStore::get(cx),
           on_open_git: Some(open_git),
           on_open_github: Some(open_github),
           on_open_billing: Some(open_billing),

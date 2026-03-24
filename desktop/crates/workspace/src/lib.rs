@@ -11,6 +11,8 @@ mod app_profile;
 mod app_update;
 mod auth_state;
 mod billing_page;
+mod dock_badge;
+
 mod config;
 mod date_format;
 mod file_preview;
@@ -23,6 +25,7 @@ mod github_pr_details_page;
 mod github_repo_page;
 mod github_shared;
 mod interactive_rebase_todo_view;
+mod notification_count;
 mod sentry_context;
 mod settings_page;
 mod workspace;
