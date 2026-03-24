@@ -758,6 +758,13 @@ fn build_overview_conversation_items(
       .map(str::trim)
       .filter(|value| !value.is_empty())
       .map(ToString::to_string);
+
+    // Skip empty "COMMENTED" reviews — these are auto-created envelopes
+    // for inline review comments that already appear as ReviewComment items.
+    if matches!(review.state, GithubPullRequestReviewState::Commented) && body.is_none() {
+      return None;
+    }
+
     Some(GithubPrOverviewConversationItem {
       kind: GithubPrOverviewConversationItemKind::Review,
       id: review.id,
