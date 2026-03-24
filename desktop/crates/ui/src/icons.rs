@@ -114,7 +114,7 @@ fn file_icon_path_for_name_str(file_name: &str, is_dark: bool) -> Option<&'stati
     ("nuget.config", "file-icons/nuget.svg"),
     ("packages.config", "file-icons/nuget.svg"),
     ("packages.lock.json", "file-icons/nuget.svg"),
-    ("package.json", "file-icons/npm.svg"),
+    ("package.json", "file-icons/nodejs.svg"),
     ("knip.json", "file-icons/knip.svg"),
     ("knip.jsonc", "file-icons/knip.svg"),
     (".editorconfig", "file-icons/editorconfig.svg"),
@@ -966,7 +966,7 @@ mod tests {
     );
     assert_eq!(
       file_icon_path_for_name_str("package.json", false),
-      Some("file-icons/npm.svg")
+      Some("file-icons/nodejs.svg")
     );
     assert_eq!(
       file_icon_path_for_name_str("jsconfig.json", false),
