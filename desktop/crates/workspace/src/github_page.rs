@@ -24,8 +24,8 @@ use crate::notification_count::NotificationCountStore;
 use time::OffsetDateTime;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT, SelectableRowStyle,
-  StatusThemeExt, UiIconName, WindowExt, selectable_list_item,
+  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT,
+  SelectableRowStyle, StatusThemeExt, UiIconName, WindowExt, selectable_list_item,
 };
 
 #[cfg(test)]
@@ -149,6 +149,26 @@ impl GithubPullRequestTab {
 
   fn shows_pull_request_author(&self) -> bool {
     !matches!(self, GithubPullRequestTab::MyOpen)
+  }
+}
+
+/// Extracts the trailing number from a GitHub API URL.
+/// e.g. `https://api.github.com/repos/owner/repo/pulls/123` → `Some(123)`
+fn extract_number_from_api_url(url: &str) -> Option<u64> {
+  url.rsplit('/').next()?.parse().ok()
+}
+
+/// Converts a GitHub API subject URL to an HTML URL.
+/// e.g. `https://api.github.com/repos/o/r/pulls/1` → `https://github.com/o/r/pull/1`
+/// e.g. `https://api.github.com/repos/o/r/issues/1` → `https://github.com/o/r/issues/1`
+fn github_html_url_from_notification(full_name: &str, subject_type: &str, api_url: &str) -> String {
+  let number = api_url.rsplit('/').next().unwrap_or("");
+  match subject_type {
+    "PullRequest" => format!("https://github.com/{full_name}/pull/{number}"),
+    "Issue" => format!("https://github.com/{full_name}/issues/{number}"),
+    "Release" => format!("https://github.com/{full_name}/releases"),
+    "Discussion" => format!("https://github.com/{full_name}/discussions"),
+    _ => format!("https://github.com/{full_name}"),
   }
 }
 
@@ -876,6 +896,66 @@ impl GithubPage {
       },
     );
     self._subscriptions.push(repositories_subscription);
+
+    let notifications_subscription = cx.subscribe(
+      &self.notifications,
+      move |_this, state, event: &ListEvent, cx| {
+        if let ListEvent::Confirm(ix) = event {
+          let row = state.read(cx).delegate().row_at(*ix);
+          if let Some(row) = row {
+            let notification = &row.notification;
+            let full_name = &notification.repository.full_name;
+            let (owner, repo) = full_name.split_once('/').unwrap_or((full_name, ""));
+
+            match notification.subject.subject_type.as_str() {
+              "PullRequest" => {
+                if let Some(number) =
+                  notification.subject.url.as_deref().and_then(extract_number_from_api_url)
+                {
+                  open_pr_target(
+                    owner.to_string(),
+                    repo.to_string(),
+                    number,
+                    false,
+                    None,
+                    None,
+                    cx,
+                  );
+                }
+              }
+              "Issue" => {
+                let issue_number =
+                  notification.subject.url.as_deref().and_then(extract_number_from_api_url);
+                open_repo_target(
+                  owner.to_string(),
+                  repo.to_string(),
+                  Some(CommandPaletteGithubRepoTab::Issues),
+                  issue_number,
+                  None,
+                  cx,
+                );
+              }
+              _ => {
+                let url = notification
+                  .subject
+                  .url
+                  .as_deref()
+                  .map(|api_url| {
+                    github_html_url_from_notification(
+                      full_name,
+                      &notification.subject.subject_type,
+                      api_url,
+                    )
+                  })
+                  .unwrap_or_else(|| format!("https://github.com/{full_name}"));
+                cx.open_url(&url);
+              }
+            }
+          }
+        }
+      },
+    );
+    self._subscriptions.push(notifications_subscription);
   }
 
   fn active_pull_request_rows(&self) -> Vec<Rc<GithubPullRequestRow>> {
