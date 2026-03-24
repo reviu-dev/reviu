@@ -831,7 +831,7 @@ impl ListDelegate for GithubRepoPullRequestListDelegate {
     Some(
       base_item
         .px_2()
-        .py_1()
+        .py_2()
         .child(github_shared::pull_request_list_row_body(
           row.pr.as_ref(),
           &theme,
