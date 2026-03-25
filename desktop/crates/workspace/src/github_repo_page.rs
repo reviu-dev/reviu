@@ -2877,16 +2877,21 @@ impl GithubRepoPage {
 
     if tab_ix == REPO_TAB_README_IX {
       self.load_readme_if_needed(cx);
+      window.focus(&self.focus_handle, cx);
       cx.notify();
       return;
     }
 
     if tab_ix == REPO_TAB_CODE_IX {
       self.load_code_tree_if_needed(cx);
+      window.focus(&self.focus_handle, cx);
       cx.notify();
       return;
     }
 
+    if tab_ix == REPO_TAB_OVERVIEW_IX {
+      window.focus(&self.focus_handle, cx);
+    }
     cx.notify();
 
     if tab_ix == REPO_TAB_PULL_REQUESTS_IX {
