@@ -51,6 +51,7 @@ use crate::{
   dock_badge::set_dock_badge,
   file_preview::{is_markdown_path, is_previewable_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
+  github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
   github_repo_page::GithubRepoPageHandle,
   interactive_rebase_todo_view::{
@@ -2633,6 +2634,7 @@ impl GitPage {
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
+        GithubPageHandle::refresh(cx);
         NavigationHistory::navigate("/github", cx);
         Ok(())
       }

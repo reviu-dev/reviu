@@ -549,7 +549,10 @@ impl Render for WorkspaceView {
     let pathname = NavigationHistory::current_pathname(cx);
     let page = workspace_page_from_pathname(&pathname);
 
-    // Sync sentry context on page change
+    // Keep WorkspaceRoute in sync BEFORE focus delegation (focus_handle reads it)
+    cx.global_mut::<WorkspaceRoute>().page = page;
+
+    // Sync sentry context and focus on page change
     if self.last_page != Some(page) {
       let previous_page = self.last_page;
       self.last_page = Some(page);
@@ -565,9 +568,6 @@ impl Render for WorkspaceView {
       let focus_handle = self.focus_handle(cx);
       window.focus(&focus_handle, cx);
     }
-
-    // Keep WorkspaceRoute in sync for code that still reads it
-    cx.global_mut::<WorkspaceRoute>().page = page;
 
     let git_page = self.git_page.clone();
     let github_page = self.github_page.clone();
