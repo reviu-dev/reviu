@@ -26,6 +26,53 @@ use crate::types::*;
 pub(crate) static BADGE_IMAGE_SOURCE_CACHE: Lazy<Mutex<HashMap<String, BadgeResolveState>>> =
   Lazy::new(|| Mutex::new(HashMap::new()));
 
+static GITHUB_ASSET_URL_CACHE: Lazy<Mutex<HashMap<String, GithubAssetResolveState>>> =
+  Lazy::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Clone, Debug)]
+enum GithubAssetResolveState {
+  Pending,
+  Resolved(String),
+  Failed,
+}
+
+pub fn is_github_user_attachment_url(url: &str) -> bool {
+  url.starts_with("https://github.com/user-attachments/assets/")
+}
+
+fn resolve_github_asset_url_async(
+  url: &str,
+  resolver: &Arc<dyn Fn(&str) -> Option<String> + Send + Sync>,
+) -> Option<String> {
+  {
+    let cache = GITHUB_ASSET_URL_CACHE.lock().unwrap();
+    if let Some(state) = cache.get(url) {
+      return match state {
+        GithubAssetResolveState::Resolved(signed_url) => Some(signed_url.clone()),
+        GithubAssetResolveState::Pending | GithubAssetResolveState::Failed => None,
+      };
+    }
+  }
+
+  GITHUB_ASSET_URL_CACHE
+    .lock()
+    .unwrap()
+    .insert(url.to_string(), GithubAssetResolveState::Pending);
+
+  let url = url.to_string();
+  let resolver = resolver.clone();
+  std::thread::spawn(move || {
+    let state = if let Some(signed_url) = resolver(&url) {
+      GithubAssetResolveState::Resolved(signed_url)
+    } else {
+      GithubAssetResolveState::Failed
+    };
+    GITHUB_ASSET_URL_CACHE.lock().unwrap().insert(url, state);
+  });
+
+  None
+}
+
 pub(crate) fn resolve_badge_image_source_async(url: &str) -> Option<BadgeImageSource> {
   {
     let cache = BADGE_IMAGE_SOURCE_CACHE.lock().unwrap();
@@ -268,12 +315,20 @@ pub(crate) fn data_uri_to_temp_file(data_uri: &str) -> Option<PathBuf> {
 pub(crate) fn inline_contains_image(inline: &Inline) -> bool {
   match inline {
     Inline::Image { .. } => true,
-    Inline::Link { content, .. }
-    | Inline::Strong(content)
-    | Inline::Emphasis(content)
-    | Inline::Strikethrough(content) => content.iter().any(inline_contains_image),
+    Inline::Link { url, content, .. } => {
+      is_bare_github_user_attachment_link(url, content) || content.iter().any(inline_contains_image)
+    }
+    Inline::Strong(content) | Inline::Emphasis(content) | Inline::Strikethrough(content) => {
+      content.iter().any(inline_contains_image)
+    }
     _ => false,
   }
+}
+
+fn is_bare_github_user_attachment_link(url: &str, content: &[Inline]) -> bool {
+  is_github_user_attachment_url(url)
+    && content.len() == 1
+    && matches!(&content[0], Inline::Text(text) if text == url)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -303,6 +358,15 @@ impl InlineImageData {
     }
     self
   }
+
+  /// Returns true if this image has explicit dimensions or is a GitHub
+  /// user-attachment, meaning it should be rendered as a block (on its own
+  /// line) rather than inline next to text.
+  pub(crate) fn is_block_sized(&self) -> bool {
+    self.width_hint.is_some()
+      || self.height_hint.is_some()
+      || is_github_user_attachment_url(&self.url)
+  }
 }
 
 pub(crate) fn inline_image_data(inline: &Inline) -> Option<InlineImageData> {
@@ -329,6 +393,17 @@ pub(crate) fn inline_image_data(inline: &Inline) -> Option<InlineImageData> {
       content,
       ..
     } => {
+      if is_bare_github_user_attachment_link(link_url, content) {
+        return Some(InlineImageData {
+          url: link_url.clone(),
+          alt: "Attachment".to_string(),
+          link_url: Some(link_url.clone()),
+          width_hint: None,
+          height_hint: None,
+          dark_url: None,
+          light_url: None,
+        });
+      }
       for child in content {
         if let Some(image) = inline_image_data(child) {
           return Some(image.with_parent_link(link_url));
@@ -467,14 +542,23 @@ pub(crate) struct MarkdownImageRenderContext<'a> {
   pub(crate) interactive: bool,
   pub(crate) is_dark_mode: bool,
   pub(crate) image_base_url: Option<&'a str>,
+  pub(crate) asset_url_resolver: Option<&'a Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
 }
 
 impl MarkdownImageRenderContext<'_> {
   pub(crate) fn resolve_url(&self, image_data: &InlineImageData) -> String {
-    resolve_markdown_image_url(
+    let url = resolve_markdown_image_url(
       &image_data.themed_url(self.is_dark_mode),
       self.image_base_url,
-    )
+    );
+    if is_github_user_attachment_url(&url) {
+      if let Some(resolver) = self.asset_url_resolver {
+        if let Some(resolved) = resolve_github_asset_url_async(&url, resolver) {
+          return resolved;
+        }
+      }
+    }
+    url
   }
 }
 
