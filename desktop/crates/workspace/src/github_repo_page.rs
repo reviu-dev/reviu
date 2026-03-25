@@ -126,15 +126,6 @@ fn repo_tab_url_segment(tab_ix: usize) -> &'static str {
   }
 }
 
-pub(crate) fn repo_tab_ix_from_url_segment(segment: &str) -> usize {
-  match segment {
-    "readme" => REPO_TAB_README_IX,
-    "code" => REPO_TAB_CODE_IX,
-    "pulls" => REPO_TAB_PULL_REQUESTS_IX,
-    "issues" => REPO_TAB_ISSUES_IX,
-    _ => REPO_TAB_OVERVIEW_IX,
-  }
-}
 const REPO_TAB_PULL_REQUESTS_IX: usize = 3;
 const REPO_TAB_ISSUES_IX: usize = 4;
 const GITHUB_REPO_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str =
