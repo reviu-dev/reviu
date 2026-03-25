@@ -169,11 +169,16 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
               && let Some(handler) = on_open_github.clone()
             {
               menu = menu.item(
-                PopupMenuItem::new("GitHub")
-                  .icon(IconName::Github)
-                  .on_click(move |_, window, cx| {
-                    handler(window, cx);
-                  }),
+                PopupMenuItem::element(move |_, _| {
+                  Badge::new()
+                    .count(notification_count)
+                    .small()
+                    .child("GitHub")
+                })
+                .icon(IconName::Github)
+                .on_click(move |_, window, cx| {
+                  handler(window, cx);
+                }),
               );
             }
 
