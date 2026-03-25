@@ -104,14 +104,6 @@ fn pr_tab_url_segment(tab_ix: usize) -> &'static str {
   }
 }
 
-pub(crate) fn pr_tab_ix_from_url_segment(segment: &str) -> usize {
-  match segment {
-    "changes" => PR_TAB_CHANGES_IX,
-    "checks" => PR_TAB_CHECKS_IX,
-    _ => PR_TAB_OVERVIEW_IX,
-  }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GithubPrLeftSidebarKind {
   Files,
