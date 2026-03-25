@@ -2015,10 +2015,7 @@ impl GithubPrDetailsPageHandle {
       this.load_pull_request(owner_string, repo_string, number, open_target_value, cx);
     });
 
-    NavigationHistory::navigate(
-      crate::navigation::build_pr_path(&owner, &repo, number),
-      cx,
-    );
+    NavigationHistory::navigate(crate::navigation::build_pr_path(&owner, &repo, number), cx);
   }
 }
 
@@ -9057,10 +9054,7 @@ impl GithubPrDetailsPage {
           },
           cx,
         );
-        NavigationHistory::navigate(
-          crate::navigation::build_pr_path(&owner, &repo, number),
-          cx,
-        );
+        NavigationHistory::navigate(crate::navigation::build_pr_path(&owner, &repo, number), cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubRepoDetails {
@@ -9087,6 +9081,10 @@ impl GithubPrDetailsPage {
       }
       CommandPaletteAction::OpenGitConfigPage => {
         NavigationHistory::navigate("/git-config", cx);
+        Ok(())
+      }
+      CommandPaletteAction::SendFeedback => {
+        crate::feedback_dialog::open_feedback_dialog(window, cx);
         Ok(())
       }
       _ => Err("Command not available.".into()),

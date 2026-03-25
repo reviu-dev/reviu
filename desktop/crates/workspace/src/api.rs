@@ -889,6 +889,14 @@ struct CheckoutSubscriptionResponse {
   redirect: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct SubmitFeedbackRequest<'a> {
+  #[serde(rename = "type")]
+  feedback_type: &'a str,
+  title: &'a str,
+  description: &'a str,
+}
+
 #[derive(Debug, Deserialize)]
 struct GithubPullRequestsResponse {
   #[serde(rename = "pullRequests")]
@@ -1187,6 +1195,26 @@ impl ApiClient {
       anyhow::bail!("unexpected status: {}", status);
     }
     self.clear_bearer_token();
+    Ok(())
+  }
+
+  pub fn submit_feedback(&self, feedback_type: &str, title: &str, description: &str) -> Result<()> {
+    let response = self
+      .authed_request(Method::POST, "/feedback")
+      .json(&SubmitFeedbackRequest {
+        feedback_type,
+        title,
+        description,
+      })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", "/feedback", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized");
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
     Ok(())
   }
 

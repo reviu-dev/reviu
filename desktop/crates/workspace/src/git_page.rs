@@ -2698,6 +2698,11 @@ impl GitPage {
         NavigationHistory::navigate("/git-config", cx);
         Ok(())
       }
+      CommandPaletteAction::SendFeedback => {
+        should_post_action_refresh = false;
+        crate::feedback_dialog::open_feedback_dialog(window, cx);
+        Ok(())
+      }
       CommandPaletteAction::OpenGitHistorySidebar => {
         self.set_sidebar_mode(GitSidebarMode::History, window, cx);
         Ok(())
@@ -9429,6 +9434,7 @@ mod tests {
           | CommandPaletteCommandId::OpenSettingsPage
           | CommandPaletteCommandId::OpenBillingPage
           | CommandPaletteCommandId::OpenAboutPage
+          | CommandPaletteCommandId::SendFeedback
       )
     };
 
