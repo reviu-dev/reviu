@@ -7451,8 +7451,9 @@ mod tests {
   }
 
   #[gpui::test]
-  fn set_sidebar_mode_history_focuses_history_tree(cx: &mut TestAppContext) {
+  async fn set_sidebar_mode_history_focuses_history_tree(cx: &mut TestAppContext) {
     init_gpui_test(cx);
+    cx.executor().allow_parking();
     let repo = TempRepo::init("git-page-history-sidebar-focus");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
@@ -7472,6 +7473,11 @@ mod tests {
       assert_ne!(focused, external_focus);
       assert_ne!(focused, page_focus);
     });
+
+    let history_task = git_page.update_in(cx, |this, _window, _cx| this.history_task.take());
+    if let Some(task) = history_task {
+      task.await;
+    }
   }
 
   #[gpui::test]
