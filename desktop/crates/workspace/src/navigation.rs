@@ -78,9 +78,25 @@ pub fn build_pr_path(owner: &str, repo: &str, number: u64) -> SharedString {
   format!("/github/{owner}/{repo}/pull/{number}").into()
 }
 
+/// Build path with tab suffix: `/github/{owner}/{repo}/pull/{number}/{tab}`
+pub fn build_pr_tab_path(owner: &str, repo: &str, number: u64, tab: &str) -> SharedString {
+  format!("/github/{owner}/{repo}/pull/{number}/{tab}").into()
+}
+
 /// Build path: `/github/{owner}/{repo}`
 pub fn build_repo_path(owner: &str, repo: &str) -> SharedString {
   format!("/github/{owner}/{repo}").into()
+}
+
+/// Build path with tab suffix: `/github/{owner}/{repo}/{tab}`
+pub fn build_repo_tab_path(owner: &str, repo: &str, tab: &str) -> SharedString {
+  format!("/github/{owner}/{repo}/{tab}").into()
+}
+
+/// Returns the last segment of the current pathname (the tab), or empty string.
+pub fn current_tab_segment(cx: &gpui::App) -> &str {
+  let pathname = &gpui_router::use_location(cx).pathname;
+  pathname.rsplit('/').next().unwrap_or("")
 }
 
 fn requires_pro_access(path: &str) -> bool {

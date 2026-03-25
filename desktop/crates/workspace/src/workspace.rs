@@ -36,7 +36,7 @@ use crate::github_repo_page::GithubRepoPage;
 use crate::notification_count::NotificationCountStore;
 use crate::sentry_context;
 use crate::settings_page::SettingsPage;
-use crate::{SHOW_COMMAND_PALETTE_SHORTCUT, ShowCommandPalette};
+use crate::{SHOW_COMMAND_PALETTE_SHORTCUT, ShowCommandPalette, ShowFileSearch};
 use ui::{
   Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, UiIconName, UserMenuConfig, UserMenuPage,
   UserMenuState, UserMenuUser, WindowExt, user_menu,
@@ -56,12 +56,12 @@ pub enum WorkspacePage {
 
 pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
   if pathname.starts_with("/github/") {
-    // Check if it's a PR details path: /github/{owner}/{repo}/pull/{number}
     let segments: Vec<&str> = pathname.trim_start_matches('/').split('/').collect();
+    // PR details: /github/{owner}/{repo}/pull/{number}[/{tab}]
     if segments.len() >= 5 && segments[3] == "pull" {
       return WorkspacePage::GithubPrDetails;
     }
-    // Otherwise it's a repo page: /github/{owner}/{repo}
+    // Repo page: /github/{owner}/{repo}[/{tab}]
     if segments.len() >= 3 {
       return WorkspacePage::GithubRepo;
     }
@@ -75,6 +75,26 @@ pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
     "/about" => WorkspacePage::About,
     _ => WorkspacePage::Git,
   }
+}
+
+/// Returns true when the current path supports file search.
+/// Git page always does; repo page on /code tab; PR details on /changes tab.
+fn page_has_file_search(pathname: &str) -> bool {
+  if pathname == "/git" {
+    return true;
+  }
+  if pathname.starts_with("/github/") {
+    let segments: Vec<&str> = pathname.trim_start_matches('/').split('/').collect();
+    // PR: /github/{owner}/{repo}/pull/{number}/changes
+    if segments.len() >= 6 && segments[3] == "pull" && segments[5] == "changes" {
+      return true;
+    }
+    // Repo: /github/{owner}/{repo}/code
+    if segments.len() >= 4 && segments[3] == "code" && !segments.contains(&"pull") {
+      return true;
+    }
+  }
+  false
 }
 
 fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
@@ -154,6 +174,10 @@ impl WorkspaceView {
 
   fn command_palette_shortcut() -> Keystroke {
     Keystroke::parse(SHOW_COMMAND_PALETTE_SHORTCUT).expect("valid command palette shortcut")
+  }
+
+  fn file_search_shortcut() -> Keystroke {
+    Keystroke::parse("cmd-p").expect("valid file search shortcut")
   }
 
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -410,7 +434,7 @@ impl WorkspaceView {
     NavigationHistory::navigate("/github", cx);
   }
 
-  fn render_global_bar(&self, page: WorkspacePage, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_global_bar(&self, page: WorkspacePage, pathname: &str, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let show_update_button = AppUpdateStore::try_available_update(cx).is_some();
     let update_download_in_progress = AppUpdateStore::is_downloading(cx);
@@ -496,6 +520,18 @@ impl WorkspaceView {
         AuthCallbackTarget::start_sign_in(cx);
       });
 
+    let show_file_search_button = page_has_file_search(&pathname);
+
+    let file_search_button = Button::new("workspace-global-file-search")
+      .label("File search")
+      .ghost()
+      .compact()
+      .small()
+      .child(Kbd::new(Self::file_search_shortcut()).ml_1())
+      .on_click(|_, window, cx| {
+        window.dispatch_action(Box::new(ShowFileSearch), cx);
+      });
+
     let command_palette_button = Button::new("workspace-global-command-palette")
       .label("Command palette")
       .ghost()
@@ -525,6 +561,9 @@ impl WorkspaceView {
     let mut right = div().flex().items_center().gap_2();
     if show_update_button {
       right = right.child(update_button);
+    }
+    if show_file_search_button {
+      right = right.child(file_search_button);
     }
     right = right.child(command_palette_button);
     if is_unauthenticated {
@@ -588,9 +627,21 @@ impl Render for WorkspaceView {
         let github_repo_page = github_repo_page.clone();
         move |_w, _cx| github_repo_page.clone()
       }))
+      .child(Route::new().path("github/{owner}/{repo}/{tab}").element({
+        let github_repo_page = github_repo_page.clone();
+        move |_w, _cx| github_repo_page.clone()
+      }))
       .child(
         Route::new()
           .path("github/{owner}/{repo}/pull/{number}")
+          .element({
+            let github_pr_details_page = github_pr_details_page.clone();
+            move |_w, _cx| github_pr_details_page.clone()
+          }),
+      )
+      .child(
+        Route::new()
+          .path("github/{owner}/{repo}/pull/{number}/{tab}")
           .element(move |_w, _cx| github_pr_details_page.clone()),
       )
       .child(Route::new().path("billing").element(move |_w, _cx| billing_page.clone()))
@@ -602,14 +653,14 @@ impl Render for WorkspaceView {
       .size_full()
       .flex()
       .flex_col()
-      .child(self.render_global_bar(page, cx))
+      .child(self.render_global_bar(page, &pathname, cx))
       .child(div().flex_1().min_h_0().child(routes))
   }
 }
 
 #[cfg(test)]
 mod tests {
-  use super::{WorkspacePage, WorkspaceView, user_menu_page_for_workspace_page, workspace_page_from_pathname};
+  use super::{WorkspacePage, WorkspaceView, page_has_file_search, user_menu_page_for_workspace_page, workspace_page_from_pathname};
   use crate::SHOW_COMMAND_PALETTE_SHORTCUT;
   use crate::app_update::{
     AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
@@ -634,6 +685,14 @@ mod tests {
       workspace_page_from_pathname("/github/owner/repo"),
       WorkspacePage::GithubRepo
     );
+    assert_eq!(
+      workspace_page_from_pathname("/github/owner/repo/code"),
+      WorkspacePage::GithubRepo
+    );
+    assert_eq!(
+      workspace_page_from_pathname("/github/owner/repo/issues"),
+      WorkspacePage::GithubRepo
+    );
   }
 
   #[test]
@@ -642,6 +701,26 @@ mod tests {
       workspace_page_from_pathname("/github/owner/repo/pull/123"),
       WorkspacePage::GithubPrDetails
     );
+    assert_eq!(
+      workspace_page_from_pathname("/github/owner/repo/pull/123/changes"),
+      WorkspacePage::GithubPrDetails
+    );
+    assert_eq!(
+      workspace_page_from_pathname("/github/owner/repo/pull/123/checks"),
+      WorkspacePage::GithubPrDetails
+    );
+  }
+
+  #[test]
+  fn page_has_file_search_matches_correct_paths() {
+    assert!(page_has_file_search("/git"));
+    assert!(page_has_file_search("/github/owner/repo/code"));
+    assert!(page_has_file_search("/github/owner/repo/pull/123/changes"));
+    assert!(!page_has_file_search("/github"));
+    assert!(!page_has_file_search("/github/owner/repo"));
+    assert!(!page_has_file_search("/github/owner/repo/pull/123"));
+    assert!(!page_has_file_search("/github/owner/repo/pulls"));
+    assert!(!page_has_file_search("/settings"));
   }
 
   #[test]

@@ -96,6 +96,22 @@ const PR_TAB_OVERVIEW_IX: usize = 0;
 const PR_TAB_CHANGES_IX: usize = 1;
 const PR_TAB_CHECKS_IX: usize = 2;
 
+fn pr_tab_url_segment(tab_ix: usize) -> &'static str {
+  match tab_ix {
+    PR_TAB_CHANGES_IX => "changes",
+    PR_TAB_CHECKS_IX => "checks",
+    _ => "", // overview = no suffix
+  }
+}
+
+pub(crate) fn pr_tab_ix_from_url_segment(segment: &str) -> usize {
+  match segment {
+    "changes" => PR_TAB_CHANGES_IX,
+    "checks" => PR_TAB_CHECKS_IX,
+    _ => PR_TAB_OVERVIEW_IX,
+  }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GithubPrLeftSidebarKind {
   Files,
@@ -4902,6 +4918,17 @@ impl GithubPrDetailsPage {
     data.insert("active_tab".into(), ix.into());
     self.add_pr_breadcrumb("Changed PR tab", data);
     cx.notify();
+
+    // Sync URL with active tab
+    if let Some(ctx) = &self.current_pr_context {
+      let tab_segment = pr_tab_url_segment(ix);
+      let path = if tab_segment.is_empty() {
+        crate::navigation::build_pr_path(&ctx.owner, &ctx.repo, ctx.number)
+      } else {
+        crate::navigation::build_pr_tab_path(&ctx.owner, &ctx.repo, ctx.number, tab_segment)
+      };
+      NavigationHistory::navigate_replace(path, cx);
+    }
 
     if ix == PR_TAB_CHANGES_IX {
       self.sync_tree_selection(cx);
