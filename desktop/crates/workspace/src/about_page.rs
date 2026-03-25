@@ -29,7 +29,8 @@ use crate::{
   auth_state::{AuthState, AuthStateStore},
   github_navigation::{open_pr_target, open_repo_target},
   github_page::GithubPageHandle,
-  workspace::{WorkspaceApi, WorkspaceRoute},
+  navigation::NavigationHistory,
+  workspace::WorkspaceApi,
 };
 
 #[derive(Clone)]
@@ -70,8 +71,7 @@ impl AboutPage {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    WorkspaceRoute::close_about(cx);
-    cx.refresh_windows();
+    NavigationHistory::navigate_back(cx);
   }
 
   fn show_command_palette_action(
@@ -118,18 +118,12 @@ impl AboutPage {
   ) -> Result<(), SharedString> {
     match action {
       CommandPaletteAction::OpenGitPage => {
-        WorkspaceRoute::global_mut(cx).page = crate::workspace::WorkspacePage::Git;
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        if AuthStateStore::has_pro_access(cx) {
-          GithubPageHandle::refresh(cx);
-          WorkspaceRoute::open_github(cx);
-        } else {
-          WorkspaceRoute::open_billing(cx);
-        }
-        cx.refresh_windows();
+        GithubPageHandle::refresh(cx);
+        NavigationHistory::navigate("/github", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -161,19 +155,16 @@ impl AboutPage {
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
-        WorkspaceRoute::open_settings(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/settings", cx);
         Ok(())
       }
       CommandPaletteAction::OpenBillingPage => {
-        WorkspaceRoute::open_billing(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/billing", cx);
         Ok(())
       }
       CommandPaletteAction::OpenAboutPage => Ok(()),
       CommandPaletteAction::OpenGitConfigPage => {
-        WorkspaceRoute::open_git_config(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git-config", cx);
         Ok(())
       }
       _ => Err("Command not available.".into()),
@@ -372,8 +363,7 @@ impl Render for AboutPage {
           .compact()
           .tooltip("Close about")
           .on_click(|_, _, cx| {
-            WorkspaceRoute::close_about(cx);
-            cx.refresh_windows();
+            NavigationHistory::navigate_back(cx);
           }),
       );
 

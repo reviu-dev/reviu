@@ -6,6 +6,7 @@ use gpui::{
   AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global, Keystroke, Render,
   Subscription, Task, Window, div, prelude::*, px,
 };
+use gpui_router::{Route, Routes};
 use gpui_component::{
   ActiveTheme as _, Disableable, IconName, Sizable as _, Theme, ThemeMode, kbd::Kbd,
   notification::Notification, tag::Tag,
@@ -13,6 +14,7 @@ use gpui_component::{
 use smol::unblock;
 
 use crate::AppProfile;
+use crate::navigation::NavigationHistory;
 use crate::AuthCallbackTarget;
 use crate::about_page::AboutPage;
 use crate::active_local_repo::ActiveLocalRepoStore;
@@ -52,29 +54,26 @@ pub enum WorkspacePage {
   About,
 }
 
-fn github_access_required(page: WorkspacePage) -> bool {
-  matches!(
-    page,
-    WorkspacePage::Github | WorkspacePage::GithubRepo | WorkspacePage::GithubPrDetails
-  )
-}
-
-fn page_for_subscription_access(page: WorkspacePage, has_access: bool) -> WorkspacePage {
-  if github_access_required(page) && !has_access {
-    WorkspacePage::Billing
-  } else {
-    page
+pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
+  if pathname.starts_with("/github/") {
+    // Check if it's a PR details path: /github/{owner}/{repo}/pull/{number}
+    let segments: Vec<&str> = pathname.trim_start_matches('/').split('/').collect();
+    if segments.len() >= 5 && segments[3] == "pull" {
+      return WorkspacePage::GithubPrDetails;
+    }
+    // Otherwise it's a repo page: /github/{owner}/{repo}
+    if segments.len() >= 3 {
+      return WorkspacePage::GithubRepo;
+    }
   }
-}
-
-fn billing_return_target_for_subscription(
-  target: WorkspacePage,
-  has_access: bool,
-) -> WorkspacePage {
-  if github_access_required(target) && !has_access {
-    WorkspacePage::Git
-  } else {
-    target
+  match pathname {
+    "/git" => WorkspacePage::Git,
+    "/github" => WorkspacePage::Github,
+    "/billing" => WorkspacePage::Billing,
+    "/settings" => WorkspacePage::Settings,
+    "/git-config" => WorkspacePage::GitConfig,
+    "/about" => WorkspacePage::About,
+    _ => WorkspacePage::Git,
   }
 }
 
@@ -90,23 +89,18 @@ fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
   }
 }
 
+/// Lightweight global that tracks the current page for focus delegation and sidebar highlighting.
+/// The source of truth for navigation is `NavigationHistory` / `RouterState`.
+/// This struct is kept in sync by `WorkspaceView::render`.
 #[derive(Clone)]
 pub(crate) struct WorkspaceRoute {
   pub page: WorkspacePage,
-  pub settings_return: Option<WorkspacePage>,
-  pub billing_return: Option<WorkspacePage>,
-  pub git_config_return: Option<WorkspacePage>,
-  pub about_return: Option<WorkspacePage>,
 }
 
 impl Default for WorkspaceRoute {
   fn default() -> Self {
     Self {
       page: WorkspacePage::Git,
-      settings_return: None,
-      billing_return: None,
-      git_config_return: None,
-      about_return: None,
     }
   }
 }
@@ -116,87 +110,6 @@ impl Global for WorkspaceRoute {}
 impl WorkspaceRoute {
   pub fn global(cx: &App) -> &Self {
     cx.global::<Self>()
-  }
-
-  pub fn global_mut(cx: &mut App) -> &mut Self {
-    cx.global_mut::<Self>()
-  }
-
-  pub fn can_access_github(cx: &App) -> bool {
-    AuthStateStore::has_pro_access(cx)
-  }
-
-  pub fn open_settings(cx: &mut App) {
-    let current = cx.global::<Self>().page;
-    let route = cx.global_mut::<Self>();
-    if route.page != WorkspacePage::Settings {
-      route.settings_return = Some(current);
-    }
-    route.page = WorkspacePage::Settings;
-  }
-
-  pub fn close_settings(cx: &mut App) {
-    let route = cx.global_mut::<Self>();
-    let target = route.settings_return.take().unwrap_or(WorkspacePage::Git);
-    route.page = target;
-  }
-
-  pub fn open_billing(cx: &mut App) {
-    let current = cx.global::<Self>().page;
-    let route = cx.global_mut::<Self>();
-    if route.page != WorkspacePage::Billing {
-      route.billing_return = Some(current);
-    }
-    route.page = WorkspacePage::Billing;
-  }
-
-  pub fn close_billing(cx: &mut App) {
-    let target = {
-      let route = cx.global_mut::<Self>();
-      route.billing_return.take().unwrap_or(WorkspacePage::Git)
-    };
-
-    let target = billing_return_target_for_subscription(target, Self::can_access_github(cx));
-
-    cx.global_mut::<Self>().page = target;
-  }
-
-  pub fn open_github(cx: &mut App) {
-    if Self::can_access_github(cx) {
-      cx.global_mut::<Self>().page = WorkspacePage::Github;
-    } else {
-      Self::open_billing(cx);
-    }
-  }
-
-  pub fn open_git_config(cx: &mut App) {
-    let current = cx.global::<Self>().page;
-    let route = cx.global_mut::<Self>();
-    if route.page != WorkspacePage::GitConfig {
-      route.git_config_return = Some(current);
-    }
-    route.page = WorkspacePage::GitConfig;
-  }
-
-  pub fn close_git_config(cx: &mut App) {
-    let route = cx.global_mut::<Self>();
-    let target = route.git_config_return.take().unwrap_or(WorkspacePage::Git);
-    route.page = target;
-  }
-
-  pub fn open_about(cx: &mut App) {
-    let current = cx.global::<Self>().page;
-    let route = cx.global_mut::<Self>();
-    if route.page != WorkspacePage::About {
-      route.about_return = Some(current);
-    }
-    route.page = WorkspacePage::About;
-  }
-
-  pub fn close_about(cx: &mut App) {
-    let route = cx.global_mut::<Self>();
-    let target = route.about_return.take().unwrap_or(WorkspacePage::Git);
-    route.page = target;
   }
 }
 
@@ -244,6 +157,11 @@ impl WorkspaceView {
   }
 
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    gpui_router::init(cx);
+    NavigationHistory::init(cx);
+    // Set initial route to /git
+    NavigationHistory::navigate_replace("/git", cx);
+
     cx.set_global(WorkspaceRoute::default());
     cx.set_global(WorkspaceApi::new());
     cx.set_global(AuthStateStore::default());
@@ -488,13 +406,8 @@ impl WorkspaceView {
   }
 
   fn open_github_home(cx: &mut App) {
-    if AuthStateStore::has_pro_access(cx) {
-      GithubPageHandle::refresh(cx);
-      WorkspaceRoute::open_github(cx);
-    } else {
-      WorkspaceRoute::open_billing(cx);
-    }
-    cx.refresh_windows();
+    GithubPageHandle::refresh(cx);
+    NavigationHistory::navigate("/github", cx);
   }
 
   fn render_global_bar(&self, page: WorkspacePage, cx: &mut Context<Self>) -> impl IntoElement {
@@ -508,33 +421,22 @@ impl WorkspaceView {
     let is_unauthenticated = matches!(auth_state, AuthState::Unauthenticated);
 
     let open_git = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
-      cx.refresh_windows();
+      NavigationHistory::navigate("/git", cx);
     });
     let open_github = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
       Self::open_github_home(cx);
     });
     let open_billing = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_billing(cx);
-      cx.refresh_windows();
+      NavigationHistory::navigate("/billing", cx);
     });
     let open_git_config = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_git_config(cx);
-      cx.refresh_windows();
+      NavigationHistory::navigate("/git-config", cx);
     });
     let open_settings = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_settings(cx);
-      cx.refresh_windows();
+      NavigationHistory::navigate("/settings", cx);
     });
     let open_about = Rc::new(|_window: &mut Window, cx: &mut App| {
-      let cx = &mut *cx;
-      WorkspaceRoute::open_about(cx);
-      cx.refresh_windows();
+      NavigationHistory::navigate("/about", cx);
     });
     let sign_in = Rc::new(|_window: &mut Window, cx: &mut App| {
       AuthCallbackTarget::start_sign_in(cx);
@@ -644,13 +546,10 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    let mut page = WorkspaceRoute::global(cx).page;
-    let gated_page = page_for_subscription_access(page, WorkspaceRoute::can_access_github(cx));
-    if gated_page != page {
-      WorkspaceRoute::open_billing(cx);
-      page = WorkspaceRoute::global(cx).page;
-    }
+    let pathname = NavigationHistory::current_pathname(cx);
+    let page = workspace_page_from_pathname(&pathname);
 
+    // Sync sentry context on page change
     if self.last_page != Some(page) {
       let previous_page = self.last_page;
       self.last_page = Some(page);
@@ -667,32 +566,50 @@ impl Render for WorkspaceView {
       window.focus(&focus_handle, cx);
     }
 
-    let page_view = match page {
-      WorkspacePage::Git => self.git_page.clone().into_any_element(),
-      WorkspacePage::Github => self.github_page.clone().into_any_element(),
-      WorkspacePage::GithubRepo => self.github_repo_page.clone().into_any_element(),
-      WorkspacePage::GithubPrDetails => self.github_pr_details_page.clone().into_any_element(),
-      WorkspacePage::Billing => self.billing_page.clone().into_any_element(),
-      WorkspacePage::GitConfig => self.git_config_page.clone().into_any_element(),
-      WorkspacePage::Settings => self.settings_page.clone().into_any_element(),
-      WorkspacePage::About => self.about_page.clone().into_any_element(),
-    };
+    // Keep WorkspaceRoute in sync for code that still reads it
+    cx.global_mut::<WorkspaceRoute>().page = page;
+
+    let git_page = self.git_page.clone();
+    let github_page = self.github_page.clone();
+    let github_repo_page = self.github_repo_page.clone();
+    let github_pr_details_page = self.github_pr_details_page.clone();
+    let billing_page = self.billing_page.clone();
+    let git_config_page = self.git_config_page.clone();
+    let settings_page = self.settings_page.clone();
+    let about_page = self.about_page.clone();
+
+    let routes = Routes::new()
+      .child(Route::new().path("git").element(move |_w, _cx| git_page.clone()))
+      .child(Route::new().path("github").element({
+        let github_page = github_page.clone();
+        move |_w, _cx| github_page.clone()
+      }))
+      .child(Route::new().path("github/{owner}/{repo}").element({
+        let github_repo_page = github_repo_page.clone();
+        move |_w, _cx| github_repo_page.clone()
+      }))
+      .child(
+        Route::new()
+          .path("github/{owner}/{repo}/pull/{number}")
+          .element(move |_w, _cx| github_pr_details_page.clone()),
+      )
+      .child(Route::new().path("billing").element(move |_w, _cx| billing_page.clone()))
+      .child(Route::new().path("git-config").element(move |_w, _cx| git_config_page.clone()))
+      .child(Route::new().path("settings").element(move |_w, _cx| settings_page.clone()))
+      .child(Route::new().path("about").element(move |_w, _cx| about_page.clone()));
 
     div()
       .size_full()
       .flex()
       .flex_col()
       .child(self.render_global_bar(page, cx))
-      .child(div().flex_1().min_h_0().child(page_view))
+      .child(div().flex_1().min_h_0().child(routes))
   }
 }
 
 #[cfg(test)]
 mod tests {
-  use super::{
-    WorkspacePage, WorkspaceView, billing_return_target_for_subscription,
-    page_for_subscription_access, user_menu_page_for_workspace_page,
-  };
+  use super::{WorkspacePage, WorkspaceView, user_menu_page_for_workspace_page, workspace_page_from_pathname};
   use crate::SHOW_COMMAND_PALETTE_SHORTCUT;
   use crate::app_update::{
     AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
@@ -702,59 +619,35 @@ mod tests {
   use ui::UserMenuPage;
 
   #[test]
-  fn page_for_subscription_access_redirects_restricted_pages_without_subscription() {
+  fn workspace_page_from_pathname_maps_static_paths() {
+    assert_eq!(workspace_page_from_pathname("/git"), WorkspacePage::Git);
+    assert_eq!(workspace_page_from_pathname("/github"), WorkspacePage::Github);
+    assert_eq!(workspace_page_from_pathname("/billing"), WorkspacePage::Billing);
+    assert_eq!(workspace_page_from_pathname("/settings"), WorkspacePage::Settings);
+    assert_eq!(workspace_page_from_pathname("/git-config"), WorkspacePage::GitConfig);
+    assert_eq!(workspace_page_from_pathname("/about"), WorkspacePage::About);
+  }
+
+  #[test]
+  fn workspace_page_from_pathname_maps_github_repo() {
     assert_eq!(
-      page_for_subscription_access(WorkspacePage::Github, false),
-      WorkspacePage::Billing
-    );
-    assert_eq!(
-      page_for_subscription_access(WorkspacePage::GithubPrDetails, false),
-      WorkspacePage::Billing
-    );
-    assert_eq!(
-      page_for_subscription_access(WorkspacePage::GithubRepo, false),
-      WorkspacePage::Billing
+      workspace_page_from_pathname("/github/owner/repo"),
+      WorkspacePage::GithubRepo
     );
   }
 
   #[test]
-  fn page_for_subscription_access_keeps_allowed_pages() {
+  fn workspace_page_from_pathname_maps_github_pr_details() {
     assert_eq!(
-      page_for_subscription_access(WorkspacePage::Git, false),
-      WorkspacePage::Git
-    );
-    assert_eq!(
-      page_for_subscription_access(WorkspacePage::About, false),
-      WorkspacePage::About
-    );
-    assert_eq!(
-      page_for_subscription_access(WorkspacePage::Settings, false),
-      WorkspacePage::Settings
-    );
-    assert_eq!(
-      page_for_subscription_access(WorkspacePage::Github, true),
-      WorkspacePage::Github
+      workspace_page_from_pathname("/github/owner/repo/pull/123"),
+      WorkspacePage::GithubPrDetails
     );
   }
 
   #[test]
-  fn billing_return_target_for_subscription_falls_back_to_git_when_needed() {
-    assert_eq!(
-      billing_return_target_for_subscription(WorkspacePage::Github, false),
-      WorkspacePage::Git
-    );
-    assert_eq!(
-      billing_return_target_for_subscription(WorkspacePage::GithubPrDetails, false),
-      WorkspacePage::Git
-    );
-    assert_eq!(
-      billing_return_target_for_subscription(WorkspacePage::GithubRepo, false),
-      WorkspacePage::Git
-    );
-    assert_eq!(
-      billing_return_target_for_subscription(WorkspacePage::Settings, false),
-      WorkspacePage::Settings
-    );
+  fn workspace_page_from_pathname_unknown_falls_back_to_git() {
+    assert_eq!(workspace_page_from_pathname("/unknown"), WorkspacePage::Git);
+    assert_eq!(workspace_page_from_pathname("/"), WorkspacePage::Git);
   }
 
   #[test]

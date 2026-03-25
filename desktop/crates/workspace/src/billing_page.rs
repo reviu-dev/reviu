@@ -25,7 +25,8 @@ use crate::{
   date_format::{format_long_date_opt, parse_rfc3339},
   github_navigation::{open_pr_target, open_repo_target},
   github_page::GithubPageHandle,
-  workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
+  navigation::NavigationHistory,
+  workspace::WorkspaceApi,
 };
 
 pub struct BillingPage {
@@ -153,8 +154,7 @@ impl BillingPage {
     _: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    WorkspaceRoute::close_billing(cx);
-    cx.refresh_windows();
+    NavigationHistory::navigate_back(cx);
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -192,18 +192,12 @@ impl BillingPage {
   ) -> Result<(), SharedString> {
     match action {
       CommandPaletteAction::OpenGitPage => {
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        if AuthStateStore::has_pro_access(cx) {
-          GithubPageHandle::refresh(cx);
-          WorkspaceRoute::open_github(cx);
-        } else {
-          WorkspaceRoute::open_billing(cx);
-        }
-        cx.refresh_windows();
+        GithubPageHandle::refresh(cx);
+        NavigationHistory::navigate("/github", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -235,19 +229,16 @@ impl BillingPage {
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
-        WorkspaceRoute::open_settings(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/settings", cx);
         Ok(())
       }
       CommandPaletteAction::OpenBillingPage => Ok(()),
       CommandPaletteAction::OpenAboutPage => {
-        WorkspaceRoute::open_about(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/about", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGitConfigPage => {
-        WorkspaceRoute::open_git_config(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git-config", cx);
         Ok(())
       }
       _ => Err("Command not available.".into()),
@@ -555,8 +546,7 @@ impl BillingPage {
       .compact()
       .tooltip("Close billing")
       .on_click(|_, _, cx| {
-        WorkspaceRoute::close_billing(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate_back(cx);
       });
 
     div()

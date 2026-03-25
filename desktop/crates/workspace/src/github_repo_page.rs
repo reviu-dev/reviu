@@ -61,7 +61,8 @@ use crate::{
   github_page::GithubPageHandle,
   github_pr_details_page::{GithubPrDetailsPageHandle, GithubPrOpenTarget},
   github_shared,
-  workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
+  navigation::NavigationHistory,
+  workspace::WorkspaceApi,
 };
 
 fn list_base_item(
@@ -99,24 +100,8 @@ fn format_repo_size(size_kb: u64) -> SharedString {
   format!("{} KB", size_kb).into()
 }
 
-fn github_page_navigation(has_pro_access: bool) -> (WorkspacePage, bool) {
-  if has_pro_access {
-    (WorkspacePage::Github, true)
-  } else {
-    (WorkspacePage::Billing, false)
-  }
-}
-
 fn should_show_overview_loading_state(repository_loading: bool, has_repository: bool) -> bool {
   repository_loading && !has_repository
-}
-
-fn repo_palette_open_target(has_pro_access: bool) -> WorkspacePage {
-  if has_pro_access {
-    WorkspacePage::GithubRepo
-  } else {
-    WorkspacePage::Billing
-  }
 }
 
 fn repo_tab_count_label(count: usize) -> SharedString {
@@ -2460,12 +2445,6 @@ impl GithubRepoPageHandle {
     target: GithubRepoOpenTarget,
     cx: &mut App,
   ) {
-    if !AuthStateStore::has_pro_access(cx) {
-      WorkspaceRoute::open_billing(cx);
-      cx.refresh_windows();
-      return;
-    }
-
     let Some(weak) = cx.global::<Self>().page.clone() else {
       return;
     };
@@ -2476,8 +2455,7 @@ impl GithubRepoPageHandle {
       this.load_repository(owner_string, repo_string, target, cx);
     });
 
-    WorkspaceRoute::global_mut(cx).page = WorkspacePage::GithubRepo;
-    cx.refresh_windows();
+    NavigationHistory::navigate(crate::navigation::build_repo_path(&owner, &repo), cx);
   }
 }
 
@@ -2500,18 +2478,8 @@ impl GithubRepoPage {
   }
 
   fn open_github_home(cx: &mut App) {
-    let (target, should_refresh) = github_page_navigation(AuthStateStore::has_pro_access(cx));
-
-    if should_refresh {
-      GithubPageHandle::refresh(cx);
-    }
-
-    match target {
-      WorkspacePage::Github => WorkspaceRoute::open_github(cx),
-      WorkspacePage::Billing => WorkspaceRoute::open_billing(cx),
-      _ => {}
-    }
-    cx.refresh_windows();
+    GithubPageHandle::refresh(cx);
+    NavigationHistory::navigate("/github", cx);
   }
 
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -3737,18 +3705,12 @@ impl GithubRepoPage {
   ) -> Result<(), SharedString> {
     match action {
       CommandPaletteAction::OpenGitPage => {
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        if AuthStateStore::has_pro_access(cx) {
-          GithubPageHandle::refresh(cx);
-          WorkspaceRoute::open_github(cx);
-        } else {
-          WorkspaceRoute::open_billing(cx);
-        }
-        cx.refresh_windows();
+        GithubPageHandle::refresh(cx);
+        NavigationHistory::navigate("/github", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubRepoDetails {
@@ -3758,22 +3720,16 @@ impl GithubRepoPage {
         issue_number,
         issue_comment_id,
       } => {
-        match repo_palette_open_target(AuthStateStore::has_pro_access(cx)) {
-          WorkspacePage::GithubRepo => {
-            self.load_repository(
-              owner,
-              repo,
-              repo_open_target_from_palette(tab, issue_number, issue_comment_id),
-              cx,
-            );
-            WorkspaceRoute::global_mut(cx).page = WorkspacePage::GithubRepo;
-          }
-          WorkspacePage::Billing => {
-            WorkspaceRoute::open_billing(cx);
-          }
-          _ => {}
-        }
-        cx.refresh_windows();
+        self.load_repository(
+          owner.clone(),
+          repo.clone(),
+          repo_open_target_from_palette(tab, issue_number, issue_comment_id),
+          cx,
+        );
+        NavigationHistory::navigate(
+          crate::navigation::build_repo_path(&owner, &repo),
+          cx,
+        );
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -3806,23 +3762,19 @@ impl GithubRepoPage {
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
-        WorkspaceRoute::open_settings(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/settings", cx);
         Ok(())
       }
       CommandPaletteAction::OpenBillingPage => {
-        WorkspaceRoute::open_billing(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/billing", cx);
         Ok(())
       }
       CommandPaletteAction::OpenAboutPage => {
-        WorkspaceRoute::open_about(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/about", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGitConfigPage => {
-        WorkspaceRoute::open_git_config(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git-config", cx);
         Ok(())
       }
       _ => Err("Command not available.".into()),
@@ -4829,29 +4781,10 @@ mod tests {
   }
 
   #[test]
-  fn github_page_navigation_targets_github_and_refresh_when_subscription_is_active() {
-    assert_eq!(github_page_navigation(true), (WorkspacePage::Github, true));
-  }
-
-  #[test]
-  fn github_page_navigation_targets_billing_without_refresh_when_subscription_is_inactive() {
-    assert_eq!(
-      github_page_navigation(false),
-      (WorkspacePage::Billing, false)
-    );
-  }
-
-  #[test]
   fn overview_loading_state_requires_loading_and_missing_repository() {
     assert!(should_show_overview_loading_state(true, false));
     assert!(!should_show_overview_loading_state(false, false));
     assert!(!should_show_overview_loading_state(true, true));
-  }
-
-  #[test]
-  fn repo_palette_open_target_follows_subscription_state() {
-    assert_eq!(repo_palette_open_target(true), WorkspacePage::GithubRepo);
-    assert_eq!(repo_palette_open_target(false), WorkspacePage::Billing);
   }
 
   #[gpui::test]

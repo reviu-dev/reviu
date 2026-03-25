@@ -22,7 +22,7 @@ use crate::{
   config::{AppSettings as PersistedSettings, ConfigStore},
   github_navigation::{open_pr_target, open_repo_target},
   github_page::GithubPageHandle,
-  workspace::{WorkspacePage, WorkspaceRoute},
+  navigation::NavigationHistory,
 };
 
 pub struct SettingsPage {
@@ -161,8 +161,7 @@ impl SettingsPage {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    WorkspaceRoute::close_settings(cx);
-    cx.refresh_windows();
+    NavigationHistory::navigate_back(cx);
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -200,18 +199,12 @@ impl SettingsPage {
   ) -> Result<(), SharedString> {
     match action {
       CommandPaletteAction::OpenGitPage => {
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        if AuthStateStore::has_pro_access(cx) {
-          GithubPageHandle::refresh(cx);
-          WorkspaceRoute::open_github(cx);
-        } else {
-          WorkspaceRoute::open_billing(cx);
-        }
-        cx.refresh_windows();
+        GithubPageHandle::refresh(cx);
+        NavigationHistory::navigate("/github", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -244,18 +237,15 @@ impl SettingsPage {
       }
       CommandPaletteAction::OpenSettingsPage => Ok(()),
       CommandPaletteAction::OpenBillingPage => {
-        WorkspaceRoute::open_billing(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/billing", cx);
         Ok(())
       }
       CommandPaletteAction::OpenAboutPage => {
-        WorkspaceRoute::open_about(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/about", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGitConfigPage => {
-        WorkspaceRoute::open_git_config(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git-config", cx);
         Ok(())
       }
       _ => Err("Command not available.".into()),
@@ -290,8 +280,7 @@ impl Render for SettingsPage {
           .compact()
           .tooltip("Close settings")
           .on_click(|_, _, cx| {
-            WorkspaceRoute::close_settings(cx);
-            cx.refresh_windows();
+            NavigationHistory::navigate_back(cx);
           }),
       );
 
