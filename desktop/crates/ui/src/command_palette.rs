@@ -197,6 +197,7 @@ pub enum CommandPaletteAction {
   OpenSettingsPage,
   OpenBillingPage,
   OpenAboutPage,
+  SendFeedback,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -666,6 +667,7 @@ pub enum CommandPaletteCommandId {
   OpenSettingsPage,
   OpenBillingPage,
   OpenAboutPage,
+  SendFeedback,
 }
 
 impl CommandPaletteCommand {
@@ -1012,6 +1014,14 @@ impl CommandPaletteCommand {
     }
   }
 
+  pub fn send_feedback() -> Self {
+    Self {
+      id: CommandPaletteCommandId::SendFeedback,
+      name: "Send Feedback".into(),
+      description: Some("Report a bug or suggest a feature".into()),
+    }
+  }
+
   pub fn open_git_config_page() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenGitConfigPage,
@@ -1058,6 +1068,8 @@ impl CommandPaletteCommand {
       commands.push(Self::open_git_history_sidebar());
       commands.push(Self::open_git_changes_sidebar());
     }
+
+    commands.push(Self::send_feedback());
 
     commands
   }
@@ -1110,6 +1122,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::OpenSettingsPage => Icon::new(IconName::Settings2),
       CommandPaletteCommandId::OpenBillingPage => Icon::new(UiIconName::CreditCard),
       CommandPaletteCommandId::OpenAboutPage => Icon::new(UiIconName::Info),
+      CommandPaletteCommandId::SendFeedback => Icon::new(UiIconName::MessageCircle),
     }
   }
 
@@ -2000,6 +2013,9 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::OpenAboutPage => {
         self.trigger_action(CommandPaletteAction::OpenAboutPage, window, cx);
+      }
+      CommandPaletteCommandId::SendFeedback => {
+        self.trigger_action(CommandPaletteAction::SendFeedback, window, cx);
       }
       CommandPaletteCommandId::OpenGitHistorySidebar => {
         self.trigger_action(CommandPaletteAction::OpenGitHistorySidebar, window, cx);

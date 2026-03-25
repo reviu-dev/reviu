@@ -6,15 +6,14 @@ use gpui::{
   AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global, Keystroke, Render,
   Subscription, Task, Window, div, prelude::*, px,
 };
-use gpui_router::{Route, Routes};
 use gpui_component::{
   ActiveTheme as _, Disableable, IconName, Sizable as _, Theme, ThemeMode, kbd::Kbd,
   notification::Notification, tag::Tag,
 };
+use gpui_router::{Route, Routes};
 use smol::unblock;
 
 use crate::AppProfile;
-use crate::navigation::NavigationHistory;
 use crate::AuthCallbackTarget;
 use crate::about_page::AboutPage;
 use crate::active_local_repo::ActiveLocalRepoStore;
@@ -33,6 +32,7 @@ use crate::git_page::GitPage;
 use crate::github_page::{GithubPage, GithubPageHandle};
 use crate::github_pr_details_page::GithubPrDetailsPage;
 use crate::github_repo_page::GithubRepoPage;
+use crate::navigation::NavigationHistory;
 use crate::notification_count::NotificationCountStore;
 use crate::sentry_context;
 use crate::settings_page::SettingsPage;
@@ -434,7 +434,12 @@ impl WorkspaceView {
     NavigationHistory::navigate("/github", cx);
   }
 
-  fn render_global_bar(&self, page: WorkspacePage, pathname: &str, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_global_bar(
+    &self,
+    page: WorkspacePage,
+    pathname: &str,
+    cx: &mut Context<Self>,
+  ) -> impl IntoElement {
     let theme = cx.theme().clone();
     let show_update_button = AppUpdateStore::try_available_update(cx).is_some();
     let update_download_in_progress = AppUpdateStore::is_downloading(cx);
@@ -618,7 +623,11 @@ impl Render for WorkspaceView {
     let about_page = self.about_page.clone();
 
     let routes = Routes::new()
-      .child(Route::new().path("git").element(move |_w, _cx| git_page.clone()))
+      .child(
+        Route::new()
+          .path("git")
+          .element(move |_w, _cx| git_page.clone()),
+      )
       .child(Route::new().path("github").element({
         let github_page = github_page.clone();
         move |_w, _cx| github_page.clone()
@@ -644,10 +653,26 @@ impl Render for WorkspaceView {
           .path("github/{owner}/{repo}/pull/{number}/{tab}")
           .element(move |_w, _cx| github_pr_details_page.clone()),
       )
-      .child(Route::new().path("billing").element(move |_w, _cx| billing_page.clone()))
-      .child(Route::new().path("git-config").element(move |_w, _cx| git_config_page.clone()))
-      .child(Route::new().path("settings").element(move |_w, _cx| settings_page.clone()))
-      .child(Route::new().path("about").element(move |_w, _cx| about_page.clone()));
+      .child(
+        Route::new()
+          .path("billing")
+          .element(move |_w, _cx| billing_page.clone()),
+      )
+      .child(
+        Route::new()
+          .path("git-config")
+          .element(move |_w, _cx| git_config_page.clone()),
+      )
+      .child(
+        Route::new()
+          .path("settings")
+          .element(move |_w, _cx| settings_page.clone()),
+      )
+      .child(
+        Route::new()
+          .path("about")
+          .element(move |_w, _cx| about_page.clone()),
+      );
 
     div()
       .size_full()
@@ -660,7 +685,10 @@ impl Render for WorkspaceView {
 
 #[cfg(test)]
 mod tests {
-  use super::{WorkspacePage, WorkspaceView, page_has_file_search, user_menu_page_for_workspace_page, workspace_page_from_pathname};
+  use super::{
+    WorkspacePage, WorkspaceView, page_has_file_search, user_menu_page_for_workspace_page,
+    workspace_page_from_pathname,
+  };
   use crate::SHOW_COMMAND_PALETTE_SHORTCUT;
   use crate::app_update::{
     AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
@@ -672,10 +700,22 @@ mod tests {
   #[test]
   fn workspace_page_from_pathname_maps_static_paths() {
     assert_eq!(workspace_page_from_pathname("/git"), WorkspacePage::Git);
-    assert_eq!(workspace_page_from_pathname("/github"), WorkspacePage::Github);
-    assert_eq!(workspace_page_from_pathname("/billing"), WorkspacePage::Billing);
-    assert_eq!(workspace_page_from_pathname("/settings"), WorkspacePage::Settings);
-    assert_eq!(workspace_page_from_pathname("/git-config"), WorkspacePage::GitConfig);
+    assert_eq!(
+      workspace_page_from_pathname("/github"),
+      WorkspacePage::Github
+    );
+    assert_eq!(
+      workspace_page_from_pathname("/billing"),
+      WorkspacePage::Billing
+    );
+    assert_eq!(
+      workspace_page_from_pathname("/settings"),
+      WorkspacePage::Settings
+    );
+    assert_eq!(
+      workspace_page_from_pathname("/git-config"),
+      WorkspacePage::GitConfig
+    );
     assert_eq!(workspace_page_from_pathname("/about"), WorkspacePage::About);
   }
 

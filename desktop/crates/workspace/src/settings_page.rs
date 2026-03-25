@@ -170,9 +170,9 @@ impl SettingsPage {
       CommandPaletteCommand::default_global_commands(CommandPalettePage::Settings, include_github);
 
     let view = cx.entity();
-    let handler: CommandPaletteHandler = Arc::new(move |action, _window, cx| {
+    let handler: CommandPaletteHandler = Arc::new(move |action, window, cx| {
       view.update(cx, |view, cx| {
-        view.handle_command_palette_action(action, cx)
+        view.handle_command_palette_action(action, window, cx)
       })
     });
 
@@ -195,6 +195,7 @@ impl SettingsPage {
   fn handle_command_palette_action(
     &mut self,
     action: CommandPaletteAction,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     match action {
@@ -246,6 +247,10 @@ impl SettingsPage {
       }
       CommandPaletteAction::OpenGitConfigPage => {
         NavigationHistory::navigate("/git-config", cx);
+        Ok(())
+      }
+      CommandPaletteAction::SendFeedback => {
+        crate::feedback_dialog::open_feedback_dialog(window, cx);
         Ok(())
       }
       _ => Err("Command not available.".into()),

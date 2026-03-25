@@ -3677,9 +3677,9 @@ impl GithubRepoPage {
     );
 
     let view = cx.entity();
-    let handler: CommandPaletteHandler = Arc::new(move |action, _window, cx| {
+    let handler: CommandPaletteHandler = Arc::new(move |action, window, cx| {
       view.update(cx, |view, cx| {
-        view.handle_command_palette_action(action, cx)
+        view.handle_command_palette_action(action, window, cx)
       })
     });
 
@@ -3717,12 +3717,15 @@ impl GithubRepoPage {
       return false;
     };
 
-    self.handle_command_palette_action(action, cx).is_ok()
+    self
+      .handle_command_palette_action(action, window, cx)
+      .is_ok()
   }
 
   fn handle_command_palette_action(
     &mut self,
     action: CommandPaletteAction,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     match action {
@@ -3748,10 +3751,7 @@ impl GithubRepoPage {
           repo_open_target_from_palette(tab, issue_number, issue_comment_id),
           cx,
         );
-        NavigationHistory::navigate(
-          crate::navigation::build_repo_path(&owner, &repo),
-          cx,
-        );
+        NavigationHistory::navigate(crate::navigation::build_repo_path(&owner, &repo), cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -3797,6 +3797,10 @@ impl GithubRepoPage {
       }
       CommandPaletteAction::OpenGitConfigPage => {
         NavigationHistory::navigate("/git-config", cx);
+        Ok(())
+      }
+      CommandPaletteAction::SendFeedback => {
+        crate::feedback_dialog::open_feedback_dialog(window, cx);
         Ok(())
       }
       _ => Err("Command not available.".into()),

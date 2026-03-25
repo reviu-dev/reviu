@@ -28,6 +28,8 @@ function setupEnv() {
     POLAR_SUBSCRIPTION_PRODUCT_ID: 'product-id',
     POLAR_WEBHOOK_SECRET: 'polar-webhook-secret',
     WEB_DASHBOARD_URL: 'http://localhost:5173',
+    LINEAR_TOKEN: 'linear-token',
+    LINEAR_TEAM_ID: 'linear-team-id',
   }
 
   for (const [key, value] of Object.entries(env)) {

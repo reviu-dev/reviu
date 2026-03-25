@@ -37,8 +37,9 @@ use crate::{
   date_format::format_relative_time,
   github_navigation::{open_pr_target, open_repo_target},
   github_pr_details_page::GithubPrDetailsPageHandle,
-  github_shared, sentry_context,
+  github_shared,
   navigation::NavigationHistory,
+  sentry_context,
   workspace::WorkspaceApi,
 };
 
@@ -1248,9 +1249,9 @@ impl GithubPage {
       CommandPaletteCommand::default_global_commands(CommandPalettePage::Github, include_github);
 
     let view = cx.entity();
-    let handler: CommandPaletteHandler = Arc::new(move |action, _window, cx| {
+    let handler: CommandPaletteHandler = Arc::new(move |action, window, cx| {
       view.update(cx, |view, cx| {
-        view.handle_command_palette_action(action, cx)
+        view.handle_command_palette_action(action, window, cx)
       })
     });
 
@@ -1273,6 +1274,7 @@ impl GithubPage {
   fn handle_command_palette_action(
     &mut self,
     action: CommandPaletteAction,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     match action {
@@ -1328,6 +1330,10 @@ impl GithubPage {
       }
       CommandPaletteAction::OpenGitConfigPage => {
         NavigationHistory::navigate("/git-config", cx);
+        Ok(())
+      }
+      CommandPaletteAction::SendFeedback => {
+        crate::feedback_dialog::open_feedback_dialog(window, cx);
         Ok(())
       }
       _ => Err("Command not available.".into()),
@@ -1948,45 +1954,49 @@ mod tests {
       this.notifications_error = None;
       this.notifications.update(cx, |state, cx| {
         state.delegate_mut().loading = false;
-        state.delegate_mut().set_rows(vec![Rc::new(GithubNotificationRow {
-          notification: Rc::new(GithubNotification {
-            id: "n1".to_string(),
-            repository: GithubNotificationRepository {
-              name: "portal".to_string(),
-              full_name: "acme/portal".to_string(),
-              owner: None,
-            },
-            subject: GithubNotificationSubject {
-              title: "Please review".to_string(),
-              subject_type: "PullRequest".to_string(),
-              url: None,
-              latest_comment_url: None,
-            },
-            reason: "mention".to_string(),
-            unread: true,
-            updated_at: "2026-02-15T12:10:00Z".to_string(),
-            last_read_at: None,
-            url: "https://api.github.test/notif/1".to_string(),
-            subscription_url: "https://api.github.test/sub/1".to_string(),
-          }),
-        })]);
+        state
+          .delegate_mut()
+          .set_rows(vec![Rc::new(GithubNotificationRow {
+            notification: Rc::new(GithubNotification {
+              id: "n1".to_string(),
+              repository: GithubNotificationRepository {
+                name: "portal".to_string(),
+                full_name: "acme/portal".to_string(),
+                owner: None,
+              },
+              subject: GithubNotificationSubject {
+                title: "Please review".to_string(),
+                subject_type: "PullRequest".to_string(),
+                url: None,
+                latest_comment_url: None,
+              },
+              reason: "mention".to_string(),
+              unread: true,
+              updated_at: "2026-02-15T12:10:00Z".to_string(),
+              last_read_at: None,
+              url: "https://api.github.test/notif/1".to_string(),
+              subscription_url: "https://api.github.test/sub/1".to_string(),
+            }),
+          })]);
         cx.notify();
       });
 
       this.repositories_error = None;
       this.repositories.update(cx, |state, cx| {
         state.delegate_mut().loading = false;
-        state.delegate_mut().set_rows(vec![Rc::new(GithubRepositoryRow {
-          repository: Rc::new(GithubUserRepository {
-            owner: "acme".to_string(),
-            repo: "portal".to_string(),
-            full_name: "acme/portal".to_string(),
-            description: Some("Main app".to_string()),
-            private: true,
-            owner_avatar_url: Some("https://example.com/acme.png".to_string()),
-            updated_at: "2026-02-15T12:30:00Z".to_string(),
-          }),
-        })]);
+        state
+          .delegate_mut()
+          .set_rows(vec![Rc::new(GithubRepositoryRow {
+            repository: Rc::new(GithubUserRepository {
+              owner: "acme".to_string(),
+              repo: "portal".to_string(),
+              full_name: "acme/portal".to_string(),
+              description: Some("Main app".to_string()),
+              private: true,
+              owner_avatar_url: Some("https://example.com/acme.png".to_string()),
+              updated_at: "2026-02-15T12:30:00Z".to_string(),
+            }),
+          })]);
         cx.notify();
       });
 
