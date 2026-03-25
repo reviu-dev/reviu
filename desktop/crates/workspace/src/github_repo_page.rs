@@ -2477,11 +2477,6 @@ impl GithubRepoPage {
     })
   }
 
-  fn open_github_home(cx: &mut App) {
-    GithubPageHandle::refresh(cx);
-    NavigationHistory::navigate("/github", cx);
-  }
-
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     GithubRepoPageHandle::register(cx);
 
@@ -3848,7 +3843,7 @@ impl GithubRepoPage {
                 .ghost()
                 .compact()
                 .on_click(|_, _, cx| {
-                  Self::open_github_home(cx);
+                  NavigationHistory::navigate_back(cx);
                 }),
             )
             .child(div().text_sm().font_medium().child(repo_label)),

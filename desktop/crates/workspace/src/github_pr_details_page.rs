@@ -6148,10 +6148,6 @@ impl GithubPrDetailsPage {
   }
 
   fn navigate_back(&self, cx: &mut Context<Self>) {
-    // Refresh github page data if going back to it
-    if matches!(&self.back_target, GithubPrBackTarget::GithubHome) {
-      GithubPageHandle::refresh(cx);
-    }
     NavigationHistory::navigate_back(cx);
   }
 
