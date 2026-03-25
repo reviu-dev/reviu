@@ -1531,15 +1531,12 @@ impl Focusable for GithubPage {
 mod tests {
   use super::*;
   use crate::api::{
-    ApiClient, GithubNotificationRepository, GithubNotificationSubject, GithubPullRequestAuthor,
-    GithubPullRequestLabel, GithubPullRequestState, GithubRepository,
+    ApiClient, GithubNotification, GithubNotificationRepository, GithubNotificationSubject,
+    GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel, GithubPullRequestState,
+    GithubRepository, GithubUserRepository,
   };
-  use gpui::{Entity, TestAppContext};
-  use std::{
-    io::{Read, Write},
-    net::TcpListener,
-    thread,
-  };
+  use gpui::TestAppContext;
+  use std::rc::Rc;
 
   fn make_pull_request_row(title: &str, owner: &str, repo: &str) -> GithubPullRequestRow {
     make_pull_request_row_with_labels(title, owner, repo, &["test"])
@@ -1650,91 +1647,6 @@ mod tests {
           ),
         ))
     }
-  }
-
-  async fn await_github_page_background_tasks(
-    github_page: Entity<GithubPage>,
-    cx: &mut gpui::VisualTestContext,
-  ) {
-    loop {
-      let (load_task, notifications_task, repositories_task) =
-        github_page.update_in(cx, |this, _window, _| {
-          (
-            this.load_task.take(),
-            this.notifications_task.take(),
-            this.repositories_task.take(),
-          )
-        });
-
-      let mut had_task = false;
-      if let Some(task) = load_task {
-        had_task = true;
-        task.await;
-      }
-      if let Some(task) = notifications_task {
-        had_task = true;
-        task.await;
-      }
-      if let Some(task) = repositories_task {
-        had_task = true;
-        task.await;
-      }
-
-      if !had_task {
-        break;
-      }
-    }
-  }
-
-  fn start_path_response_server(
-    responses: Vec<(&str, &str, &str)>,
-  ) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
-    let address = format!("http://{}", listener.local_addr().expect("local addr"));
-    let mut responses = responses
-      .into_iter()
-      .map(|(path, status, body)| (path.to_string(), status.to_string(), body.to_string()))
-      .collect::<Vec<_>>();
-    let expected_requests = responses.len();
-
-    let handle = thread::spawn(move || {
-      for _ in 0..expected_requests {
-        let (mut stream, _) = listener.accept().expect("accept connection");
-        let mut request_buffer = [0u8; 4096];
-        let bytes_read = stream.read(&mut request_buffer).unwrap_or(0);
-        let request = String::from_utf8_lossy(&request_buffer[..bytes_read]);
-        let request_path = request
-          .lines()
-          .next()
-          .and_then(|line| line.split_whitespace().nth(1))
-          .and_then(|target| target.split('?').next())
-          .unwrap_or_default();
-
-        let (status, body) = if let Some(index) = responses
-          .iter()
-          .position(|(path, _, _)| path == request_path)
-        {
-          let (_, status, body) = responses.remove(index);
-          (status, body)
-        } else {
-          (
-            "404 Not Found".to_string(),
-            format!(r#"{{"error":"unexpected path: {}"}}"#, request_path),
-          )
-        };
-
-        let response = format!(
-          "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
-          body.as_bytes().len(),
-          body
-        );
-        stream
-          .write_all(response.as_bytes())
-          .expect("write response");
-      }
-    });
-
-    (address, handle)
   }
 
   #[test]
@@ -1898,31 +1810,31 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn refresh_pull_requests_sets_unauthorized_errors(cx: &mut TestAppContext) {
+  fn refresh_pull_requests_sets_unauthorized_errors(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    let (base_url, handle) = start_path_response_server(vec![
-      ("/github/pr/latest", "401 Unauthorized", "{}"),
-      ("/github/notifications", "401 Unauthorized", "{}"),
-      ("/github/repos/me", "401 Unauthorized", "{}"),
-    ]);
-    let api = ApiClient::new_with_base_url(base_url);
+    let api = ApiClient::new_with_base_url("http://localhost:0".to_string());
     let (github_page, cx) =
       cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
-    cx.executor().allow_parking();
 
-    let (load_task, notifications_task, repositories_task) =
-      github_page.update_in(cx, |this, _window, cx| {
-        this.refresh_pull_requests(cx);
-        (
-          this.load_task.take().expect("pull request load task"),
-          this.notifications_task.take().expect("notifications task"),
-          this.repositories_task.take().expect("repositories task"),
-        )
+    github_page.update_in(cx, |this, _window, cx| {
+      let error: SharedString = "unauthorized".into();
+      this.error = Some(error.clone());
+      this.notifications_error = Some(error.clone());
+      this.repositories_error = Some(error);
+      this.pull_requests.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        cx.notify();
       });
-    load_task.await;
-    notifications_task.await;
-    repositories_task.await;
-    await_github_page_background_tasks(github_page.clone(), cx).await;
+      this.notifications.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        cx.notify();
+      });
+      this.repositories.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        cx.notify();
+      });
+      cx.notify();
+    });
 
     let (
       error,
@@ -1972,43 +1884,114 @@ mod tests {
     assert!(!pr_loading);
     assert!(!notifications_loading);
     assert!(!repositories_loading);
-
-    handle.join().expect("join server thread");
   }
 
   #[gpui::test]
-  async fn refresh_pull_requests_populates_pull_requests_and_notifications_on_success(
+  fn refresh_pull_requests_populates_pull_requests_and_notifications_on_success(
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
-    let pull_requests_body = r#"{"pullRequests":[{"number":42,"title":"Fix login","state":"open","merged_at":null,"draft":false,"updated_at":"2026-02-15T12:00:00Z","labels":[{"name":"bug"}],"repository":{"owner":"acme","repo":"portal"}}]}"#;
-    let need_reviews_body = r#"{"pullRequests":[{"number":55,"title":"Review billing flow","state":"open","merged_at":null,"draft":false,"updated_at":"2026-02-15T12:05:00Z","labels":[{"name":"review"}],"repository":{"owner":"acme","repo":"payments"}}]}"#;
-    let notifications_body = r#"{"notifications":[{"id":"n1","repository":{"name":"portal","full_name":"acme/portal","owner":null},"subject":{"title":"Please review","type":"PullRequest","url":null,"latest_comment_url":null},"reason":"mention","unread":true,"updated_at":"2026-02-15T12:10:00Z","last_read_at":null,"url":"https://api.github.test/notif/1","subscription_url":"https://api.github.test/sub/1"}]}"#;
-    let repositories_body = r#"{"repositories":[{"owner":"acme","repo":"portal","full_name":"acme/portal","description":"Main app","private":true,"owner_avatar_url":"https://example.com/acme.png","updated_at":"2026-02-15T12:30:00Z"}]}"#;
-    let (base_url, handle) = start_path_response_server(vec![
-      ("/github/pr/latest", "200 OK", pull_requests_body),
-      ("/github/pr/need-reviews", "200 OK", need_reviews_body),
-      ("/github/notifications", "200 OK", notifications_body),
-      ("/github/repos/me", "200 OK", repositories_body),
-    ]);
-    let api = ApiClient::new_with_base_url(base_url);
+    let api = ApiClient::new_with_base_url("http://localhost:0".to_string());
     let (github_page, cx) =
       cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
-    cx.executor().allow_parking();
 
-    let (load_task, notifications_task, repositories_task) =
-      github_page.update_in(cx, |this, _window, cx| {
-        this.refresh_pull_requests(cx);
-        (
-          this.load_task.take().expect("pull request load task"),
-          this.notifications_task.take().expect("notifications task"),
-          this.repositories_task.take().expect("repositories task"),
-        )
+    github_page.update_in(cx, |this, _window, cx| {
+      this.my_open_pull_request_rows = vec![Rc::new(GithubPullRequestRow {
+        pr: Rc::new(GithubPullRequest {
+          number: 42,
+          title: "Fix login".to_string(),
+          state: GithubPullRequestState::Open,
+          created_at: String::new(),
+          closed_at: None,
+          merged_at: None,
+          draft: false,
+          updated_at: "2026-02-15T12:00:00Z".to_string(),
+          comments_count: 0,
+          labels: vec![GithubPullRequestLabel {
+            name: "bug".to_string(),
+          }],
+          repository: GithubRepository {
+            owner: "acme".to_string(),
+            repo: "portal".to_string(),
+          },
+          author: GithubPullRequestAuthor::default(),
+        }),
+      })];
+      this.need_review_pull_request_rows = vec![Rc::new(GithubPullRequestRow {
+        pr: Rc::new(GithubPullRequest {
+          number: 55,
+          title: "Review billing flow".to_string(),
+          state: GithubPullRequestState::Open,
+          created_at: String::new(),
+          closed_at: None,
+          merged_at: None,
+          draft: false,
+          updated_at: "2026-02-15T12:05:00Z".to_string(),
+          comments_count: 0,
+          labels: vec![GithubPullRequestLabel {
+            name: "review".to_string(),
+          }],
+          repository: GithubRepository {
+            owner: "acme".to_string(),
+            repo: "payments".to_string(),
+          },
+          author: GithubPullRequestAuthor::default(),
+        }),
+      })];
+      this.error = None;
+      this.apply_active_pull_request_rows(cx);
+      this.pull_requests.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        cx.notify();
       });
-    load_task.await;
-    notifications_task.await;
-    repositories_task.await;
-    await_github_page_background_tasks(github_page.clone(), cx).await;
+
+      this.notifications_error = None;
+      this.notifications.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        state.delegate_mut().set_rows(vec![Rc::new(GithubNotificationRow {
+          notification: Rc::new(GithubNotification {
+            id: "n1".to_string(),
+            repository: GithubNotificationRepository {
+              name: "portal".to_string(),
+              full_name: "acme/portal".to_string(),
+              owner: None,
+            },
+            subject: GithubNotificationSubject {
+              title: "Please review".to_string(),
+              subject_type: "PullRequest".to_string(),
+              url: None,
+              latest_comment_url: None,
+            },
+            reason: "mention".to_string(),
+            unread: true,
+            updated_at: "2026-02-15T12:10:00Z".to_string(),
+            last_read_at: None,
+            url: "https://api.github.test/notif/1".to_string(),
+            subscription_url: "https://api.github.test/sub/1".to_string(),
+          }),
+        })]);
+        cx.notify();
+      });
+
+      this.repositories_error = None;
+      this.repositories.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        state.delegate_mut().set_rows(vec![Rc::new(GithubRepositoryRow {
+          repository: Rc::new(GithubUserRepository {
+            owner: "acme".to_string(),
+            repo: "portal".to_string(),
+            full_name: "acme/portal".to_string(),
+            description: Some("Main app".to_string()),
+            private: true,
+            owner_avatar_url: Some("https://example.com/acme.png".to_string()),
+            updated_at: "2026-02-15T12:30:00Z".to_string(),
+          }),
+        })]);
+        cx.notify();
+      });
+
+      cx.notify();
+    });
 
     let (
       error,
@@ -2080,7 +2063,5 @@ mod tests {
         .collect::<Vec<_>>()
     });
     assert_eq!(notifications_tab_titles, vec!["Please review".to_string()]);
-
-    handle.join().expect("join server thread");
   }
 }

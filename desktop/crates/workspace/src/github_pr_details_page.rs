@@ -10912,10 +10912,11 @@ mod tests {
   }
 
   #[gpui::test]
-  fn refresh_tree_text_search_keeps_previous_matches_visible_while_loading(
+  async fn refresh_tree_text_search_keeps_previous_matches_visible_while_loading(
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
+    cx.executor().allow_parking();
     let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
 
     page.update_in(cx, |this, _window, cx| {
@@ -10946,6 +10947,11 @@ mod tests {
         Some(HashSet::from(["src/one.rs".to_string()]))
       );
     });
+
+    let search_task = page.update_in(cx, |this, _window, _cx| this.tree_search_task.take());
+    if let Some(task) = search_task {
+      task.await;
+    }
   }
 
   #[test]
@@ -11064,6 +11070,13 @@ mod tests {
           path: "src/shared.rs".into(),
         }),
       );
+      this.file_contents.insert(
+        "src/shared.rs".to_string(),
+        GithubPrFileContents {
+          base: Some("old\n".to_string()),
+          head: Some("new\n".to_string()),
+        },
+      );
       this.select_visible_tree_path("src/shared.rs", cx);
     });
 
@@ -11084,8 +11097,9 @@ mod tests {
   }
 
   #[gpui::test]
-  fn loading_local_project_files_keeps_selected_pr_diff_visible(cx: &mut TestAppContext) {
+  async fn loading_local_project_files_keeps_selected_pr_diff_visible(cx: &mut TestAppContext) {
     init_gpui_test(cx);
+    cx.executor().allow_parking();
     let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
 
     page.update_in(cx, |this, _window, cx| {
@@ -11113,6 +11127,13 @@ mod tests {
       document.slice_to_string(0..document.len())
     });
     assert_eq!(after, "new contents\n");
+
+    let files_task = page.update_in(cx, |this, _window, _cx| {
+      this.local_project_files_task.take()
+    });
+    if let Some(task) = files_task {
+      task.await;
+    }
   }
 
   #[gpui::test]
