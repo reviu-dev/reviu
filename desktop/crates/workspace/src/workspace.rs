@@ -8,7 +8,7 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, IconName, Sizable as _, Theme, ThemeMode, kbd::Kbd,
-  notification::Notification, tag::Tag,
+  notification::Notification, spinner::Spinner, tag::Tag,
 };
 use gpui_router::{Route, Routes};
 use smol::unblock;
@@ -590,6 +590,30 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let auth_state = AuthStateStore::get(cx);
+
+    // Show a loading screen while the initial auth check is in progress
+    if matches!(auth_state, AuthState::Unknown) {
+      let theme = cx.theme().clone();
+      let version = format!("Reviu v{}", resolved_build_version(env!("CARGO_PKG_VERSION")));
+      return div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_3()
+        .bg(theme.background)
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child(version),
+        )
+        .child(Spinner::new().small())
+        .into_any_element();
+    }
+
     let pathname = NavigationHistory::current_pathname(cx);
     let page = workspace_page_from_pathname(&pathname);
 
@@ -680,6 +704,7 @@ impl Render for WorkspaceView {
       .flex_col()
       .child(self.render_global_bar(page, &pathname, cx))
       .child(div().flex_1().min_h_0().child(routes))
+      .into_any_element()
   }
 }
 

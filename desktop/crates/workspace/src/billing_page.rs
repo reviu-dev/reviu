@@ -49,7 +49,7 @@ enum BillingSubscriptionState {
 
 impl BillingPage {
   pub fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
-    let mut view = Self {
+    Self {
       focus_handle: cx.focus_handle(),
       api: WorkspaceApi::global(cx).api.clone(),
       checkout_loading: false,
@@ -57,11 +57,7 @@ impl BillingPage {
       checkout_task: None,
       refresh_task: None,
       error: None,
-    };
-
-    view.refresh_subscription_state(cx);
-
-    view
+    }
   }
 
   fn refresh_action(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
