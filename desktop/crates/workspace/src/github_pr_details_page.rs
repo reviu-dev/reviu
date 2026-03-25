@@ -8166,7 +8166,7 @@ impl GithubPrDetailsPage {
     let pr_owner: SharedString = pr.repository.owner.clone().into();
     let pr_repo: SharedString = pr.repository.repo.clone().into();
     let entity = cx.entity().clone();
-    let max_w = px(DETAILS_PAGE_CONTAINER_MAX_WIDTH);
+    let max_w = px(1100.);
     let header = std::cell::RefCell::new(Some(header_el));
 
     list(self.overview_list.clone(), move |ix, _window, cx| {
