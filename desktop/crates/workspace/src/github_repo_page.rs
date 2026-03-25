@@ -1046,9 +1046,7 @@ impl ListDelegate for GithubRepoIssueListDelegate {
               .child("·")
               .child(format!("Updated {updated_at}")),
           )
-          .when(!issue.labels.is_empty(), |this| {
-            this.child(github_shared::pull_request_label_row(label_tags))
-          }),
+          .child(github_shared::pull_request_label_row(label_tags)),
       ),
     )
   }
@@ -4860,6 +4858,144 @@ mod tests {
     let unlabeled_height = cx
       .debug_bounds("unlabeled")
       .expect("unlabeled bounds")
+      .size
+      .height;
+
+    assert_eq!(labeled_height, unlabeled_height);
+  }
+
+  struct IssueProbeView {
+    labeled: GithubRepoIssueRow,
+    unlabeled: GithubRepoIssueRow,
+  }
+
+  impl Render for IssueProbeView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+      let theme = cx.theme().clone();
+      let base = |ix: usize| {
+        list_base_item(
+          IndexPath {
+            section: 0,
+            row: ix,
+            ..Default::default()
+          },
+          None,
+          &theme,
+        )
+      };
+
+      let render_issue = |issue: &GithubIssue, base_item: ListItem| {
+        let display_name = issue_user_display_name(issue.user.as_ref());
+        let opened_at = format_relative_time(&issue.created_at);
+        let updated_at = format_relative_time(&issue.updated_at);
+        let (state_icon, state_color) =
+          match issue_visual_state(&issue.state, issue.state_reason.clone()) {
+            GithubIssueVisualState::Open => (UiIconName::CircleDot, theme.status_green()),
+            GithubIssueVisualState::Completed => (UiIconName::CircleCheck, theme.status_violet()),
+            GithubIssueVisualState::NotPlanned => (UiIconName::CircleSlash, theme.status_gray()),
+          };
+        let label_tags = issue.labels.iter().take(4).map(|label| {
+          Tag::secondary()
+            .small()
+            .rounded_full()
+            .child(label.name.clone())
+        });
+
+        base_item.px_2().py_2().child(
+          v_flex()
+            .gap_1()
+            .child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .child(Icon::new(state_icon).size_3().text_color(state_color))
+                .child(
+                  div()
+                    .min_w_0()
+                    .flex_1()
+                    .child(Label::new(issue.title.clone()).truncate()),
+                ),
+            )
+            .child(
+              h_flex()
+                .gap_1()
+                .items_center()
+                .min_w_0()
+                .overflow_hidden()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(format!("#{}", issue.number))
+                .child(
+                  Avatar::new()
+                    .name(display_name.clone())
+                    .xsmall(),
+                )
+                .child(div().text_color(theme.foreground).child(display_name))
+                .child(format!("Opened {opened_at}"))
+                .child("·")
+                .child(format!("Updated {updated_at}")),
+            )
+            .child(github_shared::pull_request_label_row(label_tags)),
+        )
+      };
+
+      v_flex()
+        .gap_2()
+        .child(
+          div()
+            .debug_selector(|| "issue_labeled".to_string())
+            .child(render_issue(&self.labeled.issue, base(0))),
+        )
+        .child(
+          div()
+            .debug_selector(|| "issue_unlabeled".to_string())
+            .child(render_issue(&self.unlabeled.issue, base(1))),
+        )
+    }
+  }
+
+  fn make_repo_issue_row(title: &str, number: u64, labels: &[&str]) -> GithubRepoIssueRow {
+    GithubRepoIssueRow {
+      issue: Rc::new(GithubIssue {
+        id: number,
+        number,
+        title: title.to_string(),
+        state: "open".to_string(),
+        state_reason: None,
+        created_at: "2026-02-12T12:00:00Z".to_string(),
+        updated_at: "2026-02-15T12:00:00Z".to_string(),
+        closed_at: None,
+        labels: labels
+          .iter()
+          .map(|label| GithubPullRequestLabel {
+            name: (*label).to_string(),
+          })
+          .collect(),
+        comments_count: 0,
+        user: None,
+        repository: GithubRepository {
+          owner: "acme".to_string(),
+          repo: "widget".to_string(),
+        },
+      }),
+    }
+  }
+
+  #[gpui::test]
+  fn repo_issue_delegate_rows_keep_a_stable_height(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let labeled = make_repo_issue_row("Labeled issue", 1, &["bug"]);
+    let unlabeled = make_repo_issue_row("Unlabeled issue", 2, &[]);
+    let (_view, cx) = cx.add_window_view(|_, _| IssueProbeView { labeled, unlabeled });
+
+    let labeled_height = cx
+      .debug_bounds("issue_labeled")
+      .expect("issue labeled bounds")
+      .size
+      .height;
+    let unlabeled_height = cx
+      .debug_bounds("issue_unlabeled")
+      .expect("issue unlabeled bounds")
       .size
       .height;
 
