@@ -24,11 +24,11 @@ if (isDev) {
 const config: Knex.Config = {
   client: 'pg',
   connection: {
-    password: env.PG_PASSWORD,
-    host: env.PG_HOST,
-    port: env.PG_PORT,
-    user: env.PG_USER,
-    database: env.PG_DATABASE,
+    password: env.POSTGRES_PASSWORD,
+    host: env.POSTGRES_HOST,
+    port: env.POSTGRES_PORT,
+    user: env.POSTGRES_USER,
+    database: env.POSTGRES_DB,
     charset: 'utf8mb4',
   },
   migrations: {

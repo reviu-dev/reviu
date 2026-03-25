@@ -5,10 +5,10 @@ import * as schema from './schemas/index.js'
 export const db = drizzle({
   schema,
   connection: {
-    user: env.PG_USER,
-    host: env.PG_HOST,
-    database: env.PG_DATABASE,
-    password: env.PG_PASSWORD,
-    port: env.PG_PORT,
+    user: env.POSTGRES_USER,
+    host: env.POSTGRES_HOST,
+    database: env.POSTGRES_DB,
+    password: env.POSTGRES_PASSWORD,
+    port: env.POSTGRES_PORT,
   },
 })
