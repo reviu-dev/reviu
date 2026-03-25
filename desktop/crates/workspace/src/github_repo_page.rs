@@ -115,6 +115,26 @@ const CODE_HEADER_HEIGHT: f32 = 40.0;
 const REPO_TAB_OVERVIEW_IX: usize = 0;
 const REPO_TAB_README_IX: usize = 1;
 const REPO_TAB_CODE_IX: usize = 2;
+
+fn repo_tab_url_segment(tab_ix: usize) -> &'static str {
+  match tab_ix {
+    REPO_TAB_README_IX => "readme",
+    REPO_TAB_CODE_IX => "code",
+    REPO_TAB_PULL_REQUESTS_IX => "pulls",
+    REPO_TAB_ISSUES_IX => "issues",
+    _ => "", // overview = no suffix
+  }
+}
+
+pub(crate) fn repo_tab_ix_from_url_segment(segment: &str) -> usize {
+  match segment {
+    "readme" => REPO_TAB_README_IX,
+    "code" => REPO_TAB_CODE_IX,
+    "pulls" => REPO_TAB_PULL_REQUESTS_IX,
+    "issues" => REPO_TAB_ISSUES_IX,
+    _ => REPO_TAB_OVERVIEW_IX,
+  }
+}
 const REPO_TAB_PULL_REQUESTS_IX: usize = 3;
 const REPO_TAB_ISSUES_IX: usize = 4;
 const GITHUB_REPO_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str =
@@ -2839,6 +2859,17 @@ impl GithubRepoPage {
       return;
     }
     self.active_tab_ix = tab_ix;
+
+    // Sync URL with active tab
+    if !self.owner.is_empty() && !self.repo.is_empty() {
+      let tab_segment = repo_tab_url_segment(tab_ix);
+      let path = if tab_segment.is_empty() {
+        crate::navigation::build_repo_path(&self.owner, &self.repo)
+      } else {
+        crate::navigation::build_repo_tab_path(&self.owner, &self.repo, tab_segment)
+      };
+      NavigationHistory::navigate_replace(path, cx);
+    }
     if tab_ix != REPO_TAB_ISSUES_IX {
       self.pending_issue_sheet_number = None;
       self.pending_issue_sheet_comment_id = None;
