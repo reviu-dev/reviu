@@ -28,7 +28,7 @@ use crate::{
   auth_state::{AuthState, AuthStateStore},
   github_navigation::{open_pr_target, open_repo_target},
   github_page::GithubPageHandle,
-  workspace::{WorkspacePage, WorkspaceRoute},
+  navigation::NavigationHistory,
 };
 
 pub struct GitConfigPage {
@@ -110,8 +110,7 @@ impl GitConfigPage {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    WorkspaceRoute::close_git_config(cx);
-    cx.refresh_windows();
+    NavigationHistory::navigate_back(cx);
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -149,18 +148,12 @@ impl GitConfigPage {
   ) -> Result<(), SharedString> {
     match action {
       CommandPaletteAction::OpenGitPage => {
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        if AuthStateStore::has_pro_access(cx) {
-          GithubPageHandle::refresh(cx);
-          WorkspaceRoute::open_github(cx);
-        } else {
-          WorkspaceRoute::open_billing(cx);
-        }
-        cx.refresh_windows();
+        GithubPageHandle::refresh(cx);
+        NavigationHistory::navigate("/github", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -192,18 +185,15 @@ impl GitConfigPage {
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
-        WorkspaceRoute::open_settings(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/settings", cx);
         Ok(())
       }
       CommandPaletteAction::OpenBillingPage => {
-        WorkspaceRoute::open_billing(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/billing", cx);
         Ok(())
       }
       CommandPaletteAction::OpenAboutPage => {
-        WorkspaceRoute::open_about(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/about", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGitConfigPage => Ok(()),
@@ -244,8 +234,7 @@ impl GitConfigPage {
       .compact()
       .tooltip("Close")
       .on_click(|_, _, cx| {
-        WorkspaceRoute::close_git_config(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate_back(cx);
       });
 
     div()
@@ -374,8 +363,7 @@ impl Render for GitConfigPage {
                 .compact()
                 .tooltip("Close")
                 .on_click(|_, _, cx| {
-                  WorkspaceRoute::close_git_config(cx);
-                  cx.refresh_windows();
+                  NavigationHistory::navigate_back(cx);
                 }),
             ),
         )

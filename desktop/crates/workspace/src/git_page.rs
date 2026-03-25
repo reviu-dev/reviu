@@ -51,16 +51,16 @@ use crate::{
   dock_badge::set_dock_badge,
   file_preview::{is_markdown_path, is_previewable_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
-  github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
   github_repo_page::GithubRepoPageHandle,
   interactive_rebase_todo_view::{
     InteractiveRebaseTodoView, InteractiveRebaseTodoViewCancelHandler,
     InteractiveRebaseTodoViewConfig, InteractiveRebaseTodoViewHandler,
   },
+  navigation::NavigationHistory,
   notification_count::NotificationCountStore,
   sentry_context,
-  workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
+  workspace::WorkspaceApi,
 };
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
@@ -1359,10 +1359,7 @@ impl GitPage {
   fn handle_subscription_callback(&mut self, cx: &mut Context<Self>) {
     self.refresh_auth_state(cx);
 
-    if WorkspaceRoute::global(cx).page != WorkspacePage::Billing {
-      WorkspaceRoute::open_billing(cx);
-      cx.refresh_windows();
-    }
+    NavigationHistory::navigate("/billing", cx);
   }
 
   fn logout(&mut self, cx: &mut Context<Self>) {
@@ -2632,18 +2629,11 @@ impl GitPage {
         Ok(())
       }
       CommandPaletteAction::OpenGitPage => {
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        if AuthStateStore::has_pro_access(cx) {
-          GithubPageHandle::refresh(cx);
-          WorkspaceRoute::open_github(cx);
-        } else {
-          WorkspaceRoute::open_billing(cx);
-        }
-        cx.refresh_windows();
+        NavigationHistory::navigate("/github", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -2691,23 +2681,19 @@ impl GitPage {
       }
       CommandPaletteAction::SwitchToPrBranch => Err(anyhow::anyhow!("Command not available.")),
       CommandPaletteAction::OpenSettingsPage => {
-        WorkspaceRoute::open_settings(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/settings", cx);
         Ok(())
       }
       CommandPaletteAction::OpenBillingPage => {
-        WorkspaceRoute::open_billing(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/billing", cx);
         Ok(())
       }
       CommandPaletteAction::OpenAboutPage => {
-        WorkspaceRoute::open_about(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/about", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGitConfigPage => {
-        WorkspaceRoute::open_git_config(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git-config", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGitHistorySidebar => {

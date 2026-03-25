@@ -38,7 +38,8 @@ use crate::{
   github_navigation::{open_pr_target, open_repo_target},
   github_pr_details_page::GithubPrDetailsPageHandle,
   github_shared, sentry_context,
-  workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
+  navigation::NavigationHistory,
+  workspace::WorkspaceApi,
 };
 
 fn list_base_item(
@@ -1276,19 +1277,13 @@ impl GithubPage {
   ) -> Result<(), SharedString> {
     match action {
       CommandPaletteAction::OpenGitPage => {
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        if AuthStateStore::has_pro_access(cx) {
-          self.focus_on_next_render = true;
-          self.refresh_pull_requests(cx);
-          WorkspaceRoute::open_github(cx);
-        } else {
-          WorkspaceRoute::open_billing(cx);
-        }
-        cx.refresh_windows();
+        self.focus_on_next_render = true;
+        self.refresh_pull_requests(cx);
+        NavigationHistory::navigate("/github", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -1320,23 +1315,19 @@ impl GithubPage {
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
-        WorkspaceRoute::open_settings(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/settings", cx);
         Ok(())
       }
       CommandPaletteAction::OpenBillingPage => {
-        WorkspaceRoute::open_billing(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/billing", cx);
         Ok(())
       }
       CommandPaletteAction::OpenAboutPage => {
-        WorkspaceRoute::open_about(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/about", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGitConfigPage => {
-        WorkspaceRoute::open_git_config(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git-config", cx);
         Ok(())
       }
       _ => Err("Command not available.".into()),

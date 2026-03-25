@@ -104,3 +104,7 @@ git = { path = "crates/git" }
 gfm_markdown_viewer = { path = "crates/gfm_markdown_viewer" }
 ui = { path = "crates/ui" }
 workspace = { path = "crates/workspace" }
+gpui-router = { git = "https://github.com/justjavac/gpui-router" }
+
+[patch.crates-io]
+gpui = { git = "https://github.com/zed-industries/zed" }

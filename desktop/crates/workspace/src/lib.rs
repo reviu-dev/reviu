@@ -20,6 +20,7 @@ mod file_search_palette;
 mod git_config_page;
 mod git_page;
 mod github_navigation;
+pub mod navigation;
 mod github_page;
 mod github_pr_details_page;
 mod github_repo_page;

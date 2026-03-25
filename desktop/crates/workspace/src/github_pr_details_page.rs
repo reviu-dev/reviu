@@ -82,8 +82,10 @@ use crate::{
   },
   github_page::GithubPageHandle,
   github_repo_page::GithubRepoPageHandle,
-  github_shared, sentry_context,
-  workspace::{WorkspaceApi, WorkspacePage, WorkspaceRoute},
+  github_shared,
+  navigation::NavigationHistory,
+  sentry_context,
+  workspace::WorkspaceApi,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
@@ -1992,12 +1994,6 @@ impl GithubPrDetailsPageHandle {
     open_target: GithubPrOpenTarget,
     cx: &mut App,
   ) {
-    if !AuthStateStore::has_pro_access(cx) {
-      WorkspaceRoute::open_billing(cx);
-      cx.refresh_windows();
-      return;
-    }
-
     let Some(weak) = cx.global::<Self>().page.clone() else {
       return;
     };
@@ -2011,8 +2007,10 @@ impl GithubPrDetailsPageHandle {
       this.load_pull_request(owner_string, repo_string, number, open_target_value, cx);
     });
 
-    WorkspaceRoute::global_mut(cx).page = WorkspacePage::GithubPrDetails;
-    cx.refresh_windows();
+    NavigationHistory::navigate(
+      crate::navigation::build_pr_path(&owner, &repo, number),
+      cx,
+    );
   }
 }
 
@@ -6150,20 +6148,11 @@ impl GithubPrDetailsPage {
   }
 
   fn navigate_back(&self, cx: &mut Context<Self>) {
-    match &self.back_target {
-      GithubPrBackTarget::GithubHome => {
-        if AuthStateStore::has_pro_access(cx) {
-          GithubPageHandle::refresh(cx);
-          WorkspaceRoute::open_github(cx);
-        } else {
-          WorkspaceRoute::open_billing(cx);
-        }
-        cx.refresh_windows();
-      }
-      GithubPrBackTarget::Repo { owner, repo } => {
-        GithubRepoPageHandle::show(owner.clone(), repo.clone(), cx);
-      }
+    // Refresh github page data if going back to it
+    if matches!(&self.back_target, GithubPrBackTarget::GithubHome) {
+      GithubPageHandle::refresh(cx);
     }
+    NavigationHistory::navigate_back(cx);
   }
 
   fn render_merge_popover(
@@ -9027,18 +9016,12 @@ impl GithubPrDetailsPage {
         Ok(())
       }
       CommandPaletteAction::OpenGitPage => {
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::Git;
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPage => {
-        if AuthStateStore::has_pro_access(cx) {
-          GithubPageHandle::refresh(cx);
-          WorkspaceRoute::open_github(cx);
-        } else {
-          WorkspaceRoute::open_billing(cx);
-        }
-        cx.refresh_windows();
+        GithubPageHandle::refresh(cx);
+        NavigationHistory::navigate("/github", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -9048,16 +9031,10 @@ impl GithubPrDetailsPage {
         open_changes_tab,
         review_comment_id,
       } => {
-        if !AuthStateStore::has_pro_access(cx) {
-          WorkspaceRoute::open_billing(cx);
-          cx.refresh_windows();
-          return Ok(());
-        }
-
         self.back_target = next_back_target_for_pr_palette(&self.back_target);
         self.load_pull_request(
-          owner,
-          repo,
+          owner.clone(),
+          repo.clone(),
           number,
           GithubPrOpenTarget {
             open_changes_tab,
@@ -9065,8 +9042,10 @@ impl GithubPrDetailsPage {
           },
           cx,
         );
-        WorkspaceRoute::global_mut(cx).page = WorkspacePage::GithubPrDetails;
-        cx.refresh_windows();
+        NavigationHistory::navigate(
+          crate::navigation::build_pr_path(&owner, &repo, number),
+          cx,
+        );
         Ok(())
       }
       CommandPaletteAction::OpenGithubRepoDetails {
@@ -9080,23 +9059,19 @@ impl GithubPrDetailsPage {
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
-        WorkspaceRoute::open_settings(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/settings", cx);
         Ok(())
       }
       CommandPaletteAction::OpenBillingPage => {
-        WorkspaceRoute::open_billing(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/billing", cx);
         Ok(())
       }
       CommandPaletteAction::OpenAboutPage => {
-        WorkspaceRoute::open_about(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/about", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGitConfigPage => {
-        WorkspaceRoute::open_git_config(cx);
-        cx.refresh_windows();
+        NavigationHistory::navigate("/git-config", cx);
         Ok(())
       }
       _ => Err("Command not available.".into()),
