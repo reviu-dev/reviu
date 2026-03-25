@@ -179,8 +179,8 @@ tell application "Finder"
     set arrangement of opts to not arranged
     set icon size of opts to 128
     set text size of opts to 12
-    set position of item "${app_name}.app" to {150, 180}
-    set position of item "Applications" to {390, 180}
+    set position of item "${app_name}.app" to {150, 140}
+    set position of item "Applications" to {390, 140}
     update without registering applications
     delay 1
     close
