@@ -1433,6 +1433,7 @@ impl GithubIssueDetailsSheetView {
       let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler)
         .with_state(self.markdown_state.clone())
         .with_syntax_cache(self.syntax_highlight_cache.clone())
+        .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
         .with_github_issue_reference_context(
           issue.repository.owner.as_str(),
           issue.repository.repo.as_str(),
@@ -1548,7 +1549,11 @@ impl GithubIssueDetailsSheetView {
 
   fn handle_gfm_link(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
     if should_open_externally(window) {
-      return false;
+      return github_shared::try_open_github_asset_url(url, &self.api, cx);
+    }
+
+    if github_shared::try_open_github_asset_url(url, &self.api, cx) {
+      return true;
     }
 
     let Some(action) = parse_github_url_action(url) else {
@@ -2280,6 +2285,7 @@ impl Render for GithubIssueDetailsSheetView {
                   let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler)
                     .with_state(self.markdown_state.clone())
                     .with_syntax_cache(self.syntax_highlight_cache.clone())
+                    .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
                     .with_github_issue_reference_context(
                       issue.repository.owner.as_str(),
                       issue.repository.repo.as_str(),
@@ -3710,7 +3716,11 @@ impl GithubRepoPage {
     cx: &mut Context<Self>,
   ) -> bool {
     if should_open_externally(window) {
-      return false;
+      return github_shared::try_open_github_asset_url(url, &self.api, cx);
+    }
+
+    if github_shared::try_open_github_asset_url(url, &self.api, cx) {
+      return true;
     }
 
     let Some(action) = parse_github_url_action(url) else {
@@ -4539,6 +4549,7 @@ impl GithubRepoPage {
       let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler)
         .with_state(self.readme_markdown_state.clone())
         .with_syntax_cache(self.readme_syntax_highlight_cache.clone())
+        .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
         .with_github_issue_reference_context(self.owner.as_ref(), self.repo.as_ref())
         .with_expanded_code_blocks()
         .with_scope_id(readme_scope_id(
@@ -4925,11 +4936,7 @@ mod tests {
                 .text_xs()
                 .text_color(theme.muted_foreground)
                 .child(format!("#{}", issue.number))
-                .child(
-                  Avatar::new()
-                    .name(display_name.clone())
-                    .xsmall(),
-                )
+                .child(Avatar::new().name(display_name.clone()).xsmall())
                 .child(div().text_color(theme.foreground).child(display_name))
                 .child(format!("Opened {opened_at}"))
                 .child("·")

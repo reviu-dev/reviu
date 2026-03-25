@@ -4046,7 +4046,11 @@ impl GithubPrDetailsPage {
 
   fn handle_gfm_link(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
     if should_open_externally(window) {
-      return false;
+      return github_shared::try_open_github_asset_url(url, &self.api, cx);
+    }
+
+    if github_shared::try_open_github_asset_url(url, &self.api, cx) {
+      return true;
     }
 
     let Some(action) = parse_github_url_action(url) else {
@@ -7049,6 +7053,7 @@ impl GithubPrDetailsPage {
     let markdown_options = MarkdownRenderOptions::with_on_link(link_handler.clone())
       .with_state(self.description_markdown_state.clone())
       .with_syntax_cache(self.syntax_highlight_cache.clone())
+      .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
       .with_github_issue_reference_context(pr_owner.as_ref(), pr_repo.as_ref())
       .with_scope_id(scope_id);
 
@@ -7422,6 +7427,7 @@ impl GithubPrDetailsPage {
                     MarkdownRenderOptions::with_on_link(link_handler.clone())
                       .with_state(self.description_markdown_state.clone())
                       .with_syntax_cache(self.syntax_highlight_cache.clone())
+                      .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
                       .with_github_issue_reference_context(pr_owner.as_ref(), pr_repo.as_ref())
                       .with_scope_id(reply_scope_id);
 
@@ -8039,6 +8045,7 @@ impl GithubPrDetailsPage {
                 let mut options = MarkdownRenderOptions::with_on_link(description_link_handler)
                   .with_state(self.description_markdown_state.clone())
                   .with_syntax_cache(self.syntax_highlight_cache.clone())
+                  .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
                   .with_github_issue_reference_context(
                     pr.repository.owner.as_str(),
                     pr.repository.repo.as_str(),

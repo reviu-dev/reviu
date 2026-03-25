@@ -18,6 +18,7 @@ pub use height_estimation::{
   estimate_github_code_reference_preview_height_px, estimate_markdown_height_px,
   estimate_parsed_markdown_height_px,
 };
+pub use image::is_github_user_attachment_url;
 pub use parse::{
   extract_github_blob_line_references, parse_github_blob_line_reference, parse_markdown,
 };

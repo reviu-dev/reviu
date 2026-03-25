@@ -2354,3 +2354,30 @@ export const githubRoutes = githubRouter
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })
+  .get('/asset/resolve', async (ctx) => {
+    const url = ctx.req.query('url')
+    if (!url || !url.startsWith('https://github.com/user-attachments/assets/')) {
+      return ctx.json({ error: 'Invalid or missing url parameter' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const response = await fetch(url, {
+        method: 'HEAD',
+        headers: { Authorization: `Bearer ${githubToken}` },
+        redirect: 'manual',
+      })
+
+      const location = response.headers.get('location')
+      if (!location) {
+        return ctx.json({ error: 'GitHub did not redirect to signed URL' }, 502)
+      }
+
+      return ctx.json({ url: location }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })

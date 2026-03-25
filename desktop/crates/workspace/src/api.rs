@@ -945,6 +945,11 @@ struct GithubPullRequestMergeResultResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct GithubAssetResolveResponse {
+  url: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubPullRequestChecksSummaryResponse {
   checks: GithubPullRequestChecksSummary,
 }
@@ -2030,6 +2035,23 @@ impl ApiClient {
 
     let payload = response.json::<DesktopUpdateCheckResponse>()?;
     Ok(payload)
+  }
+
+  pub fn resolve_github_asset_url(&self, url: &str) -> Result<String> {
+    let response = self
+      .authed_request(Method::GET, "/github/asset/resolve")
+      .query(&[("url", url)])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", "/github/asset/resolve", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<GithubAssetResolveResponse>()?;
+    Ok(payload.url)
   }
 }
 

@@ -69,6 +69,7 @@ pub struct MarkdownRenderOptions {
   pub expand_code_blocks: bool,
   pub image_base_url: Option<SharedString>,
   pub syntax_cache: Option<Arc<crate::syntax_cache::SyntaxHighlightCache>>,
+  pub asset_url_resolver: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
 }
 
 impl MarkdownRenderOptions {
@@ -136,6 +137,14 @@ impl MarkdownRenderOptions {
     cache: Arc<crate::syntax_cache::SyntaxHighlightCache>,
   ) -> Self {
     self.syntax_cache = Some(cache);
+    self
+  }
+
+  pub fn with_asset_url_resolver(
+    mut self,
+    resolver: Arc<dyn Fn(&str) -> Option<String> + Send + Sync>,
+  ) -> Self {
+    self.asset_url_resolver = Some(resolver);
     self
   }
 }
@@ -951,6 +960,7 @@ fn render_inline_with_images(
     interactive,
     is_dark_mode,
     image_base_url: options.image_base_url.as_ref().map(SharedString::as_ref),
+    asset_url_resolver: options.asset_url_resolver.as_ref(),
   };
   if let Some(image_data) = single_inline_image_data(inlines) {
     return render_block_image(&image_data, &image_render_context);
@@ -976,10 +986,23 @@ fn render_inline_with_images(
             ctx,
           ));
           text_chunk.clear();
+          row_has_content = true;
         }
-        row_container =
-          row_container.child(render_inline_image(&image_data, &image_render_context));
-        row_has_content = true;
+
+        if image_data.is_block_sized() {
+          // Flush current row, then render the image as a block on its own line.
+          if row_has_content {
+            content = content.child(row_container);
+          }
+          content = content.child(render_block_image(&image_data, &image_render_context));
+          has_content = true;
+          row_container = h_flex().items_center().gap_1().flex_wrap().min_w_0();
+          row_has_content = false;
+        } else {
+          row_container =
+            row_container.child(render_inline_image(&image_data, &image_render_context));
+          row_has_content = true;
+        }
       } else {
         text_chunk.push(inline.clone());
       }
@@ -2702,6 +2725,27 @@ See [documentation](https://oxc.rs/) for detailed usage guides for each tool."#;
   }
 
   #[test]
+  fn parses_text_followed_by_html_img_keeps_text_and_image() {
+    let source = "Tilt up (manual sync) on e2e-nsp and run the tests:\n<img width=\"346\" height=\"341\" alt=\"image\" src=\"https://github.com/user-attachments/assets/558c25e0-68bd-4c1e-84c7-49863c99c532\" />";
+    let blocks = parse_gfm(source);
+    assert_eq!(blocks.len(), 1);
+    match &blocks[0] {
+      Block::Paragraph(inlines) => {
+        assert!(inlines.len() >= 2);
+        assert!(
+          matches!(&inlines[0], Inline::Text(t) if t.contains("Tilt up")),
+          "first inline should be the text"
+        );
+        assert!(
+          inlines.iter().any(|i| matches!(i, Inline::Image { .. })),
+          "should contain an Image inline"
+        );
+      }
+      _ => panic!("expected paragraph"),
+    }
+  }
+
+  #[test]
   fn parses_html_block_image_as_inline_image_paragraph() {
     let blocks = parse_gfm(
       "<img width=\"1159\" height=\"272\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/525e1fe3-1159-47ea-a1ac-8926a03c9cd1\" />",
@@ -2720,6 +2764,44 @@ See [documentation](https://oxc.rs/) for detailed usage guides for each tool."#;
           }
           _ => panic!("expected image inline"),
         }
+      }
+      _ => panic!("expected paragraph"),
+    }
+  }
+
+  #[test]
+  fn is_github_user_attachment_url_matches_valid_urls() {
+    assert!(is_github_user_attachment_url(
+      "https://github.com/user-attachments/assets/2d42dac5-357f-45d0-a4cb-a4ebd849304b"
+    ));
+    assert!(!is_github_user_attachment_url(
+      "https://github.com/octocat/repo"
+    ));
+    assert!(!is_github_user_attachment_url(
+      "https://example.com/user-attachments/assets/abc"
+    ));
+  }
+
+  #[test]
+  fn bare_user_attachment_link_detected_as_image() {
+    let url = "https://github.com/user-attachments/assets/4aa12d28-968a-490d-81ee-32bbbb595fc4";
+    let blocks = parse_gfm(url);
+    assert_eq!(blocks.len(), 1);
+    match &blocks[0] {
+      Block::Paragraph(inlines) => {
+        // comrak autolink may produce the link as the only inline (possibly with
+        // a trailing soft break). Find the Link inline.
+        let link = inlines
+          .iter()
+          .find(|i| matches!(i, Inline::Link { .. }))
+          .expect("should contain a Link inline");
+        assert!(
+          inline_contains_image(link),
+          "bare user-attachment link should be treated as image-containing"
+        );
+        let data = inline_image_data(link).expect("should produce InlineImageData");
+        assert_eq!(data.url, url);
+        assert_eq!(data.link_url, Some(url.to_string()));
       }
       _ => panic!("expected paragraph"),
     }

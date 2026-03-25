@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use gpui::{App, Hsla, IntoElement, ParentElement as _, SharedString, Styled, div, prelude::*};
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, Sizable as _, avatar::Avatar, h_flex, label::Label, tag::Tag,
@@ -7,9 +9,32 @@ use time::OffsetDateTime;
 use ui::{StatusTag, StatusThemeExt as _, UiIconName};
 
 use crate::{
-  api::{GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestStatus},
+  api::{ApiClient, GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestStatus},
   date_format::format_relative_time_at,
 };
+
+pub(crate) fn make_asset_url_resolver(
+  api: &ApiClient,
+) -> Arc<dyn Fn(&str) -> Option<String> + Send + Sync> {
+  let api = api.clone();
+  Arc::new(move |url: &str| api.resolve_github_asset_url(url).ok())
+}
+
+/// If the URL is a GitHub user-attachment URL, resolve and open the signed S3 URL.
+/// Returns true if the URL was handled.
+pub(crate) fn try_open_github_asset_url(url: &str, api: &ApiClient, cx: &mut gpui::App) -> bool {
+  if !gfm_markdown_viewer::is_github_user_attachment_url(url) {
+    return false;
+  }
+  // Try a quick blocking resolve — the asset URL resolver cache should already
+  // have the signed URL if the image was rendered. If not, this will block briefly
+  // (single HTTP request to our backend) which is acceptable for a click action.
+  match api.resolve_github_asset_url(url) {
+    Ok(signed_url) => cx.open_url(&signed_url),
+    Err(_) => cx.open_url(url),
+  }
+  true
+}
 
 pub(crate) fn repo_section_header(label: &SharedString, cx: &App) -> impl IntoElement {
   let theme = cx.theme();
