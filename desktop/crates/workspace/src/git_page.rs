@@ -400,7 +400,6 @@ impl ListDelegate for GitFileListDelegate {
           )
           .child(
             div()
-              // .ml_auto()
               .opacity(0.0)
               .group_hover("file-row", |this| this.opacity(1.0))
               .child(
