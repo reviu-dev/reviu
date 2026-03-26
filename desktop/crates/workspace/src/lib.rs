@@ -41,6 +41,7 @@ pub mod navigation;
 mod notification_count;
 mod sentry_context;
 mod settings_page;
+pub mod status_bar;
 mod workspace;
 
 pub use app_profile::AppProfile;
