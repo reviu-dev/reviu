@@ -11,20 +11,14 @@ interface ChangelogEntry {
   body: string;
 }
 
-let entries: ChangelogEntry[] = [];
-let fetchError = false;
+const backendUrl = env.BACKEND_URL.replace(/\/$/, "");
+const res = await fetch(`${backendUrl}/desktop/update/changelog`);
 
-try {
-  const backendUrl = env.BACKEND_URL.replace(/\/$/, "");
-  const res = await fetch(`${backendUrl}/desktop/update/changelog`);
-  if (res.ok) {
-    entries = await res.json();
-  } else {
-    fetchError = true;
-  }
-} catch {
-  fetchError = true;
+if (!res.ok) {
+  throw new Error(`Failed to fetch changelog: ${res.status} ${res.statusText}`);
 }
+
+const entries: ChangelogEntry[] = await res.json();
 
 function formatDate(iso: string): string {
   if (!iso) return "";
@@ -70,17 +64,7 @@ function renderMarkdown(md: string): string {
       </div>
 
       {
-        fetchError && (
-          <div class="mt-12 rounded-lg border border-border bg-secondary p-6 text-center">
-            <p class="text-sm text-muted-foreground">
-              Unable to load changelog. Please try again later.
-            </p>
-          </div>
-        )
-      }
-
-      {
-        !fetchError && entries.length === 0 && (
+        entries.length === 0 && (
           <div class="mt-12 rounded-lg border border-border bg-secondary p-6 text-center">
             <p class="text-sm text-muted-foreground">No releases yet.</p>
           </div>
