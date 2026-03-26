@@ -19,7 +19,7 @@ use ui::{
 use crate::{
   CloseWorkspacePage, ShowCommandPalette,
   auth_state::{AuthState, AuthStateStore},
-  config::{AppSettings as PersistedSettings, ConfigStore},
+  config::AppSettings as PersistedSettings,
   github_navigation::{open_pr_target, open_repo_target},
   github_page::GithubPageHandle,
   navigation::NavigationHistory,
@@ -29,6 +29,7 @@ pub struct SettingsPage {
   focus_handle: FocusHandle,
   auto_switch_theme: bool,
   indent_rainbow: bool,
+  git_unified_file_view: bool,
   size: Size,
 }
 
@@ -38,6 +39,7 @@ impl SettingsPage {
       focus_handle: cx.focus_handle(),
       auto_switch_theme: settings.auto_switch_theme,
       indent_rainbow: settings.indent_rainbow,
+      git_unified_file_view: settings.git_unified_file_view,
       size: Size::default(),
     }
   }
@@ -46,31 +48,20 @@ impl SettingsPage {
     self.auto_switch_theme
   }
 
-  pub(crate) fn indent_rainbow_enabled(&self) -> bool {
-    self.indent_rainbow
-  }
-
   fn setting_pages(&self, _: &mut Window, cx: &mut Context<Self>) -> Vec<SettingPage> {
     let view = cx.entity();
     let default_auto = self.auto_switch_theme;
     let default_indent_rainbow = self.indent_rainbow;
+    let default_git_unified_file_view = self.git_unified_file_view;
 
-    vec![SettingPage::new("General").default_open(true).groups(vec![
-      SettingGroup::new().title("Appearance").items(vec![
-        SettingItem::new(
-          "Dark Mode",
-          SettingField::switch(
-            |cx: &App| cx.theme().mode.is_dark(),
-            {
-              let view = view.clone();
+    vec![
+      SettingPage::new("General").default_open(true).groups(vec![
+        SettingGroup::new().title("Appearance").items(vec![
+          SettingItem::new(
+            "Dark Mode",
+            SettingField::switch(|cx: &App| cx.theme().mode.is_dark(), {
               move |val: bool, cx: &mut App| {
-                let settings = view.read(cx);
-                ConfigStore::persist_app_settings(PersistedSettings {
-                  auto_switch_theme: settings.auto_switch_theme,
-                  dark_mode: val,
-                  indent_rainbow: settings.indent_rainbow,
-                  font_size: f32::from(cx.theme().font_size),
-                });
+                PersistedSettings::update(cx, |s| s.dark_mode = val);
 
                 let mode = if val {
                   ThemeMode::Dark
@@ -80,100 +71,107 @@ impl SettingsPage {
                 Theme::change(mode, None, cx);
                 cx.refresh_windows();
               }
-            },
+            })
+            .default_value(false),
           )
-          .default_value(false),
-        )
-        .description("Switch between light and dark themes."),
-        SettingItem::new(
-          "Auto Switch Theme",
-          SettingField::checkbox(
-            {
-              let view = view.clone();
-              move |cx: &App| view.read(cx).auto_switch_theme
-            },
-            {
-              let view = view.clone();
-              move |val: bool, cx: &mut App| {
-                view.update(cx, |view, _| {
-                  view.auto_switch_theme = val;
-                });
-                if val {
-                  Theme::sync_system_appearance(None, cx);
+          .description("Switch between light and dark themes."),
+          SettingItem::new(
+            "Auto Switch Theme",
+            SettingField::checkbox(
+              {
+                let view = view.clone();
+                move |cx: &App| view.read(cx).auto_switch_theme
+              },
+              {
+                let view = view.clone();
+                move |val: bool, cx: &mut App| {
+                  view.update(cx, |view, _| {
+                    view.auto_switch_theme = val;
+                  });
+                  if val {
+                    Theme::sync_system_appearance(None, cx);
+                  }
+
+                  PersistedSettings::update(cx, |s| s.auto_switch_theme = val);
+                  cx.refresh_windows();
                 }
-
-                ConfigStore::persist_app_settings(PersistedSettings {
-                  auto_switch_theme: val,
-                  dark_mode: cx.theme().mode.is_dark(),
-                  indent_rainbow: view.read(cx).indent_rainbow,
-                  font_size: f32::from(cx.theme().font_size),
-                });
-
-                cx.refresh_windows();
-              }
-            },
+              },
+            )
+            .default_value(default_auto),
           )
-          .default_value(default_auto),
-        )
-        .description("Automatically switch theme based on system settings."),
-        SettingItem::new(
-          "Indent Rainbow",
-          SettingField::checkbox(
-            {
-              let view = view.clone();
-              move |cx: &App| view.read(cx).indent_rainbow
-            },
-            {
-              let view = view.clone();
-              move |val: bool, cx: &mut App| {
-                view.update(cx, |view, _| {
-                  view.indent_rainbow = val;
-                });
+          .description("Automatically switch theme based on system settings."),
+          SettingItem::new(
+            "Indent Rainbow",
+            SettingField::checkbox(
+              {
+                let view = view.clone();
+                move |cx: &App| view.read(cx).indent_rainbow
+              },
+              {
+                let view = view.clone();
+                move |val: bool, cx: &mut App| {
+                  view.update(cx, |view, _| {
+                    view.indent_rainbow = val;
+                  });
 
-                set_indent_rainbow_enabled(val);
-                ConfigStore::persist_app_settings(PersistedSettings {
-                  auto_switch_theme: view.read(cx).auto_switch_theme,
-                  dark_mode: cx.theme().mode.is_dark(),
-                  indent_rainbow: val,
-                  font_size: f32::from(cx.theme().font_size),
-                });
+                  set_indent_rainbow_enabled(val);
+                  PersistedSettings::update(cx, |s| s.indent_rainbow = val);
+                  cx.refresh_windows();
+                }
+              },
+            )
+            .default_value(default_indent_rainbow),
+          )
+          .description("Color indentation guides by level in the editor."),
+          SettingItem::new(
+            "Font Size",
+            SettingField::number_input(
+              NumberFieldOptions {
+                min: 12.0,
+                max: 24.0,
+                step: 1.0,
+              },
+              |cx: &App| f64::from(cx.theme().font_size),
+              {
+                move |val: f64, cx: &mut App| {
+                  Theme::global_mut(cx).font_size = px(val as f32);
+                  PersistedSettings::update(cx, |s| s.font_size = val as f32);
+                  cx.refresh_windows();
+                }
+              },
+            )
+            .default_value(16.0),
+          )
+          .description("Base font size for the application (12–24px)."),
+        ]),
+        SettingGroup::new().title("Git").items(vec![
+          SettingItem::new(
+            "Unified File View",
+            SettingField::checkbox(
+              {
+                let view = view.clone();
+                move |cx: &App| view.read(cx).git_unified_file_view
+              },
+              {
+                let view = view.clone();
+                move |val: bool, cx: &mut App| {
+                  view.update(cx, |view, _| {
+                    view.git_unified_file_view = val;
+                  });
 
-                cx.refresh_windows();
-              }
-            },
+                  PersistedSettings::update(cx, |s| s.git_unified_file_view = val);
+                  cx.refresh_windows();
+                }
+              },
+            )
+            .default_value(default_git_unified_file_view),
           )
-          .default_value(default_indent_rainbow),
-        )
-        .description("Color indentation guides by level in the editor."),
-        SettingItem::new(
-          "Font Size",
-          SettingField::number_input(
-            NumberFieldOptions {
-              min: 12.0,
-              max: 24.0,
-              step: 1.0,
-            },
-            |cx: &App| f64::from(cx.theme().font_size),
-            {
-              let view = view.clone();
-              move |val: f64, cx: &mut App| {
-                Theme::global_mut(cx).font_size = px(val as f32);
-                let settings = view.read(cx);
-                ConfigStore::persist_app_settings(PersistedSettings {
-                  auto_switch_theme: settings.auto_switch_theme,
-                  dark_mode: cx.theme().mode.is_dark(),
-                  indent_rainbow: settings.indent_rainbow,
-                  font_size: val as f32,
-                });
-                cx.refresh_windows();
-              }
-            },
-          )
-          .default_value(16.0),
-        )
-        .description("Base font size for the application (12–24px)."),
+          .description(
+            "Show all changed files in a single list instead of separate staged/unstaged groups.",
+          ),
+        ]),
       ]),
-    ])]
+    ]
   }
 
   fn show_command_palette_action(
