@@ -255,14 +255,16 @@ struct GitFileListDelegate {
   rows: Vec<Rc<GitFileRow>>,
   selected_index: Option<IndexPath>,
   opened_path: Option<PathBuf>,
+  git_page: WeakEntity<GitPage>,
 }
 
 impl GitFileListDelegate {
-  fn new() -> Self {
+  fn new(git_page: WeakEntity<GitPage>) -> Self {
     Self {
       rows: Vec::new(),
       selected_index: None,
       opened_path: None,
+      git_page,
     }
   }
 
@@ -370,15 +372,79 @@ impl ListDelegate for GitFileListDelegate {
       row.entry.old_path.as_deref(),
     );
 
+    let rel_path = row.entry.path.clone();
+    let stage = row.entry.stage;
+    let git_page = self.git_page.clone();
+
+    let (toggle_stage_icon, toggle_stage_tooltip) = match stage {
+      RepoStage::Staged | RepoStage::PartiallyStaged => (IconName::Minus, "Unstage file"),
+      RepoStage::Unstaged => (IconName::Plus, "Stage file"),
+    };
+
     Some(
       base_item.px_2().py_1().child(
         h_flex()
+          .group("file-row")
+          .size_full()
           .items_center()
+          .justify_between()
           .gap_2()
-          .child(status_element)
-          .child(stage_element)
-          .child(file_icon)
-          .child(file_label),
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child(status_element)
+              .child(stage_element)
+              .child(file_icon)
+              .child(file_label),
+          )
+          .child(
+            div()
+              // .ml_auto()
+              .opacity(0.0)
+              .group_hover("file-row", |this| this.opacity(1.0))
+              .child(
+                ButtonGroup::new(format!("file-actions-{}", ix.row))
+                  .outline()
+                  .child(
+                    Button::new(format!("stage-{}", ix.row))
+                      .icon(toggle_stage_icon)
+                      .with_variant(ButtonVariant::Secondary)
+                      .xsmall()
+                      .tooltip(toggle_stage_tooltip)
+                      .on_click({
+                        let rel_path = rel_path.clone();
+                        let git_page = git_page.clone();
+                        move |_event, _window, cx| {
+                          let _ = git_page.update(cx, |page, cx| match stage {
+                            RepoStage::Staged | RepoStage::PartiallyStaged => {
+                              page.unstage_file_action(rel_path.clone(), cx);
+                            }
+                            RepoStage::Unstaged => {
+                              page.stage_file_action(rel_path.clone(), cx);
+                            }
+                          });
+                        }
+                      }),
+                  )
+                  .child(
+                    Button::new(format!("restore-{}", ix.row))
+                      .icon(IconName::Undo)
+                      .with_variant(ButtonVariant::Secondary)
+                      .xsmall()
+                      .tooltip("Discard changes")
+                      .on_click({
+                        let rel_path = rel_path.clone();
+                        let git_page = git_page.clone();
+                        move |_event, _window, cx| {
+                          let _ = git_page.update(cx, |page, cx| {
+                            page.restore_file_action(rel_path.clone(), status_kind, cx);
+                          });
+                        }
+                      }),
+                  ),
+              ),
+          ),
       ),
     )
   }
@@ -1462,7 +1528,9 @@ impl GitPage {
       .iter()
       .map(|repo| RecentRepoItem::new(repo, selected_repo.as_deref()))
       .collect();
-    let file_list = cx.new(|cx| ListState::new(GitFileListDelegate::new(), window, cx));
+    let git_page_weak = cx.entity().downgrade();
+    let file_list =
+      cx.new(|cx| ListState::new(GitFileListDelegate::new(git_page_weak), window, cx));
     let history_tree = cx.new(|cx| TreeState::new(cx));
 
     let commit_input = cx.new(|cx| {
@@ -1541,7 +1609,9 @@ impl GitPage {
 
   #[cfg(test)]
   fn new_for_test(window: &mut Window, cx: &mut Context<Self>) -> Self {
-    let file_list = cx.new(|cx| ListState::new(GitFileListDelegate::new(), window, cx));
+    let git_page_weak = cx.entity().downgrade();
+    let file_list =
+      cx.new(|cx| ListState::new(GitFileListDelegate::new(git_page_weak), window, cx));
     let history_tree = cx.new(|cx| TreeState::new(cx));
     let commit_input = cx.new(|cx| {
       InputState::new(window, cx)
