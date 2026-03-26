@@ -41,6 +41,8 @@ const imageUrl = new URL(imagePath, site).toString();
 const structuredDataItems = Array.isArray(structuredData)
   ? structuredData
   : [structuredData];
+
+const isProd = import.meta.env.MODE === "production";
 ---
 
 <html lang="en">
@@ -138,10 +140,15 @@ const structuredDataItems = Array.isArray(structuredData)
         });
       }
     </script>
-    <script
-      is:inline
-      defer
-      src="https://analytics.jorisgallot.dev/j.js"
-      data-website-id="4da481f3-4f4e-4aa1-a3b3-3d4ab7602bb8"></script>
+    {
+      isProd && (
+        <script
+          is:inline
+          defer
+          src="https://analytics.jorisgallot.dev/j.js"
+          data-website-id="4da481f3-4f4e-4aa1-a3b3-3d4ab7602bb8"
+        />
+      )
+    }
   </body>
 </html>
