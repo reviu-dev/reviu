@@ -94,6 +94,9 @@ function handleOpenChange(open: boolean) {
               <SelectItem value="user">
                 User
               </SelectItem>
+              <SelectItem value="pro">
+                Pro
+              </SelectItem>
               <SelectItem value="admin">
                 Admin
               </SelectItem>
