@@ -360,6 +360,9 @@ export async function fetchChangelog(): Promise<DesktopChangelogEntry[]> {
       publishedAt: release.published_at ?? '',
       body: release.body ?? '',
     }))
+    .sort((a: DesktopChangelogEntry, b: DesktopChangelogEntry) =>
+      new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime(),
+    )
 }
 
 export async function downloadDesktopUpdateReleaseAsset(tag: string, fileName: string) {
