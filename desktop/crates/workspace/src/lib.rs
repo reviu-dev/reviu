@@ -1,6 +1,17 @@
 use gpui::actions;
 
-actions!(workspace, [CloseWorkspacePage]);
+actions!(
+  workspace,
+  [
+    CloseWorkspacePage,
+    OpenGitPage,
+    OpenGithubPage,
+    OpenBillingPage,
+    OpenGitConfigPage,
+    OpenSettingsPage,
+    OpenAboutPage,
+  ]
+);
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
 

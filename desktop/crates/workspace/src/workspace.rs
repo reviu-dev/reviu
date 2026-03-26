@@ -595,7 +595,10 @@ impl Render for WorkspaceView {
     // Show a loading screen while the initial auth check is in progress
     if matches!(auth_state, AuthState::Unknown) {
       let theme = cx.theme().clone();
-      let version = format!("Reviu v{}", resolved_build_version(env!("CARGO_PKG_VERSION")));
+      let version = format!(
+        "Reviu v{}",
+        resolved_build_version(env!("CARGO_PKG_VERSION"))
+      );
       return div()
         .size_full()
         .flex()
@@ -702,6 +705,24 @@ impl Render for WorkspaceView {
       .size_full()
       .flex()
       .flex_col()
+      .on_action(cx.listener(|_, _: &crate::OpenGitPage, _window, cx| {
+        NavigationHistory::navigate("/git", cx);
+      }))
+      .on_action(cx.listener(|_, _: &crate::OpenGithubPage, _window, cx| {
+        Self::open_github_home(cx);
+      }))
+      .on_action(cx.listener(|_, _: &crate::OpenBillingPage, _window, cx| {
+        NavigationHistory::navigate("/billing", cx);
+      }))
+      .on_action(cx.listener(|_, _: &crate::OpenGitConfigPage, _window, cx| {
+        NavigationHistory::navigate("/git-config", cx);
+      }))
+      .on_action(cx.listener(|_, _: &crate::OpenSettingsPage, _window, cx| {
+        NavigationHistory::navigate("/settings", cx);
+      }))
+      .on_action(cx.listener(|_, _: &crate::OpenAboutPage, _window, cx| {
+        NavigationHistory::navigate("/about", cx);
+      }))
       .child(self.render_global_bar(page, &pathname, cx))
       .child(div().flex_1().min_h_0().child(routes))
       .into_any_element()
