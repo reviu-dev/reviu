@@ -239,6 +239,7 @@ impl WorkspaceView {
     view._subscriptions.push(subscription);
     view.check_for_updates(cx);
     view.start_notification_polling(cx);
+    crate::status_bar::init_status_bar(include_bytes!("../../reviu/assets/statusbar-icon.png"));
 
     view
   }
@@ -319,6 +320,7 @@ impl WorkspaceView {
             let unread = notifications.iter().filter(|n| n.unread).count();
             NotificationCountStore::set(cx, unread);
             set_dock_badge(unread);
+            crate::status_bar::update_status_bar(unread, &notifications);
             cx.refresh_windows();
           }
         });

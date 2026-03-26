@@ -1163,6 +1163,10 @@ impl GithubPage {
         let unread = rows.iter().filter(|r| r.notification.unread).count();
         NotificationCountStore::set(cx, unread);
         set_dock_badge(unread);
+        {
+          let notifications: Vec<_> = rows.iter().map(|r| (*r.notification).clone()).collect();
+          crate::status_bar::update_status_bar(unread, &notifications);
+        }
 
         this.notifications.update(cx, |state, cx| {
           state.delegate_mut().loading = false;
