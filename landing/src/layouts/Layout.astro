@@ -34,7 +34,7 @@ const {
 const pageTitle =
   pathname === "/" || title === defaultTitle
     ? "Reviu - Desktop Git Client"
-    : `${title} - Reviu`;
+    : `Reviu - ${title}`;
 const canonicalUrl = new URL(pathname, site).toString();
 const imagePath = typeof image === "string" ? image : image.src;
 const imageUrl = new URL(imagePath, site).toString();
