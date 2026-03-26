@@ -1,3 +1,4 @@
+use gpui::{App, Global};
 #[cfg(test)]
 use std::cell::RefCell;
 use std::{
@@ -58,6 +59,22 @@ pub struct AppSettings {
   pub dark_mode: bool,
   pub indent_rainbow: bool,
   pub font_size: f32,
+  pub git_unified_file_view: bool,
+}
+
+impl Global for AppSettings {}
+
+impl AppSettings {
+  pub fn get(cx: &App) -> Self {
+    *cx.global::<Self>()
+  }
+
+  pub fn update(cx: &mut App, f: impl FnOnce(&mut Self)) {
+    let mut settings = *cx.global::<Self>();
+    f(&mut settings);
+    cx.set_global(settings);
+    ConfigStore::persist_app_settings(settings);
+  }
 }
 
 impl Default for AppSettings {
@@ -67,6 +84,7 @@ impl Default for AppSettings {
       dark_mode: false,
       indent_rainbow: false,
       font_size: 16.0,
+      git_unified_file_view: false,
     }
   }
 }
@@ -154,6 +172,7 @@ impl ConfigStore {
   fn ensure_settings_columns(&self) -> rusqlite::Result<()> {
     let mut has_indent_rainbow = false;
     let mut has_font_size = false;
+    let mut has_git_unified_file_view = false;
     let mut stmt = self
       .conn
       .prepare(&format!("PRAGMA table_info({})", SETTINGS_TABLE.name))?;
@@ -165,6 +184,9 @@ impl ConfigStore {
       }
       if column == "font_size" {
         has_font_size = true;
+      }
+      if column == "git_unified_file_view" {
+        has_git_unified_file_view = true;
       }
     }
 
@@ -182,6 +204,16 @@ impl ConfigStore {
       self.conn.execute(
         &format!(
           "ALTER TABLE {} ADD COLUMN font_size REAL NOT NULL DEFAULT 16.0",
+          SETTINGS_TABLE.name
+        ),
+        [],
+      )?;
+    }
+
+    if !has_git_unified_file_view {
+      self.conn.execute(
+        &format!(
+          "ALTER TABLE {} ADD COLUMN git_unified_file_view INTEGER NOT NULL DEFAULT 0",
           SETTINGS_TABLE.name
         ),
         [],
@@ -267,7 +299,7 @@ impl ConfigStore {
   fn load_app_settings_inner(&self) -> AppSettings {
     let settings = self.conn.query_row(
       &format!(
-        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size FROM {} WHERE id = 1",
+        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view FROM {} WHERE id = 1",
         SETTINGS_TABLE.name
       ),
       [],
@@ -276,11 +308,13 @@ impl ConfigStore {
         let dark_mode: i64 = row.get(1)?;
         let indent_rainbow: i64 = row.get(2)?;
         let font_size: f64 = row.get(3)?;
+        let git_unified_file_view: i64 = row.get(4)?;
         Ok(AppSettings {
           auto_switch_theme: auto_switch_theme != 0,
           dark_mode: dark_mode != 0,
           indent_rainbow: indent_rainbow != 0,
           font_size: font_size as f32,
+          git_unified_file_view: git_unified_file_view != 0,
         })
       },
     );
@@ -378,13 +412,14 @@ impl ConfigStore {
   fn persist_app_settings_inner(&self, settings: AppSettings) {
     if let Err(err) = self.conn.execute(
       &format!(
-        "INSERT INTO {} (id, auto_switch_theme, dark_mode, indent_rainbow, font_size)
-         VALUES (1, ?1, ?2, ?3, ?4)
+        "INSERT INTO {} (id, auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(id) DO UPDATE
          SET auto_switch_theme = excluded.auto_switch_theme,
              dark_mode = excluded.dark_mode,
              indent_rainbow = excluded.indent_rainbow,
-             font_size = excluded.font_size",
+             font_size = excluded.font_size,
+             git_unified_file_view = excluded.git_unified_file_view",
         SETTINGS_TABLE.name
       ),
       params![
@@ -399,7 +434,12 @@ impl ConfigStore {
         } else {
           0_i64
         },
-        settings.font_size as f64
+        settings.font_size as f64,
+        if settings.git_unified_file_view {
+          1_i64
+        } else {
+          0_i64
+        },
       ],
     ) {
       eprintln!("Failed to persist app settings: {}", err);
@@ -469,6 +509,7 @@ mod tests {
       dark_mode: true,
       indent_rainbow: true,
       font_size: 20.0,
+      git_unified_file_view: true,
     };
     ConfigStore::persist_app_settings(settings);
 
@@ -477,6 +518,7 @@ mod tests {
     assert!(loaded.dark_mode);
     assert!(loaded.indent_rainbow);
     assert_eq!(loaded.font_size, 20.0);
+    assert!(loaded.git_unified_file_view);
 
     ConfigStore::set_test_db_path(None);
   }

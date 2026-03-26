@@ -194,6 +194,7 @@ impl WorkspaceView {
     cx.set_global(NotificationCountStore::default());
 
     let settings = ConfigStore::load_app_settings();
+    cx.set_global(settings);
     set_indent_rainbow_enabled(settings.indent_rainbow);
     Theme::global_mut(cx).font_size = px(settings.font_size);
     if settings.auto_switch_theme {
@@ -251,12 +252,10 @@ impl WorkspaceView {
     }
 
     Theme::sync_system_appearance(Some(window), cx);
-    ConfigStore::persist_app_settings(PersistedSettings {
-      auto_switch_theme: true,
-      dark_mode: cx.theme().mode.is_dark(),
-      indent_rainbow: self.settings_page.read(cx).indent_rainbow_enabled(),
-      font_size: f32::from(cx.theme().font_size),
-    });
+    let mut settings = PersistedSettings::get(cx);
+    settings.dark_mode = cx.theme().mode.is_dark();
+    cx.set_global(settings);
+    ConfigStore::persist_app_settings(settings);
   }
 
   fn check_for_updates(&mut self, cx: &mut Context<Self>) {

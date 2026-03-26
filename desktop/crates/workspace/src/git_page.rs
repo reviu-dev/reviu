@@ -251,8 +251,16 @@ impl GitFileRow {
   }
 }
 
+struct GitFileSection {
+  label: SharedString,
+  is_staged: bool,
+  rows: Vec<Rc<GitFileRow>>,
+}
+
 struct GitFileListDelegate {
   rows: Vec<Rc<GitFileRow>>,
+  sections: Vec<GitFileSection>,
+  split_sections: bool,
   selected_index: Option<IndexPath>,
   opened_path: Option<PathBuf>,
   git_page: WeakEntity<GitPage>,
@@ -262,21 +270,84 @@ impl GitFileListDelegate {
   fn new(git_page: WeakEntity<GitPage>) -> Self {
     Self {
       rows: Vec::new(),
+      sections: Vec::new(),
+      split_sections: false,
       selected_index: None,
       opened_path: None,
       git_page,
     }
   }
 
-  fn set_rows(&mut self, entries: Vec<RepoStatusEntry>) {
+  fn set_rows(&mut self, entries: Vec<RepoStatusEntry>, split_sections: bool) {
     self.rows = entries
       .into_iter()
       .map(|entry| Rc::new(GitFileRow::new(entry)))
       .collect();
+    self.split_sections = split_sections;
+    self.rebuild_sections();
+  }
+
+  fn rebuild_sections(&mut self) {
+    if !self.split_sections {
+      self.sections = vec![GitFileSection {
+        label: "".into(),
+        is_staged: false,
+        rows: self.rows.clone(),
+      }];
+      return;
+    }
+
+    let mut staged_rows = Vec::new();
+    let mut unstaged_rows = Vec::new();
+    for row in &self.rows {
+      match row.entry.stage {
+        RepoStage::Staged => staged_rows.push(row.clone()),
+        RepoStage::Unstaged => unstaged_rows.push(row.clone()),
+        RepoStage::PartiallyStaged => {
+          staged_rows.push(row.clone());
+          unstaged_rows.push(row.clone());
+        }
+      }
+    }
+
+    let mut sections = Vec::new();
+    if !staged_rows.is_empty() {
+      sections.push(GitFileSection {
+        label: format!("Staged Changes ({})", staged_rows.len()).into(),
+        is_staged: true,
+        rows: staged_rows,
+      });
+    }
+    if !unstaged_rows.is_empty() {
+      sections.push(GitFileSection {
+        label: format!("Changes ({})", unstaged_rows.len()).into(),
+        is_staged: false,
+        rows: unstaged_rows,
+      });
+    }
+    self.sections = sections;
   }
 
   fn row_at(&self, ix: IndexPath) -> Option<Rc<GitFileRow>> {
-    self.rows.get(ix.row).cloned()
+    self
+      .sections
+      .get(ix.section)
+      .and_then(|s| s.rows.get(ix.row).cloned())
+  }
+
+  fn find_index_for_path(&self, path: &Path) -> Option<IndexPath> {
+    for (section_ix, section) in self.sections.iter().enumerate() {
+      for (row_ix, row) in section.rows.iter().enumerate() {
+        if row.entry.path == path {
+          return Some(IndexPath {
+            section: section_ix,
+            row: row_ix,
+            column: 0,
+          });
+        }
+      }
+    }
+    None
   }
 
   fn set_opened_path(&mut self, path: Option<PathBuf>) {
@@ -302,8 +373,41 @@ fn file_list_base_item(
 impl ListDelegate for GitFileListDelegate {
   type Item = ListItem;
 
-  fn items_count(&self, _section: usize, _cx: &App) -> usize {
-    self.rows.len()
+  fn sections_count(&self, _cx: &App) -> usize {
+    self.sections.len()
+  }
+
+  fn items_count(&self, section: usize, _cx: &App) -> usize {
+    self.sections.get(section).map_or(0, |s| s.rows.len())
+  }
+
+  fn render_section_header(
+    &mut self,
+    section: usize,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<impl IntoElement> {
+    if !self.split_sections {
+      return None;
+    }
+    let section = self.sections.get(section)?;
+    let theme = cx.theme();
+    let (icon, icon_color) = if section.is_staged {
+      (IconName::CircleCheck, theme.status_green())
+    } else {
+      (IconName::Minus, theme.muted_foreground)
+    };
+    Some(
+      h_flex()
+        .items_center()
+        .py_1()
+        .px_2()
+        .gap_2()
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child(Icon::new(icon).size_3().text_color(icon_color))
+        .child(div().min_w_0().flex_1().child(section.label.clone())),
+    )
   }
 
   fn render_item(
@@ -314,7 +418,7 @@ impl ListDelegate for GitFileListDelegate {
   ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
     let mut base_item = file_list_base_item(ix, self.selected_index, &theme);
-    let row = self.rows.get(ix.row)?;
+    let row = self.row_at(ix)?;
     let is_opened = self
       .opened_path
       .as_ref()
@@ -376,9 +480,25 @@ impl ListDelegate for GitFileListDelegate {
     let stage = row.entry.stage;
     let git_page = self.git_page.clone();
 
-    let (toggle_stage_icon, toggle_stage_tooltip) = match stage {
-      RepoStage::Staged | RepoStage::PartiallyStaged => (IconName::Minus, "Unstage file"),
-      RepoStage::Unstaged => (IconName::Plus, "Stage file"),
+    // In split mode, the action is determined by the section the file is in,
+    // not by the file's stage status (PartiallyStaged appears in both sections).
+    let is_staged_section = self.split_sections
+      && self
+        .sections
+        .get(ix.section)
+        .map(|s| s.is_staged)
+        .unwrap_or(false);
+    let (toggle_stage_icon, toggle_stage_tooltip, toggle_stage_action) = if self.split_sections {
+      if is_staged_section {
+        (IconName::Minus, "Unstage file", RepoStage::Staged)
+      } else {
+        (IconName::Plus, "Stage file", RepoStage::Unstaged)
+      }
+    } else {
+      match stage {
+        RepoStage::Staged | RepoStage::PartiallyStaged => (IconName::Minus, "Unstage file", stage),
+        RepoStage::Unstaged => (IconName::Plus, "Stage file", stage),
+      }
     };
 
     Some(
@@ -415,7 +535,7 @@ impl ListDelegate for GitFileListDelegate {
                         let rel_path = rel_path.clone();
                         let git_page = git_page.clone();
                         move |_event, _window, cx| {
-                          let _ = git_page.update(cx, |page, cx| match stage {
+                          let _ = git_page.update(cx, |page, cx| match toggle_stage_action {
                             RepoStage::Staged | RepoStage::PartiallyStaged => {
                               page.unstage_file_action(rel_path.clone(), cx);
                             }
@@ -783,6 +903,7 @@ pub struct GitPage {
   editor: Option<Entity<Editor>>,
   interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
   diff_view: DiffViewMode,
+  git_unified_file_view: bool,
   show_markdown_preview: bool,
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
   svg_preview_source: Option<SharedString>,
@@ -1240,13 +1361,13 @@ impl GitPage {
     editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
   }
 
-  fn selected_file_index(&self) -> Option<IndexPath> {
+  fn selected_file_index(&self, cx: &Context<Self>) -> Option<IndexPath> {
     let selected = self.selected_file.as_ref()?;
-    let index = self
-      .status_entries
-      .iter()
-      .position(|entry| &entry.path == selected)?;
-    Some(IndexPath::new(index))
+    self
+      .file_list
+      .read(cx)
+      .delegate()
+      .find_index_for_path(selected)
   }
 
   fn set_file_list_selected_index(&self, index: Option<IndexPath>, cx: &mut Context<Self>) {
@@ -1260,22 +1381,22 @@ impl GitPage {
   }
 
   fn refresh_file_list(&mut self, cx: &mut Context<Self>) {
+    self.git_unified_file_view = crate::config::AppSettings::get(cx).git_unified_file_view;
     let rows = self.status_entries.clone();
-    let current_index = self.file_list.read(cx).selected_index();
+    let split_sections = !self.git_unified_file_view;
     let opened_path = self.selected_file.clone();
     self.file_list.update(cx, |state, cx| {
-      state.delegate_mut().set_rows(rows.clone());
+      state.delegate_mut().set_rows(rows.clone(), split_sections);
       state.delegate_mut().set_opened_path(opened_path);
       cx.notify();
     });
 
     let selected_index = if self.force_list_selection {
       self.force_list_selection = false;
-      self.selected_file_index()
+      self.selected_file_index(cx)
     } else {
-      current_index
-        .and_then(|ix| (ix.row < rows.len()).then_some(IndexPath::new(ix.row)))
-        .or_else(|| self.selected_file_index())
+      // Try to preserve the selected file by path rather than raw index
+      self.selected_file_index(cx)
     };
     self.set_file_list_selected_index(selected_index, cx);
   }
@@ -1522,6 +1643,7 @@ impl GitPage {
 
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     let recent = ConfigStore::load_recent_repositories();
+    let app_settings = crate::config::AppSettings::get(cx);
     let selected_repo = recent.first().map(|repo| repo.path.clone());
     let repo_dropdown_items: Vec<RecentRepoItem> = recent
       .iter()
@@ -1576,6 +1698,7 @@ impl GitPage {
       editor: None,
       interactive_rebase_todo_view: None,
       diff_view: DiffViewMode::Inline,
+      git_unified_file_view: app_settings.git_unified_file_view,
       show_markdown_preview: false,
       svg_preview: None,
       svg_preview_source: None,
@@ -1656,6 +1779,7 @@ impl GitPage {
       editor: None,
       interactive_rebase_todo_view: None,
       diff_view: DiffViewMode::Inline,
+      git_unified_file_view: false,
       show_markdown_preview: false,
       svg_preview: None,
       svg_preview_source: None,
@@ -3802,7 +3926,7 @@ impl GitPage {
       state.delegate_mut().set_opened_path(opened_path);
       cx.notify();
     });
-    let selected_index = self.selected_file_index();
+    let selected_index = self.selected_file_index(cx);
     self.set_file_list_selected_index(selected_index, cx);
     if had_history_file_selection {
       self.refresh_history_list(cx);
@@ -6845,6 +6969,9 @@ mod tests {
       }
       if !cx.has_global::<ActiveLocalRepoStore>() {
         cx.set_global(ActiveLocalRepoStore::default());
+      }
+      if !cx.has_global::<crate::config::AppSettings>() {
+        cx.set_global(crate::config::AppSettings::default());
       }
       ActiveLocalRepoStore::set(cx, None);
     });
