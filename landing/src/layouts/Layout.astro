@@ -19,7 +19,7 @@ interface Props {
 const site = Astro.site ?? new URL("https://reviu.dev");
 const defaultTitle = "Reviu";
 const defaultDescription =
-  "Reviu is a keyboard-first Git client for macOS with fast local diffs, advanced Git workflows, and GitHub pull request review in Reviu Pro.";
+  "Reviu is a keyboard-first Git client with fast local diffs, advanced Git workflows, and GitHub pull request review in Reviu Pro.";
 
 const {
   title = defaultTitle,
@@ -33,8 +33,8 @@ const {
 
 const pageTitle =
   pathname === "/" || title === defaultTitle
-    ? defaultTitle
-    : `${defaultTitle} - ${title}`;
+    ? "Reviu — Desktop Git Client"
+    : `${title} - Reviu`;
 const canonicalUrl = new URL(pathname, site).toString();
 const imagePath = typeof image === "string" ? image : image.src;
 const imageUrl = new URL(imagePath, site).toString();

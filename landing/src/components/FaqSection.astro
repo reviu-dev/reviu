@@ -36,8 +36,7 @@ const { faqItems } = Astro.props as { faqItems: FaqItem[] };
             <summary class="cursor-pointer list-none text-lg font-semibold text-foreground p-6">
               {item.question}
             </summary>
-            <p class="px-6 pb-6 text-sm/7 text-muted-foreground">
-              {item.answer}
+            <p class="px-6 pb-6 text-sm/7 text-muted-foreground" set:html={item.answer}>
             </p>
           </details>
         ))
