@@ -385,11 +385,9 @@ impl WorkspaceView {
 
   fn show_update_notification(&self, update: AvailableAppUpdate, cx: &mut Context<Self>) {
     let latest_version = update.latest_version.clone();
-    let release_notes_url = update.release_notes_url.clone();
     let view = cx.entity();
     let _ = cx.update_window(self.window_handle, move |_, window, cx| {
       let view = view.clone();
-      let release_notes_url = release_notes_url.clone();
       window.push_notification(
         Notification::new()
           .id::<AppUpdateNotificationId>()
@@ -398,7 +396,6 @@ impl WorkspaceView {
           .autohide(false)
           .content(move |_, _, _cx| {
             let view = view.clone();
-            let release_notes_url = release_notes_url.clone();
             div()
               .flex()
               .gap_2()
@@ -408,7 +405,7 @@ impl WorkspaceView {
                   .compact()
                   .label("Changelog")
                   .on_click(move |_, _, cx| {
-                    cx.open_url(&release_notes_url);
+                    cx.open_url("https://reviu.dev/changelog");
                   }),
               )
               .child(
