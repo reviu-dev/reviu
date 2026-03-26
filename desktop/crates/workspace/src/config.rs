@@ -31,7 +31,12 @@ const SETTINGS_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), auto_switch_theme INTEGER NOT NULL DEFAULT 1, dark_mode INTEGER NOT NULL DEFAULT 0, indent_rainbow INTEGER NOT NULL DEFAULT 0)",
 };
 
-const CONFIG_TABLES: [ConfigTable; 2] = [RECENT_REPOS_TABLE, SETTINGS_TABLE];
+const PINNED_REPOS_TABLE: ConfigTable = ConfigTable {
+  name: "pinned_repos",
+  create_sql: "CREATE TABLE IF NOT EXISTS pinned_repos (full_name TEXT PRIMARY KEY, pinned_at INTEGER NOT NULL)",
+};
+
+const CONFIG_TABLES: [ConfigTable; 3] = [RECENT_REPOS_TABLE, SETTINGS_TABLE, PINNED_REPOS_TABLE];
 
 #[cfg(test)]
 thread_local! {
@@ -279,6 +284,80 @@ impl ConfigStore {
     store.persist_app_settings_inner(settings);
   }
 
+  pub fn load_pinned_repos() -> Vec<String> {
+    let Some(store) = Self::open_with_tables() else {
+      return Vec::new();
+    };
+    store.load_pinned_repos_inner()
+  }
+
+  fn load_pinned_repos_inner(&self) -> Vec<String> {
+    let mut stmt = match self.conn.prepare(&format!(
+      "SELECT full_name FROM {} ORDER BY pinned_at ASC",
+      PINNED_REPOS_TABLE.name
+    )) {
+      Ok(stmt) => stmt,
+      Err(err) => {
+        eprintln!("Failed to load pinned repos: {}", err);
+        return Vec::new();
+      }
+    };
+
+    let rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
+      Ok(rows) => rows,
+      Err(err) => {
+        eprintln!("Failed to read pinned repos: {}", err);
+        return Vec::new();
+      }
+    };
+
+    rows.filter_map(|r| r.ok()).collect()
+  }
+
+  pub fn pin_repo(full_name: &str) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    store.pin_repo_inner(full_name);
+  }
+
+  fn pin_repo_inner(&self, full_name: &str) {
+    let pinned_at = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .unwrap_or_default()
+      .as_secs() as i64;
+
+    if let Err(err) = self.conn.execute(
+      &format!(
+        "INSERT INTO {} (full_name, pinned_at) VALUES (?1, ?2)
+         ON CONFLICT(full_name) DO NOTHING",
+        PINNED_REPOS_TABLE.name
+      ),
+      params![full_name, pinned_at],
+    ) {
+      eprintln!("Failed to pin repo: {}", err);
+    }
+  }
+
+  pub fn unpin_repo(full_name: &str) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    store.unpin_repo_inner(full_name);
+  }
+
+  fn unpin_repo_inner(&self, full_name: &str) {
+    if let Err(err) = self.conn.execute(
+      &format!(
+        "DELETE FROM {} WHERE full_name = ?1",
+        PINNED_REPOS_TABLE.name
+      ),
+      params![full_name],
+    ) {
+      eprintln!("Failed to unpin repo: {}", err);
+    }
+  }
+
   fn persist_app_settings_inner(&self, settings: AppSettings) {
     if let Err(err) = self.conn.execute(
       &format!(
@@ -377,6 +456,33 @@ mod tests {
     assert!(!loaded.auto_switch_theme);
     assert!(loaded.dark_mode);
     assert!(loaded.indent_rainbow);
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn pinned_repos_round_trip() {
+    let db_path = unique_test_db_path("pinned");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    assert!(ConfigStore::load_pinned_repos().is_empty());
+
+    ConfigStore::pin_repo("owner/repo-a");
+    ConfigStore::pin_repo("owner/repo-b");
+
+    let pinned = ConfigStore::load_pinned_repos();
+    assert_eq!(pinned.len(), 2);
+    assert!(pinned.contains(&"owner/repo-a".to_string()));
+    assert!(pinned.contains(&"owner/repo-b".to_string()));
+
+    // Pin again should not duplicate
+    ConfigStore::pin_repo("owner/repo-a");
+    assert_eq!(ConfigStore::load_pinned_repos().len(), 2);
+
+    ConfigStore::unpin_repo("owner/repo-a");
+    let pinned = ConfigStore::load_pinned_repos();
+    assert_eq!(pinned, vec!["owner/repo-b".to_string()]);
 
     ConfigStore::set_test_db_path(None);
   }
