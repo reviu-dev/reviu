@@ -2,11 +2,19 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.0.8
+
+### Staged and Unstaged File Groups
+
+The Git sidebar now separates changed files into "Staged Changes" and "Changes" groups, so you immediately know what will be committed. Partially staged files appear in both groups. A "Unified File View" setting lets you switch back to the previous flat list.
+
+---
+
 ## 0.0.7
 
 ### macOS Status Bar for GitHub Notifications
 
-Reviu now lives in your macOS menu bar. See your unread GitHub notification count at a glance and browse the latest notifications directly from the status bar dropdown — without switching to the app.
+Reviu now lives in your macOS menu bar. See your unread GitHub notification count instantly and browse the latest notifications directly from the status bar dropdown — without switching to the app.
 
 ### Customizable Font Size
 
@@ -58,7 +66,7 @@ Reviu now checks for updates on launch. When a new version is available, a notif
 
 ### Pull Request CI Checks
 
-The pull request overview displays CI check status with a detailed summary — total, passing, failing, pending, and required checks — so you can review merge readiness at a glance.
+The pull request overview displays CI check status with a detailed summary — total, passing, failing, pending, and required checks — so you can quickly assess merge readiness.
 
 ### Pull Request Review Actions
 
@@ -94,7 +102,7 @@ Browse the list of commits in a pull request from the context sidebar, with sear
 
 ### Editor Indent Rainbow
 
-A new setting colors indentation guides by nesting level in the diff editor, making it easier to follow code structure at a glance.
+A new setting colors indentation guides by nesting level in the diff editor, making it easier to follow code structure visually.
 
 ---
 
