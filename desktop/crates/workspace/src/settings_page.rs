@@ -8,7 +8,7 @@ use gpui::{
 use gpui_component::{
   ActiveTheme as _, IconName, Sizable, Size, Theme, ThemeMode,
   button::{Button, ButtonVariants},
-  setting::{SettingField, SettingGroup, SettingItem, SettingPage, Settings},
+  setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
 };
 
 use ui::{
@@ -69,6 +69,7 @@ impl SettingsPage {
                   auto_switch_theme: settings.auto_switch_theme,
                   dark_mode: val,
                   indent_rainbow: settings.indent_rainbow,
+                  font_size: f32::from(cx.theme().font_size),
                 });
 
                 let mode = if val {
@@ -105,6 +106,7 @@ impl SettingsPage {
                   auto_switch_theme: val,
                   dark_mode: cx.theme().mode.is_dark(),
                   indent_rainbow: view.read(cx).indent_rainbow,
+                  font_size: f32::from(cx.theme().font_size),
                 });
 
                 cx.refresh_windows();
@@ -133,6 +135,7 @@ impl SettingsPage {
                   auto_switch_theme: view.read(cx).auto_switch_theme,
                   dark_mode: cx.theme().mode.is_dark(),
                   indent_rainbow: val,
+                  font_size: f32::from(cx.theme().font_size),
                 });
 
                 cx.refresh_windows();
@@ -142,6 +145,33 @@ impl SettingsPage {
           .default_value(default_indent_rainbow),
         )
         .description("Color indentation guides by level in the editor."),
+        SettingItem::new(
+          "Font Size",
+          SettingField::number_input(
+            NumberFieldOptions {
+              min: 12.0,
+              max: 24.0,
+              step: 1.0,
+            },
+            |cx: &App| f64::from(cx.theme().font_size),
+            {
+              let view = view.clone();
+              move |val: f64, cx: &mut App| {
+                Theme::global_mut(cx).font_size = px(val as f32);
+                let settings = view.read(cx);
+                ConfigStore::persist_app_settings(PersistedSettings {
+                  auto_switch_theme: settings.auto_switch_theme,
+                  dark_mode: cx.theme().mode.is_dark(),
+                  indent_rainbow: settings.indent_rainbow,
+                  font_size: val as f32,
+                });
+                cx.refresh_windows();
+              }
+            },
+          )
+          .default_value(16.0),
+        )
+        .description("Base font size for the application (12–24px)."),
       ]),
     ])]
   }

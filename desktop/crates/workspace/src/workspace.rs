@@ -195,6 +195,7 @@ impl WorkspaceView {
 
     let settings = ConfigStore::load_app_settings();
     set_indent_rainbow_enabled(settings.indent_rainbow);
+    Theme::global_mut(cx).font_size = px(settings.font_size);
     if settings.auto_switch_theme {
       Theme::sync_system_appearance(Some(window), cx);
     } else {
@@ -254,6 +255,7 @@ impl WorkspaceView {
       auto_switch_theme: true,
       dark_mode: cx.theme().mode.is_dark(),
       indent_rainbow: self.settings_page.read(cx).indent_rainbow_enabled(),
+      font_size: f32::from(cx.theme().font_size),
     });
   }
 
