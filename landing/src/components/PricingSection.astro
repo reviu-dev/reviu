@@ -28,7 +28,8 @@ const tiers = [
     href: latestAppleSiliconDownloadUrl,
     available: true,
     price: "$19/month",
-    description: "Unlock GitHub workflows directly inside Reviu.",
+    description:
+      "14-day free trial included. Unlock GitHub workflows directly inside Reviu.",
     features: [
       "Keyboard-first command palette for GitHub actions",
       "GitHub notifications feed",
@@ -92,11 +93,6 @@ const tiers = [
             <p class="mt-6 text-4xl font-semibold tracking-tight text-foreground">
               {tier.price}
             </p>
-            {tier.id === "pro" && (
-              <p class="mt-2 text-sm/6 text-muted-foreground">
-                14-day free trial, no payment method required.
-              </p>
-            )}
 
             {tier.available ? (
               <a
