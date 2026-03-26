@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::{collections::HashSet, rc::Rc, sync::Arc};
 
 use gpui::{
   App, Context, Entity, FocusHandle, Focusable, MouseButton, ParentElement, Render, SharedString,
@@ -34,6 +34,7 @@ use crate::{
   ShowCommandPalette,
   api::{ApiClient, GithubNotification, GithubPullRequest, GithubUserRepository},
   auth_state::{AuthState, AuthStateStore},
+  config::ConfigStore,
   date_format::format_relative_time,
   github_navigation::{open_pr_target, open_repo_target},
   github_pr_details_page::GithubPrDetailsPageHandle,
@@ -200,6 +201,7 @@ impl GithubNotificationRow {
 #[derive(Clone, Debug)]
 struct GithubRepositoryRow {
   repository: Rc<GithubUserRepository>,
+  pinned: bool,
 }
 
 impl GithubRepositoryRow {
@@ -224,21 +226,36 @@ struct GithubRepositoryListDelegate {
   selected_index: Option<IndexPath>,
   query: SharedString,
   loading: bool,
+  pinned_repos: HashSet<String>,
 }
 
 impl GithubRepositoryListDelegate {
   fn new() -> Self {
+    let pinned_repos: HashSet<String> = ConfigStore::load_pinned_repos().into_iter().collect();
     Self {
       all_rows: Vec::new(),
       matched_rows: Vec::new(),
       selected_index: Some(IndexPath::default()),
       query: "".into(),
       loading: false,
+      pinned_repos,
     }
   }
 
   fn set_rows(&mut self, rows: Vec<Rc<GithubRepositoryRow>>) {
-    self.all_rows = rows;
+    self.all_rows = rows
+      .into_iter()
+      .map(|row| {
+        if self.pinned_repos.contains(&row.repository.full_name) {
+          Rc::new(GithubRepositoryRow {
+            repository: row.repository.clone(),
+            pinned: true,
+          })
+        } else {
+          row
+        }
+      })
+      .collect();
     self.prepare(self.query.clone());
   }
 
@@ -246,14 +263,36 @@ impl GithubRepositoryListDelegate {
     self.query = query.into();
     let q = self.query.as_ref();
 
-    let rows: Vec<Rc<GithubRepositoryRow>> = self
+    let mut rows: Vec<Rc<GithubRepositoryRow>> = self
       .all_rows
       .iter()
       .filter(|row| row.matches(q))
       .cloned()
       .collect();
 
+    rows.sort_by(|a, b| b.pinned.cmp(&a.pinned));
     self.matched_rows = rows;
+  }
+
+  fn toggle_pin(&mut self, full_name: &str) {
+    if self.pinned_repos.contains(full_name) {
+      self.pinned_repos.remove(full_name);
+      ConfigStore::unpin_repo(full_name);
+    } else {
+      self.pinned_repos.insert(full_name.to_string());
+      ConfigStore::pin_repo(full_name);
+    }
+
+    for row in &mut self.all_rows {
+      if row.repository.full_name == full_name {
+        *row = Rc::new(GithubRepositoryRow {
+          repository: row.repository.clone(),
+          pinned: self.pinned_repos.contains(full_name),
+        });
+      }
+    }
+
+    self.prepare(self.query.clone());
   }
 }
 
@@ -274,10 +313,20 @@ impl ListDelegate for GithubRepositoryListDelegate {
     let base_item = list_base_item(ix, self.selected_index, &theme);
     let row = self.matched_rows.get(ix.row)?;
     let updated_at = repository_updated_label(&row.repository.updated_at);
+    let is_pinned = row.pinned;
+    let full_name = row.repository.full_name.clone();
+    let pin_color = if is_pinned {
+      theme.foreground
+    } else {
+      theme.muted_foreground
+    };
+    let entity = cx.entity().clone();
 
     Some(
       base_item.px_2().py_2().child(
         v_flex()
+          .size_full()
+          .group("repo-row")
           .gap_1()
           .child(
             h_flex()
@@ -296,6 +345,27 @@ impl ListDelegate for GithubRepositoryListDelegate {
                   .min_w_0()
                   .flex_1()
                   .child(Label::new(row.repository.full_name.clone()).truncate()),
+              )
+              .child(
+                div()
+                  .id(SharedString::from(format!("pin-{}", full_name)))
+                  .cursor_pointer()
+                  .when(!is_pinned, |this| {
+                    this
+                      .opacity(0.0)
+                      .group_hover("repo-row", |this| this.opacity(1.0))
+                  })
+                  .on_mouse_down(MouseButton::Left, {
+                    let full_name = full_name.clone();
+                    move |_event, _window, cx| {
+                      cx.stop_propagation();
+                      entity.update(cx, |state, cx| {
+                        state.delegate_mut().toggle_pin(&full_name);
+                        cx.notify();
+                      });
+                    }
+                  })
+                  .child(Icon::new(UiIconName::Pin).size_3().text_color(pin_color)),
               )
               .when(row.repository.private, |this| {
                 this.child(
@@ -1203,6 +1273,7 @@ impl GithubPage {
               .map(|repository| {
                 Rc::new(GithubRepositoryRow {
                   repository: Rc::new(repository),
+                  pinned: false,
                 })
               })
               .collect::<Vec<_>>(),
@@ -2000,6 +2071,7 @@ mod tests {
               owner_avatar_url: Some("https://example.com/acme.png".to_string()),
               updated_at: "2026-02-15T12:30:00Z".to_string(),
             }),
+            pinned: false,
           })]);
         cx.notify();
       });
