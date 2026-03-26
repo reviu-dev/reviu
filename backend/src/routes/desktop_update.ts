@@ -6,6 +6,7 @@ import {
   checkDesktopUpdate,
   downloadDesktopUpdateReleaseAsset,
   downloadLatestDesktopUpdateAsset,
+  fetchChangelog,
   normalizeSemver,
 } from '../plugins/desktop_update/service.js'
 
@@ -109,6 +110,16 @@ export const desktopUpdateRoutes = router
     }
     catch (error) {
       console.error('Error during desktop update release download:', (error as Error).message)
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/changelog', async (ctx) => {
+    try {
+      const entries = await fetchChangelog()
+      return ctx.json(entries, 200)
+    }
+    catch (error) {
+      console.error('Error fetching changelog:', (error as Error).message)
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })

@@ -336,6 +336,32 @@ export async function checkDesktopUpdate(
   return resolveDesktopUpdateCheck(manifest, input)
 }
 
+export interface DesktopChangelogEntry {
+  version: string
+  publishedAt: string
+  body: string
+}
+
+export async function fetchChangelog(): Promise<DesktopChangelogEntry[]> {
+  const res = await request(
+    'GET /repos/{owner}/{repo}/releases',
+    {
+      owner: DESKTOP_UPDATE_RELEASE_OWNER,
+      repo: DESKTOP_UPDATE_RELEASE_REPO,
+      per_page: 50,
+      headers: githubHeaders('application/vnd.github+json'),
+    },
+  )
+
+  return res.data
+    .filter((release: { draft?: boolean, body?: string | null }) => !release.draft && release.body)
+    .map((release: { tag_name: string, published_at?: string | null, body?: string | null }) => ({
+      version: release.tag_name.replace(/^v/, ''),
+      publishedAt: release.published_at ?? '',
+      body: release.body ?? '',
+    }))
+}
+
 export async function downloadDesktopUpdateReleaseAsset(tag: string, fileName: string) {
   const releaseRes = await fetchReleaseMetadataByTag(tag)
   const asset = findReleaseAssetByName(releaseRes.data, fileName)
