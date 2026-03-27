@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 The Git sidebar now separates changed files into "Staged Changes" and "Changes" groups, so you immediately know what will be committed. Partially staged files appear in both groups. A new "Unified File View" option in Settings lets you switch back to the previous flat list.
 
+### Persistent Diff View Mode
+
+Your preferred diff view mode (inline or split) is now saved across sessions. Toggle once in the Git page or PR review, and Reviu remembers your choice. A new "Split Diff View" option is also available in Settings under the Editor group.
+
 ---
 
 ## 0.0.7

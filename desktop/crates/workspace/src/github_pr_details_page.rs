@@ -73,7 +73,7 @@ use crate::{
     GithubRepository,
   },
   auth_state::{AuthState, AuthStateStore},
-  config::ConfigStore,
+  config::{AppSettings, ConfigStore},
   date_format::format_relative_time,
   file_preview::{is_markdown_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
@@ -2236,7 +2236,11 @@ impl GithubPrDetailsPage {
       selected_local_project_file: None,
       selected_local_project_tree_id: None,
       diff_editor,
-      diff_view: DiffViewMode::Inline,
+      diff_view: if AppSettings::get(cx).split_diff_view {
+        DiffViewMode::Split
+      } else {
+        DiffViewMode::Inline
+      },
       show_markdown_preview: false,
       description_markdown_state: MarkdownRenderState::new(),
       syntax_highlight_cache: Arc::new(gfm_markdown_viewer::SyntaxHighlightCache::new()),
@@ -4920,6 +4924,16 @@ impl GithubPrDetailsPage {
     }
 
     if ix == PR_TAB_CHANGES_IX {
+      let saved = crate::config::AppSettings::get(cx).split_diff_view;
+      let saved_mode = if saved {
+        DiffViewMode::Split
+      } else {
+        DiffViewMode::Inline
+      };
+      if self.diff_view != saved_mode {
+        self.diff_view = saved_mode;
+        self.sync_diff_view(cx);
+      }
       self.sync_tree_selection(cx);
       self.focus_changes_tree(window, cx);
       cx.on_next_frame(window, |this, window, cx| {
@@ -5478,6 +5492,9 @@ impl GithubPrDetailsPage {
       DiffViewMode::Inline => DiffViewMode::Split,
       DiffViewMode::Split => DiffViewMode::Inline,
     };
+    AppSettings::update(cx, |s| {
+      s.split_diff_view = self.diff_view == DiffViewMode::Split
+    });
     self.sync_diff_view(cx);
     cx.notify();
   }
@@ -9976,6 +9993,9 @@ mod tests {
       }
       if !cx.has_global::<ActiveLocalRepoStore>() {
         cx.set_global(ActiveLocalRepoStore::default());
+      }
+      if !cx.has_global::<AppSettings>() {
+        cx.set_global(AppSettings::default());
       }
       ActiveLocalRepoStore::set(cx, None);
     });
