@@ -54,9 +54,8 @@ impl SettingsPage {
     let default_indent_rainbow = self.indent_rainbow;
     let default_git_unified_file_view = self.git_unified_file_view;
 
-    vec![
-      SettingPage::new("General").default_open(true).groups(vec![
-        SettingGroup::new().title("Appearance").items(vec![
+    vec![SettingPage::new("General").default_open(true).groups(vec![
+      SettingGroup::new().title("Appearance").items(vec![
           SettingItem::new(
             "Dark Mode",
             SettingField::switch(|cx: &App| cx.theme().mode.is_dark(), {
@@ -144,7 +143,7 @@ impl SettingsPage {
           )
           .description("Base font size for the application (12–24px)."),
         ]),
-        SettingGroup::new().title("Git").items(vec![
+      SettingGroup::new().title("Git").items(vec![
           SettingItem::new(
             "Unified File View",
             SettingField::checkbox(
@@ -170,8 +169,7 @@ impl SettingsPage {
             "Show all changed files in a single list instead of separate staged/unstaged groups.",
           ),
         ]),
-      ]),
-    ]
+    ])]
   }
 
   fn show_command_palette_action(

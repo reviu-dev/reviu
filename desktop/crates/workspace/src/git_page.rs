@@ -507,11 +507,12 @@ impl ListDelegate for GitFileListDelegate {
           .group("file-row")
           .size_full()
           .items_center()
-          .justify_between()
+          .relative()
           .gap_2()
           .child(
             h_flex()
               .items_center()
+              .min_w_0()
               .gap_2()
               .child(status_element)
               .child(stage_element)
@@ -520,6 +521,8 @@ impl ListDelegate for GitFileListDelegate {
           )
           .child(
             div()
+              .absolute()
+              .right_0()
               .opacity(0.0)
               .group_hover("file-row", |this| this.opacity(1.0))
               .child(
