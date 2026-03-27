@@ -74,6 +74,31 @@ export function mapGithubGraphqlPullRequest(
   }
 }
 
+export function mapGithubPullRequest(
+  pullRequest: PullRequestResponse,
+): GithubPullRequest {
+  const labels = pullRequest.labels
+    .flatMap(label => (typeof label.name === 'string' && label.name.trim().length > 0 ? [{ name: label.name }] : []))
+
+  return {
+    number: pullRequest.number,
+    title: pullRequest.title,
+    state: pullRequest.state,
+    draft: Boolean(pullRequest.draft),
+    created_at: pullRequest.created_at,
+    closed_at: pullRequest.closed_at,
+    merged_at: pullRequest.merged_at,
+    updated_at: pullRequest.updated_at,
+    comments_count: 0,
+    author: mapGithubPullRequestAuthor(pullRequest.user),
+    labels,
+    repository: {
+      owner: pullRequest.base.repo.owner.login,
+      repo: pullRequest.base.repo.name,
+    },
+  }
+}
+
 export function mapGithubPullRequestAuthor<
   U extends { login?: string | null, avatar_url?: string | null, type?: string | null },
 >(user: U | null | undefined): GithubPullRequestAuthor {

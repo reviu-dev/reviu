@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.0.9
+
+### Branch Pull Request Shortcut in Git Header
+
+The Git page header now checks whether the current GitHub branch already has an open pull request. When it does, you can open that pull request directly in Reviu. When it does not, the same spot gives you a shortcut to open GitHub and create one for the current branch.
+
 ## 0.0.8
 
 ### Staged and Unstaged File Groups

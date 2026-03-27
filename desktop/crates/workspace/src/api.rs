@@ -882,6 +882,12 @@ struct GithubPullRequestsResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct GithubPullRequestResponse {
+  #[serde(rename = "pullRequest")]
+  pull_request: Option<GithubPullRequest>,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubUserRepositoriesResponse {
   repositories: Vec<GithubUserRepository>,
 }
@@ -1400,6 +1406,29 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestsResponse>()?;
     Ok(payload.pull_requests)
+  }
+
+  pub fn fetch_pull_request_for_branch(
+    &self,
+    owner: &str,
+    repo: &str,
+    branch: &str,
+  ) -> Result<Option<GithubPullRequest>> {
+    let route = format!("/github/repos/{owner}/{repo}/pr/branch");
+    let response = self
+      .authed_request(Method::GET, route.as_str())
+      .query(&[("branch", branch)])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubPullRequestResponse>()?;
+    Ok(payload.pull_request)
   }
 
   pub fn fetch_github_repository_issues(
@@ -2606,6 +2635,79 @@ mod tests {
     assert_eq!(prs[0].repository.owner, "acme");
     assert_eq!(prs[0].repository.repo, "widget");
     handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_for_branch_parses_success_payload() {
+    let body = r#"{
+      "pullRequest": {
+        "number": 11,
+        "title": "Improve docs",
+        "state": "open",
+        "created_at": "2026-02-11T08:00:00Z",
+        "closed_at": null,
+        "merged_at": null,
+        "draft": false,
+        "updated_at": "2026-02-15T12:00:00Z",
+        "comments_count": 7,
+        "author": {
+          "login": "docs-bot[bot]",
+          "avatar_url": null,
+          "is_bot": true
+        },
+        "labels": [{ "name": "docs" }],
+        "repository": { "owner": "acme", "repo": "widget" }
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let pull_request = api
+      .fetch_pull_request_for_branch("acme", "widget", "feature/parser")
+      .expect("fetch branch pull request")
+      .expect("pull request payload");
+    assert_eq!(pull_request.number, 11);
+    assert_eq!(pull_request.title, "Improve docs");
+    assert_eq!(pull_request.repository.owner, "acme");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_for_branch_returns_none_when_branch_has_no_open_pull_request() {
+    let body = r#"{
+      "pullRequest": null
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let pull_request = api
+      .fetch_pull_request_for_branch("acme", "widget", "feature/parser")
+      .expect("fetch branch pull request");
+    assert!(pull_request.is_none());
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_for_branch_uses_expected_route_with_branch_query() {
+    let body = r#"{"pullRequest":null}"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_pull_request_for_branch("acme", "widget", "feature/parser")
+      .expect("fetch branch pull request");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "GET /github/repos/acme/widget/pr/branch?branch=feature%2Fparser HTTP/1.1"
+    );
   }
 
   #[test]
@@ -4469,6 +4571,19 @@ mod tests {
 
     let err = api
       .fetch_github_repository_pull_requests("acme", "widget")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_pull_request_for_branch_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .fetch_pull_request_for_branch("acme", "widget", "feature/parser")
       .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));

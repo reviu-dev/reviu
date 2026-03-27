@@ -45,15 +45,17 @@ use smol::unblock;
 
 use crate::{
   active_local_repo::{ActiveLocalRepo, ActiveLocalRepoStore},
-  api::ApiClient,
+  api::{ApiClient, GithubPullRequest},
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, ConfigStore, RecentRepository},
   dock_badge::set_dock_badge,
   file_preview::{is_markdown_path, is_previewable_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
+  github_navigation::should_open_externally,
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
   github_repo_page::GithubRepoPageHandle,
+  github_shared,
   interactive_rebase_todo_view::{
     InteractiveRebaseTodoView, InteractiveRebaseTodoViewCancelHandler,
     InteractiveRebaseTodoViewConfig, InteractiveRebaseTodoViewHandler,
@@ -90,6 +92,29 @@ const GIT_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str = "git-markdown-preview-r
 
 type RepoSelectHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 type BranchSelectHandler = Rc<dyn Fn(BranchRef, &mut Window, &mut App)>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GithubBranchContext {
+  owner: String,
+  repo: String,
+  branch: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum GitBranchPullRequestButtonState {
+  Hidden,
+  Checking {
+    create_url: String,
+  },
+  OpenExisting {
+    owner: String,
+    repo: String,
+    number: u64,
+  },
+  Create {
+    url: String,
+  },
+}
 
 struct GitCommandPaletteContents {
   commands: Vec<CommandPaletteCommand>,
@@ -911,14 +936,19 @@ pub struct GitPage {
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
   svg_preview_source: Option<SharedString>,
   svg_preview_task: Option<Task<()>>,
+  branch_pr_lookup_context: Option<GithubBranchContext>,
+  branch_pr_lookup_result: Option<GithubPullRequest>,
+  branch_pr_lookup_loading: bool,
   auth_state: AuthState,
   auth_task: Option<Task<()>>,
+  branch_pr_lookup_task: Option<Task<()>>,
   open_file_task: Option<Task<()>>,
   status_task: Option<Task<()>>,
   history_task: Option<Task<()>>,
   history_files_task: Option<Task<()>>,
   history_open_file_task: Option<Task<()>>,
   branch_task: Option<Task<()>>,
+  branch_pr_lookup_generation: u64,
   open_file_generation: u64,
   status_refresh_generation: u64,
   branch_refresh_generation: u64,
@@ -958,6 +988,75 @@ impl GitPage {
       "markdown_preview"
     } else {
       Self::diff_view_tag(self.diff_view)
+    }
+  }
+
+  fn github_branch_context_from_active_repo(
+    local_repo: &ActiveLocalRepo,
+  ) -> Option<GithubBranchContext> {
+    let owner = local_repo.github_owner.as_deref()?.trim();
+    let repo = local_repo.github_repo.as_deref()?.trim();
+    let branch = local_repo.current_branch.as_deref()?.trim();
+
+    if owner.is_empty() || repo.is_empty() || branch.is_empty() || branch == "HEAD" {
+      return None;
+    }
+
+    Some(GithubBranchContext {
+      owner: owner.to_string(),
+      repo: repo.to_string(),
+      branch: branch.to_string(),
+    })
+  }
+
+  fn github_branch_context(&self, cx: &App) -> Option<GithubBranchContext> {
+    ActiveLocalRepoStore::get(cx)
+      .as_ref()
+      .and_then(Self::github_branch_context_from_active_repo)
+  }
+
+  fn branch_pr_lookup_context(&self, cx: &App) -> Option<GithubBranchContext> {
+    AuthStateStore::has_pro_access(cx)
+      .then(|| self.github_branch_context(cx))
+      .flatten()
+  }
+
+  fn branch_pr_button_state(
+    branch_context: Option<&GithubBranchContext>,
+    can_open_in_app: bool,
+    lookup_loading: bool,
+    lookup_result: Option<&GithubPullRequest>,
+  ) -> GitBranchPullRequestButtonState {
+    let Some(branch_context) = branch_context else {
+      return GitBranchPullRequestButtonState::Hidden;
+    };
+
+    if can_open_in_app {
+      if lookup_loading {
+        return GitBranchPullRequestButtonState::Checking {
+          create_url: github_shared::create_pr_url(
+            branch_context.owner.as_str(),
+            branch_context.repo.as_str(),
+            branch_context.branch.as_str(),
+          ),
+        };
+      }
+
+      if let Some(pull_request) = lookup_result {
+        return GitBranchPullRequestButtonState::OpenExisting {
+          owner: pull_request.repository.owner.clone(),
+          repo: pull_request.repository.repo.clone(),
+          number: pull_request.number,
+        };
+      }
+    }
+
+    GitBranchPullRequestButtonState::Create {
+      url: github_shared::create_pr_url(
+        branch_context.owner.as_str(),
+        branch_context.repo.as_str(),
+        branch_context.branch.as_str(),
+      ),
     }
   }
 
@@ -1046,6 +1145,68 @@ impl GitPage {
       }
     });
     ActiveLocalRepoStore::set(cx, snapshot);
+  }
+
+  fn clear_branch_pr_lookup(&mut self) {
+    self.branch_pr_lookup_task = None;
+    self.branch_pr_lookup_context = None;
+    self.branch_pr_lookup_result = None;
+    self.branch_pr_lookup_loading = false;
+    self.branch_pr_lookup_generation = self.branch_pr_lookup_generation.wrapping_add(1);
+  }
+
+  fn refresh_branch_pr_lookup_if_needed(&mut self, cx: &mut Context<Self>) {
+    let next_context = self.branch_pr_lookup_context(cx);
+    if self.branch_pr_lookup_context.as_ref() == next_context.as_ref() {
+      return;
+    }
+
+    self.refresh_branch_pr_lookup(cx);
+  }
+
+  fn refresh_branch_pr_lookup(&mut self, cx: &mut Context<Self>) {
+    let next_context = self.branch_pr_lookup_context(cx);
+    self.branch_pr_lookup_generation = self.branch_pr_lookup_generation.wrapping_add(1);
+    let generation = self.branch_pr_lookup_generation;
+    self.branch_pr_lookup_task = None;
+    self.branch_pr_lookup_context = next_context.clone();
+    self.branch_pr_lookup_result = None;
+    self.branch_pr_lookup_loading = false;
+
+    let Some(context) = next_context else {
+      cx.notify();
+      return;
+    };
+
+    self.branch_pr_lookup_loading = true;
+    let api = self.api.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let context_for_fetch = context.clone();
+      let result = unblock(move || {
+        api.fetch_pull_request_for_branch(
+          context_for_fetch.owner.as_str(),
+          context_for_fetch.repo.as_str(),
+          context_for_fetch.branch.as_str(),
+        )
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        if this.branch_pr_lookup_generation != generation
+          || this.branch_pr_lookup_context.as_ref() != Some(&context)
+        {
+          return;
+        }
+
+        this.branch_pr_lookup_task = None;
+        this.branch_pr_lookup_loading = false;
+        this.branch_pr_lookup_result = result.ok().flatten();
+        cx.notify();
+      });
+    });
+
+    self.branch_pr_lookup_task = Some(task);
+    cx.notify();
   }
 
   fn should_refresh_file_list(sidebar_mode: GitSidebarMode) -> bool {
@@ -1268,6 +1429,7 @@ impl GitPage {
     self.can_push = can_push;
     self.can_force_push = can_force_push;
     self.sync_active_local_repo(cx);
+    self.refresh_branch_pr_lookup_if_needed(cx);
 
     let selected_file_update = Self::selected_file_update(
       self.selected_file.as_deref(),
@@ -1624,6 +1786,7 @@ impl GitPage {
       self.fetch_initial_notifications(cx);
     }
 
+    self.refresh_branch_pr_lookup(cx);
     cx.refresh_windows();
     cx.notify();
   }
@@ -1710,14 +1873,19 @@ impl GitPage {
       svg_preview: None,
       svg_preview_source: None,
       svg_preview_task: None,
+      branch_pr_lookup_context: None,
+      branch_pr_lookup_result: None,
+      branch_pr_lookup_loading: false,
       auth_state: AuthState::Unknown,
       auth_task: None,
+      branch_pr_lookup_task: None,
       open_file_task: None,
       status_task: None,
       history_task: None,
       history_files_task: None,
       history_open_file_task: None,
       branch_task: None,
+      branch_pr_lookup_generation: 0,
       open_file_generation: 0,
       status_refresh_generation: 0,
       branch_refresh_generation: 0,
@@ -1791,14 +1959,19 @@ impl GitPage {
       svg_preview: None,
       svg_preview_source: None,
       svg_preview_task: None,
+      branch_pr_lookup_context: None,
+      branch_pr_lookup_result: None,
+      branch_pr_lookup_loading: false,
       auth_state: AuthState::Unknown,
       auth_task: None,
+      branch_pr_lookup_task: None,
       open_file_task: None,
       status_task: None,
       history_task: None,
       history_files_task: None,
       history_open_file_task: None,
       branch_task: None,
+      branch_pr_lookup_generation: 0,
       open_file_generation: 0,
       status_refresh_generation: 0,
       branch_refresh_generation: 0,
@@ -1924,6 +2097,7 @@ impl GitPage {
     self.pending_history_file_loads.clear();
     self.history_opened_commit_file = None;
     ActiveLocalRepoStore::set(cx, None);
+    self.clear_branch_pr_lookup();
     ConfigStore::persist_recent_repository(&repo_root);
 
     self.reload_status(cx);
@@ -2113,6 +2287,7 @@ impl GitPage {
       self.refresh_history_list(cx);
       self.sync_sentry_git_context();
       ActiveLocalRepoStore::set(cx, None);
+      self.clear_branch_pr_lookup();
       cx.notify();
       return;
     };
@@ -2213,6 +2388,7 @@ impl GitPage {
             this.refresh_file_list(cx);
           }
           ActiveLocalRepoStore::set(cx, None);
+          this.clear_branch_pr_lookup();
           cx.notify();
         });
         return;
@@ -5399,6 +5575,13 @@ impl GitPage {
     let on_branch_select = self.branch_select_handler(cx);
     let repo_options = self.repo_dropdown_items.clone();
     let branch_options = self.branch_dropdown_items.clone();
+    let branch_context = self.github_branch_context(cx);
+    let branch_pr_button_state = Self::branch_pr_button_state(
+      branch_context.as_ref(),
+      AuthStateStore::has_pro_access(cx),
+      self.branch_pr_lookup_loading,
+      self.branch_pr_lookup_result.as_ref(),
+    );
 
     let repo_dropdown = dropdown_select(
       DropdownSelectConfig::new("git-header-repo-select")
@@ -5526,8 +5709,70 @@ impl GitPage {
       .tooltip("Fetch updates from remotes")
       .on_click(cx.listener(Self::fetch_action));
 
+    let branch_pr_button = match branch_pr_button_state {
+      GitBranchPullRequestButtonState::Hidden => None,
+      GitBranchPullRequestButtonState::Checking { create_url: _ } => Some(
+        Button::new("git-branch-pr-status")
+          .label("Checking PR")
+          .icon(UiIconName::GitPullRequestArrow)
+          .outline()
+          .loading(true)
+          .with_variant(ButtonVariant::Secondary)
+          .xsmall()
+          .p_2()
+          .disabled(true)
+          .tooltip("Looking for an open pull request for this branch"),
+      ),
+      GitBranchPullRequestButtonState::OpenExisting {
+        owner,
+        repo,
+        number,
+      } => {
+        let pr_url = github_shared::pr_url(owner.as_str(), repo.as_str(), number);
+        Some(
+          Button::new("git-open-branch-pr")
+            .label(format!("Open PR #{number}"))
+            .icon(UiIconName::GitPullRequestArrow)
+            .outline()
+            .with_variant(ButtonVariant::Secondary)
+            .xsmall()
+            .p_2()
+            .tooltip("Open the pull request for this branch")
+            .on_click(move |_, window, cx| {
+              if should_open_externally(window) {
+                cx.open_url(&pr_url);
+              } else {
+                GithubPrDetailsPageHandle::show_with_open_target(
+                  owner.clone().into(),
+                  repo.clone().into(),
+                  number,
+                  false,
+                  None,
+                  cx,
+                );
+              }
+            }),
+        )
+      }
+      GitBranchPullRequestButtonState::Create { url } => Some(
+        Button::new("git-create-branch-pr")
+          .label("Create PR")
+          .icon(IconName::ExternalLink)
+          .outline()
+          .with_variant(ButtonVariant::Secondary)
+          .xsmall()
+          .p_2()
+          .tooltip("Open GitHub to create a pull request for this branch")
+          .on_click(move |_, _, cx| {
+            cx.open_url(&url);
+          }),
+      ),
+    };
+
     let header_left = div()
       .flex()
+      .flex_1()
+      .min_w_0()
       .h_full()
       .items_center()
       .gap_3()
@@ -5551,6 +5796,12 @@ impl GitPage {
       .when_some(branch_info, |this, info| this.child(info))
       .child(fetch_button);
 
+    let header_right = h_flex()
+      .items_center()
+      .gap_2()
+      .flex_shrink_0()
+      .when_some(branch_pr_button, |this, button| this.child(button));
+
     div()
       .h(px(PAGE_HEADER_HEIGHT))
       .min_h(px(PAGE_HEADER_HEIGHT))
@@ -5558,11 +5809,12 @@ impl GitPage {
       .pr_3()
       .flex()
       .items_center()
-      .justify_start()
+      .justify_between()
       .bg(theme.sidebar)
       .border_b_1()
       .border_color(theme.title_bar_border)
       .child(header_left)
+      .child(header_right)
   }
 
   fn render_empty_state(&self, message: &str, cx: &mut Context<Self>) -> AnyElement {
@@ -7023,6 +7275,30 @@ mod tests {
     }
   }
 
+  fn make_branch_pull_request(number: u64) -> GithubPullRequest {
+    GithubPullRequest {
+      number,
+      title: format!("Pull request {number}"),
+      state: crate::api::GithubPullRequestState::Open,
+      created_at: "2026-03-20T09:00:00Z".to_string(),
+      closed_at: None,
+      merged_at: None,
+      draft: false,
+      updated_at: "2026-03-21T10:00:00Z".to_string(),
+      comments_count: 0,
+      author: crate::api::GithubPullRequestAuthor {
+        login: "octocat".to_string(),
+        avatar_url: None,
+        is_bot: false,
+      },
+      labels: Vec::new(),
+      repository: crate::api::GithubRepository {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+      },
+    }
+  }
+
   fn isolate_config_store_for_test() {
     static NEXT_DB_ID: AtomicU64 = AtomicU64::new(1);
     let id = NEXT_DB_ID.fetch_add(1, Ordering::Relaxed);
@@ -7066,6 +7342,85 @@ mod tests {
     });
   }
 
+  #[test]
+  fn github_branch_context_from_active_repo_requires_repo_and_named_branch() {
+    let ready = ActiveLocalRepo {
+      repo_root: PathBuf::from("/tmp/repo"),
+      github_owner: Some("acme".to_string()),
+      github_repo: Some("widget".to_string()),
+      current_branch: Some("feature/parser".to_string()),
+      head_sha: Some("head".to_string()),
+      has_uncommitted_changes: false,
+    };
+    assert_eq!(
+      GitPage::github_branch_context_from_active_repo(&ready),
+      Some(GithubBranchContext {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+        branch: "feature/parser".to_string(),
+      })
+    );
+
+    let detached = ActiveLocalRepo {
+      current_branch: Some("HEAD".to_string()),
+      ..ready.clone()
+    };
+    assert_eq!(
+      GitPage::github_branch_context_from_active_repo(&detached),
+      None
+    );
+
+    let missing_remote = ActiveLocalRepo {
+      github_owner: None,
+      ..ready
+    };
+    assert_eq!(
+      GitPage::github_branch_context_from_active_repo(&missing_remote),
+      None
+    );
+  }
+
+  #[test]
+  fn branch_pr_button_state_prefers_open_existing_pull_request() {
+    let context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature/parser".to_string(),
+    };
+    let pull_request = make_branch_pull_request(42);
+
+    assert_eq!(
+      GitPage::branch_pr_button_state(Some(&context), true, false, Some(&pull_request)),
+      GitBranchPullRequestButtonState::OpenExisting {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+        number: 42,
+      }
+    );
+  }
+
+  #[test]
+  fn branch_pr_button_state_shows_loading_only_when_in_app_lookup_is_available() {
+    let context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature/parser".to_string(),
+    };
+
+    assert_eq!(
+      GitPage::branch_pr_button_state(Some(&context), true, true, None),
+      GitBranchPullRequestButtonState::Checking {
+        create_url: "https://github.com/acme/widget/compare/feature/parser?expand=1".to_string(),
+      }
+    );
+    assert_eq!(
+      GitPage::branch_pr_button_state(Some(&context), false, true, None),
+      GitBranchPullRequestButtonState::Create {
+        url: "https://github.com/acme/widget/compare/feature/parser?expand=1".to_string(),
+      }
+    );
+  }
+
   fn seed_repo_branch_state(this: &mut GitPage, repo_root: &Path, cx: &mut Context<GitPage>) {
     this.selected_repo = Some(repo_root.to_path_buf());
     let branch_status = current_branch_status(repo_root).expect("read initial branch status");
@@ -7099,6 +7454,7 @@ mod tests {
   ) {
     loop {
       let (
+        branch_pr_lookup_task,
         open_file_task,
         status_task,
         branch_task,
@@ -7107,6 +7463,7 @@ mod tests {
         history_open_file_task,
       ) = git_page.update_in(cx, |this, _window, _| {
         (
+          this.branch_pr_lookup_task.take(),
           this.open_file_task.take(),
           this.status_task.take(),
           this.branch_task.take(),
@@ -7117,6 +7474,10 @@ mod tests {
       });
 
       let mut had_task = false;
+      if let Some(task) = branch_pr_lookup_task {
+        had_task = true;
+        task.await;
+      }
       if let Some(task) = open_file_task {
         had_task = true;
         task.await;

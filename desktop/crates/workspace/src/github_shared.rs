@@ -72,6 +72,10 @@ pub(crate) fn pr_url(owner: &str, repo: &str, pr_number: u64) -> String {
   format!("https://github.com/{owner}/{repo}/pull/{pr_number}")
 }
 
+pub(crate) fn create_pr_url(owner: &str, repo: &str, branch: &str) -> String {
+  format!("https://github.com/{owner}/{repo}/compare/{branch}?expand=1")
+}
+
 pub(crate) fn pull_request_status_label(status: GithubPullRequestStatus) -> &'static str {
   match status {
     GithubPullRequestStatus::Open => "Open",
@@ -402,7 +406,7 @@ pub(crate) fn next_trimmed_text_update(raw_value: &str, initial_value: &str) -> 
 #[cfg(test)]
 mod tests {
   use super::{
-    is_unauthorized_error_message, issue_url, line_snippets_from_content,
+    create_pr_url, is_unauthorized_error_message, issue_url, line_snippets_from_content,
     logins_match_case_insensitive, next_trimmed_text_update, normalize_non_empty_text, pr_url,
     pull_request_activity_text_at, pull_request_author_display_name, pull_request_author_is_bot,
     pull_request_comments_count_text, pull_request_list_row_body, pull_request_status_color,
@@ -523,6 +527,10 @@ mod tests {
     assert_eq!(
       pr_url("acme", "widget", 7),
       "https://github.com/acme/widget/pull/7"
+    );
+    assert_eq!(
+      create_pr_url("acme", "widget", "feature/parser"),
+      "https://github.com/acme/widget/compare/feature/parser?expand=1"
     );
   }
 

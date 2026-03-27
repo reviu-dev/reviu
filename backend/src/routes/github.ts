@@ -44,6 +44,7 @@ import type {
   GithubRepositoryTree,
   GithubRepositoryTreeParams,
   GithubUserRepository,
+  ListPullsParams,
   MergePullRequestParams,
   NotificationsParams,
   PullRequestCommentsParams,
@@ -91,6 +92,7 @@ import {
   mapGithubGraphqlPullRequest,
   mapGithubIssueComment,
   mapGithubIssueDescriptionUpdate,
+  mapGithubPullRequest,
   mapGithubPullRequestAuthor,
   mapGithubPullRequestCommit,
   mapGithubPullRequestDescriptionUpdate,
@@ -134,6 +136,7 @@ import {
   fetchGithubPullRequestConditionally,
   fetchGithubPullRequestFilesAllPages,
   fetchGithubPullRequestReviewsConditionally,
+  fetchGithubPullRequests,
   fetchGithubPullRequestSearchGraphql,
   fetchGithubRepositoryBranchesConditionally,
   fetchGithubRepositoryConditionally,
@@ -1100,6 +1103,27 @@ async function fetchRepositoryPullRequestsWithCache(
         }
       },
     }))
+}
+
+async function fetchBranchPullRequest(
+  userId: string,
+  githubToken: string,
+  owner: string,
+  repo: string,
+  branch: string,
+) {
+  return withGithubMetrics(userId, 'pull_request.branch_lookup', async () => {
+    const params: ListPullsParams = {
+      owner,
+      repo,
+      state: 'open',
+      head: `${owner}:${branch}`,
+      per_page: 1,
+    }
+
+    const pullRequests = await fetchGithubPullRequests({ token: githubToken, params })
+    return pullRequests.at(0) ? mapGithubPullRequest(pullRequests[0]) : null
+  })
 }
 
 async function fetchRepositoryIssuesWithCache(
@@ -2156,6 +2180,29 @@ export const githubRoutes = githubRouter
       return ctx.json({ pullRequests: result.payload }, 200)
     }
     catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/repos/:owner/:repo/pr/branch', async (ctx) => {
+    const { owner, repo } = ctx.req.param()
+    const branch = ctx.req.query('branch')?.trim()
+
+    if (!branch) {
+      return ctx.json({ error: 'Missing branch' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const pullRequest = await fetchBranchPullRequest(user.id, githubToken, owner, repo, branch)
+      return ctx.json({ pullRequest }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })
