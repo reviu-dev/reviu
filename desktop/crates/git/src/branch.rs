@@ -188,6 +188,21 @@ pub fn fetch(repo_root: &Path) -> Result<()> {
   Ok(())
 }
 
+pub fn pull(repo_root: &Path) -> Result<()> {
+  let output = Command::new("git")
+    .current_dir(repo_root)
+    .args(["pull"])
+    .output()
+    .context("run git pull")?;
+
+  if output.status.success() {
+    return Ok(());
+  }
+
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  bail!("git pull failed: {}", stderr.trim())
+}
+
 pub fn sync_current_branch_to_head(
   repo_root: &Path,
   branch_name: &str,
