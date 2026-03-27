@@ -17,7 +17,7 @@ use git::{
   delete_untracked_file, detached_head_label, diff_set_from_patch, drop_stash, fetch,
   head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
   list_commit_changed_files, list_commit_history, list_interactive_rebase_commits,
-  list_repo_status, list_stashes, load_commit_file_diff, merge_branch, pop_stash, push,
+  list_repo_status, list_stashes, load_commit_file_diff, merge_branch, pop_stash, pull, push,
   rebase_branch, restore_file, skip_rebase, stage_all, stage_file, start_interactive_rebase,
   switch_branch, undo_last_commit, unstage_all, unstage_file,
 };
@@ -2707,6 +2707,7 @@ impl GitPage {
         commands.push(CommandPaletteCommand::accept_all_current_conflicts());
         commands.push(CommandPaletteCommand::accept_all_incoming_conflicts());
       }
+      commands.push(CommandPaletteCommand::pull());
       commands.push(CommandPaletteCommand::fetch());
       commands.push(CommandPaletteCommand::cherry_pick());
 
@@ -3349,6 +3350,14 @@ impl GitPage {
         self.unstage_all_action(cx);
         Ok(())
       }
+      CommandPaletteAction::Pull => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
+        should_post_action_refresh = false;
+        self.pull_repository(root_path, cx);
+        Ok(())
+      }
       CommandPaletteAction::Fetch => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
@@ -3819,6 +3828,40 @@ impl GitPage {
             data.insert("error".into(), error_message.clone().into());
             this.add_git_breadcrumb("Fetch failed", data.clone());
             this.record_git_unexpected_error("git.fetch", error_message.as_str(), data);
+          }
+        }
+        this.reload_status(cx);
+        this.refresh_branches(cx);
+        if let Some(editor) = editor.clone() {
+          editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
+        }
+      });
+    });
+
+    self.status_task = Some(task);
+  }
+
+  fn pull_repository(&mut self, repo_root: PathBuf, cx: &mut Context<Self>) {
+    if self.push_pull_in_progress {
+      return;
+    }
+    self.add_git_breadcrumb("Pull started", Map::new());
+    self.push_pull_in_progress = true;
+    let editor = self.editor.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || pull(&repo_root)).await;
+      let _ = this.update(cx, |this, cx| {
+        this.push_pull_in_progress = false;
+        match result {
+          Ok(()) => {
+            this.add_git_breadcrumb("Pull succeeded", Map::new());
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            let mut data = Map::new();
+            data.insert("error".into(), error_message.clone().into());
+            this.add_git_breadcrumb("Pull failed", data.clone());
+            this.record_git_unexpected_error("git.pull", error_message.as_str(), data);
           }
         }
         this.reload_status(cx);
@@ -5407,9 +5450,15 @@ impl GitPage {
             .gap_2()
             .child(
               div()
+                .id("branch-ahead-push")
                 .flex()
                 .items_center()
                 .gap_1()
+                .cursor_pointer()
+                .tooltip(|window, cx| Tooltip::new("Push").build(window, cx))
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                  this.push_changes_action(cx);
+                }))
                 .child(
                   Icon::new(IconName::ArrowUp)
                     .size_3()
@@ -5424,9 +5473,17 @@ impl GitPage {
             )
             .child(
               div()
+                .id("branch-behind-pull")
                 .flex()
                 .items_center()
                 .gap_1()
+                .cursor_pointer()
+                .tooltip(|window, cx| Tooltip::new("Pull").build(window, cx))
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                  if let Some(repo_root) = this.selected_repo.clone() {
+                    this.pull_repository(repo_root, cx);
+                  }
+                }))
                 .child(
                   Icon::new(IconName::ArrowDown)
                     .size_3()

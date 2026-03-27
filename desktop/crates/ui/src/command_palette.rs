@@ -165,6 +165,7 @@ pub enum CommandPaletteAction {
   },
   StageAll,
   UnstageAll,
+  Pull,
   Fetch,
   Stash {
     include_untracked: bool,
@@ -650,6 +651,7 @@ pub enum CommandPaletteCommandId {
   CherryPick,
   StageAll,
   UnstageAll,
+  Pull,
   Fetch,
   Stash,
   StashIncludeUntracked,
@@ -886,6 +888,14 @@ impl CommandPaletteCommand {
     }
   }
 
+  pub fn pull() -> Self {
+    Self {
+      id: CommandPaletteCommandId::Pull,
+      name: "Pull".into(),
+      description: Some("Pull changes from the remote branch".into()),
+    }
+  }
+
   pub fn fetch() -> Self {
     Self {
       id: CommandPaletteCommandId::Fetch,
@@ -1100,6 +1110,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::CherryPick => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::StageAll => Icon::new(IconName::Plus),
       CommandPaletteCommandId::UnstageAll => Icon::new(UiIconName::ArrowUpFromLine),
+      CommandPaletteCommandId::Pull => Icon::new(IconName::ArrowDown),
       CommandPaletteCommandId::Fetch => Icon::new(UiIconName::RefreshCcw),
       CommandPaletteCommandId::Stash | CommandPaletteCommandId::StashIncludeUntracked => {
         Icon::new(UiIconName::ArrowDownFromLine)
@@ -1955,6 +1966,9 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::UnstageAll => {
         self.trigger_action(CommandPaletteAction::UnstageAll, window, cx);
+      }
+      CommandPaletteCommandId::Pull => {
+        self.trigger_action(CommandPaletteAction::Pull, window, cx);
       }
       CommandPaletteCommandId::Fetch => {
         self.trigger_action(CommandPaletteAction::Fetch, window, cx);

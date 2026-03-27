@@ -12,6 +12,10 @@ The Git sidebar now separates changed files into "Staged Changes" and "Changes" 
 
 Your preferred diff view mode (inline or split) is now saved across sessions. Toggle once in the Git page or PR review, and Reviu remembers your choice. A new "Split Diff View" option is also available in Settings under the Editor group.
 
+### Git Pull Command and Clickable Branch Indicators
+
+A new "Pull" command is available in the command palette to pull changes from the remote branch. The ahead/behind indicators in the Git page header are now clickable - click the up arrow (↑) to push, or the down arrow (↓) to pull.
+
 ---
 
 ## 0.0.7
