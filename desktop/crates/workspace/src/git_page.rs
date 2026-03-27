@@ -34,6 +34,7 @@ use gpui_component::{
   kbd::Kbd,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{DropdownMenu, PopupMenuItem},
+  notification::Notification,
   spinner::Spinner,
   tag::Tag,
   text::TextView,
@@ -115,6 +116,9 @@ enum GitBranchPullRequestButtonState {
     url: String,
   },
 }
+
+struct GitBranchSwitchNotificationId;
+struct GitActionErrorNotificationId;
 
 struct GitCommandPaletteContents {
   commands: Vec<CommandPaletteCommand>,
@@ -2023,21 +2027,56 @@ impl GitPage {
     }
     self.advance_status_refresh_generation();
     let editor = self.editor.clone();
+    let branch_name = branch.name.clone();
 
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || switch_branch(&repo_root, &branch)).await;
-      let _ = this.update(cx, |this, cx| {
-        if result.is_ok() {
+      let _ = this.update(cx, |this, cx| match result {
+        Ok(()) => {
           this.reload_status(cx);
           this.refresh_branches(cx);
           if let Some(editor) = editor.clone() {
             editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
           }
         }
+        Err(error) => {
+          this.push_branch_switch_error_notification(&branch_name, error.to_string().into(), cx);
+        }
       });
     });
 
     self.branch_task = Some(task);
+  }
+
+  fn push_branch_switch_error_notification(
+    &self,
+    branch_name: &str,
+    error: SharedString,
+    cx: &mut Context<Self>,
+  ) {
+    let title = format!("Failed to switch to {branch_name}");
+    self.push_git_error_notification_with_id::<GitBranchSwitchNotificationId>(title, error, cx);
+  }
+
+  fn push_git_action_error_notification(
+    &self,
+    title: impl Into<SharedString>,
+    error: SharedString,
+    cx: &mut Context<Self>,
+  ) {
+    self.push_git_error_notification_with_id::<GitActionErrorNotificationId>(title, error, cx);
+  }
+
+  fn push_git_error_notification_with_id<T: Sized + 'static>(
+    &self,
+    title: impl Into<SharedString>,
+    error: SharedString,
+    cx: &mut Context<Self>,
+  ) {
+    let title = title.into();
+    let _ = cx.update_window(self.window_handle, move |_, window, cx| {
+      window.push_notification(Notification::error(error).id::<T>().title(title), cx);
+    });
   }
 
   fn branch_select_handler(&self, cx: &Context<Self>) -> BranchSelectHandler {
@@ -3661,6 +3700,7 @@ impl GitPage {
             data.insert("error".into(), error_message.clone().into());
             this.add_git_breadcrumb("Commit failed", data.clone());
             this.record_git_unexpected_error("git.commit", error_message.as_str(), data);
+            this.push_git_action_error_notification("Commit failed", error_message.into(), cx);
           }
         }
         this.reload_status(cx);
@@ -3939,10 +3979,15 @@ impl GitPage {
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || amend_commit(&repo_root, message_opt.as_deref())).await;
       let _ = this.update(cx, |this, cx| {
-        if result.is_ok() {
-          let _ = cx.update_window(window_handle, |_, window, cx| {
-            commit_input.update(cx, |input, cx| input.set_value("", window, cx));
-          });
+        match result {
+          Ok(()) => {
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+              commit_input.update(cx, |input, cx| input.set_value("", window, cx));
+            });
+          }
+          Err(error) => {
+            this.push_git_action_error_notification("Amend failed", error.to_string().into(), cx);
+          }
         }
         this.reload_status(cx);
         if let Some(editor) = editor.clone() {
@@ -3964,8 +4009,15 @@ impl GitPage {
 
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
-      let _ = unblock(move || undo_last_commit(&repo_root)).await;
+      let result = unblock(move || undo_last_commit(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
+        if let Err(error) = result {
+          this.push_git_action_error_notification(
+            "Undo last commit failed",
+            error.to_string().into(),
+            cx,
+          );
+        }
         this.reload_status(cx);
         if let Some(editor) = editor.clone() {
           editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
@@ -4004,6 +4056,7 @@ impl GitPage {
             data.insert("error".into(), error_message.clone().into());
             this.add_git_breadcrumb("Fetch failed", data.clone());
             this.record_git_unexpected_error("git.fetch", error_message.as_str(), data);
+            this.push_git_action_error_notification("Fetch failed", error_message.into(), cx);
           }
         }
         this.reload_status(cx);
@@ -4038,6 +4091,7 @@ impl GitPage {
             data.insert("error".into(), error_message.clone().into());
             this.add_git_breadcrumb("Pull failed", data.clone());
             this.record_git_unexpected_error("git.pull", error_message.as_str(), data);
+            this.push_git_action_error_notification("Pull failed", error_message.into(), cx);
           }
         }
         this.reload_status(cx);
@@ -4076,6 +4130,7 @@ impl GitPage {
             data.insert("error".into(), error_message.clone().into());
             this.add_git_breadcrumb("Push failed", data.clone());
             this.record_git_unexpected_error("git.push", error_message.as_str(), data);
+            this.push_git_action_error_notification("Push failed", error_message.into(), cx);
           }
         }
         this.reload_status(cx);
@@ -4110,6 +4165,7 @@ impl GitPage {
             data.insert("error".into(), error_message.clone().into());
             this.add_git_breadcrumb("Force push failed", data.clone());
             this.record_git_unexpected_error("git.force_push", error_message.as_str(), data);
+            this.push_git_action_error_notification("Force push failed", error_message.into(), cx);
           }
         }
         this.reload_status(cx);
@@ -4571,10 +4627,19 @@ impl GitPage {
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || abort_merge(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
-        if result.is_ok() {
-          let _ = cx.update_window(window_handle, |_, window, cx| {
-            commit_input.update(cx, |input, cx| input.set_value("", window, cx));
-          });
+        match result {
+          Ok(()) => {
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+              commit_input.update(cx, |input, cx| input.set_value("", window, cx));
+            });
+          }
+          Err(error) => {
+            this.push_git_action_error_notification(
+              "Abort merge failed",
+              error.to_string().into(),
+              cx,
+            );
+          }
         }
         this.reload_status(cx);
         if let Some(editor) = editor.clone() {
@@ -4599,11 +4664,20 @@ impl GitPage {
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || abort_rebase(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
-        if result.is_ok() {
-          this.force_push_after_rebase = false;
-          let _ = cx.update_window(window_handle, |_, window, cx| {
-            commit_input.update(cx, |input, cx| input.set_value("", window, cx));
-          });
+        match result {
+          Ok(()) => {
+            this.force_push_after_rebase = false;
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+              commit_input.update(cx, |input, cx| input.set_value("", window, cx));
+            });
+          }
+          Err(error) => {
+            this.push_git_action_error_notification(
+              "Abort rebase failed",
+              error.to_string().into(),
+              cx,
+            );
+          }
         }
         this.reload_status(cx);
         if let Some(editor) = editor.clone() {
@@ -4640,6 +4714,7 @@ impl GitPage {
             data.insert("error".into(), error_message.clone().into());
             this.add_git_breadcrumb("Stage all failed", data.clone());
             this.record_git_unexpected_error("git.stage_all", error_message.as_str(), data);
+            this.push_git_action_error_notification("Stage all failed", error_message.into(), cx);
           }
         }
         this.reload_status(cx);
@@ -4668,6 +4743,7 @@ impl GitPage {
             data.insert("error".into(), error_message.clone().into());
             this.add_git_breadcrumb("Unstage all failed", data.clone());
             this.record_git_unexpected_error("git.unstage_all", error_message.as_str(), data);
+            this.push_git_action_error_notification("Unstage all failed", error_message.into(), cx);
           }
         }
         this.reload_status(cx);
@@ -4683,11 +4759,9 @@ impl GitPage {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
     };
+    let rel_path_label = rel_path.to_string_lossy().replace(['\n', '\r'], "");
     let mut start_data = Map::new();
-    start_data.insert(
-      "file".into(),
-      rel_path.to_string_lossy().replace(['\n', '\r'], "").into(),
-    );
+    start_data.insert("file".into(), rel_path_label.clone().into());
     self.add_git_breadcrumb("Stage file started", start_data);
     let rel_path_for_job = rel_path.clone();
     let task = cx.spawn(async move |this, cx| {
@@ -4699,12 +4773,14 @@ impl GitPage {
             let error_message = error.to_string();
             let mut data = Map::new();
             data.insert("error".into(), error_message.clone().into());
-            data.insert(
-              "file".into(),
-              rel_path.to_string_lossy().replace(['\n', '\r'], "").into(),
-            );
+            data.insert("file".into(), rel_path_label.clone().into());
             this.add_git_breadcrumb("Stage file failed", data.clone());
             this.record_git_unexpected_error("git.stage_file", error_message.as_str(), data);
+            this.push_git_action_error_notification(
+              format!("Failed to stage {rel_path_label}"),
+              error_message.into(),
+              cx,
+            );
           }
         }
         this.reload_status(cx);
@@ -4722,11 +4798,9 @@ impl GitPage {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
     };
+    let rel_path_label = rel_path.to_string_lossy().replace(['\n', '\r'], "");
     let mut start_data = Map::new();
-    start_data.insert(
-      "file".into(),
-      rel_path.to_string_lossy().replace(['\n', '\r'], "").into(),
-    );
+    start_data.insert("file".into(), rel_path_label.clone().into());
     self.add_git_breadcrumb("Unstage file started", start_data);
     let rel_path_for_job = rel_path.clone();
     let task = cx.spawn(async move |this, cx| {
@@ -4738,12 +4812,14 @@ impl GitPage {
             let error_message = error.to_string();
             let mut data = Map::new();
             data.insert("error".into(), error_message.clone().into());
-            data.insert(
-              "file".into(),
-              rel_path.to_string_lossy().replace(['\n', '\r'], "").into(),
-            );
+            data.insert("file".into(), rel_path_label.clone().into());
             this.add_git_breadcrumb("Unstage file failed", data.clone());
             this.record_git_unexpected_error("git.unstage_file", error_message.as_str(), data);
+            this.push_git_action_error_notification(
+              format!("Failed to unstage {rel_path_label}"),
+              error_message.into(),
+              cx,
+            );
           }
         }
         this.reload_status(cx);
@@ -4768,11 +4844,9 @@ impl GitPage {
     };
     let rel_path_for_job = rel_path.clone();
     let should_delete = Self::restore_uses_delete(status);
+    let rel_path_label = rel_path.to_string_lossy().replace(['\n', '\r'], "");
     let mut start_data = Map::new();
-    start_data.insert(
-      "file".into(),
-      rel_path.to_string_lossy().replace(['\n', '\r'], "").into(),
-    );
+    start_data.insert("file".into(), rel_path_label.clone().into());
     start_data.insert("delete".into(), should_delete.into());
     self.add_git_breadcrumb("Restore file started", start_data);
     let task = cx.spawn(async move |this, cx| {
@@ -4796,13 +4870,15 @@ impl GitPage {
             let error_message = error.to_string();
             let mut data = Map::new();
             data.insert("delete".into(), should_delete.into());
-            data.insert(
-              "file".into(),
-              rel_path.to_string_lossy().replace(['\n', '\r'], "").into(),
-            );
+            data.insert("file".into(), rel_path_label.clone().into());
             data.insert("error".into(), error_message.clone().into());
             this.add_git_breadcrumb("Restore file failed", data.clone());
             this.record_git_unexpected_error("git.restore_file", error_message.as_str(), data);
+            this.push_git_action_error_notification(
+              format!("Failed to restore {rel_path_label}"),
+              error_message.into(),
+              cx,
+            );
           }
         }
         this.reload_status(cx);
@@ -4850,6 +4926,7 @@ impl GitPage {
           data.insert("error".into(), error_message.clone().into());
           this.add_git_breadcrumb("Restore all completed with errors", data.clone());
           this.record_git_unexpected_error("git.restore_all", error_message.as_str(), data);
+          this.push_git_action_error_notification("Restore all failed", error_message.into(), cx);
         } else {
           this.add_git_breadcrumb("Restore all succeeded", Map::new());
         }
@@ -8715,6 +8792,43 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn fetch_repository_failure_shows_error_notification(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-fetch-failure-notification");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let missing_remote = repo.path.join("missing-remote.git");
+    Repository::open(&repo.path)
+      .expect("open repo")
+      .remote("origin", missing_remote.to_str().expect("remote path utf8"))
+      .expect("add origin remote");
+
+    let mut mounted_git_page = None;
+    let (root, cx) = cx.add_window_view(|window, cx| {
+      let git_page = cx.new(|cx| GitPage::new_for_test(window, cx));
+      mounted_git_page = Some(git_page.clone());
+      gpui_component::Root::new(git_page, window, cx)
+    });
+    let git_page = mounted_git_page.expect("git page");
+    cx.executor().allow_parking();
+
+    let initial_notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(initial_notification_count, 0);
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.fetch_repository(repo.path.clone(), cx);
+    });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(notification_count, 1);
+  }
+
+  #[gpui::test]
   async fn command_palette_create_branch_from_local_creates_and_switches(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-create-from");
@@ -9223,6 +9337,42 @@ mod tests {
       .expect("head after undo")
       .id();
     assert_eq!(head_after, expected_parent);
+  }
+
+  #[gpui::test]
+  async fn undo_last_commit_action_failure_shows_error_notification(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-undo-failure-notification");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+    let head_before = head_oid(&repo.path);
+
+    let mut mounted_git_page = None;
+    let (root, cx) = cx.add_window_view(|window, cx| {
+      let git_page = cx.new(|cx| GitPage::new_for_test(window, cx));
+      mounted_git_page = Some(git_page.clone());
+      gpui_component::Root::new(git_page, window, cx)
+    });
+    let git_page = mounted_git_page.expect("git page");
+    cx.executor().allow_parking();
+
+    let initial_notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(initial_notification_count, 0);
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.can_undo_last_commit = true;
+      this.undo_last_commit_action(cx);
+    });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(notification_count, 1);
+    assert_eq!(head_oid(&repo.path), head_before);
   }
 
   #[gpui::test]
@@ -11920,6 +12070,39 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn stage_file_action_failure_shows_error_notification(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let missing_repo = TempDir::new("git-page-stage-file-failure-notification");
+    let missing_repo_path = missing_repo.path.clone();
+    std::fs::remove_dir_all(&missing_repo.path).expect("remove temp dir");
+
+    let mut mounted_git_page = None;
+    let (root, cx) = cx.add_window_view(|window, cx| {
+      let git_page = cx.new(|cx| GitPage::new_for_test(window, cx));
+      mounted_git_page = Some(git_page.clone());
+      gpui_component::Root::new(git_page, window, cx)
+    });
+    let git_page = mounted_git_page.expect("git page");
+    cx.executor().allow_parking();
+
+    let initial_notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(initial_notification_count, 0);
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(missing_repo_path.clone());
+      this.stage_file_action(PathBuf::from("README.md"), cx);
+    });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(notification_count, 1);
+  }
+
+  #[gpui::test]
   async fn unstage_file_action_unstages_target_file(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-unstage-file-success");
@@ -12402,6 +12585,110 @@ mod tests {
         kind: BranchKind::Local,
       })
     );
+  }
+
+  #[gpui::test]
+  async fn branch_select_switch_failure_shows_error_notification(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-branch-switch-failure-notification");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "main\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(&repo.path, rel_path, "feature\n", "feature commit");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    std::fs::write(repo.path.join(rel_path), "main local change\n").expect("write local change");
+
+    let mut mounted_git_page = None;
+    let (root, cx) = cx.add_window_view(|window, cx| {
+      let git_page = cx.new(|cx| GitPage::new_for_test(window, cx));
+      mounted_git_page = Some(git_page.clone());
+      gpui_component::Root::new(git_page, window, cx)
+    });
+    let git_page = mounted_git_page.expect("git page");
+    cx.executor().allow_parking();
+
+    let initial_reload = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.reload_status(cx);
+      this.status_task.take().expect("initial reload task")
+    });
+    initial_reload.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let initial_notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(initial_notification_count, 0);
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.handle_branch_select_confirm(
+        BranchRef {
+          name: "feature".to_string(),
+          kind: BranchKind::Local,
+        },
+        cx,
+      );
+    });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let (branch_name, selected_branch) = git_page.update_in(cx, |this, _window, _cx| {
+      (
+        this
+          .branch_status
+          .as_ref()
+          .map(|status| status.name.clone()),
+        selected_branch_from_dropdown(this),
+      )
+    });
+    let notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("read branch after failed switch")
+        .name,
+      base_branch
+    );
+    assert_eq!(branch_name.as_deref(), Some(base_branch.as_str()));
+    assert_eq!(
+      selected_branch,
+      Some(BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      })
+    );
+    assert_eq!(notification_count, 1);
+
+    cx.executor().advance_clock(Duration::from_secs(5));
+    cx.cx.run_until_parked();
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(200));
+    cx.cx.run_until_parked();
+    cx.run_until_parked();
+
+    let notification_count_after_autohide = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(notification_count_after_autohide, 0);
   }
 
   #[gpui::test]
