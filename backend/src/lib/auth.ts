@@ -32,9 +32,6 @@ export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: 'pg',
   }),
-  account: {
-    skipStateCookieCheck: true,
-  },
   baseURL: env.BASE_URL,
   secondaryStorage: {
     get(key) {
