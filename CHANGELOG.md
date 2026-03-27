@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 The Git page header now checks whether the current GitHub branch already has an open pull request. When it does, you can open that pull request directly in Reviu. When it does not, the same spot gives you a shortcut to open GitHub and create one for the current branch.
 
+### Git Error Notifications
+
+Failed Git actions on the Git page now show notifications instead of failing silently. This covers branch switching, fetch, pull, push, amend, undo last commit, and stage or restore operations.
+
 ## 0.0.8
 
 ### Staged and Unstaged File Groups
