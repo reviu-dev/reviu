@@ -501,13 +501,15 @@ impl BillingPage {
           .child("Sign in with GitHub to manage your subscription."),
       )
       .child(
-        Button::new("billing-sign-in")
-          .icon(IconName::Github)
-          .label("Sign in with GitHub")
-          .small()
-          .on_click(|_, _, cx| {
-            AuthCallbackTarget::start_sign_in(cx);
-          }),
+        h_flex().justify_start().child(
+          Button::new("billing-sign-in")
+            .icon(IconName::Github)
+            .label("Sign in with GitHub")
+            .small()
+            .on_click(|_, _, cx| {
+              AuthCallbackTarget::start_sign_in(cx);
+            }),
+        ),
       )
   }
 
