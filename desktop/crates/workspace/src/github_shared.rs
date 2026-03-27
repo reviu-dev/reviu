@@ -45,7 +45,7 @@ pub(crate) fn repo_section_header(label: &SharedString, cx: &App) -> impl IntoEl
     .gap_2()
     .rounded(theme.radius)
     .text_sm()
-    .bg(theme.sidebar)
+    .bg(theme.sidebar_accent.opacity(0.5))
     .text_color(theme.muted_foreground)
     .child(Icon::new(IconName::Folder))
     .child(
