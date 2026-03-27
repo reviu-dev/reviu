@@ -69,14 +69,22 @@ pub fn list_branches(repo_root: &Path) -> Result<Vec<BranchRef>> {
       }
     };
 
-    branches.push(BranchRef { name, kind });
+    let last_commit_time = branch
+      .get()
+      .peel_to_commit()
+      .map(|c| c.time().seconds())
+      .unwrap_or(0);
+
+    branches.push((BranchRef { name, kind }, last_commit_time));
   }
 
-  branches.sort_by(|a, b| match (a.kind, b.kind) {
+  branches.sort_by(|a, b| match (a.0.kind, b.0.kind) {
     (BranchKind::Local, BranchKind::Remote) => std::cmp::Ordering::Less,
     (BranchKind::Remote, BranchKind::Local) => std::cmp::Ordering::Greater,
-    _ => a.name.cmp(&b.name),
+    _ => b.1.cmp(&a.1),
   });
+
+  let branches = branches.into_iter().map(|(b, _)| b).collect();
 
   Ok(branches)
 }

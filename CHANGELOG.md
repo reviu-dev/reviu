@@ -16,6 +16,10 @@ Your preferred diff view mode (inline or split) is now saved across sessions. To
 
 A new "Pull" command is available in the command palette to pull changes from the remote branch. The ahead/behind indicators in the Git page header are now clickable - click the up arrow (↑) to push, or the down arrow (↓) to pull.
 
+### Branch Selector Sorted by Recent Activity
+
+The branch selector on the Git page now sorts branches by most recent commit, so your active branches appear first. Local branches still appear before remote branches.
+
 ---
 
 ## 0.0.7
