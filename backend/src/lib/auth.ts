@@ -1,4 +1,5 @@
 import type { AsyncReturnType, Merge } from 'type-fest'
+import { redisStorage } from '@better-auth/redis-storage'
 import { checkout, polar, portal, webhooks } from '@polar-sh/better-auth'
 
 import { betterAuth } from 'better-auth'
@@ -11,7 +12,21 @@ import { db } from '../db/index.js'
 import { user } from '../db/schemas/index.js'
 import { env } from './env.js'
 import { polarClient } from './polar.js'
+import { withRedisClient } from './redis.js'
 import { getTrustedOrigins } from './utils.js'
+
+const BETTER_AUTH_REDIS_PREFIX = 'reviu:better-auth:'
+
+async function withBetterAuthSecondaryStorage<T>(
+  handler: (storage: ReturnType<typeof redisStorage>) => Promise<T>,
+): Promise<T> {
+  return withRedisClient('Better Auth secondary storage', async (client) => {
+    return handler(redisStorage({
+      client,
+      keyPrefix: BETTER_AUTH_REDIS_PREFIX,
+    }))
+  })
+}
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
@@ -21,6 +36,17 @@ export const auth = betterAuth({
     skipStateCookieCheck: true,
   },
   baseURL: env.BASE_URL,
+  secondaryStorage: {
+    get(key) {
+      return withBetterAuthSecondaryStorage(storage => storage.get(key))
+    },
+    set(key, value, ttl) {
+      return withBetterAuthSecondaryStorage(storage => storage.set(key, value, ttl))
+    },
+    delete(key) {
+      return withBetterAuthSecondaryStorage(storage => storage.delete(key))
+    },
+  },
   trustedOrigins: getTrustedOrigins(),
   secret: env.AUTH_SECRET,
   socialProviders: {

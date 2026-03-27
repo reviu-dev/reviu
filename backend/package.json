@@ -20,6 +20,7 @@
     "migrate": "tsx scripts/migrate.ts"
   },
   "dependencies": {
+    "@better-auth/redis-storage": "^1.5.6",
     "@hono/node-server": "^1.19.9",
     "@hono/zod-validator": "^0.7.6",
     "@linear/sdk": "^80.0.0",

@@ -92,6 +92,19 @@ async function getRedisClient(): Promise<Redis | null> {
   return redisConnectPromise
 }
 
+export async function withRedisClient<T>(
+  context: string,
+  handler: (client: Redis) => Promise<T>,
+): Promise<T> {
+  const client = await getRedisClient()
+
+  if (!client) {
+    throw new Error(`${context} unavailable because Redis could not be reached`)
+  }
+
+  return handler(client)
+}
+
 export async function assertRedisHealthy(): Promise<void> {
   const client = await getRedisClient()
 

@@ -18,7 +18,7 @@ export const authRoutes = authRouter
   ), async (c) => {
     const { code } = c.req.valid('json')
 
-    const token = consumeAuthCode(code)
+    const token = await consumeAuthCode(code)
 
     if (!token) {
       return c.json({ message: 'Invalid or expired code' }, 401)
@@ -34,7 +34,7 @@ export const authRoutes = authRouter
     }
 
     const { session: { token } } = session
-    const code = issueAuthCode(token)
+    const code = await issueAuthCode(token)
 
     return c.redirect(desktopDeepLinkUrl(`/auth/callback?code=${code}`))
   })
@@ -46,7 +46,7 @@ export const authRoutes = authRouter
     }
 
     const { session: { token } } = session
-    const code = issueAuthCode(token)
+    const code = await issueAuthCode(token)
 
     return c.redirect(`${env.WEB_DASHBOARD_URL}/signin?code=${code}`)
   })
