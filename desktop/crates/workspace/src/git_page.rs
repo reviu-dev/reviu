@@ -47,7 +47,7 @@ use crate::{
   active_local_repo::{ActiveLocalRepo, ActiveLocalRepoStore},
   api::ApiClient,
   auth_state::{AuthState, AuthStateStore},
-  config::{ConfigStore, RecentRepository},
+  config::{AppSettings, ConfigStore, RecentRepository},
   dock_badge::set_dock_badge,
   file_preview::{is_markdown_path, is_previewable_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
@@ -1646,7 +1646,7 @@ impl GitPage {
 
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     let recent = ConfigStore::load_recent_repositories();
-    let app_settings = crate::config::AppSettings::get(cx);
+    let app_settings = AppSettings::get(cx);
     let selected_repo = recent.first().map(|repo| repo.path.clone());
     let repo_dropdown_items: Vec<RecentRepoItem> = recent
       .iter()
@@ -1700,7 +1700,11 @@ impl GitPage {
       force_list_selection: false,
       editor: None,
       interactive_rebase_todo_view: None,
-      diff_view: DiffViewMode::Inline,
+      diff_view: if app_settings.split_diff_view {
+        DiffViewMode::Split
+      } else {
+        DiffViewMode::Inline
+      },
       git_unified_file_view: app_settings.git_unified_file_view,
       show_markdown_preview: false,
       svg_preview: None,
@@ -3900,6 +3904,16 @@ impl GitPage {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
     };
+    // Sync diff view from persisted setting
+    let saved_split = crate::config::AppSettings::get(cx).split_diff_view;
+    let saved_mode = if saved_split {
+      DiffViewMode::Split
+    } else {
+      DiffViewMode::Inline
+    };
+    if self.diff_view != saved_mode {
+      self.diff_view = saved_mode;
+    }
     if self.selected_file.as_ref() == Some(&rel_path) && self.history_opened_commit_file.is_none() {
       return;
     }
@@ -4120,6 +4134,9 @@ impl GitPage {
       DiffViewMode::Inline => DiffViewMode::Split,
       DiffViewMode::Split => DiffViewMode::Inline,
     };
+    crate::config::AppSettings::update(cx, |s| {
+      s.split_diff_view = self.diff_view == DiffViewMode::Split
+    });
     self.sync_diff_view(cx);
     self.sync_sentry_git_context();
     let mut data = Map::new();

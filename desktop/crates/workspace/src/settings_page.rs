@@ -30,6 +30,7 @@ pub struct SettingsPage {
   auto_switch_theme: bool,
   indent_rainbow: bool,
   git_unified_file_view: bool,
+  split_diff_view: bool,
   size: Size,
 }
 
@@ -40,6 +41,7 @@ impl SettingsPage {
       auto_switch_theme: settings.auto_switch_theme,
       indent_rainbow: settings.indent_rainbow,
       git_unified_file_view: settings.git_unified_file_view,
+      split_diff_view: settings.split_diff_view,
       size: Size::default(),
     }
   }
@@ -53,6 +55,7 @@ impl SettingsPage {
     let default_auto = self.auto_switch_theme;
     let default_indent_rainbow = self.indent_rainbow;
     let default_git_unified_file_view = self.git_unified_file_view;
+    let default_split_diff_view = self.split_diff_view;
 
     vec![SettingPage::new("General").default_open(true).groups(vec![
       SettingGroup::new().title("Appearance").items(vec![
@@ -100,6 +103,50 @@ impl SettingsPage {
           )
           .description("Automatically switch theme based on system settings."),
           SettingItem::new(
+            "Font Size",
+            SettingField::number_input(
+              NumberFieldOptions {
+                min: 12.0,
+                max: 24.0,
+                step: 1.0,
+              },
+              |cx: &App| f64::from(cx.theme().font_size),
+              {
+                move |val: f64, cx: &mut App| {
+                  Theme::global_mut(cx).font_size = px(val as f32);
+                  PersistedSettings::update(cx, |s| s.font_size = val as f32);
+                  cx.refresh_windows();
+                }
+              },
+            )
+            .default_value(16.0),
+          )
+          .description("Base font size for the application (12–24px)."),
+        ]),
+      SettingGroup::new().title("Editor").items(vec![
+          SettingItem::new(
+            "Split Diff View",
+            SettingField::checkbox(
+              {
+                let view = view.clone();
+                move |cx: &App| view.read(cx).split_diff_view
+              },
+              {
+                let view = view.clone();
+                move |val: bool, cx: &mut App| {
+                  view.update(cx, |view, _| {
+                    view.split_diff_view = val;
+                  });
+
+                  PersistedSettings::update(cx, |s| s.split_diff_view = val);
+                  cx.refresh_windows();
+                }
+              },
+            )
+            .default_value(default_split_diff_view),
+          )
+          .description("Use side-by-side diff view instead of inline."),
+          SettingItem::new(
             "Indent Rainbow",
             SettingField::checkbox(
               {
@@ -122,26 +169,6 @@ impl SettingsPage {
             .default_value(default_indent_rainbow),
           )
           .description("Color indentation guides by level in the editor."),
-          SettingItem::new(
-            "Font Size",
-            SettingField::number_input(
-              NumberFieldOptions {
-                min: 12.0,
-                max: 24.0,
-                step: 1.0,
-              },
-              |cx: &App| f64::from(cx.theme().font_size),
-              {
-                move |val: f64, cx: &mut App| {
-                  Theme::global_mut(cx).font_size = px(val as f32);
-                  PersistedSettings::update(cx, |s| s.font_size = val as f32);
-                  cx.refresh_windows();
-                }
-              },
-            )
-            .default_value(16.0),
-          )
-          .description("Base font size for the application (12–24px)."),
         ]),
       SettingGroup::new().title("Git").items(vec![
           SettingItem::new(
