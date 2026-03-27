@@ -258,6 +258,66 @@ impl WorkspaceView {
     ConfigStore::persist_app_settings(settings);
   }
 
+  fn handle_pending_status_bar_notification(&self, cx: &mut App) {
+    let Some(notification) = crate::status_bar::take_pending_notification() else {
+      return;
+    };
+
+    let full_name = &notification.repository.full_name;
+    let (owner, repo) = full_name.split_once('/').unwrap_or((full_name, ""));
+
+    match notification.subject.subject_type.as_str() {
+      "PullRequest" => {
+        if let Some(number) = notification
+          .subject
+          .url
+          .as_deref()
+          .and_then(|url| url.rsplit('/').next()?.parse::<u64>().ok())
+        {
+          crate::github_navigation::open_pr_target(
+            owner.to_string(),
+            repo.to_string(),
+            number,
+            false,
+            None,
+            None,
+            cx,
+          );
+        }
+      }
+      "Issue" => {
+        let issue_number = notification
+          .subject
+          .url
+          .as_deref()
+          .and_then(|url| url.rsplit('/').next()?.parse::<u64>().ok());
+        crate::github_navigation::open_repo_target(
+          owner.to_string(),
+          repo.to_string(),
+          Some(ui::CommandPaletteGithubRepoTab::Issues),
+          issue_number,
+          None,
+          cx,
+        );
+      }
+      _ => {
+        let url = notification
+          .subject
+          .url
+          .as_deref()
+          .map(
+            |_api_url| match notification.subject.subject_type.as_str() {
+              "Release" => format!("https://github.com/{full_name}/releases"),
+              "Discussion" => format!("https://github.com/{full_name}/discussions"),
+              _ => format!("https://github.com/{full_name}"),
+            },
+          )
+          .unwrap_or_else(|| format!("https://github.com/{full_name}"));
+        cx.open_url(&url);
+      }
+    }
+  }
+
   fn check_for_updates(&mut self, cx: &mut Context<Self>) {
     let api = WorkspaceApi::global(cx).api.clone();
     let current_version = resolved_build_version(env!("CARGO_PKG_VERSION"));
@@ -611,6 +671,7 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    self.handle_pending_status_bar_notification(cx);
     let auth_state = AuthStateStore::get(cx);
 
     // Show a loading screen while the initial auth check is in progress
