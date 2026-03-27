@@ -403,6 +403,7 @@ impl WorkspaceView {
                 Button::new("workspace-update-changelog")
                   .ghost()
                   .compact()
+                  .xsmall()
                   .label("Changelog")
                   .on_click(move |_, _, cx| {
                     cx.open_url("https://reviu.dev/changelog");
@@ -412,6 +413,7 @@ impl WorkspaceView {
                 Button::new("workspace-update-download")
                   .primary()
                   .compact()
+                  .xsmall()
                   .icon(UiIconName::Download)
                   .label("Download")
                   .on_click(move |_, window, cx| {
