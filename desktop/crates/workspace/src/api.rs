@@ -842,28 +842,6 @@ pub struct ApiClient {
 }
 
 #[derive(Debug, Serialize)]
-struct SocialSignInRequest<'a> {
-  provider: &'a str,
-  #[serde(rename = "disableRedirect")]
-  disable_redirect: bool,
-  #[serde(rename = "callbackURL")]
-  callback_url: &'a str,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct SocialSignInResponse {
-  #[serde(default)]
-  url: Option<String>,
-  #[serde(default)]
-  redirect: Option<bool>,
-  #[serde(default)]
-  token: Option<String>,
-  #[serde(default)]
-  user: Option<User>,
-}
-
-#[derive(Debug, Serialize)]
 struct ExchangeCodeRequest<'a> {
   code: &'a str,
 }
@@ -1115,6 +1093,10 @@ impl ApiClient {
     format!("{}/{}", self.base_url, path.trim_start_matches('/'))
   }
 
+  fn desktop_sign_in_url(&self) -> String {
+    self.get_api_url("/auth/desktop/start")
+  }
+
   pub fn keychain_service(&self) -> &str {
     AppProfile::current().keychain_service()
   }
@@ -1151,20 +1133,7 @@ impl ApiClient {
   }
 
   pub fn sign_in_with_github(&self) -> Result<Option<String>> {
-    let request = SocialSignInRequest {
-      provider: "github",
-      disable_redirect: true,
-      callback_url: "/auth/desktop/callback",
-    };
-    let url = self.get_api_url("/api/auth/sign-in/social");
-    let response = self.client.post(url).json(&request).send()?;
-    let status = response.status();
-    Self::record_http_status("POST", "/api/auth/sign-in/social", status);
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    let payload = response.json::<SocialSignInResponse>()?;
-    Ok(payload.url)
+    Ok(Some(self.desktop_sign_in_url()))
   }
 
   pub fn exchange_code_for_token(&self, code: &str) -> Result<String> {
@@ -2128,6 +2097,16 @@ mod tests {
   #[test]
   fn resolve_api_base_url_falls_back_to_localhost() {
     assert_eq!(resolve_api_base_url(None, None), DEFAULT_API_BASE_URL);
+  }
+
+  #[test]
+  fn sign_in_with_github_uses_browser_started_desktop_route() {
+    let api = make_test_api_client("https://api.reviu.dev".to_string());
+
+    assert_eq!(
+      api.sign_in_with_github().expect("sign in url"),
+      Some("https://api.reviu.dev/auth/desktop/start".to_string())
+    );
   }
 
   #[test]
