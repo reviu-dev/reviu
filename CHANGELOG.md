@@ -6,7 +6,7 @@ All notable changes to Reviu are documented here.
 
 ### Staged and Unstaged File Groups
 
-The Git sidebar now separates changed files into "Staged Changes" and "Changes" groups, so you immediately know what will be committed. Partially staged files appear in both groups. A "Unified File View" setting lets you switch back to the previous flat list.
+The Git sidebar now separates changed files into "Staged Changes" and "Changes" groups, so you immediately know what will be committed. Partially staged files appear in both groups. A new "Unified File View" option in Settings lets you switch back to the previous flat list.
 
 ---
 
