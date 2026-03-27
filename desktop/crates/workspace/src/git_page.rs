@@ -525,13 +525,14 @@ impl ListDelegate for GitFileListDelegate {
               .right_0()
               .opacity(0.0)
               .group_hover("file-row", |this| this.opacity(1.0))
+              .bg(theme.sidebar)
+              .rounded(theme.radius)
               .child(
                 ButtonGroup::new(format!("file-actions-{}", ix.row))
                   .outline()
                   .child(
                     Button::new(format!("stage-{}", ix.row))
                       .icon(toggle_stage_icon)
-                      .with_variant(ButtonVariant::Secondary)
                       .xsmall()
                       .tooltip(toggle_stage_tooltip)
                       .on_click({
@@ -552,7 +553,6 @@ impl ListDelegate for GitFileListDelegate {
                   .child(
                     Button::new(format!("restore-{}", ix.row))
                       .icon(IconName::Undo)
-                      .with_variant(ButtonVariant::Secondary)
                       .xsmall()
                       .tooltip("Discard changes")
                       .on_click({
