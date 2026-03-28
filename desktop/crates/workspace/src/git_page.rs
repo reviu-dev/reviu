@@ -2067,6 +2067,21 @@ impl GitPage {
     self.push_git_error_notification_with_id::<GitActionErrorNotificationId>(title, error, cx);
   }
 
+  fn push_git_action_error_notification_in_window(
+    &self,
+    title: impl Into<SharedString>,
+    error: SharedString,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    window.push_notification(
+      Notification::error(error)
+        .id::<GitActionErrorNotificationId>()
+        .title(title),
+      cx,
+    );
+  }
+
   fn push_git_error_notification_with_id<T: Sized + 'static>(
     &self,
     title: impl Into<SharedString>,
@@ -2077,6 +2092,43 @@ impl GitPage {
     let _ = cx.update_window(self.window_handle, move |_, window, cx| {
       window.push_notification(Notification::error(error).id::<T>().title(title), cx);
     });
+  }
+
+  fn command_palette_error_notification_title(
+    action: &CommandPaletteAction,
+  ) -> Option<&'static str> {
+    match action {
+      CommandPaletteAction::CheckoutDetached { .. } => Some("Checkout failed"),
+      CommandPaletteAction::SwitchBranch(_) => Some("Switch branch failed"),
+      CommandPaletteAction::CreateBranch { .. } => Some("Create branch failed"),
+      CommandPaletteAction::CreateBranchFrom { .. } => Some("Create branch failed"),
+      CommandPaletteAction::MergeBranch { .. } => Some("Merge failed"),
+      CommandPaletteAction::AbortMerge => Some("Abort merge failed"),
+      CommandPaletteAction::RebaseBranch { .. } => Some("Rebase failed"),
+      CommandPaletteAction::AbortRebase => Some("Abort rebase failed"),
+      CommandPaletteAction::Stash { .. } => Some("Stash failed"),
+      CommandPaletteAction::ApplyStash(_) => Some("Apply stash failed"),
+      CommandPaletteAction::DropStash(_) => Some("Drop stash failed"),
+      CommandPaletteAction::PopStash(_) => Some("Pop stash failed"),
+      CommandPaletteAction::CherryPick { .. } => Some("Cherry-pick failed"),
+      _ => None,
+    }
+  }
+
+  fn handle_command_palette_operation_error(
+    &mut self,
+    action: &CommandPaletteAction,
+    err: anyhow::Error,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if let Some(title) = Self::command_palette_error_notification_title(action) {
+      self.push_git_action_error_notification_in_window(title, err.to_string().into(), window, cx);
+      return Ok(());
+    }
+
+    let message: SharedString = format!("Action failed: {err}").into();
+    Err(message)
   }
 
   fn branch_select_handler(&self, cx: &Context<Self>) -> BranchSelectHandler {
@@ -3040,6 +3092,7 @@ impl GitPage {
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     let mut should_post_action_refresh = true;
+    let action_for_error = action.clone();
     let result = match action {
       CommandPaletteAction::OpenRepository => {
         self.start_open_repository(window, cx);
@@ -3617,8 +3670,7 @@ impl GitPage {
     };
 
     if let Err(err) = result {
-      let message: SharedString = format!("Action failed: {err}").into();
-      return Err(message);
+      self.handle_command_palette_operation_error(&action_for_error, err, window, cx)?;
     }
 
     if should_post_action_refresh {
@@ -8506,15 +8558,30 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn command_palette_create_branch_returns_error_when_branch_exists(cx: &mut TestAppContext) {
+  async fn command_palette_create_branch_shows_notification_when_branch_exists(
+    cx: &mut TestAppContext,
+  ) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-create-branch-existing");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let base_branch = current_branch_status(&repo.path).expect("base status").name;
     create_branch(&repo.path, "feature").expect("create existing target branch");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let mut mounted_git_page = None;
+    let (root, cx) = cx.add_window_view(|window, cx| {
+      let git_page = cx.new(|cx| GitPage::new_for_test(window, cx));
+      mounted_git_page = Some(git_page.clone());
+      gpui_component::Root::new(git_page, window, cx)
+    });
+    let git_page = mounted_git_page.expect("git page");
     cx.executor().allow_parking();
+    cx.executor().allow_parking();
+
+    let initial_notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(initial_notification_count, 0);
+
     let result = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.handle_command_palette_action(
@@ -8525,9 +8592,16 @@ mod tests {
         cx,
       )
     });
+    assert!(result.is_ok());
 
-    let error = result.expect_err("create branch should fail when branch already exists");
-    assert!(error.as_ref().starts_with("Action failed:"));
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+    cx.cx.run_until_parked();
+    cx.run_until_parked();
+
+    let notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(notification_count, 1);
     assert_eq!(
       current_branch_status(&repo.path)
         .expect("status after failed create")
@@ -8810,6 +8884,7 @@ mod tests {
     });
     let git_page = mounted_git_page.expect("git page");
     cx.executor().allow_parking();
+    cx.executor().allow_parking();
 
     let initial_notification_count = root.read_with(cx, |root, cx| {
       root.notification.read(cx).notifications().len()
@@ -8882,7 +8957,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn command_palette_create_branch_from_returns_error_when_branch_exists(
+  async fn command_palette_create_branch_from_shows_notification_when_branch_exists(
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
@@ -8892,8 +8967,20 @@ mod tests {
     create_branch(&repo.path, "feature").expect("create feature branch");
     create_branch(&repo.path, "feature-copy").expect("create existing target branch");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let mut mounted_git_page = None;
+    let (root, cx) = cx.add_window_view(|window, cx| {
+      let git_page = cx.new(|cx| GitPage::new_for_test(window, cx));
+      mounted_git_page = Some(git_page.clone());
+      gpui_component::Root::new(git_page, window, cx)
+    });
+    let git_page = mounted_git_page.expect("git page");
     cx.executor().allow_parking();
+
+    let initial_notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(initial_notification_count, 0);
+
     let result = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.handle_command_palette_action(
@@ -8908,9 +8995,16 @@ mod tests {
         cx,
       )
     });
+    assert!(result.is_ok());
 
-    let error = result.expect_err("create branch from should fail when branch already exists");
-    assert!(error.as_ref().starts_with("Action failed:"));
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+    cx.cx.run_until_parked();
+    cx.run_until_parked();
+
+    let notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(notification_count, 1);
     assert_eq!(
       current_branch_status(&repo.path)
         .expect("status after failed create from")
@@ -9005,7 +9099,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn command_palette_switch_remote_branch_returns_error_when_remote_branch_missing(
+  async fn command_palette_switch_remote_branch_shows_notification_when_remote_branch_missing(
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
@@ -9013,7 +9107,20 @@ mod tests {
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let base_branch = current_branch_status(&repo.path).expect("base status").name;
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let mut mounted_git_page = None;
+    let (root, cx) = cx.add_window_view(|window, cx| {
+      let git_page = cx.new(|cx| GitPage::new_for_test(window, cx));
+      mounted_git_page = Some(git_page.clone());
+      gpui_component::Root::new(git_page, window, cx)
+    });
+    let git_page = mounted_git_page.expect("git page");
+    cx.executor().allow_parking();
+
+    let initial_notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(initial_notification_count, 0);
+
     let result = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.handle_command_palette_action(
@@ -9025,10 +9132,16 @@ mod tests {
         cx,
       )
     });
+    assert!(result.is_ok());
 
-    let error = result.expect_err("switch remote should fail when remote branch is missing");
-    assert!(error.as_ref().starts_with("Action failed:"));
-    assert!(error.as_ref().contains("origin/missing"));
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+    cx.cx.run_until_parked();
+    cx.run_until_parked();
+
+    let notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(notification_count, 1);
     assert_eq!(
       current_branch_status(&repo.path)
         .expect("status after failed remote switch")
@@ -9105,45 +9218,17 @@ mod tests {
     assert_eq!(upstream, "origin/feature");
   }
 
-  #[gpui::test]
-  async fn command_palette_create_branch_from_remote_returns_error_when_base_missing(
-    cx: &mut TestAppContext,
-  ) {
-    init_gpui_test(cx);
-    let repo = TempRepo::init("git-page-cmd-create-from-remote-missing");
-    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let base_branch = current_branch_status(&repo.path).expect("base status").name;
-
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
-    let result = git_page.update_in(cx, |this, _window, cx| {
-      this.selected_repo = Some(repo.path.clone());
-      this.handle_command_palette_action(
-        CommandPaletteAction::CreateBranchFrom {
-          name: "my-feature".to_string(),
-          base: CommandPaletteBranch {
-            name: "origin/missing".into(),
-            kind: CommandPaletteBranchKind::Remote,
-          },
-        },
-        _window,
-        cx,
-      )
-    });
-
-    let error = result.expect_err("create from remote should fail when base is missing");
-    assert!(error.as_ref().starts_with("Action failed:"));
-    assert!(error.as_ref().contains("origin/missing"));
+  #[test]
+  fn command_palette_create_branch_from_remote_uses_notification_feedback() {
     assert_eq!(
-      current_branch_status(&repo.path)
-        .expect("status after failed create from remote")
-        .name,
-      base_branch
-    );
-    assert!(
-      !list_branches(&repo.path)
-        .expect("list branches")
-        .iter()
-        .any(|branch| branch.kind == BranchKind::Local && branch.name == "my-feature")
+      GitPage::command_palette_error_notification_title(&CommandPaletteAction::CreateBranchFrom {
+        name: "my-feature".to_string(),
+        base: CommandPaletteBranch {
+          name: "origin/missing".into(),
+          kind: CommandPaletteBranchKind::Remote,
+        },
+      }),
+      Some("Create branch failed")
     );
   }
 
@@ -9886,33 +9971,13 @@ mod tests {
     );
   }
 
-  #[gpui::test]
-  async fn command_palette_cherry_pick_returns_error_for_invalid_commit(cx: &mut TestAppContext) {
-    init_gpui_test(cx);
-    let repo = TempRepo::init("git-page-cmd-cherry-pick-invalid");
-    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let base_branch = current_branch_status(&repo.path).expect("base status").name;
-
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
-    let result = git_page.update_in(cx, |this, _window, cx| {
-      this.selected_repo = Some(repo.path.clone());
-      this.handle_command_palette_action(
-        CommandPaletteAction::CherryPick {
-          commit_hashes: vec!["deadbeef".to_string()],
-        },
-        _window,
-        cx,
-      )
-    });
-
-    let error = result.expect_err("cherry-pick should fail for missing commit");
-    assert!(error.as_ref().starts_with("Action failed:"));
-    assert!(error.as_ref().contains("resolve commit"));
+  #[test]
+  fn command_palette_cherry_pick_uses_notification_feedback() {
     assert_eq!(
-      current_branch_status(&repo.path)
-        .expect("status after failed cherry-pick")
-        .name,
-      base_branch
+      GitPage::command_palette_error_notification_title(&CommandPaletteAction::CherryPick {
+        commit_hashes: vec!["deadbeef".to_string()],
+      }),
+      Some("Cherry-pick failed")
     );
   }
 
