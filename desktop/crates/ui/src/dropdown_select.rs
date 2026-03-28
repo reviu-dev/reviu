@@ -7,7 +7,7 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath,
-  button::{Button, ButtonCustomVariant, ButtonVariants as _},
+  button::{Button, ButtonVariants as _},
   h_flex,
   list::{List, ListDelegate, ListItem, ListState},
   popover::{Popover, PopoverState},
@@ -474,13 +474,7 @@ impl<I: DropdownSelectItem + 'static> RenderOnce for DropdownSelect<I> {
     let placeholder = self.config.placeholder.clone();
 
     let trigger = Button::new(self.config.id.clone())
-      .custom(
-        ButtonCustomVariant::new(cx)
-          .color(theme.sidebar)
-          .foreground(theme.foreground)
-          .hover(theme.secondary_hover)
-          .active(theme.secondary),
-      )
+      .ghost()
       .rounded_none()
       .border_0()
       .w_full()
