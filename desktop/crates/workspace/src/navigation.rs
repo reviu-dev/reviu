@@ -15,8 +15,8 @@ impl NavigationHistory {
   }
 
   /// Navigate to `path`, pushing the current location onto the history stack.
-  /// GitHub paths (`/github/*`) are gated behind GitHub access — if the user
-  /// doesn't have access, they are redirected to `/billing` instead.
+  /// Deep GitHub paths are gated behind GitHub access. `/github` itself always
+  /// stays accessible as the GitHub home / access page.
   pub fn navigate(path: impl Into<SharedString>, cx: &mut App) {
     let path = path.into();
 
@@ -25,11 +25,12 @@ impl NavigationHistory {
       return;
     }
 
-    // GitHub access gating: redirect /github/* to /billing when no access
+    // GitHub access gating: redirect protected GitHub routes to /github when no access.
     if requires_github_access(&path) && !AuthStateStore::has_github_access(cx) {
-      // Push current so closing billing returns here
-      cx.global_mut::<Self>().stack.push(current);
-      Self::set_pathname("/billing", cx);
+      if current != "/github" {
+        cx.global_mut::<Self>().stack.push(current);
+      }
+      Self::set_pathname("/github", cx);
       return;
     }
 
@@ -45,9 +46,9 @@ impl NavigationHistory {
       .pop()
       .unwrap_or_else(|| "/git".into());
 
-    // If back target requires GitHub access and user lost access, fall back to /git
+    // If back target requires GitHub access and user lost access, fall back to /github.
     let target = if requires_github_access(&target) && !AuthStateStore::has_github_access(cx) {
-      "/git".into()
+      "/github".into()
     } else {
       target
     };
@@ -100,19 +101,67 @@ pub fn current_tab_segment(cx: &gpui::App) -> &str {
 }
 
 fn requires_github_access(path: &str) -> bool {
-  path.starts_with("/github")
+  path.starts_with("/github/")
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::{
+    api::{
+      CustomerStateSubscription, CustomerStateSubscriptionStatus, User, UserRole, UserSubscription,
+    },
+    auth_state::{AuthState, AuthStateStore},
+  };
   use gpui::TestAppContext;
+
+  fn make_subscription() -> CustomerStateSubscription {
+    CustomerStateSubscription {
+      id: "sub_123".to_string(),
+      created_at: "2026-01-01T00:00:00Z".to_string(),
+      modified_at: None,
+      status: CustomerStateSubscriptionStatus::Active,
+      amount: 2_000,
+      currency: "usd".to_string(),
+      recurring_interval: "month".to_string(),
+      current_period_start: "2026-01-01T00:00:00Z".to_string(),
+      current_period_end: Some("2099-01-01T00:00:00Z".to_string()),
+      trial_start: None,
+      trial_end: None,
+      cancel_at_period_end: false,
+      canceled_at: None,
+      started_at: Some("2026-01-01T00:00:00Z".to_string()),
+      ends_at: None,
+      product_id: "prod_123".to_string(),
+    }
+  }
+
+  fn make_user(role: UserRole, subscribed: bool) -> User {
+    User {
+      id: "user_123".to_string(),
+      name: "Joris".to_string(),
+      email: "joris@example.com".to_string(),
+      email_verified: true,
+      image: None,
+      github_login: Some("joris-gallot".to_string()),
+      role,
+      subscription: UserSubscription {
+        portal_url: None,
+        active_subscription: subscribed.then(make_subscription),
+      },
+    }
+  }
+
+  fn init_navigation_test(cx: &mut App) {
+    gpui_router::init(cx);
+    NavigationHistory::init(cx);
+    cx.set_global(AuthStateStore::default());
+  }
 
   #[gpui::test]
   async fn test_navigate_pushes_to_stack(cx: &mut TestAppContext) {
     cx.update(|cx| {
-      gpui_router::init(cx);
-      NavigationHistory::init(cx);
+      init_navigation_test(cx);
 
       // Start at /git
       NavigationHistory::navigate_replace("/git", cx);
@@ -134,8 +183,7 @@ mod tests {
   #[gpui::test]
   async fn test_navigate_back(cx: &mut TestAppContext) {
     cx.update(|cx| {
-      gpui_router::init(cx);
-      NavigationHistory::init(cx);
+      init_navigation_test(cx);
 
       NavigationHistory::navigate_replace("/git", cx);
       NavigationHistory::navigate("/settings", cx);
@@ -161,8 +209,7 @@ mod tests {
   #[gpui::test]
   async fn test_navigate_same_path_is_noop(cx: &mut TestAppContext) {
     cx.update(|cx| {
-      gpui_router::init(cx);
-      NavigationHistory::init(cx);
+      init_navigation_test(cx);
 
       NavigationHistory::navigate_replace("/git", cx);
       NavigationHistory::navigate("/git", cx);
@@ -175,8 +222,7 @@ mod tests {
   #[gpui::test]
   async fn test_navigate_replace_does_not_push(cx: &mut TestAppContext) {
     cx.update(|cx| {
-      gpui_router::init(cx);
-      NavigationHistory::init(cx);
+      init_navigation_test(cx);
 
       NavigationHistory::navigate_replace("/git", cx);
       NavigationHistory::navigate_replace("/settings", cx);
@@ -187,6 +233,58 @@ mod tests {
         NavigationHistory::current_pathname(cx).as_ref(),
         "/settings"
       );
+    });
+  }
+
+  #[gpui::test]
+  async fn test_navigate_allows_github_home_without_access(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      init_navigation_test(cx);
+      AuthStateStore::set(cx, AuthState::Unauthenticated);
+
+      NavigationHistory::navigate_replace("/git", cx);
+      NavigationHistory::navigate("/github", cx);
+
+      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/github");
+    });
+  }
+
+  #[gpui::test]
+  async fn test_navigate_redirects_protected_github_route_to_home_without_access(
+    cx: &mut TestAppContext,
+  ) {
+    cx.update(|cx| {
+      init_navigation_test(cx);
+      AuthStateStore::set(cx, AuthState::Unauthenticated);
+
+      NavigationHistory::navigate_replace("/git", cx);
+      NavigationHistory::navigate("/github/owner/repo", cx);
+
+      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/github");
+      assert_eq!(cx.global::<NavigationHistory>().stack.len(), 1);
+      assert_eq!(cx.global::<NavigationHistory>().stack[0].as_ref(), "/git");
+    });
+  }
+
+  #[gpui::test]
+  async fn test_navigate_back_falls_back_to_github_home_when_access_is_lost(
+    cx: &mut TestAppContext,
+  ) {
+    cx.update(|cx| {
+      init_navigation_test(cx);
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_user(UserRole::User, true))),
+      );
+
+      NavigationHistory::navigate_replace("/settings", cx);
+      cx.global_mut::<NavigationHistory>()
+        .stack
+        .push("/github/owner/repo".into());
+      AuthStateStore::set(cx, AuthState::Unauthenticated);
+      NavigationHistory::navigate_back(cx);
+
+      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/github");
     });
   }
 }

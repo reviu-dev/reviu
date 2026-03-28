@@ -1,16 +1,17 @@
 use std::{collections::HashSet, rc::Rc, sync::Arc};
 
 use gpui::{
-  App, Context, Entity, FocusHandle, Focusable, MouseButton, ParentElement, Render, SharedString,
-  Styled, Subscription, Task, Window, div, prelude::*, px,
+  AnyElement, App, Context, Entity, FocusHandle, Focusable, MouseButton, ParentElement, Render,
+  SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _,
+  ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, StyledExt as _,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   h_flex,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  scroll::ScrollableElement,
   tab::{Tab, TabBar},
   tag::Tag,
   v_flex,
@@ -24,16 +25,18 @@ use crate::notification_count::NotificationCountStore;
 use time::OffsetDateTime;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT,
-  SelectableRowStyle, StatusThemeExt, UiIconName, WindowExt, selectable_list_item,
+  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage,
+  DETAILS_PAGE_CONTAINER_MAX_WIDTH, PAGE_HEADER_HEIGHT, SelectableRowStyle, StatusTag,
+  StatusThemeExt, UiIconName, WindowExt, selectable_list_item,
 };
 
 #[cfg(test)]
 use crate::date_format::format_relative_time_at;
 use crate::{
-  ShowCommandPalette,
+  AuthCallbackTarget, ShowCommandPalette,
   api::{ApiClient, GithubNotification, GithubPullRequest, GithubUserRepository},
-  auth_state::AuthStateStore,
+  auth_state::{AuthStateStore, GithubAccessState},
+  billing_page::{ReviuProCheckoutCta, reviu_pro_checkout_button},
   config::ConfigStore,
   date_format::format_relative_time,
   github_navigation::{open_pr_target, open_repo_target},
@@ -172,6 +175,35 @@ fn github_html_url_from_notification(full_name: &str, subject_type: &str, api_ur
     "Release" => format!("https://github.com/{full_name}/releases"),
     "Discussion" => format!("https://github.com/{full_name}/discussions"),
     _ => format!("https://github.com/{full_name}"),
+  }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GithubLockedAction {
+  SignIn,
+  Subscribe,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GithubLockedPresentation {
+  title: &'static str,
+  description: &'static str,
+  action: GithubLockedAction,
+}
+
+fn github_locked_presentation(access_state: GithubAccessState) -> Option<GithubLockedPresentation> {
+  match access_state {
+    GithubAccessState::Available => None,
+    GithubAccessState::NeedsSignIn => Some(GithubLockedPresentation {
+      title: "Sign in to bring GitHub work into the app.",
+      description: "Sign in with GitHub to unlock notifications, repository browsing, pull request reviews, issues, and branch-to-PR shortcuts in one place.",
+      action: GithubLockedAction::SignIn,
+    }),
+    GithubAccessState::NeedsSubscription => Some(GithubLockedPresentation {
+      title: "Upgrade to unlock GitHub workflows.",
+      description: "Upgrade to Reviu Pro for $19/month to unlock GitHub notifications, repository browsing, pull request reviews, issues, and branch-to-PR shortcuts.",
+      action: GithubLockedAction::Subscribe,
+    }),
   }
 }
 
@@ -819,7 +851,11 @@ pub struct GithubPage {
   repositories_error: Option<SharedString>,
   notifications_error: Option<SharedString>,
   error: Option<SharedString>,
+  access_error: Option<SharedString>,
   focus_on_next_render: bool,
+  subscribe_loading: bool,
+  subscribe_task: Option<Task<()>>,
+  last_access_state: GithubAccessState,
   _subscriptions: Vec<Subscription>,
 }
 
@@ -842,8 +878,12 @@ impl GithubPageHandle {
       return;
     };
     let _ = weak.update(cx, |this, cx| {
+      let access_state = AuthStateStore::github_access_state(cx);
+      this.last_access_state = access_state;
       this.focus_on_next_render = true;
-      this.refresh_pull_requests(cx);
+      if matches!(access_state, GithubAccessState::Available) {
+        this.refresh_pull_requests(cx);
+      }
     });
   }
 }
@@ -898,7 +938,11 @@ impl GithubPage {
       repositories_error: None,
       notifications_error: None,
       error: None,
+      access_error: None,
       focus_on_next_render: true,
+      subscribe_loading: false,
+      subscribe_task: None,
+      last_access_state: AuthStateStore::github_access_state(cx),
       _subscriptions: Vec::new(),
     };
 
@@ -1110,6 +1154,46 @@ impl GithubPage {
     if !matches!(tab, GithubPullRequestTab::Notifications) {
       self.apply_active_pull_request_rows(cx);
     }
+    cx.notify();
+  }
+
+  fn subscribe_action(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    self.start_checkout(cx);
+  }
+
+  fn start_checkout(&mut self, cx: &mut Context<Self>) {
+    if self.subscribe_loading {
+      return;
+    }
+
+    self.subscribe_loading = true;
+    self.access_error = None;
+
+    let api = self.api.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.checkout_subscription("pro"))
+        .await
+        .map_err(|error| error.to_string());
+
+      match result {
+        Ok(url) => {
+          cx.update(|cx| cx.open_url(&url));
+          let _ = this.update(cx, |this, cx| {
+            this.subscribe_loading = false;
+            cx.notify();
+          });
+        }
+        Err(error) => {
+          let _ = this.update(cx, |this, cx| {
+            this.subscribe_loading = false;
+            this.access_error = Some(error.into());
+            cx.notify();
+          });
+        }
+      }
+    });
+
+    self.subscribe_task = Some(task);
     cx.notify();
   }
 
@@ -1431,11 +1515,237 @@ impl GithubPage {
       .border_color(theme.title_bar_border)
       .child(div().text_sm().text_color(theme.foreground).child("GitHub"))
   }
+
+  fn render_access_feature_card(
+    icon: Icon,
+    title: &'static str,
+    description: &'static str,
+    theme: &gpui_component::Theme,
+  ) -> impl IntoElement {
+    div()
+      .flex()
+      .flex_col()
+      .gap_3()
+      .p_4()
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius)
+      .bg(theme.sidebar)
+      .child(
+        h_flex()
+          .items_center()
+          .justify_between()
+          .gap_2()
+          .child(icon.size_4())
+          .child(StatusTag::new(theme.status_blue()).outline().child("Pro")),
+      )
+      .child(
+        div()
+          .text_sm()
+          .font_semibold()
+          .text_color(theme.foreground)
+          .child(title),
+      )
+      .child(
+        div()
+          .text_sm()
+          .text_color(theme.muted_foreground)
+          .child(description),
+      )
+  }
+
+  fn render_locked_eyebrow(&self, theme: &gpui_component::Theme) -> AnyElement {
+    h_flex()
+      .items_center()
+      .gap_0()
+      .child(
+        div()
+          .text_xs()
+          .font_semibold()
+          .text_color(theme.foreground)
+          .child("Rev"),
+      )
+      .child(
+        div()
+          .text_xs()
+          .font_semibold()
+          .text_color(theme.status_blue())
+          .child("iu Pro"),
+      )
+      .into_any_element()
+  }
+
+  fn render_locked_page(
+    &mut self,
+    access_state: GithubAccessState,
+    _: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let presentation = github_locked_presentation(access_state)
+      .expect("locked page should only render for unavailable GitHub access");
+    let action = match presentation.action {
+      GithubLockedAction::SignIn => Button::new("github-access-sign-in")
+        .icon(IconName::Github)
+        .label("Sign in with GitHub")
+        .small()
+        .on_click(|_, _, cx| {
+          AuthCallbackTarget::start_sign_in(cx);
+        })
+        .into_any_element(),
+      GithubLockedAction::Subscribe => reviu_pro_checkout_button(
+        "github-access-subscribe",
+        ReviuProCheckoutCta::StartFreeTrial,
+      )
+      .loading(self.subscribe_loading)
+      .disabled(self.subscribe_loading)
+      .on_click(cx.listener(Self::subscribe_action))
+      .into_any_element(),
+    };
+
+    div()
+      .size_full()
+      .flex()
+      .flex_col()
+      .bg(theme.background)
+      .track_focus(&self.focus_handle(cx))
+      .on_action(cx.listener(GithubPage::show_command_palette_action))
+      .child(self.render_header(cx))
+      .child(
+        div().w_full().h_full().min_h_0().overflow_y_scrollbar().child(
+          div().flex().flex_col()
+            .w_full()
+            .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+            .mx_auto()
+            .gap_4()
+            .p_4()
+            .child(
+              div().flex().flex_col()
+                .gap_4()
+                .p_4()
+                .pb_9()
+                .border_1()
+                .border_color(theme.border)
+                .rounded(theme.radius)
+                .bg(theme.sidebar)
+                .child(
+                  div().flex()
+                    .min_w_0()
+                    .items_start()
+                    .gap_3()
+                    .child(
+                      div().mt_6()
+                        .size_12()
+                        .flex()
+                        .flex_shrink_0()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(theme.background)
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(Icon::new(IconName::Github).size_6()),
+                    )
+                    .child(
+                      div().flex().flex_col()
+                        .min_w_0()
+                        .flex_1()
+                        .gap_1()
+                        .child(self.render_locked_eyebrow(&theme))
+                        .child(
+                          div()
+                            .text_3xl()
+                            .font_semibold()
+                            .text_color(theme.foreground)
+                            .child(presentation.title),
+                        )
+                        .child(
+                          div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(presentation.description),
+                        ).child(div()
+                  .flex()
+                  .flex_col()
+                        .gap_3()
+                        .child(
+                          div().flex()
+                            .items_end()
+                            .gap_2()
+                            .child(
+                              div()
+                                .text_xl()
+                                .font_semibold()
+                                .text_color(theme.foreground)
+                                .child("$19"),
+                            )
+                            .child(
+                              div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child("/ month"),
+                            ),
+                        )
+                        .child(div().flex().justify_start().child(action))
+                        .when_some(self.access_error.clone(), |this, error| {
+                          this.child(div().text_sm().text_color(theme.status_red()).child(error))
+                        })),
+                    ),
+                )
+            )
+            .child(
+              div().grid()
+                .grid_cols(2)
+                .gap_3()
+                .child(Self::render_access_feature_card(
+                  Icon::new(IconName::Bell),
+                  "GitHub notifications in-app",
+                  "Track unread threads and review work from a desktop inbox without bouncing back to the browser.",
+                  &theme,
+                ))
+                .child(Self::render_access_feature_card(
+                  Icon::new(IconName::Folder),
+                  "Browse repos, pull requests, and issues",
+                  "Open Overview, Readme, Code, Pull Requests, and Issues from one place inside Reviu.",
+                  &theme,
+                ))
+                .child(Self::render_access_feature_card(
+                  Icon::new(UiIconName::GitPullRequestArrow),
+                  "Desktop pull request review",
+                  "Review changed files in inline or split diff mode with markdown and SVG previews plus full comment actions.",
+                  &theme,
+                ))
+                .child(Self::render_access_feature_card(
+                  Icon::new(UiIconName::GitBranch),
+                  "Branch-to-PR shortcuts",
+                  "Jump from the Git page to the pull request for the current branch, or open GitHub to create one when none exists.",
+                  &theme,
+                )),
+            ),
+        ),
+      )
+  }
 }
 
 impl Render for GithubPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let access_state = AuthStateStore::github_access_state(cx);
+
+    if access_state != self.last_access_state {
+      self.last_access_state = access_state;
+      if matches!(access_state, GithubAccessState::Available) {
+        self.focus_on_next_render = true;
+        self.refresh_pull_requests(cx);
+      }
+    }
+
+    if !matches!(access_state, GithubAccessState::Available) {
+      self.focus_on_next_render = false;
+      return self
+        .render_locked_page(access_state, window, cx)
+        .into_any_element();
+    }
 
     if self.focus_on_next_render {
       self.focus_on_next_render = false;
@@ -1599,6 +1909,7 @@ impl Render for GithubPage {
               .child(right_panel),
           ),
       )
+      .into_any_element()
   }
 }
 
@@ -1746,6 +2057,24 @@ mod tests {
       repository_updated_label_at("2026-02-12T12:00:00Z", now).as_ref(),
       "Updated 3 days ago"
     );
+  }
+
+  #[test]
+  fn github_locked_presentation_uses_sign_in_for_unauthenticated_access() {
+    let presentation = github_locked_presentation(GithubAccessState::NeedsSignIn)
+      .expect("sign-in state should have locked presentation");
+
+    assert_eq!(presentation.action, GithubLockedAction::SignIn);
+    assert!(presentation.description.contains("Sign in"));
+  }
+
+  #[test]
+  fn github_locked_presentation_uses_subscribe_for_subscription_gate() {
+    let presentation = github_locked_presentation(GithubAccessState::NeedsSubscription)
+      .expect("subscription state should have locked presentation");
+
+    assert_eq!(presentation.action, GithubLockedAction::Subscribe);
+    assert!(presentation.description.contains("$19/month"));
   }
 
   #[test]

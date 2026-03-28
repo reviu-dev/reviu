@@ -4,6 +4,13 @@ use gpui::{App, Global};
 
 use crate::{api::User, sentry_context};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GithubAccessState {
+  NeedsSignIn,
+  NeedsSubscription,
+  Available,
+}
+
 #[derive(Clone, Debug)]
 pub enum AuthState {
   Unknown,
@@ -31,6 +38,14 @@ impl AuthStateStore {
     Self::get(cx).has_github_access()
   }
 
+  pub fn github_access_state(cx: &App) -> GithubAccessState {
+    Self::get(cx).github_access_state()
+  }
+
+  pub fn should_show_billing_entry(cx: &App) -> bool {
+    Self::get(cx).should_show_billing_entry()
+  }
+
   pub fn set(cx: &mut App, state: AuthState) {
     sentry_context::sync_auth_state(&state);
     if let Ok(mut guard) = cx.global::<Self>().state.lock() {
@@ -52,14 +67,26 @@ impl AuthState {
     matches!(self, AuthState::Authenticated(user) if user.has_pro_access())
   }
 
+  pub fn github_access_state(&self) -> GithubAccessState {
+    match self {
+      AuthState::Authenticated(_) if self.has_pro_access() => GithubAccessState::Available,
+      AuthState::Authenticated(_) => GithubAccessState::NeedsSubscription,
+      AuthState::Unknown | AuthState::Unauthenticated => GithubAccessState::NeedsSignIn,
+    }
+  }
+
   pub fn has_github_access(&self) -> bool {
-    self.has_pro_access()
+    matches!(self.github_access_state(), GithubAccessState::Available)
+  }
+
+  pub fn should_show_billing_entry(&self) -> bool {
+    matches!(self, AuthState::Authenticated(user) if user.should_show_billing_entry())
   }
 }
 
 #[cfg(test)]
 mod tests {
-  use super::AuthState;
+  use super::{AuthState, GithubAccessState};
   use crate::api::{
     CustomerStateSubscription, CustomerStateSubscriptionStatus, User, UserRole, UserSubscription,
   };
@@ -107,6 +134,8 @@ mod tests {
 
     assert!(state.has_pro_access());
     assert!(state.has_github_access());
+    assert_eq!(state.github_access_state(), GithubAccessState::Available);
+    assert!(state.should_show_billing_entry());
   }
 
   #[test]
@@ -115,6 +144,8 @@ mod tests {
 
     assert!(state.has_pro_access());
     assert!(state.has_github_access());
+    assert_eq!(state.github_access_state(), GithubAccessState::Available);
+    assert!(!state.should_show_billing_entry());
   }
 
   #[test]
@@ -127,7 +158,26 @@ mod tests {
 
     assert!(!no_subscription.has_pro_access());
     assert!(!no_subscription.has_github_access());
+    assert_eq!(
+      no_subscription.github_access_state(),
+      GithubAccessState::NeedsSubscription
+    );
+    assert!(!no_subscription.should_show_billing_entry());
     assert!(with_subscription.has_pro_access());
     assert!(with_subscription.has_github_access());
+    assert_eq!(
+      with_subscription.github_access_state(),
+      GithubAccessState::Available
+    );
+    assert!(with_subscription.should_show_billing_entry());
+  }
+
+  #[test]
+  fn state_requires_sign_in_when_unauthenticated() {
+    let state = AuthState::Unauthenticated;
+
+    assert_eq!(state.github_access_state(), GithubAccessState::NeedsSignIn);
+    assert!(!state.has_github_access());
+    assert!(!state.should_show_billing_entry());
   }
 }

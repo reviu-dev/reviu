@@ -47,6 +47,32 @@ enum BillingSubscriptionState {
   Canceled,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReviuProCheckoutCta {
+  Subscribe,
+  StartFreeTrial,
+}
+
+impl ReviuProCheckoutCta {
+  pub(crate) fn label(self) -> &'static str {
+    match self {
+      Self::Subscribe => "Subscribe",
+      Self::StartFreeTrial => "Start free trial",
+    }
+  }
+}
+
+pub(crate) fn reviu_pro_checkout_button(id: &'static str, cta: ReviuProCheckoutCta) -> Button {
+  Button::new(id)
+    .icon(UiIconName::CreditCard)
+    .label(cta.label())
+    .small()
+}
+
+pub(crate) fn reviu_pro_subscribe_button(id: &'static str) -> Button {
+  reviu_pro_checkout_button(id, ReviuProCheckoutCta::Subscribe)
+}
+
 impl BillingPage {
   pub fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
     Self {
@@ -467,10 +493,7 @@ impl BillingPage {
       )
       .child(
         h_flex().justify_start().child(
-          Button::new("billing-subscribe")
-            .icon(UiIconName::CreditCard)
-            .label("Subscribe")
-            .small()
+          reviu_pro_subscribe_button("billing-subscribe")
             .loading(self.checkout_loading)
             .disabled(self.checkout_loading || self.refresh_loading)
             .on_click(cx.listener(Self::subscribe_action)),
@@ -765,6 +788,15 @@ mod tests {
     assert_eq!(
       BillingPage::status_label(BillingSubscriptionState::Canceled),
       "Canceled"
+    );
+  }
+
+  #[test]
+  fn reviu_pro_checkout_cta_labels_match_copy() {
+    assert_eq!(ReviuProCheckoutCta::Subscribe.label(), "Subscribe");
+    assert_eq!(
+      ReviuProCheckoutCta::StartFreeTrial.label(),
+      "Start free trial"
     );
   }
 }
