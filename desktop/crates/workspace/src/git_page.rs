@@ -24,7 +24,7 @@ use git::{
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
   InteractiveElement, Keystroke, ParentElement, PathPromptOptions, Pixels, Render, RenderImage,
-  SharedString, Styled, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
+  SharedString, Styled, Subscription, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable, StyledExt,
@@ -37,6 +37,7 @@ use gpui_component::{
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{DropdownMenu, PopupMenuItem},
   notification::Notification,
+  select::{Select, SelectEvent, SelectState},
   spinner::Spinner,
   tag::Tag,
   text::TextView,
@@ -126,12 +127,74 @@ struct CreatePullRequestDialog {
   title_input: Entity<InputState>,
   base_input: Entity<InputState>,
   body_input: Entity<InputState>,
+  template_select: Entity<SelectState<Vec<String>>>,
   draft: bool,
   default_branch_loading: bool,
+  template_loading: bool,
+  template_options_count: usize,
   submit_loading: bool,
   validation_error: Option<SharedString>,
   default_branch_task: Option<Task<()>>,
+  template_task: Option<Task<()>>,
   submit_task: Option<Task<()>>,
+  _subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PullRequestTemplateLoadResult {
+  default_branch: Option<String>,
+  template_paths: Vec<String>,
+  template_body: Option<String>,
+}
+
+const PULL_REQUEST_TEMPLATE_SINGLE_PATHS: [&str; 3] = [
+  ".github/pull_request_template.md",
+  "pull_request_template.md",
+  "docs/pull_request_template.md",
+];
+const PULL_REQUEST_TEMPLATE_DIRECTORY_PATHS: [&str; 3] = [
+  ".github/PULL_REQUEST_TEMPLATE/",
+  "PULL_REQUEST_TEMPLATE/",
+  "docs/PULL_REQUEST_TEMPLATE/",
+];
+
+fn resolve_pull_request_template_paths(
+  entries: &[crate::api::GithubRepositoryTreeEntry],
+) -> Vec<String> {
+  let mut paths = Vec::new();
+
+  for candidate in PULL_REQUEST_TEMPLATE_SINGLE_PATHS {
+    if entries
+      .iter()
+      .any(|entry| entry.entry_type == "blob" && entry.path == candidate)
+    {
+      paths.push(candidate.to_string());
+    }
+  }
+
+  for directory in PULL_REQUEST_TEMPLATE_DIRECTORY_PATHS {
+    let mut directory_paths = entries
+      .iter()
+      .filter(|entry| entry.entry_type == "blob")
+      .filter_map(|entry| {
+        let suffix = entry.path.strip_prefix(directory)?;
+        if suffix.is_empty() || suffix.contains('/') {
+          return None;
+        }
+
+        Some(entry.path.clone())
+      })
+      .collect::<Vec<_>>();
+    directory_paths.sort();
+
+    for path in directory_paths {
+      if !paths.contains(&path) {
+        paths.push(path);
+      }
+    }
+  }
+
+  paths
 }
 
 impl CreatePullRequestDialog {
@@ -142,6 +205,17 @@ impl CreatePullRequestDialog {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Self {
+    let template_select = cx.new(|cx| SelectState::new(Vec::<String>::new(), None, window, cx));
+    let subscription = cx.subscribe(
+      &template_select,
+      move |this, _, event: &SelectEvent<Vec<String>>, cx| {
+        let SelectEvent::Confirm(Some(path)) = event else {
+          return;
+        };
+        this.load_pull_request_template(path.clone(), cx);
+      },
+    );
+
     let mut this = Self {
       api,
       window_handle,
@@ -153,44 +227,98 @@ impl CreatePullRequestDialog {
           .auto_grow(4, 10)
           .placeholder("Add an optional description...")
       }),
+      template_select,
       draft: false,
       default_branch_loading: false,
+      template_loading: false,
+      template_options_count: 0,
       submit_loading: false,
       validation_error: None,
       default_branch_task: None,
+      template_task: None,
       submit_task: None,
+      _subscriptions: vec![subscription],
     };
-    this.load_default_branch(cx);
+    this.load_repository_defaults(cx);
     this
   }
 
-  fn load_default_branch(&mut self, cx: &mut Context<Self>) {
+  fn load_repository_defaults(&mut self, cx: &mut Context<Self>) {
     if self.default_branch_loading {
       return;
     }
 
     self.default_branch_loading = true;
+    self.template_loading = true;
 
     let api = self.api.clone();
     let owner = self.branch_context.owner.clone();
     let repo = self.branch_context.repo.clone();
     let base_input = self.base_input.clone();
+    let body_input = self.body_input.clone();
+    let template_select = self.template_select.clone();
     let window_handle = self.window_handle;
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.fetch_github_repository_details(&owner, &repo)).await;
+      let result = unblock(move || {
+        let details = api.fetch_github_repository_details(&owner, &repo).ok();
+        let default_branch = details
+          .as_ref()
+          .map(|details| details.default_branch.trim().to_string())
+          .filter(|value| !value.is_empty());
+
+        let template_paths = default_branch
+          .as_ref()
+          .and_then(|default_branch| {
+            api
+              .fetch_github_repository_tree(&owner, &repo, default_branch)
+              .ok()
+              .map(|tree| resolve_pull_request_template_paths(&tree.tree))
+          })
+          .unwrap_or_default();
+
+        let template_body = if template_paths.len() == 1 {
+          default_branch.as_ref().and_then(|default_branch| {
+            api
+              .fetch_github_file_content(&owner, &repo, &template_paths[0], default_branch)
+              .ok()
+              .flatten()
+          })
+        } else {
+          None
+        };
+
+        PullRequestTemplateLoadResult {
+          default_branch,
+          template_paths,
+          template_body,
+        }
+      })
+      .await;
 
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| {
           this.default_branch_loading = false;
+          this.template_loading = false;
+          this.template_options_count = result.template_paths.len();
 
-          if let Ok(details) = result {
-            let default_branch = details.default_branch.trim().to_string();
-            if !default_branch.is_empty() && base_input.read(cx).value().trim().is_empty() {
-              base_input.update(cx, |input, cx| {
-                input.set_value(default_branch.clone(), window, cx);
-              });
-            }
+          if let Some(default_branch) = result.default_branch.clone()
+            && base_input.read(cx).value().trim().is_empty()
+          {
+            base_input.update(cx, |input, cx| {
+              input.set_value(default_branch, window, cx);
+            });
+          }
+
+          template_select.update(cx, |state, cx| {
+            state.set_items(result.template_paths.clone(), window, cx);
+            state.set_selected_index(None, window, cx);
+          });
+
+          if let Some(template_body) = result.template_body.clone() {
+            body_input.update(cx, |input, cx| {
+              input.set_value(template_body, window, cx);
+            });
           }
 
           cx.notify();
@@ -199,6 +327,48 @@ impl CreatePullRequestDialog {
     });
 
     self.default_branch_task = Some(task);
+    cx.notify();
+  }
+
+  fn load_pull_request_template(&mut self, template_path: String, cx: &mut Context<Self>) {
+    if self.template_loading {
+      return;
+    }
+
+    let base_branch = self.base_input.read(cx).value().trim().to_string();
+    if base_branch.is_empty() {
+      return;
+    }
+
+    self.template_loading = true;
+
+    let api = self.api.clone();
+    let owner = self.branch_context.owner.clone();
+    let repo = self.branch_context.repo.clone();
+    let body_input = self.body_input.clone();
+    let window_handle = self.window_handle;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.fetch_github_file_content(&owner, &repo, &template_path, &base_branch))
+          .await;
+
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        let _ = this.update(cx, |this, cx| {
+          this.template_loading = false;
+
+          if let Ok(Some(template_body)) = result {
+            body_input.update(cx, |input, cx| {
+              input.set_value(template_body, window, cx);
+            });
+          }
+
+          cx.notify();
+        });
+      });
+    });
+
+    self.template_task = Some(task);
     cx.notify();
   }
 
@@ -345,8 +515,32 @@ impl Render for CreatePullRequestDialog {
           .child(
             v_flex()
               .gap_1()
-              .child(div().text_sm().child("Description"))
-              .child(Input::new(&self.body_input).w_full()),
+              .when(self.template_options_count > 1, |this| {
+                this.child(
+                  v_flex()
+                    .gap_1()
+                    .child(div().text_sm().child("Template"))
+                    .child(
+                      Select::new(&self.template_select)
+                        .placeholder("Select a pull request template...")
+                        .disabled(self.template_loading || self.submit_loading),
+                    ),
+                )
+              })
+              .child(
+                h_flex()
+                  .justify_between()
+                  .items_center()
+                  .child(div().text_sm().child("Description"))
+                  .when(self.template_loading, |this| {
+                    this.child(Spinner::new().xsmall())
+                  }),
+              )
+              .child(
+                Input::new(&self.body_input)
+                  .w_full()
+                  .disabled(self.template_loading),
+              ),
           )
           .child(
             Checkbox::new("git-create-pull-request-draft")
@@ -7768,6 +7962,17 @@ mod tests {
     }
   }
 
+  fn make_repository_tree_entry(path: &str) -> crate::api::GithubRepositoryTreeEntry {
+    crate::api::GithubRepositoryTreeEntry {
+      path: path.to_string(),
+      mode: "100644".to_string(),
+      entry_type: "blob".to_string(),
+      sha: "deadbeef".to_string(),
+      size: Some(128),
+      url: None,
+    }
+  }
+
   fn isolate_config_store_for_test() {
     static NEXT_DB_ID: AtomicU64 = AtomicU64::new(1);
     let id = NEXT_DB_ID.fetch_add(1, Ordering::Relaxed);
@@ -7925,6 +8130,43 @@ mod tests {
     assert!(!GitPage::branch_has_github_upstream(Some(&local_only)));
     assert!(!GitPage::branch_has_github_upstream(Some(&detached)));
     assert!(!GitPage::branch_has_github_upstream(None));
+  }
+
+  #[test]
+  fn resolve_pull_request_template_paths_prefers_documented_single_template_locations() {
+    let entries = vec![
+      make_repository_tree_entry("docs/pull_request_template.md"),
+      make_repository_tree_entry("pull_request_template.md"),
+      make_repository_tree_entry(".github/pull_request_template.md"),
+    ];
+
+    assert_eq!(
+      resolve_pull_request_template_paths(&entries),
+      vec![
+        ".github/pull_request_template.md".to_string(),
+        "pull_request_template.md".to_string(),
+        "docs/pull_request_template.md".to_string(),
+      ]
+    );
+  }
+
+  #[test]
+  fn resolve_pull_request_template_paths_collects_direct_children_from_template_directories() {
+    let entries = vec![
+      make_repository_tree_entry(".github/PULL_REQUEST_TEMPLATE/bugfix.md"),
+      make_repository_tree_entry(".github/PULL_REQUEST_TEMPLATE/feature.md"),
+      make_repository_tree_entry(".github/PULL_REQUEST_TEMPLATE/nested/mobile/template.md"),
+      make_repository_tree_entry("docs/PULL_REQUEST_TEMPLATE/release.md"),
+    ];
+
+    assert_eq!(
+      resolve_pull_request_template_paths(&entries),
+      vec![
+        ".github/PULL_REQUEST_TEMPLATE/bugfix.md".to_string(),
+        ".github/PULL_REQUEST_TEMPLATE/feature.md".to_string(),
+        "docs/PULL_REQUEST_TEMPLATE/release.md".to_string(),
+      ]
+    );
   }
 
   #[gpui::test]
