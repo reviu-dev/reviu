@@ -48,9 +48,11 @@ impl AuthStateStore {
 
   pub fn set(cx: &mut App, state: AuthState) {
     sentry_context::sync_auth_state(&state);
-    if let Ok(mut guard) = cx.global::<Self>().state.lock() {
+    let store = cx.global::<Self>().clone();
+    if let Ok(mut guard) = store.state.lock() {
       *guard = state;
     }
+    cx.set_global(store);
   }
 }
 

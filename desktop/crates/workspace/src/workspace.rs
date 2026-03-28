@@ -1,10 +1,10 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use editor::set_indent_rainbow_enabled;
+use editor::{Copy, Cut, Paste, Quit, Redo, SelectAll, Undo, set_indent_rainbow_enabled};
 use gpui::{
-  AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global, Keystroke, Render,
-  Subscription, Task, Window, div, prelude::*, px,
+  AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global, Keystroke, Menu, MenuItem,
+  Render, Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, IconName, Sizable as _, Theme, ThemeMode, h_flex,
@@ -128,6 +128,49 @@ fn github_primary_navigation_count_label(notification_count: usize) -> Option<St
   (notification_count > 0).then(|| notification_count.to_string())
 }
 
+pub fn build_app_menus(show_billing_entry: bool) -> Vec<Menu> {
+  let mut navigate_items = vec![
+    MenuItem::action("Git", crate::OpenGitPage),
+    MenuItem::action("GitHub", crate::OpenGithubPage),
+    MenuItem::separator(),
+    MenuItem::action("Git Config", crate::OpenGitConfigPage),
+  ];
+
+  if show_billing_entry {
+    navigate_items.push(MenuItem::action("Billing", crate::OpenBillingPage));
+  }
+
+  vec![
+    Menu {
+      name: "Reviu".into(),
+      items: vec![
+        MenuItem::action("About Reviu", crate::OpenAboutPage),
+        MenuItem::separator(),
+        MenuItem::action("Settings...", crate::OpenSettingsPage),
+        MenuItem::separator(),
+        MenuItem::action("Quit Reviu", Quit),
+      ],
+    },
+    Menu {
+      name: "Navigate".into(),
+      items: navigate_items,
+    },
+    Menu {
+      name: "Edit".into(),
+      items: vec![
+        MenuItem::os_action("Undo", Undo, gpui::OsAction::Undo),
+        MenuItem::os_action("Redo", Redo, gpui::OsAction::Redo),
+        MenuItem::separator(),
+        MenuItem::os_action("Cut", Cut, gpui::OsAction::Cut),
+        MenuItem::os_action("Copy", Copy, gpui::OsAction::Copy),
+        MenuItem::os_action("Paste", Paste, gpui::OsAction::Paste),
+        MenuItem::separator(),
+        MenuItem::os_action("Select All", SelectAll, gpui::OsAction::SelectAll),
+      ],
+    },
+  ]
+}
+
 /// Lightweight global that tracks the current page for focus delegation and sidebar highlighting.
 /// The source of truth for navigation is `NavigationHistory` / `RouterState`.
 /// This struct is kept in sync by `WorkspaceView::render`.
@@ -199,6 +242,12 @@ impl WorkspaceView {
     Keystroke::parse("cmd-p").expect("valid file search shortcut")
   }
 
+  fn sync_app_menus(cx: &mut App) {
+    cx.set_menus(build_app_menus(AuthStateStore::should_show_billing_entry(
+      cx,
+    )));
+  }
+
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     gpui_router::init(cx);
     NavigationHistory::init(cx);
@@ -258,6 +307,12 @@ impl WorkspaceView {
       this.on_window_appearance_changed(window, cx);
     });
     view._subscriptions.push(subscription);
+    let subscription = cx.observe_global::<AuthStateStore>(|_, cx| {
+      Self::sync_app_menus(cx);
+      cx.notify();
+    });
+    view._subscriptions.push(subscription);
+    Self::sync_app_menus(cx);
     view.check_for_updates(cx);
     view.start_notification_polling(cx);
     crate::status_bar::init_status_bar(include_bytes!("../../reviu/assets/statusbar-icon.png"));
@@ -845,7 +900,9 @@ impl Render for WorkspaceView {
         Self::open_github_home(cx);
       }))
       .on_action(cx.listener(|_, _: &crate::OpenBillingPage, _window, cx| {
-        NavigationHistory::navigate("/billing", cx);
+        if AuthStateStore::should_show_billing_entry(cx) {
+          NavigationHistory::navigate("/billing", cx);
+        }
       }))
       .on_action(cx.listener(|_, _: &crate::OpenGitConfigPage, _window, cx| {
         NavigationHistory::navigate("/git-config", cx);
@@ -865,17 +922,28 @@ impl Render for WorkspaceView {
 #[cfg(test)]
 mod tests {
   use super::{
-    WorkspacePage, WorkspaceView, github_primary_navigation_count_label, page_has_file_search,
-    primary_navigation_selected_index, user_menu_page_for_workspace_page,
+    WorkspacePage, WorkspaceView, build_app_menus, github_primary_navigation_count_label,
+    page_has_file_search, primary_navigation_selected_index, user_menu_page_for_workspace_page,
     workspace_page_from_pathname,
   };
   use crate::SHOW_COMMAND_PALETTE_SHORTCUT;
   use crate::app_update::{
     AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
   };
-  use gpui::Keystroke;
+  use gpui::{Keystroke, Menu, MenuItem};
   use std::path::PathBuf;
   use ui::UserMenuPage;
+
+  fn action_menu_item_names(menu: &Menu) -> Vec<String> {
+    menu
+      .items
+      .iter()
+      .filter_map(|item| match item {
+        MenuItem::Action { name, .. } => Some(name.to_string()),
+        _ => None,
+      })
+      .collect()
+  }
 
   #[test]
   fn workspace_page_from_pathname_maps_static_paths() {
@@ -897,6 +965,34 @@ mod tests {
       WorkspacePage::GitConfig
     );
     assert_eq!(workspace_page_from_pathname("/about"), WorkspacePage::About);
+  }
+
+  #[test]
+  fn build_app_menus_hides_billing_when_entry_is_unavailable() {
+    let menus = build_app_menus(false);
+    let navigate_menu = menus
+      .iter()
+      .find(|menu| menu.name == "Navigate")
+      .expect("navigate menu");
+
+    assert_eq!(
+      action_menu_item_names(navigate_menu),
+      vec!["Git", "GitHub", "Git Config"]
+    );
+  }
+
+  #[test]
+  fn build_app_menus_shows_billing_when_entry_is_available() {
+    let menus = build_app_menus(true);
+    let navigate_menu = menus
+      .iter()
+      .find(|menu| menu.name == "Navigate")
+      .expect("navigate menu");
+
+    assert_eq!(
+      action_menu_item_names(navigate_menu),
+      vec!["Git", "GitHub", "Git Config", "Billing"]
+    );
   }
 
   #[test]
