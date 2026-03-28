@@ -142,6 +142,7 @@ pub enum CommandPaletteAction {
   CreateBranch {
     name: String,
   },
+  CreatePullRequest,
   CreateBranchFrom {
     name: String,
     base: CommandPaletteBranch,
@@ -648,6 +649,7 @@ pub enum CommandPaletteCommandId {
   InteractiveRebaseOntoBranch,
   InteractiveRebaseHeadCount,
   AbortRebase,
+  CreatePullRequest,
   CherryPick,
   StageAll,
   UnstageAll,
@@ -853,6 +855,14 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::CreateBranch,
       name: "Create branch".into(),
       description: Some("Create a new branch".into()),
+    }
+  }
+
+  pub fn create_pull_request() -> Self {
+    Self {
+      id: CommandPaletteCommandId::CreatePullRequest,
+      name: "Create pull request".into(),
+      description: Some("Create a pull request for the current branch".into()),
     }
   }
 
@@ -1123,6 +1133,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
       }
+      CommandPaletteCommandId::CreatePullRequest => Icon::new(UiIconName::GitPullRequestArrow),
       CommandPaletteCommandId::OpenGitPage => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::OpenGithubPage => Icon::new(IconName::Github),
       CommandPaletteCommandId::OpenGithubFromUrl => Icon::new(IconName::Github),
@@ -1955,6 +1966,9 @@ impl CommandPalette {
       CommandPaletteCommandId::CreateBranch => {
         self.set_screen(CommandPaletteScreen::CreateBranch, cx, window);
       }
+      CommandPaletteCommandId::CreatePullRequest => {
+        self.trigger_action(CommandPaletteAction::CreatePullRequest, window, cx);
+      }
       CommandPaletteCommandId::CherryPick => {
         self.cherry_pick_input.update(cx, |input, cx| {
           input.set_value("", window, cx);
@@ -2471,6 +2485,14 @@ mod tests {
     assert_eq!(command.id, CommandPaletteCommandId::SwitchToPrBranch);
     assert_eq!(command.name.as_ref(), "Switch to PR branch");
     assert!(command.matches("current pull request branch"));
+  }
+
+  #[test]
+  fn create_pull_request_command_is_available_with_expected_metadata() {
+    let command = CommandPaletteCommand::create_pull_request();
+    assert_eq!(command.id, CommandPaletteCommandId::CreatePullRequest);
+    assert_eq!(command.name.as_ref(), "Create pull request");
+    assert!(command.matches("current branch"));
   }
 
   #[test]

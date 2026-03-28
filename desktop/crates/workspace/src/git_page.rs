@@ -30,6 +30,8 @@ use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable, StyledExt,
   alert::Alert,
   button::{Button, ButtonGroup, ButtonVariant, ButtonVariants as _},
+  checkbox::Checkbox,
+  dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
   h_flex,
   kbd::Kbd,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
@@ -40,6 +42,7 @@ use gpui_component::{
   text::TextView,
   tooltip::Tooltip,
   tree::{TreeItem, TreeState, tree},
+  v_flex,
 };
 use sentry::protocol::{Map, Value};
 use smol::unblock;
@@ -104,21 +107,309 @@ struct GithubBranchContext {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum GitBranchPullRequestButtonState {
   Hidden,
-  Checking {
-    create_url: String,
-  },
+  Checking,
   OpenExisting {
     owner: String,
     repo: String,
     number: u64,
   },
-  Create {
-    url: String,
-  },
+  Create,
 }
 
 struct GitBranchSwitchNotificationId;
 struct GitActionErrorNotificationId;
+
+struct CreatePullRequestDialog {
+  api: ApiClient,
+  window_handle: AnyWindowHandle,
+  branch_context: GithubBranchContext,
+  title_input: Entity<InputState>,
+  base_input: Entity<InputState>,
+  body_input: Entity<InputState>,
+  draft: bool,
+  default_branch_loading: bool,
+  submit_loading: bool,
+  validation_error: Option<SharedString>,
+  default_branch_task: Option<Task<()>>,
+  submit_task: Option<Task<()>>,
+}
+
+impl CreatePullRequestDialog {
+  fn new(
+    api: ApiClient,
+    window_handle: AnyWindowHandle,
+    branch_context: GithubBranchContext,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Self {
+    let mut this = Self {
+      api,
+      window_handle,
+      branch_context,
+      title_input: cx.new(|cx| InputState::new(window, cx).placeholder("Pull request title")),
+      base_input: cx.new(|cx| InputState::new(window, cx).placeholder("Base branch")),
+      body_input: cx.new(|cx| {
+        InputState::new(window, cx)
+          .auto_grow(4, 10)
+          .placeholder("Add an optional description...")
+      }),
+      draft: false,
+      default_branch_loading: false,
+      submit_loading: false,
+      validation_error: None,
+      default_branch_task: None,
+      submit_task: None,
+    };
+    this.load_default_branch(cx);
+    this
+  }
+
+  fn load_default_branch(&mut self, cx: &mut Context<Self>) {
+    if self.default_branch_loading {
+      return;
+    }
+
+    self.default_branch_loading = true;
+
+    let api = self.api.clone();
+    let owner = self.branch_context.owner.clone();
+    let repo = self.branch_context.repo.clone();
+    let base_input = self.base_input.clone();
+    let window_handle = self.window_handle;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.fetch_github_repository_details(&owner, &repo)).await;
+
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        let _ = this.update(cx, |this, cx| {
+          this.default_branch_loading = false;
+
+          if let Ok(details) = result {
+            let default_branch = details.default_branch.trim().to_string();
+            if !default_branch.is_empty() && base_input.read(cx).value().trim().is_empty() {
+              base_input.update(cx, |input, cx| {
+                input.set_value(default_branch.clone(), window, cx);
+              });
+            }
+          }
+
+          cx.notify();
+        });
+      });
+    });
+
+    self.default_branch_task = Some(task);
+    cx.notify();
+  }
+
+  fn submit_action(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    if self.submit_loading {
+      return;
+    }
+
+    let title = self.title_input.read(cx).value().trim().to_string();
+    let base = self.base_input.read(cx).value().trim().to_string();
+    let body = self.body_input.read(cx).value().to_string();
+
+    if title.is_empty() {
+      self.validation_error = Some("Pull request title is required.".into());
+      cx.notify();
+      return;
+    }
+
+    if base.is_empty() {
+      self.validation_error = Some("Base branch is required.".into());
+      cx.notify();
+      return;
+    }
+
+    self.validation_error = None;
+    self.submit_loading = true;
+
+    let api = self.api.clone();
+    let owner = self.branch_context.owner.clone();
+    let repo = self.branch_context.repo.clone();
+    let branch = self.branch_context.branch.clone();
+    let draft = self.draft;
+    let window_handle = self.window_handle;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.create_pull_request(
+          &owner,
+          &repo,
+          &branch,
+          &title,
+          &base,
+          Some(body.as_str()),
+          draft,
+        )
+      })
+      .await;
+
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        let _ = this.update(cx, |this, cx| {
+          this.submit_loading = false;
+          cx.notify();
+        });
+
+        match result {
+          Ok(pull_request) => {
+            window.close_dialog(cx);
+            GithubPrDetailsPageHandle::show_with_open_target(
+              pull_request.repository.owner.into(),
+              pull_request.repository.repo.into(),
+              pull_request.number,
+              false,
+              None,
+              cx,
+            );
+          }
+          Err(error) => {
+            window.push_notification(
+              Notification::error(error.to_string())
+                .id::<GitActionErrorNotificationId>()
+                .title("Create pull request failed"),
+              cx,
+            );
+          }
+        }
+      });
+    });
+
+    self.submit_task = Some(task);
+    cx.notify();
+  }
+
+  fn toggle_draft_action(&mut self, checked: bool, _: &mut Window, cx: &mut Context<Self>) {
+    self.draft = checked;
+    cx.notify();
+  }
+}
+
+impl Focusable for CreatePullRequestDialog {
+  fn focus_handle(&self, cx: &App) -> FocusHandle {
+    self.title_input.read(cx).focus_handle(cx)
+  }
+}
+
+impl Render for CreatePullRequestDialog {
+  fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let branch_label = format!(
+      "{}:{}",
+      self.branch_context.owner, self.branch_context.branch
+    );
+    let repo_label = github_shared::repo_label(
+      self.branch_context.owner.as_str(),
+      self.branch_context.repo.as_str(),
+    );
+
+    div()
+      .id("git-create-pull-request-dialog")
+      .flex()
+      .flex_col()
+      .child(
+        DialogHeader::new()
+          .p_4()
+          .child(DialogTitle::new().child("Create Pull Request"))
+          .child(DialogDescription::new().child(format!(
+            "Create a pull request from {branch_label} in {repo_label}."
+          ))),
+      )
+      .child(
+        v_flex()
+          .px_4()
+          .pb_4()
+          .gap_3()
+          .child(
+            v_flex()
+              .gap_1()
+              .child(div().text_sm().child("Title"))
+              .child(Input::new(&self.title_input).w_full()),
+          )
+          .child(
+            v_flex()
+              .gap_1()
+              .child(
+                h_flex()
+                  .justify_between()
+                  .items_center()
+                  .child(div().text_sm().child("Base Branch"))
+                  .when(self.default_branch_loading, |this| {
+                    this.child(Spinner::new().xsmall())
+                  }),
+              )
+              .child(Input::new(&self.base_input).w_full()),
+          )
+          .child(
+            v_flex()
+              .gap_1()
+              .child(div().text_sm().child("Description"))
+              .child(Input::new(&self.body_input).w_full()),
+          )
+          .child(
+            Checkbox::new("git-create-pull-request-draft")
+              .checked(self.draft)
+              .label("Create as draft")
+              .on_click(cx.listener(|this, checked, window, cx| {
+                this.toggle_draft_action(*checked, window, cx);
+              })),
+          )
+          .when(self.validation_error.is_some(), |this| {
+            let error = self.validation_error.clone().unwrap_or_default();
+            this.child(div().text_xs().text_color(theme.status_red()).child(error))
+          }),
+      )
+      .child(
+        DialogFooter::new()
+          .px_4()
+          .pb_4()
+          .pt_1()
+          .justify_end()
+          .child(
+            Button::new("cancel-create-pull-request")
+              .label("Cancel")
+              .outline()
+              .disabled(self.submit_loading)
+              .on_click(|_, window, cx| {
+                window.close_dialog(cx);
+              }),
+          )
+          .child(
+            Button::new("submit-create-pull-request")
+              .label("Create pull request")
+              .icon(UiIconName::GitPullRequestArrow)
+              .primary()
+              .loading(self.submit_loading)
+              .disabled(self.submit_loading)
+              .on_click(cx.listener(Self::submit_action)),
+          ),
+      )
+  }
+}
+
+fn open_create_pull_request_dialog(
+  api: ApiClient,
+  window_handle: AnyWindowHandle,
+  branch_context: GithubBranchContext,
+  window: &mut Window,
+  cx: &mut App,
+) {
+  let dialog = cx
+    .new(|cx| CreatePullRequestDialog::new(api.clone(), window_handle, branch_context, window, cx));
+  let dialog_for_overlay = dialog.clone();
+  let dialog_for_focus = dialog.clone();
+
+  window.open_dialog(cx, move |overlay, _, _| {
+    overlay.p_0().w(px(600.0)).child(dialog_for_overlay.clone())
+  });
+
+  window.on_next_frame(move |window, cx| {
+    let focus_handle = dialog_for_focus.read(cx).focus_handle(cx);
+    window.focus(&focus_handle, cx);
+  });
+}
 
 struct GitCommandPaletteContents {
   commands: Vec<CommandPaletteCommand>,
@@ -1039,7 +1330,7 @@ impl GitPage {
     lookup_loading: bool,
     lookup_result: Option<&GithubPullRequest>,
   ) -> GitBranchPullRequestButtonState {
-    let Some(branch_context) = branch_context else {
+    let Some(_branch_context) = branch_context else {
       return GitBranchPullRequestButtonState::Hidden;
     };
 
@@ -1048,13 +1339,7 @@ impl GitPage {
     }
 
     if lookup_loading {
-      return GitBranchPullRequestButtonState::Checking {
-        create_url: github_shared::create_pr_url(
-          branch_context.owner.as_str(),
-          branch_context.repo.as_str(),
-          branch_context.branch.as_str(),
-        ),
-      };
+      return GitBranchPullRequestButtonState::Checking;
     }
 
     if let Some(pull_request) = lookup_result {
@@ -1065,13 +1350,22 @@ impl GitPage {
       };
     }
 
-    GitBranchPullRequestButtonState::Create {
-      url: github_shared::create_pr_url(
-        branch_context.owner.as_str(),
-        branch_context.repo.as_str(),
-        branch_context.branch.as_str(),
+    GitBranchPullRequestButtonState::Create
+  }
+
+  fn create_pull_request_branch_context(&self, cx: &App) -> Option<GithubBranchContext> {
+    let branch_context = self.branch_pr_lookup_context(cx)?;
+
+    matches!(
+      Self::branch_pr_button_state(
+        Some(&branch_context),
+        AuthStateStore::has_github_access(cx),
+        self.branch_pr_lookup_loading,
+        self.branch_pr_lookup_result.as_ref(),
       ),
-    }
+      GitBranchPullRequestButtonState::Create
+    )
+    .then_some(branch_context)
   }
 
   fn sentry_git_data(&self) -> Map<String, Value> {
@@ -3040,6 +3334,10 @@ impl GitPage {
           commands.push(CommandPaletteCommand::abort_rebase());
         }
       }
+
+      if self.create_pull_request_branch_context(cx).is_some() {
+        commands.push(CommandPaletteCommand::create_pull_request());
+      }
     }
 
     if palette_repositories_len > 1 {
@@ -3161,6 +3459,17 @@ impl GitPage {
         Ok(())
       }
       CommandPaletteAction::SwitchToPrBranch => Err(anyhow::anyhow!("Command not available.")),
+      CommandPaletteAction::CreatePullRequest => {
+        let branch_context = self
+          .create_pull_request_branch_context(cx)
+          .ok_or_else(|| SharedString::from("Command not available."))?;
+        let api = self.api.clone();
+        let window_handle = self.window_handle;
+        window.on_next_frame(move |window, cx| {
+          open_create_pull_request_dialog(api, window_handle, branch_context, window, cx);
+        });
+        Ok(())
+      }
       CommandPaletteAction::OpenSettingsPage => {
         NavigationHistory::navigate("/settings", cx);
         Ok(())
@@ -5850,7 +6159,7 @@ impl GitPage {
 
     let branch_pr_button = match branch_pr_button_state {
       GitBranchPullRequestButtonState::Hidden => None,
-      GitBranchPullRequestButtonState::Checking { create_url: _ } => Some(
+      GitBranchPullRequestButtonState::Checking => Some(
         Button::new("git-branch-pr-status")
           .label("Checking PR")
           .icon(UiIconName::GitPullRequestArrow)
@@ -5893,19 +6202,25 @@ impl GitPage {
             }),
         )
       }
-      GitBranchPullRequestButtonState::Create { url } => Some(
+      GitBranchPullRequestButtonState::Create => branch_context.clone().map(|branch_context| {
         Button::new("git-create-branch-pr")
           .label("Create PR")
-          .icon(IconName::ExternalLink)
+          .icon(UiIconName::GitPullRequestArrow)
           .outline()
           .with_variant(ButtonVariant::Secondary)
           .xsmall()
           .p_2()
-          .tooltip("Open GitHub to create a pull request for this branch")
-          .on_click(move |_, _, cx| {
-            cx.open_url(&url);
-          }),
-      ),
+          .tooltip("Create a pull request for this branch")
+          .on_click(move |_, window, cx| {
+            open_create_pull_request_dialog(
+              WorkspaceApi::global(cx).api.clone(),
+              window.window_handle(),
+              branch_context.clone(),
+              window,
+              cx,
+            );
+          })
+      }),
     };
 
     let header_left = div()
@@ -7563,9 +7878,7 @@ mod tests {
 
     assert_eq!(
       GitPage::branch_pr_button_state(Some(&context), true, true, None),
-      GitBranchPullRequestButtonState::Checking {
-        create_url: "https://github.com/acme/widget/compare/feature/parser?expand=1".to_string(),
-      }
+      GitBranchPullRequestButtonState::Checking
     );
     assert_eq!(
       GitPage::branch_pr_button_state(Some(&context), false, true, None),
@@ -7589,6 +7902,20 @@ mod tests {
   }
 
   #[test]
+  fn branch_pr_button_state_shows_create_when_branch_has_no_open_pull_request() {
+    let context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature/parser".to_string(),
+    };
+
+    assert_eq!(
+      GitPage::branch_pr_button_state(Some(&context), true, false, None),
+      GitBranchPullRequestButtonState::Create
+    );
+  }
+
+  #[test]
   fn branch_has_github_upstream_requires_named_branch_with_upstream() {
     let published = make_branch_status("feature/parser", 0, 0, true);
     let local_only = make_branch_status("feature/parser", 0, 0, false);
@@ -7598,6 +7925,60 @@ mod tests {
     assert!(!GitPage::branch_has_github_upstream(Some(&local_only)));
     assert!(!GitPage::branch_has_github_upstream(Some(&detached)));
     assert!(!GitPage::branch_has_github_upstream(None));
+  }
+
+  #[gpui::test]
+  fn command_palette_create_pull_request_follows_branch_button_visibility_rules(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-command-palette-create-pr");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "initial\n", "initial");
+
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_authenticated_test_user(UserRole::Pro))),
+      );
+      ActiveLocalRepoStore::set(
+        cx,
+        Some(ActiveLocalRepo {
+          repo_root: repo.path.clone(),
+          github_owner: Some("acme".to_string()),
+          github_repo: Some("widget".to_string()),
+          current_branch: Some("main".to_string()),
+          head_sha: Some("deadbeef".to_string()),
+          has_uncommitted_changes: false,
+        }),
+      );
+    });
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    let command_ids = git_page.update(cx, |this, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.branch_status = Some(make_branch_status("main", 0, 0, true));
+      this.branch_pr_lookup_loading = false;
+      this.branch_pr_lookup_result = None;
+      this
+        .build_command_palette_contents(1, cx)
+        .commands
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>()
+    });
+    assert!(command_ids.contains(&CommandPaletteCommandId::CreatePullRequest));
+
+    let hidden_command_ids = git_page.update(cx, |this, cx| {
+      this.branch_pr_lookup_result = Some(make_branch_pull_request(42));
+      this
+        .build_command_palette_contents(1, cx)
+        .commands
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>()
+    });
+    assert!(!hidden_command_ids.contains(&CommandPaletteCommandId::CreatePullRequest));
   }
 
   #[gpui::test]
