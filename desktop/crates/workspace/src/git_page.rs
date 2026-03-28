@@ -1019,8 +1019,16 @@ impl GitPage {
       .and_then(Self::github_branch_context_from_active_repo)
   }
 
+  fn branch_has_github_upstream(branch_status: Option<&BranchStatus>) -> bool {
+    matches!(
+      branch_status,
+      Some(status) if status.has_upstream && !Self::is_detached_head(Some(status))
+    )
+  }
+
   fn branch_pr_lookup_context(&self, cx: &App) -> Option<GithubBranchContext> {
-    AuthStateStore::has_github_access(cx)
+    (AuthStateStore::has_github_access(cx)
+      && Self::branch_has_github_upstream(self.branch_status.as_ref()))
       .then(|| self.github_branch_context(cx))
       .flatten()
   }
@@ -7580,6 +7588,18 @@ mod tests {
     );
   }
 
+  #[test]
+  fn branch_has_github_upstream_requires_named_branch_with_upstream() {
+    let published = make_branch_status("feature/parser", 0, 0, true);
+    let local_only = make_branch_status("feature/parser", 0, 0, false);
+    let detached = make_branch_status("HEAD", 0, 0, true);
+
+    assert!(GitPage::branch_has_github_upstream(Some(&published)));
+    assert!(!GitPage::branch_has_github_upstream(Some(&local_only)));
+    assert!(!GitPage::branch_has_github_upstream(Some(&detached)));
+    assert!(!GitPage::branch_has_github_upstream(None));
+  }
+
   #[gpui::test]
   async fn refresh_branch_pr_lookup_skips_lookup_without_github_access(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -7615,6 +7635,48 @@ mod tests {
       assert!(!this.branch_pr_lookup_loading);
       assert!(this.branch_pr_lookup_result.is_none());
       assert!(!AuthStateStore::has_github_access(cx));
+    });
+  }
+
+  #[gpui::test]
+  async fn refresh_branch_pr_lookup_skips_lookup_for_unpublished_branch(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_authenticated_test_user(UserRole::Pro))),
+      );
+      ActiveLocalRepoStore::set(
+        cx,
+        Some(ActiveLocalRepo {
+          repo_root: PathBuf::from("/tmp/reviu-git-page-branch-pr-unpublished"),
+          github_owner: Some("acme".to_string()),
+          github_repo: Some("widget".to_string()),
+          current_branch: Some("feature/parser".to_string()),
+          head_sha: Some("deadbeef".to_string()),
+          has_uncommitted_changes: false,
+        }),
+      );
+    });
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.branch_status = Some(make_branch_status("feature/parser", 0, 0, false));
+      this.refresh_branch_pr_lookup(cx);
+    });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    git_page.read_with(cx, |this, cx| {
+      assert_eq!(this.branch_pr_lookup_context, None);
+      assert!(this.branch_pr_lookup_task.is_none());
+      assert!(!this.branch_pr_lookup_loading);
+      assert!(this.branch_pr_lookup_result.is_none());
+      assert!(AuthStateStore::has_github_access(cx));
+      assert!(!GitPage::branch_has_github_upstream(this.branch_status.as_ref()));
     });
   }
 
