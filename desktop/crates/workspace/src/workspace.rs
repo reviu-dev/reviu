@@ -530,7 +530,9 @@ impl WorkspaceView {
   }
 
   fn open_github_home(cx: &mut App) {
-    GithubPageHandle::refresh(cx);
+    if AuthStateStore::has_github_access(cx) {
+      GithubPageHandle::refresh(cx);
+    }
     NavigationHistory::navigate("/github", cx);
   }
 
@@ -549,10 +551,12 @@ impl WorkspaceView {
     let auth_state = AuthStateStore::get(cx);
     let is_unauthenticated = matches!(auth_state, AuthState::Unauthenticated);
     let has_github_access = AuthStateStore::has_github_access(cx);
+    let show_billing_entry = AuthStateStore::should_show_billing_entry(cx);
 
-    let open_billing = Rc::new(|_window: &mut Window, cx: &mut App| {
-      NavigationHistory::navigate("/billing", cx);
-    });
+    let open_billing: Rc<dyn Fn(&mut Window, &mut App)> =
+      Rc::new(|_window: &mut Window, cx: &mut App| {
+        NavigationHistory::navigate("/billing", cx);
+      });
     let open_git_config = Rc::new(|_window: &mut Window, cx: &mut App| {
       NavigationHistory::navigate("/git-config", cx);
     });
@@ -578,6 +582,7 @@ impl WorkspaceView {
         } else {
           user.name.clone()
         };
+        let on_open_billing = show_billing_entry.then_some(open_billing.clone());
 
         user_menu(UserMenuConfig {
           id: "workspace-auth-menu".into(),
@@ -590,7 +595,7 @@ impl WorkspaceView {
           notification_count: NotificationCountStore::get(cx),
           on_open_git: None,
           on_open_github: None,
-          on_open_billing: Some(open_billing),
+          on_open_billing,
           on_open_git_config: Some(open_git_config),
           on_open_settings: Some(open_settings),
           on_open_about: Some(open_about),
@@ -642,36 +647,35 @@ impl WorkspaceView {
         window.dispatch_action(Box::new(ShowCommandPalette), cx);
       });
 
-    let primary_navigation = has_github_access.then(|| {
-      let github_notification_count = NotificationCountStore::get(cx);
-      let github_notification_label =
-        github_primary_navigation_count_label(github_notification_count);
-      let primary_navigation = TabBar::new("workspace-primary-navigation")
-        .segmented()
-        .small()
-        .on_click(|ix, _, cx| match ix {
-          0 => NavigationHistory::navigate("/git", cx),
-          1 => Self::open_github_home(cx),
-          _ => {}
-        })
-        .child(Tab::new().label("Git"))
-        .child(
-          Tab::new().child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child("GitHub")
-              .when_some(github_notification_label, |this, label| {
-                this.child(StatusTag::new(theme.status_red()).xsmall().child(label))
-              }),
-          ),
-        );
-      if let Some(selected_index) = primary_navigation_selected_index(page) {
-        primary_navigation.selected_index(selected_index)
-      } else {
-        primary_navigation
-      }
-    });
+    let github_notification_count = NotificationCountStore::get(cx);
+    let github_notification_label = has_github_access
+      .then(|| github_primary_navigation_count_label(github_notification_count))
+      .flatten();
+    let primary_navigation = TabBar::new("workspace-primary-navigation")
+      .segmented()
+      .small()
+      .on_click(|ix, _, cx| match ix {
+        0 => NavigationHistory::navigate("/git", cx),
+        1 => Self::open_github_home(cx),
+        _ => {}
+      })
+      .child(Tab::new().label("Git"))
+      .child(
+        Tab::new().child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child("GitHub")
+            .when_some(github_notification_label, |this, label| {
+              this.child(StatusTag::new(theme.status_red()).xsmall().child(label))
+            }),
+        ),
+      );
+    let primary_navigation = if let Some(selected_index) = primary_navigation_selected_index(page) {
+      primary_navigation.selected_index(selected_index)
+    } else {
+      primary_navigation
+    };
 
     let bar = div()
       .h(px(GLOBAL_BAR_HEIGHT))
@@ -710,9 +714,7 @@ impl WorkspaceView {
       .when_some(AppProfile::current().header_tag_label(), |this, label| {
         this.child(Tag::secondary().small().rounded_full().child(label))
       })
-      .when_some(primary_navigation, |this, primary_navigation| {
-        this.child(primary_navigation)
-      });
+      .child(primary_navigation);
 
     bar.child(left).child(right)
   }

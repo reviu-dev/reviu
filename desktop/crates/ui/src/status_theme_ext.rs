@@ -1,4 +1,5 @@
 use gpui::Hsla;
+use gpui_component::blue_600;
 
 pub trait StatusThemeExt {
   fn status_orange(&self) -> Hsla;
@@ -48,21 +49,7 @@ impl StatusThemeExt for gpui_component::Theme {
   }
 
   fn status_blue(&self) -> Hsla {
-    if self.mode.is_dark() {
-      Hsla {
-        h: 208.0 / 360.0,
-        s: 0.8,
-        l: 0.62,
-        a: 1.0,
-      }
-    } else {
-      Hsla {
-        h: 212.0 / 360.0,
-        s: 0.78,
-        l: 0.46,
-        a: 1.0,
-      }
-    }
+    blue_600()
   }
 
   fn status_green(&self) -> Hsla {

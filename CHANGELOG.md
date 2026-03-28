@@ -6,7 +6,7 @@ All notable changes to Reviu are documented here.
 
 ### Global Git and GitHub Switch
 
-The app header now includes a persistent Git and GitHub switch for accounts that actually have GitHub access, so moving between local Git work and GitHub views takes one click from anywhere in the app.
+The app header now includes a persistent Git and GitHub switch from anywhere in the app, GitHub notifications live on the GitHub tab itself.
 
 ### Branch Pull Request Shortcut in Git Header
 
