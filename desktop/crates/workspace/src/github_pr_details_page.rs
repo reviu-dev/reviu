@@ -21,7 +21,7 @@ use git::{
   list_repo_status, switch_to_branch_name, sync_current_branch_to_head,
 };
 use gpui::{
-  AnyElement, App, Context, Corner, Entity, FocusHandle, Focusable, ListAlignment,
+  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, ListAlignment,
   ListState as GpuiListState, MouseButton, ParentElement, Render, RenderImage, SharedString,
   Styled, Task, Window, div, img, list, prelude::*, px,
 };
@@ -34,6 +34,7 @@ use gpui_component::{
   input::InputEvent,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  notification::Notification,
   radio::{Radio, RadioGroup},
   scroll::ScrollableElement,
   skeleton::Skeleton,
@@ -69,8 +70,8 @@ use crate::{
     GithubPullRequestLegacyStatus, GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness,
     GithubPullRequestMergeReadinessStatus, GithubPullRequestMergeResult, GithubPullRequestReview,
     GithubPullRequestReviewComment, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
-    GithubPullRequestWorkflowJob, GithubPullRequestWorkflowRun, GithubPullRequestWorkflowStep,
-    GithubRepository,
+    GithubPullRequestState, GithubPullRequestWorkflowJob, GithubPullRequestWorkflowRun,
+    GithubPullRequestWorkflowStep, GithubRepository,
   },
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, ConfigStore},
@@ -132,10 +133,55 @@ const GITHUB_PR_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str =
 
 type CommitSelectHandler = Rc<dyn Fn(Option<String>, &mut Window, &mut App)>;
 
+struct GithubPrStatusActionNotificationId;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OverviewCommentKind {
   Issue,
   Review,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GithubPrStatusAction {
+  ReadyForReview,
+  ConvertToDraft,
+}
+
+impl GithubPrStatusAction {
+  fn button_label(self) -> &'static str {
+    match self {
+      GithubPrStatusAction::ReadyForReview => "Ready for review",
+      GithubPrStatusAction::ConvertToDraft => "Convert to draft",
+    }
+  }
+
+  fn success_breadcrumb(self) -> &'static str {
+    match self {
+      GithubPrStatusAction::ReadyForReview => "Mark pull request ready for review succeeded",
+      GithubPrStatusAction::ConvertToDraft => "Convert pull request to draft succeeded",
+    }
+  }
+
+  fn failure_breadcrumb(self) -> &'static str {
+    match self {
+      GithubPrStatusAction::ReadyForReview => "Mark pull request ready for review failed",
+      GithubPrStatusAction::ConvertToDraft => "Convert pull request to draft failed",
+    }
+  }
+
+  fn error_title(self) -> &'static str {
+    match self {
+      GithubPrStatusAction::ReadyForReview => "Ready for review failed",
+      GithubPrStatusAction::ConvertToDraft => "Convert to draft failed",
+    }
+  }
+
+  fn sentry_operation(self) -> &'static str {
+    match self {
+      GithubPrStatusAction::ReadyForReview => "github.pr.ready_for_review",
+      GithubPrStatusAction::ConvertToDraft => "github.pr.convert_to_draft",
+    }
+  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1661,6 +1707,7 @@ fn build_tree_item(
 
 pub struct GithubPrDetailsPage {
   focus_handle: FocusHandle,
+  window_handle: AnyWindowHandle,
   api: ApiClient,
   details_task: Option<Task<()>>,
   files_task: Option<Task<()>>,
@@ -1690,6 +1737,8 @@ pub struct GithubPrDetailsPage {
   merge_submit_task: Option<Task<()>>,
   merge_submit_loading: bool,
   merge_submit_error: Option<SharedString>,
+  status_action_task: Option<Task<()>>,
+  status_action_loading: bool,
   review_input: Entity<InputState>,
   review_decision: GithubPrReviewDecision,
   review_popover_open: bool,
@@ -2132,6 +2181,7 @@ impl GithubPrDetailsPage {
 
     let mut this = Self {
       focus_handle: cx.focus_handle(),
+      window_handle: window.window_handle(),
       api: WorkspaceApi::global(cx).api.clone(),
       details_task: None,
       files_task: None,
@@ -2161,6 +2211,8 @@ impl GithubPrDetailsPage {
       merge_submit_task: None,
       merge_submit_loading: false,
       merge_submit_error: None,
+      status_action_task: None,
+      status_action_loading: false,
       review_input,
       review_decision: GithubPrReviewDecision::default(),
       review_popover_open: false,
@@ -3341,6 +3393,151 @@ impl GithubPrDetailsPage {
       .author
       .login
       .eq_ignore_ascii_case(login.as_str())
+  }
+
+  fn pull_request_status_action(&self) -> Option<GithubPrStatusAction> {
+    let pull_request = self.pull_request.as_ref()?;
+    if !matches!(pull_request.state, GithubPullRequestState::Open) {
+      return None;
+    }
+
+    Some(if pull_request.draft {
+      GithubPrStatusAction::ReadyForReview
+    } else {
+      GithubPrStatusAction::ConvertToDraft
+    })
+  }
+
+  fn push_pr_status_action_error_notification(
+    &self,
+    title: impl Into<SharedString>,
+    error: SharedString,
+    cx: &mut Context<Self>,
+  ) {
+    let title = title.into();
+    let _ = cx.update_window(self.window_handle, move |_, window, cx| {
+      window.push_notification(
+        Notification::error(error)
+          .id::<GithubPrStatusActionNotificationId>()
+          .title(title),
+        cx,
+      );
+    });
+  }
+
+  fn local_draft_merge_readiness(&self) -> Option<GithubPullRequestMergeReadiness> {
+    let pull_request = self.pull_request.as_ref()?;
+    let existing = self.merge_readiness.as_ref();
+
+    Some(GithubPullRequestMergeReadiness {
+      status: GithubPullRequestMergeReadinessStatus::Draft,
+      message: "This pull request is still marked as a draft.".to_string(),
+      current_head_sha: pull_request.head_sha.clone(),
+      available_methods: Vec::new(),
+      default_method: None,
+      can_merge_now: false,
+      viewer_can_merge: existing
+        .map(|readiness| readiness.viewer_can_merge)
+        .unwrap_or(true),
+      mergeable_state: Some("draft".to_string()),
+      rebaseable: existing.and_then(|readiness| readiness.rebaseable),
+      auto_merge_enabled: existing
+        .map(|readiness| readiness.auto_merge_enabled)
+        .unwrap_or(false),
+    })
+  }
+
+  fn apply_pull_request_status_action_success(
+    &mut self,
+    action: GithubPrStatusAction,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(pull_request) = self.pull_request.as_mut() else {
+      return;
+    };
+
+    pull_request.draft = matches!(action, GithubPrStatusAction::ConvertToDraft);
+
+    match action {
+      GithubPrStatusAction::ReadyForReview => {
+        self.merge_popover_open = false;
+        self.mark_merge_form_reset_pending();
+        self.reload_merge_readiness_for_current_pull_request(cx);
+      }
+      GithubPrStatusAction::ConvertToDraft => {
+        self.merge_popover_open = false;
+        self.mark_merge_form_reset_pending();
+        self.merge_readiness_loading = false;
+        self.merge_readiness_error = None;
+        self.merge_readiness_task = None;
+        self.merge_readiness = self.local_draft_merge_readiness();
+        self.sync_merge_method_with_readiness();
+      }
+    }
+  }
+
+  fn submit_pull_request_status_action(
+    &mut self,
+    action: GithubPrStatusAction,
+    cx: &mut Context<Self>,
+  ) {
+    if self.status_action_loading {
+      return;
+    }
+
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      return;
+    };
+
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let pull_request_id = pull_request.node_id.clone();
+    let api = self.api.clone();
+    self.status_action_loading = true;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || match action {
+        GithubPrStatusAction::ReadyForReview => {
+          api.mark_pull_request_ready_for_review(&owner, &repo, number, &pull_request_id)
+        }
+        GithubPrStatusAction::ConvertToDraft => {
+          api.convert_pull_request_to_draft(&owner, &repo, number, &pull_request_id)
+        }
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.status_action_loading = false;
+
+        match result {
+          Ok(()) => {
+            this.add_pr_breadcrumb(action.success_breadcrumb(), Map::new());
+            this.apply_pull_request_status_action_success(action, cx);
+            cx.refresh_windows();
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.add_pr_breadcrumb(action.failure_breadcrumb(), Map::new());
+            this.record_pr_error(
+              action.sentry_operation(),
+              error_message.as_str(),
+              Map::new(),
+            );
+            this.push_pr_status_action_error_notification(
+              action.error_title(),
+              error_message.into(),
+              cx,
+            );
+          }
+        }
+
+        cx.notify();
+      });
+    });
+
+    self.status_action_task = Some(task);
+    cx.notify();
   }
 
   fn editable_review_comment_ids(&self, cx: &App) -> HashSet<u64> {
@@ -5876,6 +6073,8 @@ impl GithubPrDetailsPage {
     self.merge_popover_open = false;
     self.merge_submit_task = None;
     self.merge_submit_loading = false;
+    self.status_action_task = None;
+    self.status_action_loading = false;
     self.mark_merge_form_reset_pending();
     self.review_popover_open = false;
     self.mark_review_form_reset_pending();
@@ -6623,10 +6822,35 @@ impl GithubPrDetailsPage {
       .gap_2()
       .when(!self.is_pull_request_merged(), |this| {
         this
-          .child(
-            div()
-              .debug_selector(|| "github-pr-merge-button".to_string())
-              .child(self.render_merge_popover(&theme, cx)),
+          .when_some(self.pull_request_status_action(), |this, action| {
+            this.child(
+              div()
+                .debug_selector(|| "github-pr-status-action-button".to_string())
+                .child(
+                  Button::new("pr-status-action-button")
+                    .label(action.button_label())
+                    .small()
+                    .outline()
+                    .loading(self.status_action_loading)
+                    .disabled(self.status_action_loading)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                      this.submit_pull_request_status_action(action, cx);
+                    })),
+                ),
+            )
+          })
+          .when(
+            !self
+              .pull_request
+              .as_ref()
+              .is_some_and(|pull_request| pull_request.draft),
+            |this| {
+              this.child(
+                div()
+                  .debug_selector(|| "github-pr-merge-button".to_string())
+                  .child(self.render_merge_popover(&theme, cx)),
+              )
+            },
           )
           .child(
             div()
@@ -9984,7 +10208,11 @@ mod tests {
   use git2::{BranchType, Repository, Signature};
   use gpui::TestAppContext;
   use std::{
+    io::{Read, Write},
+    net::TcpListener,
+    sync::Arc,
     sync::atomic::{AtomicU64, Ordering},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
   };
 
@@ -10014,6 +10242,39 @@ mod tests {
       "reviu-pr-details-{label}-{}-{id}.sqlite",
       std::process::id()
     ))
+  }
+
+  fn make_test_api_client(base_url: impl Into<String>) -> ApiClient {
+    ApiClient::new_with_base_url(base_url)
+  }
+
+  fn start_response_server(responses: Vec<(String, String)>) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+    let address = format!("http://{}", listener.local_addr().expect("local addr"));
+
+    let handle = thread::spawn(move || {
+      for (status, body) in responses {
+        let (mut stream, _) = listener.accept().expect("accept connection");
+        let mut request_buffer = [0u8; 4096];
+        let _ = stream.read(&mut request_buffer).expect("read request");
+
+        let response = format!(
+          "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+          body.as_bytes().len(),
+          body,
+        );
+        stream
+          .write_all(response.as_bytes())
+          .expect("write response");
+        stream.flush().expect("flush response");
+      }
+    });
+
+    (address, handle)
+  }
+
+  fn start_single_response_server(status: &str, body: &str) -> (String, thread::JoinHandle<()>) {
+    start_response_server(vec![(status.to_string(), body.to_string())])
   }
 
   fn make_active_local_repo(head_sha: &str, has_uncommitted_changes: bool) -> ActiveLocalRepo {
@@ -10339,6 +10600,52 @@ mod tests {
   }
 
   #[gpui::test]
+  fn pull_request_status_action_matches_open_draft_state(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, _cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+    });
+    let open_action = page.read_with(cx, |this, _cx| this.pull_request_status_action());
+    assert_eq!(open_action, Some(GithubPrStatusAction::ConvertToDraft));
+
+    page.update_in(cx, |this, _window, _cx| {
+      let mut draft_pull_request = make_pr_details_for_stats();
+      draft_pull_request.draft = true;
+      this.pull_request = Some(draft_pull_request);
+    });
+    let draft_action = page.read_with(cx, |this, _cx| this.pull_request_status_action());
+    assert_eq!(draft_action, Some(GithubPrStatusAction::ReadyForReview));
+
+    page.update_in(cx, |this, _window, _cx| {
+      let mut closed_pull_request = make_pr_details_for_stats();
+      closed_pull_request.state = GithubPullRequestState::Closed;
+      this.pull_request = Some(closed_pull_request);
+    });
+    let closed_action = page.read_with(cx, |this, _cx| this.pull_request_status_action());
+    assert_eq!(closed_action, None);
+  }
+
+  #[gpui::test]
+  fn status_action_button_renders_for_loaded_pull_request(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let button_bounds = cx
+      .debug_bounds("github-pr-status-action-button")
+      .expect("status action button bounds")
+      .size;
+    assert!(button_bounds.width > gpui::px(0.0));
+    assert!(button_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
   fn refocus_page_shortcuts_focuses_page_container(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
@@ -10410,8 +10717,227 @@ mod tests {
       cx.notify();
     });
 
+    assert!(cx.debug_bounds("github-pr-status-action-button").is_none());
     assert!(cx.debug_bounds("github-pr-merge-button").is_none());
     assert!(cx.debug_bounds("github-pr-review-button").is_none());
+  }
+
+  #[gpui::test]
+  fn merge_button_does_not_render_for_draft_pull_request(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      let mut pull_request = make_pr_details_for_stats();
+      pull_request.draft = true;
+      this.pull_request = Some(pull_request);
+      this.merge_readiness = Some(make_merge_readiness(
+        GithubPullRequestMergeReadinessStatus::Draft,
+        vec![],
+      ));
+      cx.notify();
+    });
+
+    assert!(cx.debug_bounds("github-pr-status-action-button").is_some());
+    assert!(cx.debug_bounds("github-pr-merge-button").is_none());
+    assert!(cx.debug_bounds("github-pr-review-button").is_some());
+  }
+
+  #[gpui::test]
+  async fn draft_status_action_failure_shows_error_notification(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.executor().allow_parking();
+    let (base_url, handle) = start_single_response_server(
+      "403 FORBIDDEN",
+      r#"{"error":"You cannot change this pull request status."}"#,
+    );
+
+    let mut mounted_page = None;
+    let (root, cx) = cx.add_window_view(|window, cx| {
+      let page = cx.new(|cx| GithubPrDetailsPage::new(window, cx));
+      mounted_page = Some(page.clone());
+      gpui_component::Root::new(page, window, cx)
+    });
+    let page = mounted_page.expect("pr details page");
+
+    page.update_in(cx, |this, _window, cx| {
+      let mut pull_request = make_pr_details_for_stats();
+      pull_request.draft = true;
+      this.api = make_test_api_client(base_url.clone());
+      this.pull_request = Some(pull_request);
+      cx.notify();
+    });
+
+    let initial_notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(initial_notification_count, 0);
+
+    let task = page.update_in(cx, |this, _window, cx| {
+      this.submit_pull_request_status_action(GithubPrStatusAction::ReadyForReview, cx);
+      this
+        .status_action_task
+        .take()
+        .expect("status action task should exist")
+    });
+    task.await;
+    handle.join().expect("join server thread");
+
+    let notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(notification_count, 1);
+    let loading = page.read_with(cx, |this, _cx| this.status_action_loading);
+    assert!(!loading);
+  }
+
+  #[gpui::test]
+  async fn convert_to_draft_success_updates_local_state_without_reloading_pr(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.executor().allow_parking();
+    let (base_url, handle) = start_single_response_server("204 NO CONTENT", "");
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.api = make_test_api_client(base_url.clone());
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.merge_readiness = Some(make_merge_readiness(
+        GithubPullRequestMergeReadinessStatus::Ready,
+        vec![GithubPullRequestMergeMethod::Merge],
+      ));
+      cx.notify();
+    });
+
+    let task = page.update_in(cx, |this, _window, cx| {
+      this.submit_pull_request_status_action(GithubPrStatusAction::ConvertToDraft, cx);
+      this
+        .status_action_task
+        .take()
+        .expect("status action task should exist")
+    });
+    task.await;
+    handle.join().expect("join server thread");
+
+    let (draft, merge_status, details_task_present, merge_readiness_task_present, loading) = page
+      .read_with(cx, |this, _cx| {
+        (
+          this
+            .pull_request
+            .as_ref()
+            .map(|pull_request| pull_request.draft),
+          this
+            .merge_readiness
+            .as_ref()
+            .map(|readiness| readiness.status),
+          this.details_task.is_some(),
+          this.merge_readiness_task.is_some(),
+          this.status_action_loading,
+        )
+      });
+
+    assert_eq!(draft, Some(true));
+    assert_eq!(
+      merge_status,
+      Some(GithubPullRequestMergeReadinessStatus::Draft)
+    );
+    assert!(!details_task_present);
+    assert!(!merge_readiness_task_present);
+    assert!(!loading);
+  }
+
+  #[gpui::test]
+  async fn ready_for_review_success_only_reloads_merge_readiness(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.executor().allow_parking();
+    let merge_readiness_body = r#"{
+      "mergeReadiness": {
+        "status": "ready",
+        "message": "This pull request is ready to merge.",
+        "current_head_sha": "head123",
+        "available_methods": ["merge"],
+        "default_method": "merge",
+        "can_merge_now": true,
+        "viewer_can_merge": true,
+        "mergeable_state": "clean",
+        "rebaseable": true,
+        "auto_merge_enabled": false
+      }
+    }"#;
+    let (base_url, handle) = start_response_server(vec![
+      ("204 NO CONTENT".to_string(), String::new()),
+      ("200 OK".to_string(), merge_readiness_body.to_string()),
+    ]);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      let mut pull_request = make_pr_details_for_stats();
+      pull_request.draft = true;
+      this.api = make_test_api_client(base_url.clone());
+      this.current_pr_context = Some(CurrentPrContext {
+        owner: pull_request.repository.owner.clone(),
+        repo: pull_request.repository.repo.clone(),
+        number: pull_request.number,
+      });
+      this.pull_request = Some(pull_request);
+      this.merge_readiness = Some(make_merge_readiness(
+        GithubPullRequestMergeReadinessStatus::Draft,
+        Vec::new(),
+      ));
+      cx.notify();
+    });
+
+    let task = page.update_in(cx, |this, _window, cx| {
+      this.submit_pull_request_status_action(GithubPrStatusAction::ReadyForReview, cx);
+      this
+        .status_action_task
+        .take()
+        .expect("status action task should exist")
+    });
+    task.await;
+
+    let merge_task = page.update_in(cx, |this, _window, _cx| {
+      assert_eq!(
+        this
+          .pull_request
+          .as_ref()
+          .map(|pull_request| pull_request.draft),
+        Some(false)
+      );
+      assert!(this.details_task.is_none());
+      this.merge_readiness_task.take()
+    });
+    if let Some(task) = merge_task {
+      task.await;
+    }
+    handle.join().expect("join server thread");
+
+    let (draft, merge_status, details_task_present, loading, error) =
+      page.read_with(cx, |this, _cx| {
+        (
+          this
+            .pull_request
+            .as_ref()
+            .map(|pull_request| pull_request.draft),
+          this
+            .merge_readiness
+            .as_ref()
+            .map(|readiness| readiness.status),
+          this.details_task.is_some(),
+          this.merge_readiness_loading,
+          this.merge_readiness_error.clone(),
+        )
+      });
+
+    assert_eq!(draft, Some(false));
+    assert_eq!(
+      merge_status,
+      Some(GithubPullRequestMergeReadinessStatus::Ready)
+    );
+    assert!(!details_task_present);
+    assert!(!loading);
+    assert!(error.is_none());
   }
 
   #[gpui::test]
@@ -11646,6 +12172,7 @@ mod tests {
 
   fn make_pr_details_for_stats() -> GithubPullRequestDetails {
     GithubPullRequestDetails {
+      node_id: "PR_kwDOExample".to_string(),
       number: 42,
       title: "Example PR".to_string(),
       state: GithubPullRequestState::Open,

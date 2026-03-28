@@ -16,6 +16,10 @@ The Git page header now checks whether the current GitHub branch already has an 
 
 Failed Git actions on the Git page now show notifications instead of failing silently. This covers branch switching, fetch, pull, push, amend, undo last commit, and stage or restore operations.
 
+### Pull Request Draft Status Actions
+
+The pull request page can now switch an open pull request between draft and ready for review.
+
 ## 0.0.8
 
 ### Staged and Unstaged File Groups
