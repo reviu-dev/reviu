@@ -124,12 +124,10 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
     }
     UserMenuState::Authenticated(user) => {
       let notification_count = config.notification_count;
-      let avatar = Badge::new().count(notification_count).small().child(
-        Avatar::new()
-          .name(user.name.clone())
-          .when_some(user.image.clone(), |this, image| this.src(image))
-          .small(),
-      );
+      let avatar = Avatar::new()
+        .name(user.name.clone())
+        .when_some(user.image.clone(), |this, image| this.src(image))
+        .small();
       let user_email = user.email.clone();
       let current_page = config.current_page;
       let on_open_git = config.on_open_git.clone();

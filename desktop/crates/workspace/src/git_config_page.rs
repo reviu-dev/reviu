@@ -25,7 +25,7 @@ use ui::{
 
 use crate::{
   CloseWorkspacePage, ShowCommandPalette,
-  auth_state::{AuthState, AuthStateStore},
+  auth_state::AuthStateStore,
   github_navigation::{open_pr_target, open_repo_target},
   github_page::GithubPageHandle,
   navigation::NavigationHistory,
@@ -114,7 +114,7 @@ impl GitConfigPage {
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
+    let include_github = AuthStateStore::has_github_access(cx);
     let commands =
       CommandPaletteCommand::default_global_commands(CommandPalettePage::GitConfig, include_github);
 

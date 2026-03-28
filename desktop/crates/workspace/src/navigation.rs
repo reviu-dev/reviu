@@ -15,7 +15,7 @@ impl NavigationHistory {
   }
 
   /// Navigate to `path`, pushing the current location onto the history stack.
-  /// GitHub paths (`/github/*`) are gated behind Pro access — if the user
+  /// GitHub paths (`/github/*`) are gated behind GitHub access — if the user
   /// doesn't have access, they are redirected to `/billing` instead.
   pub fn navigate(path: impl Into<SharedString>, cx: &mut App) {
     let path = path.into();
@@ -25,8 +25,8 @@ impl NavigationHistory {
       return;
     }
 
-    // Subscription gating: redirect /github/* to /billing when no pro access
-    if requires_pro_access(&path) && !AuthStateStore::has_pro_access(cx) {
+    // GitHub access gating: redirect /github/* to /billing when no access
+    if requires_github_access(&path) && !AuthStateStore::has_github_access(cx) {
       // Push current so closing billing returns here
       cx.global_mut::<Self>().stack.push(current);
       Self::set_pathname("/billing", cx);
@@ -45,8 +45,8 @@ impl NavigationHistory {
       .pop()
       .unwrap_or_else(|| "/git".into());
 
-    // If back target requires pro and user lost access, fall back to /git
-    let target = if requires_pro_access(&target) && !AuthStateStore::has_pro_access(cx) {
+    // If back target requires GitHub access and user lost access, fall back to /git
+    let target = if requires_github_access(&target) && !AuthStateStore::has_github_access(cx) {
       "/git".into()
     } else {
       target
@@ -99,7 +99,7 @@ pub fn current_tab_segment(cx: &gpui::App) -> &str {
   pathname.rsplit('/').next().unwrap_or("")
 }
 
-fn requires_pro_access(path: &str) -> bool {
+fn requires_github_access(path: &str) -> bool {
   path.starts_with("/github")
 }
 

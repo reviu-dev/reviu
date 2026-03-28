@@ -33,7 +33,7 @@ use crate::date_format::format_relative_time_at;
 use crate::{
   ShowCommandPalette,
   api::{ApiClient, GithubNotification, GithubPullRequest, GithubUserRepository},
-  auth_state::{AuthState, AuthStateStore},
+  auth_state::AuthStateStore,
   config::ConfigStore,
   date_format::format_relative_time,
   github_navigation::{open_pr_target, open_repo_target},
@@ -1319,7 +1319,7 @@ impl GithubPage {
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
+    let include_github = AuthStateStore::has_github_access(cx);
     let commands =
       CommandPaletteCommand::default_global_commands(CommandPalettePage::Github, include_github);
 
@@ -1509,7 +1509,7 @@ impl Render for GithubPage {
           unread_count > 0,
           |this| {
             this.child(
-              Tag::secondary()
+              Tag::danger()
                 .small()
                 .rounded_full()
                 .child(unread_count.to_string()),
