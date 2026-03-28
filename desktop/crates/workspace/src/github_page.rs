@@ -207,6 +207,10 @@ fn github_locked_presentation(access_state: GithubAccessState) -> Option<GithubL
   }
 }
 
+fn github_notification_count_label(unread_count: usize) -> Option<String> {
+  (unread_count > 0).then(|| unread_count.to_string())
+}
+
 #[derive(Clone, Debug)]
 struct GithubNotificationRow {
   notification: Rc<GithubNotification>,
@@ -1786,6 +1790,7 @@ impl Render for GithubPage {
     let my_open_count = self.my_open_pull_request_rows.len();
     let need_review_count = self.need_review_pull_request_rows.len();
     let unread_count = self.notifications.read(cx).delegate().unread_count();
+    let unread_notification_label = github_notification_count_label(unread_count);
 
     let pr_tabs = TabBar::new("github-home-pr-tabs")
       .w_full()
@@ -1815,17 +1820,15 @@ impl Render for GithubPage {
         ),
       )
       .child(
-        Tab::new().child(h_flex().items_center().gap_2().child("Notifications").when(
-          unread_count > 0,
-          |this| {
-            this.child(
-              Tag::danger()
-                .small()
-                .rounded_full()
-                .child(unread_count.to_string()),
-            )
-          },
-        )),
+        Tab::new().child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child("Notifications")
+            .when_some(unread_notification_label, |this, label| {
+              this.child(StatusTag::new(theme.status_red()).xsmall().child(label))
+            }),
+        ),
       );
 
     let repositories_count = self.repositories.read(cx).delegate().matched_rows.len();
@@ -2154,6 +2157,12 @@ mod tests {
   fn pull_request_tab_author_visibility_matches_home_context() {
     assert!(!GithubPullRequestTab::MyOpen.shows_pull_request_author());
     assert!(GithubPullRequestTab::NeedReview.shows_pull_request_author());
+  }
+
+  #[test]
+  fn github_notification_count_label_hides_zero_count() {
+    assert_eq!(github_notification_count_label(0), None);
+    assert_eq!(github_notification_count_label(7), Some("7".to_string()));
   }
 
   #[test]
