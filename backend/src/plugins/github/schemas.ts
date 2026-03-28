@@ -31,6 +31,13 @@ export const createPullRequestReviewBodySchema = z.object({
   body: z.string().optional(),
 })
 
+export const createPullRequestBodySchema = z.object({
+  title: z.string().trim().min(1, 'Missing pull request title'),
+  base: z.string().trim().min(1, 'Missing base branch'),
+  body: z.string().optional(),
+  draft: z.boolean().optional(),
+})
+
 export const mergePullRequestBodySchema = z.object({
   method: z.enum(['merge', 'squash', 'rebase']),
   expectedHeadSha: z.string().trim().min(1, 'Missing expected head sha'),

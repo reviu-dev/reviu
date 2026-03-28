@@ -13,6 +13,7 @@ import type {
   CreateIssueCommentParams,
   CreatePullRequestCommentParams,
   CreatePullRequestCommentReplyParams,
+  CreatePullRequestParams,
   CreatePullRequestReviewParams,
   DeleteIssueCommentParams,
   DeletePullRequestCommentParams,
@@ -111,6 +112,7 @@ import { runWithGithubMetricsContext } from '../plugins/github/metrics/github-me
 import { fetchGithubPullRequestChecksSummary } from '../plugins/github/pull-request-checks.js'
 import { fetchGithubPullRequestMergeReadiness } from '../plugins/github/pull-request-merge.js'
 import {
+  createPullRequestBodySchema,
   createPullRequestLineCommentBodySchema,
   createPullRequestReviewBodySchema,
   createPullRequestThreadReplyBodySchema,
@@ -122,6 +124,7 @@ import {
 import {
   compareGithubRefs,
   createGithubIssueComment,
+  createGithubPullRequest,
   createGithubPullRequestComment,
   createGithubPullRequestCommentReply,
   createGithubPullRequestReview,
@@ -2180,6 +2183,56 @@ export const githubRoutes = githubRouter
       return ctx.json({ pullRequests: result.payload }, 200)
     }
     catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/repos/:owner/:repo/pr', async (ctx) => {
+    const { owner, repo } = ctx.req.param()
+    const branch = ctx.req.query('branch')?.trim()
+    const payload = await ctx.req.json().catch(() => null)
+    const parsedBody = createPullRequestBodySchema.safeParse(payload)
+
+    if (!branch) {
+      return ctx.json({ error: 'Missing branch' }, 400)
+    }
+
+    if (!parsedBody.success) {
+      const message = parsedBody.error.issues[0]?.message || 'Invalid pull request payload'
+      return ctx.json({ error: message }, 400)
+    }
+
+    const { title, base, body, draft } = parsedBody.data
+
+    const trimmedBody = body?.trim()
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: CreatePullRequestParams = {
+        owner,
+        repo,
+        head: `${owner}:${branch}`,
+        base,
+        title,
+        ...(trimmedBody ? { body: trimmedBody } : {}),
+        ...(draft === true ? { draft: true } : {}),
+      }
+
+      const data = await createGithubPullRequest({ token: githubToken, params })
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner,
+        repo,
+        pullNumber: data.number,
+      }))
+      const pullRequest = mapGithubPullRequest(data)
+      return ctx.json({ pullRequest }, 201)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })

@@ -1,4 +1,5 @@
 import type {
+  CreatePullRequestResponse,
   GithubGraphqlPullRequestNode,
   GithubGraphqlPullRequestResult,
   GithubIssueCommentResponseSource,
@@ -75,7 +76,7 @@ export function mapGithubGraphqlPullRequest(
 }
 
 export function mapGithubPullRequest(
-  pullRequest: PullRequestResponse,
+  pullRequest: PullRequestResponse | CreatePullRequestResponse,
 ): GithubPullRequest {
   const labels = pullRequest.labels
     .flatMap(label => (typeof label.name === 'string' && label.name.trim().length > 0 ? [{ name: label.name }] : []))

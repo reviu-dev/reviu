@@ -13,6 +13,8 @@ export type PullRequestReviewsParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews']['parameters']
 export type UpdatePullRequestParams
   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
+export type CreatePullRequestParams
+  = Endpoints['POST /repos/{owner}/{repo}/pulls']['parameters']
 export type MergePullRequestParams
   = Endpoints['PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge']['parameters']
 export type CreatePullRequestCommentParams
@@ -58,6 +60,8 @@ export type PullRequestReviewResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews']['response']['data'][number]
 export type UpdatePullRequestResponse
   = Endpoints['PATCH /repos/{owner}/{repo}/pulls/{pull_number}']['response']['data']
+export type CreatePullRequestResponse
+  = Endpoints['POST /repos/{owner}/{repo}/pulls']['response']['data']
 export type MergePullRequestResponse
   = Endpoints['PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge']['response']['data']
 export type CreatePullRequestCommentResponse

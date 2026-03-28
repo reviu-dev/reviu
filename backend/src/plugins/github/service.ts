@@ -16,6 +16,8 @@ import type {
   CreatePullRequestCommentReplyParams,
   CreatePullRequestCommentReplyResponse,
   CreatePullRequestCommentResponse,
+  CreatePullRequestParams,
+  CreatePullRequestResponse,
   CreatePullRequestReviewParams,
   CreatePullRequestReviewResponse,
   DeleteIssueCommentParams,
@@ -720,6 +722,16 @@ export async function fetchGithubPullRequest(
   { token: string, params: PullRequestParams },
 ): Promise<PullRequestDetailsResponse> {
   return requestGithubData('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
+    token,
+    params,
+  })
+}
+
+export async function createGithubPullRequest(
+  { token, params }:
+  { token: string, params: CreatePullRequestParams },
+): Promise<CreatePullRequestResponse> {
+  return requestGithubData('POST /repos/{owner}/{repo}/pulls', {
     token,
     params,
   })

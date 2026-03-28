@@ -891,6 +891,16 @@ struct GithubPullRequestResponse {
   pull_request: Option<GithubPullRequest>,
 }
 
+#[derive(Debug, Serialize)]
+struct CreateGithubPullRequestRequest<'a> {
+  title: &'a str,
+  base: &'a str,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  body: Option<&'a str>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  draft: Option<bool>,
+}
+
 #[derive(Debug, Deserialize)]
 struct GithubUserRepositoriesResponse {
   repositories: Vec<GithubUserRepository>,
@@ -1433,6 +1443,42 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestResponse>()?;
     Ok(payload.pull_request)
+  }
+
+  pub fn create_pull_request(
+    &self,
+    owner: &str,
+    repo: &str,
+    branch: &str,
+    title: &str,
+    base: &str,
+    body: Option<&str>,
+    draft: bool,
+  ) -> Result<GithubPullRequest> {
+    let route = format!("/github/repos/{owner}/{repo}/pr");
+    let trimmed_body = body.map(str::trim).filter(|value| !value.is_empty());
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .query(&[("branch", branch)])
+      .json(&CreateGithubPullRequestRequest {
+        title: title.trim(),
+        base: base.trim(),
+        body: trimmed_body,
+        draft: draft.then_some(true),
+      })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<GithubPullRequestResponse>()?;
+    payload
+      .pull_request
+      .ok_or_else(|| anyhow::anyhow!("Missing pull request in response"))
   }
 
   pub fn fetch_github_repository_issues(
@@ -2712,6 +2758,87 @@ mod tests {
       request_line,
       "GET /github/repos/acme/widget/pr/branch?branch=feature%2Fparser HTTP/1.1"
     );
+  }
+
+  #[test]
+  fn create_pull_request_parses_success_payload() {
+    let body = r#"{
+      "pullRequest": {
+        "number": 11,
+        "title": "Improve docs",
+        "state": "open",
+        "created_at": "2026-02-11T08:00:00Z",
+        "closed_at": null,
+        "merged_at": null,
+        "draft": true,
+        "updated_at": "2026-02-15T12:00:00Z",
+        "comments_count": 7,
+        "author": {
+          "login": "docs-bot[bot]",
+          "avatar_url": null,
+          "is_bot": true
+        },
+        "labels": [{ "name": "docs" }],
+        "repository": { "owner": "acme", "repo": "widget" }
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("201 Created", body);
+    let api = make_test_api_client(base_url);
+
+    let pull_request = api
+      .create_pull_request(
+        "acme",
+        "widget",
+        "feature/parser",
+        "Improve docs",
+        "main",
+        Some("Ready to review"),
+        true,
+      )
+      .expect("create pull request");
+    assert_eq!(pull_request.number, 11);
+    assert_eq!(pull_request.title, "Improve docs");
+    assert!(pull_request.draft);
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn create_pull_request_uses_expected_route_and_payload() {
+    let body = r#"{"pullRequest":{"number":11,"title":"Improve docs","state":"open","created_at":"2026-02-11T08:00:00Z","closed_at":null,"merged_at":null,"draft":false,"updated_at":"2026-02-15T12:00:00Z","comments_count":0,"author":{"login":"octocat","avatar_url":null,"is_bot":false},"labels":[],"repository":{"owner":"acme","repo":"widget"}}}"#;
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("201 Created", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .create_pull_request(
+        "acme",
+        "widget",
+        "feature/parser",
+        "  Improve docs  ",
+        "  main  ",
+        Some("  Ready to review  "),
+        true,
+      )
+      .expect("create pull request");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request.starts_with("POST /github/repos/acme/widget/pr?branch=feature%2Fparser HTTP/1.1")
+    );
+    assert!(
+      request
+        .to_lowercase()
+        .contains("\r\ncontent-type: application/json")
+    );
+    assert!(request.contains(r#""title":"Improve docs""#));
+    assert!(request.contains(r#""base":"main""#));
+    assert!(request.contains(r#""body":"Ready to review""#));
+    assert!(request.contains(r#""draft":true"#));
   }
 
   #[test]
@@ -4588,6 +4715,52 @@ mod tests {
 
     let err = api
       .fetch_pull_request_for_branch("acme", "widget", "feature/parser")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn create_pull_request_returns_backend_api_error() {
+    let body = r#"{"error":"A pull request already exists for acme:feature/parser."}"#;
+    let (base_url, handle) = start_single_response_server("422 Unprocessable Entity", body);
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .create_pull_request(
+        "acme",
+        "widget",
+        "feature/parser",
+        "Improve docs",
+        "main",
+        None,
+        false,
+      )
+      .err()
+      .expect("error");
+    assert_eq!(
+      err.to_string(),
+      "A pull request already exists for acme:feature/parser."
+    );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn create_pull_request_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .create_pull_request(
+        "acme",
+        "widget",
+        "feature/parser",
+        "Improve docs",
+        "main",
+        None,
+        false,
+      )
       .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
