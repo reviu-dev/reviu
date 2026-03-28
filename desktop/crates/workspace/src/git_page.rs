@@ -1029,8 +1029,8 @@ impl GitPage {
   fn branch_pr_lookup_context(&self, cx: &App) -> Option<GithubBranchContext> {
     (AuthStateStore::has_github_access(cx)
       && Self::branch_has_github_upstream(self.branch_status.as_ref()))
-      .then(|| self.github_branch_context(cx))
-      .flatten()
+    .then(|| self.github_branch_context(cx))
+    .flatten()
   }
 
   fn branch_pr_button_state(
@@ -7639,9 +7639,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn refresh_branch_pr_lookup_skips_lookup_for_unpublished_branch(
-    cx: &mut TestAppContext,
-  ) {
+  async fn refresh_branch_pr_lookup_skips_lookup_for_unpublished_branch(cx: &mut TestAppContext) {
     init_gpui_test(cx);
 
     cx.update(|cx| {
@@ -7676,7 +7674,9 @@ mod tests {
       assert!(!this.branch_pr_lookup_loading);
       assert!(this.branch_pr_lookup_result.is_none());
       assert!(AuthStateStore::has_github_access(cx));
-      assert!(!GitPage::branch_has_github_upstream(this.branch_status.as_ref()));
+      assert!(!GitPage::branch_has_github_upstream(
+        this.branch_status.as_ref()
+      ));
     });
   }
 
