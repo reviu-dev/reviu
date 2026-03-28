@@ -109,6 +109,7 @@ struct GithubBranchContext {
 enum GitBranchPullRequestButtonState {
   Hidden,
   Checking,
+  PublishAndCreate,
   OpenExisting {
     owner: String,
     repo: String,
@@ -1399,6 +1400,7 @@ pub struct GitPage {
   can_force_push: bool,
   force_push_after_rebase: bool,
   push_pull_in_progress: bool,
+  publish_branch_and_create_pr_in_progress: bool,
   fetch_in_progress: bool,
   has_staged_changes: bool,
   merge_in_progress: bool,
@@ -1521,6 +1523,8 @@ impl GitPage {
   fn branch_pr_button_state(
     branch_context: Option<&GithubBranchContext>,
     can_open_in_app: bool,
+    has_github_upstream: bool,
+    can_publish_branch: bool,
     lookup_loading: bool,
     lookup_result: Option<&GithubPullRequest>,
   ) -> GitBranchPullRequestButtonState {
@@ -1530,6 +1534,14 @@ impl GitPage {
 
     if !can_open_in_app {
       return GitBranchPullRequestButtonState::Hidden;
+    }
+
+    if !has_github_upstream {
+      return if can_publish_branch {
+        GitBranchPullRequestButtonState::PublishAndCreate
+      } else {
+        GitBranchPullRequestButtonState::Hidden
+      };
     }
 
     if lookup_loading {
@@ -1548,18 +1560,86 @@ impl GitPage {
   }
 
   fn create_pull_request_branch_context(&self, cx: &App) -> Option<GithubBranchContext> {
-    let branch_context = self.branch_pr_lookup_context(cx)?;
+    let branch_context = self.github_branch_context(cx)?;
 
     matches!(
       Self::branch_pr_button_state(
         Some(&branch_context),
         AuthStateStore::has_github_access(cx),
+        Self::branch_has_github_upstream(self.branch_status.as_ref()),
+        Self::should_publish_branch(self.branch_status.as_ref(), self.has_head_commit),
         self.branch_pr_lookup_loading,
         self.branch_pr_lookup_result.as_ref(),
       ),
       GitBranchPullRequestButtonState::Create
     )
     .then_some(branch_context)
+  }
+
+  fn publish_branch_and_create_pull_request_action(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    let Some(branch_context) = self.github_branch_context(cx) else {
+      return;
+    };
+    if !AuthStateStore::has_github_access(cx)
+      || !Self::should_publish_branch(self.branch_status.as_ref(), self.has_head_commit)
+      || self.push_pull_in_progress
+      || self.publish_branch_and_create_pr_in_progress
+    {
+      return;
+    }
+
+    let api = self.api.clone();
+    let window_handle = self.window_handle;
+    self.add_git_breadcrumb("Publish branch and create PR started", Map::new());
+    self.push_pull_in_progress = true;
+    self.publish_branch_and_create_pr_in_progress = true;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || push(&repo_root, false)).await;
+      let _ = this.update(cx, |this, cx| {
+        this.push_pull_in_progress = false;
+        this.publish_branch_and_create_pr_in_progress = false;
+
+        match result {
+          Ok(()) => {
+            this.force_push_after_rebase = false;
+            this.add_git_breadcrumb("Publish branch and create PR succeeded", Map::new());
+            this.reload_status(cx);
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+              open_create_pull_request_dialog(
+                api.clone(),
+                window_handle,
+                branch_context.clone(),
+                window,
+                cx,
+              );
+            });
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            let mut data = Map::new();
+            data.insert("error".into(), error_message.clone().into());
+            this.add_git_breadcrumb("Publish branch and create PR failed", data.clone());
+            this.record_git_unexpected_error(
+              "git.publish_and_create_pr",
+              error_message.as_str(),
+              data,
+            );
+            this.push_git_action_error_notification(
+              "Publish branch failed",
+              error_message.into(),
+              cx,
+            );
+            this.reload_status(cx);
+          }
+        }
+      });
+    });
+
+    self.status_task = Some(task);
   }
 
   fn sentry_git_data(&self) -> Map<String, Value> {
@@ -2345,6 +2425,7 @@ impl GitPage {
       can_force_push: false,
       force_push_after_rebase: false,
       push_pull_in_progress: false,
+      publish_branch_and_create_pr_in_progress: false,
       fetch_in_progress: false,
       has_staged_changes: false,
       merge_in_progress: false,
@@ -2435,6 +2516,7 @@ impl GitPage {
       can_force_push: false,
       force_push_after_rebase: false,
       push_pull_in_progress: false,
+      publish_branch_and_create_pr_in_progress: false,
       fetch_in_progress: false,
       has_staged_changes: false,
       merge_in_progress: false,
@@ -2677,6 +2759,7 @@ impl GitPage {
     self.rebase_in_progress = false;
     self.force_push_after_rebase = false;
     self.push_pull_in_progress = false;
+    self.publish_branch_and_create_pr_in_progress = false;
     self.history_commits.clear();
     self.history_revision = None;
     self.history_loading = self.sidebar_mode == GitSidebarMode::History;
@@ -2861,6 +2944,7 @@ impl GitPage {
       self.can_force_push = false;
       self.force_push_after_rebase = false;
       self.push_pull_in_progress = false;
+      self.publish_branch_and_create_pr_in_progress = false;
       self.has_staged_changes = false;
       self.merge_in_progress = false;
       self.rebase_in_progress = false;
@@ -2952,6 +3036,7 @@ impl GitPage {
           this.can_force_push = false;
           this.force_push_after_rebase = false;
           this.push_pull_in_progress = false;
+          this.publish_branch_and_create_pr_in_progress = false;
           this.has_staged_changes = false;
           this.merge_in_progress = false;
           this.rebase_in_progress = false;
@@ -6217,10 +6302,12 @@ impl GitPage {
     let on_branch_select = self.branch_select_handler(cx);
     let repo_options = self.repo_dropdown_items.clone();
     let branch_options = self.branch_dropdown_items.clone();
-    let branch_context = self.branch_pr_lookup_context(cx);
+    let branch_context = self.github_branch_context(cx);
     let branch_pr_button_state = Self::branch_pr_button_state(
       branch_context.as_ref(),
       AuthStateStore::has_github_access(cx),
+      Self::branch_has_github_upstream(self.branch_status.as_ref()),
+      Self::should_publish_branch(self.branch_status.as_ref(), self.has_head_commit),
       self.branch_pr_lookup_loading,
       self.branch_pr_lookup_result.as_ref(),
     );
@@ -6365,6 +6452,23 @@ impl GitPage {
           .disabled(true)
           .tooltip("Looking for an open pull request for this branch"),
       ),
+      GitBranchPullRequestButtonState::PublishAndCreate => {
+        branch_context.clone().map(|_branch_context| {
+          Button::new("git-publish-and-create-branch-pr")
+            .label("Publish and Create PR")
+            .icon(UiIconName::GitPullRequestArrow)
+            .outline()
+            .with_variant(ButtonVariant::Secondary)
+            .xsmall()
+            .p_2()
+            .loading(self.publish_branch_and_create_pr_in_progress)
+            .disabled(self.push_pull_in_progress || self.publish_branch_and_create_pr_in_progress)
+            .tooltip("Publish this branch to GitHub and create a pull request")
+            .on_click(cx.listener(|this, _, _window, cx| {
+              this.publish_branch_and_create_pull_request_action(cx);
+            }))
+        })
+      }
       GitBranchPullRequestButtonState::OpenExisting {
         owner,
         repo,
@@ -7661,11 +7765,13 @@ mod tests {
   use git2::build::CheckoutBuilder;
   use git2::{BranchType, Cred, PushOptions, RemoteCallbacks, Repository, Signature};
   use gpui::TestAppContext;
+  use std::io::{Read, Write};
+  use std::net::TcpListener;
   use std::sync::atomic::{AtomicU64, Ordering};
   use std::time::{SystemTime, UNIX_EPOCH};
   use ui::CommandPaletteCommandId;
 
-  use crate::api::{User, UserRole, UserSubscription};
+  use crate::api::{ApiClient, User, UserRole, UserSubscription};
 
   #[test]
   fn format_git_file_name_label_extracts_file_name() {
@@ -7949,6 +8055,43 @@ mod tests {
     }
   }
 
+  fn make_test_api_client(base_url: impl Into<String>) -> ApiClient {
+    ApiClient::new_with_base_url(base_url)
+  }
+
+  fn start_matching_response_server(
+    responses: Vec<(String, String, String)>,
+  ) -> (String, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+    let address = format!("http://{}", listener.local_addr().expect("local addr"));
+
+    let handle = std::thread::spawn(move || {
+      for _ in 0..responses.len() {
+        let (mut stream, _) = listener.accept().expect("accept connection");
+        let mut request_buffer = [0u8; 4096];
+        let bytes_read = stream.read(&mut request_buffer).expect("read request");
+        let request = String::from_utf8_lossy(&request_buffer[..bytes_read]);
+
+        let (_, status, body) = responses
+          .iter()
+          .find(|(pattern, _, _)| request.contains(pattern))
+          .unwrap_or_else(|| panic!("unexpected request: {request}"));
+
+        let response = format!(
+          "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+          body.as_bytes().len(),
+          body,
+        );
+        stream
+          .write_all(response.as_bytes())
+          .expect("write response");
+        stream.flush().expect("flush response");
+      }
+    });
+
+    (address, handle)
+  }
+
   fn make_authenticated_test_user(role: UserRole) -> User {
     User {
       id: "user_123".to_string(),
@@ -8064,7 +8207,14 @@ mod tests {
     let pull_request = make_branch_pull_request(42);
 
     assert_eq!(
-      GitPage::branch_pr_button_state(Some(&context), true, false, Some(&pull_request)),
+      GitPage::branch_pr_button_state(
+        Some(&context),
+        true,
+        true,
+        false,
+        false,
+        Some(&pull_request)
+      ),
       GitBranchPullRequestButtonState::OpenExisting {
         owner: "acme".to_string(),
         repo: "widget".to_string(),
@@ -8082,11 +8232,11 @@ mod tests {
     };
 
     assert_eq!(
-      GitPage::branch_pr_button_state(Some(&context), true, true, None),
+      GitPage::branch_pr_button_state(Some(&context), true, true, false, true, None),
       GitBranchPullRequestButtonState::Checking
     );
     assert_eq!(
-      GitPage::branch_pr_button_state(Some(&context), false, true, None),
+      GitPage::branch_pr_button_state(Some(&context), false, true, false, true, None),
       GitBranchPullRequestButtonState::Hidden
     );
   }
@@ -8101,7 +8251,14 @@ mod tests {
     let pull_request = make_branch_pull_request(42);
 
     assert_eq!(
-      GitPage::branch_pr_button_state(Some(&context), false, false, Some(&pull_request)),
+      GitPage::branch_pr_button_state(
+        Some(&context),
+        false,
+        true,
+        false,
+        false,
+        Some(&pull_request),
+      ),
       GitBranchPullRequestButtonState::Hidden
     );
   }
@@ -8115,8 +8272,22 @@ mod tests {
     };
 
     assert_eq!(
-      GitPage::branch_pr_button_state(Some(&context), true, false, None),
+      GitPage::branch_pr_button_state(Some(&context), true, true, false, false, None),
       GitBranchPullRequestButtonState::Create
+    );
+  }
+
+  #[test]
+  fn branch_pr_button_state_shows_publish_and_create_for_unpublished_branch() {
+    let context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature/parser".to_string(),
+    };
+
+    assert_eq!(
+      GitPage::branch_pr_button_state(Some(&context), true, false, true, false, None),
+      GitBranchPullRequestButtonState::PublishAndCreate
     );
   }
 
@@ -12613,6 +12784,121 @@ mod tests {
     assert_eq!(status.ahead, 0);
     assert!(!git_page.read_with(cx, |this, _| this.force_push_after_rebase));
     assert!(!git_page.read_with(cx, |this, _| this.push_pull_in_progress));
+  }
+
+  #[gpui::test]
+  async fn publish_branch_and_create_pr_action_publishes_branch_and_opens_dialog(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_authenticated_test_user(UserRole::Pro))),
+      );
+    });
+
+    let source = TempRepo::init("git-page-publish-pr-source");
+    let remote = TempBareRepo::init("git-page-publish-pr-remote");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&source.path, rel_path, "v1\n", "initial");
+
+    let source_repo = Repository::open(&source.path).expect("open source");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin remote");
+    source_repo
+      .remote("github", "git@github.com:acme/widget.git")
+      .expect("add github remote");
+
+    let branch_name = current_branch_status(&source.path)
+      .expect("source branch status")
+      .name;
+
+    let details_body = r#"{
+      "name": "widget",
+      "full_name": "acme/widget",
+      "description": "A sample repository",
+      "homepage": null,
+      "language": "Rust",
+      "default_branch": "main",
+      "stargazers_count": 0,
+      "forks_count": 0,
+      "subscribers_count": 0,
+      "open_issues_count": 0,
+      "size": 1,
+      "pushed_at": "2026-03-20T12:00:00Z",
+      "html_url": "https://github.com/acme/widget",
+      "owner": {
+        "login": "acme",
+        "avatar_url": "https://example.com/avatar.png"
+      },
+      "license": null
+    }"#;
+    let tree_body = r#"{
+      "sha": "head123",
+      "url": "https://api.github.com/repos/acme/widget/trees/head123",
+      "tree": [],
+      "truncated": false
+    }"#;
+    let (base_url, handle) = start_matching_response_server(vec![
+      (
+        format!("GET /github/repos/acme/widget/pr/branch?branch={branch_name}"),
+        "200 OK".to_string(),
+        r#"{"pullRequest":null}"#.to_string(),
+      ),
+      (
+        "GET /github/repos/acme/widget HTTP/1.1".to_string(),
+        "200 OK".to_string(),
+        details_body.to_string(),
+      ),
+      (
+        "GET /github/repos/acme/widget/trees/main?recursive=1 HTTP/1.1".to_string(),
+        "200 OK".to_string(),
+        tree_body.to_string(),
+      ),
+    ]);
+
+    let mut mounted_git_page = None;
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let git_page = cx.new(|cx| GitPage::new_for_test(window, cx));
+      mounted_git_page = Some(git_page.clone());
+      gpui_component::Root::new(git_page, window, cx)
+    });
+    let git_page = mounted_git_page.expect("git page");
+
+    let publish_task = git_page.update_in(cx, |this, _window, cx| {
+      this.api = make_test_api_client(base_url.clone());
+      this.selected_repo = Some(source.path.clone());
+      this.branch_status = Some(current_branch_status(&source.path).expect("branch status"));
+      this.has_head_commit = true;
+      this.sync_active_local_repo(cx);
+      this.publish_branch_and_create_pull_request_action(cx);
+      assert!(this.push_pull_in_progress);
+      assert!(this.publish_branch_and_create_pr_in_progress);
+      this.status_task.take().expect("publish task")
+    });
+    publish_task.await;
+
+    if let Some(reload_task) = git_page.update_in(cx, |this, _window, _| this.status_task.take()) {
+      reload_task.await;
+    }
+
+    cx.cx.run_until_parked();
+    cx.run_until_parked();
+    cx.cx.run_until_parked();
+    cx.run_until_parked();
+    handle.join().expect("join server thread");
+
+    let status = current_branch_status(&source.path).expect("status after publish");
+    assert!(status.has_upstream);
+    assert_eq!(
+      remote_branch_oid(&remote.path, &branch_name),
+      head_oid(&source.path)
+    );
+    assert!(!git_page.read_with(cx, |this, _| this.push_pull_in_progress));
+    assert!(!git_page.read_with(cx, |this, _| this.publish_branch_and_create_pr_in_progress));
   }
 
   #[gpui::test]
