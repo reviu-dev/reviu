@@ -10,7 +10,7 @@ The app header now includes a persistent Git and GitHub switch from anywhere in 
 
 ### Branch Pull Request Shortcut in Git Header
 
-The Git page header now checks whether the current GitHub branch already has an open pull request. When it does, you can open that pull request directly in Reviu. When it does not, the same spot opens a create pull request dialog.
+The Git page header now checks whether the current GitHub branch already has an open pull request. When it does, you can open that pull request, when it does not, the same spot opens a create pull request dialog.
 
 ### Git Error Notifications
 
