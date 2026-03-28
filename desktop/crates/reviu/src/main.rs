@@ -1,8 +1,8 @@
 use app_root::AppRoot;
 use editor::*;
 use gpui::{
-  App, Bounds, Focusable, KeyBinding, Menu, MenuItem, TitlebarOptions, WindowBounds, WindowOptions,
-  point, prelude::*, px, size,
+  App, Bounds, Focusable, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, point,
+  prelude::*, px, size,
 };
 use gpui_component::{Root, TitleBar};
 use reqwest_client::ReqwestClient;
@@ -11,10 +11,9 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use ui::{AppAssets, PAGE_HEADER_HEIGHT};
 use workspace::{
-  AppProfile, AuthCallbackTarget, CloseWorkspacePage, CommitChanges, OpenAboutPage,
-  OpenBillingPage, OpenGitConfigPage, OpenGitPage, OpenGithubPage, OpenRepository,
-  OpenSettingsPage, SHOW_COMMAND_PALETTE_SHORTCUT, ShowCommandPalette, ShowFileSearch,
-  WorkspaceView,
+  AppProfile, AuthCallbackTarget, CloseWorkspacePage, CommitChanges, OpenRepository,
+  SHOW_COMMAND_PALETTE_SHORTCUT, ShowCommandPalette, ShowFileSearch, WorkspaceView,
+  build_app_menus,
 };
 
 mod app_root;
@@ -130,41 +129,7 @@ fn main() {
       KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, None),
     ]);
 
-    cx.set_menus(vec![
-      Menu {
-        name: "Reviu".into(),
-        items: vec![
-          MenuItem::action("About Reviu", OpenAboutPage),
-          MenuItem::separator(),
-          MenuItem::action("Settings...", OpenSettingsPage),
-          MenuItem::separator(),
-          MenuItem::action("Quit Reviu", Quit),
-        ],
-      },
-      Menu {
-        name: "Navigate".into(),
-        items: vec![
-          MenuItem::action("Git", OpenGitPage),
-          MenuItem::action("GitHub", OpenGithubPage),
-          MenuItem::separator(),
-          MenuItem::action("Git Config", OpenGitConfigPage),
-          MenuItem::action("Billing", OpenBillingPage),
-        ],
-      },
-      Menu {
-        name: "Edit".into(),
-        items: vec![
-          MenuItem::os_action("Undo", Undo, gpui::OsAction::Undo),
-          MenuItem::os_action("Redo", Redo, gpui::OsAction::Redo),
-          MenuItem::separator(),
-          MenuItem::os_action("Cut", Cut, gpui::OsAction::Cut),
-          MenuItem::os_action("Copy", Copy, gpui::OsAction::Copy),
-          MenuItem::os_action("Paste", Paste, gpui::OsAction::Paste),
-          MenuItem::separator(),
-          MenuItem::os_action("Select All", SelectAll, gpui::OsAction::SelectAll),
-        ],
-      },
-    ]);
+    cx.set_menus(build_app_menus(false));
 
     let window_options = WindowOptions {
       window_bounds: Some(WindowBounds::Windowed(bounds)),

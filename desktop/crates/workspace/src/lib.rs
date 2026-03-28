@@ -48,4 +48,4 @@ pub use app_profile::AppProfile;
 pub use git_page::{
   AuthCallbackTarget, CommitChanges, OpenRepository, SaveFile, ShowCommandPalette, ShowFileSearch,
 };
-pub use workspace::WorkspaceView;
+pub use workspace::{WorkspaceView, build_app_menus};
