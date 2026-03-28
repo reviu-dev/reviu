@@ -1035,24 +1035,26 @@ impl GitPage {
       return GitBranchPullRequestButtonState::Hidden;
     };
 
-    if can_open_in_app {
-      if lookup_loading {
-        return GitBranchPullRequestButtonState::Checking {
-          create_url: github_shared::create_pr_url(
-            branch_context.owner.as_str(),
-            branch_context.repo.as_str(),
-            branch_context.branch.as_str(),
-          ),
-        };
-      }
+    if !can_open_in_app {
+      return GitBranchPullRequestButtonState::Hidden;
+    }
 
-      if let Some(pull_request) = lookup_result {
-        return GitBranchPullRequestButtonState::OpenExisting {
-          owner: pull_request.repository.owner.clone(),
-          repo: pull_request.repository.repo.clone(),
-          number: pull_request.number,
-        };
-      }
+    if lookup_loading {
+      return GitBranchPullRequestButtonState::Checking {
+        create_url: github_shared::create_pr_url(
+          branch_context.owner.as_str(),
+          branch_context.repo.as_str(),
+          branch_context.branch.as_str(),
+        ),
+      };
+    }
+
+    if let Some(pull_request) = lookup_result {
+      return GitBranchPullRequestButtonState::OpenExisting {
+        owner: pull_request.repository.owner.clone(),
+        repo: pull_request.repository.repo.clone(),
+        number: pull_request.number,
+      };
     }
 
     GitBranchPullRequestButtonState::Create {
@@ -5704,7 +5706,7 @@ impl GitPage {
     let on_branch_select = self.branch_select_handler(cx);
     let repo_options = self.repo_dropdown_items.clone();
     let branch_options = self.branch_dropdown_items.clone();
-    let branch_context = self.github_branch_context(cx);
+    let branch_context = self.branch_pr_lookup_context(cx);
     let branch_pr_button_state = Self::branch_pr_button_state(
       branch_context.as_ref(),
       AuthStateStore::has_github_access(cx),
@@ -7146,6 +7148,8 @@ mod tests {
   use std::time::{SystemTime, UNIX_EPOCH};
   use ui::CommandPaletteCommandId;
 
+  use crate::api::{User, UserRole, UserSubscription};
+
   #[test]
   fn format_git_file_name_label_extracts_file_name() {
     let path = Path::new("src/features/renamed_file.rs");
@@ -7428,6 +7432,19 @@ mod tests {
     }
   }
 
+  fn make_authenticated_test_user(role: UserRole) -> User {
+    User {
+      id: "user_123".to_string(),
+      name: "Joris".to_string(),
+      email: "joris@example.com".to_string(),
+      email_verified: true,
+      image: None,
+      github_login: Some("joris-gallot".to_string()),
+      role,
+      subscription: UserSubscription::default(),
+    }
+  }
+
   fn isolate_config_store_for_test() {
     static NEXT_DB_ID: AtomicU64 = AtomicU64::new(1);
     let id = NEXT_DB_ID.fetch_add(1, Ordering::Relaxed);
@@ -7544,10 +7561,61 @@ mod tests {
     );
     assert_eq!(
       GitPage::branch_pr_button_state(Some(&context), false, true, None),
-      GitBranchPullRequestButtonState::Create {
-        url: "https://github.com/acme/widget/compare/feature/parser?expand=1".to_string(),
-      }
+      GitBranchPullRequestButtonState::Hidden
     );
+  }
+
+  #[test]
+  fn branch_pr_button_state_hides_branch_pull_request_button_without_github_access() {
+    let context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature/parser".to_string(),
+    };
+    let pull_request = make_branch_pull_request(42);
+
+    assert_eq!(
+      GitPage::branch_pr_button_state(Some(&context), false, false, Some(&pull_request)),
+      GitBranchPullRequestButtonState::Hidden
+    );
+  }
+
+  #[gpui::test]
+  async fn refresh_branch_pr_lookup_skips_lookup_without_github_access(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_authenticated_test_user(UserRole::User))),
+      );
+      ActiveLocalRepoStore::set(
+        cx,
+        Some(ActiveLocalRepo {
+          repo_root: PathBuf::from("/tmp/reviu-git-page-branch-pr-no-access"),
+          github_owner: Some("acme".to_string()),
+          github_repo: Some("widget".to_string()),
+          current_branch: Some("feature/parser".to_string()),
+          head_sha: Some("deadbeef".to_string()),
+          has_uncommitted_changes: false,
+        }),
+      );
+    });
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.refresh_branch_pr_lookup(cx);
+    });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    git_page.read_with(cx, |this, cx| {
+      assert_eq!(this.branch_pr_lookup_context, None);
+      assert!(this.branch_pr_lookup_task.is_none());
+      assert!(!this.branch_pr_lookup_loading);
+      assert!(this.branch_pr_lookup_result.is_none());
+      assert!(!AuthStateStore::has_github_access(cx));
+    });
   }
 
   fn seed_repo_branch_state(this: &mut GitPage, repo_root: &Path, cx: &mut Context<GitPage>) {
