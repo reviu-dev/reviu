@@ -7,8 +7,12 @@ use gpui::{
   Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, IconName, Sizable as _, Theme, ThemeMode, kbd::Kbd,
-  notification::Notification, spinner::Spinner, tag::Tag,
+  ActiveTheme as _, Disableable, IconName, Sizable as _, Theme, ThemeMode, h_flex,
+  kbd::Kbd,
+  notification::Notification,
+  spinner::Spinner,
+  tab::{Tab, TabBar},
+  tag::Tag,
 };
 use gpui_router::{Route, Routes};
 use smol::unblock;
@@ -38,8 +42,8 @@ use crate::sentry_context;
 use crate::settings_page::SettingsPage;
 use crate::{SHOW_COMMAND_PALETTE_SHORTCUT, ShowCommandPalette, ShowFileSearch};
 use ui::{
-  Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, UiIconName, UserMenuConfig, UserMenuPage,
-  UserMenuState, UserMenuUser, WindowExt, user_menu,
+  Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, StatusTag, StatusThemeExt, UiIconName,
+  UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt, user_menu,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,6 +111,21 @@ fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
     WorkspacePage::Settings => UserMenuPage::Settings,
     WorkspacePage::About => UserMenuPage::About,
   }
+}
+
+fn primary_navigation_selected_index(page: WorkspacePage) -> Option<usize> {
+  match page {
+    WorkspacePage::Git => Some(0),
+    WorkspacePage::Github | WorkspacePage::GithubRepo | WorkspacePage::GithubPrDetails => Some(1),
+    WorkspacePage::Billing
+    | WorkspacePage::GitConfig
+    | WorkspacePage::Settings
+    | WorkspacePage::About => None,
+  }
+}
+
+fn github_primary_navigation_count_label(notification_count: usize) -> Option<String> {
+  (notification_count > 0).then(|| notification_count.to_string())
 }
 
 /// Lightweight global that tracks the current page for focus delegation and sidebar highlighting.
@@ -366,7 +385,7 @@ impl WorkspaceView {
           .await;
 
         let has_access = this
-          .update(cx, |_, cx| AuthStateStore::has_pro_access(cx))
+          .update(cx, |_, cx| AuthStateStore::has_github_access(cx))
           .unwrap_or(false);
 
         if !has_access {
@@ -529,13 +548,8 @@ impl WorkspaceView {
     let current_page = user_menu_page_for_workspace_page(page);
     let auth_state = AuthStateStore::get(cx);
     let is_unauthenticated = matches!(auth_state, AuthState::Unauthenticated);
+    let has_github_access = AuthStateStore::has_github_access(cx);
 
-    let open_git = Rc::new(|_window: &mut Window, cx: &mut App| {
-      NavigationHistory::navigate("/git", cx);
-    });
-    let open_github = Rc::new(|_window: &mut Window, cx: &mut App| {
-      Self::open_github_home(cx);
-    });
     let open_billing = Rc::new(|_window: &mut Window, cx: &mut App| {
       NavigationHistory::navigate("/billing", cx);
     });
@@ -574,8 +588,8 @@ impl WorkspaceView {
           }),
           current_page,
           notification_count: NotificationCountStore::get(cx),
-          on_open_git: Some(open_git),
-          on_open_github: Some(open_github),
+          on_open_git: None,
+          on_open_github: None,
           on_open_billing: Some(open_billing),
           on_open_git_config: Some(open_git_config),
           on_open_settings: Some(open_settings),
@@ -628,6 +642,37 @@ impl WorkspaceView {
         window.dispatch_action(Box::new(ShowCommandPalette), cx);
       });
 
+    let primary_navigation = has_github_access.then(|| {
+      let github_notification_count = NotificationCountStore::get(cx);
+      let github_notification_label =
+        github_primary_navigation_count_label(github_notification_count);
+      let primary_navigation = TabBar::new("workspace-primary-navigation")
+        .segmented()
+        .small()
+        .on_click(|ix, _, cx| match ix {
+          0 => NavigationHistory::navigate("/git", cx),
+          1 => Self::open_github_home(cx),
+          _ => {}
+        })
+        .child(Tab::new().label("Git"))
+        .child(
+          Tab::new().child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child("GitHub")
+              .when_some(github_notification_label, |this, label| {
+                this.child(StatusTag::new(theme.status_red()).xsmall().child(label))
+              }),
+          ),
+        );
+      if let Some(selected_index) = primary_navigation_selected_index(page) {
+        primary_navigation.selected_index(selected_index)
+      } else {
+        primary_navigation
+      }
+    });
+
     let bar = div()
       .h(px(GLOBAL_BAR_HEIGHT))
       .max_h(px(GLOBAL_BAR_HEIGHT))
@@ -659,11 +704,15 @@ impl WorkspaceView {
       right = right.child(auth_control);
     }
 
-    let left = if let Some(label) = AppProfile::current().header_tag_label() {
-      div().child(Tag::secondary().small().rounded_full().child(label))
-    } else {
-      div()
-    };
+    let left = h_flex()
+      .items_center()
+      .gap_3()
+      .when_some(AppProfile::current().header_tag_label(), |this, label| {
+        this.child(Tag::secondary().small().rounded_full().child(label))
+      })
+      .when_some(primary_navigation, |this, primary_navigation| {
+        this.child(primary_navigation)
+      });
 
     bar.child(left).child(right)
   }
@@ -814,7 +863,8 @@ impl Render for WorkspaceView {
 #[cfg(test)]
 mod tests {
   use super::{
-    WorkspacePage, WorkspaceView, page_has_file_search, user_menu_page_for_workspace_page,
+    WorkspacePage, WorkspaceView, github_primary_navigation_count_label, page_has_file_search,
+    primary_navigation_selected_index, user_menu_page_for_workspace_page,
     workspace_page_from_pathname,
   };
   use crate::SHOW_COMMAND_PALETTE_SHORTCUT;
@@ -906,6 +956,51 @@ mod tests {
     assert_eq!(
       user_menu_page_for_workspace_page(WorkspacePage::GithubPrDetails),
       UserMenuPage::GithubPrDetails
+    );
+  }
+
+  #[test]
+  fn primary_navigation_selected_index_matches_top_level_sections() {
+    assert_eq!(
+      primary_navigation_selected_index(WorkspacePage::Git),
+      Some(0)
+    );
+    assert_eq!(
+      primary_navigation_selected_index(WorkspacePage::Github),
+      Some(1)
+    );
+    assert_eq!(
+      primary_navigation_selected_index(WorkspacePage::GithubRepo),
+      Some(1)
+    );
+    assert_eq!(
+      primary_navigation_selected_index(WorkspacePage::GithubPrDetails),
+      Some(1)
+    );
+    assert_eq!(
+      primary_navigation_selected_index(WorkspacePage::Billing),
+      None
+    );
+    assert_eq!(
+      primary_navigation_selected_index(WorkspacePage::GitConfig),
+      None
+    );
+    assert_eq!(
+      primary_navigation_selected_index(WorkspacePage::Settings),
+      None
+    );
+    assert_eq!(
+      primary_navigation_selected_index(WorkspacePage::About),
+      None
+    );
+  }
+
+  #[test]
+  fn github_primary_navigation_count_label_hides_zero_count() {
+    assert_eq!(github_primary_navigation_count_label(0), None);
+    assert_eq!(
+      github_primary_navigation_count_label(7),
+      Some("7".to_string())
     );
   }
 

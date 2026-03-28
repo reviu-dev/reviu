@@ -26,7 +26,7 @@ use crate::{
     current_arch, current_platform, download_update_artifact, install_update_artifact,
     resolved_build_version,
   },
-  auth_state::{AuthState, AuthStateStore},
+  auth_state::AuthStateStore,
   github_navigation::{open_pr_target, open_repo_target},
   github_page::GithubPageHandle,
   navigation::NavigationHistory,
@@ -84,7 +84,7 @@ impl AboutPage {
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
+    let include_github = AuthStateStore::has_github_access(cx);
     let commands =
       CommandPaletteCommand::default_global_commands(CommandPalettePage::About, include_github);
 

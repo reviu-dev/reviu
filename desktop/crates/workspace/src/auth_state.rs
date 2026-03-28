@@ -27,8 +27,8 @@ impl AuthStateStore {
       .unwrap_or(AuthState::Unknown)
   }
 
-  pub fn has_pro_access(cx: &App) -> bool {
-    state_has_pro_access(&Self::get(cx))
+  pub fn has_github_access(cx: &App) -> bool {
+    Self::get(cx).has_github_access()
   }
 
   pub fn set(cx: &mut App, state: AuthState) {
@@ -47,13 +47,19 @@ impl Default for AuthStateStore {
   }
 }
 
-fn state_has_pro_access(state: &AuthState) -> bool {
-  matches!(state, AuthState::Authenticated(user) if user.has_pro_access())
+impl AuthState {
+  pub fn has_pro_access(&self) -> bool {
+    matches!(self, AuthState::Authenticated(user) if user.has_pro_access())
+  }
+
+  pub fn has_github_access(&self) -> bool {
+    self.has_pro_access()
+  }
 }
 
 #[cfg(test)]
 mod tests {
-  use super::{AuthState, state_has_pro_access};
+  use super::AuthState;
   use crate::api::{
     CustomerStateSubscription, CustomerStateSubscriptionStatus, User, UserRole, UserSubscription,
   };
@@ -99,14 +105,16 @@ mod tests {
   fn state_has_pro_access_allows_admin_without_subscription() {
     let state = AuthState::Authenticated(Box::new(make_user(UserRole::Admin, None)));
 
-    assert!(state_has_pro_access(&state));
+    assert!(state.has_pro_access());
+    assert!(state.has_github_access());
   }
 
   #[test]
   fn state_has_pro_access_allows_pro_role_without_subscription() {
     let state = AuthState::Authenticated(Box::new(make_user(UserRole::Pro, None)));
 
-    assert!(state_has_pro_access(&state));
+    assert!(state.has_pro_access());
+    assert!(state.has_github_access());
   }
 
   #[test]
@@ -117,7 +125,9 @@ mod tests {
       Some(make_subscription()),
     )));
 
-    assert!(!state_has_pro_access(&no_subscription));
-    assert!(state_has_pro_access(&with_subscription));
+    assert!(!no_subscription.has_pro_access());
+    assert!(!no_subscription.has_github_access());
+    assert!(with_subscription.has_pro_access());
+    assert!(with_subscription.has_github_access());
   }
 }

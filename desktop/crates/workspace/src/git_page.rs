@@ -1020,7 +1020,7 @@ impl GitPage {
   }
 
   fn branch_pr_lookup_context(&self, cx: &App) -> Option<GithubBranchContext> {
-    AuthStateStore::has_pro_access(cx)
+    AuthStateStore::has_github_access(cx)
       .then(|| self.github_branch_context(cx))
       .flatten()
   }
@@ -1782,11 +1782,11 @@ impl GitPage {
   }
 
   fn set_auth_state(&mut self, state: AuthState, cx: &mut Context<Self>) {
-    let was_pro = AuthStateStore::has_pro_access(cx);
+    let had_github_access = AuthStateStore::has_github_access(cx);
     self.auth_state = state.clone();
     AuthStateStore::set(cx, state);
 
-    if !was_pro && AuthStateStore::has_pro_access(cx) {
+    if !had_github_access && AuthStateStore::has_github_access(cx) {
       self.fetch_initial_notifications(cx);
     }
 
@@ -2925,7 +2925,7 @@ impl GitPage {
     palette_repositories_len: usize,
     cx: &App,
   ) -> GitCommandPaletteContents {
-    let include_github = matches!(self.auth_state, AuthState::Authenticated(_));
+    let include_github = self.auth_state.has_github_access();
     let mut commands = Vec::new();
     let mut stashes = Vec::new();
     let mut default_stash_message_value = None;
@@ -5707,7 +5707,7 @@ impl GitPage {
     let branch_context = self.github_branch_context(cx);
     let branch_pr_button_state = Self::branch_pr_button_state(
       branch_context.as_ref(),
-      AuthStateStore::has_pro_access(cx),
+      AuthStateStore::has_github_access(cx),
       self.branch_pr_lookup_loading,
       self.branch_pr_lookup_result.as_ref(),
     );

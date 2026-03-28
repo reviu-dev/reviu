@@ -101,7 +101,9 @@ pub(crate) fn pull_request_status_tag(
   status: GithubPullRequestStatus,
   theme: &gpui_component::Theme,
 ) -> StatusTag {
-  StatusTag::new(pull_request_status_color(status, theme)).child(pull_request_status_label(status))
+  StatusTag::new(pull_request_status_color(status, theme))
+    .outline()
+    .child(pull_request_status_label(status))
 }
 
 fn pull_request_status_icon(

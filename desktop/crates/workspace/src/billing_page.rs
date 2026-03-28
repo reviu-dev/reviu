@@ -154,7 +154,7 @@ impl BillingPage {
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
+    let include_github = AuthStateStore::has_github_access(cx);
     let commands =
       CommandPaletteCommand::default_global_commands(CommandPalettePage::Billing, include_github);
 
@@ -387,7 +387,9 @@ impl BillingPage {
               ),
           )
           .child(
-            StatusTag::new(Self::status_color(status, theme)).child(Self::status_label(status)),
+            StatusTag::new(Self::status_color(status, theme))
+              .outline()
+              .child(Self::status_label(status)),
           ),
       )
       .child(row("Start Date", start_date_value))

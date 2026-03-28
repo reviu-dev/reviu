@@ -2156,7 +2156,7 @@ impl Render for GithubIssueDetailsSheetView {
             .child(author_name)
             .child(Label::new("•").text_color(theme.muted_foreground))
             .child(format!("#{}", issue.number))
-            .child(StatusTag::new(state_color).child(state_text)),
+            .child(StatusTag::new(state_color).outline().child(state_text)),
         )
         .when(!issue.labels.is_empty(), |this| {
           this.child(h_flex().gap_1().flex_wrap().children(label_tags))
@@ -3670,7 +3670,7 @@ impl GithubRepoPage {
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
+    let include_github = AuthStateStore::has_github_access(cx);
     let commands = CommandPaletteCommand::default_global_commands(
       CommandPalettePage::GithubRepo,
       include_github,

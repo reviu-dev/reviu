@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.0.9
 
+### Global Git and GitHub Switch
+
+The app header now includes a persistent Git and GitHub switch for accounts that actually have GitHub access, so moving between local Git work and GitHub views takes one click from anywhere in the app.
+
 ### Branch Pull Request Shortcut in Git Header
 
 The Git page header now checks whether the current GitHub branch already has an open pull request. When it does, you can open that pull request directly in Reviu. When it does not, the same spot gives you a shortcut to open GitHub and create one for the current branch.

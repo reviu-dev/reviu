@@ -533,6 +533,7 @@ fn render_checks_state_badge(
 ) -> gpui::AnyElement {
   let color = checks_rollup_state_color(state, theme);
   StatusTag::new(color)
+    .outline()
     .child(checks_rollup_state_label(state))
     .into_any_element()
 }
@@ -1062,7 +1063,12 @@ fn overview_stats_badges(
   labels
     .into_iter()
     .zip(colors)
-    .map(|(label, color)| StatusTag::new(color).child(label).into_any_element())
+    .map(|(label, color)| {
+      StatusTag::new(color)
+        .outline()
+        .child(label)
+        .into_any_element()
+    })
     .collect()
 }
 
@@ -3063,7 +3069,7 @@ impl GithubPrDetailsPage {
   }
 
   fn command_palette_commands(&self, cx: &App) -> Vec<CommandPaletteCommand> {
-    let include_github = matches!(AuthStateStore::get(cx), AuthState::Authenticated(_));
+    let include_github = AuthStateStore::has_github_access(cx);
     let mut commands =
       Self::local_project_command_palette_commands(&self.local_project_availability(cx));
     commands.extend(CommandPaletteCommand::default_global_commands(
@@ -3294,7 +3300,7 @@ impl GithubPrDetailsPage {
             this.mark_merge_form_reset_pending();
             this.add_pr_breadcrumb("Merge pull request succeeded", Map::new());
             this.reload_current_pull_request(cx);
-            if AuthStateStore::has_pro_access(cx) {
+            if AuthStateStore::has_github_access(cx) {
               GithubPageHandle::refresh(cx);
             }
             cx.refresh_windows();
@@ -3960,7 +3966,7 @@ impl GithubPrDetailsPage {
             upsert_review_local(&mut this.reviews, review);
             this.refresh_reviews_for_current_pull_request(false, cx);
             this.add_pr_breadcrumb("Submit PR review succeeded", Map::new());
-            if AuthStateStore::has_pro_access(cx) {
+            if AuthStateStore::has_github_access(cx) {
               GithubPageHandle::refresh(cx);
             }
             cx.refresh_windows();
