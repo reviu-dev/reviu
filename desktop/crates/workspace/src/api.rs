@@ -598,6 +598,8 @@ pub enum GithubPullRequestMergeReadinessStatus {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestDetails {
+  #[serde(rename = "node_id")]
+  pub node_id: String,
   pub number: u64,
   pub title: String,
   pub state: GithubPullRequestState,
@@ -899,6 +901,12 @@ struct CreateGithubPullRequestRequest<'a> {
   body: Option<&'a str>,
   #[serde(skip_serializing_if = "Option::is_none")]
   draft: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct GithubPullRequestStatusMutationRequest<'a> {
+  #[serde(rename = "pullRequestId")]
+  pull_request_id: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1707,6 +1715,54 @@ impl ApiClient {
     Ok(payload.pull_request)
   }
 
+  pub fn mark_pull_request_ready_for_review(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    pull_request_id: &str,
+  ) -> Result<()> {
+    let route = format!("/github/pr/{number}/ready-for-review");
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&GithubPullRequestStatusMutationRequest { pull_request_id })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    Ok(())
+  }
+
+  pub fn convert_pull_request_to_draft(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    pull_request_id: &str,
+  ) -> Result<()> {
+    let route = format!("/github/pr/{number}/convert-to-draft");
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&GithubPullRequestStatusMutationRequest { pull_request_id })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    Ok(())
+  }
+
   pub fn merge_pull_request(
     &self,
     owner: &str,
@@ -2324,6 +2380,7 @@ mod tests {
     merged_at: Option<&str>,
   ) -> GithubPullRequestDetails {
     GithubPullRequestDetails {
+      node_id: "PR_kwDOExample".to_string(),
       number: 42,
       title: "Test PR".to_string(),
       state,
@@ -3347,6 +3404,7 @@ mod tests {
   fn fetch_pull_request_details_parses_success_payload() {
     let body = r#"{
       "pullRequest": {
+        "node_id": "PR_kwDOExample",
         "number": 42,
         "title": "Improve parser",
         "state": "open",
@@ -3378,6 +3436,7 @@ mod tests {
     let details = api
       .fetch_pull_request_details("acme", "widget", 42)
       .expect("fetch pull request details");
+    assert_eq!(details.node_id, "PR_kwDOExample");
     assert_eq!(details.number, 42);
     assert_eq!(details.head_ref_name, "feature/parser");
     assert_eq!(details.author.login, "octocat");
@@ -3394,6 +3453,46 @@ mod tests {
       "widget-fork"
     );
     handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn mark_pull_request_ready_for_review_uses_expected_route_and_payload() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("204 NO CONTENT", "");
+    let api = make_test_api_client(base_url);
+
+    api
+      .mark_pull_request_ready_for_review("acme", "widget", 42, "PR_kwDOExample")
+      .expect("mark pull request ready for review");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("POST /github/pr/42/ready-for-review?org=acme&repo=widget HTTP/1.1"));
+    assert!(request.contains("\"pullRequestId\":\"PR_kwDOExample\""));
+  }
+
+  #[test]
+  fn convert_pull_request_to_draft_uses_expected_route_and_payload() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("204 NO CONTENT", "");
+    let api = make_test_api_client(base_url);
+
+    api
+      .convert_pull_request_to_draft("acme", "widget", 42, "PR_kwDOExample")
+      .expect("convert pull request to draft");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("POST /github/pr/42/convert-to-draft?org=acme&repo=widget HTTP/1.1"));
+    assert!(request.contains("\"pullRequestId\":\"PR_kwDOExample\""));
   }
 
   #[test]
@@ -3839,6 +3938,38 @@ mod tests {
     assert_eq!(err.to_string(), "Base branch moved; refresh and try again.");
     let api_error = err.downcast_ref::<ApiError>().expect("api error");
     assert_eq!(api_error.status_code_u16(), Some(409));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn mark_pull_request_ready_for_review_surfaces_backend_error_message() {
+    let body = r#"{"error":"Only pull request authors can mark this draft ready for review."}"#;
+    let (base_url, handle) = start_single_response_server("403 FORBIDDEN", body);
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .mark_pull_request_ready_for_review("acme", "widget", 42, "PR_kwDOExample")
+      .expect_err("ready for review should fail");
+
+    assert_eq!(
+      err.to_string(),
+      "Only pull request authors can mark this draft ready for review."
+    );
+    let api_error = err.downcast_ref::<ApiError>().expect("api error");
+    assert_eq!(api_error.status_code_u16(), Some(403));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn convert_pull_request_to_draft_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 UNAUTHORIZED", "{}");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .convert_pull_request_to_draft("acme", "widget", 42, "PR_kwDOExample")
+      .expect_err("convert pull request to draft should fail");
+
+    assert_eq!(err.to_string(), "unauthorized");
     handle.join().expect("join server thread");
   }
 

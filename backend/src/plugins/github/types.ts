@@ -235,6 +235,7 @@ export interface GithubPullRequestIssueComment {
 }
 
 export interface GithubPullRequestDetails {
+  node_id: PullRequestDetailsResponse['node_id']
   number: PullRequestDetailsResponse['number']
   title: PullRequestDetailsResponse['title']
   state: PullRequestDetailsResponse['state']

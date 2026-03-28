@@ -118,11 +118,13 @@ import {
   createPullRequestThreadReplyBodySchema,
   issueCommentBodySchema,
   mergePullRequestBodySchema,
+  pullRequestStatusMutationBodySchema,
   updateDescriptionBodySchema,
   updatePullRequestCommentBodySchema,
 } from '../plugins/github/schemas.js'
 import {
   compareGithubRefs,
+  convertGithubPullRequestToDraft,
   createGithubIssueComment,
   createGithubPullRequest,
   createGithubPullRequestComment,
@@ -154,6 +156,7 @@ import {
   fetchGithubUserRepositories,
   markGithubNotificationDone,
   markGithubNotificationRead,
+  markGithubPullRequestReadyForReview,
   mergeGithubPullRequest,
   patchGithubIssue,
   patchGithubIssueComment,
@@ -460,6 +463,7 @@ async function fetchPullRequestDetailsWithCache(
 
         return {
           payload: {
+            node_id: data.node_id,
             number: data.number,
             title: data.title,
             state: data.state,
@@ -1577,6 +1581,102 @@ export const githubRoutes = githubRouter
       }))
       const pullRequest = mapGithubPullRequestDescriptionUpdate(data)
       return ctx.json({ pullRequest }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/:id/ready-for-review', async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const payload = await ctx.req.json().catch(() => ({}))
+    const parsedBody = pullRequestStatusMutationBodySchema.safeParse(payload)
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+    if (!parsedBody.success) {
+      const firstIssue = parsedBody.error.issues[0]
+      const message = firstIssue?.path[0] === 'pullRequestId'
+        ? (firstIssue.message === 'Invalid input: expected string, received undefined'
+            ? 'Missing pull request id'
+            : firstIssue.message)
+        : 'Invalid pull request status payload'
+      return ctx.json({ error: message }, 400)
+    }
+
+    const { pullRequestId } = parsedBody.data
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      await withGithubMetrics(user.id, 'pull_request.ready_for_review', () =>
+        markGithubPullRequestReadyForReview({
+          token: githubToken,
+          pullRequestId,
+        }))
+
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+      }))
+
+      return ctx.body(null, 204)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/:id/convert-to-draft', async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const payload = await ctx.req.json().catch(() => ({}))
+    const parsedBody = pullRequestStatusMutationBodySchema.safeParse(payload)
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+    if (!parsedBody.success) {
+      const firstIssue = parsedBody.error.issues[0]
+      const message = firstIssue?.path[0] === 'pullRequestId'
+        ? (firstIssue.message === 'Invalid input: expected string, received undefined'
+            ? 'Missing pull request id'
+            : firstIssue.message)
+        : 'Invalid pull request status payload'
+      return ctx.json({ error: message }, 400)
+    }
+
+    const { pullRequestId } = parsedBody.data
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      await withGithubMetrics(user.id, 'pull_request.convert_to_draft', () =>
+        convertGithubPullRequestToDraft({
+          token: githubToken,
+          pullRequestId,
+        }))
+
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+      }))
+
+      return ctx.body(null, 204)
     }
     catch (error) {
       const status = (error as { status?: number }).status

@@ -44,3 +44,7 @@ export const mergePullRequestBodySchema = z.object({
   commitTitle: z.string().optional(),
   commitMessage: z.string().optional(),
 })
+
+export const pullRequestStatusMutationBodySchema = z.object({
+  pullRequestId: z.string().trim().min(1, 'Missing pull request id'),
+})

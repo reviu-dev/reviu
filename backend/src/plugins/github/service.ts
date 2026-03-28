@@ -181,6 +181,26 @@ const GITHUB_GRAPHQL_REPOSITORY_PULL_REQUESTS_QUERY = `
   }
 `
 
+const GITHUB_GRAPHQL_MARK_PULL_REQUEST_READY_FOR_REVIEW_MUTATION = `
+  mutation MarkPullRequestReadyForReview($pullRequestId: ID!) {
+    markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
+      pullRequest {
+        id
+      }
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_CONVERT_PULL_REQUEST_TO_DRAFT_MUTATION = `
+  mutation ConvertPullRequestToDraft($pullRequestId: ID!) {
+    convertPullRequestToDraft(input: { pullRequestId: $pullRequestId }) {
+      pullRequest {
+        id
+      }
+    }
+  }
+`
+
 interface GithubErrorLike {
   status?: number
   response?: {
@@ -211,6 +231,22 @@ interface GithubGraphqlRepositoryPullRequestsResponse {
     pullRequests: {
       nodes?: Array<GithubGraphqlPullRequestNode | null> | null
     }
+  } | null
+}
+
+interface GithubGraphqlMarkPullRequestReadyForReviewResponse {
+  markPullRequestReadyForReview?: {
+    pullRequest?: {
+      id: string
+    } | null
+  } | null
+}
+
+interface GithubGraphqlConvertPullRequestToDraftResponse {
+  convertPullRequestToDraft?: {
+    pullRequest?: {
+      id: string
+    } | null
   } | null
 }
 
@@ -735,6 +771,50 @@ export async function createGithubPullRequest(
     token,
     params,
   })
+}
+
+export async function markGithubPullRequestReadyForReview(
+  {
+    token,
+    pullRequestId,
+  }: {
+    token: string
+    pullRequestId: string
+  },
+): Promise<void> {
+  const data = await requestGithubGraphqlData<GithubGraphqlMarkPullRequestReadyForReviewResponse>({
+    token,
+    query: GITHUB_GRAPHQL_MARK_PULL_REQUEST_READY_FOR_REVIEW_MUTATION,
+    variables: {
+      pullRequestId,
+    },
+  })
+
+  if (!data.markPullRequestReadyForReview?.pullRequest?.id) {
+    throw new Error('GitHub GraphQL response is missing the updated pull request')
+  }
+}
+
+export async function convertGithubPullRequestToDraft(
+  {
+    token,
+    pullRequestId,
+  }: {
+    token: string
+    pullRequestId: string
+  },
+): Promise<void> {
+  const data = await requestGithubGraphqlData<GithubGraphqlConvertPullRequestToDraftResponse>({
+    token,
+    query: GITHUB_GRAPHQL_CONVERT_PULL_REQUEST_TO_DRAFT_MUTATION,
+    variables: {
+      pullRequestId,
+    },
+  })
+
+  if (!data.convertPullRequestToDraft?.pullRequest?.id) {
+    throw new Error('GitHub GraphQL response is missing the updated pull request')
+  }
 }
 
 export async function fetchGithubRepositoryPullRequestsGraphql(

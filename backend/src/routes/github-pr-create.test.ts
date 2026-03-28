@@ -64,9 +64,7 @@ vi.mock('../plugins/github/metrics/github-metrics-context.js', () => ({
   runWithGithubMetricsContext: (_context: unknown, callback: () => Promise<unknown>) => callback(),
 }))
 
-function makePullRequest(
-  overrides: Partial<CreatePullRequestResponse> = {},
-): CreatePullRequestResponse {
+function makePullRequest(): CreatePullRequestResponse {
   return {
     number: 42,
     state: 'open',
