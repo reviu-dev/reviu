@@ -46,6 +46,8 @@ use ui::{
   UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt, user_menu,
 };
 
+const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspacePage {
   Git,
@@ -126,6 +128,19 @@ fn primary_navigation_selected_index(page: WorkspacePage) -> Option<usize> {
 
 fn github_primary_navigation_count_label(notification_count: usize) -> Option<String> {
   (notification_count > 0).then(|| notification_count.to_string())
+}
+
+fn should_run_scheduled_update_check(state: Option<AppUpdateState>) -> bool {
+  !matches!(
+    state,
+    Some(AppUpdateState::Available(_))
+      | Some(AppUpdateState::Downloading(_))
+      | Some(AppUpdateState::ReadyToInstall(_))
+      | Some(AppUpdateState::Error {
+        update: Some(_),
+        ..
+      })
+  )
 }
 
 pub fn build_app_menus(show_billing_entry: bool) -> Vec<Menu> {
@@ -226,6 +241,7 @@ pub struct WorkspaceView {
   window_handle: AnyWindowHandle,
   last_page: Option<WorkspacePage>,
   _update_check_task: Option<Task<()>>,
+  _periodic_update_check_task: Option<Task<()>>,
   _update_download_task: Option<Task<()>>,
   _notification_poll_task: Option<Task<()>>,
   _subscriptions: Vec<Subscription>,
@@ -297,6 +313,7 @@ impl WorkspaceView {
       window_handle: window.window_handle(),
       last_page: None,
       _update_check_task: None,
+      _periodic_update_check_task: None,
       _update_download_task: None,
       _notification_poll_task: None,
       _subscriptions: Vec::new(),
@@ -314,6 +331,7 @@ impl WorkspaceView {
     view._subscriptions.push(subscription);
     Self::sync_app_menus(cx);
     view.check_for_updates(cx);
+    view.start_periodic_update_checks(cx);
     view.start_notification_polling(cx);
     crate::status_bar::init_status_bar(include_bytes!("../../reviu/assets/statusbar-icon.png"));
 
@@ -429,6 +447,30 @@ impl WorkspaceView {
     });
 
     self._update_check_task = Some(task);
+  }
+
+  fn start_periodic_update_checks(&mut self, cx: &mut Context<Self>) {
+    let task = cx.spawn(async move |this, cx| {
+      loop {
+        cx.background_executor().timer(UPDATE_CHECK_INTERVAL).await;
+
+        let should_check = this
+          .update(cx, |_, cx| {
+            should_run_scheduled_update_check(AppUpdateStore::try_state(cx))
+          })
+          .unwrap_or(false);
+
+        if !should_check {
+          continue;
+        }
+
+        let _ = this.update(cx, |this, cx| {
+          this.check_for_updates(cx);
+        });
+      }
+    });
+
+    self._periodic_update_check_task = Some(task);
   }
 
   fn start_notification_polling(&mut self, cx: &mut Context<Self>) {
@@ -923,8 +965,8 @@ impl Render for WorkspaceView {
 mod tests {
   use super::{
     WorkspacePage, WorkspaceView, build_app_menus, github_primary_navigation_count_label,
-    page_has_file_search, primary_navigation_selected_index, user_menu_page_for_workspace_page,
-    workspace_page_from_pathname,
+    page_has_file_search, primary_navigation_selected_index, should_run_scheduled_update_check,
+    user_menu_page_for_workspace_page, workspace_page_from_pathname,
   };
   use crate::SHOW_COMMAND_PALETTE_SHORTCUT;
   use crate::app_update::{
@@ -943,6 +985,20 @@ mod tests {
         _ => None,
       })
       .collect()
+  }
+
+  fn make_available_update() -> AvailableAppUpdate {
+    AvailableAppUpdate {
+      latest_version: "0.2.0".to_string(),
+      minimum_supported_version: "0.1.0".to_string(),
+      release_notes_url: "https://reviu.dev/changelog".to_string(),
+      force_update: false,
+      artifact: UpdateArtifact {
+        url: "https://reviu.dev/downloads/reviu-0.2.0.dmg".to_string(),
+        sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+        size: 123,
+      },
+    }
   }
 
   #[test]
@@ -993,6 +1049,42 @@ mod tests {
       action_menu_item_names(navigate_menu),
       vec!["Git", "GitHub", "Git Config", "Billing"]
     );
+  }
+
+  #[test]
+  fn scheduled_update_check_runs_without_known_update() {
+    assert!(should_run_scheduled_update_check(None));
+    assert!(should_run_scheduled_update_check(Some(
+      AppUpdateState::Error {
+        update: None,
+        message: "network timeout".to_string(),
+      }
+    )));
+  }
+
+  #[test]
+  fn scheduled_update_check_skips_when_update_is_already_known() {
+    let update = make_available_update();
+    let ready = ReadyToInstallAppUpdate {
+      update: update.clone(),
+      artifact_path: PathBuf::from("/tmp/reviu.dmg"),
+    };
+
+    assert!(!should_run_scheduled_update_check(Some(
+      AppUpdateState::Available(update.clone())
+    )));
+    assert!(!should_run_scheduled_update_check(Some(
+      AppUpdateState::Downloading(update.clone())
+    )));
+    assert!(!should_run_scheduled_update_check(Some(
+      AppUpdateState::ReadyToInstall(ready)
+    )));
+    assert!(!should_run_scheduled_update_check(Some(
+      AppUpdateState::Error {
+        update: Some(update),
+        message: "checksum mismatch".to_string(),
+      }
+    )));
   }
 
   #[test]
