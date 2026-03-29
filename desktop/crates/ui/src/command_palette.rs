@@ -626,6 +626,12 @@ pub type CommandPaletteHandler = Arc<
 >;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandPaletteInitialScreen {
+  Root,
+  SwitchBranch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandPaletteCommandId {
   SwitchRepository,
   SwitchBranch,
@@ -1177,6 +1183,7 @@ pub struct CommandPaletteConfig {
   pub default_stash_message: Option<SharedString>,
   pub repositories: Vec<CommandPaletteRepository>,
   pub commands: Vec<CommandPaletteCommand>,
+  pub initial_screen: CommandPaletteInitialScreen,
   pub on_action: CommandPaletteHandler,
 }
 
@@ -1192,6 +1199,7 @@ impl CommandPaletteConfig {
       default_stash_message: None,
       repositories: Vec::new(),
       commands,
+      initial_screen: CommandPaletteInitialScreen::Root,
       on_action,
     }
   }
@@ -1211,6 +1219,11 @@ impl CommandPaletteConfig {
     default_stash_message: impl Into<SharedString>,
   ) -> Self {
     self.default_stash_message = Some(default_stash_message.into());
+    self
+  }
+
+  pub fn with_initial_screen(mut self, initial_screen: CommandPaletteInitialScreen) -> Self {
+    self.initial_screen = initial_screen;
     self
   }
 }
@@ -1235,6 +1248,15 @@ enum CommandPaletteScreen {
   DropStash,
   PopStash,
   OpenGithubFromUrl,
+}
+
+impl From<CommandPaletteInitialScreen> for CommandPaletteScreen {
+  fn from(value: CommandPaletteInitialScreen) -> Self {
+    match value {
+      CommandPaletteInitialScreen::Root => CommandPaletteScreen::Root,
+      CommandPaletteInitialScreen::SwitchBranch => CommandPaletteScreen::SwitchBranch,
+    }
+  }
 }
 
 pub struct CommandPalette {
@@ -1588,7 +1610,7 @@ impl CommandPalette {
       stash_input,
       default_stash_message,
       create_branch_base: None,
-      screen: CommandPaletteScreen::Root,
+      screen: config.initial_screen.into(),
       commands_list,
       interactive_rebase_mode_list,
       repositories_list,
@@ -2395,7 +2417,11 @@ impl Render for CommandPalette {
 
 #[cfg(test)]
 mod tests {
-  use super::{CommandPalette, CommandPaletteCommand, CommandPaletteCommandId};
+  use super::{
+    CommandPalette, CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig,
+    CommandPaletteHandler, CommandPaletteInitialScreen,
+  };
+  use std::sync::Arc;
 
   #[test]
   fn open_github_from_url_command_matches_pull_and_repo_urls() {
@@ -2407,6 +2433,18 @@ mod tests {
     assert!(command.matches("https://github.com/joris-gallot/guit/issues?q=is%3Aissue"));
     assert!(command.matches("https://github.com/joris-gallot/guit/issues/23"));
     assert!(!command.matches("https://gitlab.com/acme/widget"));
+  }
+
+  #[test]
+  fn command_palette_config_can_start_on_branch_switcher() {
+    let handler: CommandPaletteHandler = Arc::new(|_, _, _| Ok(()));
+    let config = CommandPaletteConfig::new(Vec::new(), Vec::new(), handler)
+      .with_initial_screen(CommandPaletteInitialScreen::SwitchBranch);
+
+    assert_eq!(
+      config.initial_screen,
+      CommandPaletteInitialScreen::SwitchBranch
+    );
   }
 
   #[test]

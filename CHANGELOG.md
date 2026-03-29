@@ -20,6 +20,14 @@ Failed Git actions on the Git page now show notifications instead of failing sil
 
 Settings now includes a Keyboard Shortcuts page where you can remap desktop shortcuts.
 
+### Keyboard-First Desktop Shortcuts
+
+Reviu now includes direct shortcuts for settings, terminal toggle, branch switching, Git sidebar mode, diff view toggle, and switching to the current pull request branch.
+
+### Diff View Shortcut Default
+
+The default shortcut for toggling diff view is now `cmd-/`.
+
 ### Pull Request Draft Status Actions
 
 The pull request page can now switch an open pull request between draft and ready for review.

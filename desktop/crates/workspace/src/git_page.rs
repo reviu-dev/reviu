@@ -77,8 +77,8 @@ use crate::{
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteGithubRepoTab, CommandPaletteHandler,
-  CommandPalettePage, CommandPaletteRepository, CommandPaletteStash, ConfirmDialog,
-  DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState,
+  CommandPaletteInitialScreen, CommandPalettePage, CommandPaletteRepository, CommandPaletteStash,
+  ConfirmDialog, DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState,
   PAGE_HEADER_HEIGHT, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusThemeExt,
   UiIconName, WindowExt, dropdown_select, file_icon_path_for_path_with_theme, selectable_list_item,
 };
@@ -3440,7 +3440,21 @@ impl GitPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.open_command_palette(window, cx);
+    self.open_command_palette(window, cx, None);
+  }
+
+  fn show_branch_switcher_action(
+    &mut self,
+    _: &crate::ShowBranchSwitcher,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.selected_repo.is_none() {
+      return;
+    }
+
+    self.open_command_palette(window, cx, Some(CommandPaletteInitialScreen::SwitchBranch));
+    cx.stop_propagation();
   }
 
   fn show_file_search_action(
@@ -3510,7 +3524,12 @@ impl GitPage {
     .detach();
   }
 
-  fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+  fn open_command_palette(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+    initial_screen: Option<CommandPaletteInitialScreen>,
+  ) {
     let mut palette_repositories = ConfigStore::load_recent_repositories()
       .into_iter()
       .map(|repo| CommandPaletteRepository {
@@ -3552,6 +3571,9 @@ impl GitPage {
       .with_stashes(palette_stashes);
     if let Some(default_stash_message) = palette_default_stash_message {
       config = config.with_default_stash_message(default_stash_message);
+    }
+    if let Some(initial_screen) = initial_screen {
+      config = config.with_initial_screen(initial_screen);
     }
 
     let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
@@ -4358,6 +4380,36 @@ impl GitPage {
       return;
     }
     self.commit_changes_inner(window, cx);
+  }
+
+  fn open_git_history_sidebar_action(
+    &mut self,
+    _: &crate::OpenGitHistorySidebar,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.set_sidebar_mode(GitSidebarMode::History, window, cx);
+    cx.stop_propagation();
+  }
+
+  fn open_git_changes_sidebar_action(
+    &mut self,
+    _: &crate::OpenGitChangesSidebar,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.set_sidebar_mode(GitSidebarMode::Changes, window, cx);
+    cx.stop_propagation();
+  }
+
+  fn toggle_diff_view_action(
+    &mut self,
+    _: &crate::ToggleDiffView,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.toggle_diff_view(cx);
+    cx.stop_propagation();
   }
 
   fn commit_changes(&mut self, _: &gpui::ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -7890,12 +7942,16 @@ impl Render for GitPage {
       .bg(cx.theme().background)
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GitPage::show_command_palette_action))
+      .on_action(cx.listener(GitPage::show_branch_switcher_action))
       .on_action(cx.listener(GitPage::show_file_search_action))
       .on_action(cx.listener(GitPage::find_action))
       .on_action(cx.listener(GitPage::close_find_action))
       .on_action(cx.listener(GitPage::open_repository_action))
       .on_action(cx.listener(GitPage::toggle_terminal_sidebar_action))
       .on_action(cx.listener(GitPage::commit_changes_action))
+      .on_action(cx.listener(GitPage::open_git_history_sidebar_action))
+      .on_action(cx.listener(GitPage::open_git_changes_sidebar_action))
+      .on_action(cx.listener(GitPage::toggle_diff_view_action))
       .child(self.render_header(window, cx))
       .child(content)
   }

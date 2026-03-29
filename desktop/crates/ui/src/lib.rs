@@ -19,8 +19,8 @@ pub use assets::AppAssets;
 pub use command_palette::{
   COMMAND_PALETTE_CONTEXT, CommandPalette, CommandPaletteAction, CommandPaletteBranch,
   CommandPaletteBranchKind, CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig,
-  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, CommandPaletteRepository,
-  CommandPaletteStash,
+  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPaletteInitialScreen,
+  CommandPalettePage, CommandPaletteRepository, CommandPaletteStash,
 };
 pub use confirm_dialog::ConfirmDialog;
 pub use dropdown_select::{
