@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.0.10
+
+### Pull Request Changes Search Performance
+
+Searching file contents from the pull request changes tree is now faster when you include unchanged local files from the current branch, Reviu now scans the local HEAD snapshot in a single pass.
+
 ## 0.0.9
 
 ### Global Git and GitHub Switch

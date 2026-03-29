@@ -18,7 +18,7 @@ use gfm_markdown_viewer::{
 use git::{
   DiffKind, DiffSet, FileDiff, GitStore, compute_buffer_diff, create_stash, current_branch_status,
   current_github_remote_repo, current_head_sha, default_stash_message, list_repo_head_files,
-  list_repo_status, switch_to_branch_name, sync_current_branch_to_head,
+  list_repo_status, search_repo_head_contents, switch_to_branch_name, sync_current_branch_to_head,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, ListAlignment,
@@ -1400,6 +1400,7 @@ struct GithubPrFileContents {
 struct GithubPrTreeSearchResult {
   matches: HashSet<String>,
   updated_file_contents: HashMap<String, GithubPrFileContents>,
+  error: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1632,7 +1633,7 @@ fn perform_tree_text_search(
   local_repo_root: Option<&Path>,
 ) -> GithubPrTreeSearchResult {
   let mut result = GithubPrTreeSearchResult::default();
-  let local_store = local_repo_root.map(|repo_root| GitStore::new(repo_root.to_path_buf()));
+  let mut local_scope_paths = Vec::new();
 
   for path in scope_paths {
     if let Some(file) = pr_files.get(path) {
@@ -1656,16 +1657,25 @@ fn perform_tree_text_search(
       continue;
     }
 
-    let Some(local_store) = local_store.as_ref() else {
-      continue;
-    };
-    if local_store
-      .load_bases(Path::new(path))
-      .ok()
-      .and_then(|bases| bases.head)
-      .is_some_and(|contents| contents.to_lowercase().contains(query))
-    {
-      result.matches.insert(path.clone());
+    if local_repo_root.is_some() {
+      local_scope_paths.push(PathBuf::from(path));
+    }
+  }
+
+  if let Some(local_repo_root) = local_repo_root
+    && !local_scope_paths.is_empty()
+  {
+    match search_repo_head_contents(local_repo_root, &local_scope_paths, query) {
+      Ok(matches) => {
+        result.matches.extend(
+          matches
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned()),
+        );
+      }
+      Err(error) => {
+        result.error = Some(format!("Failed to search local files: {error}"));
+      }
     }
   }
 
@@ -3982,6 +3992,7 @@ impl GithubPrDetailsPage {
 
         this.tree_search_task = None;
         this.tree_search_loading = false;
+        this.tree_search_error = result.error.map(Into::into);
         for (path, contents) in result.updated_file_contents {
           this.file_contents.entry(path).or_insert(contents);
         }
@@ -8671,21 +8682,35 @@ impl GithubPrDetailsPage {
     };
 
     let search_controls = {
-      let search_status = if let Some(error) = self.tree_search_error.clone() {
-        Some((error, theme.status_red()))
-      } else {
-        None
-      };
-
       v_flex()
         .gap_1()
         .px_3()
         .py_2()
         .border_b_1()
         .border_color(theme.border)
-        .child(Input::new(&self.tree_search_input).w_full())
-        .when_some(search_status, |this, (message, color)| {
-          this.child(div().text_xs().text_color(color).child(message))
+        .child(
+          div()
+            .relative()
+            .child(Input::new(&self.tree_search_input).w_full().pr(px(28.0)))
+            .when(tree_search_active && self.tree_search_loading, |this| {
+              this.child(
+                h_flex()
+                  .absolute()
+                  .top_0()
+                  .right_2()
+                  .bottom_0()
+                  .items_center()
+                  .child(Spinner::new().small()),
+              )
+            }),
+        )
+        .when_some(self.tree_search_error.clone(), |this, message| {
+          this.child(
+            div()
+              .text_xs()
+              .text_color(theme.status_red())
+              .child(message),
+          )
         })
     };
 

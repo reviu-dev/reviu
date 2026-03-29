@@ -1,4 +1,5 @@
 use std::{
+  collections::HashSet,
   path::{Path, PathBuf},
   sync::{
     Arc,
@@ -46,6 +47,35 @@ impl GitStore {
   }
 }
 
+pub fn search_repo_head_contents(
+  repo_root: &Path,
+  rel_paths: &[PathBuf],
+  query: &str,
+) -> Result<HashSet<PathBuf>> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let head = match repo.head() {
+    Ok(head) => head,
+    Err(_) => return Ok(HashSet::new()),
+  };
+  let tree = match head.peel_to_tree() {
+    Ok(tree) => tree,
+    Err(_) => return Ok(HashSet::new()),
+  };
+
+  let query = query.to_lowercase();
+  let mut matches = HashSet::new();
+  for rel_path in rel_paths {
+    if read_tree_content(&repo, &tree, rel_path)?
+      .is_some_and(|contents| contents.to_lowercase().contains(query.as_str()))
+    {
+      matches.insert(rel_path.clone());
+    }
+  }
+
+  Ok(matches)
+}
+
 fn read_head_content(repo: &Repository, rel_path: &Path) -> Result<Option<String>> {
   let head = match repo.head() {
     Ok(head) => head,
@@ -55,12 +85,7 @@ fn read_head_content(repo: &Repository, rel_path: &Path) -> Result<Option<String
     Ok(tree) => tree,
     Err(_) => return Ok(None),
   };
-  let entry = match tree.get_path(rel_path) {
-    Ok(entry) => entry,
-    Err(_) => return Ok(None),
-  };
-  let blob = repo.find_blob(entry.id())?;
-  Ok(Some(blob_to_string(&blob)))
+  read_tree_content(repo, &tree, rel_path)
 }
 
 fn read_index_content(repo: &Repository, rel_path: &Path) -> Result<Option<String>> {
@@ -70,6 +95,19 @@ fn read_index_content(repo: &Repository, rel_path: &Path) -> Result<Option<Strin
     None => return Ok(None),
   };
   let blob = repo.find_blob(entry.id)?;
+  Ok(Some(blob_to_string(&blob)))
+}
+
+fn read_tree_content(
+  repo: &Repository,
+  tree: &git2::Tree,
+  rel_path: &Path,
+) -> Result<Option<String>> {
+  let entry = match tree.get_path(rel_path) {
+    Ok(entry) => entry,
+    Err(_) => return Ok(None),
+  };
+  let blob = repo.find_blob(entry.id())?;
   Ok(Some(blob_to_string(&blob)))
 }
 
@@ -181,5 +219,42 @@ mod tests {
     let bases = store.load_bases(rel_path).expect("load bases");
     assert_eq!(bases.head.as_deref(), Some("head version\n"));
     assert_eq!(bases.index.as_deref(), Some("index version\n"));
+  }
+
+  #[test]
+  fn search_repo_head_contents_matches_tracked_head_files_only() {
+    let temp = TempRepo::init("store-search-head");
+    commit_file(
+      &temp.path,
+      Path::new("tracked.txt"),
+      "Needle in HEAD\n",
+      "tracked",
+    );
+    std::fs::create_dir_all(temp.path.join("nested")).expect("create nested dir");
+    commit_file(
+      &temp.path,
+      Path::new("nested/other.txt"),
+      "different content\n",
+      "nested",
+    );
+    std::fs::create_dir_all(temp.path.join("scratch")).expect("create scratch dir");
+    std::fs::write(
+      temp.path.join("scratch/untracked.txt"),
+      "needle in worktree only\n",
+    )
+    .expect("write untracked file");
+
+    let matches = search_repo_head_contents(
+      &temp.path,
+      &[
+        PathBuf::from("tracked.txt"),
+        PathBuf::from("nested/other.txt"),
+        PathBuf::from("scratch/untracked.txt"),
+      ],
+      "needle",
+    )
+    .expect("search repo head contents");
+
+    assert_eq!(matches, HashSet::from([PathBuf::from("tracked.txt")]));
   }
 }
