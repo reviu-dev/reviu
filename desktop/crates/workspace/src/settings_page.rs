@@ -81,6 +81,7 @@ impl SettingsPage {
     let default_indent_rainbow = self.indent_rainbow;
     let default_git_unified_file_view = self.git_unified_file_view;
     let default_split_diff_view = self.split_diff_view;
+    let is_admin = AuthStateStore::is_admin(cx);
 
     vec![
       SettingPage::new("General").default_open(true).groups(vec![
@@ -223,32 +224,41 @@ impl SettingsPage {
           ),
         ]),
       ]),
-      Self::keyboard_shortcuts_page(view.clone()),
+      Self::keyboard_shortcuts_page(view.clone(), is_admin),
     ]
   }
 
-  fn keyboard_shortcuts_page(view: gpui::Entity<Self>) -> SettingPage {
+  fn keyboard_shortcuts_page(view: gpui::Entity<Self>, is_admin: bool) -> SettingPage {
     SettingPage::new("Keyboard Shortcuts")
       .description("Edit current desktop shortcuts. Changes apply immediately in the app.")
       .resettable(false)
       .groups([
-        Self::keyboard_shortcuts_group(ShortcutCategory::Workspace, view.clone()),
-        Self::keyboard_shortcuts_group(ShortcutCategory::Search, view.clone()),
-        Self::keyboard_shortcuts_group(ShortcutCategory::Git, view),
+        Self::keyboard_shortcuts_group(ShortcutCategory::Workspace, view.clone(), is_admin),
+        Self::keyboard_shortcuts_group(ShortcutCategory::Search, view.clone(), is_admin),
+        Self::keyboard_shortcuts_group(ShortcutCategory::Git, view, is_admin),
       ])
   }
 
   fn keyboard_shortcuts_group(
     category: ShortcutCategory,
     view: gpui::Entity<Self>,
+    is_admin: bool,
   ) -> SettingGroup {
     SettingGroup::new().title(category.title()).items(
       shortcut_definitions()
         .iter()
         .copied()
         .filter(move |definition| definition.category == category)
+        .filter(move |definition| Self::shortcut_is_visible(*definition, is_admin))
         .map(move |definition| Self::keyboard_shortcut_item(view.clone(), definition)),
     )
+  }
+
+  fn shortcut_is_visible(definition: ShortcutDefinition, is_admin: bool) -> bool {
+    match definition.id {
+      ShortcutId::ToggleTerminalSidebar => is_admin,
+      _ => true,
+    }
   }
 
   fn keyboard_shortcut_item(
@@ -638,5 +648,16 @@ mod tests {
 
     assert!(description.contains("Open file search"));
     assert!(description.contains("Git, Repo Code, and PR Changes pages"));
+  }
+
+  #[test]
+  fn toggle_terminal_shortcut_is_hidden_for_non_admins() {
+    let toggle_terminal = *shortcut_definitions()
+      .iter()
+      .find(|definition| definition.id == ShortcutId::ToggleTerminalSidebar)
+      .expect("toggle terminal shortcut");
+
+    assert!(!SettingsPage::shortcut_is_visible(toggle_terminal, false));
+    assert!(SettingsPage::shortcut_is_visible(toggle_terminal, true));
   }
 }
