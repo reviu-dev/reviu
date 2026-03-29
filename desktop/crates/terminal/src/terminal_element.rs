@@ -1,7 +1,7 @@
 use gpui::{
   App, Bounds, CursorStyle, DispatchPhase, Element, ElementId, Entity, FontStyle, FontWeight,
   GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
-  MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta, ScrollWheelEvent,
+  MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent,
   ShapedLine, StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle, Window, fill, point,
   px, relative,
 };
@@ -321,14 +321,6 @@ impl Element for TerminalElement {
           return;
         }
 
-        let delta_lines = match event.delta {
-          ScrollDelta::Pixels(point) => pixels_to_scroll_lines(-point.y, line_height),
-          ScrollDelta::Lines(point) => (-point.y).round() as i32,
-        };
-        if delta_lines == 0 {
-          return;
-        }
-
         let Some(point) =
           viewport_point_for_position(event.position, bounds, &row_layouts, line_height, true)
         else {
@@ -336,7 +328,7 @@ impl Element for TerminalElement {
         };
 
         view.update(cx, |view, cx| {
-          view.handle_scroll(delta_lines, point, event.modifiers, cx);
+          view.handle_scroll(event, point, cx);
         });
         cx.stop_propagation();
       }
@@ -717,19 +709,14 @@ fn x_for_column(row_layout: &RowLayout, column: usize) -> Pixels {
   row_layout.shaped.x_for_index(byte_index)
 }
 
-fn pixels_to_scroll_lines(pixel_delta: Pixels, line_height: Pixels) -> i32 {
-  (pixel_delta / line_height).round().clamp(-10.0, 10.0) as i32
-}
-
 #[cfg(test)]
 mod tests {
-  use super::{column_for_byte_index, pixels_to_scroll_lines, style_for_cell};
+  use super::{column_for_byte_index, style_for_cell};
   use crate::{TerminalCellSnapshot, colors::TerminalPalette};
   use alacritty_terminal::{
     term::{cell::Flags, color::Colors},
     vte::ansi::{Color, NamedColor, Rgb},
   };
-  use gpui::px;
   use std::sync::Arc;
 
   #[test]
@@ -750,12 +737,6 @@ mod tests {
     assert_eq!(column_for_byte_index(&offsets, 1), 1);
     assert_eq!(column_for_byte_index(&offsets, 3), 1);
     assert_eq!(column_for_byte_index(&offsets, 4), 2);
-  }
-
-  #[test]
-  fn pixels_to_scroll_lines_clamps_large_deltas() {
-    assert_eq!(pixels_to_scroll_lines(px(60.0), px(20.0)), 3);
-    assert_eq!(pixels_to_scroll_lines(px(-300.0), px(20.0)), -10);
   }
 
   #[test]
