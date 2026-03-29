@@ -95,6 +95,7 @@ const EMPTY_REPOSITORY_HINT_SUFFIX: &str = "to add a repository.";
 const EMPTY_REPOSITORY_ACTION_LABEL: &str = "Add Repository";
 const GIT_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str = "git-markdown-preview-editor-pane";
 const GIT_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str = "git-markdown-preview-render-pane";
+const GIT_TERMINAL_BUTTON_DEBUG_SELECTOR: &str = "git-terminal-button";
 const GIT_TERMINAL_SIDEBAR_DEBUG_SELECTOR: &str = "git-terminal-sidebar";
 const TERMINAL_SIDEBAR_DEFAULT_WIDTH: f32 = 420.0;
 const TERMINAL_SIDEBAR_MIN_WIDTH: f32 = 280.0;
@@ -5210,6 +5211,15 @@ impl GitPage {
   }
 
   fn toggle_terminal_sidebar_visibility(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if !AuthStateStore::is_admin(cx) {
+      if self.show_terminal_sidebar {
+        self.show_terminal_sidebar = false;
+        self.focus_editor_or_page(window, cx);
+        cx.notify();
+      }
+      return;
+    }
+
     self.show_terminal_sidebar = !self.show_terminal_sidebar;
     if self.show_terminal_sidebar {
       self.focus_terminal_sidebar_on_next_frame(window, cx);
@@ -6598,6 +6608,7 @@ impl GitPage {
       .when_some(branch_info, |this, info| this.child(info))
       .child(fetch_button);
 
+    let can_access_terminal_sidebar = AuthStateStore::is_admin(cx);
     let terminal_sidebar_button = Button::new("git-toggle-terminal-sidebar")
       .label("Terminal")
       .icon(UiIconName::SquareTerminal)
@@ -6618,8 +6629,16 @@ impl GitPage {
       .items_center()
       .gap_2()
       .flex_shrink_0()
-      .when_some(branch_pr_button, |this, button| this.child(button))
-      .child(terminal_sidebar_button);
+      .when_some(branch_pr_button, |this, button| this.child(button));
+    let header_right = if can_access_terminal_sidebar {
+      header_right.child(
+        div()
+          .debug_selector(|| GIT_TERMINAL_BUTTON_DEBUG_SELECTOR.to_string())
+          .child(terminal_sidebar_button),
+      )
+    } else {
+      header_right
+    };
 
     div()
       .h(px(PAGE_HEADER_HEIGHT))
@@ -7801,7 +7820,7 @@ impl GitPage {
 
   fn render_main_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     let editor_area = self.render_editor_area(window, cx);
-    if !self.show_terminal_sidebar {
+    if !self.show_terminal_sidebar || !AuthStateStore::is_admin(cx) {
       return editor_area;
     }
 
@@ -7819,6 +7838,10 @@ impl GitPage {
 
 impl Render for GitPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    if !AuthStateStore::is_admin(cx) {
+      self.show_terminal_sidebar = false;
+    }
+
     let working_directory = self.selected_repo.clone();
     self.terminal_view.update(cx, |view, cx| {
       view.set_working_directory(working_directory, cx);
@@ -12517,6 +12540,12 @@ mod tests {
   fn terminal_sidebar_renders_as_a_separate_right_panel(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempDir::new("git-page-terminal-sidebar-layout");
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_authenticated_test_user(UserRole::Admin))),
+      );
+    });
 
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
     git_page.update_in(cx, |this, _window, cx| {
@@ -12538,6 +12567,12 @@ mod tests {
   fn open_terminal_action_toggles_embedded_terminal_sidebar(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempDir::new("git-page-terminal-sidebar-action");
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_authenticated_test_user(UserRole::Admin))),
+      );
+    });
 
     let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
     git_page.update_in(cx, |this, window, cx| {
@@ -12548,6 +12583,59 @@ mod tests {
     git_page.update_in(cx, |this, window, cx| {
       this.toggle_terminal_sidebar_action(&crate::ToggleTerminalSidebar, window, cx);
       assert!(this.show_terminal_sidebar);
+    });
+
+    git_page.update_in(cx, |this, window, cx| {
+      this.toggle_terminal_sidebar_action(&crate::ToggleTerminalSidebar, window, cx);
+      assert!(!this.show_terminal_sidebar);
+    });
+  }
+
+  #[gpui::test]
+  fn non_admin_users_do_not_render_terminal_button_or_sidebar(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempDir::new("git-page-terminal-sidebar-non-admin");
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_authenticated_test_user(UserRole::Pro))),
+      );
+    });
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.show_terminal_sidebar = true;
+      cx.notify();
+    });
+
+    assert!(
+      cx.debug_bounds(GIT_TERMINAL_BUTTON_DEBUG_SELECTOR)
+        .is_none(),
+      "non-admin users should not see the terminal button"
+    );
+    assert!(
+      cx.debug_bounds(GIT_TERMINAL_SIDEBAR_DEBUG_SELECTOR)
+        .is_none(),
+      "non-admin users should not render the terminal sidebar"
+    );
+  }
+
+  #[gpui::test]
+  fn non_admin_terminal_action_does_not_open_embedded_terminal_sidebar(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempDir::new("git-page-terminal-sidebar-non-admin-action");
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_authenticated_test_user(UserRole::Pro))),
+      );
+    });
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.focus_page(window, cx);
     });
 
     git_page.update_in(cx, |this, window, cx| {

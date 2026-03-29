@@ -38,6 +38,10 @@ impl AuthStateStore {
     Self::get(cx).has_github_access()
   }
 
+  pub fn is_admin(cx: &App) -> bool {
+    Self::get(cx).is_admin()
+  }
+
   pub fn github_access_state(cx: &App) -> GithubAccessState {
     Self::get(cx).github_access_state()
   }
@@ -65,6 +69,10 @@ impl Default for AuthStateStore {
 }
 
 impl AuthState {
+  pub fn is_admin(&self) -> bool {
+    matches!(self, AuthState::Authenticated(user) if matches!(user.role, crate::api::UserRole::Admin))
+  }
+
   pub fn has_pro_access(&self) -> bool {
     matches!(self, AuthState::Authenticated(user) if user.has_pro_access())
   }
@@ -134,6 +142,7 @@ mod tests {
   fn state_has_pro_access_allows_admin_without_subscription() {
     let state = AuthState::Authenticated(Box::new(make_user(UserRole::Admin, None)));
 
+    assert!(state.is_admin());
     assert!(state.has_pro_access());
     assert!(state.has_github_access());
     assert_eq!(state.github_access_state(), GithubAccessState::Available);
@@ -144,6 +153,7 @@ mod tests {
   fn state_has_pro_access_allows_pro_role_without_subscription() {
     let state = AuthState::Authenticated(Box::new(make_user(UserRole::Pro, None)));
 
+    assert!(!state.is_admin());
     assert!(state.has_pro_access());
     assert!(state.has_github_access());
     assert_eq!(state.github_access_state(), GithubAccessState::Available);
@@ -158,6 +168,7 @@ mod tests {
       Some(make_subscription()),
     )));
 
+    assert!(!no_subscription.is_admin());
     assert!(!no_subscription.has_pro_access());
     assert!(!no_subscription.has_github_access());
     assert_eq!(
@@ -167,6 +178,7 @@ mod tests {
     assert!(!no_subscription.should_show_billing_entry());
     assert!(with_subscription.has_pro_access());
     assert!(with_subscription.has_github_access());
+    assert!(!with_subscription.is_admin());
     assert_eq!(
       with_subscription.github_access_state(),
       GithubAccessState::Available
@@ -178,6 +190,7 @@ mod tests {
   fn state_requires_sign_in_when_unauthenticated() {
     let state = AuthState::Unauthenticated;
 
+    assert!(!state.is_admin());
     assert_eq!(state.github_access_state(), GithubAccessState::NeedsSignIn);
     assert!(!state.has_github_access());
     assert!(!state.should_show_billing_entry());
