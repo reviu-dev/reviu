@@ -215,6 +215,7 @@ impl Element for TerminalElement {
         };
 
         view.update(cx, |view, cx| {
+          view.focus_terminal(window, cx);
           view.handle_mouse_down(event.button, point, event.click_count, event.modifiers, cx);
         });
         cx.stop_propagation();
