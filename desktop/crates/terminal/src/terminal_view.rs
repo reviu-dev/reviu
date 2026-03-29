@@ -1,9 +1,11 @@
 use alacritty_terminal::term::cell::Flags;
 use gpui::{
-  App, ClipboardItem, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent, Modifiers,
-  MouseButton, ParentElement, Render, Styled, Task, Window, div, prelude::*,
+  App, ClipboardItem, Context, FocusHandle, Focusable, InteractiveElement, IntoElement,
+  KeyDownEvent, Modifiers, MouseButton, ParentElement, Render, Styled, Task, Window, div,
+  prelude::*,
 };
 use gpui_component::ActiveTheme as _;
+use gpui_component::tooltip::Tooltip;
 use std::time::Duration;
 use std::{
   path::{Path, PathBuf},
@@ -69,6 +71,7 @@ pub struct TerminalView {
   selection_mode: TerminalSelectionMode,
   resolved_selection: Option<ViewportSelectionRange>,
   selection_dragging: bool,
+  hovered_hyperlink: Option<Arc<str>>,
   pending_link_activation: Option<PendingLinkActivation>,
   last_reported_mouse_state: Option<(ViewportPoint, Option<MouseButton>)>,
   _poll_task: Task<()>,
@@ -98,6 +101,7 @@ impl TerminalView {
       selection_mode: TerminalSelectionMode::Simple,
       resolved_selection: None,
       selection_dragging: false,
+      hovered_hyperlink: None,
       pending_link_activation: None,
       last_reported_mouse_state: None,
       _poll_task: poll_task,
@@ -167,6 +171,18 @@ impl TerminalView {
 
   pub(crate) fn should_show_link_cursor(&self, point: ViewportPoint, modifiers: Modifiers) -> bool {
     self.hyperlink_activation_enabled(modifiers) && self.hyperlink_at(point).is_some()
+  }
+
+  pub(crate) fn update_hovered_hyperlink(
+    &mut self,
+    point: Option<ViewportPoint>,
+    cx: &mut Context<Self>,
+  ) {
+    let next = point.and_then(|point| self.hyperlink_at(point));
+    if self.hovered_hyperlink != next {
+      self.hovered_hyperlink = next;
+      cx.notify();
+    }
   }
 
   fn extend_selection(&mut self, point: ViewportPoint) {
@@ -387,12 +403,14 @@ impl TerminalView {
 
     if session.send_scroll(delta_lines, point, modifiers) {
       self.reset_selection();
+      self.hovered_hyperlink = None;
       cx.notify();
       return;
     }
 
     session.scroll_display(delta_lines);
     self.reset_selection();
+    self.hovered_hyperlink = None;
     self.refresh_snapshot();
     cx.notify();
   }
@@ -400,6 +418,7 @@ impl TerminalView {
   fn restart_session(&mut self) {
     self.error = None;
     self.reset_selection();
+    self.hovered_hyperlink = None;
     self.pending_link_activation = None;
     self.last_reported_mouse_state = None;
     self.session = self.working_directory.clone().and_then(|cwd| {
@@ -502,6 +521,7 @@ impl TerminalView {
     }
 
     if result.changed {
+      self.hovered_hyperlink = None;
       self.pending_link_activation = None;
       self.last_reported_mouse_state = None;
       self.refresh_snapshot_preserving_selection();
@@ -518,6 +538,7 @@ impl TerminalView {
     }
 
     self.last_bounds = bounds;
+    self.hovered_hyperlink = None;
     self.pending_link_activation = None;
     if let Some(session) = self.session.as_mut() {
       session.resize(bounds);
@@ -653,6 +674,42 @@ impl Render for TerminalView {
       theme.primary,
       theme.selection.opacity(0.6),
     );
+    let terminal_screen = div()
+      .id("terminal-screen")
+      .debug_selector(|| TERMINAL_SCREEN_DEBUG_SELECTOR.to_string())
+      .flex_1()
+      .min_h_0()
+      .overflow_hidden()
+      .rounded_md()
+      .border_1()
+      .border_color(if self.focus_handle.is_focused(window) {
+        theme.primary
+      } else {
+        theme.border
+      })
+      .bg(theme.sidebar)
+      .p_3()
+      .child(
+        div()
+          .debug_selector(|| TERMINAL_SURFACE_DEBUG_SELECTOR.to_string())
+          .size_full()
+          .overflow_hidden()
+          .font_family(theme.mono_font_family.clone())
+          .text_sm()
+          .text_color(theme.foreground)
+          .child(TerminalElement::new(
+            cx.entity().clone(),
+            terminal_palette,
+            self.focus_handle.is_focused(window),
+          )),
+      );
+    let terminal_screen = if let Some(url) = self.hovered_hyperlink.clone() {
+      terminal_screen.tooltip(move |window, cx| {
+        Tooltip::new(url.as_ref().to_string()).build(window, cx)
+      })
+    } else {
+      terminal_screen
+    };
 
     div()
       .id("terminal-scaffold")
@@ -690,37 +747,7 @@ impl Render for TerminalView {
           .text_color(theme.muted_foreground)
           .child(status),
       )
-      .child(
-        div()
-          .id("terminal-screen")
-          .debug_selector(|| TERMINAL_SCREEN_DEBUG_SELECTOR.to_string())
-          .flex_1()
-          .min_h_0()
-          .overflow_hidden()
-          .rounded_md()
-          .border_1()
-          .border_color(if self.focus_handle.is_focused(window) {
-            theme.primary
-          } else {
-            theme.border
-          })
-          .bg(theme.sidebar)
-          .p_3()
-          .child(
-            div()
-              .debug_selector(|| TERMINAL_SURFACE_DEBUG_SELECTOR.to_string())
-              .size_full()
-              .overflow_hidden()
-              .font_family(theme.mono_font_family.clone())
-              .text_sm()
-              .text_color(theme.foreground)
-              .child(TerminalElement::new(
-                cx.entity().clone(),
-                terminal_palette,
-                self.focus_handle.is_focused(window),
-              )),
-          ),
-      )
+      .child(terminal_screen)
   }
 }
 
@@ -1213,6 +1240,20 @@ mod tests {
       focused,
       "terminal should receive focus after clicking its screen"
     );
+  }
+
+  #[gpui::test]
+  fn hovering_terminal_hyperlink_updates_hover_state(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let view = cx.new(|cx| TerminalView::new(None, cx));
+    view.update(cx, |view, cx| {
+      view.screen = screen_with_hyperlink("link", 0..4);
+      view.update_hovered_hyperlink(Some(ViewportPoint { row: 0, col: 1 }), cx);
+    });
+
+    let hovered = view.read_with(cx, |view, _| view.hovered_hyperlink.clone());
+    assert_eq!(hovered.as_deref(), Some("https://example.com"));
   }
 
   #[gpui::test]

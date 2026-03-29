@@ -234,6 +234,14 @@ impl Element for TerminalElement {
         if hovered {
           window.refresh();
         }
+        let hover_point = if hovered {
+          viewport_point_for_position(event.position, bounds, &row_layouts, false)
+        } else {
+          None
+        };
+        view.update(cx, |view, cx| {
+          view.update_hovered_hyperlink(hover_point, cx);
+        });
 
         if !view
           .read(cx)
