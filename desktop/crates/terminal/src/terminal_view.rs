@@ -510,10 +510,7 @@ impl TerminalView {
     }
   }
 
-  fn sync_bounds(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let viewport = window.viewport_size();
-    let bounds =
-      TerminalBounds::from_viewport(f32::from(viewport.width), f32::from(viewport.height));
+  pub(crate) fn sync_bounds(&mut self, bounds: TerminalBounds, cx: &mut Context<Self>) {
     if self.last_bounds == bounds {
       return;
     }
@@ -628,8 +625,6 @@ impl Focusable for TerminalView {
 
 impl Render for TerminalView {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    self.sync_bounds(window, cx);
-
     let theme = cx.theme().clone();
     let terminal_palette = TerminalPalette::themed(
       theme.sidebar,
@@ -868,6 +863,10 @@ mod tests {
     probe_mouse_ups: usize,
   }
 
+  struct NarrowTerminalHarness {
+    terminal: gpui::Entity<TerminalView>,
+  }
+
   impl TerminalProbeHarness {
     fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
       Self {
@@ -898,6 +897,14 @@ mod tests {
     }
   }
 
+  impl NarrowTerminalHarness {
+    fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+      Self {
+        terminal: cx.new(|cx| TerminalView::new(None, cx)),
+      }
+    }
+  }
+
   impl Render for TerminalProbeHarness {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
       div()
@@ -915,6 +922,15 @@ mod tests {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_probe_up))
             .child("probe"),
         )
+    }
+  }
+
+  impl Render for NarrowTerminalHarness {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl gpui::IntoElement {
+      div()
+        .id("narrow-terminal-harness")
+        .size_full()
+        .child(div().w(px(240.)).h(px(180.)).child(self.terminal.clone()))
     }
   }
 
@@ -1184,6 +1200,35 @@ mod tests {
     assert!(
       refocused,
       "terminal should regain focus after clicking it again"
+    );
+  }
+
+  #[gpui::test]
+  fn terminal_bounds_follow_narrow_surface_size(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let (harness, cx) = cx.add_window_view(NarrowTerminalHarness::new);
+    let cx: &mut VisualTestContext = cx;
+
+    let surface_bounds = cx
+      .debug_bounds(TERMINAL_SURFACE_DEBUG_SELECTOR)
+      .expect("terminal surface bounds");
+    let bounds = harness.read_with(cx, |harness, app| {
+      let terminal = harness.terminal.read(app);
+      terminal.last_bounds
+    });
+    let expected = TerminalBounds::from_size(
+      f32::from(surface_bounds.size.width),
+      f32::from(surface_bounds.size.height),
+      bounds.cell_width,
+      bounds.cell_height,
+    );
+
+    assert!(f32::from(surface_bounds.size.width) <= 240.0);
+    assert_eq!(bounds, expected);
+    assert!(
+      bounds.columns < 48,
+      "expected sidebar width to yield fewer columns than the old full-window sizing"
     );
   }
 

@@ -13,7 +13,7 @@ use alacritty_terminal::{
 };
 
 use crate::{
-  ScreenSnapshot, TerminalCellSnapshot, ViewportPoint, colors::TerminalPalette,
+  ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, ViewportPoint, colors::TerminalPalette,
   terminal_view::TerminalView,
 };
 
@@ -103,15 +103,18 @@ impl Element for TerminalElement {
     window: &mut Window,
     cx: &mut App,
   ) -> Self::PrepaintState {
+    let terminal_bounds = terminal_bounds_for_surface(bounds, window, cx);
+    self.view.update(cx, |view, cx| {
+      view.sync_bounds(terminal_bounds, cx);
+    });
     let screen = self.view.read(cx).screen().clone();
-    let line_height = line_height_for_screen(bounds, &screen);
     let row_layouts = build_row_layouts(&screen, &self.palette, window);
 
     TerminalPrepaintState {
       hitbox: window.insert_hitbox(bounds, HitboxBehavior::Normal),
       screen,
       row_layouts: row_layouts.into(),
-      line_height,
+      line_height: px(f32::from(terminal_bounds.cell_height)),
     }
   }
 
@@ -132,6 +135,7 @@ impl Element for TerminalElement {
         window.mouse_position(),
         bounds,
         &prepaint.row_layouts,
+        prepaint.line_height,
         false,
       )
       .filter(|point| {
@@ -204,12 +208,14 @@ impl Element for TerminalElement {
       let view = self.view.clone();
       let hitbox = prepaint.hitbox.clone();
       let row_layouts = Arc::clone(&prepaint.row_layouts);
+      let line_height = prepaint.line_height;
       move |event: &MouseDownEvent, phase, window, cx| {
         if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
           return;
         }
 
-        let Some(point) = viewport_point_for_position(event.position, bounds, &row_layouts, true)
+        let Some(point) =
+          viewport_point_for_position(event.position, bounds, &row_layouts, line_height, true)
         else {
           return;
         };
@@ -226,6 +232,7 @@ impl Element for TerminalElement {
       let view = self.view.clone();
       let hitbox = prepaint.hitbox.clone();
       let row_layouts = Arc::clone(&prepaint.row_layouts);
+      let line_height = prepaint.line_height;
       move |event: &MouseMoveEvent, phase, window, cx| {
         if phase != DispatchPhase::Bubble {
           return;
@@ -236,7 +243,7 @@ impl Element for TerminalElement {
           window.refresh();
         }
         let hover_point = if hovered {
-          viewport_point_for_position(event.position, bounds, &row_layouts, false)
+          viewport_point_for_position(event.position, bounds, &row_layouts, line_height, false)
         } else {
           None
         };
@@ -252,7 +259,7 @@ impl Element for TerminalElement {
         }
 
         let Some(point) =
-          viewport_point_for_position(event.position, bounds, &row_layouts, !hovered)
+          viewport_point_for_position(event.position, bounds, &row_layouts, line_height, !hovered)
         else {
           return;
         };
@@ -277,6 +284,7 @@ impl Element for TerminalElement {
       let view = self.view.clone();
       let hitbox = prepaint.hitbox.clone();
       let row_layouts = Arc::clone(&prepaint.row_layouts);
+      let line_height = prepaint.line_height;
       move |event: &MouseUpEvent, phase, window, cx| {
         if phase != DispatchPhase::Bubble {
           return;
@@ -291,7 +299,7 @@ impl Element for TerminalElement {
 
         let hovered = hitbox.is_hovered(window);
         let Some(point) =
-          viewport_point_for_position(event.position, bounds, &row_layouts, !hovered)
+          viewport_point_for_position(event.position, bounds, &row_layouts, line_height, !hovered)
         else {
           return;
         };
@@ -321,7 +329,8 @@ impl Element for TerminalElement {
           return;
         }
 
-        let Some(point) = viewport_point_for_position(event.position, bounds, &row_layouts, true)
+        let Some(point) =
+          viewport_point_for_position(event.position, bounds, &row_layouts, line_height, true)
         else {
           return;
         };
@@ -486,12 +495,32 @@ fn text_run_for_style(len: usize, font: &gpui::Font, style: RowStyle) -> TextRun
   }
 }
 
-fn line_height_for_screen(bounds: Bounds<Pixels>, screen: &ScreenSnapshot) -> Pixels {
-  if screen.rows == 0 {
-    bounds.size.height.max(px(1.0))
-  } else {
-    (bounds.size.height / screen.rows as f32).max(px(1.0))
-  }
+fn terminal_bounds_for_surface(
+  bounds: Bounds<Pixels>,
+  window: &mut Window,
+  cx: &mut App,
+) -> TerminalBounds {
+  let text_style = window.text_style();
+  let font_size = text_style.font_size.to_pixels(window.rem_size());
+  let font_id = cx.text_system().resolve_font(&text_style.font());
+  let default_bounds = TerminalBounds::default();
+  let cell_width = cx
+    .text_system()
+    .em_advance(font_id, font_size)
+    .unwrap_or(px(f32::from(default_bounds.cell_width)))
+    .ceil()
+    .max(px(1.0));
+  let line_height = text_style
+    .line_height_in_pixels(window.rem_size())
+    .ceil()
+    .max(px(1.0));
+
+  TerminalBounds::from_size(
+    f32::from(bounds.size.width.max(px(0.0))),
+    f32::from(bounds.size.height.max(px(0.0))),
+    f32::from(cell_width) as u16,
+    f32::from(line_height) as u16,
+  )
 }
 
 fn row_top(bounds: Bounds<Pixels>, row: usize, line_height: Pixels) -> Pixels {
@@ -640,6 +669,7 @@ fn viewport_point_for_position(
   position: Point<Pixels>,
   bounds: Bounds<Pixels>,
   row_layouts: &[RowLayout],
+  line_height: Pixels,
   clamp_to_bounds: bool,
 ) -> Option<ViewportPoint> {
   if row_layouts.is_empty() {
@@ -660,7 +690,6 @@ fn viewport_point_for_position(
     position.y
   };
 
-  let line_height = (bounds.size.height / row_layouts.len() as f32).max(px(1.0));
   let row = (((y - bounds.top()) / line_height).floor() as usize).min(row_layouts.len() - 1);
   let row_layout = &row_layouts[row];
   if row_layout.byte_offsets.len() <= 1 {
