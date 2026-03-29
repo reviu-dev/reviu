@@ -1,8 +1,7 @@
 use app_root::AppRoot;
-use editor::*;
+use editor::Quit;
 use gpui::{
-  App, Bounds, Focusable, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, point,
-  prelude::*, px, size,
+  App, Bounds, Focusable, TitlebarOptions, WindowBounds, WindowOptions, point, prelude::*, px, size,
 };
 use gpui_component::{Root, TitleBar};
 use reqwest_client::ReqwestClient;
@@ -11,9 +10,7 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use ui::{AppAssets, PAGE_HEADER_HEIGHT};
 use workspace::{
-  AppProfile, AuthCallbackTarget, CloseWorkspacePage, CommitChanges, OpenRepository,
-  SHOW_COMMAND_PALETTE_SHORTCUT, ShowCommandPalette, ShowFileSearch, WorkspaceView,
-  build_app_menus,
+  AppProfile, AuthCallbackTarget, WorkspaceView, build_app_menus, install_app_key_bindings,
 };
 
 mod app_root;
@@ -83,51 +80,7 @@ fn main() {
       cx,
     );
 
-    cx.bind_keys([
-      KeyBinding::new("enter", Enter, None),
-      KeyBinding::new("tab", Tab, None),
-      KeyBinding::new("backspace", Backspace, None),
-      KeyBinding::new("alt-backspace", BackspaceWord, None),
-      KeyBinding::new("cmd-backspace", BackspaceAll, None),
-      KeyBinding::new("delete", Delete, None),
-      KeyBinding::new("up", Up, None),
-      KeyBinding::new("down", Down, None),
-      KeyBinding::new("left", Left, None),
-      KeyBinding::new("alt-left", AltLeft, None),
-      KeyBinding::new("cmd-left", CmdLeft, None),
-      KeyBinding::new("right", Right, None),
-      KeyBinding::new("alt-right", AltRight, None),
-      KeyBinding::new("cmd-right", CmdRight, None),
-      KeyBinding::new("cmd-up", CmdUp, None),
-      KeyBinding::new("cmd-down", CmdDown, None),
-      KeyBinding::new("shift-up", SelectUp, None),
-      KeyBinding::new("shift-down", SelectDown, None),
-      KeyBinding::new("shift-cmd-left", SelectCmdLeft, None),
-      KeyBinding::new("shift-cmd-right", SelectCmdRight, None),
-      KeyBinding::new("shift-cmd-up", SelectCmdUp, None),
-      KeyBinding::new("shift-cmd-down", SelectCmdDown, None),
-      KeyBinding::new("shift-left", SelectLeft, None),
-      KeyBinding::new("shift-alt-left", SelectWordLeft, None),
-      KeyBinding::new("shift-right", SelectRight, None),
-      KeyBinding::new("shift-alt-right", SelectWordRight, None),
-      KeyBinding::new("cmd-a", SelectAll, None),
-      KeyBinding::new("cmd-v", Paste, None),
-      KeyBinding::new("cmd-c", Copy, None),
-      KeyBinding::new("cmd-x", Cut, None),
-      KeyBinding::new("cmd-z", Undo, None),
-      KeyBinding::new("cmd-shift-z", Redo, None),
-      KeyBinding::new("cmd-s", Save, None),
-      KeyBinding::new("cmd-f", Find, None),
-      KeyBinding::new("escape", CloseFind, Some("Editor")),
-      KeyBinding::new("cmd-enter", CommitChanges, None),
-      KeyBinding::new("cmd-o", OpenRepository, None),
-      KeyBinding::new(SHOW_COMMAND_PALETTE_SHORTCUT, ShowCommandPalette, None),
-      KeyBinding::new("cmd-p", ShowFileSearch, None),
-      KeyBinding::new("cmd-w", CloseWorkspacePage, None),
-      KeyBinding::new("home", Home, None),
-      KeyBinding::new("end", End, None),
-      KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, None),
-    ]);
+    install_app_key_bindings(cx);
 
     cx.set_menus(build_app_menus(false));
 
@@ -188,7 +141,6 @@ fn main() {
     .detach();
 
     cx.on_action(|_: &Quit, cx| cx.quit());
-    cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
   });
 }
 

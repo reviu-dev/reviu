@@ -2,15 +2,18 @@ use gpui::{App, Global};
 #[cfg(test)]
 use std::cell::RefCell;
 use std::{
+  collections::HashMap,
   fs,
   path::{Path, PathBuf},
   time::{SystemTime, UNIX_EPOCH},
 };
 
 use dirs::config_dir;
+use gpui::Keystroke;
 use rusqlite::{Connection, params};
 
 use crate::AppProfile;
+use crate::shortcuts::ShortcutId;
 
 const CONFIG_DIR_NAME: &str = "reviu";
 const CONFIG_DB_NAME: &str = "reviu.sqlite";
@@ -37,7 +40,17 @@ const PINNED_REPOS_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS pinned_repos (full_name TEXT PRIMARY KEY, pinned_at INTEGER NOT NULL)",
 };
 
-const CONFIG_TABLES: [ConfigTable; 3] = [RECENT_REPOS_TABLE, SETTINGS_TABLE, PINNED_REPOS_TABLE];
+const SHORTCUT_OVERRIDES_TABLE: ConfigTable = ConfigTable {
+  name: "shortcut_overrides",
+  create_sql: "CREATE TABLE IF NOT EXISTS shortcut_overrides (shortcut_id TEXT PRIMARY KEY, keystroke TEXT NOT NULL)",
+};
+
+const CONFIG_TABLES: [ConfigTable; 4] = [
+  RECENT_REPOS_TABLE,
+  SETTINGS_TABLE,
+  PINNED_REPOS_TABLE,
+  SHORTCUT_OVERRIDES_TABLE,
+];
 
 #[cfg(test)]
 thread_local! {
@@ -360,6 +373,52 @@ impl ConfigStore {
     store.load_pinned_repos_inner()
   }
 
+  pub fn load_shortcut_overrides() -> HashMap<ShortcutId, String> {
+    let Some(store) = Self::open_with_tables() else {
+      return HashMap::default();
+    };
+    store.load_shortcut_overrides_inner()
+  }
+
+  fn load_shortcut_overrides_inner(&self) -> HashMap<ShortcutId, String> {
+    let mut stmt = match self.conn.prepare(&format!(
+      "SELECT shortcut_id, keystroke FROM {} ORDER BY shortcut_id ASC",
+      SHORTCUT_OVERRIDES_TABLE.name
+    )) {
+      Ok(stmt) => stmt,
+      Err(err) => {
+        eprintln!("Failed to load shortcut overrides: {}", err);
+        return HashMap::default();
+      }
+    };
+
+    let rows = match stmt.query_map([], |row| {
+      Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) {
+      Ok(rows) => rows,
+      Err(err) => {
+        eprintln!("Failed to read shortcut overrides: {}", err);
+        return HashMap::default();
+      }
+    };
+
+    let mut overrides = HashMap::default();
+    for row in rows {
+      let Ok((shortcut_id, keystroke)) = row else {
+        continue;
+      };
+      let Some(shortcut_id) = ShortcutId::from_storage_key(&shortcut_id) else {
+        continue;
+      };
+      if Keystroke::parse(&keystroke).is_err() {
+        continue;
+      }
+      overrides.insert(shortcut_id, keystroke);
+    }
+
+    overrides
+  }
+
   fn load_pinned_repos_inner(&self) -> Vec<String> {
     let mut stmt = match self.conn.prepare(&format!(
       "SELECT full_name FROM {} ORDER BY pinned_at ASC",
@@ -413,6 +472,45 @@ impl ConfigStore {
       return;
     };
     store.unpin_repo_inner(full_name);
+  }
+
+  pub fn persist_shortcut_override(shortcut_id: ShortcutId, keystroke: &str) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    store.persist_shortcut_override_inner(shortcut_id, keystroke);
+  }
+
+  fn persist_shortcut_override_inner(&self, shortcut_id: ShortcutId, keystroke: &str) {
+    if let Err(err) = self.conn.execute(
+      &format!(
+        "INSERT INTO {} (shortcut_id, keystroke) VALUES (?1, ?2)
+         ON CONFLICT(shortcut_id) DO UPDATE SET keystroke = excluded.keystroke",
+        SHORTCUT_OVERRIDES_TABLE.name
+      ),
+      params![shortcut_id.storage_key(), keystroke],
+    ) {
+      eprintln!("Failed to persist shortcut override: {}", err);
+    }
+  }
+
+  pub fn clear_shortcut_override(shortcut_id: ShortcutId) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    store.clear_shortcut_override_inner(shortcut_id);
+  }
+
+  fn clear_shortcut_override_inner(&self, shortcut_id: ShortcutId) {
+    if let Err(err) = self.conn.execute(
+      &format!(
+        "DELETE FROM {} WHERE shortcut_id = ?1",
+        SHORTCUT_OVERRIDES_TABLE.name
+      ),
+      params![shortcut_id.storage_key()],
+    ) {
+      eprintln!("Failed to clear shortcut override: {}", err);
+    }
   }
 
   fn unpin_repo_inner(&self, full_name: &str) {
@@ -572,6 +670,38 @@ mod tests {
     ConfigStore::unpin_repo("owner/repo-a");
     let pinned = ConfigStore::load_pinned_repos();
     assert_eq!(pinned, vec!["owner/repo-b".to_string()]);
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn shortcut_overrides_round_trip() {
+    let db_path = unique_test_db_path("shortcut-overrides");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    assert!(ConfigStore::load_shortcut_overrides().is_empty());
+
+    ConfigStore::persist_shortcut_override(ShortcutId::ShowCommandPalette, "cmd-shift-k");
+    ConfigStore::persist_shortcut_override(ShortcutId::CommitChanges, "cmd-j");
+
+    let overrides = ConfigStore::load_shortcut_overrides();
+    assert_eq!(
+      overrides.get(&ShortcutId::ShowCommandPalette),
+      Some(&"cmd-shift-k".to_string())
+    );
+    assert_eq!(
+      overrides.get(&ShortcutId::CommitChanges),
+      Some(&"cmd-j".to_string())
+    );
+
+    ConfigStore::clear_shortcut_override(ShortcutId::ShowCommandPalette);
+    let overrides = ConfigStore::load_shortcut_overrides();
+    assert!(!overrides.contains_key(&ShortcutId::ShowCommandPalette));
+    assert_eq!(
+      overrides.get(&ShortcutId::CommitChanges),
+      Some(&"cmd-j".to_string())
+    );
 
     ConfigStore::set_test_db_path(None);
   }

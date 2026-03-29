@@ -14,8 +14,6 @@ actions!(
   ]
 );
 
-pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
-
 mod about_page;
 mod active_local_repo;
 mod api;
@@ -42,6 +40,7 @@ pub mod navigation;
 mod notification_count;
 mod sentry_context;
 mod settings_page;
+mod shortcuts;
 pub mod status_bar;
 mod workspace;
 
@@ -49,4 +48,5 @@ pub use app_profile::AppProfile;
 pub use git_page::{
   AuthCallbackTarget, CommitChanges, OpenRepository, SaveFile, ShowCommandPalette, ShowFileSearch,
 };
+pub use shortcuts::{SHOW_COMMAND_PALETTE_SHORTCUT, install_app_key_bindings};
 pub use workspace::{WorkspaceView, build_app_menus};

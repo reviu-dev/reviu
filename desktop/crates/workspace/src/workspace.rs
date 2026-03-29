@@ -2,9 +2,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use editor::{Copy, Cut, Paste, Quit, Redo, SelectAll, Undo, set_indent_rainbow_enabled};
+#[cfg(test)]
+use gpui::Keystroke;
 use gpui::{
-  AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global, Keystroke, Menu, MenuItem,
-  Render, Subscription, Task, Window, div, prelude::*, px,
+  AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global, Menu, MenuItem, Render,
+  Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, IconName, Sizable as _, Theme, ThemeMode, h_flex,
@@ -40,7 +42,8 @@ use crate::navigation::NavigationHistory;
 use crate::notification_count::NotificationCountStore;
 use crate::sentry_context;
 use crate::settings_page::SettingsPage;
-use crate::{SHOW_COMMAND_PALETTE_SHORTCUT, ShowCommandPalette, ShowFileSearch};
+use crate::shortcuts::{self, ShortcutId};
+use crate::{ShowCommandPalette, ShowFileSearch};
 use ui::{
   Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, StatusTag, StatusThemeExt, UiIconName,
   UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt, user_menu,
@@ -250,12 +253,27 @@ pub struct WorkspaceView {
 impl WorkspaceView {
   const GLOBAL_BAR_MACOS_LEFT_PADDING: f32 = 85.0;
 
+  #[cfg(test)]
   fn command_palette_shortcut() -> Keystroke {
-    Keystroke::parse(SHOW_COMMAND_PALETTE_SHORTCUT).expect("valid command palette shortcut")
+    shortcuts::shortcut_keystroke(ShortcutId::ShowCommandPalette)
   }
 
-  fn file_search_shortcut() -> Keystroke {
-    Keystroke::parse("cmd-p").expect("valid file search shortcut")
+  fn command_palette_kbd(window: &Window, pathname: &str, cx: &App) -> Kbd {
+    Kbd::new(shortcuts::resolved_shortcut_keystroke_in(
+      cx,
+      window,
+      ShortcutId::ShowCommandPalette,
+      shortcuts::key_context_for_pathname(pathname),
+    ))
+  }
+
+  fn file_search_kbd(window: &Window, pathname: &str, cx: &App) -> Kbd {
+    Kbd::new(shortcuts::resolved_shortcut_keystroke_in(
+      cx,
+      window,
+      ShortcutId::ShowFileSearch,
+      shortcuts::key_context_for_pathname(pathname),
+    ))
   }
 
   fn sync_app_menus(cx: &mut App) {
@@ -279,6 +297,7 @@ impl WorkspaceView {
 
     let settings = ConfigStore::load_app_settings();
     cx.set_global(settings);
+    cx.set_global(shortcuts::load_shortcut_overrides());
     set_indent_rainbow_enabled(settings.indent_rainbow);
     Theme::global_mut(cx).font_size = px(settings.font_size);
     if settings.auto_switch_theme {
@@ -291,6 +310,7 @@ impl WorkspaceView {
       };
       Theme::change(mode, Some(window), cx);
     }
+    crate::install_app_key_bindings(cx);
 
     let git_page = cx.new(|cx| GitPage::new(window, cx));
     let git_config_page = cx.new(|cx| GitConfigPage::new(window, cx));
@@ -326,6 +346,10 @@ impl WorkspaceView {
     view._subscriptions.push(subscription);
     let subscription = cx.observe_global::<AuthStateStore>(|_, cx| {
       Self::sync_app_menus(cx);
+      cx.notify();
+    });
+    view._subscriptions.push(subscription);
+    let subscription = cx.observe_global::<shortcuts::ShortcutOverrides>(|_, cx| {
       cx.notify();
     });
     view._subscriptions.push(subscription);
@@ -635,6 +659,7 @@ impl WorkspaceView {
 
   fn render_global_bar(
     &self,
+    window: &Window,
     page: WorkspacePage,
     pathname: &str,
     cx: &mut Context<Self>,
@@ -729,7 +754,7 @@ impl WorkspaceView {
       .ghost()
       .compact()
       .small()
-      .child(Kbd::new(Self::file_search_shortcut()).ml_1())
+      .child(Self::file_search_kbd(window, pathname, cx).ml_1())
       .on_click(|_, window, cx| {
         window.dispatch_action(Box::new(ShowFileSearch), cx);
       });
@@ -739,7 +764,7 @@ impl WorkspaceView {
       .ghost()
       .compact()
       .small()
-      .child(Kbd::new(Self::command_palette_shortcut()).ml_1())
+      .child(Self::command_palette_kbd(window, pathname, cx).ml_1())
       .on_click(|_, window, cx| {
         window.dispatch_action(Box::new(ShowCommandPalette), cx);
       });
@@ -931,10 +956,13 @@ impl Render for WorkspaceView {
           .element(move |_w, _cx| about_page.clone()),
       );
 
+    let key_context = shortcuts::current_key_context_for_pathname(&pathname, cx);
+
     div()
       .size_full()
       .flex()
       .flex_col()
+      .key_context(key_context.as_str())
       .on_action(cx.listener(|_, _: &crate::OpenGitPage, _window, cx| {
         NavigationHistory::navigate("/git", cx);
       }))
@@ -955,7 +983,7 @@ impl Render for WorkspaceView {
       .on_action(cx.listener(|_, _: &crate::OpenAboutPage, _window, cx| {
         NavigationHistory::navigate("/about", cx);
       }))
-      .child(self.render_global_bar(page, &pathname, cx))
+      .child(self.render_global_bar(window, page, &pathname, cx))
       .child(div().flex_1().min_h_0().child(routes))
       .into_any_element()
   }
@@ -968,11 +996,11 @@ mod tests {
     page_has_file_search, primary_navigation_selected_index, should_run_scheduled_update_check,
     user_menu_page_for_workspace_page, workspace_page_from_pathname,
   };
-  use crate::SHOW_COMMAND_PALETTE_SHORTCUT;
   use crate::app_update::{
     AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
   };
-  use gpui::{Keystroke, Menu, MenuItem};
+  use crate::shortcuts::{self, ShortcutId};
+  use gpui::{Menu, MenuItem};
   use std::path::PathBuf;
   use ui::UserMenuPage;
 
@@ -1235,7 +1263,7 @@ mod tests {
   fn workspace_command_palette_shortcut_matches_global_binding() {
     assert_eq!(
       WorkspaceView::command_palette_shortcut(),
-      Keystroke::parse(SHOW_COMMAND_PALETTE_SHORTCUT).expect("valid shortcut")
+      shortcuts::shortcut_keystroke(ShortcutId::ShowCommandPalette)
     );
   }
 }
