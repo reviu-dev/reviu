@@ -6,6 +6,7 @@ members = [
   "crates/editor",
   "crates/git",
   "crates/gfm_markdown_viewer",
+  "crates/terminal",
   "crates/ui",
   "crates/workspace",
   "crates/reviu",
@@ -102,6 +103,7 @@ syntax = { path = "crates/syntax" }
 editor = { path = "crates/editor" }
 git = { path = "crates/git" }
 gfm_markdown_viewer = { path = "crates/gfm_markdown_viewer" }
+terminal = { path = "crates/terminal" }
 ui = { path = "crates/ui" }
 workspace = { path = "crates/workspace" }
 gpui-router = { git = "https://github.com/justjavac/gpui-router" }
