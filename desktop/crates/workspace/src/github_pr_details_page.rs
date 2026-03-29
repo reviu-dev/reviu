@@ -9221,6 +9221,30 @@ impl GithubPrDetailsPage {
     self.open_command_palette(window, cx);
   }
 
+  fn switch_to_pr_branch_action(
+    &mut self,
+    _: &crate::SwitchToPrBranch,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.prompt_or_switch_local_branch_to_pr_branch(window, cx);
+    cx.stop_propagation();
+  }
+
+  fn toggle_diff_view_action(
+    &mut self,
+    _: &crate::ToggleDiffView,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
+      return;
+    }
+
+    self.toggle_diff_view(cx);
+    cx.stop_propagation();
+  }
+
   fn find_action(&mut self, action: &Find, window: &mut Window, cx: &mut Context<Self>) {
     if self.active_tab_ix != PR_TAB_CHANGES_IX {
       return;
@@ -10176,6 +10200,8 @@ impl Render for GithubPrDetailsPage {
       .bg(theme.background)
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GithubPrDetailsPage::show_command_palette_action))
+      .on_action(cx.listener(GithubPrDetailsPage::switch_to_pr_branch_action))
+      .on_action(cx.listener(GithubPrDetailsPage::toggle_diff_view_action))
       .on_action(cx.listener(GithubPrDetailsPage::show_file_search_action))
       .on_action(cx.listener(GithubPrDetailsPage::find_action))
       .on_action(cx.listener(GithubPrDetailsPage::close_find_action))

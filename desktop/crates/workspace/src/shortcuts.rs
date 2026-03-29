@@ -16,7 +16,9 @@ use std::collections::HashSet;
 
 use crate::config::ConfigStore;
 use crate::{
-  CloseWorkspacePage, CommitChanges, OpenRepository, ShowCommandPalette, ShowFileSearch,
+  CloseWorkspacePage, CommitChanges, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenRepository,
+  OpenSettingsPage, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch, SwitchToPrBranch,
+  ToggleDiffView, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -47,6 +49,13 @@ const OPEN_REPOSITORY_CONTEXT: &str = "WorkspaceGit";
 const COMMIT_CHANGES_CONTEXT: &str = "WorkspaceGit";
 const CLOSE_WORKSPACE_PAGE_CONTEXT: &str =
   "WorkspaceBilling || WorkspaceGitConfig || WorkspaceSettings || WorkspaceAbout";
+const OPEN_SETTINGS_CONTEXT: &str = "Workspace";
+const TOGGLE_TERMINAL_CONTEXT: &str = "WorkspaceGit";
+const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceGit";
+const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
+const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
+const TOGGLE_DIFF_VIEW_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
+const SWITCH_TO_PR_BRANCH_CONTEXT: &str = "WorkspaceGithubPr || WorkspaceGithubPrChanges";
 
 const ALL_WORKSPACE_ACTIVE_CONTEXTS: [&str; 10] = [
   WORKSPACE_GIT_CONTEXT,
@@ -76,6 +85,14 @@ const SECONDARY_PAGE_ACTIVE_CONTEXTS: [&str; 4] = [
   WORKSPACE_ABOUT_CONTEXT,
 ];
 
+const GIT_AND_PR_CHANGES_ACTIVE_CONTEXTS: [&str; 2] =
+  [WORKSPACE_GIT_CONTEXT, WORKSPACE_GITHUB_PR_CHANGES_CONTEXT];
+
+const PR_PAGE_ACTIVE_CONTEXTS: [&str; 2] = [
+  WORKSPACE_GITHUB_PR_CONTEXT,
+  WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShortcutId {
   ShowCommandPalette,
@@ -83,6 +100,13 @@ pub enum ShortcutId {
   OpenRepository,
   CommitChanges,
   CloseWorkspacePage,
+  OpenSettingsPage,
+  ToggleTerminalSidebar,
+  ShowBranchSwitcher,
+  OpenGitHistorySidebar,
+  OpenGitChangesSidebar,
+  ToggleDiffView,
+  SwitchToPrBranch,
 }
 
 impl ShortcutId {
@@ -93,6 +117,13 @@ impl ShortcutId {
       ShortcutId::OpenRepository => "open_repository",
       ShortcutId::CommitChanges => "commit_changes",
       ShortcutId::CloseWorkspacePage => "close_workspace_page",
+      ShortcutId::OpenSettingsPage => "open_settings_page",
+      ShortcutId::ToggleTerminalSidebar => "toggle_terminal_sidebar",
+      ShortcutId::ShowBranchSwitcher => "show_branch_switcher",
+      ShortcutId::OpenGitHistorySidebar => "open_git_history_sidebar",
+      ShortcutId::OpenGitChangesSidebar => "open_git_changes_sidebar",
+      ShortcutId::ToggleDiffView => "toggle_diff_view",
+      ShortcutId::SwitchToPrBranch => "switch_to_pr_branch",
     }
   }
 
@@ -103,6 +134,13 @@ impl ShortcutId {
       "open_repository" => Some(ShortcutId::OpenRepository),
       "commit_changes" => Some(ShortcutId::CommitChanges),
       "close_workspace_page" => Some(ShortcutId::CloseWorkspacePage),
+      "open_settings_page" => Some(ShortcutId::OpenSettingsPage),
+      "toggle_terminal_sidebar" => Some(ShortcutId::ToggleTerminalSidebar),
+      "show_branch_switcher" => Some(ShortcutId::ShowBranchSwitcher),
+      "open_git_history_sidebar" => Some(ShortcutId::OpenGitHistorySidebar),
+      "open_git_changes_sidebar" => Some(ShortcutId::OpenGitChangesSidebar),
+      "toggle_diff_view" => Some(ShortcutId::ToggleDiffView),
+      "switch_to_pr_branch" => Some(ShortcutId::SwitchToPrBranch),
       _ => None,
     }
   }
@@ -128,7 +166,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 5] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 12] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -183,6 +221,83 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 5] = [
     context: CLOSE_WORKSPACE_PAGE_CONTEXT,
     display_context: WORKSPACE_SETTINGS_CONTEXT,
     active_contexts: &SECONDARY_PAGE_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::OpenSettingsPage,
+    title: "Open Settings",
+    description: "Open settings from anywhere in the workspace.",
+    scope_label: "All workspace pages",
+    category: ShortcutCategory::Workspace,
+    keystroke: "cmd-,",
+    context: OPEN_SETTINGS_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &ALL_WORKSPACE_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ToggleTerminalSidebar,
+    title: "Toggle Terminal",
+    description: "Show or hide the terminal sidebar on the Git page.",
+    scope_label: "Git page",
+    category: ShortcutCategory::Git,
+    keystroke: "cmd-j",
+    context: TOGGLE_TERMINAL_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ShowBranchSwitcher,
+    title: "Switch Branch",
+    description: "Open branch switching on the Git page.",
+    scope_label: "Git page",
+    category: ShortcutCategory::Git,
+    keystroke: "cmd-shift-b",
+    context: SHOW_BRANCH_SWITCHER_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::OpenGitHistorySidebar,
+    title: "Open History Sidebar",
+    description: "Open the Git history sidebar.",
+    scope_label: "Git page",
+    category: ShortcutCategory::Git,
+    keystroke: "cmd-shift-h",
+    context: OPEN_GIT_HISTORY_SIDEBAR_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::OpenGitChangesSidebar,
+    title: "Open Changes Sidebar",
+    description: "Open the Git changes sidebar.",
+    scope_label: "Git page",
+    category: ShortcutCategory::Git,
+    keystroke: "cmd-shift-e",
+    context: OPEN_GIT_CHANGES_SIDEBAR_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ToggleDiffView,
+    title: "Toggle Diff View",
+    description: "Switch between inline and split diff view.",
+    scope_label: "Git page and PR Changes page",
+    category: ShortcutCategory::Git,
+    keystroke: "cmd-/",
+    context: TOGGLE_DIFF_VIEW_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_AND_PR_CHANGES_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::SwitchToPrBranch,
+    title: "Switch To PR Branch",
+    description: "Switch the local repo to the current pull request branch.",
+    scope_label: "Pull request pages",
+    category: ShortcutCategory::Git,
+    keystroke: "cmd-.",
+    context: SWITCH_TO_PR_BRANCH_CONTEXT,
+    display_context: WORKSPACE_GITHUB_PR_CONTEXT,
+    active_contexts: &PR_PAGE_ACTIVE_CONTEXTS,
   },
 ];
 
@@ -451,6 +566,21 @@ impl ShortcutDefinition {
       ShortcutId::CloseWorkspacePage => {
         KeyBinding::new(keystroke, CloseWorkspacePage, Some(&context))
       }
+      ShortcutId::OpenSettingsPage => KeyBinding::new(keystroke, OpenSettingsPage, Some(&context)),
+      ShortcutId::ToggleTerminalSidebar => {
+        KeyBinding::new(keystroke, ToggleTerminalSidebar, Some(&context))
+      }
+      ShortcutId::ShowBranchSwitcher => {
+        KeyBinding::new(keystroke, ShowBranchSwitcher, Some(&context))
+      }
+      ShortcutId::OpenGitHistorySidebar => {
+        KeyBinding::new(keystroke, OpenGitHistorySidebar, Some(&context))
+      }
+      ShortcutId::OpenGitChangesSidebar => {
+        KeyBinding::new(keystroke, OpenGitChangesSidebar, Some(&context))
+      }
+      ShortcutId::ToggleDiffView => KeyBinding::new(keystroke, ToggleDiffView, Some(&context)),
+      ShortcutId::SwitchToPrBranch => KeyBinding::new(keystroke, SwitchToPrBranch, Some(&context)),
     }
   }
 
@@ -791,6 +921,13 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::OpenRepository => f(&OpenRepository),
     ShortcutId::CommitChanges => f(&CommitChanges),
     ShortcutId::CloseWorkspacePage => f(&CloseWorkspacePage),
+    ShortcutId::OpenSettingsPage => f(&OpenSettingsPage),
+    ShortcutId::ToggleTerminalSidebar => f(&ToggleTerminalSidebar),
+    ShortcutId::ShowBranchSwitcher => f(&ShowBranchSwitcher),
+    ShortcutId::OpenGitHistorySidebar => f(&OpenGitHistorySidebar),
+    ShortcutId::OpenGitChangesSidebar => f(&OpenGitChangesSidebar),
+    ShortcutId::ToggleDiffView => f(&ToggleDiffView),
+    ShortcutId::SwitchToPrBranch => f(&SwitchToPrBranch),
   }
 }
 
@@ -955,6 +1092,44 @@ mod tests {
     assert!(!has_binding("/git", "cmd-w"));
     assert!(!has_binding("/github", "cmd-w"));
     assert!(!has_binding("/github/owner/repo", "cmd-w"));
+  }
+
+  #[test]
+  fn workspace_navigation_shortcuts_are_available_across_workspace_pages() {
+    assert!(has_binding("/git", "cmd-,"));
+    assert!(has_binding("/github", "cmd-,"));
+    assert!(has_binding("/github/owner/repo/pull/42", "cmd-,"));
+    assert!(has_binding("/settings", "cmd-,"));
+  }
+
+  #[test]
+  fn git_keyboard_first_shortcuts_are_scoped_to_git_page() {
+    for keystroke in ["cmd-j", "cmd-shift-b", "cmd-shift-h", "cmd-shift-e"] {
+      assert!(
+        has_binding("/git", keystroke),
+        "{keystroke} should be active on /git"
+      );
+      assert!(
+        !has_binding("/github", keystroke),
+        "{keystroke} should not be active on /github"
+      );
+      assert!(
+        !has_binding("/github/owner/repo/pull/42/changes", keystroke),
+        "{keystroke} should not be active on PR changes"
+      );
+    }
+  }
+
+  #[test]
+  fn review_shortcuts_are_scoped_to_pr_pages_and_changes() {
+    assert!(has_binding("/git", "cmd-/"));
+    assert!(has_binding("/github/owner/repo/pull/42/changes", "cmd-/"));
+    assert!(!has_binding("/github/owner/repo/pull/42", "cmd-/"));
+
+    assert!(has_binding("/github/owner/repo/pull/42", "cmd-."));
+    assert!(has_binding("/github/owner/repo/pull/42/changes", "cmd-."));
+    assert!(!has_binding("/git", "cmd-."));
+    assert!(!has_binding("/github/owner/repo/code", "cmd-."));
   }
 
   #[test]
