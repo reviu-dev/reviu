@@ -7,10 +7,7 @@ use gpui::{
 use gpui_component::ActiveTheme as _;
 use gpui_component::tooltip::Tooltip;
 use std::time::Duration;
-use std::{
-  path::{Path, PathBuf},
-  sync::Arc,
-};
+use std::{path::PathBuf, sync::Arc};
 
 use crate::{
   ScreenSnapshot, TerminalBounds, TerminalSelectionMode, TerminalSession, ViewportPoint,
@@ -20,22 +17,6 @@ use crate::{
 const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const TERMINAL_SCREEN_DEBUG_SELECTOR: &str = "terminal-screen-bounds";
 const TERMINAL_SURFACE_DEBUG_SELECTOR: &str = "terminal-surface-bounds";
-
-fn working_directory_label(cwd: Option<&Path>) -> String {
-  cwd
-    .map(|path| path.display().to_string())
-    .unwrap_or_else(|| "No repository selected".to_string())
-}
-
-fn terminal_title(snapshot: &ScreenSnapshot, cwd: Option<&Path>) -> String {
-  snapshot.title.clone().unwrap_or_else(|| {
-    cwd
-      .and_then(Path::file_name)
-      .and_then(|segment| segment.to_str())
-      .map(|segment| format!("Shell: {segment}"))
-      .unwrap_or_else(|| "Shell".to_string())
-  })
-}
 
 fn selection_mode_for_click_count(click_count: usize) -> TerminalSelectionMode {
   match click_count {
@@ -650,24 +631,6 @@ impl Render for TerminalView {
     self.sync_bounds(window, cx);
 
     let theme = cx.theme().clone();
-    let cwd_label = working_directory_label(self.working_directory.as_deref());
-    let title = terminal_title(&self.screen, self.working_directory.as_deref());
-    let has_session = self.session.is_some();
-    let status = self
-      .screen
-      .exit_status
-      .clone()
-      .or_else(|| self.error.clone())
-      .unwrap_or_else(|| {
-        if has_session {
-          format!(
-            "{} columns x {} lines",
-            self.last_bounds.columns, self.last_bounds.lines
-          )
-        } else {
-          "Select a local repository to start a shell.".to_string()
-        }
-      });
     let terminal_palette = TerminalPalette::themed(
       theme.sidebar,
       theme.foreground,
@@ -677,18 +640,9 @@ impl Render for TerminalView {
     let terminal_screen = div()
       .id("terminal-screen")
       .debug_selector(|| TERMINAL_SCREEN_DEBUG_SELECTOR.to_string())
-      .flex_1()
-      .min_h_0()
+      .size_full()
       .overflow_hidden()
-      .rounded_md()
-      .border_1()
-      .border_color(if self.focus_handle.is_focused(window) {
-        theme.primary
-      } else {
-        theme.border
-      })
       .bg(theme.sidebar)
-      .p_3()
       .child(
         div()
           .debug_selector(|| TERMINAL_SURFACE_DEBUG_SELECTOR.to_string())
@@ -704,9 +658,8 @@ impl Render for TerminalView {
           )),
       );
     let terminal_screen = if let Some(url) = self.hovered_hyperlink.clone() {
-      terminal_screen.tooltip(move |window, cx| {
-        Tooltip::new(url.as_ref().to_string()).build(window, cx)
-      })
+      terminal_screen
+        .tooltip(move |window, cx| Tooltip::new(url.as_ref().to_string()).build(window, cx))
     } else {
       terminal_screen
     };
@@ -714,11 +667,7 @@ impl Render for TerminalView {
     div()
       .id("terminal-scaffold")
       .size_full()
-      .flex()
-      .flex_col()
-      .gap_3()
-      .p_4()
-      .bg(theme.background)
+      .bg(theme.sidebar)
       .on_mouse_down(
         MouseButton::Left,
         cx.listener(|this, _, window, cx| {
@@ -727,26 +676,6 @@ impl Render for TerminalView {
       )
       .on_key_down(cx.listener(Self::on_key_down))
       .track_focus(&self.focus_handle)
-      .child(
-        div()
-          .text_xl()
-          .font_weight(gpui::FontWeight::SEMIBOLD)
-          .text_color(theme.foreground)
-          .child("Terminal"),
-      )
-      .child(div().text_sm().text_color(theme.foreground).child(title))
-      .child(
-        div()
-          .text_sm()
-          .text_color(theme.muted_foreground)
-          .child(format!("Working directory: {cwd_label}")),
-      )
-      .child(
-        div()
-          .text_sm()
-          .text_color(theme.muted_foreground)
-          .child(status),
-      )
       .child(terminal_screen)
   }
 }
@@ -827,8 +756,7 @@ fn selection_matches_screen_text(
 mod tests {
   use super::{
     TERMINAL_SURFACE_DEBUG_SELECTOR, TerminalView, selection_matches_screen_text,
-    selection_mode_for_click_count, selection_text_from_screen, terminal_title,
-    working_directory_label,
+    selection_mode_for_click_count, selection_text_from_screen,
   };
   use crate::{
     ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, TerminalSelectionMode, TerminalSession,
@@ -841,7 +769,7 @@ mod tests {
     MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement, Render, Styled, TestAppContext,
     VisualTestContext, Window, div, point, px,
   };
-  use std::{path::Path, sync::Arc};
+  use std::sync::Arc;
 
   fn init_gpui_test(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
@@ -988,33 +916,6 @@ mod tests {
             .child("probe"),
         )
     }
-  }
-
-  #[test]
-  fn working_directory_label_uses_path_when_available() {
-    assert_eq!(
-      working_directory_label(Some(Path::new("/tmp/reviu"))),
-      "/tmp/reviu".to_string()
-    );
-  }
-
-  #[test]
-  fn working_directory_label_falls_back_when_missing() {
-    assert_eq!(
-      working_directory_label(None),
-      "No repository selected".to_string()
-    );
-  }
-
-  #[test]
-  fn terminal_title_prefers_snapshot_title() {
-    let mut snapshot = ScreenSnapshot::default();
-    snapshot.title = Some("zsh".to_string());
-
-    assert_eq!(
-      terminal_title(&snapshot, Some(Path::new("/tmp/reviu"))),
-      "zsh".to_string()
-    );
   }
 
   #[test]

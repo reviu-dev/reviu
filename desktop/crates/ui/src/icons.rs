@@ -27,6 +27,7 @@ pub enum UiIconName {
   GitPullRequestArrow,
   FileDiff,
   Pin,
+  SquareTerminal,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -56,6 +57,7 @@ impl IconNamed for UiIconName {
       UiIconName::GitPullRequestArrow => "icons/git-pull-request-arrow.svg",
       UiIconName::FileDiff => "icons/file-diff.svg",
       UiIconName::Pin => "icons/pin.svg",
+      UiIconName::SquareTerminal => "icons/square-terminal.svg",
     }
     .into()
   }
