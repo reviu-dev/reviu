@@ -1,8 +1,8 @@
 use alacritty_terminal::term::cell::Flags;
 use gpui::{
   App, ClipboardItem, Context, FocusHandle, Focusable, InteractiveElement, IntoElement,
-  KeyDownEvent, Modifiers, MouseButton, ParentElement, Render, Styled, Task, Window, div,
-  prelude::*,
+  KeyDownEvent, Modifiers, MouseButton, ParentElement, Pixels, Render, ScrollWheelEvent, Styled,
+  Task, TouchPhase, Window, div, prelude::*, px,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::tooltip::Tooltip;
@@ -55,6 +55,7 @@ pub struct TerminalView {
   hovered_hyperlink: Option<Arc<str>>,
   pending_link_activation: Option<PendingLinkActivation>,
   last_reported_mouse_state: Option<(ViewportPoint, Option<MouseButton>)>,
+  scroll_remainder: Pixels,
   _poll_task: Task<()>,
 }
 
@@ -85,6 +86,7 @@ impl TerminalView {
       hovered_hyperlink: None,
       pending_link_activation: None,
       last_reported_mouse_state: None,
+      scroll_remainder: px(0.0),
       _poll_task: poll_task,
     };
     view.set_working_directory(working_directory, cx);
@@ -373,16 +375,19 @@ impl TerminalView {
 
   pub(crate) fn handle_scroll(
     &mut self,
-    delta_lines: i32,
+    event: &ScrollWheelEvent,
     point: ViewportPoint,
-    modifiers: Modifiers,
     cx: &mut Context<Self>,
   ) {
+    let Some(delta_lines) = self.scroll_lines_for_event(event) else {
+      return;
+    };
+
     let Some(session) = self.session.as_mut() else {
       return;
     };
 
-    if session.send_scroll(delta_lines, point, modifiers) {
+    if session.send_scroll(delta_lines, point, event.modifiers) {
       self.reset_selection();
       self.hovered_hyperlink = None;
       cx.notify();
@@ -402,6 +407,7 @@ impl TerminalView {
     self.hovered_hyperlink = None;
     self.pending_link_activation = None;
     self.last_reported_mouse_state = None;
+    self.scroll_remainder = px(0.0);
     self.session = self.working_directory.clone().and_then(|cwd| {
       match TerminalSession::spawn(cwd, self.last_bounds) {
         Ok(session) => Some(session),
@@ -518,6 +524,7 @@ impl TerminalView {
     self.last_bounds = bounds;
     self.hovered_hyperlink = None;
     self.pending_link_activation = None;
+    self.scroll_remainder = px(0.0);
     if let Some(session) = self.session.as_mut() {
       session.resize(bounds);
       self.reset_selection();
@@ -614,6 +621,24 @@ impl TerminalView {
       .iter()
       .find(|cell| cell.row == point.row && cell.col == point.col)
       .and_then(|cell| cell.hyperlink_uri.clone())
+  }
+
+  fn scroll_lines_for_event(&mut self, event: &ScrollWheelEvent) -> Option<i32> {
+    let line_height = px(f32::from(self.last_bounds.cell_height.max(1)));
+
+    match event.touch_phase {
+      TouchPhase::Started => {
+        self.scroll_remainder = px(0.0);
+        None
+      }
+      TouchPhase::Moved => {
+        self.scroll_remainder += event.delta.pixel_delta(line_height).y;
+        let delta_lines = (self.scroll_remainder / line_height) as i32;
+        self.scroll_remainder %= line_height;
+        (delta_lines != 0).then_some(delta_lines)
+      }
+      TouchPhase::Ended => None,
+    }
   }
 }
 
@@ -761,8 +786,9 @@ mod tests {
   use alacritty_terminal::vte::ansi::{Color, NamedColor};
   use gpui::{
     AppContext, ClipboardItem, Context, InteractiveElement, KeyDownEvent, Keystroke, Modifiers,
-    MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement, Render, Styled, TestAppContext,
-    VisualTestContext, Window, div, point, px,
+    MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement, Render, ScrollDelta,
+    ScrollWheelEvent, Styled, TestAppContext, TouchPhase, VisualTestContext, Window, div, point,
+    px,
   };
   use std::sync::Arc;
 
@@ -829,6 +855,14 @@ mod tests {
       },
       is_held: false,
       prefer_character_input: false,
+    }
+  }
+
+  fn scroll_event(delta_y: f32, touch_phase: TouchPhase) -> ScrollWheelEvent {
+    ScrollWheelEvent {
+      delta: ScrollDelta::Pixels(point(px(0.0), px(delta_y))),
+      touch_phase,
+      ..Default::default()
     }
   }
 
@@ -1084,6 +1118,67 @@ mod tests {
     screen.cells[2].c = 'r';
 
     assert!(!selection_matches_screen_text(&screen, selection, "cat"));
+  }
+
+  #[gpui::test]
+  fn scroll_lines_for_event_accumulates_pixel_deltas_until_a_full_line(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let view = cx.new(|cx| TerminalView::new(None, cx));
+    view.update(cx, |view, _| {
+      view.last_bounds = TerminalBounds {
+        cell_height: 10,
+        ..TerminalBounds::default()
+      };
+
+      assert_eq!(
+        view.scroll_lines_for_event(&scroll_event(0.0, TouchPhase::Started)),
+        None
+      );
+      assert_eq!(
+        view.scroll_lines_for_event(&scroll_event(4.0, TouchPhase::Moved)),
+        None
+      );
+      assert_eq!(
+        view.scroll_lines_for_event(&scroll_event(4.0, TouchPhase::Moved)),
+        None
+      );
+      assert_eq!(
+        view.scroll_lines_for_event(&scroll_event(4.0, TouchPhase::Moved)),
+        Some(1)
+      );
+      assert_eq!(view.scroll_remainder, px(2.0));
+    });
+  }
+
+  #[gpui::test]
+  fn scroll_lines_for_event_uses_positive_delta_for_scroll_up(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let view = cx.new(|cx| TerminalView::new(None, cx));
+    view.update(cx, |view, _| {
+      view.last_bounds = TerminalBounds {
+        cell_height: 10,
+        ..TerminalBounds::default()
+      };
+
+      assert_eq!(
+        view.scroll_lines_for_event(&scroll_event(0.0, TouchPhase::Started)),
+        None
+      );
+      assert_eq!(
+        view.scroll_lines_for_event(&scroll_event(12.0, TouchPhase::Moved)),
+        Some(1)
+      );
+      assert_eq!(
+        view.scroll_lines_for_event(&scroll_event(0.0, TouchPhase::Started)),
+        None
+      );
+      assert_eq!(
+        view.scroll_lines_for_event(&scroll_event(-12.0, TouchPhase::Moved)),
+        Some(-1)
+      );
+    });
   }
 
   #[gpui::test]
