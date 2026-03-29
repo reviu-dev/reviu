@@ -104,6 +104,12 @@ const TERMINAL_SIDEBAR_MAX_WIDTH: f32 = 1200.0;
 type RepoSelectHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 type BranchSelectHandler = Rc<dyn Fn(BranchRef, &mut Window, &mut App)>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FileStageButtonAction {
+  Stage,
+  Unstage,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GithubBranchContext {
   owner: String,
@@ -1009,18 +1015,13 @@ impl ListDelegate for GitFileListDelegate {
         .get(ix.section)
         .map(|s| s.is_staged)
         .unwrap_or(false);
-    let (toggle_stage_icon, toggle_stage_tooltip, toggle_stage_action) = if self.split_sections {
-      if is_staged_section {
-        (IconName::Minus, "Unstage file", RepoStage::Staged)
-      } else {
-        (IconName::Plus, "Stage file", RepoStage::Unstaged)
-      }
-    } else {
-      match stage {
-        RepoStage::Staged | RepoStage::PartiallyStaged => (IconName::Minus, "Unstage file", stage),
-        RepoStage::Unstaged => (IconName::Plus, "Stage file", stage),
-      }
+    let toggle_stage_action =
+      GitPage::sidebar_toggle_stage_action(stage, self.split_sections, is_staged_section);
+    let (toggle_stage_icon, toggle_stage_tooltip) = match toggle_stage_action {
+      FileStageButtonAction::Stage => (IconName::Plus, "Stage file"),
+      FileStageButtonAction::Unstage => (IconName::Minus, "Unstage file"),
     };
+    let can_restore = GitPage::can_restore_file_stage(stage);
 
     Some(
       base_item.px_2().py_1().child(
@@ -1059,33 +1060,45 @@ impl ListDelegate for GitFileListDelegate {
                       .on_click({
                         let rel_path = rel_path.clone();
                         let git_page = git_page.clone();
-                        move |_event, _window, cx| {
+                        move |_event, window, cx| {
                           let _ = git_page.update(cx, |page, cx| match toggle_stage_action {
-                            RepoStage::Staged | RepoStage::PartiallyStaged => {
+                            FileStageButtonAction::Unstage => {
                               page.unstage_file_action(rel_path.clone(), cx);
                             }
-                            RepoStage::Unstaged => {
-                              page.stage_file_action(rel_path.clone(), cx);
+                            FileStageButtonAction::Stage => {
+                              page.stage_file_click_action(
+                                window,
+                                rel_path.clone(),
+                                status_kind,
+                                cx,
+                              );
                             }
                           });
                         }
                       }),
                   )
-                  .child(
-                    Button::new(format!("restore-{}", ix.row))
-                      .icon(IconName::Undo)
-                      .xsmall()
-                      .tooltip("Discard changes")
-                      .on_click({
-                        let rel_path = rel_path.clone();
-                        let git_page = git_page.clone();
-                        move |_event, _window, cx| {
-                          let _ = git_page.update(cx, |page, cx| {
-                            page.restore_file_action(rel_path.clone(), status_kind, cx);
-                          });
-                        }
-                      }),
-                  ),
+                  .when(can_restore, |this| {
+                    this.child(
+                      Button::new(format!("restore-{}", ix.row))
+                        .icon(IconName::Undo)
+                        .xsmall()
+                        .tooltip("Discard changes")
+                        .on_click({
+                          let rel_path = rel_path.clone();
+                          let git_page = git_page.clone();
+                          move |_event, window, cx| {
+                            let _ = git_page.update(cx, |page, cx| {
+                              page.restore_file_click_action(
+                                window,
+                                rel_path.clone(),
+                                status_kind,
+                                cx,
+                              );
+                            });
+                          }
+                        }),
+                    )
+                  }),
               ),
           ),
       ),
@@ -1944,6 +1957,36 @@ impl GitPage {
     status == RepoStatusKind::Untracked
   }
 
+  fn selected_file_can_stage(stage: RepoStage) -> bool {
+    stage == RepoStage::Unstaged
+  }
+
+  fn selected_file_can_unstage(stage: RepoStage) -> bool {
+    matches!(stage, RepoStage::Staged | RepoStage::PartiallyStaged)
+  }
+
+  fn can_restore_file_stage(stage: RepoStage) -> bool {
+    matches!(stage, RepoStage::Unstaged | RepoStage::PartiallyStaged)
+  }
+
+  fn sidebar_toggle_stage_action(
+    stage: RepoStage,
+    split_sections: bool,
+    is_staged_section: bool,
+  ) -> FileStageButtonAction {
+    if split_sections {
+      if is_staged_section {
+        FileStageButtonAction::Unstage
+      } else {
+        FileStageButtonAction::Stage
+      }
+    } else if Self::selected_file_can_unstage(stage) {
+      FileStageButtonAction::Unstage
+    } else {
+      FileStageButtonAction::Stage
+    }
+  }
+
   fn stage_requires_confirmation(status: RepoStatusKind) -> bool {
     status == RepoStatusKind::Conflicted
   }
@@ -1961,6 +2004,12 @@ impl GitPage {
       .into_iter()
       .find(|entry| entry.status == RepoStatusKind::Conflicted)
       .map(|entry| entry.path)
+  }
+
+  fn open_editor_has_unresolved_conflict_markers(&self, cx: &App) -> bool {
+    self.editor.as_ref().is_none_or(|editor| {
+      editor.read_with(cx, |editor, cx| editor.has_unresolved_conflict_markers(cx))
+    })
   }
 
   fn all_entries_staged(entries: &[RepoStatusEntry]) -> bool {
@@ -5465,6 +5514,23 @@ impl GitPage {
     self.status_task = Some(task);
   }
 
+  fn stage_file_click_action(
+    &mut self,
+    window: &mut Window,
+    rel_path: PathBuf,
+    status: RepoStatusKind,
+    cx: &mut Context<Self>,
+  ) {
+    if Self::should_confirm_stage_for_status(
+      Some(status),
+      self.open_editor_has_unresolved_conflict_markers(cx),
+    ) {
+      self.confirm_stage_conflicted_file_action(window, rel_path, cx);
+    } else {
+      self.stage_file_action(rel_path, cx);
+    }
+  }
+
   fn stage_file_action(&mut self, rel_path: PathBuf, cx: &mut Context<Self>) {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
@@ -5541,6 +5607,16 @@ impl GitPage {
       });
     });
     self.status_task = Some(task);
+  }
+
+  fn restore_file_click_action(
+    &mut self,
+    window: &mut Window,
+    rel_path: PathBuf,
+    status: RepoStatusKind,
+    cx: &mut Context<Self>,
+  ) {
+    self.confirm_restore_file_action(window, rel_path, status, cx);
   }
 
   fn restore_file_action(
@@ -5895,14 +5971,14 @@ impl GitPage {
     self.selected_repo.is_some()
       && self
         .selected_file_entry()
-        .is_some_and(|entry| entry.stage == RepoStage::Unstaged)
+        .is_some_and(|entry| Self::selected_file_can_stage(entry.stage))
   }
 
   fn should_show_unstage_selected_file_palette_command(&self) -> bool {
     self.selected_repo.is_some()
       && self
         .selected_file_entry()
-        .is_some_and(|entry| matches!(entry.stage, RepoStage::Staged | RepoStage::PartiallyStaged))
+        .is_some_and(|entry| Self::selected_file_can_unstage(entry.stage))
   }
 
   fn selected_file_status(&self) -> Option<RepoStatusKind> {
@@ -6906,21 +6982,10 @@ impl GitPage {
         });
       });
 
-    let (can_stage, can_unstage, can_restore, file_path, file_status) = if is_history_commit_file {
-      (false, false, false, None, None)
-    } else if let Some(entry) = selected_entry {
-      (
-        matches!(
-          entry.stage,
-          RepoStage::Unstaged | RepoStage::PartiallyStaged
-        ),
-        matches!(entry.stage, RepoStage::Staged | RepoStage::PartiallyStaged),
-        matches!(entry.stage, RepoStage::Unstaged),
-        Some(entry.path.clone()),
-        Some(entry.status),
-      )
+    let file_status = if is_history_commit_file {
+      None
     } else {
-      (false, false, false, None, None)
+      selected_entry.as_ref().map(|entry| entry.status)
     };
     let show_accept_all_conflict_actions = matches!(file_status, Some(RepoStatusKind::Conflicted));
     let can_accept_all_conflicts = Self::can_accept_all_conflicts(
@@ -6953,67 +7018,6 @@ impl GitPage {
         });
       });
 
-    let file_path_stage = file_path.clone();
-    let file_path_unstage = file_path.clone();
-    let file_path_restore = file_path.clone();
-    let file_status_for_stage = file_status;
-
-    let view = cx.entity();
-    let stage_button = Button::new("editor-stage-file")
-      .label("Stage")
-      .icon(IconName::Plus)
-      .xsmall()
-      .ghost()
-      .disabled(!can_stage)
-      .on_click(move |_, window, cx| {
-        if let Some(path) = file_path_stage.clone() {
-          view.update(cx, |this, cx| {
-            let has_unresolved_conflict_markers = this.editor.as_ref().is_none_or(|editor| {
-              editor.read_with(cx, |editor, cx| editor.has_unresolved_conflict_markers(cx))
-            });
-            if Self::should_confirm_stage_for_status(
-              file_status_for_stage,
-              has_unresolved_conflict_markers,
-            ) {
-              this.confirm_stage_conflicted_file_action(window, path.clone(), cx);
-            } else {
-              this.stage_file_action(path.clone(), cx);
-            }
-          });
-        }
-      });
-
-    let view = cx.entity();
-    let unstage_button = Button::new("editor-unstage-file")
-      .label("Unstage")
-      .icon(IconName::Minus)
-      .xsmall()
-      .ghost()
-      .disabled(!can_unstage)
-      .on_click(move |_, _, cx| {
-        if let Some(path) = file_path_unstage.clone() {
-          view.update(cx, |this, cx| {
-            this.unstage_file_action(path.clone(), cx);
-          });
-        }
-      });
-
-    let view = cx.entity();
-    let file_status_for_restore = file_status;
-    let restore_button = Button::new("editor-restore-file")
-      .label("Restore")
-      .icon(IconName::Undo)
-      .xsmall()
-      .ghost()
-      .disabled(!can_restore)
-      .on_click(move |_, window, cx| {
-        if let (Some(path), Some(status)) = (file_path_restore.clone(), file_status_for_restore) {
-          view.update(cx, |this, cx| {
-            this.confirm_restore_file_action(window, path.clone(), status, cx);
-          });
-        }
-      });
-
     div()
       .min_h(px(EDITOR_HEADER_HEIGHT))
       .h(px(EDITOR_HEADER_HEIGHT))
@@ -7037,9 +7041,6 @@ impl GitPage {
               .child(accept_all_current_button)
               .child(accept_all_incoming_button)
           })
-          .child(stage_button)
-          .child(unstage_button)
-          .child(restore_button)
           .child(save_button)
           .when(is_markdown || is_svg, |this| this.child(preview_button))
           .child(toggle_button),
@@ -14379,6 +14380,30 @@ mod tests {
       true
     ));
     assert!(!GitPage::should_confirm_stage_for_status(None, true));
+  }
+
+  #[test]
+  fn sidebar_toggle_stage_action_preserves_partial_split_behavior() {
+    assert_eq!(
+      GitPage::sidebar_toggle_stage_action(RepoStage::Unstaged, false, false),
+      FileStageButtonAction::Stage
+    );
+    assert_eq!(
+      GitPage::sidebar_toggle_stage_action(RepoStage::Staged, false, false),
+      FileStageButtonAction::Unstage
+    );
+    assert_eq!(
+      GitPage::sidebar_toggle_stage_action(RepoStage::PartiallyStaged, false, false),
+      FileStageButtonAction::Unstage
+    );
+    assert_eq!(
+      GitPage::sidebar_toggle_stage_action(RepoStage::PartiallyStaged, true, false),
+      FileStageButtonAction::Stage
+    );
+    assert_eq!(
+      GitPage::sidebar_toggle_stage_action(RepoStage::PartiallyStaged, true, true),
+      FileStageButtonAction::Unstage
+    );
   }
 
   #[test]
