@@ -40,6 +40,7 @@ use crate::navigation::NavigationHistory;
 use crate::notification_count::NotificationCountStore;
 use crate::sentry_context;
 use crate::settings_page::SettingsPage;
+use crate::terminal_page::TerminalPage;
 use crate::{SHOW_COMMAND_PALETTE_SHORTCUT, ShowCommandPalette, ShowFileSearch};
 use ui::{
   Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, StatusTag, StatusThemeExt, UiIconName,
@@ -54,6 +55,7 @@ pub enum WorkspacePage {
   Github,
   GithubRepo,
   GithubPrDetails,
+  Terminal,
   Billing,
   GitConfig,
   Settings,
@@ -75,6 +77,7 @@ pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
   match pathname {
     "/git" => WorkspacePage::Git,
     "/github" => WorkspacePage::Github,
+    "/terminal" => WorkspacePage::Terminal,
     "/billing" => WorkspacePage::Billing,
     "/settings" => WorkspacePage::Settings,
     "/git-config" => WorkspacePage::GitConfig,
@@ -108,6 +111,7 @@ fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
     WorkspacePage::Git => UserMenuPage::Git,
     WorkspacePage::Github | WorkspacePage::GithubRepo => UserMenuPage::Github,
     WorkspacePage::GithubPrDetails => UserMenuPage::GithubPrDetails,
+    WorkspacePage::Terminal => UserMenuPage::Git,
     WorkspacePage::Billing => UserMenuPage::Billing,
     WorkspacePage::GitConfig => UserMenuPage::GitConfig,
     WorkspacePage::Settings => UserMenuPage::Settings,
@@ -119,7 +123,8 @@ fn primary_navigation_selected_index(page: WorkspacePage) -> Option<usize> {
   match page {
     WorkspacePage::Git => Some(0),
     WorkspacePage::Github | WorkspacePage::GithubRepo | WorkspacePage::GithubPrDetails => Some(1),
-    WorkspacePage::Billing
+    WorkspacePage::Terminal
+    | WorkspacePage::Billing
     | WorkspacePage::GitConfig
     | WorkspacePage::Settings
     | WorkspacePage::About => None,
@@ -147,6 +152,7 @@ pub fn build_app_menus(show_billing_entry: bool) -> Vec<Menu> {
   let mut navigate_items = vec![
     MenuItem::action("Git", crate::OpenGitPage),
     MenuItem::action("GitHub", crate::OpenGithubPage),
+    MenuItem::action("Terminal", crate::OpenTerminalPage),
     MenuItem::separator(),
     MenuItem::action("Git Config", crate::OpenGitConfigPage),
   ];
@@ -235,6 +241,7 @@ pub struct WorkspaceView {
   github_page: Entity<GithubPage>,
   github_repo_page: Entity<GithubRepoPage>,
   github_pr_details_page: Entity<GithubPrDetailsPage>,
+  terminal_page: Entity<TerminalPage>,
   billing_page: Entity<BillingPage>,
   settings_page: Entity<SettingsPage>,
   about_page: Entity<AboutPage>,
@@ -297,6 +304,7 @@ impl WorkspaceView {
     let github_page = cx.new(|cx| GithubPage::new(window, cx));
     let github_repo_page = cx.new(|cx| GithubRepoPage::new(window, cx));
     let github_pr_details_page = cx.new(|cx| GithubPrDetailsPage::new(window, cx));
+    let terminal_page = cx.new(|cx| TerminalPage::new(window, cx));
     let billing_page = cx.new(|cx| BillingPage::new(window, cx));
     let settings_page = cx.new(|cx| SettingsPage::new(window, cx, settings));
     let about_page = cx.new(|cx| AboutPage::new(window, cx));
@@ -307,6 +315,7 @@ impl WorkspaceView {
       github_page,
       github_repo_page,
       github_pr_details_page,
+      terminal_page,
       billing_page,
       settings_page,
       about_page,
@@ -660,6 +669,9 @@ impl WorkspaceView {
     let open_settings = Rc::new(|_window: &mut Window, cx: &mut App| {
       NavigationHistory::navigate("/settings", cx);
     });
+    let open_terminal = Rc::new(|_window: &mut Window, cx: &mut App| {
+      NavigationHistory::navigate("/terminal", cx);
+    });
     let open_about = Rc::new(|_window: &mut Window, cx: &mut App| {
       NavigationHistory::navigate("/about", cx);
     });
@@ -797,6 +809,19 @@ impl WorkspaceView {
     if show_file_search_button {
       right = right.child(file_search_button);
     }
+    if matches!(page, WorkspacePage::Git | WorkspacePage::Terminal) {
+      let open_terminal = open_terminal.clone();
+      right = right.child(
+        Button::new("workspace-global-open-terminal")
+          .label("Terminal")
+          .ghost()
+          .compact()
+          .small()
+          .on_click(move |_, window, cx| {
+            open_terminal(window, cx);
+          }),
+      );
+    }
     right = right.child(command_palette_button);
     if is_unauthenticated {
       right = right.child(sign_in_button);
@@ -874,6 +899,7 @@ impl Render for WorkspaceView {
     let github_page = self.github_page.clone();
     let github_repo_page = self.github_repo_page.clone();
     let github_pr_details_page = self.github_pr_details_page.clone();
+    let terminal_page = self.terminal_page.clone();
     let billing_page = self.billing_page.clone();
     let git_config_page = self.git_config_page.clone();
     let settings_page = self.settings_page.clone();
@@ -912,6 +938,11 @@ impl Render for WorkspaceView {
       )
       .child(
         Route::new()
+          .path("terminal")
+          .element(move |_w, _cx| terminal_page.clone()),
+      )
+      .child(
+        Route::new()
           .path("billing")
           .element(move |_w, _cx| billing_page.clone()),
       )
@@ -940,6 +971,9 @@ impl Render for WorkspaceView {
       }))
       .on_action(cx.listener(|_, _: &crate::OpenGithubPage, _window, cx| {
         Self::open_github_home(cx);
+      }))
+      .on_action(cx.listener(|_, _: &crate::OpenTerminalPage, _window, cx| {
+        NavigationHistory::navigate("/terminal", cx);
       }))
       .on_action(cx.listener(|_, _: &crate::OpenBillingPage, _window, cx| {
         if AuthStateStore::should_show_billing_entry(cx) {
@@ -1009,6 +1043,10 @@ mod tests {
       WorkspacePage::Github
     );
     assert_eq!(
+      workspace_page_from_pathname("/terminal"),
+      WorkspacePage::Terminal
+    );
+    assert_eq!(
       workspace_page_from_pathname("/billing"),
       WorkspacePage::Billing
     );
@@ -1033,7 +1071,7 @@ mod tests {
 
     assert_eq!(
       action_menu_item_names(navigate_menu),
-      vec!["Git", "GitHub", "Git Config"]
+      vec!["Git", "GitHub", "Terminal", "Git Config"]
     );
   }
 
@@ -1047,7 +1085,7 @@ mod tests {
 
     assert_eq!(
       action_menu_item_names(navigate_menu),
-      vec!["Git", "GitHub", "Git Config", "Billing"]
+      vec!["Git", "GitHub", "Terminal", "Git Config", "Billing"]
     );
   }
 
@@ -1147,6 +1185,10 @@ mod tests {
       user_menu_page_for_workspace_page(WorkspacePage::GithubPrDetails),
       UserMenuPage::GithubPrDetails
     );
+    assert_eq!(
+      user_menu_page_for_workspace_page(WorkspacePage::Terminal),
+      UserMenuPage::Git
+    );
   }
 
   #[test]
@@ -1166,6 +1208,10 @@ mod tests {
     assert_eq!(
       primary_navigation_selected_index(WorkspacePage::GithubPrDetails),
       Some(1)
+    );
+    assert_eq!(
+      primary_navigation_selected_index(WorkspacePage::Terminal),
+      None
     );
     assert_eq!(
       primary_navigation_selected_index(WorkspacePage::Billing),
@@ -1247,6 +1293,7 @@ impl Focusable for WorkspaceView {
       WorkspacePage::Github => self.github_page.read(cx).focus_handle(cx),
       WorkspacePage::GithubRepo => self.github_repo_page.read(cx).focus_handle(cx),
       WorkspacePage::GithubPrDetails => self.github_pr_details_page.read(cx).focus_handle(cx),
+      WorkspacePage::Terminal => self.terminal_page.read(cx).focus_handle(cx),
       WorkspacePage::Billing => self.billing_page.read(cx).focus_handle(cx),
       WorkspacePage::GitConfig => self.git_config_page.read(cx).focus_handle(cx),
       WorkspacePage::Settings => self.settings_page.read(cx).focus_handle(cx),

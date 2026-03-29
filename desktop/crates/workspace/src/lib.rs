@@ -6,6 +6,7 @@ actions!(
     CloseWorkspacePage,
     OpenGitPage,
     OpenGithubPage,
+    OpenTerminalPage,
     OpenBillingPage,
     OpenGitConfigPage,
     OpenSettingsPage,
@@ -42,6 +43,7 @@ mod notification_count;
 mod sentry_context;
 mod settings_page;
 pub mod status_bar;
+mod terminal_page;
 mod workspace;
 
 pub use app_profile::AppProfile;

@@ -1,0 +1,15 @@
+[package]
+name = "terminal"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+alacritty_terminal = "0.26.0-rc1"
+anyhow = { workspace = true }
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
