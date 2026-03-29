@@ -26,12 +26,10 @@ use parking_lot::Mutex;
 
 use crate::input;
 
-const MIN_COLUMNS: u16 = 48;
-const MIN_LINES: u16 = 16;
+const MIN_COLUMNS: u16 = 12;
+const MIN_LINES: u16 = 4;
 const DEFAULT_CELL_WIDTH_PX: u16 = 8;
 const DEFAULT_CELL_HEIGHT_PX: u16 = 16;
-const HORIZONTAL_CHROME_PX: f32 = 48.0;
-const VERTICAL_CHROME_PX: f32 = 170.0;
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -58,20 +56,33 @@ impl Default for TerminalBounds {
 
 impl TerminalBounds {
   pub fn from_viewport(width_px: f32, height_px: f32) -> Self {
-    let usable_width =
-      (width_px - HORIZONTAL_CHROME_PX).max(f32::from(MIN_COLUMNS * DEFAULT_CELL_WIDTH_PX));
-    let usable_height =
-      (height_px - VERTICAL_CHROME_PX).max(f32::from(MIN_LINES * DEFAULT_CELL_HEIGHT_PX));
+    Self::from_size(
+      width_px,
+      height_px,
+      DEFAULT_CELL_WIDTH_PX,
+      DEFAULT_CELL_HEIGHT_PX,
+    )
+  }
+
+  pub fn from_size(width_px: f32, height_px: f32, cell_width: u16, cell_height: u16) -> Self {
+    let cell_width = cell_width.max(1);
+    let cell_height = cell_height.max(1);
+    let usable_width = width_px
+      .max(0.0)
+      .max(f32::from(MIN_COLUMNS) * f32::from(cell_width));
+    let usable_height = height_px
+      .max(0.0)
+      .max(f32::from(MIN_LINES) * f32::from(cell_height));
 
     let columns =
-      ((usable_width / f32::from(DEFAULT_CELL_WIDTH_PX)).floor() as u16).max(MIN_COLUMNS);
-    let lines = ((usable_height / f32::from(DEFAULT_CELL_HEIGHT_PX)).floor() as u16).max(MIN_LINES);
+      ((usable_width / f32::from(cell_width)).next_up().floor() as u16).max(MIN_COLUMNS);
+    let lines = ((usable_height / f32::from(cell_height)).next_up().floor() as u16).max(MIN_LINES);
 
     Self {
       columns,
       lines,
-      cell_width: DEFAULT_CELL_WIDTH_PX,
-      cell_height: DEFAULT_CELL_HEIGHT_PX,
+      cell_width,
+      cell_height,
     }
   }
 
@@ -682,18 +693,26 @@ mod tests {
 
   #[test]
   fn terminal_bounds_clamp_to_minimum_size() {
-    let bounds = TerminalBounds::from_viewport(100.0, 100.0);
+    let bounds = TerminalBounds::from_viewport(40.0, 40.0);
 
-    assert_eq!(bounds.columns, 48);
-    assert_eq!(bounds.lines, 16);
+    assert_eq!(bounds.columns, 12);
+    assert_eq!(bounds.lines, 4);
   }
 
   #[test]
   fn terminal_bounds_scale_with_viewport() {
     let bounds = TerminalBounds::from_viewport(1440.0, 960.0);
 
-    assert!(bounds.columns >= 120);
-    assert!(bounds.lines >= 40);
+    assert!(bounds.columns >= 180);
+    assert!(bounds.lines >= 60);
+  }
+
+  #[test]
+  fn terminal_bounds_match_narrow_sidebar_dimensions() {
+    let bounds = TerminalBounds::from_size(240.0, 640.0, 8, 16);
+
+    assert_eq!(bounds.columns, 30);
+    assert_eq!(bounds.lines, 40);
   }
 
   #[test]
