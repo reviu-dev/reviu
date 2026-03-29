@@ -530,7 +530,7 @@ impl TerminalView {
     }
   }
 
-  fn focus_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+  pub(crate) fn focus_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.focus_handle.focus(window, cx);
   }
 
@@ -1126,6 +1126,9 @@ mod tests {
 
     let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(None, cx));
     let cx: &mut VisualTestContext = cx;
+    view.update(cx, |view, _| {
+      view.screen = screen_from_lines(&["hello"]);
+    });
 
     let screen_bounds = cx
       .debug_bounds(TERMINAL_SURFACE_DEBUG_SELECTOR)
@@ -1140,6 +1143,47 @@ mod tests {
     assert!(
       focused,
       "terminal should receive focus after clicking its screen"
+    );
+  }
+
+  #[gpui::test]
+  fn clicking_terminal_screen_refocuses_terminal_view_after_focus_leaves(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(None, cx));
+    let cx: &mut VisualTestContext = cx;
+    view.update(cx, |view, _| {
+      view.screen = screen_from_lines(&["hello"]);
+    });
+
+    let screen_bounds = cx
+      .debug_bounds(TERMINAL_SURFACE_DEBUG_SELECTOR)
+      .expect("terminal surface bounds");
+    let click_point = point(screen_bounds.left() + px(8.), screen_bounds.top() + px(8.));
+
+    cx.simulate_click(click_point, Modifiers::default());
+    let initially_focused =
+      cx.update(|window, app| view.read_with(app, |view, _| view.focus_handle.is_focused(window)));
+    assert!(
+      initially_focused,
+      "terminal should receive focus on the initial click"
+    );
+
+    view.update_in(cx, |view, window, cx| {
+      let external_focus = cx.focus_handle();
+      window.focus(&external_focus, cx);
+      assert!(
+        !view.focus_handle.is_focused(window),
+        "terminal focus should leave after focusing another handle"
+      );
+    });
+
+    cx.simulate_click(click_point, Modifiers::default());
+    let refocused =
+      cx.update(|window, app| view.read_with(app, |view, _| view.focus_handle.is_focused(window)));
+    assert!(
+      refocused,
+      "terminal should regain focus after clicking it again"
     );
   }
 
