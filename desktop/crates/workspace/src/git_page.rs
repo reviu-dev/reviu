@@ -7790,7 +7790,7 @@ impl GitPage {
     let theme = cx.theme().clone();
     div()
       .size_full()
-      .p_1()
+      .p_2()
       .min_w(px(0.0))
       .min_h_0()
       .bg(theme.sidebar)
