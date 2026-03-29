@@ -2767,10 +2767,11 @@ impl GitPage {
     err: anyhow::Error,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Result<(), SharedString> {
+  ) -> Result<Option<SharedString>, SharedString> {
     if let Some(title) = Self::command_palette_error_notification_title(action) {
-      self.push_git_action_error_notification_in_window(title, err.to_string().into(), window, cx);
-      return Ok(());
+      let message: SharedString = err.to_string().into();
+      self.push_git_action_error_notification_in_window(title, message.clone(), window, cx);
+      return Ok(Some(message));
     }
 
     let message: SharedString = format!("Action failed: {err}").into();
@@ -3581,6 +3582,7 @@ impl GitPage {
 
     window.open_dialog(cx, move |dialog, _, _| {
       dialog
+        .on_ok(|_, _, _| false)
         .p_0()
         .border_0()
         .min_h_0()
@@ -3768,6 +3770,7 @@ impl GitPage {
   ) -> Result<(), SharedString> {
     let mut should_post_action_refresh = true;
     let action_for_error = action.clone();
+    let mut palette_error = None;
     let result = match action {
       CommandPaletteAction::OpenRepository => {
         self.start_open_repository(window, cx);
@@ -4356,7 +4359,8 @@ impl GitPage {
     };
 
     if let Err(err) = result {
-      self.handle_command_palette_operation_error(&action_for_error, err, window, cx)?;
+      palette_error =
+        self.handle_command_palette_operation_error(&action_for_error, err, window, cx)?;
     }
 
     if should_post_action_refresh {
@@ -4366,6 +4370,11 @@ impl GitPage {
         editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
       }
     }
+
+    if let Some(message) = palette_error {
+      return Err(message);
+    }
+
     Ok(())
   }
 
@@ -9720,7 +9729,8 @@ mod tests {
         cx,
       )
     });
-    assert!(result.is_ok());
+    let error = result.expect_err("create branch should keep palette open on failure");
+    assert!(!error.as_ref().is_empty());
 
     await_git_page_background_tasks(git_page.clone(), cx).await;
     cx.cx.run_until_parked();
@@ -9877,6 +9887,43 @@ mod tests {
     assert!(error.as_ref().starts_with("Repository not found:"));
     let selected_repo = git_page.read_with(cx, |this, _| this.selected_repo.clone());
     assert_eq!(selected_repo, Some(repo.path.clone()));
+  }
+
+  #[gpui::test]
+  async fn command_palette_dialog_ignores_dialog_confirm_action(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-dialog-confirm");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let mut mounted_git_page = None;
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let git_page = cx.new(|cx| GitPage::new_for_test(window, cx));
+      mounted_git_page = Some(git_page.clone());
+      gpui_component::Root::new(git_page, window, cx)
+    });
+    let git_page = mounted_git_page.expect("git page");
+    cx.executor().allow_parking();
+
+    git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.open_command_palette(window, cx, Some(CommandPaletteInitialScreen::SwitchBranch));
+    });
+    cx.cx.run_until_parked();
+    cx.run_until_parked();
+
+    let dialog_open_before_confirm =
+      git_page.update_in(cx, |_this, window, cx| window.has_active_dialog(cx));
+    assert!(dialog_open_before_confirm);
+
+    git_page.update_in(cx, |_this, window, cx| {
+      window.dispatch_action(Box::new(gpui_component::dialog::ConfirmDialog), cx);
+    });
+    cx.cx.run_until_parked();
+    cx.run_until_parked();
+
+    let dialog_open_after_confirm =
+      git_page.update_in(cx, |_this, window, cx| window.has_active_dialog(cx));
+    assert!(dialog_open_after_confirm);
   }
 
   #[gpui::test]
@@ -10123,7 +10170,8 @@ mod tests {
         cx,
       )
     });
-    assert!(result.is_ok());
+    let error = result.expect_err("create branch from should keep palette open on failure");
+    assert!(!error.as_ref().is_empty());
 
     await_git_page_background_tasks(git_page.clone(), cx).await;
     cx.cx.run_until_parked();
@@ -10260,7 +10308,8 @@ mod tests {
         cx,
       )
     });
-    assert!(result.is_ok());
+    let error = result.expect_err("switch branch should keep palette open on failure");
+    assert!(!error.as_ref().is_empty());
 
     await_git_page_background_tasks(git_page.clone(), cx).await;
     cx.cx.run_until_parked();
