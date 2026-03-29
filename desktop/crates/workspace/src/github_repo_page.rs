@@ -3689,6 +3689,7 @@ impl GithubRepoPage {
 
     window.open_dialog(cx, move |dialog, _, _| {
       dialog
+        .on_ok(|_, _, _| false)
         .p_0()
         .border_0()
         .min_h_0()
