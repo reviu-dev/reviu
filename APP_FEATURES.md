@@ -56,7 +56,7 @@ Paid plan for GitHub workflows:
 
 ## UX strengths
 
-- Keyboard-first navigation (`cmd-shift-p`, `cmd-p`, `cmd-enter`, etc.)
+- Keyboard-first navigation (`cmd-k`, `cmd-p`, `cmd-enter`, etc.)
 - Editor-oriented review with syntax highlighting
 - Real-time diff workflow in desktop context
 - Single place for local Git + GitHub review activity
