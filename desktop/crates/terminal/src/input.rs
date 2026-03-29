@@ -8,7 +8,15 @@ pub fn encode_key_down(event: &KeyDownEvent, mode: TermMode) -> Option<String> {
   let keystroke = &event.keystroke;
   let modifiers = keystroke.modifiers;
 
-  if modifiers.platform || modifiers.function {
+  if modifiers.function {
+    return None;
+  }
+
+  if let Some(sequence) = encode_platform_key(keystroke.key.as_str(), modifiers) {
+    return Some(sequence);
+  }
+
+  if modifiers.platform {
     return None;
   }
 
@@ -153,6 +161,15 @@ fn cursor_sequence(mode: TermMode, suffix: &str) -> String {
     format!("\u{1b}O{suffix}")
   } else {
     format!("\u{1b}[{suffix}")
+  }
+}
+
+fn encode_platform_key(key: &str, modifiers: Modifiers) -> Option<String> {
+  match key {
+    "backspace" if modifiers.platform && !modifiers.control && !modifiers.alt => {
+      Some("\u{15}".to_string())
+    }
+    _ => None,
   }
 }
 
@@ -388,6 +405,20 @@ mod tests {
     assert_eq!(
       encode_key_down(&key_event("c", None, modifiers), TermMode::SHOW_CURSOR),
       Some("\u{3}".to_string())
+    );
+  }
+
+  #[test]
+  fn encode_key_down_supports_platform_backspace_as_kill_line() {
+    let mut modifiers = Modifiers::default();
+    modifiers.platform = true;
+
+    assert_eq!(
+      encode_key_down(
+        &key_event("backspace", None, modifiers),
+        TermMode::SHOW_CURSOR
+      ),
+      Some("\u{15}".to_string())
     );
   }
 

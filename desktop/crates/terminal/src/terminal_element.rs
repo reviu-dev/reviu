@@ -1,9 +1,8 @@
 use gpui::{
   App, Bounds, CursorStyle, DispatchPhase, Element, ElementId, Entity, FontStyle, FontWeight,
   GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
-  MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent,
-  ShapedLine, StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle, Window, fill, point,
-  px, relative,
+  MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent, ShapedLine,
+  StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle, Window, fill, point, px, relative,
 };
 use std::sync::Arc;
 
