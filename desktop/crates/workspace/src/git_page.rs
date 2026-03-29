@@ -47,6 +47,7 @@ use gpui_component::{
 };
 use sentry::protocol::{Map, Value};
 use smol::unblock;
+use terminal::TerminalView;
 
 use crate::{
   active_local_repo::{ActiveLocalRepo, ActiveLocalRepoStore},
@@ -94,6 +95,10 @@ const EMPTY_REPOSITORY_HINT_SUFFIX: &str = "to add a repository.";
 const EMPTY_REPOSITORY_ACTION_LABEL: &str = "Add Repository";
 const GIT_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str = "git-markdown-preview-editor-pane";
 const GIT_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str = "git-markdown-preview-render-pane";
+const GIT_TERMINAL_SIDEBAR_DEBUG_SELECTOR: &str = "git-terminal-sidebar";
+const TERMINAL_SIDEBAR_DEFAULT_WIDTH: f32 = 420.0;
+const TERMINAL_SIDEBAR_MIN_WIDTH: f32 = 280.0;
+const TERMINAL_SIDEBAR_MAX_WIDTH: f32 = 1200.0;
 
 type RepoSelectHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 type BranchSelectHandler = Rc<dyn Fn(BranchRef, &mut Window, &mut App)>;
@@ -1420,10 +1425,12 @@ pub struct GitPage {
   select_first_file_after_restore: bool,
   force_list_selection: bool,
   editor: Option<Entity<Editor>>,
+  terminal_view: Entity<TerminalView>,
   interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
   diff_view: DiffViewMode,
   git_unified_file_view: bool,
   show_markdown_preview: bool,
+  show_terminal_sidebar: bool,
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
   svg_preview_source: Option<SharedString>,
   svg_preview_task: Option<Task<()>>,
@@ -2408,6 +2415,8 @@ impl GitPage {
         .placeholder("Commit message...")
     });
 
+    let terminal_working_directory = selected_repo.clone();
+
     let mut view = Self {
       focus_handle: cx.focus_handle(),
       api: WorkspaceApi::global(cx).api.clone(),
@@ -2445,6 +2454,7 @@ impl GitPage {
       select_first_file_after_restore: false,
       force_list_selection: false,
       editor: None,
+      terminal_view: cx.new(|cx| TerminalView::new(terminal_working_directory.clone(), cx)),
       interactive_rebase_todo_view: None,
       diff_view: if app_settings.split_diff_view {
         DiffViewMode::Split
@@ -2453,6 +2463,7 @@ impl GitPage {
       },
       git_unified_file_view: app_settings.git_unified_file_view,
       show_markdown_preview: false,
+      show_terminal_sidebar: false,
       svg_preview: None,
       svg_preview_source: None,
       svg_preview_task: None,
@@ -2536,10 +2547,12 @@ impl GitPage {
       select_first_file_after_restore: false,
       force_list_selection: false,
       editor: None,
+      terminal_view: cx.new(|cx| TerminalView::new(None, cx)),
       interactive_rebase_todo_view: None,
       diff_view: DiffViewMode::Inline,
       git_unified_file_view: false,
       show_markdown_preview: false,
+      show_terminal_sidebar: false,
       svg_preview: None,
       svg_preview_source: None,
       svg_preview_task: None,
@@ -5188,6 +5201,43 @@ impl GitPage {
     self.focus_page(window, cx);
   }
 
+  fn focus_terminal_sidebar_on_next_frame(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+    let terminal_view = self.terminal_view.clone();
+    window.on_next_frame(move |window, cx| {
+      let focus_handle = terminal_view.read(cx).focus_handle(cx);
+      window.focus(&focus_handle, cx);
+    });
+  }
+
+  fn toggle_terminal_sidebar_visibility(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.show_terminal_sidebar = !self.show_terminal_sidebar;
+    if self.show_terminal_sidebar {
+      self.focus_terminal_sidebar_on_next_frame(window, cx);
+    } else {
+      self.focus_editor_or_page(window, cx);
+    }
+    cx.notify();
+  }
+
+  fn toggle_terminal_sidebar_click(
+    &mut self,
+    _: &gpui::ClickEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.toggle_terminal_sidebar_visibility(window, cx);
+  }
+
+  fn toggle_terminal_sidebar_action(
+    &mut self,
+    _: &crate::ToggleTerminalSidebar,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.toggle_terminal_sidebar_visibility(window, cx);
+    cx.stop_propagation();
+  }
+
   fn ensure_page_shortcut_focus(&self, cx: &mut Context<Self>) {
     let focus_handle = self.focus_handle.clone();
     let window_handle = self.window_handle;
@@ -6548,11 +6598,28 @@ impl GitPage {
       .when_some(branch_info, |this, info| this.child(info))
       .child(fetch_button);
 
+    let terminal_sidebar_button = Button::new("git-toggle-terminal-sidebar")
+      .label("Terminal")
+      .icon(UiIconName::SquareTerminal)
+      .outline()
+      .with_variant(ButtonVariant::Secondary)
+      .xsmall()
+      .p_2()
+      .selected(self.show_terminal_sidebar)
+      .disabled(self.selected_repo.is_none())
+      .tooltip(if self.show_terminal_sidebar {
+        "Hide terminal sidebar"
+      } else {
+        "Show terminal sidebar"
+      })
+      .on_click(cx.listener(Self::toggle_terminal_sidebar_click));
+
     let header_right = h_flex()
       .items_center()
       .gap_2()
       .flex_shrink_0()
-      .when_some(branch_pr_button, |this, button| this.child(button));
+      .when_some(branch_pr_button, |this, button| this.child(button))
+      .child(terminal_sidebar_button);
 
     div()
       .h(px(PAGE_HEADER_HEIGHT))
@@ -7718,10 +7785,45 @@ impl GitPage {
 
     self.render_empty_state("Select a file to view diff", cx)
   }
+
+  fn render_terminal_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    div()
+      .size_full()
+      .p_1()
+      .min_w(px(0.0))
+      .min_h_0()
+      .bg(theme.sidebar)
+      .debug_selector(|| GIT_TERMINAL_SIDEBAR_DEBUG_SELECTOR.to_string())
+      .child(self.terminal_view.clone())
+      .into_any_element()
+  }
+
+  fn render_main_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    let editor_area = self.render_editor_area(window, cx);
+    if !self.show_terminal_sidebar {
+      return editor_area;
+    }
+
+    ui::h_resizable("git-page-editor-terminal-split")
+      .child(ui::resizable_panel().child(editor_area))
+      .child(
+        ui::resizable_panel()
+          .size(px(TERMINAL_SIDEBAR_DEFAULT_WIDTH))
+          .size_range(px(TERMINAL_SIDEBAR_MIN_WIDTH)..px(TERMINAL_SIDEBAR_MAX_WIDTH))
+          .child(self.render_terminal_sidebar(cx)),
+      )
+      .into_any_element()
+  }
 }
 
 impl Render for GitPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let working_directory = self.selected_repo.clone();
+    self.terminal_view.update(cx, |view, cx| {
+      view.set_working_directory(working_directory, cx);
+    });
+
     let content = if Self::should_render_repository_split(self.selected_repo.as_deref()) {
       ui::h_resizable("git-page-split")
         .child(
@@ -7730,7 +7832,7 @@ impl Render for GitPage {
             .size_range(px(SIDEBAR_MIN_WIDTH)..px(SIDEBAR_MAX_WIDTH))
             .child(self.render_sidebar(window, cx)),
         )
-        .child(ui::resizable_panel().child(self.render_editor_area(window, cx)))
+        .child(ui::resizable_panel().child(self.render_main_content(window, cx)))
         .into_any_element()
     } else {
       self.render_repository_empty_state(cx)
@@ -7747,6 +7849,7 @@ impl Render for GitPage {
       .on_action(cx.listener(GitPage::find_action))
       .on_action(cx.listener(GitPage::close_find_action))
       .on_action(cx.listener(GitPage::open_repository_action))
+      .on_action(cx.listener(GitPage::toggle_terminal_sidebar_action))
       .on_action(cx.listener(GitPage::commit_changes_action))
       .child(self.render_header(window, cx))
       .child(content)
@@ -12408,6 +12511,49 @@ mod tests {
     assert!(editor_bounds.height > gpui::px(0.0));
     assert!(preview_bounds.width > gpui::px(0.0));
     assert!(preview_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  fn terminal_sidebar_renders_as_a_separate_right_panel(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempDir::new("git-page-terminal-sidebar-layout");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.show_terminal_sidebar = true;
+      cx.notify();
+    });
+
+    let terminal_bounds = cx
+      .debug_bounds(GIT_TERMINAL_SIDEBAR_DEBUG_SELECTOR)
+      .expect("terminal sidebar bounds")
+      .size;
+
+    assert!(terminal_bounds.width > gpui::px(0.0));
+    assert!(terminal_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  fn open_terminal_action_toggles_embedded_terminal_sidebar(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempDir::new("git-page-terminal-sidebar-action");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.focus_page(window, cx);
+    });
+
+    git_page.update_in(cx, |this, window, cx| {
+      this.toggle_terminal_sidebar_action(&crate::ToggleTerminalSidebar, window, cx);
+      assert!(this.show_terminal_sidebar);
+    });
+
+    git_page.update_in(cx, |this, window, cx| {
+      this.toggle_terminal_sidebar_action(&crate::ToggleTerminalSidebar, window, cx);
+      assert!(!this.show_terminal_sidebar);
+    });
   }
 
   #[gpui::test]
