@@ -24,10 +24,6 @@ Settings now includes a Keyboard Shortcuts page where you can remap desktop shor
 
 Reviu now includes direct shortcuts for settings, terminal toggle, branch switching, Git sidebar mode, diff view toggle, and switching to the current pull request branch.
 
-### Diff View Shortcut Default
-
-The default shortcut for toggling diff view is now `cmd-/`.
-
 ### Pull Request Draft Status Actions
 
 The pull request page can now switch an open pull request between draft and ready for review.
