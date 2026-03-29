@@ -21,10 +21,12 @@ use git::{
   rebase_branch, restore_file, skip_rebase, stage_all, stage_file, start_interactive_rebase,
   switch_branch, undo_last_commit, unstage_all, unstage_file,
 };
+#[cfg(test)]
+use gpui::Keystroke;
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
-  InteractiveElement, Keystroke, ParentElement, PathPromptOptions, Pixels, Render, RenderImage,
-  SharedString, Styled, Subscription, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
+  InteractiveElement, ParentElement, PathPromptOptions, Pixels, Render, RenderImage, SharedString,
+  Styled, Subscription, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable, StyledExt,
@@ -69,6 +71,7 @@ use crate::{
   navigation::NavigationHistory,
   notification_count::NotificationCountStore,
   sentry_context,
+  shortcuts::{self, ShortcutId},
   workspace::WorkspaceApi,
 };
 use ui::{
@@ -6427,6 +6430,7 @@ impl GitPage {
       .id("git-history-scroll-container")
       .flex_1()
       .min_h_0()
+      .key_context(crate::shortcuts::GIT_HISTORY_TREE_CONTEXT)
       .child(tree_view.flex_1().w_full())
       .into_any_element()
   }
@@ -6459,6 +6463,9 @@ impl GitPage {
         .menu_width(px(TRIGGER_DROPDOWN_SELECT_WIDTH))
         .on_select(on_repo_select),
     );
+    let repo_dropdown = div()
+      .key_context(crate::shortcuts::GIT_REPO_SELECT_CONTEXT)
+      .child(repo_dropdown);
 
     let branch_dropdown = dropdown_select(
       DropdownSelectConfig::new("git-header-branch-select")
@@ -6472,6 +6479,9 @@ impl GitPage {
         .disabled(self.selected_repo.is_none())
         .on_select(on_branch_select),
     );
+    let branch_dropdown = div()
+      .key_context(crate::shortcuts::GIT_BRANCH_SELECT_CONTEXT)
+      .child(branch_dropdown);
 
     let branch_info = self.branch_status.as_ref().map(|status| {
       let ahead = status.ahead;
@@ -6746,15 +6756,20 @@ impl GitPage {
       .into_any_element()
   }
 
+  #[cfg(test)]
   fn open_repository_shortcut() -> Keystroke {
-    Keystroke::parse("cmd-o").expect("valid open repository shortcut")
+    shortcuts::shortcut_keystroke(ShortcutId::OpenRepository)
   }
 
   fn should_render_repository_split(selected_repo: Option<&Path>) -> bool {
     selected_repo.is_some()
   }
 
-  fn render_repository_empty_state(&mut self, cx: &mut Context<Self>) -> AnyElement {
+  fn render_repository_empty_state(
+    &mut self,
+    window: &Window,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
     let theme = cx.theme().clone();
     div()
       .size_full()
@@ -6783,7 +6798,11 @@ impl GitPage {
               .text_sm()
               .text_color(theme.muted_foreground)
               .child(EMPTY_REPOSITORY_HINT_PREFIX)
-              .child(Kbd::new(Self::open_repository_shortcut()))
+              .child(Kbd::new(shortcuts::resolved_display_shortcut_keystroke_in(
+                cx,
+                window,
+                ShortcutId::OpenRepository,
+              )))
               .child(EMPTY_REPOSITORY_HINT_SUFFIX),
           )
           .child(
@@ -7332,7 +7351,7 @@ impl GitPage {
     line_height * (display_line as f32 - scroll_offset)
   }
 
-  fn render_commit_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_commit_button(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
     let repo_ready = self.selected_repo.is_some();
     let commit_message = self.commit_input.read(cx).value().to_string();
     let commit_enabled = self.commit_primary_action_enabled(&commit_message);
@@ -7348,6 +7367,8 @@ impl GitPage {
     let push_view = view.clone();
     let force_push_view = view.clone();
     let push_label = Self::push_action_label(self.branch_status.as_ref(), self.has_head_commit);
+    let commit_shortcut =
+      shortcuts::resolved_display_shortcut_keystroke_in(cx, window, ShortcutId::CommitChanges);
 
     let main_button = if self.rebase_in_progress {
       Button::new("commit-button-main")
@@ -7356,7 +7377,7 @@ impl GitPage {
         .outline()
         .flex_1()
         .rounded_r_none()
-        .child(Kbd::new(Keystroke::parse("cmd-enter").unwrap()).ml_1())
+        .child(Kbd::new(commit_shortcut.clone()).ml_1())
         .disabled(!commit_enabled)
         .on_click(cx.listener(Self::continue_rebase_action))
     } else {
@@ -7366,7 +7387,7 @@ impl GitPage {
         .outline()
         .flex_1()
         .rounded_r_none()
-        .child(Kbd::new(Keystroke::parse("cmd-enter").unwrap()).ml_1())
+        .child(Kbd::new(commit_shortcut).ml_1())
         .disabled(!commit_enabled)
         .on_click(cx.listener(Self::commit_changes))
     };
@@ -7446,7 +7467,7 @@ impl GitPage {
       .child(menu_button)
   }
 
-  fn render_commit_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_commit_bar(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let input = self.commit_input.clone();
     let has_conflicts = Self::has_conflicted_entries(&self.status_entries);
@@ -7488,7 +7509,7 @@ impl GitPage {
         div()
           .w_full()
           .min_w_0()
-          .child(self.render_commit_button(cx)),
+          .child(self.render_commit_button(window, cx)),
       )
   }
 
@@ -7619,7 +7640,7 @@ impl GitPage {
       )
   }
 
-  fn render_sidebar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+  fn render_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let base_sidebar = div()
       .id("git-sidebar")
@@ -7646,7 +7667,7 @@ impl GitPage {
       return base_sidebar
         .relative()
         .child(self.render_sidebar_header(cx))
-        .child(self.render_history_sidebar_content(_window, cx))
+        .child(self.render_history_sidebar_content(window, cx))
         .into_any_element();
     }
 
@@ -7675,13 +7696,13 @@ impl GitPage {
           .min_h_0()
           .child(list_container),
       )
-      .child(self.render_commit_bar(cx))
+      .child(self.render_commit_bar(window, cx))
       .into_any_element()
   }
 
   fn render_editor_area(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     if self.selected_repo.is_none() {
-      return self.render_repository_empty_state(cx);
+      return self.render_repository_empty_state(window, cx);
     }
 
     if let Some(todo_view) = self.interactive_rebase_todo_view.clone() {
@@ -7859,7 +7880,7 @@ impl Render for GitPage {
         .child(ui::resizable_panel().child(self.render_main_content(window, cx)))
         .into_any_element()
     } else {
-      self.render_repository_empty_state(cx)
+      self.render_repository_empty_state(window, cx)
     };
 
     div()
@@ -14342,7 +14363,7 @@ mod tests {
     assert_eq!(EMPTY_REPOSITORY_ACTION_LABEL, "Add Repository");
     assert_eq!(
       GitPage::open_repository_shortcut(),
-      Keystroke::parse("cmd-o").expect("valid shortcut")
+      shortcuts::shortcut_keystroke(ShortcutId::OpenRepository)
     );
   }
 

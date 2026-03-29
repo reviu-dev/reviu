@@ -8873,7 +8873,13 @@ impl GithubPrDetailsPage {
       .when_some(local_project_controls, |this, controls| {
         this.child(controls)
       })
-      .child(div().flex_1().min_h_0().child(list))
+      .child(
+        div()
+          .flex_1()
+          .min_h_0()
+          .key_context(crate::shortcuts::GITHUB_PR_CHANGES_TREE_CONTEXT)
+          .child(list),
+      )
   }
 
   fn render_left_sidebar(

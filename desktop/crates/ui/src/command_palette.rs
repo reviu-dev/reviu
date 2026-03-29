@@ -18,6 +18,7 @@ use gpui_component::{
 
 const LIST_INPUT_HEIGHT: f32 = 35.0;
 const LIST_ITEM_HEIGHT: f32 = 32.0; // Height of each list item in pixels (h_8)
+pub const COMMAND_PALETTE_CONTEXT: &str = "CommandPalette";
 
 fn list_base_item(
   ix: IndexPath,
@@ -2384,6 +2385,7 @@ impl Render for CommandPalette {
 
     div()
       .max_h_128()
+      .key_context(COMMAND_PALETTE_CONTEXT)
       .track_focus(&self.focus_handle)
       .child(content)
       .h_full()
