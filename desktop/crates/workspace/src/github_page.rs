@@ -1553,6 +1553,7 @@ impl GithubPage {
       )
       .child(
         div()
+          .max_w(px(400.0))
           .text_sm()
           .text_color(theme.muted_foreground)
           .child(description),
