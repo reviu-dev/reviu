@@ -1,7 +1,9 @@
-use std::path::Path;
+use std::{path::Path, process::Command};
 
 use anyhow::{Context, Result, bail};
-use git2::{BranchType, Cred, PushOptions, RemoteCallbacks, Repository, ResetType, Signature};
+use git2::{
+  BranchType, Cred, PushOptions, RemoteCallbacks, Repository, RepositoryState, ResetType, Signature,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct HeadCommitStatus {
@@ -13,6 +15,16 @@ fn repo_signature(repo: &Repository) -> Result<Signature<'_>> {
   repo
     .signature()
     .context("git user identity is not configured (set user.name and user.email)")
+}
+
+fn command_output_details(output: &std::process::Output) -> String {
+  let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+  let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+  [stderr, stdout]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 pub fn head_commit_status(repo_root: &Path) -> Result<HeadCommitStatus> {
@@ -53,6 +65,32 @@ pub fn commit_changes(repo_root: &Path, message: &str) -> Result<()> {
 
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  if repo.state() == RepositoryState::Merge {
+    if repo.index()?.has_conflicts() {
+      bail!("merge has conflicts");
+    }
+
+    let output = Command::new("git")
+      .current_dir(repo_root)
+      .args(["commit", "-m", message])
+      .env("GIT_EDITOR", ":")
+      .output()
+      .context("run git commit for merge")?;
+
+    if output.status.success() {
+      return Ok(());
+    }
+
+    let details = command_output_details(&output);
+    if details.to_ascii_lowercase().contains("conflict") {
+      bail!("merge has conflicts");
+    }
+    if details.is_empty() {
+      bail!("commit failed");
+    }
+    bail!("commit failed: {details}");
+  }
+
   let mut index = repo.index()?;
   let tree_id = index.write_tree()?;
   let tree = repo.find_tree(tree_id)?;
@@ -669,6 +707,71 @@ mod tests {
       .and_then(|head| head.peel_to_commit())
       .expect("read head commit");
     assert_eq!(head.summary(), Some("updated message"));
+  }
+
+  #[test]
+  fn commit_changes_completes_merge_after_conflict_resolution() {
+    let repo = TempRepo::init("commit-merge-conflict-resolution");
+    let rel_path = Path::new("README.md");
+    commit_text_file(&repo.path, rel_path, "base\n", "initial");
+    let base_branch = crate::current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    crate::create_branch(&repo.path, "feature").expect("create feature branch");
+
+    commit_text_file(&repo.path, rel_path, "main change\n", "main change");
+    crate::switch_branch(
+      &repo.path,
+      &crate::BranchRef {
+        name: "feature".to_string(),
+        kind: crate::BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    commit_text_file(&repo.path, rel_path, "feature change\n", "feature change");
+    crate::switch_branch(
+      &repo.path,
+      &crate::BranchRef {
+        name: base_branch.clone(),
+        kind: crate::BranchKind::Local,
+      },
+    )
+    .expect("switch back to base branch");
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let mut checkout = git2::build::CheckoutBuilder::new();
+    checkout.force();
+    repo_handle
+      .checkout_head(Some(&mut checkout))
+      .expect("force checkout head");
+
+    let _ = crate::merge_branch(
+      &repo.path,
+      &crate::BranchRef {
+        name: "feature".to_string(),
+        kind: crate::BranchKind::Local,
+      },
+    )
+    .expect_err("merge should fail with conflicts");
+    assert!(
+      crate::is_merge_in_progress(&repo.path).expect("read merge state"),
+      "merge state should be active after conflict"
+    );
+
+    stage_text_file(&repo.path, rel_path, "resolved\n");
+
+    commit_changes(&repo.path, "Merge branch 'feature' into main").expect("commit merge");
+
+    assert!(
+      !crate::is_merge_in_progress(&repo.path).expect("read merge state after commit"),
+      "merge state should be cleaned after commit"
+    );
+    let repo_handle = Repository::open(&repo.path).expect("reopen repo after merge commit");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head after merge commit");
+    assert_eq!(head.parent_count(), 2);
+    assert_eq!(head.summary(), Some("Merge branch 'feature' into main"));
   }
 
   #[test]

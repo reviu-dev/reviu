@@ -5974,6 +5974,7 @@ impl GitPage {
       self.selected_repo.is_some()
         && !commit_message.trim().is_empty()
         && !self.status_entries.is_empty()
+        && !Self::has_conflicted_entries(&self.status_entries)
     }
   }
 
@@ -9091,6 +9092,24 @@ mod tests {
       assert!(this.should_show_skip_rebase_palette_command());
 
       this.rebase_in_progress = false;
+      this.merge_in_progress = true;
+      this.status_entries = vec![RepoStatusEntry {
+        path: PathBuf::from("README.md"),
+        old_path: None,
+        status: RepoStatusKind::Conflicted,
+        stage: RepoStage::Unstaged,
+      }];
+      assert!(!this.should_show_commit_palette_command("Merge branch 'feature' into main"));
+
+      this.status_entries = vec![RepoStatusEntry {
+        path: PathBuf::from("README.md"),
+        old_path: None,
+        status: RepoStatusKind::Modified,
+        stage: RepoStage::Staged,
+      }];
+      assert!(this.should_show_commit_palette_command("Merge branch 'feature' into main"));
+
+      this.merge_in_progress = false;
       this.selected_repo = None;
       assert!(!this.should_show_push_palette_command());
       assert!(!this.should_show_force_push_palette_command());
@@ -11771,6 +11790,110 @@ mod tests {
     assert_eq!(
       current_branch_status(&repo.path)
         .expect("status after abort merge")
+        .name,
+      base_branch
+    );
+    assert!(!git_page.read_with(cx, |this, _| this.merge_in_progress));
+    assert_eq!(
+      git_page.read_with(cx, |this, cx| this
+        .commit_input
+        .read(cx)
+        .value()
+        .to_string()),
+      ""
+    );
+  }
+
+  #[gpui::test]
+  async fn commit_action_completes_merge_after_conflict_resolution(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-commit-merge-resolution");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "base\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let _ = commit_text_file(&repo.path, rel_path, "main change\n", "main change");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(&repo.path, rel_path, "feature change\n", "feature change");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base");
+    force_checkout_head(&repo.path);
+
+    let _ = merge_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect_err("merge should fail with conflicts");
+    assert!(
+      is_merge_in_progress(&repo.path).expect("read merge state"),
+      "merge state should be active after conflict"
+    );
+
+    std::fs::write(repo.path.join(rel_path), "resolved\n").expect("write resolved contents");
+    stage_file(&repo.path, rel_path).expect("stage resolved file");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let reload_task = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.reload_status(cx);
+      this.status_task.take().expect("reload status task")
+    });
+    reload_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(git_page.read_with(cx, |this, _| this.merge_in_progress));
+    assert!(
+      !git_page.read_with(cx, |this, _| GitPage::has_conflicted_entries(
+        &this.status_entries
+      )),
+      "conflicts should be resolved before commit"
+    );
+
+    let commit_task = git_page.update_in(cx, |this, window, cx| {
+      this.commit_input.update(cx, |input, cx| {
+        input.set_value("Merge branch 'feature' into main", window, cx)
+      });
+      this.commit_changes(&gpui::ClickEvent::default(), window, cx);
+      this.status_task.take().expect("commit task")
+    });
+    commit_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(
+      !is_merge_in_progress(&repo.path).expect("read merge state after commit"),
+      "merge state should be cleaned after commit"
+    );
+    let repo_handle = Repository::open(&repo.path).expect("open repo after merge commit");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head after merge commit");
+    assert_eq!(head.parent_count(), 2);
+    assert_eq!(head.summary(), Some("Merge branch 'feature' into main"));
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("status after merge commit")
         .name,
       base_branch
     );
