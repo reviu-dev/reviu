@@ -3,7 +3,7 @@
 ## Setup
 
 ```
-docker compose up -d
+docker compose -p reviu up -d
 ```
 
 ```
