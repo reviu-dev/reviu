@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 async function request(path: string, init?: RequestInit) {
-  const { authRoutes } = await import('./auth.js')
+  const { authRoutes } = await import('../auth.js')
   return authRoutes.request(`http://localhost${path}`, init)
 }
 

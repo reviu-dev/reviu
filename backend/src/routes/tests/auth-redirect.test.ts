@@ -4,7 +4,7 @@ import {
   DESKTOP_DEEP_LINK_SCHEME,
   desktopDeepLinkSchemeForNodeEnv,
   desktopDeepLinkUrlForNodeEnv,
-} from './auth-redirect.js'
+} from '../auth-redirect.js'
 
 describe('auth redirect helpers', () => {
   it('maps development to the dev desktop scheme', () => {

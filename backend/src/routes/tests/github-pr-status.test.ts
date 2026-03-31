@@ -5,7 +5,7 @@ const convertGithubPullRequestToDraft = vi.fn()
 const invalidateTags = vi.fn()
 const getGithubPullRequestMutationTags = vi.fn()
 
-vi.mock('../middlewares/auth.js', async () => {
+vi.mock('../../middlewares/auth.js', async () => {
   const { createMiddleware } = await import('hono/factory')
 
   return {
@@ -35,9 +35,9 @@ vi.mock('../middlewares/auth.js', async () => {
   }
 })
 
-vi.mock('../plugins/github/service.js', async () => {
-  const actual = await vi.importActual<typeof import('../plugins/github/service.js')>(
-    '../plugins/github/service.js',
+vi.mock('../../plugins/github/service.js', async () => {
+  const actual = await vi.importActual<typeof import('../../plugins/github/service.js')>(
+    '../../plugins/github/service.js',
   )
 
   return {
@@ -47,13 +47,13 @@ vi.mock('../plugins/github/service.js', async () => {
   }
 })
 
-vi.mock('../plugins/github/cache/github-cache-runtime.js', () => ({
+vi.mock('../../plugins/github/cache/github-cache-runtime.js', () => ({
   githubCache: {
     invalidateTags,
   },
 }))
 
-vi.mock('../plugins/github/cache/github-repository-visibility-runtime.js', () => ({
+vi.mock('../../plugins/github/cache/github-repository-visibility-runtime.js', () => ({
   githubRepositoryVisibility: {
     isKnownPublic: vi.fn(),
     clear: vi.fn(),
@@ -61,9 +61,9 @@ vi.mock('../plugins/github/cache/github-repository-visibility-runtime.js', () =>
   },
 }))
 
-vi.mock('../plugins/github/cache/github-cache-policy.js', async () => {
-  const actual = await vi.importActual<typeof import('../plugins/github/cache/github-cache-policy.js')>(
-    '../plugins/github/cache/github-cache-policy.js',
+vi.mock('../../plugins/github/cache/github-cache-policy.js', async () => {
+  const actual = await vi.importActual<typeof import('../../plugins/github/cache/github-cache-policy.js')>(
+    '../../plugins/github/cache/github-cache-policy.js',
   )
 
   return {
@@ -72,12 +72,12 @@ vi.mock('../plugins/github/cache/github-cache-policy.js', async () => {
   }
 })
 
-vi.mock('../plugins/github/metrics/github-metrics-context.js', () => ({
+vi.mock('../../plugins/github/metrics/github-metrics-context.js', () => ({
   runWithGithubMetricsContext: (_context: unknown, callback: () => Promise<unknown>) => callback(),
 }))
 
 async function request(path: string, init?: RequestInit) {
-  const { githubRoutes } = await import('./github.js')
+  const { githubRoutes } = await import('../github.js')
   return githubRoutes.request(`http://localhost${path}`, init)
 }
 

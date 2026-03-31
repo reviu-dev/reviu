@@ -1,9 +1,9 @@
-import type { CreatePullRequestResponse } from '../plugins/github/types.js'
+import type { CreatePullRequestResponse } from '../../plugins/github/types.js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const createGithubPullRequest = vi.fn()
 
-vi.mock('../middlewares/auth.js', async () => {
+vi.mock('../../middlewares/auth.js', async () => {
   const { createMiddleware } = await import('hono/factory')
 
   return {
@@ -33,9 +33,9 @@ vi.mock('../middlewares/auth.js', async () => {
   }
 })
 
-vi.mock('../plugins/github/service.js', async () => {
-  const actual = await vi.importActual<typeof import('../plugins/github/service.js')>(
-    '../plugins/github/service.js',
+vi.mock('../../plugins/github/service.js', async () => {
+  const actual = await vi.importActual<typeof import('../../plugins/github/service.js')>(
+    '../../plugins/github/service.js',
   )
 
   return {
@@ -44,7 +44,7 @@ vi.mock('../plugins/github/service.js', async () => {
   }
 })
 
-vi.mock('../plugins/github/cache/github-cache-runtime.js', () => ({
+vi.mock('../../plugins/github/cache/github-cache-runtime.js', () => ({
   githubCache: {
     getOrLoad: vi.fn(),
     invalidateTags: vi.fn(),
@@ -52,7 +52,7 @@ vi.mock('../plugins/github/cache/github-cache-runtime.js', () => ({
   },
 }))
 
-vi.mock('../plugins/github/cache/github-repository-visibility-runtime.js', () => ({
+vi.mock('../../plugins/github/cache/github-repository-visibility-runtime.js', () => ({
   githubRepositoryVisibility: {
     isKnownPublic: vi.fn(),
     clear: vi.fn(),
@@ -60,7 +60,7 @@ vi.mock('../plugins/github/cache/github-repository-visibility-runtime.js', () =>
   },
 }))
 
-vi.mock('../plugins/github/metrics/github-metrics-context.js', () => ({
+vi.mock('../../plugins/github/metrics/github-metrics-context.js', () => ({
   runWithGithubMetricsContext: (_context: unknown, callback: () => Promise<unknown>) => callback(),
 }))
 
@@ -270,7 +270,7 @@ function makePullRequest(): CreatePullRequestResponse {
 }
 
 async function request(path: string, init?: RequestInit) {
-  const { githubRoutes } = await import('./github.js')
+  const { githubRoutes } = await import('../github.js')
   return githubRoutes.request(`http://localhost${path}`, init)
 }
 
