@@ -2797,7 +2797,7 @@ impl GitPage {
             }
           }
           Ok(GitPageOpenActionResult::MergeBaseBranchReady(branch_ref)) => {
-            if let Err(error) = this.merge_branch_action(branch_ref, cx) {
+            if let Err(error) = this.merge_branch_action(branch_ref, None, cx) {
               this.push_git_action_error_notification(
                 "Update branch failed",
                 error.to_string().into(),
@@ -2926,6 +2926,33 @@ impl GitPage {
     });
   }
 
+  fn set_commit_input_value(
+    &self,
+    value: &str,
+    window: Option<&mut Window>,
+    cx: &mut Context<Self>,
+  ) {
+    let value = value.to_string();
+    if let Some(window) = window {
+      self
+        .commit_input
+        .update(cx, |input, cx| input.set_value(&value, window, cx));
+      return;
+    }
+
+    let commit_input = self.commit_input.clone();
+    let _ = cx.update_window(self.window_handle, move |_, window, cx| {
+      commit_input.update(cx, |input, cx| input.set_value(&value, window, cx));
+    });
+  }
+
+  fn should_surface_command_palette_error_inline(message: &str) -> bool {
+    message == "No repository selected."
+      || message == "Command not available."
+      || message == "No rebase in progress."
+      || message.ends_with("is currently disabled.")
+  }
+
   fn command_palette_error_notification_title(
     action: &CommandPaletteAction,
   ) -> Option<&'static str> {
@@ -2954,13 +2981,18 @@ impl GitPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<Option<SharedString>, SharedString> {
+    let message = err.to_string();
+    if Self::should_surface_command_palette_error_inline(&message) {
+      return Err(message.into());
+    }
+
     if let Some(title) = Self::command_palette_error_notification_title(action) {
-      let message: SharedString = err.to_string().into();
+      let message: SharedString = message.into();
       self.push_git_action_error_notification_in_window(title, message.clone(), window, cx);
       return Ok(Some(message));
     }
 
-    let message: SharedString = format!("Action failed: {err}").into();
+    let message: SharedString = format!("Action failed: {message}").into();
     Err(message)
   }
 
@@ -3964,6 +3996,7 @@ impl GitPage {
   fn merge_branch_action(
     &mut self,
     branch_ref: BranchRef,
+    window: Option<&mut Window>,
     cx: &mut Context<Self>,
   ) -> Result<(), anyhow::Error> {
     let Some(root_path) = self.selected_repo.clone() else {
@@ -4006,12 +4039,9 @@ impl GitPage {
           self.record_git_expected_error("git.merge", "conflict", data.clone());
           self.add_git_breadcrumb("Merge has conflicts", data);
 
-          let commit_input = self.commit_input.clone();
           let merge_message =
             Self::merge_commit_message(branch_ref.name.as_str(), target_branch.as_str());
-          let _ = cx.update_window(self.window_handle, |_, window, cx| {
-            commit_input.update(cx, |input, cx| input.set_value(&merge_message, window, cx));
-          });
+          self.set_commit_input_value(&merge_message, window, cx);
           self.open_file(path, cx);
           Ok(())
         } else {
@@ -4374,7 +4404,7 @@ impl GitPage {
             CommandPaletteBranchKind::Remote => BranchKind::Remote,
           },
         };
-        self.merge_branch_action(branch_ref, cx)
+        self.merge_branch_action(branch_ref, Some(window), cx)
       }
       CommandPaletteAction::AbortMerge => {
         let Some(root_path) = self.selected_repo.clone() else {
