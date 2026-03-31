@@ -155,6 +155,78 @@ fn conflict_background(theme: &Theme, kind: ConflictLineKind) -> Option<gpui::Hs
   }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConflictBlockKind {
+  Current,
+  Incoming,
+}
+
+fn incoming_conflict_border_color(theme: &Theme) -> gpui::Hsla {
+  if theme.is_dark {
+    gpui::Hsla {
+      h: 212.0 / 360.0,
+      s: 0.96,
+      l: 0.58,
+      a: 1.0,
+    }
+  } else {
+    gpui::Hsla {
+      h: 212.0 / 360.0,
+      s: 0.95,
+      l: 0.5,
+      a: 1.0,
+    }
+  }
+}
+
+fn conflict_block_kind(kind: ConflictLineKind) -> Option<ConflictBlockKind> {
+  match kind {
+    ConflictLineKind::Current | ConflictLineKind::CurrentMarker => Some(ConflictBlockKind::Current),
+    ConflictLineKind::Incoming | ConflictLineKind::IncomingMarker => {
+      Some(ConflictBlockKind::Incoming)
+    }
+    ConflictLineKind::Divider => None,
+  }
+}
+
+fn conflict_border_color(theme: &Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
+  match conflict_block_kind(kind)? {
+    ConflictBlockKind::Current => Some(theme.diff_gutter_added()),
+    ConflictBlockKind::Incoming => Some(incoming_conflict_border_color(theme)),
+  }
+}
+
+fn conflict_border_edges(
+  previous: Option<ConflictLineKind>,
+  current: ConflictLineKind,
+  next: Option<ConflictLineKind>,
+) -> Option<(bool, bool)> {
+  let current_block = conflict_block_kind(current)?;
+  Some((
+    previous.and_then(conflict_block_kind) != Some(current_block),
+    next.and_then(conflict_block_kind) != Some(current_block),
+  ))
+}
+
+fn conflict_kind_for_display_line(
+  display_line: usize,
+  projection: Option<&Projection>,
+  doc_line_count: usize,
+  conflict_line_kinds: &HashMap<usize, ConflictLineKind>,
+) -> Option<ConflictLineKind> {
+  let doc_line = if let Some(projection) = projection {
+    projection
+      .lines
+      .get(display_line)
+      .and_then(conflict_doc_line)
+  } else if display_line < doc_line_count {
+    Some(display_line)
+  } else {
+    None
+  }?;
+  conflict_line_kinds.get(&doc_line).copied()
+}
+
 /// Encapsulates layout information for mouse position -> text offset conversion
 #[derive(Clone)]
 pub struct PositionMap {
@@ -841,6 +913,7 @@ pub struct PrepaintState {
   line_backgrounds: Vec<PaintQuad>,
   gap_separators: Vec<PaintQuad>,
   word_diff_quads: Vec<PaintQuad>,
+  conflict_borders: Vec<PaintQuad>,
   group_borders: Vec<PaintQuad>,
   diag_paths: Vec<Path<Pixels>>,
   cursor_quad: Option<PaintQuad>,
@@ -1330,6 +1403,7 @@ impl Element for EditorElement {
     let mut line_backgrounds = Vec::new();
     let mut gap_separators = Vec::new();
     let mut word_diff_quads = Vec::new();
+    let mut conflict_borders = Vec::new();
     let mut group_borders = Vec::new();
     let mut diag_paths = Vec::new();
     let added_bg = theme.diff_added_background();
@@ -1419,9 +1493,12 @@ impl Element for EditorElement {
         }
       }
 
-      let conflict_kind = conflict_doc_line(display_line)
-        .and_then(|doc_line| conflict_line_kinds.get(&doc_line))
-        .copied();
+      let conflict_kind = conflict_kind_for_display_line(
+        *display_idx,
+        projection.as_deref(),
+        doc_line_count,
+        &conflict_line_kinds,
+      );
       let background = if let Some(conflict_kind) = conflict_kind {
         if self.line_visibility(display_line) == LineVisibility::Blank {
           None
@@ -1494,6 +1571,50 @@ impl Element for EditorElement {
         ));
       }
 
+      if let Some(conflict_kind) = conflict_kind
+        && let Some(color) = conflict_border_color(&theme, conflict_kind)
+      {
+        let previous_conflict_kind = display_idx.checked_sub(1).and_then(|idx| {
+          conflict_kind_for_display_line(
+            idx,
+            projection.as_deref(),
+            doc_line_count,
+            &conflict_line_kinds,
+          )
+        });
+        let next_conflict_kind = conflict_kind_for_display_line(
+          display_idx + 1,
+          projection.as_deref(),
+          doc_line_count,
+          &conflict_line_kinds,
+        );
+        let (is_top, is_bottom) =
+          conflict_border_edges(previous_conflict_kind, conflict_kind, next_conflict_kind)
+            .unwrap_or((false, false));
+        let border_thickness = px(1.0);
+        let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
+
+        if is_top {
+          conflict_borders.push(fill(
+            Bounds::new(
+              point(bounds.left(), y),
+              size(bounds.size.width, border_thickness),
+            ),
+            color,
+          ));
+        }
+
+        if is_bottom {
+          conflict_borders.push(fill(
+            Bounds::new(
+              point(bounds.left(), y + line_height - border_thickness),
+              size(bounds.size.width, border_thickness),
+            ),
+            color,
+          ));
+        }
+      }
+
       if let Some(word_diff) = word_diff_for_line(
         *display_idx,
         display_line,
@@ -1532,7 +1653,8 @@ impl Element for EditorElement {
         _ => None,
       };
 
-      if let (Some(projection), Some(group_id)) = (projection.as_ref(), group_id)
+      if conflict_kind.is_none()
+        && let (Some(projection), Some(group_id)) = (projection.as_ref(), group_id)
         && let Some((top_color, bottom_color)) = group_border_colors.get(group_id.as_ref())
       {
         let prev_group = display_idx
@@ -1897,6 +2019,7 @@ impl Element for EditorElement {
       line_backgrounds,
       gap_separators,
       word_diff_quads,
+      conflict_borders,
       group_borders,
       diag_paths,
       cursor_quad,
@@ -2122,6 +2245,11 @@ impl Element for EditorElement {
           window.paint_path(path.clone(), stripe_color);
         }
       });
+    }
+
+    // Paint staged group borders
+    for quad in &prepaint.conflict_borders {
+      window.paint_quad(quad.clone());
     }
 
     // Paint staged group borders
@@ -2508,6 +2636,50 @@ mod tests {
     assert_eq!(border.l, fill_color.l);
     assert!(border.a > fill_color.a);
     assert!(border.a <= 0.28);
+  }
+
+  #[test]
+  fn test_conflict_border_edges_split_current_and_incoming_blocks() {
+    assert_eq!(
+      conflict_border_edges(
+        None,
+        ConflictLineKind::CurrentMarker,
+        Some(ConflictLineKind::Current),
+      ),
+      Some((true, false))
+    );
+    assert_eq!(
+      conflict_border_edges(
+        Some(ConflictLineKind::CurrentMarker),
+        ConflictLineKind::Current,
+        Some(ConflictLineKind::Divider),
+      ),
+      Some((false, true))
+    );
+    assert_eq!(
+      conflict_border_edges(
+        Some(ConflictLineKind::Divider),
+        ConflictLineKind::Incoming,
+        Some(ConflictLineKind::IncomingMarker),
+      ),
+      Some((true, false))
+    );
+    assert_eq!(
+      conflict_border_edges(
+        Some(ConflictLineKind::Incoming),
+        ConflictLineKind::IncomingMarker,
+        None,
+      ),
+      Some((false, true))
+    );
+    assert_eq!(
+      conflict_border_edges(
+        Some(ConflictLineKind::Current),
+        ConflictLineKind::Divider,
+        Some(ConflictLineKind::Incoming),
+      ),
+      None
+    );
   }
 
   #[test]
