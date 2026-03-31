@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 Word diff highlights are now more precise, Reviu can better show the exact inserted text inside function names in inline and split diff views instead of marking the full name as changed.
 
+### Pull Request Merge Warnings
+
+Pull request overview pages now highlight merge conflicts and out-of-date branches more clearly, so you can spot blockers before opening the merge actions.
+
 ### Pull Request Changes Search Performance
 
 Searching file contents from the pull request changes tree is now faster when you include unchanged local files from the current branch, Reviu now scans the local HEAD snapshot in a single pass.
