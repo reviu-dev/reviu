@@ -27,6 +27,7 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable as _, StyledExt,
+  alert::Alert,
   avatar::Avatar,
   button::{Button, ButtonVariant, ButtonVariants as _},
   clipboard::Clipboard,
@@ -719,6 +720,66 @@ fn render_checks_summary_card(
       )
     })
     .into_any_element()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OverviewPrAlertContent {
+  id: &'static str,
+  title: &'static str,
+  message: String,
+}
+
+fn overview_pr_alert_content(
+  merge_readiness: Option<&GithubPullRequestMergeReadiness>,
+  checks: Option<&GithubPullRequestChecksSummary>,
+) -> Option<OverviewPrAlertContent> {
+  if let Some(readiness) = merge_readiness {
+    match readiness
+      .mergeable_state
+      .as_deref()
+      .map(str::trim)
+      .map(str::to_ascii_lowercase)
+      .as_deref()
+    {
+      Some("dirty") => {
+        return Some(OverviewPrAlertContent {
+          id: "github-pr-overview-conflicts-alert",
+          title: "Merge conflicts detected",
+          message: readiness.message.clone(),
+        });
+      }
+      Some("behind") => {
+        return Some(OverviewPrAlertContent {
+          id: "github-pr-overview-out-of-date-alert",
+          title: "Branch is out of date",
+          message: readiness.message.clone(),
+        });
+      }
+      _ => {}
+    }
+
+    if matches!(
+      readiness.status,
+      GithubPullRequestMergeReadinessStatus::Blocked
+    ) {
+      return Some(OverviewPrAlertContent {
+        id: "github-pr-overview-merge-blocked-alert",
+        title: "Merge is blocked",
+        message: readiness.message.clone(),
+      });
+    }
+  }
+
+  if checks.is_some_and(|checks| checks.requires_up_to_date_branch) {
+    return Some(OverviewPrAlertContent {
+      id: "github-pr-overview-out-of-date-alert",
+      title: "Branch is out of date",
+      message: "The base branch rules require this pull request to be up to date before merging."
+        .to_string(),
+    });
+  }
+
+  None
 }
 
 fn conversation_source_priority(kind: GithubPrOverviewConversationItemKind) -> u8 {
@@ -3184,6 +3245,14 @@ impl GithubPrDetailsPage {
         .any(|method| *method == self.merge_method)
         .then_some(self.merge_method)
     })
+  }
+
+  fn render_overview_pr_alert(&self) -> Option<AnyElement> {
+    let content = overview_pr_alert_content(self.merge_readiness.as_ref(), self.checks.as_ref())?;
+
+    let alert = Alert::warning(content.id, content.message).title(content.title);
+
+    Some(alert.into_any_element())
   }
 
   fn current_open_target(&self) -> GithubPrOpenTarget {
@@ -7095,11 +7164,6 @@ impl GithubPrDetailsPage {
               checks.required_checks_pending,
             )),
         )
-        .when(checks.requires_up_to_date_branch, |this| {
-          this.child(div().text_xs().text_color(theme.muted_foreground).child(
-            "The base branch rules require this pull request to be up to date before merging.",
-          ))
-        })
         .into_any_element();
     }
 
@@ -8039,6 +8103,7 @@ impl GithubPrDetailsPage {
     let description_previews = self.cached_github_code_reference_previews_for_requests(
       &self.description_code_reference_requests,
     );
+    let overview_pr_alert = self.render_overview_pr_alert();
 
     let content = v_flex()
       .w_full()
@@ -8198,6 +8263,7 @@ impl GithubPrDetailsPage {
             ),
         ),
       )
+      .when_some(overview_pr_alert, |this, alert| this.child(alert))
       .child(stats_badges)
       .when_some(labels_row, |this, labels| this.child(labels))
       .child(
@@ -10529,6 +10595,17 @@ mod tests {
     }
   }
 
+  fn make_merge_readiness_with_state(
+    status: GithubPullRequestMergeReadinessStatus,
+    mergeable_state: Option<&str>,
+    message: &str,
+  ) -> GithubPullRequestMergeReadiness {
+    let mut readiness = make_merge_readiness(status, vec![GithubPullRequestMergeMethod::Merge]);
+    readiness.mergeable_state = mergeable_state.map(ToString::to_string);
+    readiness.message = message.to_string();
+    readiness
+  }
+
   fn make_checks_summary() -> GithubPullRequestChecksSummary {
     GithubPullRequestChecksSummary {
       head_sha: "head123".to_string(),
@@ -10553,6 +10630,54 @@ mod tests {
       other_checks: Vec::new(),
       legacy_statuses: Vec::new(),
     }
+  }
+
+  #[test]
+  fn overview_pr_alert_content_returns_conflicts_for_dirty_mergeable_state() {
+    let readiness = make_merge_readiness_with_state(
+      GithubPullRequestMergeReadinessStatus::Blocked,
+      Some("dirty"),
+      "This pull request has merge conflicts that must be resolved before it can be merged.",
+    );
+
+    let alert = overview_pr_alert_content(Some(&readiness), None).expect("alert");
+
+    assert_eq!(alert.id, "github-pr-overview-conflicts-alert");
+    assert_eq!(alert.title, "Merge conflicts detected");
+  }
+
+  #[test]
+  fn overview_pr_alert_content_returns_out_of_date_for_behind_mergeable_state() {
+    let readiness = make_merge_readiness_with_state(
+      GithubPullRequestMergeReadinessStatus::Blocked,
+      Some("behind"),
+      "This pull request branch is out of date with the base branch.",
+    );
+
+    let alert = overview_pr_alert_content(Some(&readiness), None).expect("alert");
+
+    assert_eq!(alert.id, "github-pr-overview-out-of-date-alert");
+    assert_eq!(alert.title, "Branch is out of date");
+  }
+
+  #[test]
+  fn overview_pr_alert_content_falls_back_to_checks_requirement() {
+    let alert = overview_pr_alert_content(None, Some(&make_checks_summary())).expect("alert");
+
+    assert_eq!(alert.id, "github-pr-overview-out-of-date-alert");
+    assert_eq!(alert.title, "Branch is out of date");
+  }
+
+  #[test]
+  fn overview_pr_alert_content_returns_none_when_pr_is_ready() {
+    let mut checks = make_checks_summary();
+    checks.requires_up_to_date_branch = false;
+    let readiness = make_merge_readiness(
+      GithubPullRequestMergeReadinessStatus::Ready,
+      vec![GithubPullRequestMergeMethod::Merge],
+    );
+
+    assert!(overview_pr_alert_content(Some(&readiness), Some(&checks)).is_none());
   }
 
   #[gpui::test]
@@ -10655,6 +10780,25 @@ mod tests {
       .size;
     assert!(button_bounds.width > gpui::px(0.0));
     assert!(button_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  fn overview_conflicts_alert_is_built_when_pr_has_merge_conflicts(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.merge_readiness = Some(make_merge_readiness_with_state(
+        GithubPullRequestMergeReadinessStatus::Blocked,
+        Some("dirty"),
+        "This pull request has merge conflicts that must be resolved before it can be merged.",
+      ));
+      cx.notify();
+    });
+
+    let has_alert = page.read_with(cx, |this, _cx| this.render_overview_pr_alert().is_some());
+    assert!(has_alert);
   }
 
   #[gpui::test]
