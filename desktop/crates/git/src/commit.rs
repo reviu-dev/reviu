@@ -620,6 +620,97 @@ mod tests {
   }
 
   #[test]
+  fn push_publishes_branch_created_from_remote_under_new_name() {
+    let remote = TempBareRepo::init("commit-push-create-from-remote-origin");
+    let source = TempRepo::init("commit-push-create-from-remote-source");
+    let clone_dir = TempDir::new("commit-push-create-from-remote-clone");
+    let rel_path = Path::new("README.md");
+
+    commit_text_file(&source.path, rel_path, "v1\n", "initial");
+
+    let source_repo = Repository::open(&source.path).expect("open source");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin");
+
+    let base_branch = branch_name(&source.path);
+    push_branch_to_remote(&source.path, &base_branch, "origin");
+    set_remote_head(&remote.path, &base_branch);
+
+    crate::create_branch(&source.path, "feature").expect("create source feature branch");
+    crate::switch_branch(
+      &source.path,
+      &crate::BranchRef {
+        name: "feature".to_string(),
+        kind: crate::BranchKind::Local,
+      },
+    )
+    .expect("switch source to feature");
+    commit_text_file(&source.path, rel_path, "v2-feature\n", "feature change");
+    let source_feature_head = head_oid(&source.path);
+    push_branch_to_remote(&source.path, "feature", "origin");
+
+    let _clone_repo = Repository::clone(
+      remote.path.to_str().expect("remote path utf8"),
+      &clone_dir.path,
+    )
+    .expect("clone remote");
+
+    crate::create_branch_from(
+      &clone_dir.path,
+      "my-feature",
+      &crate::BranchRef {
+        name: "origin/feature".to_string(),
+        kind: crate::BranchKind::Remote,
+      },
+    )
+    .expect("create branch from remote");
+    crate::switch_branch(
+      &clone_dir.path,
+      &crate::BranchRef {
+        name: "my-feature".to_string(),
+        kind: crate::BranchKind::Local,
+      },
+    )
+    .expect("switch to created branch");
+
+    let clone_repo = Repository::open(&clone_dir.path).expect("open clone");
+    let created_before_push = clone_repo
+      .find_branch("my-feature", BranchType::Local)
+      .expect("find created local branch before push");
+    assert!(created_before_push.upstream().is_err());
+
+    commit_text_file(
+      &clone_dir.path,
+      rel_path,
+      "v3-my-feature\n",
+      "my-feature change",
+    );
+    let expected_head = head_oid(&clone_dir.path);
+
+    push(&clone_dir.path, false).expect("publish created branch");
+
+    assert_eq!(remote_branch_oid(&remote.path, "my-feature"), expected_head);
+    assert_eq!(
+      remote_branch_oid(&remote.path, "feature"),
+      source_feature_head
+    );
+
+    let clone_repo = Repository::open(&clone_dir.path).expect("open clone after push");
+    let created_after_push = clone_repo
+      .find_branch("my-feature", BranchType::Local)
+      .expect("find created local branch after push");
+    let upstream_name = created_after_push
+      .upstream()
+      .expect("upstream configured after push")
+      .name()
+      .expect("read upstream name")
+      .unwrap_or("")
+      .to_string();
+    assert_eq!(upstream_name, "origin/my-feature");
+  }
+
+  #[test]
   fn push_force_overwrites_remote_after_non_fast_forward_rejection() {
     let source = TempRepo::init("commit-push-force-source");
     let remote = TempBareRepo::init("commit-push-force-remote");
