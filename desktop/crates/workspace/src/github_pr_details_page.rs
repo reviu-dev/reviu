@@ -1147,36 +1147,33 @@ fn overview_conversation_scope_id(
     .wrapping_add(id as usize)
 }
 
-fn overview_stats_badge_labels(pr: &GithubPullRequestDetails) -> Vec<String> {
-  vec![
-    format!("Commits {}", pr.commits),
-    format!("Additions +{}", pr.additions),
-    format!("Deletions -{}", pr.deletions),
-    format!("Files changed {}", pr.changed_files),
-  ]
+fn overview_change_stat_labels(pr: &GithubPullRequestDetails) -> [String; 2] {
+  [format!("+{}", pr.additions), format!("-{}", pr.deletions)]
 }
 
-fn overview_stats_badges(
+fn pr_changes_tab_count_label(changed_files: u64) -> SharedString {
+  changed_files.to_string().into()
+}
+
+fn overview_change_stats(
   pr: &GithubPullRequestDetails,
   theme: &gpui_component::Theme,
 ) -> Vec<gpui::AnyElement> {
-  let labels = overview_stats_badge_labels(pr);
-  let colors = [
-    theme.status_blue(),
-    theme.status_green(),
-    theme.status_red(),
-    theme.status_orange(),
-  ];
-  labels
-    .into_iter()
-    .zip(colors)
-    .map(|(label, color)| {
-      StatusTag::new(color)
-        .outline()
-        .child(label)
-        .into_any_element()
-    })
-    .collect()
+  let [additions, deletions] = overview_change_stat_labels(pr);
+  vec![
+    div()
+      .text_sm()
+      .font_medium()
+      .text_color(theme.status_green())
+      .child(additions)
+      .into_any_element(),
+    div()
+      .text_sm()
+      .font_medium()
+      .text_color(theme.status_red())
+      .child(deletions)
+      .into_any_element(),
+  ]
 }
 
 #[derive(Clone)]
@@ -6822,6 +6819,23 @@ impl GithubPrDetailsPage {
 
   fn render_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let changes_tab = if let Some(pull_request) = self.pull_request.as_ref() {
+      Tab::new().child(
+        h_flex().items_center().gap_2().child("Changes").child(
+          div()
+            .debug_selector(|| "github-pr-changes-tab-count".to_string())
+            .child(
+              Tag::secondary()
+                .small()
+                .rounded_full()
+                .child(pr_changes_tab_count_label(pull_request.changed_files)),
+            ),
+        ),
+      )
+    } else {
+      Tab::new().label("Changes")
+    };
+
     let checks_tab = if let Some(checks) = self.checks.as_ref() {
       Tab::new().child(
         h_flex()
@@ -6843,7 +6857,7 @@ impl GithubPrDetailsPage {
         this.set_active_tab(*ix, window, cx);
       }))
       .child(Tab::new().label("Overview"))
-      .child(Tab::new().label("Changes"))
+      .child(changes_tab)
       .child(checks_tab);
 
     let back_button = || {
@@ -8069,11 +8083,6 @@ impl GithubPrDetailsPage {
       .filter(|value| !value.trim().is_empty())
       .unwrap_or_else(|| "No description provided.".to_string());
 
-    let stats_badges = h_flex()
-      .gap_2()
-      .flex_wrap()
-      .children(overview_stats_badges(pr, &theme));
-
     let labels_row = if pr.labels.is_empty() {
       None
     } else {
@@ -8193,6 +8202,22 @@ impl GithubPrDetailsPage {
                   .text_sm()
                   .text_color(theme.foreground)
                   .child(updated_at),
+              )
+              .child(
+                div()
+                  .debug_selector(|| {
+                    "github-pr-overview-updated-change-stats-separator".to_string()
+                  })
+                  .text_sm()
+                  .text_color(theme.muted_foreground)
+                  .child("•"),
+              )
+              .child(
+                h_flex()
+                  .debug_selector(|| "github-pr-overview-updated-change-stats".to_string())
+                  .items_center()
+                  .gap_2()
+                  .children(overview_change_stats(pr, &theme)),
               ),
           )
           .when_some(merged_at.clone(), |this, merged| {
@@ -8264,7 +8289,6 @@ impl GithubPrDetailsPage {
         ),
       )
       .when_some(overview_pr_alert, |this, alert| this.child(alert))
-      .child(stats_badges)
       .when_some(labels_row, |this, labels| this.child(labels))
       .child(
         v_flex()
@@ -10783,6 +10807,49 @@ mod tests {
   }
 
   #[gpui::test]
+  fn changes_tab_renders_changed_files_count_tag(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let count_bounds = cx
+      .debug_bounds("github-pr-changes-tab-count")
+      .expect("changes tab count bounds")
+      .size;
+    assert!(count_bounds.width > gpui::px(0.0));
+    assert!(count_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  fn overview_updated_row_renders_inline_change_stats(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let separator_bounds = cx
+      .debug_bounds("github-pr-overview-updated-change-stats-separator")
+      .expect("updated row separator bounds")
+      .size;
+    let stats_bounds = cx
+      .debug_bounds("github-pr-overview-updated-change-stats")
+      .expect("updated row change stats bounds")
+      .size;
+
+    assert!(separator_bounds.width > gpui::px(0.0));
+    assert!(separator_bounds.height > gpui::px(0.0));
+    assert!(stats_bounds.width > gpui::px(0.0));
+    assert!(stats_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
   fn overview_conflicts_alert_is_built_when_pr_has_merge_conflicts(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
@@ -12634,17 +12701,11 @@ mod tests {
   }
 
   #[test]
-  fn overview_stats_badge_labels_exclude_comments_counts() {
+  fn overview_change_stat_labels_are_compact() {
     let pr = make_pr_details_for_stats();
-    let labels = overview_stats_badge_labels(&pr);
+    let labels = overview_change_stat_labels(&pr);
 
-    assert_eq!(labels.len(), 4);
-    assert!(labels.iter().all(|label| !label.starts_with("Comments ")));
-    assert!(
-      labels
-        .iter()
-        .all(|label| !label.starts_with("Review comments "))
-    );
+    assert_eq!(labels, ["+20".to_string(), "-4".to_string()]);
   }
 
   #[test]
