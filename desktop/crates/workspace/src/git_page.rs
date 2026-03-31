@@ -10347,7 +10347,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn command_palette_create_branch_from_remote_creates_branch_with_upstream(
+  async fn command_palette_create_branch_from_remote_keeps_branch_publishable(
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
@@ -10398,20 +10398,17 @@ mod tests {
 
     let status = current_branch_status(&clone_dir.path).expect("status after create from remote");
     assert_eq!(status.name, "my-feature");
-    assert!(status.has_upstream);
+    assert!(!status.has_upstream);
+    assert_eq!(
+      GitPage::push_action_label(Some(&status), true),
+      "Push (Publish branch)"
+    );
 
     let clone_repo = Repository::open(&clone_dir.path).expect("open clone repo");
     let created = clone_repo
       .find_branch("my-feature", BranchType::Local)
       .expect("find created branch");
-    let upstream = created
-      .upstream()
-      .expect("created branch upstream")
-      .name()
-      .expect("upstream name")
-      .expect("non-empty upstream")
-      .to_string();
-    assert_eq!(upstream, "origin/feature");
+    assert!(created.upstream().is_err());
   }
 
   #[test]

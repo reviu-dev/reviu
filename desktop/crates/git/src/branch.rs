@@ -588,11 +588,6 @@ pub fn create_branch_from(repo_root: &Path, name: &str, base: &BranchRef) -> Res
     .with_context(|| format!("resolve branch {:?}", base.name))?;
   let commit = repo.find_commit(oid)?;
   repo.branch(name, &commit, false)?;
-  if base.kind == BranchKind::Remote
-    && let Ok(mut local_branch) = repo.find_branch(name, BranchType::Local)
-  {
-    let _ = local_branch.set_upstream(Some(&base.name));
-  }
   Ok(())
 }
 
@@ -2759,7 +2754,7 @@ mod tests {
   }
 
   #[test]
-  fn create_branch_from_remote_creates_branch_with_upstream() {
+  fn create_branch_from_remote_creates_branch_without_upstream() {
     let remote = TempBareRepo::init("branch-create-from-remote-origin");
     let source = TempRepo::init("branch-create-from-remote-source");
     let clone_dir = TempDir::new("branch-create-from-remote-clone");
@@ -2797,14 +2792,7 @@ mod tests {
     let local_branch = clone_repo
       .find_branch("my-feature", BranchType::Local)
       .expect("find created local branch");
-    let upstream = local_branch
-      .upstream()
-      .expect("branch upstream")
-      .name()
-      .expect("upstream name")
-      .expect("non-empty upstream")
-      .to_string();
-    assert_eq!(upstream, "origin/feature");
+    assert!(local_branch.upstream().is_err());
   }
 
   #[test]
