@@ -235,7 +235,7 @@ async function fetchManifestFromRelease(release: GithubReleaseRef): Promise<Desk
 }
 
 async function loadDevelopmentManifestFromFile(): Promise<DesktopUpdateManifest> {
-  const manifestPath = new URL('../../dev/desktop-update.manifest.json', import.meta.url)
+  const manifestPath = new URL('../../../dev/desktop-update.manifest.json', import.meta.url)
 
   let contents: string
   try {

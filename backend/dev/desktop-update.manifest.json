@@ -1,21 +1,14 @@
 {
-  "version": "0.0.1",
-  "minimumSupportedVersion": "0.0.1",
-  "releaseNotesUrl": "https://reviu.dev/releases/0.1.0",
+  "version": "0.0.9",
+  "minimumSupportedVersion": "0.0.0",
+  "releaseNotesUrl": "https://github.com/joris-gallot/reviu/releases/tag/v0.0.9",
   "artifacts": [
     {
       "platform": "macos",
       "arch": "aarch64",
-      "url": "https://reviu.dev/downloads/reviu-0.1.0-aarch64.dmg",
-      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      "size": 1024
-    },
-    {
-      "platform": "macos",
-      "arch": "x86_64",
-      "url": "https://reviu.dev/downloads/reviu-0.1.0-x86_64.dmg",
-      "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-      "size": 1024
+      "url": "https://github.com/joris-gallot/reviu/releases/download/v0.0.9/Reviu-0.0.9-macos-aarch64.dmg",
+      "sha256": "23b50f6d954c4fac99256eee0315b0a34a87a224255ea4b0b54036e35e3c3bfa",
+      "size": 23569624
     }
   ]
 }
