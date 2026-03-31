@@ -35,6 +35,7 @@ use gpui_component::{
   checkbox::Checkbox,
   dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
   h_flex,
+  input::InputEvent,
   kbd::Kbd,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{DropdownMenu, PopupMenuItem},
@@ -2542,6 +2543,7 @@ impl GitPage {
     };
 
     view.subscribe_to_file_list(cx);
+    view.subscribe_to_commit_input(window, cx);
     view.reload_status(cx);
     view.refresh_branches(cx);
     view.start_polling(cx);
@@ -2631,6 +2633,7 @@ impl GitPage {
     };
 
     view.subscribe_to_file_list(cx);
+    view.subscribe_to_commit_input(window, cx);
     view
   }
 
@@ -2799,6 +2802,19 @@ impl GitPage {
           }
         }
         ListEvent::Cancel => {}
+      },
+    )
+    .detach();
+  }
+
+  fn subscribe_to_commit_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    cx.subscribe_in(
+      &self.commit_input,
+      window,
+      |this, _state, event: &InputEvent, window, cx| {
+        if let InputEvent::PressEnter { secondary: true } = event {
+          this.commit_changes_inner(window, cx);
+        }
       },
     )
     .detach();
@@ -13995,6 +14011,62 @@ mod tests {
       .and_then(|head| head.peel_to_commit())
       .expect("read head");
     assert_eq!(head.summary(), Some("feat: update readme"));
+    assert!(
+      list_repo_status(&repo.path)
+        .expect("status after commit")
+        .is_empty()
+    );
+
+    let input_value = git_page.read_with(cx, |this, cx| {
+      this.commit_input.read(cx).value().to_string()
+    });
+    assert!(input_value.is_empty());
+  }
+
+  #[gpui::test]
+  async fn commit_input_secondary_enter_stages_and_commits_when_ready(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-commit-secondary-enter");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
+    std::fs::write(repo.path.join(rel_path), "v2\n").expect("update file");
+    let entries = list_repo_status(&repo.path).expect("list status after edit");
+    assert!(!entries.is_empty());
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.status_entries = entries.clone();
+      this.has_staged_changes = false;
+      this.commit_input.update(cx, |input, cx| {
+        input.set_value("feat: secondary enter commit", window, cx)
+      });
+
+      this.commit_input.update(cx, |_input, cx| {
+        cx.emit(InputEvent::PressEnter { secondary: true })
+      });
+    });
+
+    cx.cx.run_until_parked();
+    cx.run_until_parked();
+
+    let commit_task = git_page.update_in(cx, |this, _window, _cx| {
+      this.status_task.take().expect("commit task")
+    });
+    commit_task.await;
+
+    if let Some(reload_task) = git_page.update_in(cx, |this, _window, _| this.status_task.take()) {
+      reload_task.await;
+    }
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let head = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read head");
+    assert_eq!(head.summary(), Some("feat: secondary enter commit"));
     assert!(
       list_repo_status(&repo.path)
         .expect("status after commit")
