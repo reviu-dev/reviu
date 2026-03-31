@@ -16,9 +16,10 @@ use gfm_markdown_viewer::{
   render_github_code_reference_preview_card, render_markdown,
 };
 use git::{
-  DiffKind, DiffSet, FileDiff, GitStore, compute_buffer_diff, create_stash, current_branch_status,
-  current_github_remote_repo, current_head_sha, default_stash_message, list_repo_head_files,
-  list_repo_status, search_repo_head_contents, switch_to_branch_name, sync_current_branch_to_head,
+  DiffKind, DiffSet, FileDiff, GitStore, RepoStatusKind, compute_buffer_diff, create_stash,
+  current_branch_status, current_github_remote_repo, current_head_sha, default_stash_message,
+  is_merge_in_progress, is_rebase_in_progress, list_repo_head_files, list_repo_status,
+  search_repo_head_contents, switch_to_branch_name, sync_current_branch_to_head,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, ListAlignment,
@@ -27,7 +28,6 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable as _, StyledExt,
-  alert::Alert,
   avatar::Avatar,
   button::{Button, ButtonVariant, ButtonVariants as _},
   clipboard::Clipboard,
@@ -79,6 +79,7 @@ use crate::{
   date_format::format_relative_time,
   file_preview::{is_markdown_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
+  git_page::GitPageHandle,
   github_navigation::{
     SamePrGfmNavigation, open_repo_target, same_pr_gfm_navigation, should_open_externally,
   },
@@ -723,8 +724,16 @@ fn render_checks_summary_card(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+enum OverviewPrAlertKind {
+  Conflicts,
+  OutOfDate,
+  Blocked,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct OverviewPrAlertContent {
   id: &'static str,
+  kind: OverviewPrAlertKind,
   title: &'static str,
   message: String,
 }
@@ -744,6 +753,7 @@ fn overview_pr_alert_content(
       Some("dirty") => {
         return Some(OverviewPrAlertContent {
           id: "github-pr-overview-conflicts-alert",
+          kind: OverviewPrAlertKind::Conflicts,
           title: "Merge conflicts detected",
           message: readiness.message.clone(),
         });
@@ -751,6 +761,7 @@ fn overview_pr_alert_content(
       Some("behind") => {
         return Some(OverviewPrAlertContent {
           id: "github-pr-overview-out-of-date-alert",
+          kind: OverviewPrAlertKind::OutOfDate,
           title: "Branch is out of date",
           message: readiness.message.clone(),
         });
@@ -764,6 +775,7 @@ fn overview_pr_alert_content(
     ) {
       return Some(OverviewPrAlertContent {
         id: "github-pr-overview-merge-blocked-alert",
+        kind: OverviewPrAlertKind::Blocked,
         title: "Merge is blocked",
         message: readiness.message.clone(),
       });
@@ -773,6 +785,7 @@ fn overview_pr_alert_content(
   if checks.is_some_and(|checks| checks.requires_up_to_date_branch) {
     return Some(OverviewPrAlertContent {
       id: "github-pr-overview-out-of-date-alert",
+      kind: OverviewPrAlertKind::OutOfDate,
       title: "Branch is out of date",
       message: "The base branch rules require this pull request to be up to date before merging."
         .to_string(),
@@ -1932,6 +1945,12 @@ enum GithubPrLocalProjectAvailability {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+enum GithubPrLocalProjectPostAction {
+  EnsurePrHeadThenOpenGitPageMergeBase { base_branch_name: String },
+  OpenGitPageMergeBase { base_branch_name: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum GithubPrBackTarget {
   GithubHome,
   Repo {
@@ -2010,6 +2029,29 @@ fn local_repo_snapshot(
     head_sha,
     has_uncommitted_changes,
   })
+}
+
+fn local_repo_has_active_conflict_resolution(repo_root: &Path) -> bool {
+  if is_merge_in_progress(repo_root).unwrap_or(false)
+    || is_rebase_in_progress(repo_root).unwrap_or(false)
+  {
+    return true;
+  }
+
+  list_repo_status(repo_root)
+    .map(|entries| {
+      entries
+        .iter()
+        .any(|entry| entry.status == RepoStatusKind::Conflicted)
+    })
+    .unwrap_or(false)
+}
+
+fn should_prepare_local_branch_before_opening_git_page(
+  repo_root: &Path,
+  has_uncommitted_changes: bool,
+) -> bool {
+  has_uncommitted_changes && !local_repo_has_active_conflict_resolution(repo_root)
 }
 
 fn find_matching_recent_local_repo(
@@ -2572,6 +2614,12 @@ impl GithubPrDetailsPage {
     Self::local_project_availability_for_repo(pull_request, local_repo)
   }
 
+  fn effective_local_repo_has_uncommitted_changes(&self, cx: &App) -> bool {
+    self
+      .effective_local_repo_for_pull_request(cx)
+      .is_some_and(|repo| repo.has_uncommitted_changes)
+  }
+
   fn local_project_mode_active(&self, cx: &App) -> bool {
     self.show_local_project_files
       && matches!(
@@ -2993,6 +3041,7 @@ impl GithubPrDetailsPage {
 
   fn confirm_switch_local_branch_with_stash(
     &mut self,
+    post_action: Option<GithubPrLocalProjectPostAction>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -3010,17 +3059,80 @@ impl GithubPrDetailsPage {
 
     window.open_alert_dialog(cx, move |alert, _, _| {
       let view = view.clone();
+      let post_action = post_action.clone();
       ConfirmDialog::new(title.clone(), div().child(message.clone()))
         .confirm_text("Stash and switch")
         .cancel_text("Cancel")
         .on_confirm(move |_, window, cx| {
+          let post_action = post_action.clone();
           view.update(cx, |this, cx| {
-            this.switch_local_branch_to_pr_branch(true, window, cx);
+            this.switch_local_branch_to_pr_branch(true, post_action, window, cx);
           });
           true
         })
         .build(alert)
     });
+  }
+
+  fn confirm_prepare_local_branch_for_git_page_with_stash(
+    &mut self,
+    repo_root: PathBuf,
+    post_action: GithubPrLocalProjectPostAction,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let title: SharedString = "Stash changes before opening Git page?".into();
+    let message: SharedString =
+      "Create a stash with tracked and untracked files, then prepare this PR branch in the Git page?"
+        .into();
+    let view = cx.entity();
+
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      let repo_root = repo_root.clone();
+      let post_action = post_action.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text("Stash and open Git page")
+        .cancel_text("Cancel")
+        .on_confirm(move |_, window, cx| {
+          let repo_root = repo_root.clone();
+          let post_action = post_action.clone();
+          view.update(cx, |this, cx| {
+            let _ = window;
+            this.start_sync_local_branch_to_pr_head(repo_root, true, Some(post_action), cx);
+          });
+          true
+        })
+        .build(alert)
+    });
+  }
+
+  fn execute_local_project_post_action(
+    &mut self,
+    post_action: GithubPrLocalProjectPostAction,
+    repo_root: PathBuf,
+    cx: &mut Context<Self>,
+  ) {
+    match post_action {
+      GithubPrLocalProjectPostAction::EnsurePrHeadThenOpenGitPageMergeBase { base_branch_name } => {
+        let current_head = current_head_sha(&repo_root).ok().flatten();
+        let pr_head = self.pull_request.as_ref().map(|pr| pr.head_sha.as_str());
+
+        if current_head.as_deref() == pr_head {
+          GitPageHandle::show_repository_and_merge_base(repo_root, base_branch_name, cx);
+        } else {
+          self.start_sync_local_branch_to_pr_head(
+            repo_root,
+            false,
+            Some(GithubPrLocalProjectPostAction::OpenGitPageMergeBase { base_branch_name }),
+            cx,
+          );
+        }
+      }
+      GithubPrLocalProjectPostAction::OpenGitPageMergeBase { base_branch_name } => {
+        GitPageHandle::show_repository_and_merge_base(repo_root, base_branch_name, cx);
+      }
+    }
   }
 
   fn prompt_or_switch_local_branch_to_pr_branch(
@@ -3041,27 +3153,23 @@ impl GithubPrDetailsPage {
     };
 
     if has_uncommitted_changes {
-      self.confirm_switch_local_branch_with_stash(window, cx);
+      self.confirm_switch_local_branch_with_stash(None, window, cx);
     } else {
-      self.switch_local_branch_to_pr_branch(false, window, cx);
+      self.switch_local_branch_to_pr_branch(false, None, window, cx);
     }
   }
 
-  fn switch_local_branch_to_pr_branch(
+  fn start_switch_local_branch_to_pr_branch(
     &mut self,
+    repo_root: PathBuf,
     stash_before_switch: bool,
-    window: &mut Window,
+    post_action: Option<GithubPrLocalProjectPostAction>,
     cx: &mut Context<Self>,
   ) {
     if self.local_branch_switch_loading {
       return;
     }
 
-    let GithubPrLocalProjectAvailability::NeedsBranchSwitch { repo_root, .. } =
-      self.local_project_availability(cx)
-    else {
-      return;
-    };
     let Some(pull_request) = self.pull_request.as_ref() else {
       return;
     };
@@ -3072,7 +3180,7 @@ impl GithubPrDetailsPage {
     self.local_project_update_error = None;
     cx.notify();
 
-    let task = cx.spawn_in(window, async move |this, cx| {
+    let task = cx.spawn(async move |this, cx| {
       let repo_root_for_action = repo_root.clone();
       let branch_name_for_action = branch_name.clone();
       let result = unblock(move || {
@@ -3088,7 +3196,7 @@ impl GithubPrDetailsPage {
       })
       .await;
 
-      let _ = this.update_in(cx, |this, _, cx| {
+      let _ = this.update(cx, |this, cx| {
         this.local_branch_switch_task = None;
         this.local_branch_switch_loading = false;
 
@@ -3100,6 +3208,9 @@ impl GithubPrDetailsPage {
               this.sync_resolved_local_repo_snapshot(&snapshot);
             }
             this.load_local_project_files(repo_root.clone(), cx);
+            if let Some(post_action) = post_action.clone() {
+              this.execute_local_project_post_action(post_action, repo_root.clone(), cx);
+            }
           }
           Err(error) => {
             this.local_branch_switch_error = Some(error.to_string().into());
@@ -3113,16 +3224,33 @@ impl GithubPrDetailsPage {
     self.local_branch_switch_task = Some(task);
   }
 
-  fn update_local_branch_to_pr_head(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if self.local_project_update_loading {
-      return;
-    }
-
-    let GithubPrLocalProjectAvailability::NeedsUpdate { repo_root } =
+  fn switch_local_branch_to_pr_branch(
+    &mut self,
+    stash_before_switch: bool,
+    post_action: Option<GithubPrLocalProjectPostAction>,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let GithubPrLocalProjectAvailability::NeedsBranchSwitch { repo_root, .. } =
       self.local_project_availability(cx)
     else {
       return;
     };
+
+    self.start_switch_local_branch_to_pr_branch(repo_root, stash_before_switch, post_action, cx);
+  }
+
+  fn start_sync_local_branch_to_pr_head(
+    &mut self,
+    repo_root: PathBuf,
+    stash_before_update: bool,
+    post_action: Option<GithubPrLocalProjectPostAction>,
+    cx: &mut Context<Self>,
+  ) {
+    if self.local_project_update_loading {
+      return;
+    }
+
     let Some(pull_request) = self.pull_request.as_ref() else {
       return;
     };
@@ -3133,11 +3261,15 @@ impl GithubPrDetailsPage {
     self.local_project_update_error = None;
     cx.notify();
 
-    let task = cx.spawn_in(window, async move |this, cx| {
+    let task = cx.spawn(async move |this, cx| {
       let repo_root_for_update = repo_root.clone();
       let branch_name_for_update = branch_name.clone();
       let target_head_sha_for_update = target_head_sha.clone();
       let result = unblock(move || {
+        if stash_before_update {
+          let stash_message = default_stash_message(&repo_root_for_update).ok();
+          create_stash(&repo_root_for_update, true, stash_message.as_deref())?;
+        }
         sync_current_branch_to_head(
           &repo_root_for_update,
           &branch_name_for_update,
@@ -3150,7 +3282,7 @@ impl GithubPrDetailsPage {
       })
       .await;
 
-      let _ = this.update_in(cx, |this, _, cx| {
+      let _ = this.update(cx, |this, cx| {
         this.local_project_update_task = None;
         this.local_project_update_loading = false;
 
@@ -3162,6 +3294,9 @@ impl GithubPrDetailsPage {
               this.sync_resolved_local_repo_snapshot(&snapshot);
             }
             this.load_local_project_files(repo_root.clone(), cx);
+            if let Some(post_action) = post_action.clone() {
+              this.execute_local_project_post_action(post_action, repo_root.clone(), cx);
+            }
           }
           Err(error) => {
             this.local_project_update_error = Some(error.to_string().into());
@@ -3173,6 +3308,24 @@ impl GithubPrDetailsPage {
     });
 
     self.local_project_update_task = Some(task);
+  }
+
+  fn update_local_branch_to_pr_head(
+    &mut self,
+    stash_before_update: bool,
+    post_action: Option<GithubPrLocalProjectPostAction>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let repo_root = match self.local_project_availability(cx) {
+      GithubPrLocalProjectAvailability::NeedsUpdate { repo_root }
+      | GithubPrLocalProjectAvailability::Dirty { repo_root }
+      | GithubPrLocalProjectAvailability::Ready { repo_root } => repo_root,
+      _ => return,
+    };
+
+    let _ = window;
+    self.start_sync_local_branch_to_pr_head(repo_root, stash_before_update, post_action, cx);
   }
 
   fn local_project_command_palette_commands(
@@ -3244,12 +3397,154 @@ impl GithubPrDetailsPage {
     })
   }
 
-  fn render_overview_pr_alert(&self) -> Option<AnyElement> {
+  fn overview_pr_alert_action_label(
+    &self,
+    content: &OverviewPrAlertContent,
+    cx: &App,
+  ) -> Option<&'static str> {
+    if matches!(
+      self.local_project_availability(cx),
+      GithubPrLocalProjectAvailability::Hidden
+    ) {
+      return None;
+    }
+
+    match content.kind {
+      OverviewPrAlertKind::Conflicts => Some("Resolve in Git page"),
+      OverviewPrAlertKind::OutOfDate => Some("Update in Git page"),
+      OverviewPrAlertKind::Blocked => None,
+    }
+  }
+
+  fn open_overview_pr_alert_in_git_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(content) =
+      overview_pr_alert_content(self.merge_readiness.as_ref(), self.checks.as_ref())
+    else {
+      return;
+    };
+    if matches!(content.kind, OverviewPrAlertKind::Blocked) {
+      return;
+    }
+
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      return;
+    };
+
+    let post_action = GithubPrLocalProjectPostAction::OpenGitPageMergeBase {
+      base_branch_name: pull_request.base_ref_name.clone(),
+    };
+    let has_uncommitted_changes = self.effective_local_repo_has_uncommitted_changes(cx);
+
+    match self.local_project_availability(cx) {
+      GithubPrLocalProjectAvailability::Hidden => {}
+      GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+        has_uncommitted_changes,
+        ..
+      } => {
+        let post_action = Some(
+          GithubPrLocalProjectPostAction::EnsurePrHeadThenOpenGitPageMergeBase {
+            base_branch_name: pull_request.base_ref_name.clone(),
+          },
+        );
+        if has_uncommitted_changes {
+          self.confirm_switch_local_branch_with_stash(post_action, window, cx);
+        } else {
+          self.switch_local_branch_to_pr_branch(false, post_action, window, cx);
+        }
+      }
+      GithubPrLocalProjectAvailability::Ready { repo_root } => {
+        if should_prepare_local_branch_before_opening_git_page(
+          repo_root.as_path(),
+          has_uncommitted_changes,
+        ) {
+          self.confirm_prepare_local_branch_for_git_page_with_stash(
+            repo_root,
+            post_action,
+            window,
+            cx,
+          );
+        } else {
+          self.execute_local_project_post_action(post_action, repo_root, cx);
+        }
+      }
+      GithubPrLocalProjectAvailability::NeedsUpdate { .. } => {
+        self.update_local_branch_to_pr_head(false, Some(post_action), window, cx);
+      }
+      GithubPrLocalProjectAvailability::Dirty { repo_root } => {
+        if should_prepare_local_branch_before_opening_git_page(repo_root.as_path(), true) {
+          self.confirm_prepare_local_branch_for_git_page_with_stash(
+            repo_root,
+            post_action,
+            window,
+            cx,
+          );
+        } else {
+          self.execute_local_project_post_action(post_action, repo_root, cx);
+        }
+      }
+    }
+  }
+
+  fn render_overview_pr_alert(&self, cx: &Context<Self>) -> Option<AnyElement> {
     let content = overview_pr_alert_content(self.merge_readiness.as_ref(), self.checks.as_ref())?;
+    let action_label = self.overview_pr_alert_action_label(&content, cx);
+    let theme = cx.theme();
+    let view = cx.entity();
 
-    let alert = Alert::warning(content.id, content.message).title(content.title);
-
-    Some(alert.into_any_element())
+    Some(
+      div()
+        .flex()
+        .id(content.id)
+        .w_full()
+        .items_start()
+        .gap_3()
+        .px_4()
+        .py_3()
+        .rounded(theme.radius)
+        .border_1()
+        .border_color(theme.warning.opacity(0.3))
+        .bg(theme.warning.opacity(0.08))
+        .text_color(theme.warning)
+        .child(
+          h_flex()
+            .flex_1()
+            .items_start()
+            .gap_3()
+            .child(Icon::new(IconName::TriangleAlert).mt(px(3.0)))
+            .child(
+              v_flex()
+                .flex_1()
+                .text_sm()
+                .gap_1()
+                .child(
+                  h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(div().font_semibold().child(content.title))
+                    .when_some(action_label, |this, label| {
+                      this.child(
+                        Button::new("github-pr-overview-alert-action")
+                          .small()
+                          .primary()
+                          .label(label)
+                          .disabled(
+                            self.local_branch_switch_loading || self.local_project_update_loading,
+                          )
+                          .on_click(move |_, window, cx| {
+                            view.update(cx, |this, cx| {
+                              this.open_overview_pr_alert_in_git_page(window, cx);
+                            });
+                          }),
+                      )
+                    }),
+                )
+                .child(div().child(content.message)),
+            ),
+        )
+        .into_any_element(),
+    )
   }
 
   fn current_open_target(&self) -> GithubPrOpenTarget {
@@ -8112,7 +8407,7 @@ impl GithubPrDetailsPage {
     let description_previews = self.cached_github_code_reference_previews_for_requests(
       &self.description_code_reference_requests,
     );
-    let overview_pr_alert = self.render_overview_pr_alert();
+    let overview_pr_alert = self.render_overview_pr_alert(cx);
 
     let content = v_flex()
       .w_full()
@@ -8167,7 +8462,7 @@ impl GithubPrDetailsPage {
       )
       .child(
         h_flex()
-          .gap_6()
+          .gap_2()
           .flex_wrap()
           .items_center()
           .child(
@@ -8186,6 +8481,13 @@ impl GithubPrDetailsPage {
                   .text_color(theme.foreground)
                   .child(created_at),
               ),
+          )
+          .child(
+            div()
+              .debug_selector(|| "github-pr-overview-created-updated-separator".to_string())
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child("•"),
           )
           .child(
             h_flex()
@@ -8725,7 +9027,7 @@ impl GithubPrDetailsPage {
             .disabled(self.local_project_update_loading)
             .on_click(move |_, window, cx| {
               view.update(cx, |this, cx| {
-                this.update_local_branch_to_pr_head(window, cx);
+                this.update_local_branch_to_pr_head(false, None, window, cx);
               });
             }),
         )
@@ -10353,6 +10655,7 @@ mod tests {
     GithubPullRequestState, GithubRepository,
   };
   use crate::workspace::WorkspaceApi;
+  use git::{BranchKind, BranchRef, merge_branch};
   use git2::{BranchType, Repository, Signature};
   use gpui::TestAppContext;
   use std::{
@@ -10834,6 +11137,10 @@ mod tests {
       cx.notify();
     });
 
+    let created_updated_separator_bounds = cx
+      .debug_bounds("github-pr-overview-created-updated-separator")
+      .expect("created and updated separator bounds")
+      .size;
     let separator_bounds = cx
       .debug_bounds("github-pr-overview-updated-change-stats-separator")
       .expect("updated row separator bounds")
@@ -10843,6 +11150,8 @@ mod tests {
       .expect("updated row change stats bounds")
       .size;
 
+    assert!(created_updated_separator_bounds.width > gpui::px(0.0));
+    assert!(created_updated_separator_bounds.height > gpui::px(0.0));
     assert!(separator_bounds.width > gpui::px(0.0));
     assert!(separator_bounds.height > gpui::px(0.0));
     assert!(stats_bounds.width > gpui::px(0.0));
@@ -10864,8 +11173,38 @@ mod tests {
       cx.notify();
     });
 
-    let has_alert = page.read_with(cx, |this, _cx| this.render_overview_pr_alert().is_some());
+    let has_alert = page.update_in(cx, |this, _window, cx| {
+      this.render_overview_pr_alert(cx).is_some()
+    });
     assert!(has_alert);
+  }
+
+  #[gpui::test]
+  fn overview_conflicts_alert_exposes_git_page_action_when_local_repo_is_available(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("head", false)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.merge_readiness = Some(make_merge_readiness_with_state(
+        GithubPullRequestMergeReadinessStatus::Blocked,
+        Some("dirty"),
+        "This pull request has merge conflicts that must be resolved before it can be merged.",
+      ));
+      cx.notify();
+    });
+
+    let action_label = page.read_with(cx, |this, cx| {
+      let content =
+        overview_pr_alert_content(this.merge_readiness.as_ref(), this.checks.as_ref()).unwrap();
+      this.overview_pr_alert_action_label(&content, cx)
+    });
+    assert_eq!(action_label, Some("Resolve in Git page"));
   }
 
   #[gpui::test]
@@ -11586,6 +11925,78 @@ mod tests {
     });
     assert!(!switch_loading);
     assert!(switch_error.is_none());
+
+    std::fs::remove_dir_all(&repo_root).ok();
+  }
+
+  #[gpui::test]
+  fn overview_conflicts_action_returns_to_git_page_when_conflict_resolution_is_already_active(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      gpui_router::init(cx);
+      NavigationHistory::init(cx);
+      NavigationHistory::navigate_replace("/github/acme/widget/pull/42", cx);
+    });
+
+    let (repo_root, _) =
+      create_local_repo_with_github_remote("acme", "widget", "feature", &["main"]);
+    let rel_path = Path::new("src/main.rs");
+    commit_local_project_file(
+      &repo_root,
+      rel_path,
+      "fn main() {\n  println!(\"feature\");\n}\n",
+      "feature change",
+    );
+    switch_to_branch_name(&repo_root, "main").expect("switch to main");
+    commit_local_project_file(
+      &repo_root,
+      rel_path,
+      "fn main() {\n  println!(\"main\");\n}\n",
+      "main change",
+    );
+    switch_to_branch_name(&repo_root, "feature").expect("switch back to feature");
+
+    let merge_result = merge_branch(
+      &repo_root,
+      &BranchRef {
+        name: "main".to_string(),
+        kind: BranchKind::Local,
+      },
+    );
+    assert!(merge_result.is_err(), "merge should stop on conflicts");
+    assert!(local_repo_has_active_conflict_resolution(&repo_root));
+
+    let snapshot = local_repo_snapshot(&repo_root, None).expect("snapshot conflicted repo");
+    let head_sha = snapshot
+      .head_sha
+      .clone()
+      .expect("feature branch head should stay available");
+    assert!(snapshot.has_uncommitted_changes);
+
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(snapshot));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_local_repo(&head_sha, "feature"));
+      this.merge_readiness = Some(make_merge_readiness_with_state(
+        GithubPullRequestMergeReadinessStatus::Blocked,
+        Some("dirty"),
+        "This pull request has merge conflicts that must be resolved before it can be merged.",
+      ));
+      cx.notify();
+    });
+
+    page.update_in(cx, |this, window, cx| {
+      this.open_overview_pr_alert_in_git_page(window, cx);
+    });
+
+    cx.update(|_, cx| {
+      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/git");
+    });
 
     std::fs::remove_dir_all(&repo_root).ok();
   }

@@ -18,8 +18,8 @@ use git::{
   head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
   list_commit_changed_files, list_commit_history, list_interactive_rebase_commits,
   list_repo_status, list_stashes, load_commit_file_diff, merge_branch, pop_stash, pull, push,
-  rebase_branch, restore_file, skip_rebase, stage_all, stage_file, start_interactive_rebase,
-  switch_branch, undo_last_commit, unstage_all, unstage_file,
+  rebase_branch, resolve_branch_ref, restore_file, skip_rebase, stage_all, stage_file,
+  start_interactive_rebase, switch_branch, undo_last_commit, unstage_all, unstage_file,
 };
 #[cfg(test)]
 use gpui::Keystroke;
@@ -136,6 +136,61 @@ enum GitBranchPullRequestButtonState {
 
 struct GitBranchSwitchNotificationId;
 struct GitActionErrorNotificationId;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum GitPageOpenAction {
+  MergeBaseBranch { base_branch_name: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ActiveConflictResolutionSnapshot {
+  merge_in_progress: bool,
+  rebase_in_progress: bool,
+  conflicted_path: Option<PathBuf>,
+}
+
+enum GitPageOpenActionResult {
+  ResumeActiveConflict(ActiveConflictResolutionSnapshot),
+  MergeBaseBranchReady(BranchRef),
+}
+
+#[derive(Clone, Default)]
+pub struct GitPageHandle {
+  git_page: Option<WeakEntity<GitPage>>,
+}
+
+impl Global for GitPageHandle {}
+
+impl GitPageHandle {
+  pub fn register(cx: &mut Context<GitPage>) {
+    cx.set_global(Self {
+      git_page: Some(cx.entity().downgrade()),
+    });
+  }
+
+  pub fn show_repository_and_merge_base(
+    repo_root: PathBuf,
+    base_branch_name: String,
+    cx: &mut App,
+  ) {
+    NavigationHistory::navigate("/git", cx);
+
+    let Some(weak) = cx
+      .try_global::<Self>()
+      .and_then(|handle| handle.git_page.clone())
+    else {
+      return;
+    };
+
+    let _ = weak.update(cx, |this, cx| {
+      this.open_repository_with_action(
+        repo_root,
+        GitPageOpenAction::MergeBaseBranch { base_branch_name },
+        cx,
+      );
+    });
+  }
+}
 
 struct CreatePullRequestDialog {
   api: ApiClient,
@@ -1455,6 +1510,7 @@ pub struct GitPage {
   branch_pr_lookup_context: Option<GithubBranchContext>,
   branch_pr_lookup_result: Option<GithubPullRequest>,
   branch_pr_lookup_loading: bool,
+  pending_open_action: Option<GitPageOpenAction>,
   auth_state: AuthState,
   auth_task: Option<Task<()>>,
   branch_pr_lookup_task: Option<Task<()>>,
@@ -2524,6 +2580,7 @@ impl GitPage {
       branch_pr_lookup_context: None,
       branch_pr_lookup_result: None,
       branch_pr_lookup_loading: false,
+      pending_open_action: None,
       auth_state: AuthState::Unknown,
       auth_task: None,
       branch_pr_lookup_task: None,
@@ -2549,6 +2606,7 @@ impl GitPage {
     view.start_polling(cx);
     view.load_bearer_from_keychain(cx);
     AuthCallbackTarget::register_git_page(cx);
+    GitPageHandle::register(cx);
 
     view
   }
@@ -2614,6 +2672,7 @@ impl GitPage {
       branch_pr_lookup_context: None,
       branch_pr_lookup_result: None,
       branch_pr_lookup_loading: false,
+      pending_open_action: None,
       auth_state: AuthState::Unknown,
       auth_task: None,
       branch_pr_lookup_task: None,
@@ -2634,12 +2693,133 @@ impl GitPage {
 
     view.subscribe_to_file_list(cx);
     view.subscribe_to_commit_input(window, cx);
+    GitPageHandle::register(cx);
     view
   }
 
   fn handle_repo_select_confirm(&mut self, repo_root: PathBuf, cx: &mut Context<Self>) {
     self.set_selected_repo(repo_root, cx);
     self.ensure_page_shortcut_focus(cx);
+  }
+
+  fn open_repository_with_action(
+    &mut self,
+    repo_root: PathBuf,
+    action: GitPageOpenAction,
+    cx: &mut Context<Self>,
+  ) {
+    let conflict_resolution = Self::active_conflict_resolution_snapshot(&repo_root);
+    self.set_selected_repo(repo_root.clone(), cx);
+    self.pending_open_action = Some(action.clone());
+    if let Some(conflict_resolution) = conflict_resolution {
+      self.merge_in_progress = conflict_resolution.merge_in_progress;
+      self.rebase_in_progress = conflict_resolution.rebase_in_progress;
+    }
+
+    match action {
+      GitPageOpenAction::MergeBaseBranch { base_branch_name } => {
+        self.start_merge_base_branch_action(repo_root, base_branch_name, cx);
+      }
+    }
+  }
+
+  fn active_conflict_resolution_snapshot(
+    repo_root: &Path,
+  ) -> Option<ActiveConflictResolutionSnapshot> {
+    let merge_in_progress = is_merge_in_progress(repo_root).unwrap_or(false);
+    let rebase_in_progress = is_rebase_in_progress(repo_root).unwrap_or(false);
+    let conflicted_path = Self::first_conflicted_path(repo_root);
+
+    (merge_in_progress || rebase_in_progress || conflicted_path.is_some()).then_some(
+      ActiveConflictResolutionSnapshot {
+        merge_in_progress,
+        rebase_in_progress,
+        conflicted_path,
+      },
+    )
+  }
+
+  fn open_action_loading_message(action: &GitPageOpenAction) -> &'static str {
+    match action {
+      GitPageOpenAction::MergeBaseBranch { .. } => "Opening conflict resolution...",
+    }
+  }
+
+  fn start_merge_base_branch_action(
+    &mut self,
+    repo_root: PathBuf,
+    base_branch_name: String,
+    cx: &mut Context<Self>,
+  ) {
+    if self.fetch_in_progress {
+      return;
+    }
+
+    self.fetch_in_progress = true;
+    let editor = self.editor.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let repo_root_for_action = repo_root.clone();
+      let branch_name_for_fetch = base_branch_name.clone();
+      let result = unblock(move || {
+        if let Some(conflict_resolution) =
+          Self::active_conflict_resolution_snapshot(&repo_root_for_action)
+        {
+          return Ok::<_, anyhow::Error>(GitPageOpenActionResult::ResumeActiveConflict(
+            conflict_resolution,
+          ));
+        }
+
+        fetch(&repo_root_for_action)?;
+        let branch_ref = resolve_branch_ref(&repo_root_for_action, &branch_name_for_fetch)?
+          .ok_or_else(|| {
+            anyhow::anyhow!(
+              "branch {:?} was not found locally or on any remote",
+              branch_name_for_fetch
+            )
+          })?;
+        Ok::<_, anyhow::Error>(GitPageOpenActionResult::MergeBaseBranchReady(branch_ref))
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.fetch_in_progress = false;
+        this.pending_open_action = None;
+
+        match result {
+          Ok(GitPageOpenActionResult::ResumeActiveConflict(conflict_resolution)) => {
+            this.merge_in_progress = conflict_resolution.merge_in_progress;
+            this.rebase_in_progress = conflict_resolution.rebase_in_progress;
+            if let Some(path) = conflict_resolution.conflicted_path {
+              this.open_file(path, cx);
+            }
+          }
+          Ok(GitPageOpenActionResult::MergeBaseBranchReady(branch_ref)) => {
+            if let Err(error) = this.merge_branch_action(branch_ref, cx) {
+              this.push_git_action_error_notification(
+                "Update branch failed",
+                error.to_string().into(),
+                cx,
+              );
+            }
+          }
+          Err(error) => {
+            this.push_git_action_error_notification(
+              "Update branch failed",
+              error.to_string().into(),
+              cx,
+            );
+          }
+        }
+
+        this.reload_status(cx);
+        this.refresh_branches(cx);
+        if let Some(editor) = editor.clone() {
+          editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
+        }
+      });
+    });
+
+    self.status_task = Some(task);
   }
 
   fn refocus_page_shortcuts_after_dropdown_select(
@@ -3778,6 +3958,71 @@ impl GitPage {
     open_shared_file_search_palette(window, cx, entries, handler, false);
   }
 
+  fn merge_branch_action(
+    &mut self,
+    branch_ref: BranchRef,
+    cx: &mut Context<Self>,
+  ) -> Result<(), anyhow::Error> {
+    let Some(root_path) = self.selected_repo.clone() else {
+      anyhow::bail!("No repository selected.");
+    };
+    let target_branch = current_branch_status(&root_path)
+      .ok()
+      .map(|status| status.name)
+      .or_else(|| {
+        self
+          .branch_status
+          .as_ref()
+          .map(|status| status.name.clone())
+      })
+      .unwrap_or_else(|| "HEAD".to_string());
+
+    let mut start_data = Map::new();
+    start_data.insert("target_branch".into(), branch_ref.name.clone().into());
+    self.add_git_breadcrumb("Merge started", start_data);
+
+    match merge_branch(&root_path, &branch_ref) {
+      Ok(()) => {
+        let mut data = Map::new();
+        data.insert("target_branch".into(), branch_ref.name.clone().into());
+        self.add_git_breadcrumb("Merge succeeded", data);
+        Ok(())
+      }
+      Err(err) => {
+        let err_text = err.to_string();
+        if let Some(path) = Self::first_conflicted_path(&root_path) {
+          self.merge_in_progress = true;
+          self.rebase_in_progress = false;
+          let mut data = Map::new();
+          data.insert("target_branch".into(), branch_ref.name.clone().into());
+          data.insert(
+            "file".into(),
+            path.to_string_lossy().replace(['\n', '\r'], "").into(),
+          );
+          data.insert("error".into(), err_text.into());
+          self.record_git_expected_error("git.merge", "conflict", data.clone());
+          self.add_git_breadcrumb("Merge has conflicts", data);
+
+          let commit_input = self.commit_input.clone();
+          let merge_message =
+            Self::merge_commit_message(branch_ref.name.as_str(), target_branch.as_str());
+          let _ = cx.update_window(self.window_handle, |_, window, cx| {
+            commit_input.update(cx, |input, cx| input.set_value(&merge_message, window, cx));
+          });
+          self.open_file(path, cx);
+          Ok(())
+        } else {
+          let mut data = Map::new();
+          data.insert("target_branch".into(), branch_ref.name.clone().into());
+          data.insert("error".into(), err_text.clone().into());
+          self.add_git_breadcrumb("Merge failed", data.clone());
+          self.record_git_unexpected_error("git.merge", err_text.as_str(), data);
+          Err(err)
+        }
+      }
+    }
+  }
+
   fn handle_command_palette_action(
     &mut self,
     action: CommandPaletteAction,
@@ -4119,19 +4364,6 @@ impl GitPage {
           .and_then(|_| switch_branch(&root_path, &new_branch))
       }
       CommandPaletteAction::MergeBranch { name } => {
-        let Some(root_path) = self.selected_repo.clone() else {
-          return Err("No repository selected.".into());
-        };
-        let target_branch = self
-          .branch_status
-          .as_ref()
-          .map(|status| status.name.clone())
-          .or_else(|| {
-            current_branch_status(&root_path)
-              .ok()
-              .map(|status| status.name)
-          })
-          .unwrap_or_else(|| "HEAD".to_string());
         let branch_ref = BranchRef {
           name: name.name.to_string(),
           kind: match name.kind {
@@ -4139,45 +4371,7 @@ impl GitPage {
             CommandPaletteBranchKind::Remote => BranchKind::Remote,
           },
         };
-        let mut start_data = Map::new();
-        start_data.insert("target_branch".into(), branch_ref.name.clone().into());
-        self.add_git_breadcrumb("Merge started", start_data);
-        match merge_branch(&root_path, &branch_ref) {
-          Ok(()) => {
-            let mut data = Map::new();
-            data.insert("target_branch".into(), branch_ref.name.clone().into());
-            self.add_git_breadcrumb("Merge succeeded", data);
-            Ok(())
-          }
-          Err(err) => {
-            let err_text = err.to_string();
-            if let Some(path) = Self::first_conflicted_path(&root_path) {
-              let mut data = Map::new();
-              data.insert("target_branch".into(), branch_ref.name.clone().into());
-              data.insert(
-                "file".into(),
-                path.to_string_lossy().replace(['\n', '\r'], "").into(),
-              );
-              data.insert("error".into(), err_text.into());
-              self.record_git_expected_error("git.merge", "conflict", data.clone());
-              self.add_git_breadcrumb("Merge has conflicts", data);
-              let merge_message =
-                Self::merge_commit_message(branch_ref.name.as_str(), target_branch.as_str());
-              self
-                .commit_input
-                .update(cx, |input, cx| input.set_value(&merge_message, window, cx));
-              self.open_file(path, cx);
-              Ok(())
-            } else {
-              let mut data = Map::new();
-              data.insert("target_branch".into(), branch_ref.name.clone().into());
-              data.insert("error".into(), err_text.clone().into());
-              self.add_git_breadcrumb("Merge failed", data.clone());
-              self.record_git_unexpected_error("git.merge", err_text.as_str(), data);
-              Err(err)
-            }
-          }
-        }
+        self.merge_branch_action(branch_ref, cx)
       }
       CommandPaletteAction::AbortMerge => {
         let Some(root_path) = self.selected_repo.clone() else {
@@ -6927,6 +7121,14 @@ impl GitPage {
     selected_file.is_some() && !has_editor
   }
 
+  fn should_show_open_action_loading_state(
+    pending_open_action: Option<&GitPageOpenAction>,
+    selected_file: Option<&Path>,
+    has_editor: bool,
+  ) -> bool {
+    pending_open_action.is_some() && selected_file.is_none() && !has_editor
+  }
+
   fn render_editor_header(&self, editor: &Entity<Editor>, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let editor_state = editor.read(cx);
@@ -7902,6 +8104,15 @@ impl GitPage {
       return self.render_loading_state("Loading file...", cx);
     }
 
+    if Self::should_show_open_action_loading_state(
+      self.pending_open_action.as_ref(),
+      self.selected_file.as_deref(),
+      self.editor.is_some(),
+    ) && let Some(action) = self.pending_open_action.as_ref()
+    {
+      return self.render_loading_state(Self::open_action_loading_message(action), cx);
+    }
+
     self.render_empty_state("Select a file to view diff", cx)
   }
 
@@ -8386,6 +8597,166 @@ mod tests {
       assert!(cx.has_global::<AuthStateStore>());
       assert!(cx.has_global::<ActiveLocalRepoStore>());
       assert_eq!(ActiveLocalRepoStore::get(cx), None);
+    });
+  }
+
+  #[gpui::test]
+  async fn git_page_handle_selects_repo_navigates_and_starts_base_merge(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+      gpui_router::init(cx);
+      NavigationHistory::init(cx);
+      NavigationHistory::navigate_replace("/github/acme/widget/pull/42", cx);
+    });
+
+    let repo = TempRepo::init("git-page-handle-merge-base");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "base\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    let _ = commit_text_file(&repo.path, rel_path, "main change\n", "main change");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(&repo.path, rel_path, "feature change\n", "feature change");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    cx.update(|_, cx| {
+      GitPageHandle::show_repository_and_merge_base(repo.path.clone(), base_branch.clone(), cx);
+    });
+    let (pending_open_action, selected_file, has_editor) = git_page.read_with(cx, |this, _cx| {
+      (
+        this.pending_open_action.clone(),
+        this.selected_file.clone(),
+        this.editor.is_some(),
+      )
+    });
+    assert_eq!(
+      pending_open_action,
+      Some(GitPageOpenAction::MergeBaseBranch {
+        base_branch_name: base_branch.clone(),
+      })
+    );
+    assert!(GitPage::should_show_open_action_loading_state(
+      pending_open_action.as_ref(),
+      selected_file.as_deref(),
+      has_editor,
+    ));
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let (selected_repo, merge_in_progress, selected_file) = git_page.read_with(cx, |this, _cx| {
+      (
+        this.selected_repo.clone(),
+        this.merge_in_progress,
+        this.selected_file.clone(),
+      )
+    });
+    assert_eq!(selected_repo, Some(repo.path.clone()));
+    assert!(
+      merge_in_progress,
+      "merge state should stay active on conflicts"
+    );
+    assert_eq!(selected_file, Some(rel_path.to_path_buf()));
+    cx.update(|_, cx| {
+      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/git");
+    });
+  }
+
+  #[gpui::test]
+  async fn git_page_handle_reopens_active_merge_conflicts_without_resetting_merge_mode(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+      gpui_router::init(cx);
+      NavigationHistory::init(cx);
+      NavigationHistory::navigate_replace("/github/acme/widget/pull/42", cx);
+    });
+
+    let repo = TempRepo::init("git-page-handle-resume-merge-conflict");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "base\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    let _ = commit_text_file(&repo.path, rel_path, "main change\n", "main change");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(&repo.path, rel_path, "feature change\n", "feature change");
+    let merge_result = merge_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    );
+    assert!(merge_result.is_err(), "merge should stop on conflicts");
+    assert!(
+      is_merge_in_progress(&repo.path).expect("read merge state"),
+      "repo should already be in merge mode before reopening via handle"
+    );
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    cx.update(|_, cx| {
+      GitPageHandle::show_repository_and_merge_base(repo.path.clone(), base_branch.clone(), cx);
+    });
+
+    let (merge_in_progress, rebase_in_progress, pending_open_action, selected_file, has_editor) =
+      git_page.read_with(cx, |this, _cx| {
+        (
+          this.merge_in_progress,
+          this.rebase_in_progress,
+          this.pending_open_action.clone(),
+          this.selected_file.clone(),
+          this.editor.is_some(),
+        )
+      });
+    assert!(merge_in_progress);
+    assert!(!rebase_in_progress);
+    assert_eq!(
+      pending_open_action,
+      Some(GitPageOpenAction::MergeBaseBranch {
+        base_branch_name: base_branch.clone(),
+      })
+    );
+    assert!(GitPage::should_show_open_action_loading_state(
+      pending_open_action.as_ref(),
+      selected_file.as_deref(),
+      has_editor,
+    ));
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let (selected_repo, merge_in_progress, selected_file) = git_page.read_with(cx, |this, _cx| {
+      (
+        this.selected_repo.clone(),
+        this.merge_in_progress,
+        this.selected_file.clone(),
+      )
+    });
+    assert_eq!(selected_repo, Some(repo.path.clone()));
+    assert!(merge_in_progress);
+    assert_eq!(selected_file, Some(rel_path.to_path_buf()));
+    cx.update(|_, cx| {
+      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/git");
     });
   }
 
@@ -14644,6 +15015,33 @@ mod tests {
       true
     ));
     assert!(!GitPage::should_show_editor_loading_state(None, false));
+  }
+
+  #[test]
+  fn should_show_open_action_loading_state_only_for_pending_repo_open_actions() {
+    let action = GitPageOpenAction::MergeBaseBranch {
+      base_branch_name: "main".to_string(),
+    };
+    let selected = Path::new("src/main.rs");
+
+    assert!(GitPage::should_show_open_action_loading_state(
+      Some(&action),
+      None,
+      false,
+    ));
+    assert!(!GitPage::should_show_open_action_loading_state(
+      Some(&action),
+      Some(selected),
+      false,
+    ));
+    assert!(!GitPage::should_show_open_action_loading_state(
+      Some(&action),
+      None,
+      true,
+    ));
+    assert!(!GitPage::should_show_open_action_loading_state(
+      None, None, false,
+    ));
   }
 
   #[test]

@@ -11,7 +11,9 @@ use git::DiffLineKind;
 
 use crate::{
   editor::{ConflictLineKind, Editor, ScrollAxis},
-  projection::{ChangeKind, DisplayLine, HunkState, ReviewCommentBackground, ReviewCommentSide},
+  projection::{
+    ChangeKind, DisplayLine, HunkState, Projection, ReviewCommentBackground, ReviewCommentSide,
+  },
 };
 
 const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
@@ -75,6 +77,12 @@ fn conflict_background(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui
   }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConflictBlockKind {
+  Current,
+  Incoming,
+}
+
 fn conflict_stripe_color(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
   match kind {
     ConflictLineKind::Current | ConflictLineKind::CurrentMarker => Some(theme.diff_gutter_added()),
@@ -97,6 +105,54 @@ fn conflict_stripe_color(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gp
       }
     }
   }
+}
+
+fn conflict_block_kind(kind: ConflictLineKind) -> Option<ConflictBlockKind> {
+  match kind {
+    ConflictLineKind::Current | ConflictLineKind::CurrentMarker => Some(ConflictBlockKind::Current),
+    ConflictLineKind::Incoming | ConflictLineKind::IncomingMarker => {
+      Some(ConflictBlockKind::Incoming)
+    }
+    ConflictLineKind::Divider => None,
+  }
+}
+
+fn conflict_border_color(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
+  match conflict_block_kind(kind)? {
+    ConflictBlockKind::Current => Some(theme.diff_gutter_added()),
+    ConflictBlockKind::Incoming => conflict_stripe_color(theme, kind),
+  }
+}
+
+fn conflict_border_edges(
+  previous: Option<ConflictLineKind>,
+  current: ConflictLineKind,
+  next: Option<ConflictLineKind>,
+) -> Option<(bool, bool)> {
+  let current_block = conflict_block_kind(current)?;
+  Some((
+    previous.and_then(conflict_block_kind) != Some(current_block),
+    next.and_then(conflict_block_kind) != Some(current_block),
+  ))
+}
+
+fn conflict_kind_for_display_line(
+  display_line: usize,
+  projection: Option<&Projection>,
+  doc_line_count: usize,
+  conflict_line_kinds: &HashMap<usize, ConflictLineKind>,
+) -> Option<ConflictLineKind> {
+  let doc_line = if let Some(projection) = projection {
+    projection
+      .lines
+      .get(display_line)
+      .and_then(conflict_doc_line)
+  } else if display_line < doc_line_count {
+    Some(display_line)
+  } else {
+    None
+  }?;
+  conflict_line_kinds.get(&doc_line).copied()
 }
 
 pub struct GutterElement {
@@ -128,6 +184,7 @@ pub struct GutterPrepaintState {
   gap_separators: Vec<PaintQuad>,
   stripe_quads: Vec<PaintQuad>,
   diag_paths: Vec<Path<Pixels>>,
+  conflict_borders: Vec<PaintQuad>,
   group_borders: Vec<PaintQuad>,
   scroll_hitbox: Hitbox,
 }
@@ -209,6 +266,7 @@ impl Element for GutterElement {
       gap_separators,
       stripe_quads,
       diag_paths,
+      conflict_borders,
       group_borders,
       scroll_hitbox,
     ) = {
@@ -358,6 +416,7 @@ impl Element for GutterElement {
       let mut gap_separators = Vec::new();
       let mut stripe_quads = Vec::new();
       let mut diag_paths = Vec::new();
+      let mut conflict_borders = Vec::new();
       let mut group_borders = Vec::new();
       let mut blank_ranges = Vec::new();
       let mut current_blank_start: Option<usize> = None;
@@ -400,11 +459,12 @@ impl Element for GutterElement {
           .map(&is_blank_for_view)
           .unwrap_or(false);
 
-        let conflict_kind = display_line
-          .as_ref()
-          .and_then(conflict_doc_line)
-          .and_then(|doc_line| conflict_line_kinds.get(&doc_line))
-          .copied();
+        let conflict_kind = conflict_kind_for_display_line(
+          display_idx,
+          projection.as_deref(),
+          doc_line_count,
+          &conflict_line_kinds,
+        );
         let background = if is_blank {
           None
         } else if let Some(conflict_kind) = conflict_kind {
@@ -471,6 +531,50 @@ impl Element for GutterElement {
           ));
         }
 
+        if let Some(conflict_kind) = conflict_kind
+          && let Some(color) = conflict_border_color(&theme, conflict_kind)
+        {
+          let previous_conflict_kind = display_idx.checked_sub(1).and_then(|idx| {
+            conflict_kind_for_display_line(
+              idx,
+              projection.as_deref(),
+              doc_line_count,
+              &conflict_line_kinds,
+            )
+          });
+          let next_conflict_kind = conflict_kind_for_display_line(
+            display_idx + 1,
+            projection.as_deref(),
+            doc_line_count,
+            &conflict_line_kinds,
+          );
+          let (is_top, is_bottom) =
+            conflict_border_edges(previous_conflict_kind, conflict_kind, next_conflict_kind)
+              .unwrap_or((false, false));
+          let border_thickness = px(1.0);
+          let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
+
+          if is_top {
+            conflict_borders.push(fill(
+              Bounds::new(
+                point(bounds.left(), y),
+                size(bounds.size.width, border_thickness),
+              ),
+              color,
+            ));
+          }
+
+          if is_bottom {
+            conflict_borders.push(fill(
+              Bounds::new(
+                point(bounds.left(), y + line_height - border_thickness),
+                size(bounds.size.width, border_thickness),
+              ),
+              color,
+            ));
+          }
+        }
+
         if is_blank {
           if current_blank_start.is_none() {
             current_blank_start = Some(display_idx);
@@ -501,7 +605,8 @@ impl Element for GutterElement {
           }
         }
 
-        if let Some(group_id) = group_id
+        if conflict_kind.is_none()
+          && let Some(group_id) = group_id
           && let (Some(projection), Some((top_color, bottom_color))) =
             (projection.as_ref(), group_border_colors.get(&group_id))
         {
@@ -588,6 +693,7 @@ impl Element for GutterElement {
         gap_separators,
         stripe_quads,
         diag_paths,
+        conflict_borders,
         group_borders,
         scroll_hitbox,
       )
@@ -607,6 +713,7 @@ impl Element for GutterElement {
       gap_separators,
       stripe_quads,
       diag_paths,
+      conflict_borders,
       group_borders,
       scroll_hitbox,
     }
@@ -646,6 +753,10 @@ impl Element for GutterElement {
           window.paint_path(path.clone(), stripe_color);
         }
       });
+    }
+
+    for quad in &prepaint.conflict_borders {
+      window.paint_quad(quad.clone());
     }
 
     for quad in &prepaint.group_borders {
@@ -864,5 +975,41 @@ mod tests {
     let light_color = conflict_stripe_color(&light, ConflictLineKind::Incoming).expect("light");
     assert_eq!(dark_color.a, 1.0);
     assert_eq!(light_color.a, 1.0);
+  }
+
+  #[test]
+  fn conflict_border_edges_split_current_and_incoming_blocks() {
+    assert_eq!(
+      conflict_border_edges(
+        None,
+        ConflictLineKind::CurrentMarker,
+        Some(ConflictLineKind::Current),
+      ),
+      Some((true, false))
+    );
+    assert_eq!(
+      conflict_border_edges(
+        Some(ConflictLineKind::CurrentMarker),
+        ConflictLineKind::Current,
+        Some(ConflictLineKind::Divider),
+      ),
+      Some((false, true))
+    );
+    assert_eq!(
+      conflict_border_edges(
+        Some(ConflictLineKind::Divider),
+        ConflictLineKind::Incoming,
+        Some(ConflictLineKind::IncomingMarker),
+      ),
+      Some((true, false))
+    );
+    assert_eq!(
+      conflict_border_edges(
+        Some(ConflictLineKind::Incoming),
+        ConflictLineKind::IncomingMarker,
+        None,
+      ),
+      Some((false, true))
+    );
   }
 }

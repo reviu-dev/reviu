@@ -369,6 +369,32 @@ pub fn switch_to_branch_name(repo_root: &Path, branch_name: &str) -> Result<()> 
   )
 }
 
+pub fn resolve_branch_ref(repo_root: &Path, branch_name: &str) -> Result<Option<BranchRef>> {
+  let branch_name = branch_name.trim();
+  if branch_name.is_empty() {
+    bail!("branch name is empty");
+  }
+
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+
+  if let Some(remote_branch_name) = resolve_remote_branch_name(&repo, branch_name)? {
+    return Ok(Some(BranchRef {
+      name: remote_branch_name,
+      kind: BranchKind::Remote,
+    }));
+  }
+
+  if repo.find_branch(branch_name, BranchType::Local).is_ok() {
+    return Ok(Some(BranchRef {
+      name: branch_name.to_string(),
+      kind: BranchKind::Local,
+    }));
+  }
+
+  Ok(None)
+}
+
 fn ensure_worktree_clean(repo_root: &Path) -> Result<()> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
