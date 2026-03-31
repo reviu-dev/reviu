@@ -356,6 +356,15 @@ struct WordDiffStyle {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IdentifierCharKind {
+  Lower,
+  Upper,
+  Digit,
+  Underscore,
+  Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InlineDiffKind {
   Added,
   Removed,
@@ -369,16 +378,80 @@ fn clean_line_text(text: &str) -> String {
   }
 }
 
+fn identifier_char_kind(ch: char) -> IdentifierCharKind {
+  if ch == '_' {
+    IdentifierCharKind::Underscore
+  } else if ch.is_lowercase() {
+    IdentifierCharKind::Lower
+  } else if ch.is_uppercase() {
+    IdentifierCharKind::Upper
+  } else if ch.is_numeric() {
+    IdentifierCharKind::Digit
+  } else {
+    IdentifierCharKind::Other
+  }
+}
+
+fn split_identifier_token_ranges(segment: &str) -> Vec<Range<usize>> {
+  let chars: Vec<_> = segment.char_indices().collect();
+  if chars.is_empty() {
+    return Vec::new();
+  }
+
+  let mut ranges = Vec::new();
+  let mut start = 0usize;
+
+  for idx in 1..chars.len() {
+    let (byte_offset, current) = chars[idx];
+    let (_, previous) = chars[idx - 1];
+    let previous_kind = identifier_char_kind(previous);
+    let current_kind = identifier_char_kind(current);
+    let next_kind = chars
+      .get(idx + 1)
+      .map(|(_, next)| identifier_char_kind(*next));
+
+    let should_split = match (previous_kind, current_kind) {
+      (IdentifierCharKind::Underscore, _) | (_, IdentifierCharKind::Underscore) => true,
+      (IdentifierCharKind::Digit, IdentifierCharKind::Digit) => false,
+      (IdentifierCharKind::Digit, _) | (_, IdentifierCharKind::Digit) => true,
+      (IdentifierCharKind::Lower, IdentifierCharKind::Upper) => true,
+      (IdentifierCharKind::Upper, IdentifierCharKind::Upper) => {
+        next_kind == Some(IdentifierCharKind::Lower)
+      }
+      _ => false,
+    };
+
+    if should_split {
+      ranges.push(start..byte_offset);
+      start = byte_offset;
+    }
+  }
+
+  ranges.push(start..segment.len());
+  ranges
+}
+
 fn word_tokens(text: &str, include_whitespace: bool) -> Vec<WordToken> {
   let mut tokens = Vec::new();
   for (idx, segment) in text.split_word_bound_indices() {
     if !include_whitespace && segment.trim().is_empty() {
       continue;
     }
-    tokens.push(WordToken {
-      text: segment.to_string(),
-      range: idx..idx + segment.len(),
-    });
+    let subranges = split_identifier_token_ranges(segment);
+    if subranges.is_empty() {
+      tokens.push(WordToken {
+        text: segment.to_string(),
+        range: idx..idx + segment.len(),
+      });
+      continue;
+    }
+
+    for subrange in subranges {
+      tokens.push(WordToken {
+        text: segment[subrange.clone()].to_string(),
+        range: idx + subrange.start..idx + subrange.end,
+      });
+    }
   }
   tokens
 }
@@ -2435,6 +2508,41 @@ mod tests {
     assert_eq!(border.l, fill_color.l);
     assert!(border.a > fill_color.a);
     assert!(border.a <= 0.28);
+  }
+
+  #[test]
+  fn test_word_tokens_split_identifier_subwords() {
+    let tokens = word_tokens("getLastDataNotification_v2", false)
+      .into_iter()
+      .map(|token| token.text)
+      .collect::<Vec<_>>();
+
+    assert_eq!(
+      tokens,
+      vec!["get", "Last", "Data", "Notification", "_", "v", "2"]
+    );
+  }
+
+  #[test]
+  fn test_word_diff_ranges_highlight_added_camel_case_segment() {
+    let old_text = "const getLastNotification = () => \"You have a new message!\";";
+    let new_text = "const getLastDataNotification = () => \"You have a new message!\";";
+
+    let (removed, added) = word_diff_ranges(old_text, new_text);
+
+    assert!(removed.is_empty());
+    assert_eq!(added.len(), 1);
+    assert_eq!(&new_text[added[0].clone()], "Data");
+  }
+
+  #[test]
+  fn test_word_tokens_preserve_acronym_boundaries() {
+    let tokens = word_tokens("getHTTPServerResponse", false)
+      .into_iter()
+      .map(|token| token.text)
+      .collect::<Vec<_>>();
+
+    assert_eq!(tokens, vec!["get", "HTTP", "Server", "Response"]);
   }
 
   #[gpui::test]
