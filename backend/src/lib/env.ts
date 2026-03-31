@@ -27,8 +27,9 @@ const envSchema = z.object({
   POLAR_SUBSCRIPTION_PRODUCT_ID: z.string(),
   POLAR_WEBHOOK_SECRET: z.string(),
   WEB_DASHBOARD_URL: z.url(),
-  LINEAR_TOKEN: z.string(),
-  LINEAR_TEAM_ID: z.string(),
+  SHIPIT_API_KEY: z.string(),
+  SHIPIT_PROJECT_ID: z.string(),
+  SHIPIT_API_URL: z.url(),
 })
 
 export type Env = z.infer<typeof envSchema>
