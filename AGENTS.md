@@ -51,7 +51,7 @@
 - Add tests for each feature/fix.
 - For desktop gpui check gpui-component stories: desktop/gpui-component/crates/story/src/stories
 - For desktop terminal check: alacritty, zed_terminal, gpui-terminal or termy
-- **Changelog**: after each feature or fix, add an entry to `CHANGELOG.md`. Use the next unreleased version section (create it if it doesn't exist). Follow the existing format: `## X.Y.Z` heading, then `### Feature Title` with a short paragraph.
+- **Changelog**: after each feature or fix, add an entry to `CHANGELOG.md`. Use the next unreleased version section (create it if it doesn't exist). Follow the existing format: `## X.Y.Z` heading, then `### Feature Title` with a short paragraph. Keep changelog copy user-facing and outcome-focused. Do not describe internal implementation details unless they matter to users.
 - **Copy tone**: avoid cliché phrases like "at a glance". Prefer direct alternatives ("immediately", "quickly", or restructure the sentence).
 
 ## Validation commands

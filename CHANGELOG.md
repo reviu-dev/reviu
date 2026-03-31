@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.0.10
 
+### More Precise Word Diff Highlights
+
+Word diff highlights are now more precise, Reviu can better show the exact inserted text inside function names in inline and split diff views instead of marking the full name as changed.
+
 ### Pull Request Changes Search Performance
 
 Searching file contents from the pull request changes tree is now faster when you include unchanged local files from the current branch, Reviu now scans the local HEAD snapshot in a single pass.
