@@ -627,6 +627,7 @@ pub struct GithubPullRequestDetails {
   #[serde(rename = "review_comments")]
   #[allow(dead_code)]
   pub review_comments: u64,
+  #[allow(dead_code)]
   pub commits: u64,
   pub additions: u64,
   pub deletions: u64,
