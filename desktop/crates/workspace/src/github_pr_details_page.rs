@@ -6816,7 +6816,7 @@ impl GithubPrDetailsPage {
           .label("Merge")
           .with_variant(ButtonVariant::Secondary)
           .outline()
-          .icon(UiIconName::GitMerge)
+          .icon(IconName::ChevronDown)
           .small()
           .disabled(merge_button_disabled),
       )
