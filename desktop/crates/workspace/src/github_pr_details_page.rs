@@ -3528,6 +3528,7 @@ impl GithubPrDetailsPage {
                         Button::new("github-pr-overview-alert-action")
                           .small()
                           .primary()
+                          .with_variant(ButtonVariant::Secondary)
                           .label(label)
                           .disabled(
                             self.local_branch_switch_loading || self.local_project_update_loading,

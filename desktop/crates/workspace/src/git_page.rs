@@ -6,7 +6,10 @@ use std::{
   time::Duration,
 };
 
-use editor::{CloseFind, ConflictResolution, DiffViewMode, Editor, Find, HunkAction, HunkState};
+use editor::{
+  CloseFind, ConflictNavigationDirection, ConflictNavigationState, ConflictResolution,
+  DiffViewMode, Editor, Find, HunkAction, HunkState,
+};
 use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
   HistoryCommitNode, HistoryRevision, InteractiveRebaseTarget, InteractiveRebaseTodoEntry,
@@ -6242,6 +6245,49 @@ impl GitPage {
       .find(|entry| &entry.path == selected)
   }
 
+  fn conflict_navigation_state_for(
+    file_status: Option<RepoStatusKind>,
+    editor: &Editor,
+    cx: &App,
+  ) -> Option<ConflictNavigationState> {
+    matches!(file_status, Some(RepoStatusKind::Conflicted))
+      .then(|| editor.conflict_navigation_state(cx))
+      .flatten()
+  }
+
+  #[cfg(test)]
+  fn editor_conflict_navigation_state(&self, cx: &App) -> Option<ConflictNavigationState> {
+    let file_status = if self.history_opened_commit_file.is_some() {
+      None
+    } else {
+      self.selected_file_entry().map(|entry| entry.status)
+    };
+
+    self.editor.as_ref().and_then(|editor| {
+      editor.read_with(cx, |editor, cx| {
+        Self::conflict_navigation_state_for(file_status, editor, cx)
+      })
+    })
+  }
+
+  fn can_navigate_conflicts(conflict_navigation: Option<ConflictNavigationState>) -> bool {
+    conflict_navigation.is_some_and(|state| state.total > 1)
+  }
+
+  fn navigate_conflict_in_editor(
+    &mut self,
+    direction: ConflictNavigationDirection,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+
+    editor.update(cx, |editor, cx| {
+      editor.navigate_conflict(direction, cx);
+    });
+  }
+
   fn should_show_stage_selected_file_palette_command(&self) -> bool {
     self.selected_repo.is_some()
       && self
@@ -7286,6 +7332,8 @@ impl GitPage {
     } else {
       selected_entry.as_ref().map(|entry| entry.status)
     };
+    let conflict_navigation = Self::conflict_navigation_state_for(file_status, &editor_state, cx);
+    let can_navigate_conflicts = Self::can_navigate_conflicts(conflict_navigation);
     let show_accept_all_conflict_actions = matches!(file_status, Some(RepoStatusKind::Conflicted));
     let can_accept_all_conflicts = Self::can_accept_all_conflicts(
       file_status,
@@ -7317,6 +7365,34 @@ impl GitPage {
         });
       });
 
+    let view = cx.entity();
+    let previous_conflict_button = Button::new("editor-conflict-prev")
+      .icon(IconName::ArrowUp)
+      .xsmall()
+      .ghost()
+      .compact()
+      .tooltip("Previous conflict")
+      .disabled(!can_navigate_conflicts)
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.navigate_conflict_in_editor(ConflictNavigationDirection::Previous, cx);
+        });
+      });
+
+    let view = cx.entity();
+    let next_conflict_button = Button::new("editor-conflict-next")
+      .icon(IconName::ArrowDown)
+      .xsmall()
+      .ghost()
+      .compact()
+      .tooltip("Next conflict")
+      .disabled(!can_navigate_conflicts)
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.navigate_conflict_in_editor(ConflictNavigationDirection::Next, cx);
+        });
+      });
+
     div()
       .min_h(px(EDITOR_HEADER_HEIGHT))
       .h(px(EDITOR_HEADER_HEIGHT))
@@ -7335,6 +7411,27 @@ impl GitPage {
           .items_center()
           .gap_2()
           .flex_shrink_0()
+          .when_some(conflict_navigation, |this, conflict_navigation| {
+            this.child(
+              h_flex()
+                .items_center()
+                .gap_1()
+                .child(previous_conflict_button)
+                .child(
+                  div()
+                    .w(px(52.0))
+                    .text_xs()
+                    .text_center()
+                    .text_color(theme.muted_foreground)
+                    .child(format!(
+                      "{}/{}",
+                      conflict_navigation.active_index + 1,
+                      conflict_navigation.total
+                    )),
+                )
+                .child(next_conflict_button),
+            )
+          })
           .when(show_accept_all_conflict_actions, |this| {
             this
               .child(accept_all_current_button)
@@ -9534,6 +9631,25 @@ mod tests {
     assert!(!GitPage::can_accept_all_conflicts(None, false, true));
   }
 
+  #[test]
+  fn can_navigate_conflicts_requires_multiple_conflicts() {
+    assert!(!GitPage::can_navigate_conflicts(None));
+    assert!(!GitPage::can_navigate_conflicts(Some(
+      ConflictNavigationState {
+        active_index: 0,
+        total: 1,
+        active_start_line: 3,
+      }
+    )));
+    assert!(GitPage::can_navigate_conflicts(Some(
+      ConflictNavigationState {
+        active_index: 0,
+        total: 2,
+        active_start_line: 3,
+      }
+    )));
+  }
+
   fn make_status_entry(path: &str, stage: RepoStage) -> RepoStatusEntry {
     RepoStatusEntry {
       path: PathBuf::from(path),
@@ -11342,6 +11458,53 @@ mod tests {
       !can_show_after,
       "commands should disappear once all conflict markers are resolved"
     );
+  }
+
+  #[gpui::test]
+  async fn editor_conflict_navigation_moves_between_conflicts_in_selected_file(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-editor-conflict-navigation");
+    let rel_path = Path::new("README.md");
+    let conflict_text = "pre\n<<<<<<< HEAD\nours1\n=======\ntheirs1\n>>>>>>> branch\nmid\n<<<<<<< HEAD\nours2\n=======\ntheirs2\n>>>>>>> branch\npost\n";
+    std::fs::write(repo.path.join(rel_path), conflict_text).expect("write conflict markers");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.status_entries = vec![RepoStatusEntry {
+        path: rel_path.to_path_buf(),
+        old_path: None,
+        status: RepoStatusKind::Conflicted,
+        stage: RepoStage::Unstaged,
+      }];
+      this.open_file(rel_path.to_path_buf(), cx);
+    });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let initial_state = git_page.read_with(cx, |this, cx| {
+      this
+        .editor_conflict_navigation_state(cx)
+        .expect("initial conflict navigation state")
+    });
+    assert_eq!(initial_state.active_index, 0);
+    assert_eq!(initial_state.total, 2);
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.navigate_conflict_in_editor(ConflictNavigationDirection::Next, cx);
+    });
+
+    let next_state = git_page.read_with(cx, |this, cx| {
+      this
+        .editor_conflict_navigation_state(cx)
+        .expect("next conflict navigation state")
+    });
+    assert_eq!(next_state.active_index, 1);
+    assert_eq!(next_state.total, 2);
+    assert_eq!(next_state.active_start_line, 7);
   }
 
   #[gpui::test]

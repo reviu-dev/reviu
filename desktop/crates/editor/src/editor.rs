@@ -639,6 +639,19 @@ pub enum ConflictResolution {
   Both,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConflictNavigationDirection {
+  Previous,
+  Next,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConflictNavigationState {
+  pub active_index: usize,
+  pub total: usize,
+  pub active_start_line: usize,
+}
+
 #[derive(Clone, Debug)]
 struct GroupToken {
   state: HunkState,
@@ -1250,6 +1263,18 @@ impl Editor {
       line_height,
       total_lines,
     )
+  }
+
+  fn center_display_line_in_viewport(&mut self, display_line: usize, total_lines: usize) {
+    if total_lines == 0 {
+      self.scroll_offset_y = 0.0;
+      return;
+    }
+
+    let line_height = self.measured_editor_line_height();
+    let metrics = self.vertical_scroll_metrics(line_height, total_lines);
+    let center_offset = ((metrics.viewport_lines - 1.0) / 2.0).max(0.0);
+    self.scroll_offset_y = (display_line as f32 - center_offset).clamp(0.0, metrics.max_scroll);
   }
 
   fn reset_horizontal_scroll_state(&mut self) {
@@ -4876,6 +4901,45 @@ impl Editor {
     !self.conflict_regions(cx).is_empty()
   }
 
+  fn active_conflict_index(&self, regions: &[ConflictRegion], cx: &App) -> Option<usize> {
+    if regions.is_empty() {
+      return None;
+    }
+
+    let cursor_doc_line = {
+      let document = self.document.read(cx);
+      document.char_to_line(self.cursor_offset().min(document.len()))
+    };
+
+    if let Some(index) = regions
+      .iter()
+      .position(|region| region.contains_doc_line(cursor_doc_line))
+    {
+      return Some(index);
+    }
+
+    if let Some(index) = regions
+      .iter()
+      .position(|region| region.start_line >= cursor_doc_line)
+    {
+      return Some(index);
+    }
+
+    Some(regions.len().saturating_sub(1))
+  }
+
+  pub fn conflict_navigation_state(&self, cx: &App) -> Option<ConflictNavigationState> {
+    let regions = self.conflict_regions(cx);
+    let active_index = self.active_conflict_index(regions.as_ref(), cx)?;
+    let active_start_line = regions[active_index].start_line;
+
+    Some(ConflictNavigationState {
+      active_index,
+      total: regions.len(),
+      active_start_line,
+    })
+  }
+
   pub(crate) fn conflict_start_line_for_display_line(
     &self,
     display_line: usize,
@@ -5004,6 +5068,44 @@ impl Editor {
     self.last_mouse_position = None;
     self.is_dirty = true;
     self.schedule_diff_recompute(cx);
+    cx.notify();
+  }
+
+  pub fn navigate_conflict(
+    &mut self,
+    direction: ConflictNavigationDirection,
+    cx: &mut Context<Self>,
+  ) {
+    let regions = self.conflict_regions(cx);
+    let Some(active_index) = self.active_conflict_index(regions.as_ref(), cx) else {
+      return;
+    };
+
+    let target_index = match direction {
+      ConflictNavigationDirection::Previous => {
+        if active_index == 0 {
+          regions.len().saturating_sub(1)
+        } else {
+          active_index - 1
+        }
+      }
+      ConflictNavigationDirection::Next => (active_index + 1) % regions.len(),
+    };
+    let target_start_line = regions[target_index].start_line;
+    let target_display_line = self
+      .doc_to_display_line(target_start_line)
+      .unwrap_or(target_start_line);
+    let target_offset = {
+      let document = self.document.read(cx);
+      document.line_to_char(target_start_line)
+    };
+    let total_lines = self.display_line_count(self.document.read(cx).len_lines());
+
+    self.move_to(target_offset, cx);
+    self.hovered_conflict_start_line = None;
+    self.last_mouse_position = None;
+    self.center_display_line_in_viewport(target_display_line, total_lines);
+    self.ensure_cursor_visible_with_policy(CursorRevealPolicy::WithPadding, cx);
     cx.notify();
   }
 
@@ -7664,6 +7766,109 @@ pub mod tests {
     });
 
     assert_eq!(ctx.text(), "pre\ntheirs1\nmid\ntheirs2\npost\n");
+  }
+
+  #[gpui::test]
+  fn conflict_navigation_moves_between_regions_and_wraps(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(
+      cx.clone(),
+      "pre\n<<<<<<< HEAD\nours1\n=======\ntheirs1\n>>>>>>> branch\nmid\n<<<<<<< HEAD\nours2\n=======\ntheirs2\n>>>>>>> branch\npost\n",
+    );
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let initial_state = editor
+        .conflict_navigation_state(cx)
+        .expect("initial conflict navigation state");
+      assert_eq!(initial_state.active_index, 0);
+      assert_eq!(initial_state.total, 2);
+      assert_eq!(initial_state.active_start_line, 1);
+
+      editor.navigate_conflict(ConflictNavigationDirection::Next, cx);
+      let second_state = editor
+        .conflict_navigation_state(cx)
+        .expect("second conflict navigation state");
+      assert_eq!(second_state.active_index, 1);
+      assert_eq!(second_state.total, 2);
+      assert_eq!(second_state.active_start_line, 7);
+      let second_offset = editor.document().read(cx).line_to_char(7);
+      assert_eq!(editor.cursor_offset(), second_offset);
+
+      editor.navigate_conflict(ConflictNavigationDirection::Next, cx);
+      let wrapped_state = editor
+        .conflict_navigation_state(cx)
+        .expect("wrapped conflict navigation state");
+      assert_eq!(wrapped_state.active_index, 0);
+      assert_eq!(wrapped_state.total, 2);
+      assert_eq!(wrapped_state.active_start_line, 1);
+
+      editor.navigate_conflict(ConflictNavigationDirection::Previous, cx);
+      let previous_state = editor
+        .conflict_navigation_state(cx)
+        .expect("previous conflict navigation state");
+      assert_eq!(previous_state.active_index, 1);
+      assert_eq!(previous_state.total, 2);
+      assert_eq!(previous_state.active_start_line, 7);
+    });
+  }
+
+  #[gpui::test]
+  fn conflict_navigation_state_advances_to_next_remaining_conflict_after_resolution(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_text(
+      cx.clone(),
+      "pre\n<<<<<<< HEAD\nours1\n=======\ntheirs1\n>>>>>>> branch\nmid\n<<<<<<< HEAD\nours2\n=======\ntheirs2\n>>>>>>> branch\npost\n",
+    );
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let first_conflict_start_line = editor
+        .conflict_navigation_state(cx)
+        .expect("initial conflict navigation state")
+        .active_start_line;
+
+      editor.resolve_conflict_region(first_conflict_start_line, ConflictResolution::Current, cx);
+
+      let state = editor
+        .conflict_navigation_state(cx)
+        .expect("remaining conflict navigation state");
+      assert_eq!(state.active_index, 0);
+      assert_eq!(state.total, 1);
+      assert_eq!(state.active_start_line, 3);
+    });
+  }
+
+  #[gpui::test]
+  fn conflict_navigation_centers_target_conflict_in_viewport(cx: &mut TestAppContext) {
+    let mut text = String::new();
+    for index in 0..15 {
+      if !text.is_empty() {
+        text.push('\n');
+      }
+      text.push_str(&format!("pre {index}"));
+    }
+    text.push_str(
+      "\n<<<<<<< HEAD\nours1\n=======\ntheirs1\n>>>>>>> branch\nmid\n<<<<<<< HEAD\nours2\n=======\ntheirs2\n>>>>>>> branch\npost\n",
+    );
+
+    let mut ctx = EditorTestContext::with_text(cx.clone(), &text);
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.navigate_conflict(ConflictNavigationDirection::Next, cx);
+
+      let target_display_line = editor
+        .first_display_line_for_conflict(21)
+        .expect("display line");
+      let total_lines = editor.display_line_count(editor.document().read(cx).len_lines());
+      let metrics = Editor::vertical_scroll_metrics_for_height(
+        editor.viewport_height,
+        editor.measured_editor_line_height(),
+        total_lines,
+      );
+      let expected_scroll = (target_display_line as f32 - ((metrics.viewport_lines - 1.0) / 2.0))
+        .clamp(0.0, metrics.max_scroll);
+
+      assert!((editor.scroll_offset_y - expected_scroll).abs() < f32::EPSILON);
+    });
   }
 
   #[gpui::test]
