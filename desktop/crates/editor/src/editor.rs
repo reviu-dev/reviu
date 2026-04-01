@@ -151,6 +151,7 @@ pub enum DiffViewMode {
 #[derive(Clone, Debug)]
 pub struct EditorFileLoad {
   pub content: String,
+  pub binary_bytes: Option<Vec<u8>>,
   pub is_read_only: bool,
   pub language_hint: Option<String>,
   pub file_mtime: Option<SystemTime>,
@@ -772,13 +773,17 @@ impl Editor {
 
   pub fn load_file_for_editor(repo_root: &Path, workdir_path: &Path) -> EditorFileLoad {
     let language_hint = Self::language_hint_for_path(workdir_path);
-    let (content, is_read_only) = match std::fs::read_to_string(workdir_path) {
-      Ok(content) => (content, false),
+    let (content, binary_bytes, is_read_only) = match std::fs::read(workdir_path) {
+      Ok(bytes) => match String::from_utf8(bytes) {
+        Ok(content) => (content, None, false),
+        Err(err) => (String::new(), Some(err.into_bytes()), false),
+      },
       Err(err) if err.kind() == std::io::ErrorKind::NotFound => (
         Self::deleted_file_content(repo_root, workdir_path).unwrap_or_default(),
+        None,
         true,
       ),
-      Err(_) => (String::new(), false),
+      Err(_) => (String::new(), None, false),
     };
 
     let file_mtime = std::fs::metadata(workdir_path)
@@ -790,6 +795,7 @@ impl Editor {
 
     EditorFileLoad {
       content,
+      binary_bytes,
       is_read_only,
       language_hint,
       file_mtime,
@@ -7354,6 +7360,14 @@ pub mod tests {
   use gpui::TestAppContext;
   use std::path::Path;
 
+  fn tiny_png_bytes() -> Vec<u8> {
+    vec![
+      137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4,
+      0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252, 255, 31, 0, 3, 3, 2,
+      0, 239, 154, 63, 71, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ]
+  }
+
   #[test]
   fn language_hint_for_path_detects_dotfiles_and_dockerfile_variants() {
     assert_eq!(
@@ -7676,6 +7690,36 @@ pub mod tests {
       editor.load_readonly_snapshot("resolved\ncontent\n".to_string(), None, cx);
       assert!(!editor.has_unresolved_conflict_markers(cx));
     });
+  }
+
+  #[test]
+  fn load_file_for_editor_preserves_binary_bytes_for_raster_images() {
+    let unique = SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .expect("system time before unix epoch")
+      .as_nanos();
+    let repo_root = std::env::temp_dir().join(format!(
+      "reviu-editor-load-binary-{}-{unique}",
+      std::process::id()
+    ));
+    let workdir_path = repo_root.join("fixtures/image.png");
+    std::fs::create_dir_all(
+      workdir_path
+        .parent()
+        .expect("binary editor fixture should have parent"),
+    )
+    .expect("create binary editor fixture parent");
+    let expected_bytes = tiny_png_bytes();
+    std::fs::write(&workdir_path, &expected_bytes).expect("write binary editor fixture");
+
+    let loaded = Editor::load_file_for_editor(&repo_root, &workdir_path);
+
+    assert_eq!(loaded.content, "");
+    assert_eq!(loaded.binary_bytes, Some(expected_bytes));
+    assert!(!loaded.is_read_only);
+    assert!(loaded.language_hint.is_none());
+
+    std::fs::remove_dir_all(&repo_root).ok();
   }
 
   #[gpui::test]

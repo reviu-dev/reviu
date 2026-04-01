@@ -10217,6 +10217,7 @@ name = "workspace"
 version = "0.0.10"
 dependencies = [
  "anyhow",
+ "base64",
  "dirs 5.0.1",
  "editor",
  "gfm_markdown_viewer",

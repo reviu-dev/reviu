@@ -18,6 +18,7 @@ import type {
   DeleteIssueCommentParams,
   DeletePullRequestCommentParams,
   GetContentParams,
+  GithubFileAsset,
   GithubFileContent,
   GithubIssue,
   GithubIssueDetails,
@@ -146,6 +147,7 @@ import {
   fetchGithubRepositoryBranchesConditionally,
   fetchGithubRepositoryConditionally,
   fetchGithubRepositoryContentConditionally,
+  fetchGithubRepositoryContentObjectConditionally,
   fetchGithubRepositoryIssueCommentsAllPages,
   fetchGithubRepositoryIssueCommentsConditionally,
   fetchGithubRepositoryIssueConditionally,
@@ -1439,6 +1441,87 @@ async function fetchRepositoryFileWithCache(
     }))
 }
 
+function encodeGithubFileAsset(data: unknown): string | null {
+  if (typeof data === 'string') {
+    return Buffer.from(data, 'utf8').toString('base64')
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString('base64')
+  }
+  if (data && typeof data === 'object' && 'content' in data) {
+    const payload = data as { content?: string, encoding?: string }
+    if (typeof payload.content === 'string') {
+      const encoding = payload.encoding === 'base64' ? 'base64' : 'utf8'
+      return Buffer.from(payload.content, encoding).toString('base64')
+    }
+  }
+  return null
+}
+
+async function fetchRepositoryFileAssetWithCache(
+  userId: string,
+  githubToken: string,
+  owner: string,
+  repo: string,
+  path: string,
+  ref: string,
+) {
+  const baseCachePolicy = createGithubRepositoryFileCachePolicy(userId, owner, repo, path, ref)
+  const cachePolicy = await resolveRepositoryReadCachePolicy({
+    ...baseCachePolicy,
+    operation: `${baseCachePolicy.operation}.asset`,
+    resourceKey: `${baseCachePolicy.resourceKey}:asset`,
+  }, owner, repo)
+
+  return withGithubMetrics(userId, cachePolicy.operation, () =>
+    githubCache.getOrLoad<GithubFileAsset>({
+      ...cachePolicy,
+      load: async ({ cachedEntry }) => {
+        const params: GetContentParams = {
+          owner,
+          repo,
+          path,
+          ref,
+        }
+
+        try {
+          const response = await fetchGithubRepositoryContentObjectConditionally({
+            token: githubToken,
+            params,
+            etag: cachedEntry?.etag,
+            lastModified: cachedEntry?.lastModified,
+          })
+
+          if (response.notModified) {
+            return {
+              notModified: true as const,
+              etag: response.etag,
+              lastModified: response.lastModified,
+            }
+          }
+
+          const contentBase64 = encodeGithubFileAsset(response.data)
+
+          return {
+            payload: { contentBase64 } satisfies GithubFileAsset,
+            etag: response.etag,
+            lastModified: response.lastModified,
+          }
+        }
+        catch (error) {
+          const status = (error as { status?: number }).status
+          if (status === 404) {
+            return {
+              payload: { contentBase64: null } satisfies GithubFileAsset,
+            }
+          }
+
+          throw error
+        }
+      },
+    }))
+}
+
 async function invalidateGithubCacheTags(tags: string[]) {
   try {
     await githubCache.invalidateTags(tags)
@@ -2176,6 +2259,37 @@ export const githubRoutes = githubRouter
       const status = (error as { status?: number }).status
       if (status === 404) {
         return ctx.json({ content: null } satisfies GithubFileContent, 200)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/file/asset', async (ctx) => {
+    const { org, repo, path, ref } = ctx.req.query()
+
+    if (!org || !repo || !path || !ref) {
+      return ctx.json({ error: 'Missing org, repo, path, or ref' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const result = await fetchRepositoryFileAssetWithCache(
+        user.id,
+        githubToken,
+        org,
+        repo,
+        path,
+        ref,
+      )
+      setGithubCacheHeaders(ctx, result)
+
+      return ctx.json(result.payload, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 404) {
+        return ctx.json({ contentBase64: null } satisfies GithubFileAsset, 200)
       }
       return ctx.json({ error: (error as Error).message }, 502)
     }

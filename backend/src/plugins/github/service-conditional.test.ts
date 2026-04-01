@@ -5,6 +5,7 @@ import {
   fetchGithubPullRequestCommentsConditionally,
   fetchGithubPullRequestsConditionally,
   fetchGithubRepositoryContentConditionally,
+  fetchGithubRepositoryContentObjectConditionally,
 } from './service.js'
 
 const { requestMock } = vi.hoisted(() => ({
@@ -108,6 +109,55 @@ describe('github service conditional requests', () => {
       notModified: true,
       etag: '"content-etag"',
       lastModified: 'Fri, 13 Mar 2026 18:10:00 GMT',
+    })
+  })
+
+  it('requests repository content objects without the raw accept header', async () => {
+    requestMock.mockResolvedValueOnce({
+      status: 200,
+      headers: {
+        etag: '"content-object-etag"',
+      },
+      data: {
+        content: 'aGVsbG8=',
+        encoding: 'base64',
+      },
+    })
+
+    const result = await fetchGithubRepositoryContentObjectConditionally({
+      token: 'github-token',
+      params: {
+        owner: 'openai',
+        repo: 'reviu',
+        path: 'image.png',
+        ref: 'main',
+      },
+      etag: '"cached-content-object-etag"',
+    })
+
+    expect(requestMock).toHaveBeenCalledWith(
+      'GET /repos/{owner}/{repo}/contents/{path}',
+      expect.objectContaining({
+        owner: 'openai',
+        repo: 'reviu',
+        path: 'image.png',
+        ref: 'main',
+        headers: expect.objectContaining({
+          'authorization': 'Bearer github-token',
+          'if-none-match': '"cached-content-object-etag"',
+        }),
+      }),
+    )
+
+    expect(requestMock.mock.calls[0]?.[1]?.headers).not.toHaveProperty('accept')
+    expect(result).toEqual({
+      data: {
+        content: 'aGVsbG8=',
+        encoding: 'base64',
+      },
+      notModified: false,
+      etag: '"content-object-etag"',
+      lastModified: undefined,
     })
   })
 

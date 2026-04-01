@@ -42,6 +42,7 @@ pub struct CommitFileDiff {
   pub file: CommitChangedFile,
   pub patch: String,
   pub content: String,
+  pub binary_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -187,11 +188,12 @@ pub fn load_commit_file_diff(
     }
 
     let patch = patch_for_delta(&diff, delta_ix)?;
-    let content = load_commit_file_content(&repo, &commit_tree, &file.path)?;
+    let (content, binary_bytes) = load_commit_file_content(&repo, &commit_tree, &file.path)?;
     return Ok(CommitFileDiff {
       file,
       patch,
       content,
+      binary_bytes,
     });
   }
 
@@ -311,14 +313,17 @@ fn load_commit_file_content(
   repo: &Repository,
   commit_tree: &Tree<'_>,
   rel_path: &Path,
-) -> Result<String> {
+) -> Result<(String, Option<Vec<u8>>)> {
   let Ok(entry) = commit_tree.get_path(rel_path) else {
-    return Ok(String::new());
+    return Ok((String::new(), None));
   };
   let blob = repo
     .find_blob(entry.id())
     .context("load blob from commit")?;
-  Ok(String::from_utf8_lossy(blob.content()).into_owned())
+  match String::from_utf8(blob.content().to_vec()) {
+    Ok(content) => Ok((content, None)),
+    Err(err) => Ok((String::new(), Some(err.into_bytes()))),
+  }
 }
 
 fn normalize_path(path: &Path) -> String {

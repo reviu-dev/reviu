@@ -17,6 +17,7 @@ rusqlite = { workspace = true }
 syntax = { workspace = true }
 smol = { workspace = true }
 anyhow = { workspace = true }
+base64 = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 time = { workspace = true }

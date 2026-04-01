@@ -1190,6 +1190,15 @@ export async function fetchGithubRepositoryContentConditionally(
   )
 }
 
+export async function fetchGithubRepositoryContentObjectConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/contents/{path}'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/contents/{path}'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}/contents/{path}'>(
+    'GET /repos/{owner}/{repo}/contents/{path}',
+    options,
+  )
+}
+
 export async function fetchGithubViewer({ token }: { token: string }): Promise<GithubUserResponse> {
   return requestGithubData('GET /user', {
     token,

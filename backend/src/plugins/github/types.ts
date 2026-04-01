@@ -563,6 +563,10 @@ export interface GithubFileContent {
   content: string | null
 }
 
+export interface GithubFileAsset {
+  contentBase64: string | null
+}
+
 export interface GithubPullRequestFileSource {
   filename: string
   status: string

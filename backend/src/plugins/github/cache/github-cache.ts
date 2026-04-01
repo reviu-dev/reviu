@@ -626,13 +626,13 @@ class GithubCacheManager {
     cacheKey: string,
     cacheStatus: GithubCacheStatus,
   ) {
-    logger.info({
-      cacheKey,
-      cacheStatus,
-      resourceKey: options.resourceKey,
-      scope: options.scope,
-      scopeId: options.scopeId ?? null,
-    }, 'GitHub cache resolved')
+    // logger.info({
+    //   cacheKey,
+    //   cacheStatus,
+    //   resourceKey: options.resourceKey,
+    //   scope: options.scope,
+    //   scopeId: options.scopeId ?? null,
+    // }, 'GitHub cache resolved')
   }
 
   private recordCacheResolution<T>(

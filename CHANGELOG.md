@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.0.11
+
+### Image File Previews in Review Editors
+
+Git and pull request review editors now render PNG, JPEG, WebP, GIF, BMP, TIFF, and ICO files as previews instead of showing raw binary text. Unsupported binary files now show a clear placeholder so large review panes no longer fill with unreadable content.
+
 ## 0.0.10
 
 ### More Precise Word Diff Highlights

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use base64::{Engine as _, engine::general_purpose};
 use reqwest::blocking::Client;
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -1059,6 +1060,12 @@ struct CreateGithubPullRequestMergeRequest<'a> {
 #[derive(Debug, Deserialize)]
 struct GithubFileContentResponse {
   content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubFileAssetResponse {
+  #[serde(rename = "contentBase64")]
+  content_base64: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2143,6 +2150,38 @@ impl ApiClient {
     }
     let payload = response.json::<GithubFileContentResponse>()?;
     Ok(payload.content)
+  }
+
+  pub fn fetch_github_file_asset(
+    &self,
+    owner: &str,
+    repo: &str,
+    path: &str,
+    reference: &str,
+  ) -> Result<Option<Vec<u8>>> {
+    let response = self
+      .authed_request(Method::GET, "/github/file/asset")
+      .query(&[
+        ("org", owner),
+        ("repo", repo),
+        ("path", path),
+        ("ref", reference),
+      ])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", "/github/file/asset", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubFileAssetResponse>()?;
+    payload
+      .content_base64
+      .map(|content| general_purpose::STANDARD.decode(content))
+      .transpose()
+      .map_err(Into::into)
   }
 
   pub fn check_desktop_update(
@@ -5242,6 +5281,32 @@ mod tests {
         .to_string()
         .contains("unexpected status")
     );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_file_asset_decodes_base64_payload() {
+    let body = r##"{"contentBase64":"aGVsbG8="}"##;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let content = api
+      .fetch_github_file_asset("acme", "widget", "image.png", "main")
+      .expect("fetch asset");
+    assert_eq!(content, Some(b"hello".to_vec()));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_file_asset_returns_none_when_content_is_null() {
+    let body = r#"{"contentBase64":null}"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let content = api
+      .fetch_github_file_asset("acme", "widget", "image.png", "main")
+      .expect("fetch asset");
+    assert_eq!(content, None);
     handle.join().expect("join server thread");
   }
 
