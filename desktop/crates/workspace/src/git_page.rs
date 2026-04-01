@@ -208,6 +208,7 @@ impl GitPageHandle {
 struct CreatePullRequestDialog {
   api: ApiClient,
   window_handle: AnyWindowHandle,
+  git_page: WeakEntity<GitPage>,
   branch_context: GithubBranchContext,
   title_input: Entity<InputState>,
   base_input: Entity<InputState>,
@@ -286,6 +287,7 @@ impl CreatePullRequestDialog {
   fn new(
     api: ApiClient,
     window_handle: AnyWindowHandle,
+    git_page: WeakEntity<GitPage>,
     branch_context: GithubBranchContext,
     window: &mut Window,
     cx: &mut Context<Self>,
@@ -304,6 +306,7 @@ impl CreatePullRequestDialog {
     let mut this = Self {
       api,
       window_handle,
+      git_page,
       branch_context,
       title_input: cx.new(|cx| InputState::new(window, cx).placeholder("Pull request title")),
       base_input: cx.new(|cx| InputState::new(window, cx).placeholder("Base branch")),
@@ -485,6 +488,8 @@ impl CreatePullRequestDialog {
     let owner = self.branch_context.owner.clone();
     let repo = self.branch_context.repo.clone();
     let branch = self.branch_context.branch.clone();
+    let branch_context = self.branch_context.clone();
+    let git_page = self.git_page.clone();
     let draft = self.draft;
     let window_handle = self.window_handle;
 
@@ -510,6 +515,10 @@ impl CreatePullRequestDialog {
 
         match result {
           Ok(pull_request) => {
+            let created_pull_request = pull_request.clone();
+            let _ = git_page.update(cx, |git_page, cx| {
+              git_page.apply_created_pull_request(&branch_context, &created_pull_request, cx);
+            });
             window.close_dialog(cx);
             GithubPrDetailsPageHandle::show_with_open_target(
               pull_request.repository.owner.into(),
@@ -671,12 +680,21 @@ impl Render for CreatePullRequestDialog {
 fn open_create_pull_request_dialog(
   api: ApiClient,
   window_handle: AnyWindowHandle,
+  git_page: WeakEntity<GitPage>,
   branch_context: GithubBranchContext,
   window: &mut Window,
   cx: &mut App,
 ) {
-  let dialog = cx
-    .new(|cx| CreatePullRequestDialog::new(api.clone(), window_handle, branch_context, window, cx));
+  let dialog = cx.new(|cx| {
+    CreatePullRequestDialog::new(
+      api.clone(),
+      window_handle,
+      git_page,
+      branch_context,
+      window,
+      cx,
+    )
+  });
   let dialog_for_overlay = dialog.clone();
   let dialog_for_focus = dialog.clone();
 
@@ -1671,6 +1689,34 @@ impl GitPage {
     .then_some(branch_context)
   }
 
+  fn should_apply_created_pull_request(
+    active_context: Option<&GithubBranchContext>,
+    created_context: &GithubBranchContext,
+  ) -> bool {
+    active_context == Some(created_context)
+  }
+
+  fn apply_created_pull_request(
+    &mut self,
+    created_context: &GithubBranchContext,
+    pull_request: &GithubPullRequest,
+    cx: &mut Context<Self>,
+  ) {
+    if !Self::should_apply_created_pull_request(
+      self.branch_pr_lookup_context(cx).as_ref(),
+      created_context,
+    ) {
+      return;
+    }
+
+    self.branch_pr_lookup_generation = self.branch_pr_lookup_generation.wrapping_add(1);
+    self.branch_pr_lookup_task = None;
+    self.branch_pr_lookup_context = Some(created_context.clone());
+    self.branch_pr_lookup_result = Some(pull_request.clone());
+    self.branch_pr_lookup_loading = false;
+    cx.notify();
+  }
+
   fn publish_branch_and_create_pull_request_action(&mut self, cx: &mut Context<Self>) {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
@@ -1703,10 +1749,12 @@ impl GitPage {
             this.force_push_after_rebase = false;
             this.add_git_breadcrumb("Publish branch and create PR succeeded", Map::new());
             this.reload_status(cx);
+            let git_page = cx.entity().downgrade();
             let _ = cx.update_window(window_handle, |_, window, cx| {
               open_create_pull_request_dialog(
                 api.clone(),
                 window_handle,
+                git_page,
                 branch_context.clone(),
                 window,
                 cx,
@@ -4240,8 +4288,9 @@ impl GitPage {
           .ok_or_else(|| SharedString::from("Command not available."))?;
         let api = self.api.clone();
         let window_handle = self.window_handle;
+        let git_page = cx.entity().downgrade();
         window.on_next_frame(move |window, cx| {
-          open_create_pull_request_dialog(api, window_handle, branch_context, window, cx);
+          open_create_pull_request_dialog(api, window_handle, git_page, branch_context, window, cx);
         });
         Ok(())
       }
@@ -7112,6 +7161,7 @@ impl GitPage {
         )
       }
       GitBranchPullRequestButtonState::Create => branch_context.clone().map(|branch_context| {
+        let git_page = cx.entity().downgrade();
         Button::new("git-create-branch-pr")
           .label("Create PR")
           .icon(UiIconName::GitPullRequestArrow)
@@ -7124,6 +7174,7 @@ impl GitPage {
             open_create_pull_request_dialog(
               WorkspaceApi::global(cx).api.clone(),
               window.window_handle(),
+              git_page.clone(),
               branch_context.clone(),
               window,
               cx,
@@ -9141,6 +9192,33 @@ mod tests {
   }
 
   #[test]
+  fn should_apply_created_pull_request_only_for_matching_branch_context() {
+    let active_context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature/parser".to_string(),
+    };
+    let other_context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature/other".to_string(),
+    };
+
+    assert!(GitPage::should_apply_created_pull_request(
+      Some(&active_context),
+      &active_context
+    ));
+    assert!(!GitPage::should_apply_created_pull_request(
+      Some(&active_context),
+      &other_context
+    ));
+    assert!(!GitPage::should_apply_created_pull_request(
+      None,
+      &active_context
+    ));
+  }
+
+  #[test]
   fn branch_pr_button_state_shows_publish_and_create_for_unpublished_branch() {
     let context = GithubBranchContext {
       owner: "acme".to_string(),
@@ -9334,6 +9412,130 @@ mod tests {
       assert!(!GitPage::branch_has_github_upstream(
         this.branch_status.as_ref()
       ));
+    });
+  }
+
+  #[gpui::test]
+  fn apply_created_pull_request_updates_branch_pr_lookup_for_matching_context(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo_root = PathBuf::from("/tmp/reviu-git-page-created-pr");
+    let branch_context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature/parser".to_string(),
+    };
+    let pull_request = make_branch_pull_request(42);
+
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_authenticated_test_user(UserRole::Pro))),
+      );
+      ActiveLocalRepoStore::set(
+        cx,
+        Some(ActiveLocalRepo {
+          repo_root: repo_root.clone(),
+          github_owner: Some(branch_context.owner.clone()),
+          github_repo: Some(branch_context.repo.clone()),
+          current_branch: Some(branch_context.branch.clone()),
+          head_sha: Some("deadbeef".to_string()),
+          has_uncommitted_changes: false,
+        }),
+      );
+    });
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    let create_pr_hidden = git_page.update(cx, |this, cx| {
+      this.selected_repo = Some(repo_root.clone());
+      this.branch_status = Some(make_branch_status(
+        branch_context.branch.as_str(),
+        0,
+        0,
+        true,
+      ));
+      this.branch_pr_lookup_loading = true;
+      this.apply_created_pull_request(&branch_context, &pull_request, cx);
+      !this
+        .build_command_palette_contents(1, cx)
+        .commands
+        .into_iter()
+        .any(|command| command.id == CommandPaletteCommandId::CreatePullRequest)
+    });
+
+    assert!(create_pr_hidden);
+    git_page.read_with(cx, |this, _cx| {
+      assert_eq!(
+        this.branch_pr_lookup_context.as_ref(),
+        Some(&branch_context)
+      );
+      assert_eq!(
+        this
+          .branch_pr_lookup_result
+          .as_ref()
+          .map(|pull_request| pull_request.number),
+        Some(pull_request.number)
+      );
+      assert!(!this.branch_pr_lookup_loading);
+      assert!(this.branch_pr_lookup_task.is_none());
+    });
+  }
+
+  #[gpui::test]
+  fn apply_created_pull_request_ignores_stale_branch_context(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo_root = PathBuf::from("/tmp/reviu-git-page-created-pr-stale");
+    let active_context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature/parser".to_string(),
+    };
+    let stale_context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature/other".to_string(),
+    };
+    let pull_request = make_branch_pull_request(42);
+
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_authenticated_test_user(UserRole::Pro))),
+      );
+      ActiveLocalRepoStore::set(
+        cx,
+        Some(ActiveLocalRepo {
+          repo_root: repo_root.clone(),
+          github_owner: Some(active_context.owner.clone()),
+          github_repo: Some(active_context.repo.clone()),
+          current_branch: Some(active_context.branch.clone()),
+          head_sha: Some("deadbeef".to_string()),
+          has_uncommitted_changes: false,
+        }),
+      );
+    });
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    git_page.update(cx, |this, cx| {
+      this.selected_repo = Some(repo_root.clone());
+      this.branch_status = Some(make_branch_status(
+        active_context.branch.as_str(),
+        0,
+        0,
+        true,
+      ));
+      this.branch_pr_lookup_loading = true;
+      this.apply_created_pull_request(&stale_context, &pull_request, cx);
+    });
+
+    git_page.read_with(cx, |this, _cx| {
+      assert!(this.branch_pr_lookup_context.is_none());
+      assert!(this.branch_pr_lookup_result.is_none());
+      assert!(this.branch_pr_lookup_loading);
+      assert!(this.branch_pr_lookup_task.is_none());
     });
   }
 
