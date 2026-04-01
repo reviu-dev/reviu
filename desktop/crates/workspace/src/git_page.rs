@@ -1543,6 +1543,7 @@ pub struct GitPage {
   branch_pr_lookup_result: Option<GithubPullRequest>,
   branch_pr_lookup_loading: bool,
   pending_open_action: Option<GitPageOpenAction>,
+  pending_conflict_reveal_path: Option<PathBuf>,
   auth_state: AuthState,
   auth_task: Option<Task<()>>,
   branch_pr_lookup_task: Option<Task<()>>,
@@ -2740,6 +2741,7 @@ impl GitPage {
       branch_pr_lookup_result: None,
       branch_pr_lookup_loading: false,
       pending_open_action: None,
+      pending_conflict_reveal_path: None,
       auth_state: AuthState::Unknown,
       auth_task: None,
       branch_pr_lookup_task: None,
@@ -2833,6 +2835,7 @@ impl GitPage {
       branch_pr_lookup_result: None,
       branch_pr_lookup_loading: false,
       pending_open_action: None,
+      pending_conflict_reveal_path: None,
       auth_state: AuthState::Unknown,
       auth_task: None,
       branch_pr_lookup_task: None,
@@ -2950,11 +2953,11 @@ impl GitPage {
             this.merge_in_progress = conflict_resolution.merge_in_progress;
             this.rebase_in_progress = conflict_resolution.rebase_in_progress;
             if let Some(path) = conflict_resolution.conflicted_path {
-              this.open_file(path, cx);
+              this.open_file_revealing_first_conflict(path, cx);
             }
           }
           Ok(GitPageOpenActionResult::MergeBaseBranchReady(branch_ref)) => {
-            if let Err(error) = this.merge_branch_action(branch_ref, None, cx) {
+            if let Err(error) = this.merge_branch_action(branch_ref, None, true, cx) {
               this.push_git_action_error_notification(
                 "Update branch failed",
                 error.to_string().into(),
@@ -4156,6 +4159,7 @@ impl GitPage {
     &mut self,
     branch_ref: BranchRef,
     window: Option<&mut Window>,
+    reveal_first_conflict_on_open: bool,
     cx: &mut Context<Self>,
   ) -> Result<(), anyhow::Error> {
     let Some(root_path) = self.selected_repo.clone() else {
@@ -4201,7 +4205,11 @@ impl GitPage {
           let merge_message =
             Self::merge_commit_message(branch_ref.name.as_str(), target_branch.as_str());
           self.set_commit_input_value(&merge_message, window, cx);
-          self.open_file(path, cx);
+          if reveal_first_conflict_on_open {
+            self.open_file_revealing_first_conflict(path, cx);
+          } else {
+            self.open_file(path, cx);
+          }
           Ok(())
         } else {
           let mut data = Map::new();
@@ -4564,7 +4572,7 @@ impl GitPage {
             CommandPaletteBranchKind::Remote => BranchKind::Remote,
           },
         };
-        self.merge_branch_action(branch_ref, Some(window), cx)
+        self.merge_branch_action(branch_ref, Some(window), false, cx)
       }
       CommandPaletteAction::AbortMerge => {
         let Some(root_path) = self.selected_repo.clone() else {
@@ -5355,7 +5363,29 @@ impl GitPage {
     self.status_task = Some(task);
   }
 
+  fn reveal_first_conflict_in_editor(&mut self, cx: &mut Context<Self>) {
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+
+    editor.update(cx, |editor, cx| editor.reveal_first_conflict(cx));
+    self.pending_conflict_reveal_path = None;
+  }
+
+  fn open_file_revealing_first_conflict(&mut self, rel_path: PathBuf, cx: &mut Context<Self>) {
+    self.open_file_internal(rel_path, true, cx);
+  }
+
   fn open_file(&mut self, rel_path: PathBuf, cx: &mut Context<Self>) {
+    self.open_file_internal(rel_path, false, cx);
+  }
+
+  fn open_file_internal(
+    &mut self,
+    rel_path: PathBuf,
+    reveal_first_conflict: bool,
+    cx: &mut Context<Self>,
+  ) {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
     };
@@ -5369,7 +5399,11 @@ impl GitPage {
     if self.diff_view != saved_mode {
       self.diff_view = saved_mode;
     }
+    self.pending_conflict_reveal_path = reveal_first_conflict.then_some(rel_path.clone());
     if self.selected_file.as_ref() == Some(&rel_path) && self.history_opened_commit_file.is_none() {
+      if reveal_first_conflict {
+        self.reveal_first_conflict_in_editor(cx);
+      }
       return;
     }
     let is_markdown = is_markdown_path(&rel_path);
@@ -5432,12 +5466,22 @@ impl GitPage {
         let editor_file_path = file_path.clone();
         let binary_preview =
           Self::build_binary_preview(requested_path.as_path(), loaded.binary_bytes.clone());
+        let should_reveal_first_conflict =
+          this.pending_conflict_reveal_path.as_deref() == Some(requested_path.as_path());
         let editor = cx.new(move |cx| {
           Editor::new_with_loaded_file(editor_repo_root, editor_file_path, loaded, cx)
         });
-        editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
+        editor.update(cx, |editor, cx| {
+          editor.set_diff_view_mode(diff_view, cx);
+          if should_reveal_first_conflict {
+            editor.reveal_first_conflict(cx);
+          }
+        });
         this.binary_preview = binary_preview;
         this.editor = Some(editor);
+        if should_reveal_first_conflict {
+          this.pending_conflict_reveal_path = None;
+        }
         cx.notify();
       });
     });
@@ -9073,6 +9117,180 @@ mod tests {
     });
   }
 
+  #[gpui::test]
+  async fn git_page_handle_reveals_first_conflict_after_opening_merge_resolution(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+      gpui_router::init(cx);
+      NavigationHistory::init(cx);
+      NavigationHistory::navigate_replace("/github/acme/widget/pull/42", cx);
+    });
+
+    let repo = TempRepo::init("git-page-handle-reveal-first-conflict");
+    let rel_path = Path::new("README.md");
+    let build_contents = |replacement: &str| {
+      let mut lines = (0..80)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>();
+      lines[60] = replacement.to_string();
+      format!("{}\n", lines.join("\n"))
+    };
+    let _ = commit_text_file(
+      &repo.path,
+      rel_path,
+      &build_contents("base line"),
+      "initial",
+    );
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    let _ = commit_text_file(
+      &repo.path,
+      rel_path,
+      &build_contents("main change"),
+      "main change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(
+      &repo.path,
+      rel_path,
+      &build_contents("feature change"),
+      "feature change",
+    );
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    cx.update(|_, cx| {
+      GitPageHandle::show_repository_and_merge_base(repo.path.clone(), base_branch.clone(), cx);
+    });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let (selected_file, conflict_navigation, conflict_top, viewport_height) =
+      git_page.read_with(cx, |this, cx| {
+        let editor = this.editor.as_ref().expect("editor should exist").read(cx);
+        let conflict_navigation = this
+          .editor_conflict_navigation_state(cx)
+          .expect("conflict navigation state");
+        let display_line = editor
+          .first_display_line_for_conflict(conflict_navigation.active_start_line)
+          .expect("display line for conflict");
+
+        (
+          this.selected_file.clone(),
+          conflict_navigation,
+          GitPage::hunk_action_top(
+            editor.measured_editor_line_height(),
+            display_line,
+            editor.scroll_offset_y,
+          ),
+          editor.viewport_height,
+        )
+      });
+
+    assert_eq!(selected_file, Some(rel_path.to_path_buf()));
+    assert_eq!(conflict_navigation.active_index, 0);
+    assert_eq!(conflict_navigation.total, 1);
+    assert!(conflict_navigation.active_start_line >= 60);
+    assert!(
+      conflict_top < viewport_height,
+      "expected first conflict to be visible after opening merge resolution"
+    );
+  }
+
+  #[gpui::test]
+  async fn git_page_handle_reveals_first_conflict_when_file_has_multiple_conflicts(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+      gpui_router::init(cx);
+      NavigationHistory::init(cx);
+      NavigationHistory::navigate_replace("/github/acme/widget/pull/42", cx);
+    });
+
+    let repo = TempRepo::init("git-page-handle-reveal-multi-conflict");
+    let rel_path = Path::new("README.md");
+    let build_contents = |replacement_prefix: &str| {
+      let mut lines = (0..160)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>();
+      for target_line in [20usize, 55, 90, 125] {
+        lines[target_line] = format!("{replacement_prefix} {target_line}");
+      }
+      format!("{}\n", lines.join("\n"))
+    };
+    let _ = commit_text_file(&repo.path, rel_path, &build_contents("base"), "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    let _ = commit_text_file(&repo.path, rel_path, &build_contents("main"), "main change");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(
+      &repo.path,
+      rel_path,
+      &build_contents("feature"),
+      "feature change",
+    );
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    cx.update(|_, cx| {
+      GitPageHandle::show_repository_and_merge_base(repo.path.clone(), base_branch.clone(), cx);
+    });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let (selected_file, first_conflict_top, viewport_height, conflict_navigation) = git_page
+      .read_with(cx, |this, cx| {
+        let editor = this.editor.as_ref().expect("editor should exist").read(cx);
+        let conflict_navigation = this
+          .editor_conflict_navigation_state(cx)
+          .expect("conflict navigation state");
+        let first_display_line = editor
+          .first_display_line_for_conflict(20)
+          .expect("first conflict display line");
+
+        (
+          this.selected_file.clone(),
+          GitPage::hunk_action_top(
+            editor.measured_editor_line_height(),
+            first_display_line,
+            editor.scroll_offset_y,
+          ),
+          editor.viewport_height,
+          conflict_navigation,
+        )
+      });
+
+    assert_eq!(selected_file, Some(rel_path.to_path_buf()));
+    assert_eq!(conflict_navigation.active_index, 0);
+    assert_eq!(conflict_navigation.total, 4);
+    assert_eq!(conflict_navigation.active_start_line, 20);
+    assert!(
+      first_conflict_top >= px(0.0) && first_conflict_top < viewport_height,
+      "expected first conflict to remain visible after diff projection settles"
+    );
+  }
+
   #[test]
   fn github_branch_context_from_active_repo_requires_repo_and_named_branch() {
     let ready = ActiveLocalRepo {
@@ -9590,6 +9808,14 @@ mod tests {
           this.history_open_file_task.take(),
         )
       });
+      let editor = git_page.read_with(cx, |this, _| this.editor.clone());
+      let (editor_bases_task, editor_diff_task) = if let Some(editor) = editor {
+        editor.update(cx, |editor, _| {
+          (editor.bases_task.take(), editor.diff_task.take())
+        })
+      } else {
+        (None, None)
+      };
 
       let mut had_task = false;
       if let Some(task) = branch_pr_lookup_task {
@@ -9617,6 +9843,14 @@ mod tests {
         task.await;
       }
       if let Some(task) = history_open_file_task {
+        had_task = true;
+        task.await;
+      }
+      if let Some(task) = editor_bases_task {
+        had_task = true;
+        task.await;
+      }
+      if let Some(task) = editor_diff_task {
         had_task = true;
         task.await;
       }
