@@ -29,6 +29,7 @@ function setupEnv() {
     POLAR_WEBHOOK_SECRET: 'polar-webhook-secret',
     WEB_DASHBOARD_URL: 'http://localhost:5173',
     SHIPIT_API_KEY: 'shipit-api-key',
+    SHIPIT_API_URL: 'https://shipit.example.com',
     SHIPIT_PROJECT_ID: 'shipit-project-id',
   }
 
