@@ -481,6 +481,7 @@ pub struct Editor {
   pub visible_groups: Vec<GroupOverlay>,
   pub hovered_group_id: Option<Arc<str>>,
   pub hovered_conflict_start_line: Option<usize>,
+  pending_conflict_reveal_start_line: Option<usize>,
   conflict_cache: RwLock<ConflictCache>,
   pub last_mouse_position: Option<Point<Pixels>>,
   pub expanded_gaps: HashMap<GapId, GapReveal>,
@@ -846,6 +847,7 @@ impl Editor {
       visible_groups: Vec::new(),
       hovered_group_id: None,
       hovered_conflict_start_line: None,
+      pending_conflict_reveal_start_line: None,
       conflict_cache: RwLock::new(ConflictCache::default()),
       last_mouse_position: None,
       expanded_gaps: HashMap::new(),
@@ -4206,6 +4208,11 @@ impl Editor {
   ) {
     self.set_projection(Some(projection));
 
+    if let Some(conflict_start_line) = self.pending_conflict_reveal_start_line.take() {
+      self.reveal_conflict_start_line(conflict_start_line, cx);
+      return;
+    }
+
     let total_lines = self.display_line_count(doc_line_count);
     self.scroll_offset_y = self.clamp_vertical_scroll(
       self.scroll_offset_y,
@@ -4963,6 +4970,43 @@ impl Editor {
     self.doc_to_display_line(conflict_start_line)
   }
 
+  fn should_preserve_conflict_reveal_through_projection(&self) -> bool {
+    self.git_state.bases.is_none()
+      || self.bases_task.is_some()
+      || self.diff_task.is_some()
+      || self.projection_task.is_some()
+  }
+
+  fn reveal_conflict_start_line(&mut self, conflict_start_line: usize, cx: &mut Context<Self>) {
+    let target_display_line = self
+      .doc_to_display_line(conflict_start_line)
+      .unwrap_or(conflict_start_line);
+    let target_offset = {
+      let document = self.document.read(cx);
+      document.line_to_char(conflict_start_line)
+    };
+    let total_lines = self.display_line_count(self.document.read(cx).len_lines());
+
+    self.move_to(target_offset, cx);
+    self.hovered_conflict_start_line = None;
+    self.last_mouse_position = None;
+    self.center_display_line_in_viewport(target_display_line, total_lines);
+    self.ensure_cursor_visible_with_policy(CursorRevealPolicy::WithPadding, cx);
+    cx.notify();
+  }
+
+  pub fn reveal_first_conflict(&mut self, cx: &mut Context<Self>) {
+    let regions = self.conflict_regions(cx);
+    let Some(first_region) = regions.first() else {
+      return;
+    };
+
+    self.pending_conflict_reveal_start_line = self
+      .should_preserve_conflict_reveal_through_projection()
+      .then_some(first_region.start_line);
+    self.reveal_conflict_start_line(first_region.start_line, cx);
+  }
+
   pub fn resolve_conflict_region(
     &mut self,
     conflict_start_line: usize,
@@ -5097,22 +5141,7 @@ impl Editor {
       }
       ConflictNavigationDirection::Next => (active_index + 1) % regions.len(),
     };
-    let target_start_line = regions[target_index].start_line;
-    let target_display_line = self
-      .doc_to_display_line(target_start_line)
-      .unwrap_or(target_start_line);
-    let target_offset = {
-      let document = self.document.read(cx);
-      document.line_to_char(target_start_line)
-    };
-    let total_lines = self.display_line_count(self.document.read(cx).len_lines());
-
-    self.move_to(target_offset, cx);
-    self.hovered_conflict_start_line = None;
-    self.last_mouse_position = None;
-    self.center_display_line_in_viewport(target_display_line, total_lines);
-    self.ensure_cursor_visible_with_policy(CursorRevealPolicy::WithPadding, cx);
-    cx.notify();
+    self.reveal_conflict_start_line(regions[target_index].start_line, cx);
   }
 
   pub fn resolve_all_conflicts(&mut self, resolution: ConflictResolution, cx: &mut Context<Self>) {
@@ -8206,6 +8235,7 @@ pub mod tests {
           visible_groups: Vec::new(),
           hovered_group_id: None,
           hovered_conflict_start_line: None,
+          pending_conflict_reveal_start_line: None,
           conflict_cache: RwLock::new(ConflictCache::default()),
           last_mouse_position: None,
           expanded_gaps: HashMap::new(),
