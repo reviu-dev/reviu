@@ -113,6 +113,31 @@ fn saved_code_selection_for_refresh(
     .flatten()
 }
 
+fn repo_refresh_in_progress(
+  active_tab_ix: usize,
+  repository_loading: bool,
+  branches_loading: bool,
+  readme_loading: bool,
+  code_files_loading: bool,
+  code_file_loading: bool,
+  pull_requests_loading: bool,
+  issues_loading: bool,
+) -> bool {
+  let shared_loading = repository_loading || branches_loading;
+  if shared_loading {
+    return true;
+  }
+
+  match active_tab_ix {
+    REPO_TAB_README_IX => readme_loading,
+    REPO_TAB_CODE_IX => code_files_loading || code_file_loading,
+    REPO_TAB_OVERVIEW_IX => code_files_loading,
+    REPO_TAB_PULL_REQUESTS_IX => pull_requests_loading,
+    REPO_TAB_ISSUES_IX => issues_loading,
+    _ => false,
+  }
+}
+
 fn repo_tab_count_label(count: usize) -> SharedString {
   count.to_string().into()
 }
@@ -2465,6 +2490,30 @@ impl GithubRepoPageHandle {
       return;
     };
     let _ = weak.update(cx, |this, cx| this.refresh_current_page(cx));
+  }
+
+  pub fn is_refreshing(cx: &App) -> bool {
+    let Some(weak) = cx
+      .try_global::<Self>()
+      .and_then(|handle| handle.page.clone())
+    else {
+      return false;
+    };
+
+    weak
+      .read_with(cx, |this, cx| {
+        repo_refresh_in_progress(
+          this.active_tab_ix,
+          this.repository_loading,
+          this.branches_loading,
+          this.readme_loading,
+          this.code_files_loading,
+          this.code_file_loading,
+          this.pull_requests.read(cx).delegate().loading,
+          this.issues.read(cx).delegate().loading,
+        )
+      })
+      .unwrap_or(false)
   }
 
   fn show_with_target(
@@ -5398,6 +5447,76 @@ mod tests {
       saved_code_selection_for_refresh(REPO_TAB_CODE_IX, None),
       None
     );
+  }
+
+  #[test]
+  fn repo_refresh_helper_matches_active_tab_loading() {
+    assert!(repo_refresh_in_progress(
+      0, true, false, false, false, false, false, false
+    ));
+    assert!(repo_refresh_in_progress(
+      0, false, true, false, false, false, false, false
+    ));
+    assert!(repo_refresh_in_progress(
+      REPO_TAB_README_IX,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+    ));
+    assert!(repo_refresh_in_progress(
+      REPO_TAB_CODE_IX,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+    ));
+    assert!(repo_refresh_in_progress(
+      REPO_TAB_CODE_IX,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+    ));
+    assert!(repo_refresh_in_progress(
+      REPO_TAB_PULL_REQUESTS_IX,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+    ));
+    assert!(repo_refresh_in_progress(
+      REPO_TAB_ISSUES_IX,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+    ));
+    assert!(!repo_refresh_in_progress(
+      REPO_TAB_README_IX,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ));
   }
 
   #[test]

@@ -9,7 +9,7 @@ use gpui::{
   Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, IconName, Sizable as _, Theme, ThemeMode, h_flex,
+  ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, Theme, ThemeMode, h_flex,
   kbd::Kbd,
   notification::Notification,
   spinner::Spinner,
@@ -139,6 +139,19 @@ fn refresh_label_for_workspace_page(page: WorkspacePage) -> Option<&'static str>
     | WorkspacePage::GitConfig
     | WorkspacePage::Settings
     | WorkspacePage::About => None,
+  }
+}
+
+fn refresh_in_progress_for_workspace_page(page: WorkspacePage, cx: &App) -> bool {
+  match page {
+    WorkspacePage::Git => GitPageHandle::is_refreshing(cx),
+    WorkspacePage::Github => GithubPageHandle::is_refreshing(cx),
+    WorkspacePage::GithubRepo => GithubRepoPageHandle::is_refreshing(cx),
+    WorkspacePage::GithubPrDetails => GithubPrDetailsPageHandle::is_refreshing(cx),
+    WorkspacePage::Billing
+    | WorkspacePage::GitConfig
+    | WorkspacePage::Settings
+    | WorkspacePage::About => false,
   }
 }
 
@@ -289,6 +302,15 @@ impl WorkspaceView {
       cx,
       window,
       ShortcutId::ShowFileSearch,
+      shortcuts::key_context_for_pathname(pathname),
+    ))
+  }
+
+  fn refresh_kbd(window: &Window, pathname: &str, cx: &App) -> Kbd {
+    Kbd::new(shortcuts::resolved_shortcut_keystroke_in(
+      cx,
+      window,
+      ShortcutId::RefreshCurrentPage,
       shortcuts::key_context_for_pathname(pathname),
     ))
   }
@@ -681,7 +703,12 @@ impl WorkspaceView {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    match WorkspaceRoute::global(cx).page {
+    let page = WorkspaceRoute::global(cx).page;
+    if refresh_in_progress_for_workspace_page(page, cx) {
+      return;
+    }
+
+    match page {
       WorkspacePage::Git => GitPageHandle::refresh_page(cx),
       WorkspacePage::Github => GithubPageHandle::refresh(cx),
       WorkspacePage::GithubRepo => GithubRepoPageHandle::refresh(cx),
@@ -787,11 +814,17 @@ impl WorkspaceView {
     let refresh_button = page_supports_refresh(page).then(|| {
       let label = refresh_label_for_workspace_page(page)
         .expect("refresh label should exist for refreshable workspace pages");
+      let refresh_in_progress = refresh_in_progress_for_workspace_page(page, cx);
       Button::new("workspace-global-refresh")
         .icon(UiIconName::RefreshCcw)
-        .label(label)
+        .loading_icon(Icon::new(UiIconName::RefreshCcw))
+        .loading(refresh_in_progress)
         .ghost()
+        .compact()
         .small()
+        .disabled(refresh_in_progress)
+        .tooltip(label)
+        .child(Self::refresh_kbd(window, pathname, cx).ml_1())
         .on_click(|_, window, cx| {
           window.dispatch_action(Box::new(crate::RefreshCurrentPage), cx);
         })
@@ -1051,7 +1084,7 @@ mod tests {
     AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
   };
   use crate::shortcuts::{self, ShortcutId};
-  use gpui::{Menu, MenuItem};
+  use gpui::{Keystroke, Menu, MenuItem};
   use std::path::PathBuf;
   use ui::UserMenuPage;
 
@@ -1274,6 +1307,14 @@ mod tests {
     assert!(!page_supports_refresh(WorkspacePage::GitConfig));
     assert!(!page_supports_refresh(WorkspacePage::Settings));
     assert!(!page_supports_refresh(WorkspacePage::About));
+  }
+
+  #[test]
+  fn refresh_shortcut_matches_default_cmd_r() {
+    assert_eq!(
+      shortcuts::shortcut_keystroke(ShortcutId::RefreshCurrentPage),
+      Keystroke::parse("cmd-r").expect("cmd-r keystroke")
+    );
   }
 
   #[test]

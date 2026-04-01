@@ -17,8 +17,8 @@ use std::collections::HashSet;
 use crate::config::ConfigStore;
 use crate::{
   CloseWorkspacePage, CommitChanges, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenRepository,
-  OpenSettingsPage, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch, SwitchToPrBranch,
-  ToggleDiffView, ToggleTerminalSidebar,
+  OpenSettingsPage, RefreshCurrentPage, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
+  SwitchToPrBranch, ToggleDiffView, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -50,6 +50,7 @@ const COMMIT_CHANGES_CONTEXT: &str = "WorkspaceGit";
 const CLOSE_WORKSPACE_PAGE_CONTEXT: &str =
   "WorkspaceBilling || WorkspaceGitConfig || WorkspaceSettings || WorkspaceAbout";
 const OPEN_SETTINGS_CONTEXT: &str = "Workspace";
+const REFRESH_CURRENT_PAGE_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubHome || WorkspaceGithubRepo || WorkspaceGithubRepoCode || WorkspaceGithubPr || WorkspaceGithubPrChanges";
 const TOGGLE_TERMINAL_CONTEXT: &str = "WorkspaceGit";
 const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceGit";
 const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
@@ -76,6 +77,15 @@ const FILE_SEARCH_ACTIVE_CONTEXTS: [&str; 3] = [
   WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
 ];
 
+const REFRESHABLE_PAGE_ACTIVE_CONTEXTS: [&str; 6] = [
+  WORKSPACE_GIT_CONTEXT,
+  WORKSPACE_GITHUB_HOME_CONTEXT,
+  WORKSPACE_GITHUB_REPO_CONTEXT,
+  WORKSPACE_GITHUB_REPO_CODE_CONTEXT,
+  WORKSPACE_GITHUB_PR_CONTEXT,
+  WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
+];
+
 const GIT_ONLY_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_GIT_CONTEXT];
 
 const SECONDARY_PAGE_ACTIVE_CONTEXTS: [&str; 4] = [
@@ -96,6 +106,7 @@ const PR_PAGE_ACTIVE_CONTEXTS: [&str; 2] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShortcutId {
   ShowCommandPalette,
+  RefreshCurrentPage,
   ShowFileSearch,
   OpenRepository,
   CommitChanges,
@@ -113,6 +124,7 @@ impl ShortcutId {
   pub fn storage_key(self) -> &'static str {
     match self {
       ShortcutId::ShowCommandPalette => "show_command_palette",
+      ShortcutId::RefreshCurrentPage => "refresh_current_page",
       ShortcutId::ShowFileSearch => "show_file_search",
       ShortcutId::OpenRepository => "open_repository",
       ShortcutId::CommitChanges => "commit_changes",
@@ -130,6 +142,7 @@ impl ShortcutId {
   pub fn from_storage_key(value: &str) -> Option<Self> {
     match value {
       "show_command_palette" => Some(ShortcutId::ShowCommandPalette),
+      "refresh_current_page" => Some(ShortcutId::RefreshCurrentPage),
       "show_file_search" => Some(ShortcutId::ShowFileSearch),
       "open_repository" => Some(ShortcutId::OpenRepository),
       "commit_changes" => Some(ShortcutId::CommitChanges),
@@ -166,7 +179,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 12] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 13] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -177,6 +190,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 12] = [
     context: WORKSPACE_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
     active_contexts: &ALL_WORKSPACE_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::RefreshCurrentPage,
+    title: "Refresh Current Page",
+    description: "Refresh the current Git or GitHub page.",
+    scope_label: "Git and GitHub pages",
+    category: ShortcutCategory::Workspace,
+    keystroke: "cmd-r",
+    context: REFRESH_CURRENT_PAGE_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &REFRESHABLE_PAGE_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::ShowFileSearch,
@@ -560,6 +584,9 @@ impl ShortcutDefinition {
       ShortcutId::ShowCommandPalette => {
         KeyBinding::new(keystroke, ShowCommandPalette, Some(&context))
       }
+      ShortcutId::RefreshCurrentPage => {
+        KeyBinding::new(keystroke, RefreshCurrentPage, Some(&context))
+      }
       ShortcutId::ShowFileSearch => KeyBinding::new(keystroke, ShowFileSearch, Some(&context)),
       ShortcutId::OpenRepository => KeyBinding::new(keystroke, OpenRepository, Some(&context)),
       ShortcutId::CommitChanges => KeyBinding::new(keystroke, CommitChanges, Some(&context)),
@@ -917,6 +944,7 @@ fn active_contexts_overlap(a: &ShortcutDefinition, b: &ShortcutDefinition) -> bo
 fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> T {
   match id {
     ShortcutId::ShowCommandPalette => f(&ShowCommandPalette),
+    ShortcutId::RefreshCurrentPage => f(&RefreshCurrentPage),
     ShortcutId::ShowFileSearch => f(&ShowFileSearch),
     ShortcutId::OpenRepository => f(&OpenRepository),
     ShortcutId::CommitChanges => f(&CommitChanges),
@@ -1008,6 +1036,18 @@ mod tests {
       shortcut_keystroke(ShortcutId::CommitChanges),
       Keystroke::parse("cmd-enter").unwrap()
     );
+  }
+
+  #[test]
+  fn refresh_current_page_binding_is_limited_to_refreshable_workspace_routes() {
+    assert!(has_binding("/git", "cmd-r"));
+    assert!(has_binding("/github", "cmd-r"));
+    assert!(has_binding("/github/owner/repo", "cmd-r"));
+    assert!(has_binding("/github/owner/repo/code", "cmd-r"));
+    assert!(has_binding("/github/owner/repo/pull/42", "cmd-r"));
+    assert!(has_binding("/github/owner/repo/pull/42/changes", "cmd-r"));
+    assert!(!has_binding("/settings", "cmd-r"));
+    assert!(!has_binding("/billing", "cmd-r"));
   }
 
   #[test]

@@ -175,6 +175,10 @@ enum GitBinaryPreview {
   UnsupportedBinary,
 }
 
+fn git_refresh_in_progress(status_loading: bool, branch_loading: bool) -> bool {
+  status_loading || branch_loading
+}
+
 #[derive(Clone, Default)]
 pub struct GitPageHandle {
   git_page: Option<WeakEntity<GitPage>>,
@@ -187,6 +191,24 @@ impl GitPageHandle {
     cx.set_global(Self {
       git_page: Some(cx.entity().downgrade()),
     });
+  }
+
+  pub fn is_refreshing(cx: &App) -> bool {
+    let Some(weak) = cx
+      .try_global::<Self>()
+      .and_then(|handle| handle.git_page.clone())
+    else {
+      return false;
+    };
+
+    weak
+      .read_with(cx, |this, _cx| {
+        git_refresh_in_progress(
+          this.status_refresh_in_progress,
+          this.branch_refresh_in_progress,
+        )
+      })
+      .unwrap_or(false)
   }
 
   pub fn refresh_page(cx: &mut App) {
@@ -1565,10 +1587,12 @@ pub struct GitPage {
   branch_pr_lookup_task: Option<Task<()>>,
   open_file_task: Option<Task<()>>,
   status_task: Option<Task<()>>,
+  status_refresh_in_progress: bool,
   history_task: Option<Task<()>>,
   history_files_task: Option<Task<()>>,
   history_open_file_task: Option<Task<()>>,
   branch_task: Option<Task<()>>,
+  branch_refresh_in_progress: bool,
   branch_pr_lookup_generation: u64,
   open_file_generation: u64,
   status_refresh_generation: u64,
@@ -2772,10 +2796,12 @@ impl GitPage {
       branch_pr_lookup_task: None,
       open_file_task: None,
       status_task: None,
+      status_refresh_in_progress: false,
       history_task: None,
       history_files_task: None,
       history_open_file_task: None,
       branch_task: None,
+      branch_refresh_in_progress: false,
       branch_pr_lookup_generation: 0,
       open_file_generation: 0,
       status_refresh_generation: 0,
@@ -2867,10 +2893,12 @@ impl GitPage {
       branch_pr_lookup_task: None,
       open_file_task: None,
       status_task: None,
+      status_refresh_in_progress: false,
       history_task: None,
       history_files_task: None,
       history_open_file_task: None,
       branch_task: None,
+      branch_refresh_in_progress: false,
       branch_pr_lookup_generation: 0,
       open_file_generation: 0,
       status_refresh_generation: 0,
@@ -3321,10 +3349,12 @@ impl GitPage {
 
   fn refresh_branches(&mut self, cx: &mut Context<Self>) {
     let Some(repo_root) = self.selected_repo.clone() else {
+      self.branch_refresh_in_progress = false;
       self.clear_branch_select(cx);
       return;
     };
 
+    self.branch_refresh_in_progress = true;
     self.branch_refresh_generation = self.branch_refresh_generation.wrapping_add(1);
     let refresh_generation = self.branch_refresh_generation;
     let requested_repo = repo_root.clone();
@@ -3340,13 +3370,6 @@ impl GitPage {
         Some((branches, current, detached_label))
       })
       .await;
-      let Some((branches, current, detached_label)) = result else {
-        return;
-      };
-
-      let selected = Self::selected_branch_from_status(current.as_ref());
-      let items = Self::branch_select_items(branches, selected.as_ref(), detached_label.as_deref());
-
       let _ = this.update(cx, |this, cx| {
         if !Self::should_apply_branch_refresh(
           this.selected_repo.as_deref(),
@@ -3356,7 +3379,14 @@ impl GitPage {
         ) {
           return;
         }
-        this.branch_dropdown_items = items.clone();
+        this.branch_refresh_in_progress = false;
+        this.branch_task = None;
+        if let Some((branches, current, detached_label)) = result {
+          let selected = Self::selected_branch_from_status(current.as_ref());
+          let items =
+            Self::branch_select_items(branches, selected.as_ref(), detached_label.as_deref());
+          this.branch_dropdown_items = items;
+        }
         cx.notify();
       });
     });
@@ -3452,9 +3482,11 @@ impl GitPage {
       self.sync_sentry_git_context();
       ActiveLocalRepoStore::set(cx, None);
       self.clear_branch_pr_lookup();
+      self.status_refresh_in_progress = false;
       cx.notify();
       return;
     };
+    self.status_refresh_in_progress = true;
     let include_history = self.sidebar_mode == GitSidebarMode::History;
     if include_history && self.history_commits.is_empty() {
       self.history_loading = true;
@@ -3520,6 +3552,8 @@ impl GitPage {
           ) {
             return;
           }
+          this.status_refresh_in_progress = false;
+          this.status_task = None;
           this.invalidate_open_file_task();
           this.status_entries.clear();
           this.select_first_file_after_restore = false;
@@ -3573,6 +3607,8 @@ impl GitPage {
         ) {
           return;
         }
+        this.status_refresh_in_progress = false;
+        this.status_task = None;
         let branch_changed = this.apply_status_snapshot(
           entries,
           branch_status,
@@ -8699,6 +8735,43 @@ mod tests {
       row.entry.old_path.as_deref(),
       Some(Path::new("src/features/old_file.rs"))
     );
+  }
+
+  #[test]
+  fn git_refresh_helper_reports_loading_when_status_or_branch_refresh_is_running() {
+    assert!(!git_refresh_in_progress(false, false));
+    assert!(git_refresh_in_progress(true, false));
+    assert!(git_refresh_in_progress(false, true));
+    assert!(git_refresh_in_progress(true, true));
+  }
+
+  #[gpui::test]
+  fn git_page_handle_refreshing_ignores_lingering_tasks(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    cx.update(|_, cx| {
+      assert!(!GitPageHandle::is_refreshing(cx));
+    });
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.status_task = Some(cx.spawn(async move |_, _| {}));
+      this.branch_task = Some(cx.spawn(async move |_, _| {}));
+      this.status_refresh_in_progress = false;
+      this.branch_refresh_in_progress = false;
+    });
+
+    cx.update(|_, cx| {
+      assert!(!GitPageHandle::is_refreshing(cx));
+    });
+
+    git_page.update_in(cx, |this, _window, _cx| {
+      this.status_refresh_in_progress = true;
+    });
+
+    cx.update(|_, cx| {
+      assert!(GitPageHandle::is_refreshing(cx));
+    });
   }
 
   struct TempRepo {

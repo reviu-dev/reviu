@@ -10,7 +10,7 @@ Git and pull request review editors now render PNG, JPEG, WebP, GIF, BMP, TIFF, 
 
 ### Contextual Refresh in the App Header
 
-Reviu now includes a refresh button in the app header, it refreshes the current Git, GitHub, repository, or pull request page without making you navigate away from what you are reviewing.
+Reviu now includes a refresh button in the app header with a `cmd-r` shortcut, so you can refresh the current Git, GitHub, repository, or pull request page without navigating away from what you are reviewing.
 
 ## 0.0.10
 

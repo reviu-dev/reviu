@@ -211,6 +211,14 @@ fn github_notification_count_label(unread_count: usize) -> Option<String> {
   (unread_count > 0).then(|| unread_count.to_string())
 }
 
+fn github_home_refresh_in_progress(
+  pull_requests_loading: bool,
+  notifications_loading: bool,
+  repositories_loading: bool,
+) -> bool {
+  pull_requests_loading || notifications_loading || repositories_loading
+}
+
 #[derive(Clone, Debug)]
 struct GithubNotificationRow {
   notification: Rc<GithubNotification>,
@@ -875,6 +883,28 @@ impl GithubPageHandle {
     cx.set_global(Self {
       github_page: Some(cx.entity().downgrade()),
     });
+  }
+
+  pub fn is_refreshing(cx: &App) -> bool {
+    let Some(weak) = cx
+      .try_global::<Self>()
+      .and_then(|handle| handle.github_page.clone())
+    else {
+      return false;
+    };
+
+    weak
+      .read_with(cx, |this, cx| {
+        let pull_requests_loading = this.pull_requests.read(cx).delegate().loading;
+        let notifications_loading = this.notifications.read(cx).delegate().loading;
+        let repositories_loading = this.repositories.read(cx).delegate().loading;
+        github_home_refresh_in_progress(
+          pull_requests_loading,
+          notifications_loading,
+          repositories_loading,
+        )
+      })
+      .unwrap_or(false)
   }
 
   pub fn refresh(cx: &mut App) {
@@ -2489,5 +2519,13 @@ mod tests {
         .collect::<Vec<_>>()
     });
     assert_eq!(notifications_tab_titles, vec!["Please review".to_string()]);
+  }
+
+  #[test]
+  fn github_home_refresh_helper_reports_loading_when_any_section_is_refreshing() {
+    assert!(!github_home_refresh_in_progress(false, false, false));
+    assert!(github_home_refresh_in_progress(true, false, false));
+    assert!(github_home_refresh_in_progress(false, true, false));
+    assert!(github_home_refresh_in_progress(false, false, true));
   }
 }

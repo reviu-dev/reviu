@@ -114,6 +114,36 @@ fn should_refresh_pr_checks_data(active_tab_ix: usize) -> bool {
   active_tab_ix == PR_TAB_CHECKS_IX
 }
 
+fn pr_refresh_in_progress(
+  active_tab_ix: usize,
+  merge_readiness_loading: bool,
+  issue_comments_loading: bool,
+  reviews_loading: bool,
+  review_comments_loading: bool,
+  commits_loading: bool,
+  files_loading: bool,
+  file_loading: bool,
+  checks_loading: bool,
+) -> bool {
+  if merge_readiness_loading {
+    return true;
+  }
+
+  if should_refresh_pr_overview_data(active_tab_ix) {
+    return issue_comments_loading || reviews_loading || review_comments_loading;
+  }
+
+  if should_refresh_pr_changes_data(active_tab_ix) {
+    return commits_loading || review_comments_loading || files_loading || file_loading;
+  }
+
+  if should_refresh_pr_checks_data(active_tab_ix) {
+    return checks_loading;
+  }
+
+  false
+}
+
 fn pr_tab_url_segment(tab_ix: usize) -> &'static str {
   match tab_ix {
     PR_TAB_CHANGES_IX => "changes",
@@ -2302,6 +2332,31 @@ impl GithubPrDetailsPageHandle {
     let _ = weak.update(cx, |this, cx| this.refresh_current_page(cx));
   }
 
+  pub fn is_refreshing(cx: &App) -> bool {
+    let Some(weak) = cx
+      .try_global::<Self>()
+      .and_then(|handle| handle.page.clone())
+    else {
+      return false;
+    };
+
+    weak
+      .read_with(cx, |this, _cx| {
+        pr_refresh_in_progress(
+          this.active_tab_ix,
+          this.merge_readiness_loading,
+          this.issue_comments_loading,
+          this.reviews_loading,
+          this.review_comments_loading,
+          this.commits_loading,
+          this.files_loading,
+          this.file_loading,
+          this.checks_loading,
+        )
+      })
+      .unwrap_or(false)
+  }
+
   fn show_with_back_target_and_open_target(
     owner: SharedString,
     repo: SharedString,
@@ -4103,6 +4158,7 @@ impl GithubPrDetailsPage {
             );
           }
         }
+        this.merge_readiness_task = None;
         cx.notify();
       });
     });
@@ -12324,6 +12380,96 @@ mod tests {
     assert!(should_refresh_pr_checks_data(PR_TAB_CHECKS_IX));
     assert!(!should_refresh_pr_checks_data(PR_TAB_OVERVIEW_IX));
     assert!(!should_refresh_pr_checks_data(PR_TAB_CHANGES_IX));
+
+    assert!(pr_refresh_in_progress(
+      PR_TAB_OVERVIEW_IX,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ));
+    assert!(pr_refresh_in_progress(
+      PR_TAB_CHANGES_IX,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+    ));
+    assert!(pr_refresh_in_progress(
+      PR_TAB_CHECKS_IX,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+    ));
+    assert!(pr_refresh_in_progress(
+      PR_TAB_OVERVIEW_IX,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ));
+    assert!(!pr_refresh_in_progress(
+      PR_TAB_CHECKS_IX,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ));
+  }
+
+  #[gpui::test]
+  fn pr_details_handle_refreshing_ignores_details_task_reuse(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    cx.update(|_, cx| {
+      assert!(!GithubPrDetailsPageHandle::is_refreshing(cx));
+    });
+
+    page.update_in(cx, |this, _window, cx| {
+      this.details_task = Some(cx.spawn(async move |_, _| {}));
+      this.merge_readiness_loading = false;
+      this.issue_comments_loading = false;
+      this.reviews_loading = false;
+      this.review_comments_loading = false;
+      this.commits_loading = false;
+      this.files_loading = false;
+      this.file_loading = false;
+      this.checks_loading = false;
+    });
+
+    cx.update(|_, cx| {
+      assert!(!GithubPrDetailsPageHandle::is_refreshing(cx));
+    });
+
+    page.update_in(cx, |this, _window, _cx| {
+      this.merge_readiness_loading = true;
+    });
+
+    cx.update(|_, cx| {
+      assert!(GithubPrDetailsPageHandle::is_refreshing(cx));
+    });
   }
 
   #[gpui::test]
