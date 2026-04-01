@@ -102,6 +102,18 @@ const PR_TAB_OVERVIEW_IX: usize = 0;
 const PR_TAB_CHANGES_IX: usize = 1;
 const PR_TAB_CHECKS_IX: usize = 2;
 
+fn should_refresh_pr_overview_data(active_tab_ix: usize) -> bool {
+  active_tab_ix == PR_TAB_OVERVIEW_IX
+}
+
+fn should_refresh_pr_changes_data(active_tab_ix: usize) -> bool {
+  active_tab_ix == PR_TAB_CHANGES_IX
+}
+
+fn should_refresh_pr_checks_data(active_tab_ix: usize) -> bool {
+  active_tab_ix == PR_TAB_CHECKS_IX
+}
+
 fn pr_tab_url_segment(tab_ix: usize) -> &'static str {
   match tab_ix {
     PR_TAB_CHANGES_IX => "changes",
@@ -2172,6 +2184,13 @@ impl GithubPrDetailsPageHandle {
     );
   }
 
+  pub fn refresh(cx: &mut App) {
+    let Some(weak) = cx.global::<Self>().page.clone() else {
+      return;
+    };
+    let _ = weak.update(cx, |this, cx| this.refresh_current_page(cx));
+  }
+
   fn show_with_back_target_and_open_target(
     owner: SharedString,
     repo: SharedString,
@@ -3580,6 +3599,32 @@ impl GithubPrDetailsPage {
     GithubPrOpenTarget::new(self.active_tab_ix == PR_TAB_CHANGES_IX, None)
   }
 
+  fn refresh_current_page(&mut self, cx: &mut Context<Self>) {
+    if self.current_pr_context.is_none() {
+      return;
+    }
+
+    self.refresh_pull_request_details_for_current_context(cx);
+    self.reload_merge_readiness_for_current_pull_request(cx);
+
+    if should_refresh_pr_overview_data(self.active_tab_ix) {
+      self.refresh_issue_comments_for_current_pull_request(cx);
+      self.refresh_reviews_for_current_pull_request(true, cx);
+      self.refresh_review_comments_for_current_pull_request(cx);
+    }
+
+    if should_refresh_pr_changes_data(self.active_tab_ix) {
+      self.saved_pr_selected_tree_id = self.current_selected_tree_path();
+      self.refresh_commits_for_current_pull_request(cx);
+      self.refresh_review_comments_for_current_pull_request(cx);
+      self.reload_files_for_current_pull_request(cx);
+    }
+
+    if should_refresh_pr_checks_data(self.active_tab_ix) {
+      self.refresh_checks_for_current_pull_request(cx);
+    }
+  }
+
   fn is_pull_request_merged(&self) -> bool {
     self
       .pull_request
@@ -3592,6 +3637,65 @@ impl GithubPrDetailsPage {
       return;
     };
     self.fetch_merge_readiness_for_context(context.owner, context.repo, context.number, cx);
+  }
+
+  fn refresh_pull_request_details_for_current_context(&mut self, cx: &mut Context<Self>) {
+    let Some(context) = self.current_pr_context.as_ref().cloned() else {
+      return;
+    };
+
+    self.error = None;
+    let details_api = self.api.clone();
+    let details_owner = context.owner.clone();
+    let details_repo = context.repo.clone();
+    let number = context.number;
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        details_api.fetch_pull_request_details(&details_owner, &details_repo, number)
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(pull_request) => {
+            this.description_code_reference_requests =
+              Self::description_code_reference_requests_for_pull_request(&pull_request);
+            this.pull_request = Some(pull_request);
+            this.resolved_local_repo = None;
+            this.resolved_local_repo_scan_complete = false;
+            this.resolved_local_repo_task = None;
+            this.error = None;
+            this.add_pr_breadcrumb("Refresh PR details succeeded", Map::new());
+            let description_requests = this.description_code_reference_requests.clone();
+            this.schedule_code_reference_fetches(description_requests.iter(), cx);
+            this.sync_review_comments(cx);
+            this.maybe_fetch_selected_file_contents(cx);
+            this.prefetch_overview_root_review_comment_files(cx);
+            this.refresh_resolved_local_repo_match(cx);
+            if this.tree_search_query_normalized().is_some() {
+              this.refresh_tree_text_search(cx);
+            }
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.pull_request = None;
+            this.description_code_reference_requests.clear();
+            this.error = Some(error_message.clone().into());
+            this.add_pr_breadcrumb("Refresh PR details failed", Map::new());
+            this.record_pr_error(
+              "github.pr.details.refresh",
+              error_message.as_str(),
+              Map::new(),
+            );
+            this.sync_review_comments(cx);
+          }
+        }
+        this.details_task = None;
+        cx.notify();
+      });
+    });
+
+    self.details_task = Some(task);
   }
 
   fn refresh_reviews_for_current_pull_request(
@@ -3642,6 +3746,50 @@ impl GithubPrDetailsPage {
     self.reviews_task = Some(task);
   }
 
+  fn refresh_issue_comments_for_current_pull_request(&mut self, cx: &mut Context<Self>) {
+    let Some(context) = self.current_pr_context.as_ref().cloned() else {
+      return;
+    };
+
+    self.issue_comments_loading = true;
+    self.issue_comments_error = None;
+
+    let api = self.api.clone();
+    let owner = context.owner;
+    let repo = context.repo;
+    let number = context.number;
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.fetch_pull_request_issue_comments(&owner, &repo, number)).await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(comments) => {
+            this.issue_comments = comments;
+            this.issue_comments_loading = false;
+            this.issue_comments_error = None;
+            this.add_pr_breadcrumb("Refresh PR issue comments succeeded", Map::new());
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.issue_comments_loading = false;
+            this.issue_comments_error = Some(error_message.clone().into());
+            this.add_pr_breadcrumb("Refresh PR issue comments failed", Map::new());
+            this.record_pr_error(
+              "github.pr.issue_comments.refresh",
+              error_message.as_str(),
+              Map::new(),
+            );
+          }
+        }
+        this.issue_comments_task = None;
+        cx.notify();
+      });
+    });
+
+    self.issue_comments_task = Some(task);
+  }
+
   fn reload_current_pull_request(&mut self, cx: &mut Context<Self>) {
     let Some(context) = self.current_pr_context.as_ref().cloned() else {
       return;
@@ -3650,6 +3798,161 @@ impl GithubPrDetailsPage {
     let open_target = self.current_open_target();
     self.load_pull_request(context.owner, context.repo, context.number, open_target, cx);
     self.active_tab_ix = active_tab_ix;
+  }
+
+  fn refresh_review_comments_for_current_pull_request(&mut self, cx: &mut Context<Self>) {
+    let Some(context) = self.current_pr_context.as_ref().cloned() else {
+      return;
+    };
+
+    self.review_comments_loading = true;
+    self.review_comments_error = None;
+
+    let api = self.api.clone();
+    let owner = context.owner;
+    let repo = context.repo;
+    let number = context.number;
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.fetch_pull_request_review_comments(&owner, &repo, number)).await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(comments) => {
+            this.review_comments = comments;
+            this.review_comments_loading = false;
+            this.review_comments_error = None;
+            this.add_pr_breadcrumb("Refresh PR comments succeeded", Map::new());
+            this.sync_review_comments(cx);
+            this.prefetch_overview_root_review_comment_files(cx);
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.review_comments_loading = false;
+            this.review_comments_error = Some(error_message.clone().into());
+            this.add_pr_breadcrumb("Refresh PR comments failed", Map::new());
+            this.record_pr_error(
+              "github.pr.comments.refresh",
+              error_message.as_str(),
+              Map::new(),
+            );
+            this.sync_review_comments(cx);
+          }
+        }
+        this.review_comments_task = None;
+        cx.notify();
+      });
+    });
+
+    self.review_comments_task = Some(task);
+  }
+
+  fn refresh_commits_for_current_pull_request(&mut self, cx: &mut Context<Self>) {
+    let Some(context) = self.current_pr_context.as_ref().cloned() else {
+      return;
+    };
+
+    self.commits_loading = true;
+    self.commits_error = None;
+
+    let api = self.api.clone();
+    let owner = context.owner;
+    let repo = context.repo;
+    let number = context.number;
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.fetch_pull_request_commits(&owner, &repo, number)).await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(mut commits) => {
+            sort_commits_desc(commits.as_mut_slice());
+            this.commit_lookup = commits
+              .iter()
+              .cloned()
+              .map(|commit| (commit.sha.clone(), commit))
+              .collect();
+            this.commits = commits;
+            let selected_commit_cleared = this
+              .selected_commit_sha
+              .clone()
+              .is_some_and(|selected_sha| !this.commit_lookup.contains_key(&selected_sha));
+            if selected_commit_cleared {
+              this.selected_commit_sha = None;
+            }
+            this.commits_loading = false;
+            this.commits_error = None;
+            this.sync_commits_list(cx);
+            if selected_commit_cleared {
+              this.saved_pr_selected_tree_id = this.current_selected_tree_path();
+              this.reload_files_for_current_pull_request(cx);
+            }
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.commits_loading = false;
+            this.commits_error = Some(error_message.clone().into());
+            this.commits.clear();
+            this.commit_lookup.clear();
+            this.selected_commit_sha = None;
+            this.sync_commits_list(cx);
+            this.add_pr_breadcrumb("Refresh PR commits failed", Map::new());
+            this.record_pr_error(
+              "github.pr.commits.refresh",
+              error_message.as_str(),
+              Map::new(),
+            );
+          }
+        }
+        this.commits_task = None;
+        cx.notify();
+      });
+    });
+
+    self.commits_task = Some(task);
+  }
+
+  fn refresh_checks_for_current_pull_request(&mut self, cx: &mut Context<Self>) {
+    let Some(context) = self.current_pr_context.as_ref().cloned() else {
+      return;
+    };
+
+    self.checks_loading = true;
+    self.checks_error = None;
+
+    let api = self.api.clone();
+    let owner = context.owner;
+    let repo = context.repo;
+    let number = context.number;
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.fetch_pull_request_checks(&owner, &repo, number)).await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(checks) => {
+            this.checks = Some(checks);
+            this.checks_loading = false;
+            this.checks_error = None;
+            this.add_pr_breadcrumb("Refresh PR checks succeeded", Map::new());
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.checks = None;
+            this.checks_loading = false;
+            this.checks_error = Some(error_message.clone().into());
+            this.add_pr_breadcrumb("Refresh PR checks failed", Map::new());
+            this.record_pr_error(
+              "github.pr.checks.refresh",
+              error_message.as_str(),
+              Map::new(),
+            );
+          }
+        }
+        this.checks_task = None;
+        cx.notify();
+      });
+    });
+
+    self.checks_task = Some(task);
   }
 
   fn fetch_merge_readiness_for_context(
@@ -11961,6 +12264,21 @@ mod tests {
       availability,
       GithubPrLocalProjectAvailability::Ready { .. }
     ));
+  }
+
+  #[test]
+  fn pr_refresh_helpers_match_active_tab() {
+    assert!(should_refresh_pr_overview_data(PR_TAB_OVERVIEW_IX));
+    assert!(!should_refresh_pr_overview_data(PR_TAB_CHANGES_IX));
+    assert!(!should_refresh_pr_overview_data(PR_TAB_CHECKS_IX));
+
+    assert!(should_refresh_pr_changes_data(PR_TAB_CHANGES_IX));
+    assert!(!should_refresh_pr_changes_data(PR_TAB_OVERVIEW_IX));
+    assert!(!should_refresh_pr_changes_data(PR_TAB_CHECKS_IX));
+
+    assert!(should_refresh_pr_checks_data(PR_TAB_CHECKS_IX));
+    assert!(!should_refresh_pr_checks_data(PR_TAB_OVERVIEW_IX));
+    assert!(!should_refresh_pr_checks_data(PR_TAB_CHANGES_IX));
   }
 
   #[gpui::test]

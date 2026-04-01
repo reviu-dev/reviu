@@ -189,6 +189,13 @@ impl GitPageHandle {
     });
   }
 
+  pub fn refresh_page(cx: &mut App) {
+    let Some(weak) = cx.global::<Self>().git_page.clone() else {
+      return;
+    };
+    let _ = weak.update(cx, |this, cx| this.refresh_current_page(cx));
+  }
+
   pub fn show_repository_and_merge_base(
     repo_root: PathBuf,
     base_branch_name: String,
@@ -3405,6 +3412,11 @@ impl GitPage {
     });
 
     self.history_task = Some(task);
+  }
+
+  fn refresh_current_page(&mut self, cx: &mut Context<Self>) {
+    self.reload_status(cx);
+    self.refresh_branches(cx);
   }
 
   fn reload_status(&mut self, cx: &mut Context<Self>) {

@@ -34,10 +34,10 @@ use crate::billing_page::BillingPage;
 use crate::config::{AppSettings as PersistedSettings, ConfigStore};
 use crate::dock_badge::set_dock_badge;
 use crate::git_config_page::GitConfigPage;
-use crate::git_page::GitPage;
+use crate::git_page::{GitPage, GitPageHandle};
 use crate::github_page::{GithubPage, GithubPageHandle};
-use crate::github_pr_details_page::GithubPrDetailsPage;
-use crate::github_repo_page::GithubRepoPage;
+use crate::github_pr_details_page::{GithubPrDetailsPage, GithubPrDetailsPageHandle};
+use crate::github_repo_page::{GithubRepoPage, GithubRepoPageHandle};
 use crate::navigation::NavigationHistory;
 use crate::notification_count::NotificationCountStore;
 use crate::sentry_context;
@@ -127,6 +127,23 @@ fn primary_navigation_selected_index(page: WorkspacePage) -> Option<usize> {
     | WorkspacePage::Settings
     | WorkspacePage::About => None,
   }
+}
+
+fn refresh_label_for_workspace_page(page: WorkspacePage) -> Option<&'static str> {
+  match page {
+    WorkspacePage::Git => Some("Refresh Git"),
+    WorkspacePage::Github => Some("Refresh GitHub"),
+    WorkspacePage::GithubRepo => Some("Refresh Repo"),
+    WorkspacePage::GithubPrDetails => Some("Refresh PR"),
+    WorkspacePage::Billing
+    | WorkspacePage::GitConfig
+    | WorkspacePage::Settings
+    | WorkspacePage::About => None,
+  }
+}
+
+fn page_supports_refresh(page: WorkspacePage) -> bool {
+  refresh_label_for_workspace_page(page).is_some()
 }
 
 fn github_primary_navigation_count_label(notification_count: usize) -> Option<String> {
@@ -658,6 +675,24 @@ impl WorkspaceView {
     NavigationHistory::navigate("/github", cx);
   }
 
+  fn refresh_current_page_action(
+    &mut self,
+    _: &crate::RefreshCurrentPage,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    match WorkspaceRoute::global(cx).page {
+      WorkspacePage::Git => GitPageHandle::refresh_page(cx),
+      WorkspacePage::Github => GithubPageHandle::refresh(cx),
+      WorkspacePage::GithubRepo => GithubRepoPageHandle::refresh(cx),
+      WorkspacePage::GithubPrDetails => GithubPrDetailsPageHandle::refresh(cx),
+      WorkspacePage::Billing
+      | WorkspacePage::GitConfig
+      | WorkspacePage::Settings
+      | WorkspacePage::About => {}
+    }
+  }
+
   fn render_global_bar(
     &self,
     window: &Window,
@@ -749,6 +784,18 @@ impl WorkspaceView {
       });
 
     let show_file_search_button = page_has_file_search(&pathname);
+    let refresh_button = page_supports_refresh(page).then(|| {
+      let label = refresh_label_for_workspace_page(page)
+        .expect("refresh label should exist for refreshable workspace pages");
+      Button::new("workspace-global-refresh")
+        .icon(UiIconName::RefreshCcw)
+        .label(label)
+        .ghost()
+        .small()
+        .on_click(|_, window, cx| {
+          window.dispatch_action(Box::new(crate::RefreshCurrentPage), cx);
+        })
+    });
 
     let file_search_button = Button::new("workspace-global-file-search")
       .label("File search")
@@ -837,7 +884,8 @@ impl WorkspaceView {
       .when_some(AppProfile::current().header_tag_label(), |this, label| {
         this.child(Tag::secondary().small().rounded_full().child(label))
       })
-      .child(primary_navigation);
+      .child(primary_navigation)
+      .when_some(refresh_button, |this, button| this.child(button));
 
     bar.child(left).child(right)
   }
@@ -970,6 +1018,7 @@ impl Render for WorkspaceView {
       .on_action(cx.listener(|_, _: &crate::OpenGithubPage, _window, cx| {
         Self::open_github_home(cx);
       }))
+      .on_action(cx.listener(Self::refresh_current_page_action))
       .on_action(cx.listener(|_, _: &crate::OpenBillingPage, _window, cx| {
         if AuthStateStore::should_show_billing_entry(cx) {
           NavigationHistory::navigate("/billing", cx);
@@ -994,7 +1043,8 @@ impl Render for WorkspaceView {
 mod tests {
   use super::{
     WorkspacePage, WorkspaceView, build_app_menus, github_primary_navigation_count_label,
-    page_has_file_search, primary_navigation_selected_index, should_run_scheduled_update_check,
+    page_has_file_search, page_supports_refresh, primary_navigation_selected_index,
+    refresh_label_for_workspace_page, should_run_scheduled_update_check,
     user_menu_page_for_workspace_page, workspace_page_from_pathname,
   };
   use crate::app_update::{
@@ -1210,6 +1260,42 @@ mod tests {
     );
     assert_eq!(
       primary_navigation_selected_index(WorkspacePage::About),
+      None
+    );
+  }
+
+  #[test]
+  fn workspace_refresh_support_matches_git_and_github_surfaces() {
+    assert!(page_supports_refresh(WorkspacePage::Git));
+    assert!(page_supports_refresh(WorkspacePage::Github));
+    assert!(page_supports_refresh(WorkspacePage::GithubRepo));
+    assert!(page_supports_refresh(WorkspacePage::GithubPrDetails));
+    assert!(!page_supports_refresh(WorkspacePage::Billing));
+    assert!(!page_supports_refresh(WorkspacePage::GitConfig));
+    assert!(!page_supports_refresh(WorkspacePage::Settings));
+    assert!(!page_supports_refresh(WorkspacePage::About));
+  }
+
+  #[test]
+  fn refresh_label_for_workspace_page_matches_page_context() {
+    assert_eq!(
+      refresh_label_for_workspace_page(WorkspacePage::Git),
+      Some("Refresh Git")
+    );
+    assert_eq!(
+      refresh_label_for_workspace_page(WorkspacePage::Github),
+      Some("Refresh GitHub")
+    );
+    assert_eq!(
+      refresh_label_for_workspace_page(WorkspacePage::GithubRepo),
+      Some("Refresh Repo")
+    );
+    assert_eq!(
+      refresh_label_for_workspace_page(WorkspacePage::GithubPrDetails),
+      Some("Refresh PR")
+    );
+    assert_eq!(
+      refresh_label_for_workspace_page(WorkspacePage::Billing),
       None
     );
   }
