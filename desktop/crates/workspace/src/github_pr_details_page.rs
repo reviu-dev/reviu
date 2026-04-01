@@ -507,6 +507,117 @@ fn review_comment_preview_side(
   }
 }
 
+fn review_comment_targets_file(
+  comment: &GithubPullRequestReviewComment,
+  file: &GithubPrFileDiff,
+) -> bool {
+  comment.path == file.path
+    || file
+      .old_path
+      .as_ref()
+      .is_some_and(|old_path| old_path.as_ref() == comment.path)
+}
+
+fn resolve_review_comment_display_anchor(
+  comment: &GithubPullRequestReviewComment,
+  comments_by_id: &HashMap<u64, &GithubPullRequestReviewComment>,
+) -> Option<(usize, ReviewCommentSide, Option<i64>)> {
+  let mut resolved_line = comment.line.or(comment.start_line);
+  let mut resolved_side = comment.side.as_deref().or(comment.start_side.as_deref());
+  let mut current = Some(comment);
+  for _ in 0..32 {
+    if resolved_line.is_some() && resolved_side.is_some() {
+      break;
+    }
+
+    let Some(parent_id) = current.and_then(|value| value.in_reply_to_id) else {
+      break;
+    };
+
+    current = comments_by_id.get(&parent_id).copied();
+    let Some(parent) = current else {
+      break;
+    };
+
+    if resolved_line.is_none() {
+      resolved_line = parent.line.or(parent.start_line);
+    }
+    if resolved_side.is_none() {
+      resolved_side = parent.side.as_deref().or(parent.start_side.as_deref());
+    }
+  }
+
+  let line = positive_line_number(resolved_line)?.saturating_sub(1);
+  let side = match resolved_side {
+    Some("LEFT") => ReviewCommentSide::Left,
+    _ => ReviewCommentSide::Right,
+  };
+
+  Some((line, side, resolved_line))
+}
+
+fn review_comment_to_editor_comment(
+  comment: &GithubPullRequestReviewComment,
+  comments_by_id: &HashMap<u64, &GithubPullRequestReviewComment>,
+) -> Option<ReviewComment> {
+  let (line, side, resolved_line) = resolve_review_comment_display_anchor(comment, comments_by_id)?;
+
+  let line_label = {
+    let line_label = if let Some(start) = comment.start_line
+      && let Some(end) = comment.line
+      && start != end
+    {
+      Some(format!("L{}-{}", start, end))
+    } else {
+      comment
+        .line
+        .or(comment.start_line)
+        .or(resolved_line)
+        .map(|value| format!("L{}", value))
+    };
+    line_label.map(|label| Arc::from(label.as_str()))
+  };
+
+  Some(ReviewComment {
+    id: comment.id,
+    in_reply_to_id: comment.in_reply_to_id,
+    line,
+    side,
+    author: Arc::from(comment.user.login.as_str()),
+    avatar_url: comment.user.avatar_url.as_deref().map(Arc::from),
+    line_label,
+    body: Arc::from(comment.body.as_str()),
+    created_at: Arc::from(format_relative_time(&comment.created_at).to_string()),
+  })
+}
+
+fn visible_review_comment_counts_by_path(
+  file_lookup: &HashMap<String, Rc<GithubPrFileDiff>>,
+  review_comments: &[GithubPullRequestReviewComment],
+) -> HashMap<String, usize> {
+  if file_lookup.is_empty() || review_comments.is_empty() {
+    return HashMap::new();
+  }
+
+  let comments_by_id: HashMap<u64, &GithubPullRequestReviewComment> = review_comments
+    .iter()
+    .map(|comment| (comment.id, comment))
+    .collect();
+  let mut counts = HashMap::new();
+
+  for comment in review_comments {
+    let Some(file) = file_for_review_comment_path(file_lookup, comment.path.as_str()) else {
+      continue;
+    };
+    if resolve_review_comment_display_anchor(comment, &comments_by_id).is_none() {
+      continue;
+    }
+    *counts.entry(file.path.to_string()).or_insert(0) += 1;
+  }
+
+  counts
+}
+
 fn github_blob_url(
   owner: &str,
   repo: &str,
@@ -6121,73 +6232,8 @@ impl GithubPrDetailsPage {
     self
       .review_comments
       .iter()
-      .filter(|comment| comment.path == file.path)
-      .filter_map(|comment| {
-        let mut resolved_line = comment.line.or(comment.start_line);
-        let mut resolved_side = comment.side.as_deref().or(comment.start_side.as_deref());
-        let mut current = Some(comment);
-        for _ in 0..32 {
-          if resolved_line.is_some() && resolved_side.is_some() {
-            break;
-          }
-
-          let Some(parent_id) = current.and_then(|value| value.in_reply_to_id) else {
-            break;
-          };
-
-          current = comments_by_id.get(&parent_id).copied();
-          let Some(parent) = current else {
-            break;
-          };
-
-          if resolved_line.is_none() {
-            resolved_line = parent.line.or(parent.start_line);
-          }
-          if resolved_side.is_none() {
-            resolved_side = parent.side.as_deref().or(parent.start_side.as_deref());
-          }
-        }
-
-        let line = resolved_line.and_then(|value| {
-          if value > 0 {
-            Some(value as usize)
-          } else {
-            None
-          }
-        })?;
-        let side = match resolved_side {
-          Some("LEFT") => ReviewCommentSide::Left,
-          _ => ReviewCommentSide::Right,
-        };
-
-        let line_label = {
-          let line_label = if let Some(start) = comment.start_line
-            && let Some(end) = comment.line
-            && start != end
-          {
-            Some(format!("L{}-{}", start, end))
-          } else {
-            comment
-              .line
-              .or(comment.start_line)
-              .or(resolved_line)
-              .map(|value| format!("L{}", value))
-          };
-          line_label.map(|label| Arc::from(label.as_str()))
-        };
-
-        Some(ReviewComment {
-          id: comment.id,
-          in_reply_to_id: comment.in_reply_to_id,
-          line: line.saturating_sub(1),
-          side,
-          author: Arc::from(comment.user.login.as_str()),
-          avatar_url: comment.user.avatar_url.as_deref().map(Arc::from),
-          line_label,
-          body: Arc::from(comment.body.as_str()),
-          created_at: Arc::from(format_relative_time(&comment.created_at).to_string()),
-        })
-      })
+      .filter(|comment| review_comment_targets_file(comment, file))
+      .filter_map(|comment| review_comment_to_editor_comment(comment, &comments_by_id))
       .collect()
   }
 
@@ -9650,12 +9696,11 @@ impl GithubPrDetailsPage {
         })
     };
 
-    let mut comment_counts = HashMap::new();
-    if self.selected_commit_sha.is_none() && !self.review_comments.is_empty() {
-      for comment in &self.review_comments {
-        *comment_counts.entry(comment.path.clone()).or_insert(0) += 1;
-      }
-    }
+    let comment_counts = if self.selected_commit_sha.is_none() && !self.review_comments.is_empty() {
+      visible_review_comment_counts_by_path(&self.file_lookup, &self.review_comments)
+    } else {
+      HashMap::new()
+    };
 
     let list = if local_project_mode && self.local_project_tree_loading {
       v_flex()
@@ -13327,6 +13372,61 @@ mod tests {
       review_comment_preview_side(&comment),
       ReviewCommentPreviewSide::Right
     );
+  }
+
+  #[test]
+  fn review_comment_targets_file_matches_renamed_old_path() {
+    let file = GithubPrFileDiff {
+      path: "src/new.rs".into(),
+      old_path: Some("src/old.rs".into()),
+      status: GithubPrFileStatus::Renamed,
+    };
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.path = "src/old.rs".to_string();
+
+    assert!(review_comment_targets_file(&comment, &file));
+  }
+
+  #[test]
+  fn review_comment_to_editor_comment_returns_none_without_current_anchor() {
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.line = None;
+    comment.start_line = None;
+    comment.original_line = Some(4);
+    comment.original_start_line = Some(4);
+
+    let comments_by_id = HashMap::from([(comment.id, &comment)]);
+
+    assert!(review_comment_to_editor_comment(&comment, &comments_by_id).is_none());
+  }
+
+  #[test]
+  fn visible_review_comment_counts_by_path_ignores_unanchored_comments_and_maps_renames() {
+    let files = files_from_api(vec![
+      make_api_file("src/main.rs", "modified", None),
+      make_api_file("src/new.rs", "renamed", Some("src/old.rs")),
+    ]);
+    let lookup: HashMap<String, Rc<GithubPrFileDiff>> = files
+      .into_iter()
+      .map(|file| (file.path.as_ref().to_string(), file))
+      .collect();
+
+    let mut renamed_comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    renamed_comment.path = "src/old.rs".to_string();
+    renamed_comment.line = Some(3);
+
+    let mut outdated_comment = make_review_comment(2, "2026-02-28T10:01:00Z", None);
+    outdated_comment.path = "src/main.rs".to_string();
+    outdated_comment.line = None;
+    outdated_comment.start_line = None;
+    outdated_comment.original_line = Some(7);
+    outdated_comment.original_start_line = Some(7);
+
+    let counts =
+      visible_review_comment_counts_by_path(&lookup, &[renamed_comment, outdated_comment]);
+
+    assert_eq!(counts.get("src/new.rs"), Some(&1));
+    assert!(counts.get("src/main.rs").is_none());
   }
 
   #[test]
