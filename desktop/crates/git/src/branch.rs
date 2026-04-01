@@ -120,6 +120,48 @@ pub fn current_branch_status(repo_root: &Path) -> Result<BranchStatus> {
   })
 }
 
+pub fn branch_has_unpublished_commits(repo_root: &Path) -> Result<bool> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let head = match repo.head() {
+    Ok(head) => head,
+    Err(_) => return Ok(false),
+  };
+
+  if !head.is_branch() {
+    return Ok(false);
+  }
+
+  let branch_name = head.shorthand().unwrap_or("HEAD");
+  let branch = match repo.find_branch(branch_name, BranchType::Local) {
+    Ok(branch) => branch,
+    Err(_) => return Ok(false),
+  };
+  let Some(local_oid) = branch.get().target() else {
+    return Ok(false);
+  };
+
+  if let Ok(upstream) = branch.upstream()
+    && let Some(upstream_oid) = upstream.get().target()
+  {
+    let (ahead, _) = repo.graph_ahead_behind(local_oid, upstream_oid)?;
+    return Ok(ahead > 0);
+  }
+
+  for remote_branch in repo.branches(Some(BranchType::Remote))? {
+    let (remote_branch, _) = remote_branch?;
+    let Some(remote_oid) = remote_branch.get().target() else {
+      continue;
+    };
+
+    if remote_oid == local_oid || repo.graph_descendant_of(remote_oid, local_oid)? {
+      return Ok(false);
+    }
+  }
+
+  Ok(true)
+}
+
 pub fn current_head_sha(repo_root: &Path) -> Result<Option<String>> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
@@ -1499,6 +1541,74 @@ mod tests {
       status.behind >= 1,
       "expected behind >= 1, got {}",
       status.behind
+    );
+  }
+
+  #[test]
+  fn branch_has_unpublished_commits_is_false_for_new_branch_without_unique_commit() {
+    let remote = TempBareRepo::init("branch-unpublished-commits-none-remote");
+    let local = TempRepo::init("branch-unpublished-commits-none-local");
+
+    let _ = commit_text_file(&local.path, Path::new("README.md"), "v1\n", "initial");
+    let local_repo = Repository::open(&local.path).expect("open local repo");
+    local_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin remote");
+    let branch_name = current_branch_status(&local.path)
+      .expect("read local branch status")
+      .name;
+    push_branch_to_remote(&local.path, &branch_name, "origin");
+
+    create_branch(&local.path, "feature").expect("create feature branch");
+    switch_branch(
+      &local.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+
+    assert!(
+      !branch_has_unpublished_commits(&local.path).expect("read unpublished commit state"),
+      "new local branch should not publish until it has a unique commit"
+    );
+  }
+
+  #[test]
+  fn branch_has_unpublished_commits_is_true_for_unpublished_branch_with_unique_commit() {
+    let remote = TempBareRepo::init("branch-unpublished-commits-remote");
+    let local = TempRepo::init("branch-unpublished-commits-local");
+
+    let _ = commit_text_file(&local.path, Path::new("README.md"), "v1\n", "initial");
+    let local_repo = Repository::open(&local.path).expect("open local repo");
+    local_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin remote");
+    let branch_name = current_branch_status(&local.path)
+      .expect("read local branch status")
+      .name;
+    push_branch_to_remote(&local.path, &branch_name, "origin");
+
+    create_branch(&local.path, "feature").expect("create feature branch");
+    switch_branch(
+      &local.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(
+      &local.path,
+      Path::new("README.md"),
+      "v2\n",
+      "feature change",
+    );
+
+    assert!(
+      branch_has_unpublished_commits(&local.path).expect("read unpublished commit state"),
+      "unique local commit should enable publish branch actions"
     );
   }
 

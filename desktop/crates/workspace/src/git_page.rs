@@ -14,15 +14,16 @@ use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
   HistoryCommitNode, HistoryRevision, InteractiveRebaseTarget, InteractiveRebaseTodoEntry,
   RepoStage, RepoStatusEntry, RepoStatusKind, abort_merge, abort_rebase, amend_commit, apply_stash,
-  checkout_detached_target, cherry_pick_commits, commit_changes, continue_rebase, create_branch,
-  create_branch_from, create_stash, current_branch_status, current_github_remote_repo,
-  current_head_sha, current_history_revision, current_rebase_commit_message, default_stash_message,
-  delete_untracked_file, detached_head_label, diff_set_from_patch, drop_stash, fetch,
-  head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
-  list_commit_changed_files, list_commit_history, list_interactive_rebase_commits,
-  list_repo_status, list_stashes, load_commit_file_diff, merge_branch, pop_stash, pull, push,
-  rebase_branch, resolve_branch_ref, restore_file, skip_rebase, stage_all, stage_file,
-  start_interactive_rebase, switch_branch, undo_last_commit, unstage_all, unstage_file,
+  branch_has_unpublished_commits, checkout_detached_target, cherry_pick_commits, commit_changes,
+  continue_rebase, create_branch, create_branch_from, create_stash, current_branch_status,
+  current_github_remote_repo, current_head_sha, current_history_revision,
+  current_rebase_commit_message, default_stash_message, delete_untracked_file, detached_head_label,
+  diff_set_from_patch, drop_stash, fetch, head_commit_status, is_merge_in_progress,
+  is_rebase_in_progress, list_branches, list_commit_changed_files, list_commit_history,
+  list_interactive_rebase_commits, list_repo_status, list_stashes, load_commit_file_diff,
+  merge_branch, pop_stash, pull, push, rebase_branch, resolve_branch_ref, restore_file,
+  skip_rebase, stage_all, stage_file, start_interactive_rebase, switch_branch, undo_last_commit,
+  unstage_all, unstage_file,
 };
 #[cfg(test)]
 use gpui::Keystroke;
@@ -159,6 +160,13 @@ struct ActiveConflictResolutionSnapshot {
 enum GitPageOpenActionResult {
   ResumeActiveConflict(ActiveConflictResolutionSnapshot),
   MergeBaseBranchReady(BranchRef),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GitCommitPrimaryButtonState {
+  ContinueRebase,
+  Commit,
+  PublishBranch,
 }
 
 #[derive(Clone)]
@@ -1507,6 +1515,7 @@ pub struct GitPage {
   can_undo_last_commit: bool,
   can_push: bool,
   can_force_push: bool,
+  has_unpublished_branch_commits: bool,
   force_push_after_rebase: bool,
   push_pull_in_progress: bool,
   publish_branch_and_create_pr_in_progress: bool,
@@ -1681,7 +1690,10 @@ impl GitPage {
         Some(&branch_context),
         AuthStateStore::has_github_access(cx),
         Self::branch_has_github_upstream(self.branch_status.as_ref()),
-        Self::should_publish_branch(self.branch_status.as_ref(), self.has_head_commit),
+        Self::should_publish_branch_and_create_pull_request(
+          self.branch_status.as_ref(),
+          self.has_unpublished_branch_commits,
+        ),
         self.branch_pr_lookup_loading,
         self.branch_pr_lookup_result.as_ref(),
       ),
@@ -1726,7 +1738,10 @@ impl GitPage {
       return;
     };
     if !AuthStateStore::has_github_access(cx)
-      || !Self::should_publish_branch(self.branch_status.as_ref(), self.has_head_commit)
+      || !Self::should_publish_branch_and_create_pull_request(
+        self.branch_status.as_ref(),
+        self.has_unpublished_branch_commits,
+      )
       || self.push_pull_in_progress
       || self.publish_branch_and_create_pr_in_progress
     {
@@ -2145,6 +2160,7 @@ impl GitPage {
     entries: Vec<RepoStatusEntry>,
     branch_status: Option<BranchStatus>,
     head_status: Option<HeadCommitStatus>,
+    has_unpublished_branch_commits: bool,
     merge_in_progress: bool,
     rebase_in_progress: bool,
     rebase_commit_message: Option<String>,
@@ -2183,6 +2199,7 @@ impl GitPage {
     });
     self.has_head_commit = head_status.has_head_commit;
     self.can_undo_last_commit = head_status.can_undo_last_commit;
+    self.has_unpublished_branch_commits = has_unpublished_branch_commits;
     let (can_push, can_force_push) = Self::push_flags(
       self.branch_status.as_ref(),
       self.has_head_commit,
@@ -2701,6 +2718,7 @@ impl GitPage {
       can_undo_last_commit: false,
       can_push: false,
       can_force_push: false,
+      has_unpublished_branch_commits: false,
       force_push_after_rebase: false,
       push_pull_in_progress: false,
       publish_branch_and_create_pr_in_progress: false,
@@ -2799,6 +2817,7 @@ impl GitPage {
       can_undo_last_commit: false,
       can_push: false,
       can_force_push: false,
+      has_unpublished_branch_commits: false,
       force_push_after_rebase: false,
       push_pull_in_progress: false,
       publish_branch_and_create_pr_in_progress: false,
@@ -3401,6 +3420,7 @@ impl GitPage {
       self.can_undo_last_commit = false;
       self.can_push = false;
       self.can_force_push = false;
+      self.has_unpublished_branch_commits = false;
       self.force_push_after_rebase = false;
       self.push_pull_in_progress = false;
       self.publish_branch_and_create_pr_in_progress = false;
@@ -3436,6 +3456,7 @@ impl GitPage {
         let entries = list_repo_status(&repo_root).ok()?;
         let branch = current_branch_status(&repo_root).ok();
         let head_status = head_commit_status(&repo_root).ok();
+        let unpublished_branch_commits = branch_has_unpublished_commits(&repo_root).ok()?;
         let merge_in_progress = is_merge_in_progress(&repo_root).unwrap_or(false);
         let rebase_in_progress = is_rebase_in_progress(&repo_root).unwrap_or(false);
         let rebase_commit_message = if rebase_in_progress {
@@ -3457,6 +3478,7 @@ impl GitPage {
           entries,
           branch,
           head_status,
+          unpublished_branch_commits,
           merge_in_progress,
           rebase_in_progress,
           rebase_commit_message,
@@ -3469,6 +3491,7 @@ impl GitPage {
         entries,
         branch_status,
         head_status,
+        unpublished_branch_commits,
         merge_in_progress,
         rebase_in_progress,
         rebase_commit_message,
@@ -3493,6 +3516,7 @@ impl GitPage {
           this.can_undo_last_commit = false;
           this.can_push = false;
           this.can_force_push = false;
+          this.has_unpublished_branch_commits = false;
           this.force_push_after_rebase = false;
           this.push_pull_in_progress = false;
           this.publish_branch_and_create_pr_in_progress = false;
@@ -3541,6 +3565,7 @@ impl GitPage {
           entries,
           branch_status,
           head_status,
+          unpublished_branch_commits,
           merge_in_progress,
           rebase_in_progress,
           rebase_commit_message,
@@ -3611,6 +3636,7 @@ impl GitPage {
           let entries = list_repo_status(&repo_root).ok()?;
           let branch = current_branch_status(&repo_root).ok();
           let head_status = head_commit_status(&repo_root).ok();
+          let unpublished_branch_commits = branch_has_unpublished_commits(&repo_root).ok()?;
           let merge_in_progress = is_merge_in_progress(&repo_root).unwrap_or(false);
           let rebase_in_progress = is_rebase_in_progress(&repo_root).unwrap_or(false);
           let rebase_commit_message = if rebase_in_progress {
@@ -3638,6 +3664,7 @@ impl GitPage {
             entries,
             branch,
             head_status,
+            unpublished_branch_commits,
             merge_in_progress,
             rebase_in_progress,
             rebase_commit_message,
@@ -3651,6 +3678,7 @@ impl GitPage {
           entries,
           branch_status,
           head_status,
+          unpublished_branch_commits,
           merge_in_progress,
           rebase_in_progress,
           rebase_commit_message,
@@ -3675,6 +3703,7 @@ impl GitPage {
             entries,
             branch_status,
             head_status,
+            unpublished_branch_commits,
             merge_in_progress,
             rebase_in_progress,
             rebase_commit_message,
@@ -3727,6 +3756,7 @@ impl GitPage {
         let entries = list_repo_status(&repo_root).ok()?;
         let branch = current_branch_status(&repo_root).ok();
         let head_status = head_commit_status(&repo_root).ok();
+        let unpublished_branch_commits = branch_has_unpublished_commits(&repo_root).ok()?;
         let merge_in_progress = is_merge_in_progress(&repo_root).unwrap_or(false);
         let rebase_in_progress = is_rebase_in_progress(&repo_root).unwrap_or(false);
         let rebase_commit_message = if rebase_in_progress {
@@ -3754,6 +3784,7 @@ impl GitPage {
           entries,
           branch,
           head_status,
+          unpublished_branch_commits,
           merge_in_progress,
           rebase_in_progress,
           rebase_commit_message,
@@ -3768,6 +3799,7 @@ impl GitPage {
         entries,
         branch_status,
         head_status,
+        unpublished_branch_commits,
         merge_in_progress,
         rebase_in_progress,
         rebase_commit_message,
@@ -3792,6 +3824,7 @@ impl GitPage {
           entries,
           branch_status,
           head_status,
+          unpublished_branch_commits,
           merge_in_progress,
           rebase_in_progress,
           rebase_commit_message,
@@ -6431,6 +6464,20 @@ impl GitPage {
     }
   }
 
+  fn commit_primary_button_state(
+    rebase_in_progress: bool,
+    has_uncommitted_changes: bool,
+    can_publish_branch: bool,
+  ) -> GitCommitPrimaryButtonState {
+    if rebase_in_progress {
+      GitCommitPrimaryButtonState::ContinueRebase
+    } else if can_publish_branch && !has_uncommitted_changes {
+      GitCommitPrimaryButtonState::PublishBranch
+    } else {
+      GitCommitPrimaryButtonState::Commit
+    }
+  }
+
   fn should_show_commit_palette_command(&self, commit_message: &str) -> bool {
     !self.rebase_in_progress && self.commit_primary_action_enabled(commit_message)
   }
@@ -6575,6 +6622,13 @@ impl GitPage {
         branch_status,
         Some(status) if !status.has_upstream && !Self::is_detached_head(Some(status))
       )
+  }
+
+  fn should_publish_branch_and_create_pull_request(
+    branch_status: Option<&BranchStatus>,
+    has_unpublished_branch_commits: bool,
+  ) -> bool {
+    Self::should_publish_branch(branch_status, true) && has_unpublished_branch_commits
   }
 
   fn push_action_label(
@@ -7005,7 +7059,10 @@ impl GitPage {
       branch_context.as_ref(),
       AuthStateStore::has_github_access(cx),
       Self::branch_has_github_upstream(self.branch_status.as_ref()),
-      Self::should_publish_branch(self.branch_status.as_ref(), self.has_head_commit),
+      Self::should_publish_branch_and_create_pull_request(
+        self.branch_status.as_ref(),
+        self.has_unpublished_branch_commits,
+      ),
       self.branch_pr_lookup_loading,
       self.branch_pr_lookup_result.as_ref(),
     );
@@ -7974,6 +8031,13 @@ impl GitPage {
     let repo_ready = self.selected_repo.is_some();
     let commit_message = self.commit_input.read(cx).value().to_string();
     let commit_enabled = self.commit_primary_action_enabled(&commit_message);
+    let can_publish_branch =
+      Self::should_publish_branch(self.branch_status.as_ref(), self.has_head_commit);
+    let commit_primary_button_state = Self::commit_primary_button_state(
+      self.rebase_in_progress,
+      !self.status_entries.is_empty(),
+      can_publish_branch,
+    );
     let amend_enabled = repo_ready && self.has_head_commit;
     let undo_enabled = repo_ready && self.can_undo_last_commit;
     let push_enabled = repo_ready && self.can_push;
@@ -7989,8 +8053,8 @@ impl GitPage {
     let commit_shortcut =
       shortcuts::resolved_display_shortcut_keystroke_in(cx, window, ShortcutId::CommitChanges);
 
-    let main_button = if self.rebase_in_progress {
-      Button::new("commit-button-main")
+    let main_button = match commit_primary_button_state {
+      GitCommitPrimaryButtonState::ContinueRebase => Button::new("commit-button-main")
         .label("Continue")
         .with_variant(ButtonVariant::Secondary)
         .outline()
@@ -7998,9 +8062,19 @@ impl GitPage {
         .rounded_r_none()
         .child(Kbd::new(commit_shortcut.clone()).ml_1())
         .disabled(!commit_enabled)
-        .on_click(cx.listener(Self::continue_rebase_action))
-    } else {
-      Button::new("commit-button-main")
+        .on_click(cx.listener(Self::continue_rebase_action)),
+      GitCommitPrimaryButtonState::PublishBranch => Button::new("commit-button-main")
+        .label("Publish branch")
+        .with_variant(ButtonVariant::Secondary)
+        .outline()
+        .flex_1()
+        .rounded_r_none()
+        .loading(self.push_pull_in_progress)
+        .disabled(!push_enabled || self.push_pull_in_progress)
+        .on_click(cx.listener(|this, _, _, cx| {
+          this.push_changes_action(cx);
+        })),
+      GitCommitPrimaryButtonState::Commit => Button::new("commit-button-main")
         .label("Commit")
         .with_variant(ButtonVariant::Secondary)
         .outline()
@@ -8008,7 +8082,7 @@ impl GitPage {
         .rounded_r_none()
         .child(Kbd::new(commit_shortcut).ml_1())
         .disabled(!commit_enabled)
-        .on_click(cx.listener(Self::commit_changes))
+        .on_click(cx.listener(Self::commit_changes)),
     };
 
     let menu_button = Button::new("commit-button-menu")
@@ -9451,6 +9525,20 @@ mod tests {
   }
 
   #[test]
+  fn branch_pr_button_state_hides_publish_and_create_without_unique_branch_commits() {
+    let context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature/parser".to_string(),
+    };
+
+    assert_eq!(
+      GitPage::branch_pr_button_state(Some(&context), true, false, false, false, None),
+      GitBranchPullRequestButtonState::Hidden
+    );
+  }
+
+  #[test]
   fn branch_has_github_upstream_requires_named_branch_with_upstream() {
     let published = make_branch_status("feature/parser", 0, 0, true);
     let local_only = make_branch_status("feature/parser", 0, 0, false);
@@ -10103,6 +10191,26 @@ mod tests {
     let detached = make_branch_status("HEAD", 0, 0, false);
     assert_eq!(GitPage::push_action_label(Some(&detached), true), "Push");
     assert_eq!(GitPage::push_action_label(None, true), "Push");
+  }
+
+  #[test]
+  fn commit_primary_button_state_prefers_publish_branch_only_for_clean_publishable_branch() {
+    assert_eq!(
+      GitPage::commit_primary_button_state(false, false, true),
+      GitCommitPrimaryButtonState::PublishBranch
+    );
+    assert_eq!(
+      GitPage::commit_primary_button_state(false, true, true),
+      GitCommitPrimaryButtonState::Commit
+    );
+    assert_eq!(
+      GitPage::commit_primary_button_state(false, false, false),
+      GitCommitPrimaryButtonState::Commit
+    );
+    assert_eq!(
+      GitPage::commit_primary_button_state(true, false, true),
+      GitCommitPrimaryButtonState::ContinueRebase
+    );
   }
 
   #[gpui::test]
@@ -11451,7 +11559,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn command_palette_create_branch_from_remote_keeps_branch_publishable(
+  async fn command_palette_create_branch_from_remote_hides_pr_until_unique_commit(
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
@@ -11503,16 +11611,42 @@ mod tests {
     let status = current_branch_status(&clone_dir.path).expect("status after create from remote");
     assert_eq!(status.name, "my-feature");
     assert!(!status.has_upstream);
+    assert!(!branch_has_unpublished_commits(&clone_dir.path).expect("unpublished commit state"));
     assert_eq!(
       GitPage::push_action_label(Some(&status), true),
       "Push (Publish branch)"
     );
+    let (can_push, has_unpublished_branch_commits) = git_page.read_with(cx, |this, _| {
+      (this.can_push, this.has_unpublished_branch_commits)
+    });
+    assert!(can_push);
+    assert!(!has_unpublished_branch_commits);
 
     let clone_repo = Repository::open(&clone_dir.path).expect("open clone repo");
     let created = clone_repo
       .find_branch("my-feature", BranchType::Local)
       .expect("find created branch");
     assert!(created.upstream().is_err());
+
+    let _ = commit_text_file(
+      &clone_dir.path,
+      Path::new("README.md"),
+      "v2-feature\n",
+      "feature change",
+    );
+    let reload_task = git_page.update_in(cx, |this, _window, cx| {
+      this.reload_status(cx);
+      this.status_task.take().expect("reload status task")
+    });
+    reload_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(branch_has_unpublished_commits(&clone_dir.path).expect("unpublished commit state"));
+    let (can_push, has_unpublished_branch_commits) = git_page.read_with(cx, |this, _| {
+      (this.can_push, this.has_unpublished_branch_commits)
+    });
+    assert!(can_push);
+    assert!(has_unpublished_branch_commits);
   }
 
   #[test]
@@ -14589,7 +14723,7 @@ mod tests {
       this.api = make_test_api_client(base_url.clone());
       this.selected_repo = Some(source.path.clone());
       this.branch_status = Some(current_branch_status(&source.path).expect("branch status"));
-      this.has_head_commit = true;
+      this.has_unpublished_branch_commits = true;
       this.sync_active_local_repo(cx);
       this.publish_branch_and_create_pull_request_action(cx);
       assert!(this.push_pull_in_progress);
