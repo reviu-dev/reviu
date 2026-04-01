@@ -17,6 +17,12 @@ pub struct GitFileBases {
 }
 
 #[derive(Clone, Debug)]
+pub struct GitFileBinaryBases {
+  pub head: Option<Vec<u8>>,
+  pub index: Option<Vec<u8>>,
+}
+
+#[derive(Clone, Debug)]
 pub struct GitStore {
   repo_root: PathBuf,
   op_id: Arc<AtomicUsize>,
@@ -44,6 +50,14 @@ impl GitStore {
     let head = read_head_content(&repo, rel_path)?;
     let index = read_index_content(&repo, rel_path)?;
     Ok(GitFileBases { head, index })
+  }
+
+  pub fn load_binary_bases(&self, rel_path: &Path) -> Result<GitFileBinaryBases> {
+    let repo = Repository::open(&self.repo_root)
+      .with_context(|| format!("open repo at {:?}", self.repo_root))?;
+    let head = read_head_bytes(&repo, rel_path)?;
+    let index = read_index_bytes(&repo, rel_path)?;
+    Ok(GitFileBinaryBases { head, index })
   }
 }
 
@@ -88,6 +102,18 @@ fn read_head_content(repo: &Repository, rel_path: &Path) -> Result<Option<String
   read_tree_content(repo, &tree, rel_path)
 }
 
+fn read_head_bytes(repo: &Repository, rel_path: &Path) -> Result<Option<Vec<u8>>> {
+  let head = match repo.head() {
+    Ok(head) => head,
+    Err(_) => return Ok(None),
+  };
+  let tree = match head.peel_to_tree() {
+    Ok(tree) => tree,
+    Err(_) => return Ok(None),
+  };
+  read_tree_bytes(repo, &tree, rel_path)
+}
+
 fn read_index_content(repo: &Repository, rel_path: &Path) -> Result<Option<String>> {
   let index = repo.index()?;
   let entry = match index.get_path(rel_path, 0) {
@@ -96,6 +122,16 @@ fn read_index_content(repo: &Repository, rel_path: &Path) -> Result<Option<Strin
   };
   let blob = repo.find_blob(entry.id)?;
   Ok(Some(blob_to_string(&blob)))
+}
+
+fn read_index_bytes(repo: &Repository, rel_path: &Path) -> Result<Option<Vec<u8>>> {
+  let index = repo.index()?;
+  let entry = match index.get_path(rel_path, 0) {
+    Some(entry) => entry,
+    None => return Ok(None),
+  };
+  let blob = repo.find_blob(entry.id)?;
+  Ok(Some(blob_to_bytes(&blob)))
 }
 
 fn read_tree_content(
@@ -111,8 +147,25 @@ fn read_tree_content(
   Ok(Some(blob_to_string(&blob)))
 }
 
+fn read_tree_bytes(
+  repo: &Repository,
+  tree: &git2::Tree,
+  rel_path: &Path,
+) -> Result<Option<Vec<u8>>> {
+  let entry = match tree.get_path(rel_path) {
+    Ok(entry) => entry,
+    Err(_) => return Ok(None),
+  };
+  let blob = repo.find_blob(entry.id())?;
+  Ok(Some(blob_to_bytes(&blob)))
+}
+
 fn blob_to_string(blob: &Blob) -> String {
   String::from_utf8_lossy(blob.content()).into_owned()
+}
+
+fn blob_to_bytes(blob: &Blob) -> Vec<u8> {
+  blob.content().to_vec()
 }
 
 #[cfg(test)]

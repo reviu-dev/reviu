@@ -27,7 +27,7 @@ use git::{
 #[cfg(test)]
 use gpui::Keystroke;
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global,
+  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global, Image,
   InteractiveElement, ParentElement, PathPromptOptions, Pixels, Render, RenderImage, SharedString,
   Styled, Subscription, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
@@ -61,7 +61,10 @@ use crate::{
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, ConfigStore, RecentRepository},
   dock_badge::set_dock_badge,
-  file_preview::{is_markdown_path, is_previewable_path, is_svg_path},
+  file_preview::{
+    FilePreviewKind, file_preview_kind, is_markdown_path, is_previewable_path, is_svg_path,
+    raster_image_from_bytes, should_show_unsupported_binary_placeholder,
+  },
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   github_navigation::should_open_externally,
   github_page::GithubPageHandle,
@@ -102,6 +105,7 @@ const EMPTY_REPOSITORY_HINT_SUFFIX: &str = "to add a repository.";
 const EMPTY_REPOSITORY_ACTION_LABEL: &str = "Add Repository";
 const GIT_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str = "git-markdown-preview-editor-pane";
 const GIT_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str = "git-markdown-preview-render-pane";
+const GIT_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR: &str = "git-binary-preview-render-pane";
 const GIT_TERMINAL_BUTTON_DEBUG_SELECTOR: &str = "git-terminal-button";
 const GIT_TERMINAL_SIDEBAR_DEBUG_SELECTOR: &str = "git-terminal-sidebar";
 const TERMINAL_SIDEBAR_DEFAULT_WIDTH: f32 = 420.0;
@@ -155,6 +159,12 @@ struct ActiveConflictResolutionSnapshot {
 enum GitPageOpenActionResult {
   ResumeActiveConflict(ActiveConflictResolutionSnapshot),
   MergeBaseBranchReady(BranchRef),
+}
+
+#[derive(Clone)]
+enum GitBinaryPreview {
+  RasterImage(Arc<Image>),
+  UnsupportedBinary,
 }
 
 #[derive(Clone, Default)]
@@ -1507,6 +1517,7 @@ pub struct GitPage {
   git_unified_file_view: bool,
   show_markdown_preview: bool,
   show_terminal_sidebar: bool,
+  binary_preview: Option<GitBinaryPreview>,
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
   svg_preview_source: Option<SharedString>,
   svg_preview_task: Option<Task<()>>,
@@ -2143,6 +2154,7 @@ impl GitPage {
       self.invalidate_open_file_task();
       self.selected_file = None;
       self.editor = None;
+      self.binary_preview = None;
       self.ensure_page_shortcut_focus(cx);
     } else if selected_file_update.sync_diff_view {
       self.sync_diff_view(cx);
@@ -2169,6 +2181,10 @@ impl GitPage {
   }
 
   fn split_disabled_for_path(&self, rel_path: &Path) -> bool {
+    if self.selected_file.as_deref() == Some(rel_path) && self.binary_preview.is_some() {
+      return true;
+    }
+
     if let Some((commit_oid, selected_path)) = self.history_opened_commit_file.as_ref()
       && selected_path == rel_path
       && let Some(status) = self.history_file_status_kind(commit_oid, rel_path)
@@ -2204,7 +2220,32 @@ impl GitPage {
       .unwrap_or(false)
   }
 
+  fn build_binary_preview(path: &Path, binary_bytes: Option<Vec<u8>>) -> Option<GitBinaryPreview> {
+    if let Some(bytes) = binary_bytes {
+      if let Some(image) = raster_image_from_bytes(path, bytes.clone()) {
+        return Some(GitBinaryPreview::RasterImage(image));
+      }
+      if should_show_unsupported_binary_placeholder(path, Some(bytes.as_slice())) {
+        return Some(GitBinaryPreview::UnsupportedBinary);
+      }
+      return None;
+    }
+
+    if matches!(
+      file_preview_kind(path),
+      Some(FilePreviewKind::UnsupportedBinary)
+    ) {
+      Some(GitBinaryPreview::UnsupportedBinary)
+    } else {
+      None
+    }
+  }
+
   fn effective_diff_view_for_path(&self, path: &Path) -> DiffViewMode {
+    if self.selected_file.as_deref() == Some(path) && self.binary_preview.is_some() {
+      return DiffViewMode::Inline;
+    }
+
     if self.show_markdown_preview && is_previewable_path(path) {
       return DiffViewMode::Inline;
     }
@@ -2226,6 +2267,72 @@ impl GitPage {
       self.diff_view
     };
     editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
+  }
+
+  fn render_binary_preview_content(
+    &self,
+    preview: &GitBinaryPreview,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    let content = match preview {
+      GitBinaryPreview::RasterImage(image) => {
+        let loading_color = theme.muted_foreground;
+        let error_color = theme.status_red();
+        img(image.clone())
+          .max_w_full()
+          .max_h_full()
+          .with_loading(move || {
+            div()
+              .text_sm()
+              .text_color(loading_color)
+              .child("Rendering image preview...")
+              .into_any_element()
+          })
+          .with_fallback(move || {
+            div()
+              .text_sm()
+              .text_color(error_color)
+              .child("Unable to render image preview")
+              .into_any_element()
+          })
+          .into_any_element()
+      }
+      GitBinaryPreview::UnsupportedBinary => v_flex()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(
+          Icon::new(IconName::File)
+            .size_6()
+            .text_color(theme.muted_foreground),
+        )
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Binary file preview is not available yet."),
+        )
+        .into_any_element(),
+    };
+
+    div()
+      .flex_1()
+      .min_h_0()
+      .min_w(px(0.0))
+      .bg(theme.background)
+      .occlude()
+      .debug_selector(|| GIT_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR.to_string())
+      .child(
+        div()
+          .size_full()
+          .p_4()
+          .items_center()
+          .justify_center()
+          .child(content),
+      )
+      .into_any_element()
   }
 
   fn selected_file_index(&self, cx: &Context<Self>) -> Option<IndexPath> {
@@ -2577,6 +2684,7 @@ impl GitPage {
       git_unified_file_view: app_settings.git_unified_file_view,
       show_markdown_preview: false,
       show_terminal_sidebar: false,
+      binary_preview: None,
       svg_preview: None,
       svg_preview_source: None,
       svg_preview_task: None,
@@ -2669,6 +2777,7 @@ impl GitPage {
       git_unified_file_view: false,
       show_markdown_preview: false,
       show_terminal_sidebar: false,
+      binary_preview: None,
       svg_preview: None,
       svg_preview_source: None,
       svg_preview_task: None,
@@ -3052,6 +3161,7 @@ impl GitPage {
     self.select_first_file_after_restore = false;
     self.operation_error = None;
     self.editor = None;
+    self.binary_preview = None;
     self.interactive_rebase_todo_view = None;
     self.merge_in_progress = false;
     self.rebase_in_progress = false;
@@ -3341,6 +3451,7 @@ impl GitPage {
           this.operation_error = None;
           this.selected_file = None;
           this.editor = None;
+          this.binary_preview = None;
           this.interactive_rebase_todo_view = None;
           this.history_opened_commit_file = None;
           this.clear_branch_select(cx);
@@ -5230,6 +5341,7 @@ impl GitPage {
     );
     self.add_git_breadcrumb("Opened file in git page", data);
     self.editor = None;
+    self.binary_preview = None;
     self.svg_preview = None;
     self.svg_preview_source = None;
     self.force_list_selection = true;
@@ -5269,10 +5381,13 @@ impl GitPage {
 
         let editor_repo_root = requested_repo.clone();
         let editor_file_path = file_path.clone();
+        let binary_preview =
+          Self::build_binary_preview(requested_path.as_path(), loaded.binary_bytes.clone());
         let editor = cx.new(move |cx| {
           Editor::new_with_loaded_file(editor_repo_root, editor_file_path, loaded, cx)
         });
         editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
+        this.binary_preview = binary_preview;
         this.editor = Some(editor);
         cx.notify();
       });
@@ -5396,6 +5511,8 @@ impl GitPage {
         });
 
         this.clear_markdown_preview_if_not_previewable(&rel_path);
+        this.binary_preview =
+          Self::build_binary_preview(rel_path.as_path(), commit_file.binary_bytes.clone());
         this.editor = Some(editor);
         this.selected_file = Some(rel_path.clone());
         this.history_opened_commit_file = Some((commit_oid.clone(), rel_path.clone()));
@@ -8125,6 +8242,16 @@ impl GitPage {
     let theme = cx.theme().clone();
     if let Some(editor) = self.editor.clone() {
       let editor_view = self.render_editor_with_overlay(editor.clone(), window, cx);
+      if let Some(binary_preview) = self.binary_preview.as_ref() {
+        return div()
+          .size_full()
+          .flex()
+          .flex_col()
+          .child(self.render_editor_header(&editor, cx))
+          .child(self.render_binary_preview_content(binary_preview, cx))
+          .into_any_element();
+      }
+
       if self.show_markdown_preview
         && (self.selected_file_is_markdown() || self.selected_file_is_svg())
       {
@@ -8713,6 +8840,14 @@ mod tests {
       }
       ActiveLocalRepoStore::set(cx, None);
     });
+  }
+
+  fn tiny_png_bytes() -> Vec<u8> {
+    vec![
+      137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4,
+      0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252, 255, 31, 0, 3, 3, 2,
+      0, 239, 154, 63, 71, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ]
   }
 
   #[gpui::test]
@@ -13320,6 +13455,91 @@ mod tests {
     assert_eq!(selected_file, Some(rel_path.to_path_buf()));
     assert!(!is_read_only);
     assert_eq!(contents, "v2\n");
+  }
+
+  #[gpui::test]
+  async fn raster_image_preview_renders_without_source_editor_pane(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-open-image-preview");
+    let rel_path = Path::new("fixtures/image.png");
+    let absolute_path = repo.path.join(rel_path);
+    std::fs::create_dir_all(
+      absolute_path
+        .parent()
+        .expect("image preview path should have parent"),
+    )
+    .expect("create image preview parent");
+    std::fs::write(&absolute_path, tiny_png_bytes()).expect("write png image");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.open_file(rel_path.to_path_buf(), cx);
+    });
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let is_raster_preview = git_page.read_with(cx, |this, _cx| {
+      matches!(this.binary_preview, Some(GitBinaryPreview::RasterImage(_)))
+    });
+    let preview_bounds = cx
+      .debug_bounds(GIT_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR)
+      .expect("binary preview pane bounds")
+      .size;
+
+    assert!(is_raster_preview);
+    assert!(preview_bounds.width > gpui::px(0.0));
+    assert!(preview_bounds.height > gpui::px(0.0));
+    assert!(
+      cx.debug_bounds(GIT_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR)
+        .is_none()
+    );
+    assert!(
+      cx.debug_bounds(GIT_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR)
+        .is_none()
+    );
+  }
+
+  #[gpui::test]
+  async fn unsupported_binary_preview_renders_placeholder(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-open-binary-placeholder");
+    let rel_path = Path::new("fixtures/slides.pdf");
+    let absolute_path = repo.path.join(rel_path);
+    std::fs::create_dir_all(
+      absolute_path
+        .parent()
+        .expect("binary placeholder path should have parent"),
+    )
+    .expect("create binary placeholder parent");
+    std::fs::write(&absolute_path, b"%PDF-1.7\n").expect("write pdf file");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.open_file(rel_path.to_path_buf(), cx);
+    });
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let is_placeholder = git_page.read_with(cx, |this, _cx| {
+      matches!(
+        this.binary_preview,
+        Some(GitBinaryPreview::UnsupportedBinary)
+      )
+    });
+    let preview_bounds = cx
+      .debug_bounds(GIT_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR)
+      .expect("binary placeholder pane bounds")
+      .size;
+
+    assert!(is_placeholder);
+    assert!(preview_bounds.width > gpui::px(0.0));
+    assert!(preview_bounds.height > gpui::px(0.0));
   }
 
   #[gpui::test]

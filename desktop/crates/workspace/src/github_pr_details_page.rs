@@ -22,9 +22,9 @@ use git::{
   search_repo_head_contents, switch_to_branch_name, sync_current_branch_to_head,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, ListAlignment,
-  ListState as GpuiListState, MouseButton, ParentElement, Render, RenderImage, SharedString,
-  Styled, Task, Window, div, img, list, prelude::*, px,
+  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Image,
+  ListAlignment, ListState as GpuiListState, MouseButton, ParentElement, Render, RenderImage,
+  SharedString, Styled, Task, Window, div, img, list, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable as _, StyledExt,
@@ -77,7 +77,10 @@ use crate::{
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, ConfigStore},
   date_format::format_relative_time,
-  file_preview::{is_markdown_path, is_svg_path},
+  file_preview::{
+    FilePreviewKind, file_preview_kind, is_markdown_path, is_svg_path, raster_image_from_bytes,
+    should_show_unsupported_binary_placeholder,
+  },
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   git_page::GitPageHandle,
   github_navigation::{
@@ -132,10 +135,17 @@ const GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str =
   "github-pr-markdown-preview-editor-pane";
 const GITHUB_PR_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str =
   "github-pr-markdown-preview-render-pane";
+const GITHUB_PR_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR: &str = "github-pr-binary-preview-render-pane";
 
 type CommitSelectHandler = Rc<dyn Fn(Option<String>, &mut Window, &mut App)>;
 
 struct GithubPrStatusActionNotificationId;
+
+#[derive(Clone)]
+enum GithubPrBinaryPreview {
+  RasterImage(Arc<Image>),
+  UnsupportedBinary,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OverviewCommentKind {
@@ -1896,6 +1906,8 @@ pub struct GithubPrDetailsPage {
   local_project_open_file_generation: u64,
   file_contents: HashMap<String, GithubPrFileContents>,
   file_content_tasks: HashMap<String, Task<()>>,
+  file_asset_previews: HashMap<String, GithubPrBinaryPreview>,
+  file_asset_tasks: HashMap<String, Task<()>>,
   selected_file: Option<Rc<GithubPrFileDiff>>,
   selected_tree_id: Option<String>,
   selected_local_project_file: Option<Rc<GithubPrLocalProjectFile>>,
@@ -1903,6 +1915,7 @@ pub struct GithubPrDetailsPage {
   diff_editor: Entity<Editor>,
   diff_view: DiffViewMode,
   show_markdown_preview: bool,
+  binary_preview: Option<GithubPrBinaryPreview>,
   description_markdown_state: MarkdownRenderState,
   syntax_highlight_cache: Arc<gfm_markdown_viewer::SyntaxHighlightCache>,
   overview_conversation_items: Vec<GithubPrOverviewConversationItem>,
@@ -2399,6 +2412,8 @@ impl GithubPrDetailsPage {
       local_project_open_file_generation: 0,
       file_contents: HashMap::new(),
       file_content_tasks: HashMap::new(),
+      file_asset_previews: HashMap::new(),
+      file_asset_tasks: HashMap::new(),
       selected_file: None,
       selected_tree_id: None,
       selected_local_project_file: None,
@@ -2410,6 +2425,7 @@ impl GithubPrDetailsPage {
         DiffViewMode::Inline
       },
       show_markdown_preview: false,
+      binary_preview: None,
       description_markdown_state: MarkdownRenderState::new(),
       syntax_highlight_cache: Arc::new(gfm_markdown_viewer::SyntaxHighlightCache::new()),
       overview_conversation_items: Vec::new(),
@@ -2907,6 +2923,7 @@ impl GithubPrDetailsPage {
     if !self.selected_file_is_markdown() && !self.selected_file_is_svg() {
       self.show_markdown_preview = false;
     }
+    self.binary_preview = None;
     self.svg_preview = None;
     self.svg_preview_source = None;
     self.file_error = None;
@@ -2946,13 +2963,21 @@ impl GithubPrDetailsPage {
       let repo_root_for_load = requested_repo_root.clone();
       let absolute_path_for_load = requested_absolute_path.clone();
       let rel_path_for_load = requested_rel_path.clone();
-      let snapshot_contents = unblock(move || {
+      let (snapshot_contents, binary_bytes) = unblock(move || {
         let loaded = Editor::load_file_for_editor(&repo_root_for_load, &absolute_path_for_load);
-        let head_contents = GitStore::new(repo_root_for_load.clone())
+        let git_store = GitStore::new(repo_root_for_load.clone());
+        let head_contents = git_store
           .load_bases(rel_path_for_load.as_path())
           .ok()
           .and_then(|bases| bases.head);
-        head_contents.unwrap_or(loaded.content)
+        let head_binary_bytes = git_store
+          .load_binary_bases(rel_path_for_load.as_path())
+          .ok()
+          .and_then(|bases| bases.head);
+        (
+          head_contents.unwrap_or(loaded.content),
+          head_binary_bytes.or(loaded.binary_bytes),
+        )
       })
       .await;
 
@@ -2977,6 +3002,8 @@ impl GithubPrDetailsPage {
           snapshot_contents,
           cx,
         );
+        this.binary_preview =
+          Self::build_binary_preview(requested_rel_path.as_path(), binary_bytes.clone());
         this.file_loading = false;
         this.file_error = None;
         this.sync_diff_view(cx);
@@ -3035,6 +3062,7 @@ impl GithubPrDetailsPage {
       self.local_project_open_file_generation.wrapping_add(1);
     self.file_loading = false;
     self.file_error = None;
+    self.binary_preview = None;
     self.refresh_tree_text_search(cx);
     cx.notify();
   }
@@ -5551,6 +5579,7 @@ impl GithubPrDetailsPage {
     if !self.selected_file_is_markdown() && !self.selected_file_is_svg() {
       self.show_markdown_preview = false;
     }
+    self.binary_preview = None;
     self.svg_preview = None;
     self.svg_preview_source = None;
 
@@ -5559,24 +5588,46 @@ impl GithubPrDetailsPage {
       self.sync_diff_view(cx);
       self.sync_tree_selection(cx);
       let key = file.path.to_string();
-      let cached = self.file_contents.contains_key(&key);
-      let in_flight = self.file_content_tasks.contains_key(&key);
-      let _ = (cached, in_flight);
-      if let Some(contents) = self.file_contents.get(&key).cloned() {
-        if contents.base.is_none() && contents.head.is_none() {
-          self.file_loading = false;
-          self.file_error = Some("File contents unavailable".into());
+      let path = Path::new(file.path.as_ref());
+      match file_preview_kind(path) {
+        Some(FilePreviewKind::RasterImage(_)) => {
+          self.file_error = None;
           self.clear_diff_editor(cx);
-        } else {
+          if let Some(preview) = self.file_asset_previews.get(&key).cloned() {
+            self.binary_preview = Some(preview);
+            self.file_loading = false;
+          } else {
+            self.file_loading = true;
+            self.maybe_fetch_file_asset(file, cx);
+          }
+        }
+        Some(FilePreviewKind::UnsupportedBinary) => {
           self.file_loading = false;
           self.file_error = None;
-          self.apply_full_diff(&file, &contents, cx);
+          self.binary_preview = Some(GithubPrBinaryPreview::UnsupportedBinary);
+          self.clear_diff_editor(cx);
         }
-      } else {
-        self.file_loading = true;
-        self.file_error = None;
-        self.clear_diff_editor(cx);
-        self.maybe_fetch_file_contents(file, cx);
+        _ => {
+          let cached = self.file_contents.contains_key(&key);
+          let in_flight = self.file_content_tasks.contains_key(&key);
+          let _ = (cached, in_flight);
+          if let Some(contents) = self.file_contents.get(&key).cloned() {
+            if contents.base.is_none() && contents.head.is_none() {
+              self.file_loading = false;
+              self.file_error = Some("File contents unavailable".into());
+              self.clear_diff_editor(cx);
+            } else {
+              self.file_loading = false;
+              self.file_error = None;
+              self.apply_full_diff(&file, &contents, cx);
+            }
+          } else {
+            self.file_loading = true;
+            self.file_error = None;
+            self.clear_diff_editor(cx);
+            self.maybe_fetch_file_contents(file, cx);
+          }
+        }
       }
     } else {
       self.file_loading = false;
@@ -5622,6 +5673,10 @@ impl GithubPrDetailsPage {
   }
 
   fn split_disabled_for_selected_file(&self) -> bool {
+    if self.binary_preview.is_some() {
+      return true;
+    }
+
     if self.show_local_project_files && self.selected_local_project_file.is_some() {
       return true;
     }
@@ -5654,6 +5709,95 @@ impl GithubPrDetailsPage {
       .as_ref()
       .map(|file| is_svg_path(Path::new(file.path.as_ref())))
       .unwrap_or(false)
+  }
+
+  fn build_binary_preview(
+    path: &Path,
+    binary_bytes: Option<Vec<u8>>,
+  ) -> Option<GithubPrBinaryPreview> {
+    if let Some(bytes) = binary_bytes {
+      if let Some(image) = raster_image_from_bytes(path, bytes.clone()) {
+        return Some(GithubPrBinaryPreview::RasterImage(image));
+      }
+      if should_show_unsupported_binary_placeholder(path, Some(bytes.as_slice())) {
+        return Some(GithubPrBinaryPreview::UnsupportedBinary);
+      }
+      return None;
+    }
+
+    if matches!(
+      file_preview_kind(path),
+      Some(FilePreviewKind::UnsupportedBinary)
+    ) {
+      Some(GithubPrBinaryPreview::UnsupportedBinary)
+    } else {
+      None
+    }
+  }
+
+  fn render_binary_preview_content(
+    &self,
+    preview: &GithubPrBinaryPreview,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    let content = match preview {
+      GithubPrBinaryPreview::RasterImage(image) => {
+        let loading_color = theme.muted_foreground;
+        let error_color = theme.status_red();
+        img(image.clone())
+          .max_w_full()
+          .max_h_full()
+          .with_loading(move || {
+            div()
+              .text_sm()
+              .text_color(loading_color)
+              .child("Rendering image preview...")
+              .into_any_element()
+          })
+          .with_fallback(move || {
+            div()
+              .text_sm()
+              .text_color(error_color)
+              .child("Unable to render image preview")
+              .into_any_element()
+          })
+          .into_any_element()
+      }
+      GithubPrBinaryPreview::UnsupportedBinary => v_flex()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(
+          Icon::new(IconName::File)
+            .size_6()
+            .text_color(theme.muted_foreground),
+        )
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Binary file preview is not available yet."),
+        )
+        .into_any_element(),
+    };
+
+    div()
+      .flex_1()
+      .min_h_0()
+      .min_w(px(0.0))
+      .bg(theme.background)
+      .debug_selector(|| GITHUB_PR_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR.to_string())
+      .child(
+        div()
+          .size_full()
+          .p_4()
+          .items_center()
+          .justify_center()
+          .child(content),
+      )
+      .into_any_element()
   }
 
   fn review_comments_for_selected_file(&self) -> Vec<ReviewComment> {
@@ -6241,6 +6385,9 @@ impl GithubPrDetailsPage {
     self.file_lookup.clear();
     self.file_contents.clear();
     self.file_content_tasks.clear();
+    self.file_asset_previews.clear();
+    self.file_asset_tasks.clear();
+    self.binary_preview = None;
     self.selected_tree_id = None;
     self.set_selected_file(None, cx);
     self.sync_review_comments(cx);
@@ -6308,11 +6455,101 @@ impl GithubPrDetailsPage {
 
   fn maybe_fetch_selected_file_contents(&mut self, cx: &mut Context<Self>) {
     if let Some(file) = self.selected_file.clone() {
-      self.maybe_fetch_file_contents(file, cx);
+      match file_preview_kind(Path::new(file.path.as_ref())) {
+        Some(FilePreviewKind::RasterImage(_)) => self.maybe_fetch_file_asset(file, cx),
+        Some(FilePreviewKind::UnsupportedBinary) => {}
+        _ => self.maybe_fetch_file_contents(file, cx),
+      }
     }
   }
 
+  fn maybe_fetch_file_asset(&mut self, file: Rc<GithubPrFileDiff>, cx: &mut Context<Self>) {
+    let key = file.path.to_string();
+    let key_for_task = key.clone();
+    if self.file_asset_previews.contains_key(&key) || self.file_asset_tasks.contains_key(&key) {
+      return;
+    }
+
+    let Some(diff_refs) = self.resolve_diff_refs() else {
+      return;
+    };
+    let (owner, repo, reference, preview_path) = match file.status {
+      GithubPrFileStatus::Deleted => (
+        diff_refs.base_owner,
+        diff_refs.base_repo,
+        diff_refs.base_sha,
+        file
+          .old_path
+          .as_ref()
+          .map(|path| path.to_string())
+          .unwrap_or_else(|| file.path.to_string()),
+      ),
+      _ => (
+        diff_refs.head_owner,
+        diff_refs.head_repo,
+        diff_refs.head_sha,
+        file.path.to_string(),
+      ),
+    };
+
+    let api = self.api.clone();
+    let preview_path_for_request = preview_path.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let asset_result = unblock(move || {
+        api.fetch_github_file_asset(&owner, &repo, &preview_path_for_request, &reference)
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.file_asset_tasks.remove(&key_for_task);
+        let is_selected_file = this.selected_tree_id.as_deref() == Some(key_for_task.as_str());
+
+        match asset_result {
+          Ok(Some(bytes)) => {
+            let preview = Self::build_binary_preview(Path::new(preview_path.as_str()), Some(bytes));
+            let Some(preview) = preview else {
+              if is_selected_file {
+                this.file_loading = false;
+                this.file_error = Some("Unable to render file preview".into());
+              }
+              cx.notify();
+              return;
+            };
+            this
+              .file_asset_previews
+              .insert(key_for_task.clone(), preview.clone());
+            if is_selected_file {
+              this.binary_preview = Some(preview);
+              this.file_loading = false;
+              this.file_error = None;
+            }
+          }
+          Ok(None) => {
+            if is_selected_file {
+              this.file_loading = false;
+              this.file_error = Some("File preview unavailable".into());
+            }
+          }
+          Err(error) => {
+            if is_selected_file {
+              this.file_loading = false;
+              this.file_error = Some(error.to_string().into());
+            }
+          }
+        }
+        cx.notify();
+      });
+    });
+
+    self.file_asset_tasks.insert(key, task);
+  }
+
   fn maybe_fetch_file_contents(&mut self, file: Rc<GithubPrFileDiff>, cx: &mut Context<Self>) {
+    match file_preview_kind(Path::new(file.path.as_ref())) {
+      Some(FilePreviewKind::RasterImage(_)) | Some(FilePreviewKind::UnsupportedBinary) => return,
+      _ => {}
+    }
+
     let key = file.path.to_string();
     let key_for_task = key.clone();
     if self.file_contents.contains_key(&key) || self.file_content_tasks.contains_key(&key) {
@@ -6518,12 +6755,15 @@ impl GithubPrDetailsPage {
     self.local_project_open_file_generation = 0;
     self.file_contents.clear();
     self.file_content_tasks.clear();
+    self.file_asset_previews.clear();
+    self.file_asset_tasks.clear();
     self.selected_tree_id = None;
     self.selected_local_project_file = None;
     self.selected_local_project_tree_id = None;
     self.set_selected_file(None, cx);
     self.diff_view = DiffViewMode::Inline;
     self.show_markdown_preview = false;
+    self.binary_preview = None;
     self.svg_preview = None;
     self.svg_preview_source = None;
     self.diff_editor.update(cx, |editor, cx| {
@@ -9343,7 +9583,7 @@ impl GithubPrDetailsPage {
     let is_svg = is_svg_path(path);
     let preview_active = (is_markdown || is_svg) && self.show_markdown_preview;
     let file_loading = self.file_loading;
-    let split_disabled = self.split_disabled_for_file(file) || preview_active;
+    let split_disabled = self.split_disabled_for_selected_file() || preview_active;
     let has_review_comments = !self.selected_file_review_comment_ids.is_empty();
     let (toggle_label, toggle_icon) = if split_disabled {
       ("Split", IconName::PanelLeft)
@@ -9524,6 +9764,10 @@ impl GithubPrDetailsPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
+    if let Some(binary_preview) = self.binary_preview.as_ref() {
+      return self.render_binary_preview_content(binary_preview, cx);
+    }
+
     let theme = cx.theme().clone();
     let preview_active = self.show_markdown_preview && (is_markdown || is_svg);
 
@@ -11084,6 +11328,156 @@ mod tests {
 
     assert!(editor_bounds.width > gpui::px(0.0));
     assert!(editor_bounds.height > gpui::px(0.0));
+    assert!(preview_bounds.width > gpui::px(0.0));
+    assert!(preview_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  async fn changes_raster_image_preview_renders_without_source_editor(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.executor().allow_parking();
+    let (base_url, handle) = start_single_response_server(
+      "200 OK",
+      r#"{"contentBase64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP0cAAAAASUVORK5CYII="}"#,
+    );
+    let file = files_from_api(vec![make_api_file("image.png", "modified", None)])
+      .into_iter()
+      .next()
+      .expect("image file");
+    let file_key = file.path.to_string();
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    let file_asset_task = page.update_in(cx, |this, _window, cx| {
+      this.active_tab_ix = PR_TAB_CHANGES_IX;
+      this.api = make_test_api_client(base_url.clone());
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.files_loading = false;
+      this.file_loading = false;
+      this.file_lookup.insert(file_key.clone(), file.clone());
+      this.set_selected_file(Some(file.clone()), cx);
+      this
+        .file_asset_tasks
+        .remove(file_key.as_str())
+        .expect("file asset task should exist")
+    });
+    file_asset_task.await;
+    handle.join().expect("join server thread");
+
+    let is_raster_preview = page.read_with(cx, |this, _cx| {
+      matches!(
+        this.binary_preview,
+        Some(GithubPrBinaryPreview::RasterImage(_))
+      )
+    });
+    let preview_bounds = cx
+      .debug_bounds(GITHUB_PR_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR)
+      .expect("binary preview render pane bounds")
+      .size;
+
+    assert!(is_raster_preview);
+    assert!(preview_bounds.width > gpui::px(0.0));
+    assert!(preview_bounds.height > gpui::px(0.0));
+    assert!(
+      cx.debug_bounds(GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR)
+        .is_none()
+    );
+    assert!(
+      cx.debug_bounds(GITHUB_PR_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR)
+        .is_none()
+    );
+  }
+
+  #[gpui::test]
+  async fn selected_raster_image_fetches_asset_when_pr_details_arrive_late(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.executor().allow_parking();
+    let (base_url, handle) = start_single_response_server(
+      "200 OK",
+      r#"{"contentBase64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP0cAAAAASUVORK5CYII="}"#,
+    );
+    let file = files_from_api(vec![make_api_file("image.png", "modified", None)])
+      .into_iter()
+      .next()
+      .expect("image file");
+    let file_key = file.path.to_string();
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.active_tab_ix = PR_TAB_CHANGES_IX;
+      this.api = make_test_api_client(base_url.clone());
+      this.file_lookup.insert(file_key.clone(), file.clone());
+      this.set_selected_file(Some(file.clone()), cx);
+
+      assert!(this.file_loading);
+      assert!(this.file_content_tasks.is_empty());
+      assert!(this.file_asset_tasks.is_empty());
+
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.maybe_fetch_selected_file_contents(cx);
+
+      assert!(this.file_content_tasks.is_empty());
+      assert!(this.file_asset_tasks.contains_key(file_key.as_str()));
+    });
+
+    let file_asset_task = page.update_in(cx, |this, _window, _cx| {
+      this
+        .file_asset_tasks
+        .remove(file_key.as_str())
+        .expect("file asset task should exist")
+    });
+    file_asset_task.await;
+    handle.join().expect("join server thread");
+
+    let is_raster_preview = page.read_with(cx, |this, _cx| {
+      matches!(
+        this.binary_preview,
+        Some(GithubPrBinaryPreview::RasterImage(_))
+      )
+    });
+    let preview_bounds = cx
+      .debug_bounds(GITHUB_PR_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR)
+      .expect("binary preview render pane bounds")
+      .size;
+
+    assert!(is_raster_preview);
+    assert!(preview_bounds.width > gpui::px(0.0));
+    assert!(preview_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  fn changes_unsupported_binary_preview_shows_placeholder(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let file = files_from_api(vec![make_api_file("slides.pdf", "modified", None)])
+      .into_iter()
+      .next()
+      .expect("pdf file");
+    let file_key = file.path.to_string();
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.active_tab_ix = PR_TAB_CHANGES_IX;
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.files_loading = false;
+      this.file_loading = false;
+      this.file_lookup.insert(file_key, file.clone());
+      this.set_selected_file(Some(file.clone()), cx);
+      cx.notify();
+    });
+
+    let is_placeholder = page.read_with(cx, |this, _cx| {
+      matches!(
+        this.binary_preview,
+        Some(GithubPrBinaryPreview::UnsupportedBinary)
+      )
+    });
+    let preview_bounds = cx
+      .debug_bounds(GITHUB_PR_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR)
+      .expect("binary preview placeholder bounds")
+      .size;
+
+    assert!(is_placeholder);
     assert!(preview_bounds.width > gpui::px(0.0));
     assert!(preview_bounds.height > gpui::px(0.0));
   }
