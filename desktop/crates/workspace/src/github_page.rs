@@ -132,7 +132,6 @@ fn build_pull_request_sections(rows: &[Rc<GithubPullRequestRow>]) -> Vec<GithubP
 enum GithubPullRequestTab {
   MyOpen,
   NeedReview,
-  Notifications,
 }
 
 impl GithubPullRequestTab {
@@ -140,7 +139,6 @@ impl GithubPullRequestTab {
     match self {
       GithubPullRequestTab::MyOpen => 0,
       GithubPullRequestTab::NeedReview => 1,
-      GithubPullRequestTab::Notifications => 2,
     }
   }
 
@@ -148,7 +146,6 @@ impl GithubPullRequestTab {
     match index {
       0 => Some(GithubPullRequestTab::MyOpen),
       1 => Some(GithubPullRequestTab::NeedReview),
-      2 => Some(GithubPullRequestTab::Notifications),
       _ => None,
     }
   }
@@ -210,6 +207,13 @@ fn github_locked_presentation(access_state: GithubAccessState) -> Option<GithubL
 fn github_notification_count_label(unread_count: usize) -> Option<String> {
   (unread_count > 0).then(|| unread_count.to_string())
 }
+
+const GITHUB_HOME_NOTIFICATIONS_PANEL_DEBUG_SELECTOR: &str = "github-home-notifications-panel";
+const GITHUB_HOME_REPOSITORIES_PANEL_DEBUG_SELECTOR: &str = "github-home-repositories-panel";
+const GITHUB_HOME_NOTIFICATIONS_UNREAD_BADGE_DEBUG_SELECTOR: &str =
+  "github-home-notifications-unread-badge";
+const GITHUB_HOME_NOTIFICATIONS_COUNT_BADGE_DEBUG_SELECTOR: &str =
+  "github-home-notifications-count-badge";
 
 fn github_home_refresh_in_progress(
   pull_requests_loading: bool,
@@ -994,18 +998,9 @@ impl GithubPage {
   }
 
   fn focus_search(&self, window: &mut Window, cx: &mut Context<Self>) {
-    match self.active_pull_request_tab {
-      GithubPullRequestTab::Notifications => {
-        self.notifications.update(cx, |state, cx| {
-          state.focus(window, cx);
-        });
-      }
-      _ => {
-        self.pull_requests.update(cx, |state, cx| {
-          state.focus(window, cx);
-        });
-      }
-    }
+    self.pull_requests.update(cx, |state, cx| {
+      state.focus(window, cx);
+    });
   }
 
   fn subscribe_to_list(&mut self, cx: &mut Context<Self>) {
@@ -1157,7 +1152,6 @@ impl GithubPage {
     match self.active_pull_request_tab {
       GithubPullRequestTab::MyOpen => self.my_open_pull_request_rows.clone(),
       GithubPullRequestTab::NeedReview => self.need_review_pull_request_rows.clone(),
-      GithubPullRequestTab::Notifications => self.my_open_pull_request_rows.clone(),
     }
   }
 
@@ -1185,9 +1179,7 @@ impl GithubPage {
     }
 
     self.active_pull_request_tab = tab;
-    if !matches!(tab, GithubPullRequestTab::Notifications) {
-      self.apply_active_pull_request_rows(cx);
-    }
+    self.apply_active_pull_request_rows(cx);
     cx.notify();
   }
 
@@ -1791,7 +1783,6 @@ impl Render for GithubPage {
     let pull_requests_search_placeholder = match self.active_pull_request_tab {
       GithubPullRequestTab::MyOpen => "Search my open pull requests...",
       GithubPullRequestTab::NeedReview => "Search pull requests needing review...",
-      GithubPullRequestTab::Notifications => "Search pull requests...",
     };
 
     let pull_requests_list = List::new(&self.pull_requests)
@@ -1823,6 +1814,7 @@ impl Render for GithubPage {
     let need_review_count = self.need_review_pull_request_rows.len();
     let unread_count = self.notifications.read(cx).delegate().unread_count();
     let unread_notification_label = github_notification_count_label(unread_count);
+    let notifications_count = self.notifications.read(cx).delegate().matched_rows.len();
 
     let pr_tabs = TabBar::new("github-home-pr-tabs")
       .w_full()
@@ -1850,24 +1842,63 @@ impl Render for GithubPage {
               .child(need_review_count.to_string()),
           ),
         ),
-      )
-      .child(
-        Tab::new().child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child("Notifications")
-            .when_some(unread_notification_label, |this, label| {
-              this.child(StatusTag::new(theme.status_red()).xsmall().child(label))
-            }),
-        ),
       );
+
+    let notifications_panel = v_flex()
+      .debug_selector(|| GITHUB_HOME_NOTIFICATIONS_PANEL_DEBUG_SELECTOR.to_string())
+      .gap_2()
+      .flex_1()
+      .min_h_0()
+      .child(
+        h_flex()
+          .items_center()
+          .justify_between()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child(Icon::new(IconName::Bell).size_4())
+              .child("Notifications")
+              .when_some(unread_notification_label, |this, label| {
+                this.child(
+                  div()
+                    .debug_selector(|| {
+                      GITHUB_HOME_NOTIFICATIONS_UNREAD_BADGE_DEBUG_SELECTOR.to_string()
+                    })
+                    .child(StatusTag::new(theme.status_red()).xsmall().child(label)),
+                )
+              }),
+          )
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .when(notifications_count > 0, |this| {
+                this.child(
+                  div()
+                    .debug_selector(|| {
+                      GITHUB_HOME_NOTIFICATIONS_COUNT_BADGE_DEBUG_SELECTOR.to_string()
+                    })
+                    .child(
+                      Tag::secondary()
+                        .small()
+                        .rounded_full()
+                        .child(notifications_count.to_string()),
+                    ),
+                )
+              }),
+          ),
+      )
+      .when_some(self.notifications_error.clone(), |this, error| {
+        this.child(div().text_sm().text_color(theme.status_red()).child(error))
+      })
+      .child(notifications_list);
 
     let repositories_count = self.repositories.read(cx).delegate().matched_rows.len();
     let repositories_panel = v_flex()
+      .debug_selector(|| GITHUB_HOME_REPOSITORIES_PANEL_DEBUG_SELECTOR.to_string())
       .gap_2()
-      .w(px(560.0))
-      .h_full()
+      .flex_1()
       .min_h_0()
       .child(
         h_flex()
@@ -1894,17 +1925,6 @@ impl Render for GithubPage {
       })
       .child(repositories_list);
 
-    let active_right_error = match self.active_pull_request_tab {
-      GithubPullRequestTab::Notifications => self.notifications_error.clone(),
-      GithubPullRequestTab::MyOpen | GithubPullRequestTab::NeedReview => self.error.clone(),
-    };
-    let active_right_list = match self.active_pull_request_tab {
-      GithubPullRequestTab::Notifications => notifications_list.into_any_element(),
-      GithubPullRequestTab::MyOpen | GithubPullRequestTab::NeedReview => {
-        pull_requests_list.into_any_element()
-      }
-    };
-
     let right_panel = v_flex()
       .gap_2()
       .flex_1()
@@ -1913,10 +1933,18 @@ impl Render for GithubPage {
       .min_h_0()
       .child("Review Inbox")
       .child(pr_tabs)
-      .when_some(active_right_error, |this, error| {
+      .when_some(self.error.clone(), |this, error| {
         this.child(div().text_sm().text_color(theme.status_red()).child(error))
       })
-      .child(active_right_list);
+      .child(pull_requests_list);
+
+    let left_column = v_flex()
+      .w(px(560.0))
+      .h_full()
+      .min_h_0()
+      .gap_3()
+      .child(notifications_panel)
+      .child(repositories_panel);
 
     div()
       .size_full()
@@ -1940,7 +1968,7 @@ impl Render for GithubPage {
               .gap_3()
               .min_h_0()
               .items_start()
-              .child(repositories_panel)
+              .child(left_column)
               .child(right_panel),
           ),
       )
@@ -1960,8 +1988,9 @@ mod tests {
   use crate::api::{
     ApiClient, GithubNotification, GithubNotificationRepository, GithubNotificationSubject,
     GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel, GithubPullRequestState,
-    GithubRepository, GithubUserRepository,
+    GithubRepository, GithubUserRepository, User, UserRole, UserSubscription,
   };
+  use crate::auth_state::AuthState;
   use gpui::TestAppContext;
   use std::rc::Rc;
 
@@ -2049,6 +2078,22 @@ mod tests {
         cx.set_global(NotificationCountStore::default());
       }
     });
+  }
+
+  fn make_available_user() -> User {
+    User {
+      id: "user_123".to_string(),
+      name: "Joris".to_string(),
+      email: "joris@example.com".to_string(),
+      email_verified: true,
+      image: None,
+      github_login: Some("joris-gallot".to_string()),
+      role: UserRole::Pro,
+      subscription: UserSubscription {
+        portal_url: None,
+        active_subscription: None,
+      },
+    }
   }
 
   struct TestProbeView {
@@ -2189,6 +2234,150 @@ mod tests {
   fn pull_request_tab_author_visibility_matches_home_context() {
     assert!(!GithubPullRequestTab::MyOpen.shows_pull_request_author());
     assert!(GithubPullRequestTab::NeedReview.shows_pull_request_author());
+  }
+
+  #[test]
+  fn pull_request_tab_index_mapping_stops_after_need_review() {
+    assert_eq!(
+      GithubPullRequestTab::from_index(0),
+      Some(GithubPullRequestTab::MyOpen)
+    );
+    assert_eq!(
+      GithubPullRequestTab::from_index(1),
+      Some(GithubPullRequestTab::NeedReview)
+    );
+    assert_eq!(GithubPullRequestTab::from_index(2), None);
+  }
+
+  #[gpui::test]
+  fn github_home_layout_stacks_notifications_above_repositories(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_available_user())),
+      );
+    });
+    let api = ApiClient::new_with_base_url("http://localhost:0".to_string());
+    let (github_page, cx) =
+      cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
+
+    github_page.update_in(cx, |this, _window, cx| {
+      this.error = None;
+      this.notifications_error = None;
+      this.repositories_error = None;
+      this.pull_requests.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        cx.notify();
+      });
+      this.notifications.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        state
+          .delegate_mut()
+          .set_rows(vec![Rc::new(make_notification_row(
+            "Please review",
+            "acme/portal",
+            "mention",
+            true,
+          ))]);
+        cx.notify();
+      });
+      this.repositories.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        state
+          .delegate_mut()
+          .set_rows(vec![Rc::new(GithubRepositoryRow {
+            repository: Rc::new(GithubUserRepository {
+              owner: "acme".to_string(),
+              repo: "portal".to_string(),
+              full_name: "acme/portal".to_string(),
+              description: Some("Main app".to_string()),
+              private: true,
+              owner_avatar_url: Some("https://example.com/acme.png".to_string()),
+              updated_at: "2026-02-15T12:30:00Z".to_string(),
+            }),
+            pinned: false,
+          })]);
+        cx.notify();
+      });
+      cx.notify();
+    });
+
+    let notifications_bounds = cx
+      .debug_bounds(GITHUB_HOME_NOTIFICATIONS_PANEL_DEBUG_SELECTOR)
+      .expect("notifications panel bounds");
+    let repositories_bounds = cx
+      .debug_bounds(GITHUB_HOME_REPOSITORIES_PANEL_DEBUG_SELECTOR)
+      .expect("repositories panel bounds");
+
+    assert!(notifications_bounds.origin.y < repositories_bounds.origin.y);
+    assert!(
+      notifications_bounds.origin.y + notifications_bounds.size.height
+        <= repositories_bounds.origin.y
+    );
+  }
+
+  #[gpui::test]
+  fn github_home_layout_places_unread_badge_next_to_notifications_title(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_available_user())),
+      );
+    });
+    let api = ApiClient::new_with_base_url("http://localhost:0".to_string());
+    let (github_page, cx) =
+      cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
+
+    github_page.update_in(cx, |this, _window, cx| {
+      this.notifications_error = None;
+      this.repositories_error = None;
+      this.pull_requests.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        cx.notify();
+      });
+      this.notifications.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        state
+          .delegate_mut()
+          .set_rows(vec![Rc::new(make_notification_row(
+            "Please review",
+            "acme/portal",
+            "mention",
+            true,
+          ))]);
+        cx.notify();
+      });
+      this.repositories.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        state
+          .delegate_mut()
+          .set_rows(vec![Rc::new(GithubRepositoryRow {
+            repository: Rc::new(GithubUserRepository {
+              owner: "acme".to_string(),
+              repo: "portal".to_string(),
+              full_name: "acme/portal".to_string(),
+              description: Some("Main app".to_string()),
+              private: true,
+              owner_avatar_url: Some("https://example.com/acme.png".to_string()),
+              updated_at: "2026-02-15T12:30:00Z".to_string(),
+            }),
+            pinned: false,
+          })]);
+        cx.notify();
+      });
+      cx.notify();
+    });
+
+    let unread_badge_bounds = cx
+      .debug_bounds(GITHUB_HOME_NOTIFICATIONS_UNREAD_BADGE_DEBUG_SELECTOR)
+      .expect("unread badge bounds");
+    let count_badge_bounds = cx
+      .debug_bounds(GITHUB_HOME_NOTIFICATIONS_COUNT_BADGE_DEBUG_SELECTOR)
+      .expect("count badge bounds");
+
+    assert!(unread_badge_bounds.origin.x < count_badge_bounds.origin.x);
   }
 
   #[test]
@@ -2504,21 +2693,6 @@ mod tests {
         .collect::<Vec<_>>()
     });
     assert_eq!(need_review_titles, vec!["Review billing flow".to_string()]);
-
-    github_page.update_in(cx, |this, window, cx| {
-      this.set_active_pull_request_tab(2, window, cx);
-    });
-    let notifications_tab_titles = github_page.read_with(cx, |this, cx| {
-      this
-        .notifications
-        .read(cx)
-        .delegate()
-        .matched_rows
-        .iter()
-        .map(|row| row.notification.subject.title.clone())
-        .collect::<Vec<_>>()
-    });
-    assert_eq!(notifications_tab_titles, vec!["Please review".to_string()]);
   }
 
   #[test]
