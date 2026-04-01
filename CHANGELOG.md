@@ -10,7 +10,11 @@ Git and pull request review editors now render PNG, JPEG, WebP, GIF, BMP, TIFF, 
 
 ### Contextual Refresh in the App Header
 
-Reviu now includes a refresh button in the app header with a `cmd-r` shortcut, so you can refresh the current Git, GitHub, repository, or pull request page without navigating away from what you are reviewing.
+Reviu now includes a refresh button in the app header with a `Cmd-R` shortcut, so you can refresh the current Git, GitHub, repository, or pull request page without navigating away from what you are reviewing.
+
+### GitHub Home Layout
+
+Notifications now sit above your repositories on the GitHub home page, so the repositories list no longer stretches the full column height and the left side is easier to scan.
 
 ## 0.0.10
 
