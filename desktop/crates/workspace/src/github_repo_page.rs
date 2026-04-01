@@ -104,6 +104,15 @@ fn should_show_overview_loading_state(repository_loading: bool, has_repository: 
   repository_loading && !has_repository
 }
 
+fn saved_code_selection_for_refresh(
+  active_tab_ix: usize,
+  selected_tree_id: Option<&str>,
+) -> Option<String> {
+  (active_tab_ix == REPO_TAB_CODE_IX)
+    .then(|| selected_tree_id.map(ToString::to_string))
+    .flatten()
+}
+
 fn repo_tab_count_label(count: usize) -> SharedString {
   count.to_string().into()
 }
@@ -2388,6 +2397,7 @@ pub struct GithubRepoPage {
   code_lookup: HashMap<String, Rc<GithubRepoCodeFile>>,
   code_selected_file: Option<Rc<GithubRepoCodeFile>>,
   code_selected_tree_id: Option<String>,
+  saved_code_selected_tree_id: Option<String>,
   code_file_loading: bool,
   code_file_error: Option<SharedString>,
   code_file_contents_cache: HashMap<String, Option<String>>,
@@ -2448,6 +2458,13 @@ impl GithubRepoPageHandle {
       },
       cx,
     );
+  }
+
+  pub fn refresh(cx: &mut App) {
+    let Some(weak) = cx.global::<Self>().page.clone() else {
+      return;
+    };
+    let _ = weak.update(cx, |this, cx| this.refresh_current_page(cx));
   }
 
   fn show_with_target(
@@ -2542,6 +2559,7 @@ impl GithubRepoPage {
       code_lookup: HashMap::new(),
       code_selected_file: None,
       code_selected_tree_id: None,
+      saved_code_selected_tree_id: None,
       code_file_loading: false,
       code_file_error: None,
       code_file_contents_cache: HashMap::new(),
@@ -2690,6 +2708,116 @@ impl GithubRepoPage {
     if self.active_tab_ix == REPO_TAB_CODE_IX {
       self.load_code_tree_if_needed(cx);
     }
+    cx.notify();
+  }
+
+  fn refresh_current_page(&mut self, cx: &mut Context<Self>) {
+    if self.owner.is_empty() || self.repo.is_empty() {
+      return;
+    }
+
+    self.refresh_repository_details(cx);
+    self.load_repository_branches(cx);
+
+    match self.active_tab_ix {
+      REPO_TAB_README_IX => {
+        self.reset_readme_state(cx);
+        self.load_readme_if_needed(cx);
+      }
+      REPO_TAB_CODE_IX => {
+        let saved_selection = saved_code_selection_for_refresh(
+          self.active_tab_ix,
+          self.code_selected_tree_id.as_deref(),
+        );
+        self.reset_code_state(cx);
+        self.saved_code_selected_tree_id = saved_selection;
+        self.load_code_tree_if_needed(cx);
+      }
+      REPO_TAB_OVERVIEW_IX => {
+        self.reset_code_state(cx);
+        self.load_code_tree_if_needed(cx);
+      }
+      REPO_TAB_PULL_REQUESTS_IX => self.refresh_pull_requests(cx),
+      REPO_TAB_ISSUES_IX => self.refresh_issues(cx),
+      _ => {}
+    }
+
+    cx.notify();
+  }
+
+  fn refresh_repository_details(&mut self, cx: &mut Context<Self>) {
+    let owner = self.owner.to_string();
+    let repo = self.repo.to_string();
+    if owner.trim().is_empty() || repo.trim().is_empty() {
+      return;
+    }
+
+    self.repository_loading = true;
+    self.repository_error = None;
+
+    let details_api = self.api.clone();
+    let details_owner = owner.clone();
+    let details_repo = repo.clone();
+    let details_owner_for_fetch = details_owner.clone();
+    let details_repo_for_fetch = details_repo.clone();
+    let details_task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        details_api
+          .fetch_github_repository_details(&details_owner_for_fetch, &details_repo_for_fetch)
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        if !this
+          .owner
+          .as_ref()
+          .eq_ignore_ascii_case(details_owner.as_str())
+          || !this
+            .repo
+            .as_ref()
+            .eq_ignore_ascii_case(details_repo.as_str())
+        {
+          return;
+        }
+
+        this.repository_task = None;
+        this.repository_loading = false;
+
+        match result {
+          Ok(repository) => {
+            let selected_branch = this
+              .selected_branch
+              .as_ref()
+              .and_then(|branch| normalize_non_empty_string(branch.as_ref()))
+              .or_else(|| normalize_non_empty_string(&repository.default_branch))
+              .map(SharedString::from);
+            this.repository = Some(repository);
+            this.selected_branch = selected_branch.clone();
+            let branch_items = build_repo_branch_select_items(
+              selected_branch
+                .clone()
+                .map(|branch| vec![branch.to_string()])
+                .unwrap_or_default(),
+              selected_branch.as_ref().map(SharedString::as_ref),
+            );
+            this.set_branch_select_items(
+              branch_items,
+              selected_branch.as_ref().map(ToString::to_string),
+              cx,
+            );
+            this.repository_error = None;
+          }
+          Err(error) => {
+            let message = error.to_string();
+            this.repository = None;
+            this.repository_error = Some(message.into());
+          }
+        }
+
+        cx.notify();
+      });
+    });
+    self.repository_task = Some(details_task);
     cx.notify();
   }
 
@@ -3026,6 +3154,7 @@ impl GithubRepoPage {
     self.code_lookup.clear();
     self.code_selected_file = None;
     self.code_selected_tree_id = None;
+    self.saved_code_selected_tree_id = None;
     self.code_file_loading = false;
     self.code_file_error = None;
     self.code_file_contents_cache.clear();
@@ -3124,13 +3253,17 @@ impl GithubRepoPage {
               .collect();
 
             let (items, lookup, _selected_index, _selected_id) = build_repo_code_tree_items(&files);
+            let selected_file = this
+              .saved_code_selected_tree_id
+              .take()
+              .and_then(|path| lookup.get(&path).cloned());
             this.code_lookup = lookup;
             this.code_selected_tree_id = None;
             this.code_tree_state.update(cx, |state, cx| {
               state.set_items(items, cx);
               state.set_selected_index(None, cx);
             });
-            this.set_selected_code_file(None, cx);
+            this.set_selected_code_file(selected_file, cx);
             this.code_files_error = None;
           }
           Err(error) => {
@@ -3284,6 +3417,132 @@ impl GithubRepoPage {
     });
 
     self.code_file_tasks.insert(key, task);
+  }
+
+  fn refresh_pull_requests(&mut self, cx: &mut Context<Self>) {
+    let owner = self.owner.to_string();
+    let repo = self.repo.to_string();
+    if owner.trim().is_empty() || repo.trim().is_empty() {
+      return;
+    }
+
+    self.pull_requests_error = None;
+    self.pull_requests.update(cx, |state, cx| {
+      state.delegate_mut().loading = true;
+      cx.notify();
+    });
+
+    let api = self.api.clone();
+    let owner_for_fetch = owner.clone();
+    let repo_for_fetch = repo.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.fetch_github_repository_pull_requests(&owner_for_fetch, &repo_for_fetch)
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        if !this.owner.as_ref().eq_ignore_ascii_case(owner.as_str())
+          || !this.repo.as_ref().eq_ignore_ascii_case(repo.as_str())
+        {
+          return;
+        }
+
+        this.pull_requests_task = None;
+        let mut rows = Vec::new();
+
+        match result {
+          Ok(pull_requests) => {
+            rows = pull_requests
+              .into_iter()
+              .map(|pr| Rc::new(GithubRepoPullRequestRow { pr: Rc::new(pr) }))
+              .collect();
+            this.pull_requests_error = None;
+          }
+          Err(error) => {
+            let message = error.to_string();
+            if github_shared::is_unauthorized_error_message(&message) {
+              this.pull_requests_error =
+                Some("Authentication required. Please sign in again.".into());
+            } else {
+              this.pull_requests_error = Some(message.into());
+            }
+          }
+        }
+
+        this.pull_requests.update(cx, |state, cx| {
+          state.delegate_mut().loading = false;
+          state.delegate_mut().set_rows(rows);
+          cx.notify();
+        });
+      });
+    });
+    self.pull_requests_task = Some(task);
+    cx.notify();
+  }
+
+  fn refresh_issues(&mut self, cx: &mut Context<Self>) {
+    let owner = self.owner.to_string();
+    let repo = self.repo.to_string();
+    if owner.trim().is_empty() || repo.trim().is_empty() {
+      return;
+    }
+
+    self.issues_error = None;
+    self.issues.update(cx, |state, cx| {
+      state.delegate_mut().loading = true;
+      cx.notify();
+    });
+
+    let api = self.api.clone();
+    let owner_for_fetch = owner.clone();
+    let repo_for_fetch = repo.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.fetch_github_repository_issues(&owner_for_fetch, &repo_for_fetch))
+          .await;
+
+      let _ = this.update(cx, |this, cx| {
+        if !this.owner.as_ref().eq_ignore_ascii_case(owner.as_str())
+          || !this.repo.as_ref().eq_ignore_ascii_case(repo.as_str())
+        {
+          return;
+        }
+
+        this.issues_task = None;
+        let mut rows = Vec::new();
+
+        match result {
+          Ok(issues) => {
+            rows = issues
+              .into_iter()
+              .map(|issue| {
+                Rc::new(GithubRepoIssueRow {
+                  issue: Rc::new(issue),
+                })
+              })
+              .collect();
+            this.issues_error = None;
+          }
+          Err(error) => {
+            let message = error.to_string();
+            if github_shared::is_unauthorized_error_message(&message) {
+              this.issues_error = Some("Authentication required. Please sign in again.".into());
+            } else {
+              this.issues_error = Some(message.into());
+            }
+          }
+        }
+
+        this.issues.update(cx, |state, cx| {
+          state.delegate_mut().loading = false;
+          state.delegate_mut().set_rows(rows);
+          cx.notify();
+        });
+      });
+    });
+    self.issues_task = Some(task);
+    cx.notify();
   }
 
   fn selected_code_file_is_markdown(&self) -> bool {
@@ -5123,6 +5382,22 @@ mod tests {
       REPO_TAB_PULL_REQUESTS_IX
     ));
     assert!(!should_prefetch_code_tree_for_tab(REPO_TAB_ISSUES_IX));
+  }
+
+  #[test]
+  fn saved_code_selection_for_refresh_only_preserves_code_tab_selection() {
+    assert_eq!(
+      saved_code_selection_for_refresh(REPO_TAB_CODE_IX, Some("src/lib.rs")),
+      Some("src/lib.rs".to_string())
+    );
+    assert_eq!(
+      saved_code_selection_for_refresh(REPO_TAB_OVERVIEW_IX, Some("src/lib.rs")),
+      None
+    );
+    assert_eq!(
+      saved_code_selection_for_refresh(REPO_TAB_CODE_IX, None),
+      None
+    );
   }
 
   #[test]

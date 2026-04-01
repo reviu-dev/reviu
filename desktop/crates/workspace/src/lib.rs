@@ -6,6 +6,7 @@ actions!(
     CloseWorkspacePage,
     OpenGitPage,
     OpenGithubPage,
+    RefreshCurrentPage,
     ToggleTerminalSidebar,
     ShowBranchSwitcher,
     OpenGitHistorySidebar,

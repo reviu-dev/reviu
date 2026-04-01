@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 Git and pull request review editors now render PNG, JPEG, WebP, GIF, BMP, TIFF, and ICO files as previews instead of showing raw binary text. Unsupported binary files now show a clear placeholder so large review panes no longer fill with unreadable content.
 
+### Contextual Refresh in the App Header
+
+Reviu now includes a refresh button in the app header, it refreshes the current Git, GitHub, repository, or pull request page without making you navigate away from what you are reviewing.
+
 ## 0.0.10
 
 ### More Precise Word Diff Highlights
