@@ -1031,12 +1031,11 @@ fn repo_issue_list_row_body(
   };
 
   let comments_count = issue.comments_count;
-  let label_tags = issue.labels.iter().take(4).map(|label| {
-    Tag::secondary()
-      .small()
-      .rounded_full()
-      .child(label.name.clone())
-  });
+  let label_tags = issue
+    .labels
+    .iter()
+    .take(4)
+    .map(|label| github_shared::github_label_tag(label, theme));
 
   let row = v_flex()
     .gap_1()
@@ -2214,12 +2213,10 @@ impl Render for GithubIssueDetailsSheetView {
         }
       });
 
-      let label_tags = issue.labels.iter().map(|label| {
-        Tag::secondary()
-          .small()
-          .rounded_full()
-          .child(label.name.clone())
-      });
+      let label_tags = issue
+        .labels
+        .iter()
+        .map(|label| github_shared::github_label_tag(label, &theme));
       let comment_submission_in_flight =
         self.comment_input_submitting || self.edit_submitting || self.description_submitting;
       let issue_details_page = cx.entity().clone();
@@ -5196,6 +5193,7 @@ mod tests {
           .iter()
           .map(|label| GithubPullRequestLabel {
             name: (*label).to_string(),
+            color: Some("f29513".to_string()),
           })
           .collect(),
         repository: GithubRepository {
@@ -5298,6 +5296,7 @@ mod tests {
           .iter()
           .map(|label| GithubPullRequestLabel {
             name: (*label).to_string(),
+            color: Some("f29513".to_string()),
           })
           .collect(),
         comments_count: 0,

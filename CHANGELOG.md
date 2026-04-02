@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.0.12
+
+### GitHub Label Colors
+
+Pull request and issue labels now reuse their GitHub colors across home lists, repository lists, and detail pages, so labels stay easier to recognize throughout the app.
+
 ## 0.0.11
 
 ### GitHub Home Tab Manager

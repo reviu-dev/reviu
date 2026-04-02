@@ -133,6 +133,11 @@ export interface GithubPullRequestAuthor {
   is_bot: boolean
 }
 
+export interface GithubLabel {
+  name: string
+  color?: string | null
+}
+
 export interface GithubGraphqlPullRequestActor {
   __typename?: string | null
   login?: string | null
@@ -152,6 +157,7 @@ export interface GithubGraphqlPullRequestNode {
   labels?: {
     nodes?: Array<{
       name?: string | null
+      color?: string | null
     } | null> | null
   } | null
   repository: {
@@ -183,7 +189,7 @@ export interface GithubPullRequest {
   updated_at: PullRequestResponse['updated_at']
   comments_count: number
   author: GithubPullRequestAuthor
-  labels: { name: string }[]
+  labels: GithubLabel[]
   repository: GithubRepository
 }
 

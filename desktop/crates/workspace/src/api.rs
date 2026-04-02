@@ -184,6 +184,8 @@ impl User {
 #[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestLabel {
   pub name: String,
+  #[serde(default)]
+  pub color: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2430,6 +2432,7 @@ mod tests {
       },
       labels: vec![GithubPullRequestLabel {
         name: "bug".to_string(),
+        color: Some("f29513".to_string()),
       }],
       repository: GithubRepository {
         owner: "acme".to_string(),
@@ -2471,6 +2474,7 @@ mod tests {
       changed_files: 1,
       labels: vec![GithubPullRequestLabel {
         name: "bug".to_string(),
+        color: Some("f29513".to_string()),
       }],
       repository: GithubRepository {
         owner: "acme".to_string(),
@@ -2554,7 +2558,7 @@ mod tests {
             "avatar_url": "https://example.com/octocat.png",
             "is_bot": false
           },
-          "labels": [{ "name": "bug" }],
+          "labels": [{ "name": "bug", "color": "f29513" }],
           "repository": { "owner": "acme", "repo": "widget" }
         }
       ]
@@ -2581,6 +2585,7 @@ mod tests {
       Some("https://example.com/octocat.png")
     );
     assert!(!prs[0].author.is_bot);
+    assert_eq!(prs[0].labels[0].color.as_deref(), Some("f29513"));
     assert_eq!(prs[0].repository.owner, "acme");
     assert_eq!(prs[0].repository.repo, "widget");
     handle.join().expect("join server thread");
@@ -2814,7 +2819,7 @@ mod tests {
             "avatar_url": null,
             "is_bot": true
           },
-          "labels": [{ "name": "docs" }],
+          "labels": [{ "name": "docs", "color": "0075ca" }],
           "repository": { "owner": "acme", "repo": "widget" }
         }
       ]
@@ -2832,6 +2837,7 @@ mod tests {
     assert_eq!(prs[0].comments_count, 7);
     assert_eq!(prs[0].author.login, "docs-bot[bot]");
     assert!(prs[0].author.is_bot);
+    assert_eq!(prs[0].labels[0].color.as_deref(), Some("0075ca"));
     assert_eq!(prs[0].repository.owner, "acme");
     assert_eq!(prs[0].repository.repo, "widget");
     handle.join().expect("join server thread");
@@ -3184,7 +3190,7 @@ mod tests {
           "created_at": "2026-02-15T10:00:00Z",
           "updated_at": "2026-02-18T11:30:00Z",
           "closed_at": "2026-02-18T11:30:00Z",
-          "labels": [{ "name": "bug" }],
+          "labels": [{ "name": "bug", "color": "f29513" }],
           "comments_count": 3,
           "user": {
             "login": "octocat",
@@ -3213,6 +3219,7 @@ mod tests {
       issues[0].user.as_ref().map(|user| user.login.as_str()),
       Some("octocat")
     );
+    assert_eq!(issues[0].labels[0].color.as_deref(), Some("f29513"));
     assert_eq!(issues[0].repository.owner, "acme");
     assert_eq!(issues[0].repository.repo, "widget");
     handle.join().expect("join server thread");
@@ -3231,7 +3238,7 @@ mod tests {
         "created_at": "2026-02-20T08:00:00Z",
         "updated_at": "2026-02-21T09:30:00Z",
         "closed_at": "2026-02-21T09:30:00Z",
-        "labels": [{ "name": "bug" }],
+        "labels": [{ "name": "bug", "color": "f29513" }],
         "comments": [
           {
             "id": 9001,
@@ -3265,6 +3272,7 @@ mod tests {
     assert_eq!(issue.title, "Fix auth race condition");
     assert_eq!(issue.state, "closed");
     assert_eq!(issue.state_reason, Some(GithubIssueStateReason::Completed));
+    assert_eq!(issue.labels[0].color.as_deref(), Some("f29513"));
     assert_eq!(issue.comments.len(), 1);
     assert_eq!(issue.comments[0].id, 9001);
     assert_eq!(issue.comments[0].body.as_deref(), Some("Looks good"));
@@ -3518,7 +3526,7 @@ mod tests {
         "additions": 10,
         "deletions": 5,
         "changed_files": 2,
-        "labels": [{ "name": "enhancement" }],
+        "labels": [{ "name": "enhancement", "color": "a2eeef" }],
         "repository": { "owner": "acme", "repo": "widget" },
         "head_repository": { "owner": "acme", "repo": "widget-fork" }
       }
@@ -3536,6 +3544,7 @@ mod tests {
     assert!(!details.author.is_bot);
     assert_eq!(details.comments, 2);
     assert_eq!(details.review_comments, 3);
+    assert_eq!(details.labels[0].color.as_deref(), Some("a2eeef"));
     assert_eq!(
       details
         .head_repository

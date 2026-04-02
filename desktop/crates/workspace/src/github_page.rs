@@ -3905,6 +3905,7 @@ mod tests {
           .iter()
           .map(|label| GithubPullRequestLabel {
             name: (*label).to_string(),
+            color: Some("f29513".to_string()),
           })
           .collect(),
         repository: GithubRepository {
@@ -4886,6 +4887,7 @@ mod tests {
           comments_count: 0,
           labels: vec![GithubPullRequestLabel {
             name: "bug".to_string(),
+            color: Some("f29513".to_string()),
           }],
           repository: GithubRepository {
             owner: "acme".to_string(),
@@ -4908,6 +4910,7 @@ mod tests {
           comments_count: 0,
           labels: vec![GithubPullRequestLabel {
             name: "review".to_string(),
+            color: Some("5319e7".to_string()),
           }],
           repository: GithubRepository {
             owner: "acme".to_string(),

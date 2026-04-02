@@ -141,6 +141,7 @@ const GITHUB_GRAPHQL_PULL_REQUEST_LIST_FIELDS = `
   labels(first: 20) {
     nodes {
       name
+      color
     }
   }
   repository {

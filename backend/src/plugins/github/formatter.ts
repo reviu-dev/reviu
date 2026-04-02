@@ -6,6 +6,7 @@ import type {
   GithubIssueDescriptionUpdate,
   GithubIssueDetailsComment,
   GithubIssueDetailsCommentResponse,
+  GithubLabel,
   GithubPullRequest,
   GithubPullRequestAuthor,
   GithubPullRequestCommit,
@@ -43,11 +44,31 @@ function mapGithubGraphqlPullRequestState(
   return state === 'OPEN' ? 'open' : 'closed'
 }
 
+function mapGithubLabel(
+  label: { name?: string | null, color?: string | null } | null | undefined,
+): GithubLabel | null {
+  const name = label?.name?.trim()
+
+  if (!name) {
+    return null
+  }
+
+  const color = label?.color?.trim()
+
+  return {
+    name,
+    ...(color ? { color } : {}),
+  }
+}
+
 export function mapGithubGraphqlPullRequest(
   pullRequest: GithubGraphqlPullRequestNode,
 ): GithubGraphqlPullRequestResult {
   const labels = (pullRequest.labels?.nodes ?? [])
-    .flatMap(label => (typeof label?.name === 'string' && label.name.trim().length > 0 ? [{ name: label.name }] : []))
+    .flatMap((label) => {
+      const mappedLabel = mapGithubLabel(label)
+      return mappedLabel ? [mappedLabel] : []
+    })
   const reviewsCount = pullRequest.reviews?.totalCount ?? 0
 
   return {
@@ -79,7 +100,14 @@ export function mapGithubPullRequest(
   pullRequest: PullRequestResponse | CreatePullRequestResponse,
 ): GithubPullRequest {
   const labels = pullRequest.labels
-    .flatMap(label => (typeof label.name === 'string' && label.name.trim().length > 0 ? [{ name: label.name }] : []))
+    .flatMap((label) => {
+      if (typeof label !== 'object' || !label) {
+        return []
+      }
+
+      const mappedLabel = mapGithubLabel(label)
+      return mappedLabel ? [mappedLabel] : []
+    })
 
   return {
     number: pullRequest.number,
