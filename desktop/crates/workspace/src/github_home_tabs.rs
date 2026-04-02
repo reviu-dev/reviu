@@ -12,7 +12,7 @@ pub enum GithubPullRequestReviewStatus {
   ChangesRequested,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GithubPullRequestSearchFilters {
   #[serde(default)]
   pub repos: Vec<String>,
@@ -28,6 +28,20 @@ pub struct GithubPullRequestSearchFilters {
   pub review_status: GithubPullRequestReviewStatus,
   #[serde(default = "default_true")]
   pub include_drafts: bool,
+}
+
+impl Default for GithubPullRequestSearchFilters {
+  fn default() -> Self {
+    Self {
+      repos: Vec::new(),
+      labels: Vec::new(),
+      authors: Vec::new(),
+      assignees: Vec::new(),
+      requested_reviewers: Vec::new(),
+      review_status: GithubPullRequestReviewStatus::Any,
+      include_drafts: true,
+    }
+  }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,8 +182,16 @@ mod tests {
     assert_eq!(tabs.len(), 2);
     assert_eq!(tabs[0].name, "My Open PRs");
     assert_eq!(tabs[0].filters.authors, vec!["@me".to_string()]);
+    assert!(tabs[0].filters.include_drafts);
     assert_eq!(tabs[1].name, "Need Review");
     assert_eq!(tabs[1].filters.requested_reviewers, vec!["@me".to_string()]);
+  }
+
+  #[test]
+  fn github_pull_request_search_filters_default_includes_drafts() {
+    let filters = GithubPullRequestSearchFilters::default();
+
+    assert!(filters.include_drafts);
   }
 
   #[test]

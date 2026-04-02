@@ -833,6 +833,7 @@ mod tests {
     let seeded_tabs = ConfigStore::load_or_seed_github_home_pull_request_tabs();
     assert_eq!(seeded_tabs.len(), 2);
     assert_eq!(seeded_tabs[0].name, "My Open PRs");
+    assert!(seeded_tabs[0].filters.include_drafts);
     assert_eq!(seeded_tabs[1].name, "Need Review");
 
     let custom_tabs = vec![GithubHomePullRequestTab {
