@@ -2,7 +2,7 @@ use std::{collections::HashSet, rc::Rc, sync::Arc};
 
 use gpui::{
   AnyElement, App, Context, Entity, FocusHandle, Focusable, MouseButton, ParentElement, Render,
-  SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
+  SharedString, Styled, Subscription, Task, Window, div, prelude::*, px, relative,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, StyledExt as _,
@@ -1669,8 +1669,10 @@ impl Render for GithubPullRequestTabDialog {
 
     div()
       .id("github-home-pull-request-tab-dialog")
+      .debug_selector(|| "github-home-pull-request-tab-dialog".to_string())
       .flex()
       .flex_col()
+      .w_full()
       .child(
         DialogHeader::new()
           .p_4()
@@ -1682,6 +1684,7 @@ impl Render for GithubPullRequestTabDialog {
       )
       .child(
         v_flex()
+          .id("github-home-pull-request-tab-dialog-body")
           .px_4()
           .pb_4()
           .gap_3()
@@ -1929,12 +1932,16 @@ impl Render for GithubPullRequestTabDialog {
               .on_click(|_, window, cx| window.close_dialog(cx)),
           )
           .child(
-            Button::new("github-tab-submit")
-              .label(self.submit_label())
-              .primary()
-              .loading(self.submit_loading)
-              .disabled(self.submit_loading)
-              .on_click(cx.listener(Self::submit_action)),
+            div()
+              .debug_selector(|| "github-home-pull-request-tab-dialog-submit".to_string())
+              .child(
+                Button::new("github-tab-submit")
+                  .label(self.submit_label())
+                  .primary()
+                  .loading(self.submit_loading)
+                  .disabled(self.submit_loading)
+                  .on_click(cx.listener(Self::submit_action)),
+              ),
           ),
       )
   }
@@ -2404,7 +2411,13 @@ impl GithubPage {
     let dialog_for_focus = dialog.clone();
 
     window.open_dialog(cx, move |overlay, _, _| {
-      overlay.p_0().w(px(680.0)).child(dialog_for_overlay.clone())
+      overlay
+        .p_0()
+        .min_h_0()
+        .w(px(680.0))
+        .h(relative(0.9))
+        .max_h(px(805.0))
+        .child(dialog_for_overlay.clone())
     });
 
     window.on_next_frame(move |window, cx| {
@@ -3442,9 +3455,10 @@ mod tests {
     GithubRepository, GithubUserRepository, User, UserRole, UserSubscription,
   };
   use crate::auth_state::AuthState;
-  use gpui::TestAppContext;
+  use gpui::{Bounds, TestAppContext, VisualTestContext, WindowBounds, WindowOptions, point, size};
   use std::{
     fs,
+    ops::Deref,
     path::PathBuf,
     rc::Rc,
     time::{SystemTime, UNIX_EPOCH},
@@ -3562,6 +3576,39 @@ mod tests {
         cx.set_global(NotificationCountStore::default());
       }
     });
+  }
+
+  fn add_window_view_with_size<F, V>(
+    cx: &mut TestAppContext,
+    width: f32,
+    height: f32,
+    build_root_view: F,
+  ) -> (Entity<V>, &mut VisualTestContext)
+  where
+    F: FnOnce(&mut Window, &mut Context<V>) -> V,
+    V: 'static + Render,
+  {
+    let window = cx.update(|cx| {
+      let bounds = Bounds::new(
+        point(px(-10000.0), px(-10000.0)),
+        size(px(width), px(height)),
+      );
+      cx.open_window(
+        WindowOptions {
+          window_bounds: Some(WindowBounds::Windowed(bounds)),
+          focus: false,
+          show: true,
+          ..Default::default()
+        },
+        |window, cx| cx.new(|cx| build_root_view(window, cx)),
+      )
+      .expect("open window")
+    });
+
+    let view = window.root(cx).expect("window root");
+    let cx = VisualTestContext::from_window(*window.deref(), cx).into_mut();
+    cx.run_until_parked();
+    (view, cx)
   }
 
   fn make_available_user() -> User {
@@ -3787,6 +3834,36 @@ mod tests {
     let suggestions = matching_user_filter_suggestions(&[], "alice", &[], true);
 
     assert!(suggestions.is_empty());
+  }
+
+  #[gpui::test]
+  fn pull_request_tab_dialog_opens_in_small_windows(cx: &mut TestAppContext) {
+    let _config_guard = GithubPageTestConfigGuard::new("dialog-small-window");
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_available_user())),
+      );
+    });
+
+    let api = ApiClient::new_with_base_url("http://localhost:0".to_string());
+    let mut mounted_github_page = None;
+    let (_root, cx) = add_window_view_with_size(cx, 720.0, 520.0, |window, cx| {
+      let github_page = cx.new(|cx| GithubPage::new_for_test(api.clone(), window, cx));
+      mounted_github_page = Some(github_page.clone());
+      gpui_component::Root::new(github_page, window, cx)
+    });
+    let github_page = mounted_github_page.expect("github page");
+
+    github_page.update_in(cx, |this, window, cx| {
+      this.open_pull_request_tab_dialog(GithubPullRequestTabDialogMode::Create, None, window, cx);
+    });
+    cx.cx.run_until_parked();
+    cx.run_until_parked();
+
+    let dialog_open = github_page.update_in(cx, |_this, window, cx| window.has_active_dialog(cx));
+    assert!(dialog_open);
   }
 
   #[gpui::test]
