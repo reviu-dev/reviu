@@ -8589,6 +8589,7 @@ dependencies = [
  "gpui-component",
  "gpui-component-assets",
  "rust-embed",
+ "serde",
  "syntax",
 ]
 

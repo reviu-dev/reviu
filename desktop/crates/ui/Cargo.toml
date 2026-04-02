@@ -11,3 +11,4 @@ gpui-component-assets = { workspace = true }
 rust-embed = { workspace = true }
 syntax = { workspace = true }
 anyhow = { workspace = true }
+serde = { workspace = true }
