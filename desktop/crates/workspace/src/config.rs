@@ -11,8 +11,13 @@ use std::{
 use dirs::config_dir;
 use gpui::Keystroke;
 use rusqlite::{Connection, params};
+use serde_json;
 
 use crate::AppProfile;
+use crate::github_home_tabs::{
+  GithubHomePullRequestTab, normalize_github_home_pull_request_tab,
+  seed_github_home_pull_request_tabs,
+};
 use crate::shortcuts::ShortcutId;
 
 const CONFIG_DIR_NAME: &str = "reviu";
@@ -45,11 +50,17 @@ const SHORTCUT_OVERRIDES_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS shortcut_overrides (shortcut_id TEXT PRIMARY KEY, keystroke TEXT NOT NULL)",
 };
 
-const CONFIG_TABLES: [ConfigTable; 4] = [
+const GITHUB_HOME_PULL_REQUEST_TABS_TABLE: ConfigTable = ConfigTable {
+  name: "github_home_pull_request_tabs",
+  create_sql: "CREATE TABLE IF NOT EXISTS github_home_pull_request_tabs (id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL, filters_json TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+};
+
+const CONFIG_TABLES: [ConfigTable; 5] = [
   RECENT_REPOS_TABLE,
   SETTINGS_TABLE,
   PINNED_REPOS_TABLE,
   SHORTCUT_OVERRIDES_TABLE,
+  GITHUB_HOME_PULL_REQUEST_TABS_TABLE,
 ];
 
 #[cfg(test)]
@@ -380,6 +391,27 @@ impl ConfigStore {
     store.load_shortcut_overrides_inner()
   }
 
+  pub fn load_or_seed_github_home_pull_request_tabs() -> Vec<GithubHomePullRequestTab> {
+    let Some(store) = Self::open_with_tables() else {
+      return seed_github_home_pull_request_tabs();
+    };
+    let tabs = store.load_github_home_pull_request_tabs_inner();
+    if !tabs.is_empty() {
+      return tabs;
+    }
+
+    let seeded_tabs = seed_github_home_pull_request_tabs();
+    store.persist_github_home_pull_request_tabs_inner(&seeded_tabs);
+    store.load_github_home_pull_request_tabs_inner()
+  }
+
+  pub fn persist_github_home_pull_request_tabs(tabs: &[GithubHomePullRequestTab]) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    store.persist_github_home_pull_request_tabs_inner(tabs);
+  }
+
   fn load_shortcut_overrides_inner(&self) -> HashMap<ShortcutId, String> {
     let mut stmt = match self.conn.prepare(&format!(
       "SELECT shortcut_id, keystroke FROM {} ORDER BY shortcut_id ASC",
@@ -440,6 +472,48 @@ impl ConfigStore {
     };
 
     rows.filter_map(|r| r.ok()).collect()
+  }
+
+  fn load_github_home_pull_request_tabs_inner(&self) -> Vec<GithubHomePullRequestTab> {
+    let mut stmt = match self.conn.prepare(&format!(
+      "SELECT id, name, filters_json FROM {} ORDER BY position ASC",
+      GITHUB_HOME_PULL_REQUEST_TABS_TABLE.name
+    )) {
+      Ok(stmt) => stmt,
+      Err(err) => {
+        eprintln!("Failed to load GitHub home pull request tabs: {}", err);
+        return Vec::new();
+      }
+    };
+
+    let rows = match stmt.query_map([], |row| {
+      Ok((
+        row.get::<_, String>(0)?,
+        row.get::<_, String>(1)?,
+        row.get::<_, String>(2)?,
+      ))
+    }) {
+      Ok(rows) => rows,
+      Err(err) => {
+        eprintln!("Failed to read GitHub home pull request tabs: {}", err);
+        return Vec::new();
+      }
+    };
+
+    let mut tabs = Vec::new();
+    for row in rows {
+      let Ok((id, name, filters_json)) = row else {
+        continue;
+      };
+      let Ok(filters) = serde_json::from_str(&filters_json) else {
+        continue;
+      };
+      tabs.push(normalize_github_home_pull_request_tab(
+        &GithubHomePullRequestTab { id, name, filters },
+      ));
+    }
+    tabs.retain(|tab| !tab.id.is_empty() && !tab.name.is_empty());
+    tabs
   }
 
   pub fn pin_repo(full_name: &str) {
@@ -565,6 +639,50 @@ impl ConfigStore {
       ],
     ) {
       eprintln!("Failed to persist app settings: {}", err);
+    }
+  }
+
+  fn persist_github_home_pull_request_tabs_inner(&self, tabs: &[GithubHomePullRequestTab]) {
+    if let Err(err) = self.conn.execute(
+      &format!("DELETE FROM {}", GITHUB_HOME_PULL_REQUEST_TABS_TABLE.name),
+      [],
+    ) {
+      eprintln!("Failed to clear GitHub home pull request tabs: {}", err);
+      return;
+    }
+
+    let timestamp = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .unwrap_or_default()
+      .as_secs() as i64;
+
+    for (position, tab) in tabs
+      .iter()
+      .map(normalize_github_home_pull_request_tab)
+      .enumerate()
+    {
+      let Ok(filters_json) = serde_json::to_string(&tab.filters) else {
+        continue;
+      };
+
+      if let Err(err) = self.conn.execute(
+        &format!(
+          "INSERT INTO {} (id, name, position, filters_json, created_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+          GITHUB_HOME_PULL_REQUEST_TABS_TABLE.name
+        ),
+        params![
+          tab.id,
+          tab.name,
+          position as i64,
+          filters_json,
+          timestamp,
+          timestamp,
+        ],
+      ) {
+        eprintln!("Failed to persist GitHub home pull request tab: {}", err);
+        return;
+      }
     }
   }
 }
@@ -702,6 +820,38 @@ mod tests {
       overrides.get(&ShortcutId::CommitChanges),
       Some(&"cmd-j".to_string())
     );
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn github_home_pull_request_tabs_seed_and_round_trip() {
+    let db_path = unique_test_db_path("github-home-tabs");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    let seeded_tabs = ConfigStore::load_or_seed_github_home_pull_request_tabs();
+    assert_eq!(seeded_tabs.len(), 2);
+    assert_eq!(seeded_tabs[0].name, "My Open PRs");
+    assert_eq!(seeded_tabs[1].name, "Need Review");
+
+    let custom_tabs = vec![GithubHomePullRequestTab {
+      id: "custom-1".to_string(),
+      name: "Frontend".to_string(),
+      filters: crate::github_home_tabs::GithubPullRequestSearchFilters {
+        repos: vec!["acme/reviu".to_string()],
+        labels: vec!["frontend".to_string()],
+        authors: vec!["alice".to_string()],
+        assignees: vec!["bob".to_string()],
+        requested_reviewers: vec!["@me".to_string()],
+        review_status: crate::github_home_tabs::GithubPullRequestReviewStatus::Required,
+        include_drafts: false,
+      },
+    }];
+
+    ConfigStore::persist_github_home_pull_request_tabs(&custom_tabs);
+    let loaded_tabs = ConfigStore::load_or_seed_github_home_pull_request_tabs();
+    assert_eq!(loaded_tabs, custom_tabs);
 
     ConfigStore::set_test_db_path(None);
   }

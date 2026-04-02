@@ -7,6 +7,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crate::AppProfile;
+use crate::github_home_tabs::{GithubPullRequestFilterOptions, GithubPullRequestSearchFilters};
 use crate::sentry_context;
 
 const DEFAULT_API_BASE_URL: &str = "http://localhost:3000";
@@ -889,6 +890,21 @@ struct GithubPullRequestsResponse {
   pull_requests: Vec<GithubPullRequest>,
 }
 
+#[derive(Debug, Serialize)]
+struct GithubPullRequestSearchRequest<'a> {
+  filters: &'a GithubPullRequestSearchFilters,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestFilterOptionsResponse {
+  options: GithubPullRequestFilterOptions,
+}
+
+#[derive(Debug, Serialize)]
+struct GithubPullRequestFilterOptionsRequest<'a> {
+  repos: &'a [String],
+}
+
 #[derive(Debug, Deserialize)]
 struct GithubPullRequestResponse {
   #[serde(rename = "pullRequest")]
@@ -1280,12 +1296,16 @@ impl ApiClient {
     Ok(payload.url)
   }
 
-  pub fn fetch_latest_pull_requests(&self) -> Result<Vec<GithubPullRequest>> {
+  pub fn fetch_github_pull_requests(
+    &self,
+    filters: &GithubPullRequestSearchFilters,
+  ) -> Result<Vec<GithubPullRequest>> {
     let response = self
-      .authed_request(Method::GET, "/github/pr/latest")
+      .authed_request(Method::POST, "/github/pr/search")
+      .json(&GithubPullRequestSearchRequest { filters })
       .send()?;
     let status = response.status();
-    Self::record_http_status("GET", "/github/pr/latest", status);
+    Self::record_http_status("POST", "/github/pr/search", status);
     if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
@@ -1296,20 +1316,24 @@ impl ApiClient {
     Ok(payload.pull_requests)
   }
 
-  pub fn fetch_need_review_pull_requests(&self) -> Result<Vec<GithubPullRequest>> {
+  pub fn fetch_github_pull_request_filter_options(
+    &self,
+    repos: &[String],
+  ) -> Result<GithubPullRequestFilterOptions> {
     let response = self
-      .authed_request(Method::GET, "/github/pr/need-reviews")
+      .authed_request(Method::POST, "/github/pr/filter-options")
+      .json(&GithubPullRequestFilterOptionsRequest { repos })
       .send()?;
     let status = response.status();
-    Self::record_http_status("GET", "/github/pr/need-reviews", status);
+    Self::record_http_status("POST", "/github/pr/filter-options", status);
     if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
     if !status.is_success() {
       anyhow::bail!("unexpected status: {}", status);
     }
-    let payload = response.json::<GithubPullRequestsResponse>()?;
-    Ok(payload.pull_requests)
+    let payload = response.json::<GithubPullRequestFilterOptionsResponse>()?;
+    Ok(payload.options)
   }
 
   pub fn fetch_github_user_repositories(&self) -> Result<Vec<GithubUserRepository>> {
@@ -2512,7 +2536,7 @@ mod tests {
   }
 
   #[test]
-  fn fetch_latest_pull_requests_parses_success_payload() {
+  fn fetch_github_pull_requests_parses_success_payload() {
     let body = r#"{
       "pullRequests": [
         {
@@ -2537,9 +2561,13 @@ mod tests {
     }"#;
     let (base_url, handle) = start_single_response_server("200 OK", body);
     let api = make_test_api_client(base_url);
+    let filters = crate::github_home_tabs::GithubPullRequestSearchFilters {
+      authors: vec!["@me".to_string()],
+      ..crate::github_home_tabs::GithubPullRequestSearchFilters::default()
+    };
 
     let prs = api
-      .fetch_latest_pull_requests()
+      .fetch_github_pull_requests(&filters)
       .expect("fetch pull requests");
     assert_eq!(prs.len(), 1);
     assert_eq!(prs[0].number, 7);
@@ -2559,86 +2587,111 @@ mod tests {
   }
 
   #[test]
-  fn fetch_latest_pull_requests_calls_expected_route_without_query_params() {
+  fn fetch_github_pull_requests_posts_expected_route_and_payload() {
     let body = r#"{"pullRequests":[]}"#;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
     let api = make_test_api_client(base_url);
+    let filters = crate::github_home_tabs::GithubPullRequestSearchFilters {
+      repos: vec!["acme/reviu".to_string()],
+      labels: vec!["bug".to_string()],
+      authors: vec!["@me".to_string()],
+      assignees: vec!["alice".to_string()],
+      requested_reviewers: vec!["@me".to_string()],
+      review_status: crate::github_home_tabs::GithubPullRequestReviewStatus::Required,
+      include_drafts: false,
+    };
 
     let _ = api
-      .fetch_latest_pull_requests()
-      .expect("fetch latest pull requests");
+      .fetch_github_pull_requests(&filters)
+      .expect("fetch pull requests");
 
     handle.join().expect("join server thread");
-    let request_line = request_line
+    let request = request
       .lock()
-      .expect("lock request line")
+      .expect("lock request")
       .clone()
       .unwrap_or_default();
-    assert_eq!(request_line, "GET /github/pr/latest HTTP/1.1");
+    assert!(
+      request.contains("POST /github/pr/search "),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"repos\":[\"acme/reviu\"]"),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"labels\":[\"bug\"]"),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"authors\":[\"@me\"]"),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"review_status\":\"required\""),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"include_drafts\":false"),
+      "request: {request}"
+    );
   }
 
   #[test]
-  fn fetch_need_review_pull_requests_parses_success_payload() {
+  fn fetch_github_pull_request_filter_options_parses_success_payload() {
     let body = r#"{
-      "pullRequests": [
-        {
-          "number": 9,
-          "title": "Review requested change",
-          "state": "open",
-          "created_at": "2026-02-14T10:15:00Z",
-          "closed_at": null,
-          "merged_at": null,
-          "draft": false,
-          "updated_at": "2026-02-15T13:00:00Z",
-          "comments_count": 2,
-          "author": {
-            "login": "renovate[bot]",
-            "avatar_url": null,
-            "is_bot": true
-          },
-          "labels": [{ "name": "enhancement" }],
-          "repository": { "owner": "acme", "repo": "portal" }
-        }
-      ]
+      "options": {
+        "labels": [{ "name": "bug" }],
+        "authors": [{ "login": "octocat", "avatar_url": "https://example.com/octocat.png" }],
+        "assignees": [{ "login": "alice", "avatar_url": null }]
+      }
     }"#;
     let (base_url, handle) = start_single_response_server("200 OK", body);
     let api = make_test_api_client(base_url);
 
-    let prs = api
-      .fetch_need_review_pull_requests()
-      .expect("fetch need review pull requests");
-    assert_eq!(prs.len(), 1);
-    assert_eq!(prs[0].number, 9);
-    assert_eq!(prs[0].title, "Review requested change");
-    assert!(matches!(prs[0].state, GithubPullRequestState::Open));
-    assert_eq!(prs[0].created_at, "2026-02-14T10:15:00Z");
-    assert_eq!(prs[0].comments_count, 2);
-    assert_eq!(prs[0].author.login, "renovate[bot]");
-    assert!(prs[0].author.is_bot);
-    assert_eq!(prs[0].repository.owner, "acme");
-    assert_eq!(prs[0].repository.repo, "portal");
+    let options = api
+      .fetch_github_pull_request_filter_options(&["acme/reviu".to_string()])
+      .expect("fetch pull request filter options");
+    assert_eq!(options.labels.len(), 1);
+    assert_eq!(options.labels[0].name, "bug");
+    assert_eq!(options.authors.len(), 1);
+    assert_eq!(options.authors[0].login, "octocat");
+    assert_eq!(
+      options.authors[0].avatar_url.as_deref(),
+      Some("https://example.com/octocat.png")
+    );
+    assert_eq!(options.assignees.len(), 1);
+    assert_eq!(options.assignees[0].login, "alice");
     handle.join().expect("join server thread");
   }
 
   #[test]
-  fn fetch_need_review_pull_requests_calls_expected_route_without_query_params() {
-    let body = r#"{"pullRequests":[]}"#;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
+  fn fetch_github_pull_request_filter_options_posts_expected_route_and_payload() {
+    let body = r#"{"options":{"labels":[],"authors":[],"assignees":[]}}"#;
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
     let api = make_test_api_client(base_url);
 
     let _ = api
-      .fetch_need_review_pull_requests()
-      .expect("fetch need review pull requests");
+      .fetch_github_pull_request_filter_options(&[
+        "acme/reviu".to_string(),
+        "acme/reviu-api".to_string(),
+      ])
+      .expect("fetch pull request filter options");
 
     handle.join().expect("join server thread");
-    let request_line = request_line
+    let request = request
       .lock()
-      .expect("lock request line")
+      .expect("lock request")
       .clone()
       .unwrap_or_default();
-    assert_eq!(request_line, "GET /github/pr/need-reviews HTTP/1.1");
+    assert!(
+      request.contains("POST /github/pr/filter-options "),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"repos\":[\"acme/reviu\",\"acme/reviu-api\"]"),
+      "request: {request}"
+    );
   }
 
   #[test]
@@ -4823,22 +4876,25 @@ mod tests {
   }
 
   #[test]
-  fn fetch_latest_pull_requests_returns_unauthorized_error() {
+  fn fetch_github_pull_requests_returns_unauthorized_error() {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
     let api = make_test_api_client(base_url);
+    let filters = crate::github_home_tabs::GithubPullRequestSearchFilters::default();
 
-    let err = api.fetch_latest_pull_requests().err();
+    let err = api.fetch_github_pull_requests(&filters).err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");
   }
 
   #[test]
-  fn fetch_need_review_pull_requests_returns_unauthorized_error() {
+  fn fetch_github_pull_request_filter_options_returns_unauthorized_error() {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
     let api = make_test_api_client(base_url);
 
-    let err = api.fetch_need_review_pull_requests().err();
+    let err = api
+      .fetch_github_pull_request_filter_options(&["acme/reviu".to_string()])
+      .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");
