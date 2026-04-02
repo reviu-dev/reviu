@@ -18,6 +18,7 @@ const envSchema = z.object({
   REDIS_HOST: z.string(),
   REDIS_PORT: z.coerce.number(),
   REDIS_PASSWORD: z.string(),
+  LOG_GITHUB_CACHE: z.stringbool().default(false),
   GITHUB_CACHE_ENABLED: z.stringbool().default(true),
   GITHUB_METRICS_FLUSH_INTERVAL_MS: z.coerce.number().positive(),
   GITHUB_METRICS_RETENTION_DAYS: z.coerce.number().int().positive(),

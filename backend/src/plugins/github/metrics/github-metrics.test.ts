@@ -47,7 +47,7 @@ describe('github metrics collector', () => {
     collector.recordCacheEvent({
       at: 120_000,
       userId: 'user-2',
-      operation: 'viewer.pull_requests.need_review',
+      operation: 'viewer.pull_requests.search',
       scope: 'viewer',
       cacheStatus: 'stale',
       ttlMs: 60_000,
@@ -58,7 +58,7 @@ describe('github metrics collector', () => {
     collector.recordGithubApiEvent({
       at: 120_100,
       userId: 'user-2',
-      operation: 'viewer.pull_requests.need_review',
+      operation: 'viewer.pull_requests.search',
       scope: 'viewer',
       route: 'GET /search/issues',
       status: 304,
@@ -203,7 +203,7 @@ describe('github metrics collector', () => {
         staleMs: 120_000,
       }),
       expect.objectContaining({
-        operation: 'viewer.pull_requests.need_review',
+        operation: 'viewer.pull_requests.search',
         scope: 'viewer',
         requests: 1,
         hits: 0,
@@ -223,7 +223,7 @@ describe('github metrics collector', () => {
         upstreamCalls: 1,
         nearLimitEvents: 1,
         lowestRemainingPct: 2 / 30,
-        lastOperation: 'viewer.pull_requests.need_review',
+        lastOperation: 'viewer.pull_requests.search',
         lastSeenAt: 120_100,
       },
       {
@@ -246,7 +246,7 @@ describe('github metrics collector', () => {
         used: 28,
         reset: 1_800,
         remainingPct: 2 / 30,
-        lastOperation: 'viewer.pull_requests.need_review',
+        lastOperation: 'viewer.pull_requests.search',
         lastRoute: 'GET /search/issues',
         lastStatus: 304,
         updatedAt: 120_100,

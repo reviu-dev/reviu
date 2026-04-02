@@ -48,3 +48,28 @@ export const mergePullRequestBodySchema = z.object({
 export const pullRequestStatusMutationBodySchema = z.object({
   pullRequestId: z.string().trim().min(1, 'Missing pull request id'),
 })
+
+const pullRequestSearchFiltersStringListSchema = z
+  .array(z.string().trim().min(1))
+  .default([])
+  .transform(values => [...new Set(values.map(value => value.trim()).filter(Boolean))])
+
+export const pullRequestSearchFiltersSchema = z.object({
+  repos: pullRequestSearchFiltersStringListSchema,
+  labels: pullRequestSearchFiltersStringListSchema,
+  authors: pullRequestSearchFiltersStringListSchema,
+  assignees: pullRequestSearchFiltersStringListSchema,
+  requested_reviewers: pullRequestSearchFiltersStringListSchema,
+  review_status: z
+    .enum(['any', 'none', 'required', 'approved', 'changes_requested'])
+    .default('any'),
+  include_drafts: z.boolean().default(true),
+})
+
+export const pullRequestSearchBodySchema = z.object({
+  filters: pullRequestSearchFiltersSchema,
+})
+
+export const pullRequestFilterOptionsBodySchema = z.object({
+  repos: pullRequestSearchFiltersStringListSchema,
+})

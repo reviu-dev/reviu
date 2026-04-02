@@ -32,18 +32,15 @@ describe('github cache policy', () => {
     })
   })
 
-  it('builds the pull request search cache policy with broad and variant tags', () => {
-    expect(createGithubPullRequestSearchCachePolicy('user-1', 'need-review')).toEqual({
-      operation: 'viewer.pull_requests.need_review',
+  it('builds the pull request search cache policy with a normalized cache key', () => {
+    expect(createGithubPullRequestSearchCachePolicy('user-1', '{"authors":["@me"]}')).toEqual({
+      operation: 'viewer.pull_requests.search',
       scope: 'viewer',
       scopeId: 'user-1',
-      resourceKey: 'search:need-review-pull-requests',
+      resourceKey: 'search:pull-requests:%7B%22authors%22%3A%5B%22%40me%22%5D%7D',
       ttlMs: 60_000,
       staleMs: 300_000,
-      tags: [
-        'viewer:user-1:pr-search',
-        'viewer:user-1:pr-search:need-review',
-      ],
+      tags: ['viewer:user-1:pr-search'],
     })
   })
 

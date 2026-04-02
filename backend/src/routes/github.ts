@@ -32,11 +32,13 @@ import type {
   GithubPullRequestCommit,
   GithubPullRequestDetails,
   GithubPullRequestFile,
+  GithubPullRequestFilterOptions,
   GithubPullRequestIssueComment,
   GithubPullRequestMergeReadiness,
   GithubPullRequestMergeResult,
   GithubPullRequestReview,
   GithubPullRequestReviewComment,
+  GithubPullRequestSearchFilters,
   GithubRepositoryBranch,
   GithubRepositoryBranchesParameters,
   GithubRepositoryDetails,
@@ -119,6 +121,8 @@ import {
   createPullRequestThreadReplyBodySchema,
   issueCommentBodySchema,
   mergePullRequestBodySchema,
+  pullRequestFilterOptionsBodySchema,
+  pullRequestSearchBodySchema,
   pullRequestStatusMutationBodySchema,
   updateDescriptionBodySchema,
   updatePullRequestCommentBodySchema,
@@ -144,6 +148,7 @@ import {
   fetchGithubPullRequestReviewsConditionally,
   fetchGithubPullRequests,
   fetchGithubPullRequestSearchGraphql,
+  fetchGithubRepositoryAssignees,
   fetchGithubRepositoryBranchesConditionally,
   fetchGithubRepositoryConditionally,
   fetchGithubRepositoryContentConditionally,
@@ -152,6 +157,7 @@ import {
   fetchGithubRepositoryIssueCommentsConditionally,
   fetchGithubRepositoryIssueConditionally,
   fetchGithubRepositoryIssuesConditionally,
+  fetchGithubRepositoryLabels,
   fetchGithubRepositoryPullRequestsGraphql,
   fetchGithubRepositoryReadmeConditionally,
   fetchGithubRepositoryTreesConditionally,
@@ -293,7 +299,153 @@ async function syncUserRepositoriesPublicVisibility(repositories: GithubUserRepo
   )
 }
 
-async function fetchPullRequestsSearchWithCache(
+function normalizeSearchValue(value: string) {
+  return value.trim()
+}
+
+function quoteGithubSearchValue(value: string) {
+  return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+}
+
+function buildGithubSearchQualifier(
+  qualifier: string,
+  value: string,
+  { quote = false }: { quote?: boolean } = {},
+) {
+  const trimmed = normalizeSearchValue(value)
+  if (!trimmed) {
+    return null
+  }
+
+  return `${qualifier}:${quote ? quoteGithubSearchValue(trimmed) : trimmed}`
+}
+
+function buildGithubSearchAnyOfGroup(qualifiers: Array<string | null>) {
+  const values = qualifiers.filter((value): value is string => Boolean(value))
+  if (values.length === 0) {
+    return null
+  }
+  if (values.length === 1) {
+    return values[0]
+  }
+  return `(${values.join(' OR ')})`
+}
+
+function buildRequestedReviewerQualifier(login: string) {
+  const trimmed = normalizeSearchValue(login)
+  if (!trimmed) {
+    return null
+  }
+
+  if (trimmed === '@me') {
+    return 'user-review-requested:@me'
+  }
+
+  return buildGithubSearchQualifier('review-requested', trimmed)
+}
+
+function normalizeRepositoryFilter(repo: string) {
+  const trimmed = repo.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const [owner, name] = trimmed.split('/')
+  if (!owner || !name) {
+    return null
+  }
+
+  return `${owner.trim()}/${name.trim()}`
+}
+
+function buildPullRequestSearchQuery(filters: GithubPullRequestSearchFilters) {
+  const parts = ['is:pr', 'state:open', 'archived:false']
+
+  const repoQualifiers = filters.repos
+    .map(repo => buildGithubSearchQualifier('repo', normalizeRepositoryFilter(repo) ?? ''))
+    .filter((value): value is string => Boolean(value))
+  if (repoQualifiers.length > 0) {
+    parts.push(...repoQualifiers)
+  }
+
+  const labelGroup = buildGithubSearchAnyOfGroup(
+    filters.labels.map(label => buildGithubSearchQualifier('label', label, { quote: true })),
+  )
+  if (labelGroup) {
+    parts.push(labelGroup)
+  }
+
+  const authorGroup = buildGithubSearchAnyOfGroup(
+    filters.authors.map(author => buildGithubSearchQualifier('author', author)),
+  )
+  if (authorGroup) {
+    parts.push(authorGroup)
+  }
+
+  const assigneeGroup = buildGithubSearchAnyOfGroup(
+    filters.assignees.map(assignee => buildGithubSearchQualifier('assignee', assignee)),
+  )
+  if (assigneeGroup) {
+    parts.push(assigneeGroup)
+  }
+
+  const requestedReviewerGroup = buildGithubSearchAnyOfGroup(
+    filters.requested_reviewers.map(login => buildRequestedReviewerQualifier(login)),
+  )
+  if (requestedReviewerGroup) {
+    parts.push(requestedReviewerGroup)
+  }
+
+  if (filters.review_status !== 'any') {
+    parts.push(`review:${filters.review_status}`)
+  }
+
+  if (!filters.include_drafts) {
+    parts.push('draft:false')
+  }
+
+  parts.push('sort:updated-desc')
+
+  return parts.join(' ')
+}
+
+function normalizePullRequestSearchCacheKey(filters: GithubPullRequestSearchFilters) {
+  return JSON.stringify({
+    repos: [...filters.repos].sort(),
+    labels: [...filters.labels].sort(),
+    authors: [...filters.authors].sort(),
+    assignees: [...filters.assignees].sort(),
+    requested_reviewers: [...filters.requested_reviewers].sort(),
+    review_status: filters.review_status,
+    include_drafts: filters.include_drafts,
+  })
+}
+
+function makeFilterOptionUser(
+  login: string,
+  avatarUrl: string | null | undefined,
+) {
+  return {
+    login,
+    avatar_url: avatarUrl ?? null,
+  }
+}
+
+function dedupeFilterOptionUsers(
+  users: Array<{ login: string, avatar_url: string | null }>,
+) {
+  const seen = new Set<string>()
+  return users.filter((user) => {
+    const key = user.login.trim().toLowerCase()
+    if (!key || seen.has(key)) {
+      return false
+    }
+    seen.add(key)
+    return true
+  })
+}
+
+async function oldFetchPullRequestsSearchWithCache(
   userId: string,
   githubToken: string,
   variant: 'latest' | 'need-review',
@@ -316,6 +468,129 @@ async function fetchPullRequestsSearchWithCache(
         }
       },
     }))
+}
+
+async function fetchPullRequestsSearchWithCache(
+  userId: string,
+  githubToken: string,
+  filters: GithubPullRequestSearchFilters,
+) {
+  const query = buildPullRequestSearchQuery(filters)
+  const cachePolicy = createGithubPullRequestSearchCachePolicy(
+    userId,
+    normalizePullRequestSearchCacheKey(filters),
+  )
+
+  return withGithubMetrics(userId, cachePolicy.operation, () =>
+    githubCache.getOrLoad({
+      ...cachePolicy,
+      load: async () => {
+        const nodes = await fetchGithubPullRequestSearchGraphql({
+          token: githubToken,
+          query,
+          limit: LATEST_PULL_REQUESTS_LIMIT,
+        })
+
+        return {
+          payload: nodes.map(node => mapGithubGraphqlPullRequest(node).pullRequest),
+        }
+      },
+    }))
+}
+
+async function fetchPullRequestFilterOptions(
+  githubToken: string,
+  repos: string[],
+): Promise<GithubPullRequestFilterOptions> {
+  const normalizedRepos = [...new Set(repos.map(repo => normalizeRepositoryFilter(repo)).filter(Boolean))] as string[]
+
+  if (normalizedRepos.length === 0) {
+    return {
+      labels: [],
+      authors: [],
+      assignees: [],
+    }
+  }
+
+  const repositoryEntries = normalizedRepos.map((fullName) => {
+    const [owner, repo] = fullName.split('/')
+    return { owner, repo }
+  })
+
+  const [labelsResults, assigneesResults, authorNodes] = await Promise.all([
+    Promise.allSettled(
+      repositoryEntries.map(({ owner, repo }) =>
+        fetchGithubRepositoryLabels({
+          token: githubToken,
+          params: {
+            owner,
+            repo,
+            per_page: 100,
+          },
+        })),
+    ),
+    Promise.allSettled(
+      repositoryEntries.map(({ owner, repo }) =>
+        fetchGithubRepositoryAssignees({
+          token: githubToken,
+          params: {
+            owner,
+            repo,
+            per_page: 100,
+          },
+        })),
+    ),
+    fetchGithubPullRequestSearchGraphql({
+      token: githubToken,
+      query: buildPullRequestSearchQuery({
+        repos: normalizedRepos,
+        labels: [],
+        authors: [],
+        assignees: [],
+        requested_reviewers: [],
+        review_status: 'any',
+        include_drafts: true,
+      }),
+      limit: 50,
+    }).catch(() => []),
+  ])
+
+  const labels = labelsResults
+    .flatMap((result) => {
+      if (result.status !== 'fulfilled') {
+        return []
+      }
+      return result.value
+        .flatMap(label => (typeof label.name === 'string' && label.name.trim() ? [{ name: label.name.trim() }] : []))
+    })
+    .filter((label, index, array) =>
+      array.findIndex(candidate => candidate.name.toLowerCase() === label.name.toLowerCase()) === index)
+    .sort((a, b) => a.name.localeCompare(b.name))
+
+  const assignees = dedupeFilterOptionUsers(
+    assigneesResults.flatMap((result) => {
+      if (result.status !== 'fulfilled') {
+        return []
+      }
+      return result.value.flatMap(user =>
+        typeof user.login === 'string' && user.login.trim()
+          ? [makeFilterOptionUser(user.login.trim(), user.avatar_url)]
+          : [])
+    }),
+  ).sort((a, b) => a.login.localeCompare(b.login))
+
+  const authors = dedupeFilterOptionUsers(
+    authorNodes.flatMap(node =>
+      typeof node.author?.login === 'string' && node.author.login.trim()
+        ? [makeFilterOptionUser(node.author.login.trim(), node.author.avatarUrl ?? null)]
+        : []),
+  ).sort((a, b) => a.login.localeCompare(b.login))
+
+  return {
+    labels,
+    authors,
+    assignees,
+  }
 }
 
 async function fetchNotificationsWithCache(
@@ -1581,7 +1856,7 @@ export const githubRoutes = githubRouter
     const user = ctx.get('user')!
     const githubToken = user.github.accessToken
     try {
-      const result = await fetchPullRequestsSearchWithCache(
+      const result = await oldFetchPullRequestsSearchWithCache(
         user.id,
         githubToken,
         'latest',
@@ -1599,7 +1874,7 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const result = await fetchPullRequestsSearchWithCache(
+      const result = await oldFetchPullRequestsSearchWithCache(
         user.id,
         githubToken,
         'need-review',
@@ -1607,6 +1882,43 @@ export const githubRoutes = githubRouter
       )
       setGithubCacheHeaders(ctx, result)
       return ctx.json({ pullRequests: result.payload }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/search', zValidator(
+    'json',
+    pullRequestSearchBodySchema,
+  ), async (ctx) => {
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+    const { filters } = ctx.req.valid('json')
+    try {
+      const result = await fetchPullRequestsSearchWithCache(
+        user.id,
+        githubToken,
+        filters,
+      )
+      setGithubCacheHeaders(ctx, result)
+      return ctx.json({ pullRequests: result.payload }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/filter-options', zValidator(
+    'json',
+    pullRequestFilterOptionsBodySchema,
+  ), async (ctx) => {
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+    const { repos } = ctx.req.valid('json')
+
+    try {
+      const options = await withGithubMetrics(user.id, 'viewer.pull_requests.filter_options', () =>
+        fetchPullRequestFilterOptions(githubToken, repos))
+      return ctx.json({ options }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)

@@ -8,10 +8,15 @@ use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, StyledExt as _,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
+  checkbox::Checkbox,
+  dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
   h_flex,
+  input::InputEvent,
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   scroll::ScrollableElement,
+  select::{Select, SelectEvent, SelectState},
+  spinner::Spinner,
   tab::{Tab, TabBar},
   tag::Tag,
   v_flex,
@@ -25,9 +30,9 @@ use crate::notification_count::NotificationCountStore;
 use time::OffsetDateTime;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage,
-  DETAILS_PAGE_CONTAINER_MAX_WIDTH, PAGE_HEADER_HEIGHT, SelectableRowStyle, StatusTag,
-  StatusThemeExt, UiIconName, WindowExt, selectable_list_item,
+  CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
+  DETAILS_PAGE_CONTAINER_MAX_WIDTH, Input, InputState, PAGE_HEADER_HEIGHT, SelectableRowStyle,
+  StatusTag, StatusThemeExt, UiIconName, WindowExt, selectable_list_item,
 };
 
 #[cfg(test)]
@@ -39,6 +44,12 @@ use crate::{
   billing_page::{ReviuProCheckoutCta, reviu_pro_checkout_button},
   config::ConfigStore,
   date_format::format_relative_time,
+  github_home_tabs::{
+    GithubHomePullRequestTab, GithubPullRequestFilterOptionLabel,
+    GithubPullRequestFilterOptionUser, GithubPullRequestFilterOptions,
+    GithubPullRequestReviewStatus, GithubPullRequestSearchFilters,
+    generate_github_home_pull_request_tab_id, normalize_github_home_pull_request_tab,
+  },
   github_navigation::{open_pr_target, open_repo_target},
   github_pr_details_page::GithubPrDetailsPageHandle,
   github_shared,
@@ -128,31 +139,133 @@ fn build_pull_request_sections(rows: &[Rc<GithubPullRequestRow>]) -> Vec<GithubP
   sections
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GithubPullRequestTab {
-  MyOpen,
-  NeedReview,
+#[derive(Clone, Debug)]
+struct GithubPullRequestTabState {
+  tab: GithubHomePullRequestTab,
+  rows: Vec<Rc<GithubPullRequestRow>>,
+  loading: bool,
+  error: Option<SharedString>,
+  loaded_once: bool,
 }
 
-impl GithubPullRequestTab {
-  fn as_index(&self) -> usize {
-    match self {
-      GithubPullRequestTab::MyOpen => 0,
-      GithubPullRequestTab::NeedReview => 1,
+impl GithubPullRequestTabState {
+  fn new(tab: GithubHomePullRequestTab) -> Self {
+    Self {
+      tab,
+      rows: Vec::new(),
+      loading: false,
+      error: None,
+      loaded_once: false,
     }
   }
+}
 
-  fn from_index(index: usize) -> Option<Self> {
-    match index {
-      0 => Some(GithubPullRequestTab::MyOpen),
-      1 => Some(GithubPullRequestTab::NeedReview),
-      _ => None,
-    }
+fn make_pull_request_tab_states(
+  tabs: Vec<GithubHomePullRequestTab>,
+) -> Vec<GithubPullRequestTabState> {
+  tabs
+    .into_iter()
+    .map(GithubPullRequestTabState::new)
+    .collect()
+}
+
+const GITHUB_HOME_MANAGE_TABS_ID: &str = "github-home-manage-tabs";
+
+fn pull_request_review_status_select_items() -> Vec<String> {
+  vec![
+    "Any review state".to_string(),
+    "Review required".to_string(),
+    "Approved".to_string(),
+    "Changes requested".to_string(),
+    "No review".to_string(),
+  ]
+}
+
+fn pull_request_review_status_label(status: GithubPullRequestReviewStatus) -> &'static str {
+  match status {
+    GithubPullRequestReviewStatus::Any => "Any review state",
+    GithubPullRequestReviewStatus::None => "No review",
+    GithubPullRequestReviewStatus::Required => "Review required",
+    GithubPullRequestReviewStatus::Approved => "Approved",
+    GithubPullRequestReviewStatus::ChangesRequested => "Changes requested",
+  }
+}
+
+fn pull_request_review_status_from_label(label: &str) -> GithubPullRequestReviewStatus {
+  match label {
+    "Review required" => GithubPullRequestReviewStatus::Required,
+    "Approved" => GithubPullRequestReviewStatus::Approved,
+    "Changes requested" => GithubPullRequestReviewStatus::ChangesRequested,
+    "No review" => GithubPullRequestReviewStatus::None,
+    _ => GithubPullRequestReviewStatus::Any,
+  }
+}
+
+fn format_tab_filter_count(count: usize, singular: &str, plural: &str) -> String {
+  if count == 1 {
+    format!("1 {singular}")
+  } else {
+    format!("{count} {plural}")
+  }
+}
+
+fn pull_request_tab_filter_summary(filters: &GithubPullRequestSearchFilters) -> String {
+  let mut parts = Vec::new();
+
+  if !filters.repos.is_empty() {
+    parts.push(format_tab_filter_count(
+      filters.repos.len(),
+      "repo",
+      "repos",
+    ));
+  }
+  if !filters.labels.is_empty() {
+    parts.push(format_tab_filter_count(
+      filters.labels.len(),
+      "label",
+      "labels",
+    ));
+  }
+  if !filters.authors.is_empty() {
+    parts.push(format_tab_filter_count(
+      filters.authors.len(),
+      "author",
+      "authors",
+    ));
+  }
+  if !filters.assignees.is_empty() {
+    parts.push(format_tab_filter_count(
+      filters.assignees.len(),
+      "assignee",
+      "assignees",
+    ));
+  }
+  if !filters.requested_reviewers.is_empty() {
+    parts.push(format_tab_filter_count(
+      filters.requested_reviewers.len(),
+      "reviewer",
+      "reviewers",
+    ));
+  }
+  if filters.review_status != GithubPullRequestReviewStatus::Any {
+    parts.push(pull_request_review_status_label(filters.review_status).to_string());
+  }
+  if !filters.include_drafts {
+    parts.push("Drafts hidden".to_string());
   }
 
-  fn shows_pull_request_author(&self) -> bool {
-    !matches!(self, GithubPullRequestTab::MyOpen)
+  if parts.is_empty() {
+    return "All open pull requests".to_string();
   }
+
+  parts.join(" · ")
+}
+
+fn pull_request_tab_delete_confirmation(tab_name: &str) -> (SharedString, SharedString) {
+  (
+    "Delete pull request list?".into(),
+    format!("Delete \"{tab_name}\" from your saved GitHub home tabs?").into(),
+  )
 }
 
 /// Extracts the trailing number from a GitHub API URL.
@@ -858,9 +971,8 @@ pub struct GithubPage {
   repositories: Entity<ListState<GithubRepositoryListDelegate>>,
   notifications: Entity<ListState<GithubNotificationListDelegate>>,
   pull_requests: Entity<ListState<GithubPullRequestListDelegate>>,
-  my_open_pull_request_rows: Vec<Rc<GithubPullRequestRow>>,
-  need_review_pull_request_rows: Vec<Rc<GithubPullRequestRow>>,
-  active_pull_request_tab: GithubPullRequestTab,
+  pull_request_tabs: Vec<GithubPullRequestTabState>,
+  active_pull_request_tab_id: Option<String>,
   load_task: Option<Task<()>>,
   repositories_task: Option<Task<()>>,
   notifications_task: Option<Task<()>>,
@@ -926,6 +1038,908 @@ impl GithubPageHandle {
   }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GithubPullRequestTabDialogMode {
+  Create,
+  Edit,
+}
+
+struct GithubPullRequestTabDialog {
+  api: ApiClient,
+  window_handle: gpui::AnyWindowHandle,
+  github_page: gpui::WeakEntity<GithubPage>,
+  mode: GithubPullRequestTabDialogMode,
+  original_tab_id: Option<String>,
+  name_input: Entity<InputState>,
+  repo_input: Entity<InputState>,
+  label_input: Entity<InputState>,
+  author_input: Entity<InputState>,
+  assignee_input: Entity<InputState>,
+  requested_reviewer_input: Entity<InputState>,
+  review_status_select: Entity<SelectState<Vec<String>>>,
+  available_repositories: Vec<GithubUserRepository>,
+  filter_options: GithubPullRequestFilterOptions,
+  selected_repos: Vec<String>,
+  selected_labels: Vec<String>,
+  selected_authors: Vec<String>,
+  selected_assignees: Vec<String>,
+  selected_requested_reviewers: Vec<String>,
+  include_drafts: bool,
+  filter_options_loading: bool,
+  filter_options_task: Option<Task<()>>,
+  submit_loading: bool,
+  submit_task: Option<Task<()>>,
+  validation_error: Option<SharedString>,
+  _subscriptions: Vec<Subscription>,
+}
+
+fn filter_tokens_contains(values: &[String], candidate: &str) -> bool {
+  values
+    .iter()
+    .any(|value| value.eq_ignore_ascii_case(candidate))
+}
+
+fn push_filter_token(values: &mut Vec<String>, raw_value: &str) -> bool {
+  let Some(value) = github_shared::normalize_non_empty_text(raw_value) else {
+    return false;
+  };
+  if filter_tokens_contains(values, &value) {
+    return false;
+  }
+  values.push(value);
+  true
+}
+
+fn remove_filter_token(values: &mut Vec<String>, raw_value: &str) {
+  values.retain(|value| !value.eq_ignore_ascii_case(raw_value));
+}
+
+fn matching_filter_option_labels(
+  options: &[GithubPullRequestFilterOptionLabel],
+  query: &str,
+  selected: &[String],
+) -> Vec<String> {
+  let query = query.trim().to_lowercase();
+  options
+    .iter()
+    .filter(|option| !filter_tokens_contains(selected, &option.name))
+    .filter(|option| query.is_empty() || option.name.to_lowercase().contains(&query))
+    .map(|option| option.name.clone())
+    .take(6)
+    .collect()
+}
+
+fn matching_filter_option_users(
+  options: &[GithubPullRequestFilterOptionUser],
+  query: &str,
+  selected: &[String],
+) -> Vec<GithubPullRequestFilterOptionUser> {
+  let query = query.trim().to_lowercase();
+  options
+    .iter()
+    .filter(|option| !filter_tokens_contains(selected, &option.login))
+    .filter(|option| query.is_empty() || option.login.to_lowercase().contains(&query))
+    .take(6)
+    .cloned()
+    .collect()
+}
+
+fn filter_option_users_contains(
+  options: &[GithubPullRequestFilterOptionUser],
+  candidate: &str,
+) -> bool {
+  options
+    .iter()
+    .any(|option| option.login.eq_ignore_ascii_case(candidate))
+}
+
+const CURRENT_USER_PULL_REQUEST_FILTER: &str = "@me";
+
+fn current_user_filter_option() -> GithubPullRequestFilterOptionUser {
+  GithubPullRequestFilterOptionUser {
+    login: CURRENT_USER_PULL_REQUEST_FILTER.to_string(),
+    avatar_url: None,
+  }
+}
+
+fn matching_user_filter_suggestions(
+  options: &[GithubPullRequestFilterOptionUser],
+  query: &str,
+  selected: &[String],
+  include_current_user_fallback: bool,
+) -> Vec<GithubPullRequestFilterOptionUser> {
+  let mut suggestions = Vec::new();
+  let normalized_query = query.trim().to_lowercase();
+
+  if include_current_user_fallback
+    && !filter_tokens_contains(selected, CURRENT_USER_PULL_REQUEST_FILTER)
+    && (normalized_query.is_empty()
+      || CURRENT_USER_PULL_REQUEST_FILTER.contains(normalized_query.as_str()))
+  {
+    suggestions.push(current_user_filter_option());
+  }
+
+  for option in matching_filter_option_users(options, query, selected) {
+    if filter_option_users_contains(&suggestions, &option.login) {
+      continue;
+    }
+    suggestions.push(option);
+    if suggestions.len() == 6 {
+      break;
+    }
+  }
+
+  suggestions
+}
+
+impl GithubPullRequestTabDialog {
+  fn new(
+    api: ApiClient,
+    window_handle: gpui::AnyWindowHandle,
+    github_page: gpui::WeakEntity<GithubPage>,
+    mode: GithubPullRequestTabDialogMode,
+    initial_tab: Option<GithubHomePullRequestTab>,
+    available_repositories: Vec<GithubUserRepository>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Self {
+    let review_status_select =
+      cx.new(|cx| SelectState::new(pull_request_review_status_select_items(), None, window, cx));
+
+    let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("List name"));
+    let repo_input = cx.new(|cx| InputState::new(window, cx).placeholder("Add repositories..."));
+    let label_input = cx.new(|cx| InputState::new(window, cx).placeholder("Add labels..."));
+    let author_input = cx.new(|cx| InputState::new(window, cx).placeholder("Add authors..."));
+    let assignee_input = cx.new(|cx| InputState::new(window, cx).placeholder("Add assignees..."));
+    let requested_reviewer_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Add requested reviewers..."));
+
+    let mut subscriptions = vec![
+      cx.subscribe_in(&repo_input, window, Self::on_repo_input_event),
+      cx.subscribe_in(&label_input, window, Self::on_label_input_event),
+      cx.subscribe_in(&author_input, window, Self::on_author_input_event),
+      cx.subscribe_in(&assignee_input, window, Self::on_assignee_input_event),
+      cx.subscribe_in(
+        &requested_reviewer_input,
+        window,
+        Self::on_requested_reviewer_input_event,
+      ),
+      cx.subscribe_in(
+        &review_status_select,
+        window,
+        |this, _, _: &SelectEvent<Vec<String>>, _, cx| {
+          cx.notify();
+          let _ = this;
+        },
+      ),
+    ];
+
+    subscriptions.push(
+      cx.subscribe_in(&name_input, window, |_, _, _: &InputEvent, _, cx| {
+        cx.notify();
+      }),
+    );
+
+    let mut this = Self {
+      api,
+      window_handle,
+      github_page,
+      mode,
+      original_tab_id: initial_tab.as_ref().map(|tab| tab.id.clone()),
+      name_input,
+      repo_input,
+      label_input,
+      author_input,
+      assignee_input,
+      requested_reviewer_input,
+      review_status_select,
+      available_repositories,
+      filter_options: GithubPullRequestFilterOptions::default(),
+      selected_repos: initial_tab
+        .as_ref()
+        .map(|tab| tab.filters.repos.clone())
+        .unwrap_or_default(),
+      selected_labels: initial_tab
+        .as_ref()
+        .map(|tab| tab.filters.labels.clone())
+        .unwrap_or_default(),
+      selected_authors: initial_tab
+        .as_ref()
+        .map(|tab| tab.filters.authors.clone())
+        .unwrap_or_default(),
+      selected_assignees: initial_tab
+        .as_ref()
+        .map(|tab| tab.filters.assignees.clone())
+        .unwrap_or_default(),
+      selected_requested_reviewers: initial_tab
+        .as_ref()
+        .map(|tab| tab.filters.requested_reviewers.clone())
+        .unwrap_or_default(),
+      include_drafts: initial_tab
+        .as_ref()
+        .map(|tab| tab.filters.include_drafts)
+        .unwrap_or(true),
+      filter_options_loading: false,
+      filter_options_task: None,
+      submit_loading: false,
+      submit_task: None,
+      validation_error: None,
+      _subscriptions: subscriptions,
+    };
+
+    if let Some(tab) = initial_tab {
+      this.name_input.update(cx, |input, cx| {
+        input.set_value(tab.name, window, cx);
+      });
+      this.review_status_select.update(cx, |state, cx| {
+        state.set_selected_value(
+          &pull_request_review_status_label(tab.filters.review_status).to_string(),
+          window,
+          cx,
+        );
+      });
+    } else {
+      this.review_status_select.update(cx, |state, cx| {
+        state.set_selected_value(
+          &pull_request_review_status_label(GithubPullRequestReviewStatus::Any).to_string(),
+          window,
+          cx,
+        );
+      });
+    }
+
+    if !this.selected_repos.is_empty() {
+      this.refresh_filter_options(cx);
+    }
+
+    this
+  }
+
+  fn title(&self) -> &'static str {
+    match self.mode {
+      GithubPullRequestTabDialogMode::Create => "Create Pull Request List",
+      GithubPullRequestTabDialogMode::Edit => "Edit Pull Request List",
+    }
+  }
+
+  fn submit_label(&self) -> &'static str {
+    match self.mode {
+      GithubPullRequestTabDialogMode::Create => "Create list",
+      GithubPullRequestTabDialogMode::Edit => "Save changes",
+    }
+  }
+
+  fn repo_query(&self, cx: &App) -> String {
+    self.repo_input.read(cx).value().trim().to_string()
+  }
+
+  fn label_query(&self, cx: &App) -> String {
+    self.label_input.read(cx).value().trim().to_string()
+  }
+
+  fn author_query(&self, cx: &App) -> String {
+    self.author_input.read(cx).value().trim().to_string()
+  }
+
+  fn assignee_query(&self, cx: &App) -> String {
+    self.assignee_input.read(cx).value().trim().to_string()
+  }
+
+  fn requested_reviewer_query(&self, cx: &App) -> String {
+    self
+      .requested_reviewer_input
+      .read(cx)
+      .value()
+      .trim()
+      .to_string()
+  }
+
+  fn matching_repo_suggestions(&self, cx: &App) -> Vec<String> {
+    let query = self.repo_query(cx).to_lowercase();
+    self
+      .available_repositories
+      .iter()
+      .map(|repo| repo.full_name.clone())
+      .filter(|full_name| !filter_tokens_contains(&self.selected_repos, full_name))
+      .filter(|full_name| query.is_empty() || full_name.to_lowercase().contains(&query))
+      .take(6)
+      .collect()
+  }
+
+  fn clear_input(input: &Entity<InputState>, window: &mut Window, cx: &mut Context<Self>) {
+    input.update(cx, |input, cx| input.set_value("", window, cx));
+  }
+
+  fn add_repo_value(&mut self, raw_value: &str, window: &mut Window, cx: &mut Context<Self>) {
+    if push_filter_token(&mut self.selected_repos, raw_value) {
+      Self::clear_input(&self.repo_input, window, cx);
+      self.refresh_filter_options(cx);
+      cx.notify();
+    }
+  }
+
+  fn add_label_value(&mut self, raw_value: &str, window: &mut Window, cx: &mut Context<Self>) {
+    if push_filter_token(&mut self.selected_labels, raw_value) {
+      Self::clear_input(&self.label_input, window, cx);
+      cx.notify();
+    }
+  }
+
+  fn add_author_value(&mut self, raw_value: &str, window: &mut Window, cx: &mut Context<Self>) {
+    if push_filter_token(&mut self.selected_authors, raw_value) {
+      Self::clear_input(&self.author_input, window, cx);
+      cx.notify();
+    }
+  }
+
+  fn add_assignee_value(&mut self, raw_value: &str, window: &mut Window, cx: &mut Context<Self>) {
+    if push_filter_token(&mut self.selected_assignees, raw_value) {
+      Self::clear_input(&self.assignee_input, window, cx);
+      cx.notify();
+    }
+  }
+
+  fn add_requested_reviewer_value(
+    &mut self,
+    raw_value: &str,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if push_filter_token(&mut self.selected_requested_reviewers, raw_value) {
+      Self::clear_input(&self.requested_reviewer_input, window, cx);
+      cx.notify();
+    }
+  }
+
+  fn remove_repo(&mut self, full_name: &str, cx: &mut Context<Self>) {
+    remove_filter_token(&mut self.selected_repos, full_name);
+    self.refresh_filter_options(cx);
+    cx.notify();
+  }
+
+  fn remove_label(&mut self, label: &str, cx: &mut Context<Self>) {
+    remove_filter_token(&mut self.selected_labels, label);
+    cx.notify();
+  }
+
+  fn remove_author(&mut self, login: &str, cx: &mut Context<Self>) {
+    remove_filter_token(&mut self.selected_authors, login);
+    cx.notify();
+  }
+
+  fn remove_assignee(&mut self, login: &str, cx: &mut Context<Self>) {
+    remove_filter_token(&mut self.selected_assignees, login);
+    cx.notify();
+  }
+
+  fn remove_requested_reviewer(&mut self, login: &str, cx: &mut Context<Self>) {
+    remove_filter_token(&mut self.selected_requested_reviewers, login);
+    cx.notify();
+  }
+
+  fn refresh_filter_options(&mut self, cx: &mut Context<Self>) {
+    if self.selected_repos.is_empty() {
+      self.filter_options = GithubPullRequestFilterOptions::default();
+      self.filter_options_loading = false;
+      cx.notify();
+      return;
+    }
+
+    self.filter_options_loading = true;
+    let api = self.api.clone();
+    let repos = self.selected_repos.clone();
+    let window_handle = self.window_handle;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.fetch_github_pull_request_filter_options(&repos)).await;
+
+      let _ = cx.update_window(window_handle, |_, _, cx| {
+        let _ = this.update(cx, |this, cx| {
+          this.filter_options_loading = false;
+          if let Ok(options) = result {
+            this.filter_options = options;
+          }
+          cx.notify();
+        });
+      });
+    });
+
+    self.filter_options_task = Some(task);
+    cx.notify();
+  }
+
+  fn review_status(&self, cx: &App) -> GithubPullRequestReviewStatus {
+    self
+      .review_status_select
+      .read(cx)
+      .selected_value()
+      .map(|value| pull_request_review_status_from_label(value.as_str()))
+      .unwrap_or_default()
+  }
+
+  fn build_tab(&self, cx: &App) -> Option<GithubHomePullRequestTab> {
+    let name = github_shared::normalize_non_empty_text(self.name_input.read(cx).value().as_str())?;
+    let id = self
+      .original_tab_id
+      .clone()
+      .unwrap_or_else(generate_github_home_pull_request_tab_id);
+    Some(normalize_github_home_pull_request_tab(
+      &GithubHomePullRequestTab {
+        id,
+        name,
+        filters: GithubPullRequestSearchFilters {
+          repos: self.selected_repos.clone(),
+          labels: self.selected_labels.clone(),
+          authors: self.selected_authors.clone(),
+          assignees: self.selected_assignees.clone(),
+          requested_reviewers: self.selected_requested_reviewers.clone(),
+          review_status: self.review_status(cx),
+          include_drafts: self.include_drafts,
+        },
+      },
+    ))
+  }
+
+  fn on_repo_input_event(
+    &mut self,
+    state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    match event {
+      InputEvent::Change => cx.notify(),
+      InputEvent::PressEnter { .. } => {
+        let query = state.read(cx).value().to_string();
+        let suggestion = self.matching_repo_suggestions(cx).into_iter().next();
+        self.add_repo_value(suggestion.as_deref().unwrap_or(query.as_str()), window, cx);
+      }
+      _ => {}
+    }
+  }
+
+  fn on_label_input_event(
+    &mut self,
+    state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    match event {
+      InputEvent::Change => cx.notify(),
+      InputEvent::PressEnter { .. } => {
+        self.add_label_value(state.read(cx).value().as_str(), window, cx);
+      }
+      _ => {}
+    }
+  }
+
+  fn on_author_input_event(
+    &mut self,
+    state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    match event {
+      InputEvent::Change => cx.notify(),
+      InputEvent::PressEnter { .. } => {
+        self.add_author_value(state.read(cx).value().as_str(), window, cx);
+      }
+      _ => {}
+    }
+  }
+
+  fn on_assignee_input_event(
+    &mut self,
+    state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    match event {
+      InputEvent::Change => cx.notify(),
+      InputEvent::PressEnter { .. } => {
+        self.add_assignee_value(state.read(cx).value().as_str(), window, cx);
+      }
+      _ => {}
+    }
+  }
+
+  fn on_requested_reviewer_input_event(
+    &mut self,
+    state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    match event {
+      InputEvent::Change => cx.notify(),
+      InputEvent::PressEnter { .. } => {
+        self.add_requested_reviewer_value(state.read(cx).value().as_str(), window, cx);
+      }
+      _ => {}
+    }
+  }
+
+  fn submit_action(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    if self.submit_loading {
+      return;
+    }
+
+    let Some(tab) = self.build_tab(cx) else {
+      self.validation_error = Some("List name is required.".into());
+      cx.notify();
+      return;
+    };
+
+    self.validation_error = None;
+    self.submit_loading = true;
+    let github_page = self.github_page.clone();
+    let original_tab_id = self.original_tab_id.clone();
+    let window_handle = self.window_handle;
+
+    let task = cx.spawn(async move |this, cx| {
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        let _ = github_page.update(cx, |github_page, cx| {
+          github_page.save_pull_request_tab(tab.clone(), original_tab_id.clone(), cx);
+        });
+        let _ = this.update(cx, |this, cx| {
+          this.submit_loading = false;
+          cx.notify();
+        });
+        window.close_dialog(cx);
+      });
+    });
+
+    self.submit_task = Some(task);
+    cx.notify();
+  }
+
+  fn toggle_include_drafts(&mut self, checked: bool, _: &mut Window, cx: &mut Context<Self>) {
+    self.include_drafts = checked;
+    cx.notify();
+  }
+
+  fn render_token_row(
+    id_prefix: &'static str,
+    values: &[String],
+    on_remove: impl Fn(String, &mut Window, &mut App) + Clone + 'static,
+  ) -> impl IntoElement {
+    h_flex()
+      .gap_1()
+      .flex_wrap()
+      .children(values.iter().cloned().map(move |value| {
+        let on_remove = on_remove.clone();
+        h_flex()
+          .items_center()
+          .gap_1()
+          .px_2()
+          .py_1()
+          .rounded_full()
+          .child(div().text_sm().child(value.clone()))
+          .child(
+            Button::new(format!("{id_prefix}-remove-{}", value))
+              .ghost()
+              .xsmall()
+              .compact()
+              .icon(IconName::Close)
+              .on_click(move |_, window, cx| {
+                on_remove(value.clone(), window, cx);
+              }),
+          )
+      }))
+  }
+}
+
+impl Focusable for GithubPullRequestTabDialog {
+  fn focus_handle(&self, cx: &App) -> FocusHandle {
+    self.name_input.read(cx).focus_handle(cx)
+  }
+}
+
+impl Render for GithubPullRequestTabDialog {
+  fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let repo_suggestions = self.matching_repo_suggestions(cx);
+    let label_suggestions = matching_filter_option_labels(
+      &self.filter_options.labels,
+      &self.label_query(cx),
+      &self.selected_labels,
+    );
+    let author_suggestions = matching_user_filter_suggestions(
+      &self.filter_options.authors,
+      &self.author_query(cx),
+      &self.selected_authors,
+      true,
+    );
+    let assignee_suggestions = matching_user_filter_suggestions(
+      &self.filter_options.assignees,
+      &self.assignee_query(cx),
+      &self.selected_assignees,
+      true,
+    );
+    let reviewer_suggestions = matching_user_filter_suggestions(
+      &self.filter_options.assignees,
+      &self.requested_reviewer_query(cx),
+      &self.selected_requested_reviewers,
+      true,
+    );
+    let needs_repos = self.selected_repos.is_empty();
+
+    div()
+      .id("github-home-pull-request-tab-dialog")
+      .flex()
+      .flex_col()
+      .child(
+        DialogHeader::new()
+          .p_4()
+          .child(DialogTitle::new().child(self.title()))
+          .child(
+            DialogDescription::new()
+              .child("Save a pull request list with reusable GitHub filters."),
+          ),
+      )
+      .child(
+        v_flex()
+          .px_4()
+          .pb_4()
+          .gap_3()
+          .child(
+            v_flex()
+              .gap_1()
+              .child(div().text_sm().child("Name"))
+              .child(Input::new(&self.name_input).w_full()),
+          )
+          .child(
+            v_flex()
+              .gap_1()
+              .child(div().text_sm().child("Repositories"))
+              .when(!self.selected_repos.is_empty(), |this| {
+                this.child(Self::render_token_row(
+                  "github-tab-repo",
+                  &self.selected_repos,
+                  {
+                    let view = cx.entity().clone();
+                    move |value, _, cx| {
+                      view.update(cx, |this, cx| {
+                        this.remove_repo(&value, cx);
+                      });
+                    }
+                  },
+                ))
+              })
+              .child(Input::new(&self.repo_input).w_full())
+              .when(!repo_suggestions.is_empty(), |this| {
+                this.child(
+                  h_flex()
+                    .gap_1()
+                    .flex_wrap()
+                    .children(repo_suggestions.into_iter().map(|repo| {
+                      Button::new(format!("github-tab-repo-suggestion-{repo}"))
+                        .label(repo.clone())
+                        .xsmall()
+                        .outline()
+                        .on_click({
+                          let view = cx.entity().clone();
+                          move |_, window, cx| {
+                            view.update(cx, |this, cx| {
+                              this.add_repo_value(&repo, window, cx);
+                            });
+                          }
+                        })
+                    })),
+                )
+              }),
+          )
+          .child(
+            v_flex()
+              .gap_1()
+              .child(
+                h_flex()
+                  .justify_between()
+                  .items_center()
+                  .child(div().text_sm().child("Labels"))
+                  .when(self.filter_options_loading, |this| {
+                    this.child(Spinner::new().xsmall())
+                  }),
+              )
+              .when(!self.selected_labels.is_empty(), |this| {
+                this.child(Self::render_token_row(
+                  "github-tab-label",
+                  &self.selected_labels,
+                  {
+                    let view = cx.entity().clone();
+                    move |value, _, cx| {
+                      view.update(cx, |this, cx| this.remove_label(&value, cx));
+                    }
+                  },
+                ))
+              })
+              .child(Input::new(&self.label_input).w_full().disabled(needs_repos))
+              .when(needs_repos, |this| {
+                this.child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Select at least one repository to load labels."),
+                )
+              })
+              .when(!label_suggestions.is_empty(), |this| {
+                this.child(h_flex().gap_1().flex_wrap().children(
+                  label_suggestions.into_iter().map(|label| {
+                    Button::new(format!("github-tab-label-suggestion-{label}"))
+                      .label(label.clone())
+                      .xsmall()
+                      .outline()
+                      .on_click({
+                        let view = cx.entity().clone();
+                        move |_, window, cx| {
+                          view.update(cx, |this, cx| {
+                            this.add_label_value(&label, window, cx);
+                          });
+                        }
+                      })
+                  }),
+                ))
+              }),
+          )
+          .child(
+            v_flex()
+              .gap_1()
+              .child(div().text_sm().child("Authors"))
+              .when(!self.selected_authors.is_empty(), |this| {
+                this.child(Self::render_token_row(
+                  "github-tab-author",
+                  &self.selected_authors,
+                  {
+                    let view = cx.entity().clone();
+                    move |value, _, cx| {
+                      view.update(cx, |this, cx| this.remove_author(&value, cx));
+                    }
+                  },
+                ))
+              })
+              .child(Input::new(&self.author_input).w_full())
+              .when(!author_suggestions.is_empty(), |this| {
+                this.child(h_flex().gap_1().flex_wrap().children(
+                  author_suggestions.into_iter().map(|author| {
+                    Button::new(format!("github-tab-author-suggestion-{}", author.login))
+                      .label(author.login.clone())
+                      .xsmall()
+                      .outline()
+                      .on_click({
+                        let view = cx.entity().clone();
+                        move |_, window, cx| {
+                          view.update(cx, |this, cx| {
+                            this.add_author_value(&author.login, window, cx);
+                          });
+                        }
+                      })
+                  }),
+                ))
+              }),
+          )
+          .child(
+            v_flex()
+              .gap_1()
+              .child(div().text_sm().child("Assignees"))
+              .when(!self.selected_assignees.is_empty(), |this| {
+                this.child(Self::render_token_row(
+                  "github-tab-assignee",
+                  &self.selected_assignees,
+                  {
+                    let view = cx.entity().clone();
+                    move |value, _, cx| {
+                      view.update(cx, |this, cx| this.remove_assignee(&value, cx));
+                    }
+                  },
+                ))
+              })
+              .child(Input::new(&self.assignee_input).w_full())
+              .when(!assignee_suggestions.is_empty(), |this| {
+                this.child(h_flex().gap_1().flex_wrap().children(
+                  assignee_suggestions.into_iter().map(|assignee| {
+                    Button::new(format!("github-tab-assignee-suggestion-{}", assignee.login))
+                      .label(assignee.login.clone())
+                      .xsmall()
+                      .outline()
+                      .on_click({
+                        let view = cx.entity().clone();
+                        move |_, window, cx| {
+                          view.update(cx, |this, cx| {
+                            this.add_assignee_value(&assignee.login, window, cx);
+                          });
+                        }
+                      })
+                  }),
+                ))
+              }),
+          )
+          .child(
+            v_flex()
+              .gap_1()
+              .child(div().text_sm().child("Requested Reviewers"))
+              .when(!self.selected_requested_reviewers.is_empty(), |this| {
+                this.child(Self::render_token_row(
+                  "github-tab-reviewer",
+                  &self.selected_requested_reviewers,
+                  {
+                    let view = cx.entity().clone();
+                    move |value, _, cx| {
+                      view.update(cx, |this, cx| this.remove_requested_reviewer(&value, cx));
+                    }
+                  },
+                ))
+              })
+              .child(Input::new(&self.requested_reviewer_input).w_full())
+              .when(!reviewer_suggestions.is_empty(), |this| {
+                this.child(h_flex().gap_1().flex_wrap().children(
+                  reviewer_suggestions.into_iter().map(|reviewer| {
+                    Button::new(format!("github-tab-reviewer-suggestion-{}", reviewer.login))
+                      .label(reviewer.login.clone())
+                      .xsmall()
+                      .outline()
+                      .on_click({
+                        let view = cx.entity().clone();
+                        move |_, window, cx| {
+                          view.update(cx, |this, cx| {
+                            this.add_requested_reviewer_value(&reviewer.login, window, cx);
+                          });
+                        }
+                      })
+                  }),
+                ))
+              }),
+          )
+          .child(
+            v_flex()
+              .gap_1()
+              .child(div().text_sm().child("Review"))
+              .child(Select::new(&self.review_status_select).w_full()),
+          )
+          .child(
+            Checkbox::new("github-tab-include-drafts")
+              .checked(self.include_drafts)
+              .label("Include draft pull requests")
+              .on_click(cx.listener(|this, checked, window, cx| {
+                this.toggle_include_drafts(*checked, window, cx);
+              })),
+          )
+          .when(self.validation_error.is_some(), |this| {
+            this.child(
+              div()
+                .text_xs()
+                .text_color(theme.status_red())
+                .child(self.validation_error.clone().unwrap_or_default()),
+            )
+          }),
+      )
+      .child(
+        DialogFooter::new()
+          .px_4()
+          .pb_4()
+          .pt_1()
+          .justify_end()
+          .child(
+            Button::new("github-tab-cancel")
+              .label("Cancel")
+              .outline()
+              .disabled(self.submit_loading)
+              .on_click(|_, window, cx| window.close_dialog(cx)),
+          )
+          .child(
+            Button::new("github-tab-submit")
+              .label(self.submit_label())
+              .primary()
+              .loading(self.submit_loading)
+              .disabled(self.submit_loading)
+              .on_click(cx.listener(Self::submit_action)),
+          ),
+      )
+  }
+}
+
 impl GithubPage {
   fn add_github_breadcrumb(&self, message: &str, data: Map<String, Value>) {
     sentry_context::add_breadcrumb("github.page", message, data);
@@ -960,6 +1974,9 @@ impl GithubPage {
     });
     let pull_requests = cx
       .new(|cx| ListState::new(GithubPullRequestListDelegate::new(), window, cx).searchable(true));
+    let pull_request_tabs =
+      make_pull_request_tab_states(ConfigStore::load_or_seed_github_home_pull_request_tabs());
+    let active_pull_request_tab_id = pull_request_tabs.first().map(|tab| tab.tab.id.clone());
 
     let view = Self {
       focus_handle: cx.focus_handle(),
@@ -967,9 +1984,8 @@ impl GithubPage {
       repositories,
       notifications,
       pull_requests,
-      my_open_pull_request_rows: Vec::new(),
-      need_review_pull_request_rows: Vec::new(),
-      active_pull_request_tab: GithubPullRequestTab::MyOpen,
+      pull_request_tabs,
+      active_pull_request_tab_id,
       load_task: None,
       repositories_task: None,
       notifications_task: None,
@@ -1148,21 +2164,82 @@ impl GithubPage {
     self._subscriptions.push(notifications_subscription);
   }
 
+  fn active_pull_request_tab_index(&self) -> Option<usize> {
+    let active_id = self.active_pull_request_tab_id.as_ref()?;
+    self
+      .pull_request_tabs
+      .iter()
+      .position(|tab_state| &tab_state.tab.id == active_id)
+  }
+
+  fn managing_pull_request_tabs(&self) -> bool {
+    self.active_pull_request_tab_id.as_deref() == Some(GITHUB_HOME_MANAGE_TABS_ID)
+  }
+
+  fn active_pull_request_inbox_tab_index(&self) -> usize {
+    self
+      .active_pull_request_tab_index()
+      .unwrap_or(self.pull_request_tabs.len())
+  }
+
+  fn active_pull_request_tab_state(&self) -> Option<&GithubPullRequestTabState> {
+    self
+      .active_pull_request_tab_index()
+      .and_then(|index| self.pull_request_tabs.get(index))
+  }
+
+  fn active_pull_request_tab_state_mut(&mut self) -> Option<&mut GithubPullRequestTabState> {
+    let index = self.active_pull_request_tab_index()?;
+    self.pull_request_tabs.get_mut(index)
+  }
+
   fn active_pull_request_rows(&self) -> Vec<Rc<GithubPullRequestRow>> {
-    match self.active_pull_request_tab {
-      GithubPullRequestTab::MyOpen => self.my_open_pull_request_rows.clone(),
-      GithubPullRequestTab::NeedReview => self.need_review_pull_request_rows.clone(),
-    }
+    self
+      .active_pull_request_tab_state()
+      .map(|tab_state| tab_state.rows.clone())
+      .unwrap_or_default()
   }
 
   fn apply_active_pull_request_rows(&mut self, cx: &mut Context<Self>) {
     let rows = self.active_pull_request_rows();
-    let show_author = self.active_pull_request_tab.shows_pull_request_author();
     self.pull_requests.update(cx, |state, cx| {
-      state.delegate_mut().show_author = show_author;
+      state.delegate_mut().show_author = true;
       state.delegate_mut().set_rows(rows);
       cx.notify();
     });
+  }
+
+  fn ensure_active_pull_request_tab(&mut self) {
+    let has_active = self
+      .active_pull_request_tab_id
+      .as_ref()
+      .is_some_and(|active_id| {
+        active_id == GITHUB_HOME_MANAGE_TABS_ID
+          || self
+            .pull_request_tabs
+            .iter()
+            .any(|tab| &tab.tab.id == active_id)
+      });
+    if has_active {
+      return;
+    }
+    self.active_pull_request_tab_id = self
+      .pull_request_tabs
+      .first()
+      .map(|tab| tab.tab.id.clone())
+      .or_else(|| Some(GITHUB_HOME_MANAGE_TABS_ID.to_string()));
+  }
+
+  fn pull_request_tab_configs(&self) -> Vec<GithubHomePullRequestTab> {
+    self
+      .pull_request_tabs
+      .iter()
+      .map(|tab_state| tab_state.tab.clone())
+      .collect()
+  }
+
+  fn persist_pull_request_tabs(&self) {
+    ConfigStore::persist_github_home_pull_request_tabs(&self.pull_request_tab_configs());
   }
 
   fn set_active_pull_request_tab(
@@ -1171,15 +2248,443 @@ impl GithubPage {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let Some(tab) = GithubPullRequestTab::from_index(index) else {
-      return;
-    };
-    if self.active_pull_request_tab == tab {
+    if index == self.pull_request_tabs.len() {
+      if self.managing_pull_request_tabs() {
+        return;
+      }
+
+      self.active_pull_request_tab_id = Some(GITHUB_HOME_MANAGE_TABS_ID.to_string());
+      self.apply_active_pull_request_rows(cx);
+      cx.notify();
       return;
     }
 
-    self.active_pull_request_tab = tab;
+    let Some((tab_id, should_refresh)) = self.pull_request_tabs.get(index).map(|tab_state| {
+      (
+        tab_state.tab.id.clone(),
+        !tab_state.loaded_once && !tab_state.loading,
+      )
+    }) else {
+      return;
+    };
+    if self.active_pull_request_tab_id.as_deref() == Some(tab_id.as_str()) {
+      return;
+    }
+
+    self.active_pull_request_tab_id = Some(tab_id);
     self.apply_active_pull_request_rows(cx);
+    if should_refresh {
+      self.refresh_active_pull_request_tab(cx);
+    }
+    cx.notify();
+  }
+
+  fn refresh_active_pull_request_tab(&mut self, cx: &mut Context<Self>) {
+    let Some(active_tab) = self
+      .active_pull_request_tab_state()
+      .map(|tab_state| tab_state.tab.clone())
+    else {
+      self.error = None;
+      self.pull_requests.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        state.delegate_mut().set_rows(Vec::new());
+        cx.notify();
+      });
+      return;
+    };
+
+    let active_tab_id = active_tab.id.clone();
+    let active_tab_name = active_tab.name.clone();
+    let filters = active_tab.filters.clone();
+    let api = self.api.clone();
+    self.add_github_breadcrumb("Refresh pull requests started", Map::new());
+    self.error = None;
+
+    if let Some(tab_state) = self.active_pull_request_tab_state_mut() {
+      tab_state.loading = true;
+      tab_state.error = None;
+    }
+
+    self.pull_requests.update(cx, |state, cx| {
+      state.delegate_mut().loading = true;
+      cx.notify();
+    });
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.fetch_github_pull_requests(&filters))
+        .await
+        .map_err(|error| error.to_string());
+
+      let _ = this.update(cx, |this, cx| {
+        let (rows, error): (Vec<Rc<GithubPullRequestRow>>, Option<SharedString>) = match result {
+          Ok(pull_requests) => (
+            pull_requests
+              .into_iter()
+              .map(|pr| Rc::new(GithubPullRequestRow { pr: Rc::new(pr) }))
+              .collect::<Vec<_>>(),
+            None,
+          ),
+          Err(error) => (Vec::new(), Some(error.into())),
+        };
+
+        match error.as_ref() {
+          Some(error) => {
+            let mut data = Map::new();
+            data.insert("tab".into(), active_tab_name.clone().into());
+            this.add_github_breadcrumb("Refresh pull requests failed", data.clone());
+            this.record_github_error("github.pull_requests.refresh", error.as_ref(), data);
+          }
+          None => {
+            let mut data = Map::new();
+            data.insert("tab".into(), active_tab_name.into());
+            data.insert("count".into(), rows.len().into());
+            this.add_github_breadcrumb("Refresh pull requests succeeded", data);
+          }
+        }
+
+        if let Some(tab_state) = this
+          .pull_request_tabs
+          .iter_mut()
+          .find(|tab_state| tab_state.tab.id == active_tab_id)
+        {
+          tab_state.rows = rows.clone();
+          tab_state.loading = false;
+          tab_state.error = error.clone();
+          tab_state.loaded_once = true;
+        }
+
+        this.error = error;
+        this.pull_requests.update(cx, |state, cx| {
+          state.delegate_mut().loading = false;
+          cx.notify();
+        });
+        this.apply_active_pull_request_rows(cx);
+        cx.notify();
+      });
+    });
+
+    self.load_task = Some(task);
+  }
+
+  fn available_repository_filters(&self, cx: &App) -> Vec<GithubUserRepository> {
+    self
+      .repositories
+      .read(cx)
+      .delegate()
+      .all_rows
+      .iter()
+      .map(|row| (*row.repository).clone())
+      .collect()
+  }
+
+  fn open_pull_request_tab_dialog(
+    &mut self,
+    mode: GithubPullRequestTabDialogMode,
+    initial_tab: Option<GithubHomePullRequestTab>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let api = self.api.clone();
+    let window_handle = window.window_handle();
+    let github_page = cx.entity().downgrade();
+    let available_repositories = self.available_repository_filters(cx);
+    let dialog = cx.new(|cx| {
+      GithubPullRequestTabDialog::new(
+        api.clone(),
+        window_handle,
+        github_page,
+        mode,
+        initial_tab,
+        available_repositories,
+        window,
+        cx,
+      )
+    });
+    let dialog_for_overlay = dialog.clone();
+    let dialog_for_focus = dialog.clone();
+
+    window.open_dialog(cx, move |overlay, _, _| {
+      overlay.p_0().w(px(680.0)).child(dialog_for_overlay.clone())
+    });
+
+    window.on_next_frame(move |window, cx| {
+      let focus_handle = dialog_for_focus.read(cx).focus_handle(cx);
+      window.focus(&focus_handle, cx);
+    });
+  }
+
+  fn open_create_pull_request_tab_dialog(
+    &mut self,
+    _: &gpui::ClickEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_pull_request_tab_dialog(GithubPullRequestTabDialogMode::Create, None, window, cx);
+  }
+
+  fn render_manage_pull_request_tabs(
+    &self,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .gap_3()
+      .flex_1()
+      .min_h_0()
+      .child(
+        h_flex()
+          .items_center()
+          .justify_between()
+          .child(
+            v_flex()
+              .gap_1()
+              .child(
+                h_flex()
+                  .items_center()
+                  .gap_2()
+                  .child(Icon::new(IconName::Settings2).size_4())
+                  .child("Manage tabs"),
+              )
+              .child(
+                div()
+                  .text_sm()
+                  .text_color(theme.muted_foreground)
+                  .child("Create, edit, and delete saved pull request lists."),
+              ),
+          )
+          .child(
+            Button::new("github-home-manage-add-pr-tab")
+              .label("Add list")
+              .icon(IconName::Plus)
+              .small()
+              .primary()
+              .on_click(cx.listener(GithubPage::open_create_pull_request_tab_dialog)),
+          ),
+      )
+      .when(self.pull_request_tabs.is_empty(), |this| {
+        this.child(
+          v_flex()
+            .flex_1()
+            .min_h_0()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .border_1()
+            .border_color(theme.border)
+            .rounded(theme.radius)
+            .p_4()
+            .text_color(theme.muted_foreground)
+            .child(Icon::new(UiIconName::GitPullRequestArrow).size_6())
+            .child("No saved pull request lists")
+            .child(
+              Button::new("github-home-manage-empty-add-pr-tab")
+                .label("Create first list")
+                .small()
+                .primary()
+                .on_click(cx.listener(GithubPage::open_create_pull_request_tab_dialog)),
+            ),
+        )
+      })
+      .when(!self.pull_request_tabs.is_empty(), |this| {
+        this.child(
+          v_flex()
+            .gap_2()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scrollbar()
+            .children(
+              self
+                .pull_request_tabs
+                .iter()
+                .enumerate()
+                .map(|(index, tab_state)| {
+                  let tab = tab_state.tab.clone();
+                  let edit_tab = tab.clone();
+
+                  v_flex()
+                    .id(("github-home-manage-tab-row", index))
+                    .gap_2()
+                    .border_1()
+                    .border_color(theme.border)
+                    .rounded(theme.radius)
+                    .p_3()
+                    .child(
+                      h_flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .child(
+                          v_flex()
+                            .gap_1()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                              h_flex()
+                                .items_center()
+                                .gap_2()
+                                .child(div().child(tab.name.clone()))
+                                .when(tab_state.loaded_once, |this| {
+                                  this.child(
+                                    Tag::secondary()
+                                      .small()
+                                      .rounded_full()
+                                      .child(tab_state.rows.len().to_string()),
+                                  )
+                                }),
+                            )
+                            .child(
+                              div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child(pull_request_tab_filter_summary(&tab.filters)),
+                            ),
+                        )
+                        .child(
+                          h_flex()
+                            .gap_2()
+                            .child(
+                              Button::new(("github-home-manage-edit-pr-tab", index))
+                                .label("Edit")
+                                .icon(UiIconName::SquarePen)
+                                .small()
+                                .outline()
+                                .on_click({
+                                  let view = cx.entity().clone();
+                                  move |_, window, cx| {
+                                    view.update(cx, |this, cx| {
+                                      this.open_pull_request_tab_dialog(
+                                        GithubPullRequestTabDialogMode::Edit,
+                                        Some(edit_tab.clone()),
+                                        window,
+                                        cx,
+                                      );
+                                    });
+                                  }
+                                }),
+                            )
+                            .child(
+                              Button::new(("github-home-manage-delete-pr-tab", index))
+                                .label("Delete")
+                                .small()
+                                .danger()
+                                .on_click({
+                                  let view = cx.entity().clone();
+                                  let delete_tab = tab.clone();
+                                  move |_, window, cx| {
+                                    view.update(cx, |this, cx| {
+                                      this.confirm_delete_pull_request_tab(
+                                        delete_tab.clone(),
+                                        window,
+                                        cx,
+                                      );
+                                    });
+                                  }
+                                }),
+                            ),
+                        ),
+                    )
+                }),
+            ),
+        )
+      })
+      .into_any_element()
+  }
+
+  fn confirm_delete_pull_request_tab(
+    &mut self,
+    tab: GithubHomePullRequestTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let (title, message) = pull_request_tab_delete_confirmation(&tab.name);
+    let tab_id = tab.id.clone();
+    let view = cx.entity();
+
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      let tab_id = tab_id.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text("Delete")
+        .cancel_text("Cancel")
+        .destructive()
+        .on_confirm(move |_, _, cx| {
+          view.update(cx, |this, cx| {
+            this.delete_pull_request_tab(&tab_id, cx);
+          });
+          true
+        })
+        .build(alert)
+    });
+  }
+
+  fn save_pull_request_tab(
+    &mut self,
+    tab: GithubHomePullRequestTab,
+    original_tab_id: Option<String>,
+    cx: &mut Context<Self>,
+  ) {
+    let existing_index = original_tab_id.as_ref().and_then(|tab_id| {
+      self
+        .pull_request_tabs
+        .iter()
+        .position(|state| state.tab.id == *tab_id)
+    });
+
+    if let Some(index) = existing_index {
+      if let Some(tab_state) = self.pull_request_tabs.get_mut(index) {
+        tab_state.tab = tab.clone();
+        tab_state.rows.clear();
+        tab_state.loading = false;
+        tab_state.error = None;
+        tab_state.loaded_once = false;
+      }
+    } else {
+      self
+        .pull_request_tabs
+        .push(GithubPullRequestTabState::new(tab.clone()));
+    }
+
+    self.active_pull_request_tab_id = Some(tab.id.clone());
+    self.persist_pull_request_tabs();
+    self.apply_active_pull_request_rows(cx);
+    self.refresh_active_pull_request_tab(cx);
+    cx.notify();
+  }
+
+  fn delete_pull_request_tab(&mut self, tab_id: &str, cx: &mut Context<Self>) {
+    let removed_index = self
+      .pull_request_tabs
+      .iter()
+      .position(|tab_state| tab_state.tab.id == tab_id);
+    self
+      .pull_request_tabs
+      .retain(|tab_state| tab_state.tab.id != tab_id);
+
+    if self.active_pull_request_tab_id.as_deref() == Some(tab_id) {
+      self.active_pull_request_tab_id = removed_index.and_then(|index| {
+        if self.pull_request_tabs.is_empty() {
+          None
+        } else {
+          let next_index = index.min(self.pull_request_tabs.len().saturating_sub(1));
+          self
+            .pull_request_tabs
+            .get(next_index)
+            .map(|tab_state| tab_state.tab.id.clone())
+        }
+      });
+    }
+
+    self.ensure_active_pull_request_tab();
+    self.persist_pull_request_tabs();
+    self.apply_active_pull_request_rows(cx);
+    if self
+      .active_pull_request_tab_state()
+      .is_some_and(|tab_state| !tab_state.loaded_once)
+    {
+      self.refresh_active_pull_request_tab(cx);
+    }
     cx.notify();
   }
 
@@ -1224,73 +2729,7 @@ impl GithubPage {
   }
 
   fn refresh_pull_requests(&mut self, cx: &mut Context<Self>) {
-    let api = self.api.clone();
-    self.add_github_breadcrumb("Refresh pull requests started", Map::new());
-
-    self.error = None;
-    self.pull_requests.update(cx, |state, cx| {
-      state.delegate_mut().loading = true;
-      cx.notify();
-    });
-
-    let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        let my_open_pull_requests = api.fetch_latest_pull_requests()?;
-        let need_review_pull_requests = api.fetch_need_review_pull_requests()?;
-        Ok::<_, anyhow::Error>((my_open_pull_requests, need_review_pull_requests))
-      })
-      .await
-      .map_err(|error| error.to_string());
-
-      let _ = this.update(cx, |this, cx| {
-        let (my_open_rows, need_review_rows, error): (
-          Vec<Rc<GithubPullRequestRow>>,
-          Vec<Rc<GithubPullRequestRow>>,
-          Option<SharedString>,
-        ) = match result {
-          Ok((my_open_pull_requests, need_review_pull_requests)) => (
-            my_open_pull_requests
-              .into_iter()
-              .map(|pr| Rc::new(GithubPullRequestRow { pr: Rc::new(pr) }))
-              .collect::<Vec<_>>(),
-            need_review_pull_requests
-              .into_iter()
-              .map(|pr| Rc::new(GithubPullRequestRow { pr: Rc::new(pr) }))
-              .collect::<Vec<_>>(),
-            None,
-          ),
-          Err(error) => (Vec::new(), Vec::new(), Some(error.into())),
-        };
-
-        match error.as_ref() {
-          Some(error) => {
-            let data = Map::new();
-            this.add_github_breadcrumb("Refresh pull requests failed", data.clone());
-            this.record_github_error("github.pull_requests.refresh", error.as_ref(), data);
-          }
-          None => {
-            let mut data = Map::new();
-            data.insert("my_open_count".into(), my_open_rows.len().into());
-            data.insert("need_review_count".into(), need_review_rows.len().into());
-            this.add_github_breadcrumb("Refresh pull requests succeeded", data);
-          }
-        }
-
-        this.error = error;
-        this.my_open_pull_request_rows = my_open_rows;
-        this.need_review_pull_request_rows = need_review_rows;
-
-        this.pull_requests.update(cx, |state, cx| {
-          state.delegate_mut().loading = false;
-          cx.notify();
-        });
-        this.apply_active_pull_request_rows(cx);
-
-        cx.notify();
-      });
-    });
-
-    self.load_task = Some(task);
+    self.refresh_active_pull_request_tab(cx);
     self.refresh_notifications(cx);
     self.refresh_repositories(cx);
   }
@@ -1780,10 +3219,11 @@ impl Render for GithubPage {
       cx.on_next_frame(window, |this, window, cx| this.focus_search(window, cx));
     }
 
-    let pull_requests_search_placeholder = match self.active_pull_request_tab {
-      GithubPullRequestTab::MyOpen => "Search my open pull requests...",
-      GithubPullRequestTab::NeedReview => "Search pull requests needing review...",
-    };
+    let pull_requests_search_placeholder = self
+      .active_pull_request_tab_state()
+      .map(|tab_state| format!("Search {}...", tab_state.tab.name.to_lowercase()))
+      .unwrap_or_else(|| "Search pull requests...".to_string());
+    let show_manage_tabs = self.managing_pull_request_tabs();
 
     let pull_requests_list = List::new(&self.pull_requests)
       .search_placeholder(pull_requests_search_placeholder)
@@ -1810,38 +3250,43 @@ impl Render for GithubPage {
       .flex_1()
       .min_h_0()
       .p(px(8.));
-    let my_open_count = self.my_open_pull_request_rows.len();
-    let need_review_count = self.need_review_pull_request_rows.len();
     let unread_count = self.notifications.read(cx).delegate().unread_count();
     let unread_notification_label = github_notification_count_label(unread_count);
     let notifications_count = self.notifications.read(cx).delegate().matched_rows.len();
-
     let pr_tabs = TabBar::new("github-home-pr-tabs")
       .w_full()
       .segmented()
-      .selected_index(self.active_pull_request_tab.as_index())
+      .selected_index(self.active_pull_request_inbox_tab_index())
       .on_click(cx.listener(|this, ix: &usize, window, cx| {
         this.set_active_pull_request_tab(*ix, window, cx);
       }))
-      .child(
-        Tab::new().child(
-          h_flex().items_center().gap_2().child("My Open PRs").child(
-            Tag::secondary()
-              .small()
-              .rounded_full()
-              .child(my_open_count.to_string()),
-          ),
-        ),
-      )
-      .child(
-        Tab::new().child(
-          h_flex().items_center().gap_2().child("Need Review").child(
-            Tag::secondary()
-              .small()
-              .rounded_full()
-              .child(need_review_count.to_string()),
-          ),
-        ),
+      .children(
+        self
+          .pull_request_tabs
+          .iter()
+          .map(|tab_state| {
+            Tab::new().child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .child(tab_state.tab.name.clone())
+                .child(
+                  Tag::secondary()
+                    .small()
+                    .rounded_full()
+                    .child(tab_state.rows.len().to_string()),
+                ),
+            )
+          })
+          .chain(std::iter::once(
+            Tab::new().child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .child(Icon::new(IconName::Settings2).size_4())
+                .child("Manage tabs"),
+            ),
+          )),
       );
 
     let notifications_panel = v_flex()
@@ -1933,10 +3378,16 @@ impl Render for GithubPage {
       .min_h_0()
       .child("Review Inbox")
       .child(pr_tabs)
-      .when_some(self.error.clone(), |this, error| {
-        this.child(div().text_sm().text_color(theme.status_red()).child(error))
+      .when(!show_manage_tabs, |this| {
+        this.when_some(self.error.clone(), |this, error| {
+          this.child(div().text_sm().text_color(theme.status_red()).child(error))
+        })
       })
-      .child(pull_requests_list);
+      .child(if show_manage_tabs {
+        self.render_manage_pull_request_tabs(window, cx)
+      } else {
+        pull_requests_list.into_any_element()
+      });
 
     let left_column = v_flex()
       .w(px(560.0))
@@ -1992,7 +3443,40 @@ mod tests {
   };
   use crate::auth_state::AuthState;
   use gpui::TestAppContext;
-  use std::rc::Rc;
+  use std::{
+    fs,
+    path::PathBuf,
+    rc::Rc,
+    time::{SystemTime, UNIX_EPOCH},
+  };
+
+  struct GithubPageTestConfigGuard {
+    path: PathBuf,
+  }
+
+  impl GithubPageTestConfigGuard {
+    fn new(name: &str) -> Self {
+      let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+      let path = std::env::temp_dir().join(format!("reviu-github-page-{name}-{timestamp}.sqlite"));
+      let _ = fs::remove_file(&path);
+      let _ = fs::remove_file(path.with_extension("sqlite-shm"));
+      let _ = fs::remove_file(path.with_extension("sqlite-wal"));
+      ConfigStore::set_test_db_path(Some(path.clone()));
+      Self { path }
+    }
+  }
+
+  impl Drop for GithubPageTestConfigGuard {
+    fn drop(&mut self) {
+      ConfigStore::set_test_db_path(None);
+      let _ = fs::remove_file(&self.path);
+      let _ = fs::remove_file(self.path.with_extension("sqlite-shm"));
+      let _ = fs::remove_file(self.path.with_extension("sqlite-wal"));
+    }
+  }
 
   fn make_pull_request_row(title: &str, owner: &str, repo: &str) -> GithubPullRequestRow {
     make_pull_request_row_with_labels(title, owner, repo, &["test"])
@@ -2231,26 +3715,154 @@ mod tests {
   }
 
   #[test]
-  fn pull_request_tab_author_visibility_matches_home_context() {
-    assert!(!GithubPullRequestTab::MyOpen.shows_pull_request_author());
-    assert!(GithubPullRequestTab::NeedReview.shows_pull_request_author());
+  fn pull_request_review_status_label_round_trips() {
+    for status in [
+      GithubPullRequestReviewStatus::Any,
+      GithubPullRequestReviewStatus::Required,
+      GithubPullRequestReviewStatus::Approved,
+      GithubPullRequestReviewStatus::ChangesRequested,
+      GithubPullRequestReviewStatus::None,
+    ] {
+      assert_eq!(
+        pull_request_review_status_from_label(pull_request_review_status_label(status)),
+        status
+      );
+    }
   }
 
   #[test]
-  fn pull_request_tab_index_mapping_stops_after_need_review() {
-    assert_eq!(
-      GithubPullRequestTab::from_index(0),
-      Some(GithubPullRequestTab::MyOpen)
+  fn make_pull_request_tab_states_preserves_seeded_tab_order() {
+    let tabs =
+      make_pull_request_tab_states(crate::github_home_tabs::seed_github_home_pull_request_tabs());
+
+    assert_eq!(tabs.len(), 2);
+    assert_eq!(tabs[0].tab.name, "My Open PRs");
+    assert_eq!(tabs[1].tab.name, "Need Review");
+    assert!(tabs.iter().all(|tab| tab.rows.is_empty()));
+    assert!(tabs.iter().all(|tab| !tab.loaded_once));
+  }
+
+  #[test]
+  fn pull_request_tab_delete_confirmation_mentions_tab_name() {
+    let (title, message) = pull_request_tab_delete_confirmation("Needs Review");
+
+    assert_eq!(title.as_ref(), "Delete pull request list?");
+    assert!(message.as_ref().contains("Needs Review"));
+  }
+
+  #[test]
+  fn matching_user_filter_suggestions_offer_me_without_selected_repositories() {
+    let suggestions = matching_user_filter_suggestions(&[], "", &[], true);
+
+    assert_eq!(suggestions.len(), 1);
+    assert_eq!(suggestions[0].login, "@me");
+  }
+
+  #[test]
+  fn matching_user_filter_suggestions_offer_me_first_with_selected_repositories() {
+    let suggestions = matching_user_filter_suggestions(
+      &[GithubPullRequestFilterOptionUser {
+        login: "alice".to_string(),
+        avatar_url: None,
+      }],
+      "",
+      &[],
+      true,
     );
-    assert_eq!(
-      GithubPullRequestTab::from_index(1),
-      Some(GithubPullRequestTab::NeedReview)
-    );
-    assert_eq!(GithubPullRequestTab::from_index(2), None);
+
+    assert_eq!(suggestions.len(), 2);
+    assert_eq!(suggestions[0].login, "@me");
+    assert_eq!(suggestions[1].login, "alice");
+  }
+
+  #[test]
+  fn matching_user_filter_suggestions_hide_me_once_already_selected() {
+    let suggestions = matching_user_filter_suggestions(&[], "", &["@me".to_string()], true);
+
+    assert!(suggestions.is_empty());
+  }
+
+  #[test]
+  fn matching_user_filter_suggestions_respect_query_when_offering_me() {
+    let suggestions = matching_user_filter_suggestions(&[], "alice", &[], true);
+
+    assert!(suggestions.is_empty());
+  }
+
+  #[gpui::test]
+  fn manage_tabs_uses_the_last_review_inbox_tab_index(cx: &mut TestAppContext) {
+    let _config_guard = GithubPageTestConfigGuard::new("manage-tabs-index");
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_available_user())),
+      );
+    });
+    let api = ApiClient::new_with_base_url("http://localhost:0".to_string());
+    let (github_page, cx) =
+      cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
+
+    let selected_index = github_page.update_in(cx, |this, _window, _cx| {
+      this.pull_request_tabs = make_pull_request_tab_states(vec![
+        GithubHomePullRequestTab {
+          id: "tab-a".to_string(),
+          name: "A".to_string(),
+          filters: GithubPullRequestSearchFilters::default(),
+        },
+        GithubHomePullRequestTab {
+          id: "tab-b".to_string(),
+          name: "B".to_string(),
+          filters: GithubPullRequestSearchFilters::default(),
+        },
+      ]);
+      this.active_pull_request_tab_id = Some(GITHUB_HOME_MANAGE_TABS_ID.to_string());
+      this.active_pull_request_inbox_tab_index()
+    });
+
+    assert_eq!(selected_index, 2);
+  }
+
+  #[gpui::test]
+  fn delete_last_pull_request_tab_falls_back_to_manage_tabs(cx: &mut TestAppContext) {
+    let _config_guard = GithubPageTestConfigGuard::new("delete-last-tab");
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_available_user())),
+      );
+    });
+    let api = ApiClient::new_with_base_url("http://localhost:0".to_string());
+    let (github_page, cx) =
+      cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
+
+    github_page.update_in(cx, |this, _window, cx| {
+      this.pull_request_tabs = make_pull_request_tab_states(vec![GithubHomePullRequestTab {
+        id: "solo-tab".to_string(),
+        name: "Solo".to_string(),
+        filters: GithubPullRequestSearchFilters::default(),
+      }]);
+      this.active_pull_request_tab_id = Some("solo-tab".to_string());
+      this.delete_pull_request_tab("solo-tab", cx);
+    });
+
+    let (remaining_tabs, managing_tabs, selected_index) = github_page.read_with(cx, |this, _cx| {
+      (
+        this.pull_request_tabs.len(),
+        this.managing_pull_request_tabs(),
+        this.active_pull_request_inbox_tab_index(),
+      )
+    });
+
+    assert_eq!(remaining_tabs, 0);
+    assert!(managing_tabs);
+    assert_eq!(selected_index, 0);
   }
 
   #[gpui::test]
   fn github_home_layout_stacks_notifications_above_repositories(cx: &mut TestAppContext) {
+    let _config_guard = GithubPageTestConfigGuard::new("layout-stacks");
     init_gpui_test(cx);
     cx.update(|cx| {
       AuthStateStore::set(
@@ -2319,6 +3931,7 @@ mod tests {
 
   #[gpui::test]
   fn github_home_layout_places_unread_badge_next_to_notifications_title(cx: &mut TestAppContext) {
+    let _config_guard = GithubPageTestConfigGuard::new("layout-unread-badge");
     init_gpui_test(cx);
     cx.update(|cx| {
       AuthStateStore::set(
@@ -2451,6 +4064,7 @@ mod tests {
 
   #[gpui::test]
   fn refresh_pull_requests_sets_unauthorized_errors(cx: &mut TestAppContext) {
+    let _config_guard = GithubPageTestConfigGuard::new("refresh-unauthorized");
     init_gpui_test(cx);
     let api = ApiClient::new_with_base_url("http://localhost:0".to_string());
     let (github_page, cx) =
@@ -2530,13 +4144,33 @@ mod tests {
   fn refresh_pull_requests_populates_pull_requests_and_notifications_on_success(
     cx: &mut TestAppContext,
   ) {
+    let _config_guard = GithubPageTestConfigGuard::new("refresh-success");
     init_gpui_test(cx);
     let api = ApiClient::new_with_base_url("http://localhost:0".to_string());
     let (github_page, cx) =
       cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
 
     github_page.update_in(cx, |this, _window, cx| {
-      this.my_open_pull_request_rows = vec![Rc::new(GithubPullRequestRow {
+      this.pull_request_tabs = make_pull_request_tab_states(vec![
+        GithubHomePullRequestTab {
+          id: "my-open".to_string(),
+          name: "My Open PRs".to_string(),
+          filters: GithubPullRequestSearchFilters {
+            authors: vec!["@me".to_string()],
+            ..GithubPullRequestSearchFilters::default()
+          },
+        },
+        GithubHomePullRequestTab {
+          id: "need-review".to_string(),
+          name: "Need Review".to_string(),
+          filters: GithubPullRequestSearchFilters {
+            requested_reviewers: vec!["@me".to_string()],
+            ..GithubPullRequestSearchFilters::default()
+          },
+        },
+      ]);
+      this.active_pull_request_tab_id = Some("my-open".to_string());
+      this.pull_request_tabs[0].rows = vec![Rc::new(GithubPullRequestRow {
         pr: Rc::new(GithubPullRequest {
           number: 42,
           title: "Fix login".to_string(),
@@ -2557,7 +4191,8 @@ mod tests {
           author: GithubPullRequestAuthor::default(),
         }),
       })];
-      this.need_review_pull_request_rows = vec![Rc::new(GithubPullRequestRow {
+      this.pull_request_tabs[0].loaded_once = true;
+      this.pull_request_tabs[1].rows = vec![Rc::new(GithubPullRequestRow {
         pr: Rc::new(GithubPullRequest {
           number: 55,
           title: "Review billing flow".to_string(),
@@ -2578,6 +4213,7 @@ mod tests {
           author: GithubPullRequestAuthor::default(),
         }),
       })];
+      this.pull_request_tabs[1].loaded_once = true;
       this.error = None;
       this.apply_active_pull_request_rows(cx);
       this.pull_requests.update(cx, |state, cx| {

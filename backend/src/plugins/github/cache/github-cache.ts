@@ -1,3 +1,4 @@
+import { env } from '../../../lib/env.js'
 import { logger } from '../../../lib/logger.js'
 import { getGithubMetricsContext, runWithGithubMetricsContext } from '../metrics/github-metrics-context.js'
 import { githubMetricsCollector } from '../metrics/github-metrics.js'
@@ -626,13 +627,15 @@ class GithubCacheManager {
     cacheKey: string,
     cacheStatus: GithubCacheStatus,
   ) {
-    // logger.info({
-    //   cacheKey,
-    //   cacheStatus,
-    //   resourceKey: options.resourceKey,
-    //   scope: options.scope,
-    //   scopeId: options.scopeId ?? null,
-    // }, 'GitHub cache resolved')
+    if (env.LOG_GITHUB_CACHE) {
+      logger.info({
+        cacheKey,
+        cacheStatus,
+        resourceKey: options.resourceKey,
+        scope: options.scope,
+        scopeId: options.scopeId ?? null,
+      }, 'GitHub cache resolved')
+    }
   }
 
   private recordCacheResolution<T>(

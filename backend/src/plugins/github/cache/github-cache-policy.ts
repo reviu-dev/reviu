@@ -1,7 +1,5 @@
 import type { GithubCacheScope } from './github-cache.js'
 
-export type GithubPullRequestSearchCacheVariant = 'latest' | 'need-review'
-
 export interface GithubCachePolicy {
   operation: string
   scope: GithubCacheScope
@@ -89,13 +87,6 @@ export function getGithubPullRequestSearchTag(userId: string) {
   return `viewer:${userId}:pr-search`
 }
 
-export function getGithubPullRequestSearchVariantTag(
-  userId: string,
-  variant: GithubPullRequestSearchCacheVariant,
-) {
-  return `viewer:${userId}:pr-search:${variant}`
-}
-
 export function getGithubRepoPullRequestsTag(owner: string, repo: string) {
   return `repo:${normalizeRepositoryKey(owner, repo)}:pull-requests`
 }
@@ -180,25 +171,16 @@ export function createGithubUserRepositoriesCachePolicy(userId: string): GithubC
 
 export function createGithubPullRequestSearchCachePolicy(
   userId: string,
-  variant: GithubPullRequestSearchCacheVariant,
+  cacheKey: string,
 ): GithubCachePolicy {
-  const resourceKey = variant === 'latest'
-    ? 'search:latest-pull-requests'
-    : 'search:need-review-pull-requests'
-
   return {
-    operation: variant === 'latest'
-      ? 'viewer.pull_requests.latest'
-      : 'viewer.pull_requests.need_review',
+    operation: 'viewer.pull_requests.search',
     scope: 'viewer',
     scopeId: userId,
-    resourceKey,
+    resourceKey: `search:pull-requests:${normalizeCacheSegment(cacheKey)}`,
     ttlMs: GITHUB_PULL_REQUEST_SEARCH_CACHE_TTL_MS,
     staleMs: GITHUB_PULL_REQUEST_SEARCH_CACHE_STALE_MS,
-    tags: [
-      getGithubPullRequestSearchTag(userId),
-      getGithubPullRequestSearchVariantTag(userId, variant),
-    ],
+    tags: [getGithubPullRequestSearchTag(userId)],
   }
 }
 

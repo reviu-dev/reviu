@@ -4,6 +4,14 @@ All notable changes to Reviu are documented here.
 
 ## 0.0.11
 
+### GitHub Home Tab Manager
+
+GitHub home now includes a dedicated `Manage tabs` view for your pull request lists. You can create, edit, and delete saved tabs from one place, reuse filters for repositories, labels, authors, assignees, requested reviewers, and review state, and keep `@me`-based lists like `My Open PRs` and `Need Review` easy to recreate and refine.
+
+### GitHub Home Layout
+
+Notifications now sit above your repositories on the GitHub home page, so the repositories list no longer stretches the full column height and the left side is easier to scan.
+
 ### Image File Previews in Review Editors
 
 Git and pull request review editors now render PNG, JPEG, WebP, GIF, BMP, TIFF, and ICO files as previews instead of showing raw binary text. Unsupported binary files now show a clear placeholder so large review panes no longer fill with unreadable content.
@@ -11,10 +19,6 @@ Git and pull request review editors now render PNG, JPEG, WebP, GIF, BMP, TIFF, 
 ### Contextual Refresh in the App Header
 
 Reviu now includes a refresh button in the app header with a `Cmd-R` shortcut, so you can refresh the current Git, GitHub, repository, or pull request page without navigating away from what you are reviewing.
-
-### GitHub Home Layout
-
-Notifications now sit above your repositories on the GitHub home page, so the repositories list no longer stretches the full column height and the left side is easier to scan.
 
 ## 0.0.10
 

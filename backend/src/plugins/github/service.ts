@@ -56,6 +56,10 @@ import type {
   PullRequestResponse,
   PullRequestReviewResponse,
   PullRequestReviewsParams,
+  RepositoryAssigneeResponse,
+  RepositoryAssigneesParams,
+  RepositoryLabelResponse,
+  RepositoryLabelsParams,
   SearchIssuesParams,
   SearchIssuesResponse,
   UpdateIssueCommentParams,
@@ -748,6 +752,26 @@ export async function fetchGithubUserRepositories(
   { token: string, params: UserRepositoriesParams },
 ): Promise<UserRepositoryResponse[]> {
   return requestGithubData('GET /user/repos', {
+    token,
+    params,
+  })
+}
+
+export async function fetchGithubRepositoryLabels(
+  { token, params }:
+  { token: string, params: RepositoryLabelsParams },
+): Promise<RepositoryLabelResponse[]> {
+  return requestGithubData('GET /repos/{owner}/{repo}/labels', {
+    token,
+    params,
+  })
+}
+
+export async function fetchGithubRepositoryAssignees(
+  { token, params }:
+  { token: string, params: RepositoryAssigneesParams },
+): Promise<RepositoryAssigneeResponse[]> {
+  return requestGithubData('GET /repos/{owner}/{repo}/assignees', {
     token,
     params,
   })

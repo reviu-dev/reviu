@@ -46,6 +46,10 @@ export type UserRepositoriesParams = Endpoints['GET /user/repos']['parameters']
 export type NotificationsParams = Endpoints['GET /notifications']['parameters']
 export type GetContentParams
   = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['parameters']
+export type RepositoryLabelsParams
+  = Endpoints['GET /repos/{owner}/{repo}/labels']['parameters']
+export type RepositoryAssigneesParams
+  = Endpoints['GET /repos/{owner}/{repo}/assignees']['parameters']
 
 export type NotificationResponse = Endpoints['GET /notifications']['response']['data'][number]
 export type PullRequestResponse
@@ -91,6 +95,10 @@ export type SearchIssuesItemResponse = SearchIssuesResponse['items'][number]
 export type UserRepositoryResponse = Endpoints['GET /user/repos']['response']['data'][number]
 export type GetContentResponse
   = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['response']['data']
+export type RepositoryLabelResponse
+  = Endpoints['GET /repos/{owner}/{repo}/labels']['response']['data'][number]
+export type RepositoryAssigneeResponse
+  = Endpoints['GET /repos/{owner}/{repo}/assignees']['response']['data'][number]
 export type GithubUserResponse = Endpoints['GET /user']['response']['data']
 export type GithubIssueResponse = Endpoints['GET /repos/{owner}/{repo}/issues']['response']['data'][number]
 export type GithubIssueParameters = Endpoints['GET /repos/{owner}/{repo}/issues']['parameters']
@@ -177,6 +185,36 @@ export interface GithubPullRequest {
   author: GithubPullRequestAuthor
   labels: { name: string }[]
   repository: GithubRepository
+}
+
+export type GithubPullRequestSearchReviewStatus
+  = 'any'
+    | 'none'
+    | 'required'
+    | 'approved'
+    | 'changes_requested'
+
+export interface GithubPullRequestSearchFilters {
+  repos: string[]
+  labels: string[]
+  authors: string[]
+  assignees: string[]
+  requested_reviewers: string[]
+  review_status: GithubPullRequestSearchReviewStatus
+  include_drafts: boolean
+}
+
+export interface GithubPullRequestFilterOptionUser {
+  login: string
+  avatar_url: string | null
+}
+
+export interface GithubPullRequestFilterOptions {
+  labels: Array<{
+    name: string
+  }>
+  authors: GithubPullRequestFilterOptionUser[]
+  assignees: GithubPullRequestFilterOptionUser[]
 }
 
 export interface GithubPullRequestReviewCommentUser {
