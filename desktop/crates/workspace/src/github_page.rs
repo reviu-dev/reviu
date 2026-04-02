@@ -32,8 +32,8 @@ use time::OffsetDateTime;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
-  DETAILS_PAGE_CONTAINER_MAX_WIDTH, Input, InputState, PAGE_HEADER_HEIGHT, SelectableRowStyle,
-  StatusTag, StatusThemeExt, UiIconName, VariableList, VariableListDelegate, VariableListEvent,
+  DETAILS_PAGE_CONTAINER_MAX_WIDTH, Input, InputState, SelectableRowStyle, StatusTag,
+  StatusThemeExt, UiIconName, VariableList, VariableListDelegate, VariableListEvent,
   VariableListState, WindowExt, selectable_list_item,
 };
 
@@ -3361,23 +3361,6 @@ impl GithubPage {
     }
   }
 
-  fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
-    div()
-      .h(px(PAGE_HEADER_HEIGHT))
-      .max_h(px(PAGE_HEADER_HEIGHT))
-      .w_full()
-      .px_3()
-      .flex()
-      .items_center()
-      .justify_start()
-      .bg(theme.sidebar)
-      .border_b_1()
-      .border_color(theme.title_bar_border)
-      .child(div().text_sm().text_color(theme.foreground).child("GitHub"))
-  }
-
   fn render_access_feature_card(
     icon: Icon,
     title: &'static str,
@@ -3473,11 +3456,10 @@ impl GithubPage {
       .bg(theme.background)
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GithubPage::show_command_palette_action))
-      .child(self.render_header(cx))
       .child(
         div().w_full().h_full().min_h_0().overflow_y_scrollbar().child(
           div().flex().flex_col()
-            .w_full()
+            .w_full().mt_20()
             .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
             .mx_auto()
             .gap_4()
@@ -3800,7 +3782,6 @@ impl Render for GithubPage {
       .bg(theme.background)
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GithubPage::show_command_palette_action))
-      .child(self.render_header(cx))
       .child(
         v_flex()
           .w_full()
