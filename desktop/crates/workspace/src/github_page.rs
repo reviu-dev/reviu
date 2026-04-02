@@ -24,11 +24,10 @@ use gpui_component::{
 };
 use sentry::protocol::{Map, Value};
 use smol::unblock;
+use time::{OffsetDateTime, macros::format_description};
 
 use crate::dock_badge::set_dock_badge;
 use crate::notification_count::NotificationCountStore;
-#[cfg(test)]
-use time::OffsetDateTime;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
@@ -42,7 +41,7 @@ use crate::date_format::format_relative_time_at;
 use crate::{
   AuthCallbackTarget, ShowCommandPalette,
   api::{ApiClient, GithubNotification, GithubPullRequest, GithubUserRepository},
-  auth_state::{AuthStateStore, GithubAccessState},
+  auth_state::{AuthState, AuthStateStore, GithubAccessState},
   billing_page::{ReviuProCheckoutCta, reviu_pro_checkout_button},
   config::ConfigStore,
   date_format::format_relative_time,
@@ -384,11 +383,54 @@ fn github_notification_count_label(unread_count: usize) -> Option<String> {
 
 const GITHUB_HOME_NOTIFICATIONS_PANEL_DEBUG_SELECTOR: &str = "github-home-notifications-panel";
 const GITHUB_HOME_REPOSITORIES_PANEL_DEBUG_SELECTOR: &str = "github-home-repositories-panel";
+const GITHUB_HOME_REVIEW_INBOX_PANEL_DEBUG_SELECTOR: &str = "github-home-review-inbox-panel";
+
+fn github_home_display_name(auth_state: &AuthState) -> Option<SharedString> {
+  let AuthState::Authenticated(user) = auth_state else {
+    return None;
+  };
+
+  let trimmed_name = user.name.trim();
+  if !trimmed_name.is_empty() {
+    return Some(trimmed_name.to_string().into());
+  }
+
+  user
+    .github_login
+    .as_deref()
+    .map(str::trim)
+    .filter(|login| !login.is_empty())
+    .map(|login| login.to_string().into())
+}
+
+fn github_home_greeting_at(name: Option<&str>, now: OffsetDateTime) -> SharedString {
+  let greeting = match now.hour() {
+    5..=11 => "Good morning",
+    12..=17 => "Good afternoon",
+    _ => "Good evening",
+  };
+
+  let trimmed_name = name.map(str::trim).filter(|name| !name.is_empty());
+
+  match trimmed_name {
+    Some(name) => format!("{greeting}, {name}").into(),
+    None => greeting.into(),
+  }
+}
+
+fn github_home_date_label_at(now: OffsetDateTime) -> SharedString {
+  now
+    .format(format_description!(
+      "[weekday repr:long], [month repr:long] [day padding:none], [year]"
+    ))
+    .unwrap_or_else(|_| now.date().to_string())
+    .into()
+}
 const GITHUB_HOME_NOTIFICATIONS_UNREAD_BADGE_DEBUG_SELECTOR: &str =
   "github-home-notifications-unread-badge";
 const GITHUB_HOME_NOTIFICATIONS_COUNT_BADGE_DEBUG_SELECTOR: &str =
   "github-home-notifications-count-badge";
-const GITHUB_HOME_REPO_SECTION_ROW_HEIGHT_PX: f32 = 40.0;
+const GITHUB_HOME_REPO_SECTION_ROW_HEIGHT_PX: f32 = 26.0;
 const GITHUB_HOME_NOTIFICATION_ROW_HEIGHT_PX: f32 = 56.0;
 
 fn github_home_refresh_in_progress(
@@ -845,6 +887,7 @@ impl VariableListDelegate for GithubNotificationListDelegate {
         ..
       } => Some(
         base_item
+          .px_0()
           .h(px(GITHUB_HOME_REPO_SECTION_ROW_HEIGHT_PX))
           .child(github_shared::repo_section_header(
             repo_label.clone(),
@@ -1147,6 +1190,7 @@ impl VariableListDelegate for GithubPullRequestListDelegate {
         ..
       } => Some(
         base_item
+          .px_0()
           .h(px(GITHUB_HOME_REPO_SECTION_ROW_HEIGHT_PX))
           .child(github_shared::repo_section_header(
             repo_label.clone(),
@@ -3576,6 +3620,7 @@ impl Render for GithubPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let access_state = AuthStateStore::github_access_state(cx);
+    let auth_state = AuthStateStore::get(cx);
 
     if access_state != self.last_access_state {
       self.last_access_state = access_state;
@@ -3602,6 +3647,14 @@ impl Render for GithubPage {
       .map(|tab_state| format!("Search {}...", tab_state.tab.name.to_lowercase()))
       .unwrap_or_else(|| "Search pull requests...".to_string());
     let show_manage_tabs = self.managing_pull_request_tabs();
+    let now = OffsetDateTime::now_utc();
+    let greeting = github_home_greeting_at(
+      github_home_display_name(&auth_state)
+        .as_deref()
+        .map(|display_name| &**display_name),
+      now,
+    );
+    let date_label = github_home_date_label_at(now);
 
     let pull_requests_list = VariableList::new(&self.pull_requests)
       .search_placeholder(pull_requests_search_placeholder)
@@ -3749,12 +3802,12 @@ impl Render for GithubPage {
       .child(repositories_list);
 
     let right_panel = v_flex()
+      .debug_selector(|| GITHUB_HOME_REVIEW_INBOX_PANEL_DEBUG_SELECTOR.to_string())
       .gap_2()
       .flex_1()
       .min_w_0()
       .h_full()
       .min_h_0()
-      .child("Review Inbox")
       .child(pr_tabs)
       .when(!show_manage_tabs, |this| {
         this.when_some(self.error.clone(), |this, error| {
@@ -3768,10 +3821,10 @@ impl Render for GithubPage {
       });
 
     let left_column = v_flex()
-      .w(px(560.0))
+      .w(px(600.0))
       .h_full()
       .min_h_0()
-      .gap_3()
+      .gap_6()
       .child(notifications_panel)
       .child(repositories_panel);
 
@@ -3788,12 +3841,27 @@ impl Render for GithubPage {
           .mx_auto()
           .h_full()
           .min_h_0()
-          .gap_3()
+          .gap_5()
           .p_4()
           .child(
+            v_flex()
+              .child(
+                div()
+                  .font_semibold()
+                  .text_color(theme.foreground)
+                  .child(greeting),
+              )
+              .child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child(date_label),
+              ),
+          )
+          .child(
             h_flex()
-              .h_full()
-              .gap_3()
+              .flex_1()
+              .gap_10()
               .min_h_0()
               .items_start()
               .child(left_column)
@@ -4033,6 +4101,52 @@ mod tests {
     assert_eq!(
       repository_updated_label_at("2026-02-12T12:00:00Z", now).as_ref(),
       "Updated 3 days ago"
+    );
+  }
+
+  #[test]
+  fn github_home_greeting_uses_time_of_day_and_name() {
+    let morning = OffsetDateTime::parse(
+      "2026-04-02T08:00:00Z",
+      &time::format_description::well_known::Rfc3339,
+    )
+    .expect("parse morning");
+    let afternoon = OffsetDateTime::parse(
+      "2026-04-02T14:00:00Z",
+      &time::format_description::well_known::Rfc3339,
+    )
+    .expect("parse afternoon");
+    let evening = OffsetDateTime::parse(
+      "2026-04-02T21:00:00Z",
+      &time::format_description::well_known::Rfc3339,
+    )
+    .expect("parse evening");
+
+    assert_eq!(
+      github_home_greeting_at(Some("Joris Gallot"), morning).as_ref(),
+      "Good morning, Joris Gallot"
+    );
+    assert_eq!(
+      github_home_greeting_at(Some("Joris Gallot"), afternoon).as_ref(),
+      "Good afternoon, Joris Gallot"
+    );
+    assert_eq!(
+      github_home_greeting_at(Some("Joris Gallot"), evening).as_ref(),
+      "Good evening, Joris Gallot"
+    );
+  }
+
+  #[test]
+  fn github_home_date_label_formats_full_date() {
+    let now = OffsetDateTime::parse(
+      "2026-04-02T21:00:00Z",
+      &time::format_description::well_known::Rfc3339,
+    )
+    .expect("parse now");
+
+    assert_eq!(
+      github_home_date_label_at(now).as_ref(),
+      "Thursday, April 2, 2026"
     );
   }
 
@@ -4560,6 +4674,51 @@ mod tests {
       notifications_bounds.origin.y + notifications_bounds.size.height
         <= repositories_bounds.origin.y
     );
+  }
+
+  #[gpui::test]
+  fn github_home_layout_adds_clear_gap_between_columns(cx: &mut TestAppContext) {
+    let _config_guard = GithubPageTestConfigGuard::new("layout-column-gap");
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      AuthStateStore::set(
+        cx,
+        AuthState::Authenticated(Box::new(make_available_user())),
+      );
+    });
+    let api = ApiClient::new_with_base_url("http://localhost:0".to_string());
+    let (github_page, cx) =
+      cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
+
+    github_page.update_in(cx, |this, _window, cx| {
+      this.error = None;
+      this.notifications_error = None;
+      this.repositories_error = None;
+      this.pull_requests.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        cx.notify();
+      });
+      this.notifications.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        cx.notify();
+      });
+      this.repositories.update(cx, |state, cx| {
+        state.delegate_mut().loading = false;
+        cx.notify();
+      });
+      cx.notify();
+    });
+
+    let repositories_bounds = cx
+      .debug_bounds(GITHUB_HOME_REPOSITORIES_PANEL_DEBUG_SELECTOR)
+      .expect("repositories panel bounds");
+    let review_inbox_bounds = cx
+      .debug_bounds(GITHUB_HOME_REVIEW_INBOX_PANEL_DEBUG_SELECTOR)
+      .expect("review inbox panel bounds");
+
+    let column_gap = review_inbox_bounds.origin.x
+      - (repositories_bounds.origin.x + repositories_bounds.size.width);
+    assert!(column_gap >= px(20.0), "column gap: {column_gap:?}");
   }
 
   #[gpui::test]
