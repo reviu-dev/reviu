@@ -2,7 +2,8 @@ use std::{collections::HashSet, rc::Rc, sync::Arc};
 
 use gpui::{
   AnyElement, App, Context, Entity, FocusHandle, Focusable, MouseButton, ParentElement, Pixels,
-  Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*, px, relative, size,
+  Point, Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*, px, relative,
+  size,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, StyledExt as _,
@@ -104,6 +105,25 @@ fn update_variable_list_selected_index<D: VariableListDelegate>(
   cx.notify();
 }
 
+fn move_item_in_vec<T>(items: &mut Vec<T>, from_index: usize, to_index: usize) -> bool {
+  if from_index >= items.len() || to_index > items.len() {
+    return false;
+  }
+
+  if from_index == to_index || from_index + 1 == to_index {
+    return false;
+  }
+
+  let item = items.remove(from_index);
+  let adjusted_index = if to_index > from_index {
+    to_index.saturating_sub(1)
+  } else {
+    to_index
+  };
+  items.insert(adjusted_index.min(items.len()), item);
+  true
+}
+
 #[cfg(test)]
 fn repository_updated_label_at(updated_at: &str, now: OffsetDateTime) -> SharedString {
   format!("Updated {}", format_relative_time_at(updated_at, now)).into()
@@ -181,6 +201,49 @@ impl GithubPullRequestTabState {
       error: None,
       loaded_once: false,
     }
+  }
+}
+
+#[derive(Clone)]
+struct DraggedPullRequestTab {
+  tab_id: String,
+  name: SharedString,
+}
+
+struct DraggedPullRequestTabPreview {
+  name: SharedString,
+  position: Point<Pixels>,
+}
+
+impl DraggedPullRequestTabPreview {
+  fn new(name: SharedString, position: Point<Pixels>) -> Self {
+    Self { name, position }
+  }
+}
+
+impl Render for DraggedPullRequestTabPreview {
+  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    div().pl(self.position.x).pt(self.position.y).child(
+      h_flex()
+        .items_center()
+        .gap_2()
+        .w(px(240.0))
+        .h(px(36.0))
+        .px_3()
+        .rounded(theme.radius)
+        .bg(theme.background)
+        .border_1()
+        .border_color(theme.drag_border)
+        .text_color(theme.foreground)
+        .child(
+          Icon::new(UiIconName::EllipsisVertical)
+            .size_3()
+            .text_color(theme.muted_foreground),
+        )
+        .child(Label::new(self.name.clone()).truncate()),
+    )
   }
 }
 
@@ -2444,6 +2507,46 @@ impl GithubPage {
     ConfigStore::persist_github_home_pull_request_tabs(&self.pull_request_tab_configs());
   }
 
+  fn move_pull_request_tab(&mut self, from_index: usize, to_index: usize, cx: &mut Context<Self>) {
+    if !move_item_in_vec(&mut self.pull_request_tabs, from_index, to_index) {
+      return;
+    }
+
+    self.ensure_active_pull_request_tab();
+    self.persist_pull_request_tabs();
+    self.apply_active_pull_request_rows(cx);
+    cx.notify();
+  }
+
+  fn move_pull_request_tab_before(
+    &mut self,
+    dragged_tab_id: &str,
+    target_index: usize,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(from_index) = self
+      .pull_request_tabs
+      .iter()
+      .position(|tab_state| tab_state.tab.id == dragged_tab_id)
+    else {
+      return;
+    };
+
+    self.move_pull_request_tab(from_index, target_index, cx);
+  }
+
+  fn move_pull_request_tab_to_end(&mut self, dragged_tab_id: &str, cx: &mut Context<Self>) {
+    let Some(from_index) = self
+      .pull_request_tabs
+      .iter()
+      .position(|tab_state| tab_state.tab.id == dragged_tab_id)
+    else {
+      return;
+    };
+
+    self.move_pull_request_tab(from_index, self.pull_request_tabs.len(), cx);
+  }
+
   fn set_active_pull_request_tab(
     &mut self,
     index: usize,
@@ -2631,12 +2734,188 @@ impl GithubPage {
     self.open_pull_request_tab_dialog(GithubPullRequestTabDialogMode::Create, None, window, cx);
   }
 
+  fn render_manage_pull_request_tab_row(
+    &self,
+    index: usize,
+    tab_state: &GithubPullRequestTabState,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+    let tab = tab_state.tab.clone();
+    let edit_tab = tab.clone();
+    let delete_tab = tab.clone();
+    let drag_tab = DraggedPullRequestTab {
+      tab_id: tab.id.clone(),
+      name: tab.name.clone().into(),
+    };
+    let drag_tab_id = tab.id.clone();
+    let filter_labels = pull_request_tab_filter_tag_labels(&tab.filters);
+
+    v_flex()
+      .id(("github-home-manage-tab-row", index))
+      .gap_2()
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius)
+      .bg(theme.background)
+      .p_3()
+      .drag_over::<DraggedPullRequestTab>(move |this, dragged_tab, _, cx| {
+        if dragged_tab.tab_id == drag_tab_id {
+          this
+        } else {
+          this
+            .border_color(cx.theme().drag_border)
+            .bg(cx.theme().drop_target)
+        }
+      })
+      .on_drop(cx.listener(
+        move |this, dragged_tab: &DraggedPullRequestTab, _window, cx| {
+          this.move_pull_request_tab_before(&dragged_tab.tab_id, index, cx);
+        },
+      ))
+      .child(
+        h_flex()
+          .items_center()
+          .justify_between()
+          .gap_3()
+          .child(
+            h_flex()
+              .items_start()
+              .gap_3()
+              .flex_1()
+              .min_w_0()
+              .child(
+                div()
+                  .id(("github-home-manage-drag-pr-tab", index))
+                  .mt_1()
+                  .cursor_move()
+                  .text_color(theme.muted_foreground)
+                  .on_drag(drag_tab, |drag, position, _, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| DraggedPullRequestTabPreview::new(drag.name.clone(), position))
+                  })
+                  .child(Icon::new(UiIconName::EllipsisVertical).size_4()),
+              )
+              .child(
+                v_flex()
+                  .gap_1()
+                  .flex_1()
+                  .min_w_0()
+                  .child(
+                    h_flex()
+                      .items_center()
+                      .gap_2()
+                      .child(div().child(tab.name.clone()))
+                      .when(tab_state.loaded_once, |this| {
+                        this.child(
+                          Tag::secondary()
+                            .small()
+                            .rounded_full()
+                            .child(tab_state.rows.len().to_string()),
+                        )
+                      }),
+                  )
+                  .child(if filter_labels.is_empty() {
+                    div()
+                      .text_sm()
+                      .text_color(theme.muted_foreground)
+                      .child("All open pull requests")
+                      .into_any_element()
+                  } else {
+                    h_flex()
+                      .gap_1()
+                      .flex_wrap()
+                      .children(filter_labels.into_iter().map(|label| {
+                        Tag::secondary()
+                          .small()
+                          .rounded_full()
+                          .child(label)
+                          .into_any_element()
+                      }))
+                      .into_any_element()
+                  }),
+              ),
+          )
+          .child(
+            h_flex()
+              .gap_2()
+              .child(
+                Button::new(("github-home-manage-edit-pr-tab", index))
+                  .label("Edit")
+                  .icon(UiIconName::SquarePen)
+                  .small()
+                  .outline()
+                  .on_click({
+                    let view = cx.entity().clone();
+                    move |_, window, cx| {
+                      view.update(cx, |this, cx| {
+                        this.open_pull_request_tab_dialog(
+                          GithubPullRequestTabDialogMode::Edit,
+                          Some(edit_tab.clone()),
+                          window,
+                          cx,
+                        );
+                      });
+                    }
+                  }),
+              )
+              .child(
+                Button::new(("github-home-manage-delete-pr-tab", index))
+                  .label("Delete")
+                  .small()
+                  .danger()
+                  .on_click({
+                    let view = cx.entity().clone();
+                    move |_, window, cx| {
+                      view.update(cx, |this, cx| {
+                        this.confirm_delete_pull_request_tab(delete_tab.clone(), window, cx);
+                      });
+                    }
+                  }),
+              ),
+          ),
+      )
+      .into_any_element()
+  }
+
+  fn render_manage_pull_request_tab_end_drop_zone(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    h_flex()
+      .id("github-home-manage-tab-end-drop-zone")
+      .items_center()
+      .justify_center()
+      .h_10()
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius)
+      .text_sm()
+      .text_color(theme.muted_foreground)
+      .child("Drag here to move to the end")
+      .drag_over::<DraggedPullRequestTab>(|this, _, _, cx| {
+        this
+          .border_color(cx.theme().drag_border)
+          .bg(cx.theme().drop_target)
+      })
+      .on_drop(
+        cx.listener(|this, dragged_tab: &DraggedPullRequestTab, _window, cx| {
+          this.move_pull_request_tab_to_end(&dragged_tab.tab_id, cx);
+        }),
+      )
+      .into_any_element()
+  }
+
   fn render_manage_pull_request_tabs(
     &self,
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) -> AnyElement {
     let theme = cx.theme().clone();
+    let mut tab_rows = Vec::with_capacity(self.pull_request_tabs.len());
+    for (index, tab_state) in self.pull_request_tabs.iter().enumerate() {
+      tab_rows.push(self.render_manage_pull_request_tab_row(index, tab_state, cx));
+    }
+    let end_drop_zone = self.render_manage_pull_request_tab_end_drop_zone(cx);
 
     v_flex()
       .gap_3()
@@ -2660,7 +2939,7 @@ impl GithubPage {
                 div()
                   .text_sm()
                   .text_color(theme.muted_foreground)
-                  .child("Create, edit, and delete saved pull request lists."),
+                  .child("Drag to reorder, then edit or delete saved pull request lists."),
               ),
           )
           .child(
@@ -2703,116 +2982,7 @@ impl GithubPage {
             .flex_1()
             .min_h_0()
             .overflow_y_scrollbar()
-            .children(
-              self
-                .pull_request_tabs
-                .iter()
-                .enumerate()
-                .map(|(index, tab_state)| {
-                  let tab = tab_state.tab.clone();
-                  let edit_tab = tab.clone();
-
-                  v_flex()
-                    .id(("github-home-manage-tab-row", index))
-                    .gap_2()
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(theme.radius)
-                    .p_3()
-                    .child(
-                      h_flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_3()
-                        .child(
-                          v_flex()
-                            .gap_1()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                              h_flex()
-                                .items_center()
-                                .gap_2()
-                                .child(div().child(tab.name.clone()))
-                                .when(tab_state.loaded_once, |this| {
-                                  this.child(
-                                    Tag::secondary()
-                                      .small()
-                                      .rounded_full()
-                                      .child(tab_state.rows.len().to_string()),
-                                  )
-                                }),
-                            )
-                            .child({
-                              let filter_labels = pull_request_tab_filter_tag_labels(&tab.filters);
-
-                              if filter_labels.is_empty() {
-                                div()
-                                  .text_sm()
-                                  .text_color(theme.muted_foreground)
-                                  .child("All open pull requests")
-                                  .into_any_element()
-                              } else {
-                                h_flex()
-                                  .gap_1()
-                                  .flex_wrap()
-                                  .children(filter_labels.into_iter().map(|label| {
-                                    Tag::secondary()
-                                      .small()
-                                      .rounded_full()
-                                      .child(label)
-                                      .into_any_element()
-                                  }))
-                                  .into_any_element()
-                              }
-                            }),
-                        )
-                        .child(
-                          h_flex()
-                            .gap_2()
-                            .child(
-                              Button::new(("github-home-manage-edit-pr-tab", index))
-                                .label("Edit")
-                                .icon(UiIconName::SquarePen)
-                                .small()
-                                .outline()
-                                .on_click({
-                                  let view = cx.entity().clone();
-                                  move |_, window, cx| {
-                                    view.update(cx, |this, cx| {
-                                      this.open_pull_request_tab_dialog(
-                                        GithubPullRequestTabDialogMode::Edit,
-                                        Some(edit_tab.clone()),
-                                        window,
-                                        cx,
-                                      );
-                                    });
-                                  }
-                                }),
-                            )
-                            .child(
-                              Button::new(("github-home-manage-delete-pr-tab", index))
-                                .label("Delete")
-                                .small()
-                                .danger()
-                                .on_click({
-                                  let view = cx.entity().clone();
-                                  let delete_tab = tab.clone();
-                                  move |_, window, cx| {
-                                    view.update(cx, |this, cx| {
-                                      this.confirm_delete_pull_request_tab(
-                                        delete_tab.clone(),
-                                        window,
-                                        cx,
-                                      );
-                                    });
-                                  }
-                                }),
-                            ),
-                        ),
-                    )
-                }),
-            ),
+            .children(tab_rows.into_iter().chain(std::iter::once(end_drop_zone))),
         )
       })
       .into_any_element()
@@ -4045,6 +4215,31 @@ mod tests {
   }
 
   #[test]
+  fn move_item_in_vec_reorders_items_before_target_index() {
+    let mut items = vec!["a", "b", "c"];
+
+    assert!(move_item_in_vec(&mut items, 2, 0));
+    assert_eq!(items, vec!["c", "a", "b"]);
+  }
+
+  #[test]
+  fn move_item_in_vec_supports_moving_items_to_end() {
+    let mut items = vec!["a", "b", "c"];
+
+    assert!(move_item_in_vec(&mut items, 0, 3));
+    assert_eq!(items, vec!["b", "c", "a"]);
+  }
+
+  #[test]
+  fn move_item_in_vec_skips_noop_reorders() {
+    let mut items = vec!["a", "b", "c"];
+
+    assert!(!move_item_in_vec(&mut items, 1, 1));
+    assert!(!move_item_in_vec(&mut items, 1, 2));
+    assert_eq!(items, vec!["a", "b", "c"]);
+  }
+
+  #[test]
   fn pull_request_tab_delete_confirmation_mentions_tab_name() {
     let (title, message) = pull_request_tab_delete_confirmation("Needs Review");
 
@@ -4216,6 +4411,104 @@ mod tests {
     assert_eq!(remaining_tabs, 0);
     assert!(managing_tabs);
     assert_eq!(selected_index, 0);
+  }
+
+  #[gpui::test]
+  fn move_pull_request_tab_reorders_tabs_and_keeps_active_tab(cx: &mut TestAppContext) {
+    let _config_guard = GithubPageTestConfigGuard::new("reorder-tabs");
+    init_gpui_test(cx);
+    let api = ApiClient::new_with_base_url("http://localhost:0".to_string());
+    let (github_page, cx) =
+      cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
+
+    github_page.update_in(cx, |this, _window, cx| {
+      this.pull_request_tabs = make_pull_request_tab_states(vec![
+        GithubHomePullRequestTab {
+          id: "tab-a".to_string(),
+          name: "A".to_string(),
+          filters: GithubPullRequestSearchFilters::default(),
+        },
+        GithubHomePullRequestTab {
+          id: "tab-b".to_string(),
+          name: "B".to_string(),
+          filters: GithubPullRequestSearchFilters::default(),
+        },
+        GithubHomePullRequestTab {
+          id: "tab-c".to_string(),
+          name: "C".to_string(),
+          filters: GithubPullRequestSearchFilters::default(),
+        },
+      ]);
+      this.active_pull_request_tab_id = Some("tab-b".to_string());
+      this.move_pull_request_tab_before("tab-c", 0, cx);
+    });
+
+    let (tab_order, active_tab_id, active_index) = github_page.read_with(cx, |this, _cx| {
+      (
+        this
+          .pull_request_tabs
+          .iter()
+          .map(|tab_state| tab_state.tab.id.clone())
+          .collect::<Vec<_>>(),
+        this.active_pull_request_tab_id.clone(),
+        this.active_pull_request_tab_index(),
+      )
+    });
+    let stored_tabs = ConfigStore::load_or_seed_github_home_pull_request_tabs();
+    let stored_order = stored_tabs
+      .into_iter()
+      .map(|tab| tab.id)
+      .collect::<Vec<_>>();
+
+    assert_eq!(tab_order, vec!["tab-c", "tab-a", "tab-b"]);
+    assert_eq!(stored_order, vec!["tab-c", "tab-a", "tab-b"]);
+    assert_eq!(active_tab_id.as_deref(), Some("tab-b"));
+    assert_eq!(active_index, Some(2));
+  }
+
+  #[gpui::test]
+  fn move_pull_request_tab_to_end_places_tab_after_last_entry(cx: &mut TestAppContext) {
+    let _config_guard = GithubPageTestConfigGuard::new("reorder-tabs-end");
+    init_gpui_test(cx);
+    let api = ApiClient::new_with_base_url("http://localhost:0".to_string());
+    let (github_page, cx) =
+      cx.add_window_view(|window, cx| GithubPage::new_for_test(api, window, cx));
+
+    github_page.update_in(cx, |this, _window, cx| {
+      this.pull_request_tabs = make_pull_request_tab_states(vec![
+        GithubHomePullRequestTab {
+          id: "tab-a".to_string(),
+          name: "A".to_string(),
+          filters: GithubPullRequestSearchFilters::default(),
+        },
+        GithubHomePullRequestTab {
+          id: "tab-b".to_string(),
+          name: "B".to_string(),
+          filters: GithubPullRequestSearchFilters::default(),
+        },
+        GithubHomePullRequestTab {
+          id: "tab-c".to_string(),
+          name: "C".to_string(),
+          filters: GithubPullRequestSearchFilters::default(),
+        },
+      ]);
+      this.active_pull_request_tab_id = Some(GITHUB_HOME_MANAGE_TABS_ID.to_string());
+      this.move_pull_request_tab_to_end("tab-a", cx);
+    });
+
+    let (tab_order, selected_index) = github_page.read_with(cx, |this, _cx| {
+      (
+        this
+          .pull_request_tabs
+          .iter()
+          .map(|tab_state| tab_state.tab.id.clone())
+          .collect::<Vec<_>>(),
+        this.active_pull_request_inbox_tab_index(),
+      )
+    });
+
+    assert_eq!(tab_order, vec!["tab-b", "tab-c", "tab-a"]);
+    assert_eq!(selected_index, 3);
   }
 
   #[gpui::test]
