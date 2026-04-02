@@ -201,64 +201,38 @@ fn pull_request_review_status_from_label(label: &str) -> GithubPullRequestReview
   }
 }
 
-fn format_tab_filter_count(count: usize, singular: &str, plural: &str) -> String {
-  if count == 1 {
-    format!("1 {singular}")
-  } else {
-    format!("{count} {plural}")
-  }
-}
+fn pull_request_tab_filter_tag_labels(filters: &GithubPullRequestSearchFilters) -> Vec<String> {
+  let mut labels = Vec::new();
 
-fn pull_request_tab_filter_summary(filters: &GithubPullRequestSearchFilters) -> String {
-  let mut parts = Vec::new();
+  labels.extend(filters.repos.iter().map(|repo| repo.to_string()));
+  labels.extend(filters.labels.iter().map(|label| label.to_string()));
+  labels.extend(
+    filters
+      .authors
+      .iter()
+      .map(|author| format!("Author: {author}")),
+  );
+  labels.extend(
+    filters
+      .assignees
+      .iter()
+      .map(|assignee| format!("Assignee: {assignee}")),
+  );
+  labels.extend(
+    filters
+      .requested_reviewers
+      .iter()
+      .map(|reviewer| format!("Reviewer: {reviewer}")),
+  );
 
-  if !filters.repos.is_empty() {
-    parts.push(format_tab_filter_count(
-      filters.repos.len(),
-      "repo",
-      "repos",
-    ));
-  }
-  if !filters.labels.is_empty() {
-    parts.push(format_tab_filter_count(
-      filters.labels.len(),
-      "label",
-      "labels",
-    ));
-  }
-  if !filters.authors.is_empty() {
-    parts.push(format_tab_filter_count(
-      filters.authors.len(),
-      "author",
-      "authors",
-    ));
-  }
-  if !filters.assignees.is_empty() {
-    parts.push(format_tab_filter_count(
-      filters.assignees.len(),
-      "assignee",
-      "assignees",
-    ));
-  }
-  if !filters.requested_reviewers.is_empty() {
-    parts.push(format_tab_filter_count(
-      filters.requested_reviewers.len(),
-      "reviewer",
-      "reviewers",
-    ));
-  }
   if filters.review_status != GithubPullRequestReviewStatus::Any {
-    parts.push(pull_request_review_status_label(filters.review_status).to_string());
+    labels.push(pull_request_review_status_label(filters.review_status).to_string());
   }
   if !filters.include_drafts {
-    parts.push("Drafts hidden".to_string());
+    labels.push("Drafts hidden".to_string());
   }
 
-  if parts.is_empty() {
-    return "All open pull requests".to_string();
-  }
-
-  parts.join(" · ")
+  labels
 }
 
 fn pull_request_tab_delete_confirmation(tab_name: &str) -> (SharedString, SharedString) {
@@ -2415,8 +2389,7 @@ impl GithubPage {
         .p_0()
         .min_h_0()
         .w(px(680.0))
-        .h(relative(0.9))
-        .max_h(px(805.0))
+        .h(relative(0.85))
         .child(dialog_for_overlay.clone())
     });
 
@@ -2547,12 +2520,29 @@ impl GithubPage {
                                   )
                                 }),
                             )
-                            .child(
-                              div()
-                                .text_sm()
-                                .text_color(theme.muted_foreground)
-                                .child(pull_request_tab_filter_summary(&tab.filters)),
-                            ),
+                            .child({
+                              let filter_labels = pull_request_tab_filter_tag_labels(&tab.filters);
+
+                              if filter_labels.is_empty() {
+                                div()
+                                  .text_sm()
+                                  .text_color(theme.muted_foreground)
+                                  .child("All open pull requests")
+                                  .into_any_element()
+                              } else {
+                                h_flex()
+                                  .gap_1()
+                                  .flex_wrap()
+                                  .children(filter_labels.into_iter().map(|label| {
+                                    Tag::secondary()
+                                      .small()
+                                      .rounded_full()
+                                      .child(label)
+                                      .into_any_element()
+                                  }))
+                                  .into_any_element()
+                              }
+                            }),
                         )
                         .child(
                           h_flex()
@@ -3795,6 +3785,32 @@ mod tests {
 
     assert_eq!(title.as_ref(), "Delete pull request list?");
     assert!(message.as_ref().contains("Needs Review"));
+  }
+
+  #[test]
+  fn pull_request_tab_filter_tag_labels_expand_selected_filters() {
+    let labels = pull_request_tab_filter_tag_labels(&GithubPullRequestSearchFilters {
+      repos: vec!["acme/reviu".to_string()],
+      labels: vec!["bug".to_string()],
+      authors: vec!["@me".to_string()],
+      assignees: vec!["alice".to_string()],
+      requested_reviewers: vec!["bob".to_string()],
+      review_status: GithubPullRequestReviewStatus::Required,
+      include_drafts: false,
+    });
+
+    assert_eq!(
+      labels,
+      vec![
+        "acme/reviu".to_string(),
+        "bug".to_string(),
+        "Author: @me".to_string(),
+        "Assignee: alice".to_string(),
+        "Reviewer: bob".to_string(),
+        "Review required".to_string(),
+        "Drafts hidden".to_string(),
+      ]
+    );
   }
 
   #[test]
