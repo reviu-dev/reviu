@@ -3708,6 +3708,7 @@ impl GithubPrDetailsPage {
       div()
         .flex()
         .id(content.id)
+        .debug_selector(|| content.id.to_string())
         .w_full()
         .items_start()
         .gap_3()
@@ -9029,14 +9030,14 @@ impl GithubPrDetailsPage {
     } else {
       Some(
         h_flex()
+          .debug_selector(|| "github-pr-overview-labels".to_string())
           .gap_1()
           .flex_wrap()
-          .children(pr.labels.iter().map(|label| {
-            Tag::secondary()
-              .small()
-              .rounded_full()
-              .child(label.name.clone())
-          })),
+          .children(
+            pr.labels
+              .iter()
+              .map(|label| github_shared::github_label_tag(label, &theme)),
+          ),
       )
     };
 
@@ -9236,8 +9237,8 @@ impl GithubPrDetailsPage {
             ),
         ),
       )
-      .when_some(overview_pr_alert, |this, alert| this.child(alert))
       .when_some(labels_row, |this, labels| this.child(labels))
+      .when_some(overview_pr_alert, |this, alert| this.child(alert))
       .child(
         v_flex()
           .gap_2()

@@ -2,14 +2,17 @@ use std::sync::Arc;
 
 use gpui::{App, Hsla, IntoElement, ParentElement as _, SharedString, Styled, div, prelude::*};
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, Sizable as _, avatar::Avatar, h_flex, label::Label, tag::Tag,
-  v_flex,
+  ActiveTheme as _, Colorize as _, Icon, IconName, Sizable as _, avatar::Avatar, h_flex,
+  label::Label, tag::Tag, v_flex,
 };
 use time::OffsetDateTime;
 use ui::{StatusTag, StatusThemeExt as _, UiIconName};
 
 use crate::{
-  api::{ApiClient, GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestStatus},
+  api::{
+    ApiClient, GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel,
+    GithubPullRequestStatus,
+  },
   date_format::format_relative_time_at,
 };
 
@@ -79,6 +82,52 @@ pub(crate) fn issue_url(owner: &str, repo: &str, issue_number: u64) -> String {
 
 pub(crate) fn pr_url(owner: &str, repo: &str, pr_number: u64) -> String {
   format!("https://github.com/{owner}/{repo}/pull/{pr_number}")
+}
+
+fn github_label_color(label: &GithubPullRequestLabel) -> Option<Hsla> {
+  let color = label
+    .color
+    .as_deref()
+    .map(str::trim)
+    .filter(|color| !color.is_empty())?;
+  let hex = if color.starts_with('#') {
+    color.to_string()
+  } else {
+    format!("#{color}")
+  };
+
+  <Hsla as gpui_component::Colorize>::parse_hex(&hex).ok()
+}
+
+pub(crate) fn github_label_tag(
+  label: &GithubPullRequestLabel,
+  theme: &gpui_component::Theme,
+) -> Tag {
+  let tag = if let Some(color) = github_label_color(label) {
+    let background = if theme.is_dark() {
+      color.mix_oklab(theme.background, 0.22)
+    } else {
+      color.mix_oklab(theme.background, 0.14)
+    };
+    let border = if theme.is_dark() {
+      color.mix_oklab(theme.border, 0.45)
+    } else {
+      color.mix_oklab(theme.border, 0.6)
+    };
+    let foreground = if theme.is_dark() {
+      color.mix_oklab(theme.foreground, 0.55)
+    } else if color.l > 0.62 {
+      color.mix_oklab(theme.foreground, 0.2)
+    } else {
+      color.mix_oklab(theme.foreground, 0.65)
+    };
+
+    Tag::custom(background, foreground, border)
+  } else {
+    Tag::secondary()
+  };
+
+  tag.small().rounded_full().child(label.name.clone())
 }
 
 pub(crate) fn pull_request_status_label(status: GithubPullRequestStatus) -> &'static str {
@@ -258,12 +307,11 @@ pub(crate) fn pull_request_list_row_body(
   let activity_text = pull_request_activity_text(pr);
   let updated_text = pull_request_updated_text(pr);
 
-  let label_tags = pr.labels.iter().take(4).map(|label| {
-    Tag::secondary()
-      .small()
-      .rounded_full()
-      .child(label.name.clone())
-  });
+  let label_tags = pr
+    .labels
+    .iter()
+    .take(4)
+    .map(|label| github_label_tag(label, theme));
 
   let row = v_flex()
     .gap_1()
@@ -428,7 +476,7 @@ pub(crate) fn next_trimmed_text_update(raw_value: &str, initial_value: &str) -> 
 #[cfg(test)]
 mod tests {
   use super::{
-    PULL_REQUEST_ROW_HEIGHT_PX, PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX,
+    PULL_REQUEST_ROW_HEIGHT_PX, PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX, github_label_color,
     is_unauthorized_error_message, issue_url, line_snippets_from_content,
     logins_match_case_insensitive, next_trimmed_text_update, normalize_non_empty_text, pr_url,
     pull_request_activity_text_at, pull_request_author_display_name, pull_request_author_is_bot,
@@ -445,7 +493,7 @@ mod tests {
     Context, InteractiveElement, IntoElement, ParentElement, Render, Styled, TestAppContext,
     Window, div,
   };
-  use gpui_component::{ActiveTheme as _, v_flex};
+  use gpui_component::{ActiveTheme as _, Colorize as _, v_flex};
   use time::{OffsetDateTime, format_description::well_known::Rfc3339};
   use ui::StatusThemeExt as _;
 
@@ -479,6 +527,7 @@ mod tests {
         .iter()
         .map(|label| GithubPullRequestLabel {
           name: (*label).to_string(),
+          color: Some("f29513".to_string()),
         })
         .collect(),
       repository: GithubRepository {
@@ -540,6 +589,28 @@ mod tests {
   #[test]
   fn repo_label_formats_owner_and_repo() {
     assert_eq!(repo_label("acme", "widget"), "acme/widget");
+  }
+
+  #[test]
+  fn github_label_color_parses_hex_without_hash() {
+    let color = github_label_color(&GithubPullRequestLabel {
+      name: "bug".to_string(),
+      color: Some("f29513".to_string()),
+    })
+    .expect("parsed color");
+
+    assert!(color.to_hex().starts_with("#F2951"));
+  }
+
+  #[test]
+  fn github_label_color_returns_none_for_missing_color() {
+    assert!(
+      github_label_color(&GithubPullRequestLabel {
+        name: "bug".to_string(),
+        color: None,
+      })
+      .is_none()
+    );
   }
 
   #[test]
