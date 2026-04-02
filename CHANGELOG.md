@@ -12,6 +12,10 @@ GitHub home now includes a dedicated `Manage tabs` view for your pull request li
 
 Notifications now sit above your repositories on the GitHub home page, so the repositories list no longer stretches the full column height and the left side is easier to scan.
 
+### Collapsible GitHub Repo Sections
+
+GitHub home pull request lists and notifications now let you click each repository section to collapse or expand its items.
+
 ### Image File Previews in Review Editors
 
 Git and pull request review editors now render PNG, JPEG, WebP, GIF, BMP, TIFF, and ICO files as previews instead of showing raw binary text. Unsupported binary files now show a clear placeholder so large review panes no longer fill with unreadable content.

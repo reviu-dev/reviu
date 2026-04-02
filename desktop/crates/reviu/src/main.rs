@@ -71,6 +71,7 @@ fn main() {
 
   app.run(move |cx: &mut App| {
     gpui_component::init(cx);
+    ui::init(cx);
     let http_client = ReqwestClient::user_agent("reviu").expect("Failed to create HTTP client");
     cx.set_http_client(Arc::new(http_client));
 

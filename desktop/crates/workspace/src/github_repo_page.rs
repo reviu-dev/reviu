@@ -12,17 +12,19 @@ use gfm_markdown_viewer::{
   MarkdownRenderState, extract_github_blob_line_references, render_markdown,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, ParentElement, Render,
-  RenderImage, SharedString, Styled, Subscription, Task, Window, div, img, prelude::*, px,
+  AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, ParentElement, Pixels,
+  Render, RenderImage, SharedString, Styled, Subscription, Task, Window, div, img, prelude::*, px,
+  size,
 };
+#[cfg(test)]
+use gpui_component::IndexPath;
 use gpui_component::{
-  ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Placement, Selectable, Sizable as _,
-  StyledExt,
+  ActiveTheme as _, Disableable, Icon, IconName, Placement, Selectable, Sizable as _, StyledExt,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   h_flex,
   label::Label,
-  list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  list::ListItem,
   scroll::ScrollableElement,
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
   spinner::Spinner,
@@ -38,7 +40,8 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
   DETAILS_PAGE_CONTAINER_MAX_WIDTH, FILE_ICON_SIZE_PX, Input, InputState, SearchFileEntry,
-  SearchFileHandler, SelectableRowStyle, StatusTag, StatusThemeExt as _, UiIconName, WindowExt,
+  SearchFileHandler, SelectableRowStyle, StatusTag, StatusThemeExt as _, UiIconName, VariableList,
+  VariableListDelegate, VariableListEvent, VariableListState, WindowExt,
   file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
   selectable_list_item,
 };
@@ -65,6 +68,7 @@ use crate::{
   workspace::WorkspaceApi,
 };
 
+#[cfg(test)]
 fn list_base_item(
   ix: IndexPath,
   selected_index: Option<IndexPath>,
@@ -78,10 +82,26 @@ fn list_base_item(
   )
 }
 
-fn update_selected_index<D: ListDelegate>(
-  selected_index: &mut Option<IndexPath>,
-  ix: Option<IndexPath>,
-  cx: &mut Context<ListState<D>>,
+const REPO_ISSUE_ROW_COMPACT_HEIGHT_PX: f32 = 48.0;
+const REPO_ISSUE_ROW_WITH_LABELS_HEIGHT_PX: f32 = 76.0;
+
+fn variable_list_base_item(
+  ix: usize,
+  selected_index: Option<usize>,
+  theme: &gpui_component::Theme,
+) -> ListItem {
+  selectable_list_item(
+    ("repo-variable-list-item", ix),
+    Some(ix) == selected_index,
+    SelectableRowStyle::Inset,
+    theme,
+  )
+}
+
+fn update_variable_list_selected_index<D: VariableListDelegate>(
+  selected_index: &mut Option<usize>,
+  ix: Option<usize>,
+  cx: &mut Context<VariableListState<D>>,
 ) {
   *selected_index = ix;
   cx.notify();
@@ -805,7 +825,7 @@ impl GithubRepoPullRequestRow {
 struct GithubRepoPullRequestListDelegate {
   all_rows: Vec<Rc<GithubRepoPullRequestRow>>,
   matched_rows: Vec<Rc<GithubRepoPullRequestRow>>,
-  selected_index: Option<IndexPath>,
+  selected_index: Option<usize>,
   query: SharedString,
   loading: bool,
 }
@@ -815,7 +835,7 @@ impl GithubRepoPullRequestListDelegate {
     Self {
       all_rows: Vec::new(),
       matched_rows: Vec::new(),
-      selected_index: Some(IndexPath::default()),
+      selected_index: Some(0),
       query: "".into(),
       loading: false,
     }
@@ -841,27 +861,38 @@ impl GithubRepoPullRequestListDelegate {
   }
 }
 
-impl ListDelegate for GithubRepoPullRequestListDelegate {
+impl VariableListDelegate for GithubRepoPullRequestListDelegate {
   type Item = ListItem;
 
-  fn items_count(&self, _section: usize, _cx: &App) -> usize {
+  fn items_count(&self, _cx: &App) -> usize {
     self.matched_rows.len()
+  }
+
+  fn item_size(&self, ix: usize, _cx: &App) -> gpui::Size<Pixels> {
+    let height = self
+      .matched_rows
+      .get(ix)
+      .map(|row| github_shared::pull_request_row_height_px(row.pr.as_ref()))
+      .unwrap_or(0.0);
+    size(px(0.0), px(height))
   }
 
   fn render_item(
     &mut self,
-    ix: IndexPath,
+    ix: usize,
     _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
+    cx: &mut Context<VariableListState<Self>>,
   ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
-    let base_item = list_base_item(ix, self.selected_index, &theme);
-    let row = self.matched_rows.get(ix.row)?;
+    let base_item = variable_list_base_item(ix, self.selected_index, &theme);
+    let row = self.matched_rows.get(ix)?;
 
     Some(
       base_item
         .px_2()
-        .py_2()
+        .h(px(github_shared::pull_request_row_height_px(
+          row.pr.as_ref(),
+        )))
         .child(github_shared::pull_request_list_row_body(
           row.pr.as_ref(),
           &theme,
@@ -874,7 +905,7 @@ impl ListDelegate for GithubRepoPullRequestListDelegate {
   fn render_empty(
     &mut self,
     _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
+    cx: &mut Context<VariableListState<Self>>,
   ) -> impl IntoElement {
     v_flex()
       .size_full()
@@ -888,18 +919,18 @@ impl ListDelegate for GithubRepoPullRequestListDelegate {
 
   fn set_selected_index(
     &mut self,
-    ix: Option<IndexPath>,
+    ix: Option<usize>,
     _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
+    cx: &mut Context<VariableListState<Self>>,
   ) {
-    update_selected_index(&mut self.selected_index, ix, cx);
+    update_variable_list_selected_index(&mut self.selected_index, ix, cx);
   }
 
   fn perform_search(
     &mut self,
     query: &str,
     _: &mut Window,
-    _: &mut Context<ListState<Self>>,
+    _: &mut Context<VariableListState<Self>>,
   ) -> Task<()> {
     self.prepare(query.to_owned());
     Task::ready(())
@@ -948,7 +979,7 @@ impl GithubRepoIssueRow {
 struct GithubRepoIssueListDelegate {
   all_rows: Vec<Rc<GithubRepoIssueRow>>,
   matched_rows: Vec<Rc<GithubRepoIssueRow>>,
-  selected_index: Option<IndexPath>,
+  selected_index: Option<usize>,
   query: SharedString,
   loading: bool,
 }
@@ -958,7 +989,7 @@ impl GithubRepoIssueListDelegate {
     Self {
       all_rows: Vec::new(),
       matched_rows: Vec::new(),
-      selected_index: Some(IndexPath::default()),
+      selected_index: Some(0),
       query: "".into(),
       loading: false,
     }
@@ -984,107 +1015,143 @@ impl GithubRepoIssueListDelegate {
   }
 }
 
-impl ListDelegate for GithubRepoIssueListDelegate {
+fn repo_issue_list_row_body(
+  issue: &GithubIssue,
+  theme: &gpui_component::Theme,
+) -> impl IntoElement {
+  let display_name = issue_user_display_name(issue.user.as_ref());
+  let opened_at = format_relative_time(&issue.created_at);
+  let updated_at = format_relative_time(&issue.updated_at);
+
+  let (state_icon, state_color) = match issue_visual_state(&issue.state, issue.state_reason.clone())
+  {
+    GithubIssueVisualState::Open => (UiIconName::CircleDot, theme.status_green()),
+    GithubIssueVisualState::Completed => (UiIconName::CircleCheck, theme.status_violet()),
+    GithubIssueVisualState::NotPlanned => (UiIconName::CircleSlash, theme.status_gray()),
+  };
+
+  let comments_count = issue.comments_count;
+  let label_tags = issue.labels.iter().take(4).map(|label| {
+    Tag::secondary()
+      .small()
+      .rounded_full()
+      .child(label.name.clone())
+  });
+
+  let row = v_flex()
+    .gap_1()
+    .child(
+      h_flex()
+        .items_center()
+        .gap_2()
+        .child(Icon::new(state_icon).size_3().text_color(state_color))
+        .child(
+          div()
+            .min_w_0()
+            .flex_1()
+            .child(Label::new(issue.title.clone()).truncate()),
+        )
+        .when(comments_count > 0, |this| {
+          this.child(
+            h_flex()
+              .items_center()
+              .gap_1()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(
+                Icon::new(UiIconName::MessageCircle)
+                  .size_3()
+                  .text_color(theme.muted_foreground),
+              )
+              .child(comments_count.to_string()),
+          )
+        }),
+    )
+    .child(
+      h_flex()
+        .gap_1()
+        .items_center()
+        .min_w_0()
+        .overflow_hidden()
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(format!("#{}", issue.number))
+        .child("·")
+        .child(
+          Avatar::new()
+            .name(display_name.clone())
+            .when_some(
+              issue.user.as_ref().and_then(|user| user.avatar_url.clone()),
+              |this, url| this.src(url),
+            )
+            .xsmall(),
+        )
+        .child(div().text_color(theme.foreground).child(display_name))
+        .child(format!("Opened {opened_at}"))
+        .child("·")
+        .child(format!("Updated {updated_at}")),
+    );
+
+  if issue.labels.is_empty() {
+    row.into_any_element()
+  } else {
+    row
+      .child(github_shared::pull_request_label_row(label_tags))
+      .into_any_element()
+  }
+}
+
+impl VariableListDelegate for GithubRepoIssueListDelegate {
   type Item = ListItem;
 
-  fn items_count(&self, _section: usize, _cx: &App) -> usize {
+  fn items_count(&self, _cx: &App) -> usize {
     self.matched_rows.len()
+  }
+
+  fn item_size(&self, ix: usize, _cx: &App) -> gpui::Size<Pixels> {
+    let height = self
+      .matched_rows
+      .get(ix)
+      .map(|row| {
+        if row.issue.labels.is_empty() {
+          REPO_ISSUE_ROW_COMPACT_HEIGHT_PX
+        } else {
+          REPO_ISSUE_ROW_WITH_LABELS_HEIGHT_PX
+        }
+      })
+      .unwrap_or(0.0);
+    size(px(0.0), px(height))
   }
 
   fn render_item(
     &mut self,
-    ix: IndexPath,
+    ix: usize,
     _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
+    cx: &mut Context<VariableListState<Self>>,
   ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
-    let base_item = list_base_item(ix, self.selected_index, &theme);
-    let row = self.matched_rows.get(ix.row)?;
+    let base_item = variable_list_base_item(ix, self.selected_index, &theme);
+    let row = self.matched_rows.get(ix)?;
     let issue = &row.issue;
-
-    let display_name = issue_user_display_name(issue.user.as_ref());
-    let opened_at = format_relative_time(&issue.created_at);
-    let updated_at = format_relative_time(&issue.updated_at);
-
-    let (state_icon, state_color) =
-      match issue_visual_state(&issue.state, issue.state_reason.clone()) {
-        GithubIssueVisualState::Open => (UiIconName::CircleDot, theme.status_green()),
-        GithubIssueVisualState::Completed => (UiIconName::CircleCheck, theme.status_violet()),
-        GithubIssueVisualState::NotPlanned => (UiIconName::CircleSlash, theme.status_gray()),
-      };
-
-    let comments_count = issue.comments_count;
-    let label_tags = issue.labels.iter().take(4).map(|label| {
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .child(label.name.clone())
-    });
+    let row_height = if issue.labels.is_empty() {
+      REPO_ISSUE_ROW_COMPACT_HEIGHT_PX
+    } else {
+      REPO_ISSUE_ROW_WITH_LABELS_HEIGHT_PX
+    };
 
     Some(
-      base_item.px_2().py_2().child(
-        v_flex()
-          .gap_1()
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(Icon::new(state_icon).size_3().text_color(state_color))
-              .child(
-                div()
-                  .min_w_0()
-                  .flex_1()
-                  .child(Label::new(issue.title.clone()).truncate()),
-              )
-              .when(comments_count > 0, |this| {
-                this.child(
-                  h_flex()
-                    .items_center()
-                    .gap_1()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(
-                      Icon::new(UiIconName::MessageCircle)
-                        .size_3()
-                        .text_color(theme.muted_foreground),
-                    )
-                    .child(comments_count.to_string()),
-                )
-              }),
-          )
-          .child(
-            h_flex()
-              .gap_1()
-              .items_center()
-              .min_w_0()
-              .overflow_hidden()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(format!("#{}", issue.number))
-              .child("·")
-              .child(
-                Avatar::new()
-                  .name(display_name.clone())
-                  .when_some(
-                    issue.user.as_ref().and_then(|user| user.avatar_url.clone()),
-                    |this, url| this.src(url),
-                  )
-                  .xsmall(),
-              )
-              .child(div().text_color(theme.foreground).child(display_name))
-              .child(format!("Opened {opened_at}"))
-              .child("·")
-              .child(format!("Updated {updated_at}")),
-          )
-          .child(github_shared::pull_request_label_row(label_tags)),
-      ),
+      base_item
+        .px_2()
+        .py_2()
+        .h(px(row_height))
+        .child(repo_issue_list_row_body(issue, &theme)),
     )
   }
 
   fn render_empty(
     &mut self,
     _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
+    cx: &mut Context<VariableListState<Self>>,
   ) -> impl IntoElement {
     v_flex()
       .size_full()
@@ -1098,18 +1165,18 @@ impl ListDelegate for GithubRepoIssueListDelegate {
 
   fn set_selected_index(
     &mut self,
-    ix: Option<IndexPath>,
+    ix: Option<usize>,
     _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
+    cx: &mut Context<VariableListState<Self>>,
   ) {
-    update_selected_index(&mut self.selected_index, ix, cx);
+    update_variable_list_selected_index(&mut self.selected_index, ix, cx);
   }
 
   fn perform_search(
     &mut self,
     query: &str,
     _: &mut Window,
-    _: &mut Context<ListState<Self>>,
+    _: &mut Context<VariableListState<Self>>,
   ) -> Task<()> {
     self.prepare(query.to_owned());
     Task::ready(())
@@ -2432,10 +2499,10 @@ pub struct GithubRepoPage {
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
   svg_preview_source: Option<SharedString>,
   svg_preview_task: Option<Task<()>>,
-  pull_requests: Entity<ListState<GithubRepoPullRequestListDelegate>>,
+  pull_requests: Entity<VariableListState<GithubRepoPullRequestListDelegate>>,
   pull_requests_error: Option<SharedString>,
   pull_requests_task: Option<Task<()>>,
-  issues: Entity<ListState<GithubRepoIssueListDelegate>>,
+  issues: Entity<VariableListState<GithubRepoIssueListDelegate>>,
   issues_error: Option<SharedString>,
   issues_task: Option<Task<()>>,
   issue_sheet_width_px: f32,
@@ -2568,10 +2635,11 @@ impl GithubRepoPage {
       .searchable(true)
     });
     let pull_requests = cx.new(|cx| {
-      ListState::new(GithubRepoPullRequestListDelegate::new(), window, cx).searchable(true)
+      VariableListState::new(GithubRepoPullRequestListDelegate::new(), window, cx).searchable(true)
     });
-    let issues =
-      cx.new(|cx| ListState::new(GithubRepoIssueListDelegate::new(), window, cx).searchable(true));
+    let issues = cx.new(|cx| {
+      VariableListState::new(GithubRepoIssueListDelegate::new(), window, cx).searchable(true)
+    });
     let code_editor = Self::build_detached_code_editor("__reviu_github_repo_placeholder__.txt", cx);
 
     let api = WorkspaceApi::global(cx).api.clone();
@@ -2638,21 +2706,24 @@ impl GithubRepoPage {
   }
 
   fn subscribe_to_pull_requests(&mut self, cx: &mut Context<Self>) {
-    let subscription = cx.subscribe(&self.pull_requests, |this, state, event: &ListEvent, cx| {
-      if let ListEvent::Confirm(ix) = event {
-        let row = state.read(cx).delegate().matched_rows.get(ix.row).cloned();
-        if let Some(row) = row {
-          GithubPrDetailsPageHandle::show_with_repo_return(
-            row.pr.repository.owner.clone().into(),
-            row.pr.repository.repo.clone().into(),
-            row.pr.number,
-            this.owner.clone(),
-            this.repo.clone(),
-            cx,
-          );
+    let subscription = cx.subscribe(
+      &self.pull_requests,
+      |this, state, event: &VariableListEvent, cx| {
+        if let VariableListEvent::Confirm(ix) = event {
+          let row = state.read(cx).delegate().matched_rows.get(*ix).cloned();
+          if let Some(row) = row {
+            GithubPrDetailsPageHandle::show_with_repo_return(
+              row.pr.repository.owner.clone().into(),
+              row.pr.repository.repo.clone().into(),
+              row.pr.number,
+              this.owner.clone(),
+              this.repo.clone(),
+              cx,
+            );
+          }
         }
-      }
-    });
+      },
+    );
 
     self._subscriptions.push(subscription);
   }
@@ -2661,9 +2732,9 @@ impl GithubRepoPage {
     let subscription = cx.subscribe_in(
       &self.issues,
       window,
-      |this, state, event: &ListEvent, window, cx| {
-        if let ListEvent::Confirm(ix) = event {
-          let row = state.read(cx).delegate().matched_rows.get(ix.row).cloned();
+      |this, state, event: &VariableListEvent, window, cx| {
+        if let VariableListEvent::Confirm(ix) = event {
+          let row = state.read(cx).delegate().matched_rows.get(*ix).cloned();
           if let Some(row) = row {
             this.open_issue_details_sheet(row.issue.clone(), None, window, cx);
           }
@@ -4882,7 +4953,7 @@ impl GithubRepoPage {
   fn render_pull_requests(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
-    let list = List::new(&self.pull_requests)
+    let list = VariableList::new(&self.pull_requests)
       .search_placeholder("Search pull requests...")
       .border_1()
       .border_color(theme.border)
@@ -4910,7 +4981,7 @@ impl GithubRepoPage {
   fn render_issues(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
-    let list = List::new(&self.issues)
+    let list = VariableList::new(&self.issues)
       .search_placeholder("Search issues...")
       .border_1()
       .border_color(theme.border)
@@ -5049,6 +5120,7 @@ mod tests {
   fn init_gpui_test(cx: &mut TestAppContext) {
     cx.update(|cx| {
       gpui_component::init(cx);
+      ui::init(cx);
       if !cx.has_global::<WorkspaceApi>() {
         cx.set_global(WorkspaceApi::new());
       }
@@ -5066,17 +5138,36 @@ mod tests {
 
       v_flex()
         .gap_2()
-        .child(div().debug_selector(|| "labeled".to_string()).child(
-          github_shared::pull_request_list_row_body(self.labeled.pr.as_ref(), &theme, false, true),
-        ))
-        .child(div().debug_selector(|| "unlabeled".to_string()).child(
-          github_shared::pull_request_list_row_body(
-            self.unlabeled.pr.as_ref(),
-            &theme,
-            false,
-            true,
+        .child(
+          div().debug_selector(|| "labeled".to_string()).child(
+            list_base_item(IndexPath::new(0), Some(IndexPath::new(0)), &theme)
+              .px_2()
+              .h(px(github_shared::pull_request_row_height_px(
+                self.labeled.pr.as_ref(),
+              )))
+              .child(github_shared::pull_request_list_row_body(
+                self.labeled.pr.as_ref(),
+                &theme,
+                false,
+                true,
+              )),
           ),
-        ))
+        )
+        .child(
+          div().debug_selector(|| "unlabeled".to_string()).child(
+            list_base_item(IndexPath::new(1), Some(IndexPath::new(1)), &theme)
+              .px_2()
+              .h(px(github_shared::pull_request_row_height_px(
+                self.unlabeled.pr.as_ref(),
+              )))
+              .child(github_shared::pull_request_list_row_body(
+                self.unlabeled.pr.as_ref(),
+                &theme,
+                false,
+                true,
+              )),
+          ),
+        )
     }
   }
 
@@ -5123,7 +5214,7 @@ mod tests {
   }
 
   #[gpui::test]
-  fn repo_pull_request_delegate_rows_keep_a_stable_height(cx: &mut TestAppContext) {
+  fn repo_pull_request_delegate_rows_use_less_height_without_labels(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let labeled = make_repo_pull_request_row("Labeled pull request", 1, &["bug"]);
     let unlabeled = make_repo_pull_request_row("Unlabeled pull request", 2, &[]);
@@ -5140,7 +5231,7 @@ mod tests {
       .size
       .height;
 
-    assert_eq!(labeled_height, unlabeled_height);
+    assert!(labeled_height > unlabeled_height);
   }
 
   struct IssueProbeView {
@@ -5164,54 +5255,17 @@ mod tests {
       };
 
       let render_issue = |issue: &GithubIssue, base_item: ListItem| {
-        let display_name = issue_user_display_name(issue.user.as_ref());
-        let opened_at = format_relative_time(&issue.created_at);
-        let updated_at = format_relative_time(&issue.updated_at);
-        let (state_icon, state_color) =
-          match issue_visual_state(&issue.state, issue.state_reason.clone()) {
-            GithubIssueVisualState::Open => (UiIconName::CircleDot, theme.status_green()),
-            GithubIssueVisualState::Completed => (UiIconName::CircleCheck, theme.status_violet()),
-            GithubIssueVisualState::NotPlanned => (UiIconName::CircleSlash, theme.status_gray()),
-          };
-        let label_tags = issue.labels.iter().take(4).map(|label| {
-          Tag::secondary()
-            .small()
-            .rounded_full()
-            .child(label.name.clone())
-        });
+        let row_height = if issue.labels.is_empty() {
+          REPO_ISSUE_ROW_COMPACT_HEIGHT_PX
+        } else {
+          REPO_ISSUE_ROW_WITH_LABELS_HEIGHT_PX
+        };
 
-        base_item.px_2().py_2().child(
-          v_flex()
-            .gap_1()
-            .child(
-              h_flex()
-                .items_center()
-                .gap_2()
-                .child(Icon::new(state_icon).size_3().text_color(state_color))
-                .child(
-                  div()
-                    .min_w_0()
-                    .flex_1()
-                    .child(Label::new(issue.title.clone()).truncate()),
-                ),
-            )
-            .child(
-              h_flex()
-                .gap_1()
-                .items_center()
-                .min_w_0()
-                .overflow_hidden()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(format!("#{}", issue.number))
-                .child(Avatar::new().name(display_name.clone()).xsmall())
-                .child(div().text_color(theme.foreground).child(display_name))
-                .child(format!("Opened {opened_at}"))
-                .child("·")
-                .child(format!("Updated {updated_at}")),
-            )
-            .child(github_shared::pull_request_label_row(label_tags)),
-        )
+        base_item
+          .px_2()
+          .py_2()
+          .h(px(row_height))
+          .child(repo_issue_list_row_body(issue, &theme))
       };
 
       v_flex()
@@ -5257,7 +5311,7 @@ mod tests {
   }
 
   #[gpui::test]
-  fn repo_issue_delegate_rows_keep_a_stable_height(cx: &mut TestAppContext) {
+  fn repo_issue_delegate_rows_use_less_height_without_labels(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let labeled = make_repo_issue_row("Labeled issue", 1, &["bug"]);
     let unlabeled = make_repo_issue_row("Unlabeled issue", 2, &[]);
@@ -5274,7 +5328,7 @@ mod tests {
       .size
       .height;
 
-    assert_eq!(labeled_height, unlabeled_height);
+    assert!(labeled_height > unlabeled_height);
   }
 
   #[gpui::test]

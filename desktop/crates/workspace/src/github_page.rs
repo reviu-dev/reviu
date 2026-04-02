@@ -1,8 +1,8 @@
 use std::{collections::HashSet, rc::Rc, sync::Arc};
 
 use gpui::{
-  AnyElement, App, Context, Entity, FocusHandle, Focusable, MouseButton, ParentElement, Render,
-  SharedString, Styled, Subscription, Task, Window, div, prelude::*, px, relative,
+  AnyElement, App, Context, Entity, FocusHandle, Focusable, MouseButton, ParentElement, Pixels,
+  Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*, px, relative, size,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, StyledExt as _,
@@ -32,7 +32,8 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
   DETAILS_PAGE_CONTAINER_MAX_WIDTH, Input, InputState, PAGE_HEADER_HEIGHT, SelectableRowStyle,
-  StatusTag, StatusThemeExt, UiIconName, WindowExt, selectable_list_item,
+  StatusTag, StatusThemeExt, UiIconName, VariableList, VariableListDelegate, VariableListEvent,
+  VariableListState, WindowExt, selectable_list_item,
 };
 
 #[cfg(test)]
@@ -71,10 +72,33 @@ fn list_base_item(
   )
 }
 
+fn variable_list_base_item(
+  ix: usize,
+  selected_index: Option<usize>,
+  theme: &gpui_component::Theme,
+) -> ListItem {
+  selectable_list_item(
+    ("github-variable-list-item", ix),
+    Some(ix) == selected_index,
+    SelectableRowStyle::Inset,
+    theme,
+  )
+  .px_2()
+}
+
 fn update_selected_index<D: ListDelegate>(
   selected_index: &mut Option<IndexPath>,
   ix: Option<IndexPath>,
   cx: &mut Context<ListState<D>>,
+) {
+  *selected_index = ix;
+  cx.notify();
+}
+
+fn update_variable_list_selected_index<D: VariableListDelegate>(
+  selected_index: &mut Option<usize>,
+  ix: Option<usize>,
+  cx: &mut Context<VariableListState<D>>,
 ) {
   *selected_index = ix;
   cx.notify();
@@ -301,6 +325,8 @@ const GITHUB_HOME_NOTIFICATIONS_UNREAD_BADGE_DEBUG_SELECTOR: &str =
   "github-home-notifications-unread-badge";
 const GITHUB_HOME_NOTIFICATIONS_COUNT_BADGE_DEBUG_SELECTOR: &str =
   "github-home-notifications-count-badge";
+const GITHUB_HOME_REPO_SECTION_ROW_HEIGHT_PX: f32 = 40.0;
+const GITHUB_HOME_NOTIFICATION_ROW_HEIGHT_PX: f32 = 56.0;
 
 fn github_home_refresh_in_progress(
   pull_requests_loading: bool,
@@ -567,6 +593,16 @@ struct GithubNotificationSection {
   rows: Vec<Rc<GithubNotificationRow>>,
 }
 
+#[derive(Clone, Debug)]
+enum GithubNotificationListEntry {
+  SectionHeader {
+    repo_label: SharedString,
+    section: usize,
+    collapsed: bool,
+  },
+  Item(Rc<GithubNotificationRow>),
+}
+
 fn build_notification_sections(
   rows: &[Rc<GithubNotificationRow>],
 ) -> Vec<GithubNotificationSection> {
@@ -595,7 +631,9 @@ struct GithubNotificationListDelegate {
   all_rows: Vec<Rc<GithubNotificationRow>>,
   matched_rows: Vec<Rc<GithubNotificationRow>>,
   sections: Vec<GithubNotificationSection>,
-  selected_index: Option<IndexPath>,
+  visible_rows: Vec<GithubNotificationListEntry>,
+  collapsed_repo_labels: HashSet<String>,
+  selected_index: Option<usize>,
   query: SharedString,
   loading: bool,
   api: ApiClient,
@@ -607,7 +645,9 @@ impl GithubNotificationListDelegate {
       all_rows: Vec::new(),
       matched_rows: Vec::new(),
       sections: Vec::new(),
-      selected_index: Some(IndexPath::default()),
+      visible_rows: Vec::new(),
+      collapsed_repo_labels: HashSet::new(),
+      selected_index: None,
       query: "".into(),
       loading: false,
       api,
@@ -632,14 +672,20 @@ impl GithubNotificationListDelegate {
 
     self.matched_rows = rows;
     self.sections = build_notification_sections(&self.matched_rows);
+    self.collapsed_repo_labels.retain(|repo_label| {
+      self
+        .sections
+        .iter()
+        .any(|section| section.repo_label.as_ref() == repo_label)
+    });
+    self.rebuild_visible_rows();
   }
 
-  fn row_at(&self, ix: IndexPath) -> Option<Rc<GithubNotificationRow>> {
-    self
-      .sections
-      .get(ix.section)
-      .and_then(|section| section.rows.get(ix.row))
-      .cloned()
+  fn row_at(&self, ix: usize) -> Option<Rc<GithubNotificationRow>> {
+    match self.visible_rows.get(ix)? {
+      GithubNotificationListEntry::Item(row) => Some(row.clone()),
+      GithubNotificationListEntry::SectionHeader { .. } => None,
+    }
   }
 
   fn unread_count(&self) -> usize {
@@ -649,123 +695,188 @@ impl GithubNotificationListDelegate {
       .filter(|row| row.notification.unread)
       .count()
   }
-}
 
-impl ListDelegate for GithubNotificationListDelegate {
-  type Item = ListItem;
+  fn rebuild_visible_rows(&mut self) {
+    let mut visible_rows = Vec::new();
 
-  fn sections_count(&self, _cx: &App) -> usize {
-    self.sections.len()
+    for (section_ix, section) in self.sections.iter().enumerate() {
+      let collapsed = self.section_is_collapsed(section_ix);
+      visible_rows.push(GithubNotificationListEntry::SectionHeader {
+        repo_label: section.repo_label.clone(),
+        section: section_ix,
+        collapsed,
+      });
+
+      if collapsed {
+        continue;
+      }
+
+      visible_rows.extend(
+        section
+          .rows
+          .iter()
+          .cloned()
+          .map(GithubNotificationListEntry::Item),
+      );
+    }
+
+    self.visible_rows = visible_rows;
   }
 
-  fn items_count(&self, section: usize, _cx: &App) -> usize {
-    self
+  fn section_is_collapsed(&self, section: usize) -> bool {
+    self.query.is_empty()
+      && self.sections.get(section).is_some_and(|section| {
+        self
+          .collapsed_repo_labels
+          .contains(section.repo_label.as_ref())
+      })
+  }
+
+  fn toggle_section(&mut self, section: usize) {
+    let Some(repo_label) = self
       .sections
       .get(section)
-      .map_or(0, |section| section.rows.len())
+      .map(|section| section.repo_label.to_string())
+    else {
+      return;
+    };
+
+    if !self.collapsed_repo_labels.insert(repo_label.clone()) {
+      self.collapsed_repo_labels.remove(&repo_label);
+    }
+    self.rebuild_visible_rows();
+  }
+}
+
+impl VariableListDelegate for GithubNotificationListDelegate {
+  type Item = ListItem;
+
+  fn items_count(&self, _cx: &App) -> usize {
+    self.visible_rows.len()
   }
 
-  fn render_section_header(
-    &mut self,
-    section: usize,
-    _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
-  ) -> Option<impl IntoElement> {
-    let section = self.sections.get(section)?;
-    Some(github_shared::repo_section_header(&section.repo_label, cx))
+  fn item_size(&self, ix: usize, _cx: &App) -> gpui::Size<Pixels> {
+    let height = match self.visible_rows.get(ix) {
+      Some(GithubNotificationListEntry::SectionHeader { .. }) => {
+        px(GITHUB_HOME_REPO_SECTION_ROW_HEIGHT_PX)
+      }
+      Some(GithubNotificationListEntry::Item(_)) => px(GITHUB_HOME_NOTIFICATION_ROW_HEIGHT_PX),
+      None => px(0.0),
+    };
+    size(px(0.0), height)
   }
 
   fn render_item(
     &mut self,
-    ix: IndexPath,
+    ix: usize,
     _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
+    cx: &mut Context<VariableListState<Self>>,
   ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
-    let base_item = list_base_item(ix, self.selected_index, &theme);
-    let row = self.row_at(ix)?;
-    let notification = &row.notification;
-    let updated_at = format_relative_time(&notification.updated_at);
-    let subject = notification.subject.title.clone();
-    let reason_tag = Tag::secondary()
-      .small()
-      .rounded_full()
-      .child(notification.reason.clone());
+    let base_item = variable_list_base_item(ix, self.selected_index, &theme);
 
-    let notification_id = notification.id.clone();
-    let api = self.api.clone();
-    let list_entity = cx.entity().clone();
-
-    Some(
-      base_item.px_2().py_2().child(
-        v_flex()
-          .gap_1()
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(
-                div()
-                  .min_w_0()
-                  .flex_1()
-                  .child(Label::new(subject).truncate()),
-              )
-              .when(notification.unread, |this| {
-                this.child(div().size(px(6.)).rounded_full().bg(theme.status_blue()))
-              })
-              .child(
-                div()
-                  .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                  .child(
-                    Button::new(format!("notif-done-{}", notification_id))
-                      .ghost()
-                      .xsmall()
-                      .compact()
-                      .icon(IconName::Check)
-                      .tooltip("Mark as done")
-                      .on_click({
-                        let notification_id = notification_id.clone();
-                        move |_, _window, cx| {
-                          cx.stop_propagation();
-                          let api = api.clone();
-                          let thread_id = notification_id.clone();
-
-                          list_entity.update(cx, |state, cx| {
-                            let delegate = state.delegate_mut();
-                            delegate.all_rows.retain(|r| r.notification.id != thread_id);
-                            delegate.prepare(delegate.query.clone());
-                            let unread = delegate.unread_count();
-                            NotificationCountStore::set(cx, unread);
-                            set_dock_badge(unread);
-                            cx.notify();
-                          });
-
-                          cx.spawn(async move |_| {
-                            let _ = unblock(move || api.mark_notification_done(&thread_id)).await;
-                          })
-                          .detach();
-                        }
-                      }),
-                  ),
-              ),
-          )
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(format!("Updated {}", updated_at))
-              .child(reason_tag),
-          ),
+    match self.visible_rows.get(ix)? {
+      GithubNotificationListEntry::SectionHeader {
+        repo_label,
+        collapsed,
+        ..
+      } => Some(
+        base_item
+          .h(px(GITHUB_HOME_REPO_SECTION_ROW_HEIGHT_PX))
+          .child(github_shared::repo_section_header(
+            repo_label.clone(),
+            *collapsed,
+            cx,
+          )),
       ),
-    )
+      GithubNotificationListEntry::Item(row) => {
+        let notification = &row.notification;
+        let updated_at = format_relative_time(&notification.updated_at);
+        let subject = notification.subject.title.clone();
+        let reason_tag = Tag::secondary()
+          .small()
+          .rounded_full()
+          .child(notification.reason.clone());
+
+        let notification_id = notification.id.clone();
+        let api = self.api.clone();
+        let list_entity = cx.entity().clone();
+
+        Some(
+          base_item
+            .h(px(GITHUB_HOME_NOTIFICATION_ROW_HEIGHT_PX))
+            .child(
+              v_flex()
+                .gap_1()
+                .child(
+                  h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                      div()
+                        .min_w_0()
+                        .flex_1()
+                        .child(Label::new(subject).truncate()),
+                    )
+                    .when(notification.unread, |this| {
+                      this.child(div().size(px(6.)).rounded_full().bg(theme.status_blue()))
+                    })
+                    .child(
+                      div()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(
+                          Button::new(format!("notif-done-{}", notification_id))
+                            .ghost()
+                            .xsmall()
+                            .compact()
+                            .icon(IconName::Check)
+                            .tooltip("Mark as done")
+                            .on_click({
+                              let notification_id = notification_id.clone();
+                              move |_, _window, cx| {
+                                cx.stop_propagation();
+                                let api = api.clone();
+                                let thread_id = notification_id.clone();
+
+                                list_entity.update(cx, |state, cx| {
+                                  let delegate = state.delegate_mut();
+                                  delegate.all_rows.retain(|r| r.notification.id != thread_id);
+                                  delegate.prepare(delegate.query.clone());
+                                  let unread = delegate.unread_count();
+                                  NotificationCountStore::set(cx, unread);
+                                  set_dock_badge(unread);
+                                  cx.notify();
+                                });
+
+                                cx.spawn(async move |_| {
+                                  let _ =
+                                    unblock(move || api.mark_notification_done(&thread_id)).await;
+                                })
+                                .detach();
+                              }
+                            }),
+                        ),
+                    ),
+                )
+                .child(
+                  h_flex()
+                    .items_center()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("Updated {}", updated_at))
+                    .child(reason_tag),
+                ),
+            ),
+        )
+      }
+    }
   }
 
   fn render_empty(
     &mut self,
     _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
+    cx: &mut Context<VariableListState<Self>>,
   ) -> impl IntoElement {
     v_flex()
       .size_full()
@@ -779,21 +890,34 @@ impl ListDelegate for GithubNotificationListDelegate {
 
   fn set_selected_index(
     &mut self,
-    ix: Option<IndexPath>,
+    ix: Option<usize>,
     _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
+    cx: &mut Context<VariableListState<Self>>,
   ) {
-    update_selected_index(&mut self.selected_index, ix, cx);
+    update_variable_list_selected_index(&mut self.selected_index, ix, cx);
   }
 
   fn perform_search(
     &mut self,
     query: &str,
     _: &mut Window,
-    _: &mut Context<ListState<Self>>,
+    _: &mut Context<VariableListState<Self>>,
   ) -> Task<()> {
     self.prepare(query.to_owned());
     Task::ready(())
+  }
+
+  fn confirm(&mut self, _: bool, _: &mut Window, cx: &mut Context<VariableListState<Self>>) {
+    let Some(ix) = self.selected_index else {
+      return;
+    };
+
+    if let Some(GithubNotificationListEntry::SectionHeader { section, .. }) =
+      self.visible_rows.get(ix)
+    {
+      self.toggle_section(*section);
+      cx.notify();
+    }
   }
 
   fn loading(&self, _: &App) -> bool {
@@ -805,10 +929,22 @@ struct GithubPullRequestListDelegate {
   all_rows: Vec<Rc<GithubPullRequestRow>>,
   matched_rows: Vec<Rc<GithubPullRequestRow>>,
   sections: Vec<GithubPullRequestSection>,
-  selected_index: Option<IndexPath>,
+  visible_rows: Vec<GithubPullRequestListEntry>,
+  collapsed_repo_labels: HashSet<String>,
+  selected_index: Option<usize>,
   query: SharedString,
   show_author: bool,
   loading: bool,
+}
+
+#[derive(Clone, Debug)]
+enum GithubPullRequestListEntry {
+  SectionHeader {
+    repo_label: SharedString,
+    section: usize,
+    collapsed: bool,
+  },
+  Item(Rc<GithubPullRequestRow>),
 }
 
 impl GithubPullRequestListDelegate {
@@ -817,7 +953,9 @@ impl GithubPullRequestListDelegate {
       all_rows: Vec::new(),
       matched_rows: Vec::new(),
       sections: Vec::new(),
-      selected_index: Some(IndexPath::default()),
+      visible_rows: Vec::new(),
+      collapsed_repo_labels: HashSet::new(),
+      selected_index: None,
       query: "".into(),
       show_author: true,
       loading: false,
@@ -837,6 +975,13 @@ impl GithubPullRequestListDelegate {
 
     self.matched_rows = rows;
     self.sections = build_pull_request_sections(&self.matched_rows);
+    self.collapsed_repo_labels.retain(|repo_label| {
+      self
+        .sections
+        .iter()
+        .any(|section| section.repo_label.as_ref() == repo_label)
+    });
+    self.rebuild_visible_rows();
   }
 
   fn set_rows(&mut self, rows: Vec<Rc<GithubPullRequestRow>>) {
@@ -844,66 +989,127 @@ impl GithubPullRequestListDelegate {
     self.prepare(self.query.clone());
   }
 
-  fn row_at(&self, ix: IndexPath) -> Option<Rc<GithubPullRequestRow>> {
-    self
+  fn row_at(&self, ix: usize) -> Option<Rc<GithubPullRequestRow>> {
+    match self.visible_rows.get(ix)? {
+      GithubPullRequestListEntry::Item(row) => Some(row.clone()),
+      GithubPullRequestListEntry::SectionHeader { .. } => None,
+    }
+  }
+
+  fn rebuild_visible_rows(&mut self) {
+    let mut visible_rows = Vec::new();
+
+    for (section_ix, section) in self.sections.iter().enumerate() {
+      let collapsed = self.section_is_collapsed(section_ix);
+      visible_rows.push(GithubPullRequestListEntry::SectionHeader {
+        repo_label: section.repo_label.clone(),
+        section: section_ix,
+        collapsed,
+      });
+
+      if collapsed {
+        continue;
+      }
+
+      visible_rows.extend(
+        section
+          .rows
+          .iter()
+          .cloned()
+          .map(GithubPullRequestListEntry::Item),
+      );
+    }
+
+    self.visible_rows = visible_rows;
+  }
+
+  fn section_is_collapsed(&self, section: usize) -> bool {
+    self.query.is_empty()
+      && self.sections.get(section).is_some_and(|section| {
+        self
+          .collapsed_repo_labels
+          .contains(section.repo_label.as_ref())
+      })
+  }
+
+  fn toggle_section(&mut self, section: usize) {
+    let Some(repo_label) = self
       .sections
-      .get(ix.section)
-      .and_then(|section| section.rows.get(ix.row))
-      .cloned()
+      .get(section)
+      .map(|section| section.repo_label.to_string())
+    else {
+      return;
+    };
+
+    if !self.collapsed_repo_labels.insert(repo_label.clone()) {
+      self.collapsed_repo_labels.remove(&repo_label);
+    }
+    self.rebuild_visible_rows();
   }
 }
 
-impl ListDelegate for GithubPullRequestListDelegate {
+impl VariableListDelegate for GithubPullRequestListDelegate {
   type Item = ListItem;
 
-  fn sections_count(&self, _cx: &App) -> usize {
-    self.sections.len()
+  fn items_count(&self, _cx: &App) -> usize {
+    self.visible_rows.len()
   }
 
-  fn items_count(&self, section: usize, _cx: &App) -> usize {
-    self
-      .sections
-      .get(section)
-      .map_or(0, |section| section.rows.len())
-  }
-
-  fn render_section_header(
-    &mut self,
-    section: usize,
-    _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
-  ) -> Option<impl IntoElement> {
-    let section = self.sections.get(section)?;
-    Some(github_shared::repo_section_header(&section.repo_label, cx))
+  fn item_size(&self, ix: usize, _cx: &App) -> gpui::Size<Pixels> {
+    let height = match self.visible_rows.get(ix) {
+      Some(GithubPullRequestListEntry::SectionHeader { .. }) => {
+        px(GITHUB_HOME_REPO_SECTION_ROW_HEIGHT_PX)
+      }
+      Some(GithubPullRequestListEntry::Item(row)) => {
+        px(github_shared::pull_request_row_height_px(row.pr.as_ref()))
+      }
+      None => px(0.0),
+    };
+    size(px(0.0), height)
   }
 
   fn render_item(
     &mut self,
-    ix: IndexPath,
+    ix: usize,
     _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
+    cx: &mut Context<VariableListState<Self>>,
   ) -> Option<Self::Item> {
-    let row = self.row_at(ix)?;
     let theme = cx.theme().clone();
-    let base_item = list_base_item(ix, self.selected_index, &theme);
+    let base_item = variable_list_base_item(ix, self.selected_index, &theme);
 
-    Some(
-      base_item
-        .px_2()
-        .py_2()
-        .child(github_shared::pull_request_list_row_body(
-          row.pr.as_ref(),
-          &theme,
-          false,
-          self.show_author,
-        )),
-    )
+    match self.visible_rows.get(ix)? {
+      GithubPullRequestListEntry::SectionHeader {
+        repo_label,
+        collapsed,
+        ..
+      } => Some(
+        base_item
+          .h(px(GITHUB_HOME_REPO_SECTION_ROW_HEIGHT_PX))
+          .child(github_shared::repo_section_header(
+            repo_label.clone(),
+            *collapsed,
+            cx,
+          )),
+      ),
+      GithubPullRequestListEntry::Item(row) => Some(
+        base_item
+          .h(px(github_shared::pull_request_row_height_px(
+            row.pr.as_ref(),
+          )))
+          .child(github_shared::pull_request_list_row_body(
+            row.pr.as_ref(),
+            &theme,
+            false,
+            self.show_author,
+          )),
+      ),
+    }
   }
 
   fn render_empty(
     &mut self,
     _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
+    cx: &mut Context<VariableListState<Self>>,
   ) -> impl IntoElement {
     v_flex()
       .size_full()
@@ -917,21 +1123,34 @@ impl ListDelegate for GithubPullRequestListDelegate {
 
   fn set_selected_index(
     &mut self,
-    ix: Option<IndexPath>,
+    ix: Option<usize>,
     _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
+    cx: &mut Context<VariableListState<Self>>,
   ) {
-    update_selected_index(&mut self.selected_index, ix, cx);
+    update_variable_list_selected_index(&mut self.selected_index, ix, cx);
   }
 
   fn perform_search(
     &mut self,
     query: &str,
     _: &mut Window,
-    _: &mut Context<ListState<Self>>,
+    _: &mut Context<VariableListState<Self>>,
   ) -> Task<()> {
     self.prepare(query.to_owned());
     Task::ready(())
+  }
+
+  fn confirm(&mut self, _: bool, _: &mut Window, cx: &mut Context<VariableListState<Self>>) {
+    let Some(ix) = self.selected_index else {
+      return;
+    };
+
+    if let Some(GithubPullRequestListEntry::SectionHeader { section, .. }) =
+      self.visible_rows.get(ix)
+    {
+      self.toggle_section(*section);
+      cx.notify();
+    }
   }
 
   fn loading(&self, _: &App) -> bool {
@@ -943,8 +1162,8 @@ pub struct GithubPage {
   focus_handle: FocusHandle,
   api: ApiClient,
   repositories: Entity<ListState<GithubRepositoryListDelegate>>,
-  notifications: Entity<ListState<GithubNotificationListDelegate>>,
-  pull_requests: Entity<ListState<GithubPullRequestListDelegate>>,
+  notifications: Entity<VariableListState<GithubNotificationListDelegate>>,
+  pull_requests: Entity<VariableListState<GithubPullRequestListDelegate>>,
   pull_request_tabs: Vec<GithubPullRequestTabState>,
   active_pull_request_tab_id: Option<String>,
   load_task: Option<Task<()>>,
@@ -1951,10 +2170,12 @@ impl GithubPage {
     let repositories =
       cx.new(|cx| ListState::new(GithubRepositoryListDelegate::new(), window, cx).searchable(true));
     let notifications = cx.new(|cx| {
-      ListState::new(GithubNotificationListDelegate::new(api.clone()), window, cx).searchable(true)
+      VariableListState::new(GithubNotificationListDelegate::new(api.clone()), window, cx)
+        .searchable(true)
     });
-    let pull_requests = cx
-      .new(|cx| ListState::new(GithubPullRequestListDelegate::new(), window, cx).searchable(true));
+    let pull_requests = cx.new(|cx| {
+      VariableListState::new(GithubPullRequestListDelegate::new(), window, cx).searchable(true)
+    });
     let pull_request_tabs =
       make_pull_request_tab_states(ConfigStore::load_or_seed_github_home_pull_request_tabs());
     let active_pull_request_tab_id = pull_request_tabs.first().map(|tab| tab.tab.id.clone());
@@ -2003,8 +2224,8 @@ impl GithubPage {
   fn subscribe_to_list(&mut self, cx: &mut Context<Self>) {
     let pull_requests_subscription = cx.subscribe(
       &self.pull_requests,
-      move |_this, state, event: &ListEvent, cx| {
-        if let ListEvent::Confirm(ix) = event {
+      move |_this, state, event: &VariableListEvent, cx| {
+        if let VariableListEvent::Confirm(ix) = event {
           let row = state.read(cx).delegate().row_at(*ix);
           if let Some(row) = row {
             GithubPrDetailsPageHandle::show(
@@ -2043,8 +2264,8 @@ impl GithubPage {
     let notifications_entity = self.notifications.downgrade();
     let notifications_subscription = cx.subscribe(
       &self.notifications,
-      move |_this, state, event: &ListEvent, cx| {
-        if let ListEvent::Confirm(ix) = event {
+      move |_this, state, event: &VariableListEvent, cx| {
+        if let VariableListEvent::Confirm(ix) = event {
           let row = state.read(cx).delegate().row_at(*ix);
           if let Some(row) = row {
             let notification = &row.notification;
@@ -3230,7 +3451,7 @@ impl Render for GithubPage {
       .unwrap_or_else(|| "Search pull requests...".to_string());
     let show_manage_tabs = self.managing_pull_request_tabs();
 
-    let pull_requests_list = List::new(&self.pull_requests)
+    let pull_requests_list = VariableList::new(&self.pull_requests)
       .search_placeholder(pull_requests_search_placeholder)
       .border_1()
       .border_color(theme.border)
@@ -3239,7 +3460,7 @@ impl Render for GithubPage {
       .min_w(px(0.0))
       .min_h_0()
       .p(px(8.));
-    let notifications_list = List::new(&self.notifications)
+    let notifications_list = VariableList::new(&self.notifications)
       .search_placeholder("Search notifications...")
       .border_1()
       .border_color(theme.border)
@@ -3561,6 +3782,7 @@ mod tests {
   fn init_gpui_test(cx: &mut TestAppContext) {
     cx.update(|cx| {
       gpui_component::init(cx);
+      ui::init(cx);
       if cx.try_global::<AuthStateStore>().is_none() {
         cx.set_global(AuthStateStore::default());
       }
@@ -3709,7 +3931,7 @@ mod tests {
   }
 
   #[test]
-  fn pull_request_delegate_row_at_uses_section_and_row_indexes() {
+  fn pull_request_delegate_row_at_uses_visible_row_indexes() {
     let mut delegate = GithubPullRequestListDelegate::new();
     delegate.set_rows(vec![
       Rc::new(make_pull_request_row("Fix login", "acme", "portal")),
@@ -3719,21 +3941,21 @@ mod tests {
 
     assert_eq!(
       delegate
-        .row_at(IndexPath::new(1).section(0))
-        .expect("portal second row")
+        .row_at(2)
+        .expect("portal second row in visible rows")
         .pr
         .title,
       "Refactor auth"
     );
     assert_eq!(
       delegate
-        .row_at(IndexPath::new(0).section(1))
-        .expect("backend first row")
+        .row_at(4)
+        .expect("backend first row in visible rows")
         .pr
         .title,
       "Improve API"
     );
-    assert!(delegate.row_at(IndexPath::new(2).section(0)).is_none());
+    assert!(delegate.row_at(0).is_none());
   }
 
   #[test]
@@ -3751,6 +3973,47 @@ mod tests {
     assert_eq!(delegate.sections.len(), 1);
     assert_eq!(delegate.sections[0].repo_label.as_ref(), "acme/portal");
     assert_eq!(delegate.sections[0].rows.len(), 2);
+  }
+
+  #[test]
+  fn pull_request_delegate_builds_clickable_repo_headers_and_hides_collapsed_rows() {
+    let mut delegate = GithubPullRequestListDelegate::new();
+    delegate.set_rows(vec![
+      Rc::new(make_pull_request_row("Fix login", "acme", "portal")),
+      Rc::new(make_pull_request_row("Improve API", "acme", "backend")),
+      Rc::new(make_pull_request_row("Refactor auth", "acme", "portal")),
+    ]);
+
+    delegate.toggle_section(0);
+
+    assert!(delegate.section_is_collapsed(0));
+    assert_eq!(delegate.sections.len(), 2);
+    assert!(matches!(
+      delegate.visible_rows.first(),
+      Some(GithubPullRequestListEntry::SectionHeader {
+        repo_label,
+        collapsed: true,
+        ..
+      }) if repo_label.as_ref() == "acme/portal"
+    ));
+    assert_eq!(delegate.visible_rows.len(), 3);
+    assert!(matches!(
+      delegate.visible_rows.get(2),
+      Some(GithubPullRequestListEntry::Item(row)) if row.pr.title == "Improve API"
+    ));
+
+    delegate.prepare("portal");
+
+    assert!(!delegate.section_is_collapsed(0));
+    assert_eq!(delegate.visible_rows.len(), 3);
+    assert!(matches!(
+      delegate.visible_rows.first(),
+      Some(GithubPullRequestListEntry::SectionHeader {
+        repo_label,
+        collapsed: false,
+        ..
+      }) if repo_label.as_ref() == "acme/portal"
+    ));
   }
 
   #[test]
@@ -4134,8 +4397,60 @@ mod tests {
     assert_eq!(delegate.sections[0].repo_label.as_ref(), "acme/backend");
   }
 
+  #[test]
+  fn notification_delegate_builds_clickable_repo_headers_and_hides_collapsed_rows() {
+    let mut delegate =
+      GithubNotificationListDelegate::new(ApiClient::new_with_base_url("http://unused"));
+    delegate.set_rows(vec![
+      Rc::new(make_notification_row(
+        "Review request",
+        "acme/portal",
+        "mention",
+        true,
+      )),
+      Rc::new(make_notification_row(
+        "Dependency update",
+        "acme/backend",
+        "subscribed",
+        false,
+      )),
+    ]);
+
+    delegate.toggle_section(0);
+
+    assert!(delegate.section_is_collapsed(0));
+    assert_eq!(delegate.sections.len(), 2);
+    assert!(matches!(
+      delegate.visible_rows.first(),
+      Some(GithubNotificationListEntry::SectionHeader {
+        repo_label,
+        collapsed: true,
+        ..
+      }) if repo_label.as_ref() == "acme/portal"
+    ));
+    assert_eq!(delegate.visible_rows.len(), 3);
+    assert!(matches!(
+      delegate.visible_rows.get(2),
+      Some(GithubNotificationListEntry::Item(row))
+        if row.notification.subject.title == "Dependency update"
+    ));
+
+    delegate.prepare("portal");
+
+    assert!(!delegate.section_is_collapsed(0));
+    assert_eq!(delegate.visible_rows.len(), 2);
+    assert!(matches!(
+      delegate.visible_rows.first(),
+      Some(GithubNotificationListEntry::SectionHeader {
+        repo_label,
+        collapsed: false,
+        ..
+      }) if repo_label.as_ref() == "acme/portal"
+    ));
+  }
+
   #[gpui::test]
-  fn pull_request_delegate_rows_keep_a_stable_height(cx: &mut TestAppContext) {
+  fn pull_request_delegate_rows_use_less_height_without_labels(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let labeled =
       make_pull_request_row_with_labels("Labeled pull request", "acme", "portal", &["bug"]);
@@ -4154,7 +4469,7 @@ mod tests {
       .size
       .height;
 
-    assert_eq!(labeled_height, unlabeled_height);
+    assert!(labeled_height > unlabeled_height);
   }
 
   #[gpui::test]

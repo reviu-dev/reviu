@@ -13,6 +13,9 @@ use crate::{
   date_format::format_relative_time_at,
 };
 
+pub(crate) const PULL_REQUEST_ROW_HEIGHT_PX: f32 = 56.0;
+pub(crate) const PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX: f32 = 80.0;
+
 pub(crate) fn make_asset_url_resolver(
   api: &ApiClient,
 ) -> Arc<dyn Fn(&str) -> Option<String> + Send + Sync> {
@@ -36,24 +39,30 @@ pub(crate) fn try_open_github_asset_url(url: &str, api: &ApiClient, cx: &mut gpu
   true
 }
 
-pub(crate) fn repo_section_header(label: &SharedString, cx: &App) -> impl IntoElement {
+pub(crate) fn repo_section_header(
+  label: SharedString,
+  collapsed: bool,
+  cx: &App,
+) -> impl IntoElement {
   let theme = cx.theme();
+  let chevron = if collapsed {
+    IconName::ChevronRight
+  } else {
+    IconName::ChevronDown
+  };
+
   h_flex()
     .items_center()
-    .py_1()
+    .h_6()
     .px_2()
     .gap_2()
     .rounded(theme.radius)
     .text_sm()
     .bg(theme.sidebar_accent.opacity(0.5))
     .text_color(theme.muted_foreground)
-    .child(Icon::new(IconName::Folder))
-    .child(
-      div()
-        .min_w_0()
-        .flex_1()
-        .child(Label::new(label.clone()).truncate()),
-    )
+    .child(Icon::new(chevron).size_3())
+    .child(Icon::new(IconName::Folder).size_3())
+    .child(div().min_w_0().flex_1().child(Label::new(label).truncate()))
 }
 
 pub(crate) fn short_sha(sha: &str) -> String {
@@ -198,6 +207,14 @@ pub(crate) fn pull_request_updated_text(pr: &GithubPullRequest) -> SharedString 
   pull_request_updated_text_at(pr, OffsetDateTime::now_utc())
 }
 
+pub(crate) fn pull_request_row_height_px(pr: &GithubPullRequest) -> f32 {
+  if pr.labels.is_empty() {
+    PULL_REQUEST_ROW_HEIGHT_PX
+  } else {
+    PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX
+  }
+}
+
 fn pull_request_comments_count_text(pr: &GithubPullRequest) -> Option<SharedString> {
   (pr.comments_count > 0).then(|| pr.comments_count.to_string().into())
 }
@@ -248,7 +265,7 @@ pub(crate) fn pull_request_list_row_body(
       .child(label.name.clone())
   });
 
-  v_flex()
+  let row = v_flex()
     .gap_1()
     .child(
       h_flex()
@@ -339,8 +356,15 @@ pub(crate) fn pull_request_list_row_body(
         )
         .child("•")
         .child(updated_text),
-    )
-    .child(pull_request_label_row(label_tags))
+    );
+
+  if pr.labels.is_empty() {
+    row.into_any_element()
+  } else {
+    row
+      .child(pull_request_label_row(label_tags))
+      .into_any_element()
+  }
 }
 
 pub(crate) fn line_snippets_from_content(
@@ -404,11 +428,13 @@ pub(crate) fn next_trimmed_text_update(raw_value: &str, initial_value: &str) -> 
 #[cfg(test)]
 mod tests {
   use super::{
+    PULL_REQUEST_ROW_HEIGHT_PX, PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX,
     is_unauthorized_error_message, issue_url, line_snippets_from_content,
     logins_match_case_insensitive, next_trimmed_text_update, normalize_non_empty_text, pr_url,
     pull_request_activity_text_at, pull_request_author_display_name, pull_request_author_is_bot,
-    pull_request_comments_count_text, pull_request_list_row_body, pull_request_status_color,
-    pull_request_status_label, pull_request_updated_text_at, repo_label, short_sha,
+    pull_request_comments_count_text, pull_request_list_row_body, pull_request_row_height_px,
+    pull_request_status_color, pull_request_status_label, pull_request_updated_text_at, repo_label,
+    short_sha,
   };
   use crate::api::{
     GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel, GithubPullRequestState,
@@ -722,8 +748,20 @@ mod tests {
     );
   }
 
+  #[test]
+  fn pull_request_row_height_matches_label_presence() {
+    assert_eq!(
+      pull_request_row_height_px(&make_pull_request(&[])),
+      PULL_REQUEST_ROW_HEIGHT_PX
+    );
+    assert_eq!(
+      pull_request_row_height_px(&make_pull_request(&["bug"])),
+      PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX
+    );
+  }
+
   #[gpui::test]
-  fn pull_request_list_row_body_keeps_stable_height_without_labels(cx: &mut TestAppContext) {
+  fn pull_request_list_row_body_uses_less_height_without_labels(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let labeled = make_pull_request(&["bug"]);
     let unlabeled = make_pull_request(&[]);
@@ -740,6 +778,6 @@ mod tests {
       .size
       .height;
 
-    assert_eq!(labeled_height, unlabeled_height);
+    assert!(labeled_height > unlabeled_height);
   }
 }

@@ -10,6 +10,7 @@ mod status_tag;
 mod status_theme_ext;
 mod theme;
 mod user_menu;
+mod variable_list;
 
 pub const GLOBAL_BAR_HEIGHT: f32 = 36.0;
 pub const PAGE_HEADER_HEIGHT: f32 = 45.0;
@@ -53,3 +54,8 @@ pub use status_tag::StatusTag;
 pub use status_theme_ext::StatusThemeExt;
 pub use theme::Theme;
 pub use user_menu::{UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, user_menu};
+pub use variable_list::{VariableList, VariableListDelegate, VariableListEvent, VariableListState};
+
+pub fn init(cx: &mut gpui::App) {
+  variable_list::init(cx);
+}
