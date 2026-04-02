@@ -2384,12 +2384,14 @@ impl GithubPage {
     let dialog_for_overlay = dialog.clone();
     let dialog_for_focus = dialog.clone();
 
-    window.open_dialog(cx, move |overlay, _, _| {
+    window.open_dialog(cx, move |overlay, window, _| {
+      let use_relative_height = window.viewport_size().height <= px(950.0);
+
       overlay
         .p_0()
         .min_h_0()
         .w(px(680.0))
-        .h(relative(0.85))
+        .when(use_relative_height, |this| this.h(relative(0.85)))
         .child(dialog_for_overlay.clone())
     });
 
