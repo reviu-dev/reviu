@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.0.12
 
+### Startup Crash Reports
+
+When Reviu recovers from a Rust panic, the next launch now shows a persistent notification to send a report to the team.
+
 ### GitHub Label Colors
 
 Pull request and issue labels now reuse their GitHub colors across home lists, repository lists, and detail pages, so labels stay easier to recognize throughout the app.

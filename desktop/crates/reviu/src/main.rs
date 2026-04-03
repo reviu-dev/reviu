@@ -11,6 +11,8 @@ use std::time::Duration;
 use ui::{AppAssets, PAGE_HEADER_HEIGHT};
 use workspace::{
   AppProfile, AuthCallbackTarget, WorkspaceView, build_app_menus, install_app_key_bindings,
+  install_crash_reporter, show_startup_crash_report_notification,
+  take_pending_startup_crash_report,
 };
 
 mod app_root;
@@ -59,6 +61,8 @@ fn main() {
     before_send: Some(Arc::new(redact_sensitive_event_data)),
     ..Default::default()
   });
+  install_crash_reporter();
+  let startup_crash_report = take_pending_startup_crash_report();
 
   let (open_url_tx, open_url_rx) = mpsc::channel::<Vec<String>>();
   let app = gpui_platform::application().with_assets(AppAssets);
@@ -102,9 +106,14 @@ fn main() {
       .unwrap();
 
     window
-      .update(cx, |_, window, cx| {
+      .update(cx, move |_, window, cx| {
         window.activate_window();
         cx.activate(true);
+        if let Some(report) = startup_crash_report.clone() {
+          window.on_next_frame(move |window, cx| {
+            show_startup_crash_report_notification(window, report.clone(), cx);
+          });
+        }
       })
       .unwrap();
 
