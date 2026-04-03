@@ -169,6 +169,8 @@ const CODE_HEADER_HEIGHT: f32 = 40.0;
 const REPO_TAB_OVERVIEW_IX: usize = 0;
 const REPO_TAB_README_IX: usize = 1;
 const REPO_TAB_CODE_IX: usize = 2;
+const REPO_TAB_PULL_REQUESTS_IX: usize = 3;
+const REPO_TAB_ISSUES_IX: usize = 4;
 
 fn repo_tab_url_segment(tab_ix: usize) -> &'static str {
   match tab_ix {
@@ -180,8 +182,21 @@ fn repo_tab_url_segment(tab_ix: usize) -> &'static str {
   }
 }
 
-const REPO_TAB_PULL_REQUESTS_IX: usize = 3;
-const REPO_TAB_ISSUES_IX: usize = 4;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TabNavigationDirection {
+  Previous,
+  Next,
+}
+
+fn adjacent_repo_tab_ix(current: usize, direction: TabNavigationDirection) -> usize {
+  const REPO_TAB_COUNT: usize = 5;
+
+  match direction {
+    TabNavigationDirection::Previous => (current + REPO_TAB_COUNT - 1) % REPO_TAB_COUNT,
+    TabNavigationDirection::Next => (current + 1) % REPO_TAB_COUNT,
+  }
+}
+
 const GITHUB_REPO_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str =
   "github-repo-markdown-preview-editor-pane";
 const GITHUB_REPO_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str =
@@ -4045,6 +4060,28 @@ impl GithubRepoPage {
     self.open_command_palette(window, cx);
   }
 
+  fn previous_page_tab_action(
+    &mut self,
+    _: &crate::PreviousPageTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let next_ix = adjacent_repo_tab_ix(self.active_tab_ix, TabNavigationDirection::Previous);
+    self.set_active_tab(next_ix, window, cx);
+    cx.stop_propagation();
+  }
+
+  fn next_page_tab_action(
+    &mut self,
+    _: &crate::NextPageTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let next_ix = adjacent_repo_tab_ix(self.active_tab_ix, TabNavigationDirection::Next);
+    self.set_active_tab(next_ix, window, cx);
+    cx.stop_propagation();
+  }
+
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = AuthStateStore::has_github_access(cx);
     let commands = CommandPaletteCommand::default_global_commands(
@@ -5036,6 +5073,8 @@ impl Render for GithubRepoPage {
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GithubRepoPage::show_command_palette_action))
       .on_action(cx.listener(GithubRepoPage::show_file_search_action))
+      .on_action(cx.listener(GithubRepoPage::previous_page_tab_action))
+      .on_action(cx.listener(GithubRepoPage::next_page_tab_action))
       .child(self.render_header(cx))
       .child(v_flex().w_full().h_full().min_h_0().child(content))
   }
@@ -5473,6 +5512,26 @@ mod tests {
     assert_eq!(REPO_TAB_CODE_IX, 2);
     assert_eq!(REPO_TAB_PULL_REQUESTS_IX, 3);
     assert_eq!(REPO_TAB_ISSUES_IX, 4);
+  }
+
+  #[test]
+  fn adjacent_repo_tab_ix_wraps_in_both_directions() {
+    assert_eq!(
+      adjacent_repo_tab_ix(REPO_TAB_OVERVIEW_IX, TabNavigationDirection::Previous),
+      REPO_TAB_ISSUES_IX
+    );
+    assert_eq!(
+      adjacent_repo_tab_ix(REPO_TAB_ISSUES_IX, TabNavigationDirection::Next),
+      REPO_TAB_OVERVIEW_IX
+    );
+    assert_eq!(
+      adjacent_repo_tab_ix(REPO_TAB_CODE_IX, TabNavigationDirection::Previous),
+      REPO_TAB_README_IX
+    );
+    assert_eq!(
+      adjacent_repo_tab_ix(REPO_TAB_CODE_IX, TabNavigationDirection::Next),
+      REPO_TAB_PULL_REQUESTS_IX
+    );
   }
 
   #[test]

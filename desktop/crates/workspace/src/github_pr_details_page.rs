@@ -152,6 +152,15 @@ fn pr_tab_url_segment(tab_ix: usize) -> &'static str {
   }
 }
 
+fn adjacent_pr_tab_ix(current: usize, direction: TabNavigationDirection) -> usize {
+  const PR_TAB_COUNT: usize = 3;
+
+  match direction {
+    TabNavigationDirection::Previous => (current + PR_TAB_COUNT - 1) % PR_TAB_COUNT,
+    TabNavigationDirection::Next => (current + 1) % PR_TAB_COUNT,
+  }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GithubPrLeftSidebarKind {
   Files,
@@ -164,6 +173,12 @@ fn left_sidebar_kind_for_tab(active_tab_ix: usize) -> GithubPrLeftSidebarKind {
   } else {
     GithubPrLeftSidebarKind::Context
   }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TabNavigationDirection {
+  Previous,
+  Next,
 }
 const PR_COMMIT_SELECT_WIDTH: f32 = 260.0;
 const PR_COMMIT_SELECT_MENU_WIDTH: f32 = 320.0;
@@ -10298,6 +10313,34 @@ impl GithubPrDetailsPage {
     cx.stop_propagation();
   }
 
+  fn previous_annotation_action(
+    &mut self,
+    _: &crate::PreviousAnnotation,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
+      return;
+    }
+
+    self.navigate_review_comment(ReviewCommentNavigationDirection::Previous, cx);
+    cx.stop_propagation();
+  }
+
+  fn next_annotation_action(
+    &mut self,
+    _: &crate::NextAnnotation,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
+      return;
+    }
+
+    self.navigate_review_comment(ReviewCommentNavigationDirection::Next, cx);
+    cx.stop_propagation();
+  }
+
   fn toggle_diff_view_action(
     &mut self,
     _: &crate::ToggleDiffView,
@@ -10309,6 +10352,28 @@ impl GithubPrDetailsPage {
     }
 
     self.toggle_diff_view(cx);
+    cx.stop_propagation();
+  }
+
+  fn previous_page_tab_action(
+    &mut self,
+    _: &crate::PreviousPageTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let next_ix = adjacent_pr_tab_ix(self.active_tab_ix, TabNavigationDirection::Previous);
+    self.set_active_tab(next_ix, window, cx);
+    cx.stop_propagation();
+  }
+
+  fn next_page_tab_action(
+    &mut self,
+    _: &crate::NextPageTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let next_ix = adjacent_pr_tab_ix(self.active_tab_ix, TabNavigationDirection::Next);
+    self.set_active_tab(next_ix, window, cx);
     cx.stop_propagation();
   }
 
@@ -11269,7 +11334,11 @@ impl Render for GithubPrDetailsPage {
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GithubPrDetailsPage::show_command_palette_action))
       .on_action(cx.listener(GithubPrDetailsPage::switch_to_pr_branch_action))
+      .on_action(cx.listener(GithubPrDetailsPage::previous_annotation_action))
+      .on_action(cx.listener(GithubPrDetailsPage::next_annotation_action))
       .on_action(cx.listener(GithubPrDetailsPage::toggle_diff_view_action))
+      .on_action(cx.listener(GithubPrDetailsPage::previous_page_tab_action))
+      .on_action(cx.listener(GithubPrDetailsPage::next_page_tab_action))
       .on_action(cx.listener(GithubPrDetailsPage::show_file_search_action))
       .on_action(cx.listener(GithubPrDetailsPage::find_action))
       .on_action(cx.listener(GithubPrDetailsPage::close_find_action))
@@ -12437,6 +12506,26 @@ mod tests {
       false,
       false,
     ));
+  }
+
+  #[test]
+  fn adjacent_pr_tab_ix_wraps_in_both_directions() {
+    assert_eq!(
+      adjacent_pr_tab_ix(PR_TAB_OVERVIEW_IX, TabNavigationDirection::Previous),
+      PR_TAB_CHECKS_IX
+    );
+    assert_eq!(
+      adjacent_pr_tab_ix(PR_TAB_CHECKS_IX, TabNavigationDirection::Next),
+      PR_TAB_OVERVIEW_IX
+    );
+    assert_eq!(
+      adjacent_pr_tab_ix(PR_TAB_CHANGES_IX, TabNavigationDirection::Previous),
+      PR_TAB_OVERVIEW_IX
+    );
+    assert_eq!(
+      adjacent_pr_tab_ix(PR_TAB_CHANGES_IX, TabNavigationDirection::Next),
+      PR_TAB_CHECKS_IX
+    );
   }
 
   #[gpui::test]
