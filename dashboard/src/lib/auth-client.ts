@@ -6,7 +6,7 @@ import { env } from './env'
 export const betterAuthClient = createAuthClient({
   baseURL: env.BACKEND_URL,
   fetchOptions: {
-    credentials: 'omit',
+    credentials: 'include',
     auth: {
       type: 'Bearer',
       token: () => localStorage.getItem(LS_BEARER_KEY) ?? '',
