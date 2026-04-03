@@ -75,7 +75,7 @@ impl SettingsPage {
     self.auto_switch_theme
   }
 
-  fn setting_pages(&self, _: &mut Window, cx: &mut Context<Self>) -> Vec<SettingPage> {
+  fn setting_pages(&self, window: &mut Window, cx: &mut Context<Self>) -> Vec<SettingPage> {
     let view = cx.entity();
     let default_auto = self.auto_switch_theme;
     let default_indent_rainbow = self.indent_rainbow;
@@ -224,21 +224,38 @@ impl SettingsPage {
           ),
         ]),
       ]),
-      Self::keyboard_shortcuts_page(view.clone(), is_admin),
+      Self::keyboard_shortcuts_page(view.clone(), is_admin, window, cx),
     ]
   }
 
-  fn keyboard_shortcuts_page(view: gpui::Entity<Self>, is_admin: bool) -> SettingPage {
+  fn keyboard_shortcuts_page(
+    view: gpui::Entity<Self>,
+    is_admin: bool,
+    window: &Window,
+    cx: &App,
+  ) -> SettingPage {
     SettingPage::new("Keyboard Shortcuts")
       .description(
-        "Edit desktop shortcuts grouped by workflow. Changes apply immediately in the app.",
+        "Edit desktop shortcuts grouped by workflow. Use the search field to filter by action or key combo. Changes apply immediately in the app.",
       )
       .resettable(false)
       .groups([
-        Self::keyboard_shortcuts_group(ShortcutCategory::Core, view.clone(), is_admin),
-        Self::keyboard_shortcuts_group(ShortcutCategory::Review, view.clone(), is_admin),
-        Self::keyboard_shortcuts_group(ShortcutCategory::LocalGit, view.clone(), is_admin),
-        Self::keyboard_shortcuts_group(ShortcutCategory::App, view, is_admin),
+        Self::keyboard_shortcuts_group(ShortcutCategory::Core, view.clone(), is_admin, window, cx),
+        Self::keyboard_shortcuts_group(
+          ShortcutCategory::Review,
+          view.clone(),
+          is_admin,
+          window,
+          cx,
+        ),
+        Self::keyboard_shortcuts_group(
+          ShortcutCategory::LocalGit,
+          view.clone(),
+          is_admin,
+          window,
+          cx,
+        ),
+        Self::keyboard_shortcuts_group(ShortcutCategory::App, view, is_admin, window, cx),
       ])
   }
 
@@ -246,6 +263,8 @@ impl SettingsPage {
     category: ShortcutCategory,
     view: gpui::Entity<Self>,
     is_admin: bool,
+    window: &Window,
+    cx: &App,
   ) -> SettingGroup {
     SettingGroup::new().title(category.title()).items(
       shortcut_definitions()
@@ -253,7 +272,7 @@ impl SettingsPage {
         .copied()
         .filter(move |definition| definition.category == category)
         .filter(move |definition| Self::shortcut_is_visible(*definition, is_admin))
-        .map(move |definition| Self::keyboard_shortcut_item(view.clone(), definition)),
+        .map(move |definition| Self::keyboard_shortcut_item(view.clone(), definition, window, cx)),
     )
   }
 
@@ -267,10 +286,13 @@ impl SettingsPage {
   fn keyboard_shortcut_item(
     view: gpui::Entity<Self>,
     definition: ShortcutDefinition,
+    window: &Window,
+    cx: &App,
   ) -> SettingItem {
     let edit_button_id = format!("settings-shortcut-edit-{}", definition.id.storage_key());
     let cancel_button_id = format!("settings-shortcut-cancel-{}", definition.id.storage_key());
     let reset_button_id = format!("settings-shortcut-reset-{}", definition.id.storage_key());
+    let shortcut_keystroke = Self::searchable_shortcut_keystroke(definition.id, window, cx);
 
     SettingItem::new(
       definition.title,
@@ -357,14 +379,44 @@ impl SettingsPage {
           })
       }),
     )
-    .description(Self::keyboard_shortcut_description(definition))
+    .description(Self::keyboard_shortcut_description(
+      definition,
+      &shortcut_keystroke,
+    ))
   }
 
-  fn keyboard_shortcut_description(definition: ShortcutDefinition) -> String {
+  fn keyboard_shortcut_description(
+    definition: ShortcutDefinition,
+    shortcut_keystroke: &str,
+  ) -> String {
     format!(
-      "{} Available on {}.",
-      definition.description, definition.scope_label
+      "{} Shortcut: {}. Available on {}.",
+      definition.description, shortcut_keystroke, definition.scope_label
     )
+  }
+
+  fn searchable_shortcut_keystroke(shortcut_id: ShortcutId, window: &Window, cx: &App) -> String {
+    let keystroke = resolved_display_shortcut_keystroke_in(cx, window, shortcut_id);
+    let mut parts = Vec::new();
+
+    if keystroke.modifiers.control {
+      parts.push("ctrl".to_string());
+    }
+    if keystroke.modifiers.alt {
+      parts.push("alt".to_string());
+    }
+    if keystroke.modifiers.shift {
+      parts.push("shift".to_string());
+    }
+    if keystroke.modifiers.platform {
+      parts.push("cmd".to_string());
+    }
+    if keystroke.modifiers.function {
+      parts.push("fn".to_string());
+    }
+
+    parts.push(keystroke.key);
+    parts.join("-")
   }
 
   fn start_shortcut_recording(
@@ -641,15 +693,17 @@ mod tests {
   use crate::shortcuts::ShortcutId;
 
   #[test]
-  fn keyboard_shortcut_descriptions_include_scope() {
+  fn keyboard_shortcut_descriptions_include_scope_and_keystroke() {
     let description = SettingsPage::keyboard_shortcut_description(
       *shortcut_definitions()
         .iter()
         .find(|definition| definition.id == ShortcutId::ShowFileSearch)
         .expect("file search shortcut"),
+      "cmd-p",
     );
 
     assert!(description.contains("Open file search"));
+    assert!(description.contains("Shortcut: cmd-p."));
     assert!(description.contains("Git, Repo Code, and PR Changes pages"));
   }
 
