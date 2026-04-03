@@ -3,6 +3,7 @@ use gpui::actions;
 actions!(
   workspace,
   [
+    NavigateBack,
     CloseWorkspacePage,
     OpenGitPage,
     OpenGithubPage,
@@ -11,8 +12,15 @@ actions!(
     ShowBranchSwitcher,
     OpenGitHistorySidebar,
     OpenGitChangesSidebar,
+    PullChanges,
+    PushChanges,
+    ForcePushChanges,
     ToggleDiffView,
     SwitchToPrBranch,
+    PreviousAnnotation,
+    NextAnnotation,
+    PreviousPageTab,
+    NextPageTab,
     OpenBillingPage,
     OpenGitConfigPage,
     OpenSettingsPage,

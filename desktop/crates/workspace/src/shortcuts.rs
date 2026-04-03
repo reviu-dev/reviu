@@ -16,9 +16,11 @@ use std::collections::HashSet;
 
 use crate::config::ConfigStore;
 use crate::{
-  CloseWorkspacePage, CommitChanges, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenRepository,
-  OpenSettingsPage, RefreshCurrentPage, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
-  SwitchToPrBranch, ToggleDiffView, ToggleTerminalSidebar,
+  CloseWorkspacePage, CommitChanges, ForcePushChanges, NavigateBack, NextAnnotation, NextPageTab,
+  OpenGitChangesSidebar, OpenGitHistorySidebar, OpenGitPage, OpenGithubPage, OpenRepository,
+  OpenSettingsPage, PreviousAnnotation, PreviousPageTab, PullChanges, PushChanges,
+  RefreshCurrentPage, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch, SwitchToPrBranch,
+  ToggleDiffView, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -47,9 +49,15 @@ const FILE_SEARCH_CONTEXT: &str =
   "WorkspaceGit || WorkspaceGithubRepoCode || WorkspaceGithubPrChanges";
 const OPEN_REPOSITORY_CONTEXT: &str = "WorkspaceGit";
 const COMMIT_CHANGES_CONTEXT: &str = "WorkspaceGit";
+const PULL_CHANGES_CONTEXT: &str = "WorkspaceGit";
+const PUSH_CHANGES_CONTEXT: &str = "WorkspaceGit";
+const FORCE_PUSH_CHANGES_CONTEXT: &str = "WorkspaceGit";
 const CLOSE_WORKSPACE_PAGE_CONTEXT: &str =
   "WorkspaceBilling || WorkspaceGitConfig || WorkspaceSettings || WorkspaceAbout";
 const OPEN_SETTINGS_CONTEXT: &str = "Workspace";
+const NAVIGATE_BACK_CONTEXT: &str = "Workspace";
+const OPEN_GIT_PAGE_CONTEXT: &str = "Workspace";
+const OPEN_GITHUB_PAGE_CONTEXT: &str = "Workspace";
 const REFRESH_CURRENT_PAGE_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubHome || WorkspaceGithubRepo || WorkspaceGithubRepoCode || WorkspaceGithubPr || WorkspaceGithubPrChanges";
 const TOGGLE_TERMINAL_CONTEXT: &str = "WorkspaceGit";
 const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceGit";
@@ -57,6 +65,9 @@ const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
 const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
 const TOGGLE_DIFF_VIEW_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
 const SWITCH_TO_PR_BRANCH_CONTEXT: &str = "WorkspaceGithubPr || WorkspaceGithubPrChanges";
+const REVIEW_ANNOTATION_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
+const PAGE_TAB_CONTEXT: &str =
+  "WorkspaceGithubRepo || WorkspaceGithubRepoCode || WorkspaceGithubPr || WorkspaceGithubPrChanges";
 
 const ALL_WORKSPACE_ACTIVE_CONTEXTS: [&str; 10] = [
   WORKSPACE_GIT_CONTEXT,
@@ -103,13 +114,26 @@ const PR_PAGE_ACTIVE_CONTEXTS: [&str; 2] = [
   WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
 ];
 
+const REPO_AND_PR_PAGE_ACTIVE_CONTEXTS: [&str; 4] = [
+  WORKSPACE_GITHUB_REPO_CONTEXT,
+  WORKSPACE_GITHUB_REPO_CODE_CONTEXT,
+  WORKSPACE_GITHUB_PR_CONTEXT,
+  WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShortcutId {
   ShowCommandPalette,
+  NavigateBack,
+  OpenGitPage,
+  OpenGithubPage,
   RefreshCurrentPage,
   ShowFileSearch,
   OpenRepository,
   CommitChanges,
+  PullChanges,
+  PushChanges,
+  ForcePushChanges,
   CloseWorkspacePage,
   OpenSettingsPage,
   ToggleTerminalSidebar,
@@ -118,16 +142,26 @@ pub enum ShortcutId {
   OpenGitChangesSidebar,
   ToggleDiffView,
   SwitchToPrBranch,
+  PreviousAnnotation,
+  NextAnnotation,
+  PreviousPageTab,
+  NextPageTab,
 }
 
 impl ShortcutId {
   pub fn storage_key(self) -> &'static str {
     match self {
       ShortcutId::ShowCommandPalette => "show_command_palette",
+      ShortcutId::NavigateBack => "navigate_back",
+      ShortcutId::OpenGitPage => "open_git_page",
+      ShortcutId::OpenGithubPage => "open_github_page",
       ShortcutId::RefreshCurrentPage => "refresh_current_page",
       ShortcutId::ShowFileSearch => "show_file_search",
       ShortcutId::OpenRepository => "open_repository",
       ShortcutId::CommitChanges => "commit_changes",
+      ShortcutId::PullChanges => "pull_changes",
+      ShortcutId::PushChanges => "push_changes",
+      ShortcutId::ForcePushChanges => "force_push_changes",
       ShortcutId::CloseWorkspacePage => "close_workspace_page",
       ShortcutId::OpenSettingsPage => "open_settings_page",
       ShortcutId::ToggleTerminalSidebar => "toggle_terminal_sidebar",
@@ -136,16 +170,26 @@ impl ShortcutId {
       ShortcutId::OpenGitChangesSidebar => "open_git_changes_sidebar",
       ShortcutId::ToggleDiffView => "toggle_diff_view",
       ShortcutId::SwitchToPrBranch => "switch_to_pr_branch",
+      ShortcutId::PreviousAnnotation => "previous_annotation",
+      ShortcutId::NextAnnotation => "next_annotation",
+      ShortcutId::PreviousPageTab => "previous_page_tab",
+      ShortcutId::NextPageTab => "next_page_tab",
     }
   }
 
   pub fn from_storage_key(value: &str) -> Option<Self> {
     match value {
       "show_command_palette" => Some(ShortcutId::ShowCommandPalette),
+      "navigate_back" => Some(ShortcutId::NavigateBack),
+      "open_git_page" => Some(ShortcutId::OpenGitPage),
+      "open_github_page" => Some(ShortcutId::OpenGithubPage),
       "refresh_current_page" => Some(ShortcutId::RefreshCurrentPage),
       "show_file_search" => Some(ShortcutId::ShowFileSearch),
       "open_repository" => Some(ShortcutId::OpenRepository),
       "commit_changes" => Some(ShortcutId::CommitChanges),
+      "pull_changes" => Some(ShortcutId::PullChanges),
+      "push_changes" => Some(ShortcutId::PushChanges),
+      "force_push_changes" => Some(ShortcutId::ForcePushChanges),
       "close_workspace_page" => Some(ShortcutId::CloseWorkspacePage),
       "open_settings_page" => Some(ShortcutId::OpenSettingsPage),
       "toggle_terminal_sidebar" => Some(ShortcutId::ToggleTerminalSidebar),
@@ -154,6 +198,10 @@ impl ShortcutId {
       "open_git_changes_sidebar" => Some(ShortcutId::OpenGitChangesSidebar),
       "toggle_diff_view" => Some(ShortcutId::ToggleDiffView),
       "switch_to_pr_branch" => Some(ShortcutId::SwitchToPrBranch),
+      "previous_annotation" => Some(ShortcutId::PreviousAnnotation),
+      "next_annotation" => Some(ShortcutId::NextAnnotation),
+      "previous_page_tab" => Some(ShortcutId::PreviousPageTab),
+      "next_page_tab" => Some(ShortcutId::NextPageTab),
       _ => None,
     }
   }
@@ -161,9 +209,10 @@ impl ShortcutId {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShortcutCategory {
-  Workspace,
-  Search,
-  Git,
+  Core,
+  Review,
+  LocalGit,
+  App,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,16 +228,49 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 13] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 23] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
     description: "Open the command palette for the current page.",
     scope_label: "All workspace pages",
-    category: ShortcutCategory::Workspace,
+    category: ShortcutCategory::Core,
     keystroke: SHOW_COMMAND_PALETTE_SHORTCUT,
     context: WORKSPACE_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &ALL_WORKSPACE_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::NavigateBack,
+    title: "Back",
+    description: "Go back to the previous page in navigation history.",
+    scope_label: "All workspace pages",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-[",
+    context: NAVIGATE_BACK_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &ALL_WORKSPACE_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::OpenGitPage,
+    title: "Open Git",
+    description: "Switch to the Git page.",
+    scope_label: "All workspace pages",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-1",
+    context: OPEN_GIT_PAGE_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &ALL_WORKSPACE_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::OpenGithubPage,
+    title: "Open GitHub",
+    description: "Switch to the GitHub page.",
+    scope_label: "All workspace pages",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-2",
+    context: OPEN_GITHUB_PAGE_CONTEXT,
+    display_context: WORKSPACE_GITHUB_HOME_CONTEXT,
     active_contexts: &ALL_WORKSPACE_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
@@ -196,7 +278,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 13] = [
     title: "Refresh Current Page",
     description: "Refresh the current Git or GitHub page.",
     scope_label: "Git and GitHub pages",
-    category: ShortcutCategory::Workspace,
+    category: ShortcutCategory::Core,
     keystroke: "cmd-r",
     context: REFRESH_CURRENT_PAGE_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
@@ -207,106 +289,62 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 13] = [
     title: "File Search",
     description: "Open file search where file navigation is available.",
     scope_label: "Git, Repo Code, and PR Changes pages",
-    category: ShortcutCategory::Search,
+    category: ShortcutCategory::Core,
     keystroke: "cmd-p",
     context: FILE_SEARCH_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
     active_contexts: &FILE_SEARCH_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
-    id: ShortcutId::OpenRepository,
-    title: "Open Repository",
-    description: "Open a local repository from the Git page.",
-    scope_label: "Git page",
-    category: ShortcutCategory::Git,
-    keystroke: "cmd-o",
-    context: OPEN_REPOSITORY_CONTEXT,
+    id: ShortcutId::PreviousAnnotation,
+    title: "Previous Annotation",
+    description: "Jump to the previous conflict or review comment.",
+    scope_label: "Git conflicts and PR Changes comments",
+    category: ShortcutCategory::Review,
+    keystroke: "cmd-alt-up",
+    context: REVIEW_ANNOTATION_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_PR_CHANGES_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
-    id: ShortcutId::CommitChanges,
-    title: "Commit Changes",
-    description: "Commit changes from the Git page.",
-    scope_label: "Git page",
-    category: ShortcutCategory::Git,
-    keystroke: "cmd-enter",
-    context: COMMIT_CHANGES_CONTEXT,
+    id: ShortcutId::NextAnnotation,
+    title: "Next Annotation",
+    description: "Jump to the next conflict or review comment.",
+    scope_label: "Git conflicts and PR Changes comments",
+    category: ShortcutCategory::Review,
+    keystroke: "cmd-alt-down",
+    context: REVIEW_ANNOTATION_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_PR_CHANGES_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
-    id: ShortcutId::CloseWorkspacePage,
-    title: "Close Page",
-    description: "Close the current secondary workspace page.",
-    scope_label: "Settings, Billing, About, and Git Config pages",
-    category: ShortcutCategory::Workspace,
-    keystroke: "cmd-w",
-    context: CLOSE_WORKSPACE_PAGE_CONTEXT,
-    display_context: WORKSPACE_SETTINGS_CONTEXT,
-    active_contexts: &SECONDARY_PAGE_ACTIVE_CONTEXTS,
+    id: ShortcutId::PreviousPageTab,
+    title: "Previous Tab",
+    description: "Move to the previous repository or pull request tab.",
+    scope_label: "Repository and pull request pages",
+    category: ShortcutCategory::Review,
+    keystroke: "cmd-shift-[",
+    context: PAGE_TAB_CONTEXT,
+    display_context: WORKSPACE_GITHUB_REPO_CONTEXT,
+    active_contexts: &REPO_AND_PR_PAGE_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
-    id: ShortcutId::OpenSettingsPage,
-    title: "Open Settings",
-    description: "Open settings from anywhere in the workspace.",
-    scope_label: "All workspace pages",
-    category: ShortcutCategory::Workspace,
-    keystroke: "cmd-,",
-    context: OPEN_SETTINGS_CONTEXT,
-    display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &ALL_WORKSPACE_ACTIVE_CONTEXTS,
-  },
-  ShortcutDefinition {
-    id: ShortcutId::ToggleTerminalSidebar,
-    title: "Toggle Terminal",
-    description: "Show or hide the terminal sidebar on the Git page.",
-    scope_label: "Git page",
-    category: ShortcutCategory::Git,
-    keystroke: "cmd-j",
-    context: TOGGLE_TERMINAL_CONTEXT,
-    display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
-  },
-  ShortcutDefinition {
-    id: ShortcutId::ShowBranchSwitcher,
-    title: "Switch Branch",
-    description: "Open branch switching on the Git page.",
-    scope_label: "Git page",
-    category: ShortcutCategory::Git,
-    keystroke: "cmd-shift-b",
-    context: SHOW_BRANCH_SWITCHER_CONTEXT,
-    display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
-  },
-  ShortcutDefinition {
-    id: ShortcutId::OpenGitHistorySidebar,
-    title: "Open History Sidebar",
-    description: "Open the Git history sidebar.",
-    scope_label: "Git page",
-    category: ShortcutCategory::Git,
-    keystroke: "cmd-shift-h",
-    context: OPEN_GIT_HISTORY_SIDEBAR_CONTEXT,
-    display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
-  },
-  ShortcutDefinition {
-    id: ShortcutId::OpenGitChangesSidebar,
-    title: "Open Changes Sidebar",
-    description: "Open the Git changes sidebar.",
-    scope_label: "Git page",
-    category: ShortcutCategory::Git,
-    keystroke: "cmd-shift-e",
-    context: OPEN_GIT_CHANGES_SIDEBAR_CONTEXT,
-    display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    id: ShortcutId::NextPageTab,
+    title: "Next Tab",
+    description: "Move to the next repository or pull request tab.",
+    scope_label: "Repository and pull request pages",
+    category: ShortcutCategory::Review,
+    keystroke: "cmd-shift-]",
+    context: PAGE_TAB_CONTEXT,
+    display_context: WORKSPACE_GITHUB_REPO_CONTEXT,
+    active_contexts: &REPO_AND_PR_PAGE_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::ToggleDiffView,
     title: "Toggle Diff View",
     description: "Switch between inline and split diff view.",
     scope_label: "Git page and PR Changes page",
-    category: ShortcutCategory::Git,
+    category: ShortcutCategory::Review,
     keystroke: "cmd-/",
     context: TOGGLE_DIFF_VIEW_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
@@ -317,11 +355,132 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 13] = [
     title: "Switch To PR Branch",
     description: "Switch the local repo to the current pull request branch.",
     scope_label: "Pull request pages",
-    category: ShortcutCategory::Git,
+    category: ShortcutCategory::Review,
     keystroke: "cmd-.",
     context: SWITCH_TO_PR_BRANCH_CONTEXT,
     display_context: WORKSPACE_GITHUB_PR_CONTEXT,
     active_contexts: &PR_PAGE_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::OpenRepository,
+    title: "Open Repository",
+    description: "Open a local repository from the Git page.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-o",
+    context: OPEN_REPOSITORY_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::CommitChanges,
+    title: "Commit Changes",
+    description: "Commit changes from the Git page.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-enter",
+    context: COMMIT_CHANGES_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::PullChanges,
+    title: "Pull Changes",
+    description: "Pull the current branch from its upstream remote.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-u",
+    context: PULL_CHANGES_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::PushChanges,
+    title: "Push Changes",
+    description: "Push the current branch to its upstream remote.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-y",
+    context: PUSH_CHANGES_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ForcePushChanges,
+    title: "Force Push Changes",
+    description: "Force push the current branch to its upstream remote.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-shift-y",
+    context: FORCE_PUSH_CHANGES_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ToggleTerminalSidebar,
+    title: "Toggle Terminal",
+    description: "Show or hide the terminal sidebar on the Git page.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-j",
+    context: TOGGLE_TERMINAL_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ShowBranchSwitcher,
+    title: "Switch Branch",
+    description: "Open branch switching on the Git page.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-shift-b",
+    context: SHOW_BRANCH_SWITCHER_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::OpenGitHistorySidebar,
+    title: "Open History Sidebar",
+    description: "Open the Git history sidebar.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-shift-h",
+    context: OPEN_GIT_HISTORY_SIDEBAR_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::OpenGitChangesSidebar,
+    title: "Open Changes Sidebar",
+    description: "Open the Git changes sidebar.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-shift-e",
+    context: OPEN_GIT_CHANGES_SIDEBAR_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::OpenSettingsPage,
+    title: "Open Settings",
+    description: "Open settings from anywhere in the workspace.",
+    scope_label: "All workspace pages",
+    category: ShortcutCategory::App,
+    keystroke: "cmd-,",
+    context: OPEN_SETTINGS_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &ALL_WORKSPACE_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::CloseWorkspacePage,
+    title: "Close Page",
+    description: "Close the current secondary workspace page.",
+    scope_label: "Settings, Billing, About, and Git Config pages",
+    category: ShortcutCategory::App,
+    keystroke: "cmd-w",
+    context: CLOSE_WORKSPACE_PAGE_CONTEXT,
+    display_context: WORKSPACE_SETTINGS_CONTEXT,
+    active_contexts: &SECONDARY_PAGE_ACTIVE_CONTEXTS,
   },
 ];
 
@@ -584,12 +743,18 @@ impl ShortcutDefinition {
       ShortcutId::ShowCommandPalette => {
         KeyBinding::new(keystroke, ShowCommandPalette, Some(&context))
       }
+      ShortcutId::NavigateBack => KeyBinding::new(keystroke, NavigateBack, Some(&context)),
+      ShortcutId::OpenGitPage => KeyBinding::new(keystroke, OpenGitPage, Some(&context)),
+      ShortcutId::OpenGithubPage => KeyBinding::new(keystroke, OpenGithubPage, Some(&context)),
       ShortcutId::RefreshCurrentPage => {
         KeyBinding::new(keystroke, RefreshCurrentPage, Some(&context))
       }
       ShortcutId::ShowFileSearch => KeyBinding::new(keystroke, ShowFileSearch, Some(&context)),
       ShortcutId::OpenRepository => KeyBinding::new(keystroke, OpenRepository, Some(&context)),
       ShortcutId::CommitChanges => KeyBinding::new(keystroke, CommitChanges, Some(&context)),
+      ShortcutId::PullChanges => KeyBinding::new(keystroke, PullChanges, Some(&context)),
+      ShortcutId::PushChanges => KeyBinding::new(keystroke, PushChanges, Some(&context)),
+      ShortcutId::ForcePushChanges => KeyBinding::new(keystroke, ForcePushChanges, Some(&context)),
       ShortcutId::CloseWorkspacePage => {
         KeyBinding::new(keystroke, CloseWorkspacePage, Some(&context))
       }
@@ -608,6 +773,12 @@ impl ShortcutDefinition {
       }
       ShortcutId::ToggleDiffView => KeyBinding::new(keystroke, ToggleDiffView, Some(&context)),
       ShortcutId::SwitchToPrBranch => KeyBinding::new(keystroke, SwitchToPrBranch, Some(&context)),
+      ShortcutId::PreviousAnnotation => {
+        KeyBinding::new(keystroke, PreviousAnnotation, Some(&context))
+      }
+      ShortcutId::NextAnnotation => KeyBinding::new(keystroke, NextAnnotation, Some(&context)),
+      ShortcutId::PreviousPageTab => KeyBinding::new(keystroke, PreviousPageTab, Some(&context)),
+      ShortcutId::NextPageTab => KeyBinding::new(keystroke, NextPageTab, Some(&context)),
     }
   }
 
@@ -619,9 +790,10 @@ impl ShortcutDefinition {
 impl ShortcutCategory {
   pub fn title(self) -> &'static str {
     match self {
-      ShortcutCategory::Workspace => "Workspace",
-      ShortcutCategory::Search => "Search",
-      ShortcutCategory::Git => "Git",
+      ShortcutCategory::Core => "Core",
+      ShortcutCategory::Review => "Review",
+      ShortcutCategory::LocalGit => "Local Git",
+      ShortcutCategory::App => "App",
     }
   }
 }
@@ -944,10 +1116,16 @@ fn active_contexts_overlap(a: &ShortcutDefinition, b: &ShortcutDefinition) -> bo
 fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> T {
   match id {
     ShortcutId::ShowCommandPalette => f(&ShowCommandPalette),
+    ShortcutId::NavigateBack => f(&NavigateBack),
+    ShortcutId::OpenGitPage => f(&OpenGitPage),
+    ShortcutId::OpenGithubPage => f(&OpenGithubPage),
     ShortcutId::RefreshCurrentPage => f(&RefreshCurrentPage),
     ShortcutId::ShowFileSearch => f(&ShowFileSearch),
     ShortcutId::OpenRepository => f(&OpenRepository),
     ShortcutId::CommitChanges => f(&CommitChanges),
+    ShortcutId::PullChanges => f(&PullChanges),
+    ShortcutId::PushChanges => f(&PushChanges),
+    ShortcutId::ForcePushChanges => f(&ForcePushChanges),
     ShortcutId::CloseWorkspacePage => f(&CloseWorkspacePage),
     ShortcutId::OpenSettingsPage => f(&OpenSettingsPage),
     ShortcutId::ToggleTerminalSidebar => f(&ToggleTerminalSidebar),
@@ -956,6 +1134,10 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::OpenGitChangesSidebar => f(&OpenGitChangesSidebar),
     ShortcutId::ToggleDiffView => f(&ToggleDiffView),
     ShortcutId::SwitchToPrBranch => f(&SwitchToPrBranch),
+    ShortcutId::PreviousAnnotation => f(&PreviousAnnotation),
+    ShortcutId::NextAnnotation => f(&NextAnnotation),
+    ShortcutId::PreviousPageTab => f(&PreviousPageTab),
+    ShortcutId::NextPageTab => f(&NextPageTab),
   }
 }
 
@@ -1118,9 +1300,18 @@ mod tests {
   fn git_only_shortcuts_are_scoped_to_the_git_page() {
     assert!(has_binding("/git", "cmd-o"));
     assert!(has_binding("/git", "cmd-enter"));
+    assert!(has_binding("/git", "cmd-u"));
+    assert!(has_binding("/git", "cmd-y"));
+    assert!(has_binding("/git", "cmd-shift-y"));
     assert!(!has_binding("/github", "cmd-o"));
     assert!(!has_binding("/github/owner/repo/code", "cmd-enter"));
+    assert!(!has_binding("/github", "cmd-u"));
+    assert!(!has_binding("/github", "cmd-y"));
+    assert!(!has_binding("/github", "cmd-shift-y"));
     assert!(!has_binding("/settings", "cmd-o"));
+    assert!(!has_binding("/settings", "cmd-u"));
+    assert!(!has_binding("/settings", "cmd-y"));
+    assert!(!has_binding("/settings", "cmd-shift-y"));
   }
 
   #[test]
@@ -1143,8 +1334,25 @@ mod tests {
   }
 
   #[test]
+  fn core_navigation_shortcuts_are_available_across_workspace_pages() {
+    for pathname in ["/git", "/github", "/github/owner/repo/pull/42", "/settings"] {
+      assert!(has_binding(pathname, "cmd-["));
+      assert!(has_binding(pathname, "cmd-1"));
+      assert!(has_binding(pathname, "cmd-2"));
+    }
+  }
+
+  #[test]
   fn git_keyboard_first_shortcuts_are_scoped_to_git_page() {
-    for keystroke in ["cmd-j", "cmd-shift-b", "cmd-shift-h", "cmd-shift-e"] {
+    for keystroke in [
+      "cmd-j",
+      "cmd-u",
+      "cmd-y",
+      "cmd-shift-y",
+      "cmd-shift-b",
+      "cmd-shift-h",
+      "cmd-shift-e",
+    ] {
       assert!(
         has_binding("/git", keystroke),
         "{keystroke} should be active on /git"
@@ -1170,6 +1378,29 @@ mod tests {
     assert!(has_binding("/github/owner/repo/pull/42/changes", "cmd-."));
     assert!(!has_binding("/git", "cmd-."));
     assert!(!has_binding("/github/owner/repo/code", "cmd-."));
+  }
+
+  #[test]
+  fn annotation_shortcuts_are_scoped_to_git_and_pr_changes() {
+    for keystroke in ["cmd-alt-up", "cmd-alt-down"] {
+      assert!(has_binding("/git", keystroke));
+      assert!(has_binding("/github/owner/repo/pull/42/changes", keystroke));
+      assert!(!has_binding("/github", keystroke));
+      assert!(!has_binding("/github/owner/repo", keystroke));
+      assert!(!has_binding("/github/owner/repo/pull/42", keystroke));
+    }
+  }
+
+  #[test]
+  fn page_tab_shortcuts_are_scoped_to_repo_and_pr_pages() {
+    for keystroke in ["cmd-shift-[", "cmd-shift-]"] {
+      assert!(!has_binding("/git", keystroke));
+      assert!(!has_binding("/github", keystroke));
+      assert!(has_binding("/github/owner/repo", keystroke));
+      assert!(has_binding("/github/owner/repo/code", keystroke));
+      assert!(has_binding("/github/owner/repo/pull/42", keystroke));
+      assert!(has_binding("/github/owner/repo/pull/42/changes", keystroke));
+    }
   }
 
   #[test]

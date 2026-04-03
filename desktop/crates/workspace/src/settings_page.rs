@@ -230,12 +230,15 @@ impl SettingsPage {
 
   fn keyboard_shortcuts_page(view: gpui::Entity<Self>, is_admin: bool) -> SettingPage {
     SettingPage::new("Keyboard Shortcuts")
-      .description("Edit current desktop shortcuts. Changes apply immediately in the app.")
+      .description(
+        "Edit desktop shortcuts grouped by workflow. Changes apply immediately in the app.",
+      )
       .resettable(false)
       .groups([
-        Self::keyboard_shortcuts_group(ShortcutCategory::Workspace, view.clone(), is_admin),
-        Self::keyboard_shortcuts_group(ShortcutCategory::Search, view.clone(), is_admin),
-        Self::keyboard_shortcuts_group(ShortcutCategory::Git, view, is_admin),
+        Self::keyboard_shortcuts_group(ShortcutCategory::Core, view.clone(), is_admin),
+        Self::keyboard_shortcuts_group(ShortcutCategory::Review, view.clone(), is_admin),
+        Self::keyboard_shortcuts_group(ShortcutCategory::LocalGit, view.clone(), is_admin),
+        Self::keyboard_shortcuts_group(ShortcutCategory::App, view, is_admin),
       ])
   }
 

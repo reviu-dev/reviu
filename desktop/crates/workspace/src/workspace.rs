@@ -178,6 +178,8 @@ fn should_run_scheduled_update_check(state: Option<AppUpdateState>) -> bool {
 
 pub fn build_app_menus(show_billing_entry: bool) -> Vec<Menu> {
   let mut navigate_items = vec![
+    MenuItem::action("Back", crate::NavigateBack),
+    MenuItem::separator(),
     MenuItem::action("Git", crate::OpenGitPage),
     MenuItem::action("GitHub", crate::OpenGithubPage),
     MenuItem::separator(),
@@ -720,6 +722,15 @@ impl WorkspaceView {
     }
   }
 
+  fn navigate_back_action(
+    &mut self,
+    _: &crate::NavigateBack,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    NavigationHistory::navigate_back(cx);
+  }
+
   fn render_global_bar(
     &self,
     window: &Window,
@@ -1052,6 +1063,7 @@ impl Render for WorkspaceView {
       .on_action(cx.listener(|_, _: &crate::OpenGithubPage, _window, cx| {
         Self::open_github_home(cx);
       }))
+      .on_action(cx.listener(Self::navigate_back_action))
       .on_action(cx.listener(Self::refresh_current_page_action))
       .on_action(cx.listener(|_, _: &crate::OpenBillingPage, _window, cx| {
         if AuthStateStore::should_show_billing_entry(cx) {
@@ -1146,7 +1158,7 @@ mod tests {
 
     assert_eq!(
       action_menu_item_names(navigate_menu),
-      vec!["Git", "GitHub", "Git Config"]
+      vec!["Back", "Git", "GitHub", "Git Config"]
     );
   }
 
@@ -1160,7 +1172,7 @@ mod tests {
 
     assert_eq!(
       action_menu_item_names(navigate_menu),
-      vec!["Git", "GitHub", "Git Config", "Billing"]
+      vec!["Back", "Git", "GitHub", "Git Config", "Billing"]
     );
   }
 

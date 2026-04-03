@@ -4913,6 +4913,60 @@ impl GitPage {
     cx.stop_propagation();
   }
 
+  fn previous_annotation_action(
+    &mut self,
+    _: &crate::PreviousAnnotation,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.navigate_conflict_in_editor(ConflictNavigationDirection::Previous, cx);
+    cx.stop_propagation();
+  }
+
+  fn next_annotation_action(
+    &mut self,
+    _: &crate::NextAnnotation,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.navigate_conflict_in_editor(ConflictNavigationDirection::Next, cx);
+    cx.stop_propagation();
+  }
+
+  fn pull_changes_action(
+    &mut self,
+    _: &crate::PullChanges,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+
+    self.pull_repository(repo_root, cx);
+    cx.stop_propagation();
+  }
+
+  fn push_changes_shortcut_action(
+    &mut self,
+    _: &crate::PushChanges,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.push_changes_action(cx);
+    cx.stop_propagation();
+  }
+
+  fn force_push_changes_shortcut_action(
+    &mut self,
+    _: &crate::ForcePushChanges,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.force_push_changes_action(cx);
+    cx.stop_propagation();
+  }
+
   fn commit_changes(&mut self, _: &gpui::ClickEvent, window: &mut Window, cx: &mut Context<Self>) {
     self.commit_changes_inner(window, cx);
   }
@@ -8659,7 +8713,12 @@ impl Render for GitPage {
       .on_action(cx.listener(GitPage::commit_changes_action))
       .on_action(cx.listener(GitPage::open_git_history_sidebar_action))
       .on_action(cx.listener(GitPage::open_git_changes_sidebar_action))
+      .on_action(cx.listener(GitPage::pull_changes_action))
+      .on_action(cx.listener(GitPage::push_changes_shortcut_action))
+      .on_action(cx.listener(GitPage::force_push_changes_shortcut_action))
       .on_action(cx.listener(GitPage::toggle_diff_view_action))
+      .on_action(cx.listener(GitPage::previous_annotation_action))
+      .on_action(cx.listener(GitPage::next_annotation_action))
       .child(self.render_header(window, cx))
       .child(content)
   }
@@ -14624,6 +14683,28 @@ mod tests {
       this.push_changes_action(cx);
       assert!(this.status_task.is_none());
       assert!(!this.push_pull_in_progress);
+    });
+  }
+
+  #[gpui::test]
+  async fn pull_changes_action_requires_selected_repo_and_respects_existing_sync(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-pull-shortcut-guards");
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    git_page.update_in(cx, |this, window, cx| {
+      this.selected_repo = None;
+      this.pull_changes_action(&crate::PullChanges, window, cx);
+      assert!(this.status_task.is_none());
+      assert!(!this.push_pull_in_progress);
+
+      this.selected_repo = Some(repo.path.clone());
+      this.push_pull_in_progress = true;
+      this.pull_changes_action(&crate::PullChanges, window, cx);
+      assert!(this.status_task.is_none());
+      assert!(this.push_pull_in_progress);
     });
   }
 
