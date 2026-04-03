@@ -2845,20 +2845,7 @@ impl GithubPage {
                   .gap_1()
                   .flex_1()
                   .min_w_0()
-                  .child(
-                    h_flex()
-                      .items_center()
-                      .gap_2()
-                      .child(div().child(tab.name.clone()))
-                      .when(tab_state.loaded_once, |this| {
-                        this.child(
-                          Tag::secondary()
-                            .small()
-                            .rounded_full()
-                            .child(tab_state.rows.len().to_string()),
-                        )
-                      }),
-                  )
+                  .child(tab.name.clone())
                   .child(if filter_labels.is_empty() {
                     div()
                       .text_sm()
