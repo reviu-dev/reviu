@@ -1,100 +1,145 @@
-# Reviu - Product Features Overview
+# Reviu - Product Snapshot
 
 ## What Reviu is
 
-Reviu is a desktop Git client focused on fast code review workflows.
+Reviu is a native desktop Git client built for fast review workflows.
 
-Core positioning:
+Core product shape:
 
-- Free local Git workflow
-- Keyboard-first UX
-- Reviu Pro unlocks GitHub integration for paid users
+- `Free` covers local Git workflows.
+- `Reviu Pro` adds GitHub workflows directly inside the app.
+- The product is keyboard-first, editor-oriented, and built to keep local Git and GitHub context in one place.
 
-## Product promise
+## Product positioning
 
-- Review faster without leaving your desktop
-- Keep local Git operations and remote GitHub workflows in one app
-- Use shortcuts and command palette instead of click-heavy UI
+- Desktop-native Git workflow, not a browser tab workflow.
+- Fast diff and review experience, not just a repository manager.
+- Keyboard-first navigation with command palette, shortcuts, and file search.
+- Native Rust + GPUI app, not Electron and not a webview.
 
-## Plans
+## Current product truth
 
-### Free
+- Public platform messaging that is safe today: `macOS (Apple Silicon)`.
+- Local Git features do not require an account.
+- GitHub features require `Sign in with GitHub` and `Reviu Pro`.
+- Current pricing shown in the app and landing: `$19/month`.
+- Current landing and terms also message a `14-day free trial`.
 
-Included in the base app:
+If pricing changes, update desktop billing, landing copy, structured data, and terms together.
 
-- Local repository management
-- Branch switching
-- Fetch, push, and force push
-- Stage/unstage by file
-- Stage/unstage all
-- Commit and undo last commit
-- Rebase flows (continue, skip, abort, interactive)
-- Cherry-pick
-- Stash flows (stash, apply, drop, pop)
-- Conflict resolution helpers
-- Keyboard-first command palette and shortcuts
+## Free
 
-### Reviu Pro
+### Local Git workflow
 
-Paid plan for GitHub workflows:
+- Open local repositories and switch between recent repositories.
+- Review repository status with staged, unstaged, partially staged, and conflicted files.
+- View local changes in inline and split diff modes.
+- Stage, unstage, and restore by file or by hunk.
+- Commit changes, amend the latest commit, and undo the last commit.
+- Switch branches and create branches from local or remote refs.
+- Fetch, pull, push, and force push with lease.
+- Rebase flows: start, continue, skip, abort, and interactive rebase.
+- Cherry-pick one or more commits.
+- Stash flows: stash, stash with untracked files, apply, pop, and drop.
+- Resolve conflicts with dedicated conflict actions.
 
-- Price shown in app billing: `$19/month`
-- GitHub notifications feed
-- GitHub repository details:
-  - Overview
-  - Readme
-  - Code
-  - Pull Requests
-  - Issues
-- Branch-aware repo browsing (Readme + Code follow selected branch)
-- Pull request review experience:
-  - File tree and changed files
-  - Inline and split diff modes
-  - Markdown and SVG preview support
-  - Create, edit, reply, and delete review comments
-- Issue context inside repository pages
+### Local UX strengths
 
-## UX strengths
+- Keyboard-first command palette for local Git actions.
+- File search on code and diff pages.
+- Persistent app settings for theme, font size, diff view, and editor display options.
+- Dedicated Git config page inside the app.
 
-- Keyboard-first navigation (`cmd-k`, `cmd-p`, `cmd-enter`, etc.)
-- Editor-oriented review with syntax highlighting
-- Real-time diff workflow in desktop context
-- Single place for local Git + GitHub review activity
+## Reviu Pro
 
-## Current platform messaging
+### GitHub home
 
-Safe messaging for landing right now:
+- GitHub notifications feed in-app.
+- Unread counts and desktop-facing GitHub attention surface inside Reviu.
+- Saved pull request lists and repository sections on the GitHub home page.
+- Upgrade and sign-in flows directly in the desktop app.
 
-- Desktop app
-- macOS (Apple Silicon)
+### GitHub repository context
 
-Avoid claiming Linux/Windows availability unless release support is confirmed.
+- Browse repository `Overview`, `Readme`, `Code`, `Pull Requests`, and `Issues`.
+- Keep `Readme` and `Code` aligned with the selected branch.
+- Open files directly inside Reviu instead of bouncing to the browser.
+- Render repository content with Markdown support and file previews where supported.
+- View issue details and work with issue descriptions and issue comments in-app.
 
-## Conversion messages that fit the product
+### Pull request review
 
-### Hero-level value props
+- Open pull requests directly inside the desktop app.
+- Review changed files in inline or split diff modes.
+- Render Markdown and SVG content in review flows.
+- Create, reply to, edit, and delete review comments.
+- Submit reviews from the PR page, including comment, approve, and request changes flows.
+- See merge readiness and checks information inside the PR view.
+- Merge pull requests from Reviu when the repository state allows it.
 
-- "A free Git client built for fast reviews."
-- "Keyboard-first local Git. GitHub workflows with Reviu Pro."
+### Local-to-GitHub bridge
 
-### Free-to-Pro bridge
+- Jump from the local Git page to the pull request for the current branch.
+- Create a pull request from the Git page when a branch is ready to publish.
+- Switch a local repository to the current pull request branch from the PR flow.
+- Open GitHub URLs in Reviu through the command palette.
 
-- "Start free for local Git. Upgrade to Reviu Pro for GitHub notifications, repos, PR reviews, and issues."
+## Desktop surfaces beyond the core pitch
 
-### CTA direction
+- Billing page with subscription state, free-trial entry point, and billing portal access.
+- In-app feedback flow.
+- Startup crash recovery notification with one-click crash reporting.
+- Desktop update checking and release download flow.
+- Settings and About pages inside the app.
 
-- Primary CTA: Download app
-- Secondary CTA: See Pro pricing
+These are not the main hero features, but they matter for polish, support, and retention.
 
-## Suggested Bento angles
+## Backend-backed capabilities
 
-- Keyboard-first workflow
-- Advanced local Git operations
-- PR review with inline/split diffs
-- GitHub notifications + repo/PR/issue context in one place
+The backend is not just auth glue. It carries core product behavior for Pro.
 
-## Notes for marketing accuracy
+- GitHub OAuth sign-in and authenticated user state.
+- Subscription and billing lifecycle for Reviu Pro.
+- GitHub API-backed routes for notifications, repositories, pull requests, issues, comments, checks, and merge readiness.
+- Desktop update metadata and download routes.
+- Feedback submission and crash report intake.
 
-- Keep "free local Git" explicit
-- Keep "GitHub integration" explicit as Pro scope
-- Keep `$19/month` consistent with in-app billing text
+## What the landing is currently saying
+
+The landing is directionally correct, but it still compresses the product too much.
+
+Accurate themes already present on the landing:
+
+- Reviu is a desktop Git client.
+- The local Git workflow is keyboard-first.
+- Reviu Pro is the GitHub layer.
+- Platform messaging stays on `macOS with Apple Silicon`.
+
+What the current landing underrepresents:
+
+- The depth of the local Git workflow.
+- Hunk-level review and restore actions.
+- The strength of the GitHub home surface.
+- PR checks, merge readiness, and merge flows.
+- Issue editing and issue comment flows.
+- Desktop polish like crash recovery and in-app updates.
+
+## Copy guardrails
+
+Good claims:
+
+- "Free local Git client."
+- "Keyboard-first Git workflow."
+- "GitHub notifications, repositories, pull request reviews, and issues in Reviu Pro."
+- "Native desktop app built with Rust and GPUI."
+
+Avoid these unless they are explicitly shipped and verified:
+
+- `Windows` or `Linux` support.
+- Browser extension claims.
+- Team workflows or enterprise features that do not exist yet.
+- Pricing that does not match app billing and landing copy.
+
+## Suggested short description
+
+Reviu is a native desktop Git client for fast review workflows. Use Free for local Git, then upgrade to Reviu Pro for GitHub notifications, repository browsing, pull request review, and issues in one keyboard-first app.
