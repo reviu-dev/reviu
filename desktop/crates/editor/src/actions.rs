@@ -869,7 +869,7 @@ mod tests {
           secondary: false,
         },
         DisplayLine::Removed {
-          text: "removed".to_string(),
+          text: "removed".into(),
           anchor_line: 0,
           old_line: 0,
           hunk: HunkState::Unstaged,

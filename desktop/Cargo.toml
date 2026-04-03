@@ -83,6 +83,7 @@ smol = "2.0"
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 blake3 = "1.5"
 anyhow = "1.0"
+criterion = "0.8.2"
 rusqlite = { version = "0.31", features = ["bundled"] }
 rust-embed = "8.11"
 reqwest = { version = "0.12", default-features = false, features = [

@@ -46,6 +46,7 @@ const DIAGONAL_STRIPE_WIDTH: f32 = 1.0;
 const INDENT_GUIDE_BORDER_WIDTH: f32 = 1.0;
 const INDENT_RAINBOW_BLOCK_COLUMNS: usize = 2;
 const CONFLICT_MARKER_ALPHA_MULTIPLIER: f32 = 1.35;
+const WORD_DIFF_MAX_COMBINED_BYTES: usize = 2_048;
 const EDITOR_CHAR_WIDTH_SAMPLE: &str =
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
 
@@ -544,11 +545,30 @@ fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
 }
 
 fn word_diff_ranges(old_text: &str, new_text: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+  if old_text == new_text {
+    return (Vec::new(), Vec::new());
+  }
+
+  // The current LCS implementation is quadratic in token count. On very long
+  // HTML or generated lines, skipping word-level diffing keeps scrolling and
+  // diff rendering responsive while preserving line-level changes.
+  if old_text.len().saturating_add(new_text.len()) > WORD_DIFF_MAX_COMBINED_BYTES {
+    return (Vec::new(), Vec::new());
+  }
+
   let (removed, added) = word_diff_ranges_impl(old_text, new_text, false);
   if removed.is_empty() && added.is_empty() && old_text != new_text {
     return word_diff_ranges_impl(old_text, new_text, true);
   }
   (removed, added)
+}
+
+#[doc(hidden)]
+pub fn benchmark_word_diff_ranges(
+  old_text: &str,
+  new_text: &str,
+) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+  word_diff_ranges(old_text, new_text)
 }
 
 fn word_diff_ranges_impl(
@@ -854,6 +874,29 @@ fn word_diff_for_line(
     }),
     _ => None,
   }
+}
+
+fn collect_word_diffs_for_viewport(
+  viewport_lines: &[(usize, DisplayLine)],
+  diff_view: DiffElementView,
+  projection: Option<&Projection>,
+  document: &Document,
+  theme: &Theme,
+) -> HashMap<usize, WordDiffStyle> {
+  viewport_lines
+    .iter()
+    .filter_map(|(display_idx, display_line)| {
+      word_diff_for_line(
+        *display_idx,
+        display_line,
+        diff_view,
+        projection,
+        document,
+        theme,
+      )
+      .map(|word_diff| (*display_idx, word_diff))
+    })
+    .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1186,91 +1229,64 @@ impl Element for EditorElement {
 
     let document_entity = self.editor.read(cx).document().clone();
     let mut newly_shaped = Vec::new();
+    let word_diffs_by_display = {
+      let document = document_entity.read(cx);
+      collect_word_diffs_for_viewport(
+        &viewport_lines,
+        self.diff_view,
+        projection.as_deref(),
+        &document,
+        &theme,
+      )
+    };
     {
       let document = document_entity.read(cx);
       for (display_idx, display_line) in lines_to_shape {
-        let (line_text, doc_line, base_color, allow_highlights, word_diff) = match &display_line {
-          DisplayLine::Doc {
-            doc_line, change, ..
-          } => {
+        let (line_text, doc_line, base_color, allow_highlights) = match &display_line {
+          DisplayLine::Doc { doc_line, .. } => {
             let content = document
               .line_content(*doc_line)
               .map(|cow| clean_line_text(&cow))
               .unwrap_or_default();
             let base_color = style.color;
-            let word_diff = if matches!(self.diff_view, DiffElementView::Inline)
-              && matches!(change, Some(ChangeKind::Added))
-            {
-              projection.as_deref().and_then(|projection| {
-                inline_word_diff_style(display_idx, &display_line, projection, document, &theme)
-              })
-            } else {
-              None
-            };
-            (content, Some(*doc_line), base_color, true, word_diff)
+            (content, Some(*doc_line), base_color, true)
           }
           DisplayLine::Modified {
             old_text, doc_line, ..
           } => match self.diff_view {
             DiffElementView::SplitLeft => {
               let old_text = clean_line_text(old_text);
-              let new_text = document
-                .line_content(*doc_line)
-                .map(|cow| clean_line_text(&cow))
-                .unwrap_or_default();
-              let word_diff =
-                modified_word_diff_style(&old_text, &new_text, self.diff_view, &theme);
-              (old_text, None, theme.diff_removed_text(), false, word_diff)
+              (old_text, None, theme.diff_removed_text(), false)
             }
             DiffElementView::SplitRight => {
-              let old_text = clean_line_text(old_text);
               let content = document
                 .line_content(*doc_line)
                 .map(|cow| clean_line_text(&cow))
                 .unwrap_or_default();
-              let word_diff = modified_word_diff_style(&old_text, &content, self.diff_view, &theme);
-              (content, Some(*doc_line), style.color, true, word_diff)
+              (content, Some(*doc_line), style.color, true)
             }
             DiffElementView::Inline => {
               let content = document
                 .line_content(*doc_line)
                 .map(|cow| clean_line_text(&cow))
                 .unwrap_or_default();
-              (content, Some(*doc_line), style.color, true, None)
+              (content, Some(*doc_line), style.color, true)
             }
           },
           DisplayLine::Removed { text, .. } => {
             let color = theme.diff_removed_text();
-            let word_diff = if matches!(self.diff_view, DiffElementView::Inline) {
-              projection.as_deref().and_then(|projection| {
-                inline_word_diff_style(display_idx, &display_line, projection, document, &theme)
-              })
-            } else {
-              None
-            };
-            (clean_line_text(text), None, color, false, word_diff)
+            (clean_line_text(text), None, color, false)
           }
-          DisplayLine::Gap { .. } => (
-            String::new(),
-            None,
-            cx.theme().muted_foreground,
-            false,
-            None,
-          ),
+          DisplayLine::Gap { .. } => (String::new(), None, cx.theme().muted_foreground, false),
           DisplayLine::NoNewline { .. } => (
             NO_NEWLINE_MARKER_TEXT.to_string(),
             None,
             cx.theme().muted_foreground,
             false,
-            None,
           ),
-          DisplayLine::ReviewComment { .. } => (
-            String::new(),
-            None,
-            cx.theme().muted_foreground,
-            false,
-            None,
-          ),
+          DisplayLine::ReviewComment { .. } => {
+            (String::new(), None, cx.theme().muted_foreground, false)
+          }
         };
 
         let runs = if allow_highlights {
@@ -1299,7 +1315,7 @@ impl Element for EditorElement {
           }]
         };
 
-        let runs = if let Some(word_diff) = word_diff {
+        let runs = if let Some(word_diff) = word_diffs_by_display.get(&display_idx) {
           apply_background_ranges(runs, &word_diff.ranges, word_diff.background)
         } else {
           runs
@@ -1615,17 +1631,11 @@ impl Element for EditorElement {
         }
       }
 
-      if let Some(word_diff) = word_diff_for_line(
-        *display_idx,
-        display_line,
-        self.diff_view,
-        projection.as_deref(),
-        document,
-        &theme,
-      ) && let Some((_, shaped)) = shaped_lines.iter().find(|(idx, _)| *idx == *display_idx)
+      if let Some(word_diff) = word_diffs_by_display.get(display_idx)
+        && let Some((_, shaped)) = shaped_lines.iter().find(|(idx, _)| *idx == *display_idx)
       {
         let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
-        for range in word_diff.ranges {
+        for range in &word_diff.ranges {
           if range.start >= range.end {
             continue;
           }
@@ -2708,6 +2718,17 @@ mod tests {
   }
 
   #[test]
+  fn test_benchmark_word_diff_ranges_matches_internal_logic() {
+    let old_text = "const getLastNotification = () => \"You have a new message!\";";
+    let new_text = "const getLastDataNotification = () => \"You have a new message!\";";
+
+    assert_eq!(
+      benchmark_word_diff_ranges(old_text, new_text),
+      word_diff_ranges(old_text, new_text)
+    );
+  }
+
+  #[test]
   fn test_word_tokens_preserve_acronym_boundaries() {
     let tokens = word_tokens("getHTTPServerResponse", false)
       .into_iter()
@@ -2717,13 +2738,24 @@ mod tests {
     assert_eq!(tokens, vec!["get", "HTTP", "Server", "Response"]);
   }
 
+  #[test]
+  fn test_word_diff_ranges_skip_very_long_lines() {
+    let old_text = "const value = \"stable\";".repeat(80);
+    let new_text = "const value = \"changed\";".repeat(80);
+
+    let (removed, added) = word_diff_ranges(&old_text, &new_text);
+
+    assert!(removed.is_empty());
+    assert!(added.is_empty());
+  }
+
   #[gpui::test]
   fn test_display_line_text_for_view_uses_old_text_on_split_left(cx: &mut TestAppContext) {
     let document = cx.new(|cx| Document::new("  new_text", None, cx));
     let display_line = DisplayLine::Modified {
       doc_line: 0,
       old_line: 0,
-      old_text: "        old_text".to_string(),
+      old_text: "        old_text".into(),
       hunk: HunkState::Unstaged,
       group_id: None,
       secondary: false,
@@ -2740,6 +2772,35 @@ mod tests {
     assert_eq!(split_left, "        old_text");
     assert_eq!(split_right, "  new_text");
     assert_eq!(inline, "  new_text");
+  }
+
+  #[gpui::test]
+  fn test_collect_word_diffs_for_viewport_keeps_modified_lines_available(cx: &mut TestAppContext) {
+    let document = cx.new(|cx| Document::new("const getLastDataNotification = value;", None, cx));
+    let viewport_lines = vec![(
+      0,
+      DisplayLine::Modified {
+        doc_line: 0,
+        old_line: 0,
+        old_text: "const getLastNotification = value;".into(),
+        hunk: HunkState::Unstaged,
+        group_id: None,
+        secondary: false,
+      },
+    )];
+
+    let styles = document.read_with(cx, |document, _| {
+      collect_word_diffs_for_viewport(
+        &viewport_lines,
+        DiffElementView::SplitRight,
+        None,
+        document,
+        &Theme::dark(),
+      )
+    });
+
+    assert!(styles.contains_key(&0));
+    assert_eq!(styles[&0].ranges.len(), 1);
   }
 
   #[test]

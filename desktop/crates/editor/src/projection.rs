@@ -79,7 +79,7 @@ pub enum DisplayLine {
     secondary: bool,
   },
   Modified {
-    old_text: String,
+    old_text: Arc<str>,
     doc_line: usize,
     old_line: usize,
     hunk: HunkState,
@@ -87,7 +87,7 @@ pub enum DisplayLine {
     secondary: bool,
   },
   Removed {
-    text: String,
+    text: Arc<str>,
     anchor_line: usize,
     old_line: usize,
     hunk: HunkState,
@@ -1133,7 +1133,7 @@ fn build_hunk_display_split_inner(
   let (computed_old_lines, computed_new_lines) = count_hunk_line_counts(hunk);
   #[derive(Clone)]
   struct PendingLine {
-    content: String,
+    content: Arc<str>,
     old_line: usize,
     new_line: usize,
     anchor_line: usize,
@@ -1537,6 +1537,14 @@ mod tests {
     compute_buffer_diffs(&bases, buffer, Path::new("test.txt")).expect("diffs")
   }
 
+  fn diffs_from_versions(head: &str, index: &str, buffer: &str) -> git::DiffSet {
+    let bases = GitFileBases {
+      head: Some(head.to_string()),
+      index: Some(index.to_string()),
+    };
+    compute_buffer_diffs(&bases, buffer, Path::new("test.txt")).expect("diffs")
+  }
+
   fn projection_from(base: &str, buffer: &str, align_modified: bool) -> Projection {
     let diffs = diffs_from(base, buffer);
     let doc_line_count = buffer.split('\n').count();
@@ -1597,6 +1605,59 @@ mod tests {
       last,
       DisplayLine::Removed { text, .. } if text.is_empty()
     ));
+  }
+
+  #[test]
+  fn projection_keeps_staged_and_unstaged_groups_visible_together() {
+    let head = "alpha\nbeta\ngamma\n";
+    let index = "alpha staged\nbeta\ngamma\n";
+    let buffer = "alpha staged\nbeta current\ngamma\n";
+    let diffs = diffs_from_versions(head, index, buffer);
+    let projection = Projection::from_diffs(
+      buffer.split('\n').count(),
+      &diffs.uncommitted,
+      &diffs.unstaged,
+      &diffs.staged,
+      &HashMap::new(),
+      true,
+    );
+
+    let has_staged = projection.lines.iter().any(|line| {
+      matches!(
+        line,
+        DisplayLine::Doc {
+          hunk: Some(HunkState::Staged),
+          ..
+        } | DisplayLine::Modified {
+          hunk: HunkState::Staged,
+          ..
+        } | DisplayLine::Removed {
+          hunk: HunkState::Staged,
+          ..
+        }
+      )
+    });
+    let has_unstaged = projection.lines.iter().any(|line| {
+      matches!(
+        line,
+        DisplayLine::Doc {
+          hunk: Some(HunkState::Unstaged),
+          ..
+        } | DisplayLine::Modified {
+          hunk: HunkState::Unstaged,
+          ..
+        } | DisplayLine::Removed {
+          hunk: HunkState::Unstaged,
+          ..
+        }
+      )
+    });
+
+    assert!(has_staged, "projection should keep staged lines visible");
+    assert!(
+      has_unstaged,
+      "projection should keep unstaged lines visible"
+    );
   }
 
   #[test]

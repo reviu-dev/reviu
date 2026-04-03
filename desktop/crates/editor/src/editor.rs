@@ -17,7 +17,7 @@ use gfm_markdown_viewer::{
   estimate_parsed_markdown_height_px, parse_markdown, render_github_code_reference_preview_card,
   render_parsed_markdown,
 };
-use git::{ApplyLocation, DiffSet, GitFileBases, GitStore, RepoFile};
+use git::{ApplyLocation, DiffSet, FileDiff, GitFileBases, GitStore, RepoFile};
 use gpui::{
   App, Bounds, Context, CursorStyle, Entity, EntityInputHandler, FocusHandle, Focusable,
   MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
@@ -611,11 +611,26 @@ struct ProjectionBuildInput {
   review_comment_body_heights_px: HashMap<u64, f32>,
 }
 
+fn staged_diff_from_bases(bases: &GitFileBases, rel_path: &Path) -> Option<FileDiff> {
+  if bases.head.as_deref() == bases.index.as_deref() {
+    return Some(FileDiff::empty(git::DiffKind::Staged));
+  }
+
+  git::compute_buffer_diff(
+    git::DiffKind::Staged,
+    bases.head.as_deref(),
+    bases.index.as_deref().unwrap_or(""),
+    rel_path,
+  )
+  .ok()
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct BufferGitState {
   pub op_id: usize,
   pub bases: Option<GitFileBases>,
   pub index_dirty: bool,
+  staged_diff: Option<FileDiff>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -4028,6 +4043,10 @@ impl Editor {
     if group.state != HunkState::Staged {
       return;
     }
+    let rel_path = self
+      .repo_file
+      .as_ref()
+      .and_then(|repo_file| repo_file.relative_path().ok());
     let Some(bases) = self.git_state.bases.as_mut() else {
       return;
     };
@@ -4037,6 +4056,9 @@ impl Editor {
     };
     bases.index = Some(updated);
     self.git_state.index_dirty = true;
+    self.git_state.staged_diff = rel_path
+      .as_deref()
+      .and_then(|rel_path| staged_diff_from_bases(bases, rel_path));
     self.optimistic_unstaged_groups.insert(group_id);
     self.schedule_diff_recompute(cx);
   }
@@ -4059,6 +4081,7 @@ impl Editor {
       return;
     };
     let op_id = git_store.op_id();
+    let staged_diff_rel_path = rel_path.clone();
 
     self.bases_task = Some(cx.spawn(async move |this, cx| {
       let bases = unblock(move || git_store.load_bases(&rel_path)).await;
@@ -4077,7 +4100,9 @@ impl Editor {
         {
           merged.index = Some(existing);
         }
+        let staged_diff = staged_diff_from_bases(&merged, &staged_diff_rel_path);
         editor.git_state.bases = Some(merged);
+        editor.git_state.staged_diff = staged_diff;
         editor.git_state.op_id = op_id;
         if editor.pending_git_after_bases {
           editor.pending_git_after_bases = false;
@@ -4116,6 +4141,7 @@ impl Editor {
     // in-memory documents on the UI thread.
     let use_workdir_diff = !self.is_dirty && !self.git_state.index_dirty;
     let repo_file_for_diff = repo_file.clone();
+    let staged_diff = self.git_state.staged_diff.clone();
 
     let generation = self.diff_generation.fetch_add(1, Ordering::Relaxed) + 1;
     let diff_generation = self.diff_generation.clone();
@@ -4139,7 +4165,28 @@ impl Editor {
         };
         unblock(move || {
           let buffer_text = buffer_snapshot.slice_to_string(0..buffer_snapshot.len());
-          git::compute_buffer_diffs(&git_bases, &buffer_text, &rel_path)
+          let head = git_bases.head.as_deref();
+          let index = git_bases.index.as_deref();
+          let uncommitted =
+            git::compute_buffer_diff(git::DiffKind::Uncommitted, head, &buffer_text, &rel_path)?;
+          let unstaged = if head == index {
+            uncommitted.clone_with_kind(git::DiffKind::Unstaged)
+          } else {
+            git::compute_buffer_diff(git::DiffKind::Unstaged, index, &buffer_text, &rel_path)?
+          };
+          let staged = match staged_diff {
+            Some(staged) => staged,
+            None if head == index => FileDiff::empty(git::DiffKind::Staged),
+            None => {
+              git::compute_buffer_diff(git::DiffKind::Staged, head, index.unwrap_or(""), &rel_path)?
+            }
+          };
+
+          Ok(DiffSet {
+            uncommitted,
+            unstaged,
+            staged,
+          })
         })
         .await
       };
@@ -4486,7 +4533,7 @@ impl Editor {
           .line_content(doc_line)
           .map(|cow| cow.into_owned())
           .unwrap_or_default(),
-        Some(DisplayLine::Removed { text, .. }) => text,
+        Some(DisplayLine::Removed { text, .. }) => text.to_string(),
         _ => continue,
       };
 
@@ -5633,7 +5680,7 @@ impl Editor {
           .map(|cow| cow.into_owned())
           .unwrap_or_default(),
       ),
-      Some(DisplayLine::Removed { text, .. }) => Some(text),
+      Some(DisplayLine::Removed { text, .. }) => Some(text.to_string()),
       Some(DisplayLine::NoNewline { .. }) => Some(NO_NEWLINE_MARKER_TEXT.to_string()),
       _ => None,
     }
@@ -5675,7 +5722,7 @@ impl Editor {
     let document = self.document.read(cx);
     let doc_line_count = document.len_lines();
     match self.display_line(display_line, doc_line_count) {
-      Some(DisplayLine::Removed { text, .. }) => Some(text),
+      Some(DisplayLine::Removed { text, .. }) => Some(text.to_string()),
       _ => None,
     }
   }
@@ -8355,7 +8402,7 @@ pub mod tests {
           secondary: false,
         },
         DisplayLine::Removed {
-          text: "removed".to_string(),
+          text: "removed".into(),
           anchor_line: 0,
           old_line: 0,
           hunk: HunkState::Unstaged,
