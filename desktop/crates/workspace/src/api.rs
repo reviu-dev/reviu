@@ -7,6 +7,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crate::AppProfile;
+use crate::crash_report::StartupCrashReport;
 use crate::github_home_tabs::{GithubPullRequestFilterOptions, GithubPullRequestSearchFilters};
 use crate::sentry_context;
 
@@ -1235,6 +1236,19 @@ impl ApiClient {
     if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized");
     }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    Ok(())
+  }
+
+  pub fn submit_crash_report(&self, report: &StartupCrashReport) -> Result<()> {
+    let response = self
+      .authed_request(Method::POST, "/crash-reports")
+      .json(report)
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", "/crash-reports", status);
     if !status.is_success() {
       return Err(Self::api_error_from_response(response));
     }
@@ -2537,6 +2551,72 @@ mod tests {
       .get(AUTHORIZATION)
       .and_then(|value| value.to_str().ok());
     assert_eq!(authorization, Some("Bearer secret-token"));
+  }
+
+  #[test]
+  fn submit_crash_report_posts_expected_route_and_payload() {
+    let body = r#"{"issueId":"issue-123","url":"https://shipit.example.com/issues/issue-123"}"#;
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("201 Created", body);
+    let api = make_test_api_client(base_url);
+
+    api
+      .submit_crash_report(&StartupCrashReport {
+        crash_id: "crash-123".to_string(),
+        message: "editor panic".to_string(),
+        panic_location: Some("desktop/crates/editor/src/editor.rs:42:7".to_string()),
+        backtrace: Some("frame 1\nframe 2".to_string()),
+        thread_name: Some("main".to_string()),
+        app_version: "0.0.11".to_string(),
+        release: Some("reviu@0.0.11".to_string()),
+        os: "macos".to_string(),
+        arch: "aarch64".to_string(),
+        app_profile: "prod".to_string(),
+        happened_at: "2026-04-03T10:00:00Z".to_string(),
+        pathname: Some("/git".to_string()),
+        workspace_page: Some("git".to_string()),
+        git_context: Some(crate::sentry_context::CrashGitContext {
+          repo_name: Some("reviu".to_string()),
+          repo_hash: Some("abc123def456".to_string()),
+          selected_file: Some("desktop/crates/editor/src/editor.rs".to_string()),
+          branch: Some("main".to_string()),
+          sidebar_mode: "changes".to_string(),
+          diff_view: "unified".to_string(),
+        }),
+        github_pr_context: None,
+      })
+      .expect("submit crash report");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request.contains("POST /crash-reports "),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"crashId\":\"crash-123\""),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"panicLocation\":\"desktop/crates/editor/src/editor.rs:42:7\""),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"appProfile\":\"prod\""),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"workspacePage\":\"git\""),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"gitContext\":{\"repoName\":\"reviu\""),
+      "request: {request}"
+    );
   }
 
   #[test]

@@ -30,6 +30,7 @@ mod billing_page;
 mod dock_badge;
 
 mod config;
+mod crash_report;
 mod date_format;
 mod feedback_dialog;
 mod file_preview;
@@ -52,6 +53,10 @@ pub mod status_bar;
 mod workspace;
 
 pub use app_profile::AppProfile;
+pub use crash_report::{
+  StartupCrashReport, install_crash_reporter, show_startup_crash_report_notification,
+  take_pending_startup_crash_report,
+};
 pub use git_page::{
   AuthCallbackTarget, CommitChanges, OpenRepository, SaveFile, ShowCommandPalette, ShowFileSearch,
 };

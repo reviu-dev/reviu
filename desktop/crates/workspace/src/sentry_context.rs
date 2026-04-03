@@ -7,6 +7,7 @@ use std::{
 };
 
 use sentry::protocol::{Breadcrumb, Context, Level, Map, User, Value};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{auth_state::AuthState, workspace::WorkspacePage};
@@ -16,6 +17,18 @@ const DEDUP_WINDOW: Duration = Duration::from_secs(300);
 fn dedup_state() -> &'static Mutex<HashMap<String, Instant>> {
   static STATE: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
   STATE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn crash_snapshot_state() -> &'static Mutex<CrashContextSnapshot> {
+  static STATE: OnceLock<Mutex<CrashContextSnapshot>> = OnceLock::new();
+  STATE.get_or_init(|| Mutex::new(CrashContextSnapshot::default()))
+}
+
+fn update_crash_snapshot(f: impl FnOnce(&mut CrashContextSnapshot)) {
+  let Ok(mut snapshot) = crash_snapshot_state().lock() else {
+    return;
+  };
+  f(&mut snapshot);
 }
 
 fn should_capture_error(key: &str, now: Instant) -> bool {
@@ -31,6 +44,36 @@ fn should_capture_error(key: &str, now: Instant) -> bool {
       true
     }
   }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CrashGitContext {
+  pub repo_name: Option<String>,
+  pub repo_hash: Option<String>,
+  pub selected_file: Option<String>,
+  pub branch: Option<String>,
+  pub sidebar_mode: String,
+  pub diff_view: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CrashGithubPrContext {
+  pub owner: String,
+  pub repo: String,
+  pub number: u64,
+  pub selected_file: Option<String>,
+  pub active_tab: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CrashContextSnapshot {
+  pub pathname: Option<String>,
+  pub workspace_page: Option<String>,
+  pub git: Option<CrashGitContext>,
+  pub github_pr: Option<CrashGithubPrContext>,
 }
 
 fn workspace_page_tag(page: WorkspacePage) -> &'static str {
@@ -168,6 +211,20 @@ pub(crate) fn sync_workspace_page(from: Option<WorkspacePage>, to: WorkspacePage
   add_breadcrumb("ui.navigation", "Workspace page changed", breadcrumb_data);
 }
 
+pub(crate) fn sync_workspace_route(pathname: &str, page: WorkspacePage) {
+  update_crash_snapshot(|snapshot| {
+    snapshot.pathname = Some(pathname.to_string());
+    snapshot.workspace_page = Some(workspace_page_tag(page).to_string());
+  });
+}
+
+pub(crate) fn current_crash_context_snapshot() -> CrashContextSnapshot {
+  crash_snapshot_state()
+    .lock()
+    .map(|snapshot| snapshot.clone())
+    .unwrap_or_default()
+}
+
 pub(crate) fn sync_auth_state(state: &AuthState) {
   sentry::configure_scope(|scope| {
     scope.set_tag("auth.state", auth_state_tag(state));
@@ -260,6 +317,22 @@ pub(crate) fn sync_git_context(
 
     scope.set_context("git_state", to_unknown_context(context));
   });
+
+  update_crash_snapshot(|snapshot| {
+    let (repo_name, repo_hash) = repo_root
+      .map(sanitize_repo_path)
+      .map(|(name, hash)| (Some(name), Some(hash)))
+      .unwrap_or((None, None));
+
+    snapshot.git = Some(CrashGitContext {
+      repo_name,
+      repo_hash,
+      selected_file: selected_file.map(|path| path.to_string_lossy().replace(['\n', '\r'], "")),
+      branch: branch.map(str::to_string),
+      sidebar_mode: sidebar_mode.to_string(),
+      diff_view: diff_view.to_string(),
+    });
+  });
 }
 
 pub(crate) fn clear_git_context() {
@@ -271,6 +344,10 @@ pub(crate) fn clear_git_context() {
     scope.remove_tag("git.sidebar_mode");
     scope.remove_tag("git.diff_view");
     scope.remove_context("git_state");
+  });
+
+  update_crash_snapshot(|snapshot| {
+    snapshot.git = None;
   });
 }
 
@@ -301,6 +378,16 @@ pub(crate) fn sync_github_pr_context(
     }
     scope.set_context("github_pr", to_unknown_context(context));
   });
+
+  update_crash_snapshot(|snapshot| {
+    snapshot.github_pr = Some(CrashGithubPrContext {
+      owner: owner.to_string(),
+      repo: repo.to_string(),
+      number,
+      selected_file: selected_file.map(str::to_string),
+      active_tab,
+    });
+  });
 }
 
 pub(crate) fn clear_github_pr_context() {
@@ -310,6 +397,10 @@ pub(crate) fn clear_github_pr_context() {
     scope.remove_tag("github.pr_number");
     scope.remove_tag("github.selected_file");
     scope.remove_context("github_pr");
+  });
+
+  update_crash_snapshot(|snapshot| {
+    snapshot.github_pr = None;
   });
 }
 

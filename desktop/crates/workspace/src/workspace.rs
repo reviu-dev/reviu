@@ -959,6 +959,7 @@ impl Render for WorkspaceView {
 
     // Keep WorkspaceRoute in sync BEFORE focus delegation (focus_handle reads it)
     cx.global_mut::<WorkspaceRoute>().page = page;
+    sentry_context::sync_workspace_route(&pathname, page);
 
     // Sync sentry context and focus on page change
     if self.last_page != Some(page) {
