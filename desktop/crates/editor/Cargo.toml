@@ -18,4 +18,9 @@ blake3 = { workspace = true }
 gfm_markdown_viewer = { workspace = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
+
+[[bench]]
+name = "performance"
+harness = false

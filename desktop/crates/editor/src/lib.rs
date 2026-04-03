@@ -18,7 +18,7 @@ pub use editor::{
   ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentEditHandler,
   ReviewCommentLinkHandler,
 };
-pub use editor_element::{EditorElement, PositionMap};
+pub use editor_element::{EditorElement, PositionMap, benchmark_word_diff_ranges};
 pub use gutter_element::GutterElement;
 pub use projection::*;
 pub use settings::{indent_rainbow_enabled, set_indent_rainbow_enabled};

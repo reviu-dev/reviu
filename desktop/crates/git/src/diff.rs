@@ -2,6 +2,7 @@ use std::{
   cell::RefCell,
   fs,
   path::{Path, PathBuf},
+  sync::Arc,
 };
 
 use anyhow::{Context, Result, bail};
@@ -29,6 +30,22 @@ pub struct FileDiff {
   pub hunks: Vec<DiffHunk>,
 }
 
+impl FileDiff {
+  pub fn empty(kind: DiffKind) -> Self {
+    Self {
+      kind,
+      hunks: Vec::new(),
+    }
+  }
+
+  pub fn clone_with_kind(&self, kind: DiffKind) -> Self {
+    Self {
+      kind,
+      hunks: self.hunks.clone(),
+    }
+  }
+}
+
 #[derive(Clone, Debug)]
 pub struct DiffHunk {
   pub id: String,
@@ -49,7 +66,7 @@ pub enum DiffLineKind {
 #[derive(Clone, Debug)]
 pub struct DiffLine {
   pub kind: DiffLineKind,
-  pub content: String,
+  pub content: Arc<str>,
   pub no_newline: bool,
 }
 
@@ -120,24 +137,20 @@ pub fn compute_buffer_diffs(
   buffer_text: &str,
   rel_path: &Path,
 ) -> Result<DiffSet> {
-  let uncommitted = compute_buffer_diff(
-    DiffKind::Uncommitted,
-    bases.head.as_deref(),
-    buffer_text,
-    rel_path,
-  )?;
-  let unstaged = compute_buffer_diff(
-    DiffKind::Unstaged,
-    bases.index.as_deref(),
-    buffer_text,
-    rel_path,
-  )?;
-  let staged = compute_buffer_diff(
-    DiffKind::Staged,
-    bases.head.as_deref(),
-    bases.index.as_deref().unwrap_or(""),
-    rel_path,
-  )?;
+  let head = bases.head.as_deref();
+  let index = bases.index.as_deref();
+  let uncommitted = compute_buffer_diff(DiffKind::Uncommitted, head, buffer_text, rel_path)?;
+  let (unstaged, staged) = if head == index {
+    (
+      uncommitted.clone_with_kind(DiffKind::Unstaged),
+      FileDiff::empty(DiffKind::Staged),
+    )
+  } else {
+    (
+      compute_buffer_diff(DiffKind::Unstaged, index, buffer_text, rel_path)?,
+      compute_buffer_diff(DiffKind::Staged, head, index.unwrap_or(""), rel_path)?,
+    )
+  };
 
   Ok(DiffSet {
     uncommitted,
@@ -208,7 +221,7 @@ pub fn apply_hunk_to_text(base_text: &str, hunk: &DiffHunk, reverse: bool) -> Re
         let Some(existing) = base_lines.get(old_idx) else {
           bail!("context line out of range at {}", old_idx + 1);
         };
-        if existing != &line.content {
+        if existing.as_str() != line.content.as_ref() {
           bail!(
             "context mismatch at {}: expected {:?}, found {:?}",
             old_idx + 1,
@@ -223,7 +236,7 @@ pub fn apply_hunk_to_text(base_text: &str, hunk: &DiffHunk, reverse: bool) -> Re
         let Some(existing) = base_lines.get(old_idx) else {
           bail!("remove line out of range at {}", old_idx + 1);
         };
-        if existing != &line.content {
+        if existing.as_str() != line.content.as_ref() {
           bail!(
             "remove mismatch at {}: expected {:?}, found {:?}",
             old_idx + 1,
@@ -234,7 +247,7 @@ pub fn apply_hunk_to_text(base_text: &str, hunk: &DiffHunk, reverse: bool) -> Re
         old_idx += 1;
       }
       DiffLineKind::Add => {
-        output.push(line.content.clone());
+        output.push(line.content.to_string());
       }
     }
   }
@@ -506,7 +519,7 @@ impl DiffLine {
 
     Some(DiffLine {
       kind,
-      content: text,
+      content: Arc::from(text),
       no_newline,
     })
   }
@@ -553,7 +566,7 @@ fn normalize_no_newline_hunk(hunk: &mut DiffHunk, trailing_change: Option<Traili
           TrailingNewlineChange::Added => DiffLineKind::Add,
           TrailingNewlineChange::Removed => DiffLineKind::Remove,
         },
-        content: String::new(),
+        content: Arc::from(""),
         no_newline: false,
       });
       hunk.lines = normalized;
@@ -605,14 +618,14 @@ fn normalize_no_newline_hunk(hunk: &mut DiffHunk, trailing_change: Option<Traili
             TrailingNewlineChange::Added => {
               normalized.push(DiffLine {
                 kind: DiffLineKind::Add,
-                content: String::new(),
+                content: Arc::from(""),
                 no_newline: false,
               });
             }
             TrailingNewlineChange::Removed => {
               normalized.push(DiffLine {
                 kind: DiffLineKind::Remove,
-                content: String::new(),
+                content: Arc::from(""),
                 no_newline: false,
               });
             }
@@ -765,7 +778,7 @@ mod tests {
   fn diff_kinds(lines: &[DiffLine]) -> Vec<(DiffLineKind, String)> {
     lines
       .iter()
-      .map(|line| (line.kind, line.content.clone()))
+      .map(|line| (line.kind, line.content.to_string()))
       .collect()
   }
 
@@ -845,6 +858,35 @@ index 1111111..2222222 100644
         (DiffLineKind::Context, "line3".to_string()),
       ]
     );
+  }
+
+  #[test]
+  fn compute_buffer_diffs_reuses_uncommitted_when_head_matches_index() {
+    let base = "line1\nline2\nline3\n";
+    let buffer = "line1\nline2 changed\nline3\n";
+    let bases = GitFileBases {
+      head: Some(base.to_string()),
+      index: Some(base.to_string()),
+    };
+
+    let diffs = compute_buffer_diffs(&bases, buffer, Path::new("test.txt")).expect("diffs");
+
+    assert_eq!(diffs.uncommitted.hunks.len(), 1);
+    assert_eq!(diffs.unstaged.hunks.len(), diffs.uncommitted.hunks.len());
+    assert_eq!(
+      diffs.unstaged.hunks[0].old_start,
+      diffs.uncommitted.hunks[0].old_start
+    );
+    assert_eq!(
+      diffs.unstaged.hunks[0].new_start,
+      diffs.uncommitted.hunks[0].new_start
+    );
+    assert_eq!(
+      diff_kinds(&diffs.unstaged.hunks[0].lines),
+      diff_kinds(&diffs.uncommitted.hunks[0].lines)
+    );
+    assert_eq!(diffs.unstaged.kind, DiffKind::Unstaged);
+    assert!(diffs.staged.hunks.is_empty());
   }
 
   #[test]
@@ -1027,7 +1069,7 @@ fn build_hunk_patch(rel_path: PathBuf, hunk: &DiffHunk, reverse: bool) -> String
     };
 
     patch.push(prefix);
-    patch.push_str(&line.content);
+    patch.push_str(line.content.as_ref());
     patch.push('\n');
 
     if line.no_newline {
