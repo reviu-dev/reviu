@@ -2118,6 +2118,10 @@ impl GitPage {
     self.status_refresh_generation
   }
 
+  fn current_status_refresh_generation(&self) -> u64 {
+    self.status_refresh_generation
+  }
+
   fn should_refresh_editor_for_path(selected_file: Option<&Path>, rel_path: &Path) -> bool {
     selected_file == Some(rel_path)
   }
@@ -3664,7 +3668,8 @@ impl GitPage {
             this.sidebar_mode == GitSidebarMode::History,
             this.history_revision.clone(),
             this.history_commits.is_empty(),
-            this.advance_status_refresh_generation(),
+            // Polling should not supersede an explicit refresh that is already in flight.
+            this.current_status_refresh_generation(),
           ))
         }) {
           Ok(Some(value)) => value,
@@ -3798,7 +3803,7 @@ impl GitPage {
     let cached_history_revision = self.history_revision.clone();
     let history_empty = self.history_commits.is_empty();
     let requested_repo = repo_root.clone();
-    let refresh_generation = self.advance_status_refresh_generation();
+    let refresh_generation = self.current_status_refresh_generation();
     let task = cx.spawn(async move |this, cx| {
       let status = unblock(move || {
         let entries = list_repo_status(&repo_root).ok()?;
@@ -15679,6 +15684,38 @@ mod tests {
         .map(|status| status.name.clone())
     });
     assert_eq!(branch_name.as_deref(), Some("feature"));
+  }
+
+  #[gpui::test]
+  async fn poll_once_does_not_keep_manual_refresh_stuck_loading(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-poll-once-refresh-race");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let reload_task = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.reload_status(cx);
+      assert!(this.status_refresh_in_progress);
+      this.status_task.take().expect("reload status task")
+    });
+    let poll_task = git_page.update_in(cx, |this, _window, cx| {
+      this.poll_once_for_test(cx);
+      this.status_task.take().expect("poll status task")
+    });
+
+    reload_task.await;
+    poll_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    cx.update(|_, cx| {
+      assert!(
+        !GitPageHandle::is_refreshing(cx),
+        "manual refresh should not stay stuck after poll runs"
+      );
+    });
   }
 
   #[gpui::test]
