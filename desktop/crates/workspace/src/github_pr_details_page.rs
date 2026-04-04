@@ -7847,15 +7847,11 @@ impl GithubPrDetailsPage {
         .child(format!("#{}", pr.number))
         .child(status_tag);
 
-      h_flex().items_center().gap_2().child(back_button()).child(
-        div()
-          .flex()
-          .items_center()
-          .gap_2()
-          .child(title)
-          .child(Label::new("•").text_color(theme.muted_foreground))
-          .child(meta),
-      )
+      h_flex()
+        .items_center()
+        .gap_2()
+        .child(back_button())
+        .child(div().flex().items_center().gap_2().child(title).child(meta))
     } else {
       let title_skeleton = Skeleton::new().w(px(220.)).h_4().rounded_md();
       let meta_skeleton = Skeleton::new().w(px(110.)).h_4().rounded_md().secondary();
@@ -9955,6 +9951,7 @@ impl GithubPrDetailsPage {
       })
       .child(
         div()
+          .px_1()
           .flex_1()
           .min_h_0()
           .key_context(crate::shortcuts::GITHUB_PR_CHANGES_TREE_CONTEXT)
