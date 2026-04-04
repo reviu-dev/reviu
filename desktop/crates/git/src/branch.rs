@@ -3,8 +3,8 @@ use std::{path::Path, process::Command};
 use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
 use git2::{
-  BranchType, CherrypickOptions, Cred, ErrorCode, FetchOptions, Rebase, RemoteCallbacks,
-  Repository, RepositoryState, ResetType, Signature, StashFlags, StatusOptions,
+  BranchType, CherrypickOptions, Cred, ErrorCode, FetchOptions, PushOptions, Rebase,
+  RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, StashFlags, StatusOptions,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -657,6 +657,61 @@ pub fn create_branch_from(repo_root: &Path, name: &str, base: &BranchRef) -> Res
   let commit = repo.find_commit(oid)?;
   repo.branch(name, &commit, false)?;
   Ok(())
+}
+
+pub fn delete_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  match branch.kind {
+    BranchKind::Local => {
+      let head = repo.head().context("read HEAD reference")?;
+      if head.is_branch() && head.shorthand() == Some(branch.name.as_str()) {
+        bail!("cannot delete the current branch")
+      }
+
+      let mut local_branch = repo
+        .find_branch(&branch.name, BranchType::Local)
+        .with_context(|| format!("find local branch {:?}", branch.name))?;
+
+      local_branch
+        .delete()
+        .with_context(|| format!("delete local branch {:?}", branch.name))?;
+      Ok(())
+    }
+    BranchKind::Remote => {
+      let (remote_name, remote_branch_name) = branch
+        .name
+        .split_once('/')
+        .ok_or_else(|| anyhow::anyhow!("invalid remote branch {:?}", branch.name))?;
+
+      {
+        let mut remote = repo
+          .find_remote(remote_name)
+          .with_context(|| format!("find remote {:?}", remote_name))?;
+        let mut callbacks = RemoteCallbacks::new();
+        callbacks.credentials(|_, username_from_url, _| {
+          if let Some(username) = username_from_url {
+            Cred::ssh_key_from_agent(username).or_else(|_| Cred::default())
+          } else {
+            Cred::default()
+          }
+        });
+
+        let mut options = PushOptions::new();
+        options.remote_callbacks(callbacks);
+        let refspec = format!(":refs/heads/{remote_branch_name}");
+        remote
+          .push(&[refspec.as_str()], Some(&mut options))
+          .with_context(|| format!("delete remote branch {:?}", branch.name))?;
+      }
+
+      if let Ok(mut reference) = repo.find_reference(&format!("refs/remotes/{}", branch.name)) {
+        let _ = reference.delete();
+      }
+
+      Ok(())
+    }
+  }
 }
 
 pub fn merge_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
@@ -2967,6 +3022,160 @@ mod tests {
       .expect("find copied branch");
     assert_eq!(copy.get().target(), Some(feature_head));
     assert!(copy.upstream().is_err());
+  }
+
+  #[test]
+  fn delete_branch_removes_local_branch() {
+    let repo = TempRepo::init("branch-delete-local");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    delete_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("delete merged local branch");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    assert!(
+      repo_handle
+        .find_branch("feature", BranchType::Local)
+        .is_err()
+    );
+  }
+
+  #[test]
+  fn delete_branch_rejects_current_branch() {
+    let repo = TempRepo::init("branch-delete-current");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let current_branch = current_branch_status(&repo.path)
+      .expect("read current branch")
+      .name;
+
+    let error = delete_branch(
+      &repo.path,
+      &BranchRef {
+        name: current_branch,
+        kind: BranchKind::Local,
+      },
+    )
+    .expect_err("current branch delete should fail");
+
+    assert_eq!(error.to_string(), "cannot delete the current branch");
+  }
+
+  #[test]
+  fn delete_branch_rejects_remote_branch() {
+    let repo = TempRepo::init("branch-delete-remote");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let error = delete_branch(
+      &repo.path,
+      &BranchRef {
+        name: "invalid-remote-branch".to_string(),
+        kind: BranchKind::Remote,
+      },
+    )
+    .expect_err("invalid remote branch delete should fail");
+
+    assert_eq!(
+      error.to_string(),
+      "invalid remote branch \"invalid-remote-branch\""
+    );
+  }
+
+  #[test]
+  fn delete_branch_removes_remote_branch() {
+    let remote = TempBareRepo::init("branch-delete-remote-origin");
+    let source = TempRepo::init("branch-delete-remote-source");
+    let clone_dir = TempDir::new("branch-delete-remote-clone");
+
+    let _ = commit_text_file(&source.path, Path::new("README.md"), "v1\n", "initial");
+    let source_repo = Repository::open(&source.path).expect("open source repo");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add source origin");
+    let base_branch = current_branch_status(&source.path)
+      .expect("read source branch status")
+      .name;
+    push_branch_to_remote(&source.path, &base_branch, "origin");
+    create_branch(&source.path, "feature").expect("create source feature branch");
+    push_branch_to_remote(&source.path, "feature", "origin");
+
+    let _clone_repo = Repository::clone(
+      remote.path.to_str().expect("remote path utf8"),
+      &clone_dir.path,
+    )
+    .expect("clone remote");
+
+    delete_branch(
+      &clone_dir.path,
+      &BranchRef {
+        name: "origin/feature".to_string(),
+        kind: BranchKind::Remote,
+      },
+    )
+    .expect("delete remote branch");
+
+    let remote_repo = Repository::open(&remote.path).expect("open remote");
+    assert!(remote_repo.refname_to_id("refs/heads/feature").is_err());
+    assert!(
+      !list_branches(&clone_dir.path)
+        .expect("list branches after remote delete")
+        .iter()
+        .any(|branch| branch.kind == BranchKind::Remote && branch.name == "origin/feature")
+    );
+  }
+
+  #[test]
+  fn delete_branch_removes_unmerged_branch() {
+    let repo = TempRepo::init("branch-delete-unmerged");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let base_branch = current_branch_status(&repo.path)
+      .expect("read base branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "v2-feature\n",
+      "feature change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: base_branch,
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base");
+
+    delete_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("force delete unmerged branch");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    assert!(
+      repo_handle
+        .find_branch("feature", BranchType::Local)
+        .is_err()
+    );
   }
 
   #[test]

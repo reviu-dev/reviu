@@ -148,6 +148,7 @@ pub enum CommandPaletteAction {
     name: String,
     base: CommandPaletteBranch,
   },
+  DeleteBranch(CommandPaletteBranch),
   MergeBranch {
     name: CommandPaletteBranch,
   },
@@ -649,6 +650,7 @@ pub enum CommandPaletteCommandId {
   AcceptAllIncomingConflicts,
   CreateBranch,
   CreateBranchFrom,
+  DeleteBranch,
   MergeBranch,
   AbortMerge,
   RebaseBranch,
@@ -878,6 +880,14 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::CreateBranchFrom,
       name: "Create branch from...".into(),
       description: Some("Create a new branch from an existing branch".into()),
+    }
+  }
+
+  pub fn delete_branch() -> Self {
+    Self {
+      id: CommandPaletteCommandId::DeleteBranch,
+      name: "Delete branch".into(),
+      description: Some("Force delete a local branch, or delete a remote branch".into()),
     }
   }
 
@@ -1136,6 +1146,7 @@ impl CommandPaletteCommand {
         Icon::new(UiIconName::ArrowUpFromLine)
       }
       CommandPaletteCommandId::DropStash => Icon::new(IconName::Delete),
+      CommandPaletteCommandId::DeleteBranch => Icon::new(IconName::Delete),
       CommandPaletteCommandId::OpenRepository => Icon::new(IconName::FolderOpen),
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
@@ -1179,6 +1190,7 @@ impl CommandPaletteCommand {
 
 pub struct CommandPaletteConfig {
   pub branches: Vec<CommandPaletteBranch>,
+  pub delete_branches: Vec<CommandPaletteBranch>,
   pub stashes: Vec<CommandPaletteStash>,
   pub default_stash_message: Option<SharedString>,
   pub repositories: Vec<CommandPaletteRepository>,
@@ -1195,6 +1207,7 @@ impl CommandPaletteConfig {
   ) -> Self {
     Self {
       branches,
+      delete_branches: Vec::new(),
       stashes: Vec::new(),
       default_stash_message: None,
       repositories: Vec::new(),
@@ -1206,6 +1219,11 @@ impl CommandPaletteConfig {
 
   pub fn with_repositories(mut self, repositories: Vec<CommandPaletteRepository>) -> Self {
     self.repositories = repositories;
+    self
+  }
+
+  pub fn with_delete_branches(mut self, delete_branches: Vec<CommandPaletteBranch>) -> Self {
+    self.delete_branches = delete_branches;
     self
   }
 
@@ -1236,6 +1254,7 @@ enum CommandPaletteScreen {
   CheckoutDetached,
   CreateBranch,
   CreateBranchFrom,
+  DeleteBranch,
   MergeBranch,
   RebaseBranch,
   InteractiveRebaseMode,
@@ -1266,6 +1285,7 @@ pub struct CommandPalette {
   interactive_rebase_mode_list: Entity<ListState<CommandListDelegate>>,
   repositories_list: Entity<ListState<RepositoriesListDelegate>>,
   branches_list: Entity<ListState<BranchesListDelegate>>,
+  delete_branches_list: Entity<ListState<BranchesListDelegate>>,
   stashes_list: Entity<ListState<StashesListDelegate>>,
   branches_with_commands_list: Entity<ListState<BranchesListWithCommandsDelegate>>,
   create_branch_input: Entity<InputState>,
@@ -1354,6 +1374,23 @@ impl CommandPalette {
 
     let branches_list =
       cx.new(|cx| ListState::new(branches_list_delegate, window, cx).searchable(true));
+
+    let default_delete_branches: Vec<Rc<CommandPaletteBranch>> = config
+      .delete_branches
+      .iter()
+      .cloned()
+      .map(Rc::new)
+      .collect();
+
+    let delete_branches_list_delegate = BranchesListDelegate {
+      _branches: default_delete_branches.clone(),
+      matched_branches: default_delete_branches.clone(),
+      selected_index: None,
+      query: "".into(),
+    };
+
+    let delete_branches_list =
+      cx.new(|cx| ListState::new(delete_branches_list_delegate, window, cx).searchable(true));
 
     let default_stashes: Vec<Rc<CommandPaletteStash>> =
       config.stashes.iter().cloned().map(Rc::new).collect();
@@ -1551,6 +1588,28 @@ impl CommandPalette {
         },
       ),
       cx.subscribe_in(
+        &delete_branches_list,
+        window,
+        |command_palette, list_state, ev: &ListEvent, window, cx| {
+          if let ListEvent::Confirm(ix) = ev
+            && command_palette.screen == CommandPaletteScreen::DeleteBranch
+          {
+            let branch = {
+              let list = list_state.read(cx);
+              list.delegate().matched_branches.get(ix.row).cloned()
+            };
+
+            if let Some(branch) = branch {
+              command_palette.trigger_action(
+                CommandPaletteAction::DeleteBranch((*branch).clone()),
+                window,
+                cx,
+              );
+            }
+          }
+        },
+      ),
+      cx.subscribe_in(
         &stashes_list,
         window,
         |command_palette, list_state, ev: &ListEvent, window, cx| {
@@ -1615,6 +1674,7 @@ impl CommandPalette {
       interactive_rebase_mode_list,
       repositories_list,
       branches_list,
+      delete_branches_list,
       stashes_list,
       branches_with_commands_list,
       open_github_url_input,
@@ -1840,6 +1900,11 @@ impl CommandPalette {
           state.focus(window, cx);
         });
       }
+      CommandPaletteScreen::DeleteBranch => {
+        self.delete_branches_list.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      }
       CommandPaletteScreen::CheckoutDetached => {
         self.checkout_detached_input.update(cx, |state, cx| {
           state.focus(window, cx);
@@ -1988,6 +2053,9 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::CreateBranch => {
         self.set_screen(CommandPaletteScreen::CreateBranch, cx, window);
+      }
+      CommandPaletteCommandId::DeleteBranch => {
+        self.set_screen(CommandPaletteScreen::DeleteBranch, cx, window);
       }
       CommandPaletteCommandId::CreatePullRequest => {
         self.trigger_action(CommandPaletteAction::CreatePullRequest, window, cx);
@@ -2254,6 +2322,29 @@ impl CommandPalette {
     self.render_select_stash(cx)
   }
 
+  fn render_delete_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    let count_branches = self
+      .delete_branches_list
+      .read(cx)
+      .delegate()
+      .matched_branches
+      .len();
+
+    v_flex()
+      .h_full()
+      .child(self.render_search_list(
+        &self.delete_branches_list,
+        count_branches,
+        "Select branch to delete...",
+        cx,
+      ))
+      .when(self.error.is_some(), |parent| {
+        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
+      })
+  }
+
   fn render_merge_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
@@ -2378,6 +2469,7 @@ impl Render for CommandPalette {
         self.render_checkout_detached(cx).into_any_element()
       }
       CommandPaletteScreen::CreateBranch => self.render_create_branch(cx).into_any_element(),
+      CommandPaletteScreen::DeleteBranch => self.render_delete_branch(cx).into_any_element(),
       CommandPaletteScreen::CherryPick => self.render_cherry_pick(cx).into_any_element(),
       CommandPaletteScreen::Stash => self.render_stash(cx).into_any_element(),
       CommandPaletteScreen::StashIncludeUntracked => {
@@ -2533,6 +2625,14 @@ mod tests {
     assert_eq!(command.id, CommandPaletteCommandId::CreatePullRequest);
     assert_eq!(command.name.as_ref(), "Create pull request");
     assert!(command.matches("current branch"));
+  }
+
+  #[test]
+  fn delete_branch_command_is_available_with_expected_metadata() {
+    let command = CommandPaletteCommand::delete_branch();
+    assert_eq!(command.id, CommandPaletteCommandId::DeleteBranch);
+    assert_eq!(command.name.as_ref(), "Delete branch");
+    assert!(command.matches("remote branch"));
   }
 
   #[test]

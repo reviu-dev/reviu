@@ -17,13 +17,13 @@ use git::{
   branch_has_unpublished_commits, checkout_detached_target, cherry_pick_commits, commit_changes,
   continue_rebase, create_branch, create_branch_from, create_stash, current_branch_status,
   current_github_remote_repo, current_head_sha, current_history_revision,
-  current_rebase_commit_message, default_stash_message, delete_untracked_file, detached_head_label,
-  diff_set_from_patch, drop_stash, fetch, head_commit_status, is_merge_in_progress,
-  is_rebase_in_progress, list_branches, list_commit_changed_files, list_commit_history,
-  list_interactive_rebase_commits, list_repo_status, list_stashes, load_commit_file_diff,
-  merge_branch, pop_stash, pull, push, rebase_branch, resolve_branch_ref, restore_file,
-  skip_rebase, stage_all, stage_file, start_interactive_rebase, switch_branch, undo_last_commit,
-  unstage_all, unstage_file,
+  current_rebase_commit_message, default_stash_message, delete_branch, delete_untracked_file,
+  detached_head_label, diff_set_from_patch, drop_stash, fetch, head_commit_status,
+  is_merge_in_progress, is_rebase_in_progress, list_branches, list_commit_changed_files,
+  list_commit_history, list_interactive_rebase_commits, list_repo_status, list_stashes,
+  load_commit_file_diff, merge_branch, pop_stash, pull, push, rebase_branch, resolve_branch_ref,
+  restore_file, skip_rebase, stage_all, stage_file, start_interactive_rebase, switch_branch,
+  undo_last_commit, unstage_all, unstage_file,
 };
 #[cfg(test)]
 use gpui::Keystroke;
@@ -748,6 +748,7 @@ fn open_create_pull_request_dialog(
 struct GitCommandPaletteContents {
   commands: Vec<CommandPaletteCommand>,
   branches: Vec<CommandPaletteBranch>,
+  delete_branches: Vec<CommandPaletteBranch>,
   stashes: Vec<CommandPaletteStash>,
   default_stash_message: Option<SharedString>,
 }
@@ -3179,6 +3180,7 @@ impl GitPage {
       CommandPaletteAction::SwitchBranch(_) => Some("Switch branch failed"),
       CommandPaletteAction::CreateBranch { .. } => Some("Create branch failed"),
       CommandPaletteAction::CreateBranchFrom { .. } => Some("Create branch failed"),
+      CommandPaletteAction::DeleteBranch(_) => Some("Delete branch failed"),
       CommandPaletteAction::MergeBranch { .. } => Some("Merge failed"),
       CommandPaletteAction::AbortMerge => Some("Abort merge failed"),
       CommandPaletteAction::RebaseBranch { .. } => Some("Rebase failed"),
@@ -4035,6 +4037,7 @@ impl GitPage {
     let GitCommandPaletteContents {
       commands,
       branches: palette_branches,
+      delete_branches: palette_delete_branches,
       stashes: palette_stashes,
       default_stash_message: palette_default_stash_message,
     } = self.build_command_palette_contents(palette_repositories.len(), cx);
@@ -4048,6 +4051,7 @@ impl GitPage {
 
     let mut config = CommandPaletteConfig::new(palette_branches, commands, handler)
       .with_repositories(palette_repositories)
+      .with_delete_branches(palette_delete_branches)
       .with_stashes(palette_stashes);
     if let Some(default_stash_message) = palette_default_stash_message {
       config = config.with_default_stash_message(default_stash_message);
@@ -4082,6 +4086,7 @@ impl GitPage {
     let mut stashes = Vec::new();
     let mut default_stash_message_value = None;
     let mut branches = Vec::new();
+    let mut delete_branches = Vec::new();
 
     if let Some(root_path) = self.selected_repo.clone() {
       let commit_message = self.commit_input.read(cx).value().to_string();
@@ -4159,6 +4164,33 @@ impl GitPage {
       }
 
       if let Ok(repo_branches) = list_branches(&root_path) {
+        let current_branch_name = self
+          .branch_status
+          .as_ref()
+          .map(|status| status.name.clone())
+          .or_else(|| {
+            current_branch_status(&root_path)
+              .ok()
+              .map(|status| status.name)
+          });
+        delete_branches = repo_branches
+          .iter()
+          .filter(|branch| match branch.kind {
+            BranchKind::Local => current_branch_name
+              .as_ref()
+              .map_or(true, |current_branch_name| {
+                branch.name != *current_branch_name
+              }),
+            BranchKind::Remote => true,
+          })
+          .map(|branch| CommandPaletteBranch {
+            name: branch.name.clone().into(),
+            kind: match branch.kind {
+              BranchKind::Local => CommandPaletteBranchKind::Local,
+              BranchKind::Remote => CommandPaletteBranchKind::Remote,
+            },
+          })
+          .collect::<Vec<_>>();
         branches = repo_branches
           .into_iter()
           .map(|branch| CommandPaletteBranch {
@@ -4170,6 +4202,9 @@ impl GitPage {
           })
           .collect::<Vec<_>>();
         commands.push(CommandPaletteCommand::switch_branch());
+        if !delete_branches.is_empty() {
+          commands.push(CommandPaletteCommand::delete_branch());
+        }
         commands.push(CommandPaletteCommand::merge_branch());
         if self.merge_in_progress {
           commands.push(CommandPaletteCommand::abort_merge());
@@ -4200,6 +4235,7 @@ impl GitPage {
     GitCommandPaletteContents {
       commands,
       branches,
+      delete_branches,
       stashes,
       default_stash_message: default_stash_message_value,
     }
@@ -4649,6 +4685,19 @@ impl GitPage {
         };
         create_branch_from(&root_path, &name, &branch_ref)
           .and_then(|_| switch_branch(&root_path, &new_branch))
+      }
+      CommandPaletteAction::DeleteBranch(branch) => {
+        let Some(root_path) = self.selected_repo.clone() else {
+          return Err("No repository selected.".into());
+        };
+        let branch_ref = BranchRef {
+          name: branch.name.to_string(),
+          kind: match branch.kind {
+            CommandPaletteBranchKind::Local => BranchKind::Local,
+            CommandPaletteBranchKind::Remote => BranchKind::Remote,
+          },
+        };
+        delete_branch(&root_path, &branch_ref)
       }
       CommandPaletteAction::MergeBranch { name } => {
         let branch_ref = BranchRef {
@@ -11164,6 +11213,181 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn command_palette_delete_branch_deletes_requested_branch(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-delete-branch");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    let current_branch = current_branch_status(&repo.path)
+      .expect("read current branch")
+      .name;
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: "feature".to_string(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch to feature");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "v2-feature\n",
+      "feature change",
+    );
+    switch_branch(
+      &repo.path,
+      &BranchRef {
+        name: current_branch.clone(),
+        kind: BranchKind::Local,
+      },
+    )
+    .expect("switch back to base");
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let result = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.branch_status = Some(make_branch_status(&current_branch, 0, 0, true));
+      this.handle_command_palette_action(
+        CommandPaletteAction::DeleteBranch(CommandPaletteBranch {
+          name: "feature".into(),
+          kind: CommandPaletteBranchKind::Local,
+        }),
+        _window,
+        cx,
+      )
+    });
+    assert!(result.is_ok());
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("read status after delete")
+        .name,
+      current_branch
+    );
+    assert!(
+      !list_branches(&repo.path)
+        .expect("list branches after delete")
+        .iter()
+        .any(|branch| branch.kind == BranchKind::Local && branch.name == "feature")
+    );
+  }
+
+  #[gpui::test]
+  async fn command_palette_delete_branch_rejects_current_branch(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-delete-current-branch");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let current_branch = current_branch_status(&repo.path)
+      .expect("read current branch")
+      .name;
+
+    let mut mounted_git_page = None;
+    let (root, cx) = cx.add_window_view(|window, cx| {
+      let git_page = cx.new(|cx| GitPage::new_for_test(window, cx));
+      mounted_git_page = Some(git_page.clone());
+      gpui_component::Root::new(git_page, window, cx)
+    });
+    let git_page = mounted_git_page.expect("git page");
+    cx.executor().allow_parking();
+
+    let initial_notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(initial_notification_count, 0);
+
+    let error = git_page
+      .update_in(cx, |this, _window, cx| {
+        this.selected_repo = Some(repo.path.clone());
+        this.branch_status = Some(make_branch_status(&current_branch, 0, 0, true));
+        this.handle_command_palette_action(
+          CommandPaletteAction::DeleteBranch(CommandPaletteBranch {
+            name: current_branch.clone().into(),
+            kind: CommandPaletteBranchKind::Local,
+          }),
+          _window,
+          cx,
+        )
+      })
+      .expect_err("current branch delete should fail");
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+    cx.cx.run_until_parked();
+    cx.run_until_parked();
+
+    let notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(notification_count, 1);
+    assert_eq!(error.as_ref(), "cannot delete the current branch");
+  }
+
+  #[gpui::test]
+  async fn command_palette_delete_remote_branch_deletes_requested_branch(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let remote = TempBareRepo::init("git-page-cmd-delete-remote-origin");
+    let source = TempRepo::init("git-page-cmd-delete-remote-source");
+    let clone_dir = TempDir::new("git-page-cmd-delete-remote-clone");
+
+    let _ = commit_text_file(&source.path, Path::new("README.md"), "v1\n", "initial");
+    let source_repo = Repository::open(&source.path).expect("open source repo");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add source origin");
+    let base_branch = current_branch_status(&source.path)
+      .expect("read source branch status")
+      .name;
+    push_branch_to_remote(&source.path, &base_branch, "origin");
+    create_branch(&source.path, "feature").expect("create source feature branch");
+    push_branch_to_remote(&source.path, "feature", "origin");
+
+    let _clone_repo = Repository::clone(
+      remote.path.to_str().expect("remote path utf8"),
+      &clone_dir.path,
+    )
+    .expect("clone remote");
+    let clone_branch = current_branch_status(&clone_dir.path)
+      .expect("read clone branch status")
+      .name;
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let result = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(clone_dir.path.clone());
+      this.branch_status = Some(make_branch_status(&clone_branch, 0, 0, true));
+      this.handle_command_palette_action(
+        CommandPaletteAction::DeleteBranch(CommandPaletteBranch {
+          name: "origin/feature".into(),
+          kind: CommandPaletteBranchKind::Remote,
+        }),
+        _window,
+        cx,
+      )
+    });
+    assert!(result.is_ok());
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(
+      Repository::open(&remote.path)
+        .expect("open remote")
+        .refname_to_id("refs/heads/feature")
+        .is_err()
+    );
+    assert!(
+      !list_branches(&clone_dir.path)
+        .expect("list clone branches after delete")
+        .iter()
+        .any(|branch| branch.kind == BranchKind::Remote && branch.name == "origin/feature")
+    );
+  }
+
+  #[gpui::test]
   async fn command_palette_checkout_detached_detaches_head(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-checkout-detached");
@@ -11809,6 +12033,19 @@ mod tests {
         },
       }),
       Some("Create branch failed")
+    );
+  }
+
+  #[test]
+  fn command_palette_delete_branch_uses_notification_feedback() {
+    assert_eq!(
+      GitPage::command_palette_error_notification_title(&CommandPaletteAction::DeleteBranch(
+        CommandPaletteBranch {
+          name: "feature".into(),
+          kind: CommandPaletteBranchKind::Local,
+        }
+      )),
+      Some("Delete branch failed")
     );
   }
 
@@ -12819,6 +13056,10 @@ mod tests {
           kind: CommandPaletteBranchKind::Local,
         },
       },
+      CommandPaletteAction::DeleteBranch(CommandPaletteBranch {
+        name: "feature".into(),
+        kind: CommandPaletteBranchKind::Local,
+      }),
       CommandPaletteAction::MergeBranch {
         name: CommandPaletteBranch {
           name: "feature".into(),
@@ -12877,6 +13118,122 @@ mod tests {
       let error = result.expect_err("action should fail without selected repo");
       assert_eq!(error.as_ref(), "No repository selected.");
     }
+  }
+
+  #[gpui::test]
+  fn command_palette_includes_delete_branch_root_command_when_available(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-command-palette-delete-available");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "initial\n", "initial");
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    let current_branch = current_branch_status(&repo.path)
+      .expect("read current branch")
+      .name;
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    let (command_ids, delete_branches) = git_page.update(cx, |this, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.branch_status = Some(make_branch_status(&current_branch, 0, 0, true));
+      let contents = this.build_command_palette_contents(1, cx);
+      (
+        contents
+          .commands
+          .into_iter()
+          .map(|command| command.id)
+          .collect::<Vec<_>>(),
+        contents.delete_branches,
+      )
+    });
+
+    assert!(command_ids.contains(&CommandPaletteCommandId::DeleteBranch));
+    assert_eq!(
+      delete_branches,
+      vec![CommandPaletteBranch {
+        name: "feature".into(),
+        kind: CommandPaletteBranchKind::Local,
+      }]
+    );
+  }
+
+  #[gpui::test]
+  fn command_palette_includes_remote_branches_in_delete_candidates(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let remote = TempBareRepo::init("git-page-command-palette-delete-remote-origin");
+    let source = TempRepo::init("git-page-command-palette-delete-remote-source");
+    let clone_dir = TempDir::new("git-page-command-palette-delete-remote-clone");
+
+    let _ = commit_text_file(&source.path, Path::new("README.md"), "initial\n", "initial");
+    let source_repo = Repository::open(&source.path).expect("open source repo");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add source origin");
+    let base_branch = current_branch_status(&source.path)
+      .expect("read source branch status")
+      .name;
+    push_branch_to_remote(&source.path, &base_branch, "origin");
+    create_branch(&source.path, "feature").expect("create source feature branch");
+    push_branch_to_remote(&source.path, "feature", "origin");
+
+    let _clone_repo = Repository::clone(
+      remote.path.to_str().expect("remote path utf8"),
+      &clone_dir.path,
+    )
+    .expect("clone remote");
+    let clone_branch = current_branch_status(&clone_dir.path)
+      .expect("read clone branch status")
+      .name;
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    let (command_ids, delete_branches) = git_page.update(cx, |this, cx| {
+      this.selected_repo = Some(clone_dir.path.clone());
+      this.branch_status = Some(make_branch_status(&clone_branch, 0, 0, true));
+      let contents = this.build_command_palette_contents(1, cx);
+      (
+        contents
+          .commands
+          .into_iter()
+          .map(|command| command.id)
+          .collect::<Vec<_>>(),
+        contents.delete_branches,
+      )
+    });
+
+    assert!(command_ids.contains(&CommandPaletteCommandId::DeleteBranch));
+    assert!(delete_branches.contains(&CommandPaletteBranch {
+      name: "origin/feature".into(),
+      kind: CommandPaletteBranchKind::Remote,
+    }));
+  }
+
+  #[gpui::test]
+  fn command_palette_hides_delete_branch_root_command_without_candidates(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-command-palette-delete-hidden");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "initial\n", "initial");
+    let current_branch = current_branch_status(&repo.path)
+      .expect("read current branch")
+      .name;
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+
+    let (command_ids, delete_branches) = git_page.update(cx, |this, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.branch_status = Some(make_branch_status(&current_branch, 0, 0, true));
+      let contents = this.build_command_palette_contents(1, cx);
+      (
+        contents
+          .commands
+          .into_iter()
+          .map(|command| command.id)
+          .collect::<Vec<_>>(),
+        contents.delete_branches,
+      )
+    });
+
+    assert!(!command_ids.contains(&CommandPaletteCommandId::DeleteBranch));
+    assert!(delete_branches.is_empty());
   }
 
   #[gpui::test]
