@@ -1,0 +1,126 @@
+---
+import BadgeCheckIcon from "@lucide/astro/icons/badge-check";
+import CommandIcon from "@lucide/astro/icons/command";
+import GitBranchIcon from "@lucide/astro/icons/git-branch";
+import GitCommitHorizontalIcon from "@lucide/astro/icons/git-commit-horizontal";
+import GitMergeConflictIcon from "@lucide/astro/icons/git-merge-conflict";
+import SplitIcon from "@lucide/astro/icons/split";
+import { Image } from "astro:assets";
+import gitConflictsDark from "../assets/app_screenshots/git_conflicts_dark.png";
+import gitConflictsLight from "../assets/app_screenshots/git_conflicts_light.png";
+
+const features = [
+  {
+    name: "Resolve conflicts in the Git page.",
+    description:
+      "Fix merge conflicts with dedicated actions directly in Reviu.",
+    icon: GitMergeConflictIcon,
+  },
+  {
+    name: "See every local change clearly.",
+    description:
+      "Review staged, unstaged, partially staged, and conflicted files from one Git page.",
+    icon: BadgeCheckIcon,
+  },
+  {
+    name: "Stage, unstage, and restore by hunk.",
+    description:
+      "Use inline and split diff views to review changes and keep commits clean with file-level and hunk-level actions.",
+    icon: SplitIcon,
+  },
+  {
+    name: "Commit, amend, undo, and push.",
+    description:
+      "Handle the core local workflow in one place, including amend, undo last commit, fetch, pull, push, and force push with lease.",
+    icon: GitCommitHorizontalIcon,
+  },
+  {
+    name: "Branches, rebase, stash, and cherry-pick.",
+    description:
+      "Switch branches, create new ones, run interactive rebase flows, stash with untracked files, and cherry-pick commits without leaving the app.",
+    icon: GitBranchIcon,
+  },
+  {
+    name: "Keyboard-first command palette.",
+    description:
+      "Run commit, fetch, push, rebase, stash, and cherry-pick actions with shortcuts instead of click-heavy menus.",
+    icon: CommandIcon,
+  },
+];
+---
+
+<section
+  id="features"
+  class="bg-background py-24 sm:py-32"
+  data-reveal-root
+  data-reveal-threshold="0.3"
+>
+  <div class="mx-auto max-w-7xl px-6 lg:px-8">
+    <div class="reviu-reveal mx-auto max-w-2xl sm:text-center">
+      <h2 class="text-base/7 font-semibold text-primary">Free Local Git</h2>
+      <p
+        class="mt-2 text-4xl font-semibold tracking-tight text-pretty text-foreground sm:text-5xl sm:text-balance"
+      >
+        Everything you need for local Git workflows.
+      </p>
+      <p class="mt-6 text-lg/8 text-muted-foreground">
+        Use Reviu without an account for fast local review, clean commits,
+        conflict resolution, branch workflows, and keyboard-first Git actions.
+      </p>
+    </div>
+  </div>
+  <div class="relative overflow-hidden pt-16">
+    <div
+      class="reviu-reveal mx-auto max-w-7xl px-6 lg:px-8"
+      style="--reveal-delay: 150ms;"
+    >
+      <Image
+        width="2432"
+        height="1442"
+        src={gitConflictsLight}
+        alt="Reviu Git conflict resolution screenshot in light mode"
+        class="mb-[-12%] rounded-xl shadow-2xl ring-1 ring-gray-900/10 dark:hidden"
+      />
+      <Image
+        width="2432"
+        height="1442"
+        src={gitConflictsDark}
+        alt="Reviu Git conflict resolution screenshot in dark mode"
+        class="mb-[-12%] rounded-xl shadow-2xl ring-1 ring-white/10 not-dark:hidden"
+      />
+      <div aria-hidden="true" class="relative">
+        <div
+          class="absolute -inset-x-20 bottom-0 bg-linear-to-t from-background pt-[7%]"
+        >
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="mx-auto mt-16 max-w-7xl px-6 sm:mt-20 md:mt-24 lg:px-8">
+    <dl
+      class="mx-auto grid max-w-2xl grid-cols-1 gap-x-6 gap-y-10 text-base/7 text-muted-foreground sm:grid-cols-2 lg:mx-0 lg:max-w-none lg:grid-cols-3 lg:gap-x-8 lg:gap-y-16"
+    >
+      {
+        features.map((feature, index) => {
+          const Icon = feature.icon;
+
+          return (
+            <div
+              class="reviu-reveal relative pl-9"
+              style={`--reveal-delay: ${index * 80 + 200}ms;`}
+            >
+              <dt class="font-semibold text-foreground">
+                <Icon
+                  aria-hidden="true"
+                  class="absolute top-1 left-1 size-5 text-primary"
+                />
+                {feature.name}
+              </dt>
+              <dd class="inline">{feature.description}</dd>
+            </div>
+          );
+        })
+      }
+    </dl>
+  </div>
+</section>

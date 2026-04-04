@@ -1,6 +1,7 @@
 ---
 import HeroSection from "../components/HeroSection.astro";
-import FeaturesSection from "../components/FeaturesSection.astro";
+import GitHubPRFeaturesSection from "../components/GitHubPRFeaturesSection.astro";
+import GitFeaturesSection from "../components/GitFeaturesSection.astro";
 import PricingSection from "../components/PricingSection.astro";
 import FaqSection from "../components/FaqSection.astro";
 import SiteFooter from "../components/SiteFooter.astro";
@@ -83,7 +84,8 @@ const structuredData = [
 <Layout description={description} pathname="/" structuredData={structuredData}>
   <main>
     <HeroSection />
-    <FeaturesSection />
+    <GitFeaturesSection />
+    <GitHubPRFeaturesSection />
     <PricingSection />
     <FaqSection faqItems={faqItems} />
     <SiteFooter />
