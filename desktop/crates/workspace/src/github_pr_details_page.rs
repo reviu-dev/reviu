@@ -22,7 +22,7 @@ use git::{
   search_repo_head_contents, switch_to_branch_name, sync_current_branch_to_head,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Image,
+  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Hsla, Image,
   ListAlignment, ListState as GpuiListState, MouseButton, ParentElement, Render, RenderImage,
   SharedString, Styled, Task, Window, div, img, list, prelude::*, px,
 };
@@ -9599,22 +9599,22 @@ impl GithubPrDetailsPage {
     ) {
       None
     } else {
-      let (status_text, status_color) = match &local_project_availability {
+      let (status_text, status_color): (Option<String>, Hsla) = match &local_project_availability {
         GithubPrLocalProjectAvailability::NeedsBranchSwitch {
           current_branch: Some(current_branch),
           has_uncommitted_changes,
           ..
         } => (
           if *has_uncommitted_changes {
-            format!(
+            Some(format!(
               "Local changes detected on {}. Stash before switching to this PR branch.",
               current_branch
-            )
+            ))
           } else {
-            format!(
+            Some(format!(
               "Current branch is {}. Switch to this PR branch to browse unchanged files.",
               current_branch
-            )
+            ))
           },
           theme.status_orange(),
         ),
@@ -9624,25 +9624,22 @@ impl GithubPrDetailsPage {
           ..
         } => (
           if *has_uncommitted_changes {
-            "Local changes detected. Stash before switching to this PR branch.".to_string()
+            Some("Local changes detected. Stash before switching to this PR branch.".to_string())
           } else {
-            "Local repo is not on this PR branch.".to_string()
+            Some("Local repo is not on this PR branch.".to_string())
           },
           theme.status_orange(),
         ),
-        GithubPrLocalProjectAvailability::Ready { .. } => (
-          "Local branch matches this PR head".to_string(),
-          theme.muted_foreground,
-        ),
+        GithubPrLocalProjectAvailability::Ready { .. } => (None, theme.muted_foreground),
         GithubPrLocalProjectAvailability::NeedsUpdate { .. } => (
-          "Local branch is not at this PR head".to_string(),
+          Some("Local branch is not at this PR head".to_string()),
           theme.status_orange(),
         ),
         GithubPrLocalProjectAvailability::Dirty { .. } => (
-          "Local branch is not at this PR head and has local changes".to_string(),
+          Some("Local branch is not at this PR head and has local changes".to_string()),
           theme.status_orange(),
         ),
-        GithubPrLocalProjectAvailability::Hidden => ("".to_string(), theme.muted_foreground),
+        GithubPrLocalProjectAvailability::Hidden => (None, theme.muted_foreground),
       };
       let can_toggle_local_project = matches!(
         local_project_availability,
@@ -9700,6 +9697,8 @@ impl GithubPrDetailsPage {
       Some(
         v_flex()
           .gap_1()
+          .justify_center()
+          .min_h(px(DIFF_HEADER_HEIGHT))
           .px_3()
           .py_2()
           .border_b_1()
@@ -9712,6 +9711,7 @@ impl GithubPrDetailsPage {
               .child(
                 Switch::new("github-pr-local-project-switch")
                   .label("Show unchanged files")
+                  .small()
                   .checked(local_project_mode)
                   .disabled(
                     !can_toggle_local_project
@@ -9725,7 +9725,9 @@ impl GithubPrDetailsPage {
               .when_some(switch_branch_button, |this, button| this.child(button))
               .when_some(update_button, |this, button| this.child(button)),
           )
-          .child(div().text_xs().text_color(status_color).child(status_text))
+          .when_some(status_text, |this, status_text| {
+            this.child(div().text_xs().text_color(status_color).child(status_text))
+          })
           .when_some(self.local_branch_switch_error.clone(), |this, error| {
             this.child(div().text_xs().text_color(theme.status_red()).child(error))
           })
