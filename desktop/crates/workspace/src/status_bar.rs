@@ -1,4 +1,3 @@
-#[cfg(target_os = "macos")]
 use crate::api::GithubNotification;
 
 #[cfg(target_os = "macos")]
@@ -211,7 +210,7 @@ pub fn update_status_bar(count: usize, notifications: &[GithubNotification]) {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn update_status_bar(_count: usize, _notifications: &[()]) {}
+pub fn update_status_bar(_count: usize, _notifications: &[GithubNotification]) {}
 
 #[cfg(target_os = "macos")]
 pub fn take_pending_notification() -> Option<GithubNotification> {
@@ -219,6 +218,6 @@ pub fn take_pending_notification() -> Option<GithubNotification> {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn take_pending_notification() -> Option<()> {
+pub fn take_pending_notification() -> Option<GithubNotification> {
   None
 }
