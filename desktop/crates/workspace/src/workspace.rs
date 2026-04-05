@@ -1018,19 +1018,21 @@ impl WorkspaceView {
       .child(primary_navigation)
       .when_some(refresh_button, |this, button| this.child(button));
 
-    let bar = if use_client_decorations {
-      bar
+    if use_client_decorations {
+      let drag_area = div()
+        .id("linux-titlebar-drag")
+        .flex_1()
+        .h_full()
         .on_mouse_down(gpui::MouseButton::Left, |_, window, _cx| {
           window.start_window_move();
         })
         .on_mouse_down(gpui::MouseButton::Right, |ev, window, _cx| {
           window.show_window_menu(ev.position);
-        })
+        });
+      bar.child(left).child(drag_area).child(right)
     } else {
-      bar
-    };
-
-    bar.child(left).child(right)
+      bar.child(left).child(right)
+    }
   }
 }
 
