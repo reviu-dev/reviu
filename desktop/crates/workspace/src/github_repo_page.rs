@@ -3719,9 +3719,7 @@ impl GithubRepoPage {
     let renderer = cx.svg_renderer();
     let svg_bytes = svg_source.as_ref().as_bytes().to_vec();
     let background =
-      cx.background_spawn(
-        async move { renderer.render_single_frame(svg_bytes.as_slice(), 1.0, true) },
-      );
+      cx.background_spawn(async move { renderer.render_single_frame(svg_bytes.as_slice(), 1.0) });
 
     let task = cx.spawn_in(window, async move |this, cx| {
       let result = background.await;

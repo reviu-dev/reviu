@@ -193,6 +193,7 @@ pub fn build_app_menus(show_billing_entry: bool) -> Vec<Menu> {
   vec![
     Menu {
       name: "Reviu".into(),
+      disabled: false,
       items: vec![
         MenuItem::action("About Reviu", crate::OpenAboutPage),
         MenuItem::separator(),
@@ -203,10 +204,12 @@ pub fn build_app_menus(show_billing_entry: bool) -> Vec<Menu> {
     },
     Menu {
       name: "Navigate".into(),
+      disabled: false,
       items: navigate_items,
     },
     Menu {
       name: "Edit".into(),
+      disabled: false,
       items: vec![
         MenuItem::os_action("Undo", Undo, gpui::OsAction::Undo),
         MenuItem::os_action("Redo", Redo, gpui::OsAction::Redo),
