@@ -4,7 +4,7 @@
 
 - Reviu is a desktop Git client.
 - `Free`: local Git workflow.
-- `Reviu Pro`: GitHub integration (`$20/month` in app billing UI).
+- `Reviu Pro`: GitHub integration (`$19/month` in app billing UI).
 - Core UX: keyboard-first navigation, fast diff/review workflows, in-app GitHub context.
 - Product/copy source for landing: `APP_FEATURES.md`.
 
@@ -49,9 +49,6 @@
 - Search in codebase: `osgrep "query"` (or `rg` when needed).
 - Always use Context7 MCP for library/API docs, setup/config, and codegen guidance.
 - Add tests for each feature/fix.
-- For backend github related feature/fix you can find the github docs repo cloned at: backend/github-docs
-- For desktop gpui check gpui-component stories: desktop/gpui-component/crates/story/src/stories
-- For desktop terminal check: alacritty, zed_terminal, gpui-terminal or termy
 - **Changelog**: after each feature or fix, add an entry to `CHANGELOG.md`. Use the next unreleased version section (create it if it doesn't exist). Follow the existing format: `## X.Y.Z` heading, then `### Feature Title` with a short paragraph. Keep changelog copy user-facing and outcome-focused. Do not describe internal implementation details unless they matter to users.
 - **Copy tone**: avoid cliché phrases like "at a glance". Prefer direct alternatives ("immediately", "quickly", or restructure the sentence).
 
