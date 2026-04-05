@@ -35,6 +35,7 @@ pub struct AvailableAppUpdate {
 pub struct ReadyToInstallAppUpdate {
   pub update: AvailableAppUpdate,
   pub artifact_path: PathBuf,
+  pub restart_binary_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -240,32 +241,25 @@ pub fn download_update_artifact(update: &AvailableAppUpdate) -> Result<ReadyToIn
     )
   })?;
 
-  Ok(ReadyToInstallAppUpdate {
-    update: update.clone(),
-    artifact_path,
-  })
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn open_installer(artifact_path: &Path) -> Result<()> {
-  #[cfg(target_os = "macos")]
+  #[cfg(target_os = "linux")]
   {
-    let status = std::process::Command::new("open")
-      .arg(artifact_path)
-      .status()
-      .with_context(|| format!("failed to launch installer {}", artifact_path.display()))?;
-
-    if !status.success() {
-      bail!("failed to launch installer {}", artifact_path.display());
-    }
-
-    Ok(())
+    let restart_binary_path = current_linux_install_layout()
+      .ok()
+      .map(|layout| layout.restart_binary_path);
+    return Ok(ReadyToInstallAppUpdate {
+      update: update.clone(),
+      artifact_path,
+      restart_binary_path,
+    });
   }
 
-  #[cfg(not(target_os = "macos"))]
+  #[cfg(not(target_os = "linux"))]
   {
-    let _ = artifact_path;
-    bail!("installer launch is currently supported on macOS only")
+    Ok(ReadyToInstallAppUpdate {
+      update: update.clone(),
+      artifact_path,
+      restart_binary_path: None,
+    })
   }
 }
 
@@ -275,9 +269,325 @@ pub fn install_update_artifact(ready: &ReadyToInstallAppUpdate) -> Result<()> {
     install_update_macos(&ready.artifact_path)
   }
 
-  #[cfg(not(target_os = "macos"))]
+  #[cfg(target_os = "linux")]
   {
-    open_installer(&ready.artifact_path)
+    install_update_linux(ready)
+  }
+
+  #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+  {
+    let _ = ready;
+    bail!("installer launch is currently supported on macOS and Linux only")
+  }
+}
+
+#[cfg(target_os = "linux")]
+fn install_update_linux(ready: &ReadyToInstallAppUpdate) -> Result<()> {
+  let layout = current_linux_install_layout()?;
+  let extract_root = linux_update_extract_root(&ready.update.latest_version);
+  if extract_root.exists() {
+    let _ = fs::remove_dir_all(&extract_root);
+  }
+  fs::create_dir_all(&extract_root).with_context(|| {
+    format!(
+      "failed to create Linux update extract directory {}",
+      extract_root.display()
+    )
+  })?;
+
+  let _cleanup = ScopedDirRemoval {
+    path: extract_root.clone(),
+  };
+
+  let status = Command::new("tar")
+    .arg("-xzf")
+    .arg(&ready.artifact_path)
+    .arg("-C")
+    .arg(&extract_root)
+    .status()
+    .with_context(|| {
+      format!(
+        "failed to extract Linux update archive {}",
+        ready.artifact_path.display()
+      )
+    })?;
+
+  if !status.success() {
+    bail!(
+      "failed to extract Linux update archive {}",
+      ready.artifact_path.display()
+    );
+  }
+
+  let package_root = find_linux_package_root(&extract_root)?;
+  let source_binary = package_root.join("bin").join("reviu");
+  let source_icon = package_root
+    .join("share")
+    .join("icons")
+    .join("hicolor")
+    .join("512x512")
+    .join("apps")
+    .join("reviu.png");
+
+  if !source_binary.is_file() {
+    bail!(
+      "Linux update archive is missing bin/reviu in {}",
+      package_root.display()
+    );
+  }
+
+  if !source_icon.is_file() {
+    bail!(
+      "Linux update archive is missing share/icons/hicolor/512x512/apps/reviu.png in {}",
+      package_root.display()
+    );
+  }
+
+  let version_dir = layout
+    .install_base
+    .join("versions")
+    .join(&ready.update.latest_version);
+  if version_dir.exists() {
+    fs::remove_dir_all(&version_dir)
+      .with_context(|| format!("failed to remove {}", version_dir.display()))?;
+  }
+  fs::create_dir_all(layout.install_base.join("versions")).with_context(|| {
+    format!(
+      "failed to create Linux versions directory {}",
+      layout.install_base.join("versions").display()
+    )
+  })?;
+
+  fs::rename(&package_root, &version_dir).with_context(|| {
+    format!(
+      "failed to move extracted Linux update into {}",
+      version_dir.display()
+    )
+  })?;
+
+  recreate_symlink(&layout.current_link, &version_dir)?;
+  fs::create_dir_all(&layout.icons_dir)
+    .with_context(|| format!("failed to create {}", layout.icons_dir.display()))?;
+  fs::create_dir_all(&layout.applications_dir)
+    .with_context(|| format!("failed to create {}", layout.applications_dir.display()))?;
+
+  let installed_icon = version_dir
+    .join("share")
+    .join("icons")
+    .join("hicolor")
+    .join("512x512")
+    .join("apps")
+    .join("reviu.png");
+  fs::copy(&installed_icon, &layout.icon_target).with_context(|| {
+    format!(
+      "failed to copy Linux app icon from {} to {}",
+      installed_icon.display(),
+      layout.icon_target.display()
+    )
+  })?;
+
+  write_linux_desktop_entry(
+    &layout.desktop_entry_path,
+    &layout.restart_binary_path,
+    &layout.icon_target,
+  )?;
+  refresh_linux_desktop_registration(&layout);
+
+  Ok(())
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinuxInstallLayout {
+  pub install_base: PathBuf,
+  pub data_home: PathBuf,
+  pub current_link: PathBuf,
+  pub restart_binary_path: PathBuf,
+  pub applications_dir: PathBuf,
+  pub desktop_entry_path: PathBuf,
+  pub icons_dir: PathBuf,
+  pub icon_target: PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+fn current_linux_install_layout() -> Result<LinuxInstallLayout> {
+  let current_exe = std::env::current_exe().context("failed to resolve current executable")?;
+  let resolved = fs::canonicalize(&current_exe).unwrap_or(current_exe.clone());
+  linux_install_layout_from_executable_path(&resolved).with_context(|| {
+    format!(
+      "auto update requires running from the installed Linux bundle, current executable is {}",
+      resolved.display()
+    )
+  })
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_install_layout_from_executable_path(executable_path: &Path) -> Option<LinuxInstallLayout> {
+  if executable_path.file_name()?.to_str()? != "reviu" {
+    return None;
+  }
+
+  let bin_dir = executable_path.parent()?;
+  if bin_dir.file_name()?.to_str()? != "bin" {
+    return None;
+  }
+
+  let bundle_root = bin_dir.parent()?;
+  let install_base = match bundle_root.file_name()?.to_str()? {
+    "current" => bundle_root.parent()?.to_path_buf(),
+    _ => {
+      let versions_dir = bundle_root.parent()?;
+      if versions_dir.file_name()?.to_str()? != "versions" {
+        return None;
+      }
+      versions_dir.parent()?.to_path_buf()
+    }
+  };
+
+  let data_home = install_base.parent()?.to_path_buf();
+  let current_link = install_base.join("current");
+  let restart_binary_path = current_link.join("bin").join("reviu");
+  let applications_dir = data_home.join("applications");
+  let desktop_entry_path = applications_dir.join("reviu.desktop");
+  let icons_dir = data_home
+    .join("icons")
+    .join("hicolor")
+    .join("512x512")
+    .join("apps");
+  let icon_target = icons_dir.join("reviu.png");
+
+  Some(LinuxInstallLayout {
+    install_base,
+    data_home,
+    current_link,
+    restart_binary_path,
+    applications_dir,
+    desktop_entry_path,
+    icons_dir,
+    icon_target,
+  })
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_update_extract_root(version: &str) -> PathBuf {
+  std::env::temp_dir().join(format!(
+    "reviu-linux-update-{}-{}",
+    std::process::id(),
+    version
+      .chars()
+      .map(|ch| {
+        if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' || ch == '_' {
+          ch
+        } else {
+          '_'
+        }
+      })
+      .collect::<String>()
+  ))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn find_linux_package_root(extract_root: &Path) -> Result<PathBuf> {
+  let entries = fs::read_dir(extract_root).with_context(|| {
+    format!(
+      "failed to inspect extracted update {}",
+      extract_root.display()
+    )
+  })?;
+  for entry in entries.flatten() {
+    let path = entry.path();
+    if path.is_dir() {
+      return Ok(path);
+    }
+  }
+
+  bail!(
+    "failed to find top-level extracted Linux update directory in {}",
+    extract_root.display()
+  )
+}
+
+#[cfg(target_os = "linux")]
+fn recreate_symlink(link_path: &Path, target_path: &Path) -> Result<()> {
+  if link_path.exists() || link_path.symlink_metadata().is_ok() {
+    if link_path.is_dir() && !link_path.symlink_metadata()?.file_type().is_symlink() {
+      fs::remove_dir_all(link_path)
+        .with_context(|| format!("failed to remove {}", link_path.display()))?;
+    } else {
+      fs::remove_file(link_path)
+        .with_context(|| format!("failed to remove {}", link_path.display()))?;
+    }
+  }
+
+  std::os::unix::fs::symlink(target_path, link_path).with_context(|| {
+    format!(
+      "failed to create symlink {} -> {}",
+      link_path.display(),
+      target_path.display()
+    )
+  })?;
+
+  Ok(())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_desktop_entry_contents(binary_path: &Path, icon_path: &Path) -> String {
+  format!(
+    "[Desktop Entry]\nType=Application\nName=Reviu\nComment=Keyboard-first Git client\nExec={} %U\nIcon={}\nTerminal=false\nCategories=Development;VersionControl;\nMimeType=x-scheme-handler/reviu;\nStartupWMClass=Reviu\n",
+    binary_path.display(),
+    icon_path.display()
+  )
+}
+
+#[cfg(target_os = "linux")]
+fn write_linux_desktop_entry(
+  desktop_entry_path: &Path,
+  binary_path: &Path,
+  icon_path: &Path,
+) -> Result<()> {
+  fs::write(
+    desktop_entry_path,
+    linux_desktop_entry_contents(binary_path, icon_path),
+  )
+  .with_context(|| format!("failed to write {}", desktop_entry_path.display()))
+}
+
+#[cfg(target_os = "linux")]
+fn refresh_linux_desktop_registration(layout: &LinuxInstallLayout) {
+  let xdg_mime_default = OsString::from("default");
+  let xdg_mime_desktop = OsString::from("reviu.desktop");
+  let xdg_mime_scheme = OsString::from("x-scheme-handler/reviu");
+  try_run_optional_linux_command(
+    "update-desktop-database",
+    &[layout.applications_dir.as_os_str()],
+  );
+  try_run_optional_linux_command(
+    "xdg-mime",
+    &[
+      xdg_mime_default.as_os_str(),
+      xdg_mime_desktop.as_os_str(),
+      xdg_mime_scheme.as_os_str(),
+    ],
+  );
+}
+
+#[cfg(target_os = "linux")]
+fn try_run_optional_linux_command(command: &str, args: &[&std::ffi::OsStr]) {
+  let Ok(status) = Command::new(command).args(args).status() else {
+    return;
+  };
+  let _ = status.success();
+}
+
+#[cfg(target_os = "linux")]
+struct ScopedDirRemoval {
+  path: PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ScopedDirRemoval {
+  fn drop(&mut self) {
+    let _ = fs::remove_dir_all(&self.path);
   }
 }
 
@@ -560,6 +870,7 @@ mod tests {
       let ready = ReadyToInstallAppUpdate {
         update: update.clone(),
         artifact_path: PathBuf::from("/tmp/reviu-installer.dmg"),
+        restart_binary_path: None,
       };
       AppUpdateStore::set_ready_to_install(cx, ready.clone());
       assert_eq!(AppUpdateStore::try_ready_to_install(cx), Some(ready));
@@ -587,6 +898,92 @@ mod tests {
       updates_directory_for_profile(base, AppProfile::Dev),
       PathBuf::from("/tmp/reviu-updates/reviu.dev/updates")
     );
+  }
+
+  #[test]
+  fn linux_install_layout_accepts_current_and_versioned_paths() {
+    assert_eq!(
+      linux_install_layout_from_executable_path(Path::new(
+        "/home/test/.local/share/reviu/current/bin/reviu"
+      )),
+      Some(LinuxInstallLayout {
+        install_base: PathBuf::from("/home/test/.local/share/reviu"),
+        data_home: PathBuf::from("/home/test/.local/share"),
+        current_link: PathBuf::from("/home/test/.local/share/reviu/current"),
+        restart_binary_path: PathBuf::from("/home/test/.local/share/reviu/current/bin/reviu"),
+        applications_dir: PathBuf::from("/home/test/.local/share/applications"),
+        desktop_entry_path: PathBuf::from("/home/test/.local/share/applications/reviu.desktop"),
+        icons_dir: PathBuf::from("/home/test/.local/share/icons/hicolor/512x512/apps"),
+        icon_target: PathBuf::from("/home/test/.local/share/icons/hicolor/512x512/apps/reviu.png"),
+      })
+    );
+
+    assert_eq!(
+      linux_install_layout_from_executable_path(Path::new(
+        "/home/test/.local/share/reviu/versions/0.0.11/bin/reviu"
+      )),
+      Some(LinuxInstallLayout {
+        install_base: PathBuf::from("/home/test/.local/share/reviu"),
+        data_home: PathBuf::from("/home/test/.local/share"),
+        current_link: PathBuf::from("/home/test/.local/share/reviu/current"),
+        restart_binary_path: PathBuf::from("/home/test/.local/share/reviu/current/bin/reviu"),
+        applications_dir: PathBuf::from("/home/test/.local/share/applications"),
+        desktop_entry_path: PathBuf::from("/home/test/.local/share/applications/reviu.desktop"),
+        icons_dir: PathBuf::from("/home/test/.local/share/icons/hicolor/512x512/apps"),
+        icon_target: PathBuf::from("/home/test/.local/share/icons/hicolor/512x512/apps/reviu.png"),
+      })
+    );
+  }
+
+  #[test]
+  fn linux_install_layout_rejects_non_bundle_paths() {
+    assert_eq!(
+      linux_install_layout_from_executable_path(Path::new("/usr/local/bin/reviu")),
+      None
+    );
+    assert_eq!(
+      linux_install_layout_from_executable_path(Path::new(
+        "/home/test/.local/share/reviu/versions/0.0.11/helpers/reviu"
+      )),
+      None
+    );
+  }
+
+  #[test]
+  fn linux_desktop_entry_uses_absolute_binary_and_icon_paths() {
+    let desktop_entry = linux_desktop_entry_contents(
+      Path::new("/home/test/.local/share/reviu/current/bin/reviu"),
+      Path::new("/home/test/.local/share/icons/hicolor/512x512/apps/reviu.png"),
+    );
+
+    assert!(desktop_entry.contains("Exec=/home/test/.local/share/reviu/current/bin/reviu %U"));
+    assert!(
+      desktop_entry.contains("Icon=/home/test/.local/share/icons/hicolor/512x512/apps/reviu.png")
+    );
+    assert!(desktop_entry.contains("MimeType=x-scheme-handler/reviu;"));
+  }
+
+  #[test]
+  fn linux_update_extract_root_sanitizes_version_label() {
+    let path = linux_update_extract_root("0.2.0-beta+linux build");
+    let file_name = path.file_name().and_then(|value| value.to_str());
+
+    assert!(matches!(file_name, Some(name) if name.contains("0.2.0-beta_linux_build")));
+  }
+
+  #[test]
+  fn find_linux_package_root_returns_first_top_level_directory() {
+    let temp_root =
+      std::env::temp_dir().join(format!("reviu-app-update-test-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp_root);
+    fs::create_dir_all(temp_root.join("Reviu-0.0.11-linux-x86_64")).expect("create package root");
+    fs::write(temp_root.join("ignored.txt"), "fixture").expect("create file fixture");
+
+    let package_root = find_linux_package_root(&temp_root).expect("package root");
+
+    assert_eq!(package_root, temp_root.join("Reviu-0.0.11-linux-x86_64"));
+
+    let _ = fs::remove_dir_all(&temp_root);
   }
 
   #[cfg(target_os = "macos")]

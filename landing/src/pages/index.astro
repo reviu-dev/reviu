@@ -31,7 +31,7 @@ const faqItems: { question: string; answer: string }[] = [
   {
     question: "Which platforms does Reviu support?",
     answer:
-      "Reviu currently supports macOS on Apple Silicon and Intel. Linux and Windows support are planned.",
+      "Reviu currently supports macOS on Apple Silicon and Intel, plus Linux through the install command on the download section. Windows support is planned.",
   },
 ];
 
@@ -41,7 +41,7 @@ const structuredData = [
     "@type": "SoftwareApplication",
     name: "Reviu",
     applicationCategory: "DeveloperApplication",
-    operatingSystem: "macOS",
+    operatingSystem: "macOS, Linux",
     url: "https://reviu.dev/",
     description,
     offers: [

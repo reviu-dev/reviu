@@ -4,9 +4,9 @@ All notable changes to Reviu are documented here.
 
 ## 0.0.12
 
-### Expanded Desktop Shortcuts
+### Linux Support
 
-Reviu now adds direct shortcuts for switching between Git and GitHub, going back in navigation history, moving between repository and pull request tabs, jumping between conflicts or review comments, and triggering pull, push, or force push on the Git page without leaving the keyboard.
+Reviu now runs on Linux, install it with a single command from the downloads page, and get the same in-app update flow as macOS.
 
 ### Startup Crash Reports
 

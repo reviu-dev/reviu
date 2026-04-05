@@ -254,7 +254,10 @@ impl AboutPage {
       return;
     }
 
-    if AppUpdateStore::try_ready_to_install(cx).is_some() {
+    if let Some(ready) = AppUpdateStore::try_ready_to_install(cx) {
+      if let Some(path) = ready.restart_binary_path {
+        cx.set_restart_path(path);
+      }
       cx.restart();
       cx.notify();
       return;
