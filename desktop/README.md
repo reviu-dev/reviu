@@ -13,6 +13,35 @@ For a production bundle, inject the backend URL at compile time:
 API_BASE_URL=https://api.reviu.dev cargo bundle -p reviu --release
 ```
 
+## Linux Packaging
+
+Reviu includes an initial Linux packaging path based on a release tarball plus a user-level install script.
+
+Build a Linux release archive:
+
+```sh
+bash ./desktop/scripts/build-linux-archive.sh 0.0.11 x86_64
+```
+
+This produces:
+
+- `dist/release/linux/<target>/Reviu-x.y.z-linux-<arch>.tar.gz`
+- `dist/release/linux/<target>/desktop-update.manifest.json`
+
+Install the latest published Linux build for the current user:
+
+```sh
+bash ./desktop/scripts/install-linux.sh
+```
+
+The installer:
+
+- downloads the latest Linux artifact from `desktop-update.manifest.json`
+- installs Reviu under `~/.local/share/reviu`
+- creates `~/.local/bin/reviu`
+- writes a desktop entry to `~/.local/share/applications/reviu.desktop`
+- registers the `reviu://` URL scheme when `xdg-mime` is available
+
 ## Profiles
 
 Desktop supports two local profiles:
