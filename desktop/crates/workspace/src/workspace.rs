@@ -5,8 +5,8 @@ use editor::{Copy, Cut, Paste, Quit, Redo, SelectAll, Undo, set_indent_rainbow_e
 #[cfg(test)]
 use gpui::Keystroke;
 use gpui::{
-  AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global, Menu, MenuItem, Render,
-  Subscription, Task, Window, div, prelude::*, px,
+  AnyWindowHandle, App, Context, Decorations, Entity, FocusHandle, Focusable, Global, Menu,
+  MenuItem, Render, Subscription, Task, Window, WindowButton, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, Theme, ThemeMode, h_flex,
@@ -737,6 +737,80 @@ impl WorkspaceView {
     NavigationHistory::navigate_back(cx);
   }
 
+  fn render_linux_window_controls(window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let controls = window.window_controls();
+    let button_layout = cx.button_layout();
+
+    let render_button = |icon: IconName, action: WindowButton, theme: &Theme| -> gpui::AnyElement {
+      let is_close = matches!(action, WindowButton::Close);
+      div()
+        .id(match action {
+          WindowButton::Minimize => "linux-minimize",
+          WindowButton::Maximize => "linux-maximize",
+          WindowButton::Close => "linux-close",
+        })
+        .flex()
+        .items_center()
+        .justify_center()
+        .w(px(28.0))
+        .h(px(28.0))
+        .rounded(px(6.0))
+        .cursor_pointer()
+        .hover(|s| {
+          if is_close {
+            s.bg(gpui::red())
+          } else {
+            s.bg(theme.secondary_hover)
+          }
+        })
+        .active(|s| {
+          if is_close {
+            s.bg(gpui::red())
+          } else {
+            s.bg(theme.secondary_active)
+          }
+        })
+        .child(Icon::new(icon).size_4().text_color(theme.muted_foreground))
+        .on_click(move |_, window, _cx| match action {
+          WindowButton::Minimize => window.minimize_window(),
+          WindowButton::Maximize => window.zoom_window(),
+          WindowButton::Close => std::process::exit(0),
+        })
+        .into_any_element()
+    };
+
+    let mut buttons: Vec<gpui::AnyElement> = Vec::new();
+
+    let ordered_buttons: Vec<WindowButton> = if let Some(layout) = button_layout {
+      layout
+        .right
+        .iter()
+        .chain(layout.left.iter())
+        .filter_map(|b| *b)
+        .collect()
+    } else {
+      vec![
+        WindowButton::Minimize,
+        WindowButton::Maximize,
+        WindowButton::Close,
+      ]
+    };
+
+    for button in ordered_buttons {
+      let (icon, supported) = match button {
+        WindowButton::Minimize => (IconName::WindowMinimize, controls.minimize),
+        WindowButton::Maximize => (IconName::WindowMaximize, controls.maximize),
+        WindowButton::Close => (IconName::WindowClose, true),
+      };
+      if supported {
+        buttons.push(render_button(icon, button, &theme));
+      }
+    }
+
+    h_flex().items_center().gap_1().ml_2().children(buttons)
+  }
+
   fn render_global_bar(
     &self,
     window: &Window,
@@ -928,6 +1002,13 @@ impl WorkspaceView {
       right = right.child(auth_control);
     }
 
+    let use_client_decorations = cfg!(target_os = "linux")
+      && matches!(window.window_decorations(), Decorations::Client { .. });
+
+    if use_client_decorations {
+      right = right.child(Self::render_linux_window_controls(window, cx));
+    }
+
     let left = h_flex()
       .items_center()
       .gap_3()
@@ -936,6 +1017,18 @@ impl WorkspaceView {
       })
       .child(primary_navigation)
       .when_some(refresh_button, |this, button| this.child(button));
+
+    let bar = if use_client_decorations {
+      bar
+        .on_mouse_down(gpui::MouseButton::Left, |_, window, _cx| {
+          window.start_window_move();
+        })
+        .on_mouse_down(gpui::MouseButton::Right, |ev, window, _cx| {
+          window.show_window_menu(ev.position);
+        })
+    } else {
+      bar
+    };
 
     bar.child(left).child(right)
   }
