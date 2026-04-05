@@ -6264,7 +6264,7 @@ impl GithubPrDetailsPage {
           div()
             .text_sm()
             .text_color(theme.muted_foreground)
-            .child("Binary file preview is not available yet."),
+            .child("Binary file preview is not available."),
         )
         .into_any_element(),
     };

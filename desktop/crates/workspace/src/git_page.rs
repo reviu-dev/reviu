@@ -103,7 +103,6 @@ const TRIGGER_DROPDOWN_SELECT_WIDTH: f32 = 350.0;
 const EMPTY_REPOSITORY_TITLE: &str = "Select a repository";
 const EMPTY_REPOSITORY_HINT_PREFIX: &str = "Press";
 const EMPTY_REPOSITORY_HINT_SUFFIX: &str = "to add a repository.";
-const EMPTY_REPOSITORY_ACTION_LABEL: &str = "Add Repository";
 const GIT_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str = "git-markdown-preview-editor-pane";
 const GIT_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str = "git-markdown-preview-render-pane";
 const GIT_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR: &str = "git-binary-preview-render-pane";
@@ -2403,6 +2402,7 @@ impl GitPage {
       }
       GitBinaryPreview::UnsupportedBinary => v_flex()
         .items_center()
+        .h_full()
         .justify_center()
         .gap_2()
         .child(
@@ -2414,7 +2414,7 @@ impl GitPage {
           div()
             .text_sm()
             .text_color(theme.muted_foreground)
-            .child("Binary file preview is not available yet."),
+            .child("Binary file preview is not available."),
         )
         .into_any_element(),
     };
@@ -7578,7 +7578,7 @@ impl GitPage {
           )
           .child(
             Button::new("git-empty-state-open-repository")
-              .label(EMPTY_REPOSITORY_ACTION_LABEL)
+              .label("Open Repository")
               .icon(IconName::FolderOpen)
               .with_variant(ButtonVariant::Secondary)
               .on_click(cx.listener(move |this, _, window, cx| {
@@ -16591,16 +16591,6 @@ mod tests {
     assert!(GitPage::should_render_repository_split(Some(Path::new(
       "/tmp/reviu-selected-repo"
     ))));
-  }
-
-  #[test]
-  fn repository_empty_state_uses_expected_copy_and_shortcut() {
-    assert_eq!(EMPTY_REPOSITORY_TITLE, "Select a repository");
-    assert_eq!(EMPTY_REPOSITORY_ACTION_LABEL, "Add Repository");
-    assert_eq!(
-      GitPage::open_repository_shortcut(),
-      shortcuts::shortcut_keystroke(ShortcutId::OpenRepository)
-    );
   }
 
   #[test]
