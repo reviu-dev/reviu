@@ -47,7 +47,10 @@ fn main() {
     None
   };
 
-  println!("Starting Reviu (Sentry enabled: {})", dsn.is_some());
+  if dsn.is_none() {
+    println!("Sentry error reporting is disabled.");
+  }
+
   let _guard = sentry::init(sentry::ClientOptions {
     dsn,
     release: resolved_sentry_release(),
