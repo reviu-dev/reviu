@@ -29,8 +29,8 @@ use git::{
 use gpui::Keystroke;
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global, Image,
-  InteractiveElement, ParentElement, PathPromptOptions, Pixels, Render, RenderImage, SharedString,
-  Styled, Subscription, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
+  InteractiveElement, ObjectFit, ParentElement, PathPromptOptions, Pixels, Render, RenderImage,
+  SharedString, Styled, Subscription, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable, StyledExt,
@@ -2377,13 +2377,13 @@ impl GitPage {
   ) -> AnyElement {
     let theme = cx.theme().clone();
 
-    let content = match preview {
+    match preview {
       GitBinaryPreview::RasterImage(image) => {
         let loading_color = theme.muted_foreground;
         let error_color = theme.status_red();
-        img(image.clone())
-          .max_w_full()
-          .max_h_full()
+        let image_el = img(image.clone())
+          .size_full()
+          .object_fit(ObjectFit::Contain)
           .with_loading(move || {
             div()
               .text_sm()
@@ -2397,44 +2397,51 @@ impl GitPage {
               .text_color(error_color)
               .child("Unable to render image preview")
               .into_any_element()
-          })
+          });
+
+        div()
+          .flex_1()
+          .min_h_0()
+          .min_w(px(0.0))
+          .bg(theme.background)
+          .occlude()
+          .debug_selector(|| GIT_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR.to_string())
+          .child(
+            div()
+              .relative()
+              .size_full()
+              .p_4()
+              .child(div().absolute().inset_4().child(image_el)),
+          )
           .into_any_element()
       }
-      GitBinaryPreview::UnsupportedBinary => v_flex()
-        .items_center()
-        .h_full()
-        .justify_center()
-        .gap_2()
+      GitBinaryPreview::UnsupportedBinary => div()
+        .flex_1()
+        .min_h_0()
+        .min_w(px(0.0))
+        .bg(theme.background)
+        .occlude()
+        .debug_selector(|| GIT_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR.to_string())
         .child(
-          Icon::new(IconName::File)
-            .size_6()
-            .text_color(theme.muted_foreground),
-        )
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Binary file preview is not available."),
+          v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .child(
+              Icon::new(IconName::File)
+                .size_6()
+                .text_color(theme.muted_foreground),
+            )
+            .child(
+              div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child("Binary file preview is not available."),
+            ),
         )
         .into_any_element(),
-    };
-
-    div()
-      .flex_1()
-      .min_h_0()
-      .min_w(px(0.0))
-      .bg(theme.background)
-      .occlude()
-      .debug_selector(|| GIT_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR.to_string())
-      .child(
-        div()
-          .size_full()
-          .p_4()
-          .items_center()
-          .justify_center()
-          .child(content),
-      )
-      .into_any_element()
+    }
   }
 
   fn selected_file_index(&self, cx: &Context<Self>) -> Option<IndexPath> {
@@ -8568,6 +8575,7 @@ impl GitPage {
       if let Some(binary_preview) = self.binary_preview.as_ref() {
         return div()
           .size_full()
+          .overflow_hidden()
           .flex()
           .flex_col()
           .child(self.render_editor_header(&editor, cx))
