@@ -6233,7 +6233,8 @@ impl GithubPrDetailsPage {
         let loading_color = theme.muted_foreground;
         let error_color = theme.status_red();
         let image_el = img(image.clone())
-          .size_full()
+          .max_w_full()
+          .max_h_full()
           .object_fit(ObjectFit::Contain)
           .with_loading(move || {
             div()
@@ -6254,14 +6255,23 @@ impl GithubPrDetailsPage {
           .flex_1()
           .min_h_0()
           .min_w(px(0.0))
+          .overflow_hidden()
           .bg(theme.background)
           .debug_selector(|| GITHUB_PR_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR.to_string())
           .child(
-            div()
-              .relative()
-              .size_full()
-              .p_4()
-              .child(div().absolute().inset_4().child(image_el)),
+            div().relative().size_full().child(
+              div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .p_4()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(image_el),
+            ),
           )
           .into_any_element()
       }
