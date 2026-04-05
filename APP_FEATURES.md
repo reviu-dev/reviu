@@ -19,7 +19,7 @@ Core product shape:
 
 ## Current product truth
 
-- Public platform messaging that is safe today: `macOS (Apple Silicon)`.
+- Public platform messaging that is safe today: `macOS (Apple Silicon and Intel)`.
 - Local Git features do not require an account.
 - GitHub features require `Sign in with GitHub` and `Reviu Pro`.
 - Current pricing shown in the app and landing: `$19/month`.
@@ -113,7 +113,7 @@ Accurate themes already present on the landing:
 - Reviu is a desktop Git client.
 - The local Git workflow is keyboard-first.
 - Reviu Pro is the GitHub layer.
-- Platform messaging stays on `macOS with Apple Silicon`.
+- Platform messaging stays on `macOS with Apple Silicon and Intel`.
 
 What the current landing underrepresents:
 
