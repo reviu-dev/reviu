@@ -1,11 +1,11 @@
 ---
 import { Image } from "astro:assets";
 import GitBranchIcon from "@lucide/astro/icons/git-branch";
+import DownloadIcon from "@lucide/astro/icons/download";
 import GitPullRequestIcon from "@lucide/astro/icons/git-pull-request";
 import KeyboardIcon from "@lucide/astro/icons/keyboard";
 import gitDark from "../assets/app_screenshots/git_dark.png";
 import gitLight from "../assets/app_screenshots/git_light.png";
-import { latestAppleSiliconDownloadUrl } from "../../constants";
 ---
 
 <section
@@ -112,11 +112,13 @@ import { latestAppleSiliconDownloadUrl } from "../../constants";
         style="--reveal-delay: 700ms;"
       >
         <a
-          href={latestAppleSiliconDownloadUrl}
+          href="#downloads"
           data-umami-event="download-hero"
-          class="reviu-hover-lift rounded-md bg-primary px-3.5 py-2.5 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          aria-describedby="hero-download-hint"
+          class="reviu-hover-lift rounded-md bg-primary px-3.5 py-2.5 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary flex items-center gap-2"
         >
-          Download for macOS (Apple Silicon)
+          <DownloadIcon class="size-4" aria-hidden="true" />
+          Download now
         </a>
         <a
           href="#pricing"

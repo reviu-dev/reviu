@@ -1,0 +1,130 @@
+---
+import CpuIcon from "@lucide/astro/icons/cpu";
+import DownloadIcon from "@lucide/astro/icons/download";
+import HardDriveIcon from "@lucide/astro/icons/hard-drive";
+import MonitorIcon from "@lucide/astro/icons/monitor";
+import { desktopDownloadUrls } from "../../constants";
+
+const downloadPlatforms = [
+  {
+    id: "macos",
+    title: "macOS",
+    badge: "Available now",
+    icon: CpuIcon,
+    downloads: [
+      {
+        label: "Apple Silicon",
+        href: desktopDownloadUrls.macAppleSilicon,
+        event: "download-macos-apple-silicon",
+      },
+      {
+        label: "Intel",
+        href: desktopDownloadUrls.macIntel,
+        event: "download-macos-intel",
+      },
+    ],
+  },
+  {
+    id: "linux",
+    title: "Linux",
+    badge: "Coming soon",
+    description: "Native Linux builds are planned next.",
+    icon: HardDriveIcon,
+    downloads: [],
+  },
+  {
+    id: "windows",
+    title: "Windows",
+    badge: "Planned",
+    description: "Native Windows builds are planned after Linux.",
+    icon: MonitorIcon,
+    downloads: [],
+  },
+] as const;
+---
+
+<section
+  id="downloads"
+  class="py-24 sm:py-32"
+  data-reveal-root
+  data-reveal-threshold="0.2"
+>
+  <div class="mx-auto max-w-7xl px-6 lg:px-8">
+    <div class="reviu-reveal mx-auto max-w-3xl text-center">
+      <h2 class="text-base/7 font-semibold text-primary">Downloads</h2>
+      <p
+        class="mt-2 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-5xl"
+      >
+        Pick the build that matches your machine.
+      </p>
+      <p class="mt-6 text-lg/8 text-muted-foreground">
+        Reviu runs on macOS today with separate downloads for Apple Silicon and
+        Intel. Linux and Windows are planned next.
+      </p>
+    </div>
+
+    <div class="mt-12 grid grid-cols-1 gap-6 lg:grid-cols-3">
+      {
+        downloadPlatforms.map((platform, index) => (
+          <article
+            class="reviu-reveal flex h-full flex-col rounded-3xl border border-border bg-background p-8"
+            style={`--reveal-delay: ${index * 125 + 150}ms;`}
+          >
+            <div class="flex items-start justify-between gap-4">
+              <div class="inline-flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+                <platform.icon class="size-6" aria-hidden="true" />
+              </div>
+              <span
+                class:list={[
+                  "rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset",
+                  platform.downloads.length > 0
+                    ? "bg-primary/10 text-primary ring-primary/15"
+                    : "bg-muted text-muted-foreground ring-border",
+                ]}
+              >
+                {platform.badge}
+              </span>
+            </div>
+
+            <div class="mt-6">
+              <h3 class="text-2xl font-semibold text-foreground">
+                {platform.title}
+              </h3>
+              {"description" in platform && (
+                <p class="mt-3 text-sm/7 text-muted-foreground">
+                  {platform.description}
+                </p>
+              )}
+            </div>
+
+            <div class="mt-auto pt-8">
+              {platform.downloads.length > 0 ? (
+                <div class="flex flex-col gap-3">
+                  {platform.downloads.map((download) => (
+                    <a
+                      href={download.href}
+                      data-umami-event={download.event}
+                      class="reviu-hover-lift inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm/6 font-semibold text-white shadow-xs transition-colors hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    >
+                      <DownloadIcon class="size-4" aria-hidden="true" />
+                      Download for {download.label}
+                    </a>
+                  ))}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  aria-disabled="true"
+                  class="inline-flex w-full cursor-not-allowed items-center justify-center rounded-md bg-muted px-3 py-2 text-sm/6 font-semibold text-muted-foreground"
+                >
+                  {platform.title === "Linux" ? "Coming soon" : "Planned"}
+                </button>
+              )}
+            </div>
+          </article>
+        ))
+      }
+    </div>
+  </div>
+</section>

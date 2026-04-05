@@ -1,5 +1,6 @@
 ---
 import HeroSection from "../components/HeroSection.astro";
+import DownloadSection from "../components/DownloadSection.astro";
 import GitHubHomeFeaturesSection from "../components/GitHubHomeFeaturesSection.astro";
 import GitHubPRFeaturesSection from "../components/GitHubPRFeaturesSection.astro";
 import GitFeaturesSection from "../components/GitFeaturesSection.astro";
@@ -30,7 +31,7 @@ const faqItems: { question: string; answer: string }[] = [
   {
     question: "Which platforms does Reviu support?",
     answer:
-      "Reviu currently supports macOS with Apple Silicon. More platforms are planned.",
+      "Reviu currently supports macOS on Apple Silicon and Intel. Linux and Windows support are planned.",
   },
 ];
 
@@ -89,6 +90,7 @@ const structuredData = [
     <GitHubHomeFeaturesSection />
     <GitHubPRFeaturesSection />
     <PricingSection />
+    <DownloadSection />
     <FaqSection faqItems={faqItems} />
     <SiteFooter />
   </main>

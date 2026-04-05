@@ -14,10 +14,13 @@ const readDistFile = async (relativePath) => {
 test('homepage ships crawlable metadata and content', async () => {
   const html = await readDistFile('index.html')
 
-  assert.match(html, /<title>Reviu<\/title>/)
-  assert.match(html, /<meta name="description" content="Reviu is a desktop Git client for macOS/)
+  assert.match(html, /<title>Reviu - Desktop Git Client<\/title>/)
+  assert.match(
+    html,
+    /<meta name="description" content="Reviu is a desktop Git client with keyboard-first local workflows/,
+  )
   assert.match(html, /<link rel="canonical" href="https:\/\/reviu\.dev\/"/)
-  assert.match(html, /<meta property="og:title" content="Reviu"/)
+  assert.match(html, /<meta property="og:title" content="Reviu - Desktop Git Client"/)
   assert.match(html, /<meta name="twitter:card" content="summary_large_image"/)
   assert.match(html, /SoftwareApplication/)
   assert.match(html, /FAQPage/)
