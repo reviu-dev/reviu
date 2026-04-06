@@ -25,8 +25,6 @@ use git::{
   restore_file, skip_rebase, stage_all, stage_file, start_interactive_rebase, switch_branch,
   undo_last_commit, unstage_all, unstage_file,
 };
-#[cfg(test)]
-use gpui::Keystroke;
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global, Image,
   InteractiveElement, ObjectFit, ParentElement, PathPromptOptions, Pixels, Render, RenderImage,
