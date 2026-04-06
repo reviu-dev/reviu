@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# NOTE: A copy of this script is served at landing/public/install.sh
-# Update both files when making changes.
 set -euo pipefail
 
 DEFAULT_API_BASE_URL="https://api.reviu.dev"
