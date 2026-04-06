@@ -50,7 +50,7 @@ const downloadPlatforms = [
   data-reveal-root
   data-reveal-threshold="0.2"
 >
-  <div class="mx-auto max-w-7xl px-6 lg:px-8">
+  <div class="mx-auto max-w-2xl lg:max-w-7xl px-6 lg:px-8">
     <div class="reviu-reveal mx-auto max-w-3xl text-center">
       <h2 class="text-base/7 font-semibold text-primary">Downloads</h2>
       <p
@@ -64,7 +64,9 @@ const downloadPlatforms = [
       </p>
     </div>
 
-    <div class="mt-12 grid grid-cols-1 gap-6 lg:grid-cols-3">
+    <div
+      class="mt-12 mx-auto grid lg:max-w-none max-w-md grid-cols-1 gap-6 lg:grid-cols-3"
+    >
       {
         downloadPlatforms.map((platform, index) => (
           <article
