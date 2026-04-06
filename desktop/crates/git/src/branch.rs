@@ -4,7 +4,8 @@ use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
 use git2::{
   BranchType, CherrypickOptions, Cred, ErrorCode, FetchOptions, PushOptions, Rebase,
-  RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, StashFlags, StatusOptions,
+  RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, StashApplyOptions,
+  StashFlags, StatusOptions,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1204,8 +1205,9 @@ pub fn list_stashes(repo_root: &Path) -> Result<Vec<StashEntry>> {
 pub fn apply_stash(repo_root: &Path, index: usize) -> Result<()> {
   let mut repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let mut opts = stash_checkout_options();
   repo
-    .stash_apply(index, None)
+    .stash_apply(index, Some(&mut opts))
     .with_context(|| format!("apply stash at index {index}"))?;
   Ok(())
 }
@@ -1222,10 +1224,19 @@ pub fn drop_stash(repo_root: &Path, index: usize) -> Result<()> {
 pub fn pop_stash(repo_root: &Path, index: usize) -> Result<()> {
   let mut repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let mut opts = stash_checkout_options();
   repo
-    .stash_pop(index, None)
+    .stash_pop(index, Some(&mut opts))
     .with_context(|| format!("pop stash at index {index}"))?;
   Ok(())
+}
+
+fn stash_checkout_options() -> StashApplyOptions<'static> {
+  let mut checkout = CheckoutBuilder::new();
+  checkout.force();
+  let mut opts = StashApplyOptions::new();
+  opts.checkout_options(checkout);
+  opts
 }
 
 #[cfg(test)]
