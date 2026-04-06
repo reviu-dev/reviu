@@ -15,6 +15,72 @@ use workspace::{
   take_pending_startup_crash_report,
 };
 
+#[cfg(target_os = "linux")]
+mod linux_single_instance {
+  use std::io;
+  use std::os::unix::net::UnixDatagram;
+  use std::path::PathBuf;
+  use std::sync::mpsc;
+  use std::thread;
+  use workspace::AppProfile;
+
+  fn sock_path() -> PathBuf {
+    let data_dir = dirs::data_dir()
+      .unwrap_or_else(|| PathBuf::from("/tmp"))
+      .join(AppProfile::current().storage_dir_name());
+    std::fs::create_dir_all(&data_dir).ok();
+    data_dir.join("reviu.sock")
+  }
+
+  /// If another instance is already listening, forward the URL and return true.
+  pub fn try_forward_url(url: &str) -> bool {
+    let path = sock_path();
+    let Ok(sock) = UnixDatagram::unbound() else {
+      return false;
+    };
+    if sock.connect(&path).is_ok() {
+      let _ = sock.send(url.as_bytes());
+      eprintln!("[reviu] Forwarded deeplink to running instance, exiting.");
+      return true;
+    }
+    false
+  }
+
+  /// Start listening for URLs from other instances.
+  /// Sends received URLs into the provided channel.
+  pub fn listen(tx: mpsc::Sender<Vec<String>>) {
+    let path = sock_path();
+    // Clean up stale socket: try to connect, if refused then the listener is dead.
+    if let Ok(probe) = UnixDatagram::unbound() {
+      if let Err(e) = probe.connect(&path) {
+        if e.kind() == io::ErrorKind::ConnectionRefused {
+          std::fs::remove_file(&path).ok();
+        }
+      } else {
+        // Another instance is already listening — should not happen since
+        // try_forward_url would have caught this, but be safe.
+        return;
+      }
+    }
+    // Remove leftover socket file that has no listener.
+    // bind() fails if the file already exists.
+    let _ = std::fs::remove_file(&path);
+    let Ok(listener) = UnixDatagram::bind(&path) else {
+      eprintln!("[reviu] Failed to bind deeplink socket at {}", path.display());
+      return;
+    };
+    eprintln!("[reviu] Listening for deeplinks on {}", path.display());
+    thread::spawn(move || {
+      let mut buf = [0u8; 2048];
+      while let Ok(len) = listener.recv(&mut buf) {
+        let url = String::from_utf8_lossy(&buf[..len]).to_string();
+        eprintln!("[reviu] Received deeplink from another instance: {url}");
+        let _ = tx.send(vec![url]);
+      }
+    });
+  }
+}
+
 mod app_root;
 const INITIAL_WINDOW_WIDTH: f32 = 1200.0;
 const INITIAL_WINDOW_HEIGHT: f32 = 800.0;
@@ -40,6 +106,19 @@ fn macos_titlebar_options() -> TitlebarOptions {
 
 fn main() {
   let app_profile = AppProfile::current();
+
+  // On Linux, the .desktop file launches a new process for deeplinks.
+  // If an instance is already running, forward the URL via Unix socket and exit.
+  #[cfg(target_os = "linux")]
+  {
+    let scheme = app_profile.url_scheme();
+    if let Some(url) = std::env::args().nth(1) {
+      if url.starts_with(&format!("{scheme}://")) && linux_single_instance::try_forward_url(&url) {
+        std::process::exit(0);
+      }
+    }
+  }
+
   let traces_sample_rate = if cfg!(debug_assertions) { 1.0 } else { 0.1 };
   let dsn = if sentry_enabled() {
     Some(SENTRY_DSN.parse().expect("Invalid Sentry DSN"))
@@ -68,6 +147,24 @@ fn main() {
   let startup_crash_report = take_pending_startup_crash_report();
 
   let (open_url_tx, open_url_rx) = mpsc::channel::<Vec<String>>();
+
+  // On Linux, listen for deeplinks forwarded from other instances via Unix socket.
+  #[cfg(target_os = "linux")]
+  linux_single_instance::listen(open_url_tx.clone());
+
+  // If this instance was launched with a deeplink URL arg (Linux first launch),
+  // inject it into the channel so it gets processed once the app is ready.
+  #[cfg(target_os = "linux")]
+  {
+    let scheme = app_profile.url_scheme();
+    if let Some(url) = std::env::args().nth(1) {
+      if url.starts_with(&format!("{scheme}://")) {
+        eprintln!("[reviu] Processing deeplink from CLI arg: {url}");
+        let _ = open_url_tx.send(vec![url]);
+      }
+    }
+  }
+
   let app = gpui_platform::application().with_assets(AppAssets);
   app.on_open_urls({
     let open_url_tx = open_url_tx.clone();
