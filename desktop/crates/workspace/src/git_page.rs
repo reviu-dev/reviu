@@ -7544,11 +7544,6 @@ impl GitPage {
       .into_any_element()
   }
 
-  #[cfg(test)]
-  fn open_repository_shortcut() -> Keystroke {
-    shortcuts::shortcut_keystroke(ShortcutId::OpenRepository)
-  }
-
   fn should_render_repository_split(selected_repo: Option<&Path>) -> bool {
     selected_repo.is_some()
   }
