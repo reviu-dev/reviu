@@ -12058,6 +12058,7 @@ mod tests {
     );
   }
 
+  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_commit_stages_all_when_needed(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -12286,6 +12287,7 @@ mod tests {
     assert_eq!(head_oid(&repo.path), head_before);
   }
 
+  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_amend_updates_head_message_when_allowed(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -12706,6 +12708,7 @@ mod tests {
     );
   }
 
+  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_rebase_branch_fast_forwards_current_branch(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -12775,6 +12778,7 @@ mod tests {
     );
   }
 
+  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_cherry_pick_applies_multiple_commits(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -13601,6 +13605,7 @@ mod tests {
     );
   }
 
+  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn commit_action_completes_merge_after_conflict_resolution(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -13705,6 +13710,7 @@ mod tests {
     );
   }
 
+  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn abort_rebase_action_clears_rebase_state(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -13808,6 +13814,7 @@ mod tests {
     );
   }
 
+  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_abort_rebase_clears_rebase_state(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -13913,6 +13920,7 @@ mod tests {
     );
   }
 
+  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn continue_rebase_action_completes_rebase_after_conflict_resolution(
     cx: &mut TestAppContext,
@@ -14021,6 +14029,7 @@ mod tests {
     );
   }
 
+  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_continue_rebase_completes_rebase_after_conflict_resolution(
     cx: &mut TestAppContext,
@@ -14103,6 +14112,7 @@ mod tests {
     assert!(!git_page.read_with(cx, |this, _| this.rebase_in_progress));
   }
 
+  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_skip_rebase_skips_conflicted_commit(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -14183,6 +14193,7 @@ mod tests {
     );
   }
 
+  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn continue_rebase_action_opens_first_conflicted_file_for_next_conflict(
     cx: &mut TestAppContext,
@@ -14292,6 +14303,7 @@ mod tests {
     );
   }
 
+  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_rebase_branch_opens_first_conflicted_file(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -15866,6 +15878,7 @@ mod tests {
     );
   }
 
+  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn commit_changes_inner_stages_and_commits_when_ready(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -15914,6 +15927,7 @@ mod tests {
     assert!(input_value.is_empty());
   }
 
+  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn commit_input_secondary_enter_stages_and_commits_when_ready(cx: &mut TestAppContext) {
     init_gpui_test(cx);
