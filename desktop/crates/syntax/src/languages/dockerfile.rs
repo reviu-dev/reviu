@@ -1,6 +1,5 @@
 use crate::highlighter::{LanguageConfig, build_language_config};
 use once_cell::sync::Lazy;
-use tree_sitter_dockerfile as _;
 
 unsafe extern "C" {
   fn tree_sitter_dockerfile() -> tree_sitter::Language;
