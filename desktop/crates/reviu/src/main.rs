@@ -44,7 +44,6 @@ mod linux_single_instance {
     };
     if sock.connect(&path).is_ok() {
       let _ = sock.send(url.as_bytes());
-      eprintln!("[reviu] Forwarded deeplink to running instance, exiting.");
       return true;
     }
     false
@@ -70,15 +69,12 @@ mod linux_single_instance {
     // bind() fails if the file already exists.
     let _ = std::fs::remove_file(&path);
     let Ok(listener) = UnixDatagram::bind(&path) else {
-      eprintln!("[reviu] Failed to bind deeplink socket at {}", path.display());
       return;
     };
-    eprintln!("[reviu] Listening for deeplinks on {}", path.display());
     thread::spawn(move || {
       let mut buf = [0u8; 2048];
       while let Ok(len) = listener.recv(&mut buf) {
         let url = String::from_utf8_lossy(&buf[..len]).to_string();
-        eprintln!("[reviu] Received deeplink from another instance: {url}");
         let _ = tx.send(vec![url]);
       }
     });
@@ -163,7 +159,6 @@ fn main() {
     let scheme = app_profile.url_scheme();
     if let Some(url) = std::env::args().nth(1) {
       if url.starts_with(&format!("{scheme}://")) {
-        eprintln!("[reviu] Processing deeplink from CLI arg: {url}");
         let _ = open_url_tx.send(vec![url]);
       }
     }
@@ -231,9 +226,7 @@ fn main() {
           let mut codes = Vec::new();
           let mut should_handle_subscription_callback = false;
           for url in &urls {
-            eprintln!("[reviu] Received deeplink URL: {url}");
             if let Some(code) = extract_auth_code(url) {
-              eprintln!("[reviu] Extracted auth code from deeplink");
               codes.push(code);
             }
             if is_subscription_callback(url) {
@@ -241,7 +234,6 @@ fn main() {
             }
           }
           if codes.is_empty() && !should_handle_subscription_callback {
-            eprintln!("[reviu] Deeplink URL(s) did not contain auth code or subscription callback");
             continue;
           }
           cx.update(|cx| {

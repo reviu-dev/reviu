@@ -2619,16 +2619,13 @@ impl GitPage {
         Ok(token) => {
           let secret = token.clone().into_bytes();
           let write_task = cx.update(|cx| cx.write_credentials(&service, &username, &secret));
-          if let Err(err) = write_task.await {
-            eprintln!("[reviu] Failed to write credentials to keyring: {err}");
-          }
+          let _ = write_task.await;
           let _ = this.update(cx, |this, cx| {
             this.api.set_bearer_token(token);
             this.refresh_auth_state(cx);
           });
         }
-        Err(err) => {
-          eprintln!("[reviu] Failed to exchange auth code for token: {err}");
+        Err(_) => {
           let _ = this.update(cx, |this, cx| {
             this.set_auth_state(AuthState::Unauthenticated, cx);
           });
@@ -2665,21 +2662,12 @@ impl GitPage {
     let task = cx.spawn(async move |this, cx| {
       let read_result = cx.update(|cx| cx.read_credentials(&service)).await;
       let _ = this.update(cx, |this, cx| {
-        match &read_result {
-          Ok(Some((_username, secret))) => {
-            if let Ok(token) = String::from_utf8(secret.clone()) {
-              this.api.set_bearer_token(token);
-              this.refresh_auth_state(cx);
-              return;
-            }
-            eprintln!("[reviu] Keyring credentials are not valid UTF-8");
-          }
-          Ok(None) => {
-            eprintln!("[reviu] No credentials found in keyring");
-          }
-          Err(err) => {
-            eprintln!("[reviu] Failed to read credentials from keyring: {err}");
-          }
+        if let Ok(Some((_username, secret))) = read_result
+          && let Ok(token) = String::from_utf8(secret)
+        {
+          this.api.set_bearer_token(token);
+          this.refresh_auth_state(cx);
+          return;
         }
         this.set_auth_state(AuthState::Unauthenticated, cx);
       });
