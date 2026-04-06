@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEFAULT_MANIFEST_URL="https://github.com/joris-gallot/reviu/releases/latest/download/desktop-update.manifest.json"
+DEFAULT_API_BASE_URL="https://api.reviu.dev"
 DEFAULT_INSTALL_BASE="${XDG_DATA_HOME:-${HOME}/.local/share}/reviu"
 DEFAULT_BIN_DIR="${HOME}/.local/bin"
 DEFAULT_APPLICATIONS_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
@@ -9,14 +9,14 @@ DEFAULT_ICONS_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor/512x512/
 
 usage() {
   cat <<EOF
-Usage: $0 [--arch x86_64|aarch64] [--manifest-url URL]
+Usage: $0 [--arch x86_64|aarch64] [--api-url URL]
 
 Install the latest Linux build of Reviu for the current user.
 
 Options:
-  --arch ARCH          Override detected architecture
-  --manifest-url URL   Override the desktop update manifest URL
-  --help, -h           Show this help
+  --arch ARCH        Override detected architecture
+  --api-url URL      Override the backend API base URL
+  --help, -h         Show this help
 EOF
 }
 
@@ -44,6 +44,23 @@ download_to_file() {
 
   if command -v wget >/dev/null 2>&1; then
     wget -qO "${output_path}" "${url}"
+    return
+  fi
+
+  die "Could not find 'curl' or 'wget' in your path"
+}
+
+post_json() {
+  local url="$1"
+  local body="$2"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL -X POST -H "Content-Type: application/json" -d "${body}" "${url}"
+    return
+  fi
+
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO- --post-data="${body}" --header="Content-Type: application/json" "${url}"
     return
   fi
 
@@ -84,55 +101,26 @@ sha256_check_cmd() {
   die "Either 'sha256sum' or 'shasum' is required"
 }
 
-extract_linux_artifact_from_manifest() {
-  local manifest_path="$1"
-  local arch="$2"
+# Extract a string field from JSON without external dependencies.
+# Handles the common case: "key": "value"
+json_string_field() {
+  local json="$1"
+  local field="$2"
+  printf '%s' "${json}" | sed -n 's/.*"'"${field}"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+}
 
-  python3 - "${manifest_path}" "${arch}" <<'PY'
-import json
-import os
-import sys
-from urllib.parse import urlparse
+# Extract a number field from JSON.
+json_number_field() {
+  local json="$1"
+  local field="$2"
+  printf '%s' "${json}" | sed -n 's/.*"'"${field}"'"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1
+}
 
-manifest_path, arch = sys.argv[1], sys.argv[2]
-with open(manifest_path, "r", encoding="utf-8") as fh:
-    manifest = json.load(fh)
-
-version = manifest.get("version")
-if not isinstance(version, str) or not version.strip():
-    raise SystemExit("Manifest is missing a valid version")
-
-artifact = None
-for candidate in manifest.get("artifacts", []):
-    if candidate.get("platform") == "linux" and candidate.get("arch") == arch:
-      artifact = candidate
-      break
-
-if artifact is None:
-    raise SystemExit(f"No linux artifact found for arch={arch}")
-
-url = artifact.get("url")
-sha256 = artifact.get("sha256")
-size = artifact.get("size")
-if not isinstance(url, str) or not url:
-    raise SystemExit("Artifact url is missing")
-if not isinstance(sha256, str) or not sha256:
-    raise SystemExit("Artifact sha256 is missing")
-if not isinstance(size, int) or size <= 0:
-    raise SystemExit("Artifact size is missing")
-
-file_name = os.path.basename(urlparse(url).path)
-if not file_name:
-    raise SystemExit("Artifact file name is missing")
-
-print("\t".join([
-    version,
-    url,
-    sha256.lower(),
-    str(size),
-    file_name,
-]))
-PY
+# Extract a boolean field from JSON.
+json_bool_field() {
+  local json="$1"
+  local field="$2"
+  printf '%s' "${json}" | sed -n 's/.*"'"${field}"'"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' | head -n 1
 }
 
 verify_archive_checksum() {
@@ -199,7 +187,7 @@ print_path_help() {
 }
 
 main() {
-  local manifest_url="${REVIU_MANIFEST_URL:-${DEFAULT_MANIFEST_URL}}"
+  local api_base_url="${REVIU_API_URL:-${DEFAULT_API_BASE_URL}}"
   local install_base="${REVIU_INSTALL_BASE:-${DEFAULT_INSTALL_BASE}}"
   local bin_dir="${REVIU_BIN_DIR:-${DEFAULT_BIN_DIR}}"
   local applications_dir="${REVIU_APPLICATIONS_DIR:-${DEFAULT_APPLICATIONS_DIR}}"
@@ -213,9 +201,9 @@ main() {
         arch="$(normalize_linux_arch "$2")" || die "Unsupported Linux architecture: $2"
         shift 2
         ;;
-      --manifest-url)
-        [[ $# -ge 2 ]] || die "Missing value for --manifest-url"
-        manifest_url="$2"
+      --api-url)
+        [[ $# -ge 2 ]] || die "Missing value for --api-url"
+        api_base_url="$2"
         shift 2
         ;;
       --help|-h)
@@ -234,30 +222,41 @@ main() {
   fi
 
   require_cmd tar
-  require_cmd python3
 
   local checksum_cmd
   checksum_cmd="$(sha256_check_cmd)"
 
   local temp_dir=""
   temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/reviu-install.XXXXXX")"
-  local manifest_path="${temp_dir}/desktop-update.manifest.json"
   local archive_path="${temp_dir}/reviu-linux.tar.gz"
   local extract_dir="${temp_dir}/extract"
 
   trap 'rm -rf "${temp_dir:-}"' EXIT
 
-  log "Fetching release manifest"
-  download_to_file "${manifest_url}" "${manifest_path}"
+  # Ask the backend for the latest release info
+  api_base_url="${api_base_url%/}"
+  local check_url="${api_base_url}/desktop/update/check"
+  local check_body='{"currentVersion":"0.0.0","platform":"linux","arch":"'"${arch}"'"}'
+
+  log "Checking latest version"
+  local check_response
+  check_response="$(post_json "${check_url}" "${check_body}")"
 
   local version
+  version="$(json_string_field "${check_response}" "latestVersion")"
+  [[ -n "${version}" ]] || die "Failed to resolve latest version from API"
+
   local artifact_url
+  artifact_url="$(json_string_field "${check_response}" "url")"
+  [[ -n "${artifact_url}" ]] || die "No download URL in API response — Linux ${arch} build may not be available yet"
+
   local artifact_sha256
+  artifact_sha256="$(json_string_field "${check_response}" "sha256")"
+  [[ -n "${artifact_sha256}" ]] || die "No sha256 in API response"
+
   local artifact_size
-  local artifact_file_name
-  local artifact_metadata
-  artifact_metadata="$(extract_linux_artifact_from_manifest "${manifest_path}" "${arch}")"
-  IFS=$'\t' read -r version artifact_url artifact_sha256 artifact_size artifact_file_name <<<"${artifact_metadata}"
+  artifact_size="$(json_number_field "${check_response}" "size")"
+  [[ -n "${artifact_size}" ]] || die "No size in API response"
 
   log "Downloading Reviu ${version} for Linux ${arch}"
   download_to_file "${artifact_url}" "${archive_path}"
@@ -309,7 +308,6 @@ main() {
   log "Installed Reviu ${version}"
   log "Binary: ${bin_dir}/reviu"
   log "Desktop entry: ${desktop_entry_path}"
-  log "Archive: ${artifact_file_name}"
   print_path_help "${bin_dir}/reviu"
 }
 
