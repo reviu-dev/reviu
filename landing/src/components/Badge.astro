@@ -1,0 +1,20 @@
+---
+interface Props {
+  variant?: "primary" | "muted";
+  compact?: boolean;
+}
+
+const { variant = "primary", compact = false } = Astro.props;
+---
+
+<span
+  class:list={[
+    "rounded-full py-1 text-xs font-semibold ring-1 ring-inset",
+    compact ? "px-2" : "px-3",
+    variant === "primary"
+      ? "bg-primary/10 text-primary ring-primary/15"
+      : "bg-muted text-muted-foreground ring-border",
+  ]}
+>
+  <slot />
+</span>

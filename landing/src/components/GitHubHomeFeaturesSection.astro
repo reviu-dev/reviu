@@ -1,20 +1,26 @@
 ---
 import gitHubHomeDark from "../assets/app_screenshots/github_home_dark.png";
 import gitHubHomeLight from "../assets/app_screenshots/github_home_light.png";
-import BadgeCheckIcon from "@lucide/astro/icons/badge-check";
 import BellIcon from "@lucide/astro/icons/bell";
 import CommandIcon from "@lucide/astro/icons/command";
 import FolderIcon from "@lucide/astro/icons/folder";
 import GitPullRequestArrowIcon from "@lucide/astro/icons/git-pull-request-arrow";
 import { Image } from "astro:assets";
+import MonitorIcon from "@lucide/astro/icons/monitor";
 import SearchCheckIcon from "@lucide/astro/icons/search-check";
 
 const features = [
   {
     name: "Keep GitHub notifications in the app.",
     description:
-      "See unread work immediately from a desktop inbox with reasons, repo sections, and quick search.",
+      "See unread work immediately from a desktop inbox, repo sections, and quick search.",
     icon: BellIcon,
+  },
+  {
+    name: "Create custom tabs that match your workflow.",
+    description:
+      "Create pull request tabs filtered by repository, label, author, assignee, reviewer, review status, and draft visibility.",
+    icon: GitPullRequestArrowIcon,
   },
   {
     name: "Browse your repositories quickly.",
@@ -23,28 +29,22 @@ const features = [
     icon: FolderIcon,
   },
   {
-    name: "Build review queues that match your workflow.",
+    name: "Built-in cache to protect your rate limit.",
     description:
-      "Save tabs like My Open PRs or Need Review and keep each list focused on the pull requests that matter.",
-    icon: GitPullRequestArrowIcon,
-  },
-  {
-    name: "Manage tabs instead of one endless list.",
-    description:
-      "Create, edit, reorder, and remove saved pull request lists directly from the GitHub home page.",
-    icon: BadgeCheckIcon,
-  },
-  {
-    name: "Search every panel fast.",
-    description:
-      "Filter notifications, repositories, and pull requests without leaving the desktop app.",
+      "Every GitHub request goes through a multi-tier cache with conditional fetches. Stale data is served instantly while fresh data loads in the background.",
     icon: SearchCheckIcon,
   },
   {
-    name: "Jump with the command palette.",
+    name: "Navigate with the command palette.",
     description:
-      "Open GitHub views and move between Git and GitHub surfaces from the same keyboard-first workflow.",
+      "Paste any GitHub repository, pull request, or issue URL to open it directly in the app.",
     icon: CommandIcon,
+  },
+  {
+    name: "Notifications in the macOS menu bar.",
+    description:
+      "A status bar icon shows your unread count and lists recent notifications. Click one to jump straight into the app.",
+    icon: MonitorIcon,
   },
 ];
 ---
