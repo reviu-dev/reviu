@@ -3,6 +3,7 @@ import CpuIcon from "@lucide/astro/icons/cpu";
 import DownloadIcon from "@lucide/astro/icons/download";
 import HardDriveIcon from "@lucide/astro/icons/hard-drive";
 import MonitorIcon from "@lucide/astro/icons/monitor";
+import Badge from "./Badge.astro";
 import { desktopDownloadUrls } from "../../constants";
 
 const linuxInstallCommand = "curl -fsSL https://reviu.dev/install.sh | sh";
@@ -77,18 +78,16 @@ const downloadPlatforms = [
               <div class="inline-flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
                 <platform.icon class="size-6" aria-hidden="true" />
               </div>
-              <span
-                class:list={[
-                  "rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset",
-                  "downloads" in platform && platform.downloads.length > 0
-                    ? "bg-primary/10 text-primary ring-primary/15"
-                    : "installCommand" in platform
-                      ? "bg-primary/10 text-primary ring-primary/15"
-                      : "bg-muted text-muted-foreground ring-border",
-                ]}
+              <Badge
+                variant={
+                  ("downloads" in platform && platform.downloads.length > 0) ||
+                  "installCommand" in platform
+                    ? "primary"
+                    : "muted"
+                }
               >
                 {platform.badge}
-              </span>
+              </Badge>
             </div>
 
             <div class="mt-6">

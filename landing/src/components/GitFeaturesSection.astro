@@ -1,50 +1,52 @@
 ---
-import BadgeCheckIcon from "@lucide/astro/icons/badge-check";
 import CommandIcon from "@lucide/astro/icons/command";
-import GitBranchIcon from "@lucide/astro/icons/git-branch";
+import GitPullRequestIcon from "@lucide/astro/icons/git-pull-request";
 import GitCommitHorizontalIcon from "@lucide/astro/icons/git-commit-horizontal";
 import GitMergeConflictIcon from "@lucide/astro/icons/git-merge-conflict";
+import PencilLineIcon from "@lucide/astro/icons/pencil-line";
 import SplitIcon from "@lucide/astro/icons/split";
+import Badge from "./Badge.astro";
 import { Image } from "astro:assets";
 import gitDark from "../assets/app_screenshots/git_dark.png";
 import gitLight from "../assets/app_screenshots/git_light.png";
 
 const features = [
   {
-    name: "Resolve conflicts in the Git page.",
+    name: "A real-time diff editor.",
     description:
-      "Fix merge conflicts with dedicated actions directly in Reviu.",
-    icon: GitMergeConflictIcon,
+      "Edit your changes directly inside the diff view. Review and modify code in one place instead of switching between your editor and your Git client.",
+    icon: PencilLineIcon,
   },
   {
-    name: "See every local change clearly.",
+    name: "Inline and split diff views.",
     description:
-      "Review staged, unstaged, partially staged, and conflicted files from one Git page.",
-    icon: BadgeCheckIcon,
-  },
-  {
-    name: "Stage, unstage, and restore by hunk.",
-    description:
-      "Use inline and split diff views to review changes and keep commits clean with file-level and hunk-level actions.",
+      "Switch between inline and split diff layouts. Stage, unstage, and restore individual hunks to keep your commits precise.",
     icon: SplitIcon,
   },
   {
-    name: "Commit, amend, undo, and push.",
+    name: "Resolve conflicts without leaving the app.",
     description:
-      "Handle the core local workflow in one place, including amend, undo last commit, fetch, pull, push, and force push with lease.",
-    icon: GitCommitHorizontalIcon,
+      "Handle merge conflicts with dedicated actions, pick sides, edit the result, and move on.",
+    icon: GitMergeConflictIcon,
   },
   {
-    name: "Branches, rebase, stash, and cherry-pick.",
+    name: "The full local Git workflow.",
     description:
-      "Switch branches, create new ones, run interactive rebase flows, stash with untracked files, and cherry-pick commits without leaving the app.",
-    icon: GitBranchIcon,
+      "Commit, amend, undo, fetch, pull, push, force push with lease, branch, rebase, stash, and cherry-pick - all in one place.",
+    icon: GitCommitHorizontalIcon,
   },
   {
     name: "Keyboard-first command palette.",
     description:
-      "Run commit, fetch, push, rebase, stash, and cherry-pick actions with shortcuts instead of click-heavy menus.",
+      "Every Git action is reachable from the command palette. Navigate and operate entirely from the keyboard.",
     icon: CommandIcon,
+  },
+  {
+    name: "One-click link to your PR.",
+    description:
+      "A button in the header connects your current branch to its pull request. Open an existing PR or create a new one without leaving Reviu. Requires Reviu Pro.",
+    icon: GitPullRequestIcon,
+    pro: true,
   },
 ];
 ---
@@ -109,12 +111,15 @@ const features = [
               class="reviu-reveal relative pl-9"
               style={`--reveal-delay: ${index * 80 + 200}ms;`}
             >
-              <dt class="font-semibold text-foreground">
-                <Icon
-                  aria-hidden="true"
-                  class="absolute top-1 left-1 size-5 text-primary"
-                />
-                {feature.name}
+              <dt class="flex items-center gap-2 font-semibold text-foreground">
+                <span>
+                  <Icon
+                    aria-hidden="true"
+                    class="absolute top-1 left-1 size-5 text-primary"
+                  />
+                  {feature.name}
+                </span>
+                {feature.pro && <Badge compact>Pro</Badge>}
               </dt>
               <dd class="inline">{feature.description}</dd>
             </div>
