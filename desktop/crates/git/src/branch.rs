@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
 use git2::{
   BranchType, CherrypickOptions, Cred, ErrorCode, FetchOptions, PushOptions, Rebase,
-  RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, StashFlags, StatusOptions,
+  RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, StatusOptions,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1169,16 +1169,27 @@ pub fn create_stash(
   include_untracked: bool,
   message: Option<&str>,
 ) -> Result<()> {
-  let mut repo =
-    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
-  let signature = repo_signature(&repo)?;
-
-  let flags = include_untracked.then_some(StashFlags::INCLUDE_UNTRACKED);
-  let message = message.map(str::trim).filter(|message| !message.is_empty());
-  repo
-    .stash_save2(&signature, message, flags)
-    .context("create stash entry")?;
-
+  let mut args = vec!["stash", "push"];
+  if include_untracked {
+    args.push("--include-untracked");
+  }
+  let trimmed;
+  if let Some(msg) = message.map(str::trim).filter(|m| !m.is_empty()) {
+    args.push("-m");
+    trimmed = msg.to_string();
+    args.push(&trimmed);
+  }
+  let output = Command::new("git")
+    .args(&args)
+    .current_dir(repo_root)
+    .output()
+    .context("run git stash push")?;
+  if !output.status.success() {
+    bail!(
+      "git stash push failed: {}",
+      String::from_utf8_lossy(&output.stderr).trim()
+    );
+  }
   Ok(())
 }
 
