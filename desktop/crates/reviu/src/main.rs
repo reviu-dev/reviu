@@ -129,15 +129,18 @@ fn main() {
         while let Ok(urls) = open_url_rx.try_recv() {
           let mut codes = Vec::new();
           let mut should_handle_subscription_callback = false;
-          for url in urls {
-            if let Some(code) = extract_auth_code(&url) {
+          for url in &urls {
+            eprintln!("[reviu] Received deeplink URL: {url}");
+            if let Some(code) = extract_auth_code(url) {
+              eprintln!("[reviu] Extracted auth code from deeplink");
               codes.push(code);
             }
-            if is_subscription_callback(&url) {
+            if is_subscription_callback(url) {
               should_handle_subscription_callback = true;
             }
           }
           if codes.is_empty() && !should_handle_subscription_callback {
+            eprintln!("[reviu] Deeplink URL(s) did not contain auth code or subscription callback");
             continue;
           }
           cx.update(|cx| {
