@@ -72,7 +72,7 @@ const tiers = [
       {
         tiers.map((tier, index) => (
           <div
-            class="reviu-reveal group/tier rounded-3xl bg-background p-8 ring-1 ring-muted data-featured:ring-primary xl:p-10 dark:data-featured:ring-2"
+            class="reviu-reveal group/tier rounded-3xl bg-background p-8 ring-1 ring-border data-featured:ring-primary xl:p-10 dark:data-featured:ring-2"
             data-featured={tier.featured ? "true" : undefined}
             style={`--reveal-delay: ${index * 150 + 200}ms;`}
           >
