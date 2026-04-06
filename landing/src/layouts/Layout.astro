@@ -130,7 +130,7 @@ const isProd = import.meta.env.MODE === "production";
                   observer.unobserve(entry.target);
                 });
               },
-              { threshold },
+              { threshold, rootMargin: "0px 0px 160px 0px" },
             );
 
             observers.set(key, observer);
