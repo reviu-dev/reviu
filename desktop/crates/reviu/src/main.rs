@@ -25,8 +25,12 @@ mod linux_single_instance {
   use workspace::AppProfile;
 
   fn sock_path() -> PathBuf {
-    let data_dir = dirs::data_dir()
-      .unwrap_or_else(|| PathBuf::from("/tmp"))
+    let data_dir = std::env::var_os("XDG_DATA_HOME")
+      .map(PathBuf::from)
+      .unwrap_or_else(|| {
+        let home = std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into());
+        PathBuf::from(home).join(".local/share")
+      })
       .join(AppProfile::current().storage_dir_name());
     std::fs::create_dir_all(&data_dir).ok();
     data_dir.join("reviu.sock")
