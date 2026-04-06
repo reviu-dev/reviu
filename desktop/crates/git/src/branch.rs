@@ -4,8 +4,7 @@ use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
 use git2::{
   BranchType, CherrypickOptions, Cred, ErrorCode, FetchOptions, PushOptions, Rebase,
-  RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, StashApplyOptions,
-  StashFlags, StatusOptions,
+  RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, StashFlags, StatusOptions,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1203,12 +1202,17 @@ pub fn list_stashes(repo_root: &Path) -> Result<Vec<StashEntry>> {
 }
 
 pub fn apply_stash(repo_root: &Path, index: usize) -> Result<()> {
-  let mut repo =
-    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
-  let mut opts = stash_checkout_options();
-  repo
-    .stash_apply(index, Some(&mut opts))
-    .with_context(|| format!("apply stash at index {index}"))?;
+  let output = Command::new("git")
+    .args(["stash", "apply", &format!("stash@{{{index}}}")])
+    .current_dir(repo_root)
+    .output()
+    .with_context(|| format!("run git stash apply at index {index}"))?;
+  if !output.status.success() {
+    bail!(
+      "git stash apply failed: {}",
+      String::from_utf8_lossy(&output.stderr).trim()
+    );
+  }
   Ok(())
 }
 
@@ -1222,21 +1226,18 @@ pub fn drop_stash(repo_root: &Path, index: usize) -> Result<()> {
 }
 
 pub fn pop_stash(repo_root: &Path, index: usize) -> Result<()> {
-  let mut repo =
-    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
-  let mut opts = stash_checkout_options();
-  repo
-    .stash_pop(index, Some(&mut opts))
-    .with_context(|| format!("pop stash at index {index}"))?;
+  let output = Command::new("git")
+    .args(["stash", "pop", &format!("stash@{{{index}}}")])
+    .current_dir(repo_root)
+    .output()
+    .with_context(|| format!("run git stash pop at index {index}"))?;
+  if !output.status.success() {
+    bail!(
+      "git stash pop failed: {}",
+      String::from_utf8_lossy(&output.stderr).trim()
+    );
+  }
   Ok(())
-}
-
-fn stash_checkout_options() -> StashApplyOptions<'static> {
-  let mut checkout = CheckoutBuilder::new();
-  checkout.force();
-  let mut opts = StashApplyOptions::new();
-  opts.checkout_options(checkout);
-  opts
 }
 
 #[cfg(test)]
