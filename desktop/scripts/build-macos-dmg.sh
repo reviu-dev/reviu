@@ -125,32 +125,7 @@ json_field() {
   /usr/bin/python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"
 }
 
-write_metadata_manifest() {
-  local metadata_path="$1"
-  local version="$2"
-  local release_notes_url="$3"
-  local manifest_arch="$4"
-  local artifact_url="$5"
-  local sha256="$6"
-  local size="$7"
-
-  cat > "${metadata_path}" <<EOF
-{
-  "version": "${version}",
-  "minimumSupportedVersion": "0.0.0",
-  "releaseNotesUrl": "${release_notes_url}",
-  "artifacts": [
-    {
-      "platform": "macos",
-      "arch": "${manifest_arch}",
-      "url": "${artifact_url}",
-      "sha256": "${sha256}",
-      "size": ${size}
-    }
-  ]
-}
-EOF
-}
+WRITE_MANIFEST_ARTIFACT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/write-manifest-artifact.sh"
 
 apply_dmg_layout() {
   local volume_name="$1"
@@ -286,7 +261,6 @@ main() {
   local output_dir="${repo_root}/dist/release/macos/${target}"
   local dmg_name="${app_name}-${version}-macos-${manifest_arch}.dmg"
   local dmg_path="${output_dir}/${dmg_name}"
-  local metadata_path="${output_dir}/desktop-update.manifest.json"
   local artifact_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/${dmg_name}"
   local release_notes_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
   local app_zip_path="${runner_temp}/${app_name}-${target}.app.zip"
@@ -467,17 +441,15 @@ main() {
   local size
   size="$(wc -c < "${dmg_path}" | tr -d '[:space:]')"
 
-  write_metadata_manifest \
-    "${metadata_path}" \
+  bash "${WRITE_MANIFEST_ARTIFACT}" \
     "${version}" \
-    "${release_notes_url}" \
+    "macos" \
     "${manifest_arch}" \
     "${artifact_url}" \
     "${sha256}" \
     "${size}"
 
   echo "Created DMG: ${dmg_path}"
-  echo "Created metadata: ${metadata_path}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

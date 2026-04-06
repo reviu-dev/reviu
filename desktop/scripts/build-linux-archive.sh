@@ -84,32 +84,7 @@ sha256_hex() {
   die "Either 'sha256sum' or 'shasum' is required"
 }
 
-write_metadata_manifest() {
-  local metadata_path="$1"
-  local version="$2"
-  local release_notes_url="$3"
-  local manifest_arch="$4"
-  local artifact_url="$5"
-  local sha256="$6"
-  local size="$7"
-
-  cat > "${metadata_path}" <<EOF
-{
-  "version": "${version}",
-  "minimumSupportedVersion": "0.0.0",
-  "releaseNotesUrl": "${release_notes_url}",
-  "artifacts": [
-    {
-      "platform": "linux",
-      "arch": "${manifest_arch}",
-      "url": "${artifact_url}",
-      "sha256": "${sha256}",
-      "size": ${size}
-    }
-  ]
-}
-EOF
-}
+WRITE_MANIFEST_ARTIFACT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/write-manifest-artifact.sh"
 
 main() {
   if [[ $# -ne 2 ]]; then
@@ -135,7 +110,6 @@ main() {
   local output_dir="${repo_root}/dist/release/linux/${target}"
   local archive_name="${app_name}-${version}-linux-${manifest_arch}.tar.gz"
   local archive_path="${output_dir}/${archive_name}"
-  local metadata_path="${output_dir}/desktop-update.manifest.json"
   local artifact_url="https://github.com/${github_repository}/releases/download/${tag}/${archive_name}"
   local release_notes_url="https://github.com/${github_repository}/releases/tag/${tag}"
   local icon_source_path="${desktop_dir}/crates/reviu/assets/reviu_icon.png"
@@ -184,17 +158,15 @@ main() {
   archive_size="$(wc -c < "${archive_path}" | tr -d ' ')"
   archive_sha256="$(sha256_hex "${archive_path}")"
 
-  write_metadata_manifest \
-    "${metadata_path}" \
+  bash "${WRITE_MANIFEST_ARTIFACT}" \
     "${version}" \
-    "${release_notes_url}" \
+    "linux" \
     "${manifest_arch}" \
     "${artifact_url}" \
     "${archive_sha256}" \
     "${archive_size}"
 
   log "Created ${archive_path}"
-  log "Created ${metadata_path}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
