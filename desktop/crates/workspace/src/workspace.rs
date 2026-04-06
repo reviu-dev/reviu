@@ -879,6 +879,20 @@ impl WorkspaceView {
           on_sign_out: Some(sign_out),
         })
       }
+      AuthState::Unauthenticated => user_menu(UserMenuConfig {
+        id: "workspace-auth-menu".into(),
+        state: UserMenuState::Unauthenticated,
+        current_page,
+        notification_count: 0,
+        on_open_git: None,
+        on_open_github: None,
+        on_open_billing: None,
+        on_open_git_config: Some(open_git_config),
+        on_open_settings: Some(open_settings),
+        on_open_about: Some(open_about),
+        on_sign_in: None,
+        on_sign_out: None,
+      }),
       _ => None,
     };
 
