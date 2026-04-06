@@ -11,12 +11,6 @@ permissions:
   contents: write
 
 env:
-  APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
-  APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-  APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-  APPLE_NOTARYTOOL_APPLE_ID: ${{ secrets.APPLE_NOTARYTOOL_APPLE_ID }}
-  APPLE_NOTARYTOOL_APP_PASSWORD: ${{ secrets.APPLE_NOTARYTOOL_APP_PASSWORD }}
-  APPLE_NOTARYTOOL_TEAM_ID: ${{ secrets.APPLE_NOTARYTOOL_TEAM_ID }}
   SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
   SENTRY_ORG: joris-gallot
   SENTRY_PROJECT: reviu-desktop
@@ -62,8 +56,140 @@ jobs:
         run: |
           echo "Commit subject does not match ^release: pattern, skipping release steps."
 
-  build-macos:
-    name: Build macOS (${{ matrix.arch }})
+  # macOS builds are disabled until we have a self-hosted runner.
+  # Build macOS locally with: bash desktop/scripts/build-macos-dmg.sh <version> aarch64
+  # build-macos:
+  #   name: Build macOS (${{ matrix.arch }})
+  #   needs: prepare-release
+  #   if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
+  #   runs-on: ${{ matrix.runner }}
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       include:
+  #         - arch: aarch64
+  #           manifest_arch: aarch64
+  #           target: aarch64-apple-darwin
+  #           runner: macos-26
+  #   env:
+  #     APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+  #     APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+  #     APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+  #     APPLE_NOTARYTOOL_APPLE_ID: ${{ secrets.APPLE_NOTARYTOOL_APPLE_ID }}
+  #     APPLE_NOTARYTOOL_APP_PASSWORD: ${{ secrets.APPLE_NOTARYTOOL_APP_PASSWORD }}
+  #     APPLE_NOTARYTOOL_TEAM_ID: ${{ secrets.APPLE_NOTARYTOOL_TEAM_ID }}
+  #     VERSION: ${{ needs.prepare-release.outputs.version }}
+  #     TAG: ${{ needs.prepare-release.outputs.tag }}
+  #     SENTRY_RELEASE: ${{ needs.prepare-release.outputs.sentry_release }}
+  #     TARGET: ${{ matrix.target }}
+  #     MANIFEST_ARCH: ${{ matrix.manifest_arch }}
+  #     API_BASE_URL: https://api.reviu.dev
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #       with:
+  #         ref: ${{ github.event.workflow_run.head_sha }}
+  #     - name: Setup Rust
+  #       uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         targets: ${{ matrix.target }}
+  #     - name: Install cargo-bundle
+  #       run: cargo install cargo-bundle --locked
+  #     - name: Validate macOS release secrets
+  #       shell: bash
+  #       run: |
+  #         set -euo pipefail
+  #         required_vars=(
+  #           APPLE_CERTIFICATE_P12_BASE64
+  #           APPLE_CERTIFICATE_PASSWORD
+  #           APPLE_SIGNING_IDENTITY
+  #           APPLE_NOTARYTOOL_APPLE_ID
+  #           APPLE_NOTARYTOOL_APP_PASSWORD
+  #           APPLE_NOTARYTOOL_TEAM_ID
+  #           SENTRY_AUTH_TOKEN
+  #           SENTRY_ORG
+  #           SENTRY_PROJECT
+  #         )
+  #         missing=()
+  #         for var_name in "${required_vars[@]}"; do
+  #           if [[ -z "${!var_name:-}" ]]; then
+  #             missing+=("${var_name}")
+  #           fi
+  #         done
+  #         if [[ "${#missing[@]}" -gt 0 ]]; then
+  #           printf 'Missing required GitHub secrets: %s\n' "${missing[*]}" >&2
+  #           exit 1
+  #         fi
+  #     - name: Install Sentry CLI
+  #       shell: bash
+  #       run: |
+  #         set -euo pipefail
+  #         install_dir="${RUNNER_TEMP}/sentry-cli/bin"
+  #         mkdir -p "${install_dir}"
+  #         curl -sL https://sentry.io/get-cli/ | INSTALL_DIR="${install_dir}" bash
+  #         echo "${install_dir}" >> "${GITHUB_PATH}"
+  #         "${install_dir}/sentry-cli" --version
+  #     - name: Import Apple Developer ID certificate
+  #       shell: bash
+  #       run: |
+  #         set -euo pipefail
+  #         certificate_path="${RUNNER_TEMP}/reviu-signing-cert.p12"
+  #         keychain_path="${RUNNER_TEMP}/reviu-signing-${TARGET}.keychain-db"
+  #         keychain_password="$(openssl rand -hex 32)"
+  #         printf '%s' "${APPLE_CERTIFICATE_P12_BASE64}" | base64 --decode > "${certificate_path}" 2>/dev/null || \
+  #           printf '%s' "${APPLE_CERTIFICATE_P12_BASE64}" | base64 -D > "${certificate_path}"
+  #         security create-keychain -p "${keychain_password}" "${keychain_path}"
+  #         security set-keychain-settings -lut 21600 "${keychain_path}"
+  #         security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+  #         security import "${certificate_path}" \
+  #           -k "${keychain_path}" \
+  #           -P "${APPLE_CERTIFICATE_PASSWORD}" \
+  #           -T /usr/bin/codesign \
+  #           -T /usr/bin/security \
+  #           -T /usr/bin/xcrun
+  #         security set-key-partition-list \
+  #           -S apple-tool:,apple:,codesign: \
+  #           -s \
+  #           -k "${keychain_password}" \
+  #           "${keychain_path}"
+  #         security list-keychains -d user -s "${keychain_path}" "/Library/Keychains/System.keychain"
+  #         security default-keychain -d user -s "${keychain_path}"
+  #         rm -f "${certificate_path}"
+  #         echo "APPLE_KEYCHAIN_PATH=${keychain_path}" >> "${GITHUB_ENV}"
+  #         echo "APPLE_KEYCHAIN_PASSWORD=${keychain_password}" >> "${GITHUB_ENV}"
+  #     - name: Sign, notarize and package macOS release
+  #       timeout-minutes: 25
+  #       shell: bash
+  #       run: |
+  #         set -euo pipefail
+  #         bash ./desktop/scripts/build-macos-dmg.sh "${VERSION}" "${MANIFEST_ARCH}"
+  #     - name: Upload Sentry debug files
+  #       shell: bash
+  #       run: |
+  #         set -euo pipefail
+  #         app_path="desktop/target/${TARGET}/release/bundle/osx/Reviu.app"
+  #         if [[ ! -d "${app_path}" ]]; then
+  #           echo "Expected app bundle not found for Sentry debug upload: ${app_path}" >&2
+  #           exit 1
+  #         fi
+  #         sentry-cli debug-files upload "${app_path}"
+  #     - name: Upload release assets
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: desktop-release-macos-${{ matrix.arch }}
+  #         if-no-files-found: error
+  #         path: |
+  #           dist/release/macos/${{ matrix.target }}/Reviu-${{ env.VERSION }}-macos-${{ matrix.manifest_arch }}.dmg
+  #     - name: Cleanup signing keychain
+  #       if: ${{ always() }}
+  #       shell: bash
+  #       run: |
+  #         set -euo pipefail
+  #         if [[ -n "${APPLE_KEYCHAIN_PATH:-}" ]]; then
+  #           security delete-keychain "${APPLE_KEYCHAIN_PATH}" || true
+  #         fi
+
+  build-linux:
+    name: Build Linux (${{ matrix.arch }})
     needs: prepare-release
     if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
     runs-on: ${{ matrix.runner }}
@@ -73,16 +199,15 @@ jobs:
         include:
           - arch: aarch64
             manifest_arch: aarch64
-            target: aarch64-apple-darwin
-            runner: macos-26
-          # - arch: x86_64
-          #   manifest_arch: x86_64
-          #   target: x86_64-apple-darwin
-          #   runner: macos-26
+            target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - arch: x86_64
+            manifest_arch: x86_64
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
     env:
       VERSION: ${{ needs.prepare-release.outputs.version }}
       TAG: ${{ needs.prepare-release.outputs.tag }}
-      SENTRY_RELEASE: ${{ needs.prepare-release.outputs.sentry_release }}
       TARGET: ${{ matrix.target }}
       MANIFEST_ARCH: ${{ matrix.manifest_arch }}
       API_BASE_URL: https://api.reviu.dev
@@ -91,225 +216,37 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libx11-xcb-dev \
+            libvulkan-dev \
+            libfontconfig1-dev
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cargo-bundle
-        run: cargo install cargo-bundle --locked
-
-      - name: Validate macOS release secrets
+      - name: Build Linux archive
+        timeout-minutes: 30
         shell: bash
         run: |
           set -euo pipefail
+          bash ./desktop/scripts/build-linux-archive.sh "${VERSION}" "${MANIFEST_ARCH}"
 
-          required_vars=(
-            APPLE_CERTIFICATE_P12_BASE64
-            APPLE_CERTIFICATE_PASSWORD
-            APPLE_SIGNING_IDENTITY
-            APPLE_NOTARYTOOL_APPLE_ID
-            APPLE_NOTARYTOOL_APP_PASSWORD
-            APPLE_NOTARYTOOL_TEAM_ID
-            SENTRY_AUTH_TOKEN
-            SENTRY_ORG
-            SENTRY_PROJECT
-          )
-
-          missing=()
-          for var_name in "${required_vars[@]}"; do
-            if [[ -z "${!var_name:-}" ]]; then
-              missing+=("${var_name}")
-            fi
-          done
-
-          if [[ "${#missing[@]}" -gt 0 ]]; then
-            printf 'Missing required GitHub secrets: %s\n' "${missing[*]}" >&2
-            exit 1
-          fi
-
-      - name: Install Sentry CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          install_dir="${RUNNER_TEMP}/sentry-cli/bin"
-          mkdir -p "${install_dir}"
-          curl -sL https://sentry.io/get-cli/ | INSTALL_DIR="${install_dir}" bash
-          echo "${install_dir}" >> "${GITHUB_PATH}"
-          "${install_dir}/sentry-cli" --version
-
-      - name: Import Apple Developer ID certificate
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          certificate_path="${RUNNER_TEMP}/reviu-signing-cert.p12"
-          keychain_path="${RUNNER_TEMP}/reviu-signing-${TARGET}.keychain-db"
-          keychain_password="$(openssl rand -hex 32)"
-
-          printf '%s' "${APPLE_CERTIFICATE_P12_BASE64}" | base64 --decode > "${certificate_path}" 2>/dev/null || \
-            printf '%s' "${APPLE_CERTIFICATE_P12_BASE64}" | base64 -D > "${certificate_path}"
-
-          security create-keychain -p "${keychain_password}" "${keychain_path}"
-          security set-keychain-settings -lut 21600 "${keychain_path}"
-          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
-          security import "${certificate_path}" \
-            -k "${keychain_path}" \
-            -P "${APPLE_CERTIFICATE_PASSWORD}" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security \
-            -T /usr/bin/xcrun
-          security set-key-partition-list \
-            -S apple-tool:,apple:,codesign: \
-            -s \
-            -k "${keychain_password}" \
-            "${keychain_path}"
-          security list-keychains -d user -s "${keychain_path}" "/Library/Keychains/System.keychain"
-          security default-keychain -d user -s "${keychain_path}"
-
-          rm -f "${certificate_path}"
-
-          echo "APPLE_KEYCHAIN_PATH=${keychain_path}" >> "${GITHUB_ENV}"
-          echo "APPLE_KEYCHAIN_PASSWORD=${keychain_password}" >> "${GITHUB_ENV}"
-
-      - name: Sign, notarize and package macOS release
-        timeout-minutes: 25
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash ./desktop/scripts/build-macos-dmg.sh "${VERSION}" "${MANIFEST_ARCH}"
-
-      - name: Upload Sentry debug files
-        shell: bash
-        run: |
-          set -euo pipefail
-          app_path="desktop/target/${TARGET}/release/bundle/osx/Reviu.app"
-          if [[ ! -d "${app_path}" ]]; then
-            echo "Expected app bundle not found for Sentry debug upload: ${app_path}" >&2
-            exit 1
-          fi
-          sentry-cli debug-files upload "${app_path}"
-
-      - name: Upload release assets
+      - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-release-${{ matrix.arch }}
+          name: desktop-release-linux-${{ matrix.arch }}
           if-no-files-found: error
+          retention-days: 7
           path: |
-            dist/release/macos/${{ matrix.target }}/Reviu-${{ env.VERSION }}-macos-${{ matrix.manifest_arch }}.dmg
-            dist/release/macos/${{ matrix.target }}/desktop-update.${{ matrix.manifest_arch }}.json
-
-      - name: Cleanup signing keychain
-        if: ${{ always() }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "${APPLE_KEYCHAIN_PATH:-}" ]]; then
-            security delete-keychain "${APPLE_KEYCHAIN_PATH}" || true
-          fi
-
-  publish-release:
-    name: Publish Release
-    needs:
-      - prepare-release
-      - build-macos
-    if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      VERSION: ${{ needs.prepare-release.outputs.version }}
-      TAG: ${{ needs.prepare-release.outputs.tag }}
-      SENTRY_RELEASE: ${{ needs.prepare-release.outputs.sentry_release }}
-    steps:
-      - name: Download release assets
-        uses: actions/download-artifact@v5
-        with:
-          pattern: desktop-release-*
-          merge-multiple: true
-          path: dist/release/macos
-
-      - name: Install Sentry CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          install_dir="${RUNNER_TEMP}/sentry-cli/bin"
-          mkdir -p "${install_dir}"
-          curl -sL https://sentry.io/get-cli/ | INSTALL_DIR="${install_dir}" bash
-          echo "${install_dir}" >> "${GITHUB_PATH}"
-          "${install_dir}/sentry-cli" --version
-
-      - name: Create Sentry release (idempotent)
-        shell: bash
-        run: |
-          set -euo pipefail
-          if sentry-cli releases info "${SENTRY_RELEASE}" >/dev/null 2>&1; then
-            echo "Sentry release ${SENTRY_RELEASE} already exists."
-          else
-            sentry-cli releases new "${SENTRY_RELEASE}"
-          fi
-
-      - name: Build aggregated desktop update manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          output_dir="dist/release/macos"
-          manifest_path="${output_dir}/desktop-update.manifest.json"
-          release_notes_url="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
-
-          artifacts_json="$(
-            /usr/bin/python3 - <<'PY'
-            import glob
-            import json
-            from pathlib import Path
-
-            files = sorted(
-              path
-              for path in glob.glob("dist/release/macos/**/*.json", recursive=True)
-              if Path(path).name.startswith("desktop-update.")
-              and Path(path).name != "desktop-update.manifest.json"
-            )
-            if not files:
-              raise SystemExit("No desktop manifest fragments found")
-
-            artifacts = []
-            for path in files:
-              payload = json.load(open(path))
-              if isinstance(payload, dict) and isinstance(payload.get("artifacts"), list):
-                artifacts.extend(payload["artifacts"])
-              else:
-                artifacts.append(payload)
-
-            artifacts.sort(key=lambda item: item["arch"])
-            print(json.dumps(artifacts))
-            PY
-          )"
-
-          cat > "${manifest_path}" <<EOF
-          {
-            "version": "${VERSION}",
-            "minimumSupportedVersion": "0.0.0",
-            "releaseNotesUrl": "${release_notes_url}",
-            "artifacts": ${artifacts_json}
-          }
-          EOF
-
-      - name: Create or update GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG }}
-          target_commitish: ${{ github.event.workflow_run.head_sha }}
-          name: Reviu ${{ env.TAG }}
-          generate_release_notes: true
-          overwrite_files: true
-          fail_on_unmatched_files: true
-          files: |
-            dist/release/macos/**/*.dmg
-            dist/release/macos/desktop-update.manifest.json
-
-      - name: Finalize Sentry release (idempotent)
-        shell: bash
-        run: |
-          set -euo pipefail
-          sentry-cli releases finalize "${SENTRY_RELEASE}" || true
+            dist/release/linux/${{ matrix.target }}/Reviu-${{ env.VERSION }}-linux-${{ matrix.manifest_arch }}.tar.gz
+            dist/release/desktop-update.manifest.json
