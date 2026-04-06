@@ -6,8 +6,8 @@ import GitCommitHorizontalIcon from "@lucide/astro/icons/git-commit-horizontal";
 import GitMergeConflictIcon from "@lucide/astro/icons/git-merge-conflict";
 import SplitIcon from "@lucide/astro/icons/split";
 import { Image } from "astro:assets";
-import gitConflictsDark from "../assets/app_screenshots/git_conflicts_dark.png";
-import gitConflictsLight from "../assets/app_screenshots/git_conflicts_light.png";
+import gitDark from "../assets/app_screenshots/git_dark.png";
+import gitLight from "../assets/app_screenshots/git_light.png";
 
 const features = [
   {
@@ -77,14 +77,14 @@ const features = [
       <Image
         width="2432"
         height="1442"
-        src={gitConflictsLight}
+        src={gitLight}
         alt="Reviu Git conflict resolution screenshot in light mode"
         class="mb-[-12%] rounded-xl shadow-2xl ring-1 ring-gray-900/10 dark:hidden"
       />
       <Image
         width="2432"
         height="1442"
-        src={gitConflictsDark}
+        src={gitDark}
         alt="Reviu Git conflict resolution screenshot in dark mode"
         class="mb-[-12%] rounded-xl shadow-2xl ring-1 ring-white/10 not-dark:hidden"
       />
