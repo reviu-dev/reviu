@@ -234,21 +234,32 @@ pub fn apply_hunk_to_text(base_text: &str, hunk: &DiffHunk, reverse: bool) -> Re
         old_idx += 1;
       }
       DiffLineKind::Remove => {
-        let Some(existing) = base_lines.get(old_idx) else {
-          bail!("remove line out of range at {}", old_idx + 1);
-        };
-        if existing.as_str() != line.content.as_ref() {
-          bail!(
-            "remove mismatch at {}: expected {:?}, found {:?}",
-            old_idx + 1,
-            line.content,
-            existing
-          );
+        // An empty Remove represents stripping the trailing newline — it doesn't
+        // correspond to an actual line in base_lines, just the trailing_newline flag.
+        if line.content.is_empty() && old_idx >= base_lines.len() {
+          trailing_newline = false;
+        } else {
+          let Some(existing) = base_lines.get(old_idx) else {
+            bail!("remove line out of range at {}", old_idx + 1);
+          };
+          if existing.as_str() != line.content.as_ref() {
+            bail!(
+              "remove mismatch at {}: expected {:?}, found {:?}",
+              old_idx + 1,
+              line.content,
+              existing
+            );
+          }
+          old_idx += 1;
         }
-        old_idx += 1;
       }
       DiffLineKind::Add => {
-        output.push(line.content.to_string());
+        // An empty Add represents adding a trailing newline.
+        if line.content.is_empty() && old_idx >= base_lines.len() {
+          trailing_newline = true;
+        } else {
+          output.push(line.content.to_string());
+        }
       }
     }
   }
@@ -1298,6 +1309,172 @@ index 1111111..0000000
         .map(|l| (l.kind, l.content.to_string()))
         .collect::<Vec<_>>()
     );
+  }
+
+  // --- apply_hunk_to_text tests ---
+
+  #[test]
+  fn apply_hunk_forward_stages_correctly() {
+    let base = "line1\nline2\nline3\n";
+    let buffer = "line1\nchanged\nline3\n";
+    let diff = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.txt"),
+      false,
+    )
+    .expect("diff");
+
+    assert_eq!(diff.hunks.len(), 1);
+    let result = apply_hunk_to_text(base, &diff.hunks[0], false).expect("apply");
+    assert_eq!(result, buffer);
+  }
+
+  #[test]
+  fn apply_hunk_reverse_unstages_correctly() {
+    let base = "line1\nline2\nline3\n";
+    let buffer = "line1\nchanged\nline3\n";
+    let diff = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.txt"),
+      false,
+    )
+    .expect("diff");
+
+    assert_eq!(diff.hunks.len(), 1);
+    // Apply forward first
+    let staged = apply_hunk_to_text(base, &diff.hunks[0], false).expect("apply forward");
+    assert_eq!(staged, buffer);
+    // Now reverse (unstage) — should get back to base
+    let unstaged = apply_hunk_to_text(&staged, &diff.hunks[0], true).expect("apply reverse");
+    assert_eq!(unstaged, base);
+  }
+
+  #[test]
+  fn apply_hunk_roundtrip_last_hunk() {
+    let base = "line1\nline2\nline3\n";
+    let buffer = "line1\nline2\nchanged\n";
+    let diff = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.txt"),
+      false,
+    )
+    .expect("diff");
+
+    assert_eq!(diff.hunks.len(), 1);
+    let staged = apply_hunk_to_text(base, &diff.hunks[0], false).expect("apply forward");
+    assert_eq!(staged, buffer);
+    let unstaged = apply_hunk_to_text(&staged, &diff.hunks[0], true).expect("apply reverse");
+    assert_eq!(unstaged, base);
+  }
+
+  #[test]
+  fn apply_hunk_roundtrip_last_line_removed() {
+    let base = "line1\nline2\nline3\n";
+    let buffer = "line1\nline2\n";
+    let diff = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.txt"),
+      false,
+    )
+    .expect("diff");
+
+    assert_eq!(diff.hunks.len(), 1);
+    let staged = apply_hunk_to_text(base, &diff.hunks[0], false).expect("apply forward");
+    assert_eq!(staged, buffer);
+    let unstaged = apply_hunk_to_text(&staged, &diff.hunks[0], true).expect("apply reverse");
+    assert_eq!(unstaged, base);
+  }
+
+  #[test]
+  fn apply_hunk_roundtrip_trailing_newline_added() {
+    let base = "line1\nline2";
+    let buffer = "line1\nline2\n";
+    let diff = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.txt"),
+      false,
+    )
+    .expect("diff");
+
+    assert_eq!(diff.hunks.len(), 1);
+    let staged = apply_hunk_to_text(base, &diff.hunks[0], false).expect("apply forward");
+    assert_eq!(staged, buffer);
+    let unstaged = apply_hunk_to_text(&staged, &diff.hunks[0], true).expect("apply reverse");
+    assert_eq!(unstaged, base);
+  }
+
+  #[test]
+  fn apply_hunk_roundtrip_trailing_newline_removed() {
+    let base = "line1\nline2\n";
+    let buffer = "line1\nline2";
+    let diff = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.txt"),
+      false,
+    )
+    .expect("diff");
+
+    assert_eq!(diff.hunks.len(), 1);
+    let staged = apply_hunk_to_text(base, &diff.hunks[0], false).expect("apply forward");
+    assert_eq!(staged, buffer);
+    let unstaged = apply_hunk_to_text(&staged, &diff.hunks[0], true).expect("apply reverse");
+    assert_eq!(unstaged, base);
+  }
+
+  #[test]
+  fn ignore_whitespace_hunks_are_display_only() {
+    // With ignore_whitespace, Context lines have base content (original indentation).
+    // These hunks are for display — staging should use the non-ignore_whitespace diff.
+    let base = "  <Wrapper>\n    <Inner />\n  </Wrapper>\n";
+    let buffer = "<Inner />\n";
+    let diff_display = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.txt"),
+      true,
+    )
+    .expect("diff");
+    let diff_staging = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.txt"),
+      false,
+    )
+    .expect("diff");
+
+    // Display diff has context lines (inner lines matched modulo whitespace)
+    let display_context = diff_display
+      .hunks
+      .iter()
+      .flat_map(|h| h.lines.iter())
+      .filter(|l| l.kind == DiffLineKind::Context)
+      .count();
+    assert!(
+      display_context >= 1,
+      "display diff should have context lines"
+    );
+
+    // Staging diff roundtrips correctly
+    for hunk in &diff_staging.hunks {
+      let staged = apply_hunk_to_text(base, hunk, false).expect("apply forward");
+      assert_eq!(staged, buffer);
+      let unstaged = apply_hunk_to_text(&staged, hunk, true).expect("apply reverse");
+      assert_eq!(unstaged, base);
+    }
   }
 }
 
