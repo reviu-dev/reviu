@@ -2053,6 +2053,7 @@ pub struct GithubPrDetailsPage {
   tree_search_generation: u64,
   tree_search_reset_pending: bool,
   show_local_project_files: bool,
+  hide_whitespace: bool,
   saved_pr_selected_tree_id: Option<String>,
   file_lookup: HashMap<String, Rc<GithubPrFileDiff>>,
   resolved_local_repo: Option<ActiveLocalRepo>,
@@ -2591,6 +2592,7 @@ impl GithubPrDetailsPage {
       tree_search_generation: 0,
       tree_search_reset_pending: false,
       show_local_project_files: false,
+      hide_whitespace: AppSettings::get(cx).hide_whitespace,
       saved_pr_selected_tree_id: None,
       file_lookup: HashMap::new(),
       resolved_local_repo: None,
@@ -6662,6 +6664,19 @@ impl GithubPrDetailsPage {
     cx.notify();
   }
 
+  fn toggle_hide_whitespace(&mut self, cx: &mut Context<Self>) {
+    self.hide_whitespace = !self.hide_whitespace;
+    // Re-apply diff for the currently selected file
+    if let Some(path) = self.current_selected_tree_path() {
+      if let Some(file) = self.file_lookup.get(&path).cloned() {
+        if let Some(contents) = self.file_contents.get(&path).cloned() {
+          self.apply_full_diff(&file, &contents, cx);
+        }
+      }
+    }
+    cx.notify();
+  }
+
   fn toggle_markdown_preview(&mut self, cx: &mut Context<Self>) {
     if !self.selected_file_is_markdown() && !self.selected_file_is_svg() {
       return;
@@ -6725,6 +6740,7 @@ impl GithubPrDetailsPage {
       base,
       head,
       Path::new(file.path.as_ref()),
+      self.hide_whitespace,
     )
     .ok();
     let Some(diff) = diff else {
@@ -10074,6 +10090,23 @@ impl GithubPrDetailsPage {
         });
       });
     let view = cx.entity();
+    let hide_whitespace = self.hide_whitespace;
+    let whitespace_label = if hide_whitespace {
+      "Show whitespace"
+    } else {
+      "Hide whitespace"
+    };
+    let whitespace_button = Button::new("pr-whitespace-toggle")
+      .label(whitespace_label)
+      .xsmall()
+      .ghost()
+      .disabled(file_loading)
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.toggle_hide_whitespace(cx);
+        });
+      });
+    let view = cx.entity();
     let preview_button = Button::new("pr-markdown-preview")
       .label("Preview")
       .icon(if preview_active {
@@ -10126,6 +10159,7 @@ impl GithubPrDetailsPage {
           .gap_2()
           .child(previous_comment_button)
           .child(next_comment_button)
+          .child(whitespace_button)
           .child(toggle_button)
           .when(is_markdown || is_svg, |this| this.child(preview_button)),
       )

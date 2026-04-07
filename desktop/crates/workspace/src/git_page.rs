@@ -1568,6 +1568,7 @@ pub struct GitPage {
   terminal_view: Entity<TerminalView>,
   interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
   diff_view: DiffViewMode,
+  hide_whitespace: bool,
   git_unified_file_view: bool,
   show_markdown_preview: bool,
   show_terminal_sidebar: bool,
@@ -2365,7 +2366,11 @@ impl GitPage {
     } else {
       self.diff_view
     };
-    editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
+    let hide_ws = self.hide_whitespace;
+    editor.update(cx, |editor, cx| {
+      editor.set_diff_view_mode(diff_view, cx);
+      editor.set_ignore_whitespace(hide_ws, cx);
+    });
   }
 
   fn render_binary_preview_content(
@@ -2799,6 +2804,7 @@ impl GitPage {
       } else {
         DiffViewMode::Inline
       },
+      hide_whitespace: app_settings.hide_whitespace,
       git_unified_file_view: app_settings.git_unified_file_view,
       show_markdown_preview: false,
       show_terminal_sidebar: false,
@@ -2896,6 +2902,7 @@ impl GitPage {
       terminal_view: cx.new(|cx| TerminalView::new(None, cx)),
       interactive_rebase_todo_view: None,
       diff_view: DiffViewMode::Inline,
+      hide_whitespace: false,
       git_unified_file_view: false,
       show_markdown_preview: false,
       show_terminal_sidebar: false,
@@ -5677,8 +5684,10 @@ impl GitPage {
         let editor = cx.new(move |cx| {
           Editor::new_with_loaded_file(editor_repo_root, editor_file_path, loaded, cx)
         });
+        let hide_ws = this.hide_whitespace;
         editor.update(cx, |editor, cx| {
           editor.set_diff_view_mode(diff_view, cx);
+          editor.set_ignore_whitespace(hide_ws, cx);
           if should_reveal_first_conflict {
             editor.reveal_first_conflict(cx);
           }
@@ -5804,9 +5813,11 @@ impl GitPage {
         };
         let diff_view = this.effective_diff_view_for_path(&rel_path);
 
+        let hide_ws = this.hide_whitespace;
         editor.update(cx, |editor, cx| {
           editor.load_readonly_snapshot(commit_file.content, diff_set, cx);
           editor.set_diff_view_mode(diff_view, cx);
+          editor.set_ignore_whitespace(hide_ws, cx);
         });
 
         this.clear_markdown_preview_if_not_previewable(&rel_path);
@@ -5853,6 +5864,17 @@ impl GitPage {
     let mut data = Map::new();
     data.insert("diff_view".into(), self.active_diff_view_tag().into());
     self.add_git_breadcrumb("Toggled git diff view", data);
+    cx.notify();
+  }
+
+  fn toggle_hide_whitespace(&mut self, cx: &mut Context<Self>) {
+    self.hide_whitespace = !self.hide_whitespace;
+    if let Some(editor) = self.editor.as_ref() {
+      let value = self.hide_whitespace;
+      editor.update(cx, |editor, cx| {
+        editor.set_ignore_whitespace(value, cx);
+      });
+    }
     cx.notify();
   }
 
@@ -7776,6 +7798,23 @@ impl GitPage {
       });
 
     let view = cx.entity();
+    let hide_whitespace = self.hide_whitespace;
+    let whitespace_label = if hide_whitespace {
+      "Show whitespace"
+    } else {
+      "Hide whitespace"
+    };
+    let whitespace_button = Button::new("editor-whitespace-toggle")
+      .label(whitespace_label)
+      .xsmall()
+      .ghost()
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.toggle_hide_whitespace(cx);
+        });
+      });
+
+    let view = cx.entity();
     let preview_button = Button::new("editor-markdown-preview")
       .label("Preview")
       .icon(if preview_active {
@@ -7904,6 +7943,7 @@ impl GitPage {
           })
           .child(save_button)
           .when(is_markdown || is_svg, |this| this.child(preview_button))
+          .child(whitespace_button)
           .child(toggle_button),
       )
       .into_any_element()

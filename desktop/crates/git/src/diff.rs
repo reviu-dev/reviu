@@ -6,7 +6,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use git2::{ApplyLocation, Diff, DiffLineType, DiffOptions, Patch, Repository};
+use git2::{ApplyLocation, Diff, DiffLineType, DiffOptions, Repository};
+use imara_diff::{Algorithm, Diff as ImaraDiff, InternedInput};
 
 use crate::GitFileBases;
 
@@ -139,7 +140,7 @@ pub fn compute_buffer_diffs(
 ) -> Result<DiffSet> {
   let head = bases.head.as_deref();
   let index = bases.index.as_deref();
-  let uncommitted = compute_buffer_diff(DiffKind::Uncommitted, head, buffer_text, rel_path)?;
+  let uncommitted = compute_buffer_diff(DiffKind::Uncommitted, head, buffer_text, rel_path, false)?;
   let (unstaged, staged) = if head == index {
     (
       uncommitted.clone_with_kind(DiffKind::Unstaged),
@@ -147,8 +148,8 @@ pub fn compute_buffer_diffs(
     )
   } else {
     (
-      compute_buffer_diff(DiffKind::Unstaged, index, buffer_text, rel_path)?,
-      compute_buffer_diff(DiffKind::Staged, head, index.unwrap_or(""), rel_path)?,
+      compute_buffer_diff(DiffKind::Unstaged, index, buffer_text, rel_path, false)?,
+      compute_buffer_diff(DiffKind::Staged, head, index.unwrap_or(""), rel_path, false)?,
     )
   };
 
@@ -367,6 +368,39 @@ fn compute_diff(repo: &Repository, rel_path: &Path, kind: DiffKind) -> Result<Fi
   })
 }
 
+/// Split text into lines preserving the trailing `\n` on each line (matching imara-diff's tokenizer).
+/// The last line may or may not have a trailing `\n`.
+fn split_lines_borrowed(text: &str) -> Vec<&str> {
+  let mut lines = Vec::new();
+  let mut rest = text;
+  while !rest.is_empty() {
+    match rest.find('\n') {
+      Some(pos) => {
+        lines.push(&rest[..=pos]);
+        rest = &rest[pos + 1..];
+      }
+      None => {
+        lines.push(rest);
+        break;
+      }
+    }
+  }
+  lines
+}
+
+/// Strip leading whitespace from a line while preserving the trailing newline.
+fn trim_leading_whitespace(line: &str) -> String {
+  if line.ends_with('\n') {
+    let mut trimmed = line.trim_start().to_string();
+    if !trimmed.ends_with('\n') {
+      trimmed.push('\n');
+    }
+    trimmed
+  } else {
+    line.trim_start().to_string()
+  }
+}
+
 fn split_lines(text: &str) -> (Vec<String>, bool) {
   if text.is_empty() {
     return (Vec::new(), false);
@@ -386,47 +420,163 @@ pub fn compute_buffer_diff(
   kind: DiffKind,
   base: Option<&str>,
   buffer_text: &str,
-  rel_path: &Path,
+  _rel_path: &Path,
+  ignore_whitespace: bool,
 ) -> Result<FileDiff> {
-  let mut opts = DiffOptions::new();
-  opts.context_lines(3).patience(true).indent_heuristic(true);
-
   let base_text = base.unwrap_or("");
   let trailing_change = trailing_newline_change(base_text, buffer_text);
-  let patch = Patch::from_buffers(
-    base_text.as_bytes(),
-    Some(rel_path),
-    buffer_text.as_bytes(),
-    Some(rel_path),
-    Some(&mut opts),
-  )?;
+
+  // When ignoring whitespace, we diff on trimmed lines but keep original lines for content.
+  let base_original: Vec<&str> = split_lines_borrowed(base_text);
+  let buffer_original: Vec<&str> = split_lines_borrowed(buffer_text);
+
+  let base_trimmed: String;
+  let buffer_trimmed: String;
+
+  let (diff_base, diff_buffer) = if ignore_whitespace {
+    base_trimmed = base_original
+      .iter()
+      .map(|l| trim_leading_whitespace(l))
+      .collect::<Vec<_>>()
+      .join("");
+    buffer_trimmed = buffer_original
+      .iter()
+      .map(|l| trim_leading_whitespace(l))
+      .collect::<Vec<_>>()
+      .join("");
+    (base_trimmed.as_str(), buffer_trimmed.as_str())
+  } else {
+    (base_text, buffer_text)
+  };
+
+  let input = InternedInput::new(diff_base, diff_buffer);
+  let mut diff = ImaraDiff::compute(Algorithm::Histogram, &input);
+  diff.postprocess_lines(&input);
+
+  let context_lines: u32 = 3;
+  let before_len = input.before.len() as u32;
+  let raw_hunks: Vec<_> = diff.hunks().collect();
+
+  if raw_hunks.is_empty() {
+    return Ok(FileDiff {
+      kind,
+      hunks: Vec::new(),
+    });
+  }
+
+  let strip_newline = |token_text: &str| -> (Arc<str>, bool) {
+    let trimmed = token_text.trim_end_matches(['\r', '\n']);
+    let had_newline = trimmed.len() < token_text.len();
+    (Arc::from(trimmed), !had_newline)
+  };
+
+  // Get original line content (with indentation) regardless of ignore_whitespace mode.
+  let get_before_line =
+    |idx: u32| -> (Arc<str>, bool) { strip_newline(base_original[idx as usize]) };
+  let get_after_line =
+    |idx: u32| -> (Arc<str>, bool) { strip_newline(buffer_original[idx as usize]) };
 
   let mut hunks = Vec::new();
-  for hunk_idx in 0..patch.num_hunks() {
-    let (hunk, line_count) = patch.hunk(hunk_idx)?;
-    let mut diff_hunk = DiffHunk {
-      id: String::new(),
-      old_start: hunk.old_start() as usize,
-      old_lines: hunk.old_lines() as usize,
-      new_start: hunk.new_start() as usize,
-      new_lines: hunk.new_lines() as usize,
-      lines: Vec::new(),
-    };
+  let mut group_lines: Vec<DiffLine> = Vec::new();
+  let first = &raw_hunks[0];
+  let mut group_before_start = first.before.start.saturating_sub(context_lines);
+  let mut group_after_start = first.after.start.saturating_sub(context_lines);
+  let mut group_before_pos = group_before_start;
 
-    for line_idx in 0..line_count {
-      let line = patch.line_in_hunk(hunk_idx, line_idx)?;
-      if apply_no_newline_marker(&line, &mut diff_hunk) {
-        continue;
+  for (i, raw_hunk) in raw_hunks.iter().enumerate() {
+    // Check if this hunk is far enough from the previous to start a new group
+    if i > 0 && raw_hunk.before.start.saturating_sub(group_before_pos) > 2 * context_lines {
+      // Emit trailing context for previous group
+      let trailing_end = (group_before_pos + context_lines).min(before_len);
+      for idx in group_before_pos..trailing_end {
+        let (content, no_newline) = get_before_line(idx);
+        group_lines.push(DiffLine {
+          kind: DiffLineKind::Context,
+          content,
+          no_newline,
+        });
       }
-      if let Some(diff_line) = DiffLine::from_git_line(line) {
-        diff_hunk.lines.push(diff_line);
-      }
+
+      // Finalize the current group as a DiffHunk
+      let mut diff_hunk = DiffHunk {
+        id: String::new(),
+        old_start: group_before_start as usize + 1,
+        old_lines: 0,
+        new_start: group_after_start as usize + 1,
+        new_lines: 0,
+        lines: std::mem::take(&mut group_lines),
+      };
+      let (old_lines, new_lines) = count_hunk_line_counts(&diff_hunk);
+      diff_hunk.old_lines = old_lines;
+      diff_hunk.new_lines = new_lines;
+      normalize_no_newline_hunk(&mut diff_hunk, trailing_change);
+      diff_hunk.id = compute_hunk_id(&diff_hunk);
+      hunks.push(diff_hunk);
+
+      // Start new group
+      group_before_start = raw_hunk.before.start.saturating_sub(context_lines);
+      group_after_start = raw_hunk.after.start.saturating_sub(context_lines);
+      group_before_pos = group_before_start;
     }
 
-    normalize_no_newline_hunk(&mut diff_hunk, trailing_change);
-    diff_hunk.id = compute_hunk_id(&diff_hunk);
-    hunks.push(diff_hunk);
+    // Push context lines between previous position and this hunk
+    for idx in group_before_pos..raw_hunk.before.start {
+      let (content, no_newline) = get_before_line(idx);
+      group_lines.push(DiffLine {
+        kind: DiffLineKind::Context,
+        content,
+        no_newline,
+      });
+    }
+
+    // Push removed lines
+    for idx in raw_hunk.before.start..raw_hunk.before.end {
+      let (content, no_newline) = get_before_line(idx);
+      group_lines.push(DiffLine {
+        kind: DiffLineKind::Remove,
+        content,
+        no_newline,
+      });
+    }
+
+    // Push added lines
+    for idx in raw_hunk.after.start..raw_hunk.after.end {
+      let (content, no_newline) = get_after_line(idx);
+      group_lines.push(DiffLine {
+        kind: DiffLineKind::Add,
+        content,
+        no_newline,
+      });
+    }
+
+    group_before_pos = raw_hunk.before.end;
   }
+
+  // Finalize last group
+  let trailing_end = (group_before_pos + context_lines).min(before_len);
+  for idx in group_before_pos..trailing_end {
+    let (content, no_newline) = get_before_line(idx);
+    group_lines.push(DiffLine {
+      kind: DiffLineKind::Context,
+      content,
+      no_newline,
+    });
+  }
+
+  let mut diff_hunk = DiffHunk {
+    id: String::new(),
+    old_start: group_before_start as usize + 1,
+    old_lines: 0,
+    new_start: group_after_start as usize + 1,
+    new_lines: 0,
+    lines: group_lines,
+  };
+  let (old_lines, new_lines) = count_hunk_line_counts(&diff_hunk);
+  diff_hunk.old_lines = old_lines;
+  diff_hunk.new_lines = new_lines;
+  normalize_no_newline_hunk(&mut diff_hunk, trailing_change);
+  diff_hunk.id = compute_hunk_id(&diff_hunk);
+  hunks.push(diff_hunk);
 
   Ok(FileDiff { kind, hunks })
 }
@@ -791,6 +941,7 @@ mod tests {
       Some(base),
       buffer,
       Path::new("test.txt"),
+      false,
     )
     .expect("diff");
 
@@ -814,6 +965,7 @@ mod tests {
       Some(base),
       buffer,
       Path::new("test.txt"),
+      false,
     )
     .expect("diff");
 
@@ -1016,6 +1168,135 @@ index 1111111..0000000
         (DiffLineKind::Remove, "line1".to_string()),
         (DiffLineKind::Remove, "line2".to_string()),
       ]
+    );
+  }
+
+  #[test]
+  fn wrapper_removed_keeps_inner_lines_as_context() {
+    let base = "<Highlight>\n  <Btn\n    color=\"blue\"\n    size=\"lg\"\n  />\n</Highlight>\n";
+    let buffer = "  <Btn\n    color=\"blue\"\n    size=\"lg\"\n  />\n";
+    let diff = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.tsx"),
+      false,
+    )
+    .expect("diff");
+
+    let lines = diff_kinds(
+      &diff
+        .hunks
+        .iter()
+        .flat_map(|h| h.lines.clone())
+        .collect::<Vec<_>>(),
+    );
+    let context_count = lines
+      .iter()
+      .filter(|(k, _)| *k == DiffLineKind::Context)
+      .count();
+    assert!(
+      context_count >= 3,
+      "inner lines should be recognized as context, got: {:?}",
+      lines
+    );
+  }
+
+  #[test]
+  fn ignore_whitespace_treats_indent_changes_as_context() {
+    // Wrapper removed causes inner lines to shift indentation
+    let base = "  <Wrapper>\n    <Inner />\n  </Wrapper>\n";
+    let buffer = "<Inner />\n";
+    let diff = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.tsx"),
+      true,
+    )
+    .expect("diff");
+
+    let lines = diff_kinds(
+      &diff
+        .hunks
+        .iter()
+        .flat_map(|h| h.lines.clone())
+        .collect::<Vec<_>>(),
+    );
+    // <Inner /> should be context (same content after trimming leading whitespace)
+    let inner_is_context = lines
+      .iter()
+      .any(|(k, c)| *k == DiffLineKind::Context && c.contains("Inner"));
+    assert!(
+      inner_is_context,
+      "indent-only changes should become context with ignore_whitespace, got: {:?}",
+      lines
+    );
+    // Wrapper lines should still be removed
+    let wrapper_removed = lines
+      .iter()
+      .any(|(k, c)| *k == DiffLineKind::Remove && c.contains("Wrapper"));
+    assert!(wrapper_removed, "wrapper lines should still be removed");
+  }
+
+  #[test]
+  fn ignore_whitespace_empty_files() {
+    let diff = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(""),
+      "",
+      Path::new("test.txt"),
+      true,
+    )
+    .expect("diff");
+    assert!(diff.hunks.is_empty());
+  }
+
+  #[test]
+  fn ignore_whitespace_all_lines_reindented() {
+    let base = "line1\nline2\nline3\n";
+    let buffer = "  line1\n  line2\n  line3\n";
+    let diff = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.txt"),
+      true,
+    )
+    .expect("diff");
+    assert!(
+      diff.hunks.is_empty(),
+      "pure indent change should produce no hunks, got: {:?}",
+      diff
+        .hunks
+        .iter()
+        .flat_map(|h| h.lines.iter())
+        .map(|l| (l.kind, l.content.to_string()))
+        .collect::<Vec<_>>()
+    );
+  }
+
+  #[test]
+  fn ignore_whitespace_no_trailing_newline() {
+    let base = "line";
+    let buffer = "  line";
+    let diff = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.txt"),
+      true,
+    )
+    .expect("diff");
+    assert!(
+      diff.hunks.is_empty(),
+      "indent-only change without trailing newline should be empty, got: {:?}",
+      diff
+        .hunks
+        .iter()
+        .flat_map(|h| h.lines.iter())
+        .map(|l| (l.kind, l.content.to_string()))
+        .collect::<Vec<_>>()
     );
   }
 }
