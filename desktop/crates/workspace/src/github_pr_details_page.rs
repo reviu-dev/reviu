@@ -3571,8 +3571,13 @@ impl GithubPrDetailsPage {
 
   fn command_palette_commands(&self, cx: &App) -> Vec<CommandPaletteCommand> {
     let include_github = AuthStateStore::has_github_access(cx);
-    let mut commands =
-      Self::local_project_command_palette_commands(&self.local_project_availability(cx));
+    let availability = self.local_project_availability(cx);
+    let mut commands = Self::local_project_command_palette_commands(&availability);
+    if matches!(availability, GithubPrLocalProjectAvailability::Ready { .. }) {
+      commands.push(CommandPaletteCommand::toggle_unchanged_files(
+        self.show_local_project_files,
+      ));
+    }
     commands.extend(CommandPaletteCommand::default_global_commands(
       CommandPalettePage::GithubPrDetails,
       include_github,
@@ -10512,6 +10517,11 @@ impl GithubPrDetailsPage {
       }
       CommandPaletteAction::SendFeedback => {
         crate::feedback_dialog::open_feedback_dialog(window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::ToggleUnchangedFiles => {
+        let next = !self.show_local_project_files;
+        self.set_show_local_project_files(next, cx);
         Ok(())
       }
       _ => Err("Command not available.".into()),

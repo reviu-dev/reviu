@@ -195,6 +195,7 @@ pub enum CommandPaletteAction {
     review_comment_id: Option<u64>,
   },
   SwitchToPrBranch,
+  ToggleUnchangedFiles,
   OpenGitHistorySidebar,
   OpenGitChangesSidebar,
   OpenGitConfigPage,
@@ -674,6 +675,7 @@ pub enum CommandPaletteCommandId {
   OpenGithubPage,
   OpenGithubFromUrl,
   SwitchToPrBranch,
+  ToggleUnchangedFiles,
   OpenGitHistorySidebar,
   OpenGitChangesSidebar,
   OpenGitConfigPage,
@@ -1011,6 +1013,22 @@ impl CommandPaletteCommand {
     }
   }
 
+  pub fn toggle_unchanged_files(currently_shown: bool) -> Self {
+    if currently_shown {
+      Self {
+        id: CommandPaletteCommandId::ToggleUnchangedFiles,
+        name: "Hide unchanged files".into(),
+        description: Some("Show only files changed in this pull request".into()),
+      }
+    } else {
+      Self {
+        id: CommandPaletteCommandId::ToggleUnchangedFiles,
+        name: "Show unchanged files".into(),
+        description: Some("Show all project files alongside changed files".into()),
+      }
+    }
+  }
+
   pub fn open_git_history_sidebar() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenGitHistorySidebar,
@@ -1156,6 +1174,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::OpenGithubPage => Icon::new(IconName::Github),
       CommandPaletteCommandId::OpenGithubFromUrl => Icon::new(IconName::Github),
       CommandPaletteCommandId::SwitchToPrBranch => Icon::new(UiIconName::GitBranch),
+      CommandPaletteCommandId::ToggleUnchangedFiles => Icon::new(UiIconName::ScanEye),
       CommandPaletteCommandId::OpenGitHistorySidebar => Icon::new(UiIconName::History),
       CommandPaletteCommandId::OpenGitChangesSidebar => Icon::new(UiIconName::FileCode),
       CommandPaletteCommandId::OpenGitConfigPage => Self::git_config_icon(),
@@ -2120,6 +2139,9 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::SwitchToPrBranch => {
         self.trigger_action(CommandPaletteAction::SwitchToPrBranch, window, cx);
+      }
+      CommandPaletteCommandId::ToggleUnchangedFiles => {
+        self.trigger_action(CommandPaletteAction::ToggleUnchangedFiles, window, cx);
       }
       CommandPaletteCommandId::OpenGitConfigPage => {
         self.trigger_action(CommandPaletteAction::OpenGitConfigPage, window, cx);
