@@ -8360,7 +8360,8 @@ impl GithubPrDetailsPage {
       .with_syntax_cache(self.syntax_highlight_cache.clone())
       .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
       .with_github_issue_reference_context(pr_owner.as_ref(), pr_repo.as_ref())
-      .with_scope_id(scope_id);
+      .with_scope_id(scope_id)
+      .with_hardbreaks();
 
     // Determine root comment target and editability
     let root_target = match item.kind {
@@ -8734,7 +8735,8 @@ impl GithubPrDetailsPage {
                       .with_syntax_cache(self.syntax_highlight_cache.clone())
                       .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
                       .with_github_issue_reference_context(pr_owner.as_ref(), pr_repo.as_ref())
-                      .with_scope_id(reply_scope_id);
+                      .with_scope_id(reply_scope_id)
+                      .with_hardbreaks();
 
                   let reply_target = OverviewCommentTarget {
                     kind: OverviewCommentKind::Review,
@@ -9374,7 +9376,8 @@ impl GithubPrDetailsPage {
                     pr.repository.owner.as_str(),
                     pr.repository.repo.as_str(),
                   )
-                  .with_scope_id(pr_description_scope_id(pr.number));
+                  .with_scope_id(pr_description_scope_id(pr.number))
+                  .with_hardbreaks();
                 if let Some(previews) = description_previews.clone() {
                   options = options.with_github_code_reference_previews(previews);
                 }

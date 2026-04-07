@@ -67,6 +67,7 @@ pub struct MarkdownRenderOptions {
   pub github_code_reference_previews: Option<Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>>,
   pub github_issue_reference_context: Option<GithubIssueReferenceContext>,
   pub expand_code_blocks: bool,
+  pub hardbreaks: bool,
   pub image_base_url: Option<SharedString>,
   pub syntax_cache: Option<Arc<crate::syntax_cache::SyntaxHighlightCache>>,
   pub asset_url_resolver: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
@@ -145,6 +146,11 @@ impl MarkdownRenderOptions {
     resolver: Arc<dyn Fn(&str) -> Option<String> + Send + Sync>,
   ) -> Self {
     self.asset_url_resolver = Some(resolver);
+    self
+  }
+
+  pub fn with_hardbreaks(mut self) -> Self {
+    self.hardbreaks = true;
     self
   }
 }
@@ -1552,6 +1558,7 @@ fn build_spans(
 ) -> (SharedString, Vec<InlineSpan>, Vec<LinkRange>) {
   let mut builder = SpanBuilder {
     github_issue_reference_context: options.github_issue_reference_context.clone(),
+    hardbreaks: options.hardbreaks,
     ..Default::default()
   };
   builder.push_inlines(inlines, InlineStyle::default(), None);
@@ -1563,6 +1570,7 @@ struct SpanBuilder {
   text: String,
   spans: Vec<InlineSpan>,
   github_issue_reference_context: Option<GithubIssueReferenceContext>,
+  hardbreaks: bool,
 }
 
 impl SpanBuilder {
@@ -1577,7 +1585,13 @@ impl SpanBuilder {
           self.push_text(value, code_style, link.clone());
           self.push_text("\u{2009}", style, link.clone());
         }
-        Inline::SoftBreak => self.push_text(" ", style, link.clone()),
+        Inline::SoftBreak => {
+          if self.hardbreaks {
+            self.push_text("\n", style, link.clone());
+          } else {
+            self.push_text(" ", style, link.clone());
+          }
+        }
         Inline::HardBreak => self.push_text("\n", style, link.clone()),
         Inline::Strong(children) => {
           let mut strong_style = style;
@@ -3467,5 +3481,29 @@ Apres"#,
     assert_eq!(code_spans.len(), 2);
     assert_eq!(&text[code_spans[0].range.clone()], "first");
     assert_eq!(&text[code_spans[1].range.clone()], "second");
+  }
+
+  #[test]
+  fn build_spans_softbreak_renders_as_space_by_default() {
+    let inlines = vec![
+      Inline::Text("line one".to_string()),
+      Inline::SoftBreak,
+      Inline::Text("line two".to_string()),
+    ];
+    let options = MarkdownRenderOptions::default();
+    let (text, _, _) = build_spans(&inlines, &options);
+    assert_eq!(text.as_ref(), "line one line two");
+  }
+
+  #[test]
+  fn build_spans_softbreak_renders_as_newline_with_hardbreaks() {
+    let inlines = vec![
+      Inline::Text("line one".to_string()),
+      Inline::SoftBreak,
+      Inline::Text("line two".to_string()),
+    ];
+    let options = MarkdownRenderOptions::default().with_hardbreaks();
+    let (text, _, _) = build_spans(&inlines, &options);
+    assert_eq!(text.as_ref(), "line one\nline two");
   }
 }
