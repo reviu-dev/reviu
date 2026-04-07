@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DatabaseZap, Users } from 'lucide-vue-next'
+import { DatabaseZap, Monitor, Users } from 'lucide-vue-next'
 import HealthcheckAlert from '@/components/HealthcheckAlert.vue'
 import {
   Sidebar,
@@ -17,6 +17,11 @@ const navItems = [
     title: 'Github Cache',
     to: { name: 'GithubCache' },
     icon: DatabaseZap,
+  },
+  {
+    title: 'Client Analytics',
+    to: { name: 'ClientAnalytics' },
+    icon: Monitor,
   },
   {
     title: 'Manage Users',

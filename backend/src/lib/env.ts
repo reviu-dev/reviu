@@ -23,6 +23,7 @@ const envSchema = z.object({
   GITHUB_METRICS_FLUSH_INTERVAL_MS: z.coerce.number().positive(),
   GITHUB_METRICS_RETENTION_DAYS: z.coerce.number().int().positive(),
   GITHUB_RATE_LIMIT_STATE_RETENTION_DAYS: z.coerce.number().int().positive(),
+  CLIENT_ANALYTICS_RETENTION_DAYS: z.coerce.number().int().positive(),
   POLAR_ACCESS_TOKEN: z.string(),
   POLAR_SUCCESS_URL: z.url(),
   POLAR_SUBSCRIPTION_PRODUCT_ID: z.string(),

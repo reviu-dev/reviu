@@ -5,6 +5,10 @@ import { db } from '../db/index.js'
 import { logger } from '../lib/logger.js'
 import { authMiddlewareAdmin } from '../middlewares/auth.js'
 import {
+  flushClientAnalyticsNow,
+  readClientAnalyticsOverview,
+} from '../plugins/client-analytics/client-analytics-store.js'
+import {
   flushGithubMetricsNow,
   readGithubMetricsOperationDrilldownFromDatabase,
   readGithubMetricsOverviewFromDatabase,
@@ -113,5 +117,24 @@ export const adminRoutes = adminRouter
       }
 
       return ctx.json(drilldown, 200)
+    },
+  )
+  .get(
+    '/client-analytics',
+    zValidator('query', z.object({
+      windowMinutes: z.coerce.number().int().min(1).max(7 * 24 * 60).default(1440),
+    })),
+    async (ctx) => {
+      const { windowMinutes } = ctx.req.valid('query')
+
+      try {
+        await flushClientAnalyticsNow()
+      }
+      catch {
+        // proceed with stale data
+      }
+
+      const data = await readClientAnalyticsOverview({ windowMinutes })
+      return ctx.json(data, 200)
     },
   )
