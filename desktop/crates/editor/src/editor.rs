@@ -548,6 +548,7 @@ pub struct Editor {
   pub optimistic_unstaged_groups: HashSet<Arc<str>>,
 
   diff_view_mode: DiffViewMode,
+  ignore_whitespace: bool,
   pub is_read_only: bool,
 
   // Track syntax highlighting version to invalidate cache when highlights change
@@ -621,6 +622,7 @@ fn staged_diff_from_bases(bases: &GitFileBases, rel_path: &Path) -> Option<FileD
     bases.head.as_deref(),
     bases.index.as_deref().unwrap_or(""),
     rel_path,
+    false,
   )
   .ok()
 }
@@ -931,6 +933,7 @@ impl Editor {
       save_task: None,
       optimistic_unstaged_groups: HashSet::new(),
       diff_view_mode: DiffViewMode::Inline,
+      ignore_whitespace: false,
       is_read_only: loaded.is_read_only,
     };
     editor.init(cx);
@@ -993,6 +996,17 @@ impl Editor {
         self.virtual_line_layouts.clear();
       }
     }
+  }
+
+  pub fn set_ignore_whitespace(&mut self, value: bool, cx: &mut Context<Self>) {
+    if self.ignore_whitespace != value {
+      self.ignore_whitespace = value;
+      self.schedule_diff_recompute(cx);
+    }
+  }
+
+  pub fn ignore_whitespace(&self) -> bool {
+    self.ignore_whitespace
   }
 
   pub fn reset_selection(&mut self, cx: &mut Context<Self>) {
@@ -4139,10 +4153,11 @@ impl Editor {
 
     // For clean buffers, diff directly from git/workdir to avoid copying very large
     // in-memory documents on the UI thread.
-    let use_workdir_diff = !self.is_dirty && !self.git_state.index_dirty;
+    let use_workdir_diff = !self.is_dirty && !self.git_state.index_dirty && !self.ignore_whitespace;
     let repo_file_for_diff = repo_file.clone();
     let staged_diff = self.git_state.staged_diff.clone();
 
+    let ignore_whitespace = self.ignore_whitespace;
     let generation = self.diff_generation.fetch_add(1, Ordering::Relaxed) + 1;
     let diff_generation = self.diff_generation.clone();
     self.diff_task = Some(cx.spawn(async move |this, cx| {
@@ -4167,19 +4182,34 @@ impl Editor {
           let buffer_text = buffer_snapshot.slice_to_string(0..buffer_snapshot.len());
           let head = git_bases.head.as_deref();
           let index = git_bases.index.as_deref();
-          let uncommitted =
-            git::compute_buffer_diff(git::DiffKind::Uncommitted, head, &buffer_text, &rel_path)?;
+          let uncommitted = git::compute_buffer_diff(
+            git::DiffKind::Uncommitted,
+            head,
+            &buffer_text,
+            &rel_path,
+            ignore_whitespace,
+          )?;
           let unstaged = if head == index {
             uncommitted.clone_with_kind(git::DiffKind::Unstaged)
           } else {
-            git::compute_buffer_diff(git::DiffKind::Unstaged, index, &buffer_text, &rel_path)?
+            git::compute_buffer_diff(
+              git::DiffKind::Unstaged,
+              index,
+              &buffer_text,
+              &rel_path,
+              ignore_whitespace,
+            )?
           };
           let staged = match staged_diff {
             Some(staged) => staged,
             None if head == index => FileDiff::empty(git::DiffKind::Staged),
-            None => {
-              git::compute_buffer_diff(git::DiffKind::Staged, head, index.unwrap_or(""), &rel_path)?
-            }
+            None => git::compute_buffer_diff(
+              git::DiffKind::Staged,
+              head,
+              index.unwrap_or(""),
+              &rel_path,
+              ignore_whitespace,
+            )?,
           };
 
           Ok(DiffSet {
@@ -8306,6 +8336,7 @@ pub mod tests {
           is_dirty: false,
           save_task: None,
           diff_view_mode: DiffViewMode::Inline,
+          ignore_whitespace: false,
           is_read_only: false,
           last_highlights_version: 0,
           last_highlights_epoch: 0,

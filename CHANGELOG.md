@@ -2,6 +2,16 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.0.13
+
+### Smarter Diffs
+
+Diffs now use the histogram algorithm, producing more accurate results when code is wrapped or unwrapped. Inner lines that stay the same are correctly shown as unchanged instead of being marked as fully removed and re-added.
+
+### Hide Whitespace
+
+A new "Hide whitespace" toggle in the diff editor header lets you ignore indentation-only changes. When enabled, lines that differ only by leading whitespace appear as context. The default can be set in Settings under Editor.
+
 ## 0.0.12
 
 ### Linux Support

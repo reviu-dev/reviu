@@ -85,6 +85,7 @@ pub struct AppSettings {
   pub font_size: f32,
   pub git_unified_file_view: bool,
   pub split_diff_view: bool,
+  pub hide_whitespace: bool,
 }
 
 impl Global for AppSettings {}
@@ -111,6 +112,7 @@ impl Default for AppSettings {
       font_size: 16.0,
       git_unified_file_view: false,
       split_diff_view: false,
+      hide_whitespace: false,
     }
   }
 }
@@ -200,6 +202,7 @@ impl ConfigStore {
     let mut has_font_size = false;
     let mut has_git_unified_file_view = false;
     let mut has_split_diff_view = false;
+    let mut has_hide_whitespace = false;
     let mut stmt = self
       .conn
       .prepare(&format!("PRAGMA table_info({})", SETTINGS_TABLE.name))?;
@@ -217,6 +220,9 @@ impl ConfigStore {
       }
       if column == "split_diff_view" {
         has_split_diff_view = true;
+      }
+      if column == "hide_whitespace" {
+        has_hide_whitespace = true;
       }
     }
 
@@ -254,6 +260,16 @@ impl ConfigStore {
       self.conn.execute(
         &format!(
           "ALTER TABLE {} ADD COLUMN split_diff_view INTEGER NOT NULL DEFAULT 0",
+          SETTINGS_TABLE.name
+        ),
+        [],
+      )?;
+    }
+
+    if !has_hide_whitespace {
+      self.conn.execute(
+        &format!(
+          "ALTER TABLE {} ADD COLUMN hide_whitespace INTEGER NOT NULL DEFAULT 0",
           SETTINGS_TABLE.name
         ),
         [],
@@ -339,7 +355,7 @@ impl ConfigStore {
   fn load_app_settings_inner(&self) -> AppSettings {
     let settings = self.conn.query_row(
       &format!(
-        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view FROM {} WHERE id = 1",
+        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace FROM {} WHERE id = 1",
         SETTINGS_TABLE.name
       ),
       [],
@@ -350,6 +366,7 @@ impl ConfigStore {
         let font_size: f64 = row.get(3)?;
         let git_unified_file_view: i64 = row.get(4)?;
         let split_diff_view: i64 = row.get(5)?;
+        let hide_whitespace: i64 = row.get(6)?;
         Ok(AppSettings {
           auto_switch_theme: auto_switch_theme != 0,
           dark_mode: dark_mode != 0,
@@ -357,6 +374,7 @@ impl ConfigStore {
           font_size: font_size as f32,
           git_unified_file_view: git_unified_file_view != 0,
           split_diff_view: split_diff_view != 0,
+          hide_whitespace: hide_whitespace != 0,
         })
       },
     );
@@ -602,15 +620,16 @@ impl ConfigStore {
   fn persist_app_settings_inner(&self, settings: AppSettings) {
     if let Err(err) = self.conn.execute(
       &format!(
-        "INSERT INTO {} (id, auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view)
-         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO {} (id, auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(id) DO UPDATE
          SET auto_switch_theme = excluded.auto_switch_theme,
              dark_mode = excluded.dark_mode,
              indent_rainbow = excluded.indent_rainbow,
              font_size = excluded.font_size,
              git_unified_file_view = excluded.git_unified_file_view,
-             split_diff_view = excluded.split_diff_view",
+             split_diff_view = excluded.split_diff_view,
+             hide_whitespace = excluded.hide_whitespace",
         SETTINGS_TABLE.name
       ),
       params![
@@ -632,6 +651,11 @@ impl ConfigStore {
           0_i64
         },
         if settings.split_diff_view {
+          1_i64
+        } else {
+          0_i64
+        },
+        if settings.hide_whitespace {
           1_i64
         } else {
           0_i64
@@ -751,6 +775,7 @@ mod tests {
       font_size: 20.0,
       git_unified_file_view: true,
       split_diff_view: true,
+      hide_whitespace: true,
     };
     ConfigStore::persist_app_settings(settings);
 
@@ -761,6 +786,7 @@ mod tests {
     assert_eq!(loaded.font_size, 20.0);
     assert!(loaded.git_unified_file_view);
     assert!(loaded.split_diff_view);
+    assert!(loaded.hide_whitespace);
 
     ConfigStore::set_test_db_path(None);
   }

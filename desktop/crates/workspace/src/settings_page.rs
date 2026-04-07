@@ -43,6 +43,7 @@ pub struct SettingsPage {
   indent_rainbow: bool,
   git_unified_file_view: bool,
   split_diff_view: bool,
+  hide_whitespace: bool,
   shortcut_recording: Option<ShortcutId>,
   shortcut_error: Option<ShortcutCaptureError>,
   size: Size,
@@ -64,6 +65,7 @@ impl SettingsPage {
       indent_rainbow: settings.indent_rainbow,
       git_unified_file_view: settings.git_unified_file_view,
       split_diff_view: settings.split_diff_view,
+      hide_whitespace: settings.hide_whitespace,
       shortcut_recording: None,
       shortcut_error: None,
       size: Size::default(),
@@ -172,7 +174,29 @@ impl SettingsPage {
             )
             .default_value(default_split_diff_view),
           )
-          .description("Use side-by-side diff view instead of inline."),
+          .description("Use side-by-side diff view instead of inline by default."),
+          SettingItem::new(
+            "Hide Whitespace",
+            SettingField::checkbox(
+              {
+                let view = view.clone();
+                move |cx: &App| view.read(cx).hide_whitespace
+              },
+              {
+                let view = view.clone();
+                move |val: bool, cx: &mut App| {
+                  view.update(cx, |view, _| {
+                    view.hide_whitespace = val;
+                  });
+
+                  PersistedSettings::update(cx, |s| s.hide_whitespace = val);
+                  cx.refresh_windows();
+                }
+              },
+            )
+            .default_value(self.hide_whitespace),
+          )
+          .description("Hide whitespace changes in diffs by default."),
           SettingItem::new(
             "Indent Rainbow",
             SettingField::checkbox(
