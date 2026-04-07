@@ -902,6 +902,21 @@ mod tests {
     assert!(token_types.contains(&TokenType::Number));
   }
 
+  #[test]
+  fn vue_directive_first_identifier_highlights_as_variable() {
+    let vue = r#"<template><button v-if="myVar && other"></button></template>"#;
+    let mut highlighter = SyntaxHighlighter::new(&VUE_CONFIG);
+    let highlights = highlighter.highlight_text(vue).unwrap();
+
+    // The first identifier right after the quote should be Variable, not missing
+    let first_id_types = token_types_for_fragment(vue, &highlights, "myVar");
+    assert!(
+      first_id_types.contains(&TokenType::Variable),
+      "first identifier in directive should be Variable, got: {:?}",
+      first_id_types
+    );
+  }
+
   fn token_types_for_fragment(
     text: &str,
     highlights: &[HighlightSpan],

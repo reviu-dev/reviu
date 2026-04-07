@@ -41,12 +41,12 @@
   .
   (directive_value) @variable)
 
-(directive_attribute
-  (quoted_attribute_value) @punctuation.special)
-
+; Override the HTML `(attribute_value) @string` for directive expressions.
+; The TypeScript injection handles syntax highlighting of the expression content.
+; Without this override, the HTML @string rule colors the first injected token as a string.
 (directive_attribute
   (quoted_attribute_value
-    (attribute_value) @none))
+    (attribute_value) @variable))
 
 (directive_modifier) @function.method
 
