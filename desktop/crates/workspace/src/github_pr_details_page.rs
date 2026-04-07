@@ -6666,11 +6666,34 @@ impl GithubPrDetailsPage {
 
   fn toggle_hide_whitespace(&mut self, cx: &mut Context<Self>) {
     self.hide_whitespace = !self.hide_whitespace;
-    // Re-apply diff for the currently selected file
+    // Recompute diff without resetting scroll or selection
     if let Some(path) = self.current_selected_tree_path() {
       if let Some(file) = self.file_lookup.get(&path).cloned() {
         if let Some(contents) = self.file_contents.get(&path).cloned() {
-          self.apply_full_diff(&file, &contents, cx);
+          let head = contents.head.as_deref().unwrap_or("");
+          let base = contents.base.as_deref();
+          if let Ok(diff) = compute_buffer_diff(
+            DiffKind::Uncommitted,
+            base,
+            head,
+            Path::new(file.path.as_ref()),
+            self.hide_whitespace,
+          ) {
+            let diff_set = Some(DiffSet {
+              uncommitted: diff,
+              unstaged: FileDiff {
+                kind: DiffKind::Unstaged,
+                hunks: Vec::new(),
+              },
+              staged: FileDiff {
+                kind: DiffKind::Staged,
+                hunks: Vec::new(),
+              },
+            });
+            self.diff_editor.update(cx, |editor, cx| {
+              editor.set_diffs(diff_set, cx);
+            });
+          }
         }
       }
     }
