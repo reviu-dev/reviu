@@ -4426,7 +4426,9 @@ impl GitPage {
         }
         Ok(())
       }
-      CommandPaletteAction::SwitchToPrBranch => Err(anyhow::anyhow!("Command not available.")),
+      CommandPaletteAction::SwitchToPrBranch | CommandPaletteAction::ToggleUnchangedFiles => {
+        Err(anyhow::anyhow!("Command not available."))
+      }
       CommandPaletteAction::CreatePullRequest => {
         let branch_context = self
           .create_pull_request_branch_context(cx)
