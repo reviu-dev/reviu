@@ -1132,8 +1132,15 @@ impl ApiClient {
 
   pub(crate) fn new_with_base_url(base_url: impl Into<String>) -> Self {
     let base_url = base_url.into();
+    let user_agent = format!(
+      "Reviu-Desktop/{} ({}; {})",
+      crate::app_update::resolved_build_version(env!("CARGO_PKG_VERSION")),
+      std::env::consts::OS,
+      std::env::consts::ARCH,
+    );
     let client = Client::builder()
       .cookie_store(true)
+      .user_agent(user_agent)
       .build()
       .expect("failed to build api client");
 
