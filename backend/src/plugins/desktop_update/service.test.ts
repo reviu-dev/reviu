@@ -1,31 +1,4 @@
-import process from 'node:process'
 import { describe, expect, it } from 'vitest'
-
-Object.assign(process.env, {
-  NODE_ENV: 'development',
-  BASE_URL: 'http://localhost:3000',
-  PORT: '3000',
-  PG_USER: 'postgres',
-  PG_PASSWORD: 'postgres',
-  PG_HOST: 'localhost',
-  PG_PORT: '5432',
-  PG_DATABASE: 'reviu',
-  AUTH_SECRET: 'test-secret',
-  GITHUB_OAUTH_CLIENT_SECRET: 'test-secret',
-  GITHUB_OAUTH_CLIENT_ID: 'test-client-id',
-  GITHUB_TOKEN: 'test-token',
-  REDIS_HOST: 'localhost',
-  REDIS_PORT: '6379',
-  REDIS_PASSWORD: 'test-password',
-  GITHUB_METRICS_FLUSH_INTERVAL_MS: '1000',
-  GITHUB_METRICS_RETENTION_DAYS: '7',
-  GITHUB_RATE_LIMIT_STATE_RETENTION_DAYS: '7',
-  POLAR_ACCESS_TOKEN: 'test-polar-token',
-  POLAR_SUCCESS_URL: 'https://example.com/polar-success',
-  POLAR_SUBSCRIPTION_PRODUCT_ID: 'product-id',
-  POLAR_WEBHOOK_SECRET: 'test-webhook-secret',
-  WEB_DASHBOARD_URL: 'https://example.com/dashboard',
-})
 
 const {
   normalizeSemver,
@@ -100,7 +73,7 @@ describe('desktop update service', () => {
       minimumSupportedVersion: '0.0.4-alpha.0',
       releaseNotesUrl: 'https://github.com/joris-gallot/reviu/releases/tag/v0.0.4-alpha.1',
       artifact: {
-        url: 'http://localhost:3000/desktop/update/download/release/v0.0.4-alpha.1/Reviu-0.0.4-alpha.1-macos-aarch64.dmg',
+        url: 'http://localhost:4000/desktop/update/download/release/v0.0.4-alpha.1/Reviu-0.0.4-alpha.1-macos-aarch64.dmg',
         sha256: 'aa1dd070755c9e97e4b785d310bf7cef1f440dd8f624580d3974ddc82dee92d5',
         size: 17222631,
       },
