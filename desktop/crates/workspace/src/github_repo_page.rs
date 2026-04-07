@@ -1549,7 +1549,8 @@ impl GithubIssueDetailsSheetView {
           issue.repository.owner.as_str(),
           issue.repository.repo.as_str(),
         )
-        .with_scope_id(issue_comment_scope_id(issue.id, comment_id));
+        .with_scope_id(issue_comment_scope_id(issue.id, comment_id))
+        .with_hardbreaks();
       if let Some(previews) = comment_previews {
         options = options.with_github_code_reference_previews(previews);
       }
@@ -2399,7 +2400,8 @@ impl Render for GithubIssueDetailsSheetView {
                       issue.repository.owner.as_str(),
                       issue.repository.repo.as_str(),
                     )
-                    .with_scope_id(issue_description_scope_id(issue.id));
+                    .with_scope_id(issue_description_scope_id(issue.id))
+                    .with_hardbreaks();
                   if let Some(previews) = description_previews.clone() {
                     options = options.with_github_code_reference_previews(previews);
                   }
