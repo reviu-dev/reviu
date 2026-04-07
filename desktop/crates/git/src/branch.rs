@@ -1219,6 +1219,10 @@ pub fn apply_stash(repo_root: &Path, index: usize) -> Result<()> {
     .output()
     .with_context(|| format!("run git stash apply at index {index}"))?;
   if !output.status.success() {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stash_output_has_conflicts(&stdout) {
+      return Ok(());
+    }
     bail!(
       "git stash apply failed: {}",
       String::from_utf8_lossy(&output.stderr).trim()
@@ -1243,12 +1247,21 @@ pub fn pop_stash(repo_root: &Path, index: usize) -> Result<()> {
     .output()
     .with_context(|| format!("run git stash pop at index {index}"))?;
   if !output.status.success() {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stash_output_has_conflicts(&stdout) {
+      return Ok(());
+    }
     bail!(
       "git stash pop failed: {}",
       String::from_utf8_lossy(&output.stderr).trim()
     );
   }
   Ok(())
+}
+
+fn stash_output_has_conflicts(output: &str) -> bool {
+  let lower = output.to_ascii_lowercase();
+  lower.contains("conflict") || lower.contains("unmerged")
 }
 
 #[cfg(test)]
@@ -3346,6 +3359,79 @@ mod tests {
       list_stashes(&repo.path)
         .expect("list stashes after pop")
         .is_empty()
+    );
+  }
+
+  #[test]
+  fn apply_stash_with_conflicts_succeeds() {
+    let repo = TempRepo::init("branch-stash-apply-conflict");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "line1\nline2\n", "initial");
+
+    // Modify and stash
+    std::fs::write(repo.path.join(rel_path), "line1\nstashed change\n").expect("write for stash");
+    create_stash(&repo.path, false, None).expect("create stash");
+
+    // Make a conflicting commit
+    let _ = commit_text_file(
+      &repo.path,
+      rel_path,
+      "line1\ncommitted change\n",
+      "conflict",
+    );
+
+    // Apply stash — should succeed even though there are conflicts
+    let result = apply_stash(&repo.path, 0);
+    assert!(
+      result.is_ok(),
+      "apply_stash should return Ok when conflicts occur, got: {:?}",
+      result.err()
+    );
+
+    // Working tree should contain conflict markers
+    let content = std::fs::read_to_string(repo.path.join(rel_path)).expect("read file after apply");
+    assert!(
+      content.contains("<<<<<<<") && content.contains(">>>>>>>"),
+      "file should contain conflict markers, got: {:?}",
+      content
+    );
+
+    // Stash should still be in the list (apply doesn't remove it)
+    assert_eq!(list_stashes(&repo.path).expect("list stashes").len(), 1);
+  }
+
+  #[test]
+  fn pop_stash_with_conflicts_succeeds() {
+    let repo = TempRepo::init("branch-stash-pop-conflict");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "line1\nline2\n", "initial");
+
+    // Modify and stash
+    std::fs::write(repo.path.join(rel_path), "line1\nstashed change\n").expect("write for stash");
+    create_stash(&repo.path, false, None).expect("create stash");
+
+    // Make a conflicting commit
+    let _ = commit_text_file(
+      &repo.path,
+      rel_path,
+      "line1\ncommitted change\n",
+      "conflict",
+    );
+
+    // Pop stash — should succeed even though there are conflicts
+    let result = pop_stash(&repo.path, 0);
+    assert!(
+      result.is_ok(),
+      "pop_stash should return Ok when conflicts occur, got: {:?}",
+      result.err()
+    );
+
+    // Working tree should contain conflict markers
+    let content = std::fs::read_to_string(repo.path.join(rel_path)).expect("read file after pop");
+    assert!(
+      content.contains("<<<<<<<") && content.contains(">>>>>>>"),
+      "file should contain conflict markers, got: {:?}",
+      content
     );
   }
 }
