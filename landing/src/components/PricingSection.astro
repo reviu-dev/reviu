@@ -1,5 +1,6 @@
 ---
 import CheckIcon from "@lucide/astro/icons/check";
+import MinusIcon from "@lucide/astro/icons/minus";
 import SparklesIcon from "@lucide/astro/icons/sparkles";
 
 const downloadsSectionUrl = "#downloads";
@@ -14,10 +15,10 @@ const tiers = [
     description:
       "Full local Git client for everyday development and review workflows.",
     features: [
-      "Keyboard-first command palette and shortcuts",
-      "Full Git workflow: branches, rebase, stash, cherry-pick, conflict resolution...",
       "Real-time diff editor with inline and split views",
-      "Manage your Git config",
+      "Branch, merge, rebase, stash, cherry-pick, and conflict resolution",
+      "Interactive rebase, squash, and edit commits",
+      "Keyboard-first command palette and shortcuts",
     ],
     featured: false,
     cta: "Download app",
@@ -29,16 +30,69 @@ const tiers = [
     available: true,
     price: "$19/month",
     description:
-      "14-day free trial included. Unlock GitHub workflows directly inside Reviu.",
+      "14-day free trial included. Git and GitHub stay connected in one workflow.",
     features: [
       "Keyboard-first command palette for GitHub actions",
-      "GitHub notifications feed",
-      "Browse GitHub repositories with Code, Pull Requests, Issues...",
-      "PR review with inline and split diff modes",
-      "Browser extension to open GitHub URLs in Reviu",
+      "GitHub notifications with a macOS menu bar badge",
+      "Saved pull request lists with filters",
+      "Browse GitHub repositories, pull requests, and issues in the app",
+      "Review pull requests, comment inline, track checks, and merge",
     ],
     featured: true,
     cta: "Download & start free trial",
+  },
+];
+
+const comparisonRows = [
+  {
+    feature: "Full local Git workflow",
+    free: true,
+    pro: true,
+  },
+  {
+    feature: "Real-time diff editor",
+    free: true,
+    pro: true,
+  },
+  {
+    feature: "Inline and split diff views",
+    free: true,
+    pro: true,
+  },
+  {
+    feature: "Conflict resolution",
+    free: true,
+    pro: true,
+  },
+  {
+    feature: "Merge, rebase, and interactive rebase",
+    free: true,
+    pro: true,
+  },
+  {
+    feature: "GitHub notifications and macOS menu bar badge",
+    free: false,
+    pro: true,
+  },
+  {
+    feature: "Review pull requests, comment inline, track checks, and merge",
+    free: false,
+    pro: true,
+  },
+  {
+    feature: "Move between your local branch and its pull request",
+    free: false,
+    pro: true,
+  },
+  {
+    feature: "Saved pull request lists with filters",
+    free: false,
+    pro: true,
+  },
+  {
+    feature: "Browse GitHub repositories, pull requests, and issues",
+    free: false,
+    pro: true,
   },
 ];
 ---
@@ -134,11 +188,96 @@ const tiers = [
       }
     </div>
 
-    <p
-      class="reviu-reveal mx-auto mt-8 max-w-2xl text-center text-sm text-muted-foreground"
+    <div
+      class="reviu-reveal mx-auto mt-16 max-w-5xl"
       style="--reveal-delay: 500ms;"
     >
-      Start free, upgrade to Pro when you need GitHub integration.
+      <div class="mx-auto max-w-3xl text-center">
+        <h3 class="text-2xl font-semibold tracking-tight text-foreground">
+          Compare Free and Pro
+        </h3>
+        <p class="mt-3 text-base text-muted-foreground sm:text-lg">
+          Free covers the full local Git workflow. Pro keeps all of that and
+          adds GitHub notifications, repository context, and pull request
+          review.
+        </p>
+      </div>
+
+      <div class="mt-8 overflow-hidden rounded-3xl border border-border">
+        <div
+          class="hidden grid-cols-[minmax(0,1fr)_8rem_8rem] gap-4 bg-muted/40 px-6 py-4 text-sm font-semibold text-foreground sm:grid"
+        >
+          <div>Feature</div>
+          <div class="text-center">Free</div>
+          <div class="text-center text-primary">Pro</div>
+        </div>
+
+        <div class="divide-y divide-border bg-background">
+          {
+            comparisonRows.map((row) => (
+              <div class="grid gap-3 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_8rem_8rem] sm:items-center sm:gap-4 sm:px-6">
+                <div class="pr-4 text-sm font-medium text-foreground sm:text-base">
+                  {row.feature}
+                </div>
+
+                <div class="flex items-center justify-between sm:justify-center">
+                  <span class="text-xs font-semibold tracking-wide text-muted-foreground uppercase sm:hidden">
+                    Free
+                  </span>
+                  <span
+                    class:list={[
+                      "inline-flex size-8 items-center justify-center rounded-full ring-1 ring-inset",
+                      row.free
+                        ? "bg-primary/10 text-primary ring-primary/15"
+                        : "bg-muted text-muted-foreground ring-border",
+                    ]}
+                  >
+                    {row.free ? (
+                      <CheckIcon class="size-4" aria-hidden="true" />
+                    ) : (
+                      <MinusIcon class="size-4" aria-hidden="true" />
+                    )}
+                    <span class="sr-only">
+                      {row.free ? "Included in Free" : "Not included in Free"}
+                    </span>
+                  </span>
+                </div>
+
+                <div class="flex items-center justify-between sm:justify-center">
+                  <span class="text-xs font-semibold tracking-wide text-muted-foreground uppercase sm:hidden">
+                    Pro
+                  </span>
+                  <span
+                    class:list={[
+                      "inline-flex size-8 items-center justify-center rounded-full ring-1 ring-inset",
+                      row.pro
+                        ? "bg-primary/10 text-primary ring-primary/15"
+                        : "bg-muted text-muted-foreground ring-border",
+                    ]}
+                  >
+                    {row.pro ? (
+                      <CheckIcon class="size-4" aria-hidden="true" />
+                    ) : (
+                      <MinusIcon class="size-4" aria-hidden="true" />
+                    )}
+                    <span class="sr-only">
+                      {row.pro ? "Included in Pro" : "Not included in Pro"}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </div>
+
+    <p
+      class="reviu-reveal mx-auto mt-8 max-w-2xl text-center text-sm text-muted-foreground"
+      style="--reveal-delay: 650ms;"
+    >
+      Start free, then move to Pro when you want GitHub built into the same
+      workflow.
     </p>
   </div>
 </section>
