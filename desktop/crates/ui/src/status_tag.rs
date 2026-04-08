@@ -1,10 +1,13 @@
 use gpui::{
   AnyElement, App, Hsla, IntoElement, ParentElement, Pixels, RenderOnce, StyleRefinement, Styled,
-  Window, black, px, white,
+  Window, px,
 };
 use gpui_component::{Sizable as _, Size, StyledExt as _, tag::Tag};
 
-const STATUS_TAG_BACKGROUND_OPACITY: f32 = 0.12;
+use crate::status_surface::{
+  StatusSurfacePalette, filled_status_surface_palette, tinted_status_surface_palette,
+};
+
 const STATUS_TAG_XSMALL_TEXT_SIZE: Pixels = px(10.);
 const STATUS_TAG_XSMALL_PADDING_X: Pixels = px(4.);
 const STATUS_TAG_XSMALL_PADDING_Y: Pixels = px(1.);
@@ -15,25 +18,10 @@ enum StatusTagVariant {
   Outline,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct StatusTagPalette {
-  background: Hsla,
-  foreground: Hsla,
-  border: Hsla,
-}
-
-fn status_tag_palette(color: Hsla, variant: StatusTagVariant) -> StatusTagPalette {
+fn status_tag_palette(color: Hsla, variant: StatusTagVariant) -> StatusSurfacePalette {
   match variant {
-    StatusTagVariant::Filled => StatusTagPalette {
-      background: color,
-      foreground: if color.l > 0.62 { black() } else { white() },
-      border: color.opacity(0.0),
-    },
-    StatusTagVariant::Outline => StatusTagPalette {
-      background: color.opacity(STATUS_TAG_BACKGROUND_OPACITY),
-      foreground: color,
-      border: color,
-    },
+    StatusTagVariant::Filled => filled_status_surface_palette(color),
+    StatusTagVariant::Outline => tinted_status_surface_palette(color),
   }
 }
 
@@ -127,10 +115,11 @@ impl RenderOnce for StatusTag {
 #[cfg(test)]
 mod tests {
   use super::{
-    STATUS_TAG_BACKGROUND_OPACITY, STATUS_TAG_XSMALL_PADDING_X, STATUS_TAG_XSMALL_PADDING_Y,
-    STATUS_TAG_XSMALL_TEXT_SIZE, StatusTag, StatusTagVariant, status_tag_padding_x_override,
-    status_tag_padding_y_override, status_tag_palette, status_tag_text_size_override,
+    STATUS_TAG_XSMALL_PADDING_X, STATUS_TAG_XSMALL_PADDING_Y, STATUS_TAG_XSMALL_TEXT_SIZE,
+    StatusTag, StatusTagVariant, status_tag_padding_x_override, status_tag_padding_y_override,
+    status_tag_palette, status_tag_text_size_override,
   };
+  use crate::status_surface::TINTED_STATUS_SURFACE_BACKGROUND_OPACITY;
   use gpui::{Hsla, black, px, white};
   use gpui_component::{Sizable as _, Size};
 
@@ -150,7 +139,10 @@ mod tests {
     assert_eq!(palette.background.h, color.h);
     assert_eq!(palette.background.s, color.s);
     assert_eq!(palette.background.l, color.l);
-    assert_eq!(palette.background.a, STATUS_TAG_BACKGROUND_OPACITY);
+    assert_eq!(
+      palette.background.a,
+      TINTED_STATUS_SURFACE_BACKGROUND_OPACITY
+    );
   }
 
   #[test]

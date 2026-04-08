@@ -32,7 +32,6 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable, StyledExt,
-  alert::Alert,
   button::{Button, ButtonGroup, ButtonVariant, ButtonVariants as _},
   checkbox::Checkbox,
   dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
@@ -85,8 +84,9 @@ use ui::{
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteGithubRepoTab, CommandPaletteHandler,
   CommandPaletteInitialScreen, CommandPalettePage, CommandPaletteRepository, CommandPaletteStash,
   ConfirmDialog, DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState,
-  PAGE_HEADER_HEIGHT, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusThemeExt,
-  UiIconName, WindowExt, dropdown_select, file_icon_path_for_path_with_theme, selectable_list_item,
+  PAGE_HEADER_HEIGHT, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusAlert,
+  StatusThemeExt, UiIconName, WindowExt, dropdown_select, file_icon_path_for_path_with_theme,
+  selectable_list_item,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
@@ -8415,24 +8415,31 @@ impl GitPage {
       .border_color(theme.border)
       .when(detached_head, |this| {
         this.child(
-          Alert::info(
+          StatusAlert::new(
             "commit-detached-head-info",
+            theme.status_blue(),
             "You are in detached HEAD mode. Commits are not on a branch.",
           )
+          .icon(IconName::Info)
           .title("Detached HEAD"),
         )
       })
       .when(has_conflicts, |this| {
         this.child(
-          Alert::warning(
+          StatusAlert::new(
             "commit-conflicts-warning",
+            theme.status_orange(),
             "Resolve all conflicts before committing.",
           )
           .title("Conflicts detected"),
         )
       })
       .when_some(operation_error, |this, error| {
-        this.child(Alert::error("commit-operation-error", error.clone()).title("Operation failed"))
+        this.child(
+          StatusAlert::new("commit-operation-error", theme.status_red(), error.clone())
+            .icon(IconName::CircleX)
+            .title("Operation failed"),
+        )
       })
       .child(div().w_full().min_w_0().child(Input::new(&input).w_full()))
       .child(
