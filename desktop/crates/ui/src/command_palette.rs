@@ -159,6 +159,9 @@ pub enum CommandPaletteAction {
   InteractiveRebaseBranch {
     name: CommandPaletteBranch,
   },
+  InteractiveRebaseEditBranch {
+    name: CommandPaletteBranch,
+  },
   InteractiveRebaseHeadCount {
     count: usize,
   },
@@ -657,6 +660,7 @@ pub enum CommandPaletteCommandId {
   RebaseBranch,
   InteractiveRebase,
   InteractiveRebaseOntoBranch,
+  InteractiveRebaseEditBranch,
   InteractiveRebaseHeadCount,
   AbortRebase,
   CreatePullRequest,
@@ -834,6 +838,16 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::InteractiveRebaseOntoBranch,
       name: "Onto branch".into(),
       description: Some("Start interactive rebase onto another branch".into()),
+    }
+  }
+
+  pub fn interactive_rebase_edit_branch() -> Self {
+    Self {
+      id: CommandPaletteCommandId::InteractiveRebaseEditBranch,
+      name: "Edit branch commits".into(),
+      description: Some(
+        "Reorder, squash, or edit commits without incorporating upstream changes".into(),
+      ),
     }
   }
 
@@ -1150,6 +1164,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::RebaseBranch => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::InteractiveRebase => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::InteractiveRebaseOntoBranch => Icon::new(UiIconName::GitMerge),
+      CommandPaletteCommandId::InteractiveRebaseEditBranch => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::InteractiveRebaseHeadCount => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::AbortRebase => Icon::new(IconName::Undo),
       CommandPaletteCommandId::CherryPick => Icon::new(UiIconName::GitMerge),
@@ -1278,6 +1293,7 @@ enum CommandPaletteScreen {
   RebaseBranch,
   InteractiveRebaseMode,
   InteractiveRebaseBranch,
+  InteractiveRebaseEditBranch,
   InteractiveRebaseHeadCount,
   CherryPick,
   Stash,
@@ -1469,6 +1485,7 @@ impl CommandPalette {
       cx.new(|cx| ListState::new(commands_list_delegate, window, cx).searchable(true));
 
     let interactive_rebase_mode_commands = vec![
+      CommandPaletteCommand::interactive_rebase_edit_branch(),
       CommandPaletteCommand::interactive_rebase_onto_branch(),
       CommandPaletteCommand::interactive_rebase_head_count(),
     ];
@@ -1567,7 +1584,8 @@ impl CommandPalette {
             match command_palette.screen {
               CommandPaletteScreen::MergeBranch
               | CommandPaletteScreen::RebaseBranch
-              | CommandPaletteScreen::InteractiveRebaseBranch => {
+              | CommandPaletteScreen::InteractiveRebaseBranch
+              | CommandPaletteScreen::InteractiveRebaseEditBranch => {
                 let branch = {
                   let list = list_state.read(cx);
                   list.delegate().matched_branches.get(ix.row).cloned()
@@ -1583,6 +1601,11 @@ impl CommandPalette {
                     },
                     CommandPaletteScreen::InteractiveRebaseBranch => {
                       CommandPaletteAction::InteractiveRebaseBranch {
+                        name: (*branch).clone(),
+                      }
+                    }
+                    CommandPaletteScreen::InteractiveRebaseEditBranch => {
+                      CommandPaletteAction::InteractiveRebaseEditBranch {
                         name: (*branch).clone(),
                       }
                     }
@@ -1965,7 +1988,8 @@ impl CommandPalette {
       }
       CommandPaletteScreen::MergeBranch
       | CommandPaletteScreen::RebaseBranch
-      | CommandPaletteScreen::InteractiveRebaseBranch => {
+      | CommandPaletteScreen::InteractiveRebaseBranch
+      | CommandPaletteScreen::InteractiveRebaseEditBranch => {
         self.branches_list.update(cx, |state, cx| {
           state.focus(window, cx);
         });
@@ -2058,6 +2082,13 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::InteractiveRebaseOntoBranch => {
         self.set_screen(CommandPaletteScreen::InteractiveRebaseBranch, cx, window);
+      }
+      CommandPaletteCommandId::InteractiveRebaseEditBranch => {
+        self.set_screen(
+          CommandPaletteScreen::InteractiveRebaseEditBranch,
+          cx,
+          window,
+        );
       }
       CommandPaletteCommandId::InteractiveRebaseHeadCount => {
         self
@@ -2511,7 +2542,8 @@ impl Render for CommandPalette {
       CommandPaletteScreen::InteractiveRebaseMode => {
         self.render_interactive_rebase_mode(cx).into_any_element()
       }
-      CommandPaletteScreen::InteractiveRebaseBranch => {
+      CommandPaletteScreen::InteractiveRebaseBranch
+      | CommandPaletteScreen::InteractiveRebaseEditBranch => {
         self.render_interactive_rebase_branch(cx).into_any_element()
       }
       CommandPaletteScreen::InteractiveRebaseHeadCount => self
@@ -2703,6 +2735,7 @@ mod tests {
     let skip_rebase = CommandPaletteCommand::skip_rebase();
     let interactive_rebase = CommandPaletteCommand::interactive_rebase();
     let interactive_rebase_onto_branch = CommandPaletteCommand::interactive_rebase_onto_branch();
+    let interactive_rebase_edit_branch = CommandPaletteCommand::interactive_rebase_edit_branch();
     let interactive_rebase_head_count = CommandPaletteCommand::interactive_rebase_head_count();
     let push = CommandPaletteCommand::push("Push");
     let force_push = CommandPaletteCommand::force_push();
@@ -2745,6 +2778,16 @@ mod tests {
     );
     assert_eq!(interactive_rebase_onto_branch.name.as_ref(), "Onto branch");
     assert!(interactive_rebase_onto_branch.matches("another branch"));
+
+    assert_eq!(
+      interactive_rebase_edit_branch.id,
+      CommandPaletteCommandId::InteractiveRebaseEditBranch
+    );
+    assert_eq!(
+      interactive_rebase_edit_branch.name.as_ref(),
+      "Edit branch commits"
+    );
+    assert!(interactive_rebase_edit_branch.matches("without incorporating upstream"));
 
     assert_eq!(
       interactive_rebase_head_count.id,

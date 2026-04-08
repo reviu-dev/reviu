@@ -4798,7 +4798,8 @@ impl GitPage {
           }
         }
       }
-      CommandPaletteAction::InteractiveRebaseBranch { name } => {
+      CommandPaletteAction::InteractiveRebaseBranch { ref name }
+      | CommandPaletteAction::InteractiveRebaseEditBranch { ref name } => {
         if self.selected_repo.is_none() {
           return Err("No repository selected.".into());
         }
@@ -4806,13 +4807,21 @@ impl GitPage {
           return Err("Interactive rebase is currently disabled.".into());
         }
         should_post_action_refresh = false;
-        let target = InteractiveRebaseTarget::Branch(BranchRef {
+        let branch_ref = BranchRef {
           name: name.name.to_string(),
           kind: match name.kind {
             CommandPaletteBranchKind::Local => BranchKind::Local,
             CommandPaletteBranchKind::Remote => BranchKind::Remote,
           },
-        });
+        };
+        let target = if matches!(
+          action,
+          CommandPaletteAction::InteractiveRebaseEditBranch { .. }
+        ) {
+          InteractiveRebaseTarget::BranchInPlace(branch_ref)
+        } else {
+          InteractiveRebaseTarget::Branch(branch_ref)
+        };
         let commits = self.prepare_interactive_rebase_commits(&target)?;
         let view = cx.entity();
         window.on_next_frame(move |window, cx| {
@@ -13138,6 +13147,12 @@ mod tests {
         },
       },
       CommandPaletteAction::InteractiveRebaseBranch {
+        name: CommandPaletteBranch {
+          name: "feature".into(),
+          kind: CommandPaletteBranchKind::Local,
+        },
+      },
+      CommandPaletteAction::InteractiveRebaseEditBranch {
         name: CommandPaletteBranch {
           name: "feature".into(),
           kind: CommandPaletteBranchKind::Local,

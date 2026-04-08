@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.0.13
 
+### Edit Branch Commits (In-Place Interactive Rebase)
+
+The interactive rebase menu now offers an "Edit branch commits" option that lets you reorder, squash, or edit your branch's commits without pulling in upstream changes. This runs `git rebase -i --onto <merge-base>`, so your commits stay exactly where they diverged from the base branch.
+
 ### Smarter Diffs
 
 Diffs now use the histogram algorithm, producing more accurate results when code is wrapped or unwrapped. Inner lines that stay the same are correctly shown as unchanged instead of being marked as fully removed and re-added.
