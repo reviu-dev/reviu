@@ -1220,7 +1220,13 @@ export async function fetchGithubRepositoryContentObjectConditionally(
 ): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/contents/{path}'>> {
   return requestGithubConditionally<'GET /repos/{owner}/{repo}/contents/{path}'>(
     'GET /repos/{owner}/{repo}/contents/{path}',
-    options,
+    {
+      ...options,
+      headers: {
+        accept: 'application/vnd.github.object+json',
+        ...options.headers,
+      },
+    },
   )
 }
 

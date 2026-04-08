@@ -1717,17 +1717,13 @@ async function fetchRepositoryFileWithCache(
 }
 
 function encodeGithubFileAsset(data: unknown): string | null {
-  if (typeof data === 'string') {
-    return Buffer.from(data, 'utf8').toString('base64')
-  }
   if (Buffer.isBuffer(data)) {
     return data.toString('base64')
   }
   if (data && typeof data === 'object' && 'content' in data) {
     const payload = data as { content?: string, encoding?: string }
-    if (typeof payload.content === 'string') {
-      const encoding = payload.encoding === 'base64' ? 'base64' : 'utf8'
-      return Buffer.from(payload.content, encoding).toString('base64')
+    if (typeof payload.content === 'string' && payload.encoding === 'base64') {
+      return payload.content.replace(/\n/g, '')
     }
   }
   return null
