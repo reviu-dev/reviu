@@ -5603,8 +5603,8 @@ impl GitPage {
       return;
     };
     // Sync diff view from persisted setting
-    let saved_split = crate::config::AppSettings::get(cx).split_diff_view;
-    let saved_mode = if saved_split {
+    let app_settings = crate::config::AppSettings::get(cx);
+    let saved_mode = if app_settings.split_diff_view {
       DiffViewMode::Split
     } else {
       DiffViewMode::Inline
@@ -5612,6 +5612,7 @@ impl GitPage {
     if self.diff_view != saved_mode {
       self.diff_view = saved_mode;
     }
+    self.hide_whitespace = app_settings.hide_whitespace;
     self.pending_conflict_reveal_path = reveal_first_conflict.then_some(rel_path.clone());
     if self.selected_file.as_ref() == Some(&rel_path) && self.history_opened_commit_file.is_none() {
       if reveal_first_conflict {

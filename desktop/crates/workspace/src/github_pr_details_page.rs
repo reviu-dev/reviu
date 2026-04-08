@@ -6021,8 +6021,8 @@ impl GithubPrDetailsPage {
     }
 
     if ix == PR_TAB_CHANGES_IX {
-      let saved = crate::config::AppSettings::get(cx).split_diff_view;
-      let saved_mode = if saved {
+      let app_settings = crate::config::AppSettings::get(cx);
+      let saved_mode = if app_settings.split_diff_view {
         DiffViewMode::Split
       } else {
         DiffViewMode::Inline
@@ -6031,6 +6031,7 @@ impl GithubPrDetailsPage {
         self.diff_view = saved_mode;
         self.sync_diff_view(cx);
       }
+      self.hide_whitespace = app_settings.hide_whitespace;
       self.sync_tree_selection(cx);
       self.focus_changes_tree(window, cx);
       cx.on_next_frame(window, |this, window, cx| {
