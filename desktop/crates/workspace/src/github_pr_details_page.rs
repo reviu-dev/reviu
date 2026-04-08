@@ -129,16 +129,20 @@ fn pr_refresh_in_progress(
     return true;
   }
 
+  if commits_loading || checks_loading {
+    return true;
+  }
+
   if should_refresh_pr_overview_data(active_tab_ix) {
     return issue_comments_loading || reviews_loading || review_comments_loading;
   }
 
   if should_refresh_pr_changes_data(active_tab_ix) {
-    return commits_loading || review_comments_loading || files_loading || file_loading;
+    return review_comments_loading || files_loading || file_loading;
   }
 
   if should_refresh_pr_checks_data(active_tab_ix) {
-    return checks_loading;
+    return false;
   }
 
   false
@@ -3779,6 +3783,8 @@ impl GithubPrDetailsPage {
 
     self.refresh_pull_request_details_for_current_context(cx);
     self.reload_merge_readiness_for_current_pull_request(cx);
+    self.refresh_commits_for_current_pull_request(cx);
+    self.refresh_checks_for_current_pull_request(cx);
 
     if should_refresh_pr_overview_data(self.active_tab_ix) {
       self.refresh_issue_comments_for_current_pull_request(cx);
@@ -3788,13 +3794,8 @@ impl GithubPrDetailsPage {
 
     if should_refresh_pr_changes_data(self.active_tab_ix) {
       self.saved_pr_selected_tree_id = self.current_selected_tree_path();
-      self.refresh_commits_for_current_pull_request(cx);
       self.refresh_review_comments_for_current_pull_request(cx);
       self.reload_files_for_current_pull_request(cx);
-    }
-
-    if should_refresh_pr_checks_data(self.active_tab_ix) {
-      self.refresh_checks_for_current_pull_request(cx);
     }
   }
 
@@ -12572,6 +12573,28 @@ mod tests {
       false,
       false,
     ));
+    assert!(pr_refresh_in_progress(
+      PR_TAB_OVERVIEW_IX,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+    ));
+    assert!(pr_refresh_in_progress(
+      PR_TAB_CHECKS_IX,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+    ));
     assert!(!pr_refresh_in_progress(
       PR_TAB_CHECKS_IX,
       false,
@@ -12583,6 +12606,101 @@ mod tests {
       false,
       false,
     ));
+  }
+
+  fn assert_refresh_current_page_starts_commits_and_checks_for_tab(
+    active_tab_ix: usize,
+    cx: &mut TestAppContext,
+  ) {
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    let (
+      commits_loading,
+      commits_task_present,
+      checks_loading,
+      checks_task_present,
+      issue_comments_loading,
+      reviews_loading,
+      review_comments_loading,
+      files_loading,
+    ) = page.update_in(cx, |this, _window, cx| {
+      this.current_pr_context = Some(CurrentPrContext {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+        number: 42,
+      });
+      this.active_tab_ix = active_tab_ix;
+      this.commits_loading = false;
+      this.checks_loading = false;
+      this.issue_comments_loading = false;
+      this.reviews_loading = false;
+      this.review_comments_loading = false;
+      this.files_loading = false;
+      this.file_loading = false;
+      this.commits_task = None;
+      this.checks_task = None;
+      this.issue_comments_task = None;
+      this.reviews_task = None;
+      this.review_comments_task = None;
+      this.files_task = None;
+
+      this.refresh_current_page(cx);
+
+      (
+        this.commits_loading,
+        this.commits_task.is_some(),
+        this.checks_loading,
+        this.checks_task.is_some(),
+        this.issue_comments_loading,
+        this.reviews_loading,
+        this.review_comments_loading,
+        this.files_loading,
+      )
+    });
+
+    assert!(
+      commits_loading,
+      "tab {active_tab_ix} should refresh commits"
+    );
+    assert!(
+      commits_task_present,
+      "tab {active_tab_ix} should schedule commit refresh"
+    );
+    assert!(checks_loading, "tab {active_tab_ix} should refresh checks");
+    assert!(
+      checks_task_present,
+      "tab {active_tab_ix} should schedule checks refresh"
+    );
+
+    match active_tab_ix {
+      PR_TAB_OVERVIEW_IX => {
+        assert!(issue_comments_loading);
+        assert!(reviews_loading);
+        assert!(review_comments_loading);
+        assert!(!files_loading);
+      }
+      PR_TAB_CHANGES_IX => {
+        assert!(!issue_comments_loading);
+        assert!(!reviews_loading);
+        assert!(review_comments_loading);
+        assert!(files_loading);
+      }
+      PR_TAB_CHECKS_IX => {
+        assert!(!issue_comments_loading);
+        assert!(!reviews_loading);
+        assert!(!review_comments_loading);
+        assert!(!files_loading);
+      }
+      _ => unreachable!(),
+    }
+  }
+
+  #[gpui::test]
+  fn refresh_current_page_starts_commits_and_checks_for_all_tabs(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_OVERVIEW_IX, cx);
+    assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_CHANGES_IX, cx);
+    assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_CHECKS_IX, cx);
   }
 
   #[test]
