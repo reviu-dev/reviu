@@ -401,7 +401,9 @@ impl WorkspaceView {
     view.check_for_updates(cx);
     view.start_periodic_update_checks(cx);
     view.start_notification_polling(cx);
-    crate::status_bar::init_status_bar(include_bytes!("../../reviu/assets/statusbar-icon.png"));
+    crate::status_bar::init_status_bar(include_bytes!(
+      "../../reviu/assets/reviu_status_bar_icon.png"
+    ));
 
     view
   }
