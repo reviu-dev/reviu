@@ -676,6 +676,9 @@ impl Render for InteractiveRebaseTodoView {
     let theme = cx.theme().clone();
     let target_label: SharedString = match &self.target {
       InteractiveRebaseTarget::Branch(branch) => format!("Target: {}", branch.name).into(),
+      InteractiveRebaseTarget::BranchInPlace(branch) => {
+        format!("Edit commits since {}", branch.name).into()
+      }
       InteractiveRebaseTarget::HeadCount(count) => format!("Target: HEAD~{count}").into(),
     };
     let validation_error = self.validate_rows().err();

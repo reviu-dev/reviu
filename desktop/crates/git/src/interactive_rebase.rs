@@ -14,6 +14,7 @@ use crate::{BranchKind, BranchRef};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InteractiveRebaseTarget {
   Branch(BranchRef),
+  BranchInPlace(BranchRef),
   HeadCount(usize),
 }
 
@@ -84,10 +85,12 @@ pub fn start_interactive_rebase(
   make_script_executable_if_supported(&editor_script.path)?;
 
   let mut command = Command::new("git");
+  command.current_dir(repo_root).arg("rebase").arg("-i");
+  if let InteractiveRebaseTarget::BranchInPlace(branch) = target {
+    let merge_base = resolve_merge_base(repo_root, branch)?;
+    command.arg("--onto").arg(merge_base);
+  }
   command
-    .current_dir(repo_root)
-    .arg("rebase")
-    .arg("-i")
     .arg(target_command_arg(target))
     .env("GIT_SEQUENCE_EDITOR", &editor_script.path)
     .env("GIT_EDITOR", ":");
@@ -113,7 +116,9 @@ pub fn start_interactive_rebase(
 
 fn resolve_target_base_oid(repo: &Repository, target: &InteractiveRebaseTarget) -> Result<Oid> {
   match target {
-    InteractiveRebaseTarget::Branch(branch) => resolve_branch_oid(repo, branch),
+    InteractiveRebaseTarget::Branch(branch) | InteractiveRebaseTarget::BranchInPlace(branch) => {
+      resolve_branch_oid(repo, branch)
+    }
     InteractiveRebaseTarget::HeadCount(count) => resolve_head_count_base_oid(repo, *count),
   }
 }
@@ -263,9 +268,26 @@ fn build_todo_contents(
 
 fn target_command_arg(target: &InteractiveRebaseTarget) -> String {
   match target {
-    InteractiveRebaseTarget::Branch(branch) => branch.name.clone(),
+    InteractiveRebaseTarget::Branch(branch) | InteractiveRebaseTarget::BranchInPlace(branch) => {
+      branch.name.clone()
+    }
     InteractiveRebaseTarget::HeadCount(count) => format!("HEAD~{count}"),
   }
+}
+
+fn resolve_merge_base(repo_root: &Path, branch: &BranchRef) -> Result<String> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let branch_oid = resolve_branch_oid(&repo, branch)?;
+  let head_oid = repo
+    .head()
+    .and_then(|head| head.peel_to_commit())
+    .context("read HEAD commit")?
+    .id();
+  let merge_base = repo
+    .merge_base(head_oid, branch_oid)
+    .context("find merge base between HEAD and branch")?;
+  Ok(merge_base.to_string())
 }
 
 fn script_suffix() -> &'static str {
@@ -692,6 +714,163 @@ mod tests {
         .to_string()
         .contains("first non-dropped commit must use pick"),
       "unexpected error: {error}"
+    );
+  }
+
+  #[test]
+  fn list_interactive_rebase_commits_branch_in_place_returns_same_commits_as_branch() {
+    let repo = TempRepo::init("interactive-rebase-branch-in-place-list");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "base\n", "initial");
+    let base_branch = current_branch_name(&repo.path);
+    create_branch_at_head(&repo.path, "feature");
+
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("main.txt"),
+      "main change\n",
+      "main change",
+    );
+    switch_to_branch(&repo.path, "feature");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("feature.txt"),
+      "feature 1\n",
+      "feature 1",
+    );
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("feature-2.txt"),
+      "feature 2\n",
+      "feature 2",
+    );
+
+    let branch_ref = BranchRef {
+      name: base_branch,
+      kind: BranchKind::Local,
+    };
+
+    let branch_commits = list_interactive_rebase_commits(
+      &repo.path,
+      &InteractiveRebaseTarget::Branch(branch_ref.clone()),
+    )
+    .expect("list commits for Branch");
+    let in_place_commits = list_interactive_rebase_commits(
+      &repo.path,
+      &InteractiveRebaseTarget::BranchInPlace(branch_ref),
+    )
+    .expect("list commits for BranchInPlace");
+
+    assert_eq!(branch_commits, in_place_commits);
+    let summaries = in_place_commits
+      .iter()
+      .map(|c| c.summary.as_str())
+      .collect::<Vec<_>>();
+    assert_eq!(summaries, vec!["feature 1", "feature 2"]);
+  }
+
+  #[test]
+  fn start_interactive_rebase_branch_in_place_does_not_incorporate_upstream() {
+    let repo = TempRepo::init("interactive-rebase-branch-in-place-no-upstream");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "base\n", "initial");
+    let base_branch = current_branch_name(&repo.path);
+    create_branch_at_head(&repo.path, "feature");
+
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("main.txt"),
+      "main change\n",
+      "main upstream",
+    );
+    switch_to_branch(&repo.path, "feature");
+    let _ = commit_text_file(&repo.path, Path::new("a.txt"), "a\n", "feature a");
+    let _ = commit_text_file(&repo.path, Path::new("b.txt"), "b\n", "feature b");
+
+    let branch_ref = BranchRef {
+      name: base_branch,
+      kind: BranchKind::Local,
+    };
+    let target = InteractiveRebaseTarget::BranchInPlace(branch_ref);
+    let commits = list_interactive_rebase_commits(&repo.path, &target).expect("list commits");
+    assert_eq!(commits.len(), 2);
+
+    let todo = vec![
+      InteractiveRebaseTodoEntry {
+        oid: commits[0].oid.clone(),
+        action: InteractiveRebaseAction::Pick,
+      },
+      InteractiveRebaseTodoEntry {
+        oid: commits[1].oid.clone(),
+        action: InteractiveRebaseAction::Squash,
+      },
+    ];
+
+    start_interactive_rebase(&repo.path, &target, &todo).expect("run in-place rebase");
+
+    assert_eq!(commit_count(&repo.path), 2);
+    assert!(repo.path.join("a.txt").exists());
+    assert!(repo.path.join("b.txt").exists());
+    assert!(
+      !repo.path.join("main.txt").exists(),
+      "upstream file should not be present after in-place rebase"
+    );
+    let messages = head_messages(&repo.path, 2);
+    assert_eq!(messages.len(), 2);
+    assert!(
+      messages[0].contains("feature a"),
+      "squashed commit should contain first message"
+    );
+  }
+
+  #[test]
+  fn start_interactive_rebase_branch_in_place_reorders_commits() {
+    let repo = TempRepo::init("interactive-rebase-branch-in-place-reorder");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "base\n", "initial");
+    let base_branch = current_branch_name(&repo.path);
+    create_branch_at_head(&repo.path, "feature");
+
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("main.txt"),
+      "upstream\n",
+      "main upstream",
+    );
+    switch_to_branch(&repo.path, "feature");
+    let _ = commit_text_file(&repo.path, Path::new("x.txt"), "x\n", "commit x");
+    let _ = commit_text_file(&repo.path, Path::new("y.txt"), "y\n", "commit y");
+    let _ = commit_text_file(&repo.path, Path::new("z.txt"), "z\n", "commit z");
+
+    let branch_ref = BranchRef {
+      name: base_branch,
+      kind: BranchKind::Local,
+    };
+    let target = InteractiveRebaseTarget::BranchInPlace(branch_ref);
+    let commits = list_interactive_rebase_commits(&repo.path, &target).expect("list commits");
+    assert_eq!(commits.len(), 3);
+
+    let todo = vec![
+      InteractiveRebaseTodoEntry {
+        oid: commits[2].oid.clone(),
+        action: InteractiveRebaseAction::Pick,
+      },
+      InteractiveRebaseTodoEntry {
+        oid: commits[0].oid.clone(),
+        action: InteractiveRebaseAction::Pick,
+      },
+      InteractiveRebaseTodoEntry {
+        oid: commits[1].oid.clone(),
+        action: InteractiveRebaseAction::Drop,
+      },
+    ];
+
+    start_interactive_rebase(&repo.path, &target, &todo).expect("run in-place rebase");
+
+    let messages = head_messages(&repo.path, 3);
+    assert_eq!(messages[0], "commit x");
+    assert_eq!(messages[1], "commit z");
+    assert!(!repo.path.join("y.txt").exists());
+    assert!(
+      !repo.path.join("main.txt").exists(),
+      "upstream file should not be present after in-place rebase"
     );
   }
 }
