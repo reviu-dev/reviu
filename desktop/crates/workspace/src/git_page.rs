@@ -7817,6 +7817,7 @@ impl GitPage {
 
     let view = cx.entity();
     let hide_whitespace = self.hide_whitespace;
+    let show_whitespace_button = self.binary_preview.is_none();
 
     let whitespace_icon = if hide_whitespace {
       IconName::Eye
@@ -7828,17 +7829,21 @@ impl GitPage {
     } else {
       "Hide whitespace changes"
     };
-    let whitespace_button = Button::new("editor-whitespace-toggle")
-      .label("Whitespace")
-      .icon(whitespace_icon)
-      .tooltip(tooltip)
-      .xsmall()
-      .ghost()
-      .on_click(move |_, _, cx| {
-        view.update(cx, |this, cx| {
-          this.toggle_hide_whitespace(cx);
-        });
-      });
+    let whitespace_button = div()
+      .debug_selector(|| "editor-whitespace-toggle".to_string())
+      .child(
+        Button::new("editor-whitespace-toggle")
+          .label("Whitespace")
+          .icon(whitespace_icon)
+          .tooltip(tooltip)
+          .xsmall()
+          .ghost()
+          .on_click(move |_, _, cx| {
+            view.update(cx, |this, cx| {
+              this.toggle_hide_whitespace(cx);
+            });
+          }),
+      );
 
     let view = cx.entity();
     let preview_button = Button::new("editor-markdown-preview")
@@ -7969,7 +7974,7 @@ impl GitPage {
           })
           .child(save_button)
           .when(is_markdown || is_svg, |this| this.child(preview_button))
-          .child(whitespace_button)
+          .when(show_whitespace_button, |this| this.child(whitespace_button))
           .child(toggle_button),
       )
       .into_any_element()
@@ -14663,6 +14668,7 @@ mod tests {
     assert!(is_raster_preview);
     assert!(preview_bounds.width > gpui::px(0.0));
     assert!(preview_bounds.height > gpui::px(0.0));
+    assert!(cx.debug_bounds("editor-whitespace-toggle").is_none());
     assert!(
       cx.debug_bounds(GIT_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR)
         .is_none()
@@ -14711,6 +14717,7 @@ mod tests {
     assert!(is_placeholder);
     assert!(preview_bounds.width > gpui::px(0.0));
     assert!(preview_bounds.height > gpui::px(0.0));
+    assert!(cx.debug_bounds("editor-whitespace-toggle").is_none());
   }
 
   #[gpui::test]
@@ -14752,6 +14759,7 @@ mod tests {
     assert!(editor_bounds.height > gpui::px(0.0));
     assert!(preview_bounds.width > gpui::px(0.0));
     assert!(preview_bounds.height > gpui::px(0.0));
+    assert!(cx.debug_bounds("editor-whitespace-toggle").is_some());
   }
 
   #[gpui::test]
