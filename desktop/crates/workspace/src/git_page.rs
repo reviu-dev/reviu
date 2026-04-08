@@ -3230,20 +3230,19 @@ impl GitPage {
     err: anyhow::Error,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Result<Option<SharedString>, SharedString> {
+  ) -> Option<SharedString> {
     let message = err.to_string();
     if Self::should_surface_command_palette_error_inline(&message) {
-      return Err(message.into());
+      return Some(message.into());
     }
 
     if let Some(title) = Self::command_palette_error_notification_title(action) {
       let message: SharedString = message.into();
       self.push_git_action_error_notification_in_window(title, message.clone(), window, cx);
-      return Ok(Some(message));
+      return None;
     }
 
-    let message: SharedString = format!("Action failed: {message}").into();
-    Err(message)
+    Some(format!("Action failed: {message}").into())
   }
 
   fn branch_select_handler(&self, cx: &Context<Self>) -> BranchSelectHandler {
@@ -4947,7 +4946,7 @@ impl GitPage {
 
     if let Err(err) = result {
       palette_error =
-        self.handle_command_palette_operation_error(&action_for_error, err, window, cx)?;
+        self.handle_command_palette_operation_error(&action_for_error, err, window, cx);
     }
 
     if should_post_action_refresh {
@@ -11213,7 +11212,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn command_palette_create_branch_shows_notification_when_branch_exists(
+  async fn command_palette_create_branch_shows_notification_only_when_branch_exists(
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
@@ -11247,8 +11246,10 @@ mod tests {
         cx,
       )
     });
-    let error = result.expect_err("create branch should keep palette open on failure");
-    assert!(!error.as_ref().is_empty());
+    assert!(
+      result.is_ok(),
+      "create branch failure should close palette and rely on notification feedback"
+    );
 
     await_git_page_background_tasks(git_page.clone(), cx).await;
     cx.cx.run_until_parked();
@@ -11367,7 +11368,9 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn command_palette_delete_branch_rejects_current_branch(cx: &mut TestAppContext) {
+  async fn command_palette_delete_branch_rejects_current_branch_with_notification_only(
+    cx: &mut TestAppContext,
+  ) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-delete-current-branch");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -11389,20 +11392,22 @@ mod tests {
     });
     assert_eq!(initial_notification_count, 0);
 
-    let error = git_page
-      .update_in(cx, |this, _window, cx| {
-        this.selected_repo = Some(repo.path.clone());
-        this.branch_status = Some(make_branch_status(&current_branch, 0, 0, true));
-        this.handle_command_palette_action(
-          CommandPaletteAction::DeleteBranch(CommandPaletteBranch {
-            name: current_branch.clone().into(),
-            kind: CommandPaletteBranchKind::Local,
-          }),
-          _window,
-          cx,
-        )
-      })
-      .expect_err("current branch delete should fail");
+    let result = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.branch_status = Some(make_branch_status(&current_branch, 0, 0, true));
+      this.handle_command_palette_action(
+        CommandPaletteAction::DeleteBranch(CommandPaletteBranch {
+          name: current_branch.clone().into(),
+          kind: CommandPaletteBranchKind::Local,
+        }),
+        _window,
+        cx,
+      )
+    });
+    assert!(
+      result.is_ok(),
+      "delete current branch failure should close palette and rely on notification feedback"
+    );
 
     await_git_page_background_tasks(git_page.clone(), cx).await;
     cx.cx.run_until_parked();
@@ -11412,7 +11417,6 @@ mod tests {
       root.notification.read(cx).notifications().len()
     });
     assert_eq!(notification_count, 1);
-    assert_eq!(error.as_ref(), "cannot delete the current branch");
   }
 
   #[gpui::test]
@@ -11825,7 +11829,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn command_palette_create_branch_from_shows_notification_when_branch_exists(
+  async fn command_palette_create_branch_from_shows_notification_only_when_branch_exists(
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
@@ -11863,8 +11867,10 @@ mod tests {
         cx,
       )
     });
-    let error = result.expect_err("create branch from should keep palette open on failure");
-    assert!(!error.as_ref().is_empty());
+    assert!(
+      result.is_ok(),
+      "create branch from failure should close palette and rely on notification feedback"
+    );
 
     await_git_page_background_tasks(git_page.clone(), cx).await;
     cx.cx.run_until_parked();
@@ -11968,7 +11974,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn command_palette_switch_remote_branch_shows_notification_when_remote_branch_missing(
+  async fn command_palette_switch_remote_branch_shows_notification_only_when_remote_branch_missing(
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
@@ -12001,8 +12007,10 @@ mod tests {
         cx,
       )
     });
-    let error = result.expect_err("switch branch should keep palette open on failure");
-    assert!(!error.as_ref().is_empty());
+    assert!(
+      result.is_ok(),
+      "switch branch failure should close palette and rely on notification feedback"
+    );
 
     await_git_page_background_tasks(git_page.clone(), cx).await;
     cx.cx.run_until_parked();
@@ -12855,6 +12863,71 @@ mod tests {
         .expect("status after rebase")
         .name,
       base_branch
+    );
+  }
+
+  #[cfg(not(target_os = "linux"))]
+  #[gpui::test]
+  async fn command_palette_rebase_branch_with_dirty_worktree_shows_notification_only(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-rebase-dirty-worktree");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let base_branch = current_branch_status(&repo.path).expect("base status").name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+    std::fs::write(repo.path.join("README.md"), "dirty change\n")
+      .expect("write unstaged change before rebase");
+
+    let mut mounted_git_page = None;
+    let (root, cx) = cx.add_window_view(|window, cx| {
+      let git_page = cx.new(|cx| GitPage::new_for_test(window, cx));
+      mounted_git_page = Some(git_page.clone());
+      gpui_component::Root::new(git_page, window, cx)
+    });
+    let git_page = mounted_git_page.expect("git page");
+    cx.executor().allow_parking();
+
+    let initial_notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(initial_notification_count, 0);
+
+    let result = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.handle_command_palette_action(
+        CommandPaletteAction::RebaseBranch {
+          name: CommandPaletteBranch {
+            name: "feature".into(),
+            kind: CommandPaletteBranchKind::Local,
+          },
+        },
+        _window,
+        cx,
+      )
+    });
+    assert!(
+      result.is_ok(),
+      "dirty worktree rebase failure should close palette and rely on notification feedback"
+    );
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+    cx.cx.run_until_parked();
+    cx.run_until_parked();
+
+    let notification_count = root.read_with(cx, |root, cx| {
+      root.notification.read(cx).notifications().len()
+    });
+    assert_eq!(notification_count, 1);
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("status after failed rebase")
+        .name,
+      base_branch
+    );
+    assert!(
+      !is_rebase_in_progress(&repo.path).expect("read rebase state after failed rebase"),
+      "rebase should not start when the worktree is dirty"
     );
   }
 
