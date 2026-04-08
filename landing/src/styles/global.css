@@ -5,6 +5,10 @@ html {
   scroll-behavior: smooth;
 }
 
+body {
+  font-family: "Poppins", sans-serif;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .reviu-motion .reviu-reveal,
   .reviu-motion .reviu-reveal-right {

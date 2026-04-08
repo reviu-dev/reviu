@@ -6,6 +6,8 @@ import GitPullRequestIcon from "@lucide/astro/icons/git-pull-request";
 import KeyboardIcon from "@lucide/astro/icons/keyboard";
 import gitDark from "../assets/app_screenshots/git_dark.png";
 import gitLight from "../assets/app_screenshots/git_light.png";
+import LogoDark from "../assets/logo_dark.svg";
+import LogoLight from "../assets/logo_light.svg";
 ---
 
 <section
@@ -57,9 +59,14 @@ import gitLight from "../assets/app_screenshots/git_light.png";
     class="mx-auto max-w-7xl px-6 pt-10 pb-24 sm:pb-32 lg:flex lg:px-8 lg:py-40"
   >
     <div class="mx-auto max-w-2xl shrink-0 lg:mx-0 lg:pt-8">
-      <p class="reviu-reveal text-6xl font-semibold text-foreground">
-        Rev<span class="text-primary">iu</span>
-      </p>
+      <div class="reviu-reveal">
+        <span class="sr-only">Reviu</span>
+        <LogoDark class="h-14 w-auto dark:hidden sm:h-16" aria-hidden="true" />
+        <LogoLight
+          class="h-14 w-auto not-dark:hidden sm:h-16"
+          aria-hidden="true"
+        />
+      </div>
 
       <div
         class="reviu-reveal mt-8 sm:mt-32 lg:mt-16"
@@ -73,7 +80,7 @@ import gitLight from "../assets/app_screenshots/git_light.png";
       </div>
 
       <h1
-        class="reviu-reveal mt-10 text-5xl font-semibold tracking-tight text-pretty text-foreground sm:text-7xl"
+        class="reviu-reveal mt-10 text-4xl font-semibold tracking-tight text-pretty text-foreground sm:text-6xl"
         style="--reveal-delay: 200ms;"
       >
         A free Git client with a real-time diff editor.
