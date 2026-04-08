@@ -216,6 +216,22 @@ enum GithubPrStatusAction {
   ConvertToDraft,
 }
 
+fn render_image_preview_status_message(
+  message: impl Into<SharedString>,
+  color: Hsla,
+) -> AnyElement {
+  div()
+    .w(px(280.0))
+    .max_w_full()
+    .px_3()
+    .text_sm()
+    .text_center()
+    .whitespace_normal()
+    .text_color(color)
+    .child(message.into())
+    .into_any_element()
+}
+
 impl GithubPrStatusAction {
   fn button_label(self) -> &'static str {
     match self {
@@ -6245,18 +6261,10 @@ impl GithubPrDetailsPage {
           .max_h_full()
           .object_fit(ObjectFit::Contain)
           .with_loading(move || {
-            div()
-              .text_sm()
-              .text_color(loading_color)
-              .child("Rendering image preview...")
-              .into_any_element()
+            render_image_preview_status_message("Rendering image preview...", loading_color)
           })
           .with_fallback(move || {
-            div()
-              .text_sm()
-              .text_color(error_color)
-              .child("Unable to render image preview")
-              .into_any_element()
+            render_image_preview_status_message("Unable to render image preview", error_color)
           });
 
         div()

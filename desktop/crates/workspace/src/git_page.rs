@@ -113,6 +113,22 @@ const TERMINAL_SIDEBAR_MAX_WIDTH: f32 = 1200.0;
 type RepoSelectHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 type BranchSelectHandler = Rc<dyn Fn(BranchRef, &mut Window, &mut App)>;
 
+fn render_image_preview_status_message(
+  message: impl Into<SharedString>,
+  color: gpui::Hsla,
+) -> AnyElement {
+  div()
+    .w(px(280.0))
+    .max_w_full()
+    .px_3()
+    .text_sm()
+    .text_center()
+    .whitespace_normal()
+    .text_color(color)
+    .child(message.into())
+    .into_any_element()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FileStageButtonAction {
   Stage,
@@ -2389,18 +2405,10 @@ impl GitPage {
           .max_h_full()
           .object_fit(ObjectFit::Contain)
           .with_loading(move || {
-            div()
-              .text_sm()
-              .text_color(loading_color)
-              .child("Rendering image preview...")
-              .into_any_element()
+            render_image_preview_status_message("Rendering image preview...", loading_color)
           })
           .with_fallback(move || {
-            div()
-              .text_sm()
-              .text_color(error_color)
-              .child("Unable to render image preview")
-              .into_any_element()
+            render_image_preview_status_message("Unable to render image preview", error_color)
           });
 
         div()
