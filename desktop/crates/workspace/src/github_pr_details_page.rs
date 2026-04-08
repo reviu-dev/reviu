@@ -55,8 +55,8 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DETAILS_PAGE_CONTAINER_MAX_WIDTH,
   DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState, Popover,
-  SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusTag, StatusThemeExt, UiIconName,
-  WindowExt, dropdown_select, file_icon_path_for_name_with_theme, h_resizable,
+  SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusAlert, StatusTag, StatusThemeExt,
+  UiIconName, WindowExt, dropdown_select, file_icon_path_for_name_with_theme, h_resizable,
   parse_github_url_action, resizable_panel, selectable_list_item,
 };
 
@@ -3740,64 +3740,32 @@ impl GithubPrDetailsPage {
     let content = overview_pr_alert_content(self.merge_readiness.as_ref(), self.checks.as_ref())?;
     let action_label = self.overview_pr_alert_action_label(&content, cx);
     let theme = cx.theme();
+    let color = match content.kind {
+      OverviewPrAlertKind::Conflicts => theme.status_red(),
+      OverviewPrAlertKind::OutOfDate | OverviewPrAlertKind::Blocked => theme.status_orange(),
+    };
     let view = cx.entity();
+    let mut alert = StatusAlert::new(content.id, color, content.message.clone())
+      .title(content.title)
+      .icon(IconName::TriangleAlert);
 
-    Some(
-      div()
-        .flex()
-        .id(content.id)
-        .debug_selector(|| content.id.to_string())
-        .w_full()
-        .items_start()
-        .gap_3()
-        .px_4()
-        .py_3()
-        .rounded(theme.radius)
-        .border_1()
-        .border_color(theme.warning.opacity(0.3))
-        .bg(theme.warning.opacity(0.08))
-        .text_color(theme.warning)
-        .child(
-          h_flex()
-            .flex_1()
-            .items_start()
-            .gap_3()
-            .child(Icon::new(IconName::TriangleAlert).mt(px(3.0)))
-            .child(
-              v_flex()
-                .flex_1()
-                .text_sm()
-                .gap_1()
-                .child(
-                  h_flex()
-                    .w_full()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .child(div().font_semibold().child(content.title))
-                    .when_some(action_label, |this, label| {
-                      this.child(
-                        Button::new("github-pr-overview-alert-action")
-                          .small()
-                          .primary()
-                          .with_variant(ButtonVariant::Secondary)
-                          .label(label)
-                          .disabled(
-                            self.local_branch_switch_loading || self.local_project_update_loading,
-                          )
-                          .on_click(move |_, window, cx| {
-                            view.update(cx, |this, cx| {
-                              this.open_overview_pr_alert_in_git_page(window, cx);
-                            });
-                          }),
-                      )
-                    }),
-                )
-                .child(div().child(content.message)),
-            ),
-        )
-        .into_any_element(),
-    )
+    if let Some(label) = action_label {
+      alert = alert.action(
+        Button::new("github-pr-overview-alert-action")
+          .small()
+          .primary()
+          .with_variant(ButtonVariant::Secondary)
+          .label(label)
+          .disabled(self.local_branch_switch_loading || self.local_project_update_loading)
+          .on_click(move |_, window, cx| {
+            view.update(cx, |this, cx| {
+              this.open_overview_pr_alert_in_git_page(window, cx);
+            });
+          }),
+      );
+    }
+
+    Some(alert.into_any_element())
   }
 
   fn current_open_target(&self) -> GithubPrOpenTarget {
