@@ -7799,13 +7799,21 @@ impl GitPage {
 
     let view = cx.entity();
     let hide_whitespace = self.hide_whitespace;
-    let whitespace_label = if hide_whitespace {
-      "Show whitespace"
+
+    let whitespace_icon = if hide_whitespace {
+      IconName::Eye
     } else {
-      "Hide whitespace"
+      IconName::EyeOff
+    };
+    let tooltip = if hide_whitespace {
+      "Show whitespace changes"
+    } else {
+      "Hide whitespace changes"
     };
     let whitespace_button = Button::new("editor-whitespace-toggle")
-      .label(whitespace_label)
+      .label("Whitespace")
+      .icon(whitespace_icon)
+      .tooltip(tooltip)
       .xsmall()
       .ghost()
       .on_click(move |_, _, cx| {
