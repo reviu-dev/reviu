@@ -3744,12 +3744,9 @@ impl GithubPrDetailsPage {
     let content = overview_pr_alert_content(self.merge_readiness.as_ref(), self.checks.as_ref())?;
     let action_label = self.overview_pr_alert_action_label(&content, cx);
     let theme = cx.theme();
-    let color = match content.kind {
-      OverviewPrAlertKind::Conflicts => theme.status_red(),
-      OverviewPrAlertKind::OutOfDate | OverviewPrAlertKind::Blocked => theme.status_orange(),
-    };
+
     let view = cx.entity();
-    let mut alert = StatusAlert::new(content.id, color, content.message.clone())
+    let mut alert = StatusAlert::new(content.id, theme.status_orange(), content.message.clone())
       .title(content.title)
       .icon(IconName::TriangleAlert);
 
