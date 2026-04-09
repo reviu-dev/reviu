@@ -18,7 +18,8 @@ use git::DiffLineKind;
 use crate::{
   document::Document,
   editor::{
-    ConflictLineKind, DEFAULT_MAX_LINE_WIDTH, DisplayCursor, Editor, GroupOverlay, ScrollAxis,
+    ConflictLineKind, DEFAULT_MAX_LINE_WIDTH, DisplayCursor, Editor, GroupOverlay,
+    REVIEW_COMMENT_UI_FONT_FAMILY, ScrollAxis,
   },
   projection::{
     ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
@@ -1199,9 +1200,8 @@ impl Element for EditorElement {
       )
     };
 
-    let style = window.text_style();
-    let font_size = style.font_size.to_pixels(window.rem_size());
-    let measured_char_width = {
+    let measure_char_width = |style: &TextStyle| {
+      let font_size = style.font_size.to_pixels(window.rem_size());
       let sample_runs = vec![TextRun {
         len: EDITOR_CHAR_WIDTH_SAMPLE.len(),
         font: style.font(),
@@ -1219,8 +1219,15 @@ impl Element for EditorElement {
       let sample_chars = EDITOR_CHAR_WIDTH_SAMPLE.chars().count().max(1) as f32;
       (shaped.x_for_index(EDITOR_CHAR_WIDTH_SAMPLE.len()) / sample_chars).max(px(1.0))
     };
+    let style = window.text_style();
+    let font_size = style.font_size.to_pixels(window.rem_size());
+    let measured_char_width = measure_char_width(&style);
+    let mut review_comment_style = style.clone();
+    review_comment_style.font_family = REVIEW_COMMENT_UI_FONT_FAMILY.into();
+    let measured_review_comment_char_width = measure_char_width(&review_comment_style);
     self.editor.update(cx, |editor, _| {
       editor.editor_char_width = measured_char_width;
+      editor.review_comment_char_width = measured_review_comment_char_width;
     });
     let line_height = measured_line_height;
 
