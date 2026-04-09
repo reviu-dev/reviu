@@ -610,7 +610,7 @@ struct ProjectionBuildInput {
   projection_comments: Vec<ReviewComment>,
   collapsed_review_comments: HashSet<u64>,
   review_comment_wrap_columns: usize,
-  review_comment_line_height_px: f32,
+  editor_line_height_px: f32,
   markdown_line_height_px: f32,
   review_comment_body_heights_px: HashMap<u64, f32>,
 }
@@ -974,6 +974,21 @@ impl Editor {
       self.review_comment_char_width
     } else {
       px(REVIEW_COMMENT_CHAR_WIDTH_PX)
+    }
+  }
+
+  pub(crate) fn set_review_comment_line_height_px(
+    &mut self,
+    line_height_px: f32,
+    cx: &mut Context<Self>,
+  ) {
+    if (line_height_px - self.review_comment_line_height_px).abs() <= 0.05 {
+      return;
+    }
+
+    self.review_comment_line_height_px = line_height_px;
+    if self.diffs.is_some() {
+      self.rebuild_projection(cx);
     }
   }
 
@@ -4293,7 +4308,7 @@ impl Editor {
       &input.projection_comments,
       &input.collapsed_review_comments,
       input.review_comment_wrap_columns,
-      input.review_comment_line_height_px,
+      input.editor_line_height_px,
       input.markdown_line_height_px,
       &input.review_comment_body_heights_px,
     )
@@ -4332,6 +4347,7 @@ impl Editor {
       return;
     }
 
+    let editor_line_height_px = (self.measured_editor_line_height() / px(1.0)).max(1.0);
     let markdown_line_height_px = self.review_comment_line_height_px;
     let wrap_columns = self.review_comment_wrap_columns;
     let mut review_comment_body_heights_px = HashMap::new();
@@ -4424,7 +4440,7 @@ impl Editor {
       projection_comments,
       collapsed_review_comments: self.collapsed_review_comments.clone(),
       review_comment_wrap_columns: self.review_comment_wrap_columns,
-      review_comment_line_height_px: self.review_comment_line_height_px,
+      editor_line_height_px,
       markdown_line_height_px,
       review_comment_body_heights_px,
     };
@@ -7155,10 +7171,17 @@ impl Render for Editor {
 
     let editor_entity = cx.entity().clone();
     let line_height = self.measured_editor_line_height();
+    let previous_editor_line_height = self.editor_line_height;
     self.editor_line_height = line_height;
     let line_height_px = (line_height / px(1.0)).max(1.0);
-    if (line_height_px - self.review_comment_line_height_px).abs() > 0.05 {
-      self.review_comment_line_height_px = line_height_px;
+    let previous_editor_line_height_px = if previous_editor_line_height > px(0.0) {
+      (previous_editor_line_height / px(1.0)).max(1.0)
+    } else {
+      0.0
+    };
+    if previous_editor_line_height_px > 0.0
+      && (line_height_px - previous_editor_line_height_px).abs() > 0.05
+    {
       if self.diffs.is_some() {
         self.rebuild_projection(cx);
       }
@@ -8160,17 +8183,19 @@ pub mod tests {
   }
 
   #[gpui::test]
-  fn test_computed_review_comment_wrap_columns_tracks_measured_char_width(cx: &mut TestAppContext) {
+  fn test_computed_review_comment_wrap_columns_tracks_review_comment_char_width(
+    cx: &mut TestAppContext,
+  ) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "line");
     ctx.editor.update(&mut ctx.cx, |editor, _| {
-      editor.editor_char_width = px(6.0);
+      editor.review_comment_char_width = px(6.0);
     });
     let narrow_columns = ctx.editor.read_with(&ctx.cx, |editor, _| {
       editor.computed_review_comment_wrap_columns()
     });
 
     ctx.editor.update(&mut ctx.cx, |editor, _| {
-      editor.editor_char_width = px(12.0);
+      editor.review_comment_char_width = px(12.0);
     });
     let wide_columns = ctx.editor.read_with(&ctx.cx, |editor, _| {
       editor.computed_review_comment_wrap_columns()
