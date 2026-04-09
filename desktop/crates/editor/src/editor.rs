@@ -47,11 +47,10 @@ use crate::{
   gutter_element::GutterElement,
   projection::{
     ChangeKind, DisplayLine, GapId, GapReveal, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
-    REVIEW_COMMENT_CARD_BORDER_PX, REVIEW_COMMENT_CARD_CONTENT_GAP_PX,
-    REVIEW_COMMENT_CARD_PADDING_X_PX, REVIEW_COMMENT_FIRST_MESSAGE_BOTTOM_PADDING_PX,
-    REVIEW_COMMENT_HEADER_HEIGHT_LINES, REVIEW_COMMENT_REPLY_BORDER_TOP_PX,
-    REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX, REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX,
-    ReviewComment, ReviewCommentSide,
+    REVIEW_COMMENT_CARD_BORDER_PX, REVIEW_COMMENT_CARD_PADDING_X_PX,
+    REVIEW_COMMENT_HEADER_BODY_GAP_PX, REVIEW_COMMENT_HEADER_HEIGHT_LINES,
+    REVIEW_COMMENT_REPLY_BORDER_TOP_PX, REVIEW_COMMENT_VERTICAL_PADDING_PX, ReviewComment,
+    ReviewCommentSide,
   },
   text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
 };
@@ -104,6 +103,7 @@ const REVIEW_COMMENT_DEFAULT_WRAP_COLUMNS: usize = 72;
 const REVIEW_COMMENT_MIN_WRAP_COLUMNS: usize = 28;
 const REVIEW_COMMENT_MAX_WRAP_COLUMNS: usize = 180;
 const REVIEW_COMMENT_CHAR_WIDTH_PX: f32 = 7.8;
+pub(crate) const REVIEW_COMMENT_UI_FONT_FAMILY: &str = ".SystemUIFont";
 const REVIEW_COMMENT_HORIZONTAL_PADDING_PX: f32 =
   REVIEW_COMMENT_CARD_PADDING_X_PX * 2.0 + REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
 const REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX: f32 = 20.0;
@@ -460,6 +460,7 @@ pub struct Editor {
   pub scroll_offset_y: f32, // Vertical scroll offset in lines (0.0 = top, 1.5 = 1.5 lines down)
   pub editor_line_height: Pixels,
   pub editor_char_width: Pixels,
+  pub review_comment_char_width: Pixels,
   pub viewport_height: Pixels,
   pub viewport_width: Pixels,
   pub max_line_width: Pixels, // Maximum width of visible lines (never decreases to avoid scroll jumps)
@@ -850,6 +851,7 @@ impl Editor {
       scroll_offset_y: 0.0,
       editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
       editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
+      review_comment_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
       viewport_height: px(DEFAULT_VIEWPORT_HEIGHT), // Will be updated on first render
       viewport_width: px(DEFAULT_VIEWPORT_WIDTH),   // Will be updated on first render
       max_line_width: px(DEFAULT_MAX_LINE_WIDTH),   // Will be updated on first render
@@ -962,6 +964,14 @@ impl Editor {
   pub fn measured_editor_char_width(&self) -> Pixels {
     if self.editor_char_width > px(0.0) {
       self.editor_char_width
+    } else {
+      px(REVIEW_COMMENT_CHAR_WIDTH_PX)
+    }
+  }
+
+  pub fn measured_review_comment_char_width(&self) -> Pixels {
+    if self.review_comment_char_width > px(0.0) {
+      self.review_comment_char_width
     } else {
       px(REVIEW_COMMENT_CHAR_WIDTH_PX)
     }
@@ -1195,7 +1205,7 @@ impl Editor {
   }
 
   fn computed_review_comment_wrap_columns(&self) -> usize {
-    let char_width_px = (self.measured_editor_char_width() / px(1.0)).max(1.0);
+    let char_width_px = (self.measured_review_comment_char_width() / px(1.0)).max(1.0);
     let available_px =
       (REVIEW_COMMENT_FIXED_WIDTH_PX - REVIEW_COMMENT_HORIZONTAL_PADDING_PX).max(char_width_px);
     let columns = (available_px / char_width_px).floor() as usize;
@@ -3251,7 +3261,7 @@ impl Editor {
             .when_some(first_message.avatar_url.clone(), |this, url| {
               this.src(url.as_ref().to_string())
             })
-            .xsmall(),
+            .small(),
         )
         .child(
           div()
@@ -3514,7 +3524,7 @@ impl Editor {
 
         let message_block = if index == 0 {
           v_flex()
-            .pb(px(REVIEW_COMMENT_FIRST_MESSAGE_BOTTOM_PADDING_PX))
+            .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
             .child(body)
         } else {
           let message_line_label: Option<Arc<str>> = None;
@@ -3607,8 +3617,8 @@ impl Editor {
           };
 
           v_flex()
-            .py(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
-            .gap(px(REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX))
+            .py(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
+            .gap(px(REVIEW_COMMENT_HEADER_BODY_GAP_PX))
             .border_t(px(REVIEW_COMMENT_REPLY_BORDER_TOP_PX))
             .border_color(theme.border)
             .child(
@@ -3626,7 +3636,7 @@ impl Editor {
                         .when_some(message.avatar_url.clone(), |this, url| {
                           this.src(url.as_ref().to_string())
                         })
-                        .xsmall(),
+                        .small(),
                     )
                     .child(
                       div()
@@ -3685,9 +3695,9 @@ impl Editor {
             let reply_error = self.review_comment_reply_error.clone();
             v_flex()
               .on_action(cx.listener(Self::on_review_comment_reply_input_escape))
-              .pt(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
-              .pb(px(REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX / 2.0))
-              .gap(px(REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX))
+              .pt(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
+              .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
+              .gap(px(REVIEW_COMMENT_HEADER_BODY_GAP_PX))
               .border_t(px(REVIEW_COMMENT_REPLY_BORDER_TOP_PX))
               .border_color(theme.border)
               .child(
@@ -3784,6 +3794,7 @@ impl Editor {
         .border(px(REVIEW_COMMENT_CARD_BORDER_PX))
         .border_color(theme.border)
         .rounded_r_md()
+        .font_family(REVIEW_COMMENT_UI_FONT_FAMILY)
         .cursor(CursorStyle::Arrow)
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
           cx.stop_propagation();
@@ -3791,7 +3802,6 @@ impl Editor {
         .child(
           v_flex()
             .px(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
-            .gap(px(REVIEW_COMMENT_CARD_CONTENT_GAP_PX))
             .child(header)
             .when(!is_collapsed, |this| this.child(thread_messages)),
         );
@@ -8324,6 +8334,7 @@ pub mod tests {
           scroll_offset_y: 0.0,
           editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
           editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
+          review_comment_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
           viewport_height: px(DEFAULT_VIEWPORT_HEIGHT),
           viewport_width: px(DEFAULT_VIEWPORT_WIDTH),
           max_line_width: px(DEFAULT_MAX_LINE_WIDTH),

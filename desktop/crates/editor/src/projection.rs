@@ -14,9 +14,8 @@ pub const REVIEW_COMMENT_HEADER_HEIGHT_LINES: f32 = 2.0;
 pub const REVIEW_COMMENT_CARD_BORDER_PX: f32 = 1.0;
 pub const REVIEW_COMMENT_CARD_PADDING_X_PX: f32 = 12.0;
 pub const REVIEW_COMMENT_CARD_CONTENT_GAP_PX: f32 = 4.0;
-pub const REVIEW_COMMENT_FIRST_MESSAGE_BOTTOM_PADDING_PX: f32 = 16.0;
-pub const REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX: f32 = 20.0;
-pub const REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX: f32 = 12.0;
+pub const REVIEW_COMMENT_VERTICAL_PADDING_PX: f32 = 12.0;
+pub const REVIEW_COMMENT_HEADER_BODY_GAP_PX: f32 = 10.0;
 pub const REVIEW_COMMENT_REPLY_BORDER_TOP_PX: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -600,19 +599,18 @@ fn estimated_expanded_thread_height_px(
 
   let mut total_px = REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
   total_px += editor_line_height_px * REVIEW_COMMENT_HEADER_HEIGHT_LINES;
-  total_px += REVIEW_COMMENT_CARD_CONTENT_GAP_PX;
 
   let first_message = thread_comments[0];
   total_px += comment_body_heights_px
     .get(&first_message.id)
     .copied()
     .unwrap_or(fallback_markdown_height_px);
-  total_px += REVIEW_COMMENT_FIRST_MESSAGE_BOTTOM_PADDING_PX;
+  total_px += REVIEW_COMMENT_VERTICAL_PADDING_PX;
 
   for reply in thread_comments.iter().skip(1) {
-    total_px += REVIEW_COMMENT_REPLY_VERTICAL_PADDING_PX;
+    total_px += REVIEW_COMMENT_VERTICAL_PADDING_PX * 2.0;
     total_px += REVIEW_COMMENT_REPLY_BORDER_TOP_PX;
-    total_px += REVIEW_COMMENT_REPLY_HEADER_BODY_GAP_PX;
+    total_px += REVIEW_COMMENT_HEADER_BODY_GAP_PX;
     total_px += editor_line_height_px;
     total_px += comment_body_heights_px
       .get(&reply.id)
