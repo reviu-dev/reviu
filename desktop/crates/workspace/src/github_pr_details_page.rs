@@ -5104,6 +5104,10 @@ impl GithubPrDetailsPage {
         }
       });
       editor.set_review_comment_link_handler(Some(link_handler), cx);
+      editor.set_review_comment_asset_url_resolver(
+        Some(github_shared::make_asset_url_resolver(&self.api)),
+        cx,
+      );
     });
   }
 
@@ -5123,6 +5127,7 @@ impl GithubPrDetailsPage {
       editor.set_review_comment_edit_handler(None, cx);
       editor.set_review_comment_delete_handler(None, cx);
       editor.set_review_comment_create_handler(None, cx);
+      editor.set_review_comment_asset_url_resolver(None, cx);
       editor.set_review_comment_pr_number(None, cx);
       editor.set_editable_review_comment_ids(std::iter::empty::<u64>(), cx);
       editor.set_review_comments(Vec::new(), cx);
