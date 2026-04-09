@@ -163,6 +163,7 @@ pub type ReviewCommentCreateHandler =
   Arc<dyn Fn(ReviewCommentCreateRequest, &mut Window, &mut App)>;
 pub type ReviewCommentDeleteHandler = Arc<dyn Fn(u64, &mut Window, &mut App)>;
 pub type ReviewCommentLinkHandler = Arc<dyn Fn(&str, &mut Window, &mut App) -> bool>;
+type ReviewCommentAssetUrlResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReviewCommentCodeReferencePreview {
@@ -511,6 +512,7 @@ pub struct Editor {
   review_comment_delete_submitting_id: Option<u64>,
   review_comment_create_handler: Option<ReviewCommentCreateHandler>,
   review_comment_link_handler: Option<ReviewCommentLinkHandler>,
+  review_comment_asset_url_resolver: Option<ReviewCommentAssetUrlResolver>,
   review_comment_create_input: Option<Entity<InputState>>,
   review_comment_create_draft: Option<ReviewCommentCreateDraft>,
   review_comment_create_drag_start_display_line: Option<usize>,
@@ -897,6 +899,7 @@ impl Editor {
       review_comment_delete_submitting_id: None,
       review_comment_create_handler: None,
       review_comment_link_handler: None,
+      review_comment_asset_url_resolver: None,
       review_comment_create_input: None,
       review_comment_create_draft: None,
       review_comment_create_drag_start_display_line: None,
@@ -1497,6 +1500,20 @@ impl Editor {
     estimated
   }
 
+  fn review_comment_markdown_options(
+    &self,
+    state: MarkdownRenderState,
+    scope_id: usize,
+  ) -> MarkdownRenderOptions {
+    let mut options = MarkdownRenderOptions::default()
+      .with_state(state)
+      .with_scope_id(scope_id);
+    if let Some(resolver) = self.review_comment_asset_url_resolver.clone() {
+      options = options.with_asset_url_resolver(resolver);
+    }
+    options
+  }
+
   pub fn set_review_comment_pr_number(&mut self, pr_number: Option<u64>, cx: &mut Context<Self>) {
     if self.review_comment_pr_number != pr_number {
       self.review_comment_pr_number = pr_number;
@@ -1579,6 +1596,15 @@ impl Editor {
     cx: &mut Context<Self>,
   ) {
     self.review_comment_link_handler = handler;
+    cx.notify();
+  }
+
+  pub fn set_review_comment_asset_url_resolver(
+    &mut self,
+    resolver: Option<ReviewCommentAssetUrlResolver>,
+    cx: &mut Context<Self>,
+  ) {
+    self.review_comment_asset_url_resolver = resolver;
     cx.notify();
   }
 
@@ -3417,14 +3443,10 @@ impl Editor {
               .unwrap_or_else(MarkdownRenderState::new);
             let parsed =
               self.cached_parsed_review_comment_markdown(message.id, message.body.as_ref());
-            render_parsed_markdown(
-              &parsed,
-              &MarkdownRenderOptions::with_on_link(link_handler.clone())
-                .with_state(state)
-                .with_scope_id(review_comment_markdown_scope_id(message.id)),
-              cx,
-            )
-            .into_any_element()
+            let mut options = self
+              .review_comment_markdown_options(state, review_comment_markdown_scope_id(message.id));
+            options.on_link = Some(link_handler.clone());
+            render_parsed_markdown(&parsed, &options, cx).into_any_element()
           }
         } else {
           let has_previews = self
@@ -3439,14 +3461,10 @@ impl Editor {
               .unwrap_or_else(MarkdownRenderState::new);
             let parsed =
               self.cached_parsed_review_comment_markdown(message.id, message.body.as_ref());
-            render_parsed_markdown(
-              &parsed,
-              &MarkdownRenderOptions::with_on_link(link_handler.clone())
-                .with_state(state)
-                .with_scope_id(review_comment_markdown_scope_id(message.id)),
-              cx,
-            )
-            .into_any_element()
+            let mut options = self
+              .review_comment_markdown_options(state, review_comment_markdown_scope_id(message.id));
+            options.on_link = Some(link_handler.clone());
+            render_parsed_markdown(&parsed, &options, cx).into_any_element()
           } else {
             let segments = self.review_comment_body_segments(message.id, message.body.as_ref());
             let state = self
@@ -3464,19 +3482,13 @@ impl Editor {
                     continue;
                   }
                   let parsed = parse_markdown(markdown);
-                  rendered = rendered.child(
-                    render_parsed_markdown(
-                      &parsed,
-                      &MarkdownRenderOptions::with_on_link(link_handler.clone())
-                        .with_state(state.clone())
-                        .with_scope_id(review_comment_markdown_segment_scope_id(
-                          message.id,
-                          segment_index,
-                        )),
-                      cx,
-                    )
-                    .into_any_element(),
+                  let mut options = self.review_comment_markdown_options(
+                    state.clone(),
+                    review_comment_markdown_segment_scope_id(message.id, segment_index),
                   );
+                  options.on_link = Some(link_handler.clone());
+                  rendered = rendered
+                    .child(render_parsed_markdown(&parsed, &options, cx).into_any_element());
                   has_rendered_content = true;
                 }
                 ReviewCommentBodySegment::Preview(preview) => {
@@ -8052,6 +8064,21 @@ pub mod tests {
   }
 
   #[gpui::test]
+  fn review_comment_markdown_options_include_asset_url_resolver(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "line");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let resolver: ReviewCommentAssetUrlResolver =
+        Arc::new(|_| Some("https://example.com/image.png".to_string()));
+      editor.set_review_comment_asset_url_resolver(Some(resolver), cx);
+
+      let options = editor.review_comment_markdown_options(MarkdownRenderState::new(), 42);
+
+      assert!(options.asset_url_resolver.is_some());
+    });
+  }
+
+  #[gpui::test]
   fn as_gfm_code_reference_preview_preserves_fields(cx: &mut TestAppContext) {
     let _ = cx;
     let preview = ReviewCommentCodeReferencePreview {
@@ -8263,6 +8290,7 @@ pub mod tests {
           review_comment_delete_submitting_id: None,
           review_comment_create_handler: None,
           review_comment_link_handler: None,
+          review_comment_asset_url_resolver: None,
           review_comment_create_input: None,
           review_comment_create_draft: None,
           review_comment_create_drag_start_display_line: None,

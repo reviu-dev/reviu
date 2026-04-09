@@ -1,5 +1,8 @@
 use crate::constants::*;
-use crate::image::inline_contains_image;
+use crate::image::{
+  InlineImageData, MarkdownImageDimension, inline_contains_image, inline_image_data,
+  parse_markdown_image_dimension, single_inline_image_data, split_inlines_by_hard_breaks,
+};
 use crate::parse::inline_to_plain_text;
 use crate::parsed_cache::parse_markdown_for_render;
 use crate::types::*;
@@ -53,10 +56,11 @@ pub(crate) fn estimate_block_height_px(
   indent: usize,
 ) -> f32 {
   match block {
-    Block::Paragraph(inlines) => {
-      estimate_inline_lines(inlines, wrap_columns_for_indent(wrap_columns, indent)) as f32
-        * line_height_px
-    }
+    Block::Paragraph(inlines) => estimate_inline_content_height_px(
+      inlines,
+      wrap_columns_for_indent(wrap_columns, indent),
+      line_height_px,
+    ),
     Block::Heading { level, content } => {
       let lines =
         estimate_inline_lines(content, wrap_columns_for_indent(wrap_columns, indent)).max(1);
@@ -160,6 +164,108 @@ pub(crate) fn estimate_table_row_content_height_px(
     max_height = max_height.max(cell_height);
   }
   max_height
+}
+
+pub(crate) fn estimate_inline_content_height_px(
+  inlines: &[Inline],
+  wrap_columns: usize,
+  line_height_px: f32,
+) -> f32 {
+  if !inlines.iter().any(inline_contains_image) {
+    return estimate_inline_lines(inlines, wrap_columns).max(1) as f32 * line_height_px;
+  }
+
+  if let Some(image_data) = single_inline_image_data(inlines) {
+    return estimate_image_height_px(&image_data, wrap_columns, line_height_px);
+  }
+
+  let rows = split_inlines_by_hard_breaks(inlines);
+  let mut total = 0.0f32;
+
+  for (row_ix, row) in rows.iter().enumerate() {
+    total += estimate_inline_row_height_px(row, wrap_columns, line_height_px);
+    if row_ix + 1 < rows.len() {
+      total += MARKDOWN_IMAGE_HARD_BREAK_SPACER_PX;
+    }
+  }
+
+  total.max(line_height_px)
+}
+
+fn estimate_inline_row_height_px(
+  inlines: &[Inline],
+  wrap_columns: usize,
+  line_height_px: f32,
+) -> f32 {
+  if inlines.is_empty() {
+    return line_height_px;
+  }
+
+  let mut total = 0.0f32;
+  let mut row_height = 0.0f32;
+  let mut text_chunk: Vec<Inline> = Vec::new();
+
+  for inline in inlines {
+    if let Some(image_data) = inline_image_data(inline) {
+      if !text_chunk.is_empty() {
+        let text_height =
+          estimate_inline_lines(&text_chunk, wrap_columns).max(1) as f32 * line_height_px;
+        row_height = row_height.max(text_height);
+        text_chunk.clear();
+      }
+
+      let image_height = estimate_image_height_px(&image_data, wrap_columns, line_height_px);
+      if image_data.is_block_sized() {
+        total += row_height;
+        total += image_height;
+        row_height = 0.0;
+      } else {
+        row_height = row_height.max(image_height);
+      }
+    } else {
+      text_chunk.push(inline.clone());
+    }
+  }
+
+  if !text_chunk.is_empty() {
+    let text_height =
+      estimate_inline_lines(&text_chunk, wrap_columns).max(1) as f32 * line_height_px;
+    row_height = row_height.max(text_height);
+  }
+
+  (total + row_height).max(line_height_px)
+}
+
+fn estimate_image_height_px(
+  image_data: &InlineImageData,
+  wrap_columns: usize,
+  line_height_px: f32,
+) -> f32 {
+  let line_height_px = line_height_px.max(1.0);
+  let available_width_px = (wrap_columns.max(MARKDOWN_MIN_WRAP_COLUMNS) as f32
+    * MARKDOWN_CHAR_WIDTH_PX)
+    .max(line_height_px);
+
+  let width_hint = parse_markdown_image_dimension(image_data.width_hint.as_deref());
+  let height_hint = parse_markdown_image_dimension(image_data.height_hint.as_deref());
+
+  let estimated = match (width_hint, height_hint) {
+    (Some(MarkdownImageDimension::Pixels(width)), Some(MarkdownImageDimension::Pixels(height))) => {
+      let clamped_width = width.max(1.0).min(available_width_px);
+      height.max(1.0) * (clamped_width / width.max(1.0))
+    }
+    (_, Some(MarkdownImageDimension::Pixels(height))) => height.max(1.0),
+    (Some(MarkdownImageDimension::Pixels(width)), _) if image_data.is_block_sized() => {
+      let clamped_width = width.max(1.0).min(available_width_px);
+      clamped_width * 9.0 / 16.0
+    }
+    _ if image_data.is_block_sized() => available_width_px * 9.0 / 16.0,
+    _ => 18.0,
+  };
+
+  estimated
+    .max(line_height_px)
+    .min(MARKDOWN_INLINE_IMAGE_MAX_HEIGHT_PX)
 }
 
 pub(crate) fn wrap_columns_for_indent(base_wrap_columns: usize, indent: usize) -> usize {
@@ -275,4 +381,38 @@ pub(crate) fn estimate_code_reference_preview_min_content_width_px(
   (widest_row_columns * MARKDOWN_CODE_BLOCK_APPROX_CHAR_WIDTH_PX
     + MARKDOWN_CODE_REFERENCE_ROW_GAP_PX)
     .ceil()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::estimate_parsed_markdown_height_px;
+  use crate::parsed_cache::parse_markdown_for_render;
+
+  #[test]
+  fn explicit_image_dimensions_reserve_more_than_a_single_text_line() {
+    let parsed = parse_markdown_for_render(
+      r#"<img width="1159" height="272" alt="Image" src="https://github.com/user-attachments/assets/525e1fe3-1159-47ea-a1ac-8926a03c9cd1" />"#,
+    );
+
+    let height = estimate_parsed_markdown_height_px(&parsed, 72, 20.0);
+
+    assert!(
+      height > 100.0,
+      "image height should reserve more than a single line"
+    );
+  }
+
+  #[test]
+  fn bare_user_attachment_links_reserve_block_image_height() {
+    let parsed = parse_markdown_for_render(
+      "https://github.com/user-attachments/assets/4aa12d28-968a-490d-81ee-32bbbb595fc4",
+    );
+
+    let height = estimate_parsed_markdown_height_px(&parsed, 72, 20.0);
+
+    assert!(
+      height > 100.0,
+      "attachment links should reserve block image space"
+    );
+  }
 }
