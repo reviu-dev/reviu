@@ -484,6 +484,78 @@ fn sort_commits_desc(commits: &mut [GithubPullRequestCommit]) {
   commits.sort_by(|a, b| commit_sort_timestamp(b).cmp(commit_sort_timestamp(a)));
 }
 
+fn parse_github_commit_url(url: &str) -> Option<(String, String, String)> {
+  let url = url.trim();
+  let tail = url
+    .strip_prefix("https://github.com/")
+    .or_else(|| url.strip_prefix("http://github.com/"))
+    .or_else(|| url.strip_prefix("github.com/"))?;
+  let tail = tail
+    .split('#')
+    .next()
+    .unwrap_or(tail)
+    .split('?')
+    .next()
+    .unwrap_or(tail);
+
+  let parts = tail
+    .split('/')
+    .map(str::trim)
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>();
+  if parts.len() < 4 {
+    return None;
+  }
+
+  let owner = parts[0].to_string();
+  let repo = parts[1].to_string();
+  let sha = match parts[2] {
+    "commit" => parts.get(3)?,
+    "pull" if parts.get(4).copied() == Some("commits") => parts.get(5)?,
+    _ => return None,
+  };
+
+  Some((owner, repo, (*sha).to_string()))
+}
+
+fn resolve_same_pr_commit_link_sha(
+  current_pr_context: Option<&CurrentPrContext>,
+  commits: &[GithubPullRequestCommit],
+  url: &str,
+) -> Option<String> {
+  let (owner, repo, linked_sha) = parse_github_commit_url(url)?;
+  let context = current_pr_context?;
+  if !context.owner.eq_ignore_ascii_case(&owner) || !context.repo.eq_ignore_ascii_case(&repo) {
+    return None;
+  }
+
+  let linked_sha = linked_sha.trim();
+  if linked_sha.is_empty() {
+    return None;
+  }
+
+  if let Some(commit) = commits
+    .iter()
+    .find(|commit| commit.sha.eq_ignore_ascii_case(linked_sha))
+  {
+    return Some(commit.sha.clone());
+  }
+
+  let linked_sha = linked_sha.to_ascii_lowercase();
+  let mut matches = commits.iter().filter(|commit| {
+    commit
+      .sha
+      .to_ascii_lowercase()
+      .starts_with(linked_sha.as_str())
+  });
+  let first_match = matches.next()?;
+  if matches.next().is_some() {
+    return None;
+  }
+
+  Some(first_match.sha.clone())
+}
+
 fn resolve_diff_shas_for_context(
   merge_base_sha: &str,
   base_sha: &str,
@@ -5145,6 +5217,16 @@ impl GithubPrDetailsPage {
     }
 
     if github_shared::try_open_github_asset_url(url, &self.api, cx) {
+      return true;
+    }
+
+    if let Some(commit_sha) =
+      resolve_same_pr_commit_link_sha(self.current_pr_context.as_ref(), &self.commits, url)
+    {
+      if self.active_tab_ix != PR_TAB_CHANGES_IX {
+        self.set_active_tab(PR_TAB_CHANGES_IX, window, cx);
+      }
+      self.select_commit_filter(Some(commit_sha), cx);
       return true;
     }
 
@@ -12737,9 +12819,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn refresh_current_page_starts_commits_and_checks_for_all_tabs(
-    cx: &mut TestAppContext,
-  ) {
+  async fn refresh_current_page_starts_commits_and_checks_for_all_tabs(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     cx.executor().allow_parking();
     assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_OVERVIEW_IX, cx).await;
@@ -13703,6 +13783,50 @@ mod tests {
     assert!(selected_local_project_file.is_none());
   }
 
+  #[gpui::test]
+  async fn same_pr_commit_links_switch_to_changes_and_select_the_commit(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+      gpui_router::init(cx);
+      NavigationHistory::init(cx);
+      NavigationHistory::navigate_replace("/github/acme/widget/pull/42", cx);
+    });
+    let target_sha = "abcdef1234567890abcdef1234567890abcdef12";
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    let files_task = page.update_in(cx, |this, window, cx| {
+      this.api = make_test_api_client("http://127.0.0.1:1");
+      this.current_pr_context = Some(CurrentPrContext {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+        number: 42,
+      });
+      this.commits = vec![make_api_commit(
+        target_sha,
+        "feat: add filter",
+        Some("2026-02-26T10:00:00Z"),
+        Some("0000000000000000000000000000000000000000"),
+      )];
+      this.active_tab_ix = PR_TAB_OVERVIEW_IX;
+
+      let handled =
+        this.handle_gfm_link("https://github.com/acme/widget/commit/abcdef1", window, cx);
+      assert!(handled);
+
+      this.files_task.take()
+    });
+    if let Some(task) = files_task {
+      task.await;
+    }
+
+    let (active_tab_ix, selected_commit_sha) = page.read_with(cx, |this, _cx| {
+      (this.active_tab_ix, this.selected_commit_sha.clone())
+    });
+    assert_eq!(active_tab_ix, PR_TAB_CHANGES_IX);
+    assert_eq!(selected_commit_sha.as_deref(), Some(target_sha));
+  }
+
   fn make_issue_comment(id: u64, created_at: &str, body: &str) -> GithubPullRequestIssueComment {
     GithubPullRequestIssueComment {
       id,
@@ -14405,6 +14529,114 @@ mod tests {
     let labels = overview_change_stat_labels(&pr);
 
     assert_eq!(labels, ["+20".to_string(), "-4".to_string()]);
+  }
+
+  #[test]
+  fn parse_github_commit_url_accepts_repository_commit_urls() {
+    let parsed = parse_github_commit_url("https://github.com/acme/widget/commit/abcdef1234567890");
+    assert_eq!(
+      parsed,
+      Some((
+        "acme".to_string(),
+        "widget".to_string(),
+        "abcdef1234567890".to_string(),
+      ))
+    );
+  }
+
+  #[test]
+  fn parse_github_commit_url_accepts_pull_request_commit_urls() {
+    let parsed = parse_github_commit_url(
+      "https://github.com/acme/widget/pull/42/commits/abcdef1234567890?diff=split",
+    );
+    assert_eq!(
+      parsed,
+      Some((
+        "acme".to_string(),
+        "widget".to_string(),
+        "abcdef1234567890".to_string(),
+      ))
+    );
+  }
+
+  #[test]
+  fn resolve_same_pr_commit_link_sha_matches_exact_and_unique_prefix_links() {
+    let commits = vec![
+      make_api_commit(
+        "abcdef1234567890abcdef1234567890abcdef12",
+        "first",
+        Some("2026-02-20T10:00:00Z"),
+        Some("p1"),
+      ),
+      make_api_commit(
+        "fedcba9876543210fedcba9876543210fedcba98",
+        "second",
+        Some("2026-02-21T10:00:00Z"),
+        Some("p2"),
+      ),
+    ];
+    let context = CurrentPrContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      number: 42,
+    };
+
+    let exact = resolve_same_pr_commit_link_sha(
+      Some(&context),
+      &commits,
+      "https://github.com/acme/widget/commit/abcdef1234567890abcdef1234567890abcdef12",
+    );
+    assert_eq!(
+      exact.as_deref(),
+      Some("abcdef1234567890abcdef1234567890abcdef12")
+    );
+
+    let prefix = resolve_same_pr_commit_link_sha(
+      Some(&context),
+      &commits,
+      "https://github.com/acme/widget/commit/fedcba9",
+    );
+    assert_eq!(
+      prefix.as_deref(),
+      Some("fedcba9876543210fedcba9876543210fedcba98")
+    );
+  }
+
+  #[test]
+  fn resolve_same_pr_commit_link_sha_rejects_other_repos_and_ambiguous_prefixes() {
+    let commits = vec![
+      make_api_commit(
+        "abcdef1234567890abcdef1234567890abcdef12",
+        "first",
+        Some("2026-02-20T10:00:00Z"),
+        Some("p1"),
+      ),
+      make_api_commit(
+        "abcdef9999999999abcdef9999999999abcdef99",
+        "second",
+        Some("2026-02-21T10:00:00Z"),
+        Some("p2"),
+      ),
+    ];
+    let context = CurrentPrContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      number: 42,
+    };
+
+    let other_repo = resolve_same_pr_commit_link_sha(
+      Some(&context),
+      &commits,
+      "https://github.com/acme/other/commit/abcdef1234567890abcdef1234567890abcdef12",
+    );
+    assert!(other_repo.is_none());
+
+    let ambiguous = resolve_same_pr_commit_link_sha(
+      Some(&context),
+      &commits,
+      "https://github.com/acme/widget/commit/abcdef",
+    );
+    assert!(ambiguous.is_none());
   }
 
   #[test]

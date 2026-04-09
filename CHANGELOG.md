@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.0.14
+
+### Commit Links in Pull Request Comments
+
+Commit links inside pull request comments now stay inside the current review when they point to a commit from the same pull request, clicking one of those links opens the Changes tab and selects the matching commit in the existing commit filter.
+
 ## 0.0.13
 
 ### Edit Branch Commits (In-Place Interactive Rebase)
