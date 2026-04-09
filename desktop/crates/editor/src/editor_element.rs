@@ -3,7 +3,7 @@ use gpui::{
   GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, LayoutId, MouseButton,
   MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Path, PathBuilder, Pixels, Point,
   ScrollDelta, ScrollWheelEvent, ShapedLine, Style, TextAlign, TextRun, TextStyle, Window, fill,
-  point, prelude::*, px, relative, size,
+  point, prelude::*, px, relative, rems, size,
 };
 use std::{
   collections::{HashMap, HashSet},
@@ -50,6 +50,8 @@ const CONFLICT_MARKER_ALPHA_MULTIPLIER: f32 = 1.35;
 const WORD_DIFF_MAX_COMBINED_BYTES: usize = 2_048;
 const EDITOR_CHAR_WIDTH_SAMPLE: &str =
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
+const REVIEW_COMMENT_CHAR_WIDTH_SAMPLE: &str =
+  "the quick brown fox jumps over the lazy dog, with spaces and punctuation. ";
 
 fn clamp_to_char_boundary(text: &str, byte_offset: usize) -> usize {
   let mut byte_offset = byte_offset.min(text.len());
@@ -1200,10 +1202,10 @@ impl Element for EditorElement {
       )
     };
 
-    let measure_char_width = |style: &TextStyle| {
+    let measure_char_width = |style: &TextStyle, sample: &'static str| {
       let font_size = style.font_size.to_pixels(window.rem_size());
       let sample_runs = vec![TextRun {
-        len: EDITOR_CHAR_WIDTH_SAMPLE.len(),
+        len: sample.len(),
         font: style.font(),
         color: style.color,
         background_color: None,
@@ -1211,23 +1213,31 @@ impl Element for EditorElement {
         strikethrough: None,
       }];
       let shaped = window.text_system().shape_line(
-        EDITOR_CHAR_WIDTH_SAMPLE.into(),
+        sample.into(),
         font_size,
         &sample_runs,
         None,
       );
-      let sample_chars = EDITOR_CHAR_WIDTH_SAMPLE.chars().count().max(1) as f32;
-      (shaped.x_for_index(EDITOR_CHAR_WIDTH_SAMPLE.len()) / sample_chars).max(px(1.0))
+      let sample_chars = sample.chars().count().max(1) as f32;
+      (shaped.x_for_index(sample.len()) / sample_chars).max(px(1.0))
     };
     let style = window.text_style();
     let font_size = style.font_size.to_pixels(window.rem_size());
-    let measured_char_width = measure_char_width(&style);
+    let measured_char_width = measure_char_width(&style, EDITOR_CHAR_WIDTH_SAMPLE);
     let mut review_comment_style = style.clone();
     review_comment_style.font_family = REVIEW_COMMENT_UI_FONT_FAMILY.into();
-    let measured_review_comment_char_width = measure_char_width(&review_comment_style);
-    self.editor.update(cx, |editor, _| {
+    review_comment_style.font_size = rems(0.875).into();
+    let measured_review_comment_char_width =
+      measure_char_width(&review_comment_style, REVIEW_COMMENT_CHAR_WIDTH_SAMPLE);
+    let measured_review_comment_line_height =
+      review_comment_style.line_height_in_pixels(window.rem_size()).max(px(1.0));
+    self.editor.update(cx, |editor, cx| {
       editor.editor_char_width = measured_char_width;
       editor.review_comment_char_width = measured_review_comment_char_width;
+      editor.set_review_comment_line_height_px(
+        (measured_review_comment_line_height / px(1.0)).max(1.0),
+        cx,
+      );
     });
     let line_height = measured_line_height;
 
