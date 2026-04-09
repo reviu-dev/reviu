@@ -1212,12 +1212,9 @@ impl Element for EditorElement {
         underline: None,
         strikethrough: None,
       }];
-      let shaped = window.text_system().shape_line(
-        sample.into(),
-        font_size,
-        &sample_runs,
-        None,
-      );
+      let shaped = window
+        .text_system()
+        .shape_line(sample.into(), font_size, &sample_runs, None);
       let sample_chars = sample.chars().count().max(1) as f32;
       (shaped.x_for_index(sample.len()) / sample_chars).max(px(1.0))
     };
@@ -1229,8 +1226,9 @@ impl Element for EditorElement {
     review_comment_style.font_size = rems(0.875).into();
     let measured_review_comment_char_width =
       measure_char_width(&review_comment_style, REVIEW_COMMENT_CHAR_WIDTH_SAMPLE);
-    let measured_review_comment_line_height =
-      review_comment_style.line_height_in_pixels(window.rem_size()).max(px(1.0));
+    let measured_review_comment_line_height = review_comment_style
+      .line_height_in_pixels(window.rem_size())
+      .max(px(1.0));
     self.editor.update(cx, |editor, cx| {
       editor.editor_char_width = measured_char_width;
       editor.review_comment_char_width = measured_review_comment_char_width;
