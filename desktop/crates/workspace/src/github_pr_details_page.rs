@@ -12615,7 +12615,7 @@ mod tests {
     ));
   }
 
-  fn assert_refresh_current_page_starts_commits_and_checks_for_tab(
+  async fn assert_refresh_current_page_starts_commits_and_checks_for_tab(
     active_tab_ix: usize,
     cx: &mut TestAppContext,
   ) {
@@ -12631,6 +12631,7 @@ mod tests {
       review_comments_loading,
       files_loading,
     ) = page.update_in(cx, |this, _window, cx| {
+      this.api = make_test_api_client("http://127.0.0.1:1");
       this.current_pr_context = Some(CurrentPrContext {
         owner: "acme".to_string(),
         repo: "widget".to_string(),
@@ -12700,14 +12701,50 @@ mod tests {
       }
       _ => unreachable!(),
     }
+
+    let tasks = page.update_in(cx, |this, _window, _cx| {
+      let mut tasks = Vec::new();
+      if let Some(task) = this.details_task.take() {
+        tasks.push(task);
+      }
+      if let Some(task) = this.merge_readiness_task.take() {
+        tasks.push(task);
+      }
+      if let Some(task) = this.commits_task.take() {
+        tasks.push(task);
+      }
+      if let Some(task) = this.checks_task.take() {
+        tasks.push(task);
+      }
+      if let Some(task) = this.issue_comments_task.take() {
+        tasks.push(task);
+      }
+      if let Some(task) = this.reviews_task.take() {
+        tasks.push(task);
+      }
+      if let Some(task) = this.review_comments_task.take() {
+        tasks.push(task);
+      }
+      if let Some(task) = this.files_task.take() {
+        tasks.push(task);
+      }
+      tasks
+    });
+
+    for task in tasks {
+      task.await;
+    }
   }
 
   #[gpui::test]
-  fn refresh_current_page_starts_commits_and_checks_for_all_tabs(cx: &mut TestAppContext) {
+  async fn refresh_current_page_starts_commits_and_checks_for_all_tabs(
+    cx: &mut TestAppContext,
+  ) {
     init_gpui_test(cx);
-    assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_OVERVIEW_IX, cx);
-    assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_CHANGES_IX, cx);
-    assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_CHECKS_IX, cx);
+    cx.executor().allow_parking();
+    assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_OVERVIEW_IX, cx).await;
+    assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_CHANGES_IX, cx).await;
+    assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_CHECKS_IX, cx).await;
   }
 
   #[test]
