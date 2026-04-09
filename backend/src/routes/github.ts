@@ -172,8 +172,6 @@ import {
   patchGithubPullRequestComment,
 } from '../plugins/github/service.js'
 
-const LATEST_PULL_REQUESTS_QUERY = 'author:@me is:pr is:open archived:false sort:updated-desc'
-const NEED_REVIEWS_PULL_REQUESTS_QUERY = 'review-requested:@me is:pr is:open archived:false sort:updated-desc'
 const LATEST_PULL_REQUESTS_LIMIT = 20
 const GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY = 'pullRequest'
 const GITHUB_PULL_REQUEST_FILES_COMMIT_VALIDATOR_KEY = 'commit'
@@ -443,31 +441,6 @@ function dedupeFilterOptionUsers(
     seen.add(key)
     return true
   })
-}
-
-async function oldFetchPullRequestsSearchWithCache(
-  userId: string,
-  githubToken: string,
-  variant: 'latest' | 'need-review',
-  query: string,
-) {
-  const cachePolicy = createGithubPullRequestSearchCachePolicy(userId, variant)
-
-  return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
-      ...cachePolicy,
-      load: async () => {
-        const nodes = await fetchGithubPullRequestSearchGraphql({
-          token: githubToken,
-          query,
-          limit: LATEST_PULL_REQUESTS_LIMIT,
-        })
-
-        return {
-          payload: nodes.map(node => mapGithubGraphqlPullRequest(node).pullRequest),
-        }
-      },
-    }))
 }
 
 async function fetchPullRequestsSearchWithCache(
@@ -1843,41 +1816,6 @@ export const githubRoutes = githubRouter
       await markGithubNotificationRead({ token: githubToken, threadId })
       await invalidateGithubCacheTags([getGithubNotificationsTag(user.id)])
       return ctx.json({ success: true }, 200)
-    }
-    catch (error) {
-      return ctx.json({ error: (error as Error).message }, 502)
-    }
-  })
-  .get('/pr/latest', async (ctx) => {
-    const user = ctx.get('user')!
-    const githubToken = user.github.accessToken
-    try {
-      const result = await oldFetchPullRequestsSearchWithCache(
-        user.id,
-        githubToken,
-        'latest',
-        LATEST_PULL_REQUESTS_QUERY,
-      )
-      setGithubCacheHeaders(ctx, result)
-      return ctx.json({ pullRequests: result.payload }, 200)
-    }
-    catch (error) {
-      return ctx.json({ error: (error as Error).message }, 502)
-    }
-  })
-  .get('/pr/need-reviews', async (ctx) => {
-    const user = ctx.get('user')!
-    const githubToken = user.github.accessToken
-
-    try {
-      const result = await oldFetchPullRequestsSearchWithCache(
-        user.id,
-        githubToken,
-        'need-review',
-        NEED_REVIEWS_PULL_REQUESTS_QUERY,
-      )
-      setGithubCacheHeaders(ctx, result)
-      return ctx.json({ pullRequests: result.payload }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
