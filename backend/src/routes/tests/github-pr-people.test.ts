@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const addGithubIssueAssignees = vi.fn()
 const removeGithubIssueAssignees = vi.fn()
+const addGithubIssueLabels = vi.fn()
+const removeGithubIssueLabel = vi.fn()
 const requestGithubPullRequestReviewers = vi.fn()
 const removeGithubPullRequestReviewers = vi.fn()
 const invalidateTags = vi.fn()
@@ -45,7 +47,9 @@ vi.mock('../../plugins/github/service.js', async () => {
   return {
     ...actual,
     addGithubIssueAssignees,
+    addGithubIssueLabels,
     removeGithubIssueAssignees,
+    removeGithubIssueLabel,
     requestGithubPullRequestReviewers,
     removeGithubPullRequestReviewers,
   }
@@ -170,6 +174,67 @@ describe('github pull request people routes', () => {
     expect(invalidateTags).toHaveBeenCalledWith(['pr-tag', 'repo-tag'])
   })
 
+  it('adds labels and invalidates pull request tags', async () => {
+    addGithubIssueLabels.mockResolvedValue(undefined)
+
+    const response = await request('/pr/42/labels?org=acme&repo=widget', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        labels: ['bug', 'docs'],
+      }),
+    })
+
+    expect(response.status).toBe(204)
+    expect(addGithubIssueLabels).toHaveBeenCalledWith({
+      token: 'github-token',
+      params: {
+        owner: 'acme',
+        repo: 'widget',
+        issue_number: 42,
+        labels: ['bug', 'docs'],
+      },
+    })
+    expect(invalidateTags).toHaveBeenCalledWith(['pr-tag', 'repo-tag'])
+  })
+
+  it('removes labels and invalidates pull request tags', async () => {
+    removeGithubIssueLabel.mockResolvedValue(undefined)
+
+    const response = await request('/pr/42/labels?org=acme&repo=widget', {
+      method: 'DELETE',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        labels: ['bug', 'docs'],
+      }),
+    })
+
+    expect(response.status).toBe(204)
+    expect(removeGithubIssueLabel).toHaveBeenCalledWith({
+      token: 'github-token',
+      params: {
+        owner: 'acme',
+        repo: 'widget',
+        issue_number: 42,
+        name: 'bug',
+      },
+    })
+    expect(removeGithubIssueLabel).toHaveBeenCalledWith({
+      token: 'github-token',
+      params: {
+        owner: 'acme',
+        repo: 'widget',
+        issue_number: 42,
+        name: 'docs',
+      },
+    })
+    expect(invalidateTags).toHaveBeenCalledWith(['pr-tag', 'repo-tag'])
+  })
+
   it('removes a requested reviewer and invalidates pull request tags', async () => {
     removeGithubPullRequestReviewers.mockResolvedValue(undefined)
 
@@ -199,6 +264,8 @@ describe('github pull request people routes', () => {
   it.each([
     ['POST', '/pr/42/assignees?org=acme&repo=widget'],
     ['DELETE', '/pr/42/assignees?org=acme&repo=widget'],
+    ['POST', '/pr/42/labels?org=acme&repo=widget'],
+    ['DELETE', '/pr/42/labels?org=acme&repo=widget'],
     ['POST', '/pr/42/requested-reviewers?org=acme&repo=widget'],
     ['DELETE', '/pr/42/requested-reviewers?org=acme&repo=widget'],
   ])('returns 400 when users are missing for %s %s', async (method, path) => {
@@ -211,13 +278,15 @@ describe('github pull request people routes', () => {
     })
 
     expect(response.status).toBe(400)
+    const expectedError = path.includes('/labels') ? 'Missing labels' : 'Missing users'
     await expect(response.json()).resolves.toEqual({
-      error: 'Missing users',
+      error: expectedError,
     })
   })
 
   it.each([
     [422, '/pr/42/assignees?org=acme&repo=widget', 'POST', addGithubIssueAssignees],
+    [422, '/pr/42/labels?org=acme&repo=widget', 'POST', addGithubIssueLabels],
     [403, '/pr/42/requested-reviewers?org=acme&repo=widget', 'DELETE', removeGithubPullRequestReviewers],
   ])(
     'passes through GitHub status %i without invalidating cache for %s %s',

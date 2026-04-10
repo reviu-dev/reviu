@@ -54,6 +54,10 @@ export type AddIssueAssigneesParams
   = Endpoints['POST /repos/{owner}/{repo}/issues/{issue_number}/assignees']['parameters']
 export type RemoveIssueAssigneesParams
   = Endpoints['DELETE /repos/{owner}/{repo}/issues/{issue_number}/assignees']['parameters']
+export type AddIssueLabelsParams
+  = Endpoints['POST /repos/{owner}/{repo}/issues/{issue_number}/labels']['parameters']
+export type RemoveIssueLabelParams
+  = Endpoints['DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}']['parameters']
 export type RequestPullRequestReviewersParams
   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers']['parameters']
 export type RemovePullRequestReviewersParams

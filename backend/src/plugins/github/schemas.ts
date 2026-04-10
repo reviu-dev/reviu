@@ -58,6 +58,15 @@ export const pullRequestUsersMutationBodySchema = z.object({
   users: pullRequestUsersMutationListSchema,
 })
 
+const pullRequestLabelsMutationListSchema = z
+  .array(z.string().trim().min(1, 'Missing label'))
+  .min(1, 'Missing labels')
+  .transform(values => [...new Set(values.map(value => value.trim()).filter(Boolean))])
+
+export const pullRequestLabelsMutationBodySchema = z.object({
+  labels: pullRequestLabelsMutationListSchema,
+})
+
 const pullRequestSearchFiltersStringListSchema = z
   .array(z.string().trim().min(1))
   .default([])

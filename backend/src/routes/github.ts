@@ -11,6 +11,7 @@ import type {
 } from '../plugins/github/cache/github-cache.js'
 import type {
   AddIssueAssigneesParams,
+  AddIssueLabelsParams,
   CompareParams,
   CreateIssueCommentParams,
   CreatePullRequestCommentParams,
@@ -127,6 +128,7 @@ import {
   issueCommentBodySchema,
   mergePullRequestBodySchema,
   pullRequestFilterOptionsBodySchema,
+  pullRequestLabelsMutationBodySchema,
   pullRequestSearchBodySchema,
   pullRequestStatusMutationBodySchema,
   pullRequestUsersMutationBodySchema,
@@ -135,6 +137,7 @@ import {
 } from '../plugins/github/schemas.js'
 import {
   addGithubIssueAssignees,
+  addGithubIssueLabels,
   compareGithubRefs,
   convertGithubPullRequestToDraft,
   createGithubIssueComment,
@@ -178,6 +181,7 @@ import {
   patchGithubPullRequest,
   patchGithubPullRequestComment,
   removeGithubIssueAssignees,
+  removeGithubIssueLabel,
   removeGithubPullRequestReviewers,
   requestGithubPullRequestReviewers,
 } from '../plugins/github/service.js'
@@ -461,6 +465,17 @@ function pullRequestUsersMutationErrorMessage(error: z.ZodError) {
 
   return firstIssue.message === 'Invalid input: expected array, received undefined'
     ? 'Missing users'
+    : firstIssue.message
+}
+
+function pullRequestLabelsMutationErrorMessage(error: z.ZodError) {
+  const firstIssue = error.issues[0]
+  if (firstIssue?.path[0] !== 'labels') {
+    return 'Invalid pull request labels payload'
+  }
+
+  return firstIssue.message === 'Invalid input: expected array, received undefined'
+    ? 'Missing labels'
     : firstIssue.message
 }
 
@@ -2038,6 +2053,108 @@ export const githubRoutes = githubRouter
           token: githubToken,
           params,
         }))
+
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+      }))
+
+      return ctx.body(null, 204)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/:id/labels', zValidator(
+    'json',
+    pullRequestLabelsMutationBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const payload = await ctx.req.json().catch(() => ({}))
+    const parsedBody = pullRequestLabelsMutationBodySchema.safeParse(payload)
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+    if (!parsedBody.success) {
+      return ctx.json({ error: pullRequestLabelsMutationErrorMessage(parsedBody.error) }, 400)
+    }
+
+    const { labels } = parsedBody.data
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: AddIssueLabelsParams = {
+        owner: org,
+        repo,
+        issue_number: pullNumber,
+        labels,
+      }
+
+      await withGithubMetrics(user.id, 'pull_request.labels.add', () =>
+        addGithubIssueLabels({
+          token: githubToken,
+          params,
+        }))
+
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+      }))
+
+      return ctx.body(null, 204)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .delete('/pr/:id/labels', zValidator(
+    'json',
+    pullRequestLabelsMutationBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const payload = await ctx.req.json().catch(() => ({}))
+    const parsedBody = pullRequestLabelsMutationBodySchema.safeParse(payload)
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+    if (!parsedBody.success) {
+      return ctx.json({ error: pullRequestLabelsMutationErrorMessage(parsedBody.error) }, 400)
+    }
+
+    const { labels } = parsedBody.data
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      await withGithubMetrics(user.id, 'pull_request.labels.remove', async () => {
+        await Promise.all(labels.map(label =>
+          removeGithubIssueLabel({
+            token: githubToken,
+            params: {
+              owner: org,
+              repo,
+              issue_number: pullNumber,
+              name: label,
+            },
+          })))
+      })
 
       await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
         userId: user.id,

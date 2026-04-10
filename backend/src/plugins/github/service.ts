@@ -1,6 +1,7 @@
 import type { Endpoints, RequestHeaders, RequestParameters } from '@octokit/types'
 import type {
   AddIssueAssigneesParams,
+  AddIssueLabelsParams,
   BranchRulesParams,
   BranchRulesResponse,
   CommitCheckRunsParams,
@@ -58,6 +59,7 @@ import type {
   PullRequestReviewResponse,
   PullRequestReviewsParams,
   RemoveIssueAssigneesParams,
+  RemoveIssueLabelParams,
   RemovePullRequestReviewersParams,
   RepositoryAssigneeResponse,
   RepositoryAssigneesParams,
@@ -777,6 +779,26 @@ export async function fetchGithubRepositoryAssignees(
   { token: string, params: RepositoryAssigneesParams },
 ): Promise<RepositoryAssigneeResponse[]> {
   return requestGithubData('GET /repos/{owner}/{repo}/assignees', {
+    token,
+    params,
+  })
+}
+
+export async function addGithubIssueLabels(
+  { token, params }:
+  { token: string, params: AddIssueLabelsParams },
+): Promise<void> {
+  await requestGithubData('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+    token,
+    params,
+  })
+}
+
+export async function removeGithubIssueLabel(
+  { token, params }:
+  { token: string, params: RemoveIssueLabelParams },
+): Promise<void> {
+  await requestGithubData('DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}', {
     token,
     params,
   })
