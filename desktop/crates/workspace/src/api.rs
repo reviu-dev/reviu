@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::AppProfile;
 use crate::crash_report::StartupCrashReport;
-use crate::github_home_tabs::{GithubPullRequestFilterOptions, GithubPullRequestSearchFilters};
+use crate::github_home_tabs::{
+  GithubPullRequestFilterOptionUser, GithubPullRequestFilterOptions, GithubPullRequestSearchFilters,
+};
 use crate::sentry_context;
 
 const DEFAULT_API_BASE_URL: &str = "http://localhost:3000";
@@ -557,7 +559,7 @@ pub struct GithubPullRequestFile {
   pub previous_filename: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum GithubPullRequestState {
   Open,
@@ -627,6 +629,10 @@ pub struct GithubPullRequestDetails {
   pub head_ref_name: String,
   pub body: Option<String>,
   pub author: GithubPullRequestAuthor,
+  #[serde(default)]
+  pub assignees: Vec<GithubPullRequestFilterOptionUser>,
+  #[serde(default, rename = "requested_reviewers")]
+  pub requested_reviewers: Vec<GithubPullRequestFilterOptionUser>,
   #[allow(dead_code)]
   pub comments: u64,
   #[serde(rename = "review_comments")]
@@ -928,6 +934,11 @@ struct CreateGithubPullRequestRequest<'a> {
 struct GithubPullRequestStatusMutationRequest<'a> {
   #[serde(rename = "pullRequestId")]
   pull_request_id: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct GithubPullRequestUsersMutationRequest<'a> {
+  users: &'a [&'a str],
 }
 
 #[derive(Debug, Deserialize)]
@@ -1770,6 +1781,106 @@ impl ApiClient {
     Ok(payload.pull_request)
   }
 
+  pub fn add_pull_request_assignee(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    login: &str,
+  ) -> Result<()> {
+    let route = format!("/github/pr/{number}/assignees");
+    let users = [login];
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&GithubPullRequestUsersMutationRequest { users: &users })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    Ok(())
+  }
+
+  pub fn remove_pull_request_assignee(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    login: &str,
+  ) -> Result<()> {
+    let route = format!("/github/pr/{number}/assignees");
+    let users = [login];
+    let response = self
+      .authed_request(Method::DELETE, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&GithubPullRequestUsersMutationRequest { users: &users })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("DELETE", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    Ok(())
+  }
+
+  pub fn request_pull_request_reviewer(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    login: &str,
+  ) -> Result<()> {
+    let route = format!("/github/pr/{number}/requested-reviewers");
+    let users = [login];
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&GithubPullRequestUsersMutationRequest { users: &users })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    Ok(())
+  }
+
+  pub fn remove_pull_request_reviewer(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    login: &str,
+  ) -> Result<()> {
+    let route = format!("/github/pr/{number}/requested-reviewers");
+    let users = [login];
+    let response = self
+      .authed_request(Method::DELETE, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&GithubPullRequestUsersMutationRequest { users: &users })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("DELETE", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    Ok(())
+  }
+
   pub fn mark_pull_request_ready_for_review(
     &self,
     owner: &str,
@@ -2487,6 +2598,8 @@ mod tests {
         avatar_url: None,
         is_bot: false,
       },
+      assignees: Vec::new(),
+      requested_reviewers: Vec::new(),
       comments: 0,
       review_comments: 0,
       commits: 1,
@@ -3607,6 +3720,8 @@ mod tests {
         "head_ref_name": "feature/parser",
         "body": "PR body",
         "author": { "login": "octocat", "avatar_url": null, "is_bot": false },
+        "assignees": [{ "login": "alice", "avatar_url": "https://example.com/alice.png" }],
+        "requested_reviewers": [{ "login": "bob", "avatar_url": null }],
         "comments": 2,
         "review_comments": 3,
         "commits": 4,
@@ -3629,6 +3744,8 @@ mod tests {
     assert_eq!(details.head_ref_name, "feature/parser");
     assert_eq!(details.author.login, "octocat");
     assert!(!details.author.is_bot);
+    assert_eq!(details.assignees[0].login, "alice");
+    assert_eq!(details.requested_reviewers[0].login, "bob");
     assert_eq!(details.comments, 2);
     assert_eq!(details.review_comments, 3);
     assert_eq!(details.labels[0].color.as_deref(), Some("a2eeef"));
@@ -3642,6 +3759,90 @@ mod tests {
       "widget-fork"
     );
     handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn add_pull_request_assignee_uses_expected_route_and_payload() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("204 NO CONTENT", "");
+    let api = make_test_api_client(base_url);
+
+    api
+      .add_pull_request_assignee("acme", "widget", 42, "alice")
+      .expect("add pull request assignee");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("POST /github/pr/42/assignees?org=acme&repo=widget HTTP/1.1"));
+    assert!(request.contains("\"users\":[\"alice\"]"));
+  }
+
+  #[test]
+  fn remove_pull_request_assignee_uses_expected_route_and_payload() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("204 NO CONTENT", "");
+    let api = make_test_api_client(base_url);
+
+    api
+      .remove_pull_request_assignee("acme", "widget", 42, "alice")
+      .expect("remove pull request assignee");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("DELETE /github/pr/42/assignees?org=acme&repo=widget HTTP/1.1"));
+    assert!(request.contains("\"users\":[\"alice\"]"));
+  }
+
+  #[test]
+  fn request_pull_request_reviewer_uses_expected_route_and_payload() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("204 NO CONTENT", "");
+    let api = make_test_api_client(base_url);
+
+    api
+      .request_pull_request_reviewer("acme", "widget", 42, "bob")
+      .expect("request pull request reviewer");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request.contains("POST /github/pr/42/requested-reviewers?org=acme&repo=widget HTTP/1.1")
+    );
+    assert!(request.contains("\"users\":[\"bob\"]"));
+  }
+
+  #[test]
+  fn remove_pull_request_reviewer_uses_expected_route_and_payload() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("204 NO CONTENT", "");
+    let api = make_test_api_client(base_url);
+
+    api
+      .remove_pull_request_reviewer("acme", "widget", 42, "bob")
+      .expect("remove pull request reviewer");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request.contains("DELETE /github/pr/42/requested-reviewers?org=acme&repo=widget HTTP/1.1")
+    );
+    assert!(request.contains("\"users\":[\"bob\"]"));
   }
 
   #[test]
@@ -4127,6 +4328,41 @@ mod tests {
     assert_eq!(err.to_string(), "Base branch moved; refresh and try again.");
     let api_error = err.downcast_ref::<ApiError>().expect("api error");
     assert_eq!(api_error.status_code_u16(), Some(409));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn add_pull_request_assignee_surfaces_backend_error_message() {
+    let body = r#"{"error":"Reviewer must have write access to this repository."}"#;
+    let (base_url, handle) = start_single_response_server("422 UNPROCESSABLE ENTITY", body);
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .add_pull_request_assignee("acme", "widget", 42, "alice")
+      .expect_err("add pull request assignee should fail");
+
+    assert_eq!(
+      err.to_string(),
+      "Reviewer must have write access to this repository."
+    );
+    let api_error = err.downcast_ref::<ApiError>().expect("api error");
+    assert_eq!(api_error.status_code_u16(), Some(422));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn request_pull_request_reviewer_surfaces_backend_error_message() {
+    let body = r#"{"error":"Requested reviewer is not a collaborator."}"#;
+    let (base_url, handle) = start_single_response_server("422 UNPROCESSABLE ENTITY", body);
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .request_pull_request_reviewer("acme", "widget", 42, "bob")
+      .expect_err("request pull request reviewer should fail");
+
+    assert_eq!(err.to_string(), "Requested reviewer is not a collaborator.");
+    let api_error = err.downcast_ref::<ApiError>().expect("api error");
+    assert_eq!(api_error.status_code_u16(), Some(422));
     handle.join().expect("join server thread");
   }
 
@@ -5219,6 +5455,32 @@ mod tests {
 
     let err = api
       .update_pull_request_description("acme", "widget", 42, "Body")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn add_pull_request_assignee_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .add_pull_request_assignee("acme", "widget", 42, "alice")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn request_pull_request_reviewer_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .request_pull_request_reviewer("acme", "widget", 42, "bob")
       .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));

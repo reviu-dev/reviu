@@ -461,9 +461,13 @@ impl BillingPage {
       .bg(theme.sidebar)
       .when_some(launch_offer, |this, offer| {
         this.child(
-          StatusAlert::new("billing-launch-offer", theme.status_orange(), offer.description)
-            .title(offer.title)
-            .icon(IconName::Info),
+          StatusAlert::new(
+            "billing-launch-offer",
+            theme.status_orange(),
+            offer.description,
+          )
+          .title(offer.title)
+          .icon(IconName::Info),
         )
       })
       .child(
@@ -522,9 +526,7 @@ impl BillingPage {
                   div()
                     .text_sm()
                     .text_color(theme.muted_foreground)
-                    .child(
-                      "Founder pricing stays active while your subscription stays active.",
-                    ),
+                    .child("Founder pricing stays active while your subscription stays active."),
                 ),
             )
           })
