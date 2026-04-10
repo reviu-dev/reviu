@@ -54,6 +54,7 @@ mod github_shared;
 mod interactive_rebase_todo_view;
 pub mod navigation;
 mod notification_count;
+mod pricing_copy;
 mod sentry_context;
 mod settings_page;
 mod shortcuts;

@@ -15,7 +15,7 @@ use time::OffsetDateTime;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, DETAILS_PAGE_CONTAINER_MAX_WIDTH, PAGE_HEADER_HEIGHT,
-  StatusTag, StatusThemeExt, UiIconName, WindowExt,
+  StatusAlert, StatusTag, StatusThemeExt, UiIconName, WindowExt,
 };
 
 use crate::{
@@ -26,6 +26,7 @@ use crate::{
   github_navigation::{open_pr_target, open_repo_target},
   github_page::GithubPageHandle,
   navigation::NavigationHistory,
+  pricing_copy::{active_reviu_pro_launch_offer, reviu_pro_checkout_cta_label},
   workspace::WorkspaceApi,
 };
 
@@ -56,7 +57,7 @@ pub(crate) enum ReviuProCheckoutCta {
 impl ReviuProCheckoutCta {
   pub(crate) fn label(self) -> &'static str {
     match self {
-      Self::Subscribe => "Subscribe",
+      Self::Subscribe => reviu_pro_checkout_cta_label(),
       Self::StartFreeTrial => "Start free trial",
     }
   }
@@ -448,6 +449,7 @@ impl BillingPage {
 
   fn render_no_subscription(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let launch_offer = active_reviu_pro_launch_offer();
 
     v_flex()
       .w_full()
@@ -457,34 +459,95 @@ impl BillingPage {
       .border_color(theme.border)
       .rounded(theme.radius)
       .bg(theme.sidebar)
+      .when_some(launch_offer, |this, offer| {
+        this.child(
+          StatusAlert::new("billing-launch-offer", theme.status_orange(), offer.description)
+            .title(offer.title)
+            .icon(IconName::Info),
+        )
+      })
       .child(
         v_flex()
           .gap_1()
           .child(
-            div()
-              .text_lg()
-              .font_semibold()
-              .text_color(theme.foreground)
-              .child("Reviu Pro"),
-          )
-          .child(
             h_flex()
-              .items_end()
+              .items_center()
               .gap_2()
               .child(
                 div()
-                  .text_xl()
+                  .text_lg()
                   .font_semibold()
                   .text_color(theme.foreground)
-                  .child("$19"),
+                  .child("Reviu Pro"),
               )
-              .child(
-                div()
-                  .text_sm()
-                  .text_color(theme.muted_foreground)
-                  .child("/ month"),
-              ),
-          ),
+              .when_some(launch_offer, |this, offer| {
+                this.child(
+                  StatusTag::new(theme.status_orange())
+                    .outline()
+                    .xsmall()
+                    .child(offer.badge),
+                )
+              }),
+          )
+          .when_some(launch_offer, |this, offer| {
+            this.child(
+              v_flex()
+                .gap_1()
+                .child(
+                  h_flex()
+                    .items_end()
+                    .gap_2()
+                    .child(
+                      div()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .line_through()
+                        .child(offer.regular_price),
+                    )
+                    .child(
+                      div()
+                        .text_xl()
+                        .font_semibold()
+                        .text_color(theme.foreground)
+                        .child(offer.launch_price),
+                    )
+                    .child(
+                      div()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child(offer.billing_period),
+                    ),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child(
+                      "Founder pricing stays active while your subscription stays active.",
+                    ),
+                ),
+            )
+          })
+          .when(launch_offer.is_none(), |this| {
+            this.child(
+              h_flex()
+                .items_end()
+                .gap_2()
+                .child(
+                  div()
+                    .text_xl()
+                    .font_semibold()
+                    .text_color(theme.foreground)
+                    .child("$19"),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("/ month"),
+                ),
+            )
+          }),
       )
       .child(
         div()
@@ -794,7 +857,6 @@ mod tests {
 
   #[test]
   fn reviu_pro_checkout_cta_labels_match_copy() {
-    assert_eq!(ReviuProCheckoutCta::Subscribe.label(), "Subscribe");
     assert_eq!(
       ReviuProCheckoutCta::StartFreeTrial.label(),
       "Start free trial"
