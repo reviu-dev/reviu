@@ -4013,7 +4013,7 @@ impl GithubPrDetailsPage {
     let theme = cx.theme();
 
     let view = cx.entity();
-    let mut alert = StatusAlert::new(content.id, theme.status_orange(), content.message.clone())
+    let mut alert = StatusAlert::new(content.id, theme.status_yellow(), content.message.clone())
       .title(content.title)
       .icon(IconName::TriangleAlert);
 
