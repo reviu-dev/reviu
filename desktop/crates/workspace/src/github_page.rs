@@ -55,6 +55,7 @@ use crate::{
   github_pr_details_page::GithubPrDetailsPageHandle,
   github_shared,
   navigation::NavigationHistory,
+  pricing_copy::{active_reviu_pro_launch_offer, github_upgrade_description},
   sentry_context,
   workspace::WorkspaceApi,
 };
@@ -371,7 +372,7 @@ fn github_locked_presentation(access_state: GithubAccessState) -> Option<GithubL
     }),
     GithubAccessState::NeedsSubscription => Some(GithubLockedPresentation {
       title: "Upgrade to unlock GitHub workflows.",
-      description: "Upgrade to Reviu Pro for $19/month to unlock GitHub notifications, repository browsing, pull request reviews, issues, and branch-to-PR shortcuts.",
+      description: github_upgrade_description(),
       action: GithubLockedAction::Subscribe,
     }),
   }
@@ -3461,6 +3462,7 @@ impl GithubPage {
     let theme = cx.theme().clone();
     let presentation = github_locked_presentation(access_state)
       .expect("locked page should only render for unavailable GitHub access");
+    let launch_offer = active_reviu_pro_launch_offer();
     let action = match presentation.action {
       GithubLockedAction::SignIn => Button::new("github-access-sign-in")
         .icon(IconName::Github)
@@ -3492,6 +3494,7 @@ impl GithubPage {
           div().flex().flex_col()
             .w_full().mt_20()
             .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+            .w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
             .mx_auto()
             .gap_4()
             .p_4()
@@ -3545,22 +3548,57 @@ impl GithubPage {
                   .flex_col()
                         .gap_3()
                         .child(
-                          div().flex()
-                            .items_end()
-                            .gap_2()
-                            .child(
-                              div()
-                                .text_xl()
-                                .font_semibold()
-                                .text_color(theme.foreground)
-                                .child("$19"),
-                            )
-                            .child(
-                              div()
-                                .text_sm()
-                                .text_color(theme.muted_foreground)
-                                .child("/ month"),
-                            ),
+                          div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .when_some(launch_offer, |this, offer| {
+                              this.child(
+                                h_flex()
+                                  .items_end()
+                                  .gap_2()
+                                  .child(
+                                    div()
+                                      .text_sm()
+                                      .text_color(theme.muted_foreground)
+                                      .line_through()
+                                      .child(offer.regular_price),
+                                  )
+                                  .child(
+                                    div()
+                                      .text_xl()
+                                      .font_semibold()
+                                      .text_color(theme.foreground)
+                                      .child(offer.launch_price),
+                                  )
+                                  .child(
+                                    div()
+                                      .text_sm()
+                                      .text_color(theme.muted_foreground)
+                                      .child(offer.billing_period),
+                                  ),
+                              )
+                            })
+                            .when(launch_offer.is_none(), |this| {
+                              this.child(
+                                h_flex()
+                                  .items_end()
+                                  .gap_2()
+                                  .child(
+                                    div()
+                                      .text_xl()
+                                      .font_semibold()
+                                      .text_color(theme.foreground)
+                                      .child("$19"),
+                                  )
+                                  .child(
+                                    div()
+                                      .text_sm()
+                                      .text_color(theme.muted_foreground)
+                                      .child("/ month"),
+                                  ),
+                              )
+                            }),
                         )
                         .child(div().flex().justify_start().child(action))
                         .when_some(self.access_error.clone(), |this, error| {
@@ -4152,7 +4190,7 @@ mod tests {
       .expect("subscription state should have locked presentation");
 
     assert_eq!(presentation.action, GithubLockedAction::Subscribe);
-    assert!(presentation.description.contains("$19/month"));
+    assert!(presentation.description.contains("Reviu Pro"));
   }
 
   #[test]

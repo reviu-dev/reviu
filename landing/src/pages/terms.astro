@@ -1,8 +1,9 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import SiteFooter from "../components/SiteFooter.astro";
+import { launchOffer } from "../data/launchOffer";
 
-const lastUpdated = "March 4, 2026";
+const lastUpdated = "April 10, 2026";
 ---
 
 <Layout
@@ -47,7 +48,14 @@ const lastUpdated = "March 4, 2026";
         3. Subscriptions and Trial
       </h2>
       <ul class="mt-4 list-disc space-y-2 pl-6 text-sm/7 text-muted-foreground">
-        <li>Pro price: $19 per month.</li>
+        {launchOffer.enabled ? (
+          <>
+            <li>{launchOffer.termsSummary}</li>
+            <li>{launchOffer.standardTermsSummary}</li>
+          </>
+        ) : (
+          <li>Pro price: $19 per month.</li>
+        )}
         <li>Pro includes a 14-day free trial.</li>
         <li>No payment method is required to start the free trial.</li>
         <li>

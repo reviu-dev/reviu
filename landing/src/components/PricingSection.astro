@@ -2,8 +2,10 @@
 import CheckIcon from "@lucide/astro/icons/check";
 import MinusIcon from "@lucide/astro/icons/minus";
 import SparklesIcon from "@lucide/astro/icons/sparkles";
+import { launchOffer } from "../data/launchOffer";
 
 const downloadsSectionUrl = "#downloads";
+const launchOfferEnabled = launchOffer.enabled;
 
 const tiers = [
   {
@@ -28,7 +30,9 @@ const tiers = [
     id: "pro",
     href: downloadsSectionUrl,
     available: true,
-    price: "$19/month",
+    price: launchOfferEnabled ? launchOffer.launchPriceLabel : "$19",
+    previousPrice: launchOfferEnabled ? launchOffer.regularPriceLabel : null,
+    priceSuffix: launchOfferEnabled ? launchOffer.billingPeriodLabel : "/month",
     description:
       "14-day free trial included. Git and GitHub stay connected in one workflow.",
     features: [
@@ -39,7 +43,9 @@ const tiers = [
       "Review pull requests, comment inline, track checks, and merge",
     ],
     featured: true,
-    cta: "Download & start free trial",
+    cta: launchOfferEnabled
+      ? launchOffer.pricingSectionCta
+      : "Download & start free trial",
   },
 ];
 
@@ -114,9 +120,11 @@ const comparisonRows = [
       <p
         class="mx-auto mt-6 max-w-2xl text-center text-lg font-medium text-pretty text-gray-600 sm:text-xl/8 dark:text-gray-400"
       >
-        Use Free for full local Git workflows, then upgrade to Pro at $19/month
-        when you need GitHub notifications, repositories, PR reviews, and
-        issues.
+        {
+          launchOfferEnabled
+            ? launchOffer.intro
+            : "Use Free for full local Git workflows, then upgrade to Pro at $19/month when you need GitHub notifications, repositories, PR reviews, and issues."
+        }
       </p>
     </div>
 
@@ -144,9 +152,36 @@ const comparisonRows = [
             <p class="mt-4 text-sm/6 text-muted-foreground">
               {tier.description}
             </p>
-            <p class="mt-6 text-4xl font-semibold tracking-tight text-foreground">
-              {tier.price}
-            </p>
+            {tier.id === "pro" && launchOffer.enabled && (
+              <div class="mt-4 rounded-2xl border border-primary/15 bg-primary/5 px-4 py-3">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="inline-flex rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold tracking-wide text-primary ring-1 ring-primary/15 ring-inset">
+                    {launchOffer.badge}
+                  </span>
+                  <p class="text-sm font-semibold text-primary">
+                    {launchOffer.title}
+                  </p>
+                </div>
+                <p class="mt-1 text-sm/6 text-muted-foreground">
+                  {launchOffer.description}
+                </p>
+              </div>
+            )}
+            <div class="mt-6 flex items-end gap-3">
+              {tier.previousPrice && (
+                <p class="text-base font-medium text-muted-foreground line-through">
+                  {tier.previousPrice}
+                </p>
+              )}
+              <p class="text-4xl font-semibold tracking-tight text-foreground">
+                {tier.price}
+              </p>
+              {tier.priceSuffix && (
+                <p class="pb-1 text-sm font-medium text-muted-foreground">
+                  {tier.priceSuffix}
+                </p>
+              )}
+            </div>
 
             {tier.available ? (
               <a

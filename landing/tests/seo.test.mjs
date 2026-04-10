@@ -17,14 +17,14 @@ test('homepage ships crawlable metadata and content', async () => {
   assert.match(html, /<title>Reviu - Desktop Git Client<\/title>/)
   assert.match(
     html,
-    /<meta name="description" content="Reviu is a desktop Git client with keyboard-first local workflows/,
+    /<meta name="description" content="Reviu is a desktop Git client with a real-time diff editor, keyboard-first workflows/,
   )
   assert.match(html, /<link rel="canonical" href="https:\/\/reviu\.dev\/"/)
   assert.match(html, /<meta property="og:title" content="Reviu - Desktop Git Client"/)
   assert.match(html, /<meta name="twitter:card" content="summary_large_image"/)
   assert.match(html, /SoftwareApplication/)
   assert.match(html, /FAQPage/)
-  assert.match(html, /A free Git client built for fast reviews\./)
+  assert.match(html, /A free Git client with a real-time diff editor\./)
   assert.match(html, /srcset=/)
   assert.match(html, /--fit: contain;/)
   assert.doesNotMatch(html, /client="only"/)
