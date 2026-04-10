@@ -196,7 +196,6 @@ const PR_REVIEW_POPOVER_WIDTH: f32 = 500.0;
 const PR_REVIEW_INPUT_HEIGHT_PX: f32 = 100.0;
 const OVERVIEW_COMMENT_INPUT_HEIGHT_PX: f32 = 100.0;
 const OVERVIEW_DESCRIPTION_INPUT_HEIGHT_PX: f32 = 500.0;
-const OVERVIEW_CONVERSATION_HEADER_MIN_HEIGHT_PX: f32 = 40.0;
 const OVERVIEW_CONVERSATION_META_GAP_PX: f32 = 8.0;
 const GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str =
   "github-pr-markdown-preview-editor-pane";
@@ -9219,7 +9218,7 @@ impl GithubPrDetailsPage {
       };
 
     // Root body (edit mode or markdown)
-    let root_body = if root_is_editing {
+    let root_body: Option<AnyElement> = if root_is_editing {
       if let Some(input_state) = self.overview_edit_input.clone() {
         let can_save = self
           .overview_edit_initial_body
@@ -9231,7 +9230,7 @@ impl GithubPrDetailsPage {
           .is_some();
         let page_for_cancel = pr_page.clone();
         let page_for_save = pr_page.clone();
-        v_flex()
+        let content = v_flex()
           .gap_2()
           .child(
             div().w_full().child(
@@ -9273,24 +9272,22 @@ impl GithubPrDetailsPage {
                   }),
               ),
           )
-          .into_any_element()
+          .into_any_element();
+
+        Some(content)
       } else {
-        div().into_any_element()
+        Some(div().into_any_element())
       }
     } else if let Some(body) = &item.body {
-      div()
-        .w_full()
-        .min_w_0()
-        .child(render_markdown(body.as_str(), &markdown_options, cx))
-        .into_any_element()
+      Some(
+        div()
+          .w_full()
+          .min_w_0()
+          .child(render_markdown(body.as_str(), &markdown_options, cx))
+          .into_any_element(),
+      )
     } else {
-      div()
-        .w_full()
-        .min_w_0()
-        .text_sm()
-        .text_color(theme.muted_foreground)
-        .child("No comment body.")
-        .into_any_element()
+      None
     };
 
     // Reply composer for root
@@ -9406,7 +9403,7 @@ impl GithubPrDetailsPage {
             this.child(
               h_flex()
                 .items_center()
-                .min_h(px(OVERVIEW_CONVERSATION_HEADER_MIN_HEIGHT_PX))
+                .mb_1()
                 .gap_1()
                 .text_sm()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -9467,10 +9464,16 @@ impl GithubPrDetailsPage {
                       .when_some(root_reply_button, |this, button| this.child(button)),
                   ),
               )
-              .child(
-                v_flex()
-                  .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-                  .child(root_body),
+              .when_else(
+                root_body.is_some(),
+                |this| {
+                  this.child(
+                    v_flex()
+                      .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
+                      .child(root_body.unwrap()),
+                  )
+                },
+                |this| this.pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX)),
               ),
           )
           .when_some(root_reply_composer, |this, composer| this.child(composer))
