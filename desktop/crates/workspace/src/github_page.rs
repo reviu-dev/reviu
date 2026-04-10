@@ -3566,17 +3566,23 @@ impl GithubPage {
                                   )
                                   .child(
                                     div()
-                                      .text_xl()
-                                      .font_semibold()
-                                      .text_color(theme.foreground)
-                                      .child(offer.launch_price),
+                                    .flex()
+                                    .items_center()
+                                    .gap_0p5()
+                                    .child(
+                                      div()
+                                        .text_xl()
+                                        .font_semibold()
+                                        .text_color(theme.foreground)
+                                        .child(offer.launch_price),
                                   )
                                   .child(
                                     div()
                                       .text_sm()
                                       .text_color(theme.muted_foreground)
                                       .child(offer.billing_period),
-                                  ),
+                                  )
+                                ),
                               )
                             })
                             .when(launch_offer.is_none(), |this| {
