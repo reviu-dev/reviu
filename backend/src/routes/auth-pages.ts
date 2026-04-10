@@ -1,3 +1,18 @@
+import { readFileSync } from 'node:fs'
+
+const LOGO_LIGHT = readFileSync(
+  new URL('../assets/reviu_logo_light.svg', import.meta.url),
+  'utf8',
+).trim()
+const LOGO_DARK = readFileSync(
+  new URL('../assets/reviu_logo_dark.svg', import.meta.url),
+  'utf8',
+).trim()
+const LOGO_MARKUP = `
+  <div class="logo logo--light">${LOGO_DARK}</div>
+  <div class="logo logo--dark">${LOGO_LIGHT}</div>
+`
+
 const SHARED_STYLES = `
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   :root{
@@ -27,10 +42,14 @@ const SHARED_STYLES = `
     background:var(--surface);border:1px solid var(--border);
     border-radius:var(--radius);
     max-width:380px;width:100%;
-    box-shadow:0 0 0 1px rgba(128,128,128,.06),0 20px 50px -12px rgba(0,0,0,.25);
   }
-  .logo{font-size:28px;font-weight:700;letter-spacing:-.03em}
-  .logo span{color:var(--primary)}
+  .logo{display:block;width:140px;height:auto}
+  .logo svg{display:block;width:100%;height:auto}
+  .logo--dark{display:none}
+  @media(prefers-color-scheme:dark){
+    .logo--light{display:none}
+    .logo--dark{display:block}
+  }
   .gh-icon{opacity:.85}
   #status{font-size:15px;color:var(--muted);text-align:center;line-height:1.5}
   .row{display:flex;align-items:center;gap:10px}
@@ -81,7 +100,7 @@ export function desktopSignInPage(signInEndpoint: string, callbackUrl: string) {
 
   const body = `
     <div class="card" id="root">
-      <div class="logo">Rev<span>iu</span></div>
+      ${LOGO_MARKUP}
       ${GITHUB_ICON}
       <div class="row">
         <div class="spinner"></div>
@@ -147,7 +166,7 @@ export function desktopSignInSuccessPage(deepLinkUrl: string) {
 
   const body = `
     <div class="card">
-      <div class="logo">Rev<span>iu</span></div>
+      ${LOGO_MARKUP}
       <div class="check">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="20 6 9 17 4 12"/>
@@ -179,7 +198,7 @@ export function desktopSignInErrorPage() {
 
   const body = `
     <div class="card">
-      <div class="logo">Rev<span>iu</span></div>
+      ${LOGO_MARKUP}
       <div class="error-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
