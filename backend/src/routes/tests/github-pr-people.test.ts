@@ -278,9 +278,11 @@ describe('github pull request people routes', () => {
     })
 
     expect(response.status).toBe(400)
-    const expectedError = path.includes('/labels') ? 'Missing labels' : 'Missing users'
-    await expect(response.json()).resolves.toEqual({
-      error: expectedError,
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      error: {
+        name: 'ZodError',
+      },
     })
   })
 
@@ -300,9 +302,9 @@ describe('github pull request people routes', () => {
         headers: {
           'content-type': 'application/json',
         },
-        body: JSON.stringify({
-          users: ['octocat'],
-        }),
+        body: JSON.stringify(path.includes('/labels')
+          ? { labels: ['bug'] }
+          : { users: ['octocat'] }),
       })
 
       expect(response.status).toBe(status)

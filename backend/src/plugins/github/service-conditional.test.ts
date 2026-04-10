@@ -144,12 +144,12 @@ describe('github service conditional requests', () => {
         ref: 'main',
         headers: expect.objectContaining({
           'authorization': 'Bearer github-token',
+          'accept': 'application/vnd.github.object+json',
           'if-none-match': '"cached-content-object-etag"',
         }),
       }),
     )
 
-    expect(requestMock.mock.calls[0]?.[1]?.headers).not.toHaveProperty('accept')
     expect(result).toEqual({
       data: {
         content: 'aGVsbG8=',

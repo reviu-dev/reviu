@@ -457,28 +457,6 @@ function dedupeFilterOptionUsers(
   })
 }
 
-function pullRequestUsersMutationErrorMessage(error: z.ZodError) {
-  const firstIssue = error.issues[0]
-  if (firstIssue?.path[0] !== 'users') {
-    return 'Invalid pull request user payload'
-  }
-
-  return firstIssue.message === 'Invalid input: expected array, received undefined'
-    ? 'Missing users'
-    : firstIssue.message
-}
-
-function pullRequestLabelsMutationErrorMessage(error: z.ZodError) {
-  const firstIssue = error.issues[0]
-  if (firstIssue?.path[0] !== 'labels') {
-    return 'Invalid pull request labels payload'
-  }
-
-  return firstIssue.message === 'Invalid input: expected array, received undefined'
-    ? 'Missing labels'
-    : firstIssue.message
-}
-
 async function fetchPullRequestsSearchWithCache(
   userId: string,
   githubToken: string,
@@ -1975,17 +1953,11 @@ export const githubRoutes = githubRouter
   ), async (ctx) => {
     const { org, repo } = ctx.req.query()
     const pullNumber = Number(ctx.req.param('id'))
-    const payload = await ctx.req.json().catch(() => ({}))
-    const parsedBody = pullRequestUsersMutationBodySchema.safeParse(payload)
+    const { users } = ctx.req.valid('json')
 
     if (!org || !repo || Number.isNaN(pullNumber)) {
       return ctx.json({ error: 'Missing org, repo, or id' }, 400)
     }
-    if (!parsedBody.success) {
-      return ctx.json({ error: pullRequestUsersMutationErrorMessage(parsedBody.error) }, 400)
-    }
-
-    const { users } = parsedBody.data
     const user = ctx.get('user')!
     const githubToken = user.github.accessToken
 
@@ -2026,17 +1998,11 @@ export const githubRoutes = githubRouter
   ), async (ctx) => {
     const { org, repo } = ctx.req.query()
     const pullNumber = Number(ctx.req.param('id'))
-    const payload = await ctx.req.json().catch(() => ({}))
-    const parsedBody = pullRequestUsersMutationBodySchema.safeParse(payload)
+    const { users } = ctx.req.valid('json')
 
     if (!org || !repo || Number.isNaN(pullNumber)) {
       return ctx.json({ error: 'Missing org, repo, or id' }, 400)
     }
-    if (!parsedBody.success) {
-      return ctx.json({ error: pullRequestUsersMutationErrorMessage(parsedBody.error) }, 400)
-    }
-
-    const { users } = parsedBody.data
     const user = ctx.get('user')!
     const githubToken = user.github.accessToken
 
@@ -2077,17 +2043,11 @@ export const githubRoutes = githubRouter
   ), async (ctx) => {
     const { org, repo } = ctx.req.query()
     const pullNumber = Number(ctx.req.param('id'))
-    const payload = await ctx.req.json().catch(() => ({}))
-    const parsedBody = pullRequestLabelsMutationBodySchema.safeParse(payload)
+    const { labels } = ctx.req.valid('json')
 
     if (!org || !repo || Number.isNaN(pullNumber)) {
       return ctx.json({ error: 'Missing org, repo, or id' }, 400)
     }
-    if (!parsedBody.success) {
-      return ctx.json({ error: pullRequestLabelsMutationErrorMessage(parsedBody.error) }, 400)
-    }
-
-    const { labels } = parsedBody.data
     const user = ctx.get('user')!
     const githubToken = user.github.accessToken
 
@@ -2128,17 +2088,11 @@ export const githubRoutes = githubRouter
   ), async (ctx) => {
     const { org, repo } = ctx.req.query()
     const pullNumber = Number(ctx.req.param('id'))
-    const payload = await ctx.req.json().catch(() => ({}))
-    const parsedBody = pullRequestLabelsMutationBodySchema.safeParse(payload)
+    const { labels } = ctx.req.valid('json')
 
     if (!org || !repo || Number.isNaN(pullNumber)) {
       return ctx.json({ error: 'Missing org, repo, or id' }, 400)
     }
-    if (!parsedBody.success) {
-      return ctx.json({ error: pullRequestLabelsMutationErrorMessage(parsedBody.error) }, 400)
-    }
-
-    const { labels } = parsedBody.data
     const user = ctx.get('user')!
     const githubToken = user.github.accessToken
 
@@ -2179,17 +2133,11 @@ export const githubRoutes = githubRouter
   ), async (ctx) => {
     const { org, repo } = ctx.req.query()
     const pullNumber = Number(ctx.req.param('id'))
-    const payload = await ctx.req.json().catch(() => ({}))
-    const parsedBody = pullRequestUsersMutationBodySchema.safeParse(payload)
+    const { users } = ctx.req.valid('json')
 
     if (!org || !repo || Number.isNaN(pullNumber)) {
       return ctx.json({ error: 'Missing org, repo, or id' }, 400)
     }
-    if (!parsedBody.success) {
-      return ctx.json({ error: pullRequestUsersMutationErrorMessage(parsedBody.error) }, 400)
-    }
-
-    const { users } = parsedBody.data
     const user = ctx.get('user')!
     const githubToken = user.github.accessToken
 
@@ -2230,17 +2178,11 @@ export const githubRoutes = githubRouter
   ), async (ctx) => {
     const { org, repo } = ctx.req.query()
     const pullNumber = Number(ctx.req.param('id'))
-    const payload = await ctx.req.json().catch(() => ({}))
-    const parsedBody = pullRequestUsersMutationBodySchema.safeParse(payload)
+    const { users } = ctx.req.valid('json')
 
     if (!org || !repo || Number.isNaN(pullNumber)) {
       return ctx.json({ error: 'Missing org, repo, or id' }, 400)
     }
-    if (!parsedBody.success) {
-      return ctx.json({ error: pullRequestUsersMutationErrorMessage(parsedBody.error) }, 400)
-    }
-
-    const { users } = parsedBody.data
     const user = ctx.get('user')!
     const githubToken = user.github.accessToken
 
