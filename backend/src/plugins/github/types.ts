@@ -50,6 +50,14 @@ export type RepositoryLabelsParams
   = Endpoints['GET /repos/{owner}/{repo}/labels']['parameters']
 export type RepositoryAssigneesParams
   = Endpoints['GET /repos/{owner}/{repo}/assignees']['parameters']
+export type AddIssueAssigneesParams
+  = Endpoints['POST /repos/{owner}/{repo}/issues/{issue_number}/assignees']['parameters']
+export type RemoveIssueAssigneesParams
+  = Endpoints['DELETE /repos/{owner}/{repo}/issues/{issue_number}/assignees']['parameters']
+export type RequestPullRequestReviewersParams
+  = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers']['parameters']
+export type RemovePullRequestReviewersParams
+  = Endpoints['DELETE /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers']['parameters']
 
 export type NotificationResponse = Endpoints['GET /notifications']['response']['data'][number]
 export type PullRequestResponse
@@ -294,6 +302,8 @@ export interface GithubPullRequestDetails {
   head_ref_name: PullRequestDetailsResponse['head']['ref']
   body: PullRequestDetailsResponse['body']
   author: GithubPullRequestAuthor
+  assignees: GithubPullRequestFilterOptionUser[]
+  requested_reviewers: GithubPullRequestFilterOptionUser[]
   comments: PullRequestDetailsResponse['comments']
   review_comments: PullRequestDetailsResponse['review_comments']
   commits: PullRequestDetailsResponse['commits']

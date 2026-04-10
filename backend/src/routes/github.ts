@@ -1,4 +1,5 @@
 import type { Context } from 'hono'
+import type z from 'zod'
 import type { GithubCachePolicy } from '../plugins/github/cache/github-cache-policy.js'
 import type {
   GithubCacheLoadedPayload,
@@ -9,6 +10,7 @@ import type {
   GithubCacheValidators,
 } from '../plugins/github/cache/github-cache.js'
 import type {
+  AddIssueAssigneesParams,
   CompareParams,
   CreateIssueCommentParams,
   CreatePullRequestCommentParams,
@@ -54,6 +56,9 @@ import type {
   PullRequestCommentsParams,
   PullRequestParams,
   PullRequestReviewsParams,
+  RemoveIssueAssigneesParams,
+  RemovePullRequestReviewersParams,
+  RequestPullRequestReviewersParams,
   UpdateIssueCommentParams,
   UpdateIssueParams,
   UpdatePullRequestCommentParams,
@@ -124,10 +129,12 @@ import {
   pullRequestFilterOptionsBodySchema,
   pullRequestSearchBodySchema,
   pullRequestStatusMutationBodySchema,
+  pullRequestUsersMutationBodySchema,
   updateDescriptionBodySchema,
   updatePullRequestCommentBodySchema,
 } from '../plugins/github/schemas.js'
 import {
+  addGithubIssueAssignees,
   compareGithubRefs,
   convertGithubPullRequestToDraft,
   createGithubIssueComment,
@@ -170,6 +177,9 @@ import {
   patchGithubIssueComment,
   patchGithubPullRequest,
   patchGithubPullRequestComment,
+  removeGithubIssueAssignees,
+  removeGithubPullRequestReviewers,
+  requestGithubPullRequestReviewers,
 } from '../plugins/github/service.js'
 
 const LATEST_PULL_REQUESTS_LIMIT = 20
@@ -443,6 +453,17 @@ function dedupeFilterOptionUsers(
   })
 }
 
+function pullRequestUsersMutationErrorMessage(error: z.ZodError) {
+  const firstIssue = error.issues[0]
+  if (firstIssue?.path[0] !== 'users') {
+    return 'Invalid pull request user payload'
+  }
+
+  return firstIssue.message === 'Invalid input: expected array, received undefined'
+    ? 'Missing users'
+    : firstIssue.message
+}
+
 async function fetchPullRequestsSearchWithCache(
   userId: string,
   githubToken: string,
@@ -690,6 +711,18 @@ async function fetchPullRequestDetailsWithCache(
         const data = response.data!
         resolvedRepositoryPrivate = data.base.repo.private
         const author: GithubPullRequestAuthor = mapGithubPullRequestAuthor(data.user)
+        const assignees = dedupeFilterOptionUsers(
+          (data.assignees ?? []).flatMap(user =>
+            typeof user.login === 'string' && user.login.trim()
+              ? [makeFilterOptionUser(user.login.trim(), user.avatar_url)]
+              : []),
+        )
+        const requestedReviewers = dedupeFilterOptionUsers(
+          (data.requested_reviewers ?? []).flatMap(user =>
+            typeof user.login === 'string' && user.login.trim()
+              ? [makeFilterOptionUser(user.login.trim(), user.avatar_url)]
+              : []),
+        )
 
         let mergeBaseSha = data.base.sha
         const baseRef = data.base.ref
@@ -728,6 +761,8 @@ async function fetchPullRequestDetailsWithCache(
             head_ref_name: data.head.ref,
             body: data.body,
             author,
+            assignees,
+            requested_reviewers: requestedReviewers,
             comments: data.comments,
             review_comments: data.review_comments,
             commits: data.commits,
@@ -1910,6 +1945,210 @@ export const githubRoutes = githubRouter
       }))
       const pullRequest = mapGithubPullRequestDescriptionUpdate(data)
       return ctx.json({ pullRequest }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/:id/assignees', zValidator(
+    'json',
+    pullRequestUsersMutationBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const payload = await ctx.req.json().catch(() => ({}))
+    const parsedBody = pullRequestUsersMutationBodySchema.safeParse(payload)
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+    if (!parsedBody.success) {
+      return ctx.json({ error: pullRequestUsersMutationErrorMessage(parsedBody.error) }, 400)
+    }
+
+    const { users } = parsedBody.data
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: AddIssueAssigneesParams = {
+        owner: org,
+        repo,
+        issue_number: pullNumber,
+        assignees: users,
+      }
+
+      await withGithubMetrics(user.id, 'pull_request.assignees.add', () =>
+        addGithubIssueAssignees({
+          token: githubToken,
+          params,
+        }))
+
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+      }))
+
+      return ctx.body(null, 204)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .delete('/pr/:id/assignees', zValidator(
+    'json',
+    pullRequestUsersMutationBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const payload = await ctx.req.json().catch(() => ({}))
+    const parsedBody = pullRequestUsersMutationBodySchema.safeParse(payload)
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+    if (!parsedBody.success) {
+      return ctx.json({ error: pullRequestUsersMutationErrorMessage(parsedBody.error) }, 400)
+    }
+
+    const { users } = parsedBody.data
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: RemoveIssueAssigneesParams = {
+        owner: org,
+        repo,
+        issue_number: pullNumber,
+        assignees: users,
+      }
+
+      await withGithubMetrics(user.id, 'pull_request.assignees.remove', () =>
+        removeGithubIssueAssignees({
+          token: githubToken,
+          params,
+        }))
+
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+      }))
+
+      return ctx.body(null, 204)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/:id/requested-reviewers', zValidator(
+    'json',
+    pullRequestUsersMutationBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const payload = await ctx.req.json().catch(() => ({}))
+    const parsedBody = pullRequestUsersMutationBodySchema.safeParse(payload)
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+    if (!parsedBody.success) {
+      return ctx.json({ error: pullRequestUsersMutationErrorMessage(parsedBody.error) }, 400)
+    }
+
+    const { users } = parsedBody.data
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: RequestPullRequestReviewersParams = {
+        owner: org,
+        repo,
+        pull_number: pullNumber,
+        reviewers: users,
+      }
+
+      await withGithubMetrics(user.id, 'pull_request.review_requests.add', () =>
+        requestGithubPullRequestReviewers({
+          token: githubToken,
+          params,
+        }))
+
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+      }))
+
+      return ctx.body(null, 204)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .delete('/pr/:id/requested-reviewers', zValidator(
+    'json',
+    pullRequestUsersMutationBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const payload = await ctx.req.json().catch(() => ({}))
+    const parsedBody = pullRequestUsersMutationBodySchema.safeParse(payload)
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+    if (!parsedBody.success) {
+      return ctx.json({ error: pullRequestUsersMutationErrorMessage(parsedBody.error) }, 400)
+    }
+
+    const { users } = parsedBody.data
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: RemovePullRequestReviewersParams = {
+        owner: org,
+        repo,
+        pull_number: pullNumber,
+        reviewers: users,
+      }
+
+      await withGithubMetrics(user.id, 'pull_request.review_requests.remove', () =>
+        removeGithubPullRequestReviewers({
+          token: githubToken,
+          params,
+        }))
+
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+      }))
+
+      return ctx.body(null, 204)
     }
     catch (error) {
       const status = (error as { status?: number }).status

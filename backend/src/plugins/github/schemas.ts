@@ -49,6 +49,15 @@ export const pullRequestStatusMutationBodySchema = z.object({
   pullRequestId: z.string().trim().min(1, 'Missing pull request id'),
 })
 
+const pullRequestUsersMutationListSchema = z
+  .array(z.string().trim().min(1, 'Missing user login'))
+  .min(1, 'Missing users')
+  .transform(values => [...new Set(values.map(value => value.trim()).filter(Boolean))])
+
+export const pullRequestUsersMutationBodySchema = z.object({
+  users: pullRequestUsersMutationListSchema,
+})
+
 const pullRequestSearchFiltersStringListSchema = z
   .array(z.string().trim().min(1))
   .default([])

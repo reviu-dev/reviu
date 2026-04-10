@@ -1,5 +1,6 @@
 import type { Endpoints, RequestHeaders, RequestParameters } from '@octokit/types'
 import type {
+  AddIssueAssigneesParams,
   BranchRulesParams,
   BranchRulesResponse,
   CommitCheckRunsParams,
@@ -56,10 +57,13 @@ import type {
   PullRequestResponse,
   PullRequestReviewResponse,
   PullRequestReviewsParams,
+  RemoveIssueAssigneesParams,
+  RemovePullRequestReviewersParams,
   RepositoryAssigneeResponse,
   RepositoryAssigneesParams,
   RepositoryLabelResponse,
   RepositoryLabelsParams,
+  RequestPullRequestReviewersParams,
   SearchIssuesParams,
   SearchIssuesResponse,
   UpdateIssueCommentParams,
@@ -882,6 +886,46 @@ export async function patchGithubPullRequest(
   { token: string, params: UpdatePullRequestParams },
 ): Promise<UpdatePullRequestResponse> {
   return requestGithubData('PATCH /repos/{owner}/{repo}/pulls/{pull_number}', {
+    token,
+    params,
+  })
+}
+
+export async function addGithubIssueAssignees(
+  { token, params }:
+  { token: string, params: AddIssueAssigneesParams },
+): Promise<void> {
+  await requestGithubWithoutData('POST /repos/{owner}/{repo}/issues/{issue_number}/assignees', {
+    token,
+    params,
+  })
+}
+
+export async function removeGithubIssueAssignees(
+  { token, params }:
+  { token: string, params: RemoveIssueAssigneesParams },
+): Promise<void> {
+  await requestGithubWithoutData('DELETE /repos/{owner}/{repo}/issues/{issue_number}/assignees', {
+    token,
+    params,
+  })
+}
+
+export async function requestGithubPullRequestReviewers(
+  { token, params }:
+  { token: string, params: RequestPullRequestReviewersParams },
+): Promise<void> {
+  await requestGithubWithoutData('POST /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers', {
+    token,
+    params,
+  })
+}
+
+export async function removeGithubPullRequestReviewers(
+  { token, params }:
+  { token: string, params: RemovePullRequestReviewersParams },
+): Promise<void> {
+  await requestGithubWithoutData('DELETE /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers', {
     token,
     params,
   })

@@ -25,8 +25,9 @@ use git::{
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Hsla, Image,
-  ListAlignment, ListState as GpuiListState, MouseButton, ObjectFit, ParentElement, Render,
-  RenderImage, SharedString, Styled, Task, Window, div, img, list, prelude::*, px,
+  InteractiveElement, ListAlignment, ListState as GpuiListState, MouseButton, ObjectFit,
+  ParentElement, Render, RenderImage, SharedString, Styled, Task, Window, div, img, list,
+  prelude::*, px, white,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable as _, StyledExt,
@@ -85,6 +86,7 @@ use crate::{
   },
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   git_page::GitPageHandle,
+  github_home_tabs::GithubPullRequestFilterOptionUser,
   github_navigation::{
     SamePrGfmNavigation, open_repo_target, same_pr_gfm_navigation, should_open_externally,
   },
@@ -830,6 +832,110 @@ fn review_state_icon_style(
   }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewerStatus {
+  Awaiting,
+  Approved,
+  Commented,
+  ChangesRequested,
+}
+
+fn reviewer_status_for_login(reviews: &[GithubPullRequestReview], login: &str) -> ReviewerStatus {
+  let mut latest_approved: Option<&str> = None;
+  let mut latest_changes: Option<&str> = None;
+  let mut latest_comment: Option<&str> = None;
+
+  for review in reviews {
+    let Some(user) = review.user.as_ref() else {
+      continue;
+    };
+    if !github_shared::logins_match_case_insensitive(user.login.as_str(), login) {
+      continue;
+    }
+    let Some(submitted_at) = review.submitted_at.as_deref() else {
+      continue;
+    };
+    match review.state {
+      GithubPullRequestReviewState::Approved => {
+        if latest_approved.map_or(true, |ts| submitted_at > ts) {
+          latest_approved = Some(submitted_at);
+        }
+      }
+      GithubPullRequestReviewState::RequestChanges => {
+        if latest_changes.map_or(true, |ts| submitted_at > ts) {
+          latest_changes = Some(submitted_at);
+        }
+      }
+      GithubPullRequestReviewState::Commented => {
+        if latest_comment.map_or(true, |ts| submitted_at > ts) {
+          latest_comment = Some(submitted_at);
+        }
+      }
+      GithubPullRequestReviewState::Dismissed | GithubPullRequestReviewState::Pending => {}
+    }
+  }
+
+  match (latest_approved, latest_changes, latest_comment) {
+    (Some(approved), Some(changes), _) => {
+      if approved > changes {
+        ReviewerStatus::Approved
+      } else {
+        ReviewerStatus::ChangesRequested
+      }
+    }
+    (_, Some(_), _) => ReviewerStatus::ChangesRequested,
+    (Some(_), None, _) => ReviewerStatus::Approved,
+    (None, None, Some(_)) => ReviewerStatus::Commented,
+    _ => ReviewerStatus::Awaiting,
+  }
+}
+
+fn reviewer_status_tooltip(status: ReviewerStatus, login: &str) -> SharedString {
+  match status {
+    ReviewerStatus::Awaiting => format!("Awaiting requested review from {login}").into(),
+    ReviewerStatus::Approved => format!("{login} approved").into(),
+    ReviewerStatus::Commented => format!("{login} left review comments").into(),
+    ReviewerStatus::ChangesRequested => format!("{login} requested changes").into(),
+  }
+}
+
+fn merged_reviewers(
+  requested_reviewers: &[GithubPullRequestFilterOptionUser],
+  reviews: &[GithubPullRequestReview],
+  author_login: &str,
+) -> Vec<GithubPullRequestFilterOptionUser> {
+  let mut reviewers = Vec::new();
+  let mut seen: HashSet<String> = HashSet::new();
+
+  for reviewer in requested_reviewers {
+    let key = reviewer.login.to_lowercase();
+    if github_shared::logins_match_case_insensitive(reviewer.login.as_str(), author_login) {
+      continue;
+    }
+    if seen.insert(key) {
+      reviewers.push(reviewer.clone());
+    }
+  }
+
+  for review in reviews {
+    let Some(user) = review.user.as_ref() else {
+      continue;
+    };
+    let key = user.login.to_lowercase();
+    if github_shared::logins_match_case_insensitive(user.login.as_str(), author_login) {
+      continue;
+    }
+    if seen.insert(key) {
+      reviewers.push(GithubPullRequestFilterOptionUser {
+        login: user.login.clone(),
+        avatar_url: user.avatar_url.clone(),
+      });
+    }
+  }
+
+  reviewers
+}
+
 fn checks_rollup_state_label(state: GithubPullRequestChecksRollupState) -> &'static str {
   match state {
     GithubPullRequestChecksRollupState::Success => "Passing",
@@ -1301,6 +1407,64 @@ fn apply_pull_request_description_update_local(
 ) {
   pull_request.body = update.body;
   pull_request.updated_at = update.updated_at;
+}
+
+fn filter_option_users_contains(
+  users: &[GithubPullRequestFilterOptionUser],
+  candidate: &str,
+) -> bool {
+  users
+    .iter()
+    .any(|user| github_shared::logins_match_case_insensitive(user.login.as_str(), candidate))
+}
+
+fn matching_filter_option_users(
+  options: &[GithubPullRequestFilterOptionUser],
+  query: &str,
+  selected: &[GithubPullRequestFilterOptionUser],
+) -> Vec<GithubPullRequestFilterOptionUser> {
+  let normalized_query = query.trim().to_lowercase();
+  options
+    .iter()
+    .filter(|option| !filter_option_users_contains(selected, option.login.as_str()))
+    .filter(|option| {
+      normalized_query.is_empty() || option.login.to_lowercase().contains(&normalized_query)
+    })
+    .take(6)
+    .cloned()
+    .collect()
+}
+
+fn find_filter_option_user(
+  options: &[GithubPullRequestFilterOptionUser],
+  login: &str,
+) -> GithubPullRequestFilterOptionUser {
+  options
+    .iter()
+    .find(|option| github_shared::logins_match_case_insensitive(option.login.as_str(), login))
+    .cloned()
+    .unwrap_or_else(|| GithubPullRequestFilterOptionUser {
+      login: login.trim().to_string(),
+      avatar_url: None,
+    })
+}
+
+fn upsert_filter_option_user(
+  users: &mut Vec<GithubPullRequestFilterOptionUser>,
+  user: GithubPullRequestFilterOptionUser,
+) {
+  if let Some(existing) = users.iter_mut().find(|existing| {
+    github_shared::logins_match_case_insensitive(existing.login.as_str(), user.login.as_str())
+  }) {
+    *existing = user;
+    return;
+  }
+
+  users.push(user);
+}
+
+fn remove_filter_option_user(users: &mut Vec<GithubPullRequestFilterOptionUser>, login: &str) {
+  users.retain(|user| !github_shared::logins_match_case_insensitive(user.login.as_str(), login));
 }
 
 fn review_comment_owned_by_login(comment: &GithubPullRequestReviewComment, login: &str) -> bool {
@@ -2105,6 +2269,17 @@ pub struct GithubPrDetailsPage {
   issue_comments_loading: bool,
   issue_comments_error: Option<SharedString>,
   issue_comments: Vec<GithubPullRequestIssueComment>,
+  review_people_options_task: Option<Task<()>>,
+  review_people_options_loading: bool,
+  review_people_options_error: Option<SharedString>,
+  review_people_options: Vec<GithubPullRequestFilterOptionUser>,
+  assignee_input: Entity<InputState>,
+  requested_reviewer_input: Entity<InputState>,
+  assignee_popover_open: bool,
+  reviewer_popover_open: bool,
+  people_mutation_task: Option<Task<()>>,
+  people_mutation_loading: bool,
+  people_mutation_error: Option<SharedString>,
   overview_issue_comment_input: Entity<InputState>,
   overview_issue_comment_submitting: bool,
   overview_issue_comment_error: Option<SharedString>,
@@ -2596,6 +2771,9 @@ impl GithubPrDetailsPage {
         .rows(6)
         .placeholder("Add comment...")
     });
+    let assignee_input = cx.new(|cx| InputState::new(window, cx).placeholder("Assign a user..."));
+    let requested_reviewer_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Request review..."));
     let tree_search_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Search in file contents..."));
 
@@ -2644,6 +2822,17 @@ impl GithubPrDetailsPage {
       issue_comments_loading: false,
       issue_comments_error: None,
       issue_comments: Vec::new(),
+      review_people_options_task: None,
+      review_people_options_loading: false,
+      review_people_options_error: None,
+      review_people_options: Vec::new(),
+      assignee_input,
+      requested_reviewer_input,
+      assignee_popover_open: false,
+      reviewer_popover_open: false,
+      people_mutation_task: None,
+      people_mutation_loading: false,
+      people_mutation_error: None,
       overview_issue_comment_input,
       overview_issue_comment_submitting: false,
       overview_issue_comment_error: None,
@@ -2742,6 +2931,8 @@ impl GithubPrDetailsPage {
     this.sync_commits_list(cx);
     this.subscribe_to_commits_list(window, cx);
     this.subscribe_to_tree_search_input(window, cx);
+    this.subscribe_to_assignee_input(window, cx);
+    this.subscribe_to_requested_reviewer_input(window, cx);
     this
   }
 
@@ -3849,6 +4040,111 @@ impl GithubPrDetailsPage {
     GithubPrOpenTarget::new(self.active_tab_ix == PR_TAB_CHANGES_IX, None)
   }
 
+  fn render_people_token_row(
+    id_prefix: &'static str,
+    users: &[GithubPullRequestFilterOptionUser],
+    _can_remove: bool,
+    _on_remove: impl Fn(String, &mut Window, &mut App) + Clone + 'static,
+  ) -> impl IntoElement {
+    let mut row = h_flex().gap_1().items_center();
+    for user in users {
+      let login = user.login.clone();
+      let avatar = Avatar::new()
+        .name(login.clone())
+        .when_some(user.avatar_url.clone(), |this, url| this.src(url))
+        .small();
+      let wrapper = div()
+        .id(format!("{id_prefix}-{}", login))
+        .child(avatar)
+        .hoverable_tooltip({
+          let tooltip = login.clone();
+          move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)
+        });
+      row = row.child(wrapper);
+    }
+
+    h_flex().gap_2().items_center().ml_auto().child(row)
+  }
+
+  fn render_people_skeleton_row(count: usize) -> impl IntoElement {
+    let mut row = h_flex().gap_1().items_center();
+    for _ in 0..count {
+      row = row.child(Skeleton::new().size(px(24.0)).rounded_full());
+    }
+    h_flex().gap_2().items_center().ml_auto().child(row)
+  }
+
+  fn render_requested_reviewer_row(
+    users: &[GithubPullRequestFilterOptionUser],
+    reviews: &[GithubPullRequestReview],
+    theme: &gpui_component::Theme,
+  ) -> impl IntoElement {
+    let mut row = h_flex().gap_1().items_center();
+
+    for user in users {
+      let login = user.login.clone();
+      let avatar = Avatar::new()
+        .name(login.clone())
+        .when_some(user.avatar_url.clone(), |this, url| this.src(url))
+        .small();
+
+      let badge_size = px(12.0);
+      let status = reviewer_status_for_login(reviews, login.as_str());
+      let tooltip = reviewer_status_tooltip(status, login.as_str());
+      let status_marker = match status {
+        ReviewerStatus::Awaiting => div().size(px(9.0)).rounded_full().bg(theme.status_orange()),
+        ReviewerStatus::Approved => div()
+          .size(badge_size)
+          .rounded_full()
+          .bg(theme.status_green())
+          .flex()
+          .items_center()
+          .justify_center()
+          .child(Icon::new(UiIconName::Check).size_3().text_color(white())),
+        ReviewerStatus::Commented => div()
+          .size(badge_size)
+          .rounded_full()
+          .bg(theme.background)
+          .flex()
+          .items_center()
+          .justify_center()
+          .child(
+            Icon::new(UiIconName::MessageCircle)
+              .size_3()
+              .text_color(theme.muted_foreground),
+          ),
+        ReviewerStatus::ChangesRequested => div()
+          .size(badge_size)
+          .rounded_full()
+          .bg(theme.status_red())
+          .flex()
+          .items_center()
+          .justify_center()
+          .child(Icon::new(UiIconName::FileDiff).size_3().text_color(white())),
+      };
+      let status_overlay = div()
+        .absolute()
+        .right_0()
+        .bottom_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(status_marker);
+      let wrapper = div()
+        .relative()
+        .id(format!("github-pr-reviewer-{}", login))
+        .child(avatar)
+        .child(status_overlay)
+        .hoverable_tooltip({
+          let tooltip = tooltip.clone();
+          move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)
+        });
+      row = row.child(wrapper);
+    }
+
+    h_flex().gap_2().items_center().ml_auto().child(row)
+  }
+
   fn refresh_current_page(&mut self, cx: &mut Context<Self>) {
     if self.current_pr_context.is_none() {
       return;
@@ -3863,6 +4159,7 @@ impl GithubPrDetailsPage {
       self.refresh_issue_comments_for_current_pull_request(cx);
       self.refresh_reviews_for_current_pull_request(true, cx);
       self.refresh_review_comments_for_current_pull_request(cx);
+      self.refresh_review_people_options_for_current_context(cx);
     }
 
     if should_refresh_pr_changes_data(self.active_tab_ix) {
@@ -4855,6 +5152,42 @@ impl GithubPrDetailsPage {
     .detach();
   }
 
+  fn subscribe_to_assignee_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    cx.subscribe_in(
+      &self.assignee_input,
+      window,
+      |this, state, event: &InputEvent, window, cx| match event {
+        InputEvent::Change => {
+          this.people_mutation_error = None;
+          cx.notify();
+        }
+        InputEvent::PressEnter { .. } => {
+          this.add_assignee_value(state.read(cx).value().as_str(), window, cx);
+        }
+        _ => {}
+      },
+    )
+    .detach();
+  }
+
+  fn subscribe_to_requested_reviewer_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    cx.subscribe_in(
+      &self.requested_reviewer_input,
+      window,
+      |this, state, event: &InputEvent, window, cx| match event {
+        InputEvent::Change => {
+          this.people_mutation_error = None;
+          cx.notify();
+        }
+        InputEvent::PressEnter { .. } => {
+          this.add_requested_reviewer_value(state.read(cx).value().as_str(), window, cx);
+        }
+        _ => {}
+      },
+    )
+    .detach();
+  }
+
   fn set_tree_search_query(&mut self, query: String, cx: &mut Context<Self>) {
     if self.tree_search_query == query {
       return;
@@ -4862,6 +5195,291 @@ impl GithubPrDetailsPage {
 
     self.tree_search_query = query;
     self.refresh_tree_text_search(cx);
+  }
+
+  fn assignee_query(&self, cx: &App) -> String {
+    self.assignee_input.read(cx).value().trim().to_string()
+  }
+
+  fn requested_reviewer_query(&self, cx: &App) -> String {
+    self
+      .requested_reviewer_input
+      .read(cx)
+      .value()
+      .trim()
+      .to_string()
+  }
+
+  fn can_edit_people(&self, pr: &GithubPullRequestDetails) -> bool {
+    pr.state == GithubPullRequestState::Open
+      && pr.merged_at.is_none()
+      && !self.people_mutation_loading
+  }
+
+  fn clear_input(input: &Entity<InputState>, window: &mut Window, cx: &mut Context<Self>) {
+    input.update(cx, |input, cx| input.set_value("", window, cx));
+  }
+
+  fn refresh_review_people_options_for_current_context(&mut self, cx: &mut Context<Self>) {
+    let Some(context) = self.current_pr_context.as_ref().cloned() else {
+      return;
+    };
+
+    self.review_people_options_loading = true;
+    self.review_people_options_error = None;
+
+    let api = self.api.clone();
+    let full_name = format!("{}/{}", context.owner, context.repo);
+    let window_handle = self.window_handle;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.fetch_github_pull_request_filter_options(&[full_name])).await;
+
+      let _ = cx.update_window(window_handle, |_, _, cx| {
+        let _ = this.update(cx, |this, cx| {
+          match result {
+            Ok(options) => {
+              this.review_people_options = options.assignees;
+              this.review_people_options_loading = false;
+              this.review_people_options_error = None;
+            }
+            Err(error) => {
+              this.review_people_options = Vec::new();
+              this.review_people_options_loading = false;
+              this.review_people_options_error = Some(error.to_string().into());
+            }
+          }
+          this.review_people_options_task = None;
+          cx.notify();
+        });
+      });
+    });
+
+    self.review_people_options_task = Some(task);
+  }
+
+  fn add_assignee_value(&mut self, raw_value: &str, window: &mut Window, cx: &mut Context<Self>) {
+    if self.people_mutation_loading {
+      return;
+    }
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      self.people_mutation_error = Some("No pull request selected".into());
+      return;
+    };
+    let login = raw_value.trim();
+    if login.is_empty() {
+      return;
+    }
+    if pull_request
+      .assignees
+      .iter()
+      .any(|user| github_shared::logins_match_case_insensitive(user.login.as_str(), login))
+    {
+      Self::clear_input(&self.assignee_input, window, cx);
+      return;
+    }
+
+    self.people_mutation_loading = true;
+    self.people_mutation_error = None;
+    let api = self.api.clone();
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let login_string = login.to_string();
+    let user = find_filter_option_user(&self.review_people_options, login);
+    let window_handle = self.window_handle;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.add_pull_request_assignee(&owner, &repo, number, &login_string)).await;
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        let _ = this.update(cx, |this, cx| {
+          match result {
+            Ok(()) => {
+              if let Some(pr) = this.pull_request.as_mut() {
+                upsert_filter_option_user(&mut pr.assignees, user.clone());
+              }
+              Self::clear_input(&this.assignee_input, window, cx);
+              this.people_mutation_error = None;
+            }
+            Err(error) => {
+              this.people_mutation_error = Some(error.to_string().into());
+            }
+          }
+          this.people_mutation_loading = false;
+          this.people_mutation_task = None;
+          cx.notify();
+        });
+      });
+    });
+
+    self.people_mutation_task = Some(task);
+  }
+
+  fn remove_assignee(&mut self, login: &str, cx: &mut Context<Self>) {
+    if self.people_mutation_loading {
+      return;
+    }
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      self.people_mutation_error = Some("No pull request selected".into());
+      return;
+    };
+    let login = login.trim();
+    if login.is_empty() {
+      return;
+    }
+
+    self.people_mutation_loading = true;
+    self.people_mutation_error = None;
+    let api = self.api.clone();
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let login_string = login.to_string();
+    let login_for_request = login_string.clone();
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.remove_pull_request_assignee(&owner, &repo, number, &login_for_request)
+      })
+      .await;
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(()) => {
+            if let Some(pr) = this.pull_request.as_mut() {
+              remove_filter_option_user(&mut pr.assignees, &login_string);
+            }
+            this.people_mutation_error = None;
+          }
+          Err(error) => {
+            this.people_mutation_error = Some(error.to_string().into());
+          }
+        }
+        this.people_mutation_loading = false;
+        this.people_mutation_task = None;
+        cx.notify();
+      });
+    });
+
+    self.people_mutation_task = Some(task);
+  }
+
+  fn add_requested_reviewer_value(
+    &mut self,
+    raw_value: &str,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.people_mutation_loading {
+      return;
+    }
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      self.people_mutation_error = Some("No pull request selected".into());
+      return;
+    };
+    let login = raw_value.trim();
+    if login.is_empty() {
+      return;
+    }
+    if github_shared::logins_match_case_insensitive(login, pull_request.author.login.as_str()) {
+      self.people_mutation_error =
+        Some("You cannot request a review from the pull request author.".into());
+      return;
+    }
+    if pull_request
+      .requested_reviewers
+      .iter()
+      .any(|user| github_shared::logins_match_case_insensitive(user.login.as_str(), login))
+    {
+      Self::clear_input(&self.requested_reviewer_input, window, cx);
+      return;
+    }
+
+    self.people_mutation_loading = true;
+    self.people_mutation_error = None;
+    let api = self.api.clone();
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let login_string = login.to_string();
+    let user = find_filter_option_user(&self.review_people_options, login);
+    let window_handle = self.window_handle;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.request_pull_request_reviewer(&owner, &repo, number, &login_string))
+          .await;
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        let _ = this.update(cx, |this, cx| {
+          match result {
+            Ok(()) => {
+              if let Some(pr) = this.pull_request.as_mut() {
+                upsert_filter_option_user(&mut pr.requested_reviewers, user.clone());
+              }
+              Self::clear_input(&this.requested_reviewer_input, window, cx);
+              this.people_mutation_error = None;
+            }
+            Err(error) => {
+              this.people_mutation_error = Some(error.to_string().into());
+            }
+          }
+          this.people_mutation_loading = false;
+          this.people_mutation_task = None;
+          cx.notify();
+        });
+      });
+    });
+
+    self.people_mutation_task = Some(task);
+  }
+
+  fn remove_requested_reviewer(&mut self, login: &str, cx: &mut Context<Self>) {
+    if self.people_mutation_loading {
+      return;
+    }
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      self.people_mutation_error = Some("No pull request selected".into());
+      return;
+    };
+    let login = login.trim();
+    if login.is_empty() {
+      return;
+    }
+
+    self.people_mutation_loading = true;
+    self.people_mutation_error = None;
+    let api = self.api.clone();
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let login_string = login.to_string();
+    let login_for_request = login_string.clone();
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.remove_pull_request_reviewer(&owner, &repo, number, &login_for_request)
+      })
+      .await;
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(()) => {
+            if let Some(pr) = this.pull_request.as_mut() {
+              remove_filter_option_user(&mut pr.requested_reviewers, &login_string);
+            }
+            this.people_mutation_error = None;
+          }
+          Err(error) => {
+            this.people_mutation_error = Some(error.to_string().into());
+          }
+        }
+        this.people_mutation_loading = false;
+        this.people_mutation_task = None;
+        cx.notify();
+      });
+    });
+
+    self.people_mutation_task = Some(task);
   }
 
   fn refresh_tree_text_search(&mut self, cx: &mut Context<Self>) {
@@ -7238,6 +7856,15 @@ impl GithubPrDetailsPage {
     self.issue_comments_task = None;
     self.reviews_task = None;
     self.submit_review_loading = false;
+    self.review_people_options_task = None;
+    self.review_people_options_loading = true;
+    self.review_people_options_error = None;
+    self.review_people_options.clear();
+    self.people_mutation_task = None;
+    self.people_mutation_loading = false;
+    self.people_mutation_error = None;
+    self.assignee_popover_open = false;
+    self.reviewer_popover_open = false;
     self.sync_commits_list(cx);
     self.issue_comments_loading = true;
     self.issue_comments_error = None;
@@ -7317,6 +7944,15 @@ impl GithubPrDetailsPage {
         doc.replace_all("", cx);
       });
       editor.is_read_only = true;
+    });
+    let window_handle = self.window_handle;
+    let _ = cx.update_window(window_handle, |_, window, cx| {
+      self
+        .assignee_input
+        .update(cx, |input, cx| input.set_value("", window, cx));
+      self
+        .requested_reviewer_input
+        .update(cx, |input, cx| input.set_value("", window, cx));
     });
 
     let details_api = self.api.clone();
@@ -7399,6 +8035,7 @@ impl GithubPrDetailsPage {
         cx.notify();
       });
     });
+    self.refresh_review_people_options_for_current_context(cx);
 
     let reviews_api = self.api.clone();
     let reviews_owner = owner.clone();
@@ -9194,12 +9831,29 @@ impl GithubPrDetailsPage {
       &self.description_code_reference_requests,
     );
     let overview_pr_alert = self.render_overview_pr_alert(cx);
+    let can_edit_people = self.can_edit_people(pr);
+    let author_login = pr.author.login.clone();
+    let assignee_suggestions = matching_filter_option_users(
+      &self.review_people_options,
+      &self.assignee_query(cx),
+      &pr.assignees,
+    );
+    let reviewer_suggestions = matching_filter_option_users(
+      &self.review_people_options,
+      &self.requested_reviewer_query(cx),
+      &pr.requested_reviewers,
+    )
+    .into_iter()
+    .filter(|user| {
+      !github_shared::logins_match_case_insensitive(user.login.as_str(), author_login.as_str())
+    })
+    .collect::<Vec<_>>();
 
     let content = v_flex()
       .w_full()
       .gap_4()
-      .child(
-        h_flex()
+      .child({
+        let author_row = h_flex()
           .gap_2()
           .items_center()
           .text_sm()
@@ -9244,10 +9898,9 @@ impl GithubPrDetailsPage {
                   cx.open_url(&pr_url);
                 }
               }),
-          ),
-      )
-      .child(
-        h_flex()
+          );
+
+        let created_updated = h_flex()
           .gap_2()
           .flex_wrap()
           .items_center()
@@ -9257,7 +9910,7 @@ impl GithubPrDetailsPage {
               .gap_2()
               .child(
                 div()
-                  .text_sm()
+                  .text_xs()
                   .text_color(theme.muted_foreground)
                   .child("Created"),
               )
@@ -9281,7 +9934,7 @@ impl GithubPrDetailsPage {
               .gap_2()
               .child(
                 div()
-                  .text_sm()
+                  .text_xs()
                   .text_color(theme.muted_foreground)
                   .child("Updated"),
               )
@@ -9326,10 +9979,9 @@ impl GithubPrDetailsPage {
                     .child(merged.to_string()),
                 ),
             )
-          }),
-      )
-      .child(
-        h_flex().items_center().gap_2().child(
+          });
+
+        let source_target = h_flex().items_center().gap_2().child(
           h_flex()
             .items_center()
             .gap_2()
@@ -9374,9 +10026,275 @@ impl GithubPrDetailsPage {
                 )
                 .child(Clipboard::new("copy-pr-branch-target").value(pr.base_ref_name.clone())),
             ),
-        ),
-      )
-      .when_some(labels_row, |this, labels| this.child(labels))
+        );
+
+        let left_meta = v_flex()
+          .gap_2()
+          .child(author_row)
+          .child(created_updated)
+          .child(source_target)
+          .when_some(labels_row, |this, labels| {
+            this.child(div().pt_2().child(labels))
+          });
+
+        let reviewers_popover = Popover::new("pr-reviewers-popover")
+          .anchor(Corner::TopRight)
+          .open(self.reviewer_popover_open)
+          .on_open_change(cx.listener(|this, open, _window, cx| {
+            this.reviewer_popover_open = *open;
+            if *open {
+              this.people_mutation_error = None;
+            }
+            cx.notify();
+          }))
+          .trigger(
+            Button::new("pr-reviewers-edit")
+              .ghost()
+              .xsmall()
+              .compact()
+              .icon(UiIconName::SquarePen)
+              .disabled(!can_edit_people),
+          )
+          .child(
+            v_flex()
+              .w(px(260.0))
+              .gap_2()
+              .when(!pr.requested_reviewers.is_empty(), |this| {
+                this.child(h_flex().gap_1().flex_wrap().children(
+                  pr.requested_reviewers.iter().cloned().map(|user| {
+                    let page = pr_page.clone();
+                    let login = user.login.clone();
+                    h_flex()
+                      .items_center()
+                      .gap_1()
+                      .px_2()
+                      .py_1()
+                      .rounded_full()
+                      .child(
+                        Avatar::new()
+                          .name(login.clone())
+                          .when_some(user.avatar_url.clone(), |this, url| this.src(url))
+                          .xsmall(),
+                      )
+                      .child(div().text_sm().child(login.clone()))
+                      .child(
+                        Button::new(format!("pr-reviewer-remove-{}", login))
+                          .ghost()
+                          .xsmall()
+                          .compact()
+                          .icon(IconName::Close)
+                          .on_click(move |_, _, cx| {
+                            page.update(cx, |this, cx| {
+                              this.remove_requested_reviewer(&login, cx);
+                            });
+                          }),
+                      )
+                  }),
+                ))
+              })
+              .child(
+                Input::new(&self.requested_reviewer_input)
+                  .w_full()
+                  .disabled(!can_edit_people || self.review_people_options_loading),
+              )
+              .when(!reviewer_suggestions.is_empty(), |this| {
+                this.child(h_flex().gap_1().flex_wrap().children(
+                  reviewer_suggestions.into_iter().map(|reviewer| {
+                    Button::new(format!("pr-reviewer-suggestion-{}", reviewer.login))
+                      .label(reviewer.login.clone())
+                      .xsmall()
+                      .outline()
+                      .on_click({
+                        let page = pr_page.clone();
+                        let login = reviewer.login.clone();
+                        move |_, window, cx| {
+                          page.update(cx, |this, cx| {
+                            this.add_requested_reviewer_value(&login, window, cx);
+                          });
+                        }
+                      })
+                  }),
+                ))
+              }),
+          );
+
+        let assignees_popover =
+          Popover::new("pr-assignees-popover")
+            .anchor(Corner::TopRight)
+            .open(self.assignee_popover_open)
+            .on_open_change(cx.listener(|this, open, _window, cx| {
+              this.assignee_popover_open = *open;
+              if *open {
+                this.people_mutation_error = None;
+              }
+              cx.notify();
+            }))
+            .trigger(
+              Button::new("pr-assignees-edit")
+                .ghost()
+                .xsmall()
+                .compact()
+                .icon(UiIconName::SquarePen)
+                .disabled(!can_edit_people),
+            )
+            .child(
+              v_flex()
+                .w(px(260.0))
+                .gap_2()
+                .when(!pr.assignees.is_empty(), |this| {
+                  this.child(h_flex().gap_1().flex_wrap().children(
+                    pr.assignees.iter().cloned().map(|user| {
+                      let page = pr_page.clone();
+                      let login = user.login.clone();
+                      h_flex()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .py_1()
+                        .rounded_full()
+                        .child(
+                          Avatar::new()
+                            .name(login.clone())
+                            .when_some(user.avatar_url.clone(), |this, url| this.src(url))
+                            .xsmall(),
+                        )
+                        .child(div().text_sm().child(login.clone()))
+                        .child(
+                          Button::new(format!("pr-assignee-remove-{}", login))
+                            .ghost()
+                            .xsmall()
+                            .compact()
+                            .icon(IconName::Close)
+                            .on_click(move |_, _, cx| {
+                              page.update(cx, |this, cx| {
+                                this.remove_assignee(&login, cx);
+                              });
+                            }),
+                        )
+                    }),
+                  ))
+                })
+                .child(
+                  Input::new(&self.assignee_input)
+                    .w_full()
+                    .disabled(!can_edit_people || self.review_people_options_loading),
+                )
+                .when(!assignee_suggestions.is_empty(), |this| {
+                  this.child(h_flex().gap_1().flex_wrap().children(
+                    assignee_suggestions.into_iter().map(|assignee| {
+                      Button::new(format!("pr-assignee-suggestion-{}", assignee.login))
+                        .label(assignee.login.clone())
+                        .xsmall()
+                        .outline()
+                        .on_click({
+                          let page = pr_page.clone();
+                          let login = assignee.login.clone();
+                          move |_, window, cx| {
+                            page.update(cx, |this, cx| {
+                              this.add_assignee_value(&login, window, cx);
+                            });
+                          }
+                        })
+                    }),
+                  ))
+                }),
+            );
+
+        let merged_reviewers = merged_reviewers(
+          &pr.requested_reviewers,
+          &self.reviews,
+          author_login.as_str(),
+        );
+        let reviewer_block = v_flex()
+          .gap_1()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_1()
+              .justify_between()
+              .child(div().text_sm().child("Reviewers"))
+              .child(reviewers_popover),
+          )
+          .when(self.review_people_options_loading, |this| {
+            this.child(Self::render_people_skeleton_row(3))
+          })
+          .when(
+            !self.review_people_options_loading && !merged_reviewers.is_empty(),
+            |this| {
+              this.child(Self::render_requested_reviewer_row(
+                &merged_reviewers,
+                &self.reviews,
+                &theme,
+              ))
+            },
+          )
+          .when(
+            !self.review_people_options_loading && merged_reviewers.is_empty(),
+            |this| {
+              this.child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child("No reviewers"),
+              )
+            },
+          );
+
+        let assignee_block = v_flex()
+          .gap_1()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_1()
+              .justify_between()
+              .child(div().text_sm().child("Assignees"))
+              .child(assignees_popover),
+          )
+          .when(self.review_people_options_loading, |this| {
+            this.child(Self::render_people_skeleton_row(3))
+          })
+          .when(
+            !self.review_people_options_loading && !pr.assignees.is_empty(),
+            |this| {
+              this.child(Self::render_people_token_row(
+                "github-pr-assignee",
+                &pr.assignees,
+                false,
+                |_login, _, _| {},
+              ))
+            },
+          )
+          .when(
+            !self.review_people_options_loading && pr.assignees.is_empty(),
+            |this| {
+              this.child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child("No assignees"),
+              )
+            },
+          );
+
+        let right_people = v_flex()
+          .gap_3()
+          .items_end()
+          .child(reviewer_block)
+          .child(assignee_block)
+          .when_some(self.review_people_options_error.clone(), |this, error| {
+            this.child(div().text_xs().text_color(theme.status_red()).child(error))
+          })
+          .when_some(self.people_mutation_error.clone(), |this, error| {
+            this.child(div().text_xs().text_color(theme.status_red()).child(error))
+          });
+
+        div()
+          .flex()
+          .justify_between()
+          .gap_6()
+          .child(left_meta)
+          .child(right_people)
+      })
       .when_some(overview_pr_alert, |this, alert| this.child(alert))
       .child(
         v_flex()
@@ -9384,7 +10302,6 @@ impl GithubPrDetailsPage {
           .child(
             h_flex()
               .items_center()
-              .justify_between()
               .gap_2()
               .child(
                 div()
@@ -9399,7 +10316,6 @@ impl GithubPrDetailsPage {
                   .xsmall()
                   .compact()
                   .icon(UiIconName::SquarePen)
-                  .tooltip("Edit description")
                   .disabled(
                     self.pr_description_editing || self.overview_comment_submission_in_flight(),
                   )
@@ -9636,7 +10552,7 @@ impl GithubPrDetailsPage {
             div()
               .mx_auto()
               .max_w(max_w)
-              .pt(if ix == 0 { px(40.) } else { px(0.) })
+              .pt(if ix == 0 { px(30.) } else { px(0.) })
               .child(el),
           )
           .into_any_element()
@@ -14283,6 +15199,8 @@ mod tests {
         avatar_url: None,
         is_bot: false,
       },
+      assignees: Vec::new(),
+      requested_reviewers: Vec::new(),
       comments: 10,
       review_comments: 11,
       commits: 3,
