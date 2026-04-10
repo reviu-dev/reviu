@@ -8427,7 +8427,7 @@ impl GitPage {
         this.child(
           StatusAlert::new(
             "commit-conflicts-warning",
-            theme.status_orange(),
+            theme.status_yellow(),
             "Resolve all conflicts before committing.",
           )
           .title("Conflicts detected"),
