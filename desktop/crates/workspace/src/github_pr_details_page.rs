@@ -70,7 +70,7 @@ use crate::{
     ApiClient, ApiError, GithubIssueDetailsComment, GithubPullRequestCheckRun,
     GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary, GithubPullRequestCommit,
     GithubPullRequestDescriptionUpdate, GithubPullRequestDetails, GithubPullRequestFile,
-    GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser,
+    GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser, GithubPullRequestLabel,
     GithubPullRequestLegacyStatus, GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness,
     GithubPullRequestMergeReadinessStatus, GithubPullRequestMergeResult, GithubPullRequestReview,
     GithubPullRequestReviewComment, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
@@ -86,7 +86,7 @@ use crate::{
   },
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   git_page::GitPageHandle,
-  github_home_tabs::GithubPullRequestFilterOptionUser,
+  github_home_tabs::{GithubPullRequestFilterOptionLabel, GithubPullRequestFilterOptionUser},
   github_navigation::{
     SamePrGfmNavigation, open_repo_target, same_pr_gfm_navigation, should_open_externally,
   },
@@ -1466,6 +1466,44 @@ fn remove_filter_option_user(users: &mut Vec<GithubPullRequestFilterOptionUser>,
   users.retain(|user| !github_shared::logins_match_case_insensitive(user.login.as_str(), login));
 }
 
+fn labels_contains(labels: &[GithubPullRequestLabel], candidate: &str) -> bool {
+  labels
+    .iter()
+    .any(|label| label.name.eq_ignore_ascii_case(candidate))
+}
+
+fn matching_label_options(
+  options: &[GithubPullRequestFilterOptionLabel],
+  query: &str,
+  selected: &[GithubPullRequestLabel],
+) -> Vec<GithubPullRequestFilterOptionLabel> {
+  let normalized_query = query.trim().to_lowercase();
+  options
+    .iter()
+    .filter(|option| !labels_contains(selected, option.name.as_str()))
+    .filter(|option| {
+      normalized_query.is_empty() || option.name.to_lowercase().contains(&normalized_query)
+    })
+    .take(8)
+    .cloned()
+    .collect()
+}
+
+fn upsert_label(labels: &mut Vec<GithubPullRequestLabel>, label: GithubPullRequestLabel) {
+  if let Some(existing) = labels
+    .iter_mut()
+    .find(|existing| existing.name.eq_ignore_ascii_case(label.name.as_str()))
+  {
+    *existing = label;
+    return;
+  }
+  labels.push(label);
+}
+
+fn remove_label(labels: &mut Vec<GithubPullRequestLabel>, name: &str) {
+  labels.retain(|label| !label.name.eq_ignore_ascii_case(name));
+}
+
 fn review_comment_owned_by_login(comment: &GithubPullRequestReviewComment, login: &str) -> bool {
   github_shared::logins_match_case_insensitive(comment.user.login.as_str(), login)
 }
@@ -2272,13 +2310,21 @@ pub struct GithubPrDetailsPage {
   review_people_options_loading: bool,
   review_people_options_error: Option<SharedString>,
   review_people_options: Vec<GithubPullRequestFilterOptionUser>,
+  label_options: Vec<GithubPullRequestFilterOptionLabel>,
+  label_options_loading: bool,
+  label_options_error: Option<SharedString>,
   assignee_input: Entity<InputState>,
   requested_reviewer_input: Entity<InputState>,
+  label_input: Entity<InputState>,
   assignee_popover_open: bool,
   reviewer_popover_open: bool,
+  label_popover_open: bool,
   people_mutation_task: Option<Task<()>>,
   people_mutation_loading: bool,
   people_mutation_error: Option<SharedString>,
+  label_mutation_task: Option<Task<()>>,
+  label_mutation_loading: bool,
+  label_mutation_error: Option<SharedString>,
   overview_issue_comment_input: Entity<InputState>,
   overview_issue_comment_submitting: bool,
   overview_issue_comment_error: Option<SharedString>,
@@ -2773,6 +2819,7 @@ impl GithubPrDetailsPage {
     let assignee_input = cx.new(|cx| InputState::new(window, cx).placeholder("Assign a user..."));
     let requested_reviewer_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Request review..."));
+    let label_input = cx.new(|cx| InputState::new(window, cx).placeholder("Add a label..."));
     let tree_search_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Search in file contents..."));
 
@@ -2825,13 +2872,21 @@ impl GithubPrDetailsPage {
       review_people_options_loading: false,
       review_people_options_error: None,
       review_people_options: Vec::new(),
+      label_options: Vec::new(),
+      label_options_loading: false,
+      label_options_error: None,
       assignee_input,
       requested_reviewer_input,
+      label_input,
       assignee_popover_open: false,
       reviewer_popover_open: false,
+      label_popover_open: false,
       people_mutation_task: None,
       people_mutation_loading: false,
       people_mutation_error: None,
+      label_mutation_task: None,
+      label_mutation_loading: false,
+      label_mutation_error: None,
       overview_issue_comment_input,
       overview_issue_comment_submitting: false,
       overview_issue_comment_error: None,
@@ -2932,6 +2987,7 @@ impl GithubPrDetailsPage {
     this.subscribe_to_tree_search_input(window, cx);
     this.subscribe_to_assignee_input(window, cx);
     this.subscribe_to_requested_reviewer_input(window, cx);
+    this.subscribe_to_label_input(window, cx);
     this
   }
 
@@ -4073,6 +4129,14 @@ impl GithubPrDetailsPage {
     h_flex().gap_2().items_center().ml_auto().child(row)
   }
 
+  fn render_label_skeleton_row(count: usize) -> impl IntoElement {
+    let mut row = h_flex().gap_1().items_center();
+    for _ in 0..count {
+      row = row.child(Skeleton::new().w(px(85.0)).h(px(17.0)).rounded_full());
+    }
+    h_flex().gap_2().items_center().child(row)
+  }
+
   fn render_requested_reviewer_row(
     users: &[GithubPullRequestFilterOptionUser],
     reviews: &[GithubPullRequestReview],
@@ -5187,6 +5251,24 @@ impl GithubPrDetailsPage {
     .detach();
   }
 
+  fn subscribe_to_label_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    cx.subscribe_in(
+      &self.label_input,
+      window,
+      |this, state, event: &InputEvent, window, cx| match event {
+        InputEvent::Change => {
+          this.label_mutation_error = None;
+          cx.notify();
+        }
+        InputEvent::PressEnter { .. } => {
+          this.add_label_value(state.read(cx).value().as_str(), window, cx);
+        }
+        _ => {}
+      },
+    )
+    .detach();
+  }
+
   fn set_tree_search_query(&mut self, query: String, cx: &mut Context<Self>) {
     if self.tree_search_query == query {
       return;
@@ -5209,10 +5291,20 @@ impl GithubPrDetailsPage {
       .to_string()
   }
 
+  fn label_query(&self, cx: &App) -> String {
+    self.label_input.read(cx).value().trim().to_string()
+  }
+
   fn can_edit_people(&self, pr: &GithubPullRequestDetails) -> bool {
     pr.state == GithubPullRequestState::Open
       && pr.merged_at.is_none()
       && !self.people_mutation_loading
+  }
+
+  fn can_edit_labels(&self, pr: &GithubPullRequestDetails) -> bool {
+    pr.state == GithubPullRequestState::Open
+      && pr.merged_at.is_none()
+      && !self.label_mutation_loading
   }
 
   fn clear_input(input: &Entity<InputState>, window: &mut Window, cx: &mut Context<Self>) {
@@ -5226,6 +5318,8 @@ impl GithubPrDetailsPage {
 
     self.review_people_options_loading = true;
     self.review_people_options_error = None;
+    self.label_options_loading = true;
+    self.label_options_error = None;
 
     let api = self.api.clone();
     let full_name = format!("{}/{}", context.owner, context.repo);
@@ -5240,13 +5334,19 @@ impl GithubPrDetailsPage {
           match result {
             Ok(options) => {
               this.review_people_options = options.assignees;
+              this.label_options = options.labels;
               this.review_people_options_loading = false;
               this.review_people_options_error = None;
+              this.label_options_loading = false;
+              this.label_options_error = None;
             }
             Err(error) => {
               this.review_people_options = Vec::new();
+              this.label_options = Vec::new();
               this.review_people_options_loading = false;
               this.review_people_options_error = Some(error.to_string().into());
+              this.label_options_loading = false;
+              this.label_options_error = Some(error.to_string().into());
             }
           }
           this.review_people_options_task = None;
@@ -5479,6 +5579,119 @@ impl GithubPrDetailsPage {
     });
 
     self.people_mutation_task = Some(task);
+  }
+
+  fn add_label_value(&mut self, raw_value: &str, window: &mut Window, cx: &mut Context<Self>) {
+    if self.label_mutation_loading {
+      return;
+    }
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      self.label_mutation_error = Some("No pull request selected".into());
+      return;
+    };
+    let label = raw_value.trim();
+    if label.is_empty() {
+      return;
+    }
+    if labels_contains(&pull_request.labels, label) {
+      Self::clear_input(&self.label_input, window, cx);
+      return;
+    }
+
+    self.label_mutation_loading = true;
+    self.label_mutation_error = None;
+    let api = self.api.clone();
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let label_string = label.to_string();
+    let label_for_request = label_string.clone();
+    let window_handle = self.window_handle;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.add_pull_request_label(&owner, &repo, number, &label_for_request))
+          .await;
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        let _ = this.update(cx, |this, cx| {
+          match result {
+            Ok(()) => {
+              if let Some(pr) = this.pull_request.as_mut() {
+                upsert_label(
+                  &mut pr.labels,
+                  GithubPullRequestLabel {
+                    name: label_string.clone(),
+                    color: None,
+                  },
+                );
+              }
+              Self::clear_input(&this.label_input, window, cx);
+              this.label_mutation_error = None;
+              this.refresh_pull_request_details_for_current_context(cx);
+            }
+            Err(error) => {
+              this.label_mutation_error = Some(error.to_string().into());
+            }
+          }
+          this.label_mutation_loading = false;
+          this.label_mutation_task = None;
+          cx.notify();
+        });
+      });
+    });
+
+    self.label_mutation_task = Some(task);
+  }
+
+  fn remove_label(&mut self, name: &str, cx: &mut Context<Self>) {
+    if self.label_mutation_loading {
+      return;
+    }
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      self.label_mutation_error = Some("No pull request selected".into());
+      return;
+    };
+    let name = name.trim();
+    if name.is_empty() {
+      return;
+    }
+
+    self.label_mutation_loading = true;
+    self.label_mutation_error = None;
+    let api = self.api.clone();
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let name_string = name.to_string();
+    let name_for_request = name_string.clone();
+    let window_handle = self.window_handle;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.remove_pull_request_label(&owner, &repo, number, &name_for_request))
+          .await;
+      let _ = cx.update_window(window_handle, |_, _, cx| {
+        let _ = this.update(cx, |this, cx| {
+          match result {
+            Ok(()) => {
+              if let Some(pr) = this.pull_request.as_mut() {
+                remove_label(&mut pr.labels, &name_string);
+              }
+              this.label_mutation_error = None;
+              this.refresh_pull_request_details_for_current_context(cx);
+            }
+            Err(error) => {
+              this.label_mutation_error = Some(error.to_string().into());
+            }
+          }
+          this.label_mutation_loading = false;
+          this.label_mutation_task = None;
+          cx.notify();
+        });
+      });
+    });
+
+    self.label_mutation_task = Some(task);
   }
 
   fn refresh_tree_text_search(&mut self, cx: &mut Context<Self>) {
@@ -7859,11 +8072,18 @@ impl GithubPrDetailsPage {
     self.review_people_options_loading = true;
     self.review_people_options_error = None;
     self.review_people_options.clear();
+    self.label_options.clear();
+    self.label_options_loading = true;
+    self.label_options_error = None;
     self.people_mutation_task = None;
     self.people_mutation_loading = false;
     self.people_mutation_error = None;
+    self.label_mutation_task = None;
+    self.label_mutation_loading = false;
+    self.label_mutation_error = None;
     self.assignee_popover_open = false;
     self.reviewer_popover_open = false;
+    self.label_popover_open = false;
     self.sync_commits_list(cx);
     self.issue_comments_loading = true;
     self.issue_comments_error = None;
@@ -7951,6 +8171,9 @@ impl GithubPrDetailsPage {
         .update(cx, |input, cx| input.set_value("", window, cx));
       self
         .requested_reviewer_input
+        .update(cx, |input, cx| input.set_value("", window, cx));
+      self
+        .label_input
         .update(cx, |input, cx| input.set_value("", window, cx));
     });
 
@@ -9804,22 +10027,6 @@ impl GithubPrDetailsPage {
       .filter(|value| !value.trim().is_empty())
       .unwrap_or_else(|| "No description provided.".to_string());
 
-    let labels_row = if pr.labels.is_empty() {
-      None
-    } else {
-      Some(
-        h_flex()
-          .debug_selector(|| "github-pr-overview-labels".to_string())
-          .gap_1()
-          .flex_wrap()
-          .children(
-            pr.labels
-              .iter()
-              .map(|label| github_shared::github_label_tag(label, &theme)),
-          ),
-      )
-    };
-
     let pr_page = cx.entity().clone();
     let pr_page_for_links = pr_page.clone();
     let description_link_handler = Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
@@ -9835,6 +10042,7 @@ impl GithubPrDetailsPage {
     );
     let overview_pr_alert = self.render_overview_pr_alert(cx);
     let can_edit_people = self.can_edit_people(pr);
+    let can_edit_labels = self.can_edit_labels(pr);
     let author_login = pr.author.login.clone();
     let assignee_suggestions = matching_filter_option_users(
       &self.review_people_options,
@@ -9851,6 +10059,8 @@ impl GithubPrDetailsPage {
       !github_shared::logins_match_case_insensitive(user.login.as_str(), author_login.as_str())
     })
     .collect::<Vec<_>>();
+    let label_suggestions =
+      matching_label_options(&self.label_options, &self.label_query(cx), &pr.labels);
 
     let content = v_flex()
       .w_full()
@@ -10031,14 +10241,131 @@ impl GithubPrDetailsPage {
             ),
         );
 
+        let labels_popover =
+          |trigger| {
+            Popover::new("pr-labels-popover")
+              .anchor(Corner::TopRight)
+              .open(self.label_popover_open)
+              .on_open_change(cx.listener(|this, open, _window, cx| {
+                this.label_popover_open = *open;
+                if *open {
+                  this.label_mutation_error = None;
+                }
+                cx.notify();
+              }))
+              .trigger(trigger)
+              .child(
+                v_flex()
+                  .w(px(260.0))
+                  .gap_2()
+                  .when(!pr.labels.is_empty(), |this| {
+                    this.child(h_flex().gap_1().flex_wrap().children(
+                      pr.labels.iter().cloned().map(|label| {
+                        let page = pr_page.clone();
+                        let label_name = label.name.clone();
+                        h_flex()
+                          .items_center()
+                          .gap_1()
+                          .child(github_shared::github_label_tag(&label, &theme))
+                          .child(
+                            Button::new(format!("pr-label-remove-{}", label_name))
+                              .ghost()
+                              .xsmall()
+                              .compact()
+                              .icon(IconName::Close)
+                              .disabled(!can_edit_labels)
+                              .on_click(move |_, _, cx| {
+                                page.update(cx, |this, cx| {
+                                  this.remove_label(&label_name, cx);
+                                });
+                              }),
+                          )
+                      }),
+                    ))
+                  })
+                  .child(
+                    Input::new(&self.label_input)
+                      .w_full()
+                      .disabled(!can_edit_labels || self.label_options_loading),
+                  )
+                  .when(!label_suggestions.is_empty(), |this| {
+                    this.child(h_flex().gap_1().flex_wrap().children(
+                      label_suggestions.iter().cloned().map(|label| {
+                        let page = pr_page.clone();
+                        let label_name = label.name.clone();
+                        Button::new(format!("pr-label-suggestion-{}", label.name))
+                          .label(label.name.clone())
+                          .xsmall()
+                          .outline()
+                          .on_click(move |_, window, cx| {
+                            page.update(cx, |this, cx| {
+                              this.add_label_value(&label_name, window, cx);
+                            });
+                          })
+                      }),
+                    ))
+                  }),
+              )
+          };
+
+        let label_block = v_flex()
+          .pt_2()
+          .gap_1()
+          .when(self.label_options_loading, |this| {
+            this.child(Self::render_label_skeleton_row(3))
+          })
+          .when(
+            !self.label_options_loading && !pr.labels.is_empty(),
+            |this| {
+              this.child(
+                h_flex()
+                  .debug_selector(|| "github-pr-overview-labels".to_string())
+                  .gap_1()
+                  .flex_wrap()
+                  .children(
+                    pr.labels
+                      .iter()
+                      .map(|label| github_shared::github_label_tag(label, &theme)),
+                  )
+                  .child(labels_popover(
+                    Button::new("pr-labels-edit-inline")
+                      .label("Edit labels")
+                      .xsmall()
+                      .outline()
+                      .icon(UiIconName::SquarePen)
+                      .disabled(!can_edit_labels),
+                  )),
+              )
+            },
+          )
+          .when(
+            !self.label_options_loading && pr.labels.is_empty(),
+            |this| {
+              this.child(
+                div().flex().child(labels_popover(
+                  Button::new("pr-labels-edit-inline-empty")
+                    .label("Add labels")
+                    .xsmall()
+                    .outline()
+                    .icon(UiIconName::SquarePen)
+                    .disabled(!can_edit_labels),
+                )),
+              )
+            },
+          )
+          .when_some(self.label_mutation_error.clone(), |this, error| {
+            this.child(div().text_xs().text_color(theme.status_red()).child(error))
+          });
+        let label_block = label_block.when_some(self.label_options_error.clone(), |this, error| {
+          this.child(div().text_xs().text_color(theme.status_red()).child(error))
+        });
+
         let left_meta = v_flex()
           .gap_2()
           .child(author_row)
           .child(created_updated)
           .child(source_target)
-          .when_some(labels_row, |this, labels| {
-            this.child(div().pt_2().child(labels))
-          });
+          .child(label_block);
 
         let reviewers_popover = Popover::new("pr-reviewers-popover")
           .anchor(Corner::TopRight)
@@ -10305,7 +10632,7 @@ impl GithubPrDetailsPage {
           .child(
             h_flex()
               .items_center()
-              .gap_2()
+              .gap_1()
               .child(
                 div()
                   .text_sm()

@@ -941,6 +941,11 @@ struct GithubPullRequestUsersMutationRequest<'a> {
   users: &'a [&'a str],
 }
 
+#[derive(Debug, Serialize)]
+struct GithubPullRequestLabelsMutationRequest<'a> {
+  labels: &'a [&'a str],
+}
+
 #[derive(Debug, Deserialize)]
 struct GithubUserRepositoriesResponse {
   repositories: Vec<GithubUserRepository>,
@@ -1819,6 +1824,56 @@ impl ApiClient {
       .authed_request(Method::DELETE, route.as_str())
       .query(&[("org", owner), ("repo", repo)])
       .json(&GithubPullRequestUsersMutationRequest { users: &users })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("DELETE", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    Ok(())
+  }
+
+  pub fn add_pull_request_label(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    label: &str,
+  ) -> Result<()> {
+    let route = format!("/github/pr/{number}/labels");
+    let labels = [label];
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&GithubPullRequestLabelsMutationRequest { labels: &labels })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    Ok(())
+  }
+
+  pub fn remove_pull_request_label(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    label: &str,
+  ) -> Result<()> {
+    let route = format!("/github/pr/{number}/labels");
+    let labels = [label];
+    let response = self
+      .authed_request(Method::DELETE, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&GithubPullRequestLabelsMutationRequest { labels: &labels })
       .send()?;
     let status = response.status();
     Self::record_http_status("DELETE", route.as_str(), status);
@@ -3802,6 +3857,46 @@ mod tests {
   }
 
   #[test]
+  fn add_pull_request_label_uses_expected_route_and_payload() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("204 NO CONTENT", "");
+    let api = make_test_api_client(base_url);
+
+    api
+      .add_pull_request_label("acme", "widget", 42, "bug")
+      .expect("add pull request label");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("POST /github/pr/42/labels?org=acme&repo=widget HTTP/1.1"));
+    assert!(request.contains("\"labels\":[\"bug\"]"));
+  }
+
+  #[test]
+  fn remove_pull_request_label_uses_expected_route_and_payload() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("204 NO CONTENT", "");
+    let api = make_test_api_client(base_url);
+
+    api
+      .remove_pull_request_label("acme", "widget", 42, "bug")
+      .expect("remove pull request label");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("DELETE /github/pr/42/labels?org=acme&repo=widget HTTP/1.1"));
+    assert!(request.contains("\"labels\":[\"bug\"]"));
+  }
+
+  #[test]
   fn request_pull_request_reviewer_uses_expected_route_and_payload() {
     let (base_url, request, handle) =
       start_single_response_server_with_request("204 NO CONTENT", "");
@@ -5468,6 +5563,32 @@ mod tests {
 
     let err = api
       .add_pull_request_assignee("acme", "widget", 42, "alice")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn add_pull_request_label_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .add_pull_request_label("acme", "widget", 42, "bug")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn remove_pull_request_label_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .remove_pull_request_label("acme", "widget", 42, "bug")
       .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
