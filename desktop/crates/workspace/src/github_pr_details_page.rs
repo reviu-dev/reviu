@@ -40,7 +40,6 @@ use gpui_component::{
   label::Label,
   notification::Notification,
   radio::{Radio, RadioGroup},
-  scroll::ScrollableElement,
   skeleton::Skeleton,
   spinner::Spinner,
   switch::Switch,
@@ -56,26 +55,25 @@ use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DETAILS_PAGE_CONTAINER_MAX_WIDTH,
-  DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState, Popover,
-  SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusAlert, StatusTag, StatusThemeExt,
-  UiIconName, WindowExt, dropdown_select, file_icon_path_for_name_with_theme, h_resizable,
-  parse_github_url_action, resizable_panel, selectable_list_item,
+  CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DropdownSelectConfig,
+  DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState, Popover, SearchFileEntry,
+  SearchFileHandler, SelectableRowStyle, StatusAlert, StatusThemeExt, UiIconName, WindowExt,
+  dropdown_select, file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action,
+  resizable_panel, selectable_list_item,
 };
 
 use crate::{
   ShowCommandPalette, ShowFileSearch,
   active_local_repo::{ActiveLocalRepo, ActiveLocalRepoStore},
   api::{
-    ApiClient, ApiError, GithubIssueDetailsComment, GithubPullRequestCheckRun,
-    GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary, GithubPullRequestCommit,
-    GithubPullRequestDescriptionUpdate, GithubPullRequestDetails, GithubPullRequestFile,
-    GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser, GithubPullRequestLabel,
-    GithubPullRequestLegacyStatus, GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness,
-    GithubPullRequestMergeReadinessStatus, GithubPullRequestMergeResult, GithubPullRequestReview,
-    GithubPullRequestReviewComment, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
-    GithubPullRequestState, GithubPullRequestWorkflowJob, GithubPullRequestWorkflowRun,
-    GithubPullRequestWorkflowStep, GithubRepository,
+    ApiClient, ApiError, GithubIssueDetailsComment, GithubPullRequestChecksRollupState,
+    GithubPullRequestChecksSummary, GithubPullRequestCommit, GithubPullRequestDescriptionUpdate,
+    GithubPullRequestDetails, GithubPullRequestFile, GithubPullRequestIssueComment,
+    GithubPullRequestIssueCommentUser, GithubPullRequestLabel, GithubPullRequestMergeMethod,
+    GithubPullRequestMergeReadiness, GithubPullRequestMergeReadinessStatus,
+    GithubPullRequestMergeResult, GithubPullRequestReview, GithubPullRequestReviewComment,
+    GithubPullRequestReviewEvent, GithubPullRequestReviewState, GithubPullRequestState,
+    GithubRepository,
   },
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, ConfigStore},
@@ -104,7 +102,6 @@ const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const DIFF_HEADER_HEIGHT: f32 = 40.0;
 const PR_TAB_OVERVIEW_IX: usize = 0;
 const PR_TAB_CHANGES_IX: usize = 1;
-const PR_TAB_CHECKS_IX: usize = 2;
 
 fn should_refresh_pr_overview_data(active_tab_ix: usize) -> bool {
   active_tab_ix == PR_TAB_OVERVIEW_IX
@@ -112,10 +109,6 @@ fn should_refresh_pr_overview_data(active_tab_ix: usize) -> bool {
 
 fn should_refresh_pr_changes_data(active_tab_ix: usize) -> bool {
   active_tab_ix == PR_TAB_CHANGES_IX
-}
-
-fn should_refresh_pr_checks_data(active_tab_ix: usize) -> bool {
-  active_tab_ix == PR_TAB_CHECKS_IX
 }
 
 fn pr_refresh_in_progress(
@@ -145,23 +138,18 @@ fn pr_refresh_in_progress(
     return review_comments_loading || files_loading || file_loading;
   }
 
-  if should_refresh_pr_checks_data(active_tab_ix) {
-    return false;
-  }
-
   false
 }
 
 fn pr_tab_url_segment(tab_ix: usize) -> &'static str {
   match tab_ix {
     PR_TAB_CHANGES_IX => "changes",
-    PR_TAB_CHECKS_IX => "checks",
     _ => "", // overview = no suffix
   }
 }
 
 fn adjacent_pr_tab_ix(current: usize, direction: TabNavigationDirection) -> usize {
-  const PR_TAB_COUNT: usize = 3;
+  const PR_TAB_COUNT: usize = 2;
 
   match direction {
     TabNavigationDirection::Previous => (current + PR_TAB_COUNT - 1) % PR_TAB_COUNT,
@@ -917,173 +905,6 @@ fn merged_reviewers(
   }
 
   reviewers
-}
-
-fn checks_rollup_state_label(state: GithubPullRequestChecksRollupState) -> &'static str {
-  match state {
-    GithubPullRequestChecksRollupState::Success => "Passing",
-    GithubPullRequestChecksRollupState::Pending => "Pending",
-    GithubPullRequestChecksRollupState::Failure => "Failing",
-  }
-}
-
-fn checks_rollup_state_color(
-  state: GithubPullRequestChecksRollupState,
-  theme: &gpui_component::Theme,
-) -> gpui::Hsla {
-  match state {
-    GithubPullRequestChecksRollupState::Success => theme.status_green(),
-    GithubPullRequestChecksRollupState::Pending => theme.status_orange(),
-    GithubPullRequestChecksRollupState::Failure => theme.status_red(),
-  }
-}
-
-fn render_checks_state_badge(
-  state: GithubPullRequestChecksRollupState,
-  theme: &gpui_component::Theme,
-) -> gpui::AnyElement {
-  let color = checks_rollup_state_color(state, theme);
-  StatusTag::new(color)
-    .outline()
-    .child(checks_rollup_state_label(state))
-    .into_any_element()
-}
-
-fn render_checks_summary_card(
-  checks: &GithubPullRequestChecksSummary,
-  theme: &gpui_component::Theme,
-  trailing_header_content: Option<gpui::AnyElement>,
-) -> gpui::AnyElement {
-  v_flex()
-    .debug_selector(|| "github-pr-checks-summary-card".to_string())
-    .gap_3()
-    .border_1()
-    .border_color(theme.border)
-    .rounded(theme.radius)
-    .p_3()
-    .child(
-      h_flex()
-        .items_center()
-        .justify_between()
-        .gap_2()
-        .child(
-          div()
-            .text_sm()
-            .font_medium()
-            .text_color(theme.foreground)
-            .child("Checks summary"),
-        )
-        .child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child(render_checks_state_badge(checks.overall_state, theme))
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("Overall"),
-            )
-            .child(render_checks_state_badge(checks.required_state, theme))
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("Required"),
-            )
-            .when_some(trailing_header_content, |this, content| this.child(content)),
-        ),
-    )
-    .child(
-      h_flex()
-        .items_center()
-        .gap_4()
-        .flex_wrap()
-        .child(
-          div()
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("Total checks"),
-            )
-            .child(
-              div()
-                .text_sm()
-                .font_medium()
-                .text_color(theme.foreground)
-                .child(checks.total_checks.to_string()),
-            ),
-        )
-        .child(
-          div()
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("Passing"),
-            )
-            .child(
-              div()
-                .text_sm()
-                .font_medium()
-                .text_color(theme.status_green())
-                .child(checks.successful_checks.to_string()),
-            ),
-        )
-        .child(
-          div()
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("Failing"),
-            )
-            .child(
-              div()
-                .text_sm()
-                .font_medium()
-                .text_color(theme.status_red())
-                .child(checks.failed_checks.to_string()),
-            ),
-        )
-        .child(
-          div()
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("Pending"),
-            )
-            .child(
-              div()
-                .text_sm()
-                .font_medium()
-                .text_color(theme.status_orange())
-                .child(checks.pending_checks.to_string()),
-            ),
-        ),
-    )
-    .child(
-      div()
-        .text_sm()
-        .text_color(theme.muted_foreground)
-        .child(format!(
-          "{} required contexts • {} passed • {} failing • {} pending",
-          checks.required_checks_total,
-          checks.required_checks_passed,
-          checks.required_checks_failed,
-          checks.required_checks_pending,
-        )),
-    )
-    .when(checks.requires_up_to_date_branch, |this| {
-      this.child(
-        div().text_xs().text_color(theme.muted_foreground).child(
-          "The base branch rules require this pull request to be up to date before merging.",
-        ),
-      )
-    })
-    .into_any_element()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -9033,19 +8854,6 @@ impl GithubPrDetailsPage {
       Tab::new().label("Changes")
     };
 
-    let checks_tab = if let Some(checks) = self.checks.as_ref() {
-      Tab::new().child(
-        h_flex()
-          .debug_selector(|| "github-pr-checks-tab-status".to_string())
-          .items_center()
-          .gap_2()
-          .child("Checks")
-          .child(render_checks_state_badge(checks.overall_state, &theme)),
-      )
-    } else {
-      Tab::new().label("Checks")
-    };
-
     let tab_bar = TabBar::new("pr-details-tabs")
       .w_full()
       .segmented()
@@ -9054,8 +8862,7 @@ impl GithubPrDetailsPage {
         this.set_active_tab(*ix, window, cx);
       }))
       .child(Tab::new().label("Overview"))
-      .child(changes_tab)
-      .child(checks_tab);
+      .child(changes_tab);
 
     let back_button = || {
       Button::new("pr-back")
@@ -12627,561 +12434,6 @@ impl GithubPrDetailsPage {
     });
   }
 
-  fn render_checks_open_url_button(
-    &self,
-    id: String,
-    label: &'static str,
-    url: Option<String>,
-    _cx: &mut Context<Self>,
-  ) -> Option<gpui::AnyElement> {
-    let url = url
-      .map(|value| value.trim().to_string())
-      .filter(|value| !value.is_empty())?;
-
-    Some(
-      Button::new(id)
-        .ghost()
-        .xsmall()
-        .compact()
-        .label(label)
-        .on_click(move |_, _, cx| {
-          cx.open_url(&url);
-        })
-        .into_any_element(),
-    )
-  }
-
-  fn render_workflow_job_card(
-    &self,
-    _run_id: u64,
-    job: GithubPullRequestWorkflowJob,
-    theme: &gpui_component::Theme,
-    cx: &mut Context<Self>,
-  ) -> gpui::AnyElement {
-    let open_button = self.render_checks_open_url_button(
-      format!("pr-checks-job-open-{}", job.id),
-      "Open",
-      job.html_url.clone(),
-      cx,
-    );
-    let time_label = job
-      .started_at
-      .as_deref()
-      .map(format_relative_time)
-      .unwrap_or_else(|| "Unknown time".into());
-
-    v_flex()
-      .gap_2()
-      .border_1()
-      .border_color(theme.border)
-      .rounded(theme.radius)
-      .p_2()
-      .child(
-        h_flex()
-          .items_center()
-          .justify_between()
-          .gap_2()
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .flex_wrap()
-              .child(
-                div()
-                  .text_sm()
-                  .font_medium()
-                  .text_color(theme.foreground)
-                  .child(job.name.clone()),
-              )
-              .when(job.required, |this| {
-                this.child(Tag::secondary().small().rounded_full().child("Required"))
-              })
-              .child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child(time_label),
-              ),
-          )
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(render_checks_state_badge(job.state, theme))
-              .when_some(open_button, |this, button| this.child(button)),
-          ),
-      )
-      .when(!job.steps.is_empty(), |this| {
-        this.child(
-          v_flex()
-            .gap_1()
-            .pl_3()
-            .border_l_1()
-            .border_color(theme.border)
-            .children(
-              job
-                .steps
-                .into_iter()
-                .map(|step: GithubPullRequestWorkflowStep| {
-                  let step_time = step
-                    .started_at
-                    .as_deref()
-                    .map(format_relative_time)
-                    .unwrap_or_else(|| "Unknown time".into());
-                  h_flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .child(
-                      h_flex()
-                        .items_center()
-                        .gap_2()
-                        .min_w_0()
-                        .child(
-                          div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(format!("#{}", step.number)),
-                        )
-                        .child(
-                          div()
-                            .min_w_0()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(step.name),
-                        )
-                        .child(
-                          div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(step_time),
-                        ),
-                    )
-                    .child(render_checks_state_badge(step.state, theme))
-                    .into_any_element()
-                }),
-            ),
-        )
-      })
-      .into_any_element()
-  }
-
-  fn render_workflow_run_card(
-    &self,
-    run: GithubPullRequestWorkflowRun,
-    theme: &gpui_component::Theme,
-    cx: &mut Context<Self>,
-  ) -> gpui::AnyElement {
-    let title = run
-      .name
-      .clone()
-      .filter(|value| !value.trim().is_empty())
-      .unwrap_or_else(|| "Workflow run".to_string());
-    let open_button = self.render_checks_open_url_button(
-      format!("pr-checks-run-open-{}", run.id),
-      "Open run",
-      run.html_url.clone(),
-      cx,
-    );
-    let meta = format!(
-      "Run #{}{} • {}",
-      run.run_number,
-      run
-        .run_attempt
-        .map(|attempt| format!(" attempt {}", attempt))
-        .unwrap_or_default(),
-      run.event
-    );
-    let time_label = format_relative_time(
-      run
-        .run_started_at
-        .as_deref()
-        .unwrap_or(run.created_at.as_str()),
-    );
-
-    v_flex()
-      .gap_3()
-      .border_1()
-      .border_color(theme.border)
-      .rounded(theme.radius)
-      .p_3()
-      .child(
-        h_flex()
-          .items_center()
-          .justify_between()
-          .gap_2()
-          .child(
-            v_flex()
-              .gap_1()
-              .min_w_0()
-              .child(
-                div()
-                  .text_sm()
-                  .font_medium()
-                  .text_color(theme.foreground)
-                  .child(title),
-              )
-              .when_some(run.display_title.clone(), |this, display_title| {
-                this.child(
-                  div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(display_title),
-                )
-              })
-              .child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child(format!("{} • {}", meta, time_label)),
-              ),
-          )
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(render_checks_state_badge(run.state, theme))
-              .when_some(open_button, |this, button| this.child(button)),
-          ),
-      )
-      .when(run.jobs.is_empty(), |this| {
-        this.child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("No job details were returned for this workflow run."),
-        )
-      })
-      .when(!run.jobs.is_empty(), |this| {
-        this.child(
-          v_flex().gap_2().children(
-            run
-              .jobs
-              .into_iter()
-              .map(|job| self.render_workflow_job_card(run.id, job, theme, cx)),
-          ),
-        )
-      })
-      .into_any_element()
-  }
-
-  fn render_check_run_card(
-    &self,
-    check: GithubPullRequestCheckRun,
-    theme: &gpui_component::Theme,
-    cx: &mut Context<Self>,
-  ) -> gpui::AnyElement {
-    let open_button = self.render_checks_open_url_button(
-      format!("pr-checks-check-run-open-{}", check.id),
-      "Open",
-      check.details_url.clone().or(check.html_url.clone()),
-      cx,
-    );
-    let time_label = check
-      .started_at
-      .as_deref()
-      .map(format_relative_time)
-      .unwrap_or_else(|| "Unknown time".into());
-
-    v_flex()
-      .gap_2()
-      .border_1()
-      .border_color(theme.border)
-      .rounded(theme.radius)
-      .p_3()
-      .child(
-        h_flex()
-          .items_center()
-          .justify_between()
-          .gap_2()
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .flex_wrap()
-              .child(
-                div()
-                  .text_sm()
-                  .font_medium()
-                  .text_color(theme.foreground)
-                  .child(check.name.clone()),
-              )
-              .when(check.required, |this| {
-                this.child(Tag::secondary().small().rounded_full().child("Required"))
-              })
-              .when_some(check.app_name.clone(), |this, app_name| {
-                this.child(Tag::secondary().small().rounded_full().child(app_name))
-              })
-              .child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child(time_label),
-              ),
-          )
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(render_checks_state_badge(check.state, theme))
-              .when_some(open_button, |this, button| this.child(button)),
-          ),
-      )
-      .when_some(check.summary.clone(), |this, summary| {
-        this.child(div().text_sm().text_color(theme.foreground).child(summary))
-      })
-      .when_some(check.text.clone(), |this, text| {
-        this.child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child(text),
-        )
-      })
-      .when(check.annotations_count > 0, |this| {
-        this.child(
-          div()
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .child(format!("{} annotations reported", check.annotations_count)),
-        )
-      })
-      .into_any_element()
-  }
-
-  fn render_legacy_status_card(
-    &self,
-    status: GithubPullRequestLegacyStatus,
-    theme: &gpui_component::Theme,
-    cx: &mut Context<Self>,
-  ) -> gpui::AnyElement {
-    let open_button = self.render_checks_open_url_button(
-      format!("pr-checks-legacy-status-open-{}", status.id),
-      "Open",
-      status.target_url.clone(),
-      cx,
-    );
-    let time_label = format_relative_time(status.updated_at.as_str());
-
-    v_flex()
-      .gap_2()
-      .border_1()
-      .border_color(theme.border)
-      .rounded(theme.radius)
-      .p_3()
-      .child(
-        h_flex()
-          .items_center()
-          .justify_between()
-          .gap_2()
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .flex_wrap()
-              .child(
-                div()
-                  .text_sm()
-                  .font_medium()
-                  .text_color(theme.foreground)
-                  .child(status.context.clone()),
-              )
-              .when(status.required, |this| {
-                this.child(Tag::secondary().small().rounded_full().child("Required"))
-              })
-              .child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child(time_label),
-              ),
-          )
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(render_checks_state_badge(status.state, theme))
-              .when_some(open_button, |this, button| this.child(button)),
-          ),
-      )
-      .when_some(status.description.clone(), |this, description| {
-        this.child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child(description),
-        )
-      })
-      .into_any_element()
-  }
-
-  fn render_checks_tab(
-    &mut self,
-    _window: &mut Window,
-    cx: &mut Context<Self>,
-  ) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
-    let content: gpui::AnyElement = if self.checks_loading && self.checks.is_none() {
-      v_flex()
-        .flex_1()
-        .h_full()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .child(Spinner::new().small())
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading checks..."),
-        )
-        .into_any_element()
-    } else if let Some(error) = self.checks_error.as_ref() {
-      v_flex()
-        .flex_1()
-        .h_full()
-        .items_center()
-        .justify_center()
-        .text_sm()
-        .text_color(theme.status_red())
-        .child(error.clone())
-        .into_any_element()
-    } else if let Some(checks) = self.checks.clone() {
-      let missing_required_contexts = checks.missing_required_contexts.clone();
-      let has_missing_required_contexts = !missing_required_contexts.is_empty();
-      let actions_runs = checks.actions_runs.clone();
-      let has_actions_runs = !actions_runs.is_empty();
-      let other_checks = checks.other_checks.clone();
-      let has_other_checks = !other_checks.is_empty();
-      let legacy_statuses = checks.legacy_statuses.clone();
-      let has_legacy_statuses = !legacy_statuses.is_empty();
-
-      v_flex()
-        .w_full()
-        .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
-        .mx_auto()
-        .py_4()
-        .px_10()
-        .gap_4()
-        .child(render_checks_summary_card(&checks, &theme, None))
-        .when(has_missing_required_contexts, |this| {
-          this.child(
-            v_flex()
-              .gap_2()
-              .border_1()
-              .border_color(theme.border)
-              .rounded(theme.radius)
-              .p_3()
-              .child(
-                div()
-                  .text_sm()
-                  .font_medium()
-                  .text_color(theme.foreground)
-                  .child("Required checks still waiting to report"),
-              )
-              .children(missing_required_contexts.into_iter().map(|context| {
-                h_flex()
-                  .items_center()
-                  .justify_between()
-                  .gap_2()
-                  .child(div().text_sm().text_color(theme.foreground).child(context))
-                  .child(render_checks_state_badge(
-                    GithubPullRequestChecksRollupState::Pending,
-                    &theme,
-                  ))
-                  .into_any_element()
-              })),
-          )
-        })
-        .when(has_actions_runs, |this| {
-          this.child(
-            v_flex()
-              .gap_3()
-              .child(
-                div()
-                  .text_sm()
-                  .font_medium()
-                  .text_color(theme.foreground)
-                  .child("GitHub Actions"),
-              )
-              .children(
-                actions_runs
-                  .into_iter()
-                  .map(|run| self.render_workflow_run_card(run, &theme, cx)),
-              ),
-          )
-        })
-        .when(has_other_checks, |this| {
-          this.child(
-            v_flex()
-              .gap_3()
-              .child(
-                div()
-                  .text_sm()
-                  .font_medium()
-                  .text_color(theme.foreground)
-                  .child("Other checks"),
-              )
-              .children(
-                other_checks
-                  .into_iter()
-                  .map(|check| self.render_check_run_card(check, &theme, cx)),
-              ),
-          )
-        })
-        .when(has_legacy_statuses, |this| {
-          this.child(
-            v_flex()
-              .gap_3()
-              .child(
-                div()
-                  .text_sm()
-                  .font_medium()
-                  .text_color(theme.foreground)
-                  .child("Legacy statuses"),
-              )
-              .children(
-                legacy_statuses
-                  .into_iter()
-                  .map(|status| self.render_legacy_status_card(status, &theme, cx)),
-              ),
-          )
-        })
-        .when(
-          !has_actions_runs
-            && !has_other_checks
-            && !has_legacy_statuses
-            && !has_missing_required_contexts,
-          |this| {
-            this.child(
-              div()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child("GitHub has not reported any checks for this pull request yet."),
-            )
-          },
-        )
-        .into_any_element()
-    } else {
-      v_flex()
-        .flex_1()
-        .h_full()
-        .items_center()
-        .justify_center()
-        .text_sm()
-        .text_color(theme.muted_foreground)
-        .child("Checks are unavailable for this pull request.")
-        .into_any_element()
-    };
-
-    div()
-      .id("github-pr-checks-scroll")
-      .size_full()
-      .overflow_y_scrollbar()
-      .child(content)
-  }
-
   fn render_changes_tab(
     &mut self,
     window: &mut Window,
@@ -13378,19 +12630,10 @@ impl Render for GithubPrDetailsPage {
       .child(self.render_changes_tab(window, cx))
       .into_any_element();
 
-    let checks_content = div()
-      .id("checks-tab")
-      .flex_1()
-      .min_h_0()
-      .child(self.render_checks_tab(window, cx))
-      .into_any_element();
-
     let content = if self.active_tab_ix == PR_TAB_OVERVIEW_IX {
       overview_content
     } else if self.active_tab_ix == PR_TAB_CHANGES_IX {
       changes_content
-    } else if self.active_tab_ix >= PR_TAB_CHECKS_IX {
-      checks_content
     } else {
       overview_content
     };
@@ -14222,45 +13465,6 @@ mod tests {
   }
 
   #[gpui::test]
-  fn checks_summary_renders_when_checks_tab_is_active(cx: &mut TestAppContext) {
-    init_gpui_test(cx);
-    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
-
-    page.update_in(cx, |this, _window, cx| {
-      this.pull_request = Some(make_pr_details_for_stats());
-      this.active_tab_ix = PR_TAB_CHECKS_IX;
-      this.checks = Some(make_checks_summary());
-      cx.notify();
-    });
-
-    let summary_bounds = cx
-      .debug_bounds("github-pr-checks-summary-card")
-      .expect("checks summary bounds")
-      .size;
-    assert!(summary_bounds.width > gpui::px(0.0));
-    assert!(summary_bounds.height > gpui::px(0.0));
-  }
-
-  #[gpui::test]
-  fn checks_tab_renders_overall_status_badge_in_header(cx: &mut TestAppContext) {
-    init_gpui_test(cx);
-    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
-
-    page.update_in(cx, |this, _window, cx| {
-      this.pull_request = Some(make_pr_details_for_stats());
-      this.checks = Some(make_checks_summary());
-      cx.notify();
-    });
-
-    let overall_status_bounds = cx
-      .debug_bounds("github-pr-checks-tab-status")
-      .expect("checks tab status bounds")
-      .size;
-    assert!(overall_status_bounds.width > gpui::px(0.0));
-    assert!(overall_status_bounds.height > gpui::px(0.0));
-  }
-
-  #[gpui::test]
   fn merge_and_review_buttons_do_not_render_for_merged_pull_request(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
@@ -14523,15 +13727,9 @@ mod tests {
   fn pr_refresh_helpers_match_active_tab() {
     assert!(should_refresh_pr_overview_data(PR_TAB_OVERVIEW_IX));
     assert!(!should_refresh_pr_overview_data(PR_TAB_CHANGES_IX));
-    assert!(!should_refresh_pr_overview_data(PR_TAB_CHECKS_IX));
 
     assert!(should_refresh_pr_changes_data(PR_TAB_CHANGES_IX));
     assert!(!should_refresh_pr_changes_data(PR_TAB_OVERVIEW_IX));
-    assert!(!should_refresh_pr_changes_data(PR_TAB_CHECKS_IX));
-
-    assert!(should_refresh_pr_checks_data(PR_TAB_CHECKS_IX));
-    assert!(!should_refresh_pr_checks_data(PR_TAB_OVERVIEW_IX));
-    assert!(!should_refresh_pr_checks_data(PR_TAB_CHANGES_IX));
 
     assert!(pr_refresh_in_progress(
       PR_TAB_OVERVIEW_IX,
@@ -14556,17 +13754,6 @@ mod tests {
       false,
     ));
     assert!(pr_refresh_in_progress(
-      PR_TAB_CHECKS_IX,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      true,
-    ));
-    assert!(pr_refresh_in_progress(
       PR_TAB_OVERVIEW_IX,
       true,
       false,
@@ -14584,28 +13771,6 @@ mod tests {
       false,
       false,
       true,
-      false,
-      false,
-      false,
-    ));
-    assert!(pr_refresh_in_progress(
-      PR_TAB_CHECKS_IX,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      true,
-    ));
-    assert!(!pr_refresh_in_progress(
-      PR_TAB_CHECKS_IX,
-      false,
-      false,
-      false,
-      false,
-      false,
       false,
       false,
       false,
@@ -14690,12 +13855,6 @@ mod tests {
         assert!(review_comments_loading);
         assert!(files_loading);
       }
-      PR_TAB_CHECKS_IX => {
-        assert!(!issue_comments_loading);
-        assert!(!reviews_loading);
-        assert!(!review_comments_loading);
-        assert!(!files_loading);
-      }
       _ => unreachable!(),
     }
 
@@ -14739,18 +13898,13 @@ mod tests {
     cx.executor().allow_parking();
     assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_OVERVIEW_IX, cx).await;
     assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_CHANGES_IX, cx).await;
-    assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_CHECKS_IX, cx).await;
   }
 
   #[test]
   fn adjacent_pr_tab_ix_wraps_in_both_directions() {
     assert_eq!(
       adjacent_pr_tab_ix(PR_TAB_OVERVIEW_IX, TabNavigationDirection::Previous),
-      PR_TAB_CHECKS_IX
-    );
-    assert_eq!(
-      adjacent_pr_tab_ix(PR_TAB_CHECKS_IX, TabNavigationDirection::Next),
-      PR_TAB_OVERVIEW_IX
+      PR_TAB_CHANGES_IX
     );
     assert_eq!(
       adjacent_pr_tab_ix(PR_TAB_CHANGES_IX, TabNavigationDirection::Previous),
@@ -14758,7 +13912,7 @@ mod tests {
     );
     assert_eq!(
       adjacent_pr_tab_ix(PR_TAB_CHANGES_IX, TabNavigationDirection::Next),
-      PR_TAB_CHECKS_IX
+      PR_TAB_OVERVIEW_IX
     );
   }
 
@@ -16078,22 +15232,6 @@ mod tests {
   }
 
   #[test]
-  fn checks_rollup_state_label_covers_all_variants() {
-    assert_eq!(
-      checks_rollup_state_label(GithubPullRequestChecksRollupState::Success),
-      "Passing"
-    );
-    assert_eq!(
-      checks_rollup_state_label(GithubPullRequestChecksRollupState::Pending),
-      "Pending"
-    );
-    assert_eq!(
-      checks_rollup_state_label(GithubPullRequestChecksRollupState::Failure),
-      "Failing"
-    );
-  }
-
-  #[test]
   fn upsert_issue_comment_local_updates_existing_and_appends_missing() {
     let mut comments = vec![make_issue_comment(1, "2026-02-28T10:00:00Z", "Initial")];
     let mut updated = make_issue_comment(1, "2026-02-28T10:01:00Z", "Updated");
@@ -16771,7 +15909,6 @@ mod tests {
       left_sidebar_kind_for_tab(PR_TAB_CHANGES_IX),
       Some(GithubPrLeftSidebarKind::Files)
     );
-    assert_eq!(left_sidebar_kind_for_tab(PR_TAB_CHECKS_IX), None);
   }
 
   #[test]
