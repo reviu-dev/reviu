@@ -8911,126 +8911,42 @@ impl GithubPrDetailsPage {
       .child(tab_bar)
   }
 
-  fn render_context_sidebar_checks_summary(
-    &self,
-    show_view_checks_button: bool,
-    cx: &mut Context<Self>,
-  ) -> gpui::AnyElement {
+  fn render_context_sidebar_checks_summary(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
     let theme = cx.theme().clone();
 
-    if self.checks_loading && self.checks.is_none() {
-      return v_flex()
+    let context_content: AnyElement = if self.checks_loading && self.checks.is_none() {
+      div()
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child("Loading checks...")
+        .into_any_element()
+    } else if let Some(error) = self.checks_error.as_ref() {
+      div()
+        .text_sm()
+        .text_color(theme.status_red())
+        .child(error.clone())
+        .into_any_element()
+    } else if let Some(checks) = self.checks.as_ref() {
+      v_flex()
         .gap_3()
-        .border_1()
-        .border_color(theme.border)
-        .rounded(theme.radius)
-        .p_3()
         .child(
           h_flex()
             .items_center()
-            .justify_between()
             .gap_2()
+            .flex_wrap()
+            .child(render_checks_state_badge(checks.overall_state, &theme))
             .child(
               div()
-                .text_sm()
-                .font_medium()
-                .text_color(theme.foreground)
-                .child("Checks summary"),
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("Overall"),
             )
-            .child(Spinner::new().small()),
-        )
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading checks..."),
-        )
-        .into_any_element();
-    }
-
-    if let Some(error) = self.checks_error.as_ref() {
-      return v_flex()
-        .gap_3()
-        .border_1()
-        .border_color(theme.border)
-        .rounded(theme.radius)
-        .p_3()
-        .child(
-          div()
-            .text_sm()
-            .font_medium()
-            .text_color(theme.foreground)
-            .child("Checks summary"),
-        )
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.status_red())
-            .child(error.clone()),
-        )
-        .into_any_element();
-    }
-
-    if let Some(checks) = self.checks.as_ref() {
-      let view_checks_button = if show_view_checks_button {
-        let view = cx.entity();
-        Some(
-          Button::new("pr-overview-view-checks")
-            .ghost()
-            .xsmall()
-            .label("View check details")
-            .on_click(move |_, window, cx| {
-              view.update(cx, |this, cx| {
-                this.set_active_tab(PR_TAB_CHECKS_IX, window, cx);
-              });
-            }),
-        )
-      } else {
-        None
-      };
-
-      return v_flex()
-        .gap_3()
-        .border_1()
-        .border_color(theme.border)
-        .rounded(theme.radius)
-        .p_3()
-        .child(
-          v_flex()
-            .gap_2()
+            .child(render_checks_state_badge(checks.required_state, &theme))
             .child(
-              h_flex()
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .child(
-                  div()
-                    .text_sm()
-                    .font_medium()
-                    .text_color(theme.foreground)
-                    .child("Checks summary"),
-                )
-                .when_some(view_checks_button, |this, button| this.child(button)),
-            )
-            .child(
-              h_flex()
-                .items_center()
-                .gap_2()
-                .flex_wrap()
-                .child(render_checks_state_badge(checks.overall_state, &theme))
-                .child(
-                  div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("Overall"),
-                )
-                .child(render_checks_state_badge(checks.required_state, &theme))
-                .child(
-                  div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("Required"),
-                ),
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("Required"),
             ),
         )
         .child(
@@ -9115,15 +9031,17 @@ impl GithubPrDetailsPage {
               checks.required_checks_pending,
             )),
         )
-        .into_any_element();
-    }
+        .into_any_element()
+    } else {
+      div()
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child("Checks are unavailable for this pull request.")
+        .into_any_element()
+    };
 
     v_flex()
-      .gap_3()
-      .border_1()
-      .border_color(theme.border)
-      .rounded(theme.radius)
-      .p_3()
+      .gap_2()
       .child(
         div()
           .text_sm()
@@ -9133,9 +9051,11 @@ impl GithubPrDetailsPage {
       )
       .child(
         div()
-          .text_sm()
-          .text_color(theme.muted_foreground)
-          .child("Checks are unavailable for this pull request."),
+          .p_3()
+          .rounded(theme.radius_lg)
+          .border_1()
+          .border_color(theme.border)
+          .child(context_content),
       )
       .into_any_element()
   }
@@ -9143,69 +9063,45 @@ impl GithubPrDetailsPage {
   fn render_context_sidebar_commits(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
     let theme = cx.theme().clone();
 
-    if self.commits_loading {
-      return v_flex()
+    let commits_content: AnyElement = if self.commits_loading {
+      v_flex()
         .flex_1()
         .min_h_0()
-        .gap_3()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .child(Spinner::new().small())
         .child(
           div()
             .text_sm()
-            .font_medium()
-            .text_color(theme.foreground)
-            .child("Commits"),
+            .text_color(theme.muted_foreground)
+            .child("Loading commits..."),
         )
-        .child(
-          v_flex()
-            .flex_1()
-            .min_h_0()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .child(Spinner::new().small())
-            .child(
-              div()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child("Loading commits..."),
-            ),
-        )
-        .into_any_element();
-    }
+        .into_any_element()
+    } else if let Some(error) = self.commits_error.as_ref() {
+      div()
+        .text_sm()
+        .text_color(theme.status_red())
+        .child(error.clone())
+        .into_any_element()
+    } else {
+      let commits_list = List::new(&self.commits_list)
+        .search_placeholder("Search commits...")
+        .rounded(theme.radius_lg)
+        .size_full()
+        .p(px(0.));
 
-    if let Some(error) = self.commits_error.as_ref() {
-      return v_flex()
+      v_flex()
         .flex_1()
         .min_h_0()
-        .gap_3()
-        .child(
-          div()
-            .text_sm()
-            .font_medium()
-            .text_color(theme.foreground)
-            .child("Commits"),
-        )
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.status_red())
-            .child(error.clone()),
-        )
-        .into_any_element();
-    }
-
-    let commits_list = List::new(&self.commits_list)
-      .search_placeholder("Search commits...")
-      .border_1()
-      .border_color(theme.border)
-      .rounded(theme.radius)
-      .size_full()
-      .p(px(8.));
+        .child(commits_list)
+        .into_any_element()
+    };
 
     v_flex()
+      .gap_2()
       .flex_1()
       .min_h_0()
-      .gap_3()
       .child(
         h_flex()
           .items_center()
@@ -9225,7 +9121,15 @@ impl GithubPrDetailsPage {
               .child(self.commits.len().to_string()),
           ),
       )
-      .child(div().flex_1().min_h_0().child(commits_list))
+      .child(
+        v_flex()
+          .flex_1()
+          .min_h_0()
+          .rounded(theme.radius_lg)
+          .border_1()
+          .border_color(theme.border)
+          .child(commits_content),
+      )
       .into_any_element()
   }
 
@@ -9238,7 +9142,7 @@ impl GithubPrDetailsPage {
       .bg(theme.sidebar)
       .gap_3()
       .p_3()
-      .child(self.render_context_sidebar_checks_summary(self.active_tab_ix != PR_TAB_CHECKS_IX, cx))
+      .child(self.render_context_sidebar_checks_summary(cx))
       .child(self.render_context_sidebar_commits(cx))
       .into_any_element()
   }
