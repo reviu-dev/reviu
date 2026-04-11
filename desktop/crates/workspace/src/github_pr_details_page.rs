@@ -1165,22 +1165,14 @@ fn overview_checks_summary_title(checks: &GithubPullRequestChecksSummary) -> Str
       if checks.pending_checks == 0 {
         "Checks are pending".to_string()
       } else {
-        format!(
-          "{} {} pending",
-          checks.pending_checks,
-          singular_or_plural(checks.pending_checks, "check", "checks")
-        )
+        "Checks".to_string()
       }
     }
     GithubPullRequestChecksRollupState::Failure => {
       if checks.failed_checks == 0 {
         "Checks need attention".to_string()
       } else {
-        format!(
-          "{} {} failed",
-          checks.failed_checks,
-          singular_or_plural(checks.failed_checks, "check", "checks")
-        )
+        "Checks".to_string()
       }
     }
   }
@@ -9849,6 +9841,7 @@ impl GithubPrDetailsPage {
               .overflow_hidden()
               .text_ellipsis()
               .text_sm()
+              .flex_shrink_0()
               .font_medium()
               .text_color(theme.foreground)
               .child(title),
