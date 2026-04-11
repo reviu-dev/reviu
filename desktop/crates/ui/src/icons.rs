@@ -7,6 +7,8 @@ use gpui_component::{IconNamed, Theme};
 pub enum UiIconName {
   GitBranch,
   GitMerge,
+  GitCommitVertical,
+  GitCommitHorizontal,
   ArrowUpFromLine,
   ArrowDownFromLine,
   MessageCircle,
@@ -25,6 +27,7 @@ pub enum UiIconName {
   CircleSlash,
   Lock,
   ScanEye,
+  Eye,
   GitPullRequestArrow,
   FileDiff,
   Pin,
@@ -39,6 +42,8 @@ impl IconNamed for UiIconName {
     match self {
       UiIconName::GitBranch => "icons/git-branch.svg",
       UiIconName::GitMerge => "icons/git-merge.svg",
+      UiIconName::GitCommitVertical => "icons/git-commit-vertical.svg",
+      UiIconName::GitCommitHorizontal => "icons/git-commit-horizontal.svg",
       UiIconName::ArrowUpFromLine => "icons/arrow-up-from-line.svg",
       UiIconName::ArrowDownFromLine => "icons/arrow-down-from-line.svg",
       UiIconName::MessageCircle => "icons/message-circle.svg",
@@ -62,6 +67,7 @@ impl IconNamed for UiIconName {
       UiIconName::Pin => "icons/pin.svg",
       UiIconName::SquareTerminal => "icons/square-terminal.svg",
       UiIconName::X => "icons/x.svg",
+      UiIconName::Eye => "icons/eye.svg",
     }
     .into()
   }

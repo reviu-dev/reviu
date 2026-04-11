@@ -805,6 +805,12 @@ struct GithubPrOverviewConversationReply {
   body: String,
 }
 
+#[derive(Clone, Debug)]
+enum GithubPrOverviewTimelineItem {
+  Commit(GithubPullRequestCommit),
+  Conversation(GithubPrOverviewConversationItem),
+}
+
 fn review_state_display_label(state: GithubPullRequestReviewState) -> &'static str {
   match state {
     GithubPullRequestReviewState::Commented => "Commented",
@@ -1790,6 +1796,57 @@ fn build_overview_conversation_items(
       .cmp(&b.timestamp)
       .then_with(|| conversation_source_priority(a.kind).cmp(&conversation_source_priority(b.kind)))
       .then_with(|| a.id.cmp(&b.id))
+  });
+
+  items
+}
+
+fn overview_timeline_item_timestamp(item: &GithubPrOverviewTimelineItem) -> &str {
+  match item {
+    GithubPrOverviewTimelineItem::Commit(commit) => commit_sort_timestamp(commit),
+    GithubPrOverviewTimelineItem::Conversation(item) => item.timestamp.as_str(),
+  }
+}
+
+fn overview_timeline_item_priority(item: &GithubPrOverviewTimelineItem) -> u8 {
+  match item {
+    GithubPrOverviewTimelineItem::Commit(_) => 0,
+    GithubPrOverviewTimelineItem::Conversation(item) => 1 + conversation_source_priority(item.kind),
+  }
+}
+
+fn build_overview_timeline_items(
+  commits: &[GithubPullRequestCommit],
+  issue_comments: &[GithubPullRequestIssueComment],
+  reviews: &[GithubPullRequestReview],
+  review_comments: &[GithubPullRequestReviewComment],
+) -> Vec<GithubPrOverviewTimelineItem> {
+  let mut items = commits
+    .iter()
+    .cloned()
+    .map(GithubPrOverviewTimelineItem::Commit)
+    .collect::<Vec<_>>();
+
+  items.extend(
+    build_overview_conversation_items(issue_comments, reviews, review_comments)
+      .into_iter()
+      .map(GithubPrOverviewTimelineItem::Conversation),
+  );
+
+  items.sort_by(|a, b| {
+    overview_timeline_item_timestamp(a)
+      .cmp(overview_timeline_item_timestamp(b))
+      .then_with(|| overview_timeline_item_priority(a).cmp(&overview_timeline_item_priority(b)))
+      .then_with(|| match (a, b) {
+        (GithubPrOverviewTimelineItem::Commit(a), GithubPrOverviewTimelineItem::Commit(b)) => {
+          a.sha.cmp(&b.sha)
+        }
+        (
+          GithubPrOverviewTimelineItem::Conversation(a),
+          GithubPrOverviewTimelineItem::Conversation(b),
+        ) => a.id.cmp(&b.id),
+        _ => std::cmp::Ordering::Equal,
+      })
   });
 
   items
@@ -2828,7 +2885,7 @@ pub struct GithubPrDetailsPage {
   description_markdown_state: MarkdownRenderState,
   syntax_highlight_cache: Arc<gfm_markdown_viewer::SyntaxHighlightCache>,
   overview_checks_open: bool,
-  overview_conversation_items: Vec<GithubPrOverviewConversationItem>,
+  overview_timeline_items: Vec<GithubPrOverviewTimelineItem>,
   overview_list: GpuiListState,
   overview_list_count: usize,
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
@@ -3395,7 +3452,7 @@ impl GithubPrDetailsPage {
       description_markdown_state: MarkdownRenderState::new(),
       syntax_highlight_cache: Arc::new(gfm_markdown_viewer::SyntaxHighlightCache::new()),
       overview_checks_open: true,
-      overview_conversation_items: Vec::new(),
+      overview_timeline_items: Vec::new(),
       overview_list: GpuiListState::new(0, ListAlignment::Top, px(300.)),
       overview_list_count: 0,
       svg_preview: None,
@@ -9899,6 +9956,260 @@ impl GithubPrDetailsPage {
     item.into_any_element()
   }
 
+  fn render_overview_timeline_marker(
+    icon: AnyElement,
+    color: Hsla,
+    theme: &gpui_component::Theme,
+  ) -> AnyElement {
+    div()
+      .size(px(24.0))
+      .rounded_full()
+      .border_1()
+      .border_color(color.opacity(0.45))
+      .bg(theme.background)
+      .flex()
+      .items_center()
+      .justify_center()
+      .child(icon)
+      .into_any_element()
+  }
+
+  fn render_overview_timeline_shell(
+    id: String,
+    marker: AnyElement,
+    body: AnyElement,
+    is_first: bool,
+    is_last: bool,
+    theme: &gpui_component::Theme,
+  ) -> AnyElement {
+    div()
+      .flex()
+      .flex_row()
+      .id(id)
+      .w_full()
+      .min_w_0()
+      .gap_3()
+      .child(
+        div()
+          .relative()
+          .w(px(52.0))
+          .min_h(px(56.0))
+          .flex_shrink_0()
+          .when(!is_first, |this| {
+            this.child(
+              div()
+                .absolute()
+                .top_0()
+                .left(px(25.5))
+                .w(px(1.0))
+                .h(px(12.0))
+                .bg(theme.border),
+            )
+          })
+          .when(!is_last, |this| {
+            this.child(
+              div()
+                .absolute()
+                .top(px(34.0))
+                .bottom_0()
+                .left(px(25.5))
+                .w(px(1.0))
+                .bg(theme.border),
+            )
+          })
+          .child(div().absolute().top(px(10.0)).left(px(14.0)).child(marker)),
+      )
+      .child(div().min_w_0().flex_1().pb_4().child(body))
+      .into_any_element()
+  }
+
+  fn render_overview_commit_timeline_item(
+    &self,
+    commit: &GithubPullRequestCommit,
+    is_first: bool,
+    is_last: bool,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+    let subject = commit_subject(&commit.message);
+    let short_sha = github_shared::short_sha(&commit.sha);
+    let commit_user = commit.author.as_ref().or(commit.committer.as_ref());
+    let author = commit_user
+      .map(|user| user.login.clone())
+      .unwrap_or_else(|| "unknown".to_string());
+    let avatar_url = commit_user.and_then(|user| user.avatar_url.clone());
+    let date_label = commit
+      .committed_at
+      .as_deref()
+      .or(commit.authored_at.as_deref())
+      .map(format_relative_time)
+      .unwrap_or_else(|| "—".into());
+    let selected = self.selected_commit_sha.as_deref() == Some(commit.sha.as_str());
+    let sha = commit.sha.clone();
+    let hover_bg = theme.accent.opacity(0.55);
+    let marker_color = theme.muted_foreground;
+    let marker = Self::render_overview_timeline_marker(
+      Icon::new(UiIconName::GitCommitHorizontal)
+        .size_3()
+        .text_color(marker_color)
+        .into_any_element(),
+      marker_color,
+      &theme,
+    );
+
+    let body = h_flex()
+      .id(format!("github-pr-overview-timeline-commit-row-{sha}"))
+      .w_full()
+      .min_w_0()
+      .items_center()
+      .gap_3()
+      .rounded(theme.radius)
+      .px_2()
+      .py_2()
+      .cursor_pointer()
+      .when(selected, |this| this.bg(hover_bg))
+      .hover(move |this| this.bg(hover_bg))
+      .on_click(cx.listener(move |this, _, window, cx| {
+        this.select_commit_filter(Some(sha.clone()), cx);
+        this.set_active_tab(PR_TAB_CHANGES_IX, window, cx);
+      }))
+      .child(
+        Avatar::new()
+          .name(author.clone())
+          .when_some(avatar_url.clone(), |this, url| this.src(url))
+          .small(),
+      )
+      .child(
+        v_flex()
+          .min_w_0()
+          .flex_1()
+          .gap_1()
+          .child(
+            div()
+              .min_w_0()
+              .overflow_hidden()
+              .text_ellipsis()
+              .text_sm()
+              .font_weight(gpui::FontWeight::SEMIBOLD)
+              .text_color(theme.foreground)
+              .child(subject),
+          )
+          .child(
+            h_flex()
+              .min_w_0()
+              .items_center()
+              .gap_1()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(
+                Tag::secondary()
+                  .small()
+                  .rounded_full()
+                  .text_color(theme.muted_foreground)
+                  .child(short_sha.clone()),
+              )
+              .child(
+                div()
+                  .min_w_0()
+                  .overflow_hidden()
+                  .text_ellipsis()
+                  .child(author),
+              )
+              .child("·")
+              .child(date_label),
+          ),
+      )
+      .into_any_element();
+
+    Self::render_overview_timeline_shell(
+      format!("github-pr-overview-timeline-commit-{short_sha}"),
+      marker,
+      body,
+      is_first,
+      is_last,
+      &theme,
+    )
+  }
+
+  fn render_overview_conversation_timeline_item(
+    &self,
+    item: &GithubPrOverviewConversationItem,
+    is_first: bool,
+    is_last: bool,
+    pr_number: u64,
+    pr_owner: SharedString,
+    pr_repo: SharedString,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+    let (marker_icon, marker_color): (AnyElement, Hsla) = match item.review_state {
+      Some(GithubPullRequestReviewState::Approved) => (
+        Icon::new(UiIconName::CircleCheck)
+          .size_3()
+          .text_color(theme.status_green())
+          .into_any_element(),
+        theme.status_green(),
+      ),
+      Some(GithubPullRequestReviewState::RequestChanges) => (
+        Icon::new(IconName::CircleX)
+          .size_3()
+          .text_color(theme.status_red())
+          .into_any_element(),
+        theme.status_red(),
+      ),
+      _ if item.kind == GithubPrOverviewConversationItemKind::ReviewComment => (
+        Icon::new(UiIconName::Eye)
+          .size_3()
+          .text_color(theme.muted_foreground)
+          .into_any_element(),
+        theme.muted_foreground,
+      ),
+      _ => (
+        Icon::new(UiIconName::MessageCircle)
+          .size_3()
+          .text_color(theme.muted_foreground)
+          .into_any_element(),
+        theme.muted_foreground,
+      ),
+    };
+    let marker = Self::render_overview_timeline_marker(marker_icon, marker_color, &theme);
+    let body = self.render_overview_conversation_item(item, pr_number, pr_owner, pr_repo, cx);
+
+    Self::render_overview_timeline_shell(
+      format!(
+        "github-pr-overview-timeline-conversation-{}-{}",
+        conversation_source_priority(item.kind),
+        item.id
+      ),
+      marker,
+      body,
+      is_first,
+      is_last,
+      &theme,
+    )
+  }
+
+  fn render_overview_timeline_item(
+    &self,
+    item: &GithubPrOverviewTimelineItem,
+    is_first: bool,
+    is_last: bool,
+    pr_number: u64,
+    pr_owner: SharedString,
+    pr_repo: SharedString,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    match item {
+      GithubPrOverviewTimelineItem::Commit(commit) => {
+        self.render_overview_commit_timeline_item(commit, is_first, is_last, cx)
+      }
+      GithubPrOverviewTimelineItem::Conversation(item) => self
+        .render_overview_conversation_timeline_item(
+          item, is_first, is_last, pr_number, pr_owner, pr_repo, cx,
+        ),
+    }
+  }
+
   fn render_overview_add_comment_section(
     &self,
     theme: &gpui_component::Theme,
@@ -9950,16 +10261,12 @@ impl GithubPrDetailsPage {
 
   fn render_overview_conversation_item(
     &self,
-    ix: usize,
+    item: &GithubPrOverviewConversationItem,
     pr_number: u64,
     pr_owner: SharedString,
     pr_repo: SharedString,
     cx: &mut Context<Self>,
   ) -> AnyElement {
-    let Some(item) = self.overview_conversation_items.get(ix) else {
-      return div().into_any_element();
-    };
-
     let theme = cx.theme().clone();
     let timestamp = format_relative_time(&item.timestamp);
     let scope_id = overview_conversation_scope_id(pr_number, item.kind, item.id);
@@ -10322,16 +10629,6 @@ impl GithubPrDetailsPage {
                           .text_xs()
                           .text_color(theme.muted_foreground)
                           .child(timestamp),
-                      )
-                      .when(
-                        item.kind == GithubPrOverviewConversationItemKind::ReviewComment,
-                        |this| {
-                          this.child(
-                            Icon::new(UiIconName::ScanEye)
-                              .size_3()
-                              .text_color(theme.muted_foreground),
-                          )
-                        },
                       ),
                   )
                   .child(
@@ -11400,19 +11697,32 @@ impl GithubPrDetailsPage {
           }),
       );
 
-    // Build conversation items and update list state
-    let conversation_items =
-      build_overview_conversation_items(&self.issue_comments, &self.reviews, &self.review_comments);
-    self.overview_conversation_items = conversation_items;
+    let timeline_items = build_overview_timeline_items(
+      &self.commits,
+      &self.issue_comments,
+      &self.reviews,
+      &self.review_comments,
+    );
+    self.overview_timeline_items = timeline_items;
 
-    // Also include conversation header in item 0
-    let is_conv_loading =
-      self.issue_comments_loading || self.reviews_loading || self.review_comments_loading;
-    let has_conv_errors = self.issue_comments_error.is_some()
+    let is_timeline_loading = self.commits_loading
+      || self.issue_comments_loading
+      || self.reviews_loading
+      || self.review_comments_loading;
+    let has_timeline_errors = self.commits_error.is_some()
+      || self.issue_comments_error.is_some()
       || self.reviews_error.is_some()
       || self.review_comments_error.is_some();
-    let conv_errors = v_flex()
+    let timeline_errors = v_flex()
       .gap_1()
+      .when_some(self.commits_error.clone(), |this, error| {
+        this.child(
+          div()
+            .text_xs()
+            .text_color(theme.status_red())
+            .child(format!("Commits: {error}")),
+        )
+      })
       .when_some(self.issue_comments_error.clone(), |this, error| {
         this.child(
           div()
@@ -11438,73 +11748,63 @@ impl GithubPrDetailsPage {
         )
       });
 
-    let overview_checks_section =
-      if self.checks_loading || self.checks_error.is_some() || self.checks.is_some() {
-        Some(self.render_overview_checks_section(cx))
-      } else {
-        None
-      };
+    let has_overview_checks_section =
+      self.checks_loading || self.checks_error.is_some() || self.checks.is_some();
+
+    let timeline_state = v_flex()
+      .w_full()
+      .gap_2()
+      .when(has_timeline_errors, |this| this.child(timeline_errors))
+      .when(
+        self.overview_timeline_items.is_empty() && is_timeline_loading,
+        |this| {
+          this.child(
+            v_flex()
+              .w_full()
+              .items_center()
+              .justify_center()
+              .gap_2()
+              .py_6()
+              .child(Spinner::new().small())
+              .child(
+                div()
+                  .text_sm()
+                  .text_color(theme.muted_foreground)
+                  .child("Loading timeline..."),
+              ),
+          )
+        },
+      )
+      .when(
+        self.overview_timeline_items.is_empty() && !is_timeline_loading,
+        |this| {
+          this.child(
+            v_flex()
+              .w_full()
+              .items_center()
+              .justify_center()
+              .py_6()
+              .child(
+                div()
+                  .text_sm()
+                  .text_color(theme.muted_foreground)
+                  .child("No timeline activity yet"),
+              ),
+          )
+        },
+      );
 
     let header_el = content
-      .child(
-        v_flex()
-          .w_full()
-          .gap_2()
-          .child(
-            div()
-              .text_sm()
-              .font_medium()
-              .text_color(theme.foreground)
-              .child("Conversation"),
-          )
-          .when(has_conv_errors, |this| this.child(conv_errors))
-          .when(
-            self.overview_conversation_items.is_empty() && is_conv_loading,
-            |this| {
-              this.child(
-                v_flex()
-                  .w_full()
-                  .items_center()
-                  .justify_center()
-                  .gap_2()
-                  .py_6()
-                  .child(Spinner::new().small())
-                  .child(
-                    div()
-                      .text_sm()
-                      .text_color(theme.muted_foreground)
-                      .child("Loading conversation..."),
-                  ),
-              )
-            },
-          )
-          .when(
-            self.overview_conversation_items.is_empty() && !is_conv_loading,
-            |this| {
-              this.child(
-                v_flex()
-                  .w_full()
-                  .items_center()
-                  .justify_center()
-                  .py_6()
-                  .child(
-                    div()
-                      .text_sm()
-                      .text_color(theme.muted_foreground)
-                      .child("No comments yet"),
-                  ),
-              )
-            },
-          ),
+      .when(
+        has_timeline_errors || self.overview_timeline_items.is_empty(),
+        |this| this.child(timeline_state),
       )
-      .when_some(overview_checks_section, |this, checks_section| {
-        this.child(checks_section)
-      })
       .into_any_element();
 
-    // List layout: item 0 = header/description, items 1..N = comments, item N+1 = add comment
-    let conversation_count = self.overview_conversation_items.len();
-    let total_items = 1 + conversation_count + 1;
+    let timeline_count = self.overview_timeline_items.len();
+    let checks_ix = 1 + timeline_count;
+    let add_comment_ix = checks_ix + usize::from(has_overview_checks_section);
+    let total_items = add_comment_ix + 1;
     // Only reset when item count changes to preserve cached heights
     if self.overview_list_count != total_items {
       self.overview_list_count = total_items;
@@ -11522,28 +11822,37 @@ impl GithubPrDetailsPage {
       entity.update(cx, |this, cx| {
         let theme = cx.theme().clone();
         let el = if ix == 0 {
-          // Header + description + conversation header
+          // Header + description + timeline state.
           header
             .borrow_mut()
             .take()
             .unwrap_or_else(|| div().into_any_element())
-        } else if ix <= conversation_count {
-          // Conversation item
-          this.render_overview_conversation_item(
-            ix - 1,
-            pr_number,
-            pr_owner.clone(),
-            pr_repo.clone(),
-            cx,
+        } else if ix <= timeline_count {
+          let timeline_ix = ix - 1;
+          let item = this.overview_timeline_items.get(timeline_ix).cloned();
+          item.map_or_else(
+            || div().into_any_element(),
+            |item| {
+              this.render_overview_timeline_item(
+                &item,
+                timeline_ix == 0,
+                timeline_ix + 1 == timeline_count,
+                pr_number,
+                pr_owner.clone(),
+                pr_repo.clone(),
+                cx,
+              )
+            },
           )
+        } else if has_overview_checks_section && ix == checks_ix {
+          this.render_overview_checks_section(cx)
         } else {
-          // Add comment section
           this.render_overview_add_comment_section(&theme, cx)
         };
 
         div()
           .px_10()
-          .pb_4()
+          .when(ix == 0 || ix > timeline_count, |this| this.pb_4())
           .child(
             div()
               .mx_auto()
