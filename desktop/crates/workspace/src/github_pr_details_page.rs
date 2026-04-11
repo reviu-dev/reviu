@@ -57,9 +57,9 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DropdownSelectConfig,
   DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState, Popover, SearchFileEntry,
-  SearchFileHandler, SelectableRowStyle, StatusAlert, StatusThemeExt, UiIconName, WindowExt,
-  dropdown_select, file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action,
-  resizable_panel, selectable_list_item,
+  SearchFileHandler, SelectableRowStyle, StatusThemeExt, UiIconName, WindowExt, dropdown_select,
+  file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
+  selectable_list_item,
 };
 
 use crate::{
@@ -1337,18 +1337,10 @@ enum OverviewPrAlertKind {
   Blocked,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct OverviewPrAlertContent {
-  id: &'static str,
-  kind: OverviewPrAlertKind,
-  title: &'static str,
-  message: String,
-}
-
-fn overview_pr_alert_content(
+fn overview_pr_alert_kind(
   merge_readiness: Option<&GithubPullRequestMergeReadiness>,
   checks: Option<&GithubPullRequestChecksSummary>,
-) -> Option<OverviewPrAlertContent> {
+) -> Option<OverviewPrAlertKind> {
   if let Some(readiness) = merge_readiness {
     match readiness
       .mergeable_state
@@ -1357,22 +1349,8 @@ fn overview_pr_alert_content(
       .map(str::to_ascii_lowercase)
       .as_deref()
     {
-      Some("dirty") => {
-        return Some(OverviewPrAlertContent {
-          id: "github-pr-overview-conflicts-alert",
-          kind: OverviewPrAlertKind::Conflicts,
-          title: "Merge conflicts detected",
-          message: readiness.message.clone(),
-        });
-      }
-      Some("behind") => {
-        return Some(OverviewPrAlertContent {
-          id: "github-pr-overview-out-of-date-alert",
-          kind: OverviewPrAlertKind::OutOfDate,
-          title: "Branch is out of date",
-          message: readiness.message.clone(),
-        });
-      }
+      Some("dirty") => return Some(OverviewPrAlertKind::Conflicts),
+      Some("behind") => return Some(OverviewPrAlertKind::OutOfDate),
       _ => {}
     }
 
@@ -1380,19 +1358,138 @@ fn overview_pr_alert_content(
       readiness.status,
       GithubPullRequestMergeReadinessStatus::Blocked
     ) {
-      return Some(OverviewPrAlertContent {
-        id: "github-pr-overview-merge-blocked-alert",
-        kind: OverviewPrAlertKind::Blocked,
-        title: "Merge is blocked",
-        message: readiness.message.clone(),
-      });
+      return Some(OverviewPrAlertKind::Blocked);
     }
   }
 
   if checks.is_some_and(|checks| checks.requires_up_to_date_branch) {
-    return Some(OverviewPrAlertContent {
-      id: "github-pr-overview-out-of-date-alert",
-      kind: OverviewPrAlertKind::OutOfDate,
+    return Some(OverviewPrAlertKind::OutOfDate);
+  }
+
+  None
+}
+
+#[derive(Clone, Debug)]
+struct OverviewReviewStatusInfo {
+  title: &'static str,
+  message: String,
+}
+
+fn overview_review_status_info(
+  merge_readiness: Option<&GithubPullRequestMergeReadiness>,
+  requested_reviewers: &[GithubPullRequestFilterOptionUser],
+  reviews: &[GithubPullRequestReview],
+  author_login: &str,
+) -> Option<OverviewReviewStatusInfo> {
+  // Branch protection explicitly blocks the merge for review requirements.
+  if let Some(readiness) = merge_readiness {
+    if matches!(
+      readiness.status,
+      GithubPullRequestMergeReadinessStatus::Blocked
+    ) {
+      let state = readiness
+        .mergeable_state
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase);
+      if !matches!(state.as_deref(), Some("dirty") | Some("behind")) {
+        return Some(OverviewReviewStatusInfo {
+          title: "Review required",
+          message: readiness.message.clone(),
+        });
+      }
+    }
+  }
+
+  // Derive status from requested reviewers and submitted reviews.
+  let reviewers = merged_reviewers(requested_reviewers, reviews, author_login);
+  if reviewers.is_empty() {
+    return None;
+  }
+
+  let has_changes_requested = reviewers.iter().any(|r| {
+    matches!(
+      reviewer_status_for_login(reviews, &r.login),
+      ReviewerStatus::ChangesRequested
+    )
+  });
+  let all_approved = reviewers.iter().all(|r| {
+    matches!(
+      reviewer_status_for_login(reviews, &r.login),
+      ReviewerStatus::Approved
+    )
+  });
+
+  if has_changes_requested {
+    Some(OverviewReviewStatusInfo {
+      title: "Changes requested",
+      message: "Some reviewers have requested changes.".to_string(),
+    })
+  } else if all_approved {
+    Some(OverviewReviewStatusInfo {
+      title: "Changes approved",
+      message: "All requested reviewers have approved.".to_string(),
+    })
+  } else {
+    Some(OverviewReviewStatusInfo {
+      title: "Review required",
+      message: "Awaiting review from requested reviewers.".to_string(),
+    })
+  }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum OverviewConflictsKind {
+  NoConflicts,
+  Conflicts,
+  OutOfDate,
+}
+
+#[derive(Clone, Debug)]
+struct OverviewConflictsInfo {
+  kind: OverviewConflictsKind,
+  title: &'static str,
+  message: String,
+}
+
+fn overview_conflicts_info(
+  merge_readiness: Option<&GithubPullRequestMergeReadiness>,
+  checks: Option<&GithubPullRequestChecksSummary>,
+) -> Option<OverviewConflictsInfo> {
+  if let Some(readiness) = merge_readiness {
+    let state = readiness
+      .mergeable_state
+      .as_deref()
+      .map(str::trim)
+      .map(str::to_ascii_lowercase);
+    match state.as_deref() {
+      Some("dirty") => {
+        return Some(OverviewConflictsInfo {
+          kind: OverviewConflictsKind::Conflicts,
+          title: "Merge conflicts detected",
+          message: "Resolve conflicts before continuing.".to_string(),
+        });
+      }
+      Some("behind") => {
+        return Some(OverviewConflictsInfo {
+          kind: OverviewConflictsKind::OutOfDate,
+          title: "Branch is out of date",
+          message: "Update this branch before merging.".to_string(),
+        });
+      }
+      _ => {
+        return Some(OverviewConflictsInfo {
+          kind: OverviewConflictsKind::NoConflicts,
+          title: "No conflicts with base branch",
+          message: "Merging can be performed automatically.".to_string(),
+        });
+      }
+    }
+  }
+
+  if checks.is_some_and(|c| c.requires_up_to_date_branch) {
+    return Some(OverviewConflictsInfo {
+      kind: OverviewConflictsKind::OutOfDate,
       title: "Branch is out of date",
       message: "The base branch rules require this pull request to be up to date before merging."
         .to_string(),
@@ -3081,7 +3178,7 @@ impl GithubPrDetailsPage {
       binary_preview: None,
       description_markdown_state: MarkdownRenderState::new(),
       syntax_highlight_cache: Arc::new(gfm_markdown_viewer::SyntaxHighlightCache::new()),
-      overview_checks_open: true,
+      overview_checks_open: false,
       overview_timeline_items: Vec::new(),
       overview_list: GpuiListState::new(0, ListAlignment::Top, px(300.)),
       overview_list_count: 0,
@@ -4085,32 +4182,12 @@ impl GithubPrDetailsPage {
     })
   }
 
-  fn overview_pr_alert_action_label(
-    &self,
-    content: &OverviewPrAlertContent,
-    cx: &App,
-  ) -> Option<&'static str> {
-    if matches!(
-      self.local_project_availability(cx),
-      GithubPrLocalProjectAvailability::Hidden
-    ) {
-      return None;
-    }
-
-    match content.kind {
-      OverviewPrAlertKind::Conflicts => Some("Resolve in Git page"),
-      OverviewPrAlertKind::OutOfDate => Some("Update in Git page"),
-      OverviewPrAlertKind::Blocked => None,
-    }
-  }
-
   fn open_overview_pr_alert_in_git_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(content) =
-      overview_pr_alert_content(self.merge_readiness.as_ref(), self.checks.as_ref())
+    let Some(kind) = overview_pr_alert_kind(self.merge_readiness.as_ref(), self.checks.as_ref())
     else {
       return;
     };
-    if matches!(content.kind, OverviewPrAlertKind::Blocked) {
+    if matches!(kind, OverviewPrAlertKind::Blocked) {
       return;
     }
 
@@ -4171,35 +4248,6 @@ impl GithubPrDetailsPage {
         }
       }
     }
-  }
-
-  fn render_overview_pr_alert(&self, cx: &Context<Self>) -> Option<AnyElement> {
-    let content = overview_pr_alert_content(self.merge_readiness.as_ref(), self.checks.as_ref())?;
-    let action_label = self.overview_pr_alert_action_label(&content, cx);
-    let theme = cx.theme();
-
-    let view = cx.entity();
-    let mut alert = StatusAlert::new(content.id, theme.status_yellow(), content.message.clone())
-      .title(content.title)
-      .icon(IconName::TriangleAlert);
-
-    if let Some(label) = action_label {
-      alert = alert.action(
-        Button::new("github-pr-overview-alert-action")
-          .small()
-          .primary()
-          .with_variant(ButtonVariant::Secondary)
-          .label(label)
-          .disabled(self.local_branch_switch_loading || self.local_project_update_loading)
-          .on_click(move |_, window, cx| {
-            view.update(cx, |this, cx| {
-              this.open_overview_pr_alert_in_git_page(window, cx);
-            });
-          }),
-      );
-    }
-
-    Some(alert.into_any_element())
   }
 
   fn current_open_target(&self) -> GithubPrOpenTarget {
@@ -8974,19 +9022,225 @@ impl GithubPrDetailsPage {
       .child(tab_bar)
   }
 
-  fn render_overview_checks_section(&self, cx: &mut Context<Self>) -> AnyElement {
+  fn render_overview_status_section(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
 
+    let author_login = self
+      .pull_request
+      .as_ref()
+      .map(|pr| pr.author.login.as_str())
+      .unwrap_or("");
+    let requested_reviewers = self
+      .pull_request
+      .as_ref()
+      .map(|pr| pr.requested_reviewers.as_slice())
+      .unwrap_or(&[]);
+    let review_info = overview_review_status_info(
+      self.merge_readiness.as_ref(),
+      requested_reviewers,
+      &self.reviews,
+      author_login,
+    );
+    let conflicts_info =
+      overview_conflicts_info(self.merge_readiness.as_ref(), self.checks.as_ref());
+    let has_checks_content =
+      self.checks.is_some() || self.checks_loading || self.checks_error.is_some();
+
+    if review_info.is_none() && !has_checks_content && conflicts_info.is_none() {
+      return div().into_any_element();
+    }
+
+    let mut card = v_flex()
+      .id("github-pr-overview-status")
+      .w_full()
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius_lg)
+      .overflow_hidden();
+
+    let mut has_previous = false;
+
+    if let Some(review) = &review_info {
+      let review_icon: AnyElement = match review.title {
+        "Changes approved" => Icon::new(UiIconName::CircleCheck)
+          .size_5()
+          .text_color(theme.status_green())
+          .into_any_element(),
+        "Changes requested" => Icon::new(IconName::CircleX)
+          .size_5()
+          .text_color(theme.status_red())
+          .into_any_element(),
+        _ => Self::render_status_icon_dot(theme.status_yellow()),
+      };
+      card = card.child(Self::render_overview_status_row(
+        "github-pr-overview-review-status",
+        review.title,
+        &review.message,
+        review_icon,
+        has_previous,
+        None::<AnyElement>,
+        &theme,
+      ));
+      has_previous = true;
+    }
+
+    if has_checks_content {
+      card = card.child(self.render_overview_checks_inner(has_previous, &theme, cx));
+      has_previous = true;
+    }
+
+    if let Some(conflicts) = &conflicts_info {
+      let icon = match conflicts.kind {
+        OverviewConflictsKind::NoConflicts => Icon::new(UiIconName::CircleCheck)
+          .size_5()
+          .text_color(theme.status_green())
+          .into_any_element(),
+        OverviewConflictsKind::Conflicts => Icon::new(IconName::CircleX)
+          .size_5()
+          .text_color(theme.status_red())
+          .into_any_element(),
+        OverviewConflictsKind::OutOfDate => {
+          Self::render_status_icon_dot(theme.status_yellow()).into_any_element()
+        }
+      };
+
+      let action = self.render_overview_conflicts_action(&conflicts.kind, cx);
+
+      card = card.child(Self::render_overview_status_row(
+        "github-pr-overview-conflicts-status",
+        conflicts.title,
+        &conflicts.message,
+        icon,
+        has_previous,
+        action,
+        &theme,
+      ));
+    }
+
+    card.into_any_element()
+  }
+
+  fn render_overview_status_row(
+    id: &'static str,
+    title: &str,
+    message: &str,
+    icon: impl IntoElement,
+    has_border_top: bool,
+    action: Option<impl IntoElement>,
+    theme: &gpui_component::Theme,
+  ) -> AnyElement {
+    h_flex()
+      .id(id)
+      .w_full()
+      .items_start()
+      .justify_between()
+      .gap_3()
+      .p_3()
+      .when(has_border_top, |this| {
+        this.border_t_1().border_color(theme.border)
+      })
+      .child(
+        h_flex()
+          .min_w_0()
+          .flex_1()
+          .items_center()
+          .gap_3()
+          .child(
+            div()
+              .size(px(OVERVIEW_CHECKS_SUMMARY_RING_SIZE))
+              .flex_shrink_0()
+              .flex()
+              .items_center()
+              .justify_center()
+              .child(icon),
+          )
+          .child(
+            v_flex()
+              .min_w_0()
+              .flex_1()
+              .child(
+                div()
+                  .font_medium()
+                  .text_color(theme.foreground)
+                  .child(title.to_string()),
+              )
+              .child(
+                div()
+                  .text_sm()
+                  .text_color(theme.muted_foreground)
+                  .child(message.to_string()),
+              ),
+          ),
+      )
+      .when_some(action, |this, action| this.child(action))
+      .into_any_element()
+  }
+
+  fn render_status_icon_dot(color: Hsla) -> AnyElement {
+    div()
+      .size(px(16.0))
+      .rounded_full()
+      .border_2()
+      .border_color(color)
+      .into_any_element()
+  }
+
+  fn render_overview_conflicts_action(
+    &self,
+    kind: &OverviewConflictsKind,
+    cx: &Context<Self>,
+  ) -> Option<AnyElement> {
+    if matches!(
+      self.local_project_availability(cx),
+      GithubPrLocalProjectAvailability::Hidden
+    ) {
+      return None;
+    }
+
+    let label = match kind {
+      OverviewConflictsKind::Conflicts => "Resolve conflicts",
+      OverviewConflictsKind::OutOfDate => "Update branch",
+      OverviewConflictsKind::NoConflicts => return None,
+    };
+
+    let view = cx.entity().clone();
+    Some(
+      div()
+        .flex_shrink_0()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(
+          Button::new("github-pr-overview-conflicts-action")
+            .small()
+            .primary()
+            .with_variant(ButtonVariant::Secondary)
+            .label(label)
+            .disabled(self.local_branch_switch_loading || self.local_project_update_loading)
+            .on_click(move |_, window, cx| {
+              view.update(cx, |this, cx| {
+                this.open_overview_pr_alert_in_git_page(window, cx);
+              });
+            }),
+        )
+        .into_any_element(),
+    )
+  }
+
+  fn render_overview_checks_inner(
+    &self,
+    has_border_top: bool,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
     if self.checks_loading && self.checks.is_none() {
       return h_flex()
         .id("github-pr-overview-checks-loading")
         .w_full()
         .items_center()
         .gap_2()
-        .border_1()
-        .border_color(theme.border)
-        .rounded(theme.radius_lg)
         .p_4()
+        .when(has_border_top, |this| {
+          this.border_t_1().border_color(theme.border)
+        })
         .child(Spinner::new().small())
         .child(
           div()
@@ -9003,10 +9257,10 @@ impl GithubPrDetailsPage {
         .w_full()
         .items_center()
         .gap_2()
-        .border_1()
-        .border_color(theme.border)
-        .rounded(theme.radius_lg)
         .p_4()
+        .when(has_border_top, |this| {
+          this.border_t_1().border_color(theme.border)
+        })
         .child(
           Icon::new(IconName::CircleX)
             .size_4()
@@ -9022,7 +9276,7 @@ impl GithubPrDetailsPage {
     }
 
     if let Some(checks) = self.checks.as_ref() {
-      return self.render_overview_checks_card(checks, &theme, cx);
+      return self.render_overview_checks_card(checks, has_border_top, theme, cx);
     }
 
     div().into_any_element()
@@ -9031,6 +9285,7 @@ impl GithubPrDetailsPage {
   fn render_overview_checks_card(
     &self,
     checks: &GithubPullRequestChecksSummary,
+    has_border_top: bool,
     theme: &gpui_component::Theme,
     cx: &mut Context<Self>,
   ) -> AnyElement {
@@ -9077,6 +9332,9 @@ impl GithubPrDetailsPage {
       .justify_between()
       .gap_3()
       .p_3()
+      .when(has_border_top, |this| {
+        this.border_t_1().border_color(theme.border)
+      })
       .cursor_pointer()
       .hover(move |this| this.bg(header_hover_bg))
       .on_click(cx.listener(|this, _, _, cx| {
@@ -9129,10 +9387,6 @@ impl GithubPrDetailsPage {
     v_flex()
       .id("github-pr-overview-checks")
       .w_full()
-      .border_1()
-      .border_color(theme.border)
-      .rounded(theme.radius_lg)
-      .overflow_hidden()
       .child(
         Collapsible::new()
           .open(self.overview_checks_open)
@@ -9145,12 +9399,8 @@ impl GithubPrDetailsPage {
   fn toggle_overview_checks(&mut self, cx: &mut Context<Self>) {
     self.overview_checks_open = !self.overview_checks_open;
 
-    let item_count = self.overview_list.item_count();
-    let checks_ix = 1 + self.overview_timeline_items.len();
-    if checks_ix < item_count {
-      self.overview_list.remeasure_items(checks_ix..checks_ix + 1);
-    } else if item_count > 0 {
-      self.overview_list.remeasure();
+    if self.overview_list.item_count() > 0 {
+      self.overview_list.remeasure_items(0..1);
     }
 
     cx.notify();
@@ -9561,7 +9811,7 @@ impl GithubPrDetailsPage {
       .as_deref()
       .or(commit.authored_at.as_deref())
       .map(format_relative_time)
-      .unwrap_or_else(|| "—".into());
+      .unwrap_or_else(|| "-".into());
     let selected = self.selected_commit_sha.as_deref() == Some(commit.sha.as_str());
     let sha = commit.sha.clone();
     let hover_bg = theme.accent.opacity(0.55);
@@ -9620,21 +9870,30 @@ impl GithubPrDetailsPage {
               .text_xs()
               .text_color(theme.muted_foreground)
               .child(
-                Tag::secondary()
-                  .small()
-                  .rounded_full()
-                  .text_color(theme.muted_foreground)
-                  .child(short_sha.clone()),
+                h_flex()
+                  .flex_shrink_0()
+                  .items_center()
+                  .gap_0p5()
+                  .child(
+                    Tag::secondary()
+                      .small()
+                      .rounded_full()
+                      .text_color(theme.muted_foreground)
+                      .child(short_sha.clone()),
+                  )
+                  .child(
+                    div()
+                      .id(format!("copy-commit-sha-tooltip-{short_sha}"))
+                      .hoverable_tooltip(|window, cx| Tooltip::new("Copy sha").build(window, cx))
+                      .child(
+                        Clipboard::new(format!("copy-commit-sha-{short_sha}"))
+                          .value(commit.sha.clone()),
+                      ),
+                  ),
               )
-              .child(
-                div()
-                  .min_w_0()
-                  .overflow_hidden()
-                  .text_ellipsis()
-                  .child(author),
-              )
+              .child(div().flex_shrink_0().child(author))
               .child("·")
-              .child(date_label),
+              .child(div().flex_shrink_0().child(date_label)),
           ),
       )
       .into_any_element();
@@ -10511,7 +10770,6 @@ impl GithubPrDetailsPage {
     let description_previews = self.cached_github_code_reference_previews_for_requests(
       &self.description_code_reference_requests,
     );
-    let overview_pr_alert = self.render_overview_pr_alert(cx);
     let can_edit_people = self.can_edit_people(pr);
     let can_edit_labels = self.can_edit_labels(pr);
     let author_login = pr.author.login.clone();
@@ -11096,7 +11354,6 @@ impl GithubPrDetailsPage {
           .child(left_meta)
           .child(right_people)
       })
-      .when_some(overview_pr_alert, |this, alert| this.child(alert))
       .child(
         v_flex()
           .gap_2()
@@ -11213,7 +11470,8 @@ impl GithubPrDetailsPage {
               })
               .into_any_element()
           }),
-      );
+      )
+      .child(self.render_overview_status_section(cx));
 
     let timeline_items = build_overview_timeline_items(
       &self.commits,
@@ -11266,9 +11524,6 @@ impl GithubPrDetailsPage {
         )
       });
 
-    let has_overview_checks_section =
-      self.checks_loading || self.checks_error.is_some() || self.checks.is_some();
-
     let timeline_state = v_flex()
       .w_full()
       .gap_2()
@@ -11320,8 +11575,7 @@ impl GithubPrDetailsPage {
       .into_any_element();
 
     let timeline_count = self.overview_timeline_items.len();
-    let checks_ix = 1 + timeline_count;
-    let add_comment_ix = checks_ix + usize::from(has_overview_checks_section);
+    let add_comment_ix = 1 + timeline_count;
     let total_items = add_comment_ix + 1;
     // Only reset when item count changes to preserve cached heights
     if self.overview_list_count != total_items {
@@ -11362,8 +11616,6 @@ impl GithubPrDetailsPage {
               )
             },
           )
-        } else if has_overview_checks_section && ix == checks_ix {
-          this.render_overview_checks_section(cx)
         } else {
           this.render_overview_add_comment_section(&theme, cx)
         };
@@ -12717,7 +12969,7 @@ mod tests {
     GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness,
     GithubPullRequestMergeReadinessStatus, GithubPullRequestReview, GithubPullRequestReviewComment,
     GithubPullRequestReviewCommentUser, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
-    GithubPullRequestState, GithubRepository,
+    GithubPullRequestReviewUser, GithubPullRequestState, GithubRepository,
   };
   use crate::workspace::WorkspaceApi;
   use git::{BranchKind, BranchRef, merge_branch};
@@ -13047,43 +13299,43 @@ mod tests {
   }
 
   #[test]
-  fn overview_pr_alert_content_returns_conflicts_for_dirty_mergeable_state() {
+  fn overview_conflicts_info_returns_conflicts_for_dirty_mergeable_state() {
     let readiness = make_merge_readiness_with_state(
       GithubPullRequestMergeReadinessStatus::Blocked,
       Some("dirty"),
       "This pull request has merge conflicts that must be resolved before it can be merged.",
     );
 
-    let alert = overview_pr_alert_content(Some(&readiness), None).expect("alert");
+    let info = overview_conflicts_info(Some(&readiness), None).expect("conflicts info");
 
-    assert_eq!(alert.id, "github-pr-overview-conflicts-alert");
-    assert_eq!(alert.title, "Merge conflicts detected");
+    assert_eq!(info.kind, OverviewConflictsKind::Conflicts);
+    assert_eq!(info.title, "Merge conflicts detected");
   }
 
   #[test]
-  fn overview_pr_alert_content_returns_out_of_date_for_behind_mergeable_state() {
+  fn overview_conflicts_info_returns_out_of_date_for_behind_mergeable_state() {
     let readiness = make_merge_readiness_with_state(
       GithubPullRequestMergeReadinessStatus::Blocked,
       Some("behind"),
       "This pull request branch is out of date with the base branch.",
     );
 
-    let alert = overview_pr_alert_content(Some(&readiness), None).expect("alert");
+    let info = overview_conflicts_info(Some(&readiness), None).expect("conflicts info");
 
-    assert_eq!(alert.id, "github-pr-overview-out-of-date-alert");
-    assert_eq!(alert.title, "Branch is out of date");
+    assert_eq!(info.kind, OverviewConflictsKind::OutOfDate);
+    assert_eq!(info.title, "Branch is out of date");
   }
 
   #[test]
-  fn overview_pr_alert_content_falls_back_to_checks_requirement() {
-    let alert = overview_pr_alert_content(None, Some(&make_checks_summary())).expect("alert");
+  fn overview_conflicts_info_falls_back_to_checks_requirement() {
+    let info = overview_conflicts_info(None, Some(&make_checks_summary())).expect("conflicts info");
 
-    assert_eq!(alert.id, "github-pr-overview-out-of-date-alert");
-    assert_eq!(alert.title, "Branch is out of date");
+    assert_eq!(info.kind, OverviewConflictsKind::OutOfDate);
+    assert_eq!(info.title, "Branch is out of date");
   }
 
   #[test]
-  fn overview_pr_alert_content_returns_none_when_pr_is_ready() {
+  fn overview_conflicts_info_returns_no_conflicts_when_pr_is_ready() {
     let mut checks = make_checks_summary();
     checks.requires_up_to_date_branch = false;
     let readiness = make_merge_readiness(
@@ -13091,7 +13343,114 @@ mod tests {
       vec![GithubPullRequestMergeMethod::Merge],
     );
 
-    assert!(overview_pr_alert_content(Some(&readiness), Some(&checks)).is_none());
+    let info = overview_conflicts_info(Some(&readiness), Some(&checks)).expect("conflicts info");
+    assert_eq!(info.kind, OverviewConflictsKind::NoConflicts);
+  }
+
+  #[test]
+  fn overview_review_status_returns_review_required_when_blocked() {
+    let readiness = make_merge_readiness_with_state(
+      GithubPullRequestMergeReadinessStatus::Blocked,
+      Some("blocked"),
+      "Review is required by reviewers with write access.",
+    );
+
+    let info =
+      overview_review_status_info(Some(&readiness), &[], &[], "author").expect("review info");
+    assert_eq!(info.title, "Review required");
+  }
+
+  #[test]
+  fn overview_review_status_returns_none_for_dirty_state() {
+    let readiness = make_merge_readiness_with_state(
+      GithubPullRequestMergeReadinessStatus::Blocked,
+      Some("dirty"),
+      "Merge conflicts.",
+    );
+
+    assert!(overview_review_status_info(Some(&readiness), &[], &[], "author").is_none());
+  }
+
+  #[test]
+  fn overview_review_status_returns_none_when_ready_and_no_reviewers() {
+    let readiness = make_merge_readiness(
+      GithubPullRequestMergeReadinessStatus::Ready,
+      vec![GithubPullRequestMergeMethod::Merge],
+    );
+
+    assert!(overview_review_status_info(Some(&readiness), &[], &[], "author").is_none());
+  }
+
+  #[test]
+  fn overview_review_status_returns_awaiting_when_reviewer_has_not_approved() {
+    let readiness = make_merge_readiness(
+      GithubPullRequestMergeReadinessStatus::Ready,
+      vec![GithubPullRequestMergeMethod::Merge],
+    );
+    let reviewers = vec![GithubPullRequestFilterOptionUser {
+      login: "reviewer1".to_string(),
+      avatar_url: None,
+    }];
+
+    let info = overview_review_status_info(Some(&readiness), &reviewers, &[], "author")
+      .expect("review info");
+    assert_eq!(info.title, "Review required");
+  }
+
+  #[test]
+  fn overview_review_status_returns_approved_when_all_reviewers_approved() {
+    let readiness = make_merge_readiness(
+      GithubPullRequestMergeReadinessStatus::Ready,
+      vec![GithubPullRequestMergeMethod::Merge],
+    );
+    let reviewers = vec![GithubPullRequestFilterOptionUser {
+      login: "reviewer1".to_string(),
+      avatar_url: None,
+    }];
+    let reviews = vec![GithubPullRequestReview {
+      id: 1,
+      body: None,
+      state: GithubPullRequestReviewState::Approved,
+      submitted_at: Some("2025-01-01T00:00:00Z".to_string()),
+      commit_id: None,
+      html_url: String::new(),
+      user: Some(GithubPullRequestReviewUser {
+        login: "reviewer1".to_string(),
+        avatar_url: None,
+      }),
+    }];
+
+    let info = overview_review_status_info(Some(&readiness), &reviewers, &reviews, "author")
+      .expect("review info");
+    assert_eq!(info.title, "Changes approved");
+  }
+
+  #[test]
+  fn overview_review_status_returns_changes_requested() {
+    let readiness = make_merge_readiness(
+      GithubPullRequestMergeReadinessStatus::Ready,
+      vec![GithubPullRequestMergeMethod::Merge],
+    );
+    let reviewers = vec![GithubPullRequestFilterOptionUser {
+      login: "reviewer1".to_string(),
+      avatar_url: None,
+    }];
+    let reviews = vec![GithubPullRequestReview {
+      id: 1,
+      body: None,
+      state: GithubPullRequestReviewState::RequestChanges,
+      submitted_at: Some("2025-01-01T00:00:00Z".to_string()),
+      commit_id: None,
+      html_url: String::new(),
+      user: Some(GithubPullRequestReviewUser {
+        login: "reviewer1".to_string(),
+        avatar_url: None,
+      }),
+    }];
+
+    let info = overview_review_status_info(Some(&readiness), &reviewers, &reviews, "author")
+      .expect("review info");
+    assert_eq!(info.title, "Changes requested");
   }
 
   #[gpui::test]
@@ -13398,53 +13757,16 @@ mod tests {
     assert!(stats_bounds.height > gpui::px(0.0));
   }
 
-  #[gpui::test]
-  fn overview_conflicts_alert_is_built_when_pr_has_merge_conflicts(cx: &mut TestAppContext) {
-    init_gpui_test(cx);
-    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+  #[test]
+  fn overview_conflicts_status_is_built_when_pr_has_merge_conflicts() {
+    let readiness = make_merge_readiness_with_state(
+      GithubPullRequestMergeReadinessStatus::Blocked,
+      Some("dirty"),
+      "This pull request has merge conflicts that must be resolved before it can be merged.",
+    );
 
-    page.update_in(cx, |this, _window, cx| {
-      this.pull_request = Some(make_pr_details_for_stats());
-      this.merge_readiness = Some(make_merge_readiness_with_state(
-        GithubPullRequestMergeReadinessStatus::Blocked,
-        Some("dirty"),
-        "This pull request has merge conflicts that must be resolved before it can be merged.",
-      ));
-      cx.notify();
-    });
-
-    let has_alert = page.update_in(cx, |this, _window, cx| {
-      this.render_overview_pr_alert(cx).is_some()
-    });
-    assert!(has_alert);
-  }
-
-  #[gpui::test]
-  fn overview_conflicts_alert_exposes_git_page_action_when_local_repo_is_available(
-    cx: &mut TestAppContext,
-  ) {
-    init_gpui_test(cx);
-    cx.update(|cx| {
-      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("head", false)));
-    });
-    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
-
-    page.update_in(cx, |this, _window, cx| {
-      this.pull_request = Some(make_pr_details_for_stats());
-      this.merge_readiness = Some(make_merge_readiness_with_state(
-        GithubPullRequestMergeReadinessStatus::Blocked,
-        Some("dirty"),
-        "This pull request has merge conflicts that must be resolved before it can be merged.",
-      ));
-      cx.notify();
-    });
-
-    let action_label = page.read_with(cx, |this, cx| {
-      let content =
-        overview_pr_alert_content(this.merge_readiness.as_ref(), this.checks.as_ref()).unwrap();
-      this.overview_pr_alert_action_label(&content, cx)
-    });
-    assert_eq!(action_label, Some("Resolve in Git page"));
+    let info = overview_conflicts_info(Some(&readiness), None).expect("conflicts info");
+    assert_eq!(info.kind, OverviewConflictsKind::Conflicts);
   }
 
   #[gpui::test]
