@@ -565,6 +565,7 @@ fn render_block(
       let theme = cx.theme();
       let content = div()
         .whitespace_normal()
+        .overflow_hidden()
         .text_sm()
         .text_color(theme.foreground)
         .child(render_inline_text(inlines, options, cx, ctx))

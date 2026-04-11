@@ -1413,7 +1413,7 @@ fn overview_review_status_info(
       ReviewerStatus::ChangesRequested
     )
   });
-  let all_approved = reviewers.iter().all(|r| {
+  let has_approval = reviewers.iter().any(|r| {
     matches!(
       reviewer_status_for_login(reviews, &r.login),
       ReviewerStatus::Approved
@@ -1425,10 +1425,10 @@ fn overview_review_status_info(
       title: "Changes requested",
       message: "Some reviewers have requested changes.".to_string(),
     })
-  } else if all_approved {
+  } else if has_approval {
     Some(OverviewReviewStatusInfo {
       title: "Changes approved",
-      message: "All requested reviewers have approved.".to_string(),
+      message: "Pull request has been approved.".to_string(),
     })
   } else {
     Some(OverviewReviewStatusInfo {
@@ -13447,6 +13447,102 @@ mod tests {
         avatar_url: None,
       }),
     }];
+
+    let info = overview_review_status_info(Some(&readiness), &reviewers, &reviews, "author")
+      .expect("review info");
+    assert_eq!(info.title, "Changes requested");
+  }
+
+  #[test]
+  fn overview_review_status_returns_approved_when_one_approved_and_one_commented() {
+    let readiness = make_merge_readiness(
+      GithubPullRequestMergeReadinessStatus::Ready,
+      vec![GithubPullRequestMergeMethod::Merge],
+    );
+    let reviewers = vec![
+      GithubPullRequestFilterOptionUser {
+        login: "reviewer1".to_string(),
+        avatar_url: None,
+      },
+      GithubPullRequestFilterOptionUser {
+        login: "reviewer2".to_string(),
+        avatar_url: None,
+      },
+    ];
+    let reviews = vec![
+      GithubPullRequestReview {
+        id: 1,
+        body: None,
+        state: GithubPullRequestReviewState::Approved,
+        submitted_at: Some("2025-01-01T00:00:00Z".to_string()),
+        commit_id: None,
+        html_url: String::new(),
+        user: Some(GithubPullRequestReviewUser {
+          login: "reviewer1".to_string(),
+          avatar_url: None,
+        }),
+      },
+      GithubPullRequestReview {
+        id: 2,
+        body: None,
+        state: GithubPullRequestReviewState::Commented,
+        submitted_at: Some("2025-01-01T00:00:00Z".to_string()),
+        commit_id: None,
+        html_url: String::new(),
+        user: Some(GithubPullRequestReviewUser {
+          login: "reviewer2".to_string(),
+          avatar_url: None,
+        }),
+      },
+    ];
+
+    let info = overview_review_status_info(Some(&readiness), &reviewers, &reviews, "author")
+      .expect("review info");
+    assert_eq!(info.title, "Changes approved");
+  }
+
+  #[test]
+  fn overview_review_status_changes_requested_overrides_approval() {
+    let readiness = make_merge_readiness(
+      GithubPullRequestMergeReadinessStatus::Ready,
+      vec![GithubPullRequestMergeMethod::Merge],
+    );
+    let reviewers = vec![
+      GithubPullRequestFilterOptionUser {
+        login: "reviewer1".to_string(),
+        avatar_url: None,
+      },
+      GithubPullRequestFilterOptionUser {
+        login: "reviewer2".to_string(),
+        avatar_url: None,
+      },
+    ];
+    let reviews = vec![
+      GithubPullRequestReview {
+        id: 1,
+        body: None,
+        state: GithubPullRequestReviewState::Approved,
+        submitted_at: Some("2025-01-01T00:00:00Z".to_string()),
+        commit_id: None,
+        html_url: String::new(),
+        user: Some(GithubPullRequestReviewUser {
+          login: "reviewer1".to_string(),
+          avatar_url: None,
+        }),
+      },
+      GithubPullRequestReview {
+        id: 2,
+        body: None,
+        state: GithubPullRequestReviewState::RequestChanges,
+        submitted_at: Some("2025-01-01T00:00:00Z".to_string()),
+        commit_id: None,
+        html_url: String::new(),
+        user: Some(GithubPullRequestReviewUser {
+          login: "reviewer2".to_string(),
+          avatar_url: None,
+        }),
+      },
+    ];
 
     let info = overview_review_status_info(Some(&readiness), &reviewers, &reviews, "author")
       .expect("review info");
