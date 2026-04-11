@@ -776,29 +776,12 @@ enum GithubPrOverviewTimelineItem {
   Conversation(GithubPrOverviewConversationItem),
 }
 
-fn review_state_display_label(state: GithubPullRequestReviewState) -> &'static str {
-  match state {
-    GithubPullRequestReviewState::Commented => "Commented",
-    GithubPullRequestReviewState::Approved => "Approved",
-    GithubPullRequestReviewState::RequestChanges => "Changes requested",
-    GithubPullRequestReviewState::Dismissed => "Dismissed",
-    GithubPullRequestReviewState::Pending => "Pending",
-  }
-}
-
-fn review_state_icon_style(
-  state: GithubPullRequestReviewState,
-  theme: &gpui_component::Theme,
-) -> Option<(UiIconName, gpui::Hsla)> {
-  match state {
-    GithubPullRequestReviewState::Commented => None,
-    GithubPullRequestReviewState::Approved => Some((UiIconName::CircleCheck, theme.status_green())),
-    GithubPullRequestReviewState::RequestChanges => {
-      Some((UiIconName::FileDiff, theme.status_red()))
-    }
-    GithubPullRequestReviewState::Dismissed => {
-      Some((UiIconName::CircleSlash, theme.status_orange()))
-    }
+fn review_state_inline_label(state: Option<GithubPullRequestReviewState>) -> Option<&'static str> {
+  match state? {
+    GithubPullRequestReviewState::Approved => Some("approved these changes"),
+    GithubPullRequestReviewState::RequestChanges => Some("requested changes"),
+    GithubPullRequestReviewState::Commented => Some("left a review comment"),
+    GithubPullRequestReviewState::Dismissed => Some("dismissed review"),
     GithubPullRequestReviewState::Pending => None,
   }
 }
@@ -9921,14 +9904,14 @@ impl GithubPrDetailsPage {
     let theme = cx.theme().clone();
     let (marker_icon, marker_color): (AnyElement, Hsla) = match item.review_state {
       Some(GithubPullRequestReviewState::Approved) => (
-        Icon::new(UiIconName::CircleCheck)
+        Icon::new(UiIconName::Check)
           .size_3()
           .text_color(theme.status_green())
           .into_any_element(),
         theme.status_green(),
       ),
       Some(GithubPullRequestReviewState::RequestChanges) => (
-        Icon::new(IconName::CircleX)
+        Icon::new(UiIconName::FileDiff)
           .size_3()
           .text_color(theme.status_red())
           .into_any_element(),
@@ -10339,11 +10322,7 @@ impl GithubPrDetailsPage {
         item.id
       ))
       .border_1()
-      .border_color(match item.review_state {
-        Some(GithubPullRequestReviewState::Approved) => theme.status_green(),
-        Some(GithubPullRequestReviewState::RequestChanges) => theme.status_red(),
-        _ => theme.border,
-      })
+      .border_color(theme.border)
       .rounded(theme.radius)
       .when_some(review_comment_preview, |this, preview| {
         this.child(
@@ -10360,22 +10339,6 @@ impl GithubPrDetailsPage {
           .gap(px(REVIEW_COMMENT_CARD_CONTENT_GAP_PX))
           .px(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
           .pt(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-          .when_some(item.review_state, |this, state| {
-            let label = review_state_display_label(state);
-            let icon_style = review_state_icon_style(state, &theme);
-            this.child(
-              h_flex()
-                .items_center()
-                .mb_1()
-                .gap_1()
-                .text_sm()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .when_some(icon_style, |this, (icon, color)| {
-                  this.child(Icon::new(icon).size_4().text_color(color))
-                })
-                .child(label),
-            )
-          })
           .child(
             v_flex()
               .gap(px(REVIEW_COMMENT_HEADER_BODY_GAP_PX))
@@ -10400,6 +10363,17 @@ impl GithubPrDetailsPage {
                           .text_sm()
                           .text_color(theme.foreground)
                           .child(item.author_login.clone()),
+                      )
+                      .when_some(
+                        review_state_inline_label(item.review_state),
+                        |this, label| {
+                          this.child(
+                            div()
+                              .text_sm()
+                              .text_color(theme.muted_foreground)
+                              .child(label),
+                          )
+                        },
                       )
                       .child(
                         div()
@@ -15919,14 +15893,6 @@ mod tests {
     assert!(!merge_method_supports_commit_message(
       GithubPullRequestMergeMethod::Rebase
     ));
-  }
-
-  #[test]
-  fn review_state_display_label_supports_commented_reviews() {
-    assert_eq!(
-      review_state_display_label(GithubPullRequestReviewState::Commented),
-      "Commented"
-    );
   }
 
   #[test]
