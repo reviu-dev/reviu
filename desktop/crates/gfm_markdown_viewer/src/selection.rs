@@ -487,10 +487,11 @@ pub(crate) fn build_runs(
   let syntax_theme = syntax_theme_for_background(theme.background);
 
   let mut runs = Vec::new();
+  let code_font_family = theme.mono_font_family.clone();
   for span in spans {
     let mut font = base_font.clone();
     if span.style.code {
-      font.family = SharedString::new_static(".ZedMono");
+      font.family = code_font_family.clone();
     }
     if span.style.bold {
       font.weight = FontWeight::BOLD;
