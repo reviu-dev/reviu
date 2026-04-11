@@ -30,7 +30,7 @@ use gpui::{
   img, list, point, prelude::*, px, white,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable as _, StyledExt,
+  ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable as _, StyledExt,
   avatar::Avatar,
   button::{Button, ButtonVariant, ButtonVariants as _},
   clipboard::Clipboard,
@@ -38,7 +38,6 @@ use gpui_component::{
   h_flex,
   input::InputEvent,
   label::Label,
-  list::{List, ListDelegate, ListEvent, ListItem, ListState},
   notification::Notification,
   radio::{Radio, RadioGroup},
   scroll::ScrollableElement,
@@ -173,14 +172,13 @@ fn adjacent_pr_tab_ix(current: usize, direction: TabNavigationDirection) -> usiz
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GithubPrLeftSidebarKind {
   Files,
-  Context,
 }
 
-fn left_sidebar_kind_for_tab(active_tab_ix: usize) -> GithubPrLeftSidebarKind {
+fn left_sidebar_kind_for_tab(active_tab_ix: usize) -> Option<GithubPrLeftSidebarKind> {
   if active_tab_ix == PR_TAB_CHANGES_IX {
-    GithubPrLeftSidebarKind::Files
+    Some(GithubPrLeftSidebarKind::Files)
   } else {
-    GithubPrLeftSidebarKind::Context
+    None
   }
 }
 
@@ -451,27 +449,6 @@ fn commit_subject(message: &str) -> String {
     .find(|line| !line.is_empty())
     .unwrap_or("No commit message")
     .to_string()
-}
-
-fn pull_request_commit_matches(commit: &GithubPullRequestCommit, query: &str) -> bool {
-  if query.is_empty() {
-    return true;
-  }
-
-  let q = query.to_lowercase();
-  commit.sha.to_lowercase().contains(&q)
-    || github_shared::short_sha(&commit.sha)
-      .to_lowercase()
-      .contains(&q)
-    || commit.message.to_lowercase().contains(&q)
-    || commit
-      .author
-      .as_ref()
-      .is_some_and(|author| author.login.to_lowercase().contains(&q))
-    || commit
-      .committer
-      .as_ref()
-      .is_some_and(|committer| committer.login.to_lowercase().contains(&q))
 }
 
 fn commit_sort_timestamp(commit: &GithubPullRequestCommit) -> &str {
@@ -2233,171 +2210,6 @@ impl DropdownSelectItem for GithubPrCommitSelectItem {
   }
 }
 
-struct GithubPrCommitListDelegate {
-  all_rows: Vec<Rc<GithubPullRequestCommit>>,
-  matched_rows: Vec<Rc<GithubPullRequestCommit>>,
-  selected_index: Option<IndexPath>,
-  selected_commit_sha: Option<SharedString>,
-  query: SharedString,
-}
-
-impl GithubPrCommitListDelegate {
-  fn new() -> Self {
-    Self {
-      all_rows: Vec::new(),
-      matched_rows: Vec::new(),
-      selected_index: None,
-      selected_commit_sha: None,
-      query: "".into(),
-    }
-  }
-
-  fn set_rows(&mut self, commits: &[GithubPullRequestCommit], selected_commit_sha: Option<&str>) {
-    self.all_rows = commits.iter().cloned().map(Rc::new).collect();
-    self.selected_commit_sha = selected_commit_sha.map(|sha| sha.to_string().into());
-    self.prepare(self.query.clone());
-  }
-
-  fn prepare(&mut self, query: impl Into<SharedString>) {
-    self.query = query.into();
-    let q = self.query.as_ref();
-
-    self.matched_rows = self
-      .all_rows
-      .iter()
-      .filter(|commit| pull_request_commit_matches(commit, q))
-      .cloned()
-      .collect();
-
-    self.selected_index = self
-      .selected_commit_sha
-      .as_ref()
-      .and_then(|selected_sha| {
-        self
-          .matched_rows
-          .iter()
-          .position(|commit| commit.sha == selected_sha.as_ref())
-          .map(IndexPath::new)
-      })
-      .or_else(|| (!self.matched_rows.is_empty()).then_some(IndexPath::new(0)));
-  }
-
-  fn row_at(&self, ix: IndexPath) -> Option<Rc<GithubPullRequestCommit>> {
-    self.matched_rows.get(ix.row).cloned()
-  }
-}
-
-impl ListDelegate for GithubPrCommitListDelegate {
-  type Item = ListItem;
-
-  fn items_count(&self, _section: usize, _cx: &App) -> usize {
-    self.matched_rows.len()
-  }
-
-  fn render_item(
-    &mut self,
-    ix: IndexPath,
-    _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
-  ) -> Option<Self::Item> {
-    let theme = cx.theme().clone();
-    let commit = self.matched_rows.get(ix.row)?;
-    let subject = commit_subject(&commit.message);
-    let short = github_shared::short_sha(&commit.sha);
-    let author = commit
-      .author
-      .as_ref()
-      .or(commit.committer.as_ref())
-      .map(|user| user.login.as_str())
-      .unwrap_or("unknown");
-    let date_label = commit
-      .committed_at
-      .as_deref()
-      .or(commit.authored_at.as_deref())
-      .map(format_relative_time)
-      .unwrap_or_else(|| "—".into());
-
-    Some(
-      selectable_list_item(
-        ix,
-        Some(ix) == self.selected_index,
-        SelectableRowStyle::Inset,
-        &theme,
-      )
-      .w_full()
-      .px_3()
-      .py_2()
-      .child(
-        v_flex()
-          .gap_1()
-          .child(
-            div()
-              .text_sm()
-              .text_color(theme.foreground)
-              .overflow_hidden()
-              .text_ellipsis()
-              .child(subject),
-          )
-          .child(
-            h_flex()
-              .gap_1()
-              .items_center()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(
-                Tag::secondary()
-                  .small()
-                  .rounded_full()
-                  .text_color(theme.muted_foreground)
-                  .child(short),
-              )
-              .child(author.to_string())
-              .child("·")
-              .child(date_label),
-          ),
-      ),
-    )
-  }
-
-  fn render_empty(
-    &mut self,
-    _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
-  ) -> impl IntoElement {
-    v_flex()
-      .size_full()
-      .items_center()
-      .justify_center()
-      .text_sm()
-      .text_color(cx.theme().muted_foreground)
-      .child(if self.query.is_empty() {
-        "No commits"
-      } else {
-        "No matching commits"
-      })
-  }
-
-  fn set_selected_index(
-    &mut self,
-    ix: Option<IndexPath>,
-    _window: &mut Window,
-    cx: &mut Context<ListState<Self>>,
-  ) {
-    self.selected_index = ix;
-    cx.notify();
-  }
-
-  fn perform_search(
-    &mut self,
-    query: &str,
-    _: &mut Window,
-    _: &mut Context<ListState<Self>>,
-  ) -> Task<()> {
-    self.prepare(query.to_owned());
-    Task::ready(())
-  }
-}
-
 fn file_for_review_comment_path(
   file_lookup: &HashMap<String, Rc<GithubPrFileDiff>>,
   path: &str,
@@ -2756,7 +2568,6 @@ pub struct GithubPrDetailsPage {
   commits_error: Option<SharedString>,
   commits: Vec<GithubPullRequestCommit>,
   commit_lookup: HashMap<String, GithubPullRequestCommit>,
-  commits_list: Entity<ListState<GithubPrCommitListDelegate>>,
   selected_commit_sha: Option<String>,
   checks_task: Option<Task<()>>,
   checks_loading: bool,
@@ -3277,7 +3088,6 @@ impl GithubPrDetailsPage {
     GithubPrDetailsPageHandle::register(cx);
 
     let tree_state = cx.new(|cx| TreeState::new(cx));
-    let commits_list = cx.new(|cx| ListState::new(GithubPrCommitListDelegate::new(), window, cx));
     let diff_editor = Self::build_detached_diff_editor("__reviu_github_pr_placeholder__.diff", cx);
     let merge_commit_title_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Commit title (optional)"));
@@ -3319,7 +3129,6 @@ impl GithubPrDetailsPage {
       commits_error: None,
       commits: Vec::new(),
       commit_lookup: HashMap::new(),
-      commits_list,
       selected_commit_sha: None,
       checks_task: None,
       checks_loading: false,
@@ -3465,8 +3274,6 @@ impl GithubPrDetailsPage {
       error: None,
     };
     this.install_diff_editor_review_comment_handlers(cx);
-    this.sync_commits_list(cx);
-    this.subscribe_to_commits_list(window, cx);
     this.subscribe_to_tree_search_input(window, cx);
     this.subscribe_to_assignee_input(window, cx);
     this.subscribe_to_requested_reviewer_input(window, cx);
@@ -4971,7 +4778,6 @@ impl GithubPrDetailsPage {
             }
             this.commits_loading = false;
             this.commits_error = None;
-            this.sync_commits_list(cx);
             if selected_commit_cleared {
               this.saved_pr_selected_tree_id = this.current_selected_tree_path();
               this.reload_files_for_current_pull_request(cx);
@@ -4984,7 +4790,6 @@ impl GithubPrDetailsPage {
             this.commits.clear();
             this.commit_lookup.clear();
             this.selected_commit_sha = None;
-            this.sync_commits_list(cx);
             this.add_pr_breadcrumb("Refresh PR commits failed", Map::new());
             this.record_pr_error(
               "github.pr.commits.refresh",
@@ -5657,34 +5462,6 @@ impl GithubPrDetailsPage {
     cx.notify();
   }
 
-  fn sync_commits_list(&mut self, cx: &mut Context<Self>) {
-    let commits = self.commits.clone();
-    let selected_commit_sha = self.selected_commit_sha.clone();
-    self.commits_list.update(cx, |state, cx| {
-      state
-        .delegate_mut()
-        .set_rows(&commits, selected_commit_sha.as_deref());
-      cx.notify();
-    });
-  }
-
-  fn subscribe_to_commits_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    cx.subscribe_in(
-      &self.commits_list,
-      window,
-      |this, state, event: &ListEvent, window, cx| {
-        if let ListEvent::Confirm(ix) = event {
-          let commit = state.read(cx).delegate().row_at(*ix);
-          if let Some(commit) = commit {
-            this.select_commit_filter(Some(commit.sha.clone()), cx);
-            this.set_active_tab(PR_TAB_CHANGES_IX, window, cx);
-          }
-        }
-      },
-    )
-    .detach();
-  }
-
   fn subscribe_to_tree_search_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     cx.subscribe_in(
       &self.tree_search_input,
@@ -6304,7 +6081,6 @@ impl GithubPrDetailsPage {
       self.set_show_local_project_files(false, cx);
     }
     self.sync_sentry_pr_context();
-    self.sync_commits_list(cx);
     self.reload_files_for_current_pull_request(cx);
   }
 
@@ -8567,7 +8343,6 @@ impl GithubPrDetailsPage {
     self.assignee_popover_open = false;
     self.reviewer_popover_open = false;
     self.label_popover_open = false;
-    self.sync_commits_list(cx);
     self.issue_comments_loading = true;
     self.issue_comments_error = None;
     self.issue_comments.clear();
@@ -8829,7 +8604,6 @@ impl GithubPrDetailsPage {
             }
             this.commits_loading = false;
             this.commits_error = None;
-            this.sync_commits_list(cx);
           }
           Err(error) => {
             let error_message = error.to_string();
@@ -8838,7 +8612,6 @@ impl GithubPrDetailsPage {
             this.commits.clear();
             this.commit_lookup.clear();
             this.selected_commit_sha = None;
-            this.sync_commits_list(cx);
             this.add_pr_breadcrumb("Load PR commits failed", Map::new());
             this.record_pr_error("github.pr.commits", error_message.as_str(), Map::new());
           }
@@ -9392,92 +9165,6 @@ impl GithubPrDetailsPage {
           .child(right_area),
       )
       .child(tab_bar)
-  }
-
-  fn render_context_sidebar_commits(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-    let theme = cx.theme().clone();
-
-    let commits_content: AnyElement = if self.commits_loading {
-      v_flex()
-        .flex_1()
-        .min_h_0()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .child(Spinner::new().small())
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading commits..."),
-        )
-        .into_any_element()
-    } else if let Some(error) = self.commits_error.as_ref() {
-      div()
-        .text_sm()
-        .text_color(theme.status_red())
-        .child(error.clone())
-        .into_any_element()
-    } else {
-      let commits_list = List::new(&self.commits_list)
-        .search_placeholder("Search commits...")
-        .rounded(theme.radius_lg)
-        .size_full()
-        .p(px(0.));
-
-      v_flex()
-        .flex_1()
-        .min_h_0()
-        .child(commits_list)
-        .into_any_element()
-    };
-
-    v_flex()
-      .gap_2()
-      .flex_1()
-      .min_h_0()
-      .child(
-        h_flex()
-          .items_center()
-          .justify_between()
-          .gap_2()
-          .child(
-            div()
-              .text_sm()
-              .font_medium()
-              .text_color(theme.foreground)
-              .child("Commits"),
-          )
-          .child(
-            Tag::secondary()
-              .small()
-              .rounded_full()
-              .child(self.commits.len().to_string()),
-          ),
-      )
-      .child(
-        v_flex()
-          .flex_1()
-          .min_h_0()
-          .rounded(theme.radius_lg)
-          .border_1()
-          .border_color(theme.border)
-          .child(commits_content),
-      )
-      .into_any_element()
-  }
-
-  fn render_context_sidebar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-    let theme = cx.theme().clone();
-
-    v_flex()
-      .id("github-pr-context-sidebar")
-      .size_full()
-      .bg(theme.sidebar)
-      .gap_3()
-      .p_3()
-      .child(self.render_context_sidebar_commits(cx))
-      .into_any_element()
   }
 
   fn render_overview_checks_section(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -12313,10 +12000,12 @@ impl GithubPrDetailsPage {
     &mut self,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> gpui::AnyElement {
+  ) -> Option<gpui::AnyElement> {
     match left_sidebar_kind_for_tab(self.active_tab_ix) {
-      GithubPrLeftSidebarKind::Files => self.render_files_sidebar(window, cx).into_any_element(),
-      GithubPrLeftSidebarKind::Context => self.render_context_sidebar(cx),
+      Some(GithubPrLeftSidebarKind::Files) => {
+        Some(self.render_files_sidebar(window, cx).into_any_element())
+      }
+      None => None,
     }
   }
 
@@ -13712,6 +13401,20 @@ impl Render for GithubPrDetailsPage {
       .child(self.render_header(cx))
       .child(v_flex().flex_1().min_h_0().child(content));
 
+    let body = if let Some(left_sidebar) = self.render_left_sidebar(window, cx) {
+      h_resizable("github-pr-layout")
+        .child(
+          resizable_panel()
+            .size(px(SIDEBAR_DEFAULT_WIDTH))
+            .size_range(px(SIDEBAR_MIN_WIDTH)..px(SIDEBAR_MAX_WIDTH))
+            .child(left_sidebar),
+        )
+        .child(resizable_panel().child(right_panel))
+        .into_any_element()
+    } else {
+      right_panel.into_any_element()
+    };
+
     div()
       .size_full()
       .flex()
@@ -13727,16 +13430,7 @@ impl Render for GithubPrDetailsPage {
       .on_action(cx.listener(GithubPrDetailsPage::show_file_search_action))
       .on_action(cx.listener(GithubPrDetailsPage::find_action))
       .on_action(cx.listener(GithubPrDetailsPage::close_find_action))
-      .child(
-        h_resizable("github-pr-layout")
-          .child(
-            resizable_panel()
-              .size(px(SIDEBAR_DEFAULT_WIDTH))
-              .size_range(px(SIDEBAR_MIN_WIDTH)..px(SIDEBAR_MAX_WIDTH))
-              .child(self.render_left_sidebar(window, cx)),
-          )
-          .child(resizable_panel().child(right_panel)),
-      )
+      .child(body)
   }
 }
 
@@ -16936,90 +16630,6 @@ mod tests {
   }
 
   #[test]
-  fn commit_list_delegate_selects_matching_commit_sha() {
-    let commits = vec![
-      make_api_commit(
-        "aaaaaaa111111111111111111111111111111111",
-        "first",
-        Some("2026-02-20T10:00:00Z"),
-        Some("p1"),
-      ),
-      make_api_commit(
-        "bbbbbbb222222222222222222222222222222222",
-        "second",
-        Some("2026-02-21T10:00:00Z"),
-        Some("p2"),
-      ),
-    ];
-
-    let mut delegate = GithubPrCommitListDelegate::new();
-    delegate.set_rows(&commits, Some("bbbbbbb222222222222222222222222222222222"));
-
-    assert_eq!(delegate.selected_index, Some(IndexPath::new(1)));
-    assert_eq!(
-      delegate
-        .row_at(IndexPath::new(1))
-        .map(|commit| commit.sha.clone()),
-      Some("bbbbbbb222222222222222222222222222222222".to_string())
-    );
-  }
-
-  #[test]
-  fn commit_list_delegate_defaults_to_first_when_no_selected_commit() {
-    let commits = vec![
-      make_api_commit(
-        "aaaaaaa111111111111111111111111111111111",
-        "first",
-        Some("2026-02-20T10:00:00Z"),
-        Some("p1"),
-      ),
-      make_api_commit(
-        "bbbbbbb222222222222222222222222222222222",
-        "second",
-        Some("2026-02-21T10:00:00Z"),
-        Some("p2"),
-      ),
-    ];
-
-    let mut delegate = GithubPrCommitListDelegate::new();
-    delegate.set_rows(&commits, None);
-
-    assert_eq!(delegate.selected_index, Some(IndexPath::new(0)));
-  }
-
-  #[test]
-  fn commit_list_delegate_search_filters_by_message_sha_and_author() {
-    let commits = vec![
-      make_api_commit(
-        "aaaaaaa111111111111111111111111111111111",
-        "Fix parser regression",
-        Some("2026-02-20T10:00:00Z"),
-        Some("p1"),
-      ),
-      make_api_commit(
-        "bbbbbbb222222222222222222222222222222222",
-        "Refactor toolbar",
-        Some("2026-02-21T10:00:00Z"),
-        Some("p2"),
-      ),
-    ];
-
-    let mut delegate = GithubPrCommitListDelegate::new();
-    delegate.set_rows(&commits, None);
-
-    delegate.prepare("parser");
-    assert_eq!(delegate.matched_rows.len(), 1);
-    assert_eq!(delegate.matched_rows[0].sha, commits[0].sha);
-
-    delegate.prepare("bbbbbbb");
-    assert_eq!(delegate.matched_rows.len(), 1);
-    assert_eq!(delegate.matched_rows[0].sha, commits[1].sha);
-
-    delegate.prepare("octocat");
-    assert_eq!(delegate.matched_rows.len(), 2);
-  }
-
-  #[test]
   fn resolve_diff_shas_for_context_uses_commit_parent_when_selected() {
     let resolved = resolve_diff_shas_for_context(
       "merge123",
@@ -17155,19 +16765,13 @@ mod tests {
   }
 
   #[test]
-  fn left_sidebar_kind_routes_changes_to_files_and_other_tabs_to_context() {
-    assert_eq!(
-      left_sidebar_kind_for_tab(PR_TAB_OVERVIEW_IX),
-      GithubPrLeftSidebarKind::Context
-    );
+  fn left_sidebar_kind_only_renders_for_changes_tab() {
+    assert_eq!(left_sidebar_kind_for_tab(PR_TAB_OVERVIEW_IX), None);
     assert_eq!(
       left_sidebar_kind_for_tab(PR_TAB_CHANGES_IX),
-      GithubPrLeftSidebarKind::Files
+      Some(GithubPrLeftSidebarKind::Files)
     );
-    assert_eq!(
-      left_sidebar_kind_for_tab(PR_TAB_CHECKS_IX),
-      GithubPrLeftSidebarKind::Context
-    );
+    assert_eq!(left_sidebar_kind_for_tab(PR_TAB_CHECKS_IX), None);
   }
 
   #[test]
