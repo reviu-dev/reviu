@@ -36,6 +36,7 @@ use gpui_component::{
   clipboard::Clipboard,
   collapsible::Collapsible,
   h_flex,
+  menu::{DropdownMenu as _, PopupMenuItem},
   input::InputEvent,
   label::Label,
   notification::Notification,
@@ -8567,10 +8568,15 @@ impl GithubPrDetailsPage {
       }))
       .trigger(
         Button::new("pr-merge-button")
-          .label("Merge")
           .with_variant(ButtonVariant::Secondary)
           .outline()
-          .icon(IconName::ChevronDown)
+          .child(
+            h_flex()
+              .items_center()
+              .child(Icon::new(UiIconName::GitMerge).size_3p5().mr_1p5())
+              .child("Merge")
+              .child(Icon::new(IconName::ChevronDown).size_3p5().ml_2()),
+          )
           .small()
           .disabled(merge_button_disabled),
       )
@@ -8713,6 +8719,40 @@ impl GithubPrDetailsPage {
       .into_any_element()
   }
 
+  fn render_pr_actions_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+    let status_action = self.pull_request_status_action();
+    let status_loading = self.status_action_loading;
+    let view = cx.entity().clone();
+
+    Button::new("pr-actions-menu")
+      .icon(IconName::Ellipsis)
+      .ghost()
+      .small()
+      .disabled(status_action.is_none())
+      .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+        let view = view.clone();
+        if let Some(action) = status_action {
+          let icon = match action {
+            GithubPrStatusAction::ConvertToDraft => UiIconName::GitPullRequestDraft,
+            GithubPrStatusAction::ReadyForReview => UiIconName::GitPullRequestArrow,
+          };
+          menu.item(
+            PopupMenuItem::new(action.button_label())
+              .icon(Icon::new(icon))
+              .disabled(status_loading)
+              .on_click(move |_, _, cx| {
+                view.update(cx, |this, cx| {
+                  this.submit_pull_request_status_action(action, cx);
+                });
+              }),
+          )
+        } else {
+          menu
+        }
+      })
+      .into_any_element()
+  }
+
   fn render_review_popover(
     &mut self,
     theme: &gpui_component::Theme,
@@ -8753,10 +8793,15 @@ impl GithubPrDetailsPage {
       }))
       .trigger(
         Button::new("pr-review-button")
-          .label("Review")
+          .child(
+            h_flex()
+              .items_center()
+              .child(Icon::new(UiIconName::Eye).size_3p5().mr_1p5())
+              .child("Review")
+              .child(Icon::new(IconName::ChevronDown).size_3p5().ml_2()),
+          )
           .with_variant(ButtonVariant::Secondary)
           .outline()
-          .icon(IconName::ChevronDown)
           .small()
           .disabled(review_button_disabled),
       )
@@ -8947,23 +8992,6 @@ impl GithubPrDetailsPage {
       .gap_2()
       .when(!self.is_pull_request_merged(), |this| {
         this
-          .when_some(self.pull_request_status_action(), |this, action| {
-            this.child(
-              div()
-                .debug_selector(|| "github-pr-status-action-button".to_string())
-                .child(
-                  Button::new("pr-status-action-button")
-                    .label(action.button_label())
-                    .small()
-                    .outline()
-                    .loading(self.status_action_loading)
-                    .disabled(self.status_action_loading)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                      this.submit_pull_request_status_action(action, cx);
-                    })),
-                ),
-            )
-          })
           .when(
             !self
               .pull_request
@@ -8982,6 +9010,7 @@ impl GithubPrDetailsPage {
               .debug_selector(|| "github-pr-review-button".to_string())
               .child(self.render_review_popover(&theme, cx)),
           )
+          .child(self.render_pr_actions_menu(cx))
       });
 
     div()
