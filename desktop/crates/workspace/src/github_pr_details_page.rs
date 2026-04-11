@@ -9046,6 +9046,7 @@ impl GithubPrDetailsPage {
     } else {
       "Details"
     };
+    let header_hover_bg = theme.muted.opacity(0.35);
 
     let content = v_flex()
       .w_full()
@@ -9070,11 +9071,17 @@ impl GithubPrDetailsPage {
       );
 
     let header = h_flex()
+      .id("github-pr-overview-checks-header")
       .w_full()
       .items_center()
       .justify_between()
       .gap_3()
       .p_3()
+      .cursor_pointer()
+      .hover(move |this| this.bg(header_hover_bg))
+      .on_click(cx.listener(|this, _, _, cx| {
+        this.toggle_overview_checks(cx);
+      }))
       .child(
         h_flex()
           .min_w_0()
@@ -9103,17 +9110,20 @@ impl GithubPrDetailsPage {
           ),
       )
       .child(
-        Button::new("github-pr-overview-checks-toggle")
-          .ghost()
-          .xsmall()
-          .compact()
-          .label(toggle_label)
-          .icon(toggle_icon)
-          .on_click(cx.listener(|this, _, _, cx| {
-            this.overview_checks_open = !this.overview_checks_open;
-            this.overview_list.reset(this.overview_list_count);
-            cx.notify();
-          })),
+        div()
+          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+          .child(
+            Button::new("github-pr-overview-checks-toggle")
+              .ghost()
+              .xsmall()
+              .compact()
+              .label(toggle_label)
+              .icon(toggle_icon)
+              .on_click(cx.listener(|this, _, _, cx| {
+                cx.stop_propagation();
+                this.toggle_overview_checks(cx);
+              })),
+          ),
       );
 
     v_flex()
@@ -9130,6 +9140,20 @@ impl GithubPrDetailsPage {
           .content(content),
       )
       .into_any_element()
+  }
+
+  fn toggle_overview_checks(&mut self, cx: &mut Context<Self>) {
+    self.overview_checks_open = !self.overview_checks_open;
+
+    let item_count = self.overview_list.item_count();
+    let checks_ix = 1 + self.overview_timeline_items.len();
+    if checks_ix < item_count {
+      self.overview_list.remeasure_items(checks_ix..checks_ix + 1);
+    } else if item_count > 0 {
+      self.overview_list.remeasure();
+    }
+
+    cx.notify();
   }
 
   fn render_overview_checks_summary_icon(
@@ -12998,6 +13022,28 @@ mod tests {
       other_checks: Vec::new(),
       legacy_statuses: Vec::new(),
     }
+  }
+
+  #[gpui::test]
+  fn overview_checks_toggle_preserves_overview_scroll_position(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.overview_list_count = 3;
+      this.overview_list.reset(3);
+      this.overview_list.scroll_to(gpui::ListOffset {
+        item_ix: 2,
+        offset_in_item: px(24.0),
+      });
+
+      let scroll_before = this.overview_list.logical_scroll_top();
+      this.toggle_overview_checks(cx);
+      let scroll_after = this.overview_list.logical_scroll_top();
+
+      assert_eq!(scroll_after.item_ix, scroll_before.item_ix);
+      assert_eq!(scroll_after.offset_in_item, scroll_before.offset_in_item);
+    });
   }
 
   #[test]
