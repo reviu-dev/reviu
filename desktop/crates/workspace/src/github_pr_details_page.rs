@@ -36,9 +36,9 @@ use gpui_component::{
   clipboard::Clipboard,
   collapsible::Collapsible,
   h_flex,
-  menu::{DropdownMenu as _, PopupMenuItem},
   input::InputEvent,
   label::Label,
+  menu::{DropdownMenu as _, PopupMenuItem},
   notification::Notification,
   radio::{Radio, RadioGroup},
   skeleton::Skeleton,
@@ -9058,7 +9058,12 @@ impl GithubPrDetailsPage {
     let has_checks_content =
       self.checks.is_some() || self.checks_loading || self.checks_error.is_some();
 
+    let is_loading = self.merge_readiness_loading || self.checks_loading || self.reviews_loading;
+
     if review_info.is_none() && !has_checks_content && conflicts_info.is_none() {
+      if is_loading {
+        return Self::render_overview_status_skeleton(&theme);
+      }
       return div().into_any_element();
     }
 
@@ -9197,6 +9202,51 @@ impl GithubPrDetailsPage {
       .into_any_element()
   }
 
+  fn render_overview_status_skeleton(theme: &gpui_component::Theme) -> AnyElement {
+    let skeleton_row = |has_border_top: bool| {
+      h_flex()
+        .w_full()
+        .items_center()
+        .gap_3()
+        .p_3()
+        .when(has_border_top, |this| {
+          this.border_t_1().border_color(theme.border)
+        })
+        .child(
+          Skeleton::new()
+            .size(px(OVERVIEW_CHECKS_SUMMARY_RING_SIZE))
+            .rounded_full(),
+        )
+        .child(
+          v_flex()
+            .gap_1()
+            .child(
+              Skeleton::new()
+                .w(px(160.0))
+                .h(px(16.0))
+                .rounded(theme.radius),
+            )
+            .child(
+              Skeleton::new()
+                .w(px(120.0))
+                .h(px(14.0))
+                .rounded(theme.radius),
+            ),
+        )
+    };
+
+    v_flex()
+      .id("github-pr-overview-status-skeleton")
+      .w_full()
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius_lg)
+      .overflow_hidden()
+      .child(skeleton_row(false))
+      .child(skeleton_row(true))
+      .into_any_element()
+  }
+
   fn render_overview_conflicts_action(
     &self,
     kind: &OverviewConflictsKind,
@@ -9248,17 +9298,31 @@ impl GithubPrDetailsPage {
         .id("github-pr-overview-checks-loading")
         .w_full()
         .items_center()
-        .gap_2()
-        .p_4()
+        .gap_3()
+        .p_3()
         .when(has_border_top, |this| {
           this.border_t_1().border_color(theme.border)
         })
-        .child(Spinner::new().small())
         .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading checks..."),
+          Skeleton::new()
+            .size(px(OVERVIEW_CHECKS_SUMMARY_RING_SIZE))
+            .rounded_full(),
+        )
+        .child(
+          v_flex()
+            .gap_1()
+            .child(
+              Skeleton::new()
+                .w(px(180.0))
+                .h(px(16.0))
+                .rounded(theme.radius),
+            )
+            .child(
+              Skeleton::new()
+                .w(px(130.0))
+                .h(px(14.0))
+                .rounded(theme.radius),
+            ),
         )
         .into_any_element();
     }
@@ -10008,13 +10072,6 @@ impl GithubPrDetailsPage {
       .gap_2()
       .pt_2()
       .pb_32()
-      .child(
-        div()
-          .text_sm()
-          .font_medium()
-          .text_color(theme.foreground)
-          .child("Add comment"),
-      )
       .child(div().w_full().child(
         Input::new(&self.overview_issue_comment_input).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
       ))
@@ -10736,6 +10793,278 @@ impl GithubPrDetailsPage {
                 .into_any_element()
             })))
           }),
+      )
+      .into_any_element()
+  }
+
+  fn render_overview_skeleton(&self, theme: &gpui_component::Theme) -> AnyElement {
+    let max_w = px(1100.);
+
+    // Author row skeleton
+    let author_row = h_flex()
+      .gap_2()
+      .items_center()
+      .child(Skeleton::new().size(px(24.0)).rounded_full())
+      .child(
+        Skeleton::new()
+          .w(px(100.0))
+          .h(px(16.0))
+          .rounded(theme.radius),
+      )
+      .child(
+        Skeleton::new()
+          .w(px(120.0))
+          .h(px(16.0))
+          .rounded(theme.radius),
+      )
+      .child(
+        Skeleton::new()
+          .w(px(110.0))
+          .h(px(16.0))
+          .rounded(theme.radius),
+      );
+
+    // Created / Updated row skeleton
+    let created_updated = h_flex()
+      .gap_2()
+      .items_center()
+      .child(
+        Skeleton::new()
+          .w(px(50.0))
+          .h(px(14.0))
+          .rounded(theme.radius),
+      )
+      .child(
+        Skeleton::new()
+          .w(px(80.0))
+          .h(px(16.0))
+          .rounded(theme.radius),
+      )
+      .child(
+        div()
+          .text_sm()
+          .text_color(theme.muted_foreground)
+          .child("•"),
+      )
+      .child(
+        Skeleton::new()
+          .w(px(55.0))
+          .h(px(14.0))
+          .rounded(theme.radius),
+      )
+      .child(
+        Skeleton::new()
+          .w(px(60.0))
+          .h(px(16.0))
+          .rounded(theme.radius),
+      )
+      .child(
+        div()
+          .text_sm()
+          .text_color(theme.muted_foreground)
+          .child("•"),
+      )
+      .child(
+        Skeleton::new()
+          .w(px(50.0))
+          .h(px(16.0))
+          .rounded(theme.radius),
+      );
+
+    // Source → Target row skeleton
+    let source_target = h_flex()
+      .gap_2()
+      .items_center()
+      .child(
+        Skeleton::new()
+          .w(px(40.0))
+          .h(px(14.0))
+          .rounded(theme.radius),
+      )
+      .child(
+        Skeleton::new()
+          .w(px(160.0))
+          .h(px(16.0))
+          .rounded(theme.radius),
+      )
+      .child(
+        Icon::new(IconName::ArrowRight)
+          .size_3()
+          .text_color(theme.muted_foreground),
+      )
+      .child(
+        Skeleton::new()
+          .w(px(40.0))
+          .h(px(14.0))
+          .rounded(theme.radius),
+      )
+      .child(
+        Skeleton::new()
+          .w(px(60.0))
+          .h(px(16.0))
+          .rounded(theme.radius),
+      );
+
+    // Description skeleton
+    let description = v_flex()
+      .gap_2()
+      .child(
+        Skeleton::new()
+          .w(px(90.0))
+          .h(px(16.0))
+          .rounded(theme.radius),
+      )
+      .child(
+        v_flex()
+          .gap_2()
+          .border_1()
+          .border_color(theme.border)
+          .rounded(theme.radius)
+          .p_3()
+          .child(Skeleton::new().w_full().h(px(14.0)).rounded(theme.radius))
+          .child(
+            Skeleton::new()
+              .w(px(300.0))
+              .h(px(14.0))
+              .rounded(theme.radius),
+          )
+          .child(
+            Skeleton::new()
+              .w(px(200.0))
+              .h(px(14.0))
+              .rounded(theme.radius),
+          ),
+      );
+
+    // Status section skeleton
+    let status_section = v_flex()
+      .w_full()
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius_lg)
+      .overflow_hidden()
+      .child(
+        h_flex()
+          .w_full()
+          .items_center()
+          .gap_3()
+          .p_3()
+          .child(Skeleton::new().size(px(36.0)).rounded_full())
+          .child(
+            v_flex()
+              .gap_1()
+              .child(
+                Skeleton::new()
+                  .w(px(160.0))
+                  .h(px(16.0))
+                  .rounded(theme.radius),
+              )
+              .child(
+                Skeleton::new()
+                  .w(px(120.0))
+                  .h(px(14.0))
+                  .rounded(theme.radius),
+              ),
+          ),
+      )
+      .child(
+        h_flex()
+          .w_full()
+          .items_center()
+          .gap_3()
+          .p_3()
+          .border_t_1()
+          .border_color(theme.border)
+          .child(
+            div()
+              .size(px(36.0))
+              .flex_shrink_0()
+              .flex()
+              .items_center()
+              .justify_center()
+              .child(Skeleton::new().size(px(20.0)).rounded_full()),
+          )
+          .child(
+            v_flex()
+              .gap_1()
+              .child(
+                Skeleton::new()
+                  .w(px(200.0))
+                  .h(px(16.0))
+                  .rounded(theme.radius),
+              )
+              .child(
+                Skeleton::new()
+                  .w(px(260.0))
+                  .h(px(14.0))
+                  .rounded(theme.radius),
+              ),
+          ),
+      );
+
+    div()
+      .px_10()
+      .pb_4()
+      .child(
+        v_flex()
+          .mx_auto()
+          .max_w(max_w)
+          .pt(px(30.))
+          .gap_4()
+          .child({
+            let left_meta = v_flex()
+              .gap_2()
+              .child(author_row)
+              .child(created_updated)
+              .child(source_target);
+
+            let right_people = v_flex()
+              .gap_3()
+              .items_end()
+              .child(
+                v_flex()
+                  .gap_1()
+                  .items_end()
+                  .child(
+                    Skeleton::new()
+                      .w(px(80.0))
+                      .h(px(14.0))
+                      .rounded(theme.radius),
+                  )
+                  .child(
+                    Skeleton::new()
+                      .w(px(100.0))
+                      .h(px(14.0))
+                      .rounded(theme.radius),
+                  ),
+              )
+              .child(
+                v_flex()
+                  .gap_1()
+                  .items_end()
+                  .child(
+                    Skeleton::new()
+                      .w(px(75.0))
+                      .h(px(14.0))
+                      .rounded(theme.radius),
+                  )
+                  .child(
+                    Skeleton::new()
+                      .w(px(100.0))
+                      .h(px(14.0))
+                      .rounded(theme.radius),
+                  ),
+              );
+
+            div()
+              .flex()
+              .justify_between()
+              .gap_6()
+              .child(left_meta)
+              .child(right_people)
+          })
+          .child(description)
+          .child(status_section),
       )
       .into_any_element()
   }
@@ -12879,20 +13208,7 @@ impl Render for GithubPrDetailsPage {
         .child(self.error.clone().unwrap_or_default())
         .into_any_element()
     } else {
-      v_flex()
-        .flex_1()
-        .h_full()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .child(Spinner::new().small())
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading pull request details..."),
-        )
-        .into_any_element()
+      self.render_overview_skeleton(&theme)
     };
 
     let overview_content = div()
@@ -13897,21 +14213,16 @@ mod tests {
   }
 
   #[gpui::test]
-  fn status_action_button_renders_for_loaded_pull_request(cx: &mut TestAppContext) {
+  fn status_action_is_available_for_loaded_pull_request(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
 
-    page.update_in(cx, |this, _window, cx| {
+    page.update_in(cx, |this, _window, _cx| {
       this.pull_request = Some(make_pr_details_for_stats());
-      cx.notify();
     });
 
-    let button_bounds = cx
-      .debug_bounds("github-pr-status-action-button")
-      .expect("status action button bounds")
-      .size;
-    assert!(button_bounds.width > gpui::px(0.0));
-    assert!(button_bounds.height > gpui::px(0.0));
+    let action = page.read_with(cx, |this, _cx| this.pull_request_status_action());
+    assert_eq!(action, Some(GithubPrStatusAction::ConvertToDraft));
   }
 
   #[gpui::test]
@@ -13968,7 +14279,6 @@ mod tests {
       cx.notify();
     });
 
-    assert!(cx.debug_bounds("github-pr-status-action-button").is_some());
     assert!(cx.debug_bounds("github-pr-merge-button").is_none());
     assert!(cx.debug_bounds("github-pr-review-button").is_some());
   }
