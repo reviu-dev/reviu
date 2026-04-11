@@ -1110,11 +1110,7 @@ fn render_code_block(
     options.state.clone(),
     options.on_link.clone(),
     text_id,
-    SelectableTextOptions {
-      interactive: true,
-      show_indentation_dots: true,
-      show_inline_code_backgrounds: false,
-    },
+    code_block_selectable_text_options(),
   );
   let scroll_id: SharedString = format!("markdown-code-block-scroll-{text_id}").into();
   let scroll_content = div().id(scroll_id).w_full().min_w_0().child(
@@ -1127,8 +1123,8 @@ fn render_code_block(
       .child(
         div()
           .pl(px(MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX))
-          .font_family(cx.theme().mono_font_family.clone())
-          .text_sm()
+          .font_family(theme.mono_font_family.clone())
+          .text_size(theme.mono_font_size)
           .text_color(theme.foreground)
           .child(content),
       ),
@@ -1153,22 +1149,28 @@ fn render_code_block(
     .min_w_0()
     .relative()
     .group(hover_group_id.clone())
-    .bg(theme.accent.opacity(0.3))
-    .border_1()
-    .border_color(theme.border)
+    .bg(theme.muted)
     .rounded_md()
     .overflow_hidden()
     .child(scroll_container)
     .child(
       div()
         .absolute()
-        .top_1()
-        .right_1()
+        .top_2()
+        .right_2()
         .invisible()
         .group_hover(&hover_group_id, |this| this.visible())
         .child(Clipboard::new(("markdown-code-block-copy", text_id)).value(copy_value)),
     )
     .into_any_element()
+}
+
+fn code_block_selectable_text_options() -> SelectableTextOptions {
+  SelectableTextOptions {
+    interactive: true,
+    show_indentation_dots: false,
+    show_inline_code_backgrounds: false,
+  }
 }
 
 fn code_block_hover_group_id(text_id: usize) -> SharedString {
@@ -3147,6 +3149,36 @@ Apres"#,
       "markdown-code-block-hover-42"
     );
     assert_ne!(code_block_hover_group_id(1), code_block_hover_group_id(2));
+  }
+
+  #[test]
+  fn code_block_selectable_text_options_match_gfm_preview_behavior() {
+    let options = code_block_selectable_text_options();
+
+    assert!(options.interactive);
+    assert!(!options.show_indentation_dots);
+    assert!(!options.show_inline_code_backgrounds);
+  }
+
+  #[test]
+  fn code_block_display_value_preserves_box_drawing_table_spacing() {
+    let table = concat!(
+      "┌──────────────────────────────────────┬──────────────┬───────────────────────────┐\n",
+      "│                                      │ Figma Plugin │ Manual MCP server config  │\n",
+      "├──────────────────────────────────────┼──────────────┼───────────────────────────┤\n",
+      "│ MCP tools (get_design_context, etc.) │ Included     │ You configure it yourself │\n",
+      "├──────────────────────────────────────┼──────────────┼───────────────────────────┤\n",
+      "│ Skills (/implement-design, etc.)     │ Included     │ Not available             │\n",
+      "├──────────────────────────────────────┼──────────────┼───────────────────────────┤\n",
+      "│ Steering / best practices            │ Included     │ Not available             │\n",
+      "└──────────────────────────────────────┴──────────────┴───────────────────────────┘",
+    );
+    let code = CodeBlock {
+      lang: None,
+      value: format!("{table}\n"),
+    };
+
+    assert_eq!(code_block_display_value(&code), table);
   }
 
   #[test]
