@@ -26,14 +26,15 @@ use git::{
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Hsla, Image,
   InteractiveElement, ListAlignment, ListState as GpuiListState, MouseButton, ObjectFit,
-  ParentElement, Render, RenderImage, SharedString, Styled, Task, Window, div, img, list,
-  prelude::*, px, white,
+  ParentElement, PathBuilder, Render, RenderImage, SharedString, Styled, Task, Window, canvas, div,
+  img, list, point, prelude::*, px, white,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable as _, StyledExt,
   avatar::Avatar,
   button::{Button, ButtonVariant, ButtonVariants as _},
   clipboard::Clipboard,
+  collapsible::Collapsible,
   h_flex,
   input::InputEvent,
   label::Label,
@@ -79,7 +80,7 @@ use crate::{
   },
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, ConfigStore},
-  date_format::format_relative_time,
+  date_format::{format_relative_time, parse_rfc3339},
   file_preview::{
     FilePreviewKind, file_preview_kind, is_markdown_path, is_svg_path, raster_image_from_bytes,
     should_show_unsupported_binary_placeholder,
@@ -1100,6 +1101,437 @@ fn render_checks_summary_card(
       )
     })
     .into_any_element()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OverviewCheckRow {
+  id: String,
+  state: GithubPullRequestChecksRollupState,
+  title: String,
+  detail: Option<String>,
+  app_label: Option<String>,
+  app_slug: Option<String>,
+  open_url: Option<String>,
+  duration_label: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OverviewChecksSummarySlice {
+  value: f32,
+  color: Hsla,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OverviewChecksSummaryCap {
+  left: f32,
+  top: f32,
+  size: f32,
+  color: Hsla,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OverviewChecksSummarySegment {
+  start_angle: f32,
+  end_angle: f32,
+  color: Hsla,
+}
+
+const OVERVIEW_CHECKS_SUMMARY_RING_SIZE: f32 = 36.0;
+const OVERVIEW_CHECKS_SUMMARY_RING_RADIUS: f32 = 14.0;
+const OVERVIEW_CHECKS_SUMMARY_RING_STROKE_WIDTH: f32 = 5.0;
+const OVERVIEW_CHECKS_SUMMARY_RING_GAP_ANGLE: f32 = 0.5;
+
+fn non_empty_owned(value: &str) -> Option<String> {
+  let value = value.trim();
+  if value.is_empty() {
+    None
+  } else {
+    Some(value.to_string())
+  }
+}
+
+fn singular_or_plural(count: u64, singular: &'static str, plural: &'static str) -> &'static str {
+  if count == 1 { singular } else { plural }
+}
+
+fn overview_checks_summary_title(checks: &GithubPullRequestChecksSummary) -> String {
+  if checks.total_checks == 0 {
+    return "No checks have run".to_string();
+  }
+
+  match checks.overall_state {
+    GithubPullRequestChecksRollupState::Success => "All checks have passed".to_string(),
+    GithubPullRequestChecksRollupState::Pending => {
+      if checks.pending_checks == 0 {
+        "Checks are pending".to_string()
+      } else {
+        format!(
+          "{} {} pending",
+          checks.pending_checks,
+          singular_or_plural(checks.pending_checks, "check", "checks")
+        )
+      }
+    }
+    GithubPullRequestChecksRollupState::Failure => {
+      if checks.failed_checks == 0 {
+        "Checks need attention".to_string()
+      } else {
+        format!(
+          "{} {} failed",
+          checks.failed_checks,
+          singular_or_plural(checks.failed_checks, "check", "checks")
+        )
+      }
+    }
+  }
+}
+
+fn overview_checks_summary_subtitle(checks: &GithubPullRequestChecksSummary) -> String {
+  if checks.total_checks == 0 {
+    return "No checks reported".to_string();
+  }
+
+  if checks.successful_checks == checks.total_checks {
+    return format!(
+      "{} successful {}",
+      checks.successful_checks,
+      singular_or_plural(checks.successful_checks, "check", "checks")
+    );
+  }
+
+  let mut parts = Vec::new();
+  if checks.successful_checks > 0 {
+    parts.push(format!("{} passed", checks.successful_checks));
+  }
+  if checks.failed_checks > 0 {
+    parts.push(format!("{} failing", checks.failed_checks));
+  }
+  if checks.pending_checks > 0 {
+    parts.push(format!("{} pending", checks.pending_checks));
+  }
+
+  parts.join(" • ")
+}
+
+fn overview_checks_uniform_state(
+  checks: &GithubPullRequestChecksSummary,
+) -> Option<GithubPullRequestChecksRollupState> {
+  if checks.total_checks == 0 {
+    return None;
+  }
+
+  if checks.successful_checks == checks.total_checks {
+    Some(GithubPullRequestChecksRollupState::Success)
+  } else if checks.pending_checks == checks.total_checks {
+    Some(GithubPullRequestChecksRollupState::Pending)
+  } else if checks.failed_checks == checks.total_checks {
+    Some(GithubPullRequestChecksRollupState::Failure)
+  } else {
+    None
+  }
+}
+
+fn overview_checks_summary_slices(
+  checks: &GithubPullRequestChecksSummary,
+  theme: &gpui_component::Theme,
+) -> Vec<OverviewChecksSummarySlice> {
+  let mut slices = Vec::new();
+
+  if checks.failed_checks > 0 {
+    slices.push(OverviewChecksSummarySlice {
+      value: checks.failed_checks as f32,
+      color: theme.status_red(),
+    });
+  }
+
+  if checks.pending_checks > 0 {
+    slices.push(OverviewChecksSummarySlice {
+      value: checks.pending_checks as f32,
+      color: theme.status_orange(),
+    });
+  }
+
+  if checks.successful_checks > 0 {
+    slices.push(OverviewChecksSummarySlice {
+      value: checks.successful_checks as f32,
+      color: theme.status_green(),
+    });
+  }
+
+  if slices.is_empty() {
+    slices.push(OverviewChecksSummarySlice {
+      value: 1.0,
+      color: theme.muted_foreground.opacity(0.3),
+    });
+  }
+
+  slices
+}
+
+fn overview_checks_summary_segments(
+  slices: &[OverviewChecksSummarySlice],
+) -> Vec<OverviewChecksSummarySegment> {
+  let total: f32 = slices.iter().map(|slice| slice.value.max(0.0)).sum();
+  if total <= 0.0 {
+    return Vec::new();
+  }
+
+  let mut start_angle = 0.0;
+  let mut segments = Vec::new();
+
+  for slice in slices {
+    let span = (slice.value.max(0.0) / total) * std::f32::consts::TAU;
+    if span <= 0.0 {
+      continue;
+    }
+
+    let half_gap = if slices.len() > 1 {
+      (OVERVIEW_CHECKS_SUMMARY_RING_GAP_ANGLE / 2.0).min(span / 4.0)
+    } else {
+      0.0
+    };
+    let segment_start_angle = start_angle + half_gap;
+    let segment_end_angle = start_angle + span - half_gap;
+    if segment_end_angle > segment_start_angle {
+      segments.push(OverviewChecksSummarySegment {
+        start_angle: segment_start_angle,
+        end_angle: segment_end_angle,
+        color: slice.color,
+      });
+    }
+
+    start_angle += span;
+  }
+
+  segments
+}
+
+fn overview_checks_summary_caps(
+  segments: &[OverviewChecksSummarySegment],
+) -> Vec<OverviewChecksSummaryCap> {
+  if segments.len() <= 1 {
+    return Vec::new();
+  }
+
+  let center = OVERVIEW_CHECKS_SUMMARY_RING_SIZE / 2.0;
+  let mut caps = Vec::new();
+
+  for segment in segments {
+    for angle in [segment.start_angle, segment.end_angle] {
+      let visual_angle = angle - std::f32::consts::FRAC_PI_2;
+      let x = center + OVERVIEW_CHECKS_SUMMARY_RING_RADIUS * visual_angle.cos();
+      let y = center + OVERVIEW_CHECKS_SUMMARY_RING_RADIUS * visual_angle.sin();
+      caps.push(OverviewChecksSummaryCap {
+        left: x - OVERVIEW_CHECKS_SUMMARY_RING_STROKE_WIDTH / 2.0,
+        top: y - OVERVIEW_CHECKS_SUMMARY_RING_STROKE_WIDTH / 2.0,
+        size: OVERVIEW_CHECKS_SUMMARY_RING_STROKE_WIDTH,
+        color: segment.color,
+      });
+    }
+  }
+
+  caps
+}
+
+fn overview_check_detail_without_duplicates(detail: Option<String>, title: &str) -> Option<String> {
+  detail.filter(|detail| !detail.eq_ignore_ascii_case(title))
+}
+
+fn format_overview_check_duration(total_seconds: u64) -> String {
+  if total_seconds < 60 {
+    return format!("{total_seconds}s");
+  }
+
+  let total_minutes = total_seconds / 60;
+  let seconds = total_seconds % 60;
+  if total_minutes < 60 {
+    return if seconds == 0 {
+      format!("{total_minutes}m")
+    } else {
+      format!("{total_minutes}m {seconds}s")
+    };
+  }
+
+  let total_hours = total_minutes / 60;
+  let minutes = total_minutes % 60;
+  if total_hours < 24 {
+    return if minutes == 0 {
+      format!("{total_hours}h")
+    } else {
+      format!("{total_hours}h {minutes}m")
+    };
+  }
+
+  let days = total_hours / 24;
+  let hours = total_hours % 24;
+  if hours == 0 {
+    format!("{days}d")
+  } else {
+    format!("{days}d {hours}h")
+  }
+}
+
+fn overview_check_duration_label(
+  started_at: Option<&str>,
+  finished_at: Option<&str>,
+  state: GithubPullRequestChecksRollupState,
+) -> Option<String> {
+  let started_at = parse_rfc3339(started_at?)?;
+  let finished_at = finished_at.and_then(parse_rfc3339).or_else(|| {
+    (state == GithubPullRequestChecksRollupState::Pending).then(time::OffsetDateTime::now_utc)
+  })?;
+  let elapsed_seconds = (finished_at - started_at).whole_seconds();
+  if elapsed_seconds < 0 {
+    return None;
+  }
+
+  Some(format_overview_check_duration(elapsed_seconds as u64))
+}
+
+fn overview_check_failed_first_sort_key(row: &OverviewCheckRow) -> u8 {
+  if row.state == GithubPullRequestChecksRollupState::Failure {
+    0
+  } else {
+    1
+  }
+}
+
+fn overview_check_rows(checks: &GithubPullRequestChecksSummary) -> Vec<OverviewCheckRow> {
+  let mut rows = Vec::new();
+
+  for (ix, context) in checks.missing_required_contexts.iter().enumerate() {
+    rows.push(OverviewCheckRow {
+      id: format!("missing-required-context-{ix}"),
+      state: GithubPullRequestChecksRollupState::Pending,
+      title: context.clone(),
+      detail: Some("Required check has not reported yet".to_string()),
+      app_label: None,
+      app_slug: None,
+      open_url: None,
+      duration_label: None,
+    });
+  }
+
+  for run in &checks.actions_runs {
+    let run_name = run
+      .name
+      .as_deref()
+      .and_then(non_empty_owned)
+      .unwrap_or_else(|| "GitHub Actions".to_string());
+    let run_detail = run.display_title.as_deref().and_then(non_empty_owned);
+    let run_started_at = run
+      .run_started_at
+      .as_deref()
+      .or(Some(run.created_at.as_str()));
+    let run_finished_at =
+      (run.state != GithubPullRequestChecksRollupState::Pending).then_some(run.updated_at.as_str());
+    let run_duration_label =
+      overview_check_duration_label(run_started_at, run_finished_at, run.state);
+
+    if run.jobs.is_empty() {
+      rows.push(OverviewCheckRow {
+        id: format!("workflow-run-{}", run.id),
+        state: run.state,
+        title: run_name.clone(),
+        detail: overview_check_detail_without_duplicates(run_detail.clone(), &run_name),
+        app_label: Some("GitHub Actions".to_string()),
+        app_slug: Some("github-actions".to_string()),
+        open_url: run.html_url.clone(),
+        duration_label: run_duration_label.clone(),
+      });
+      continue;
+    }
+
+    for job in &run.jobs {
+      let title = non_empty_owned(&job.name).unwrap_or_else(|| run_name.clone());
+      let detail = run_detail
+        .clone()
+        .or_else(|| Some(run_name.clone()))
+        .filter(|detail| !detail.eq_ignore_ascii_case(&title));
+      let job_started_at = job.started_at.as_deref().or(run_started_at);
+      let job_finished_at = if job.state == GithubPullRequestChecksRollupState::Pending {
+        None
+      } else {
+        job.completed_at.as_deref().or(run_finished_at)
+      };
+
+      rows.push(OverviewCheckRow {
+        id: format!("workflow-job-{}", job.id),
+        state: job.state,
+        title,
+        detail,
+        app_label: Some("GitHub Actions".to_string()),
+        app_slug: Some("github-actions".to_string()),
+        open_url: job.html_url.clone().or_else(|| run.html_url.clone()),
+        duration_label: overview_check_duration_label(job_started_at, job_finished_at, job.state),
+      });
+    }
+  }
+
+  for check in &checks.other_checks {
+    let title = non_empty_owned(&check.name).unwrap_or_else(|| "Check run".to_string());
+    let detail = check
+      .title
+      .as_deref()
+      .and_then(non_empty_owned)
+      .or_else(|| check.summary.as_deref().and_then(non_empty_owned));
+
+    rows.push(OverviewCheckRow {
+      id: format!("check-run-{}", check.id),
+      state: check.state,
+      title: title.clone(),
+      detail: overview_check_detail_without_duplicates(detail, &title),
+      app_label: check
+        .app_name
+        .as_deref()
+        .and_then(non_empty_owned)
+        .or_else(|| check.app_slug.as_deref().and_then(non_empty_owned)),
+      app_slug: check.app_slug.as_deref().and_then(non_empty_owned),
+      open_url: check.details_url.clone().or_else(|| check.html_url.clone()),
+      duration_label: overview_check_duration_label(
+        check.started_at.as_deref(),
+        (check.state != GithubPullRequestChecksRollupState::Pending)
+          .then(|| check.completed_at.as_deref())
+          .flatten(),
+        check.state,
+      ),
+    });
+  }
+
+  for status in &checks.legacy_statuses {
+    let title = non_empty_owned(&status.context).unwrap_or_else(|| "Status check".to_string());
+    rows.push(OverviewCheckRow {
+      id: format!("legacy-status-{}", status.id),
+      state: status.state,
+      title: title.clone(),
+      detail: overview_check_detail_without_duplicates(status.description.clone(), &title),
+      app_label: None,
+      app_slug: None,
+      open_url: status.target_url.clone(),
+      duration_label: overview_check_duration_label(
+        Some(status.created_at.as_str()),
+        (status.state != GithubPullRequestChecksRollupState::Pending)
+          .then_some(status.updated_at.as_str()),
+        status.state,
+      ),
+    });
+  }
+
+  rows.sort_by_key(overview_check_failed_first_sort_key);
+  rows
+}
+
+fn overview_check_app_initial(row: &OverviewCheckRow) -> String {
+  row
+    .app_label
+    .as_deref()
+    .or(row.app_slug.as_deref())
+    .unwrap_or(row.title.as_str())
+    .chars()
+    .next()
+    .map(|c| c.to_uppercase().collect::<String>())
+    .filter(|initial| !initial.is_empty())
+    .unwrap_or_else(|| "C".to_string())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2403,6 +2835,7 @@ pub struct GithubPrDetailsPage {
   binary_preview: Option<GithubPrBinaryPreview>,
   description_markdown_state: MarkdownRenderState,
   syntax_highlight_cache: Arc<gfm_markdown_viewer::SyntaxHighlightCache>,
+  overview_checks_open: bool,
   overview_conversation_items: Vec<GithubPrOverviewConversationItem>,
   overview_list: GpuiListState,
   overview_list_count: usize,
@@ -2969,6 +3402,7 @@ impl GithubPrDetailsPage {
       binary_preview: None,
       description_markdown_state: MarkdownRenderState::new(),
       syntax_highlight_cache: Arc::new(gfm_markdown_viewer::SyntaxHighlightCache::new()),
+      overview_checks_open: true,
       overview_conversation_items: Vec::new(),
       overview_list: GpuiListState::new(0, ListAlignment::Top, px(300.)),
       overview_list_count: 0,
@@ -4155,7 +4589,7 @@ impl GithubPrDetailsPage {
       let status = reviewer_status_for_login(reviews, login.as_str());
       let tooltip = reviewer_status_tooltip(status, login.as_str());
       let status_marker = match status {
-        ReviewerStatus::Awaiting => div().size(px(9.0)).rounded_full().bg(theme.status_orange()),
+        ReviewerStatus::Awaiting => div().size(px(9.0)).rounded_full().bg(theme.status_yellow()),
         ReviewerStatus::Approved => div()
           .size(badge_size)
           .rounded_full()
@@ -8911,155 +9345,6 @@ impl GithubPrDetailsPage {
       .child(tab_bar)
   }
 
-  fn render_context_sidebar_checks_summary(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-    let theme = cx.theme().clone();
-
-    let context_content: AnyElement = if self.checks_loading && self.checks.is_none() {
-      div()
-        .text_sm()
-        .text_color(theme.muted_foreground)
-        .child("Loading checks...")
-        .into_any_element()
-    } else if let Some(error) = self.checks_error.as_ref() {
-      div()
-        .text_sm()
-        .text_color(theme.status_red())
-        .child(error.clone())
-        .into_any_element()
-    } else if let Some(checks) = self.checks.as_ref() {
-      v_flex()
-        .gap_3()
-        .child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .flex_wrap()
-            .child(render_checks_state_badge(checks.overall_state, &theme))
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("Overall"),
-            )
-            .child(render_checks_state_badge(checks.required_state, &theme))
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("Required"),
-            ),
-        )
-        .child(
-          h_flex()
-            .items_center()
-            .gap_4()
-            .flex_wrap()
-            .child(
-              div()
-                .child(
-                  div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("Total checks"),
-                )
-                .child(
-                  div()
-                    .text_sm()
-                    .font_medium()
-                    .text_color(theme.foreground)
-                    .child(checks.total_checks.to_string()),
-                ),
-            )
-            .child(
-              div()
-                .child(
-                  div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("Passing"),
-                )
-                .child(
-                  div()
-                    .text_sm()
-                    .font_medium()
-                    .text_color(theme.status_green())
-                    .child(checks.successful_checks.to_string()),
-                ),
-            )
-            .child(
-              div()
-                .child(
-                  div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("Failing"),
-                )
-                .child(
-                  div()
-                    .text_sm()
-                    .font_medium()
-                    .text_color(theme.status_red())
-                    .child(checks.failed_checks.to_string()),
-                ),
-            )
-            .child(
-              div()
-                .child(
-                  div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("Pending"),
-                )
-                .child(
-                  div()
-                    .text_sm()
-                    .font_medium()
-                    .text_color(theme.status_orange())
-                    .child(checks.pending_checks.to_string()),
-                ),
-            ),
-        )
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child(format!(
-              "{} required contexts • {} passed • {} failing • {} pending",
-              checks.required_checks_total,
-              checks.required_checks_passed,
-              checks.required_checks_failed,
-              checks.required_checks_pending,
-            )),
-        )
-        .into_any_element()
-    } else {
-      div()
-        .text_sm()
-        .text_color(theme.muted_foreground)
-        .child("Checks are unavailable for this pull request.")
-        .into_any_element()
-    };
-
-    v_flex()
-      .gap_2()
-      .child(
-        div()
-          .text_sm()
-          .font_medium()
-          .text_color(theme.foreground)
-          .child("Checks summary"),
-      )
-      .child(
-        div()
-          .p_3()
-          .rounded(theme.radius_lg)
-          .border_1()
-          .border_color(theme.border)
-          .child(context_content),
-      )
-      .into_any_element()
-  }
-
   fn render_context_sidebar_commits(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
     let theme = cx.theme().clone();
 
@@ -9142,9 +9427,483 @@ impl GithubPrDetailsPage {
       .bg(theme.sidebar)
       .gap_3()
       .p_3()
-      .child(self.render_context_sidebar_checks_summary(cx))
       .child(self.render_context_sidebar_commits(cx))
       .into_any_element()
+  }
+
+  fn render_overview_checks_section(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    if self.checks_loading && self.checks.is_none() {
+      return h_flex()
+        .id("github-pr-overview-checks-loading")
+        .w_full()
+        .items_center()
+        .gap_2()
+        .border_1()
+        .border_color(theme.border)
+        .rounded(theme.radius_lg)
+        .p_4()
+        .child(Spinner::new().small())
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading checks..."),
+        )
+        .into_any_element();
+    }
+
+    if let Some(error) = self.checks_error.as_ref() {
+      return h_flex()
+        .id("github-pr-overview-checks-error")
+        .w_full()
+        .items_center()
+        .gap_2()
+        .border_1()
+        .border_color(theme.border)
+        .rounded(theme.radius_lg)
+        .p_4()
+        .child(
+          Icon::new(IconName::CircleX)
+            .size_4()
+            .text_color(theme.status_red()),
+        )
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.status_red())
+            .child(error.clone()),
+        )
+        .into_any_element();
+    }
+
+    if let Some(checks) = self.checks.as_ref() {
+      return self.render_overview_checks_card(checks, &theme, cx);
+    }
+
+    div().into_any_element()
+  }
+
+  fn render_overview_checks_card(
+    &self,
+    checks: &GithubPullRequestChecksSummary,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let rows = overview_check_rows(checks);
+    let row_count = rows.len();
+    let toggle_icon = if self.overview_checks_open {
+      IconName::ChevronUp
+    } else {
+      IconName::ChevronDown
+    };
+    let toggle_label = if self.overview_checks_open {
+      "Hide"
+    } else {
+      "Details"
+    };
+
+    let content = v_flex()
+      .w_full()
+      .border_t_1()
+      .border_color(theme.border)
+      .bg(theme.muted.opacity(0.45))
+      .when(row_count == 0, |this| {
+        this.child(
+          div()
+            .px_4()
+            .py_3()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("GitHub has not reported individual check details."),
+        )
+      })
+      .children(
+        rows
+          .into_iter()
+          .enumerate()
+          .map(|(ix, row)| self.render_overview_check_row(row, ix, row_count, theme)),
+      );
+
+    let header = h_flex()
+      .w_full()
+      .items_center()
+      .justify_between()
+      .gap_3()
+      .p_3()
+      .child(
+        h_flex()
+          .min_w_0()
+          .items_center()
+          .gap_3()
+          .child(Self::render_overview_checks_summary_icon(checks, theme))
+          .child(
+            v_flex()
+              .min_w_0()
+              .child(
+                div()
+                  .font_medium()
+                  .text_color(theme.foreground)
+                  .overflow_hidden()
+                  .text_ellipsis()
+                  .child(overview_checks_summary_title(checks)),
+              )
+              .child(
+                div()
+                  .text_sm()
+                  .text_color(theme.muted_foreground)
+                  .overflow_hidden()
+                  .text_ellipsis()
+                  .child(overview_checks_summary_subtitle(checks)),
+              ),
+          ),
+      )
+      .child(
+        Button::new("github-pr-overview-checks-toggle")
+          .ghost()
+          .xsmall()
+          .compact()
+          .label(toggle_label)
+          .icon(toggle_icon)
+          .on_click(cx.listener(|this, _, _, cx| {
+            this.overview_checks_open = !this.overview_checks_open;
+            this.overview_list.reset(this.overview_list_count);
+            cx.notify();
+          })),
+      );
+
+    v_flex()
+      .id("github-pr-overview-checks")
+      .w_full()
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius_lg)
+      .overflow_hidden()
+      .child(
+        Collapsible::new()
+          .open(self.overview_checks_open)
+          .child(header)
+          .content(content),
+      )
+      .into_any_element()
+  }
+
+  fn render_overview_checks_summary_icon(
+    checks: &GithubPullRequestChecksSummary,
+    theme: &gpui_component::Theme,
+  ) -> AnyElement {
+    let slices = overview_checks_summary_slices(checks, theme);
+    let segments = overview_checks_summary_segments(&slices);
+    let caps = overview_checks_summary_caps(&segments);
+    let segments_for_canvas = segments.clone();
+    let center_icon = overview_checks_uniform_state(checks).map(|state| match state {
+      GithubPullRequestChecksRollupState::Success => Icon::new(UiIconName::Check)
+        .size_3()
+        .text_color(theme.status_green())
+        .into_any_element(),
+      GithubPullRequestChecksRollupState::Pending => div()
+        .size(px(6.0))
+        .rounded_full()
+        .bg(theme.status_orange())
+        .into_any_element(),
+      GithubPullRequestChecksRollupState::Failure => Icon::new(UiIconName::X)
+        .size_3()
+        .text_color(theme.status_red())
+        .into_any_element(),
+    });
+
+    div()
+      .relative()
+      .size(px(OVERVIEW_CHECKS_SUMMARY_RING_SIZE))
+      .flex_shrink_0()
+      .child(
+        canvas(
+          |bounds, _, _| bounds,
+          move |bounds, _, window, _| {
+            let center_x = bounds.origin.x.as_f32() + bounds.size.width.as_f32() / 2.0;
+            let center_y = bounds.origin.y.as_f32() + bounds.size.height.as_f32() / 2.0;
+
+            for segment in &segments_for_canvas {
+              let mut builder = PathBuilder::stroke(px(OVERVIEW_CHECKS_SUMMARY_RING_STROKE_WIDTH));
+              let start_visual_angle = segment.start_angle - std::f32::consts::FRAC_PI_2;
+              let end_visual_angle = segment.end_angle - std::f32::consts::FRAC_PI_2;
+              let start = point(
+                px(center_x + OVERVIEW_CHECKS_SUMMARY_RING_RADIUS * start_visual_angle.cos()),
+                px(center_y + OVERVIEW_CHECKS_SUMMARY_RING_RADIUS * start_visual_angle.sin()),
+              );
+              let end = point(
+                px(center_x + OVERVIEW_CHECKS_SUMMARY_RING_RADIUS * end_visual_angle.cos()),
+                px(center_y + OVERVIEW_CHECKS_SUMMARY_RING_RADIUS * end_visual_angle.sin()),
+              );
+              let span = segment.end_angle - segment.start_angle;
+
+              builder.move_to(start);
+              if span >= std::f32::consts::TAU - 0.001 {
+                let mid_angle = segment.start_angle + span / 2.0;
+                let mid_visual_angle = mid_angle - std::f32::consts::FRAC_PI_2;
+                let mid = point(
+                  px(center_x + OVERVIEW_CHECKS_SUMMARY_RING_RADIUS * mid_visual_angle.cos()),
+                  px(center_y + OVERVIEW_CHECKS_SUMMARY_RING_RADIUS * mid_visual_angle.sin()),
+                );
+                builder.arc_to(
+                  point(
+                    px(OVERVIEW_CHECKS_SUMMARY_RING_RADIUS),
+                    px(OVERVIEW_CHECKS_SUMMARY_RING_RADIUS),
+                  ),
+                  px(0.0),
+                  false,
+                  true,
+                  mid,
+                );
+                builder.arc_to(
+                  point(
+                    px(OVERVIEW_CHECKS_SUMMARY_RING_RADIUS),
+                    px(OVERVIEW_CHECKS_SUMMARY_RING_RADIUS),
+                  ),
+                  px(0.0),
+                  false,
+                  true,
+                  end,
+                );
+              } else {
+                builder.arc_to(
+                  point(
+                    px(OVERVIEW_CHECKS_SUMMARY_RING_RADIUS),
+                    px(OVERVIEW_CHECKS_SUMMARY_RING_RADIUS),
+                  ),
+                  px(0.0),
+                  span.abs() > std::f32::consts::PI,
+                  true,
+                  end,
+                );
+              }
+
+              if let Ok(path) = builder.build() {
+                window.paint_path(path, segment.color);
+              }
+            }
+          },
+        )
+        .absolute()
+        .size_full(),
+      )
+      .children(caps.into_iter().map(|cap| {
+        div()
+          .absolute()
+          .left(px(cap.left))
+          .top(px(cap.top))
+          .size(px(cap.size))
+          .rounded_full()
+          .bg(cap.color)
+      }))
+      .child(
+        div()
+          .absolute()
+          .inset_0()
+          .flex()
+          .items_center()
+          .justify_center()
+          .child(
+            div()
+              .size(px(20.0))
+              .rounded_full()
+              .bg(theme.background)
+              .flex()
+              .items_center()
+              .justify_center()
+              .when_some(center_icon, |this, center_icon| this.child(center_icon)),
+          ),
+      )
+      .into_any_element()
+  }
+
+  fn render_overview_check_status_icon(
+    state: GithubPullRequestChecksRollupState,
+    theme: &gpui_component::Theme,
+  ) -> AnyElement {
+    match state {
+      GithubPullRequestChecksRollupState::Success => div()
+        .w(px(22.0))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+          Icon::new(UiIconName::CircleCheck)
+            .size_4()
+            .text_color(theme.status_green()),
+        )
+        .into_any_element(),
+      GithubPullRequestChecksRollupState::Pending => div()
+        .w(px(22.0))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+          div()
+            .size(px(8.0))
+            .rounded_full()
+            .border_1()
+            .border_color(theme.status_orange()),
+        )
+        .into_any_element(),
+      GithubPullRequestChecksRollupState::Failure => div()
+        .w(px(22.0))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+          Icon::new(IconName::CircleX)
+            .size_4()
+            .text_color(theme.status_red()),
+        )
+        .into_any_element(),
+    }
+  }
+
+  fn render_overview_check_app_icon(
+    row: &OverviewCheckRow,
+    theme: &gpui_component::Theme,
+  ) -> AnyElement {
+    let is_github_app = row
+      .app_slug
+      .as_deref()
+      .is_some_and(|slug| slug.to_ascii_lowercase().contains("github"))
+      || row
+        .app_label
+        .as_deref()
+        .is_some_and(|label| label.to_ascii_lowercase().contains("github"));
+
+    let base = div()
+      .size(px(26.0))
+      .flex_shrink_0()
+      .flex()
+      .items_center()
+      .justify_center()
+      .rounded(theme.radius)
+      .border_1()
+      .border_color(theme.border)
+      .bg(theme.background);
+
+    if is_github_app {
+      base
+        .child(
+          Icon::new(IconName::Github)
+            .size_4()
+            .text_color(theme.foreground),
+        )
+        .into_any_element()
+    } else {
+      base
+        .child(
+          div()
+            .text_xs()
+            .font_medium()
+            .text_color(theme.muted_foreground)
+            .child(overview_check_app_initial(row)),
+        )
+        .into_any_element()
+    }
+  }
+
+  fn render_overview_check_row(
+    &self,
+    row: OverviewCheckRow,
+    ix: usize,
+    row_count: usize,
+    theme: &gpui_component::Theme,
+  ) -> AnyElement {
+    let row_id = row.id.clone();
+    let title = row.title.clone();
+    let detail = row.detail.clone();
+    let duration_label = row.duration_label.clone();
+    let open_url = row.open_url.clone();
+    let hover_bg = theme.accent.opacity(0.55);
+
+    let mut item = h_flex()
+      .id(format!("github-pr-overview-check-row-{row_id}"))
+      .w_full()
+      .min_w_0()
+      .items_center()
+      .gap_3()
+      .px_4()
+      .py_2()
+      .when(ix + 1 < row_count, |this| {
+        this.border_b_1().border_color(theme.border.opacity(0.65))
+      })
+      .child(Self::render_overview_check_status_icon(row.state, theme))
+      .child(Self::render_overview_check_app_icon(&row, theme))
+      .child(
+        h_flex()
+          .min_w_0()
+          .flex_1()
+          .items_center()
+          .gap_1()
+          .overflow_hidden()
+          .child(
+            div()
+              .min_w_0()
+              .overflow_hidden()
+              .text_ellipsis()
+              .text_sm()
+              .font_medium()
+              .text_color(theme.foreground)
+              .child(title),
+          )
+          .when_some(duration_label, |this, duration_label| {
+            this
+              .child(
+                div()
+                  .flex_shrink_0()
+                  .text_sm()
+                  .text_color(theme.muted_foreground)
+                  .child("-"),
+              )
+              .child(
+                div()
+                  .flex_shrink_0()
+                  .text_sm()
+                  .text_color(theme.muted_foreground)
+                  .child(duration_label),
+              )
+          })
+          .when_some(detail, |this, detail| {
+            this
+              .child(
+                div()
+                  .flex_shrink_0()
+                  .text_sm()
+                  .text_color(theme.muted_foreground)
+                  .child("•"),
+              )
+              .child(
+                div()
+                  .min_w_0()
+                  .overflow_hidden()
+                  .text_ellipsis()
+                  .text_sm()
+                  .text_color(theme.muted_foreground)
+                  .child(detail),
+              )
+          }),
+      );
+
+    if let Some(url) = open_url
+      .map(|value| value.trim().to_string())
+      .filter(|value| !value.is_empty())
+    {
+      item = item
+        .cursor_pointer()
+        .hover(move |this| this.bg(hover_bg))
+        .on_click(move |_, _, cx| {
+          cx.open_url(&url);
+        });
+    }
+
+    item.into_any_element()
   }
 
   fn render_overview_add_comment_section(
@@ -10686,6 +11445,13 @@ impl GithubPrDetailsPage {
         )
       });
 
+    let overview_checks_section =
+      if self.checks_loading || self.checks_error.is_some() || self.checks.is_some() {
+        Some(self.render_overview_checks_section(cx))
+      } else {
+        None
+      };
+
     let header_el = content
       .child(
         v_flex()
@@ -10738,6 +11504,9 @@ impl GithubPrDetailsPage {
             },
           ),
       )
+      .when_some(overview_checks_section, |this, checks_section| {
+        this.child(checks_section)
+      })
       .into_any_element();
 
     // List layout: item 0 = header/description, items 1..N = comments, item N+1 = add comment
