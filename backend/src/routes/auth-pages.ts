@@ -143,7 +143,7 @@ export function desktopSignInPage(signInEndpoint: string, callbackUrl: string) {
     void startSignIn();
   `
 
-  return page('Reviu — Sign in with GitHub', body, extraStyles, script)
+  return page('Reviu - Sign in with GitHub', body, extraStyles, script)
 }
 
 export function desktopSignInSuccessPage(deepLinkUrl: string) {
@@ -181,7 +181,7 @@ export function desktopSignInSuccessPage(deepLinkUrl: string) {
     window.location.replace(${JSON.stringify(deepLinkUrl)});
   `
 
-  return page('Reviu — Connected', body, extraStyles, script)
+  return page('Reviu - Connected', body, extraStyles, script)
 }
 
 export function desktopSignInErrorPage() {
@@ -208,5 +208,5 @@ export function desktopSignInErrorPage() {
     </div>
   `
 
-  return page('Reviu — Sign in failed', body, extraStyles)
+  return page('Reviu - Sign in failed', body, extraStyles)
 }
