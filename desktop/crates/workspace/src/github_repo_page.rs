@@ -82,8 +82,8 @@ fn list_base_item(
   )
 }
 
-const REPO_ISSUE_ROW_COMPACT_HEIGHT_PX: f32 = 48.0;
-const REPO_ISSUE_ROW_WITH_LABELS_HEIGHT_PX: f32 = 76.0;
+const REPO_ISSUE_ROW_COMPACT_HEIGHT_PX: f32 = 56.0;
+const REPO_ISSUE_ROW_WITH_LABELS_HEIGHT_PX: f32 = 80.0;
 
 fn variable_list_base_item(
   ix: usize,
@@ -1332,7 +1332,6 @@ impl VariableListDelegate for GithubRepoIssueListDelegate {
     Some(
       base_item
         .px_2()
-        .py_2()
         .h(px(row_height))
         .child(repo_issue_list_row_body(issue, &theme)),
     )
@@ -5533,7 +5532,6 @@ mod tests {
 
         base_item
           .px_2()
-          .py_2()
           .h(px(row_height))
           .child(repo_issue_list_row_body(issue, &theme))
       };
