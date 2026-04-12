@@ -34,6 +34,7 @@ pub enum UiIconName {
   Pin,
   SquareTerminal,
   X,
+  SlidersHorizontal,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -70,6 +71,7 @@ impl IconNamed for UiIconName {
       UiIconName::SquareTerminal => "icons/square-terminal.svg",
       UiIconName::X => "icons/x.svg",
       UiIconName::Eye => "icons/eye.svg",
+      UiIconName::SlidersHorizontal => "icons/sliders-horizontal.svg",
     }
     .into()
   }
