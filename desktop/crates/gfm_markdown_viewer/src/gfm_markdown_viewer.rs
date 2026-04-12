@@ -1,8 +1,9 @@
 use std::{
   collections::HashMap,
   hash::{DefaultHasher, Hash, Hasher},
+  ops::Range,
   path::Path,
-  sync::Arc,
+  sync::{Arc, Mutex},
 };
 
 use crate::constants::*;
@@ -250,10 +251,16 @@ pub fn render_github_code_reference_preview_card(
         ),
     );
   } else {
-    for (offset, snippet) in preview.snippets.iter().enumerate() {
+    let per_line_spans =
+      build_preview_code_spans_per_line(
+        &preview.snippets,
+        snippet_language_hint.as_deref(),
+        preview.full_content.as_deref(),
+        preview.start_line,
+      );
+
+    for (offset, (line_text, line_spans)) in per_line_spans.into_iter().enumerate() {
       let line_number = preview.start_line + offset;
-      let (snippet_text, snippet_spans, snippet_links) =
-        build_preview_code_spans(snippet.as_ref(), snippet_language_hint.as_deref());
       let text_id = compose_text_id(snippet_text_seed, line_number);
       snippet_rows = snippet_rows.child(
         h_flex()
@@ -273,9 +280,9 @@ pub fn render_github_code_reference_preview_card(
               .whitespace_nowrap()
               .text_color(theme.foreground)
               .child(SelectableText::new(
-                snippet_text,
-                snippet_spans,
-                snippet_links,
+                line_text,
+                line_spans,
+                Vec::new(),
                 snippet_render_state.clone(),
                 None,
                 text_id,
@@ -372,17 +379,223 @@ fn code_block_language_hint_from_path(path: &str) -> Option<String> {
   Some(file_name.to_string())
 }
 
-fn build_preview_code_spans(
-  snippet: &str,
+/// Max file size for full-file highlighting. Above this we fall back to
+/// snippet-only highlighting to avoid blocking the UI thread.
+const FULL_FILE_HIGHLIGHT_MAX_BYTES: usize = 150_000;
+
+/// Cache of highlight spans keyed by (language, content_hash).
+/// Avoids re-highlighting the same file for multiple code preview cards.
+static PREVIEW_HIGHLIGHT_CACHE: Mutex<Option<PreviewHighlightCache>> = Mutex::new(None);
+
+const PREVIEW_HIGHLIGHT_CACHE_MAX_ENTRIES: usize = 16;
+
+struct PreviewHighlightCache {
+  entries: Vec<(u64, Arc<Vec<InlineSpan>>)>,
+}
+
+impl PreviewHighlightCache {
+  fn get(&self, key: u64) -> Option<&Arc<Vec<InlineSpan>>> {
+    self.entries.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
+  }
+
+  fn insert(&mut self, key: u64, spans: Arc<Vec<InlineSpan>>) {
+    if self.entries.len() >= PREVIEW_HIGHLIGHT_CACHE_MAX_ENTRIES {
+      self.entries.remove(0);
+    }
+    self.entries.push((key, spans));
+  }
+}
+
+fn preview_highlight_cache_key(language_hint: Option<&str>, content: &str) -> u64 {
+  let mut hasher = DefaultHasher::new();
+  language_hint.hash(&mut hasher);
+  content.len().hash(&mut hasher);
+  // Hash first + last chunks for speed on large files.
+  let prefix = &content[..content.len().min(4096)];
+  prefix.hash(&mut hasher);
+  if content.len() > 4096 {
+    let suffix = &content[content.len().saturating_sub(4096)..];
+    suffix.hash(&mut hasher);
+  }
+  hasher.finish()
+}
+
+fn highlight_full_text(text: &str, language_hint: Option<&str>) -> Arc<Vec<InlineSpan>> {
+  let base_style = InlineStyle {
+    code: true,
+    ..InlineStyle::default()
+  };
+
+  let cache_key = preview_highlight_cache_key(language_hint, text);
+
+  // Check cache.
+  if let Ok(guard) = PREVIEW_HIGHLIGHT_CACHE.lock() {
+    if let Some(cache) = guard.as_ref() {
+      if let Some(cached) = cache.get(cache_key) {
+        return cached.clone();
+      }
+    }
+  }
+
+  let spans = code_block_language_config(language_hint)
+    .and_then(|config| {
+      let mut highlighter = SyntaxHighlighter::new(config);
+      highlighter
+        .highlight_text(text)
+        .ok()
+        .map(|highlights| syntax_highlight_spans_for_code(text, &highlights, base_style))
+    })
+    .unwrap_or_default();
+
+  let spans = Arc::new(spans);
+
+  if let Ok(mut guard) = PREVIEW_HIGHLIGHT_CACHE.lock() {
+    let cache = guard.get_or_insert_with(|| PreviewHighlightCache {
+      entries: Vec::new(),
+    });
+    cache.insert(cache_key, spans.clone());
+  }
+
+  spans
+}
+
+/// Highlight code with full file context when available, then extract spans for
+/// only the visible lines. Results are cached per file so multiple preview cards
+/// referencing the same file only trigger one tree-sitter pass.
+fn build_preview_code_spans_per_line(
+  snippets: &[Arc<str>],
   language_hint: Option<&str>,
-) -> (SharedString, Vec<InlineSpan>, Vec<LinkRange>) {
-  build_code_block_spans(
-    &CodeBlock {
-      lang: language_hint.map(ToOwned::to_owned),
-      value: snippet.to_string(),
-    },
-    None,
-  )
+  full_content: Option<&str>,
+  start_line: usize,
+) -> Vec<(SharedString, Vec<InlineSpan>)> {
+  let base_style = InlineStyle {
+    code: true,
+    ..InlineStyle::default()
+  };
+
+  // Use full file content if available and within size cap.
+  let usable_full_content =
+    full_content.filter(|content| content.len() <= FULL_FILE_HIGHLIGHT_MAX_BYTES);
+
+  if let Some(content) = usable_full_content {
+    let first_line_ix = start_line.saturating_sub(1);
+    let target_line_indices: Vec<usize> =
+      (first_line_ix..first_line_ix + snippets.len()).collect();
+    let all_spans = highlight_full_text(content, language_hint);
+    return split_spans_per_line(snippets, content, &all_spans, target_line_indices);
+  }
+
+  // Fallback: join snippets and highlight as one block.
+  let joined: String = snippets
+    .iter()
+    .map(|s| s.as_ref())
+    .collect::<Vec<_>>()
+    .join("\n");
+  let all_spans = code_block_language_config(language_hint)
+    .and_then(|config| {
+      let mut highlighter = SyntaxHighlighter::new(config);
+      highlighter
+        .highlight_text(&joined)
+        .ok()
+        .map(|highlights| syntax_highlight_spans_for_code(&joined, &highlights, base_style))
+    })
+    .unwrap_or_default();
+  split_spans_per_line(snippets, &joined, &all_spans, (0..snippets.len()).collect())
+}
+
+fn split_spans_per_line(
+  snippets: &[Arc<str>],
+  full_text: &str,
+  all_spans: &[InlineSpan],
+  target_line_indices: Vec<usize>,
+) -> Vec<(SharedString, Vec<InlineSpan>)> {
+  let base_style = InlineStyle {
+    code: true,
+    ..InlineStyle::default()
+  };
+
+  let mut all_line_byte_ranges: Vec<Range<usize>> = Vec::new();
+  let mut cursor = 0usize;
+  for line in full_text.split('\n') {
+    let end = cursor + line.len();
+    all_line_byte_ranges.push(cursor..end);
+    cursor = end + 1;
+  }
+
+  target_line_indices
+    .iter()
+    .enumerate()
+    .map(|(snippet_ix, &line_ix)| {
+      let line_text = SharedString::from(snippets[snippet_ix].as_ref().to_string());
+      let text_len = line_text.len();
+      let Some(line_range) = all_line_byte_ranges.get(line_ix) else {
+        return (
+          line_text,
+          vec![InlineSpan {
+            range: 0..text_len,
+            style: base_style,
+            link: None,
+            syntax_token: None,
+          }],
+        );
+      };
+      let line_start = line_range.start;
+      let line_end = line_range.end;
+
+      let mut line_spans: Vec<InlineSpan> = all_spans
+        .iter()
+        .filter_map(|span| {
+          let span_start = span.range.start.max(line_start);
+          let span_end = span.range.end.min(line_end);
+          if span_start >= span_end {
+            return None;
+          }
+          Some(InlineSpan {
+            range: (span_start - line_start)..(span_end - line_start),
+            style: span.style,
+            link: span.link.clone(),
+            syntax_token: span.syntax_token,
+          })
+        })
+        .collect();
+
+      // Fill gaps so spans cover the entire line.
+      if line_spans.is_empty() && text_len > 0 {
+        line_spans.push(InlineSpan {
+          range: 0..text_len,
+          style: base_style,
+          link: None,
+          syntax_token: None,
+        });
+      } else {
+        let mut filled = Vec::with_capacity(line_spans.len() * 2);
+        let mut pos = 0usize;
+        for span in &line_spans {
+          if span.range.start > pos {
+            filled.push(InlineSpan {
+              range: pos..span.range.start,
+              style: base_style,
+              link: None,
+              syntax_token: None,
+            });
+          }
+          filled.push(span.clone());
+          pos = span.range.end;
+        }
+        if pos < text_len {
+          filled.push(InlineSpan {
+            range: pos..text_len,
+            style: base_style,
+            link: None,
+            syntax_token: None,
+          });
+        }
+        line_spans = filled;
+      }
+
+      (line_text, line_spans)
+    })
+    .collect()
 }
 
 fn render_markdown_with_preview_segments(
@@ -1767,6 +1980,7 @@ mod tests {
       start_line: 7,
       end_line: 9,
       snippets: vec![Arc::from("services:")],
+      full_content: None,
     }
   }
 
@@ -3538,5 +3752,50 @@ Apres"#,
     let options = MarkdownRenderOptions::default().with_hardbreaks();
     let (text, _, _) = build_spans(&inlines, &options);
     assert_eq!(text.as_ref(), "line one\nline two");
+  }
+
+  #[test]
+  fn build_preview_code_spans_per_line_covers_every_byte() {
+    let snippets: Vec<Arc<str>> = vec![
+      Arc::from("  container_name: postgres"),
+      Arc::from("  image: postgres:17.7"),
+      Arc::from("  restart: always"),
+    ];
+    let result = build_preview_code_spans_per_line(&snippets, Some("yaml"), None, 1);
+
+    assert_eq!(result.len(), 3);
+    for (i, (text, spans)) in result.iter().enumerate() {
+      assert_eq!(text.as_ref(), snippets[i].as_ref());
+      let text_len = text.len();
+      // Verify spans cover 0..text_len without gaps
+      let mut covered = 0;
+      for span in spans {
+        assert_eq!(
+          span.range.start, covered,
+          "gap at byte {} in line {i}: {text:?}",
+          covered
+        );
+        covered = span.range.end;
+      }
+      assert_eq!(
+        covered, text_len,
+        "spans don't reach end of line {i}: {text:?}"
+      );
+    }
+  }
+
+  #[test]
+  fn build_preview_code_spans_per_line_produces_syntax_tokens_for_typescript() {
+    let snippets: Vec<Arc<str>> = vec![
+      Arc::from("const x = 42;"),
+      Arc::from("let name = \"hello\";"),
+    ];
+    let result = build_preview_code_spans_per_line(&snippets, Some("typescript"), None, 1);
+
+    assert_eq!(result.len(), 2);
+    let has_token = result
+      .iter()
+      .any(|(_, spans)| spans.iter().any(|s| s.syntax_token.is_some()));
+    assert!(has_token, "expected at least one syntax token");
   }
 }

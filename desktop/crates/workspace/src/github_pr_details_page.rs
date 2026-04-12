@@ -302,6 +302,7 @@ fn gfm_preview_from_review_preview(
     start_line: preview.start_line,
     end_line: preview.end_line,
     snippets: preview.snippets.clone(),
+    full_content: preview.full_content.clone(),
   }
 }
 
@@ -7471,6 +7472,7 @@ impl GithubPrDetailsPage {
       start_line,
       end_line: actual_end_line,
       snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
+      full_content: Some(Arc::<str>::from(content)),
     })
   }
 
@@ -7569,6 +7571,7 @@ impl GithubPrDetailsPage {
               start_line,
               end_line: actual_end_line,
               snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
+              full_content: Some(Arc::<str>::from(content.as_str())),
             }
           }),
           _ => None,
@@ -16734,6 +16737,7 @@ mod tests {
       start_line: 1,
       end_line: 2,
       snippets: vec![Arc::from("fn main() {}")],
+      full_content: None,
     };
 
     let converted = gfm_preview_from_review_preview(&preview);

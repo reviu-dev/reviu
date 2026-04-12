@@ -757,6 +757,7 @@ fn github_code_reference_preview_from_content(
         start_line: reference.start_line,
         end_line: actual_end_line,
         snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
+        full_content: Some(Arc::from(content)),
       }
     },
   )

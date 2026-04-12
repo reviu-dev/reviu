@@ -174,6 +174,7 @@ pub struct ReviewCommentCodeReferencePreview {
   pub start_line: usize,
   pub end_line: usize,
   pub snippets: Vec<Arc<str>>,
+  pub full_content: Option<Arc<str>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -222,6 +223,7 @@ fn as_gfm_code_reference_preview(
     start_line: preview.start_line,
     end_line: preview.end_line,
     snippets: preview.snippets.clone(),
+    full_content: preview.full_content.clone(),
   }
 }
 
@@ -8078,6 +8080,7 @@ pub mod tests {
       start_line: 11,
       end_line: 11,
       snippets: vec![Arc::from("- '5433:5432'")],
+      full_content: None,
     }];
 
     ctx.editor.update(&mut ctx.cx, |editor, _| {
@@ -8122,6 +8125,7 @@ pub mod tests {
       start_line: 1,
       end_line: 2,
       snippets: vec![Arc::from("fn main() {"), Arc::from("}")],
+      full_content: None,
     };
 
     let converted = as_gfm_code_reference_preview(&preview);
@@ -8145,6 +8149,7 @@ pub mod tests {
       start_line: 1,
       end_line: 2,
       snippets: vec![Arc::from("fn main() {"), Arc::from("}")],
+      full_content: None,
     };
 
     ctx.editor.read_with(&ctx.cx, |editor, _| {
