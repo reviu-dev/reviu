@@ -10,12 +10,12 @@ export const launchOffer = {
   billingPeriodLabel: "/ month",
   pricingSectionCta: "Download & start launch offer",
   description:
-    "Get Reviu Pro for $9/month during launch week. Keep that price while your subscription stays active.",
+    "Get Reviu Pro for $9/month until April 19, 2026. Keep that price while your subscription stays active.",
   intro:
-    "Use Free for full local Git workflows, then upgrade to Pro at $9/month during launch week. New subscriptions return to $19/month after the offer ends.",
+    "Use Free for full local Git workflows, then upgrade to Pro at $9/month until April 19, 2026. New subscriptions return to $19/month after that date.",
   termsSummary:
-    "Launch week offer: eligible new subscribers can start Pro at $9 per month and keep that price while the subscription stays active.",
+    "Launch week offer: eligible new subscribers can start Pro at $9 per month until April 19, 2026 and keep that price while the subscription stays active.",
   standardTermsSummary:
-    "After the launch offer ends, new Pro subscriptions are billed at $19 per month.",
+    "After April 19, 2026, new Pro subscriptions are billed at $19 per month.",
   structuredDataPrice: "9",
 } as const
