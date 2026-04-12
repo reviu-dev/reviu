@@ -253,7 +253,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 23] = [
   },
   ShortcutDefinition {
     id: ShortcutId::OpenGitPage,
-    title: "Open Git",
+    title: "Go to Git",
     description: "Switch to the Git page.",
     scope_label: "All workspace pages",
     category: ShortcutCategory::Core,
@@ -264,7 +264,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 23] = [
   },
   ShortcutDefinition {
     id: ShortcutId::OpenGithubPage,
-    title: "Open GitHub",
+    title: "Go to GitHub",
     description: "Switch to the GitHub page.",
     scope_label: "All workspace pages",
     category: ShortcutCategory::Core,
@@ -462,7 +462,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 23] = [
   },
   ShortcutDefinition {
     id: ShortcutId::OpenSettingsPage,
-    title: "Open Settings",
+    title: "Go to Settings",
     description: "Open settings from anywhere in the workspace.",
     scope_label: "All workspace pages",
     category: ShortcutCategory::App,
