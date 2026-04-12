@@ -668,6 +668,111 @@ fn readme_image_base_url(
   Some(base_url)
 }
 
+fn readme_relative_link_path(readme_path: Option<&str>, url: &str) -> Option<String> {
+  let url = url.trim();
+  if url.is_empty() || url.starts_with('#') || url.starts_with("//") || has_url_scheme(url) {
+    return None;
+  }
+
+  let path = url
+    .split('#')
+    .next()
+    .unwrap_or(url)
+    .split('?')
+    .next()
+    .unwrap_or(url)
+    .trim();
+  if path.is_empty() || path == "." || path == "./" || path.contains('\\') {
+    return None;
+  }
+
+  let mut segments = if path.starts_with('/') {
+    Vec::new()
+  } else {
+    readme_path
+      .and_then(normalize_non_empty_string)
+      .and_then(|path| {
+        path
+          .trim_start_matches('/')
+          .rsplit_once('/')
+          .map(|(dir, _)| dir.to_string())
+      })
+      .unwrap_or_default()
+      .split('/')
+      .map(str::trim)
+      .filter(|segment| !segment.is_empty() && *segment != ".")
+      .map(ToString::to_string)
+      .collect::<Vec<_>>()
+  };
+
+  let mut has_target_segment = false;
+  for raw_segment in path.trim_start_matches('/').split('/') {
+    let segment = percent_decode_path_segment(raw_segment.trim());
+    match segment.as_str() {
+      "" | "." => {}
+      ".." => {
+        segments.pop()?;
+      }
+      _ => {
+        has_target_segment = true;
+        segments.push(segment);
+      }
+    }
+  }
+
+  if !has_target_segment || segments.is_empty() {
+    return None;
+  }
+
+  Some(segments.join("/"))
+}
+
+fn has_url_scheme(value: &str) -> bool {
+  let Some((scheme, _)) = value.split_once(':') else {
+    return false;
+  };
+
+  !scheme.is_empty()
+    && scheme.chars().enumerate().all(|(ix, ch)| {
+      if ix == 0 {
+        ch.is_ascii_alphabetic()
+      } else {
+        ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.')
+      }
+    })
+}
+
+fn percent_decode_path_segment(segment: &str) -> String {
+  let bytes = segment.as_bytes();
+  let mut decoded = Vec::with_capacity(bytes.len());
+  let mut ix = 0;
+
+  while ix < bytes.len() {
+    if bytes[ix] == b'%'
+      && let (Some(high), Some(low)) = (bytes.get(ix + 1), bytes.get(ix + 2))
+      && let (Some(high), Some(low)) = (hex_value(*high), hex_value(*low))
+    {
+      decoded.push((high << 4) | low);
+      ix += 3;
+      continue;
+    }
+
+    decoded.push(bytes[ix]);
+    ix += 1;
+  }
+
+  String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+  match byte {
+    b'0'..=b'9' => Some(byte - b'0'),
+    b'a'..=b'f' => Some(byte - b'a' + 10),
+    b'A'..=b'F' => Some(byte - b'A' + 10),
+    _ => None,
+  }
+}
+
 const ISSUE_DETAILS_SHEET_WIDTH_PX: f32 = 850.0;
 const ISSUE_DETAILS_SHEET_MIN_WIDTH_PX: f32 = 600.0;
 const ISSUE_DETAILS_SHEET_MAX_WIDTH_PX: f32 = 1200.0;
@@ -3388,11 +3493,11 @@ impl GithubRepoPage {
               .collect();
 
             let (items, lookup, _selected_index, _selected_id) = build_repo_code_tree_items(&files);
+            this.code_lookup = lookup;
             let selected_file = this
               .saved_code_selected_tree_id
               .take()
-              .and_then(|path| lookup.get(&path).cloned());
-            this.code_lookup = lookup;
+              .and_then(|path| this.find_code_file_for_repo_path(&path));
             this.code_selected_tree_id = None;
             this.code_tree_state.update(cx, |state, cx| {
               state.set_items(items, cx);
@@ -3474,6 +3579,38 @@ impl GithubRepoPage {
     }
 
     cx.notify();
+  }
+
+  fn find_code_file_for_repo_path(&self, path: &str) -> Option<Rc<GithubRepoCodeFile>> {
+    let path = path.trim().trim_matches('/');
+    if path.is_empty() {
+      return None;
+    }
+
+    self
+      .code_lookup
+      .get(path)
+      .cloned()
+      .or_else(|| self.code_lookup.get(&format!("{path}/README.md")).cloned())
+      .or_else(|| self.code_lookup.get(&format!("{path}/readme.md")).cloned())
+  }
+
+  fn select_code_file_by_repo_path(&mut self, path: &str, cx: &mut Context<Self>) -> bool {
+    let Some(file) = self.find_code_file_for_repo_path(path) else {
+      return false;
+    };
+
+    let key = file.path.as_ref().to_string();
+    let tree_item = TreeItem::new(key.clone(), key);
+    self.code_tree_state.update(cx, |state, cx| {
+      state.set_selected_item(Some(&tree_item), cx);
+      if let Some(ix) = state.selected_index() {
+        state.scroll_to_item(ix, gpui::ScrollStrategy::Top);
+      }
+    });
+
+    self.set_selected_code_file(Some(file), cx);
+    true
   }
 
   fn maybe_fetch_code_file_content(
@@ -3789,19 +3926,7 @@ impl GithubRepoPage {
 
   fn select_code_file_from_palette(&mut self, path: &Path, cx: &mut Context<Self>) {
     let key = path.to_string_lossy().to_string();
-    let Some(file) = self.code_lookup.get(&key).cloned() else {
-      return;
-    };
-
-    let tree_item = TreeItem::new(key.clone(), key.clone());
-    self.code_tree_state.update(cx, |state, cx| {
-      state.set_selected_item(Some(&tree_item), cx);
-      if let Some(ix) = state.selected_index() {
-        state.scroll_to_item(ix, gpui::ScrollStrategy::Top);
-      }
-    });
-
-    self.set_selected_code_file(Some(file), cx);
+    self.select_code_file_by_repo_path(&key, cx);
   }
 
   fn ensure_code_editor_for_path(&mut self, path: &str, cx: &mut Context<Self>) {
@@ -4128,6 +4253,13 @@ impl GithubRepoPage {
       return true;
     }
 
+    if let Some(path) =
+      readme_relative_link_path(self.readme_path.as_ref().map(SharedString::as_ref), url)
+    {
+      self.open_readme_code_link(&path, window, cx);
+      return true;
+    }
+
     let Some(action) = parse_github_url_action(url) else {
       return false;
     };
@@ -4135,6 +4267,31 @@ impl GithubRepoPage {
     self
       .handle_command_palette_action(action, window, cx)
       .is_ok()
+  }
+
+  fn open_readme_code_link(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+    if !self.code_lookup.is_empty() {
+      let selected = self.select_code_file_by_repo_path(path, cx);
+      self.saved_code_selected_tree_id = None;
+      self.set_active_tab(REPO_TAB_CODE_IX, window, cx);
+      if !selected {
+        self.code_selected_file = None;
+        self.code_selected_tree_id = None;
+        self.code_file_loading = false;
+        self.code_file_error = Some(format!("File not found: {path}").into());
+        self.clear_code_editor(cx);
+        cx.notify();
+      }
+      return;
+    }
+
+    self.saved_code_selected_tree_id = Some(path.to_string());
+    self.set_active_tab(REPO_TAB_CODE_IX, window, cx);
+    self.load_code_tree_if_needed(cx);
+
+    if !self.code_lookup.is_empty() && self.select_code_file_by_repo_path(path, cx) {
+      self.saved_code_selected_tree_id = None;
+    }
   }
 
   fn handle_command_palette_action(
@@ -5411,6 +5568,47 @@ mod tests {
     assert!(preview_bounds.height > gpui::px(0.0));
   }
 
+  #[gpui::test]
+  fn readme_relative_link_opens_code_tab_and_selects_file(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      gpui_router::init(cx);
+      NavigationHistory::init(cx);
+      NavigationHistory::navigate_replace("/github/acme/widget/readme", cx);
+    });
+    let file = Rc::new(GithubRepoCodeFile {
+      path: "packages/solidjs/README.md".into(),
+      sha: "sha-solid".into(),
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubRepoPage::new(window, cx));
+
+    page.update_in(cx, |this, window, cx| {
+      this.owner = "acme".into();
+      this.repo = "widget".into();
+      this.active_tab_ix = REPO_TAB_README_IX;
+      this.readme_path = Some("README.md".into());
+      this.code_lookup.insert(file.path.to_string(), file.clone());
+      this
+        .code_file_contents_cache
+        .insert(file.path.to_string(), Some("# Solid\n".to_string()));
+
+      assert!(this.handle_readme_gfm_link("packages/solidjs/README.md", window, cx));
+
+      assert_eq!(this.active_tab_ix, REPO_TAB_CODE_IX);
+      assert_eq!(
+        this
+          .code_selected_file
+          .as_ref()
+          .map(|file| file.path.as_ref()),
+        Some("packages/solidjs/README.md")
+      );
+      assert_eq!(
+        this.code_selected_tree_id.as_deref(),
+        Some("packages/solidjs/README.md")
+      );
+    });
+  }
+
   #[test]
   fn repo_tab_count_label_formats_counts() {
     assert_eq!(repo_tab_count_label(0).as_ref(), "0");
@@ -5917,6 +6115,59 @@ mod tests {
     );
     assert_eq!(
       readme_image_base_url("acme", "widget", "", Some("README.md")),
+      None
+    );
+  }
+
+  #[test]
+  fn readme_relative_link_path_resolves_root_readme_links() {
+    assert_eq!(
+      readme_relative_link_path(Some("README.md"), "packages/solidjs/README.md").as_deref(),
+      Some("packages/solidjs/README.md")
+    );
+    assert_eq!(
+      readme_relative_link_path(Some("README.md"), "./packages/vue/README.md#api").as_deref(),
+      Some("packages/vue/README.md")
+    );
+    assert_eq!(
+      readme_relative_link_path(Some("README.md"), "/packages/svelte/README.md?plain=1").as_deref(),
+      Some("packages/svelte/README.md")
+    );
+  }
+
+  #[test]
+  fn readme_relative_link_path_resolves_nested_readme_links() {
+    assert_eq!(
+      readme_relative_link_path(Some("docs/README.md"), "guide.md").as_deref(),
+      Some("docs/guide.md")
+    );
+    assert_eq!(
+      readme_relative_link_path(Some("docs/reference/README.md"), "../intro.md").as_deref(),
+      Some("docs/intro.md")
+    );
+    assert_eq!(
+      readme_relative_link_path(Some("docs/README.md"), "../packages/vue/README.md").as_deref(),
+      Some("packages/vue/README.md")
+    );
+  }
+
+  #[test]
+  fn readme_relative_link_path_decodes_spaces_and_rejects_external_targets() {
+    assert_eq!(
+      readme_relative_link_path(Some("README.md"), "docs/My%20Guide.md").as_deref(),
+      Some("docs/My Guide.md")
+    );
+    assert_eq!(
+      readme_relative_link_path(Some("README.md"), "https://example.com/docs.md"),
+      None
+    );
+    assert_eq!(
+      readme_relative_link_path(Some("README.md"), "mailto:team@example.com"),
+      None
+    );
+    assert_eq!(readme_relative_link_path(Some("README.md"), "#usage"), None);
+    assert_eq!(
+      readme_relative_link_path(Some("README.md"), "../outside.md"),
       None
     );
   }
