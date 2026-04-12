@@ -91,6 +91,8 @@ import {
   createGithubUserRepositoriesCachePolicy,
   getGithubIssueMutationTags,
   getGithubNotificationsTag,
+  getGithubPullRequestCommitsTag,
+  getGithubPullRequestFilesTag,
   getGithubPullRequestMutationTags,
 
   withGithubPublicScope,
@@ -150,6 +152,7 @@ import {
   fetchGithubCommitConditionally,
   fetchGithubCommitFilesAllPages,
   fetchGithubNotifications,
+  fetchGithubPullRequest,
   fetchGithubPullRequestCommentsAllPages,
   fetchGithubPullRequestCommentsConditionally,
   fetchGithubPullRequestCommitsAllPages,
@@ -190,6 +193,8 @@ import {
 const LATEST_PULL_REQUESTS_LIMIT = 20
 const GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY = 'pullRequest'
 const GITHUB_PULL_REQUEST_FILES_COMMIT_VALIDATOR_KEY = 'commit'
+const GITHUB_UPDATE_BRANCH_POLL_ATTEMPTS = 10
+const GITHUB_UPDATE_BRANCH_POLL_INTERVAL_MS = 750
 
 function withGithubMetrics<T>(
   userId: string,
@@ -1804,6 +1809,33 @@ async function invalidateGithubCacheTags(tags: string[]) {
   }
 }
 
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function waitForPullRequestHeadShaChange(
+  token: string,
+  params: PullRequestParams,
+  previousHeadSha: string,
+) {
+  for (let attempt = 0; attempt < GITHUB_UPDATE_BRANCH_POLL_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await sleep(GITHUB_UPDATE_BRANCH_POLL_INTERVAL_MS)
+    }
+
+    const pullRequest = await fetchGithubPullRequest({
+      token,
+      params,
+    })
+
+    if (pullRequest.head.sha !== previousHeadSha) {
+      return pullRequest.head.sha
+    }
+  }
+
+  return null
+}
+
 const githubRouter = new Hono()
 
 githubRouter.use('*', authMiddlewarePro)
@@ -2456,10 +2488,19 @@ export const githubRoutes = githubRouter
     const githubToken = user.github.accessToken
 
     try {
-      const params: UpdatePullRequestBranchParams = {
+      const pullRequestParams: PullRequestParams = {
         owner: org,
         repo,
         pull_number: pullNumber,
+      }
+      const pullRequestBeforeUpdate = await withGithubMetrics(user.id, 'pull_request.update_branch.current_head', () =>
+        fetchGithubPullRequest({
+          token: githubToken,
+          params: pullRequestParams,
+        }))
+      const params: UpdatePullRequestBranchParams = {
+        ...pullRequestParams,
+        expected_head_sha: pullRequestBeforeUpdate.head.sha,
       }
 
       await withGithubMetrics(user.id, 'pull_request.update_branch', () =>
@@ -2468,12 +2509,31 @@ export const githubRoutes = githubRouter
           params,
         }))
 
-      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
-        userId: user.id,
-        owner: org,
-        repo,
-        pullNumber,
-      }))
+      try {
+        await withGithubMetrics(user.id, 'pull_request.update_branch.wait', () =>
+          waitForPullRequestHeadShaChange(
+            githubToken,
+            pullRequestParams,
+            pullRequestBeforeUpdate.head.sha,
+          ))
+      }
+      catch (error) {
+        logger.warn(
+          { error, owner: org, repo, pullNumber },
+          'Failed to wait for GitHub pull request branch update',
+        )
+      }
+
+      await invalidateGithubCacheTags([
+        ...getGithubPullRequestMutationTags({
+          userId: user.id,
+          owner: org,
+          repo,
+          pullNumber,
+        }),
+        getGithubPullRequestCommitsTag(org, repo, pullNumber),
+        getGithubPullRequestFilesTag(org, repo, pullNumber),
+      ])
 
       return ctx.body(null, 202)
     }
