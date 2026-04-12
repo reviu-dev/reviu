@@ -718,6 +718,12 @@ pub struct GithubPullRequestWorkflowJob {
   #[serde(rename = "html_url")]
   pub html_url: Option<String>,
   pub required: bool,
+  #[serde(default, rename = "app_name")]
+  pub app_name: Option<String>,
+  #[serde(default, rename = "app_slug")]
+  pub app_slug: Option<String>,
+  #[serde(default, rename = "app_avatar_url")]
+  pub app_avatar_url: Option<String>,
   pub steps: Vec<GithubPullRequestWorkflowStep>,
 }
 
@@ -768,6 +774,8 @@ pub struct GithubPullRequestCheckRun {
   pub app_name: Option<String>,
   #[serde(rename = "app_slug")]
   pub app_slug: Option<String>,
+  #[serde(default, rename = "app_avatar_url")]
+  pub app_avatar_url: Option<String>,
   pub title: Option<String>,
   pub summary: Option<String>,
   pub text: Option<String>,
@@ -785,6 +793,8 @@ pub struct GithubPullRequestLegacyStatus {
   pub description: Option<String>,
   #[serde(rename = "target_url")]
   pub target_url: Option<String>,
+  #[serde(default, rename = "avatar_url")]
+  pub avatar_url: Option<String>,
   #[serde(rename = "created_at")]
   pub created_at: String,
   #[serde(rename = "updated_at")]
@@ -4120,6 +4130,9 @@ mod tests {
                 "completed_at": "2026-03-19T10:02:00Z",
                 "html_url": "https://github.com/acme/widget/actions/runs/100/job/200",
                 "required": true,
+                "app_name": "GitHub Actions",
+                "app_slug": "github-actions",
+                "app_avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
                 "steps": [
                   {
                     "number": 1,
@@ -4149,6 +4162,7 @@ mod tests {
             "required": true,
             "app_name": "Reviewdog",
             "app_slug": "reviewdog",
+            "app_avatar_url": "https://avatars.githubusercontent.com/u/15138054?v=4",
             "title": "Lint",
             "summary": "Lint failed",
             "text": "unused variable",
@@ -4163,6 +4177,7 @@ mod tests {
             "state": "success",
             "description": "Security checks passed",
             "target_url": "https://ci.example.com/401",
+            "avatar_url": "https://ci.example.com/avatar.png",
             "created_at": "2026-03-19T10:00:00Z",
             "updated_at": "2026-03-19T10:04:00Z",
             "required": false
@@ -4190,8 +4205,20 @@ mod tests {
     assert_eq!(checks.actions_runs.len(), 1);
     assert_eq!(checks.actions_runs[0].jobs.len(), 1);
     assert_eq!(checks.actions_runs[0].jobs[0].steps.len(), 1);
+    assert_eq!(
+      checks.actions_runs[0].jobs[0].app_avatar_url.as_deref(),
+      Some("https://avatars.githubusercontent.com/in/15368?v=4")
+    );
     assert_eq!(checks.other_checks.len(), 1);
+    assert_eq!(
+      checks.other_checks[0].app_avatar_url.as_deref(),
+      Some("https://avatars.githubusercontent.com/u/15138054?v=4")
+    );
     assert_eq!(checks.legacy_statuses.len(), 1);
+    assert_eq!(
+      checks.legacy_statuses[0].avatar_url.as_deref(),
+      Some("https://ci.example.com/avatar.png")
+    );
     handle.join().expect("join server thread");
   }
 
