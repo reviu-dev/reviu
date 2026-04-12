@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 Repository pull request lists now split open, merged, and closed pull requests into separate tabs with search and a sidebar for filtering by labels, people, review state, draft visibility, base branch, and sorting.
 
+### Repository Issue Search and Filters
+
+Repository issue lists now split open, closed, and not planned issues into separate tabs with search and a sidebar for filtering by labels, authors, assignees, and sorting.
+
 ### Pull Request Check Provider Images
 
 Pull request checks now show provider images when GitHub exposes them, making CI, security, and automation results easier to recognize.

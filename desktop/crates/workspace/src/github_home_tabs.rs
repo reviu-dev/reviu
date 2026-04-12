@@ -60,6 +60,30 @@ impl Default for GithubPullRequestSearchFilters {
   }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GithubIssueSearchSort {
+  #[default]
+  UpdatedDesc,
+  CreatedDesc,
+  CreatedAsc,
+  CommentsDesc,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GithubIssueSearchFilters {
+  #[serde(default)]
+  pub repos: Vec<String>,
+  #[serde(default)]
+  pub labels: Vec<String>,
+  #[serde(default)]
+  pub authors: Vec<String>,
+  #[serde(default)]
+  pub assignees: Vec<String>,
+  #[serde(default)]
+  pub sort: GithubIssueSearchSort,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GithubHomePullRequestTab {
   pub id: String,

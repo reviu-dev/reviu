@@ -27,6 +27,7 @@ import type {
   GithubIssueDetailsCommentParameters,
   GithubIssueDetailsParameters,
   GithubIssueParameters,
+  GithubIssueSearchFilters,
   GithubNotification,
   GithubPullRequest,
   GithubPullRequestAuthor,
@@ -72,6 +73,7 @@ import { Hono } from 'hono'
 import { logger } from '../lib/logger.js'
 import { authMiddlewarePro } from '../middlewares/auth.js'
 import {
+  createGithubIssueSearchCachePolicy,
   createGithubNotificationsCachePolicy,
   createGithubPullRequestCommentsCachePolicy,
   createGithubPullRequestCommitsCachePolicy,
@@ -128,6 +130,7 @@ import {
   createPullRequestReviewBodySchema,
   createPullRequestThreadReplyBodySchema,
   issueCommentBodySchema,
+  issueSearchBodySchema,
   mergePullRequestBodySchema,
   pullRequestFilterOptionsBodySchema,
   pullRequestLabelsMutationBodySchema,
@@ -152,6 +155,7 @@ import {
   deleteGithubPullRequestComment,
   fetchGithubCommitConditionally,
   fetchGithubCommitFilesAllPages,
+  fetchGithubIssueSearchGraphql,
   fetchGithubNotifications,
   fetchGithubPullRequest,
   fetchGithubPullRequestCommentsAllPages,
@@ -470,6 +474,94 @@ function normalizePullRequestSearchCacheKey(filters: GithubPullRequestSearchFilt
     base: filters.base,
     sort: filters.sort,
   })
+}
+
+function issueSearchSortQualifier(sort: GithubIssueSearchFilters['sort']) {
+  switch (sort) {
+    case 'updated_desc': return 'updated-desc'
+    case 'created_desc': return 'created-desc'
+    case 'created_asc': return 'created-asc'
+    case 'comments_desc': return 'comments-desc'
+  }
+}
+
+function buildIssueSearchQuery(
+  filters: GithubIssueSearchFilters,
+  state: 'open' | 'closed',
+) {
+  const parts = ['is:issue', `state:${state}`, 'archived:false']
+
+  const repoQualifiers = filters.repos
+    .map(repo => buildGithubSearchQualifier('repo', normalizeRepositoryFilter(repo) ?? ''))
+    .filter((value): value is string => Boolean(value))
+  if (repoQualifiers.length > 0) {
+    parts.push(...repoQualifiers)
+  }
+
+  const labelGroup = buildGithubSearchAnyOfGroup(
+    filters.labels.map(label => buildGithubSearchQualifier('label', label, { quote: true })),
+  )
+  if (labelGroup) {
+    parts.push(labelGroup)
+  }
+
+  const authorGroup = buildGithubSearchAnyOfGroup(
+    filters.authors.map(author => buildGithubSearchQualifier('author', author)),
+  )
+  if (authorGroup) {
+    parts.push(authorGroup)
+  }
+
+  const assigneeGroup = buildGithubSearchAnyOfGroup(
+    filters.assignees.map(assignee => buildGithubSearchQualifier('assignee', assignee)),
+  )
+  if (assigneeGroup) {
+    parts.push(assigneeGroup)
+  }
+
+  parts.push(`sort:${issueSearchSortQualifier(filters.sort)}`)
+
+  return parts.join(' ')
+}
+
+function normalizeIssueSearchCacheKey(filters: GithubIssueSearchFilters, state: string) {
+  return JSON.stringify({
+    repos: [...filters.repos].sort(),
+    labels: [...filters.labels].sort(),
+    authors: [...filters.authors].sort(),
+    assignees: [...filters.assignees].sort(),
+    sort: filters.sort,
+    state,
+  })
+}
+
+async function fetchIssuesSearchWithCache(
+  userId: string,
+  githubToken: string,
+  filters: GithubIssueSearchFilters,
+  state: 'open' | 'closed',
+) {
+  const query = buildIssueSearchQuery(filters, state)
+  const cachePolicy = createGithubIssueSearchCachePolicy(
+    userId,
+    normalizeIssueSearchCacheKey(filters, state),
+  )
+
+  return withGithubMetrics(userId, cachePolicy.operation, () =>
+    githubCache.getOrLoad({
+      ...cachePolicy,
+      load: async () => {
+        const nodes = await fetchGithubIssueSearchGraphql({
+          token: githubToken,
+          query,
+          limit: 50,
+        })
+
+        return {
+          payload: nodes,
+        }
+      },
+    }))
 }
 
 function uniqueSearchParamValues(params: URLSearchParams, name: string) {
@@ -1986,6 +2078,28 @@ export const githubRoutes = githubRouter
       )
       setGithubCacheHeaders(ctx, result)
       return ctx.json({ pullRequests: result.payload }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/issue/search', zValidator(
+    'json',
+    issueSearchBodySchema,
+  ), async (ctx) => {
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+    const { filters } = ctx.req.valid('json')
+    const state = (ctx.req.query('state') as 'open' | 'closed') || 'open'
+    try {
+      const result = await fetchIssuesSearchWithCache(
+        user.id,
+        githubToken,
+        filters,
+        state,
+      )
+      setGithubCacheHeaders(ctx, result)
+      return ctx.json({ issues: result.payload }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)

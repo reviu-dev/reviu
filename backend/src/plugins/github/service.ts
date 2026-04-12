@@ -27,6 +27,7 @@ import type {
   GetContentParams,
   GetContentResponse,
   GithubGraphqlPullRequestNode,
+  GithubIssue,
   GithubIssueDetailsCommentParameters,
   GithubIssueDetailsCommentResponse,
   GithubIssueDetailsParameters,
@@ -177,6 +178,43 @@ const GITHUB_GRAPHQL_SEARCH_PULL_REQUESTS_QUERY = `
   }
 `
 
+const GITHUB_GRAPHQL_SEARCH_ISSUES_QUERY = `
+  query SearchIssues($query: String!, $first: Int!) {
+    search(query: $query, type: ISSUE, first: $first) {
+      nodes {
+        ... on Issue {
+          number
+          title
+          state
+          stateReason
+          createdAt
+          updatedAt
+          closedAt
+          comments {
+            totalCount
+          }
+          author {
+            login
+            avatarUrl
+          }
+          labels(first: 10) {
+            nodes {
+              name
+              color
+            }
+          }
+          repository {
+            owner {
+              login
+            }
+            name
+          }
+        }
+      }
+    }
+  }
+`
+
 const GITHUB_GRAPHQL_REPOSITORY_PULL_REQUESTS_QUERY = `
   query RepositoryPullRequests($owner: String!, $repo: String!, $first: Int!) {
     repository(owner: $owner, name: $repo) {
@@ -230,6 +268,26 @@ interface GithubGraphqlResponse<T> {
   errors?: Array<{
     message: string
   }>
+}
+
+interface GithubGraphqlIssueNode {
+  number: number
+  title: string
+  state: string
+  stateReason: string | null
+  createdAt: string
+  updatedAt: string
+  closedAt: string | null
+  comments: { totalCount: number }
+  author: { login: string, avatarUrl: string } | null
+  labels: { nodes: Array<{ name: string, color: string }> | null } | null
+  repository: { owner: { login: string }, name: string }
+}
+
+interface GithubGraphqlSearchIssuesResponse {
+  search: {
+    nodes?: Array<GithubGraphqlIssueNode | null> | null
+  }
 }
 
 interface GithubGraphqlSearchPullRequestsResponse {
@@ -753,6 +811,59 @@ export async function fetchGithubPullRequestSearchGraphql(
   })
 
   return data.search.nodes?.flatMap(node => (node ? [node] : [])) ?? []
+}
+
+function mapGithubGraphqlIssue(node: GithubGraphqlIssueNode): GithubIssue {
+  const stateReason = node.stateReason?.toLowerCase() ?? null
+  return {
+    id: node.number,
+    number: node.number,
+    title: node.title,
+    state: node.state.toLowerCase(),
+    state_reason: stateReason as GithubIssue['state_reason'],
+    created_at: node.createdAt,
+    updated_at: node.updatedAt,
+    closed_at: node.closedAt,
+    labels: (node.labels?.nodes ?? []).map(label => ({
+      name: label.name,
+      color: label.color,
+    })),
+    comments_count: node.comments.totalCount,
+    user: node.author
+      ? {
+          login: node.author.login,
+          avatar_url: node.author.avatarUrl,
+        }
+      : null,
+    repository: {
+      owner: node.repository.owner.login,
+      repo: node.repository.name,
+    },
+  }
+}
+
+export async function fetchGithubIssueSearchGraphql(
+  {
+    token,
+    query,
+    limit,
+  }: {
+    token: string
+    query: string
+    limit: number
+  },
+): Promise<GithubIssue[]> {
+  const data = await requestGithubGraphqlData<GithubGraphqlSearchIssuesResponse>({
+    token,
+    query: GITHUB_GRAPHQL_SEARCH_ISSUES_QUERY,
+    variables: {
+      query,
+      first: limit,
+    },
+  })
+
+  return (data.search.nodes?.flatMap(node => (node ? [node] : [])) ?? [])
+    .map(mapGithubGraphqlIssue)
 }
 
 export async function fetchGithubUserRepositories(

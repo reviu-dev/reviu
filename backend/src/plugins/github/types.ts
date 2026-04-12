@@ -232,6 +232,16 @@ export interface GithubPullRequestSearchFilters {
   sort: GithubPullRequestSearchSort
 }
 
+export type GithubIssueSearchSort = 'updated_desc' | 'created_desc' | 'created_asc' | 'comments_desc'
+
+export interface GithubIssueSearchFilters {
+  repos: string[]
+  labels: string[]
+  authors: string[]
+  assignees: string[]
+  sort: GithubIssueSearchSort
+}
+
 export interface GithubPullRequestFilterOptionUser {
   login: string
   avatar_url: string | null

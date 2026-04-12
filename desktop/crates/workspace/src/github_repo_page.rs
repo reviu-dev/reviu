@@ -61,9 +61,10 @@ use crate::{
   file_preview::{is_markdown_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   github_home_tabs::{
-    GithubPullRequestFilterOptionLabel, GithubPullRequestFilterOptionUser,
-    GithubPullRequestFilterOptions, GithubPullRequestReviewStatus, GithubPullRequestSearchFilters,
-    GithubPullRequestSearchSort, normalize_github_pull_request_filters,
+    GithubIssueSearchFilters, GithubIssueSearchSort, GithubPullRequestFilterOptionLabel,
+    GithubPullRequestFilterOptionUser, GithubPullRequestFilterOptions,
+    GithubPullRequestReviewStatus, GithubPullRequestSearchFilters, GithubPullRequestSearchSort,
+    normalize_github_pull_request_filters,
   },
   github_navigation::{
     SameRepoIssueLinkNavigation, open_pr_target, open_repo_target, same_repo_issue_link_navigation,
@@ -215,6 +216,69 @@ fn repo_pull_request_list_tab(icon: UiIconName, label: &'static str, count: usiz
   )
 }
 
+const REPO_ISSUES_OPEN_IX: usize = 0;
+const REPO_ISSUES_CLOSED_IX: usize = 1;
+const REPO_ISSUES_NOT_PLANNED_IX: usize = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RepoIssueListTab {
+  Open,
+  Closed,
+  NotPlanned,
+}
+
+fn repo_issue_list_tab_from_ix(ix: usize) -> RepoIssueListTab {
+  match ix {
+    REPO_ISSUES_CLOSED_IX => RepoIssueListTab::Closed,
+    REPO_ISSUES_NOT_PLANNED_IX => RepoIssueListTab::NotPlanned,
+    _ => RepoIssueListTab::Open,
+  }
+}
+
+fn repo_issue_list_tab_for_issue(issue: &GithubIssue) -> RepoIssueListTab {
+  if issue.state == "open" {
+    RepoIssueListTab::Open
+  } else if issue.state_reason.as_ref().is_some_and(|r| {
+    matches!(
+      r,
+      GithubIssueStateReason::NotPlanned | GithubIssueStateReason::Duplicate
+    )
+  }) {
+    RepoIssueListTab::NotPlanned
+  } else {
+    RepoIssueListTab::Closed
+  }
+}
+
+fn repo_issue_rows_by_tab(
+  rows: Vec<Rc<GithubRepoIssueRow>>,
+) -> (
+  Vec<Rc<GithubRepoIssueRow>>,
+  Vec<Rc<GithubRepoIssueRow>>,
+  Vec<Rc<GithubRepoIssueRow>>,
+) {
+  let mut open = Vec::new();
+  let mut closed = Vec::new();
+  let mut not_planned = Vec::new();
+
+  for row in rows {
+    match repo_issue_list_tab_for_issue(row.issue.as_ref()) {
+      RepoIssueListTab::Open => open.push(row),
+      RepoIssueListTab::Closed => closed.push(row),
+      RepoIssueListTab::NotPlanned => not_planned.push(row),
+    }
+  }
+
+  (open, closed, not_planned)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RepoIssueFilterTokenKind {
+  Label,
+  Author,
+  Assignee,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RepoPullRequestFilterTokenKind {
   Label,
@@ -233,6 +297,15 @@ enum RepoPullRequestFilterChip {
   DraftsHidden,
   Base(String),
   Sort,
+}
+
+fn issue_search_sort_label(sort: GithubIssueSearchSort) -> &'static str {
+  match sort {
+    GithubIssueSearchSort::UpdatedDesc => "Recently updated",
+    GithubIssueSearchSort::CreatedDesc => "Newest",
+    GithubIssueSearchSort::CreatedAsc => "Oldest",
+    GithubIssueSearchSort::CommentsDesc => "Most commented",
+  }
 }
 
 fn pull_request_review_status_label(status: GithubPullRequestReviewStatus) -> &'static str {
@@ -1509,7 +1582,8 @@ fn repo_issue_list_row_body(
         .text_xs()
         .text_color(theme.muted_foreground)
         .child(format!("#{}", issue.number))
-        .child("·")
+        .child(format!("opened {opened_at}"))
+        .child("by")
         .child(
           Avatar::new()
             .name(display_name.clone())
@@ -1520,9 +1594,8 @@ fn repo_issue_list_row_body(
             .xsmall(),
         )
         .child(div().text_color(theme.foreground).child(display_name))
-        .child(format!("Opened {opened_at}"))
         .child("·")
-        .child(format!("Updated {updated_at}")),
+        .child(format!("updated {updated_at}")),
     );
 
   if issue.labels.is_empty() {
@@ -2958,11 +3031,20 @@ pub struct GithubRepoPage {
   pull_requests_error: Option<SharedString>,
   pull_requests_task: Option<Task<()>>,
   issues: Entity<VariableListState<GithubRepoIssueListDelegate>>,
+  closed_issues: Entity<VariableListState<GithubRepoIssueListDelegate>>,
+  not_planned_issues: Entity<VariableListState<GithubRepoIssueListDelegate>>,
   issues_error: Option<SharedString>,
   issues_task: Option<Task<()>>,
+  issues_search_input: Entity<InputState>,
+  issue_filter_label_input: Entity<InputState>,
+  issue_filter_author_input: Entity<InputState>,
+  issue_filter_assignee_input: Entity<InputState>,
+  issue_filters: GithubIssueSearchFilters,
+  issues_request_generation: u64,
   issue_sheet_width_px: f32,
   active_tab_ix: usize,
   active_pull_requests_tab_ix: usize,
+  active_issues_tab_ix: usize,
   pending_issue_sheet_number: Option<u64>,
   pending_issue_sheet_comment_id: Option<u64>,
   _subscriptions: Vec<Subscription>,
@@ -3106,9 +3188,20 @@ impl GithubRepoPage {
       cx.new(|cx| InputState::new(window, cx).placeholder("Add assignee..."));
     let pull_request_filter_reviewer_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Add reviewer..."));
-    let issues = cx.new(|cx| {
-      VariableListState::new(GithubRepoIssueListDelegate::new(), window, cx).searchable(true)
-    });
+    let issues =
+      cx.new(|cx| VariableListState::new(GithubRepoIssueListDelegate::new(), window, cx));
+    let closed_issues =
+      cx.new(|cx| VariableListState::new(GithubRepoIssueListDelegate::new(), window, cx));
+    let not_planned_issues =
+      cx.new(|cx| VariableListState::new(GithubRepoIssueListDelegate::new(), window, cx));
+    let issues_search_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Search issues..."));
+    let issue_filter_label_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Add label..."));
+    let issue_filter_author_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Add author..."));
+    let issue_filter_assignee_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Add assignee..."));
     let code_editor = Self::build_detached_code_editor("__reviu_github_repo_placeholder__.txt", cx);
 
     let api = WorkspaceApi::global(cx).api.clone();
@@ -3174,11 +3267,20 @@ impl GithubRepoPage {
       pull_requests_error: None,
       pull_requests_task: None,
       issues,
+      closed_issues,
+      not_planned_issues,
       issues_error: None,
       issues_task: None,
+      issues_search_input,
+      issue_filter_label_input,
+      issue_filter_author_input,
+      issue_filter_assignee_input,
+      issue_filters: GithubIssueSearchFilters::default(),
+      issues_request_generation: 0,
       issue_sheet_width_px: ISSUE_DETAILS_SHEET_WIDTH_PX,
       active_tab_ix: 0,
       active_pull_requests_tab_ix: REPO_PULL_REQUESTS_OPEN_IX,
+      active_issues_tab_ix: REPO_ISSUES_OPEN_IX,
       pending_issue_sheet_number: None,
       pending_issue_sheet_comment_id: None,
       _subscriptions: Vec::new(),
@@ -3188,6 +3290,8 @@ impl GithubRepoPage {
     this.subscribe_to_pull_requests_search(window, cx);
     this.subscribe_to_pull_request_filter_inputs(window, cx);
     this.subscribe_to_issues(window, cx);
+    this.subscribe_to_issues_search(window, cx);
+    this.subscribe_to_issue_filter_inputs(window, cx);
     this.subscribe_to_branch_select(cx);
     this
   }
@@ -3231,6 +3335,70 @@ impl GithubRepoPage {
     );
 
     self._subscriptions.push(subscription);
+  }
+
+  fn subscribe_to_issues_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let subscription = cx.subscribe_in(
+      &self.issues_search_input,
+      window,
+      |this, state, event: &InputEvent, _window, cx| {
+        if matches!(event, InputEvent::Change) {
+          let query = state.read(cx).value();
+          this.apply_issues_query(query.as_ref(), cx);
+        }
+      },
+    );
+
+    self._subscriptions.push(subscription);
+  }
+
+  fn subscribe_to_issue_filter_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    for (input, kind) in [
+      (
+        self.issue_filter_label_input.clone(),
+        RepoIssueFilterTokenKind::Label,
+      ),
+      (
+        self.issue_filter_author_input.clone(),
+        RepoIssueFilterTokenKind::Author,
+      ),
+      (
+        self.issue_filter_assignee_input.clone(),
+        RepoIssueFilterTokenKind::Assignee,
+      ),
+    ] {
+      let subscription = cx.subscribe_in(
+        &input,
+        window,
+        move |this, state, event: &InputEvent, window, cx| {
+          this.on_issue_filter_input_event(kind, state, event, window, cx);
+        },
+      );
+      self._subscriptions.push(subscription);
+    }
+  }
+
+  fn on_issue_filter_input_event(
+    &mut self,
+    kind: RepoIssueFilterTokenKind,
+    state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    match event {
+      InputEvent::PressEnter { .. } => {
+        let value = state.read(cx).value().trim().to_string();
+        if !value.is_empty() {
+          self.add_issue_filter_token(kind, value);
+          state.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+          });
+          self.refresh_issues(cx);
+        }
+      }
+      _ => {}
+    }
   }
 
   fn subscribe_to_pull_request_filter_inputs(
@@ -3574,20 +3742,26 @@ impl GithubRepoPage {
   }
 
   fn subscribe_to_issues(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let subscription = cx.subscribe_in(
-      &self.issues,
-      window,
-      |this, state, event: &VariableListEvent, window, cx| {
-        if let VariableListEvent::Confirm(ix) = event {
-          let row = state.read(cx).delegate().matched_rows.get(*ix).cloned();
-          if let Some(row) = row {
-            this.open_issue_details_sheet(row.issue.clone(), None, window, cx);
+    for list in [
+      self.issues.clone(),
+      self.closed_issues.clone(),
+      self.not_planned_issues.clone(),
+    ] {
+      let subscription = cx.subscribe_in(
+        &list,
+        window,
+        |this, state, event: &VariableListEvent, window, cx| {
+          if let VariableListEvent::Confirm(ix) = event {
+            let row = state.read(cx).delegate().matched_rows.get(*ix).cloned();
+            if let Some(row) = row {
+              this.open_issue_details_sheet(row.issue.clone(), None, window, cx);
+            }
           }
-        }
-      },
-    );
+        },
+      );
 
-    self._subscriptions.push(subscription);
+      self._subscriptions.push(subscription);
+    }
   }
 
   fn subscribe_to_branch_select(&mut self, cx: &mut Context<Self>) {
@@ -3975,6 +4149,10 @@ impl GithubRepoPage {
       return;
     }
 
+    if tab_ix == REPO_TAB_ISSUES_IX {
+      self.load_pull_request_filter_options_if_needed(cx);
+    }
+
     if tab_ix == REPO_TAB_OVERVIEW_IX {
       window.focus(&self.focus_handle, cx);
     }
@@ -3991,11 +4169,13 @@ impl GithubRepoPage {
     }
 
     if tab_ix == REPO_TAB_ISSUES_IX {
-      cx.on_next_frame(window, |this, window, cx| {
-        this.issues.update(cx, |state, cx| {
+      let input = self.issues_search_input.clone();
+      cx.on_next_frame(window, move |_, window, cx| {
+        input.update(cx, |state, cx| {
           state.focus(window, cx);
         });
       });
+      return;
     }
   }
 
@@ -4478,6 +4658,182 @@ impl GithubRepoPage {
     cx.notify();
   }
 
+  fn refresh_issues(&mut self, cx: &mut Context<Self>) {
+    let owner = self.owner.to_string();
+    let repo = self.repo.to_string();
+    if owner.trim().is_empty() || repo.trim().is_empty() {
+      return;
+    }
+
+    self.issues_error = None;
+    self.set_issues_loading(true, cx);
+    self.issues_request_generation = self.issues_request_generation.wrapping_add(1);
+    let request_generation = self.issues_request_generation;
+
+    let api = self.api.clone();
+    let mut filters = self.issue_filters.clone();
+    filters.repos = vec![format!("{owner}/{repo}")];
+    let task = cx.spawn(async move |this, cx| {
+      let open_result = {
+        let api = api.clone();
+        let filters = filters.clone();
+        unblock(move || api.fetch_github_issues_search(&filters, "open")).await
+      };
+      let closed_result = {
+        let api = api.clone();
+        let filters = filters.clone();
+        unblock(move || api.fetch_github_issues_search(&filters, "closed")).await
+      };
+
+      let _ = this.update(cx, |this, cx| {
+        if !this.owner.as_ref().eq_ignore_ascii_case(owner.as_str())
+          || !this.repo.as_ref().eq_ignore_ascii_case(repo.as_str())
+          || this.issues_request_generation != request_generation
+        {
+          return;
+        }
+
+        this.issues_task = None;
+        let mut all_rows = Vec::new();
+
+        match open_result {
+          Ok(issues) => {
+            all_rows.extend(issues.into_iter().map(|issue| {
+              Rc::new(GithubRepoIssueRow {
+                issue: Rc::new(issue),
+              })
+            }));
+          }
+          Err(error) => {
+            let message = error.to_string();
+            this.issues_error = Some(message.into());
+          }
+        }
+
+        match closed_result {
+          Ok(issues) => {
+            all_rows.extend(issues.into_iter().map(|issue| {
+              Rc::new(GithubRepoIssueRow {
+                issue: Rc::new(issue),
+              })
+            }));
+          }
+          Err(error) => {
+            if this.issues_error.is_none() {
+              let message = error.to_string();
+              this.issues_error = Some(message.into());
+            }
+          }
+        }
+
+        this.set_issue_rows(all_rows, cx);
+      });
+    });
+    self.issues_task = Some(task);
+    cx.notify();
+  }
+
+  fn set_issues_loading(&mut self, loading: bool, cx: &mut Context<Self>) {
+    for list in [
+      self.issues.clone(),
+      self.closed_issues.clone(),
+      self.not_planned_issues.clone(),
+    ] {
+      list.update(cx, |state, cx| {
+        state.delegate_mut().loading = loading;
+        cx.notify();
+      });
+    }
+  }
+
+  fn set_issue_rows(&mut self, rows: Vec<Rc<GithubRepoIssueRow>>, cx: &mut Context<Self>) {
+    let query = self.issues_search_input.read(cx).value();
+    let query = query.trim().to_string();
+    let (open_rows, closed_rows, not_planned_rows) = repo_issue_rows_by_tab(rows);
+    Self::update_issue_list_rows(&self.issues, open_rows, false, &query, cx);
+    Self::update_issue_list_rows(&self.closed_issues, closed_rows, false, &query, cx);
+    Self::update_issue_list_rows(
+      &self.not_planned_issues,
+      not_planned_rows,
+      false,
+      &query,
+      cx,
+    );
+  }
+
+  fn update_issue_list_rows(
+    list: &Entity<VariableListState<GithubRepoIssueListDelegate>>,
+    rows: Vec<Rc<GithubRepoIssueRow>>,
+    loading: bool,
+    query: &str,
+    cx: &mut Context<Self>,
+  ) {
+    list.update(cx, |state, cx| {
+      let delegate = state.delegate_mut();
+      delegate.all_rows = rows;
+      delegate.loading = loading;
+      delegate.prepare(query.to_owned());
+      delegate.selected_index = if delegate.matched_rows.is_empty() {
+        None
+      } else {
+        Some(0)
+      };
+      cx.notify();
+    });
+  }
+
+  fn active_issues_list(&self) -> &Entity<VariableListState<GithubRepoIssueListDelegate>> {
+    match repo_issue_list_tab_from_ix(self.active_issues_tab_ix) {
+      RepoIssueListTab::Open => &self.issues,
+      RepoIssueListTab::Closed => &self.closed_issues,
+      RepoIssueListTab::NotPlanned => &self.not_planned_issues,
+    }
+  }
+
+  fn issues_matched_count(
+    list: &Entity<VariableListState<GithubRepoIssueListDelegate>>,
+    cx: &App,
+  ) -> usize {
+    list.read(cx).delegate().matched_rows.len()
+  }
+
+  fn apply_issues_query(&mut self, query: &str, cx: &mut Context<Self>) {
+    let query = query.trim().to_string();
+    for list in [
+      self.issues.clone(),
+      self.closed_issues.clone(),
+      self.not_planned_issues.clone(),
+    ] {
+      let query = query.clone();
+      list.update(cx, |state, cx| {
+        let delegate = state.delegate_mut();
+        delegate.prepare(query);
+        delegate.selected_index = if delegate.matched_rows.is_empty() {
+          None
+        } else {
+          Some(0)
+        };
+        cx.notify();
+      });
+    }
+    cx.notify();
+  }
+
+  fn set_active_issues_tab(&mut self, ix: usize, _window: &mut Window, cx: &mut Context<Self>) {
+    self.active_issues_tab_ix = ix;
+    cx.notify();
+  }
+
+  fn load_pull_request_filter_options_if_needed(&mut self, cx: &mut Context<Self>) {
+    let has_options = !self.pull_request_filter_options.labels.is_empty()
+      || !self.pull_request_filter_options.authors.is_empty()
+      || !self.pull_request_filter_options.assignees.is_empty();
+    if has_options || self.pull_request_filter_options_loading {
+      return;
+    }
+    self.load_pull_request_filter_options(cx);
+  }
+
   fn load_pull_request_filter_options(&mut self, cx: &mut Context<Self>) {
     let owner = self.owner.to_string();
     let repo = self.repo.to_string();
@@ -4518,70 +4874,6 @@ impl GithubRepoPage {
       });
     });
     self.pull_request_filter_options_task = Some(task);
-    cx.notify();
-  }
-
-  fn refresh_issues(&mut self, cx: &mut Context<Self>) {
-    let owner = self.owner.to_string();
-    let repo = self.repo.to_string();
-    if owner.trim().is_empty() || repo.trim().is_empty() {
-      return;
-    }
-
-    self.issues_error = None;
-    self.issues.update(cx, |state, cx| {
-      state.delegate_mut().loading = true;
-      cx.notify();
-    });
-
-    let api = self.api.clone();
-    let owner_for_fetch = owner.clone();
-    let repo_for_fetch = repo.clone();
-    let task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || api.fetch_github_repository_issues(&owner_for_fetch, &repo_for_fetch))
-          .await;
-
-      let _ = this.update(cx, |this, cx| {
-        if !this.owner.as_ref().eq_ignore_ascii_case(owner.as_str())
-          || !this.repo.as_ref().eq_ignore_ascii_case(repo.as_str())
-        {
-          return;
-        }
-
-        this.issues_task = None;
-        let mut rows = Vec::new();
-
-        match result {
-          Ok(issues) => {
-            rows = issues
-              .into_iter()
-              .map(|issue| {
-                Rc::new(GithubRepoIssueRow {
-                  issue: Rc::new(issue),
-                })
-              })
-              .collect();
-            this.issues_error = None;
-          }
-          Err(error) => {
-            let message = error.to_string();
-            if github_shared::is_unauthorized_error_message(&message) {
-              this.issues_error = Some("Authentication required. Please sign in again.".into());
-            } else {
-              this.issues_error = Some(message.into());
-            }
-          }
-        }
-
-        this.issues.update(cx, |state, cx| {
-          state.delegate_mut().loading = false;
-          state.delegate_mut().set_rows(rows);
-          cx.notify();
-        });
-      });
-    });
-    self.issues_task = Some(task);
     cx.notify();
   }
 
@@ -4866,47 +5158,7 @@ impl GithubRepoPage {
     self.refresh_pull_requests(cx);
     self.load_pull_request_filter_options(cx);
 
-    let issues_api = self.api.clone();
-    let issues_owner = owner;
-    let issues_repo = repo;
-    let issues_task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || issues_api.fetch_github_repository_issues(&issues_owner, &issues_repo))
-          .await;
-
-      let _ = this.update(cx, |this, cx| {
-        let mut rows = Vec::new();
-
-        match result {
-          Ok(issues) => {
-            rows = issues
-              .into_iter()
-              .map(|issue| {
-                Rc::new(GithubRepoIssueRow {
-                  issue: Rc::new(issue),
-                })
-              })
-              .collect();
-            this.issues_error = None;
-          }
-          Err(error) => {
-            let message = error.to_string();
-            if github_shared::is_unauthorized_error_message(&message) {
-              this.issues_error = Some("Authentication required. Please sign in again.".into());
-            } else {
-              this.issues_error = Some(message.into());
-            }
-          }
-        }
-
-        this.issues.update(cx, |state, cx| {
-          state.delegate_mut().loading = false;
-          state.delegate_mut().set_rows(rows);
-          cx.notify();
-        });
-      });
-    });
-    self.issues_task = Some(issues_task);
+    self.refresh_issues(cx);
 
     cx.notify();
   }
@@ -6268,9 +6520,38 @@ impl GithubRepoPage {
 
   fn render_issues(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let open_count = Self::issues_matched_count(&self.issues, cx);
+    let closed_count = Self::issues_matched_count(&self.closed_issues, cx);
+    let not_planned_count = Self::issues_matched_count(&self.not_planned_issues, cx);
 
-    let list = VariableList::new(&self.issues)
-      .search_placeholder("Search issues...")
+    let search = Input::new(&self.issues_search_input)
+      .prefix(Icon::new(IconName::Search).text_color(theme.muted_foreground))
+      .cleanable(true)
+      .w_full();
+
+    let tabs = TabBar::new("github-repo-issue-list-tabs")
+      .segmented()
+      .selected_index(self.active_issues_tab_ix)
+      .on_click(cx.listener(|this, ix: &usize, window, cx| {
+        this.set_active_issues_tab(*ix, window, cx);
+      }))
+      .child(repo_pull_request_list_tab(
+        UiIconName::CircleDot,
+        "Open",
+        open_count,
+      ))
+      .child(repo_pull_request_list_tab(
+        UiIconName::CircleCheck,
+        "Closed",
+        closed_count,
+      ))
+      .child(repo_pull_request_list_tab(
+        UiIconName::CircleSlash,
+        "Not Planned",
+        not_planned_count,
+      ));
+
+    let list = VariableList::new(self.active_issues_list())
       .border_1()
       .border_color(theme.border)
       .rounded(theme.radius)
@@ -6279,17 +6560,256 @@ impl GithubRepoPage {
       .min_h_0()
       .p(px(8.));
 
-    v_flex().w_full().h_full().min_h_0().p_4().child(
-      v_flex()
-        .w_full()
-        .h_full()
-        .min_h_0()
-        .gap_3()
-        .when_some(self.issues_error.clone(), |this, error| {
-          this.child(div().text_sm().text_color(theme.red).child(error))
-        })
-        .child(list),
-    )
+    let sort_options = [
+      GithubIssueSearchSort::UpdatedDesc,
+      GithubIssueSearchSort::CreatedDesc,
+      GithubIssueSearchSort::CreatedAsc,
+      GithubIssueSearchSort::CommentsDesc,
+    ]
+    .into_iter()
+    .map(|sort| {
+      DropdownSelectOption::new(sort, issue_search_sort_label(sort))
+        .selected(sort == self.issue_filters.sort)
+    })
+    .collect::<Vec<_>>();
+
+    let label_suggestions = matching_filter_option_labels(
+      &self.pull_request_filter_options.labels,
+      self.issue_filter_label_input.read(cx).value().as_ref(),
+      &self.issue_filters.labels,
+    );
+    let author_suggestions = matching_filter_option_users(
+      &self.pull_request_filter_options.authors,
+      self.issue_filter_author_input.read(cx).value().as_ref(),
+      &self.issue_filters.authors,
+      true,
+    );
+    let assignee_suggestions = matching_filter_option_users(
+      &self.pull_request_filter_options.assignees,
+      self.issue_filter_assignee_input.read(cx).value().as_ref(),
+      &self.issue_filters.assignees,
+      true,
+    );
+
+    // Left sidebar: search + filters
+    let left_sidebar = v_flex()
+      .w(px(300.0))
+      .flex_shrink_0()
+      .h_full()
+      .min_h_0()
+      .gap_3()
+      .child(search)
+      .child(
+        div()
+          .id("github-repo-issue-filters-scroll")
+          .flex_1()
+          .min_h_0()
+          .overflow_y_scroll()
+          .child(
+            v_flex()
+              .w_full()
+              .gap_3()
+              .child(
+                h_flex()
+                  .items_center()
+                  .justify_between()
+                  .child(
+                    div()
+                      .text_sm()
+                      .font_medium()
+                      .text_color(theme.foreground)
+                      .child("Filters"),
+                  )
+                  .child(
+                    Button::new("github-repo-issue-filters-clear")
+                      .label("Clear")
+                      .xsmall()
+                      .ghost()
+                      .disabled(self.issue_filters == GithubIssueSearchFilters::default())
+                      .on_click(cx.listener(|this, _, _, cx| {
+                        this.issue_filters = GithubIssueSearchFilters::default();
+                        this.refresh_issues(cx);
+                      })),
+                  ),
+              )
+              .when(self.pull_request_filter_options_loading, |this| {
+                this.child(
+                  h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(Spinner::new().xsmall())
+                    .child(
+                      div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("Loading filter suggestions..."),
+                    ),
+                )
+              })
+              .child(self.render_issue_filter_token_section(
+                "Labels",
+                RepoIssueFilterTokenKind::Label,
+                self.issue_filter_label_input.clone(),
+                &self.issue_filters.labels,
+                label_suggestions,
+                cx,
+              ))
+              .child(self.render_issue_filter_token_section(
+                "Authors",
+                RepoIssueFilterTokenKind::Author,
+                self.issue_filter_author_input.clone(),
+                &self.issue_filters.authors,
+                author_suggestions,
+                cx,
+              ))
+              .child(self.render_issue_filter_token_section(
+                "Assignees",
+                RepoIssueFilterTokenKind::Assignee,
+                self.issue_filter_assignee_input.clone(),
+                &self.issue_filters.assignees,
+                assignee_suggestions,
+                cx,
+              ))
+              .child(
+                v_flex()
+                  .gap_1()
+                  .child(div().text_sm().child("Sort"))
+                  .child(dropdown_select(
+                    DropdownSelectConfig::new("github-repo-issue-sort-filter")
+                      .placeholder("Recently updated")
+                      .options(sort_options)
+                      .searchable(false)
+                      .width(px(268.0))
+                      .menu_width(px(268.0))
+                      .on_select(Rc::new({
+                        let view = cx.entity().clone();
+                        move |sort: GithubIssueSearchSort, _, cx| {
+                          view.update(cx, |this, cx| {
+                            this.issue_filters.sort = sort;
+                            this.refresh_issues(cx);
+                          });
+                        }
+                      })),
+                  )),
+              ),
+          ),
+      );
+
+    // Right content: tabs + list
+    let right_content = v_flex()
+      .flex_1()
+      .min_w_0()
+      .h_full()
+      .min_h_0()
+      .gap_3()
+      .when_some(self.issues_error.clone(), |this, error| {
+        this.child(div().text_sm().text_color(theme.red).child(error))
+      })
+      .child(tabs)
+      .child(list);
+
+    h_flex()
+      .w_full()
+      .h_full()
+      .min_h_0()
+      .p_4()
+      .gap_6()
+      .child(left_sidebar)
+      .child(right_content)
+  }
+
+  fn render_issue_filter_token_section(
+    &self,
+    title: &'static str,
+    kind: RepoIssueFilterTokenKind,
+    input: Entity<InputState>,
+    current_values: &[String],
+    suggestions: Vec<String>,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .gap_1()
+      .child(div().text_sm().child(title))
+      .when(!current_values.is_empty(), |this| {
+        this.child(
+          h_flex()
+            .gap_1()
+            .flex_wrap()
+            .children(current_values.iter().cloned().map(|value| {
+              h_flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .rounded_full()
+                .bg(theme.muted)
+                .child(div().text_xs().child(value.clone()))
+                .child(
+                  Button::new(format!("github-repo-issue-filter-remove-{title}-{value}"))
+                    .ghost()
+                    .xsmall()
+                    .compact()
+                    .icon(IconName::Close)
+                    .on_click({
+                      let view = cx.entity().clone();
+                      move |_, _, cx| {
+                        view.update(cx, |this, cx| {
+                          this.remove_issue_filter_token(kind, &value);
+                          this.refresh_issues(cx);
+                        });
+                      }
+                    }),
+                )
+            })),
+        )
+      })
+      .child(Input::new(&input).w_full())
+      .when(!suggestions.is_empty(), |this| {
+        this.child(
+          h_flex()
+            .gap_1()
+            .flex_wrap()
+            .children(suggestions.into_iter().map(|suggestion| {
+              Button::new(format!(
+                "github-repo-issue-filter-suggestion-{title}-{suggestion}"
+              ))
+              .label(suggestion.clone())
+              .xsmall()
+              .outline()
+              .on_click({
+                let view = cx.entity().clone();
+                move |_, _, cx| {
+                  view.update(cx, |this, cx| {
+                    this.add_issue_filter_token(kind, suggestion.clone());
+                    this.refresh_issues(cx);
+                  });
+                }
+              })
+            })),
+        )
+      })
+      .into_any_element()
+  }
+
+  fn issue_filter_tokens_mut(&mut self, kind: RepoIssueFilterTokenKind) -> &mut Vec<String> {
+    match kind {
+      RepoIssueFilterTokenKind::Label => &mut self.issue_filters.labels,
+      RepoIssueFilterTokenKind::Author => &mut self.issue_filters.authors,
+      RepoIssueFilterTokenKind::Assignee => &mut self.issue_filters.assignees,
+    }
+  }
+
+  fn add_issue_filter_token(&mut self, kind: RepoIssueFilterTokenKind, value: String) {
+    let tokens = self.issue_filter_tokens_mut(kind);
+    if !tokens.iter().any(|t| t.eq_ignore_ascii_case(&value)) {
+      tokens.push(value);
+    }
+  }
+
+  fn remove_issue_filter_token(&mut self, kind: RepoIssueFilterTokenKind, value: &str) {
+    let tokens = self.issue_filter_tokens_mut(kind);
+    tokens.retain(|t| !t.eq_ignore_ascii_case(value));
   }
 }
 

@@ -99,3 +99,17 @@ export const pullRequestSearchBodySchema = z.object({
 export const pullRequestFilterOptionsBodySchema = z.object({
   repos: pullRequestSearchFiltersStringListSchema,
 })
+
+export const issueSearchFiltersSchema = z.object({
+  repos: pullRequestSearchFiltersStringListSchema,
+  labels: pullRequestSearchFiltersStringListSchema,
+  authors: pullRequestSearchFiltersStringListSchema,
+  assignees: pullRequestSearchFiltersStringListSchema,
+  sort: z
+    .enum(['updated_desc', 'created_desc', 'created_asc', 'comments_desc'])
+    .default('updated_desc'),
+})
+
+export const issueSearchBodySchema = z.object({
+  filters: issueSearchFiltersSchema,
+})

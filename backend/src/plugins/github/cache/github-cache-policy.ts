@@ -184,6 +184,21 @@ export function createGithubPullRequestSearchCachePolicy(
   }
 }
 
+export function createGithubIssueSearchCachePolicy(
+  userId: string,
+  cacheKey: string,
+): GithubCachePolicy {
+  return {
+    operation: 'viewer.issues.search',
+    scope: 'viewer',
+    scopeId: userId,
+    resourceKey: `search:issues:${normalizeCacheSegment(cacheKey)}`,
+    ttlMs: GITHUB_PULL_REQUEST_SEARCH_CACHE_TTL_MS,
+    staleMs: GITHUB_PULL_REQUEST_SEARCH_CACHE_STALE_MS,
+    tags: [`issue-search:${userId}`],
+  }
+}
+
 export function createGithubPullRequestDetailsCachePolicy(
   userId: string,
   owner: string,
