@@ -5023,12 +5023,20 @@ impl GithubPrDetailsPage {
             this.refresh_current_page(cx);
           }
           Err(error) => {
-            let error_message: SharedString = error.to_string().into();
+            let error_message = error.to_string();
+            let is_already_up_to_date = error_message
+              .to_ascii_lowercase()
+              .contains("no new commits");
             let _ = cx.update_window(this.window_handle, move |_, window, cx| {
-              window.push_notification(
-                Notification::error(error_message).title("Update branch failed"),
-                cx,
-              );
+              if is_already_up_to_date {
+                window.push_notification(Notification::info("Branch is already up to date"), cx);
+              } else {
+                window.push_notification(
+                  Notification::error(SharedString::from(error_message))
+                    .title("Update branch failed"),
+                  cx,
+                );
+              }
             });
           }
         }
