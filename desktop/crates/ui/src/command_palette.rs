@@ -998,16 +998,16 @@ impl CommandPaletteCommand {
   pub fn open_github_page() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenGithubPage,
-      name: "Open GitHub page".into(),
-      description: Some("Go to the GitHub page".into()),
+      name: "Go to GitHub".into(),
+      description: Some("Navigate to the GitHub page".into()),
     }
   }
 
   pub fn open_git_page() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenGitPage,
-      name: "Open Git page".into(),
-      description: Some("Go to the Git page".into()),
+      name: "Go to Git".into(),
+      description: Some("Navigate to the Git page".into()),
     }
   }
 
@@ -1062,24 +1062,24 @@ impl CommandPaletteCommand {
   pub fn open_settings_page() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenSettingsPage,
-      name: "Open Settings".into(),
-      description: Some("Go to Settings".into()),
+      name: "Go to Settings".into(),
+      description: Some("Navigate to Settings".into()),
     }
   }
 
   pub fn open_billing_page() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenBillingPage,
-      name: "Open Billing".into(),
-      description: Some("Go to Billing".into()),
+      name: "Go to Billing".into(),
+      description: Some("Navigate to Billing".into()),
     }
   }
 
   pub fn open_about_page() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenAboutPage,
-      name: "Open About".into(),
-      description: Some("Go to About".into()),
+      name: "Go to About".into(),
+      description: Some("Navigate to About".into()),
     }
   }
 
@@ -1094,7 +1094,7 @@ impl CommandPaletteCommand {
   pub fn open_git_config_page() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenGitConfigPage,
-      name: "Open Git Config".into(),
+      name: "Go to Git Config".into(),
       description: Some("Edit ~/.gitconfig".into()),
     }
   }
@@ -2695,11 +2695,11 @@ mod tests {
     let about = CommandPaletteCommand::open_about_page();
 
     assert_eq!(billing.id, CommandPaletteCommandId::OpenBillingPage);
-    assert_eq!(billing.name.as_ref(), "Open Billing");
+    assert_eq!(billing.name.as_ref(), "Go to Billing");
     assert!(billing.matches("billing"));
 
     assert_eq!(about.id, CommandPaletteCommandId::OpenAboutPage);
-    assert_eq!(about.name.as_ref(), "Open About");
+    assert_eq!(about.name.as_ref(), "Go to About");
     assert!(about.matches("about"));
   }
 
