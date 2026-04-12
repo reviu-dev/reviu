@@ -160,11 +160,20 @@ pub(crate) fn pull_request_status_tag(
     .child(pull_request_status_label(status))
 }
 
+fn pull_request_status_icon_name(status: GithubPullRequestStatus) -> UiIconName {
+  match status {
+    GithubPullRequestStatus::Open => UiIconName::GitPullRequest,
+    GithubPullRequestStatus::Closed => UiIconName::GitPullRequestClosed,
+    GithubPullRequestStatus::Merged => UiIconName::GitMerge,
+    GithubPullRequestStatus::Draft => UiIconName::GitPullRequestDraft,
+  }
+}
+
 fn pull_request_status_icon(
   status: GithubPullRequestStatus,
   theme: &gpui_component::Theme,
 ) -> Icon {
-  Icon::new(UiIconName::GitPullRequestArrow)
+  Icon::new(pull_request_status_icon_name(status))
     .size_3()
     .text_color(pull_request_status_color(status, theme))
 }
@@ -481,8 +490,8 @@ mod tests {
     logins_match_case_insensitive, next_trimmed_text_update, normalize_non_empty_text, pr_url,
     pull_request_activity_text_at, pull_request_author_display_name, pull_request_author_is_bot,
     pull_request_comments_count_text, pull_request_list_row_body, pull_request_row_height_px,
-    pull_request_status_color, pull_request_status_label, pull_request_updated_text_at, repo_label,
-    short_sha,
+    pull_request_status_color, pull_request_status_icon_name, pull_request_status_label,
+    pull_request_updated_text_at, repo_label, short_sha,
   };
   use crate::api::{
     GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel, GithubPullRequestState,
@@ -495,7 +504,7 @@ mod tests {
   };
   use gpui_component::{ActiveTheme as _, Colorize as _, v_flex};
   use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-  use ui::StatusThemeExt as _;
+  use ui::{StatusThemeExt as _, UiIconName};
 
   fn make_pull_request(labels: &[&str]) -> GithubPullRequest {
     make_pull_request_with_author(
@@ -642,6 +651,26 @@ mod tests {
     assert_eq!(
       pull_request_status_label(GithubPullRequestStatus::Draft),
       "Draft"
+    );
+  }
+
+  #[test]
+  fn pull_request_status_icon_name_covers_all_variants() {
+    assert_eq!(
+      pull_request_status_icon_name(GithubPullRequestStatus::Open),
+      UiIconName::GitPullRequest
+    );
+    assert_eq!(
+      pull_request_status_icon_name(GithubPullRequestStatus::Closed),
+      UiIconName::GitPullRequestClosed
+    );
+    assert_eq!(
+      pull_request_status_icon_name(GithubPullRequestStatus::Merged),
+      UiIconName::GitMerge
+    );
+    assert_eq!(
+      pull_request_status_icon_name(GithubPullRequestStatus::Draft),
+      UiIconName::GitPullRequestDraft
     );
   }
 
