@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.1.1
+
+### Repository README Links
+
+Relative file links in GitHub repository READMEs now open the Code tab with the referenced file selected.
+
 ## 0.1.0
 
 ### Pull Request People Management
