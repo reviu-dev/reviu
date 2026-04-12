@@ -19,9 +19,8 @@ use crate::{
 pub(crate) const PULL_REQUEST_ROW_HEIGHT_PX: f32 = 56.0;
 pub(crate) const PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX: f32 = 80.0;
 
-pub(crate) fn pull_request_list_loading_skeleton(cx: &App) -> impl IntoElement {
+fn list_loading_skeleton(row_height: f32, cx: &App) -> impl IntoElement {
   let theme = cx.theme();
-  let row_height = PULL_REQUEST_ROW_HEIGHT_PX;
 
   v_flex().w_full().p_2().children((0..6).map(|_| {
     v_flex()
@@ -66,6 +65,14 @@ pub(crate) fn pull_request_list_loading_skeleton(cx: &App) -> impl IntoElement {
           ),
       )
   }))
+}
+
+pub(crate) fn pull_request_list_loading_skeleton(cx: &App) -> impl IntoElement {
+  list_loading_skeleton(PULL_REQUEST_ROW_HEIGHT_PX, cx)
+}
+
+pub(crate) fn issue_list_loading_skeleton(row_height: f32, cx: &App) -> impl IntoElement {
+  list_loading_skeleton(row_height, cx)
 }
 
 pub(crate) fn make_asset_url_resolver(
