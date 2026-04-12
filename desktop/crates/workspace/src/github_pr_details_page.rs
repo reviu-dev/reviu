@@ -159,19 +159,6 @@ fn adjacent_pr_tab_ix(current: usize, direction: TabNavigationDirection) -> usiz
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GithubPrLeftSidebarKind {
-  Files,
-}
-
-fn left_sidebar_kind_for_tab(active_tab_ix: usize) -> Option<GithubPrLeftSidebarKind> {
-  if active_tab_ix == PR_TAB_CHANGES_IX {
-    Some(GithubPrLeftSidebarKind::Files)
-  } else {
-    None
-  }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TabNavigationDirection {
   Previous,
   Next,
@@ -2565,6 +2552,7 @@ pub struct GithubPrDetailsPage {
   tree_search_error: Option<SharedString>,
   tree_search_generation: u64,
   tree_search_reset_pending: bool,
+  file_sidebar_options_open: bool,
   show_local_project_files: bool,
   hide_whitespace: bool,
   saved_pr_selected_tree_id: Option<String>,
@@ -3128,6 +3116,7 @@ impl GithubPrDetailsPage {
       tree_search_error: None,
       tree_search_generation: 0,
       tree_search_reset_pending: false,
+      file_sidebar_options_open: false,
       show_local_project_files: false,
       hide_whitespace: AppSettings::get(cx).hide_whitespace,
       saved_pr_selected_tree_id: None,
@@ -12127,7 +12116,7 @@ impl GithubPrDetailsPage {
           )),
       );
 
-    let local_project_controls = if matches!(
+    let local_project_options = if matches!(
       local_project_availability,
       GithubPrLocalProjectAvailability::Hidden
     ) {
@@ -12230,34 +12219,33 @@ impl GithubPrDetailsPage {
 
       Some(
         v_flex()
-          .gap_1()
-          .justify_center()
-          .min_h(px(DIFF_HEADER_HEIGHT))
-          .px_3()
-          .py_2()
-          .border_b_1()
-          .border_color(theme.border)
+          .w(px(280.0))
+          .gap_3()
           .child(
-            h_flex()
-              .items_center()
-              .justify_between()
-              .gap_2()
-              .child(
-                Switch::new("github-pr-local-project-switch")
-                  .label("Show unchanged files")
-                  .small()
-                  .checked(local_project_mode)
-                  .disabled(
-                    !can_toggle_local_project
-                      || self.local_project_update_loading
-                      || self.local_branch_switch_loading,
-                  )
-                  .on_click(cx.listener(move |this, checked, _, cx| {
-                    this.set_show_local_project_files(*checked, cx);
-                  })),
+            Switch::new("github-pr-local-project-switch")
+              .label("Show unchanged files")
+              .small()
+              .checked(local_project_mode)
+              .disabled(
+                !can_toggle_local_project
+                  || self.local_project_update_loading
+                  || self.local_branch_switch_loading,
               )
-              .when_some(switch_branch_button, |this, button| this.child(button))
-              .when_some(update_button, |this, button| this.child(button)),
+              .on_click(cx.listener(move |this, checked, _, cx| {
+                this.set_show_local_project_files(*checked, cx);
+              })),
+          )
+          .when(
+            switch_branch_button.is_some() || update_button.is_some(),
+            |this| {
+              this.child(
+                h_flex()
+                  .items_center()
+                  .gap_2()
+                  .when_some(switch_branch_button, |this, button| this.child(button))
+                  .when_some(update_button, |this, button| this.child(button)),
+              )
+            },
           )
           .when_some(status_text, |this, status_text| {
             this.child(div().text_xs().text_color(status_color).child(status_text))
@@ -12272,6 +12260,25 @@ impl GithubPrDetailsPage {
     };
 
     let search_controls = {
+      let file_options_popover = local_project_options.map(|options| {
+        Popover::new("github-pr-file-sidebar-options-popover")
+          .anchor(Corner::TopRight)
+          .open(self.file_sidebar_options_open)
+          .on_open_change(cx.listener(|this, open, _window, cx| {
+            this.file_sidebar_options_open = *open;
+            cx.notify();
+          }))
+          .trigger(
+            Button::new("github-pr-file-sidebar-options")
+              .ghost()
+              .xsmall()
+              .compact()
+              .icon(UiIconName::SlidersHorizontal)
+              .tooltip("File options"),
+          )
+          .child(options)
+      });
+
       v_flex()
         .gap_1()
         .px_3()
@@ -12279,18 +12286,32 @@ impl GithubPrDetailsPage {
         .border_b_1()
         .border_color(theme.border)
         .child(
-          div()
-            .relative()
-            .child(Input::new(&self.tree_search_input).w_full().pr(px(28.0)))
-            .when(tree_search_active && self.tree_search_loading, |this| {
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child(
+              div()
+                .relative()
+                .min_w_0()
+                .flex_1()
+                .child(Input::new(&self.tree_search_input).w_full().pr(px(28.0)))
+                .when(tree_search_active && self.tree_search_loading, |this| {
+                  this.child(
+                    h_flex()
+                      .absolute()
+                      .top_0()
+                      .right_2()
+                      .bottom_0()
+                      .items_center()
+                      .child(Spinner::new().small()),
+                  )
+                }),
+            )
+            .when_some(file_options_popover, |this, popover| {
               this.child(
-                h_flex()
-                  .absolute()
-                  .top_0()
-                  .right_2()
-                  .bottom_0()
-                  .items_center()
-                  .child(Spinner::new().small()),
+                div()
+                  .debug_selector(|| "github-pr-file-sidebar-options-button".to_string())
+                  .child(popover),
               )
             }),
         )
@@ -12484,9 +12505,6 @@ impl GithubPrDetailsPage {
       .size_full()
       .child(header)
       .child(search_controls)
-      .when_some(local_project_controls, |this, controls| {
-        this.child(controls)
-      })
       .child(
         div()
           .px_1()
@@ -12495,19 +12513,6 @@ impl GithubPrDetailsPage {
           .key_context(crate::shortcuts::GITHUB_PR_CHANGES_TREE_CONTEXT)
           .child(list),
       )
-  }
-
-  fn render_left_sidebar(
-    &mut self,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) -> Option<gpui::AnyElement> {
-    match left_sidebar_kind_for_tab(self.active_tab_ix) {
-      Some(GithubPrLeftSidebarKind::Files) => {
-        Some(self.render_files_sidebar(window, cx).into_any_element())
-      }
-      None => None,
-    }
   }
 
   fn render_diff_header(
@@ -13260,7 +13265,16 @@ impl GithubPrDetailsPage {
       )
       .child(editor_content);
 
-    editor_panel
+    let files_sidebar = self.render_files_sidebar(window, cx);
+
+    h_resizable("github-pr-changes-layout")
+      .child(
+        resizable_panel()
+          .size(px(SIDEBAR_DEFAULT_WIDTH))
+          .size_range(px(SIDEBAR_MIN_WIDTH)..px(SIDEBAR_MAX_WIDTH))
+          .child(files_sidebar),
+      )
+      .child(resizable_panel().child(editor_panel))
   }
 }
 
@@ -13320,24 +13334,11 @@ impl Render for GithubPrDetailsPage {
     };
 
     let right_panel = v_flex()
+      .debug_selector(|| "github-pr-details-main-panel".to_string())
       .size_full()
       .overflow_hidden()
       .child(self.render_header(cx))
       .child(v_flex().flex_1().min_h_0().child(content));
-
-    let body = if let Some(left_sidebar) = self.render_left_sidebar(window, cx) {
-      h_resizable("github-pr-layout")
-        .child(
-          resizable_panel()
-            .size(px(SIDEBAR_DEFAULT_WIDTH))
-            .size_range(px(SIDEBAR_MIN_WIDTH)..px(SIDEBAR_MAX_WIDTH))
-            .child(left_sidebar),
-        )
-        .child(resizable_panel().child(right_panel))
-        .into_any_element()
-    } else {
-      right_panel.into_any_element()
-    };
 
     div()
       .size_full()
@@ -13354,7 +13355,7 @@ impl Render for GithubPrDetailsPage {
       .on_action(cx.listener(GithubPrDetailsPage::show_file_search_action))
       .on_action(cx.listener(GithubPrDetailsPage::find_action))
       .on_action(cx.listener(GithubPrDetailsPage::close_find_action))
-      .child(body)
+      .child(right_panel)
   }
 }
 
@@ -14225,6 +14226,30 @@ mod tests {
       .size;
     assert!(count_bounds.width > gpui::px(0.0));
     assert!(count_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  fn changes_file_sidebar_renders_options_button_when_local_project_is_available(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("head", false)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.active_tab_ix = PR_TAB_CHANGES_IX;
+      cx.notify();
+    });
+
+    let button_bounds = cx
+      .debug_bounds("github-pr-file-sidebar-options-button")
+      .expect("file sidebar options button bounds")
+      .size;
+    assert!(button_bounds.width > gpui::px(0.0));
+    assert!(button_bounds.height > gpui::px(0.0));
   }
 
   #[gpui::test]
@@ -16755,15 +16780,6 @@ mod tests {
     assert!(lookup.is_empty());
     assert_eq!(selected_index, None);
     assert_eq!(selected_id, None);
-  }
-
-  #[test]
-  fn left_sidebar_kind_only_renders_for_changes_tab() {
-    assert_eq!(left_sidebar_kind_for_tab(PR_TAB_OVERVIEW_IX), None);
-    assert_eq!(
-      left_sidebar_kind_for_tab(PR_TAB_CHANGES_IX),
-      Some(GithubPrLeftSidebarKind::Files)
-    );
   }
 
   #[test]
