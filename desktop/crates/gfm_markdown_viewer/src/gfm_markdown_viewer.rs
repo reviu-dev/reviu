@@ -251,13 +251,12 @@ pub fn render_github_code_reference_preview_card(
         ),
     );
   } else {
-    let per_line_spans =
-      build_preview_code_spans_per_line(
-        &preview.snippets,
-        snippet_language_hint.as_deref(),
-        preview.full_content.as_deref(),
-        preview.start_line,
-      );
+    let per_line_spans = build_preview_code_spans_per_line(
+      &preview.snippets,
+      snippet_language_hint.as_deref(),
+      preview.full_content.as_deref(),
+      preview.start_line,
+    );
 
     for (offset, (line_text, line_spans)) in per_line_spans.into_iter().enumerate() {
       let line_number = preview.start_line + offset;
@@ -479,8 +478,7 @@ fn build_preview_code_spans_per_line(
 
   if let Some(content) = usable_full_content {
     let first_line_ix = start_line.saturating_sub(1);
-    let target_line_indices: Vec<usize> =
-      (first_line_ix..first_line_ix + snippets.len()).collect();
+    let target_line_indices: Vec<usize> = (first_line_ix..first_line_ix + snippets.len()).collect();
     let all_spans = highlight_full_text(content, language_hint);
     return split_spans_per_line(snippets, content, &all_spans, target_line_indices);
   }

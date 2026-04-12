@@ -72,6 +72,7 @@ import type {
   UpdateIssueCommentResponse,
   UpdateIssueParams,
   UpdateIssueResponse,
+  UpdatePullRequestBranchParams,
   UpdatePullRequestCommentParams,
   UpdatePullRequestCommentResponse,
   UpdatePullRequestParams,
@@ -958,6 +959,16 @@ export async function mergeGithubPullRequest(
   { token: string, params: MergePullRequestParams },
 ): Promise<MergePullRequestResponse> {
   return requestGithubData('PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge', {
+    token,
+    params,
+  })
+}
+
+export async function updateGithubPullRequestBranch(
+  { token, params }:
+  { token: string, params: UpdatePullRequestBranchParams },
+): Promise<void> {
+  await requestGithubWithoutData('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', {
     token,
     params,
   })

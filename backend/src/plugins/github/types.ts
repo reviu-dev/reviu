@@ -17,6 +17,8 @@ export type CreatePullRequestParams
   = Endpoints['POST /repos/{owner}/{repo}/pulls']['parameters']
 export type MergePullRequestParams
   = Endpoints['PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge']['parameters']
+export type UpdatePullRequestBranchParams
+  = Endpoints['PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch']['parameters']
 export type CreatePullRequestCommentParams
   = Endpoints['POST /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
 export type CreatePullRequestReviewParams

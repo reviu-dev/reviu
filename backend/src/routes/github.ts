@@ -1,5 +1,4 @@
 import type { Context } from 'hono'
-import type z from 'zod'
 import type { GithubCachePolicy } from '../plugins/github/cache/github-cache-policy.js'
 import type {
   GithubCacheLoadedPayload,
@@ -62,6 +61,7 @@ import type {
   RequestPullRequestReviewersParams,
   UpdateIssueCommentParams,
   UpdateIssueParams,
+  UpdatePullRequestBranchParams,
   UpdatePullRequestCommentParams,
   UpdatePullRequestParams,
   UserRepositoriesParams,
@@ -184,6 +184,7 @@ import {
   removeGithubIssueLabel,
   removeGithubPullRequestReviewers,
   requestGithubPullRequestReviewers,
+  updateGithubPullRequestBranch,
 } from '../plugins/github/service.js'
 
 const LATEST_PULL_REQUESTS_LIMIT = 20
@@ -2437,6 +2438,48 @@ export const githubRoutes = githubRouter
     catch (error) {
       const status = (error as { status?: number }).status
       if (status === 403 || status === 404 || status === 405 || status === 409 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .put('/pr/:id/update-branch', async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: UpdatePullRequestBranchParams = {
+        owner: org,
+        repo,
+        pull_number: pullNumber,
+      }
+
+      await withGithubMetrics(user.id, 'pull_request.update_branch', () =>
+        updateGithubPullRequestBranch({
+          token: githubToken,
+          params,
+        }))
+
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+      }))
+
+      return ctx.body(null, 202)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
         return ctx.json({ error: (error as Error).message }, status)
       }
 
