@@ -4,9 +4,9 @@ All notable changes to Reviu are documented here.
 
 ## 0.1.1
 
-### Repository Pull Request Tabs
+### Repository Pull Request Search and Filters
 
-Repository pull request pages now split open, merged, and closed pull requests into separate tabs with shared search.
+Repository pull request lists now split open, merged, and closed pull requests into separate tabs with search and a sidebar for filtering by labels, people, review state, draft visibility, base branch, and sorting.
 
 ### Pull Request Check Provider Images
 

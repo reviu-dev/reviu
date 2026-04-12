@@ -1264,6 +1264,14 @@ impl VariableListDelegate for GithubPullRequestListDelegate {
   fn loading(&self, _: &App) -> bool {
     self.loading
   }
+
+  fn render_loading(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<VariableListState<Self>>,
+  ) -> impl IntoElement {
+    github_shared::pull_request_list_loading_skeleton(cx)
+  }
 }
 
 pub struct GithubPage {
@@ -1776,6 +1784,8 @@ impl GithubPullRequestTabDialog {
           requested_reviewers: self.selected_requested_reviewers.clone(),
           review_status: self.review_status(cx),
           include_drafts: self.include_drafts,
+          base: None,
+          sort: Default::default(),
         },
       },
     ))
@@ -4384,6 +4394,8 @@ mod tests {
       requested_reviewers: vec!["bob".to_string()],
       review_status: GithubPullRequestReviewStatus::Required,
       include_drafts: false,
+      base: None,
+      sort: Default::default(),
     });
 
     assert_eq!(

@@ -12,6 +12,16 @@ pub enum GithubPullRequestReviewStatus {
   ChangesRequested,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GithubPullRequestSearchSort {
+  #[default]
+  UpdatedDesc,
+  CreatedDesc,
+  CreatedAsc,
+  CommentsDesc,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GithubPullRequestSearchFilters {
   #[serde(default)]
@@ -28,6 +38,10 @@ pub struct GithubPullRequestSearchFilters {
   pub review_status: GithubPullRequestReviewStatus,
   #[serde(default = "default_true")]
   pub include_drafts: bool,
+  #[serde(default)]
+  pub base: Option<String>,
+  #[serde(default)]
+  pub sort: GithubPullRequestSearchSort,
 }
 
 impl Default for GithubPullRequestSearchFilters {
@@ -40,6 +54,8 @@ impl Default for GithubPullRequestSearchFilters {
       requested_reviewers: Vec::new(),
       review_status: GithubPullRequestReviewStatus::Any,
       include_drafts: true,
+      base: None,
+      sort: GithubPullRequestSearchSort::UpdatedDesc,
     }
   }
 }
@@ -151,6 +167,12 @@ pub fn normalize_github_pull_request_filters(
     ),
     review_status: filters.review_status,
     include_drafts: filters.include_drafts,
+    base: filters.base.as_ref().and_then(|base| {
+      normalize_non_empty_list(&[base.as_str()])
+        .into_iter()
+        .next()
+    }),
+    sort: filters.sort,
   }
 }
 
@@ -204,6 +226,8 @@ mod tests {
       requested_reviewers: vec![" bob ".to_string(), "bob".to_string()],
       review_status: GithubPullRequestReviewStatus::Approved,
       include_drafts: false,
+      base: Some(" main ".to_string()),
+      sort: GithubPullRequestSearchSort::CreatedDesc,
     });
 
     assert_eq!(filters.repos, vec!["acme/reviu".to_string()]);
@@ -216,5 +240,7 @@ mod tests {
       GithubPullRequestReviewStatus::Approved
     );
     assert!(!filters.include_drafts);
+    assert_eq!(filters.base.as_deref(), Some("main"));
+    assert_eq!(filters.sort, GithubPullRequestSearchSort::CreatedDesc);
   }
 }
