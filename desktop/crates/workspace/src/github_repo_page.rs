@@ -26,7 +26,7 @@ use gpui_component::{
   label::Label,
   list::ListItem,
   scroll::ScrollableElement,
-  select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
+  select::{SearchableVec, SelectEvent, SelectItem, SelectState},
   spinner::Spinner,
   tab::{Tab, TabBar},
   tag::Tag,
@@ -39,11 +39,11 @@ use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
-  DETAILS_PAGE_CONTAINER_MAX_WIDTH, FILE_ICON_SIZE_PX, Input, InputState, SearchFileEntry,
-  SearchFileHandler, SelectableRowStyle, StatusTag, StatusThemeExt as _, UiIconName, VariableList,
-  VariableListDelegate, VariableListEvent, VariableListState, WindowExt,
-  file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
-  selectable_list_item,
+  DETAILS_PAGE_CONTAINER_MAX_WIDTH, DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX,
+  Input, InputState, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusTag,
+  StatusThemeExt as _, UiIconName, VariableList, VariableListDelegate, VariableListEvent,
+  VariableListState, WindowExt, dropdown_select, file_icon_path_for_name_with_theme, h_resizable,
+  parse_github_url_action, resizable_panel, selectable_list_item,
 };
 
 use crate::{
@@ -439,6 +439,76 @@ fn build_repo_branch_select_items(
   names
     .into_iter()
     .map(GithubRepoBranchSelectItem::new)
+    .collect()
+}
+
+#[derive(Clone)]
+struct GithubRepoBranchDropdownItem {
+  branch: String,
+  label: SharedString,
+  is_selected: bool,
+}
+
+impl DropdownSelectItem for GithubRepoBranchDropdownItem {
+  type Value = String;
+
+  fn value(&self) -> &Self::Value {
+    &self.branch
+  }
+
+  fn selected(&self) -> bool {
+    self.is_selected
+  }
+
+  fn matches(&self, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+      return true;
+    }
+    self.label.to_lowercase().contains(query.as_str())
+  }
+
+  fn render_item(&self, _window: &mut Window, _cx: &mut App) -> gpui::AnyElement {
+    div()
+      .w_full()
+      .min_w_0()
+      .overflow_hidden()
+      .text_ellipsis()
+      .text_sm()
+      .child(self.label.clone())
+      .into_any_element()
+  }
+}
+
+fn build_branch_dropdown_items(
+  branches: &[String],
+  selected_branch: Option<&str>,
+) -> Vec<GithubRepoBranchDropdownItem> {
+  let mut names: Vec<String> = branches
+    .iter()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
+    .collect();
+  names.sort();
+  names.dedup();
+
+  if let Some(selected) = selected_branch.map(str::trim).filter(|s| !s.is_empty()) {
+    if !names.iter().any(|n| n == selected) {
+      names.push(selected.to_string());
+      names.sort();
+    }
+  }
+
+  names
+    .into_iter()
+    .map(|name| {
+      let is_selected = selected_branch == Some(name.as_str());
+      GithubRepoBranchDropdownItem {
+        label: SharedString::from(name.clone()),
+        branch: name,
+        is_selected,
+      }
+    })
     .collect()
 }
 
@@ -2584,6 +2654,7 @@ pub struct GithubRepoPage {
   repo: SharedString,
   branch_select: Entity<SelectState<SearchableVec<GithubRepoBranchSelectItem>>>,
   selected_branch: Option<SharedString>,
+  branch_names: Vec<String>,
   branches_loading: bool,
   branches_error: Option<SharedString>,
   branches_task: Option<Task<()>>,
@@ -2771,6 +2842,7 @@ impl GithubRepoPage {
       repo: "".into(),
       branch_select,
       selected_branch: None,
+      branch_names: Vec::new(),
       branches_loading: false,
       branches_error: None,
       branches_task: None,
@@ -2912,6 +2984,7 @@ impl GithubRepoPage {
     self.branches_error = None;
     self.branches_task = None;
     self.selected_branch = None;
+    self.branch_names = Vec::new();
     self.branches_request_generation = self.branches_request_generation.wrapping_add(1);
     self.set_branch_select_items(Vec::new(), None, cx);
   }
@@ -3108,6 +3181,7 @@ impl GithubRepoPage {
               .collect::<Vec<_>>();
             let selected_branch = this.effective_branch();
             this.selected_branch = selected_branch.clone().map(Into::into);
+            this.branch_names = branch_names.clone();
             let items = build_repo_branch_select_items(branch_names, selected_branch.as_deref());
             this.set_branch_select_items(items, selected_branch, cx);
             this.branches_error = None;
@@ -4529,14 +4603,6 @@ impl GithubRepoPage {
         .rounded_full()
         .child(format!("Open issues {}", repository.open_issues_count)),
     ]);
-    let branch_select = Select::new(&self.branch_select)
-      .placeholder("Select branch...")
-      .search_placeholder("Search branches...")
-      .menu_width(px(320.))
-      .w(px(280.))
-      .small()
-      .disabled(self.repository.is_none());
-
     v_flex().w_full().h_full().min_h_0().p_4().child(
       v_flex()
         .w_full()
@@ -4612,23 +4678,6 @@ impl GithubRepoPage {
         .child(
           v_flex()
             .gap_2()
-            .child(div().text_sm().font_semibold().child("Code branch"))
-            .child(
-              h_flex()
-                .items_center()
-                .gap_2()
-                .child(branch_select)
-                .when(self.branches_loading, |this| {
-                  this.child(Spinner::new().small())
-                }),
-            )
-            .when_some(self.branches_error.clone(), |this, error| {
-              this.child(div().text_xs().text_color(theme.status_red()).child(error))
-            }),
-        )
-        .child(
-          v_flex()
-            .gap_2()
             .child(div().text_sm().font_semibold().child("Repository info"))
             .child(
               h_flex()
@@ -4672,25 +4721,51 @@ impl GithubRepoPage {
       });
     }
 
-    let header = div()
-      .px_3()
-      .flex()
+    let branch_options = build_branch_dropdown_items(
+      &self.branch_names,
+      self.selected_branch.as_ref().map(|s| s.as_ref()),
+    );
+    let view = cx.entity().clone();
+    let on_branch_select = Rc::new(move |branch: String, _window: &mut Window, cx: &mut App| {
+      view.update(cx, |this, cx| {
+        this.set_selected_branch(branch, cx);
+      });
+    });
+
+    let header = h_flex()
+      .pl_3()
       .items_center()
+      .justify_between()
       .h(px(CODE_HEADER_HEIGHT))
       .border_b_1()
       .border_color(theme.border)
       .child(
         h_flex()
           .items_center()
-          .w_full()
-          .justify_between()
-          .child(div().text_sm().text_color(theme.foreground).child("Files"))
-          .child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(count.to_string()),
-          ),
+          .gap_2()
+          .child(div().text_sm().text_color(theme.foreground).child("Files")),
+      )
+      .child(
+        div()
+          .border_l_1()
+          .border_color(theme.border)
+          .child(dropdown_select(
+            DropdownSelectConfig::new("github-repo-branch-select")
+              .placeholder(
+                self
+                  .selected_branch
+                  .clone()
+                  .map(|s| s.to_string())
+                  .unwrap_or_else(|| "Select branch...".to_string()),
+              )
+              .search_placeholder("Search branches...")
+              .options(branch_options)
+              .width(px(220.))
+              .menu_width(px(320.))
+              .trigger_height(px(CODE_HEADER_HEIGHT - 1.))
+              .disabled(self.branches_loading || self.repository.is_none())
+              .on_select(on_branch_select),
+          )),
       );
 
     let list = if self.code_files_loading {
