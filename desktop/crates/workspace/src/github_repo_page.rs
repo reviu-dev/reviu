@@ -23,6 +23,7 @@ use gpui_component::{
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   h_flex,
+  input::InputEvent,
   label::Label,
   list::ListItem,
   scroll::ScrollableElement,
@@ -51,7 +52,7 @@ use crate::{
   api::{
     ApiClient, GithubIssue, GithubIssueDescriptionUpdate, GithubIssueDetails,
     GithubIssueDetailsComment, GithubIssueStateReason, GithubIssueUser, GithubPullRequest,
-    GithubRepositoryDetails,
+    GithubPullRequestState, GithubRepositoryDetails,
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_long_date_opt, format_relative_time},
@@ -160,6 +161,51 @@ fn repo_refresh_in_progress(
 
 fn repo_tab_count_label(count: usize) -> SharedString {
   count.to_string().into()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RepoPullRequestListTab {
+  Open,
+  Merged,
+  Closed,
+}
+
+const REPO_PULL_REQUESTS_OPEN_IX: usize = 0;
+const REPO_PULL_REQUESTS_MERGED_IX: usize = 1;
+const REPO_PULL_REQUESTS_CLOSED_IX: usize = 2;
+
+fn repo_pull_request_list_tab_from_ix(ix: usize) -> RepoPullRequestListTab {
+  match ix {
+    REPO_PULL_REQUESTS_MERGED_IX => RepoPullRequestListTab::Merged,
+    REPO_PULL_REQUESTS_CLOSED_IX => RepoPullRequestListTab::Closed,
+    _ => RepoPullRequestListTab::Open,
+  }
+}
+
+fn repo_pull_request_list_tab_for_pr(pr: &GithubPullRequest) -> RepoPullRequestListTab {
+  if pr.merged_at.is_some() {
+    RepoPullRequestListTab::Merged
+  } else if pr.state == GithubPullRequestState::Closed {
+    RepoPullRequestListTab::Closed
+  } else {
+    RepoPullRequestListTab::Open
+  }
+}
+
+fn repo_pull_request_list_tab(icon: UiIconName, label: &'static str, count: usize) -> Tab {
+  Tab::new().child(
+    h_flex()
+      .items_center()
+      .gap_2()
+      .child(Icon::new(icon).size_3p5())
+      .child(label)
+      .child(
+        Tag::secondary()
+          .small()
+          .rounded_full()
+          .child(repo_tab_count_label(count)),
+      ),
+  )
 }
 
 const CODE_SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
@@ -1011,6 +1057,28 @@ impl GithubRepoPullRequestRow {
         .iter()
         .any(|label| label.name.to_lowercase().contains(&q))
   }
+}
+
+fn repo_pull_request_rows_by_tab(
+  rows: Vec<Rc<GithubRepoPullRequestRow>>,
+) -> (
+  Vec<Rc<GithubRepoPullRequestRow>>,
+  Vec<Rc<GithubRepoPullRequestRow>>,
+  Vec<Rc<GithubRepoPullRequestRow>>,
+) {
+  let mut open_rows = Vec::new();
+  let mut merged_rows = Vec::new();
+  let mut closed_rows = Vec::new();
+
+  for row in rows {
+    match repo_pull_request_list_tab_for_pr(row.pr.as_ref()) {
+      RepoPullRequestListTab::Open => open_rows.push(row),
+      RepoPullRequestListTab::Merged => merged_rows.push(row),
+      RepoPullRequestListTab::Closed => closed_rows.push(row),
+    }
+  }
+
+  (open_rows, merged_rows, closed_rows)
 }
 
 struct GithubRepoPullRequestListDelegate {
@@ -2689,7 +2757,10 @@ pub struct GithubRepoPage {
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
   svg_preview_source: Option<SharedString>,
   svg_preview_task: Option<Task<()>>,
+  pull_requests_search_input: Entity<InputState>,
   pull_requests: Entity<VariableListState<GithubRepoPullRequestListDelegate>>,
+  merged_pull_requests: Entity<VariableListState<GithubRepoPullRequestListDelegate>>,
+  closed_pull_requests: Entity<VariableListState<GithubRepoPullRequestListDelegate>>,
   pull_requests_error: Option<SharedString>,
   pull_requests_task: Option<Task<()>>,
   issues: Entity<VariableListState<GithubRepoIssueListDelegate>>,
@@ -2697,6 +2768,7 @@ pub struct GithubRepoPage {
   issues_task: Option<Task<()>>,
   issue_sheet_width_px: f32,
   active_tab_ix: usize,
+  active_pull_requests_tab_ix: usize,
   pending_issue_sheet_number: Option<u64>,
   pending_issue_sheet_comment_id: Option<u64>,
   _subscriptions: Vec<Subscription>,
@@ -2766,7 +2838,7 @@ impl GithubRepoPageHandle {
           this.readme_loading,
           this.code_files_loading,
           this.code_file_loading,
-          this.pull_requests.read(cx).delegate().loading,
+          this.pull_requests_loading(cx),
           this.issues.read(cx).delegate().loading,
         )
       })
@@ -2824,9 +2896,14 @@ impl GithubRepoPage {
       )
       .searchable(true)
     });
-    let pull_requests = cx.new(|cx| {
-      VariableListState::new(GithubRepoPullRequestListDelegate::new(), window, cx).searchable(true)
-    });
+    let pull_requests =
+      cx.new(|cx| VariableListState::new(GithubRepoPullRequestListDelegate::new(), window, cx));
+    let merged_pull_requests =
+      cx.new(|cx| VariableListState::new(GithubRepoPullRequestListDelegate::new(), window, cx));
+    let closed_pull_requests =
+      cx.new(|cx| VariableListState::new(GithubRepoPullRequestListDelegate::new(), window, cx));
+    let pull_requests_search_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Search pull requests..."));
     let issues = cx.new(|cx| {
       VariableListState::new(GithubRepoIssueListDelegate::new(), window, cx).searchable(true)
     });
@@ -2877,7 +2954,10 @@ impl GithubRepoPage {
       svg_preview: None,
       svg_preview_source: None,
       svg_preview_task: None,
+      pull_requests_search_input,
       pull_requests,
+      merged_pull_requests,
+      closed_pull_requests,
       pull_requests_error: None,
       pull_requests_task: None,
       issues,
@@ -2885,21 +2965,26 @@ impl GithubRepoPage {
       issues_task: None,
       issue_sheet_width_px: ISSUE_DETAILS_SHEET_WIDTH_PX,
       active_tab_ix: 0,
+      active_pull_requests_tab_ix: REPO_PULL_REQUESTS_OPEN_IX,
       pending_issue_sheet_number: None,
       pending_issue_sheet_comment_id: None,
       _subscriptions: Vec::new(),
     };
 
     this.subscribe_to_pull_requests(cx);
+    this.subscribe_to_pull_requests_search(window, cx);
     this.subscribe_to_issues(window, cx);
     this.subscribe_to_branch_select(cx);
     this
   }
 
   fn subscribe_to_pull_requests(&mut self, cx: &mut Context<Self>) {
-    let subscription = cx.subscribe(
-      &self.pull_requests,
-      |this, state, event: &VariableListEvent, cx| {
+    for list in [
+      self.pull_requests.clone(),
+      self.merged_pull_requests.clone(),
+      self.closed_pull_requests.clone(),
+    ] {
+      let subscription = cx.subscribe(&list, |this, state, event: &VariableListEvent, cx| {
         if let VariableListEvent::Confirm(ix) = event {
           let row = state.read(cx).delegate().matched_rows.get(*ix).cloned();
           if let Some(row) = row {
@@ -2913,10 +2998,179 @@ impl GithubRepoPage {
             );
           }
         }
+      });
+
+      self._subscriptions.push(subscription);
+    }
+  }
+
+  fn subscribe_to_pull_requests_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let subscription = cx.subscribe_in(
+      &self.pull_requests_search_input,
+      window,
+      |this, state, event: &InputEvent, _window, cx| {
+        if matches!(event, InputEvent::Change) {
+          let query = state.read(cx).value();
+          this.apply_pull_requests_query(query.as_ref(), cx);
+        }
       },
     );
 
     self._subscriptions.push(subscription);
+  }
+
+  fn pull_requests_loading(&self, cx: &App) -> bool {
+    self.pull_requests.read(cx).delegate().loading
+      || self.merged_pull_requests.read(cx).delegate().loading
+      || self.closed_pull_requests.read(cx).delegate().loading
+  }
+
+  fn pull_requests_total_count(&self, cx: &App) -> usize {
+    self.pull_requests.read(cx).delegate().all_rows.len()
+      + self.merged_pull_requests.read(cx).delegate().all_rows.len()
+      + self.closed_pull_requests.read(cx).delegate().all_rows.len()
+  }
+
+  fn pull_requests_matched_count(
+    list: &Entity<VariableListState<GithubRepoPullRequestListDelegate>>,
+    cx: &App,
+  ) -> usize {
+    list.read(cx).delegate().matched_rows.len()
+  }
+
+  fn active_pull_requests_list(
+    &self,
+  ) -> &Entity<VariableListState<GithubRepoPullRequestListDelegate>> {
+    match repo_pull_request_list_tab_from_ix(self.active_pull_requests_tab_ix) {
+      RepoPullRequestListTab::Open => &self.pull_requests,
+      RepoPullRequestListTab::Merged => &self.merged_pull_requests,
+      RepoPullRequestListTab::Closed => &self.closed_pull_requests,
+    }
+  }
+
+  fn set_active_pull_requests_tab(
+    &mut self,
+    tab_ix: usize,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let tab_ix = match repo_pull_request_list_tab_from_ix(tab_ix) {
+      RepoPullRequestListTab::Open => REPO_PULL_REQUESTS_OPEN_IX,
+      RepoPullRequestListTab::Merged => REPO_PULL_REQUESTS_MERGED_IX,
+      RepoPullRequestListTab::Closed => REPO_PULL_REQUESTS_CLOSED_IX,
+    };
+
+    if self.active_pull_requests_tab_ix == tab_ix {
+      return;
+    }
+
+    self.active_pull_requests_tab_ix = tab_ix;
+    let list = self.active_pull_requests_list().clone();
+    cx.on_next_frame(window, move |_, window, cx| {
+      list.update(cx, |state, cx| {
+        state.focus(window, cx);
+      });
+    });
+    cx.notify();
+  }
+
+  fn update_pull_request_list_rows(
+    list: &Entity<VariableListState<GithubRepoPullRequestListDelegate>>,
+    rows: Vec<Rc<GithubRepoPullRequestRow>>,
+    loading: bool,
+    query: &str,
+    cx: &mut Context<Self>,
+  ) {
+    list.update(cx, |state, cx| {
+      let delegate = state.delegate_mut();
+      delegate.loading = loading;
+      delegate.set_rows(rows);
+      delegate.prepare(query.to_string());
+      delegate.selected_index = if delegate.matched_rows.is_empty() {
+        None
+      } else {
+        Some(0)
+      };
+      cx.notify();
+    });
+  }
+
+  fn set_pull_requests_loading(&mut self, loading: bool, cx: &mut Context<Self>) {
+    for list in [
+      self.pull_requests.clone(),
+      self.merged_pull_requests.clone(),
+      self.closed_pull_requests.clone(),
+    ] {
+      list.update(cx, |state, cx| {
+        state.delegate_mut().loading = loading;
+        cx.notify();
+      });
+    }
+  }
+
+  fn clear_pull_request_rows(&mut self, loading: bool, cx: &mut Context<Self>) {
+    let query = self.pull_requests_search_input.read(cx).value();
+    let query = query.trim().to_string();
+    Self::update_pull_request_list_rows(&self.pull_requests, Vec::new(), loading, &query, cx);
+    Self::update_pull_request_list_rows(
+      &self.merged_pull_requests,
+      Vec::new(),
+      loading,
+      &query,
+      cx,
+    );
+    Self::update_pull_request_list_rows(
+      &self.closed_pull_requests,
+      Vec::new(),
+      loading,
+      &query,
+      cx,
+    );
+  }
+
+  fn set_pull_request_rows(
+    &mut self,
+    rows: Vec<Rc<GithubRepoPullRequestRow>>,
+    cx: &mut Context<Self>,
+  ) {
+    let query = self.pull_requests_search_input.read(cx).value();
+    let query = query.trim().to_string();
+    let (open_rows, merged_rows, closed_rows) = repo_pull_request_rows_by_tab(rows);
+    Self::update_pull_request_list_rows(&self.pull_requests, open_rows, false, &query, cx);
+    Self::update_pull_request_list_rows(&self.merged_pull_requests, merged_rows, false, &query, cx);
+    Self::update_pull_request_list_rows(&self.closed_pull_requests, closed_rows, false, &query, cx);
+  }
+
+  fn apply_pull_requests_query(&mut self, query: &str, cx: &mut Context<Self>) {
+    let query = query.trim().to_string();
+    for list in [
+      self.pull_requests.clone(),
+      self.merged_pull_requests.clone(),
+      self.closed_pull_requests.clone(),
+    ] {
+      let query = query.clone();
+      list.update(cx, |state, cx| {
+        let delegate = state.delegate_mut();
+        delegate.prepare(query);
+        delegate.selected_index = if delegate.matched_rows.is_empty() {
+          None
+        } else {
+          Some(0)
+        };
+        cx.notify();
+      });
+    }
+    cx.notify();
+  }
+
+  fn clear_pull_requests_query(&mut self, cx: &mut Context<Self>) {
+    let input = self.pull_requests_search_input.clone();
+    let window_handle = self.window_handle;
+    let _ = cx.update_window(window_handle, move |_, window, cx| {
+      input.update(cx, |state, cx| {
+        state.set_value("", window, cx);
+      });
+    });
   }
 
   fn subscribe_to_issues(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3327,8 +3581,9 @@ impl GithubRepoPage {
     cx.notify();
 
     if tab_ix == REPO_TAB_PULL_REQUESTS_IX {
-      cx.on_next_frame(window, |this, window, cx| {
-        this.pull_requests.update(cx, |state, cx| {
+      let input = self.pull_requests_search_input.clone();
+      cx.on_next_frame(window, move |_, window, cx| {
+        input.update(cx, |state, cx| {
           state.focus(window, cx);
         });
       });
@@ -3772,10 +4027,7 @@ impl GithubRepoPage {
     }
 
     self.pull_requests_error = None;
-    self.pull_requests.update(cx, |state, cx| {
-      state.delegate_mut().loading = true;
-      cx.notify();
-    });
+    self.set_pull_requests_loading(true, cx);
 
     let api = self.api.clone();
     let owner_for_fetch = owner.clone();
@@ -3815,11 +4067,7 @@ impl GithubRepoPage {
           }
         }
 
-        this.pull_requests.update(cx, |state, cx| {
-          state.delegate_mut().loading = false;
-          state.delegate_mut().set_rows(rows);
-          cx.notify();
-        });
+        this.set_pull_request_rows(rows, cx);
       });
     });
     self.pull_requests_task = Some(task);
@@ -4095,6 +4343,7 @@ impl GithubRepoPage {
     self.owner = owner.clone().into();
     self.repo = repo.clone().into();
     self.active_tab_ix = open_target.tab_ix();
+    self.active_pull_requests_tab_ix = REPO_PULL_REQUESTS_OPEN_IX;
     self.pending_issue_sheet_number = open_target.issue_number();
     self.pending_issue_sheet_comment_id = open_target.issue_comment_id();
 
@@ -4106,11 +4355,8 @@ impl GithubRepoPage {
     self.reset_code_state(cx);
 
     self.pull_requests_error = None;
-    self.pull_requests.update(cx, |state, cx| {
-      state.delegate_mut().loading = true;
-      state.delegate_mut().set_rows(Vec::new());
-      cx.notify();
-    });
+    self.clear_pull_requests_query(cx);
+    self.clear_pull_request_rows(true, cx);
     self.issues_error = None;
     self.issues.update(cx, |state, cx| {
       state.delegate_mut().loading = true;
@@ -4196,11 +4442,7 @@ impl GithubRepoPage {
           }
         }
 
-        this.pull_requests.update(cx, |state, cx| {
-          state.delegate_mut().loading = false;
-          state.delegate_mut().set_rows(rows);
-          cx.notify();
-        });
+        this.set_pull_request_rows(rows, cx);
       });
     });
     self.pull_requests_task = Some(pull_requests_task);
@@ -4461,7 +4703,7 @@ impl GithubRepoPage {
       } else {
         github_shared::repo_label(self.owner.as_ref(), self.repo.as_ref()).into()
       };
-    let pull_requests_count = self.pull_requests.read(cx).delegate().all_rows.len();
+    let pull_requests_count = self.pull_requests_total_count(cx);
     let issues_count = self.issues.read(cx).delegate().all_rows.len();
 
     let tab_bar = TabBar::new("github-repo-tabs")
@@ -5218,9 +5460,39 @@ impl GithubRepoPage {
 
   fn render_pull_requests(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let open_count = Self::pull_requests_matched_count(&self.pull_requests, cx);
+    let merged_count = Self::pull_requests_matched_count(&self.merged_pull_requests, cx);
+    let closed_count = Self::pull_requests_matched_count(&self.closed_pull_requests, cx);
 
-    let list = VariableList::new(&self.pull_requests)
-      .search_placeholder("Search pull requests...")
+    let search = Input::new(&self.pull_requests_search_input)
+      .prefix(Icon::new(IconName::Search).text_color(theme.muted_foreground))
+      .cleanable(true)
+      .w_full();
+
+    let tabs = TabBar::new("github-repo-pull-request-list-tabs")
+      .segmented()
+      .small()
+      .selected_index(self.active_pull_requests_tab_ix)
+      .on_click(cx.listener(|this, ix: &usize, window, cx| {
+        this.set_active_pull_requests_tab(*ix, window, cx);
+      }))
+      .child(repo_pull_request_list_tab(
+        UiIconName::GitPullRequest,
+        "Open",
+        open_count,
+      ))
+      .child(repo_pull_request_list_tab(
+        UiIconName::GitMerge,
+        "Merged",
+        merged_count,
+      ))
+      .child(repo_pull_request_list_tab(
+        UiIconName::GitPullRequestClosed,
+        "Closed",
+        closed_count,
+      ));
+
+    let list = VariableList::new(self.active_pull_requests_list())
       .border_1()
       .border_color(theme.border)
       .rounded(theme.radius)
@@ -5240,6 +5512,8 @@ impl GithubRepoPage {
         .when_some(self.pull_requests_error.clone(), |this, error| {
           this.child(div().text_sm().text_color(theme.red).child(error))
         })
+        .child(search)
+        .child(tabs)
         .child(list),
     )
   }
@@ -5444,14 +5718,25 @@ mod tests {
     number: u64,
     labels: &[&str],
   ) -> GithubRepoPullRequestRow {
+    make_repo_pull_request_row_with_state(title, number, labels, GithubPullRequestState::Open, None)
+  }
+
+  fn make_repo_pull_request_row_with_state(
+    title: &str,
+    number: u64,
+    labels: &[&str],
+    state: GithubPullRequestState,
+    merged_at: Option<&str>,
+  ) -> GithubRepoPullRequestRow {
     GithubRepoPullRequestRow {
       pr: Rc::new(GithubPullRequest {
         number,
         title: title.to_string(),
-        state: GithubPullRequestState::Open,
+        state,
         created_at: "2026-02-12T12:00:00Z".to_string(),
-        closed_at: None,
-        merged_at: None,
+        closed_at: (state == GithubPullRequestState::Closed)
+          .then(|| "2026-02-16T12:00:00Z".to_string()),
+        merged_at: merged_at.map(str::to_string),
         draft: false,
         updated_at: "2026-02-15T12:00:00Z".to_string(),
         comments_count: 0,
@@ -5473,6 +5758,61 @@ mod tests {
         },
       }),
     }
+  }
+
+  #[test]
+  fn repo_pull_request_rows_by_tab_splits_open_merged_and_closed() {
+    let open = Rc::new(make_repo_pull_request_row_with_state(
+      "Open pull request",
+      1,
+      &[],
+      GithubPullRequestState::Open,
+      None,
+    ));
+    let merged = Rc::new(make_repo_pull_request_row_with_state(
+      "Merged pull request",
+      2,
+      &[],
+      GithubPullRequestState::Closed,
+      Some("2026-02-16T12:00:00Z"),
+    ));
+    let closed = Rc::new(make_repo_pull_request_row_with_state(
+      "Closed pull request",
+      3,
+      &[],
+      GithubPullRequestState::Closed,
+      None,
+    ));
+
+    let (open_rows, merged_rows, closed_rows) =
+      repo_pull_request_rows_by_tab(vec![open, merged, closed]);
+
+    assert_eq!(open_rows.len(), 1);
+    assert_eq!(open_rows[0].pr.title, "Open pull request");
+    assert_eq!(merged_rows.len(), 1);
+    assert_eq!(merged_rows[0].pr.title, "Merged pull request");
+    assert_eq!(closed_rows.len(), 1);
+    assert_eq!(closed_rows[0].pr.title, "Closed pull request");
+  }
+
+  #[test]
+  fn repo_pull_request_delegate_search_matches_rows() {
+    let mut delegate = GithubRepoPullRequestListDelegate::new();
+    delegate.set_rows(vec![
+      Rc::new(make_repo_pull_request_row("Fix parser", 1, &["bug"])),
+      Rc::new(make_repo_pull_request_row("Add docs", 2, &["docs"])),
+    ]);
+
+    delegate.prepare("bug");
+    assert_eq!(delegate.matched_rows.len(), 1);
+    assert_eq!(delegate.matched_rows[0].pr.title, "Fix parser");
+
+    delegate.prepare("2");
+    assert_eq!(delegate.matched_rows.len(), 1);
+    assert_eq!(delegate.matched_rows[0].pr.title, "Add docs");
+
+    delegate.prepare("");
+    assert_eq!(delegate.matched_rows.len(), 2);
   }
 
   #[test]

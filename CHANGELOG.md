@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.1.1
 
+### Repository Pull Request Tabs
+
+Repository pull request pages now split open, merged, and closed pull requests into separate tabs with shared search.
+
 ### Pull Request Check Provider Images
 
 Pull request checks now show provider images when GitHub exposes them, making CI, security, and automation results easier to recognize.
