@@ -61,6 +61,12 @@ interface CountableCheckItem {
   required: boolean
 }
 
+interface CheckRunAppMetadata {
+  name: string | null
+  slug: string | null
+  avatarUrl: string | null
+}
+
 function normalizeCheckState(
   status: string | null | undefined,
   conclusion: string | null | undefined,
@@ -155,6 +161,10 @@ function parseCheckRunIdFromUrl(url: string | null | undefined) {
   return Number.isNaN(checkRunId) ? null : checkRunId
 }
 
+function legacyStatusAvatarUrl(status: CommitCombinedStatusResponse['statuses'][number]) {
+  return (status as { avatar_url?: string | null }).avatar_url ?? null
+}
+
 function compareDescendingIsoTimestamps(
   left: string | null | undefined,
   right: string | null | undefined,
@@ -202,6 +212,15 @@ export function buildGithubPullRequestChecksSummary({
 }): GithubPullRequestChecksSummary {
   const { requiredContexts, requiresUpToDateBranch } = extractRequiredStatusCheckConfig(branchRules)
   const requiredContextSet = new Set(requiredContexts)
+  const checkRunAppsById = new Map<number, CheckRunAppMetadata>()
+
+  for (const checkRun of checkRuns?.check_runs ?? []) {
+    checkRunAppsById.set(checkRun.id, {
+      name: checkRun.app?.name ?? null,
+      slug: checkRun.app?.slug ?? null,
+      avatarUrl: checkRun.app?.owner?.avatar_url ?? null,
+    })
+  }
 
   const actionsRuns = (workflowRuns?.workflow_runs ?? [])
     .filter(run => run.head_sha === pullRequest.head.sha)
@@ -212,6 +231,8 @@ export function buildGithubPullRequestChecksSummary({
     .map((run): GithubPullRequestWorkflowRun => {
       const jobs = (workflowRunJobsByRunId.get(run.id)?.jobs ?? [])
         .map((job): GithubPullRequestWorkflowJob => {
+          const checkRunId = parseCheckRunIdFromUrl(job.check_run_url)
+          const app = checkRunId == null ? undefined : checkRunAppsById.get(checkRunId)
           const steps = (job.steps ?? [])
             .slice()
             .sort((left, right) => left.number - right.number)
@@ -235,6 +256,9 @@ export function buildGithubPullRequestChecksSummary({
             completed_at: job.completed_at ?? null,
             html_url: job.html_url,
             required: requiredContextSet.has(job.name),
+            app_name: app?.name ?? null,
+            app_slug: app?.slug ?? null,
+            app_avatar_url: app?.avatarUrl ?? null,
             steps,
           }
         })
@@ -294,6 +318,7 @@ export function buildGithubPullRequestChecksSummary({
       required: requiredContextSet.has(checkRun.name),
       app_name: checkRun.app?.name ?? null,
       app_slug: checkRun.app?.slug ?? null,
+      app_avatar_url: checkRun.app?.owner?.avatar_url ?? null,
       title: checkRun.output?.title ?? null,
       summary: checkRun.output?.summary ?? null,
       text: checkRun.output?.text ?? null,
@@ -308,6 +333,7 @@ export function buildGithubPullRequestChecksSummary({
       state: normalizeCheckState(status.state, status.state),
       description: status.description ?? null,
       target_url: status.target_url ?? null,
+      avatar_url: legacyStatusAvatarUrl(status),
       created_at: status.created_at,
       updated_at: status.updated_at,
       required: requiredContextSet.has(status.context),

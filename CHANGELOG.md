@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.1.1
 
+### Pull Request Check Provider Images
+
+Pull request checks now show provider images when GitHub exposes them, making CI, security, and automation results easier to recognize.
+
 ### Repository README Links
 
 Relative file links in GitHub repository READMEs now open the Code tab with the referenced file selected.

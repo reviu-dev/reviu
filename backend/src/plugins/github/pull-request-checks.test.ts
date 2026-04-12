@@ -132,6 +132,9 @@ describe('pull request checks summary', () => {
           app: {
             name: 'GitHub Actions',
             slug: 'github-actions',
+            owner: {
+              avatar_url: 'https://avatars.githubusercontent.com/in/15368?v=4',
+            },
           },
         },
         {
@@ -152,6 +155,9 @@ describe('pull request checks summary', () => {
           app: {
             name: 'Reviewdog',
             slug: 'reviewdog',
+            owner: {
+              avatar_url: 'https://avatars.githubusercontent.com/u/15138054?v=4',
+            },
           },
         },
       ]),
@@ -162,6 +168,7 @@ describe('pull request checks summary', () => {
           state: 'success',
           description: 'Security checks passed',
           target_url: 'https://ci.example.com/401',
+          avatar_url: 'https://ci.example.com/avatar.png',
           created_at: '2026-03-19T10:00:00Z',
           updated_at: '2026-03-19T10:04:00Z',
         },
@@ -171,13 +178,20 @@ describe('pull request checks summary', () => {
     expect(summary.actions_runs).toHaveLength(1)
     expect(summary.actions_runs[0].jobs).toHaveLength(1)
     expect(summary.actions_runs[0].jobs[0].required).toBe(true)
+    expect(summary.actions_runs[0].jobs[0].app_avatar_url).toBe(
+      'https://avatars.githubusercontent.com/in/15368?v=4',
+    )
 
     expect(summary.other_checks).toHaveLength(1)
     expect(summary.other_checks[0].name).toBe('lint')
     expect(summary.other_checks[0].required).toBe(true)
+    expect(summary.other_checks[0].app_avatar_url).toBe(
+      'https://avatars.githubusercontent.com/u/15138054?v=4',
+    )
 
     expect(summary.legacy_statuses).toHaveLength(1)
     expect(summary.legacy_statuses[0].context).toBe('security/brakeman')
+    expect(summary.legacy_statuses[0].avatar_url).toBe('https://ci.example.com/avatar.png')
 
     expect(summary.missing_required_contexts).toEqual(['deploy'])
     expect(summary.requires_up_to_date_branch).toBe(true)

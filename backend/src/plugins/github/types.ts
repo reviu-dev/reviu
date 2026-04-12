@@ -374,6 +374,9 @@ export interface GithubPullRequestWorkflowJob {
   completed_at: string | null
   html_url: string | null
   required: boolean
+  app_name: string | null
+  app_slug: string | null
+  app_avatar_url: string | null
   steps: GithubPullRequestWorkflowStep[]
 }
 
@@ -407,6 +410,7 @@ export interface GithubPullRequestCheckRun {
   required: boolean
   app_name: string | null
   app_slug: string | null
+  app_avatar_url: string | null
   title: string | null
   summary: string | null
   text: string | null
@@ -420,6 +424,7 @@ export interface GithubPullRequestLegacyStatus {
   state: GithubPullRequestChecksRollupState
   description: string | null
   target_url: string | null
+  avatar_url: string | null
   created_at: string
   updated_at: string
   required: boolean

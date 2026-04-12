@@ -887,6 +887,7 @@ struct OverviewCheckRow {
   detail: Option<String>,
   app_label: Option<String>,
   app_slug: Option<String>,
+  app_avatar_url: Option<String>,
   open_url: Option<String>,
   duration_label: Option<String>,
 }
@@ -1175,6 +1176,7 @@ fn overview_check_rows(checks: &GithubPullRequestChecksSummary) -> Vec<OverviewC
       detail: Some("Required check has not reported yet".to_string()),
       app_label: None,
       app_slug: None,
+      app_avatar_url: None,
       open_url: None,
       duration_label: None,
     });
@@ -1204,6 +1206,7 @@ fn overview_check_rows(checks: &GithubPullRequestChecksSummary) -> Vec<OverviewC
         detail: overview_check_detail_without_duplicates(run_detail.clone(), &run_name),
         app_label: Some("GitHub Actions".to_string()),
         app_slug: Some("github-actions".to_string()),
+        app_avatar_url: None,
         open_url: run.html_url.clone(),
         duration_label: run_duration_label.clone(),
       });
@@ -1228,8 +1231,17 @@ fn overview_check_rows(checks: &GithubPullRequestChecksSummary) -> Vec<OverviewC
         state: job.state,
         title,
         detail,
-        app_label: Some("GitHub Actions".to_string()),
-        app_slug: Some("github-actions".to_string()),
+        app_label: job
+          .app_name
+          .as_deref()
+          .and_then(non_empty_owned)
+          .or_else(|| Some("GitHub Actions".to_string())),
+        app_slug: job
+          .app_slug
+          .as_deref()
+          .and_then(non_empty_owned)
+          .or_else(|| Some("github-actions".to_string())),
+        app_avatar_url: job.app_avatar_url.as_deref().and_then(non_empty_owned),
         open_url: job.html_url.clone().or_else(|| run.html_url.clone()),
         duration_label: overview_check_duration_label(job_started_at, job_finished_at, job.state),
       });
@@ -1255,6 +1267,7 @@ fn overview_check_rows(checks: &GithubPullRequestChecksSummary) -> Vec<OverviewC
         .and_then(non_empty_owned)
         .or_else(|| check.app_slug.as_deref().and_then(non_empty_owned)),
       app_slug: check.app_slug.as_deref().and_then(non_empty_owned),
+      app_avatar_url: check.app_avatar_url.as_deref().and_then(non_empty_owned),
       open_url: check.details_url.clone().or_else(|| check.html_url.clone()),
       duration_label: overview_check_duration_label(
         check.started_at.as_deref(),
@@ -1275,6 +1288,7 @@ fn overview_check_rows(checks: &GithubPullRequestChecksSummary) -> Vec<OverviewC
       detail: overview_check_detail_without_duplicates(status.description.clone(), &title),
       app_label: None,
       app_slug: None,
+      app_avatar_url: status.avatar_url.as_deref().and_then(non_empty_owned),
       open_url: status.target_url.clone(),
       duration_label: overview_check_duration_label(
         Some(status.created_at.as_str()),
@@ -9769,9 +9783,14 @@ impl GithubPrDetailsPage {
       .rounded(theme.radius)
       .border_1()
       .border_color(theme.border)
+      .overflow_hidden()
       .bg(theme.background);
 
-    if is_github_app {
+    if let Some(url) = row.app_avatar_url.as_deref().and_then(non_empty_owned) {
+      base
+        .child(img(url).size(px(24.0)).rounded(theme.radius))
+        .into_any_element()
+    } else if is_github_app {
       base
         .child(
           Icon::new(IconName::Github)
@@ -13369,13 +13388,15 @@ impl Focusable for GithubPrDetailsPage {
 mod tests {
   use super::*;
   use crate::api::{
-    GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary, GithubPullRequestCommit,
-    GithubPullRequestCommitUser, GithubPullRequestDescriptionUpdate, GithubPullRequestDetails,
-    GithubPullRequestFile, GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser,
-    GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness,
-    GithubPullRequestMergeReadinessStatus, GithubPullRequestReview, GithubPullRequestReviewComment,
-    GithubPullRequestReviewCommentUser, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
-    GithubPullRequestReviewUser, GithubPullRequestState, GithubRepository,
+    GithubPullRequestCheckRun, GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary,
+    GithubPullRequestCommit, GithubPullRequestCommitUser, GithubPullRequestDescriptionUpdate,
+    GithubPullRequestDetails, GithubPullRequestFile, GithubPullRequestIssueComment,
+    GithubPullRequestIssueCommentUser, GithubPullRequestLegacyStatus, GithubPullRequestMergeMethod,
+    GithubPullRequestMergeReadiness, GithubPullRequestMergeReadinessStatus,
+    GithubPullRequestReview, GithubPullRequestReviewComment, GithubPullRequestReviewCommentUser,
+    GithubPullRequestReviewEvent, GithubPullRequestReviewState, GithubPullRequestReviewUser,
+    GithubPullRequestState, GithubPullRequestWorkflowJob, GithubPullRequestWorkflowRun,
+    GithubRepository,
   };
   use crate::workspace::WorkspaceApi;
   use git::{BranchKind, BranchRef, merge_branch};
@@ -13680,6 +13701,97 @@ mod tests {
       other_checks: Vec::new(),
       legacy_statuses: Vec::new(),
     }
+  }
+
+  #[test]
+  fn overview_check_rows_keep_provider_avatar_urls() {
+    let mut checks = make_checks_summary();
+    checks.missing_required_contexts.clear();
+    checks.actions_runs = vec![GithubPullRequestWorkflowRun {
+      id: 100,
+      name: Some("CI".to_string()),
+      display_title: Some("build branch".to_string()),
+      event: "pull_request".to_string(),
+      status: Some("completed".to_string()),
+      conclusion: Some("success".to_string()),
+      state: GithubPullRequestChecksRollupState::Success,
+      created_at: "2026-03-19T10:00:00Z".to_string(),
+      updated_at: "2026-03-19T10:02:00Z".to_string(),
+      run_started_at: Some("2026-03-19T10:00:00Z".to_string()),
+      run_number: 12,
+      run_attempt: Some(1),
+      html_url: Some("https://github.com/acme/widget/actions/runs/100".to_string()),
+      jobs: vec![GithubPullRequestWorkflowJob {
+        id: 200,
+        name: "build".to_string(),
+        status: Some("completed".to_string()),
+        conclusion: Some("success".to_string()),
+        state: GithubPullRequestChecksRollupState::Success,
+        started_at: Some("2026-03-19T10:00:00Z".to_string()),
+        completed_at: Some("2026-03-19T10:02:00Z".to_string()),
+        html_url: Some("https://github.com/acme/widget/actions/runs/100/job/200".to_string()),
+        required: true,
+        app_name: Some("GitHub Actions".to_string()),
+        app_slug: Some("github-actions".to_string()),
+        app_avatar_url: Some("https://avatars.githubusercontent.com/in/15368?v=4".to_string()),
+        steps: Vec::new(),
+      }],
+    }];
+    checks.other_checks = vec![GithubPullRequestCheckRun {
+      id: 301,
+      name: "lint".to_string(),
+      status: Some("completed".to_string()),
+      conclusion: Some("failure".to_string()),
+      state: GithubPullRequestChecksRollupState::Failure,
+      started_at: Some("2026-03-19T10:01:00Z".to_string()),
+      completed_at: Some("2026-03-19T10:03:00Z".to_string()),
+      html_url: Some("https://github.com/acme/widget/runs/301".to_string()),
+      details_url: Some("https://github.com/acme/widget/runs/301".to_string()),
+      required: true,
+      app_name: Some("Reviewdog".to_string()),
+      app_slug: Some("reviewdog".to_string()),
+      app_avatar_url: Some("https://avatars.githubusercontent.com/u/15138054?v=4".to_string()),
+      title: Some("Lint".to_string()),
+      summary: Some("Lint failed".to_string()),
+      text: None,
+      annotations_count: 2,
+    }];
+    checks.legacy_statuses = vec![GithubPullRequestLegacyStatus {
+      id: 401,
+      context: "security/brakeman".to_string(),
+      status: "success".to_string(),
+      state: GithubPullRequestChecksRollupState::Success,
+      description: Some("Security checks passed".to_string()),
+      target_url: Some("https://ci.example.com/401".to_string()),
+      avatar_url: Some("https://ci.example.com/avatar.png".to_string()),
+      created_at: "2026-03-19T10:00:00Z".to_string(),
+      updated_at: "2026-03-19T10:04:00Z".to_string(),
+      required: false,
+    }];
+
+    let rows = overview_check_rows(&checks);
+
+    assert_eq!(
+      rows
+        .iter()
+        .find(|row| row.id == "workflow-job-200")
+        .and_then(|row| row.app_avatar_url.as_deref()),
+      Some("https://avatars.githubusercontent.com/in/15368?v=4")
+    );
+    assert_eq!(
+      rows
+        .iter()
+        .find(|row| row.id == "check-run-301")
+        .and_then(|row| row.app_avatar_url.as_deref()),
+      Some("https://avatars.githubusercontent.com/u/15138054?v=4")
+    );
+    assert_eq!(
+      rows
+        .iter()
+        .find(|row| row.id == "legacy-status-401")
+        .and_then(|row| row.app_avatar_url.as_deref()),
+      Some("https://ci.example.com/avatar.png")
+    );
   }
 
   #[gpui::test]
