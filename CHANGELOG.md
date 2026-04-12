@@ -2,7 +2,7 @@
 
 All notable changes to Reviu are documented here.
 
-## 0.0.14
+## 0.1.0
 
 ### Pull Request People Management
 
