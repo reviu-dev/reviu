@@ -50,6 +50,10 @@ pub struct GithubCodeReferencePreview {
   pub start_line: usize,
   pub end_line: usize,
   pub snippets: Vec<Arc<str>>,
+  /// Full file content for accurate syntax highlighting.
+  /// When provided, the highlighter runs on the entire file and extracts
+  /// spans for the visible lines, giving tree-sitter proper context.
+  pub full_content: Option<Arc<str>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
