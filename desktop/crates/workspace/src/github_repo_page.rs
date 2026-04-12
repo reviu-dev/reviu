@@ -1617,6 +1617,14 @@ impl VariableListDelegate for GithubRepoIssueListDelegate {
   fn loading(&self, _: &App) -> bool {
     self.loading
   }
+
+  fn render_loading(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<VariableListState<Self>>,
+  ) -> impl IntoElement {
+    github_shared::issue_list_loading_skeleton(REPO_ISSUE_ROW_COMPACT_HEIGHT_PX, cx)
+  }
 }
 
 struct GithubIssueDetailsSheetView {
