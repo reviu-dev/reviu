@@ -6284,8 +6284,6 @@ impl GithubRepoPage {
         .w_full()
         .h_full()
         .min_h_0()
-        .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
-        .mx_auto()
         .gap_3()
         .when_some(self.issues_error.clone(), |this, error| {
           this.child(div().text_sm().text_color(theme.red).child(error))
