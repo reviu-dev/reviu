@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use crate::AppProfile;
 use crate::crash_report::StartupCrashReport;
 use crate::github_home_tabs::{
-  GithubPullRequestFilterOptionUser, GithubPullRequestFilterOptions,
+  GithubIssueSearchFilters, GithubPullRequestFilterOptionUser, GithubPullRequestFilterOptions,
   GithubPullRequestSearchFilters, GithubPullRequestSearchSort,
 };
 use crate::sentry_context;
@@ -915,6 +915,16 @@ struct GithubPullRequestSearchRequest<'a> {
   filters: &'a GithubPullRequestSearchFilters,
 }
 
+#[derive(Debug, Serialize)]
+struct GithubIssueSearchRequest<'a> {
+  filters: &'a GithubIssueSearchFilters,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubIssueSearchResponse {
+  issues: Vec<GithubIssue>,
+}
+
 #[derive(Debug, Deserialize)]
 struct GithubPullRequestFilterOptionsResponse {
   options: GithubPullRequestFilterOptions,
@@ -1024,11 +1034,6 @@ struct GithubPullRequestLabelsMutationRequest<'a> {
 #[derive(Debug, Deserialize)]
 struct GithubUserRepositoriesResponse {
   repositories: Vec<GithubUserRepository>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GithubIssuesResponse {
-  issues: Vec<GithubIssue>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1450,6 +1455,28 @@ impl ApiClient {
     Ok(payload.options)
   }
 
+  pub fn fetch_github_issues_search(
+    &self,
+    filters: &GithubIssueSearchFilters,
+    state: &str,
+  ) -> Result<Vec<GithubIssue>> {
+    let route = format!("/github/issue/search?state={state}");
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .json(&GithubIssueSearchRequest { filters })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", "/github/issue/search", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubIssueSearchResponse>()?;
+    Ok(payload.issues)
+  }
+
   pub fn fetch_github_user_repositories(&self) -> Result<Vec<GithubUserRepository>> {
     let response = self
       .authed_request(Method::GET, "/github/repos/me")
@@ -1638,25 +1665,6 @@ impl ApiClient {
     payload
       .pull_request
       .ok_or_else(|| anyhow::anyhow!("Missing pull request in response"))
-  }
-
-  pub fn fetch_github_repository_issues(
-    &self,
-    owner: &str,
-    repo: &str,
-  ) -> Result<Vec<GithubIssue>> {
-    let route = format!("/github/repos/{owner}/{repo}/issues");
-    let response = self.authed_request(Method::GET, route.as_str()).send()?;
-    let status = response.status();
-    Self::record_http_status("GET", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    let payload = response.json::<GithubIssuesResponse>()?;
-    Ok(payload.issues)
   }
 
   pub fn fetch_github_repository_issue_details(
@@ -3600,54 +3608,6 @@ mod tests {
       .fetch_github_repository_readme("acme", "widget", Some("main"))
       .expect("fetch repository readme");
     assert!(readme.is_none());
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_repository_issues_parses_success_payload() {
-    let body = r#"{
-      "issues": [
-        {
-          "id": 101,
-          "number": 44,
-          "title": "Fix flaky test in CI",
-          "state": "closed",
-          "state_reason": "completed",
-          "created_at": "2026-02-15T10:00:00Z",
-          "updated_at": "2026-02-18T11:30:00Z",
-          "closed_at": "2026-02-18T11:30:00Z",
-          "labels": [{ "name": "bug", "color": "f29513" }],
-          "comments_count": 3,
-          "user": {
-            "login": "octocat",
-            "name": "The Octocat",
-            "avatar_url": "https://example.com/octocat.png"
-          },
-          "repository": { "owner": "acme", "repo": "widget" }
-        }
-      ]
-    }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let issues = api
-      .fetch_github_repository_issues("acme", "widget")
-      .expect("fetch repository issues");
-    assert_eq!(issues.len(), 1);
-    assert_eq!(issues[0].number, 44);
-    assert_eq!(issues[0].title, "Fix flaky test in CI");
-    assert_eq!(issues[0].state, "closed");
-    assert_eq!(
-      issues[0].state_reason,
-      Some(GithubIssueStateReason::Completed)
-    );
-    assert_eq!(
-      issues[0].user.as_ref().map(|user| user.login.as_str()),
-      Some("octocat")
-    );
-    assert_eq!(issues[0].labels[0].color.as_deref(), Some("f29513"));
-    assert_eq!(issues[0].repository.owner, "acme");
-    assert_eq!(issues[0].repository.repo, "widget");
     handle.join().expect("join server thread");
   }
 
@@ -5642,17 +5602,6 @@ mod tests {
     let err = api
       .fetch_github_repository_readme("acme", "widget", Some("main"))
       .err();
-    assert!(err.is_some());
-    assert!(err.expect("error").to_string().contains("unauthorized"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_repository_issues_returns_unauthorized_error() {
-    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
-    let api = make_test_api_client(base_url);
-
-    let err = api.fetch_github_repository_issues("acme", "widget").err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");
