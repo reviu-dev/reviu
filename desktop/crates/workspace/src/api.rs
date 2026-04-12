@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 use crate::AppProfile;
 use crate::crash_report::StartupCrashReport;
 use crate::github_home_tabs::{
-  GithubPullRequestFilterOptionUser, GithubPullRequestFilterOptions, GithubPullRequestSearchFilters,
+  GithubPullRequestFilterOptionUser, GithubPullRequestFilterOptions,
+  GithubPullRequestSearchFilters, GithubPullRequestSearchSort,
 };
 use crate::sentry_context;
 
@@ -924,6 +925,70 @@ struct GithubPullRequestFilterOptionsRequest<'a> {
   repos: &'a [String],
 }
 
+fn github_pull_request_search_sort_query(sort: GithubPullRequestSearchSort) -> &'static str {
+  match sort {
+    GithubPullRequestSearchSort::UpdatedDesc => "updated_desc",
+    GithubPullRequestSearchSort::CreatedDesc => "created_desc",
+    GithubPullRequestSearchSort::CreatedAsc => "created_asc",
+    GithubPullRequestSearchSort::CommentsDesc => "comments_desc",
+  }
+}
+
+fn github_pull_request_review_status_query(
+  status: crate::github_home_tabs::GithubPullRequestReviewStatus,
+) -> &'static str {
+  match status {
+    crate::github_home_tabs::GithubPullRequestReviewStatus::Any => "any",
+    crate::github_home_tabs::GithubPullRequestReviewStatus::None => "none",
+    crate::github_home_tabs::GithubPullRequestReviewStatus::Required => "required",
+    crate::github_home_tabs::GithubPullRequestReviewStatus::Approved => "approved",
+    crate::github_home_tabs::GithubPullRequestReviewStatus::ChangesRequested => "changes_requested",
+  }
+}
+
+fn github_repository_pull_request_filter_query(
+  filters: &GithubPullRequestSearchFilters,
+) -> Vec<(String, String)> {
+  let mut query = Vec::new();
+
+  for label in &filters.labels {
+    query.push(("label".to_string(), label.clone()));
+  }
+  for author in &filters.authors {
+    query.push(("author".to_string(), author.clone()));
+  }
+  for assignee in &filters.assignees {
+    query.push(("assignee".to_string(), assignee.clone()));
+  }
+  for reviewer in &filters.requested_reviewers {
+    query.push(("requested_reviewer".to_string(), reviewer.clone()));
+  }
+
+  if filters.review_status != crate::github_home_tabs::GithubPullRequestReviewStatus::Any {
+    query.push((
+      "review_status".to_string(),
+      github_pull_request_review_status_query(filters.review_status).to_string(),
+    ));
+  }
+
+  if !filters.include_drafts {
+    query.push(("include_drafts".to_string(), "false".to_string()));
+  }
+
+  if let Some(base) = filters.base.as_ref().filter(|base| !base.trim().is_empty()) {
+    query.push(("base".to_string(), base.trim().to_string()));
+  }
+
+  if filters.sort != GithubPullRequestSearchSort::UpdatedDesc {
+    query.push((
+      "sort".to_string(),
+      github_pull_request_search_sort_query(filters.sort).to_string(),
+    ));
+  }
+
+  query
+}
+
 #[derive(Debug, Deserialize)]
 struct GithubPullRequestResponse {
   #[serde(rename = "pullRequest")]
@@ -1496,9 +1561,14 @@ impl ApiClient {
     &self,
     owner: &str,
     repo: &str,
+    filters: &GithubPullRequestSearchFilters,
   ) -> Result<Vec<GithubPullRequest>> {
     let route = format!("/github/repos/{owner}/{repo}/pr");
-    let response = self.authed_request(Method::GET, route.as_str()).send()?;
+    let query = github_repository_pull_request_filter_query(filters);
+    let response = self
+      .authed_request(Method::GET, route.as_str())
+      .query(&query)
+      .send()?;
     let status = response.status();
     Self::record_http_status("GET", route.as_str(), status);
     if status == StatusCode::UNAUTHORIZED {
@@ -2886,6 +2956,8 @@ mod tests {
       requested_reviewers: vec!["@me".to_string()],
       review_status: crate::github_home_tabs::GithubPullRequestReviewStatus::Required,
       include_drafts: false,
+      base: Some("main".to_string()),
+      sort: crate::github_home_tabs::GithubPullRequestSearchSort::CommentsDesc,
     };
 
     let _ = api
@@ -2920,6 +2992,11 @@ mod tests {
     );
     assert!(
       request.contains("\"include_drafts\":false"),
+      "request: {request}"
+    );
+    assert!(request.contains("\"base\":\"main\""), "request: {request}");
+    assert!(
+      request.contains("\"sort\":\"comments_desc\""),
       "request: {request}"
     );
   }
@@ -3108,9 +3185,10 @@ mod tests {
     }"#;
     let (base_url, handle) = start_single_response_server("200 OK", body);
     let api = make_test_api_client(base_url);
+    let filters = GithubPullRequestSearchFilters::default();
 
     let prs = api
-      .fetch_github_repository_pull_requests("acme", "widget")
+      .fetch_github_repository_pull_requests("acme", "widget", &filters)
       .expect("fetch repository pull requests");
     assert_eq!(prs.len(), 1);
     assert_eq!(prs[0].number, 11);
@@ -3123,6 +3201,72 @@ mod tests {
     assert_eq!(prs[0].repository.owner, "acme");
     assert_eq!(prs[0].repository.repo, "widget");
     handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_repository_pull_requests_uses_filter_query_params() {
+    let body = r#"{"pullRequests":[]}"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+    let filters = GithubPullRequestSearchFilters {
+      labels: vec!["needs design".to_string()],
+      authors: vec!["@me".to_string()],
+      assignees: vec!["alice".to_string()],
+      requested_reviewers: vec!["bob".to_string()],
+      review_status: crate::github_home_tabs::GithubPullRequestReviewStatus::ChangesRequested,
+      include_drafts: false,
+      base: Some("feature/ui".to_string()),
+      sort: GithubPullRequestSearchSort::CommentsDesc,
+      ..GithubPullRequestSearchFilters::default()
+    };
+
+    let _ = api
+      .fetch_github_repository_pull_requests("acme", "widget", &filters)
+      .expect("fetch repository pull requests");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request_line.starts_with("GET /github/repos/acme/widget/pr?"),
+      "request_line: {request_line}"
+    );
+    assert!(
+      request_line.contains("label=needs+design"),
+      "request_line: {request_line}"
+    );
+    assert!(
+      request_line.contains("author=%40me"),
+      "request_line: {request_line}"
+    );
+    assert!(
+      request_line.contains("assignee=alice"),
+      "request_line: {request_line}"
+    );
+    assert!(
+      request_line.contains("requested_reviewer=bob"),
+      "request_line: {request_line}"
+    );
+    assert!(
+      request_line.contains("review_status=changes_requested"),
+      "request_line: {request_line}"
+    );
+    assert!(
+      request_line.contains("include_drafts=false"),
+      "request_line: {request_line}"
+    );
+    assert!(
+      request_line.contains("base=feature%2Fui"),
+      "request_line: {request_line}"
+    );
+    assert!(
+      request_line.contains("sort=comments_desc"),
+      "request_line: {request_line}"
+    );
   }
 
   #[test]
@@ -5397,9 +5541,10 @@ mod tests {
   fn fetch_github_repository_pull_requests_returns_unauthorized_error() {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
     let api = make_test_api_client(base_url);
+    let filters = GithubPullRequestSearchFilters::default();
 
     let err = api
-      .fetch_github_repository_pull_requests("acme", "widget")
+      .fetch_github_repository_pull_requests("acme", "widget", &filters)
       .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));

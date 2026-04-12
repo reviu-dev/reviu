@@ -3,7 +3,7 @@ use std::sync::Arc;
 use gpui::{App, Hsla, IntoElement, ParentElement as _, SharedString, Styled, div, prelude::*};
 use gpui_component::{
   ActiveTheme as _, Colorize as _, Icon, IconName, Sizable as _, avatar::Avatar, h_flex,
-  label::Label, tag::Tag, v_flex,
+  label::Label, skeleton::Skeleton, tag::Tag, v_flex,
 };
 use time::OffsetDateTime;
 use ui::{StatusTag, StatusThemeExt as _, UiIconName};
@@ -18,6 +18,55 @@ use crate::{
 
 pub(crate) const PULL_REQUEST_ROW_HEIGHT_PX: f32 = 56.0;
 pub(crate) const PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX: f32 = 80.0;
+
+pub(crate) fn pull_request_list_loading_skeleton(cx: &App) -> impl IntoElement {
+  let theme = cx.theme();
+  let row_height = PULL_REQUEST_ROW_HEIGHT_PX;
+
+  v_flex().w_full().p_2().children((0..6).map(|_| {
+    v_flex()
+      .w_full()
+      .gap_1()
+      .px_2()
+      .h(gpui::px(row_height))
+      .justify_center()
+      .child(
+        h_flex()
+          .items_center()
+          .justify_between()
+          .gap_2()
+          .child(
+            Skeleton::new()
+              .w(gpui::px(220.0))
+              .h(gpui::px(14.0))
+              .rounded(theme.radius),
+          )
+          .child(
+            Skeleton::new()
+              .w(gpui::px(50.0))
+              .h(gpui::px(18.0))
+              .rounded_full(),
+          ),
+      )
+      .child(
+        h_flex()
+          .items_center()
+          .gap_1()
+          .child(
+            Skeleton::new()
+              .w(gpui::px(200.0))
+              .h(gpui::px(12.0))
+              .rounded(theme.radius),
+          )
+          .child(
+            Skeleton::new()
+              .w(gpui::px(60.0))
+              .h(gpui::px(12.0))
+              .rounded(theme.radius),
+          ),
+      )
+  }))
+}
 
 pub(crate) fn make_asset_url_resolver(
   api: &ApiClient,

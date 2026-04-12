@@ -214,6 +214,12 @@ export type GithubPullRequestSearchReviewStatus
     | 'approved'
     | 'changes_requested'
 
+export type GithubPullRequestSearchSort
+  = 'updated_desc'
+    | 'created_desc'
+    | 'created_asc'
+    | 'comments_desc'
+
 export interface GithubPullRequestSearchFilters {
   repos: string[]
   labels: string[]
@@ -222,6 +228,8 @@ export interface GithubPullRequestSearchFilters {
   requested_reviewers: string[]
   review_status: GithubPullRequestSearchReviewStatus
   include_drafts: boolean
+  base: string | null
+  sort: GithubPullRequestSearchSort
 }
 
 export interface GithubPullRequestFilterOptionUser {

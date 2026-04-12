@@ -374,14 +374,16 @@ export function createGithubRepositoryPullRequestsCachePolicy(
   userId: string,
   owner: string,
   repo: string,
+  filtersCacheKey?: string,
 ): GithubCachePolicy {
   const repositoryKey = normalizeRepositoryKey(owner, repo)
+  const filtersKey = filtersCacheKey ? `:${encodeURIComponent(filtersCacheKey)}` : ''
 
   return {
     operation: 'repository.pull_requests',
     scope: 'viewer',
     scopeId: userId,
-    resourceKey: `repo:${repositoryKey}:pull-requests`,
+    resourceKey: `repo:${repositoryKey}:pull-requests${filtersKey}`,
     ttlMs: GITHUB_REPOSITORY_PULL_REQUESTS_CACHE_TTL_MS,
     staleMs: GITHUB_REPOSITORY_PULL_REQUESTS_CACHE_STALE_MS,
     tags: [getGithubRepoPullRequestsTag(owner, repo)],

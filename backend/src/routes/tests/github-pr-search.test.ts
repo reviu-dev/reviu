@@ -148,6 +148,40 @@ describe('github pull request search routes', () => {
     })
   })
 
+  it('searches repository pull requests through the existing repo list route', async () => {
+    const response = await request(
+      '/repos/acme/widget/pr?label=bug&label=needs%20design&author=%40me&assignee=alice&requested_reviewer=bob&review_status=changes_requested&include_drafts=false&base=main&sort=comments_desc',
+    )
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      pullRequests: [],
+    })
+    expect(fetchGithubPullRequestSearchGraphql).toHaveBeenCalledWith({
+      token: 'github-token',
+      query: 'is:pr archived:false repo:acme/widget (label:"bug" OR label:"needs design") author:@me assignee:alice review-requested:bob review:changes_requested draft:false base:main sort:comments-desc',
+      limit: 100,
+    })
+  })
+
+  it('uses GitHub Search for repository pull requests without filters', async () => {
+    const response = await request('/repos/acme/widget/pr')
+
+    expect(response.status).toBe(200)
+    expect(fetchGithubPullRequestSearchGraphql).toHaveBeenCalledWith({
+      token: 'github-token',
+      query: 'is:pr archived:false repo:acme/widget sort:updated-desc',
+      limit: 100,
+    })
+  })
+
+  it('rejects invalid repository pull request filter values', async () => {
+    const response = await request('/repos/acme/widget/pr?sort=unknown')
+
+    expect(response.status).toBe(400)
+    expect(fetchGithubPullRequestSearchGraphql).not.toHaveBeenCalled()
+  })
+
   it('aggregates label, assignee, and author filter options for selected repositories', async () => {
     fetchGithubRepositoryLabels.mockImplementation(async ({ params }: any) => {
       if (params.repo === 'reviu') {

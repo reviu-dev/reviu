@@ -22,6 +22,7 @@ use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Placement, Selectable, Sizable as _, StyledExt,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
+  checkbox::Checkbox,
   h_flex,
   input::InputEvent,
   label::Label,
@@ -40,11 +41,12 @@ use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
-  DETAILS_PAGE_CONTAINER_MAX_WIDTH, DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX,
-  Input, InputState, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusTag,
-  StatusThemeExt as _, UiIconName, VariableList, VariableListDelegate, VariableListEvent,
-  VariableListState, WindowExt, dropdown_select, file_icon_path_for_name_with_theme, h_resizable,
-  parse_github_url_action, resizable_panel, selectable_list_item,
+  DETAILS_PAGE_CONTAINER_MAX_WIDTH, DropdownSelectConfig, DropdownSelectItem, DropdownSelectOption,
+  FILE_ICON_SIZE_PX, Input, InputState, SearchFileEntry, SearchFileHandler, SelectableRowStyle,
+  StatusTag, StatusThemeExt as _, UiIconName, VariableList, VariableListDelegate,
+  VariableListEvent, VariableListState, WindowExt, dropdown_select,
+  file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
+  selectable_list_item,
 };
 
 use crate::{
@@ -58,6 +60,11 @@ use crate::{
   date_format::{format_long_date_opt, format_relative_time},
   file_preview::{is_markdown_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
+  github_home_tabs::{
+    GithubPullRequestFilterOptionLabel, GithubPullRequestFilterOptionUser,
+    GithubPullRequestFilterOptions, GithubPullRequestReviewStatus, GithubPullRequestSearchFilters,
+    GithubPullRequestSearchSort, normalize_github_pull_request_filters,
+  },
   github_navigation::{
     SameRepoIssueLinkNavigation, open_pr_target, open_repo_target, same_repo_issue_link_navigation,
     should_open_externally,
@@ -206,6 +213,166 @@ fn repo_pull_request_list_tab(icon: UiIconName, label: &'static str, count: usiz
           .child(repo_tab_count_label(count)),
       ),
   )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RepoPullRequestFilterTokenKind {
+  Label,
+  Author,
+  Assignee,
+  RequestedReviewer,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RepoPullRequestFilterChip {
+  Label(String),
+  Author(String),
+  Assignee(String),
+  RequestedReviewer(String),
+  ReviewStatus,
+  DraftsHidden,
+  Base(String),
+  Sort,
+}
+
+fn pull_request_review_status_label(status: GithubPullRequestReviewStatus) -> &'static str {
+  match status {
+    GithubPullRequestReviewStatus::Any => "Any review state",
+    GithubPullRequestReviewStatus::None => "No review",
+    GithubPullRequestReviewStatus::Required => "Review required",
+    GithubPullRequestReviewStatus::Approved => "Approved",
+    GithubPullRequestReviewStatus::ChangesRequested => "Changes requested",
+  }
+}
+
+fn pull_request_search_sort_label(sort: GithubPullRequestSearchSort) -> &'static str {
+  match sort {
+    GithubPullRequestSearchSort::UpdatedDesc => "Recently updated",
+    GithubPullRequestSearchSort::CreatedDesc => "Newest",
+    GithubPullRequestSearchSort::CreatedAsc => "Oldest",
+    GithubPullRequestSearchSort::CommentsDesc => "Most commented",
+  }
+}
+
+fn repo_pull_request_filter_chips(
+  filters: &GithubPullRequestSearchFilters,
+) -> Vec<RepoPullRequestFilterChip> {
+  let mut chips = Vec::new();
+
+  chips.extend(
+    filters
+      .labels
+      .iter()
+      .cloned()
+      .map(RepoPullRequestFilterChip::Label),
+  );
+  chips.extend(
+    filters
+      .authors
+      .iter()
+      .cloned()
+      .map(RepoPullRequestFilterChip::Author),
+  );
+  chips.extend(
+    filters
+      .assignees
+      .iter()
+      .cloned()
+      .map(RepoPullRequestFilterChip::Assignee),
+  );
+  chips.extend(
+    filters
+      .requested_reviewers
+      .iter()
+      .cloned()
+      .map(RepoPullRequestFilterChip::RequestedReviewer),
+  );
+
+  if filters.review_status != GithubPullRequestReviewStatus::Any {
+    chips.push(RepoPullRequestFilterChip::ReviewStatus);
+  }
+  if !filters.include_drafts {
+    chips.push(RepoPullRequestFilterChip::DraftsHidden);
+  }
+  if let Some(base) = filters.base.as_ref().filter(|base| !base.trim().is_empty()) {
+    chips.push(RepoPullRequestFilterChip::Base(base.trim().to_string()));
+  }
+  if filters.sort != GithubPullRequestSearchSort::UpdatedDesc {
+    chips.push(RepoPullRequestFilterChip::Sort);
+  }
+
+  chips
+}
+
+fn filter_tokens_contains(values: &[String], candidate: &str) -> bool {
+  values
+    .iter()
+    .any(|value| value.eq_ignore_ascii_case(candidate))
+}
+
+fn push_filter_token(values: &mut Vec<String>, raw_value: &str) -> bool {
+  let Some(value) = normalize_non_empty_string(raw_value) else {
+    return false;
+  };
+  if filter_tokens_contains(values, &value) {
+    return false;
+  }
+  values.push(value);
+  true
+}
+
+fn remove_filter_token(values: &mut Vec<String>, raw_value: &str) -> bool {
+  let old_len = values.len();
+  values.retain(|value| !value.eq_ignore_ascii_case(raw_value));
+  values.len() != old_len
+}
+
+fn matching_filter_option_labels(
+  options: &[GithubPullRequestFilterOptionLabel],
+  query: &str,
+  selected: &[String],
+) -> Vec<String> {
+  let query = query.trim().to_lowercase();
+  options
+    .iter()
+    .filter(|option| !filter_tokens_contains(selected, &option.name))
+    .filter(|option| query.is_empty() || option.name.to_lowercase().contains(&query))
+    .map(|option| option.name.clone())
+    .take(6)
+    .collect()
+}
+
+fn matching_filter_option_users(
+  options: &[GithubPullRequestFilterOptionUser],
+  query: &str,
+  selected: &[String],
+  include_current_user_fallback: bool,
+) -> Vec<String> {
+  let query = query.trim().to_lowercase();
+  let mut suggestions = Vec::new();
+
+  if include_current_user_fallback
+    && !filter_tokens_contains(selected, "@me")
+    && (query.is_empty() || "@me".contains(query.as_str()))
+  {
+    suggestions.push("@me".to_string());
+  }
+
+  for option in options
+    .iter()
+    .filter(|option| !filter_tokens_contains(selected, &option.login))
+    .filter(|option| query.is_empty() || option.login.to_lowercase().contains(&query))
+  {
+    if filter_tokens_contains(&suggestions, &option.login) {
+      continue;
+    }
+    suggestions.push(option.login.clone());
+    if suggestions.len() == 6 {
+      break;
+    }
+  }
+
+  suggestions
 }
 
 const CODE_SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
@@ -1197,6 +1364,14 @@ impl VariableListDelegate for GithubRepoPullRequestListDelegate {
 
   fn loading(&self, _: &App) -> bool {
     self.loading
+  }
+
+  fn render_loading(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<VariableListState<Self>>,
+  ) -> impl IntoElement {
+    github_shared::pull_request_list_loading_skeleton(cx)
   }
 }
 
@@ -2758,6 +2933,17 @@ pub struct GithubRepoPage {
   svg_preview_source: Option<SharedString>,
   svg_preview_task: Option<Task<()>>,
   pull_requests_search_input: Entity<InputState>,
+  pull_request_filter_label_input: Entity<InputState>,
+  pull_request_filter_author_input: Entity<InputState>,
+  pull_request_filter_assignee_input: Entity<InputState>,
+  pull_request_filter_reviewer_input: Entity<InputState>,
+  pull_request_filters: GithubPullRequestSearchFilters,
+  pull_request_filter_options: GithubPullRequestFilterOptions,
+  pull_request_filter_options_loading: bool,
+  pull_request_filter_options_error: Option<SharedString>,
+  pull_request_filter_options_task: Option<Task<()>>,
+  pull_request_filter_popover_open: bool,
+  pull_requests_request_generation: u64,
   pull_requests: Entity<VariableListState<GithubRepoPullRequestListDelegate>>,
   merged_pull_requests: Entity<VariableListState<GithubRepoPullRequestListDelegate>>,
   closed_pull_requests: Entity<VariableListState<GithubRepoPullRequestListDelegate>>,
@@ -2904,6 +3090,14 @@ impl GithubRepoPage {
       cx.new(|cx| VariableListState::new(GithubRepoPullRequestListDelegate::new(), window, cx));
     let pull_requests_search_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Search pull requests..."));
+    let pull_request_filter_label_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Add label..."));
+    let pull_request_filter_author_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Add author..."));
+    let pull_request_filter_assignee_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Add assignee..."));
+    let pull_request_filter_reviewer_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Add reviewer..."));
     let issues = cx.new(|cx| {
       VariableListState::new(GithubRepoIssueListDelegate::new(), window, cx).searchable(true)
     });
@@ -2955,6 +3149,17 @@ impl GithubRepoPage {
       svg_preview_source: None,
       svg_preview_task: None,
       pull_requests_search_input,
+      pull_request_filter_label_input,
+      pull_request_filter_author_input,
+      pull_request_filter_assignee_input,
+      pull_request_filter_reviewer_input,
+      pull_request_filters: GithubPullRequestSearchFilters::default(),
+      pull_request_filter_options: GithubPullRequestFilterOptions::default(),
+      pull_request_filter_options_loading: false,
+      pull_request_filter_options_error: None,
+      pull_request_filter_options_task: None,
+      pull_request_filter_popover_open: false,
+      pull_requests_request_generation: 0,
       pull_requests,
       merged_pull_requests,
       closed_pull_requests,
@@ -2973,6 +3178,7 @@ impl GithubRepoPage {
 
     this.subscribe_to_pull_requests(cx);
     this.subscribe_to_pull_requests_search(window, cx);
+    this.subscribe_to_pull_request_filter_inputs(window, cx);
     this.subscribe_to_issues(window, cx);
     this.subscribe_to_branch_select(cx);
     this
@@ -3017,6 +3223,58 @@ impl GithubRepoPage {
     );
 
     self._subscriptions.push(subscription);
+  }
+
+  fn subscribe_to_pull_request_filter_inputs(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    for (input, kind) in [
+      (
+        self.pull_request_filter_label_input.clone(),
+        RepoPullRequestFilterTokenKind::Label,
+      ),
+      (
+        self.pull_request_filter_author_input.clone(),
+        RepoPullRequestFilterTokenKind::Author,
+      ),
+      (
+        self.pull_request_filter_assignee_input.clone(),
+        RepoPullRequestFilterTokenKind::Assignee,
+      ),
+      (
+        self.pull_request_filter_reviewer_input.clone(),
+        RepoPullRequestFilterTokenKind::RequestedReviewer,
+      ),
+    ] {
+      let subscription = cx.subscribe_in(
+        &input,
+        window,
+        move |this, state, event: &InputEvent, window, cx| {
+          this.on_pull_request_filter_input_event(kind, state, event, window, cx);
+        },
+      );
+      self._subscriptions.push(subscription);
+    }
+  }
+
+  fn on_pull_request_filter_input_event(
+    &mut self,
+    kind: RepoPullRequestFilterTokenKind,
+    state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    match event {
+      InputEvent::Change => cx.notify(),
+      InputEvent::PressEnter { .. } => {
+        let value = state.read(cx).value().to_string();
+        self.add_pull_request_filter_token(kind, &value, window, cx);
+      }
+      _ => {}
+    }
   }
 
   fn pull_requests_loading(&self, cx: &App) -> bool {
@@ -3170,6 +3428,140 @@ impl GithubRepoPage {
       input.update(cx, |state, cx| {
         state.set_value("", window, cx);
       });
+    });
+  }
+
+  fn pull_request_filter_tokens_mut(
+    &mut self,
+    kind: RepoPullRequestFilterTokenKind,
+  ) -> &mut Vec<String> {
+    match kind {
+      RepoPullRequestFilterTokenKind::Label => &mut self.pull_request_filters.labels,
+      RepoPullRequestFilterTokenKind::Author => &mut self.pull_request_filters.authors,
+      RepoPullRequestFilterTokenKind::Assignee => &mut self.pull_request_filters.assignees,
+      RepoPullRequestFilterTokenKind::RequestedReviewer => {
+        &mut self.pull_request_filters.requested_reviewers
+      }
+    }
+  }
+
+  fn pull_request_filter_input(&self, kind: RepoPullRequestFilterTokenKind) -> Entity<InputState> {
+    match kind {
+      RepoPullRequestFilterTokenKind::Label => self.pull_request_filter_label_input.clone(),
+      RepoPullRequestFilterTokenKind::Author => self.pull_request_filter_author_input.clone(),
+      RepoPullRequestFilterTokenKind::Assignee => self.pull_request_filter_assignee_input.clone(),
+      RepoPullRequestFilterTokenKind::RequestedReviewer => {
+        self.pull_request_filter_reviewer_input.clone()
+      }
+    }
+  }
+
+  fn add_pull_request_filter_token(
+    &mut self,
+    kind: RepoPullRequestFilterTokenKind,
+    value: &str,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !push_filter_token(self.pull_request_filter_tokens_mut(kind), value) {
+      return;
+    }
+
+    self.pull_request_filters = normalize_github_pull_request_filters(&self.pull_request_filters);
+    let input = self.pull_request_filter_input(kind);
+    input.update(cx, |state, cx| {
+      state.set_value("", window, cx);
+    });
+    self.refresh_pull_requests(cx);
+    cx.notify();
+  }
+
+  fn remove_pull_request_filter_token(
+    &mut self,
+    kind: RepoPullRequestFilterTokenKind,
+    value: &str,
+    cx: &mut Context<Self>,
+  ) {
+    if !remove_filter_token(self.pull_request_filter_tokens_mut(kind), value) {
+      return;
+    }
+    self.refresh_pull_requests(cx);
+    cx.notify();
+  }
+
+  fn set_pull_request_review_status_filter(
+    &mut self,
+    status: GithubPullRequestReviewStatus,
+    cx: &mut Context<Self>,
+  ) {
+    if self.pull_request_filters.review_status == status {
+      return;
+    }
+    self.pull_request_filters.review_status = status;
+    self.refresh_pull_requests(cx);
+    cx.notify();
+  }
+
+  fn set_pull_request_include_drafts_filter(
+    &mut self,
+    include_drafts: bool,
+    cx: &mut Context<Self>,
+  ) {
+    if self.pull_request_filters.include_drafts == include_drafts {
+      return;
+    }
+    self.pull_request_filters.include_drafts = include_drafts;
+    self.refresh_pull_requests(cx);
+    cx.notify();
+  }
+
+  fn set_pull_request_base_filter(&mut self, base: Option<String>, cx: &mut Context<Self>) {
+    let base = base.and_then(|value| normalize_non_empty_string(&value));
+    if self.pull_request_filters.base == base {
+      return;
+    }
+    self.pull_request_filters.base = base;
+    self.refresh_pull_requests(cx);
+    cx.notify();
+  }
+
+  fn set_pull_request_sort_filter(
+    &mut self,
+    sort: GithubPullRequestSearchSort,
+    cx: &mut Context<Self>,
+  ) {
+    if self.pull_request_filters.sort == sort {
+      return;
+    }
+    self.pull_request_filters.sort = sort;
+    self.refresh_pull_requests(cx);
+    cx.notify();
+  }
+
+  fn clear_pull_request_filters(&mut self, cx: &mut Context<Self>) {
+    if repo_pull_request_filter_chips(&self.pull_request_filters).is_empty() {
+      return;
+    }
+
+    self.pull_request_filters = GithubPullRequestSearchFilters::default();
+    self.refresh_pull_requests(cx);
+    cx.notify();
+  }
+
+  fn clear_pull_request_filter_inputs(&mut self, cx: &mut Context<Self>) {
+    let inputs = [
+      self.pull_request_filter_label_input.clone(),
+      self.pull_request_filter_author_input.clone(),
+      self.pull_request_filter_assignee_input.clone(),
+      self.pull_request_filter_reviewer_input.clone(),
+    ];
+    let window_handle = self.window_handle;
+    let _ = cx.update_window(window_handle, move |_, window, cx| {
+      for input in inputs {
+        input.update(cx, |state, cx| {
+          state.set_value("", window, cx);
+        });
+      }
     });
   }
 
@@ -4028,19 +4420,23 @@ impl GithubRepoPage {
 
     self.pull_requests_error = None;
     self.set_pull_requests_loading(true, cx);
+    self.pull_requests_request_generation = self.pull_requests_request_generation.wrapping_add(1);
+    let request_generation = self.pull_requests_request_generation;
 
     let api = self.api.clone();
     let owner_for_fetch = owner.clone();
     let repo_for_fetch = repo.clone();
+    let filters = self.pull_request_filters.clone();
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || {
-        api.fetch_github_repository_pull_requests(&owner_for_fetch, &repo_for_fetch)
+        api.fetch_github_repository_pull_requests(&owner_for_fetch, &repo_for_fetch, &filters)
       })
       .await;
 
       let _ = this.update(cx, |this, cx| {
         if !this.owner.as_ref().eq_ignore_ascii_case(owner.as_str())
           || !this.repo.as_ref().eq_ignore_ascii_case(repo.as_str())
+          || this.pull_requests_request_generation != request_generation
         {
           return;
         }
@@ -4071,6 +4467,49 @@ impl GithubRepoPage {
       });
     });
     self.pull_requests_task = Some(task);
+    cx.notify();
+  }
+
+  fn load_pull_request_filter_options(&mut self, cx: &mut Context<Self>) {
+    let owner = self.owner.to_string();
+    let repo = self.repo.to_string();
+    if owner.trim().is_empty() || repo.trim().is_empty() {
+      return;
+    }
+
+    self.pull_request_filter_options = GithubPullRequestFilterOptions::default();
+    self.pull_request_filter_options_error = None;
+    self.pull_request_filter_options_loading = true;
+
+    let api = self.api.clone();
+    let repo_name = format!("{owner}/{repo}");
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.fetch_github_pull_request_filter_options(&[repo_name])).await;
+
+      let _ = this.update(cx, |this, cx| {
+        if !this.owner.as_ref().eq_ignore_ascii_case(owner.as_str())
+          || !this.repo.as_ref().eq_ignore_ascii_case(repo.as_str())
+        {
+          return;
+        }
+
+        this.pull_request_filter_options_task = None;
+        this.pull_request_filter_options_loading = false;
+        match result {
+          Ok(options) => {
+            this.pull_request_filter_options = options;
+            this.pull_request_filter_options_error = None;
+          }
+          Err(error) => {
+            this.pull_request_filter_options = GithubPullRequestFilterOptions::default();
+            this.pull_request_filter_options_error = Some(error.to_string().into());
+          }
+        }
+        cx.notify();
+      });
+    });
+    self.pull_request_filter_options_task = Some(task);
     cx.notify();
   }
 
@@ -4355,7 +4794,13 @@ impl GithubRepoPage {
     self.reset_code_state(cx);
 
     self.pull_requests_error = None;
+    self.pull_request_filters = GithubPullRequestSearchFilters::default();
+    self.pull_request_filter_options = GithubPullRequestFilterOptions::default();
+    self.pull_request_filter_options_loading = false;
+    self.pull_request_filter_options_error = None;
+    self.pull_request_filter_popover_open = false;
     self.clear_pull_requests_query(cx);
+    self.clear_pull_request_filter_inputs(cx);
     self.clear_pull_request_rows(true, cx);
     self.issues_error = None;
     self.issues.update(cx, |state, cx| {
@@ -4410,42 +4855,8 @@ impl GithubRepoPage {
     });
     self.repository_task = Some(details_task);
 
-    let pull_requests_api = self.api.clone();
-    let pull_requests_owner = owner.clone();
-    let pull_requests_repo = repo.clone();
-    let pull_requests_task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        pull_requests_api
-          .fetch_github_repository_pull_requests(&pull_requests_owner, &pull_requests_repo)
-      })
-      .await;
-
-      let _ = this.update(cx, |this, cx| {
-        let mut rows = Vec::new();
-
-        match result {
-          Ok(pull_requests) => {
-            rows = pull_requests
-              .into_iter()
-              .map(|pr| Rc::new(GithubRepoPullRequestRow { pr: Rc::new(pr) }))
-              .collect();
-            this.pull_requests_error = None;
-          }
-          Err(error) => {
-            let message = error.to_string();
-            if github_shared::is_unauthorized_error_message(&message) {
-              this.pull_requests_error =
-                Some("Authentication required. Please sign in again.".into());
-            } else {
-              this.pull_requests_error = Some(message.into());
-            }
-          }
-        }
-
-        this.set_pull_request_rows(rows, cx);
-      });
-    });
-    self.pull_requests_task = Some(pull_requests_task);
+    self.refresh_pull_requests(cx);
+    self.load_pull_request_filter_options(cx);
 
     let issues_api = self.api.clone();
     let issues_owner = owner;
@@ -5458,6 +5869,313 @@ impl GithubRepoPage {
       )
   }
 
+  fn render_pull_request_filter_token_section(
+    &self,
+    title: &'static str,
+    kind: RepoPullRequestFilterTokenKind,
+    input: Entity<InputState>,
+    values: &[String],
+    suggestions: Vec<String>,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .gap_1()
+      .child(div().text_sm().child(title))
+      .when(!values.is_empty(), |this| {
+        this.child(
+          h_flex()
+            .gap_1()
+            .flex_wrap()
+            .children(values.iter().cloned().map(|value| {
+              h_flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .rounded_full()
+                .bg(theme.muted)
+                .child(div().text_xs().child(value.clone()))
+                .child(
+                  Button::new(format!(
+                    "github-repo-pr-filter-token-remove-{title}-{value}"
+                  ))
+                  .ghost()
+                  .xsmall()
+                  .compact()
+                  .icon(IconName::Close)
+                  .on_click({
+                    let view = cx.entity().clone();
+                    move |_, _, cx| {
+                      view.update(cx, |this, cx| {
+                        this.remove_pull_request_filter_token(kind, &value, cx);
+                      });
+                    }
+                  }),
+                )
+            })),
+        )
+      })
+      .child(Input::new(&input).w_full())
+      .when(!suggestions.is_empty(), |this| {
+        this.child(
+          h_flex()
+            .gap_1()
+            .flex_wrap()
+            .children(suggestions.into_iter().map(|suggestion| {
+              Button::new(format!(
+                "github-repo-pr-filter-suggestion-{title}-{suggestion}"
+              ))
+              .label(suggestion.clone())
+              .xsmall()
+              .outline()
+              .on_click({
+                let view = cx.entity().clone();
+                move |_, window, cx| {
+                  view.update(cx, |this, cx| {
+                    this.add_pull_request_filter_token(kind, &suggestion, window, cx);
+                  });
+                }
+              })
+            })),
+        )
+      })
+      .into_any_element()
+  }
+
+  fn render_pull_request_filters_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let label_suggestions = matching_filter_option_labels(
+      &self.pull_request_filter_options.labels,
+      self
+        .pull_request_filter_label_input
+        .read(cx)
+        .value()
+        .as_ref(),
+      &self.pull_request_filters.labels,
+    );
+    let author_suggestions = matching_filter_option_users(
+      &self.pull_request_filter_options.authors,
+      self
+        .pull_request_filter_author_input
+        .read(cx)
+        .value()
+        .as_ref(),
+      &self.pull_request_filters.authors,
+      true,
+    );
+    let assignee_suggestions = matching_filter_option_users(
+      &self.pull_request_filter_options.assignees,
+      self
+        .pull_request_filter_assignee_input
+        .read(cx)
+        .value()
+        .as_ref(),
+      &self.pull_request_filters.assignees,
+      true,
+    );
+    let reviewer_suggestions = matching_filter_option_users(
+      &self.pull_request_filter_options.assignees,
+      self
+        .pull_request_filter_reviewer_input
+        .read(cx)
+        .value()
+        .as_ref(),
+      &self.pull_request_filters.requested_reviewers,
+      true,
+    );
+
+    let review_status_options = [
+      GithubPullRequestReviewStatus::Any,
+      GithubPullRequestReviewStatus::Required,
+      GithubPullRequestReviewStatus::Approved,
+      GithubPullRequestReviewStatus::ChangesRequested,
+      GithubPullRequestReviewStatus::None,
+    ]
+    .into_iter()
+    .map(|status| {
+      DropdownSelectOption::new(status, pull_request_review_status_label(status))
+        .selected(status == self.pull_request_filters.review_status)
+    })
+    .collect::<Vec<_>>();
+
+    let sort_options = [
+      GithubPullRequestSearchSort::UpdatedDesc,
+      GithubPullRequestSearchSort::CreatedDesc,
+      GithubPullRequestSearchSort::CreatedAsc,
+      GithubPullRequestSearchSort::CommentsDesc,
+    ]
+    .into_iter()
+    .map(|sort| {
+      DropdownSelectOption::new(sort, pull_request_search_sort_label(sort))
+        .selected(sort == self.pull_request_filters.sort)
+    })
+    .collect::<Vec<_>>();
+
+    let mut base_names = self.branch_names.clone();
+    if let Some(base) = self.pull_request_filters.base.as_ref() {
+      base_names.push(base.clone());
+    }
+    base_names.sort_by_key(|branch| branch.to_lowercase());
+    base_names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+
+    let mut base_options = vec![
+      DropdownSelectOption::new(None::<String>, "Any base branch")
+        .selected(self.pull_request_filters.base.is_none()),
+    ];
+    base_options.extend(base_names.into_iter().map(|branch| {
+      DropdownSelectOption::new(Some(branch.clone()), branch.clone())
+        .selected(self.pull_request_filters.base.as_ref() == Some(&branch))
+    }));
+
+    v_flex()
+      .w_full()
+      .gap_3()
+      .child(
+        h_flex()
+          .items_center()
+          .justify_between()
+          .child(
+            div()
+              .text_sm()
+              .font_medium()
+              .text_color(theme.foreground)
+              .child("Filters"),
+          )
+          .child(
+            Button::new("github-repo-pr-filters-clear-panel")
+              .label("Clear")
+              .xsmall()
+              .ghost()
+              .disabled(repo_pull_request_filter_chips(&self.pull_request_filters).is_empty())
+              .on_click(cx.listener(|this, _, _, cx| {
+                this.clear_pull_request_filters(cx);
+              })),
+          ),
+      )
+      .when(self.pull_request_filter_options_loading, |this| {
+        this.child(
+          h_flex()
+            .gap_2()
+            .items_center()
+            .child(Spinner::new().xsmall())
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child("Loading filter suggestions..."),
+            ),
+        )
+      })
+      .when_some(
+        self.pull_request_filter_options_error.clone(),
+        |this, error| this.child(div().text_xs().text_color(theme.status_red()).child(error)),
+      )
+      .child(self.render_pull_request_filter_token_section(
+        "Labels",
+        RepoPullRequestFilterTokenKind::Label,
+        self.pull_request_filter_label_input.clone(),
+        &self.pull_request_filters.labels,
+        label_suggestions,
+        cx,
+      ))
+      .child(self.render_pull_request_filter_token_section(
+        "Authors",
+        RepoPullRequestFilterTokenKind::Author,
+        self.pull_request_filter_author_input.clone(),
+        &self.pull_request_filters.authors,
+        author_suggestions,
+        cx,
+      ))
+      .child(self.render_pull_request_filter_token_section(
+        "Assignees",
+        RepoPullRequestFilterTokenKind::Assignee,
+        self.pull_request_filter_assignee_input.clone(),
+        &self.pull_request_filters.assignees,
+        assignee_suggestions,
+        cx,
+      ))
+      .child(self.render_pull_request_filter_token_section(
+        "Requested reviewers",
+        RepoPullRequestFilterTokenKind::RequestedReviewer,
+        self.pull_request_filter_reviewer_input.clone(),
+        &self.pull_request_filters.requested_reviewers,
+        reviewer_suggestions,
+        cx,
+      ))
+      .child(
+        v_flex()
+          .gap_1()
+          .child(div().text_sm().child("Review"))
+          .child(dropdown_select(
+            DropdownSelectConfig::new("github-repo-pr-review-filter-panel")
+              .placeholder("Any review state")
+              .options(review_status_options)
+              .searchable(false)
+              .width(px(268.0))
+              .menu_width(px(268.0))
+              .on_select(Rc::new({
+                let view = cx.entity().clone();
+                move |status, _, cx| {
+                  view.update(cx, |this, cx| {
+                    this.set_pull_request_review_status_filter(status, cx);
+                  });
+                }
+              })),
+          )),
+      )
+      .child(
+        v_flex()
+          .gap_1()
+          .child(div().text_sm().child("Base branch"))
+          .child(dropdown_select(
+            DropdownSelectConfig::new("github-repo-pr-base-filter-panel")
+              .placeholder("Any base branch")
+              .options(base_options)
+              .search_placeholder("Search branches...")
+              .width(px(268.0))
+              .menu_width(px(268.0))
+              .on_select(Rc::new({
+                let view = cx.entity().clone();
+                move |base, _, cx| {
+                  view.update(cx, |this, cx| {
+                    this.set_pull_request_base_filter(base, cx);
+                  });
+                }
+              })),
+          )),
+      )
+      .child(
+        v_flex()
+          .gap_1()
+          .child(div().text_sm().child("Sort"))
+          .child(dropdown_select(
+            DropdownSelectConfig::new("github-repo-pr-sort-filter-panel")
+              .placeholder("Recently updated")
+              .options(sort_options)
+              .searchable(false)
+              .width(px(268.0))
+              .menu_width(px(268.0))
+              .on_select(Rc::new({
+                let view = cx.entity().clone();
+                move |sort, _, cx| {
+                  view.update(cx, |this, cx| {
+                    this.set_pull_request_sort_filter(sort, cx);
+                  });
+                }
+              })),
+          )),
+      )
+      .child(
+        Checkbox::new("github-repo-pr-include-drafts-panel")
+          .checked(self.pull_request_filters.include_drafts)
+          .label("Include draft pull requests")
+          .on_click(cx.listener(|this, checked, _, cx| {
+            this.set_pull_request_include_drafts_filter(*checked, cx);
+          })),
+      )
+  }
+
   fn render_pull_requests(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let open_count = Self::pull_requests_matched_count(&self.pull_requests, cx);
@@ -5471,7 +6189,6 @@ impl GithubRepoPage {
 
     let tabs = TabBar::new("github-repo-pull-request-list-tabs")
       .segmented()
-      .small()
       .selected_index(self.active_pull_requests_tab_ix)
       .on_click(cx.listener(|this, ix: &usize, window, cx| {
         this.set_active_pull_requests_tab(*ix, window, cx);
@@ -5501,21 +6218,44 @@ impl GithubRepoPage {
       .min_h_0()
       .p(px(8.));
 
-    v_flex().w_full().h_full().min_h_0().p_4().child(
-      v_flex()
-        .w_full()
-        .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
-        .mx_auto()
-        .h_full()
-        .min_h_0()
-        .gap_3()
-        .when_some(self.pull_requests_error.clone(), |this, error| {
-          this.child(div().text_sm().text_color(theme.red).child(error))
-        })
-        .child(search)
-        .child(tabs)
-        .child(list),
-    )
+    // Left sidebar: search + filters
+    let left_sidebar = v_flex()
+      .w(px(300.0))
+      .flex_shrink_0()
+      .h_full()
+      .min_h_0()
+      .gap_3()
+      .child(search)
+      .child(
+        div()
+          .id("github-repo-pr-filters-scroll")
+          .flex_1()
+          .min_h_0()
+          .overflow_y_scroll()
+          .child(self.render_pull_request_filters_panel(cx)),
+      );
+
+    // Right content: tabs + list
+    let right_content = v_flex()
+      .flex_1()
+      .min_w_0()
+      .h_full()
+      .min_h_0()
+      .gap_3()
+      .when_some(self.pull_requests_error.clone(), |this, error| {
+        this.child(div().text_sm().text_color(theme.red).child(error))
+      })
+      .child(tabs)
+      .child(list);
+
+    h_flex()
+      .w_full()
+      .h_full()
+      .min_h_0()
+      .p_4()
+      .gap_6()
+      .child(left_sidebar)
+      .child(right_content)
   }
 
   fn render_issues(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -5813,6 +6553,37 @@ mod tests {
 
     delegate.prepare("");
     assert_eq!(delegate.matched_rows.len(), 2);
+  }
+
+  #[test]
+  fn repo_pull_request_filter_chips_expand_active_filters() {
+    let filters = GithubPullRequestSearchFilters {
+      labels: vec!["bug".to_string()],
+      authors: vec!["@me".to_string()],
+      assignees: vec!["alice".to_string()],
+      requested_reviewers: vec!["bob".to_string()],
+      review_status: GithubPullRequestReviewStatus::Approved,
+      include_drafts: false,
+      base: Some("main".to_string()),
+      sort: GithubPullRequestSearchSort::CommentsDesc,
+      ..GithubPullRequestSearchFilters::default()
+    };
+
+    let chips = repo_pull_request_filter_chips(&filters);
+
+    assert_eq!(
+      chips,
+      vec![
+        RepoPullRequestFilterChip::Label("bug".to_string()),
+        RepoPullRequestFilterChip::Author("@me".to_string()),
+        RepoPullRequestFilterChip::Assignee("alice".to_string()),
+        RepoPullRequestFilterChip::RequestedReviewer("bob".to_string()),
+        RepoPullRequestFilterChip::ReviewStatus,
+        RepoPullRequestFilterChip::DraftsHidden,
+        RepoPullRequestFilterChip::Base("main".to_string()),
+        RepoPullRequestFilterChip::Sort,
+      ]
+    );
   }
 
   #[test]

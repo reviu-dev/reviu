@@ -128,6 +128,23 @@ describe('github cache policy', () => {
     })
   })
 
+  it('builds a filtered repository pull requests cache policy', () => {
+    expect(
+      createGithubRepositoryPullRequestsCachePolicy(
+        'user-1',
+        'OpenAI',
+        'Reviu',
+        '{"labels":["bug"],"sort":"updated_desc"}',
+      ),
+    ).toMatchObject({
+      operation: 'repository.pull_requests',
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'repo:openai/reviu:pull-requests:%7B%22labels%22%3A%5B%22bug%22%5D%2C%22sort%22%3A%22updated_desc%22%7D',
+      tags: ['repo:openai/reviu:pull-requests'],
+    })
+  })
+
   it('builds the repository issues cache policy', () => {
     expect(createGithubRepositoryIssuesCachePolicy('user-1', 'OpenAI', 'Reviu')).toEqual({
       operation: 'repository.issues',

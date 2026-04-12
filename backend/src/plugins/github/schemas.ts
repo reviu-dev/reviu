@@ -82,6 +82,14 @@ export const pullRequestSearchFiltersSchema = z.object({
     .enum(['any', 'none', 'required', 'approved', 'changes_requested'])
     .default('any'),
   include_drafts: z.boolean().default(true),
+  base: z
+    .string()
+    .trim()
+    .nullish()
+    .transform(value => value || null),
+  sort: z
+    .enum(['updated_desc', 'created_desc', 'created_asc', 'comments_desc'])
+    .default('updated_desc'),
 })
 
 export const pullRequestSearchBodySchema = z.object({

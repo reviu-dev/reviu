@@ -873,6 +873,8 @@ mod tests {
         requested_reviewers: vec!["@me".to_string()],
         review_status: crate::github_home_tabs::GithubPullRequestReviewStatus::Required,
         include_drafts: false,
+        base: None,
+        sort: Default::default(),
       },
     }];
 

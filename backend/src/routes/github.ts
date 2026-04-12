@@ -132,6 +132,7 @@ import {
   pullRequestFilterOptionsBodySchema,
   pullRequestLabelsMutationBodySchema,
   pullRequestSearchBodySchema,
+  pullRequestSearchFiltersSchema,
   pullRequestStatusMutationBodySchema,
   pullRequestUsersMutationBodySchema,
   updateDescriptionBodySchema,
@@ -171,7 +172,6 @@ import {
   fetchGithubRepositoryIssueConditionally,
   fetchGithubRepositoryIssuesConditionally,
   fetchGithubRepositoryLabels,
-  fetchGithubRepositoryPullRequestsGraphql,
   fetchGithubRepositoryReadmeConditionally,
   fetchGithubRepositoryTreesConditionally,
   fetchGithubUserRepositories,
@@ -191,6 +191,7 @@ import {
 } from '../plugins/github/service.js'
 
 const LATEST_PULL_REQUESTS_LIMIT = 20
+const REPOSITORY_PULL_REQUESTS_LIMIT = 100
 const GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY = 'pullRequest'
 const GITHUB_PULL_REQUEST_FILES_COMMIT_VALIDATOR_KEY = 'commit'
 const GITHUB_UPDATE_BRANCH_POLL_ATTEMPTS = 10
@@ -376,8 +377,30 @@ function normalizeRepositoryFilter(repo: string) {
   return `${owner.trim()}/${name.trim()}`
 }
 
-function buildPullRequestSearchQuery(filters: GithubPullRequestSearchFilters) {
-  const parts = ['is:pr', 'state:open', 'archived:false']
+function pullRequestSearchSortQualifier(sort: GithubPullRequestSearchFilters['sort']) {
+  switch (sort) {
+    case 'created_desc':
+      return 'created-desc'
+    case 'created_asc':
+      return 'created-asc'
+    case 'comments_desc':
+      return 'comments-desc'
+    case 'updated_desc':
+    default:
+      return 'updated-desc'
+  }
+}
+
+function buildPullRequestSearchQuery(
+  filters: GithubPullRequestSearchFilters,
+  options: { openOnly?: boolean } = {},
+) {
+  const parts = ['is:pr']
+
+  if (options.openOnly ?? true) {
+    parts.push('state:open')
+  }
+  parts.push('archived:false')
 
   const repoQualifiers = filters.repos
     .map(repo => buildGithubSearchQualifier('repo', normalizeRepositoryFilter(repo) ?? ''))
@@ -422,7 +445,15 @@ function buildPullRequestSearchQuery(filters: GithubPullRequestSearchFilters) {
     parts.push('draft:false')
   }
 
-  parts.push('sort:updated-desc')
+  const base = filters.base?.trim()
+  if (base) {
+    const baseQualifier = buildGithubSearchQualifier('base', base)
+    if (baseQualifier) {
+      parts.push(baseQualifier)
+    }
+  }
+
+  parts.push(`sort:${pullRequestSearchSortQualifier(filters.sort)}`)
 
   return parts.join(' ')
 }
@@ -436,7 +467,48 @@ function normalizePullRequestSearchCacheKey(filters: GithubPullRequestSearchFilt
     requested_reviewers: [...filters.requested_reviewers].sort(),
     review_status: filters.review_status,
     include_drafts: filters.include_drafts,
+    base: filters.base,
+    sort: filters.sort,
   })
+}
+
+function uniqueSearchParamValues(params: URLSearchParams, name: string) {
+  const seen = new Set<string>()
+  return params.getAll(name)
+    .flatMap(value => value.split(','))
+    .map(value => value.trim())
+    .filter((value) => {
+      const key = value.toLowerCase()
+      if (!key || seen.has(key)) {
+        return false
+      }
+      seen.add(key)
+      return true
+    })
+}
+
+function parseBooleanSearchParam(params: URLSearchParams, name: string, defaultValue: boolean) {
+  const value = params.get(name)?.trim().toLowerCase()
+  if (!value) {
+    return defaultValue
+  }
+  return value !== 'false'
+}
+
+function repositoryPullRequestFiltersInput(url: string) {
+  const params = new URL(url).searchParams
+
+  return {
+    repos: [],
+    labels: uniqueSearchParamValues(params, 'label'),
+    authors: uniqueSearchParamValues(params, 'author'),
+    assignees: uniqueSearchParamValues(params, 'assignee'),
+    requested_reviewers: uniqueSearchParamValues(params, 'requested_reviewer'),
+    review_status: params.get('review_status') ?? undefined,
+    include_drafts: parseBooleanSearchParam(params, 'include_drafts', true),
+    base: params.get('base') ?? undefined,
+    sort: params.get('sort') ?? undefined,
+  }
 }
 
 function makeFilterOptionUser(
@@ -543,6 +615,8 @@ async function fetchPullRequestFilterOptions(
         requested_reviewers: [],
         review_status: 'any',
         include_drafts: true,
+        base: null,
+        sort: 'updated_desc',
       }),
       limit: 50,
     }).catch(() => []),
@@ -1374,19 +1448,34 @@ async function fetchRepositoryPullRequestsWithCache(
   githubToken: string,
   owner: string,
   repo: string,
+  filters: GithubPullRequestSearchFilters,
 ) {
-  const baseCachePolicy = createGithubRepositoryPullRequestsCachePolicy(userId, owner, repo)
+  const repositoryFilter = normalizeRepositoryFilter(`${owner}/${repo}`)
+  if (!repositoryFilter) {
+    throw new Error('Missing repository')
+  }
+
+  const searchFilters = {
+    ...filters,
+    repos: [repositoryFilter],
+  }
+  const query = buildPullRequestSearchQuery(searchFilters, { openOnly: false })
+  const baseCachePolicy = createGithubRepositoryPullRequestsCachePolicy(
+    userId,
+    owner,
+    repo,
+    normalizePullRequestSearchCacheKey(searchFilters),
+  )
   const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, owner, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
     githubCache.getOrLoad<GithubPullRequest[]>({
       ...cachePolicy,
       load: async () => {
-        const nodes = await fetchGithubRepositoryPullRequestsGraphql({
+        const nodes = await fetchGithubPullRequestSearchGraphql({
           token: githubToken,
-          owner,
-          repo,
-          limit: 20,
+          query,
+          limit: REPOSITORY_PULL_REQUESTS_LIMIT,
         })
 
         return {
@@ -3038,8 +3127,22 @@ export const githubRoutes = githubRouter
     const user = ctx.get('user')!
     const githubToken = user.github.accessToken
 
+    const filtersResult = pullRequestSearchFiltersSchema.safeParse(
+      repositoryPullRequestFiltersInput(ctx.req.url),
+    )
+    if (!filtersResult.success) {
+      const message = filtersResult.error.issues[0]?.message || 'Invalid pull request filters'
+      return ctx.json({ error: message }, 400)
+    }
+
     try {
-      const result = await fetchRepositoryPullRequestsWithCache(user.id, githubToken, owner, repo)
+      const result = await fetchRepositoryPullRequestsWithCache(
+        user.id,
+        githubToken,
+        owner,
+        repo,
+        filtersResult.data,
+      )
       setGithubCacheHeaders(ctx, result)
       return ctx.json({ pullRequests: result.payload }, 200)
     }
