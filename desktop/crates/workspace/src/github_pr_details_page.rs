@@ -2490,6 +2490,8 @@ pub struct GithubPrDetailsPage {
   merge_submit_error: Option<SharedString>,
   status_action_task: Option<Task<()>>,
   status_action_loading: bool,
+  update_branch_task: Option<Task<()>>,
+  update_branch_loading: bool,
   review_input: Entity<InputState>,
   review_decision: GithubPrReviewDecision,
   review_popover_open: bool,
@@ -3051,6 +3053,8 @@ impl GithubPrDetailsPage {
       merge_submit_error: None,
       status_action_task: None,
       status_action_loading: false,
+      update_branch_task: None,
+      update_branch_loading: false,
       review_input,
       review_decision: GithubPrReviewDecision::default(),
       review_popover_open: false,
@@ -4990,6 +4994,50 @@ impl GithubPrDetailsPage {
     });
 
     self.status_action_task = Some(task);
+    cx.notify();
+  }
+
+  fn submit_update_branch(&mut self, cx: &mut Context<Self>) {
+    if self.update_branch_loading {
+      return;
+    }
+
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      return;
+    };
+
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let api = self.api.clone();
+    self.update_branch_loading = true;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.update_pull_request_branch(&owner, &repo, number)).await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.update_branch_loading = false;
+
+        match result {
+          Ok(()) => {
+            this.refresh_current_page(cx);
+          }
+          Err(error) => {
+            let error_message: SharedString = error.to_string().into();
+            let _ = cx.update_window(this.window_handle, move |_, window, cx| {
+              window.push_notification(
+                Notification::error(error_message).title("Update branch failed"),
+                cx,
+              );
+            });
+          }
+        }
+
+        cx.notify();
+      });
+    });
+
+    self.update_branch_task = Some(task);
     cx.notify();
   }
 
@@ -8176,6 +8224,8 @@ impl GithubPrDetailsPage {
     self.merge_submit_loading = false;
     self.status_action_task = None;
     self.status_action_loading = false;
+    self.update_branch_task = None;
+    self.update_branch_loading = false;
     self.mark_merge_form_reset_pending();
     self.review_popover_open = false;
     self.mark_review_form_reset_pending();
@@ -8725,6 +8775,16 @@ impl GithubPrDetailsPage {
   fn render_pr_actions_menu(&self, cx: &mut Context<Self>) -> AnyElement {
     let status_action = self.pull_request_status_action();
     let status_loading = self.status_action_loading;
+    let update_branch_loading = self.update_branch_loading;
+    let has_conflicts = self
+      .merge_readiness
+      .as_ref()
+      .and_then(|r| r.mergeable_state.as_deref())
+      .is_some_and(|s| s.trim().eq_ignore_ascii_case("dirty"));
+    let is_open = self
+      .pull_request
+      .as_ref()
+      .is_some_and(|pr| matches!(pr.state, GithubPullRequestState::Open));
     let view = cx.entity().clone();
     let pr_url = self
       .pull_request
@@ -8749,12 +8809,27 @@ impl GithubPrDetailsPage {
           );
         }
 
+        if is_open {
+          let update_view = view.clone();
+
+          menu = menu.item(
+            PopupMenuItem::new("Update branch")
+              .icon(Icon::new(UiIconName::GitMerge))
+              .disabled(update_branch_loading || has_conflicts)
+              .on_click(move |_, _, cx| {
+                update_view.update(cx, |this, cx| {
+                  this.submit_update_branch(cx);
+                });
+              }),
+          );
+        }
+
         if let Some(action) = status_action {
           let icon = match action {
             GithubPrStatusAction::ConvertToDraft => UiIconName::GitPullRequestDraft,
             GithubPrStatusAction::ReadyForReview => UiIconName::GitPullRequestArrow,
           };
-          menu = menu.separator().item(
+          menu = menu.item(
             PopupMenuItem::new(action.button_label())
               .icon(Icon::new(icon))
               .disabled(status_loading)

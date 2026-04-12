@@ -2023,6 +2023,23 @@ impl ApiClient {
     Ok(payload.merge_result)
   }
 
+  pub fn update_pull_request_branch(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
+    let route = format!("/github/pr/{number}/update-branch");
+    let response = self
+      .authed_request(Method::PUT, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("PUT", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    Ok(())
+  }
+
   pub fn fetch_pull_request_files(
     &self,
     owner: &str,
