@@ -8726,20 +8726,35 @@ impl GithubPrDetailsPage {
     let status_action = self.pull_request_status_action();
     let status_loading = self.status_action_loading;
     let view = cx.entity().clone();
+    let pr_url = self
+      .pull_request
+      .as_ref()
+      .map(|pr| github_shared::pr_url(&pr.repository.owner, &pr.repository.repo, pr.number));
 
     Button::new("pr-actions-menu")
       .icon(IconName::Ellipsis)
       .ghost()
       .small()
-      .disabled(status_action.is_none())
       .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
         let view = view.clone();
+        let mut menu = menu;
+
+        if let Some(url) = pr_url.clone() {
+          menu = menu.item(
+            PopupMenuItem::new("View on GitHub")
+              .icon(Icon::new(IconName::ExternalLink))
+              .on_click(move |_, _, cx| {
+                cx.open_url(&url);
+              }),
+          );
+        }
+
         if let Some(action) = status_action {
           let icon = match action {
             GithubPrStatusAction::ConvertToDraft => UiIconName::GitPullRequestDraft,
             GithubPrStatusAction::ReadyForReview => UiIconName::GitPullRequestArrow,
           };
-          menu.item(
+          menu = menu.separator().item(
             PopupMenuItem::new(action.button_label())
               .icon(Icon::new(icon))
               .disabled(status_loading)
@@ -8748,10 +8763,10 @@ impl GithubPrDetailsPage {
                   this.submit_pull_request_status_action(action, cx);
                 });
               }),
-          )
-        } else {
-          menu
+          );
         }
+
+        menu
       })
       .into_any_element()
   }
@@ -11079,7 +11094,6 @@ impl GithubPrDetailsPage {
   ) -> impl IntoElement {
     let theme = cx.theme().clone();
     let repo_label = github_shared::repo_label(&pr.repository.owner, &pr.repository.repo);
-    let pr_url = github_shared::pr_url(&pr.repository.owner, &pr.repository.repo, pr.number);
     let repo_owner = pr.repository.owner.clone();
     let repo_name = pr.repository.repo.clone();
     let updated_at = format_relative_time(&pr.updated_at);
@@ -11160,20 +11174,6 @@ impl GithubPrDetailsPage {
               .label(repo_label)
               .on_click(move |_, _, cx| {
                 GithubRepoPageHandle::show(repo_owner.clone().into(), repo_name.clone().into(), cx);
-              }),
-          )
-          .child(
-            Button::new("open-pr-on-github")
-              .icon(IconName::ExternalLink)
-              .ghost()
-              .small()
-              .label("View on GitHub")
-              .compact()
-              .on_click({
-                let pr_url = pr_url.clone();
-                move |_, _, cx| {
-                  cx.open_url(&pr_url);
-                }
               }),
           );
 
