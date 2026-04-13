@@ -3369,7 +3369,7 @@ Apres"#,
     let options = code_block_selectable_text_options();
 
     assert!(options.interactive);
-    assert!(!options.show_indentation_dots);
+    assert!(options.show_indentation_dots);
     assert!(!options.show_inline_code_backgrounds);
   }
 
@@ -3416,7 +3416,7 @@ Apres"#,
 
     assert_eq!(
       code_block_display_value(&code),
-      "    fn main() {\n        println!(\"ok\");\n    }"
+      "  fn main() {\n    println!(\"ok\");\n  }"
     );
   }
 
@@ -3429,7 +3429,7 @@ Apres"#,
 
     assert_eq!(
       code_block_display_value(&code),
-      "    let x = 1 + 2;\nvalue . split_whitespace();"
+      "  let x = 1 + 2;\nvalue . split_whitespace();"
     );
   }
 
