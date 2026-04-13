@@ -1380,7 +1380,7 @@ fn render_code_block(
 fn code_block_selectable_text_options() -> SelectableTextOptions {
   SelectableTextOptions {
     interactive: true,
-    show_indentation_dots: false,
+    show_indentation_dots: true,
     show_inline_code_backgrounds: false,
   }
 }
