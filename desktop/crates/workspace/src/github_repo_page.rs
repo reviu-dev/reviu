@@ -3030,11 +3030,16 @@ pub struct GithubRepoPage {
   closed_pull_requests: Entity<VariableListState<GithubRepoPullRequestListDelegate>>,
   pull_requests_error: Option<SharedString>,
   pull_requests_task: Option<Task<()>>,
+  open_pull_request_count: Option<u64>,
+  merged_pull_request_count: Option<u64>,
+  closed_pull_request_count: Option<u64>,
   issues: Entity<VariableListState<GithubRepoIssueListDelegate>>,
   closed_issues: Entity<VariableListState<GithubRepoIssueListDelegate>>,
   not_planned_issues: Entity<VariableListState<GithubRepoIssueListDelegate>>,
   issues_error: Option<SharedString>,
   issues_task: Option<Task<()>>,
+  open_issue_count: Option<u64>,
+  closed_issue_count: Option<u64>,
   issues_search_input: Entity<InputState>,
   issue_filter_label_input: Entity<InputState>,
   issue_filter_author_input: Entity<InputState>,
@@ -3266,11 +3271,16 @@ impl GithubRepoPage {
       closed_pull_requests,
       pull_requests_error: None,
       pull_requests_task: None,
+      open_pull_request_count: None,
+      merged_pull_request_count: None,
+      closed_pull_request_count: None,
       issues,
       closed_issues,
       not_planned_issues,
       issues_error: None,
       issues_task: None,
+      open_issue_count: None,
+      closed_issue_count: None,
       issues_search_input,
       issue_filter_label_input,
       issue_filter_author_input,
@@ -3460,9 +3470,29 @@ impl GithubRepoPage {
   }
 
   fn pull_requests_total_count(&self, cx: &App) -> usize {
-    self.pull_requests.read(cx).delegate().all_rows.len()
-      + self.merged_pull_requests.read(cx).delegate().all_rows.len()
-      + self.closed_pull_requests.read(cx).delegate().all_rows.len()
+    match (
+      self.open_pull_request_count,
+      self.merged_pull_request_count,
+      self.closed_pull_request_count,
+    ) {
+      (Some(open), Some(merged), Some(closed)) => (open + merged + closed) as usize,
+      _ => {
+        self.pull_requests.read(cx).delegate().all_rows.len()
+          + self.merged_pull_requests.read(cx).delegate().all_rows.len()
+          + self.closed_pull_requests.read(cx).delegate().all_rows.len()
+      }
+    }
+  }
+
+  fn issues_total_count(&self, cx: &App) -> usize {
+    match (self.open_issue_count, self.closed_issue_count) {
+      (Some(open), Some(closed)) => (open + closed) as usize,
+      _ => {
+        self.issues.read(cx).delegate().all_rows.len()
+          + self.closed_issues.read(cx).delegate().all_rows.len()
+          + self.not_planned_issues.read(cx).delegate().all_rows.len()
+      }
+    }
   }
 
   fn pull_requests_matched_count(
@@ -4616,29 +4646,61 @@ impl GithubRepoPage {
     let repo_for_fetch = repo.clone();
     let filters = self.pull_request_filters.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        api.fetch_github_repository_pull_requests(&owner_for_fetch, &repo_for_fetch, &filters)
-      })
-      .await;
+      let open_result = {
+        let api = api.clone();
+        let owner = owner_for_fetch.clone();
+        let repo = repo_for_fetch.clone();
+        let filters = filters.clone();
+        unblock(move || api.fetch_github_repository_pull_requests(&owner, &repo, &filters, "open"))
+          .await
+      };
+      let merged_result = {
+        let api = api.clone();
+        let owner = owner_for_fetch.clone();
+        let repo = repo_for_fetch.clone();
+        let filters = filters.clone();
+        unblock(move || {
+          api.fetch_github_repository_pull_requests(&owner, &repo, &filters, "merged")
+        })
+        .await
+      };
+      let closed_result = {
+        let api = api.clone();
+        let owner = owner_for_fetch.clone();
+        let repo = repo_for_fetch.clone();
+        let filters = filters.clone();
+        unblock(move || {
+          api.fetch_github_repository_pull_requests(&owner, &repo, &filters, "closed")
+        })
+        .await
+      };
 
       let _ = this.update(cx, |this, cx| {
-        if !this.owner.as_ref().eq_ignore_ascii_case(owner.as_str())
-          || !this.repo.as_ref().eq_ignore_ascii_case(repo.as_str())
+        if !this
+          .owner
+          .as_ref()
+          .eq_ignore_ascii_case(owner_for_fetch.as_str())
+          || !this
+            .repo
+            .as_ref()
+            .eq_ignore_ascii_case(repo_for_fetch.as_str())
           || this.pull_requests_request_generation != request_generation
         {
           return;
         }
 
         this.pull_requests_task = None;
-        let mut rows = Vec::new();
+        let mut all_rows = Vec::new();
 
-        match result {
-          Ok(pull_requests) => {
-            rows = pull_requests
-              .into_iter()
-              .map(|pr| Rc::new(GithubRepoPullRequestRow { pr: Rc::new(pr) }))
-              .collect();
-            this.pull_requests_error = None;
+        match open_result {
+          Ok(response) => {
+            this.open_pull_request_count = Some(response.pull_request_count);
+            all_rows.extend(
+              response
+                .pull_requests
+                .into_iter()
+                .map(|pr| Rc::new(GithubRepoPullRequestRow { pr: Rc::new(pr) })),
+            );
           }
           Err(error) => {
             let message = error.to_string();
@@ -4651,7 +4713,41 @@ impl GithubRepoPage {
           }
         }
 
-        this.set_pull_request_rows(rows, cx);
+        match merged_result {
+          Ok(response) => {
+            this.merged_pull_request_count = Some(response.pull_request_count);
+            all_rows.extend(
+              response
+                .pull_requests
+                .into_iter()
+                .map(|pr| Rc::new(GithubRepoPullRequestRow { pr: Rc::new(pr) })),
+            );
+          }
+          Err(error) => {
+            if this.pull_requests_error.is_none() {
+              this.pull_requests_error = Some(error.to_string().into());
+            }
+          }
+        }
+
+        match closed_result {
+          Ok(response) => {
+            this.closed_pull_request_count = Some(response.pull_request_count);
+            all_rows.extend(
+              response
+                .pull_requests
+                .into_iter()
+                .map(|pr| Rc::new(GithubRepoPullRequestRow { pr: Rc::new(pr) })),
+            );
+          }
+          Err(error) => {
+            if this.pull_requests_error.is_none() {
+              this.pull_requests_error = Some(error.to_string().into());
+            }
+          }
+        }
+
+        this.set_pull_request_rows(all_rows, cx);
       });
     });
     self.pull_requests_task = Some(task);
@@ -4671,23 +4767,34 @@ impl GithubRepoPage {
     let request_generation = self.issues_request_generation;
 
     let api = self.api.clone();
-    let mut filters = self.issue_filters.clone();
-    filters.repos = vec![format!("{owner}/{repo}")];
+    let owner_for_fetch = owner.clone();
+    let repo_for_fetch = repo.clone();
+    let filters = self.issue_filters.clone();
     let task = cx.spawn(async move |this, cx| {
       let open_result = {
         let api = api.clone();
+        let owner = owner_for_fetch.clone();
+        let repo = repo_for_fetch.clone();
         let filters = filters.clone();
-        unblock(move || api.fetch_github_issues_search(&filters, "open")).await
+        unblock(move || api.fetch_github_repository_issues(&owner, &repo, "open", &filters)).await
       };
       let closed_result = {
         let api = api.clone();
+        let owner = owner_for_fetch.clone();
+        let repo = repo_for_fetch.clone();
         let filters = filters.clone();
-        unblock(move || api.fetch_github_issues_search(&filters, "closed")).await
+        unblock(move || api.fetch_github_repository_issues(&owner, &repo, "closed", &filters)).await
       };
 
       let _ = this.update(cx, |this, cx| {
-        if !this.owner.as_ref().eq_ignore_ascii_case(owner.as_str())
-          || !this.repo.as_ref().eq_ignore_ascii_case(repo.as_str())
+        if !this
+          .owner
+          .as_ref()
+          .eq_ignore_ascii_case(owner_for_fetch.as_str())
+          || !this
+            .repo
+            .as_ref()
+            .eq_ignore_ascii_case(repo_for_fetch.as_str())
           || this.issues_request_generation != request_generation
         {
           return;
@@ -4697,8 +4804,9 @@ impl GithubRepoPage {
         let mut all_rows = Vec::new();
 
         match open_result {
-          Ok(issues) => {
-            all_rows.extend(issues.into_iter().map(|issue| {
+          Ok(response) => {
+            this.open_issue_count = Some(response.issue_count);
+            all_rows.extend(response.issues.into_iter().map(|issue| {
               Rc::new(GithubRepoIssueRow {
                 issue: Rc::new(issue),
               })
@@ -4711,8 +4819,9 @@ impl GithubRepoPage {
         }
 
         match closed_result {
-          Ok(issues) => {
-            all_rows.extend(issues.into_iter().map(|issue| {
+          Ok(response) => {
+            this.closed_issue_count = Some(response.issue_count);
+            all_rows.extend(response.issues.into_iter().map(|issue| {
               Rc::new(GithubRepoIssueRow {
                 issue: Rc::new(issue),
               })
@@ -5094,6 +5203,9 @@ impl GithubRepoPage {
     self.reset_code_state(cx);
 
     self.pull_requests_error = None;
+    self.open_pull_request_count = None;
+    self.merged_pull_request_count = None;
+    self.closed_pull_request_count = None;
     self.pull_request_filters = GithubPullRequestSearchFilters::default();
     self.pull_request_filter_options = GithubPullRequestFilterOptions::default();
     self.pull_request_filter_options_loading = false;
@@ -5103,6 +5215,8 @@ impl GithubRepoPage {
     self.clear_pull_request_filter_inputs(cx);
     self.clear_pull_request_rows(true, cx);
     self.issues_error = None;
+    self.open_issue_count = None;
+    self.closed_issue_count = None;
     self.issues.update(cx, |state, cx| {
       state.delegate_mut().loading = true;
       state.delegate_mut().set_rows(Vec::new());
@@ -5375,7 +5489,7 @@ impl GithubRepoPage {
         github_shared::repo_label(self.owner.as_ref(), self.repo.as_ref()).into()
       };
     let pull_requests_count = self.pull_requests_total_count(cx);
-    let issues_count = self.issues.read(cx).delegate().all_rows.len();
+    let issues_count = self.issues_total_count(cx);
 
     let tab_bar = TabBar::new("github-repo-tabs")
       .w_full()
@@ -6438,9 +6552,36 @@ impl GithubRepoPage {
 
   fn render_pull_requests(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let open_count = Self::pull_requests_matched_count(&self.pull_requests, cx);
-    let merged_count = Self::pull_requests_matched_count(&self.merged_pull_requests, cx);
-    let closed_count = Self::pull_requests_matched_count(&self.closed_pull_requests, cx);
+    let has_search_query = !self
+      .pull_requests_search_input
+      .read(cx)
+      .value()
+      .trim()
+      .is_empty();
+    let open_count = if !has_search_query {
+      self
+        .open_pull_request_count
+        .map(|c| c as usize)
+        .unwrap_or_else(|| Self::pull_requests_matched_count(&self.pull_requests, cx))
+    } else {
+      Self::pull_requests_matched_count(&self.pull_requests, cx)
+    };
+    let merged_count = if !has_search_query {
+      self
+        .merged_pull_request_count
+        .map(|c| c as usize)
+        .unwrap_or_else(|| Self::pull_requests_matched_count(&self.merged_pull_requests, cx))
+    } else {
+      Self::pull_requests_matched_count(&self.merged_pull_requests, cx)
+    };
+    let closed_count = if !has_search_query {
+      self
+        .closed_pull_request_count
+        .map(|c| c as usize)
+        .unwrap_or_else(|| Self::pull_requests_matched_count(&self.closed_pull_requests, cx))
+    } else {
+      Self::pull_requests_matched_count(&self.closed_pull_requests, cx)
+    };
 
     let search = Input::new(&self.pull_requests_search_input)
       .prefix(Icon::new(IconName::Search).text_color(theme.muted_foreground))
@@ -6520,7 +6661,15 @@ impl GithubRepoPage {
 
   fn render_issues(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let open_count = Self::issues_matched_count(&self.issues, cx);
+    let has_search_query = !self.issues_search_input.read(cx).value().trim().is_empty();
+    let open_count = if !has_search_query {
+      self
+        .open_issue_count
+        .map(|c| c as usize)
+        .unwrap_or_else(|| Self::issues_matched_count(&self.issues, cx))
+    } else {
+      Self::issues_matched_count(&self.issues, cx)
+    };
     let closed_count = Self::issues_matched_count(&self.closed_issues, cx);
     let not_planned_count = Self::issues_matched_count(&self.not_planned_issues, cx);
 

@@ -169,6 +169,7 @@ const GITHUB_GRAPHQL_PULL_REQUEST_LIST_FIELDS = `
 const GITHUB_GRAPHQL_SEARCH_PULL_REQUESTS_QUERY = `
   query SearchPullRequests($query: String!, $first: Int!) {
     search(query: $query, type: ISSUE, first: $first) {
+      issueCount
       nodes {
         ... on PullRequest {
           ${GITHUB_GRAPHQL_PULL_REQUEST_LIST_FIELDS}
@@ -181,6 +182,7 @@ const GITHUB_GRAPHQL_SEARCH_PULL_REQUESTS_QUERY = `
 const GITHUB_GRAPHQL_SEARCH_ISSUES_QUERY = `
   query SearchIssues($query: String!, $first: Int!) {
     search(query: $query, type: ISSUE, first: $first) {
+      issueCount
       nodes {
         ... on Issue {
           number
@@ -286,12 +288,14 @@ interface GithubGraphqlIssueNode {
 
 interface GithubGraphqlSearchIssuesResponse {
   search: {
+    issueCount: number
     nodes?: Array<GithubGraphqlIssueNode | null> | null
   }
 }
 
 interface GithubGraphqlSearchPullRequestsResponse {
   search: {
+    issueCount: number
     nodes?: Array<GithubGraphqlPullRequestNode | null> | null
   }
 }
@@ -800,7 +804,7 @@ export async function fetchGithubPullRequestSearchGraphql(
     query: string
     limit: number
   },
-): Promise<GithubGraphqlPullRequestNode[]> {
+): Promise<{ nodes: GithubGraphqlPullRequestNode[], issueCount: number }> {
   const data = await requestGithubGraphqlData<GithubGraphqlSearchPullRequestsResponse>({
     token,
     query: GITHUB_GRAPHQL_SEARCH_PULL_REQUESTS_QUERY,
@@ -810,7 +814,10 @@ export async function fetchGithubPullRequestSearchGraphql(
     },
   })
 
-  return data.search.nodes?.flatMap(node => (node ? [node] : [])) ?? []
+  return {
+    nodes: data.search.nodes?.flatMap(node => (node ? [node] : [])) ?? [],
+    issueCount: data.search.issueCount,
+  }
 }
 
 function mapGithubGraphqlIssue(node: GithubGraphqlIssueNode): GithubIssue {
@@ -852,7 +859,7 @@ export async function fetchGithubIssueSearchGraphql(
     query: string
     limit: number
   },
-): Promise<GithubIssue[]> {
+): Promise<{ issues: GithubIssue[], issueCount: number }> {
   const data = await requestGithubGraphqlData<GithubGraphqlSearchIssuesResponse>({
     token,
     query: GITHUB_GRAPHQL_SEARCH_ISSUES_QUERY,
@@ -862,8 +869,10 @@ export async function fetchGithubIssueSearchGraphql(
     },
   })
 
-  return (data.search.nodes?.flatMap(node => (node ? [node] : [])) ?? [])
+  const issues = (data.search.nodes?.flatMap(node => (node ? [node] : [])) ?? [])
     .map(mapGithubGraphqlIssue)
+
+  return { issues, issueCount: data.search.issueCount }
 }
 
 export async function fetchGithubUserRepositories(

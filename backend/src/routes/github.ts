@@ -26,7 +26,6 @@ import type {
   GithubIssueDetails,
   GithubIssueDetailsCommentParameters,
   GithubIssueDetailsParameters,
-  GithubIssueParameters,
   GithubIssueSearchFilters,
   GithubNotification,
   GithubPullRequest,
@@ -102,7 +101,6 @@ import {
 import { githubCache } from '../plugins/github/cache/github-cache-runtime.js'
 import { githubRepositoryVisibility } from '../plugins/github/cache/github-repository-visibility-runtime.js'
 import {
-  formatGithubUser,
   mapGithubGraphqlPullRequest,
   mapGithubIssueComment,
   mapGithubIssueDescriptionUpdate,
@@ -131,6 +129,7 @@ import {
   createPullRequestThreadReplyBodySchema,
   issueCommentBodySchema,
   issueSearchBodySchema,
+  issueSearchFiltersSchema,
   mergePullRequestBodySchema,
   pullRequestFilterOptionsBodySchema,
   pullRequestLabelsMutationBodySchema,
@@ -174,7 +173,6 @@ import {
   fetchGithubRepositoryIssueCommentsAllPages,
   fetchGithubRepositoryIssueCommentsConditionally,
   fetchGithubRepositoryIssueConditionally,
-  fetchGithubRepositoryIssuesConditionally,
   fetchGithubRepositoryLabels,
   fetchGithubRepositoryReadmeConditionally,
   fetchGithubRepositoryTreesConditionally,
@@ -196,6 +194,7 @@ import {
 
 const LATEST_PULL_REQUESTS_LIMIT = 20
 const REPOSITORY_PULL_REQUESTS_LIMIT = 100
+const REPOSITORY_ISSUES_LIMIT = 100
 const GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY = 'pullRequest'
 const GITHUB_PULL_REQUEST_FILES_COMMIT_VALIDATOR_KEY = 'commit'
 const GITHUB_UPDATE_BRANCH_POLL_ATTEMPTS = 10
@@ -551,14 +550,14 @@ async function fetchIssuesSearchWithCache(
     githubCache.getOrLoad({
       ...cachePolicy,
       load: async () => {
-        const nodes = await fetchGithubIssueSearchGraphql({
+        const { issues } = await fetchGithubIssueSearchGraphql({
           token: githubToken,
           query,
           limit: 50,
         })
 
         return {
-          payload: nodes,
+          payload: issues,
         }
       },
     }))
@@ -585,6 +584,18 @@ function parseBooleanSearchParam(params: URLSearchParams, name: string, defaultV
     return defaultValue
   }
   return value !== 'false'
+}
+
+function repositoryIssueFiltersInput(url: string) {
+  const params = new URL(url).searchParams
+
+  return {
+    repos: [],
+    labels: uniqueSearchParamValues(params, 'label'),
+    authors: uniqueSearchParamValues(params, 'author'),
+    assignees: uniqueSearchParamValues(params, 'assignee'),
+    sort: params.get('sort') ?? undefined,
+  }
 }
 
 function repositoryPullRequestFiltersInput(url: string) {
@@ -642,7 +653,7 @@ async function fetchPullRequestsSearchWithCache(
     githubCache.getOrLoad({
       ...cachePolicy,
       load: async () => {
-        const nodes = await fetchGithubPullRequestSearchGraphql({
+        const { nodes } = await fetchGithubPullRequestSearchGraphql({
           token: githubToken,
           query,
           limit: LATEST_PULL_REQUESTS_LIMIT,
@@ -711,7 +722,7 @@ async function fetchPullRequestFilterOptions(
         sort: 'updated_desc',
       }),
       limit: 50,
-    }).catch(() => []),
+    }).then(r => r.nodes).catch(() => []),
   ])
 
   const labels = labelsResults
@@ -1535,12 +1546,26 @@ async function fetchRepositoryBranchesWithCache(
     }))
 }
 
+type RepositoryPullRequestState = 'open' | 'merged' | 'closed'
+
+function buildRepositoryPullRequestStateQualifier(state: RepositoryPullRequestState): string {
+  switch (state) {
+    case 'open':
+      return 'state:open'
+    case 'merged':
+      return 'is:merged'
+    case 'closed':
+      return 'state:closed -is:merged'
+  }
+}
+
 async function fetchRepositoryPullRequestsWithCache(
   userId: string,
   githubToken: string,
   owner: string,
   repo: string,
   filters: GithubPullRequestSearchFilters,
+  state: RepositoryPullRequestState,
 ) {
   const repositoryFilter = normalizeRepositoryFilter(`${owner}/${repo}`)
   if (!repositoryFilter) {
@@ -1551,27 +1576,35 @@ async function fetchRepositoryPullRequestsWithCache(
     ...filters,
     repos: [repositoryFilter],
   }
-  const query = buildPullRequestSearchQuery(searchFilters, { openOnly: false })
+  const baseQuery = buildPullRequestSearchQuery(searchFilters, { openOnly: false })
+  const query = `${baseQuery} ${buildRepositoryPullRequestStateQualifier(state)}`
+  const cacheKey = JSON.stringify({
+    filters: normalizePullRequestSearchCacheKey(searchFilters),
+    state,
+  })
   const baseCachePolicy = createGithubRepositoryPullRequestsCachePolicy(
     userId,
     owner,
     repo,
-    normalizePullRequestSearchCacheKey(searchFilters),
+    cacheKey,
   )
   const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, owner, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad<GithubPullRequest[]>({
+    githubCache.getOrLoad<{ pullRequests: GithubPullRequest[], pullRequestCount: number }>({
       ...cachePolicy,
       load: async () => {
-        const nodes = await fetchGithubPullRequestSearchGraphql({
+        const { nodes, issueCount } = await fetchGithubPullRequestSearchGraphql({
           token: githubToken,
           query,
           limit: REPOSITORY_PULL_REQUESTS_LIMIT,
         })
 
         return {
-          payload: nodes.map(node => mapGithubGraphqlPullRequest(node).pullRequest),
+          payload: {
+            pullRequests: nodes.map(node => mapGithubGraphqlPullRequest(node).pullRequest),
+            pullRequestCount: issueCount,
+          },
         }
       },
     }))
@@ -1603,58 +1636,37 @@ async function fetchRepositoryIssuesWithCache(
   githubToken: string,
   owner: string,
   repo: string,
+  state: 'open' | 'closed',
+  filters: GithubIssueSearchFilters,
 ) {
-  const baseCachePolicy = createGithubRepositoryIssuesCachePolicy(userId, owner, repo)
+  const repositoryFilter = normalizeRepositoryFilter(`${owner}/${repo}`)
+  if (!repositoryFilter) {
+    throw new Error('Missing repository')
+  }
+
+  const searchFilters: GithubIssueSearchFilters = {
+    ...filters,
+    repos: [repositoryFilter],
+  }
+  const query = buildIssueSearchQuery(searchFilters, state)
+  const cacheKey = JSON.stringify({
+    filters: normalizeIssueSearchCacheKey(searchFilters, state),
+  })
+  const baseCachePolicy = createGithubRepositoryIssuesCachePolicy(userId, owner, repo, cacheKey)
   const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, owner, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad<GithubIssue[]>({
+    githubCache.getOrLoad<{ issues: GithubIssue[], issueCount: number }>({
       ...cachePolicy,
-      load: async ({ cachedEntry }) => {
-        const params: GithubIssueParameters = {
-          owner,
-          repo,
-          state: 'all',
-          sort: 'updated',
-          direction: 'desc',
-          per_page: 20,
-        }
-
-        const response = await fetchGithubRepositoryIssuesConditionally({
+      load: async () => {
+        const result = await fetchGithubIssueSearchGraphql({
           token: githubToken,
-          params,
-          etag: cachedEntry?.etag,
-          lastModified: cachedEntry?.lastModified,
+          query,
+          limit: REPOSITORY_ISSUES_LIMIT,
         })
 
-        if (response.notModified) {
-          return {
-            notModified: true as const,
-            etag: response.etag,
-            lastModified: response.lastModified,
-          }
-        }
-
         return {
-          payload: (response.data || []).filter(issue => !issue.pull_request).map(issue => ({
-            id: issue.id,
-            number: issue.number,
-            title: issue.title,
-            state: issue.state,
-            state_reason: issue.state_reason,
-            created_at: issue.created_at,
-            updated_at: issue.updated_at,
-            closed_at: issue.closed_at,
-            labels: issue.labels,
-            comments_count: issue.comments,
-            user: formatGithubUser(issue.user),
-            repository: {
-              owner,
-              repo,
-            },
-          } satisfies GithubIssue)),
-          etag: response.etag,
-          lastModified: response.lastModified,
+          payload: result,
         }
       },
     }))
@@ -3241,6 +3253,11 @@ export const githubRoutes = githubRouter
     const user = ctx.get('user')!
     const githubToken = user.github.accessToken
 
+    const state = ctx.req.query('state')
+    if (state !== 'open' && state !== 'merged' && state !== 'closed') {
+      return ctx.json({ error: 'Missing or invalid state query parameter (open, merged, or closed)' }, 400)
+    }
+
     const filtersResult = pullRequestSearchFiltersSchema.safeParse(
       repositoryPullRequestFiltersInput(ctx.req.url),
     )
@@ -3256,9 +3273,11 @@ export const githubRoutes = githubRouter
         owner,
         repo,
         filtersResult.data,
+        state,
       )
       setGithubCacheHeaders(ctx, result)
-      return ctx.json({ pullRequests: result.payload }, 200)
+      const { pullRequests, pullRequestCount } = result.payload
+      return ctx.json({ pullRequests, pullRequestCount }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
@@ -3343,10 +3362,24 @@ export const githubRoutes = githubRouter
     const user = ctx.get('user')!
     const githubToken = user.github.accessToken
 
+    const state = ctx.req.query('state')
+    if (state !== 'open' && state !== 'closed') {
+      return ctx.json({ error: 'Missing or invalid state query parameter (open or closed)' }, 400)
+    }
+
+    const filtersResult = issueSearchFiltersSchema.safeParse(
+      repositoryIssueFiltersInput(ctx.req.url),
+    )
+    if (!filtersResult.success) {
+      const message = filtersResult.error.issues[0]?.message || 'Invalid issue filters'
+      return ctx.json({ error: message }, 400)
+    }
+
     try {
-      const result = await fetchRepositoryIssuesWithCache(user.id, githubToken, owner, repo)
+      const result = await fetchRepositoryIssuesWithCache(user.id, githubToken, owner, repo, state, filtersResult.data)
       setGithubCacheHeaders(ctx, result)
-      return ctx.json({ issues: result.payload }, 200)
+      const { issues, issueCount } = result.payload
+      return ctx.json({ issues, issueCount }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)

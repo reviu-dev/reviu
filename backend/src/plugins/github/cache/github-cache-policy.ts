@@ -409,14 +409,16 @@ export function createGithubRepositoryIssuesCachePolicy(
   userId: string,
   owner: string,
   repo: string,
+  state?: string,
 ): GithubCachePolicy {
   const repositoryKey = normalizeRepositoryKey(owner, repo)
+  const stateKey = state ? `:${state}` : ''
 
   return {
     operation: 'repository.issues',
     scope: 'viewer',
     scopeId: userId,
-    resourceKey: `repo:${repositoryKey}:issues`,
+    resourceKey: `repo:${repositoryKey}:issues${stateKey}`,
     ttlMs: GITHUB_REPOSITORY_ISSUES_CACHE_TTL_MS,
     staleMs: GITHUB_REPOSITORY_ISSUES_CACHE_STALE_MS,
     tags: [getGithubRepoIssuesTag(owner, repo)],

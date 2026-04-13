@@ -157,6 +157,18 @@ describe('github cache policy', () => {
     })
   })
 
+  it('builds the repository issues cache policy with state', () => {
+    expect(createGithubRepositoryIssuesCachePolicy('user-1', 'OpenAI', 'Reviu', 'open')).toEqual({
+      operation: 'repository.issues',
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'repo:openai/reviu:issues:open',
+      ttlMs: 30_000,
+      staleMs: 300_000,
+      tags: ['repo:openai/reviu:issues'],
+    })
+  })
+
   it('builds the repository issue details cache policy with issue and comment tags', () => {
     expect(createGithubRepositoryIssueDetailsCachePolicy('user-1', 'OpenAI', 'Reviu', 7)).toEqual({
       operation: 'repository.issue_details',
