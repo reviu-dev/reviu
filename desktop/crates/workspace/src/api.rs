@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use crate::AppProfile;
 use crate::crash_report::StartupCrashReport;
 use crate::github_home_tabs::{
-  GithubIssueSearchFilters, GithubPullRequestFilterOptionUser, GithubPullRequestFilterOptions,
-  GithubPullRequestSearchFilters, GithubPullRequestSearchSort,
+  GithubIssueSearchFilters, GithubIssueSearchSort, GithubPullRequestFilterOptionUser,
+  GithubPullRequestFilterOptions, GithubPullRequestSearchFilters, GithubPullRequestSearchSort,
 };
 use crate::sentry_context;
 
@@ -910,19 +910,24 @@ struct GithubPullRequestsResponse {
   pull_requests: Vec<GithubPullRequest>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct GithubRepositoryPullRequestsResponse {
+  #[serde(rename = "pullRequests")]
+  pub pull_requests: Vec<GithubPullRequest>,
+  #[serde(rename = "pullRequestCount")]
+  pub pull_request_count: u64,
+}
+
 #[derive(Debug, Serialize)]
 struct GithubPullRequestSearchRequest<'a> {
   filters: &'a GithubPullRequestSearchFilters,
 }
 
-#[derive(Debug, Serialize)]
-struct GithubIssueSearchRequest<'a> {
-  filters: &'a GithubIssueSearchFilters,
-}
-
 #[derive(Debug, Deserialize)]
-struct GithubIssueSearchResponse {
-  issues: Vec<GithubIssue>,
+pub struct GithubRepositoryIssuesResponse {
+  pub issues: Vec<GithubIssue>,
+  #[serde(rename = "issueCount")]
+  pub issue_count: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -993,6 +998,40 @@ fn github_repository_pull_request_filter_query(
     query.push((
       "sort".to_string(),
       github_pull_request_search_sort_query(filters.sort).to_string(),
+    ));
+  }
+
+  query
+}
+
+fn github_issue_search_sort_query(sort: GithubIssueSearchSort) -> &'static str {
+  match sort {
+    GithubIssueSearchSort::UpdatedDesc => "updated_desc",
+    GithubIssueSearchSort::CreatedDesc => "created_desc",
+    GithubIssueSearchSort::CreatedAsc => "created_asc",
+    GithubIssueSearchSort::CommentsDesc => "comments_desc",
+  }
+}
+
+fn github_repository_issue_filter_query(
+  filters: &GithubIssueSearchFilters,
+) -> Vec<(String, String)> {
+  let mut query = Vec::new();
+
+  for label in &filters.labels {
+    query.push(("label".to_string(), label.clone()));
+  }
+  for author in &filters.authors {
+    query.push(("author".to_string(), author.clone()));
+  }
+  for assignee in &filters.assignees {
+    query.push(("assignee".to_string(), assignee.clone()));
+  }
+
+  if filters.sort != GithubIssueSearchSort::UpdatedDesc {
+    query.push((
+      "sort".to_string(),
+      github_issue_search_sort_query(filters.sort).to_string(),
     ));
   }
 
@@ -1455,28 +1494,6 @@ impl ApiClient {
     Ok(payload.options)
   }
 
-  pub fn fetch_github_issues_search(
-    &self,
-    filters: &GithubIssueSearchFilters,
-    state: &str,
-  ) -> Result<Vec<GithubIssue>> {
-    let route = format!("/github/issue/search?state={state}");
-    let response = self
-      .authed_request(Method::POST, route.as_str())
-      .json(&GithubIssueSearchRequest { filters })
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("POST", "/github/issue/search", status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    let payload = response.json::<GithubIssueSearchResponse>()?;
-    Ok(payload.issues)
-  }
-
   pub fn fetch_github_user_repositories(&self) -> Result<Vec<GithubUserRepository>> {
     let response = self
       .authed_request(Method::GET, "/github/repos/me")
@@ -1589,9 +1606,11 @@ impl ApiClient {
     owner: &str,
     repo: &str,
     filters: &GithubPullRequestSearchFilters,
-  ) -> Result<Vec<GithubPullRequest>> {
+    state: &str,
+  ) -> Result<GithubRepositoryPullRequestsResponse> {
     let route = format!("/github/repos/{owner}/{repo}/pr");
-    let query = github_repository_pull_request_filter_query(filters);
+    let mut query = github_repository_pull_request_filter_query(filters);
+    query.push(("state".to_string(), state.to_string()));
     let response = self
       .authed_request(Method::GET, route.as_str())
       .query(&query)
@@ -1604,8 +1623,36 @@ impl ApiClient {
     if !status.is_success() {
       anyhow::bail!("unexpected status: {}", status);
     }
-    let payload = response.json::<GithubPullRequestsResponse>()?;
-    Ok(payload.pull_requests)
+    response
+      .json::<GithubRepositoryPullRequestsResponse>()
+      .map_err(Into::into)
+  }
+
+  pub fn fetch_github_repository_issues(
+    &self,
+    owner: &str,
+    repo: &str,
+    state: &str,
+    filters: &GithubIssueSearchFilters,
+  ) -> Result<GithubRepositoryIssuesResponse> {
+    let route = format!("/github/repos/{owner}/{repo}/issues");
+    let mut query = github_repository_issue_filter_query(filters);
+    query.push(("state".to_string(), state.to_string()));
+    let response = self
+      .authed_request(Method::GET, route.as_str())
+      .query(&query)
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    response
+      .json::<GithubRepositoryIssuesResponse>()
+      .map_err(Into::into)
   }
 
   pub fn fetch_pull_request_for_branch(
@@ -3189,31 +3236,36 @@ mod tests {
           "labels": [{ "name": "docs", "color": "0075ca" }],
           "repository": { "owner": "acme", "repo": "widget" }
         }
-      ]
+      ],
+      "pullRequestCount": 42
     }"#;
     let (base_url, handle) = start_single_response_server("200 OK", body);
     let api = make_test_api_client(base_url);
     let filters = GithubPullRequestSearchFilters::default();
 
-    let prs = api
-      .fetch_github_repository_pull_requests("acme", "widget", &filters)
+    let response = api
+      .fetch_github_repository_pull_requests("acme", "widget", &filters, "open")
       .expect("fetch repository pull requests");
-    assert_eq!(prs.len(), 1);
-    assert_eq!(prs[0].number, 11);
-    assert_eq!(prs[0].title, "Improve docs");
-    assert_eq!(prs[0].created_at, "2026-02-11T08:00:00Z");
-    assert_eq!(prs[0].comments_count, 7);
-    assert_eq!(prs[0].author.login, "docs-bot[bot]");
-    assert!(prs[0].author.is_bot);
-    assert_eq!(prs[0].labels[0].color.as_deref(), Some("0075ca"));
-    assert_eq!(prs[0].repository.owner, "acme");
-    assert_eq!(prs[0].repository.repo, "widget");
+    assert_eq!(response.pull_request_count, 42);
+    assert_eq!(response.pull_requests.len(), 1);
+    assert_eq!(response.pull_requests[0].number, 11);
+    assert_eq!(response.pull_requests[0].title, "Improve docs");
+    assert_eq!(response.pull_requests[0].created_at, "2026-02-11T08:00:00Z");
+    assert_eq!(response.pull_requests[0].comments_count, 7);
+    assert_eq!(response.pull_requests[0].author.login, "docs-bot[bot]");
+    assert!(response.pull_requests[0].author.is_bot);
+    assert_eq!(
+      response.pull_requests[0].labels[0].color.as_deref(),
+      Some("0075ca")
+    );
+    assert_eq!(response.pull_requests[0].repository.owner, "acme");
+    assert_eq!(response.pull_requests[0].repository.repo, "widget");
     handle.join().expect("join server thread");
   }
 
   #[test]
   fn fetch_github_repository_pull_requests_uses_filter_query_params() {
-    let body = r#"{"pullRequests":[]}"#;
+    let body = r#"{"pullRequests":[],"pullRequestCount":0}"#;
     let (base_url, request_line, handle) =
       start_single_response_server_with_request_line("200 OK", body);
     let api = make_test_api_client(base_url);
@@ -3230,7 +3282,7 @@ mod tests {
     };
 
     let _ = api
-      .fetch_github_repository_pull_requests("acme", "widget", &filters)
+      .fetch_github_repository_pull_requests("acme", "widget", &filters, "open")
       .expect("fetch repository pull requests");
 
     handle.join().expect("join server thread");
@@ -3273,6 +3325,89 @@ mod tests {
     );
     assert!(
       request_line.contains("sort=comments_desc"),
+      "request_line: {request_line}"
+    );
+    assert!(
+      request_line.contains("state=open"),
+      "request_line: {request_line}"
+    );
+  }
+
+  #[test]
+  fn fetch_github_repository_issues_parses_success_payload() {
+    let body = r#"{
+      "issues": [
+        {
+          "id": 1,
+          "number": 42,
+          "title": "Fix login bug",
+          "state": "open",
+          "state_reason": null,
+          "created_at": "2026-03-01T10:00:00Z",
+          "updated_at": "2026-03-05T14:00:00Z",
+          "closed_at": null,
+          "labels": [{ "name": "bug", "color": "d73a4a" }],
+          "comments_count": 3,
+          "user": {
+            "login": "alice",
+            "avatar_url": "https://example.com/alice.png"
+          },
+          "repository": { "owner": "acme", "repo": "widget" }
+        }
+      ],
+      "issueCount": 15
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let response = api
+      .fetch_github_repository_issues(
+        "acme",
+        "widget",
+        "open",
+        &GithubIssueSearchFilters::default(),
+      )
+      .expect("fetch repository issues");
+    assert_eq!(response.issue_count, 15);
+    assert_eq!(response.issues.len(), 1);
+    assert_eq!(response.issues[0].number, 42);
+    assert_eq!(response.issues[0].title, "Fix login bug");
+    assert_eq!(
+      response.issues[0].labels[0].color.as_deref(),
+      Some("d73a4a")
+    );
+    assert_eq!(response.issues[0].repository.owner, "acme");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_repository_issues_sends_state_query_param() {
+    let body = r#"{"issues":[],"issueCount":0}"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_github_repository_issues(
+        "acme",
+        "widget",
+        "closed",
+        &GithubIssueSearchFilters::default(),
+      )
+      .expect("fetch repository issues");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request_line.starts_with("GET /github/repos/acme/widget/issues?"),
+      "request_line: {request_line}"
+    );
+    assert!(
+      request_line.contains("state=closed"),
       "request_line: {request_line}"
     );
   }
@@ -5504,7 +5639,7 @@ mod tests {
     let filters = GithubPullRequestSearchFilters::default();
 
     let err = api
-      .fetch_github_repository_pull_requests("acme", "widget", &filters)
+      .fetch_github_repository_pull_requests("acme", "widget", &filters, "open")
       .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
