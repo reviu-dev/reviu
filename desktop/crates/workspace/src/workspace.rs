@@ -425,6 +425,20 @@ impl WorkspaceView {
       return;
     };
 
+    if notification.unread {
+      let api = WorkspaceApi::global(cx).api.clone();
+      let thread_id = notification.id.clone();
+
+      let count = NotificationCountStore::get(cx).saturating_sub(1);
+      NotificationCountStore::set(cx, count);
+      set_dock_badge(count);
+
+      cx.background_spawn(async move {
+        let _ = unblock(move || api.mark_notification_read(&thread_id)).await;
+      })
+      .detach();
+    }
+
     let full_name = &notification.repository.full_name;
     let (owner, repo) = full_name.split_once('/').unwrap_or((full_name, ""));
 
