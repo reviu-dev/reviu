@@ -72,7 +72,6 @@ import { Hono } from 'hono'
 import { logger } from '../lib/logger.js'
 import { authMiddlewarePro } from '../middlewares/auth.js'
 import {
-  createGithubIssueSearchCachePolicy,
   createGithubNotificationsCachePolicy,
   createGithubPullRequestCommentsCachePolicy,
   createGithubPullRequestCommitsCachePolicy,
@@ -128,7 +127,6 @@ import {
   createPullRequestReviewBodySchema,
   createPullRequestThreadReplyBodySchema,
   issueCommentBodySchema,
-  issueSearchBodySchema,
   issueSearchFiltersSchema,
   mergePullRequestBodySchema,
   pullRequestFilterOptionsBodySchema,
@@ -533,35 +531,6 @@ function normalizeIssueSearchCacheKey(filters: GithubIssueSearchFilters, state: 
     sort: filters.sort,
     state,
   })
-}
-
-async function fetchIssuesSearchWithCache(
-  userId: string,
-  githubToken: string,
-  filters: GithubIssueSearchFilters,
-  state: 'open' | 'closed',
-) {
-  const query = buildIssueSearchQuery(filters, state)
-  const cachePolicy = createGithubIssueSearchCachePolicy(
-    userId,
-    normalizeIssueSearchCacheKey(filters, state),
-  )
-
-  return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad({
-      ...cachePolicy,
-      load: async () => {
-        const { issues } = await fetchGithubIssueSearchGraphql({
-          token: githubToken,
-          query,
-          limit: 50,
-        })
-
-        return {
-          payload: issues,
-        }
-      },
-    }))
 }
 
 function uniqueSearchParamValues(params: URLSearchParams, name: string) {
@@ -2154,28 +2123,6 @@ export const githubRoutes = githubRouter
       )
       setGithubCacheHeaders(ctx, result)
       return ctx.json({ pullRequests: result.payload }, 200)
-    }
-    catch (error) {
-      return ctx.json({ error: (error as Error).message }, 502)
-    }
-  })
-  .post('/issue/search', zValidator(
-    'json',
-    issueSearchBodySchema,
-  ), async (ctx) => {
-    const user = ctx.get('user')!
-    const githubToken = user.github.accessToken
-    const { filters } = ctx.req.valid('json')
-    const state = (ctx.req.query('state') as 'open' | 'closed') || 'open'
-    try {
-      const result = await fetchIssuesSearchWithCache(
-        user.id,
-        githubToken,
-        filters,
-        state,
-      )
-      setGithubCacheHeaders(ctx, result)
-      return ctx.json({ issues: result.payload }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
