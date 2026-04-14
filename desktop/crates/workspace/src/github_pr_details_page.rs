@@ -12526,7 +12526,7 @@ impl GithubPrDetailsPage {
       .child(search_controls)
       .child(
         div()
-          .px_1()
+          .p_1()
           .flex_1()
           .min_h_0()
           .key_context(crate::shortcuts::GITHUB_PR_CHANGES_TREE_CONTEXT)
