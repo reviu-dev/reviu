@@ -1005,16 +1005,25 @@ fn render_table(
     .fold(table.headers.len(), |count, row| count.max(row.len()))
     .max(1);
   let column_widths = table_column_widths(table, column_count);
+  let total_width: f32 = column_widths.iter().sum();
 
-  let mut header_row = h_flex().bg(theme.accent.opacity(0.3));
+  let mut header_row = div().flex().flex_row().items_stretch().bg(theme.accent.opacity(0.3));
   for (column, width) in column_widths.iter().enumerate().take(column_count) {
     let cell = table
       .headers
       .get(column)
       .map_or(&[][..], |cell| cell.as_slice());
+    let basis = if total_width > 0.0 {
+      *width / total_width
+    } else {
+      1.0 / column_count as f32
+    };
     header_row = header_row.child(
       div()
-        .w(px(*width))
+        .flex_basis(gpui::relative(basis))
+        .flex_grow()
+        .min_w_0()
+        .h_full()
         .px_3()
         .py_2()
         .when(column + 1 < column_count, |this| {
@@ -1025,7 +1034,6 @@ fn render_table(
             .text_sm()
             .font_medium()
             .text_color(theme.foreground)
-            .whitespace_nowrap()
             .child(render_table_cell_inlines(cell, options, cx, ctx)),
         ),
     );
@@ -1033,12 +1041,19 @@ fn render_table(
 
   let mut body = v_flex();
   for row in &table.rows {
-    let mut row_el = h_flex().border_t_1().border_color(theme.border);
+    let mut row_el = div().flex().flex_row().items_stretch().border_t_1().border_color(theme.border);
     for (column, width) in column_widths.iter().enumerate().take(column_count) {
       let cell = row.get(column).map_or(&[][..], |cell| cell.as_slice());
+      let basis = if total_width > 0.0 {
+        *width / total_width
+      } else {
+        1.0 / column_count as f32
+      };
       row_el = row_el.child(
         div()
-          .w(px(*width))
+          .flex_basis(gpui::relative(basis))
+          .flex_grow()
+          .min_w_0()
           .px_3()
           .py_2()
           .when(column + 1 < column_count, |this| {
@@ -1048,7 +1063,6 @@ fn render_table(
             div()
               .text_sm()
               .text_color(theme.foreground)
-              .whitespace_nowrap()
               .child(render_table_cell_inlines(cell, options, cx, ctx)),
           ),
       );
