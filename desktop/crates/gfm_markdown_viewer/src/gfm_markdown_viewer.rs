@@ -333,29 +333,26 @@ pub fn render_github_code_reference_preview_card(
     )
     .child(
       div()
+        .id(preview_scroll_id)
+        .w_full()
         .px(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX))
         .py(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX))
+        .min_w_0()
+        .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
+        .overflow_scroll()
+        .on_scroll_wheel(|_, _, cx| {
+          cx.stop_propagation();
+        })
         .child(
           div()
-            .id(preview_scroll_id)
-            .w_full()
-            .min_w_0()
-            .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
-            .overflow_scroll()
-            .on_scroll_wheel(|_, _, cx| {
-              cx.stop_propagation();
-            })
+            .min_w(px(min_preview_content_width_px))
+            .whitespace_nowrap()
+            .text_sm()
+            .text_color(theme.foreground)
             .child(
-              div()
-                .min_w(px(min_preview_content_width_px))
-                .whitespace_nowrap()
-                .text_sm()
-                .text_color(theme.foreground)
-                .child(
-                  v_flex()
-                    .gap(px(MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX))
-                    .child(snippet_rows),
-                ),
+              v_flex()
+                .gap(px(MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX))
+                .child(snippet_rows),
             ),
         ),
     )
