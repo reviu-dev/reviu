@@ -29,7 +29,7 @@ use gpui_component::{
   list::ListItem,
   pagination::Pagination,
   scroll::ScrollableElement,
-  select::{SearchableVec, SelectEvent, SelectItem, SelectState},
+  select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
   spinner::Spinner,
   tab::{Tab, TabBar},
   tag::Tag,
@@ -42,12 +42,11 @@ use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
-  DETAILS_PAGE_CONTAINER_MAX_WIDTH, DropdownSelectConfig, DropdownSelectItem, DropdownSelectOption,
-  FILE_ICON_SIZE_PX, Input, InputState, SearchFileEntry, SearchFileHandler, SelectableRowStyle,
-  StatusTag, StatusThemeExt as _, UiIconName, VariableList, VariableListDelegate,
-  VariableListEvent, VariableListState, WindowExt, dropdown_select,
-  file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
-  selectable_list_item,
+  DETAILS_PAGE_CONTAINER_MAX_WIDTH, DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX,
+  Input, InputState, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusTag,
+  StatusThemeExt as _, UiIconName, VariableList, VariableListDelegate, VariableListEvent,
+  VariableListState, WindowExt, dropdown_select, file_icon_path_for_name_with_theme, h_resizable,
+  parse_github_url_action, resizable_panel, selectable_list_item,
 };
 
 use crate::{
@@ -703,6 +702,139 @@ impl SelectItem for GithubRepoBranchSelectItem {
   fn matches(&self, query: &str) -> bool {
     self.label.to_lowercase().contains(&query.to_lowercase())
   }
+}
+
+#[derive(Clone)]
+struct PrReviewStatusSelectItem {
+  status: GithubPullRequestReviewStatus,
+  label: SharedString,
+}
+
+impl SelectItem for PrReviewStatusSelectItem {
+  type Value = GithubPullRequestReviewStatus;
+  fn title(&self) -> SharedString {
+    self.label.clone()
+  }
+  fn value(&self) -> &Self::Value {
+    &self.status
+  }
+}
+
+#[derive(Clone)]
+struct PrSortSelectItem {
+  sort: GithubPullRequestSearchSort,
+  label: SharedString,
+}
+
+impl SelectItem for PrSortSelectItem {
+  type Value = GithubPullRequestSearchSort;
+  fn title(&self) -> SharedString {
+    self.label.clone()
+  }
+  fn value(&self) -> &Self::Value {
+    &self.sort
+  }
+}
+
+#[derive(Clone)]
+struct PrBaseSelectItem {
+  base: Option<String>,
+  label: SharedString,
+}
+
+impl SelectItem for PrBaseSelectItem {
+  type Value = Option<String>;
+  fn title(&self) -> SharedString {
+    self.label.clone()
+  }
+  fn value(&self) -> &Self::Value {
+    &self.base
+  }
+}
+
+#[derive(Clone)]
+struct IssueSortSelectItem {
+  sort: GithubIssueSearchSort,
+  label: SharedString,
+}
+
+impl SelectItem for IssueSortSelectItem {
+  type Value = GithubIssueSearchSort;
+  fn title(&self) -> SharedString {
+    self.label.clone()
+  }
+  fn value(&self) -> &Self::Value {
+    &self.sort
+  }
+}
+
+fn build_pr_review_status_items() -> Vec<PrReviewStatusSelectItem> {
+  [
+    GithubPullRequestReviewStatus::Any,
+    GithubPullRequestReviewStatus::Required,
+    GithubPullRequestReviewStatus::Approved,
+    GithubPullRequestReviewStatus::ChangesRequested,
+    GithubPullRequestReviewStatus::None,
+  ]
+  .into_iter()
+  .map(|status| PrReviewStatusSelectItem {
+    label: pull_request_review_status_label(status).into(),
+    status,
+  })
+  .collect()
+}
+
+fn build_pr_sort_items() -> Vec<PrSortSelectItem> {
+  [
+    GithubPullRequestSearchSort::UpdatedDesc,
+    GithubPullRequestSearchSort::CreatedDesc,
+    GithubPullRequestSearchSort::CreatedAsc,
+    GithubPullRequestSearchSort::CommentsDesc,
+  ]
+  .into_iter()
+  .map(|sort| PrSortSelectItem {
+    label: pull_request_search_sort_label(sort).into(),
+    sort,
+  })
+  .collect()
+}
+
+fn build_pr_base_items(
+  branch_names: &[String],
+  selected_base: Option<&String>,
+) -> Vec<PrBaseSelectItem> {
+  let mut items = vec![PrBaseSelectItem {
+    base: None,
+    label: "Any base branch".into(),
+  }];
+
+  let mut names = branch_names.to_vec();
+  if let Some(base) = selected_base {
+    names.push(base.clone());
+  }
+  names.sort_by_key(|b| b.to_lowercase());
+  names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+
+  items.extend(names.into_iter().map(|branch| PrBaseSelectItem {
+    label: branch.clone().into(),
+    base: Some(branch),
+  }));
+  items
+}
+
+fn build_issue_sort_items() -> Vec<IssueSortSelectItem> {
+  [
+    GithubIssueSearchSort::UpdatedDesc,
+    GithubIssueSearchSort::CreatedDesc,
+    GithubIssueSearchSort::CreatedAsc,
+    GithubIssueSearchSort::CommentsDesc,
+  ]
+  .into_iter()
+  .map(|sort| IssueSortSelectItem {
+    label: issue_search_sort_label(sort).into(),
+    sort,
+  })
+  .collect()
 }
 
 fn build_repo_branch_select_items(
@@ -3025,6 +3157,10 @@ pub struct GithubRepoPage {
   pull_request_filter_options_error: Option<SharedString>,
   pull_request_filter_options_task: Option<Task<()>>,
   pull_request_filter_popover_open: bool,
+  pr_review_status_select: Entity<SelectState<Vec<PrReviewStatusSelectItem>>>,
+  pr_sort_select: Entity<SelectState<Vec<PrSortSelectItem>>>,
+  pr_base_select: Entity<SelectState<SearchableVec<PrBaseSelectItem>>>,
+  issue_sort_select: Entity<SelectState<Vec<IssueSortSelectItem>>>,
   pull_requests_request_generation: u64,
   pull_requests: Entity<VariableListState<GithubRepoPullRequestListDelegate>>,
   merged_pull_requests: Entity<VariableListState<GithubRepoPullRequestListDelegate>>,
@@ -3179,6 +3315,48 @@ impl GithubRepoPage {
     GithubRepoPageHandle::register(cx);
 
     let code_tree_state = cx.new(|cx| TreeState::new(cx));
+    let pr_review_status_select = cx.new(|cx| {
+      let mut state = SelectState::new(
+        build_pr_review_status_items(),
+        Some(gpui_component::IndexPath::default()),
+        window,
+        cx,
+      );
+      state.set_selected_value(&GithubPullRequestReviewStatus::Any, window, cx);
+      state
+    });
+    let pr_sort_select = cx.new(|cx| {
+      let mut state = SelectState::new(
+        build_pr_sort_items(),
+        Some(gpui_component::IndexPath::default()),
+        window,
+        cx,
+      );
+      state.set_selected_value(&GithubPullRequestSearchSort::UpdatedDesc, window, cx);
+      state
+    });
+    let pr_base_select = cx.new(|cx| {
+      SelectState::new(
+        SearchableVec::new(vec![PrBaseSelectItem {
+          base: None,
+          label: "Any base branch".into(),
+        }]),
+        Some(gpui_component::IndexPath::default()),
+        window,
+        cx,
+      )
+      .searchable(true)
+    });
+    let issue_sort_select = cx.new(|cx| {
+      let mut state = SelectState::new(
+        build_issue_sort_items(),
+        Some(gpui_component::IndexPath::default()),
+        window,
+        cx,
+      );
+      state.set_selected_value(&GithubIssueSearchSort::UpdatedDesc, window, cx);
+      state
+    });
     let branch_select = cx.new(|cx| {
       SelectState::new(
         SearchableVec::new(Vec::<GithubRepoBranchSelectItem>::new()),
@@ -3276,6 +3454,10 @@ impl GithubRepoPage {
       pull_request_filter_options_error: None,
       pull_request_filter_options_task: None,
       pull_request_filter_popover_open: false,
+      pr_review_status_select,
+      pr_sort_select,
+      pr_base_select,
+      issue_sort_select,
       pull_requests_request_generation: 0,
       pull_requests,
       merged_pull_requests,
@@ -3324,6 +3506,7 @@ impl GithubRepoPage {
     this.subscribe_to_issues_search(window, cx);
     this.subscribe_to_issue_filter_inputs(window, cx);
     this.subscribe_to_branch_select(cx);
+    this.subscribe_to_filter_selects(cx);
     this
   }
 
@@ -3825,9 +4008,28 @@ impl GithubRepoPage {
     }
 
     self.pull_request_filters = GithubPullRequestSearchFilters::default();
+    self.reset_pr_filter_selects(cx);
     self.reset_pr_pages();
     self.refresh_pull_requests(cx);
     cx.notify();
+  }
+
+  fn reset_pr_filter_selects(&mut self, cx: &mut Context<Self>) {
+    let review_select = self.pr_review_status_select.clone();
+    let sort_select = self.pr_sort_select.clone();
+    let base_select = self.pr_base_select.clone();
+    let window_handle = self.window_handle;
+    let _ = cx.update_window(window_handle, move |_, window, cx| {
+      review_select.update(cx, |state, cx| {
+        state.set_selected_value(&GithubPullRequestReviewStatus::Any, window, cx);
+      });
+      sort_select.update(cx, |state, cx| {
+        state.set_selected_value(&GithubPullRequestSearchSort::UpdatedDesc, window, cx);
+      });
+      base_select.update(cx, |state, cx| {
+        state.set_selected_value(&None, window, cx);
+      });
+    });
   }
 
   fn clear_pull_request_filter_inputs(&mut self, cx: &mut Context<Self>) {
@@ -3876,6 +4078,61 @@ impl GithubRepoPage {
       |this, _state, event: &SelectEvent<SearchableVec<GithubRepoBranchSelectItem>>, cx| {
         if let SelectEvent::Confirm(Some(branch)) = event {
           this.set_selected_branch(branch.clone(), cx);
+        }
+      },
+    )
+    .detach();
+  }
+
+  fn update_pr_base_select_items(&mut self, cx: &mut Context<Self>) {
+    let items = build_pr_base_items(&self.branch_names, self.pull_request_filters.base.as_ref());
+    let pr_base_select = self.pr_base_select.clone();
+    let window_handle = self.window_handle;
+    let _ = cx.update_window(window_handle, move |_, window, cx| {
+      pr_base_select.update(cx, |state, cx| {
+        state.set_items(SearchableVec::new(items), window, cx);
+      });
+    });
+  }
+
+  fn subscribe_to_filter_selects(&mut self, cx: &mut Context<Self>) {
+    cx.subscribe(
+      &self.pr_review_status_select,
+      |this, _state, event: &SelectEvent<Vec<PrReviewStatusSelectItem>>, cx| {
+        if let SelectEvent::Confirm(Some(status)) = event {
+          this.set_pull_request_review_status_filter(*status, cx);
+        }
+      },
+    )
+    .detach();
+
+    cx.subscribe(
+      &self.pr_sort_select,
+      |this, _state, event: &SelectEvent<Vec<PrSortSelectItem>>, cx| {
+        if let SelectEvent::Confirm(Some(sort)) = event {
+          this.set_pull_request_sort_filter(*sort, cx);
+        }
+      },
+    )
+    .detach();
+
+    cx.subscribe(
+      &self.pr_base_select,
+      |this, _state, event: &SelectEvent<SearchableVec<PrBaseSelectItem>>, cx| {
+        if let SelectEvent::Confirm(Some(base)) = event {
+          this.set_pull_request_base_filter(base.clone(), cx);
+        }
+      },
+    )
+    .detach();
+
+    cx.subscribe(
+      &self.issue_sort_select,
+      |this, _state, event: &SelectEvent<Vec<IssueSortSelectItem>>, cx| {
+        if let SelectEvent::Confirm(Some(sort)) = event {
+          this.issue_filters.sort = *sort;
+          this.reset_issue_pages();
+          this.refresh_issues(cx);
         }
       },
     )
@@ -4115,8 +4372,10 @@ impl GithubRepoPage {
             let selected_branch = this.effective_branch();
             this.selected_branch = selected_branch.clone().map(Into::into);
             this.branch_names = branch_names.clone();
-            let items = build_repo_branch_select_items(branch_names, selected_branch.as_deref());
+            let items =
+              build_repo_branch_select_items(branch_names.clone(), selected_branch.as_deref());
             this.set_branch_select_items(items, selected_branch, cx);
+            this.update_pr_base_select_items(cx);
             this.branches_error = None;
           }
           Err(error) => {
@@ -6463,49 +6722,6 @@ impl GithubRepoPage {
       true,
     );
 
-    let review_status_options = [
-      GithubPullRequestReviewStatus::Any,
-      GithubPullRequestReviewStatus::Required,
-      GithubPullRequestReviewStatus::Approved,
-      GithubPullRequestReviewStatus::ChangesRequested,
-      GithubPullRequestReviewStatus::None,
-    ]
-    .into_iter()
-    .map(|status| {
-      DropdownSelectOption::new(status, pull_request_review_status_label(status))
-        .selected(status == self.pull_request_filters.review_status)
-    })
-    .collect::<Vec<_>>();
-
-    let sort_options = [
-      GithubPullRequestSearchSort::UpdatedDesc,
-      GithubPullRequestSearchSort::CreatedDesc,
-      GithubPullRequestSearchSort::CreatedAsc,
-      GithubPullRequestSearchSort::CommentsDesc,
-    ]
-    .into_iter()
-    .map(|sort| {
-      DropdownSelectOption::new(sort, pull_request_search_sort_label(sort))
-        .selected(sort == self.pull_request_filters.sort)
-    })
-    .collect::<Vec<_>>();
-
-    let mut base_names = self.branch_names.clone();
-    if let Some(base) = self.pull_request_filters.base.as_ref() {
-      base_names.push(base.clone());
-    }
-    base_names.sort_by_key(|branch| branch.to_lowercase());
-    base_names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
-
-    let mut base_options = vec![
-      DropdownSelectOption::new(None::<String>, "Any base branch")
-        .selected(self.pull_request_filters.base.is_none()),
-    ];
-    base_options.extend(base_names.into_iter().map(|branch| {
-      DropdownSelectOption::new(Some(branch.clone()), branch.clone())
-        .selected(self.pull_request_filters.base.as_ref() == Some(&branch))
-    }));
-
     v_flex()
       .w_full()
       .gap_3()
@@ -6585,64 +6801,35 @@ impl GithubRepoPage {
         v_flex()
           .gap_1()
           .child(div().text_sm().child("Review"))
-          .child(dropdown_select(
-            DropdownSelectConfig::new("github-repo-pr-review-filter-panel")
+          .child(
+            Select::new(&self.pr_review_status_select)
               .placeholder("Any review state")
-              .options(review_status_options)
-              .searchable(false)
-              .width(px(268.0))
-              .menu_width(px(268.0))
-              .on_select(Rc::new({
-                let view = cx.entity().clone();
-                move |status, _, cx| {
-                  view.update(cx, |this, cx| {
-                    this.set_pull_request_review_status_filter(status, cx);
-                  });
-                }
-              })),
-          )),
+              .small()
+              .w(px(268.0))
+              .menu_width(px(268.0)),
+          ),
       )
       .child(
         v_flex()
           .gap_1()
           .child(div().text_sm().child("Base branch"))
-          .child(dropdown_select(
-            DropdownSelectConfig::new("github-repo-pr-base-filter-panel")
+          .child(
+            Select::new(&self.pr_base_select)
               .placeholder("Any base branch")
-              .options(base_options)
               .search_placeholder("Search branches...")
-              .width(px(268.0))
-              .menu_width(px(268.0))
-              .on_select(Rc::new({
-                let view = cx.entity().clone();
-                move |base, _, cx| {
-                  view.update(cx, |this, cx| {
-                    this.set_pull_request_base_filter(base, cx);
-                  });
-                }
-              })),
-          )),
+              .small()
+              .w(px(268.0))
+              .menu_width(px(268.0)),
+          ),
       )
       .child(
-        v_flex()
-          .gap_1()
-          .child(div().text_sm().child("Sort"))
-          .child(dropdown_select(
-            DropdownSelectConfig::new("github-repo-pr-sort-filter-panel")
-              .placeholder("Recently updated")
-              .options(sort_options)
-              .searchable(false)
-              .width(px(268.0))
-              .menu_width(px(268.0))
-              .on_select(Rc::new({
-                let view = cx.entity().clone();
-                move |sort, _, cx| {
-                  view.update(cx, |this, cx| {
-                    this.set_pull_request_sort_filter(sort, cx);
-                  });
-                }
-              })),
-          )),
+        v_flex().gap_1().child(div().text_sm().child("Sort")).child(
+          Select::new(&self.pr_sort_select)
+            .placeholder("Recently updated")
+            .small()
+            .w(px(268.0))
+            .menu_width(px(268.0)),
+        ),
       )
       .child(
         Checkbox::new("github-repo-pr-include-drafts-panel")
@@ -6839,19 +7026,6 @@ impl GithubRepoPage {
       .min_h_0()
       .p(px(8.));
 
-    let sort_options = [
-      GithubIssueSearchSort::UpdatedDesc,
-      GithubIssueSearchSort::CreatedDesc,
-      GithubIssueSearchSort::CreatedAsc,
-      GithubIssueSearchSort::CommentsDesc,
-    ]
-    .into_iter()
-    .map(|sort| {
-      DropdownSelectOption::new(sort, issue_search_sort_label(sort))
-        .selected(sort == self.issue_filters.sort)
-    })
-    .collect::<Vec<_>>();
-
     let label_suggestions = matching_filter_option_labels(
       &self.pull_request_filter_options.labels,
       self.issue_filter_label_input.read(cx).value().as_ref(),
@@ -6905,8 +7079,11 @@ impl GithubRepoPage {
                       .xsmall()
                       .ghost()
                       .disabled(self.issue_filters == GithubIssueSearchFilters::default())
-                      .on_click(cx.listener(|this, _, _, cx| {
+                      .on_click(cx.listener(|this, _, window, cx| {
                         this.issue_filters = GithubIssueSearchFilters::default();
+                        this.issue_sort_select.update(cx, |state, cx| {
+                          state.set_selected_value(&GithubIssueSearchSort::UpdatedDesc, window, cx);
+                        });
                         this.reset_issue_pages();
                         this.refresh_issues(cx);
                       })),
@@ -6951,27 +7128,13 @@ impl GithubRepoPage {
                 cx,
               ))
               .child(
-                v_flex()
-                  .gap_1()
-                  .child(div().text_sm().child("Sort"))
-                  .child(dropdown_select(
-                    DropdownSelectConfig::new("github-repo-issue-sort-filter")
-                      .placeholder("Recently updated")
-                      .options(sort_options)
-                      .searchable(false)
-                      .width(px(268.0))
-                      .menu_width(px(268.0))
-                      .on_select(Rc::new({
-                        let view = cx.entity().clone();
-                        move |sort: GithubIssueSearchSort, _, cx| {
-                          view.update(cx, |this, cx| {
-                            this.issue_filters.sort = sort;
-                            this.reset_issue_pages();
-                            this.refresh_issues(cx);
-                          });
-                        }
-                      })),
-                  )),
+                v_flex().gap_1().child(div().text_sm().child("Sort")).child(
+                  Select::new(&self.issue_sort_select)
+                    .placeholder("Recently updated")
+                    .small()
+                    .w(px(268.0))
+                    .menu_width(px(268.0)),
+                ),
               ),
           ),
       );
