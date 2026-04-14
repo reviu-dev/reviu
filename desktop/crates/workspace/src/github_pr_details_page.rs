@@ -9114,8 +9114,8 @@ impl GithubPrDetailsPage {
               .debug_selector(|| "github-pr-review-button".to_string())
               .child(self.render_review_popover(&theme, cx)),
           )
-          .child(self.render_pr_actions_menu(cx))
-      });
+      })
+      .child(self.render_pr_actions_menu(cx));
 
     div()
       .px_3()
