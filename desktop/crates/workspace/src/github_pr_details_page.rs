@@ -1429,6 +1429,7 @@ enum OverviewConflictsKind {
   NoConflicts,
   Conflicts,
   OutOfDate,
+  Merged,
 }
 
 #[derive(Clone, Debug)]
@@ -9157,8 +9158,15 @@ impl GithubPrDetailsPage {
       &self.reviews,
       author_login,
     );
-    let conflicts_info =
-      overview_conflicts_info(self.merge_readiness.as_ref(), self.checks.as_ref());
+    let conflicts_info = if self.is_pull_request_merged() {
+      Some(OverviewConflictsInfo {
+        kind: OverviewConflictsKind::Merged,
+        title: "Pull request successfully merged and closed",
+        message: "You're all set - the branch has been merged.".to_string(),
+      })
+    } else {
+      overview_conflicts_info(self.merge_readiness.as_ref(), self.checks.as_ref())
+    };
     let has_checks_content =
       self.checks.is_some() || self.checks_loading || self.checks_error.is_some();
 
@@ -9181,7 +9189,9 @@ impl GithubPrDetailsPage {
 
     let mut has_previous = false;
 
-    if let Some(review) = &review_info {
+    if let Some(review) = &review_info
+      && !self.is_pull_request_merged()
+    {
       let review_icon: AnyElement = match review.title {
         "Changes approved" => Icon::new(UiIconName::CircleCheck)
           .size_5()
@@ -9223,6 +9233,10 @@ impl GithubPrDetailsPage {
         OverviewConflictsKind::OutOfDate => {
           Self::render_status_icon_dot(theme.status_yellow()).into_any_element()
         }
+        OverviewConflictsKind::Merged => Icon::new(UiIconName::GitMerge)
+          .size_5()
+          .text_color(theme.status_violet())
+          .into_any_element(),
       };
 
       let action = self.render_overview_conflicts_action(&conflicts.kind, cx);
@@ -9366,7 +9380,7 @@ impl GithubPrDetailsPage {
     let label = match kind {
       OverviewConflictsKind::Conflicts => "Resolve conflicts",
       OverviewConflictsKind::OutOfDate => "Update branch",
-      OverviewConflictsKind::NoConflicts => return None,
+      OverviewConflictsKind::NoConflicts | OverviewConflictsKind::Merged => return None,
     };
 
     let view = cx.entity().clone();
