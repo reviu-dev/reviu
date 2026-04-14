@@ -788,13 +788,6 @@ fn reviewer_status_for_login(
   login: &str,
   requested_reviewers: &[GithubPullRequestFilterOptionUser],
 ) -> ReviewerStatus {
-  let is_requested = requested_reviewers
-    .iter()
-    .any(|r| r.login.eq_ignore_ascii_case(login));
-  if is_requested {
-    return ReviewerStatus::Awaiting;
-  }
-
   let mut latest_approved: Option<&str> = None;
   let mut latest_changes: Option<&str> = None;
   let mut latest_comment: Option<&str> = None;
@@ -829,7 +822,11 @@ fn reviewer_status_for_login(
     }
   }
 
-  match (latest_approved, latest_changes, latest_comment) {
+  let is_requested = requested_reviewers
+    .iter()
+    .any(|r| r.login.eq_ignore_ascii_case(login));
+
+  let review_status = match (latest_approved, latest_changes, latest_comment) {
     (Some(approved), Some(changes), _) => {
       if approved > changes {
         ReviewerStatus::Approved
@@ -840,8 +837,15 @@ fn reviewer_status_for_login(
     (_, Some(_), _) => ReviewerStatus::ChangesRequested,
     (Some(_), None, _) => ReviewerStatus::Approved,
     (None, None, Some(_)) => ReviewerStatus::Commented,
-    _ => ReviewerStatus::Awaiting,
+    _ => return ReviewerStatus::Awaiting,
+  };
+
+  // If the reviewer was re-requested after their last review, show as awaiting.
+  if is_requested {
+    return ReviewerStatus::Awaiting;
   }
+
+  review_status
 }
 
 fn reviewer_status_tooltip(status: ReviewerStatus, login: &str) -> SharedString {
@@ -14054,8 +14058,8 @@ mod tests {
       }),
     }];
 
-    let info = overview_review_status_info(Some(&readiness), &reviewers, &reviews, "author")
-      .expect("review info");
+    let info =
+      overview_review_status_info(Some(&readiness), &[], &reviews, "author").expect("review info");
     assert_eq!(info.title, "Changes approved");
   }
 
@@ -14082,8 +14086,8 @@ mod tests {
       }),
     }];
 
-    let info = overview_review_status_info(Some(&readiness), &reviewers, &reviews, "author")
-      .expect("review info");
+    let info =
+      overview_review_status_info(Some(&readiness), &[], &reviews, "author").expect("review info");
     assert_eq!(info.title, "Changes requested");
   }
 
@@ -14130,8 +14134,8 @@ mod tests {
       },
     ];
 
-    let info = overview_review_status_info(Some(&readiness), &reviewers, &reviews, "author")
-      .expect("review info");
+    let info =
+      overview_review_status_info(Some(&readiness), &[], &reviews, "author").expect("review info");
     assert_eq!(info.title, "Changes approved");
   }
 
@@ -14178,8 +14182,8 @@ mod tests {
       },
     ];
 
-    let info = overview_review_status_info(Some(&readiness), &reviewers, &reviews, "author")
-      .expect("review info");
+    let info =
+      overview_review_status_info(Some(&readiness), &[], &reviews, "author").expect("review info");
     assert_eq!(info.title, "Changes requested");
   }
 
