@@ -2,7 +2,7 @@
 
 All notable changes to Reviu are documented here.
 
-## 0.1.1
+## 0.2.0
 
 ### Repository Pull Request Search and Filters
 
