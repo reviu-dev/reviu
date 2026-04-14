@@ -9965,6 +9965,18 @@ impl GithubPrDetailsPage {
       .into_any_element()
   }
 
+  fn render_overview_timeline_marker_filled(icon_name: UiIconName, bg_color: Hsla) -> AnyElement {
+    div()
+      .size(px(24.0))
+      .rounded_full()
+      .bg(bg_color)
+      .flex()
+      .items_center()
+      .justify_center()
+      .child(Icon::new(icon_name).size_3().text_color(gpui::white()))
+      .into_any_element()
+  }
+
   fn render_overview_timeline_shell(
     id: String,
     marker: AnyElement,
@@ -10142,37 +10154,30 @@ impl GithubPrDetailsPage {
     cx: &mut Context<Self>,
   ) -> AnyElement {
     let theme = cx.theme().clone();
-    let (marker_icon, marker_color): (AnyElement, Hsla) = match item.review_state {
-      Some(GithubPullRequestReviewState::Approved) => (
-        Icon::new(UiIconName::Check)
-          .size_3()
-          .text_color(theme.status_green())
-          .into_any_element(),
-        theme.status_green(),
-      ),
-      Some(GithubPullRequestReviewState::RequestChanges) => (
-        Icon::new(UiIconName::FileDiff)
-          .size_3()
-          .text_color(theme.status_red())
-          .into_any_element(),
-        theme.status_red(),
-      ),
-      _ if item.kind == GithubPrOverviewConversationItemKind::ReviewComment => (
-        Icon::new(UiIconName::Eye)
-          .size_3()
-          .text_color(theme.muted_foreground)
-          .into_any_element(),
-        theme.muted_foreground,
-      ),
-      _ => (
-        Icon::new(UiIconName::MessageCircle)
-          .size_3()
-          .text_color(theme.muted_foreground)
-          .into_any_element(),
-        theme.muted_foreground,
-      ),
+    let (marker_icon_name, marker_color, filled) = match item.review_state {
+      Some(GithubPullRequestReviewState::Approved) => {
+        (UiIconName::Check, theme.status_green(), true)
+      }
+      Some(GithubPullRequestReviewState::RequestChanges) => {
+        (UiIconName::FileDiff, theme.status_red(), true)
+      }
+      _ if item.kind == GithubPrOverviewConversationItemKind::ReviewComment => {
+        (UiIconName::Eye, theme.muted_foreground, false)
+      }
+      _ => (UiIconName::MessageCircle, theme.muted_foreground, false),
     };
-    let marker = Self::render_overview_timeline_marker(marker_icon, marker_color, &theme);
+    let marker = if filled {
+      Self::render_overview_timeline_marker_filled(marker_icon_name, marker_color)
+    } else {
+      Self::render_overview_timeline_marker(
+        Icon::new(marker_icon_name)
+          .size_3()
+          .text_color(marker_color)
+          .into_any_element(),
+        marker_color,
+        &theme,
+      )
+    };
     let body = self.render_overview_conversation_item(item, pr_number, pr_owner, pr_repo, cx);
 
     Self::render_overview_timeline_shell(
