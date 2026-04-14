@@ -9624,6 +9624,8 @@ impl GithubPrDetailsPage {
         .into_any_element(),
     });
 
+    let ring_bg_color = theme.background;
+
     div()
       .relative()
       .size(px(OVERVIEW_CHECKS_SUMMARY_RING_SIZE))
@@ -9634,6 +9636,28 @@ impl GithubPrDetailsPage {
           move |bounds, _, window, _| {
             let center_x = bounds.origin.x.as_f32() + bounds.size.width.as_f32() / 2.0;
             let center_y = bounds.origin.y.as_f32() + bounds.size.height.as_f32() / 2.0;
+
+            // Single segment: draw a perfect ring with paint_quad to avoid
+            // visible round cap seam at the stroke join point.
+            if segments_for_canvas.len() == 1 {
+              let segment = &segments_for_canvas[0];
+              let stroke = px(OVERVIEW_CHECKS_SUMMARY_RING_STROKE_WIDTH);
+              let radius = px(OVERVIEW_CHECKS_SUMMARY_RING_RADIUS);
+              let center = point(px(center_x), px(center_y));
+              let outer_r = radius + stroke / 2.;
+              let inner_r = radius - stroke / 2.;
+              let outer_bounds = gpui::Bounds::new(
+                point(center.x - outer_r, center.y - outer_r),
+                gpui::size(outer_r * 2., outer_r * 2.),
+              );
+              let inner_bounds = gpui::Bounds::new(
+                point(center.x - inner_r, center.y - inner_r),
+                gpui::size(inner_r * 2., inner_r * 2.),
+              );
+              window.paint_quad(gpui::fill(outer_bounds, segment.color).corner_radii(outer_r));
+              window.paint_quad(gpui::fill(inner_bounds, ring_bg_color).corner_radii(inner_r));
+              return;
+            }
 
             for segment in &segments_for_canvas {
               let mut builder = PathBuilder::stroke(px(OVERVIEW_CHECKS_SUMMARY_RING_STROKE_WIDTH));
