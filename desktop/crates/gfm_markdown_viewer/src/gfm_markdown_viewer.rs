@@ -1007,7 +1007,11 @@ fn render_table(
   let column_widths = table_column_widths(table, column_count);
   let total_width: f32 = column_widths.iter().sum();
 
-  let mut header_row = div().flex().flex_row().items_stretch().bg(theme.accent.opacity(0.3));
+  let mut header_row = div()
+    .flex()
+    .flex_row()
+    .items_stretch()
+    .bg(theme.accent.opacity(0.3));
   for (column, width) in column_widths.iter().enumerate().take(column_count) {
     let cell = table
       .headers
@@ -1041,7 +1045,12 @@ fn render_table(
 
   let mut body = v_flex();
   for row in &table.rows {
-    let mut row_el = div().flex().flex_row().items_stretch().border_t_1().border_color(theme.border);
+    let mut row_el = div()
+      .flex()
+      .flex_row()
+      .items_stretch()
+      .border_t_1()
+      .border_color(theme.border);
     for (column, width) in column_widths.iter().enumerate().take(column_count) {
       let cell = row.get(column).map_or(&[][..], |cell| cell.as_slice());
       let basis = if total_width > 0.0 {
