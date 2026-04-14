@@ -783,7 +783,18 @@ enum ReviewerStatus {
   ChangesRequested,
 }
 
-fn reviewer_status_for_login(reviews: &[GithubPullRequestReview], login: &str) -> ReviewerStatus {
+fn reviewer_status_for_login(
+  reviews: &[GithubPullRequestReview],
+  login: &str,
+  requested_reviewers: &[GithubPullRequestFilterOptionUser],
+) -> ReviewerStatus {
+  let is_requested = requested_reviewers
+    .iter()
+    .any(|r| r.login.eq_ignore_ascii_case(login));
+  if is_requested {
+    return ReviewerStatus::Awaiting;
+  }
+
   let mut latest_approved: Option<&str> = None;
   let mut latest_changes: Option<&str> = None;
   let mut latest_comment: Option<&str> = None;
@@ -1395,13 +1406,13 @@ fn overview_review_status_info(
 
   let has_changes_requested = reviewers.iter().any(|r| {
     matches!(
-      reviewer_status_for_login(reviews, &r.login),
+      reviewer_status_for_login(reviews, &r.login, requested_reviewers),
       ReviewerStatus::ChangesRequested
     )
   });
   let has_approval = reviewers.iter().any(|r| {
     matches!(
-      reviewer_status_for_login(reviews, &r.login),
+      reviewer_status_for_login(reviews, &r.login, requested_reviewers),
       ReviewerStatus::Approved
     )
   });
@@ -4292,6 +4303,7 @@ impl GithubPrDetailsPage {
   fn render_requested_reviewer_row(
     users: &[GithubPullRequestFilterOptionUser],
     reviews: &[GithubPullRequestReview],
+    requested_reviewers: &[GithubPullRequestFilterOptionUser],
     theme: &gpui_component::Theme,
   ) -> impl IntoElement {
     let mut row = h_flex().gap_1().items_center();
@@ -4304,7 +4316,7 @@ impl GithubPrDetailsPage {
         .small();
 
       let badge_size = px(12.0);
-      let status = reviewer_status_for_login(reviews, login.as_str());
+      let status = reviewer_status_for_login(reviews, login.as_str(), requested_reviewers);
       let tooltip = reviewer_status_tooltip(status, login.as_str());
       let status_marker = match status {
         ReviewerStatus::Awaiting => div().size(px(9.0)).rounded_full().bg(theme.status_yellow()),
@@ -11805,6 +11817,11 @@ impl GithubPrDetailsPage {
               this.child(Self::render_requested_reviewer_row(
                 &merged_reviewers,
                 &self.reviews,
+                self
+                  .pull_request
+                  .as_ref()
+                  .map(|pr| pr.requested_reviewers.as_slice())
+                  .unwrap_or(&[]),
                 &theme,
               ))
             },
