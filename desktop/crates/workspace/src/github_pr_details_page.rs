@@ -6116,6 +6116,12 @@ impl GithubPrDetailsPage {
             this.review_popover_open = false;
             this.reset_review_form(window, cx);
             upsert_review_local(&mut this.reviews, review);
+            if let Some(pr) = this.pull_request.as_mut() {
+              if let Some(login) = Self::current_github_login(cx) {
+                pr.requested_reviewers
+                  .retain(|r| !r.login.eq_ignore_ascii_case(&login));
+              }
+            }
             this.refresh_reviews_for_current_pull_request(false, cx);
             this.add_pr_breadcrumb("Submit PR review succeeded", Map::new());
             if AuthStateStore::has_github_access(cx) {
@@ -6576,6 +6582,12 @@ impl GithubPrDetailsPage {
               *existing = created_comment;
             } else {
               this.review_comments.push(created_comment);
+            }
+            if let Some(pr) = this.pull_request.as_mut() {
+              if let Some(login) = Self::current_github_login(cx) {
+                pr.requested_reviewers
+                  .retain(|r| !r.login.eq_ignore_ascii_case(&login));
+              }
             }
             this.review_comments_error = None;
             this.sync_review_comments(cx);
@@ -9137,6 +9149,47 @@ impl GithubPrDetailsPage {
           .child(right_area),
       )
       .child(tab_bar)
+  }
+
+  fn render_review_requested_alert(&self, cx: &App) -> Option<AnyElement> {
+    let pr = self.pull_request.as_ref()?;
+    if pr.state != GithubPullRequestState::Open {
+      return None;
+    }
+    let login = Self::current_github_login(cx)?;
+    let is_requested = pr
+      .requested_reviewers
+      .iter()
+      .any(|r| r.login.eq_ignore_ascii_case(&login));
+    if !is_requested {
+      return None;
+    }
+
+    let theme = cx.theme();
+    Some(
+      h_flex()
+        .w_full()
+        .gap_2()
+        .items_center()
+        .px_3()
+        .py_2()
+        .rounded(theme.radius)
+        .border_1()
+        .border_color(theme.status_yellow().opacity(0.4))
+        .bg(theme.status_yellow().opacity(0.08))
+        .child(
+          Icon::new(UiIconName::Eye)
+            .size_4()
+            .text_color(theme.status_yellow()),
+        )
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.foreground)
+            .child("Your review has been requested on this pull request."),
+        )
+        .into_any_element(),
+    )
   }
 
   fn render_overview_status_section(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -11940,6 +11993,9 @@ impl GithubPrDetailsPage {
               .into_any_element()
           }),
       )
+      .when_some(self.render_review_requested_alert(cx), |this, alert| {
+        this.child(alert)
+      })
       .child(self.render_overview_status_section(cx));
 
     let timeline_items = build_overview_timeline_items(
