@@ -4,13 +4,13 @@ use gpui::{
   App, Bounds, ClipboardItem, CursorStyle, DispatchPhase, Element, ElementId, FontStyle,
   FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, LayoutId,
   MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, SharedString,
-  StrikethroughStyle, StyledText, TextRun, UnderlineStyle, Window, fill, point, px,
+  StrikethroughStyle, StyledText, TextAlign, TextRun, UnderlineStyle, Window, fill, point, px,
 };
 use gpui_component::ActiveTheme as _;
 use syntax::SyntaxTheme;
 
 use crate::constants::*;
-use crate::gfm_markdown_viewer::{LinkHandlerFn, collect_indentation_dot_indices};
+use crate::gfm_markdown_viewer::{LinkHandlerFn, collect_indentation_indicators};
 use crate::types::*;
 
 pub(crate) struct SelectableText {
@@ -24,6 +24,7 @@ pub(crate) struct SelectableText {
   show_indentation_dots: bool,
   show_inline_code_backgrounds: bool,
   indentation_dot_indices: Vec<usize>,
+  indentation_tab_indices: Vec<usize>,
   styled_text: StyledText,
   runs_initialized: bool,
   last_selection: Option<Range<usize>>,
@@ -47,10 +48,13 @@ impl SelectableText {
     options: SelectableTextOptions,
   ) -> Self {
     let styled_text = StyledText::new(text.clone());
-    let indentation_dot_indices = if options.show_indentation_dots {
-      collect_indentation_dot_indices(text.as_ref())
+    let indicators = if options.show_indentation_dots {
+      collect_indentation_indicators(text.as_ref())
     } else {
-      Vec::new()
+      crate::gfm_markdown_viewer::IndentationIndicators {
+        dot_indices: Vec::new(),
+        tab_indices: Vec::new(),
+      }
     };
     Self {
       text,
@@ -62,7 +66,8 @@ impl SelectableText {
       interactive: options.interactive,
       show_indentation_dots: options.show_indentation_dots,
       show_inline_code_backgrounds: options.show_inline_code_backgrounds,
-      indentation_dot_indices,
+      indentation_dot_indices: indicators.dot_indices,
+      indentation_tab_indices: indicators.tab_indices,
       styled_text,
       runs_initialized: false,
       last_selection: None,
@@ -142,6 +147,63 @@ impl SelectableText {
         .corner_radii(dot_radius),
       );
       last_drawn = Some((ix, dot_center_x));
+    }
+  }
+
+  fn paint_indentation_tab_arrows(
+    &self,
+    text_layout: &gpui::TextLayout,
+    window: &mut Window,
+    cx: &mut App,
+  ) {
+    if !self.show_indentation_dots || self.indentation_tab_indices.is_empty() {
+      return;
+    }
+
+    let text_len = self.text.len();
+    let line_height = text_layout.line_height();
+    let font_size = cx.theme().mono_font_size;
+    let arrow_color = cx
+      .theme()
+      .muted_foreground
+      .opacity(MARKDOWN_CODE_INDENT_TAB_ARROW_OPACITY);
+
+    let runs = vec![TextRun {
+      len: "→".len(),
+      font: gpui::Font {
+        family: cx.theme().font_family.clone(),
+        style: FontStyle::Normal,
+        weight: FontWeight::NORMAL,
+        ..Default::default()
+      },
+      color: arrow_color,
+      background_color: None,
+      underline: None,
+      strikethrough: None,
+    }];
+
+    let shaped = window
+      .text_system()
+      .shape_line("→".into(), font_size, &runs, None);
+
+    for &ix in &self.indentation_tab_indices {
+      if ix + 1 > text_len {
+        continue;
+      }
+      let Some(start) = text_layout.position_for_index(ix) else {
+        continue;
+      };
+      let Some(end) = text_layout.position_for_index(ix + 1) else {
+        continue;
+      };
+      let tab_width = end.x - start.x;
+      if tab_width <= px(0.) {
+        continue;
+      }
+
+      let arrow_x = start.x + (tab_width - shaped.width) / 2.;
+      let origin = point(arrow_x, start.y);
+      let _ = shaped.paint(origin, line_height, TextAlign::Left, None, window, cx);
     }
   }
 
@@ -250,6 +312,7 @@ impl Element for SelectableText {
         .styled_text
         .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
       self.paint_indentation_dots(&text_layout, window, cx);
+      self.paint_indentation_tab_arrows(&text_layout, window, cx);
       return;
     }
 
