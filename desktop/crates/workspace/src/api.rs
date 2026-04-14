@@ -911,11 +911,26 @@ struct GithubPullRequestsResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct GithubRepositoryPullRequestsResponse {
   #[serde(rename = "pullRequests")]
   pub pull_requests: Vec<GithubPullRequest>,
   #[serde(rename = "pullRequestCount")]
   pub pull_request_count: u64,
+  #[serde(default = "default_page")]
+  pub page: u64,
+  #[serde(rename = "perPage", default = "default_per_page")]
+  pub per_page: u64,
+  #[serde(rename = "totalPages", default = "default_page")]
+  pub total_pages: u64,
+}
+
+fn default_page() -> u64 {
+  1
+}
+
+fn default_per_page() -> u64 {
+  30
 }
 
 #[derive(Debug, Serialize)]
@@ -924,10 +939,17 @@ struct GithubPullRequestSearchRequest<'a> {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct GithubRepositoryIssuesResponse {
   pub issues: Vec<GithubIssue>,
   #[serde(rename = "issueCount")]
   pub issue_count: u64,
+  #[serde(default = "default_page")]
+  pub page: u64,
+  #[serde(rename = "perPage", default = "default_per_page")]
+  pub per_page: u64,
+  #[serde(rename = "totalPages", default = "default_page")]
+  pub total_pages: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1607,10 +1629,12 @@ impl ApiClient {
     repo: &str,
     filters: &GithubPullRequestSearchFilters,
     state: &str,
+    page: u64,
   ) -> Result<GithubRepositoryPullRequestsResponse> {
     let route = format!("/github/repos/{owner}/{repo}/pr");
     let mut query = github_repository_pull_request_filter_query(filters);
     query.push(("state".to_string(), state.to_string()));
+    query.push(("page".to_string(), page.to_string()));
     let response = self
       .authed_request(Method::GET, route.as_str())
       .query(&query)
@@ -1634,10 +1658,12 @@ impl ApiClient {
     repo: &str,
     state: &str,
     filters: &GithubIssueSearchFilters,
+    page: u64,
   ) -> Result<GithubRepositoryIssuesResponse> {
     let route = format!("/github/repos/{owner}/{repo}/issues");
     let mut query = github_repository_issue_filter_query(filters);
     query.push(("state".to_string(), state.to_string()));
+    query.push(("page".to_string(), page.to_string()));
     let response = self
       .authed_request(Method::GET, route.as_str())
       .query(&query)
@@ -3244,7 +3270,7 @@ mod tests {
     let filters = GithubPullRequestSearchFilters::default();
 
     let response = api
-      .fetch_github_repository_pull_requests("acme", "widget", &filters, "open")
+      .fetch_github_repository_pull_requests("acme", "widget", &filters, "open", 1)
       .expect("fetch repository pull requests");
     assert_eq!(response.pull_request_count, 42);
     assert_eq!(response.pull_requests.len(), 1);
@@ -3282,7 +3308,7 @@ mod tests {
     };
 
     let _ = api
-      .fetch_github_repository_pull_requests("acme", "widget", &filters, "open")
+      .fetch_github_repository_pull_requests("acme", "widget", &filters, "open", 1)
       .expect("fetch repository pull requests");
 
     handle.join().expect("join server thread");
@@ -3366,6 +3392,7 @@ mod tests {
         "widget",
         "open",
         &GithubIssueSearchFilters::default(),
+        1,
       )
       .expect("fetch repository issues");
     assert_eq!(response.issue_count, 15);
@@ -3393,6 +3420,7 @@ mod tests {
         "widget",
         "closed",
         &GithubIssueSearchFilters::default(),
+        1,
       )
       .expect("fetch repository issues");
 
@@ -5639,7 +5667,7 @@ mod tests {
     let filters = GithubPullRequestSearchFilters::default();
 
     let err = api
-      .fetch_github_repository_pull_requests("acme", "widget", &filters, "open")
+      .fetch_github_repository_pull_requests("acme", "widget", &filters, "open", 1)
       .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));

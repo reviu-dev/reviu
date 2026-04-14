@@ -157,11 +157,14 @@ describe('github pull request search routes', () => {
     await expect(response.json()).resolves.toEqual({
       pullRequests: [],
       pullRequestCount: 0,
+      page: 1,
+      perPage: 30,
+      totalPages: 1,
     })
     expect(fetchGithubPullRequestSearchGraphql).toHaveBeenCalledWith({
       token: 'github-token',
       query: 'is:pr archived:false repo:acme/widget (label:"bug" OR label:"needs design") author:@me assignee:alice review-requested:bob review:changes_requested draft:false base:main sort:comments-desc state:closed -is:merged',
-      limit: 100,
+      limit: 30,
     })
   })
 
@@ -172,7 +175,7 @@ describe('github pull request search routes', () => {
     expect(fetchGithubPullRequestSearchGraphql).toHaveBeenCalledWith({
       token: 'github-token',
       query: 'is:pr archived:false repo:acme/widget sort:updated-desc state:open',
-      limit: 100,
+      limit: 30,
     })
   })
 

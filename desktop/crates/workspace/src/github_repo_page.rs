@@ -27,6 +27,7 @@ use gpui_component::{
   input::InputEvent,
   label::Label,
   list::ListItem,
+  pagination::Pagination,
   scroll::ScrollableElement,
   select::{SearchableVec, SelectEvent, SelectItem, SelectState},
   spinner::Spinner,
@@ -3033,6 +3034,12 @@ pub struct GithubRepoPage {
   open_pull_request_count: Option<u64>,
   merged_pull_request_count: Option<u64>,
   closed_pull_request_count: Option<u64>,
+  open_pr_page: usize,
+  open_pr_total_pages: usize,
+  merged_pr_page: usize,
+  merged_pr_total_pages: usize,
+  closed_pr_page: usize,
+  closed_pr_total_pages: usize,
   issues: Entity<VariableListState<GithubRepoIssueListDelegate>>,
   closed_issues: Entity<VariableListState<GithubRepoIssueListDelegate>>,
   not_planned_issues: Entity<VariableListState<GithubRepoIssueListDelegate>>,
@@ -3040,6 +3047,10 @@ pub struct GithubRepoPage {
   issues_task: Option<Task<()>>,
   open_issue_count: Option<u64>,
   closed_issue_count: Option<u64>,
+  open_issue_page: usize,
+  open_issue_total_pages: usize,
+  closed_issue_page: usize,
+  closed_issue_total_pages: usize,
   issues_search_input: Entity<InputState>,
   issue_filter_label_input: Entity<InputState>,
   issue_filter_author_input: Entity<InputState>,
@@ -3274,6 +3285,12 @@ impl GithubRepoPage {
       open_pull_request_count: None,
       merged_pull_request_count: None,
       closed_pull_request_count: None,
+      open_pr_page: 1,
+      open_pr_total_pages: 1,
+      merged_pr_page: 1,
+      merged_pr_total_pages: 1,
+      closed_pr_page: 1,
+      closed_pr_total_pages: 1,
       issues,
       closed_issues,
       not_planned_issues,
@@ -3281,6 +3298,10 @@ impl GithubRepoPage {
       issues_task: None,
       open_issue_count: None,
       closed_issue_count: None,
+      open_issue_page: 1,
+      open_issue_total_pages: 1,
+      closed_issue_page: 1,
+      closed_issue_total_pages: 1,
       issues_search_input,
       issue_filter_label_input,
       issue_filter_author_input,
@@ -3404,6 +3425,7 @@ impl GithubRepoPage {
           state.update(cx, |state, cx| {
             state.set_value("", window, cx);
           });
+          self.reset_issue_pages();
           self.refresh_issues(cx);
         }
       }
@@ -3536,6 +3558,53 @@ impl GithubRepoPage {
       });
     });
     cx.notify();
+  }
+
+  fn set_pr_page(&mut self, page: usize, cx: &mut Context<Self>) {
+    let tab = repo_pull_request_list_tab_from_ix(self.active_pull_requests_tab_ix);
+    match tab {
+      RepoPullRequestListTab::Open => self.open_pr_page = page,
+      RepoPullRequestListTab::Merged => self.merged_pr_page = page,
+      RepoPullRequestListTab::Closed => self.closed_pr_page = page,
+    }
+    self.refresh_pull_requests(cx);
+  }
+
+  fn set_issue_page(&mut self, page: usize, cx: &mut Context<Self>) {
+    let tab = repo_issue_list_tab_from_ix(self.active_issues_tab_ix);
+    match tab {
+      RepoIssueListTab::Open => self.open_issue_page = page,
+      RepoIssueListTab::Closed | RepoIssueListTab::NotPlanned => self.closed_issue_page = page,
+    }
+    self.refresh_issues(cx);
+  }
+
+  fn reset_pr_pages(&mut self) {
+    self.open_pr_page = 1;
+    self.merged_pr_page = 1;
+    self.closed_pr_page = 1;
+  }
+
+  fn reset_issue_pages(&mut self) {
+    self.open_issue_page = 1;
+    self.closed_issue_page = 1;
+  }
+
+  fn active_pr_pagination(&self) -> (usize, usize) {
+    match repo_pull_request_list_tab_from_ix(self.active_pull_requests_tab_ix) {
+      RepoPullRequestListTab::Open => (self.open_pr_page, self.open_pr_total_pages),
+      RepoPullRequestListTab::Merged => (self.merged_pr_page, self.merged_pr_total_pages),
+      RepoPullRequestListTab::Closed => (self.closed_pr_page, self.closed_pr_total_pages),
+    }
+  }
+
+  fn active_issue_pagination(&self) -> (usize, usize) {
+    match repo_issue_list_tab_from_ix(self.active_issues_tab_ix) {
+      RepoIssueListTab::Open => (self.open_issue_page, self.open_issue_total_pages),
+      RepoIssueListTab::Closed | RepoIssueListTab::NotPlanned => {
+        (self.closed_issue_page, self.closed_issue_total_pages)
+      }
+    }
   }
 
   fn update_pull_request_list_rows(
@@ -3678,6 +3747,7 @@ impl GithubRepoPage {
     input.update(cx, |state, cx| {
       state.set_value("", window, cx);
     });
+    self.reset_pr_pages();
     self.refresh_pull_requests(cx);
     cx.notify();
   }
@@ -3691,6 +3761,7 @@ impl GithubRepoPage {
     if !remove_filter_token(self.pull_request_filter_tokens_mut(kind), value) {
       return;
     }
+    self.reset_pr_pages();
     self.refresh_pull_requests(cx);
     cx.notify();
   }
@@ -3704,6 +3775,7 @@ impl GithubRepoPage {
       return;
     }
     self.pull_request_filters.review_status = status;
+    self.reset_pr_pages();
     self.refresh_pull_requests(cx);
     cx.notify();
   }
@@ -3717,6 +3789,7 @@ impl GithubRepoPage {
       return;
     }
     self.pull_request_filters.include_drafts = include_drafts;
+    self.reset_pr_pages();
     self.refresh_pull_requests(cx);
     cx.notify();
   }
@@ -3727,6 +3800,7 @@ impl GithubRepoPage {
       return;
     }
     self.pull_request_filters.base = base;
+    self.reset_pr_pages();
     self.refresh_pull_requests(cx);
     cx.notify();
   }
@@ -3740,6 +3814,7 @@ impl GithubRepoPage {
       return;
     }
     self.pull_request_filters.sort = sort;
+    self.reset_pr_pages();
     self.refresh_pull_requests(cx);
     cx.notify();
   }
@@ -3750,6 +3825,7 @@ impl GithubRepoPage {
     }
 
     self.pull_request_filters = GithubPullRequestSearchFilters::default();
+    self.reset_pr_pages();
     self.refresh_pull_requests(cx);
     cx.notify();
   }
@@ -4645,14 +4721,19 @@ impl GithubRepoPage {
     let owner_for_fetch = owner.clone();
     let repo_for_fetch = repo.clone();
     let filters = self.pull_request_filters.clone();
+    let open_page = self.open_pr_page as u64;
+    let merged_page = self.merged_pr_page as u64;
+    let closed_page = self.closed_pr_page as u64;
     let task = cx.spawn(async move |this, cx| {
       let open_result = {
         let api = api.clone();
         let owner = owner_for_fetch.clone();
         let repo = repo_for_fetch.clone();
         let filters = filters.clone();
-        unblock(move || api.fetch_github_repository_pull_requests(&owner, &repo, &filters, "open"))
-          .await
+        unblock(move || {
+          api.fetch_github_repository_pull_requests(&owner, &repo, &filters, "open", open_page)
+        })
+        .await
       };
       let merged_result = {
         let api = api.clone();
@@ -4660,7 +4741,7 @@ impl GithubRepoPage {
         let repo = repo_for_fetch.clone();
         let filters = filters.clone();
         unblock(move || {
-          api.fetch_github_repository_pull_requests(&owner, &repo, &filters, "merged")
+          api.fetch_github_repository_pull_requests(&owner, &repo, &filters, "merged", merged_page)
         })
         .await
       };
@@ -4670,7 +4751,7 @@ impl GithubRepoPage {
         let repo = repo_for_fetch.clone();
         let filters = filters.clone();
         unblock(move || {
-          api.fetch_github_repository_pull_requests(&owner, &repo, &filters, "closed")
+          api.fetch_github_repository_pull_requests(&owner, &repo, &filters, "closed", closed_page)
         })
         .await
       };
@@ -4695,6 +4776,7 @@ impl GithubRepoPage {
         match open_result {
           Ok(response) => {
             this.open_pull_request_count = Some(response.pull_request_count);
+            this.open_pr_total_pages = response.total_pages as usize;
             all_rows.extend(
               response
                 .pull_requests
@@ -4716,6 +4798,7 @@ impl GithubRepoPage {
         match merged_result {
           Ok(response) => {
             this.merged_pull_request_count = Some(response.pull_request_count);
+            this.merged_pr_total_pages = response.total_pages as usize;
             all_rows.extend(
               response
                 .pull_requests
@@ -4733,6 +4816,7 @@ impl GithubRepoPage {
         match closed_result {
           Ok(response) => {
             this.closed_pull_request_count = Some(response.pull_request_count);
+            this.closed_pr_total_pages = response.total_pages as usize;
             all_rows.extend(
               response
                 .pull_requests
@@ -4770,20 +4854,28 @@ impl GithubRepoPage {
     let owner_for_fetch = owner.clone();
     let repo_for_fetch = repo.clone();
     let filters = self.issue_filters.clone();
+    let open_page = self.open_issue_page as u64;
+    let closed_page = self.closed_issue_page as u64;
     let task = cx.spawn(async move |this, cx| {
       let open_result = {
         let api = api.clone();
         let owner = owner_for_fetch.clone();
         let repo = repo_for_fetch.clone();
         let filters = filters.clone();
-        unblock(move || api.fetch_github_repository_issues(&owner, &repo, "open", &filters)).await
+        unblock(move || {
+          api.fetch_github_repository_issues(&owner, &repo, "open", &filters, open_page)
+        })
+        .await
       };
       let closed_result = {
         let api = api.clone();
         let owner = owner_for_fetch.clone();
         let repo = repo_for_fetch.clone();
         let filters = filters.clone();
-        unblock(move || api.fetch_github_repository_issues(&owner, &repo, "closed", &filters)).await
+        unblock(move || {
+          api.fetch_github_repository_issues(&owner, &repo, "closed", &filters, closed_page)
+        })
+        .await
       };
 
       let _ = this.update(cx, |this, cx| {
@@ -4806,6 +4898,7 @@ impl GithubRepoPage {
         match open_result {
           Ok(response) => {
             this.open_issue_count = Some(response.issue_count);
+            this.open_issue_total_pages = response.total_pages as usize;
             all_rows.extend(response.issues.into_iter().map(|issue| {
               Rc::new(GithubRepoIssueRow {
                 issue: Rc::new(issue),
@@ -4821,6 +4914,7 @@ impl GithubRepoPage {
         match closed_result {
           Ok(response) => {
             this.closed_issue_count = Some(response.issue_count);
+            this.closed_issue_total_pages = response.total_pages as usize;
             all_rows.extend(response.issues.into_iter().map(|issue| {
               Rc::new(GithubRepoIssueRow {
                 issue: Rc::new(issue),
@@ -5206,6 +5300,12 @@ impl GithubRepoPage {
     self.open_pull_request_count = None;
     self.merged_pull_request_count = None;
     self.closed_pull_request_count = None;
+    self.open_pr_page = 1;
+    self.open_pr_total_pages = 1;
+    self.merged_pr_page = 1;
+    self.merged_pr_total_pages = 1;
+    self.closed_pr_page = 1;
+    self.closed_pr_total_pages = 1;
     self.pull_request_filters = GithubPullRequestSearchFilters::default();
     self.pull_request_filter_options = GithubPullRequestFilterOptions::default();
     self.pull_request_filter_options_loading = false;
@@ -5217,6 +5317,10 @@ impl GithubRepoPage {
     self.issues_error = None;
     self.open_issue_count = None;
     self.closed_issue_count = None;
+    self.open_issue_page = 1;
+    self.open_issue_total_pages = 1;
+    self.closed_issue_page = 1;
+    self.closed_issue_total_pages = 1;
     self.issues.update(cx, |state, cx| {
       state.delegate_mut().loading = true;
       state.delegate_mut().set_rows(Vec::new());
@@ -6558,6 +6662,7 @@ impl GithubRepoPage {
       .value()
       .trim()
       .is_empty();
+    let (pr_current_page, pr_total_pages) = self.active_pr_pagination();
     let open_count = if !has_search_query {
       self
         .open_pull_request_count
@@ -6646,7 +6751,21 @@ impl GithubRepoPage {
       .when_some(self.pull_requests_error.clone(), |this, error| {
         this.child(div().text_sm().text_color(theme.red).child(error))
       })
-      .child(tabs)
+      .child(h_flex().items_center().justify_between().child(tabs).when(
+        !has_search_query && pr_total_pages > 1,
+        |this| {
+          this.child(
+            Pagination::new("pr-pagination")
+              .current_page(pr_current_page)
+              .total_pages(pr_total_pages)
+              .small()
+              .p_0()
+              .on_click(cx.listener(|this, page: &usize, _window, cx| {
+                this.set_pr_page(*page, cx);
+              })),
+          )
+        },
+      ))
       .child(list);
 
     h_flex()
@@ -6662,6 +6781,7 @@ impl GithubRepoPage {
   fn render_issues(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let has_search_query = !self.issues_search_input.read(cx).value().trim().is_empty();
+    let (issue_current_page, issue_total_pages) = self.active_issue_pagination();
     let open_count = if !has_search_query {
       self
         .open_issue_count
@@ -6670,8 +6790,14 @@ impl GithubRepoPage {
     } else {
       Self::issues_matched_count(&self.issues, cx)
     };
-    let closed_count = Self::issues_matched_count(&self.closed_issues, cx);
-    let not_planned_count = Self::issues_matched_count(&self.not_planned_issues, cx);
+    let closed_count = if !has_search_query {
+      self
+        .closed_issue_count
+        .map(|c| c as usize)
+        .unwrap_or_else(|| Self::issues_matched_count(&self.closed_issues, cx))
+    } else {
+      Self::issues_matched_count(&self.closed_issues, cx)
+    };
 
     let search = Input::new(&self.issues_search_input)
       .prefix(Icon::new(IconName::Search).text_color(theme.muted_foreground))
@@ -6694,11 +6820,15 @@ impl GithubRepoPage {
         "Closed",
         closed_count,
       ))
-      .child(repo_pull_request_list_tab(
-        UiIconName::CircleSlash,
-        "Not Planned",
-        not_planned_count,
-      ));
+      .child(
+        Tab::new().child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .child(Icon::new(UiIconName::CircleSlash).size_3p5())
+            .child("Not Planned"),
+        ),
+      );
 
     let list = VariableList::new(self.active_issues_list())
       .border_1()
@@ -6777,6 +6907,7 @@ impl GithubRepoPage {
                       .disabled(self.issue_filters == GithubIssueSearchFilters::default())
                       .on_click(cx.listener(|this, _, _, cx| {
                         this.issue_filters = GithubIssueSearchFilters::default();
+                        this.reset_issue_pages();
                         this.refresh_issues(cx);
                       })),
                   ),
@@ -6835,6 +6966,7 @@ impl GithubRepoPage {
                         move |sort: GithubIssueSearchSort, _, cx| {
                           view.update(cx, |this, cx| {
                             this.issue_filters.sort = sort;
+                            this.reset_issue_pages();
                             this.refresh_issues(cx);
                           });
                         }
@@ -6854,7 +6986,21 @@ impl GithubRepoPage {
       .when_some(self.issues_error.clone(), |this, error| {
         this.child(div().text_sm().text_color(theme.red).child(error))
       })
-      .child(tabs)
+      .child(h_flex().items_center().justify_between().child(tabs).when(
+        !has_search_query && issue_total_pages > 1,
+        |this| {
+          this.child(
+            Pagination::new("issue-pagination")
+              .current_page(issue_current_page)
+              .total_pages(issue_total_pages)
+              .small()
+              .p_0()
+              .on_click(cx.listener(|this, page: &usize, _window, cx| {
+                this.set_issue_page(*page, cx);
+              })),
+          )
+        },
+      ))
       .child(list);
 
     h_flex()
@@ -6905,6 +7051,7 @@ impl GithubRepoPage {
                       move |_, _, cx| {
                         view.update(cx, |this, cx| {
                           this.remove_issue_filter_token(kind, &value);
+                          this.reset_issue_pages();
                           this.refresh_issues(cx);
                         });
                       }
@@ -6931,6 +7078,7 @@ impl GithubRepoPage {
                 move |_, _, cx| {
                   view.update(cx, |this, cx| {
                     this.add_issue_filter_token(kind, suggestion.clone());
+                    this.reset_issue_pages();
                     this.refresh_issues(cx);
                   });
                 }

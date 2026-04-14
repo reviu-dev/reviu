@@ -193,8 +193,9 @@ import {
 } from '../plugins/github/service.js'
 
 const LATEST_PULL_REQUESTS_LIMIT = 20
-const REPOSITORY_PULL_REQUESTS_LIMIT = 100
-const REPOSITORY_ISSUES_LIMIT = 100
+const REPOSITORY_GRAPHQL_SEARCH_LIMIT = 100
+const REPOSITORY_DEFAULT_PER_PAGE = 30
+const REPOSITORY_MAX_PER_PAGE = 50
 const GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY = 'pullRequest'
 const GITHUB_PULL_REQUEST_FILES_COMMIT_VALIDATOR_KEY = 'commit'
 const GITHUB_UPDATE_BRANCH_POLL_ATTEMPTS = 10
@@ -584,6 +585,26 @@ function parseBooleanSearchParam(params: URLSearchParams, name: string, defaultV
     return defaultValue
   }
   return value !== 'false'
+}
+
+function parsePageParams(url: string) {
+  const params = new URL(url).searchParams
+  const page = Math.max(1, Number(params.get('page')) || 1)
+  const perPage = Math.min(REPOSITORY_MAX_PER_PAGE, Math.max(1, Number(params.get('per_page')) || REPOSITORY_DEFAULT_PER_PAGE))
+  return { page, perPage }
+}
+
+function paginateItems<T>(items: T[], page: number, perPage: number, totalCount: number) {
+  const maxFetchable = REPOSITORY_GRAPHQL_SEARCH_LIMIT
+  const totalPages = Math.max(1, Math.min(
+    Math.ceil(totalCount / perPage),
+    Math.ceil(maxFetchable / perPage),
+  ))
+  const clampedPage = Math.min(page, totalPages)
+  const start = (clampedPage - 1) * perPage
+  const sliced = items.slice(start, start + perPage)
+
+  return { items: sliced, page: clampedPage, perPage, totalPages }
 }
 
 function repositoryIssueFiltersInput(url: string) {
@@ -1559,6 +1580,27 @@ function buildRepositoryPullRequestStateQualifier(state: RepositoryPullRequestSt
   }
 }
 
+interface RepositoryPaginationParams {
+  page: number
+  perPage: number
+}
+
+interface PaginatedPullRequests {
+  pullRequests: GithubPullRequest[]
+  pullRequestCount: number
+  page: number
+  perPage: number
+  totalPages: number
+}
+
+interface PaginatedIssues {
+  issues: GithubIssue[]
+  issueCount: number
+  page: number
+  perPage: number
+  totalPages: number
+}
+
 async function fetchRepositoryPullRequestsWithCache(
   userId: string,
   githubToken: string,
@@ -1566,6 +1608,7 @@ async function fetchRepositoryPullRequestsWithCache(
   repo: string,
   filters: GithubPullRequestSearchFilters,
   state: RepositoryPullRequestState,
+  pagination: RepositoryPaginationParams,
 ) {
   const repositoryFilter = normalizeRepositoryFilter(`${owner}/${repo}`)
   if (!repositoryFilter) {
@@ -1578,9 +1621,12 @@ async function fetchRepositoryPullRequestsWithCache(
   }
   const baseQuery = buildPullRequestSearchQuery(searchFilters, { openOnly: false })
   const query = `${baseQuery} ${buildRepositoryPullRequestStateQualifier(state)}`
+  const fetchLimit = Math.min(pagination.page * pagination.perPage, REPOSITORY_GRAPHQL_SEARCH_LIMIT)
   const cacheKey = JSON.stringify({
     filters: normalizePullRequestSearchCacheKey(searchFilters),
     state,
+    page: pagination.page,
+    perPage: pagination.perPage,
   })
   const baseCachePolicy = createGithubRepositoryPullRequestsCachePolicy(
     userId,
@@ -1591,19 +1637,25 @@ async function fetchRepositoryPullRequestsWithCache(
   const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, owner, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad<{ pullRequests: GithubPullRequest[], pullRequestCount: number }>({
+    githubCache.getOrLoad<PaginatedPullRequests>({
       ...cachePolicy,
       load: async () => {
         const { nodes, issueCount } = await fetchGithubPullRequestSearchGraphql({
           token: githubToken,
           query,
-          limit: REPOSITORY_PULL_REQUESTS_LIMIT,
+          limit: fetchLimit,
         })
+
+        const allPullRequests = nodes.map(node => mapGithubGraphqlPullRequest(node).pullRequest)
+        const paginated = paginateItems(allPullRequests, pagination.page, pagination.perPage, issueCount)
 
         return {
           payload: {
-            pullRequests: nodes.map(node => mapGithubGraphqlPullRequest(node).pullRequest),
+            pullRequests: paginated.items,
             pullRequestCount: issueCount,
+            page: paginated.page,
+            perPage: paginated.perPage,
+            totalPages: paginated.totalPages,
           },
         }
       },
@@ -1638,6 +1690,7 @@ async function fetchRepositoryIssuesWithCache(
   repo: string,
   state: 'open' | 'closed',
   filters: GithubIssueSearchFilters,
+  pagination: RepositoryPaginationParams,
 ) {
   const repositoryFilter = normalizeRepositoryFilter(`${owner}/${repo}`)
   if (!repositoryFilter) {
@@ -1649,24 +1702,35 @@ async function fetchRepositoryIssuesWithCache(
     repos: [repositoryFilter],
   }
   const query = buildIssueSearchQuery(searchFilters, state)
+  const fetchLimit = Math.min(pagination.page * pagination.perPage, REPOSITORY_GRAPHQL_SEARCH_LIMIT)
   const cacheKey = JSON.stringify({
     filters: normalizeIssueSearchCacheKey(searchFilters, state),
+    page: pagination.page,
+    perPage: pagination.perPage,
   })
   const baseCachePolicy = createGithubRepositoryIssuesCachePolicy(userId, owner, repo, cacheKey)
   const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, owner, repo)
 
   return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad<{ issues: GithubIssue[], issueCount: number }>({
+    githubCache.getOrLoad<PaginatedIssues>({
       ...cachePolicy,
       load: async () => {
-        const result = await fetchGithubIssueSearchGraphql({
+        const { issues, issueCount } = await fetchGithubIssueSearchGraphql({
           token: githubToken,
           query,
-          limit: REPOSITORY_ISSUES_LIMIT,
+          limit: fetchLimit,
         })
 
+        const paginated = paginateItems(issues, pagination.page, pagination.perPage, issueCount)
+
         return {
-          payload: result,
+          payload: {
+            issues: paginated.items,
+            issueCount,
+            page: paginated.page,
+            perPage: paginated.perPage,
+            totalPages: paginated.totalPages,
+          },
         }
       },
     }))
@@ -3266,6 +3330,8 @@ export const githubRoutes = githubRouter
       return ctx.json({ error: message }, 400)
     }
 
+    const pagination = parsePageParams(ctx.req.url)
+
     try {
       const result = await fetchRepositoryPullRequestsWithCache(
         user.id,
@@ -3274,10 +3340,11 @@ export const githubRoutes = githubRouter
         repo,
         filtersResult.data,
         state,
+        pagination,
       )
       setGithubCacheHeaders(ctx, result)
-      const { pullRequests, pullRequestCount } = result.payload
-      return ctx.json({ pullRequests, pullRequestCount }, 200)
+      const { pullRequests, pullRequestCount, page, perPage, totalPages } = result.payload
+      return ctx.json({ pullRequests, pullRequestCount, page, perPage, totalPages }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
@@ -3375,11 +3442,13 @@ export const githubRoutes = githubRouter
       return ctx.json({ error: message }, 400)
     }
 
+    const pagination = parsePageParams(ctx.req.url)
+
     try {
-      const result = await fetchRepositoryIssuesWithCache(user.id, githubToken, owner, repo, state, filtersResult.data)
+      const result = await fetchRepositoryIssuesWithCache(user.id, githubToken, owner, repo, state, filtersResult.data, pagination)
       setGithubCacheHeaders(ctx, result)
-      const { issues, issueCount } = result.payload
-      return ctx.json({ issues, issueCount }, 200)
+      const { issues, issueCount, page, perPage, totalPages } = result.payload
+      return ctx.json({ issues, issueCount, page, perPage, totalPages }, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
