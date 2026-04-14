@@ -3394,6 +3394,7 @@ impl Editor {
               .child(
                 Input::new(&input_state)
                   .disabled(is_edit_submitting)
+                  .font_family(theme.font_family.clone())
                   .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
               )
               .child(
@@ -3729,6 +3730,7 @@ impl Editor {
                   .child(
                     Input::new(&input_state)
                       .disabled(is_reply_submitting)
+                      .font_family(theme.font_family.clone())
                       .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
                   )
                   .child(
@@ -3945,6 +3947,7 @@ impl Editor {
                 .child(
                   Input::new(&input_state)
                     .disabled(is_create_submitting)
+                    .font_family(theme.font_family.clone())
                     .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
                 )
                 .child(
