@@ -1489,13 +1489,23 @@ fn expand_tabs_for_code_block(value: &str) -> String {
   expanded
 }
 
-pub(crate) fn collect_indentation_dot_indices(text: &str) -> Vec<usize> {
-  if text.len() > MARKDOWN_CODE_INDENT_DOT_DISABLE_ABOVE_TEXT_LEN || !text.contains(' ') {
-    return Vec::new();
+pub(crate) struct IndentationIndicators {
+  pub dot_indices: Vec<usize>,
+  pub tab_indices: Vec<usize>,
+}
+
+pub(crate) fn collect_indentation_indicators(text: &str) -> IndentationIndicators {
+  if text.len() > MARKDOWN_CODE_INDENT_DOT_DISABLE_ABOVE_TEXT_LEN {
+    return IndentationIndicators {
+      dot_indices: Vec::new(),
+      tab_indices: Vec::new(),
+    };
   }
 
-  let mut indices = Vec::new();
+  let mut dot_indices = Vec::new();
+  let mut tab_indices = Vec::new();
   let mut leading_spaces = Vec::new();
+  let mut leading_tabs = Vec::new();
   let mut saw_non_whitespace = false;
   let mut in_leading_indent = true;
 
@@ -1503,20 +1513,21 @@ pub(crate) fn collect_indentation_dot_indices(text: &str) -> Vec<usize> {
     match ch {
       '\n' | '\r' => {
         if saw_non_whitespace {
-          indices.extend_from_slice(&leading_spaces);
+          dot_indices.extend_from_slice(&leading_spaces);
+          tab_indices.extend_from_slice(&leading_tabs);
         }
         leading_spaces.clear();
+        leading_tabs.clear();
         saw_non_whitespace = false;
         in_leading_indent = true;
       }
       ' ' if in_leading_indent => {
         leading_spaces.push(ix);
       }
-      ' ' => {}
       '\t' if in_leading_indent => {
-        in_leading_indent = false;
+        leading_tabs.push(ix);
       }
-      '\t' => {}
+      ' ' | '\t' => {}
       _ => {
         saw_non_whitespace = true;
         in_leading_indent = false;
@@ -1525,10 +1536,14 @@ pub(crate) fn collect_indentation_dot_indices(text: &str) -> Vec<usize> {
   }
 
   if saw_non_whitespace {
-    indices.extend_from_slice(&leading_spaces);
+    dot_indices.extend_from_slice(&leading_spaces);
+    tab_indices.extend_from_slice(&leading_tabs);
   }
 
-  limit_indentation_dot_indices(indices)
+  IndentationIndicators {
+    dot_indices: limit_indentation_dot_indices(dot_indices),
+    tab_indices,
+  }
 }
 
 fn limit_indentation_dot_indices(indices: Vec<usize>) -> Vec<usize> {
@@ -3531,7 +3546,7 @@ Apres"#,
   #[test]
   fn collect_indentation_dot_indices_marks_leading_spaces_only() {
     let text = "    first\n  second";
-    let indices = collect_indentation_dot_indices(text);
+    let indices = collect_indentation_indicators(text).dot_indices;
 
     assert_eq!(indices, vec![0, 1, 2, 3, 10, 11]);
   }
@@ -3539,7 +3554,7 @@ Apres"#,
   #[test]
   fn collect_indentation_dot_indices_ignores_internal_spaces() {
     let text = "  first second third";
-    let indices = collect_indentation_dot_indices(text);
+    let indices = collect_indentation_indicators(text).dot_indices;
 
     assert_eq!(indices, vec![0, 1]);
   }
@@ -3547,7 +3562,7 @@ Apres"#,
   #[test]
   fn collect_indentation_dot_indices_ignores_blank_or_whitespace_only_lines() {
     let text = "  \n  valid\n    \n end";
-    let indices = collect_indentation_dot_indices(text);
+    let indices = collect_indentation_indicators(text).dot_indices;
 
     assert_eq!(indices, vec![3, 4, 16]);
   }
@@ -3555,7 +3570,7 @@ Apres"#,
   #[test]
   fn collect_indentation_dot_indices_handles_crlf() {
     let text = "  a\r\n    b\r\n  ";
-    let indices = collect_indentation_dot_indices(text);
+    let indices = collect_indentation_indicators(text).dot_indices;
 
     assert_eq!(indices, vec![0, 1, 5, 6, 7, 8]);
   }
@@ -3566,7 +3581,7 @@ Apres"#,
       .map(|_| "                              line")
       .collect::<Vec<_>>()
       .join("\n");
-    let indices = collect_indentation_dot_indices(text.as_str());
+    let indices = collect_indentation_indicators(text.as_str()).dot_indices;
 
     assert!(!indices.is_empty());
     assert!(indices.len() <= MARKDOWN_CODE_INDENT_DOT_MAX_RENDER_COUNT);
@@ -3578,9 +3593,27 @@ Apres"#,
       "{}code",
       " ".repeat(MARKDOWN_CODE_INDENT_DOT_DISABLE_ABOVE_TEXT_LEN + 1)
     );
-    let indices = collect_indentation_dot_indices(text.as_str());
+    let indices = collect_indentation_indicators(text.as_str()).dot_indices;
 
     assert!(indices.is_empty());
+  }
+
+  #[test]
+  fn collect_indentation_indicators_collects_tab_indices() {
+    let text = "\t\tfirst\n\tsecond";
+    let indicators = collect_indentation_indicators(text);
+
+    assert!(indicators.dot_indices.is_empty());
+    assert_eq!(indicators.tab_indices, vec![0, 1, 8]);
+  }
+
+  #[test]
+  fn collect_indentation_indicators_collects_mixed_spaces_and_tabs() {
+    let text = "  \tfirst\n\t  second";
+    let indicators = collect_indentation_indicators(text);
+
+    assert_eq!(indicators.dot_indices, vec![0, 1, 10, 11]);
+    assert_eq!(indicators.tab_indices, vec![2, 9]);
   }
 
   #[test]
