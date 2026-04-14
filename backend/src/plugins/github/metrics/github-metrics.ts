@@ -1,7 +1,7 @@
 import type { GithubCacheScope, GithubCacheStatus } from '../cache/github-cache.js'
 import type { GithubRateLimitInfo } from '../service.js'
 
-export interface GithubCacheMetricEvent {
+interface GithubCacheMetricEvent {
   at?: number
   userId?: string
   operation: string
@@ -12,7 +12,7 @@ export interface GithubCacheMetricEvent {
   durationMs: number
 }
 
-export interface GithubApiMetricEvent {
+interface GithubApiMetricEvent {
   at?: number
   userId?: string
   operation: string
@@ -24,7 +24,7 @@ export interface GithubApiMetricEvent {
   rateLimit?: GithubRateLimitInfo | null
 }
 
-export interface GithubPaginationMetricEvent {
+interface GithubPaginationMetricEvent {
   at?: number
   userId?: string
   operation: string
@@ -35,7 +35,7 @@ export interface GithubPaginationMetricEvent {
   durationMs: number
 }
 
-export interface GithubCacheMetricsOverviewQuery {
+interface GithubCacheMetricsOverviewQuery {
   now?: number
   windowMs?: number
   limit?: number
@@ -589,7 +589,7 @@ export function createGithubMetricsCollector(
   return new GithubMetricsCollector(now, bucketMs, retentionMs)
 }
 
-export class GithubMetricsCollector {
+class GithubMetricsCollector {
   private readonly buckets = new Map<number, GithubMetricsBucket>()
   private readonly currentRateLimits = new Map<string, GithubRateLimitState>()
   private readonly pendingOperationMetrics = new Map<string, GithubPersistedOperationMetric>()

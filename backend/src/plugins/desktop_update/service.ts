@@ -44,10 +44,10 @@ interface CachedDesktopUpdateManifest {
   expiresAt: number
 }
 
-export type DesktopPlatform = z.infer<typeof desktopPlatformSchema>
-export type DesktopArch = z.infer<typeof desktopArchSchema>
+type DesktopPlatform = z.infer<typeof desktopPlatformSchema>
+type DesktopArch = z.infer<typeof desktopArchSchema>
 
-export interface DesktopUpdateArtifact {
+interface DesktopUpdateArtifact {
   platform: DesktopPlatform
   arch: DesktopArch
   url: string
@@ -55,20 +55,20 @@ export interface DesktopUpdateArtifact {
   size: number
 }
 
-export interface DesktopUpdateManifest {
+interface DesktopUpdateManifest {
   version: string
   minimumSupportedVersion: string
   releaseNotesUrl: string
   artifacts: DesktopUpdateArtifact[]
 }
 
-export interface DesktopUpdateCheckInput {
+interface DesktopUpdateCheckInput {
   currentVersion: string
   platform: DesktopPlatform
   arch: DesktopArch
 }
 
-export interface DesktopUpdateCheckResult {
+interface DesktopUpdateCheckResult {
   updateAvailable: boolean
   forceUpdate: boolean
   currentVersion: string
@@ -265,7 +265,7 @@ async function fetchProductionManifestFromRemote(): Promise<DesktopUpdateManifes
   return fetchManifestFromRelease(releaseRes.data)
 }
 
-export async function fetchDesktopUpdateManifest() {
+async function fetchDesktopUpdateManifest() {
   if (env.NODE_ENV === 'development') {
     // Dev is intentionally fail-fast and always re-reads the local file.
     return loadDevelopmentManifestFromFile()
@@ -336,7 +336,7 @@ export async function checkDesktopUpdate(
   return resolveDesktopUpdateCheck(manifest, input)
 }
 
-export interface DesktopChangelogEntry {
+interface DesktopChangelogEntry {
   version: string
   publishedAt: string
   body: string
@@ -385,8 +385,4 @@ export async function downloadLatestDesktopUpdateAsset(
 
   const asset = findReleaseAssetByName(releaseRes.data, assetFileName)
   return fetchReleaseAssetData(asset)
-}
-
-export function clearDesktopUpdateManifestCache() {
-  desktopUpdateManifestCache = null
 }

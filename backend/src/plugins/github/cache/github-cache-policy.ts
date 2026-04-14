@@ -79,31 +79,31 @@ export function getGithubNotificationsTag(userId: string) {
   return `viewer:${userId}:notifications`
 }
 
-export function getGithubUserRepositoriesTag(userId: string) {
+function getGithubUserRepositoriesTag(userId: string) {
   return `viewer:${userId}:repos-me`
 }
 
-export function getGithubPullRequestSearchTag(userId: string) {
+function getGithubPullRequestSearchTag(userId: string) {
   return `viewer:${userId}:pr-search`
 }
 
-export function getGithubRepoPullRequestsTag(owner: string, repo: string) {
+function getGithubRepoPullRequestsTag(owner: string, repo: string) {
   return `repo:${normalizeRepositoryKey(owner, repo)}:pull-requests`
 }
 
-export function getGithubRepoIssuesTag(owner: string, repo: string) {
+function getGithubRepoIssuesTag(owner: string, repo: string) {
   return `repo:${normalizeRepositoryKey(owner, repo)}:issues`
 }
 
-export function getGithubPullRequestTag(owner: string, repo: string, pullNumber: number) {
+function getGithubPullRequestTag(owner: string, repo: string, pullNumber: number) {
   return `pull-request:${normalizeRepositoryKey(owner, repo)}:${pullNumber}`
 }
 
-export function getGithubPullRequestCommentsTag(owner: string, repo: string, pullNumber: number) {
+function getGithubPullRequestCommentsTag(owner: string, repo: string, pullNumber: number) {
   return `pull-request:${normalizeRepositoryKey(owner, repo)}:${pullNumber}:comments`
 }
 
-export function getGithubPullRequestReviewsTag(owner: string, repo: string, pullNumber: number) {
+function getGithubPullRequestReviewsTag(owner: string, repo: string, pullNumber: number) {
   return `pull-request:${normalizeRepositoryKey(owner, repo)}:${pullNumber}:reviews`
 }
 
@@ -115,31 +115,31 @@ export function getGithubPullRequestCommitsTag(owner: string, repo: string, pull
   return `pull-request:${normalizeRepositoryKey(owner, repo)}:${pullNumber}:commits`
 }
 
-export function getGithubIssueTag(owner: string, repo: string, issueNumber: number) {
+function getGithubIssueTag(owner: string, repo: string, issueNumber: number) {
   return `issue:${normalizeRepositoryKey(owner, repo)}:${issueNumber}`
 }
 
-export function getGithubIssueCommentsTag(owner: string, repo: string, issueNumber: number) {
+function getGithubIssueCommentsTag(owner: string, repo: string, issueNumber: number) {
   return `issue:${normalizeRepositoryKey(owner, repo)}:${issueNumber}:comments`
 }
 
-export function getGithubRepositoryDetailsTag(owner: string, repo: string) {
+function getGithubRepositoryDetailsTag(owner: string, repo: string) {
   return `repo:${normalizeRepositoryKey(owner, repo)}:details`
 }
 
-export function getGithubRepositoryReadmeTag(owner: string, repo: string) {
+function getGithubRepositoryReadmeTag(owner: string, repo: string) {
   return `repo:${normalizeRepositoryKey(owner, repo)}:readme`
 }
 
-export function getGithubRepositoryBranchesTag(owner: string, repo: string) {
+function getGithubRepositoryBranchesTag(owner: string, repo: string) {
   return `repo:${normalizeRepositoryKey(owner, repo)}:branches`
 }
 
-export function getGithubRepositoryTreeTag(owner: string, repo: string, treeSha: string) {
+function getGithubRepositoryTreeTag(owner: string, repo: string, treeSha: string) {
   return `repo:${normalizeRepositoryKey(owner, repo)}:tree:${treeSha}`
 }
 
-export function getGithubRepositoryFileTag(owner: string, repo: string, ref: string) {
+function getGithubRepositoryFileTag(owner: string, repo: string, ref: string) {
   const repositoryKey = normalizeRepositoryKey(owner, repo)
   const refPrefix = isGitSha(ref) ? 'blob' : 'ref'
   return `repo:${repositoryKey}:file:${refPrefix}:${normalizeCacheSegment(ref)}`

@@ -9,7 +9,7 @@ import { formatGithubUser, mapGithubIssueComment } from './formatter.js'
 export const GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY = 'issue'
 export const GITHUB_ISSUE_DETAILS_COMMENTS_VALIDATOR_KEY = 'issueComments'
 
-export function buildGithubIssueDetailsPayload(
+function buildGithubIssueDetailsPayload(
   {
     owner,
     repo,

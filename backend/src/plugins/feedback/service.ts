@@ -1,16 +1,16 @@
 import { env } from '../../lib/env.js'
 
-export type FeedbackType = 'bug' | 'feature'
-export type AppProfile = 'prod' | 'dev'
+type FeedbackType = 'bug' | 'feature'
+type AppProfile = 'prod' | 'dev'
 
-export interface CreateFeedbackParams {
+interface CreateFeedbackParams {
   type: FeedbackType
   title: string
   description: string
   userEmail: string
 }
 
-export interface CreateCrashReportParams {
+interface CreateCrashReportParams {
   crashId: string
   message: string
   panicLocation?: string

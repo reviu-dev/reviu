@@ -43,7 +43,6 @@ export type WorkflowRunJobsParams
   = Endpoints['GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs']['parameters']
 export type BranchRulesParams
   = Endpoints['GET /repos/{owner}/{repo}/rules/branches/{branch}']['parameters']
-export type SearchIssuesParams = Endpoints['GET /search/issues']['parameters']
 export type UserRepositoriesParams = Endpoints['GET /user/repos']['parameters']
 export type NotificationsParams = Endpoints['GET /notifications']['parameters']
 export type GetContentParams
@@ -104,18 +103,13 @@ export type WorkflowRunJobsResponse
   = Endpoints['GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs']['response']['data']
 export type BranchRulesResponse
   = Endpoints['GET /repos/{owner}/{repo}/rules/branches/{branch}']['response']['data']
-export type SearchIssuesResponse = Endpoints['GET /search/issues']['response']['data']
-export type SearchIssuesItemResponse = SearchIssuesResponse['items'][number]
 export type UserRepositoryResponse = Endpoints['GET /user/repos']['response']['data'][number]
-export type GetContentResponse
-  = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['response']['data']
 export type RepositoryLabelResponse
   = Endpoints['GET /repos/{owner}/{repo}/labels']['response']['data'][number]
 export type RepositoryAssigneeResponse
   = Endpoints['GET /repos/{owner}/{repo}/assignees']['response']['data'][number]
 export type GithubUserResponse = Endpoints['GET /user']['response']['data']
 export type GithubIssueResponse = Endpoints['GET /repos/{owner}/{repo}/issues']['response']['data'][number]
-export type GithubIssueParameters = Endpoints['GET /repos/{owner}/{repo}/issues']['parameters']
 export type GithubIssueDetailsResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}']['response']['data']
 export type GithubIssueDetailsParameters = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}']['parameters']
 export type UpdateIssueParams = Endpoints['PATCH /repos/{owner}/{repo}/issues/{issue_number}']['parameters']
@@ -133,7 +127,6 @@ export type GithubRepositoryTreesResponse = Endpoints['GET /repos/{owner}/{repo}
 export type GithubRepositoryTreeParams = Endpoints['GET /repos/{owner}/{repo}/git/trees/{tree_sha}']['parameters']
 export type GithubRepositoryBranchesResponse = Endpoints['GET /repos/{owner}/{repo}/branches']['response']['data'][number]
 export type GithubRepositoryBranchesParameters = Endpoints['GET /repos/{owner}/{repo}/branches']['parameters']
-export type GithubRepositoryReadmeResponse = Endpoints['GET /repos/{owner}/{repo}/readme']['response']['data']
 export type GithubRepositoryReadmeParameters = Endpoints['GET /repos/{owner}/{repo}/readme']['parameters']
 
 export interface GithubRepository {

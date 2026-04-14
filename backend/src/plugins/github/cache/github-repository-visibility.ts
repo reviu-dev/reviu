@@ -37,7 +37,7 @@ export function createGithubRepositoryVisibilityStore(
   return new GithubRepositoryVisibilityStore(store, now, ttlMs)
 }
 
-export class GithubRepositoryVisibilityStore {
+class GithubRepositoryVisibilityStore {
   constructor(
     private readonly store: GithubCacheStore,
     private readonly now: () => number,

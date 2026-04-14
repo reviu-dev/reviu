@@ -24,24 +24,12 @@ import type {
   CreatePullRequestReviewResponse,
   DeleteIssueCommentParams,
   DeletePullRequestCommentParams,
-  GetContentParams,
-  GetContentResponse,
   GithubGraphqlPullRequestNode,
   GithubIssue,
   GithubIssueDetailsCommentParameters,
   GithubIssueDetailsCommentResponse,
-  GithubIssueDetailsParameters,
-  GithubIssueDetailsResponse,
-  GithubIssueParameters,
-  GithubIssueResponse,
-  GithubRepositoryBranchesParameters,
-  GithubRepositoryBranchesResponse,
   GithubRepositoryParameters,
-  GithubRepositoryReadmeParameters,
-  GithubRepositoryReadmeResponse,
   GithubRepositoryResponse,
-  GithubRepositoryTreeParams,
-  GithubRepositoryTreesResponse,
   GithubUserResponse,
   ListPullsParams,
   MergePullRequestParams,
@@ -57,8 +45,6 @@ import type {
   PullRequestFilesParams,
   PullRequestParams,
   PullRequestResponse,
-  PullRequestReviewResponse,
-  PullRequestReviewsParams,
   RemoveIssueAssigneesParams,
   RemoveIssueLabelParams,
   RemovePullRequestReviewersParams,
@@ -67,8 +53,6 @@ import type {
   RepositoryLabelResponse,
   RepositoryLabelsParams,
   RequestPullRequestReviewersParams,
-  SearchIssuesParams,
-  SearchIssuesResponse,
   UpdateIssueCommentParams,
   UpdateIssueCommentResponse,
   UpdateIssueParams,
@@ -97,7 +81,7 @@ function githubAuthHeaders(token: string, extraHeaders?: Record<string, string>)
   }
 }
 
-export interface GithubConditionalRequestOptions<Route extends keyof Endpoints> {
+interface GithubConditionalRequestOptions<Route extends keyof Endpoints> {
   token: string
   params: Endpoints[Route]['parameters']
   etag?: string
@@ -105,7 +89,7 @@ export interface GithubConditionalRequestOptions<Route extends keyof Endpoints> 
   headers?: Record<string, string>
 }
 
-export interface GithubConditionalResponse<Route extends keyof Endpoints> {
+interface GithubConditionalResponse<Route extends keyof Endpoints> {
   data: Endpoints[Route]['response']['data'] | null
   notModified: boolean
   etag?: string
@@ -120,7 +104,7 @@ export interface GithubRateLimitInfo {
   resource?: string
 }
 
-export interface GithubPaginatedCollectionResult<T> {
+interface GithubPaginatedCollectionResult<T> {
   items: T[]
   pageCount: number
   itemCount: number
@@ -217,22 +201,6 @@ const GITHUB_GRAPHQL_SEARCH_ISSUES_QUERY = `
   }
 `
 
-const GITHUB_GRAPHQL_REPOSITORY_PULL_REQUESTS_QUERY = `
-  query RepositoryPullRequests($owner: String!, $repo: String!, $first: Int!) {
-    repository(owner: $owner, name: $repo) {
-      pullRequests(
-        first: $first
-        states: [OPEN, CLOSED]
-        orderBy: { field: UPDATED_AT, direction: DESC }
-      ) {
-        nodes {
-          ${GITHUB_GRAPHQL_PULL_REQUEST_LIST_FIELDS}
-        }
-      }
-    }
-  }
-`
-
 const GITHUB_GRAPHQL_MARK_PULL_REQUEST_READY_FOR_REVIEW_MUTATION = `
   mutation MarkPullRequestReadyForReview($pullRequestId: ID!) {
     markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
@@ -298,14 +266,6 @@ interface GithubGraphqlSearchPullRequestsResponse {
     issueCount: number
     nodes?: Array<GithubGraphqlPullRequestNode | null> | null
   }
-}
-
-interface GithubGraphqlRepositoryPullRequestsResponse {
-  repository: {
-    pullRequests: {
-      nodes?: Array<GithubGraphqlPullRequestNode | null> | null
-    }
-  } | null
 }
 
 interface GithubGraphqlMarkPullRequestReadyForReviewResponse {
@@ -784,16 +744,6 @@ export async function fetchGithubPullRequestsConditionally(
   )
 }
 
-export async function fetchGithubSearchIssues(
-  { token, params }:
-  { token: string, params: SearchIssuesParams },
-): Promise<SearchIssuesResponse> {
-  return requestGithubData('GET /search/issues', {
-    token,
-    params,
-  })
-}
-
 export async function fetchGithubPullRequestSearchGraphql(
   {
     token,
@@ -989,32 +939,6 @@ export async function convertGithubPullRequestToDraft(
   }
 }
 
-export async function fetchGithubRepositoryPullRequestsGraphql(
-  {
-    token,
-    owner,
-    repo,
-    limit,
-  }: {
-    token: string
-    owner: string
-    repo: string
-    limit: number
-  },
-): Promise<GithubGraphqlPullRequestNode[]> {
-  const data = await requestGithubGraphqlData<GithubGraphqlRepositoryPullRequestsResponse>({
-    token,
-    query: GITHUB_GRAPHQL_REPOSITORY_PULL_REQUESTS_QUERY,
-    variables: {
-      owner,
-      repo,
-      first: limit,
-    },
-  })
-
-  return data.repository?.pullRequests.nodes?.flatMap(node => (node ? [node] : [])) ?? []
-}
-
 export async function fetchGithubPullRequestConditionally(
   options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/pulls/{pull_number}'>,
 ): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/pulls/{pull_number}'>> {
@@ -1094,7 +1018,7 @@ export async function updateGithubPullRequestBranch(
   })
 }
 
-export async function fetchGithubPullRequestCommitsPage(
+async function fetchGithubPullRequestCommitsPage(
   { token, params }:
   { token: string, params: PullRequestCommitsParams },
 ): Promise<PullRequestCommitResponse[]> {
@@ -1153,7 +1077,7 @@ export async function compareGithubRefs(
   })
 }
 
-export async function fetchGithubPullRequestFilesPage(
+async function fetchGithubPullRequestFilesPage(
   { token, params }:
   { token: string, params: PullRequestFilesParams },
 ): Promise<PullRequestFileResponse[]> {
@@ -1193,7 +1117,7 @@ export async function fetchGithubPullRequestFilesAllPages(
   return files
 }
 
-export async function fetchGithubCommit(
+async function fetchGithubCommit(
   { token, params }:
   { token: string, params: CommitParams },
 ): Promise<CommitResponse> {
@@ -1284,7 +1208,7 @@ export async function fetchGithubCommitFilesAllPages(
   return files
 }
 
-export async function fetchGithubPullRequestComments(
+async function fetchGithubPullRequestComments(
   { token, params }: { token: string, params: PullRequestCommentsParams },
 ): Promise<PullRequestCommentResponse[]> {
   return requestGithubData('GET /repos/{owner}/{repo}/pulls/{pull_number}/comments', {
@@ -1319,15 +1243,6 @@ export async function fetchGithubPullRequestCommentsAllPages(
     maxPages,
     maxItems,
     initialPageItems,
-  })
-}
-
-export async function fetchGithubPullRequestReviews(
-  { token, params }: { token: string, params: PullRequestReviewsParams },
-): Promise<PullRequestReviewResponse[]> {
-  return requestGithubData('GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews', {
-    token,
-    params,
   })
 }
 
@@ -1382,18 +1297,6 @@ export async function deleteGithubPullRequestComment(
   await requestGithubWithoutData('DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}', {
     token,
     params,
-  })
-}
-
-export async function fetchGithubRepositoryContent(
-  { token, params}: { token: string, params: GetContentParams },
-): Promise<GetContentResponse> {
-  return requestGithubData('GET /repos/{owner}/{repo}/contents/{path}', {
-    token,
-    params,
-    headers: {
-      accept: 'application/vnd.github.raw+json',
-    },
   })
 }
 
@@ -1452,35 +1355,6 @@ export async function fetchGithubRepositoryConditionally(
   )
 }
 
-export async function fetchGithubRepositoryIssues(
-  { token, params }:
-  { token: string, params: GithubIssueParameters },
-): Promise<GithubIssueResponse[]> {
-  return requestGithubData('GET /repos/{owner}/{repo}/issues', {
-    token,
-    params,
-  })
-}
-
-export async function fetchGithubRepositoryIssuesConditionally(
-  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/issues'>,
-): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/issues'>> {
-  return requestGithubConditionally<'GET /repos/{owner}/{repo}/issues'>(
-    'GET /repos/{owner}/{repo}/issues',
-    options,
-  )
-}
-
-export async function fetchGithubRepositoryIssue(
-  { token, params }:
-  { token: string, params: GithubIssueDetailsParameters },
-): Promise<GithubIssueDetailsResponse> {
-  return requestGithubData('GET /repos/{owner}/{repo}/issues/{issue_number}', {
-    token,
-    params,
-  })
-}
-
 export async function fetchGithubRepositoryIssueConditionally(
   options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/issues/{issue_number}'>,
 ): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/issues/{issue_number}'>> {
@@ -1500,7 +1374,7 @@ export async function patchGithubIssue(
   })
 }
 
-export async function fetchGithubRepositoryIssueComments(
+async function fetchGithubRepositoryIssueComments(
   { token, params }:
   { token: string, params: GithubIssueDetailsCommentParameters },
 ): Promise<GithubIssueDetailsCommentResponse[]> {
@@ -1569,16 +1443,6 @@ export async function deleteGithubIssueComment(
   })
 }
 
-export async function fetchGithubRepositoryTrees(
-  { token, params }:
-  { token: string, params: GithubRepositoryTreeParams },
-): Promise<GithubRepositoryTreesResponse> {
-  return requestGithubData('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', {
-    token,
-    params,
-  })
-}
-
 export async function fetchGithubRepositoryTreesConditionally(
   options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/git/trees/{tree_sha}'>,
 ): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/git/trees/{tree_sha}'>> {
@@ -1588,16 +1452,6 @@ export async function fetchGithubRepositoryTreesConditionally(
   )
 }
 
-export async function fetchGithubRepositoryBranches(
-  { token, params }:
-  { token: string, params: GithubRepositoryBranchesParameters },
-): Promise<GithubRepositoryBranchesResponse[]> {
-  return requestGithubData('GET /repos/{owner}/{repo}/branches', {
-    token,
-    params,
-  })
-}
-
 export async function fetchGithubRepositoryBranchesConditionally(
   options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/branches'>,
 ): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/branches'>> {
@@ -1605,16 +1459,6 @@ export async function fetchGithubRepositoryBranchesConditionally(
     'GET /repos/{owner}/{repo}/branches',
     options,
   )
-}
-
-export async function fetchGithubRepositoryReadme(
-  { token, params }:
-  { token: string, params: GithubRepositoryReadmeParameters },
-): Promise<GithubRepositoryReadmeResponse> {
-  return requestGithubData('GET /repos/{owner}/{repo}/readme', {
-    token,
-    params,
-  })
 }
 
 export async function fetchGithubRepositoryReadmeConditionally(

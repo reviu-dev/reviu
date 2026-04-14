@@ -106,7 +106,7 @@ export function stopClientAnalyticsPersistence() {
   flushInterval = null
 }
 
-export interface ClientAnalyticsVersionSummary {
+interface ClientAnalyticsVersionSummary {
   clientVersion: string
   clientPlatform: string | null
   clientArch: string | null
@@ -115,7 +115,7 @@ export interface ClientAnalyticsVersionSummary {
   lastSeenAt: number
 }
 
-export interface ClientAnalyticsRouteSummary {
+interface ClientAnalyticsRouteSummary {
   method: string
   route: string
   clientVersion: string
@@ -123,7 +123,7 @@ export interface ClientAnalyticsRouteSummary {
   lastSeenAt: number
 }
 
-export interface ClientAnalyticsOverview {
+interface ClientAnalyticsOverview {
   versions: ClientAnalyticsVersionSummary[]
   routes: ClientAnalyticsRouteSummary[]
 }
@@ -226,7 +226,7 @@ export async function readClientAnalyticsOverview(
   return { versions, routes }
 }
 
-export interface ClientAnalyticsPruneResult {
+interface ClientAnalyticsPruneResult {
   retentionDays: number
   cutoff: Date
   deletedRows: number

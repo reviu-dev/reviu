@@ -1,7 +1,7 @@
 const DEFAULT_BUCKET_MS = 60_000
 const DEFAULT_RETENTION_MS = 24 * 60 * 60_000
 
-export interface ClientRouteMetricEvent {
+interface ClientRouteMetricEvent {
   at?: number
   clientVersion: string
   clientPlatform: string | null
@@ -38,7 +38,7 @@ function bucketKey(version: string, method: string, route: string): string {
   return `${version}|${method}|${route}`
 }
 
-export class ClientAnalyticsCollector {
+class ClientAnalyticsCollector {
   private readonly buckets = new Map<number, Map<string, BucketEntry>>()
   private readonly pendingMetrics = new Map<string, ClientRoutePersistedMetric>()
 

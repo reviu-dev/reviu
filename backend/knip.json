@@ -1,0 +1,15 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "tags": [
+    "-lintignore"
+  ],
+  "entry": [
+    "src/exposed.ts"
+  ],
+  "ignore": [
+    "migrations/**"
+  ],
+  "ignoreDependencies": [
+    "pino-pretty"
+  ]
+}

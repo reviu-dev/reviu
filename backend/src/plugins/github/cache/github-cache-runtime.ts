@@ -10,12 +10,12 @@ import { logger } from '../../../lib/logger.js'
 import { createDefaultGithubCacheStore } from '../../../lib/redis.js'
 import { createGithubCache } from './github-cache.js'
 
-export type GithubCacheRuntime = Pick<
+type GithubCacheRuntime = Pick<
   ReturnType<typeof createGithubCache>,
   'getOrLoad' | 'invalidateTags' | 'prime' | 'waitForIdle'
 >
 
-export function createGithubCacheRuntime(
+function createGithubCacheRuntime(
   {
     cacheEnabled,
     store,

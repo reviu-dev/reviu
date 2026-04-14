@@ -9,8 +9,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
+    "lint": "eslint . && knip",
+    "lint:fix": "eslint . --fix && knip",
     "db:push": "drizzle-kit push",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -19,7 +19,8 @@
     "github:metrics:prune:dev": "tsx src/scripts/prune-github-metrics.ts",
     "client-analytics:prune": "node dist/scripts/prune-client-analytics.js",
     "client-analytics:prune:dev": "tsx src/scripts/prune-client-analytics.ts",
-    "migrate": "tsx scripts/migrate.ts"
+    "migrate": "tsx scripts/migrate.ts",
+    "knip": "knip"
   },
   "dependencies": {
     "@better-auth/redis-storage": "^1.5.6",
@@ -49,6 +50,7 @@
     "@types/semver": "^7.7.1",
     "drizzle-kit": "^0.31.8",
     "eslint": "^9.39.2",
+    "knip": "^6.4.1",
     "tsx": "^4.21.0",
     "type-fest": "^5.4.3",
     "typescript": "^5.9.3",

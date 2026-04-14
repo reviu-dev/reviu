@@ -18,11 +18,9 @@ import type {
   GithubPullRequestReview,
   GithubPullRequestReviewComment,
   GithubPullRequestReviewResponseSource,
-  GithubRepository,
   GithubReviewCommentResponse,
   PullRequestCommitResponse,
   PullRequestResponse,
-  SearchIssuesItemResponse,
   UpdateIssueResponse,
   UpdatePullRequestResponse,
 } from './types.js'
@@ -238,7 +236,7 @@ export function mapGithubIssueDescriptionUpdate(
   }
 }
 
-export function mapGithubPullRequestCommitUser(
+function mapGithubPullRequestCommitUser(
   user: PullRequestCommitResponse['author'] | PullRequestCommitResponse['committer'],
 ): GithubPullRequestCommitUser | null {
   if (!user) {
@@ -271,48 +269,5 @@ export function mapGithubPullRequestFile(file: GithubPullRequestFileSource): Git
     status: file.status as GithubPullRequestFile['status'],
     patch: file.patch ?? undefined,
     previous_filename: file.previous_filename ?? undefined,
-  }
-}
-
-function parseGithubRepositoryUrl(repositoryUrl: string): GithubRepository | null {
-  try {
-    const pathParts = new URL(repositoryUrl).pathname.split('/').filter(Boolean)
-    if (pathParts.length < 3 || pathParts[0] !== 'repos') {
-      return null
-    }
-
-    const owner = pathParts[1]
-    const repo = pathParts[2]
-    if (!owner || !repo) {
-      return null
-    }
-
-    return { owner, repo }
-  }
-  catch {
-    return null
-  }
-}
-
-export function mapSearchIssueItemToPullRequest(item: SearchIssuesItemResponse): GithubPullRequest | null {
-  const repository = parseGithubRepositoryUrl(item.repository_url)
-  if (!repository || !item.pull_request) {
-    return null
-  }
-
-  return {
-    number: item.number,
-    title: item.title,
-    state: item.state as PullRequestResponse['state'],
-    draft: Boolean(item.draft),
-    created_at: item.created_at,
-    closed_at: item.closed_at,
-    merged_at: item.pull_request.merged_at ?? null,
-    updated_at: item.updated_at,
-    comments_count: item.comments ?? 0,
-    author: mapGithubPullRequestAuthor(item.user),
-    labels: item.labels
-      .flatMap(label => (typeof label.name === 'string' && label.name.trim().length > 0 ? [{ name: label.name }] : [])),
-    repository,
   }
 }

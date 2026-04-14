@@ -1,7 +1,7 @@
 import type { GithubCacheScope } from '../cache/github-cache.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
 
-export interface GithubMetricsContext {
+interface GithubMetricsContext {
   userId?: string
   operation?: string
   scope?: GithubCacheScope
