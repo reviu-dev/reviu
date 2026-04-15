@@ -98,6 +98,7 @@ serde_json = "1.0"
 comrak = "0.22"
 imara-diff = "0.2.0"
 sentry = "0.46.2"
+percent-encoding = "2.3"
 
 # Workspace member crates
 buffer = { path = "crates/buffer" }
