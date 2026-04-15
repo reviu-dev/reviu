@@ -11,13 +11,13 @@ import { launchOffer } from "../data/launchOffer";
 import Layout from "../layouts/Layout.astro";
 
 const description =
-  "Reviu is a desktop Git client with a real-time diff editor, keyboard-first workflows, and GitHub notifications, repos, pull request reviews, and issues in Reviu Pro.";
+  "Reviu is a native Rust desktop Git client with a real-time diff editor, keyboard-first workflows, and GitHub notifications, repos, pull request reviews, and issues in Reviu Pro. No Electron, GPU-accelerated.";
 
 const faqItems: { question: string; answer: string }[] = [
   {
     question: "What is Reviu?",
     answer:
-      "Reviu is a desktop Git client with a real-time diff editor, keyboard-first navigation, and GitHub integration in one app.",
+      "Reviu is a native desktop Git client built with Rust. It features a real-time diff editor, keyboard-first navigation, and GitHub integration in one app.",
   },
   {
     question: "Is Reviu built with a webview?",
@@ -60,6 +60,7 @@ const structuredData = [
       },
     ],
     featureList: [
+      "Native Rust GPU-accelerated desktop application",
       "Keyboard-first Git command palette",
       "Real-time diff editor",
       "Inline and split diff views",
