@@ -15,7 +15,7 @@ use time::OffsetDateTime;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, DETAILS_PAGE_CONTAINER_MAX_WIDTH, PAGE_HEADER_HEIGHT,
-  StatusAlert, StatusTag, StatusThemeExt, UiIconName, WindowExt,
+  StatusTag, StatusThemeExt, UiIconName, WindowExt,
 };
 
 use crate::{
@@ -26,7 +26,10 @@ use crate::{
   github_navigation::{open_pr_target, open_repo_target},
   github_page::GithubPageHandle,
   navigation::NavigationHistory,
-  pricing_copy::{active_reviu_pro_launch_offer, reviu_pro_checkout_cta_label},
+  pricing_copy::{
+    PRO_ANNUAL_PERIOD, PRO_ANNUAL_PRICE, PRO_ANNUAL_SAVE_PERCENT, PRO_ANNUAL_SLUG,
+    PRO_MONTHLY_PERIOD, PRO_MONTHLY_PRICE, PRO_MONTHLY_SLUG,
+  },
   workspace::WorkspaceApi,
 };
 
@@ -50,15 +53,15 @@ enum BillingSubscriptionState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReviuProCheckoutCta {
-  Subscribe,
-  StartFreeTrial,
+  SubscribeMonthly,
+  SubscribeAnnual,
 }
 
 impl ReviuProCheckoutCta {
   pub(crate) fn label(self) -> &'static str {
     match self {
-      Self::Subscribe => reviu_pro_checkout_cta_label(),
-      Self::StartFreeTrial => "Start free trial",
+      Self::SubscribeMonthly => "Start free trial",
+      Self::SubscribeAnnual => "Start free trial",
     }
   }
 }
@@ -70,8 +73,87 @@ pub(crate) fn reviu_pro_checkout_button(id: &'static str, cta: ReviuProCheckoutC
     .small()
 }
 
-pub(crate) fn reviu_pro_subscribe_button(id: &'static str) -> Button {
-  reviu_pro_checkout_button(id, ReviuProCheckoutCta::Subscribe)
+pub(crate) fn render_pro_pricing_cards(
+  annual_button: impl IntoElement,
+  monthly_button: impl IntoElement,
+  theme: &gpui_component::Theme,
+) -> impl IntoElement {
+  h_flex()
+    .gap_3()
+    .child(
+      v_flex()
+        .flex_1()
+        .gap_2()
+        .child(
+          div()
+            .text_sm()
+            .font_semibold()
+            .text_color(theme.foreground)
+            .child("Annual"),
+        )
+        .child(
+          h_flex()
+            .items_end()
+            .gap_2()
+            .child(
+              h_flex()
+                .items_end()
+                .gap_1()
+                .child(
+                  div()
+                    .text_xl()
+                    .font_semibold()
+                    .text_color(theme.foreground)
+                    .child(PRO_ANNUAL_PRICE),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child(PRO_ANNUAL_PERIOD),
+                ),
+            )
+            .child(
+              div()
+                .text_xs()
+                .font_semibold()
+                .text_color(theme.status_blue())
+                .child(PRO_ANNUAL_SAVE_PERCENT),
+            ),
+        )
+        .child(h_flex().justify_start().child(annual_button)),
+    )
+    .child(
+      v_flex()
+        .flex_1()
+        .gap_2()
+        .child(
+          div()
+            .text_sm()
+            .font_semibold()
+            .text_color(theme.foreground)
+            .child("Monthly"),
+        )
+        .child(
+          h_flex()
+            .items_end()
+            .gap_1()
+            .child(
+              div()
+                .text_xl()
+                .font_semibold()
+                .text_color(theme.foreground)
+                .child(PRO_MONTHLY_PRICE),
+            )
+            .child(
+              div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child(PRO_MONTHLY_PERIOD),
+            ),
+        )
+        .child(h_flex().justify_start().child(monthly_button)),
+    )
 }
 
 impl BillingPage {
@@ -91,8 +173,22 @@ impl BillingPage {
     self.refresh_subscription_state(cx);
   }
 
-  fn subscribe_action(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-    self.start_checkout(cx);
+  fn subscribe_monthly_action(
+    &mut self,
+    _: &gpui::ClickEvent,
+    _: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.start_checkout(PRO_MONTHLY_SLUG, cx);
+  }
+
+  fn subscribe_annual_action(
+    &mut self,
+    _: &gpui::ClickEvent,
+    _: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.start_checkout(PRO_ANNUAL_SLUG, cx);
   }
 
   fn refresh_subscription_state(&mut self, cx: &mut Context<Self>) {
@@ -126,7 +222,7 @@ impl BillingPage {
     cx.notify();
   }
 
-  fn start_checkout(&mut self, cx: &mut Context<Self>) {
+  fn start_checkout(&mut self, slug: &'static str, cx: &mut Context<Self>) {
     if self.checkout_loading {
       return;
     }
@@ -136,7 +232,7 @@ impl BillingPage {
 
     let api = self.api.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.checkout_subscription("pro"))
+      let result = unblock(move || api.checkout_subscription(slug))
         .await
         .map_err(|error| error.to_string());
 
@@ -449,7 +545,22 @@ impl BillingPage {
 
   fn render_no_subscription(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let launch_offer = active_reviu_pro_launch_offer();
+
+    let annual_button = reviu_pro_checkout_button(
+      "billing-subscribe-annual",
+      ReviuProCheckoutCta::SubscribeAnnual,
+    )
+    .loading(self.checkout_loading)
+    .disabled(self.checkout_loading || self.refresh_loading)
+    .on_click(cx.listener(Self::subscribe_annual_action));
+
+    let monthly_button = reviu_pro_checkout_button(
+      "billing-subscribe-monthly",
+      ReviuProCheckoutCta::SubscribeMonthly,
+    )
+    .loading(self.checkout_loading)
+    .disabled(self.checkout_loading || self.refresh_loading)
+    .on_click(cx.listener(Self::subscribe_monthly_action));
 
     v_flex()
       .w_full()
@@ -459,112 +570,28 @@ impl BillingPage {
       .border_color(theme.border)
       .rounded(theme.radius)
       .bg(theme.sidebar)
-      .when_some(launch_offer, |this, offer| {
-        this.child(
-          StatusAlert::new(
-            "billing-launch-offer",
-            theme.status_orange(),
-            offer.description,
-          )
-          .title(offer.title)
-          .icon(IconName::Info),
-        )
-      })
       .child(
         v_flex()
           .gap_1()
           .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(
-                div()
-                  .text_lg()
-                  .font_semibold()
-                  .text_color(theme.foreground)
-                  .child("Reviu Pro"),
-              )
-              .when_some(launch_offer, |this, offer| {
-                this.child(
-                  StatusTag::new(theme.status_orange())
-                    .outline()
-                    .xsmall()
-                    .child(offer.badge),
-                )
-              }),
+            div()
+              .text_lg()
+              .font_semibold()
+              .text_color(theme.foreground)
+              .child("Reviu Pro"),
           )
-          .when_some(launch_offer, |this, offer| {
-            this.child(
-              v_flex()
-                .gap_1()
-                .child(
-                  h_flex()
-                    .items_end()
-                    .gap_2()
-                    .child(
-                      div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .line_through()
-                        .child(offer.regular_price),
-                    )
-                    .child(
-                      div()
-                        .text_xl()
-                        .font_semibold()
-                        .text_color(theme.foreground)
-                        .child(offer.launch_price),
-                    )
-                    .child(
-                      div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child(offer.billing_period),
-                    ),
-                )
-                .child(
-                  div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child("Founder pricing stays active while your subscription stays active."),
-                ),
-            )
-          })
-          .when(launch_offer.is_none(), |this| {
-            this.child(
-              h_flex()
-                .items_end()
-                .gap_2()
-                .child(
-                  div()
-                    .text_xl()
-                    .font_semibold()
-                    .text_color(theme.foreground)
-                    .child("$19"),
-                )
-                .child(
-                  div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child("/ month"),
-                ),
-            )
-          }),
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child("No active subscription found for your account."),
+          ),
       )
-      .child(
-        div()
-          .text_sm()
-          .text_color(theme.muted_foreground)
-          .child("No active subscription found for your account."),
-      )
-      .child(
-        h_flex().justify_start().child(
-          reviu_pro_subscribe_button("billing-subscribe")
-            .loading(self.checkout_loading)
-            .disabled(self.checkout_loading || self.refresh_loading)
-            .on_click(cx.listener(Self::subscribe_action)),
-        ),
-      )
+      .child(render_pro_pricing_cards(
+        annual_button,
+        monthly_button,
+        &theme,
+      ))
   }
 
   fn render_unauthenticated(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -854,14 +881,6 @@ mod tests {
     assert_eq!(
       BillingPage::status_label(BillingSubscriptionState::Canceled),
       "Canceled"
-    );
-  }
-
-  #[test]
-  fn reviu_pro_checkout_cta_labels_match_copy() {
-    assert_eq!(
-      ReviuProCheckoutCta::StartFreeTrial.label(),
-      "Start free trial"
     );
   }
 }

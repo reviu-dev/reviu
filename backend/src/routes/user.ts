@@ -18,9 +18,10 @@ export const userRoutes = userRouter
       },
     )
 
-    const activeSubscription = polarState.activeSubscriptions.find(sub => sub.productId === env.POLAR_SUBSCRIPTION_PRODUCT_ID) ?? null
+    const proProductIds = [env.POLAR_SUBSCRIPTION_MONTHLY_PRODUCT_ID, env.POLAR_SUBSCRIPTION_ANNUAL_PRODUCT_ID]
+    const activeSubscription = polarState.activeSubscriptions.find(sub => proProductIds.includes(sub.productId)) ?? null
 
-    const hasProAccess = activeSubscription?.productId === env.POLAR_SUBSCRIPTION_PRODUCT_ID
+    const hasProAccess = activeSubscription !== null
 
     if ((hasProAccess && !user.proGrantedAt) || (!hasProAccess && user.proGrantedAt)) {
       // TODO: alert inconsistent state

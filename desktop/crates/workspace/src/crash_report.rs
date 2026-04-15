@@ -186,9 +186,7 @@ pub fn install_crash_reporter() {
       // generic "panic in a function that cannot unwind" message. The first call
       // has the original panic message; the second would overwrite it.
       if !CRASH_REPORT_PERSISTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        if let Err(err) =
-          persist_startup_crash_report(&StartupCrashReport::from_panic_info(info))
-        {
+        if let Err(err) = persist_startup_crash_report(&StartupCrashReport::from_panic_info(info)) {
           eprintln!("Failed to persist crash report: {err}");
         }
       }

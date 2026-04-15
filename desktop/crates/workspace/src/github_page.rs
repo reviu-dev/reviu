@@ -42,7 +42,7 @@ use crate::{
   AuthCallbackTarget, ShowCommandPalette,
   api::{ApiClient, GithubNotification, GithubPullRequest, GithubUserRepository},
   auth_state::{AuthState, AuthStateStore, GithubAccessState},
-  billing_page::{ReviuProCheckoutCta, reviu_pro_checkout_button},
+  billing_page::{ReviuProCheckoutCta, render_pro_pricing_cards, reviu_pro_checkout_button},
   config::ConfigStore,
   date_format::format_relative_time,
   github_home_tabs::{
@@ -55,7 +55,7 @@ use crate::{
   github_pr_details_page::GithubPrDetailsPageHandle,
   github_shared,
   navigation::NavigationHistory,
-  pricing_copy::{active_reviu_pro_launch_offer, github_upgrade_description},
+  pricing_copy::{GITHUB_UPGRADE_DESCRIPTION, PRO_ANNUAL_SLUG, PRO_MONTHLY_SLUG},
   sentry_context,
   workspace::WorkspaceApi,
 };
@@ -372,7 +372,7 @@ fn github_locked_presentation(access_state: GithubAccessState) -> Option<GithubL
     }),
     GithubAccessState::NeedsSubscription => Some(GithubLockedPresentation {
       title: "Upgrade to unlock GitHub workflows.",
-      description: github_upgrade_description(),
+      description: GITHUB_UPGRADE_DESCRIPTION,
       action: GithubLockedAction::Subscribe,
     }),
   }
@@ -3126,11 +3126,25 @@ impl GithubPage {
     cx.notify();
   }
 
-  fn subscribe_action(&mut self, _: &gpui::ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-    self.start_checkout(cx);
+  fn subscribe_monthly_action(
+    &mut self,
+    _: &gpui::ClickEvent,
+    _: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.start_checkout(PRO_MONTHLY_SLUG, cx);
   }
 
-  fn start_checkout(&mut self, cx: &mut Context<Self>) {
+  fn subscribe_annual_action(
+    &mut self,
+    _: &gpui::ClickEvent,
+    _: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.start_checkout(PRO_ANNUAL_SLUG, cx);
+  }
+
+  fn start_checkout(&mut self, slug: &'static str, cx: &mut Context<Self>) {
     if self.subscribe_loading {
       return;
     }
@@ -3140,7 +3154,7 @@ impl GithubPage {
 
     let api = self.api.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.checkout_subscription("pro"))
+      let result = unblock(move || api.checkout_subscription(slug))
         .await
         .map_err(|error| error.to_string());
 
@@ -3444,21 +3458,20 @@ impl GithubPage {
 
   fn render_locked_eyebrow(&self, theme: &gpui_component::Theme) -> AnyElement {
     h_flex()
-      .items_center()
-      .gap_0()
+      .items_start()
+      .gap_1()
       .child(
-        div()
-          .text_xs()
-          .font_semibold()
-          .text_color(theme.foreground)
-          .child("Rev"),
+        gpui::svg()
+          .path("logos/reviu-pro.svg")
+          .size(px(16.0))
+          .text_color(gpui::hsla(222.0 / 360.0, 0.83, 0.53, 1.0)),
       )
       .child(
         div()
-          .text_xs()
+          .text_sm()
           .font_semibold()
-          .text_color(theme.status_blue())
-          .child("iu Pro"),
+          .text_color(theme.foreground)
+          .child("Reviu Pro"),
       )
       .into_any_element()
   }
@@ -3472,24 +3485,40 @@ impl GithubPage {
     let theme = cx.theme().clone();
     let presentation = github_locked_presentation(access_state)
       .expect("locked page should only render for unavailable GitHub access");
-    let launch_offer = active_reviu_pro_launch_offer();
-    let action = match presentation.action {
-      GithubLockedAction::SignIn => Button::new("github-access-sign-in")
-        .icon(IconName::Github)
-        .label("Sign in with GitHub")
-        .small()
-        .on_click(|_, _, cx| {
-          AuthCallbackTarget::start_sign_in(cx);
-        })
+
+    let action_section: gpui::AnyElement = match presentation.action {
+      GithubLockedAction::SignIn => div()
+        .flex()
+        .justify_start()
+        .child(
+          Button::new("github-access-sign-in")
+            .icon(IconName::Github)
+            .label("Sign in with GitHub")
+            .small()
+            .on_click(|_, _, cx| {
+              AuthCallbackTarget::start_sign_in(cx);
+            }),
+        )
         .into_any_element(),
-      GithubLockedAction::Subscribe => reviu_pro_checkout_button(
-        "github-access-subscribe",
-        ReviuProCheckoutCta::StartFreeTrial,
-      )
-      .loading(self.subscribe_loading)
-      .disabled(self.subscribe_loading)
-      .on_click(cx.listener(Self::subscribe_action))
-      .into_any_element(),
+      GithubLockedAction::Subscribe => {
+        let annual_button = reviu_pro_checkout_button(
+          "github-access-subscribe-annual",
+          ReviuProCheckoutCta::SubscribeAnnual,
+        )
+        .loading(self.subscribe_loading)
+        .disabled(self.subscribe_loading)
+        .on_click(cx.listener(Self::subscribe_annual_action));
+
+        let monthly_button = reviu_pro_checkout_button(
+          "github-access-subscribe-monthly",
+          ReviuProCheckoutCta::SubscribeMonthly,
+        )
+        .loading(self.subscribe_loading)
+        .disabled(self.subscribe_loading)
+        .on_click(cx.listener(Self::subscribe_monthly_action));
+
+        render_pro_pricing_cards(annual_button, monthly_button, &theme).into_any_element()
+      }
     };
 
     div()
@@ -3553,73 +3582,17 @@ impl GithubPage {
                             .text_sm()
                             .text_color(theme.muted_foreground)
                             .child(presentation.description),
-                        ).child(div()
-                  .flex()
-                  .flex_col()
-                        .gap_3()
+                        )
                         .child(
                           div()
-                            .flex()
+                            .flex().mt_4()
                             .flex_col()
-                            .gap_1()
-                            .when_some(launch_offer, |this, offer| {
-                              this.child(
-                                h_flex()
-                                  .items_end()
-                                  .gap_2()
-                                  .child(
-                                    div()
-                                      .text_sm()
-                                      .text_color(theme.muted_foreground)
-                                      .line_through()
-                                      .child(offer.regular_price),
-                                  )
-                                  .child(
-                                    div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_0p5()
-                                    .child(
-                                      div()
-                                        .text_xl()
-                                        .font_semibold()
-                                        .text_color(theme.foreground)
-                                        .child(offer.launch_price),
-                                  )
-                                  .child(
-                                    div()
-                                      .text_sm()
-                                      .text_color(theme.muted_foreground)
-                                      .child(offer.billing_period),
-                                  )
-                                ),
-                              )
-                            })
-                            .when(launch_offer.is_none(), |this| {
-                              this.child(
-                                h_flex()
-                                  .items_end()
-                                  .gap_2()
-                                  .child(
-                                    div()
-                                      .text_xl()
-                                      .font_semibold()
-                                      .text_color(theme.foreground)
-                                      .child("$19"),
-                                  )
-                                  .child(
-                                    div()
-                                      .text_sm()
-                                      .text_color(theme.muted_foreground)
-                                      .child("/ month"),
-                                  ),
-                              )
+                            .gap_3()
+                            .child(action_section)
+                            .when_some(self.access_error.clone(), |this, error| {
+                              this.child(div().text_sm().text_color(theme.status_red()).child(error))
                             }),
-                        )
-                        .child(div().flex().justify_start().child(action))
-                        .when_some(self.access_error.clone(), |this, error| {
-                          this.child(div().text_sm().text_color(theme.status_red()).child(error))
-                        })),
+                        ),
                     ),
                 )
             )
