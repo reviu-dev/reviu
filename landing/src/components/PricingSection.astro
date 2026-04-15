@@ -28,8 +28,11 @@ const tiers = [
     id: "pro",
     href: downloadsSectionUrl,
     available: true,
-    price: "$19",
-    priceSuffix: "/month",
+    annualPrice: "$79",
+    annualPriceSuffix: "/year",
+    monthlyPrice: "$9",
+    monthlyPriceSuffix: "/month",
+    savePercent: "Save 27%",
     description:
       "14-day free trial included. Git and GitHub stay connected in one workflow.",
     features: [
@@ -115,7 +118,7 @@ const comparisonRows = [
       <p
         class="mx-auto mt-6 max-w-2xl text-center text-lg font-medium text-pretty text-gray-600 sm:text-xl/8 dark:text-gray-400"
       >
-        Use Free for full local Git workflows, then upgrade to Pro at $19/month when you need GitHub notifications, repositories, PR reviews, and issues.
+        Use Free for full local Git workflows, then upgrade to Pro when you need GitHub notifications, repositories, PR reviews, and issues.
       </p>
     </div>
 
@@ -143,16 +146,39 @@ const comparisonRows = [
             <p class="mt-4 text-sm/6 text-muted-foreground">
               {tier.description}
             </p>
-            <div class="mt-6 flex items-end gap-3">
-              <p class="text-4xl font-semibold tracking-tight text-foreground">
-                {tier.price}
-              </p>
-              {tier.priceSuffix && (
-                <p class="pb-1 text-sm font-medium text-muted-foreground">
-                  {tier.priceSuffix}
+            {"annualPrice" in tier ? (
+              <div class="mt-6 grid grid-cols-2 gap-3">
+                <div class="flex flex-col gap-1 rounded-lg border border-primary/20 bg-primary/5 p-3">
+                  <p class="text-xs font-semibold tracking-wide text-primary uppercase">Annual</p>
+                  <div class="flex items-end gap-1">
+                    <p class="text-3xl font-semibold tracking-tight text-foreground">
+                      {tier.annualPrice}
+                    </p>
+                    <p class="pb-0.5 text-sm font-medium text-muted-foreground">
+                      {tier.annualPriceSuffix}
+                    </p>
+                  </div>
+                  <p class="text-xs font-medium text-primary">{tier.savePercent}</p>
+                </div>
+                <div class="flex flex-col gap-1 rounded-lg border border-border p-3">
+                  <p class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Monthly</p>
+                  <div class="flex items-end gap-1">
+                    <p class="text-3xl font-semibold tracking-tight text-foreground">
+                      {tier.monthlyPrice}
+                    </p>
+                    <p class="pb-0.5 text-sm font-medium text-muted-foreground">
+                      {tier.monthlyPriceSuffix}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div class="mt-6 flex items-end gap-2">
+                <p class="text-4xl font-semibold tracking-tight text-foreground">
+                  {tier.price}
                 </p>
-              )}
-            </div>
+              </div>
+            )}
 
             {tier.available ? (
               <a

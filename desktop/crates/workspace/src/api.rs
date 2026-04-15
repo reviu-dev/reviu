@@ -5571,7 +5571,7 @@ mod tests {
     let api = make_test_api_client(base_url);
 
     let url = api
-      .checkout_subscription("pro")
+      .checkout_subscription("pro-annual")
       .expect("checkout subscription should return a URL");
 
     assert_eq!(url, "https://polar.sh/checkout/session_123");
@@ -5583,7 +5583,7 @@ mod tests {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "{}");
     let api = make_test_api_client(base_url);
 
-    let err = api.checkout_subscription("pro").err();
+    let err = api.checkout_subscription("pro-monthly").err();
 
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
@@ -5596,7 +5596,9 @@ mod tests {
     let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
     let api = make_test_api_client(base_url);
 
-    let _ = api.checkout_subscription("pro").expect("checkout request");
+    let _ = api
+      .checkout_subscription("pro-annual")
+      .expect("checkout request");
 
     handle.join().expect("join server thread");
     let request = request
@@ -5609,7 +5611,10 @@ mod tests {
       request.contains("POST /api/auth/checkout "),
       "request: {request}"
     );
-    assert!(request.contains("\"slug\":\"pro\""), "request: {request}");
+    assert!(
+      request.contains("\"slug\":\"pro-annual\""),
+      "request: {request}"
+    );
     assert!(request.contains("\"redirect\":false"), "request: {request}");
   }
 

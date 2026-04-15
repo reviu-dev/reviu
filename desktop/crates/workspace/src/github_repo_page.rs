@@ -3285,9 +3285,7 @@ impl GithubRepoPageHandle {
 
     let owner_string = owner.to_string();
     let repo_string = repo.to_string();
-    let window_handle = weak
-      .read_with(cx, |this, _| this.window_handle)
-      .ok();
+    let window_handle = weak.read_with(cx, |this, _| this.window_handle).ok();
     let _ = weak.update(cx, |this, cx| {
       this.load_repository(owner_string, repo_string, target, cx);
     });
