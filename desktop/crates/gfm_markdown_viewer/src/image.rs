@@ -325,6 +325,16 @@ pub(crate) fn inline_contains_image(inline: &Inline) -> bool {
   }
 }
 
+pub(crate) fn inline_contains_link(inline: &Inline) -> bool {
+  match inline {
+    Inline::Link { .. } => true,
+    Inline::Strong(content) | Inline::Emphasis(content) | Inline::Strikethrough(content) => {
+      content.iter().any(inline_contains_link)
+    }
+    _ => false,
+  }
+}
+
 fn is_bare_github_user_attachment_link(url: &str, content: &[Inline]) -> bool {
   is_github_user_attachment_url(url)
     && content.len() == 1

@@ -1771,26 +1771,56 @@ fn render_details(
     "gfm-details-toggle-{}-{}",
     options.state.instance_id, details_id
   );
-  let summary = h_flex()
-    .id(toggle_id)
-    .items_center()
-    .gap_2()
-    .child(gpui_component::Icon::new(toggle_icon).small())
-    .child(
-      div()
-        .whitespace_normal()
-        .text_sm()
-        .font_medium()
-        .text_color(theme.foreground)
-        .child(render_inline_static(&details.summary, options, cx, ctx)),
-    )
-    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-      let mut map = toggle_state.details_open.lock().unwrap();
-      let next = !map.get(&details_id).copied().unwrap_or(default_open);
-      map.insert(details_id, next);
-      window.refresh();
-      cx.stop_propagation();
-    });
+  let has_links = details.summary.iter().any(inline_contains_link);
+  let summary_content = if has_links {
+    render_inline_selectable_text(&details.summary, options, true, cx, ctx)
+  } else {
+    render_inline_static(&details.summary, options, cx, ctx)
+  };
+
+  let summary_text = div()
+    .whitespace_normal()
+    .text_sm()
+    .font_medium()
+    .text_color(theme.foreground)
+    .child(summary_content);
+
+  let summary: AnyElement = if has_links {
+    h_flex()
+      .items_center()
+      .gap_2()
+      .child(
+        div()
+          .id(toggle_id)
+          .cursor_pointer()
+          .child(gpui_component::Icon::new(toggle_icon).small())
+          .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            let mut map = toggle_state.details_open.lock().unwrap();
+            let next = !map.get(&details_id).copied().unwrap_or(default_open);
+            map.insert(details_id, next);
+            window.refresh();
+            cx.stop_propagation();
+          }),
+      )
+      .child(summary_text)
+      .into_any_element()
+  } else {
+    h_flex()
+      .id(toggle_id)
+      .cursor_pointer()
+      .items_center()
+      .gap_2()
+      .child(gpui_component::Icon::new(toggle_icon).small())
+      .child(summary_text)
+      .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+        let mut map = toggle_state.details_open.lock().unwrap();
+        let next = !map.get(&details_id).copied().unwrap_or(default_open);
+        map.insert(details_id, next);
+        window.refresh();
+        cx.stop_propagation();
+      })
+      .into_any_element()
+  };
 
   let mut container = v_flex().gap_2().child(summary);
   if is_open {
@@ -3110,6 +3140,31 @@ Body **text**
         assert!(details.open);
         assert_eq!(inline_to_plain_text(&details.summary), "Summary");
         assert!(!details.blocks.is_empty());
+      }
+      _ => panic!("expected details"),
+    }
+  }
+
+  #[test]
+  fn parses_details_summary_with_html_link() {
+    let source = r#"<details>
+<summary><a href="https://github.com/badlogic/pi-mono">badlogic/pi-mono</a></summary>
+
+Body content
+</details>"#;
+    let blocks = parse_gfm(source);
+    assert_eq!(blocks.len(), 1);
+    match &blocks[0] {
+      Block::Details(details) => {
+        assert!(!details.open);
+        assert_eq!(details.summary.len(), 1);
+        match &details.summary[0] {
+          Inline::Link { url, content, .. } => {
+            assert_eq!(url, "https://github.com/badlogic/pi-mono");
+            assert_eq!(inline_to_plain_text(content), "badlogic/pi-mono");
+          }
+          other => panic!("expected link inline, got {:?}", other),
+        }
       }
       _ => panic!("expected details"),
     }
