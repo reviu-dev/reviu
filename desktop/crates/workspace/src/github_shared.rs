@@ -11,7 +11,7 @@ use ui::{StatusTag, StatusThemeExt as _, UiIconName};
 use crate::{
   api::{
     ApiClient, GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel,
-    GithubPullRequestStatus,
+    GithubPullRequestState, GithubPullRequestStatus,
   },
   date_format::format_relative_time_at,
 };
@@ -184,6 +184,22 @@ pub(crate) fn github_label_tag(
   };
 
   tag.small().rounded_full().child(label.name.clone())
+}
+
+pub(crate) fn resolve_pull_request_status(
+  state: &GithubPullRequestState,
+  draft: bool,
+  merged: bool,
+) -> GithubPullRequestStatus {
+  if merged {
+    GithubPullRequestStatus::Merged
+  } else if matches!(state, GithubPullRequestState::Closed) {
+    GithubPullRequestStatus::Closed
+  } else if draft {
+    GithubPullRequestStatus::Draft
+  } else {
+    GithubPullRequestStatus::Open
+  }
 }
 
 pub(crate) fn pull_request_status_label(status: GithubPullRequestStatus) -> &'static str {
