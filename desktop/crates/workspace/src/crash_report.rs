@@ -28,6 +28,8 @@ const PENDING_CRASH_REPORT_FILE_NAME: &str = "pending.json";
 const CRASH_DETAILS_COPY_BACKTRACE_LIMIT: usize = 20_000;
 
 static CRASH_REPORTER_INSTALL: Once = Once::new();
+static CRASH_REPORT_PERSISTED: std::sync::atomic::AtomicBool =
+  std::sync::atomic::AtomicBool::new(false);
 
 fn crash_report_submission_state() -> &'static Mutex<HashSet<String>> {
   static STATE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -179,8 +181,16 @@ pub fn install_crash_reporter() {
   CRASH_REPORTER_INSTALL.call_once(|| {
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-      if let Err(err) = persist_startup_crash_report(&StartupCrashReport::from_panic_info(info)) {
-        eprintln!("Failed to persist crash report: {err}");
+      // Only persist the first panic report. When a panic crosses an FFI boundary
+      // (e.g. GPUI's Objective-C bridge), Rust catches and re-panics with a
+      // generic "panic in a function that cannot unwind" message. The first call
+      // has the original panic message; the second would overwrite it.
+      if !CRASH_REPORT_PERSISTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        if let Err(err) =
+          persist_startup_crash_report(&StartupCrashReport::from_panic_info(info))
+        {
+          eprintln!("Failed to persist crash report: {err}");
+        }
       }
 
       previous_hook(info);

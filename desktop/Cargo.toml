@@ -111,5 +111,8 @@ ui = { path = "crates/ui" }
 workspace = { path = "crates/workspace" }
 gpui-router = { git = "https://github.com/justjavac/gpui-router" }
 
+[profile.release]
+debug = "line-tables-only"
+
 [patch.crates-io]
 gpui = { git = "https://github.com/zed-industries/zed" }
