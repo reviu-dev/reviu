@@ -28,7 +28,6 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, clipboard::Clipboard, h_flex,
-  v_flex,
 };
 #[cfg(test)]
 use syntax::TokenType;
@@ -228,7 +227,10 @@ pub fn render_github_code_reference_preview_card(
     )
   };
 
-  let mut snippet_rows = v_flex().gap(px(MARKDOWN_CODE_REFERENCE_SNIPPET_ROW_GAP_PX));
+  let mut snippet_rows = div()
+    .flex()
+    .flex_col()
+    .gap(px(MARKDOWN_CODE_REFERENCE_SNIPPET_ROW_GAP_PX));
   if preview.snippets.is_empty() {
     snippet_rows = snippet_rows.child(
       h_flex()
@@ -296,7 +298,9 @@ pub fn render_github_code_reference_preview_card(
     }
   }
 
-  v_flex()
+  div()
+    .flex()
+    .flex_col()
     .my(px(MARKDOWN_CODE_REFERENCE_CARD_MARGIN_Y_PX))
     .border_1()
     .border_color(theme.border)
@@ -315,7 +319,9 @@ pub fn render_github_code_reference_preview_card(
           cx.open_url(url.as_ref());
         })
         .child(
-          v_flex()
+          div()
+            .flex()
+            .flex_col()
             .child(
               div()
                 .text_sm()
@@ -350,7 +356,9 @@ pub fn render_github_code_reference_preview_card(
             .text_sm()
             .text_color(theme.foreground)
             .child(
-              v_flex()
+              div()
+                .flex()
+                .flex_col()
                 .gap(px(MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX))
                 .child(snippet_rows),
             ),
@@ -613,7 +621,7 @@ fn render_markdown_with_preview_segments(
     |scope_id| scoped_id_for_state(scope_id, &options.state),
   );
 
-  let mut rendered = v_flex();
+  let mut rendered = div().flex().flex_col();
   for (segment_index, segment) in segments.into_iter().enumerate() {
     match segment {
       MarkdownRenderSegment::Markdown(markdown) => {
@@ -738,7 +746,7 @@ fn render_blocks(
   cx: &App,
   ctx: &mut RenderContext,
 ) -> AnyElement {
-  let mut container = v_flex().gap_2();
+  let mut container = div().flex().flex_col().gap_2();
 
   for (ix, block) in blocks.iter().enumerate() {
     let block_element = render_block(block, options, indent, cx, ctx);
@@ -894,7 +902,7 @@ fn render_block(
     Block::Details(details) => render_details(details, options, indent, cx, ctx),
     Block::Aligned { center, blocks } => {
       if *center {
-        let mut aligned = v_flex().w_full().min_w_0().gap_2();
+        let mut aligned = div().flex().flex_col().w_full().min_w_0().gap_2();
         for block in blocks {
           aligned = aligned.child(
             h_flex().w_full().min_w_0().justify_center().child(
@@ -921,7 +929,9 @@ fn render_list(
   ctx: &mut RenderContext,
 ) -> AnyElement {
   let theme = cx.theme();
-  let mut container = v_flex()
+  let mut container = div()
+    .flex()
+    .flex_col()
     .w_full()
     .min_w_0()
     .gap_1()
@@ -981,7 +991,7 @@ fn render_list_item_blocks(
   cx: &App,
   ctx: &mut RenderContext,
 ) -> AnyElement {
-  let mut container = v_flex().w_full().min_w_0().gap_2();
+  let mut container = div().flex().flex_col().w_full().min_w_0().gap_2();
   for block in blocks {
     container = container.child(render_block(block, options, 0, cx, ctx));
   }
@@ -1043,7 +1053,7 @@ fn render_table(
     );
   }
 
-  let mut body = v_flex();
+  let mut body = div().flex().flex_col();
   for row in &table.rows {
     let mut row_el = div()
       .flex()
@@ -1093,7 +1103,7 @@ fn render_table(
         .border_color(theme.border)
         .rounded_md()
         .overflow_hidden()
-        .child(v_flex().child(header_row).child(body)),
+        .child(div().flex().flex_col().child(header_row).child(body)),
     )
     .into_any_element()
 }
@@ -1205,7 +1215,7 @@ fn render_inline_with_images(
   }
 
   let rows = split_inlines_by_hard_breaks(inlines);
-  let mut content = v_flex().min_w_0();
+  let mut content = div().flex().flex_col().min_w_0();
   let mut has_content = false;
 
   for (row_ix, row) in rows.iter().enumerate() {
@@ -1822,7 +1832,7 @@ fn render_details(
       .into_any_element()
   };
 
-  let mut container = v_flex().gap_2().child(summary);
+  let mut container = div().flex().flex_col().gap_2().child(summary);
   if is_open {
     let body = render_blocks(&details.blocks, options, indent + 1, cx, ctx);
     container = container.child(body);

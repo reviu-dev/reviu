@@ -6600,12 +6600,12 @@ impl GithubRepoPage {
 
     div()
       .id("github-repo-readme-scroll")
-      .size_full()
       .overflow_y_scrollbar()
       .child(
-        v_flex().w_full().px_4().pt_4().pb_32().child(
-          v_flex()
-            .w_full()
+        div().flex().flex_col().px_4().pt_4().pb_32().child(
+          div()
+            .flex()
+            .flex_col()
             .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
             .mx_auto()
             .child(body),
@@ -7315,7 +7315,15 @@ impl Render for GithubRepoPage {
       .on_action(cx.listener(GithubRepoPage::previous_page_tab_action))
       .on_action(cx.listener(GithubRepoPage::next_page_tab_action))
       .child(self.render_header(cx))
-      .child(v_flex().w_full().h_full().min_h_0().child(content))
+      .child(
+        div()
+          .flex()
+          .flex_col()
+          .w_full()
+          .h_full()
+          .min_h_0()
+          .child(content),
+      )
   }
 }
 
