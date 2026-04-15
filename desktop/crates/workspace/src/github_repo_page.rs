@@ -12,9 +12,9 @@ use gfm_markdown_viewer::{
   MarkdownRenderState, extract_github_blob_line_references, render_markdown,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, ParentElement, Pixels,
-  Render, RenderImage, SharedString, Styled, Subscription, Task, Window, div, img, prelude::*, px,
-  size,
+  AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Image, ObjectFit,
+  ParentElement, Pixels, Render, RenderImage, SharedString, Styled, Subscription, Task, Window,
+  div, img, prelude::*, px, size,
 };
 #[cfg(test)]
 use gpui_component::IndexPath;
@@ -58,7 +58,10 @@ use crate::{
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_long_date_opt, format_relative_time},
-  file_preview::{is_markdown_path, is_svg_path},
+  file_preview::{
+    FilePreviewKind, file_preview_kind, is_markdown_path, is_svg_path, raster_image_from_bytes,
+    should_show_unsupported_binary_placeholder,
+  },
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   github_home_tabs::{
     GithubIssueSearchFilters, GithubIssueSearchSort, GithubPullRequestFilterOptionLabel,
@@ -487,6 +490,30 @@ const GITHUB_REPO_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str =
   "github-repo-markdown-preview-editor-pane";
 const GITHUB_REPO_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str =
   "github-repo-markdown-preview-render-pane";
+const GITHUB_REPO_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR: &str =
+  "github-repo-binary-preview-render-pane";
+
+#[derive(Clone)]
+enum GithubRepoBinaryPreview {
+  RasterImage(Arc<Image>),
+  UnsupportedBinary,
+}
+
+fn render_image_preview_status_message(
+  message: impl Into<SharedString>,
+  color: gpui::Hsla,
+) -> AnyElement {
+  div()
+    .w(px(280.0))
+    .max_w_full()
+    .px_3()
+    .text_sm()
+    .text_center()
+    .whitespace_normal()
+    .text_color(color)
+    .child(message.into())
+    .into_any_element()
+}
 
 #[derive(Clone, Debug)]
 struct GithubRepoCodeFile {
@@ -3142,6 +3169,9 @@ pub struct GithubRepoPage {
   code_file_contents_cache: HashMap<String, Option<String>>,
   code_file_tasks: HashMap<String, Task<()>>,
   code_editor: Entity<Editor>,
+  binary_preview: Option<GithubRepoBinaryPreview>,
+  code_file_asset_previews: HashMap<String, GithubRepoBinaryPreview>,
+  code_file_asset_tasks: HashMap<String, Task<()>>,
   show_markdown_preview: bool,
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
   svg_preview_source: Option<SharedString>,
@@ -3446,6 +3476,9 @@ impl GithubRepoPage {
       code_file_contents_cache: HashMap::new(),
       code_file_tasks: HashMap::new(),
       code_editor,
+      binary_preview: None,
+      code_file_asset_previews: HashMap::new(),
+      code_file_asset_tasks: HashMap::new(),
       show_markdown_preview: false,
       svg_preview: None,
       svg_preview_source: None,
@@ -4679,6 +4712,9 @@ impl GithubRepoPage {
     self.code_file_error = None;
     self.code_file_contents_cache.clear();
     self.code_file_tasks.clear();
+    self.binary_preview = None;
+    self.code_file_asset_previews.clear();
+    self.code_file_asset_tasks.clear();
     self.show_markdown_preview = false;
     self.svg_preview = None;
     self.svg_preview_source = None;
@@ -4719,6 +4755,9 @@ impl GithubRepoPage {
     self.code_selected_tree_id = None;
     self.code_file_contents_cache.clear();
     self.code_file_tasks.clear();
+    self.binary_preview = None;
+    self.code_file_asset_previews.clear();
+    self.code_file_asset_tasks.clear();
     self.code_tree_state.update(cx, |state, cx| {
       state.set_items(Vec::new(), cx);
       state.set_selected_index(None, cx);
@@ -4831,26 +4870,49 @@ impl GithubRepoPage {
     }
     self.svg_preview = None;
     self.svg_preview_source = None;
+    self.binary_preview = None;
 
     if let Some(file) = selected {
       self.ensure_code_editor_for_path(file.path.as_ref(), cx);
       self.sync_code_tree_selection(cx);
 
       let key = file.path.as_ref().to_string();
-      if let Some(content) = self.code_file_contents_cache.get(&key).cloned() {
-        if let Some(content) = content {
-          self.apply_code_editor_content(&content, cx);
+      let path = Path::new(file.path.as_ref());
+      match file_preview_kind(path) {
+        Some(FilePreviewKind::RasterImage(_)) => {
           self.code_file_error = None;
-        } else {
+          self.clear_code_editor(cx);
+          if let Some(preview) = self.code_file_asset_previews.get(&key).cloned() {
+            self.binary_preview = Some(preview);
+            self.code_file_loading = false;
+          } else {
+            self.code_file_loading = true;
+            self.maybe_fetch_code_file_asset(file, cx);
+          }
+        }
+        Some(FilePreviewKind::UnsupportedBinary) => {
           self.code_file_loading = false;
-          self.code_file_error = Some("File contents unavailable".into());
+          self.code_file_error = None;
+          self.binary_preview = Some(GithubRepoBinaryPreview::UnsupportedBinary);
           self.clear_code_editor(cx);
         }
-      } else {
-        self.code_file_loading = true;
-        self.code_file_error = None;
-        self.clear_code_editor(cx);
-        self.maybe_fetch_code_file_content(file, cx);
+        _ => {
+          if let Some(content) = self.code_file_contents_cache.get(&key).cloned() {
+            if let Some(content) = content {
+              self.apply_code_editor_content(&content, cx);
+              self.code_file_error = None;
+            } else {
+              self.code_file_loading = false;
+              self.code_file_error = Some("File contents unavailable".into());
+              self.clear_code_editor(cx);
+            }
+          } else {
+            self.code_file_loading = true;
+            self.code_file_error = None;
+            self.clear_code_editor(cx);
+            self.maybe_fetch_code_file_content(file, cx);
+          }
+        }
       }
     } else {
       self.code_file_loading = false;
@@ -5360,6 +5422,178 @@ impl GithubRepoPage {
       .as_ref()
       .map(|file| is_svg_path(Path::new(file.path.as_ref())))
       .unwrap_or(false)
+  }
+
+  fn build_binary_preview(
+    path: &Path,
+    binary_bytes: Option<Vec<u8>>,
+  ) -> Option<GithubRepoBinaryPreview> {
+    if let Some(bytes) = binary_bytes {
+      if let Some(image) = raster_image_from_bytes(path, bytes.clone()) {
+        return Some(GithubRepoBinaryPreview::RasterImage(image));
+      }
+      if should_show_unsupported_binary_placeholder(path, Some(bytes.as_slice())) {
+        return Some(GithubRepoBinaryPreview::UnsupportedBinary);
+      }
+      return None;
+    }
+
+    if matches!(
+      file_preview_kind(path),
+      Some(FilePreviewKind::UnsupportedBinary)
+    ) {
+      Some(GithubRepoBinaryPreview::UnsupportedBinary)
+    } else {
+      None
+    }
+  }
+
+  fn render_binary_preview_content(
+    &self,
+    preview: &GithubRepoBinaryPreview,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    match preview {
+      GithubRepoBinaryPreview::RasterImage(image) => {
+        let loading_color = theme.muted_foreground;
+        let error_color = theme.status_red();
+        let image_el = img(image.clone())
+          .max_w_full()
+          .max_h_full()
+          .object_fit(ObjectFit::Contain)
+          .with_loading(move || {
+            render_image_preview_status_message("Rendering image preview...", loading_color)
+          })
+          .with_fallback(move || {
+            render_image_preview_status_message("Unable to render image preview", error_color)
+          });
+
+        div()
+          .flex_1()
+          .min_h_0()
+          .min_w(px(0.0))
+          .overflow_hidden()
+          .bg(theme.background)
+          .debug_selector(|| GITHUB_REPO_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR.to_string())
+          .child(
+            div().relative().size_full().child(
+              div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .p_4()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(image_el),
+            ),
+          )
+          .into_any_element()
+      }
+      GithubRepoBinaryPreview::UnsupportedBinary => div()
+        .flex_1()
+        .min_h_0()
+        .min_w(px(0.0))
+        .bg(theme.background)
+        .debug_selector(|| GITHUB_REPO_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR.to_string())
+        .child(
+          v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .child(
+              Icon::new(IconName::File)
+                .size_6()
+                .text_color(theme.muted_foreground),
+            )
+            .child(
+              div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child("Binary file preview is not available."),
+            ),
+        )
+        .into_any_element(),
+    }
+  }
+
+  fn maybe_fetch_code_file_asset(&mut self, file: Rc<GithubRepoCodeFile>, cx: &mut Context<Self>) {
+    let key = file.path.as_ref().to_string();
+    if self.code_file_asset_previews.contains_key(&key)
+      || self.code_file_asset_tasks.contains_key(&key)
+    {
+      return;
+    }
+
+    let Some(reference) = self.effective_branch() else {
+      return;
+    };
+
+    let owner = self.owner.to_string();
+    let repo = self.repo.to_string();
+    let path = key.clone();
+    let key_for_task = key.clone();
+    let api = self.api.clone();
+    let request_generation = self.code_request_generation;
+
+    let task = cx.spawn(async move |this, cx| {
+      let path_for_request = path.clone();
+      let ref_for_request = reference.clone();
+      let asset_result = unblock(move || {
+        api.fetch_github_file_asset(&owner, &repo, &path_for_request, &ref_for_request)
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.code_file_asset_tasks.remove(&key_for_task);
+        if !should_apply_repo_request_result(this.code_request_generation, request_generation) {
+          return;
+        }
+        let is_selected = this.code_selected_tree_id.as_deref() == Some(key_for_task.as_str());
+
+        match asset_result {
+          Ok(Some(bytes)) => {
+            let preview = Self::build_binary_preview(Path::new(key_for_task.as_str()), Some(bytes));
+            let Some(preview) = preview else {
+              if is_selected {
+                this.code_file_loading = false;
+                this.code_file_error = Some("Unable to render file preview".into());
+              }
+              cx.notify();
+              return;
+            };
+            this
+              .code_file_asset_previews
+              .insert(key_for_task.clone(), preview.clone());
+            if is_selected {
+              this.binary_preview = Some(preview);
+              this.code_file_loading = false;
+              this.code_file_error = None;
+            }
+          }
+          Ok(None) => {
+            if is_selected {
+              this.code_file_loading = false;
+              this.code_file_error = Some("File contents unavailable".into());
+            }
+          }
+          Err(_) => {
+            if is_selected {
+              this.code_file_loading = false;
+              this.code_file_error = Some("Failed to load file contents".into());
+            }
+          }
+        }
+        cx.notify();
+      });
+    });
+
+    self.code_file_asset_tasks.insert(key, task);
   }
 
   fn toggle_code_markdown_preview(&mut self, cx: &mut Context<Self>) {
@@ -6392,6 +6626,8 @@ impl GithubRepoPage {
         .text_color(theme.status_red())
         .child(self.code_files_error.clone().unwrap_or_default())
         .into_any_element()
+    } else if let Some(binary_preview) = self.binary_preview.as_ref() {
+      self.render_binary_preview_content(binary_preview, cx)
     } else if self.code_selected_file.is_some() {
       if preview_active {
         let preview_panel = if is_svg {
@@ -7754,6 +7990,89 @@ mod tests {
   }
 
   #[gpui::test]
+  fn repo_raster_image_shows_binary_preview_pane(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let file = Rc::new(GithubRepoCodeFile {
+      path: "assets/logo.png".into(),
+      sha: "abc123".into(),
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubRepoPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.owner = "acme".into();
+      this.repo = "widget".into();
+      this.active_tab_ix = REPO_TAB_CODE_IX;
+      this.code_files_loading = false;
+      this.code_file_loading = false;
+      this.code_lookup.insert(file.path.to_string(), file.clone());
+
+      // Simulate having already fetched the asset bytes (a minimal 1x1 PNG).
+      let png_bytes: Vec<u8> = vec![
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77,
+        0x53, 0xDE,
+      ];
+      let preview =
+        GithubRepoPage::build_binary_preview(Path::new("assets/logo.png"), Some(png_bytes));
+      assert!(
+        matches!(preview, Some(GithubRepoBinaryPreview::RasterImage(_))),
+        "expected RasterImage preview for a .png file"
+      );
+      this
+        .code_file_asset_previews
+        .insert(file.path.to_string(), preview.unwrap());
+
+      this.code_selected_file = Some(file.clone());
+      this.code_selected_tree_id = Some(file.path.to_string());
+      // Re-drive set_selected_code_file to pick up the cached asset preview.
+      let cached = this
+        .code_file_asset_previews
+        .get("assets/logo.png")
+        .cloned();
+      this.binary_preview = cached;
+      cx.notify();
+    });
+
+    let bounds = cx
+      .debug_bounds(GITHUB_REPO_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR)
+      .expect("binary preview pane bounds")
+      .size;
+    assert!(bounds.width > gpui::px(0.0));
+    assert!(bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  fn repo_unsupported_binary_shows_placeholder_pane(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let file = Rc::new(GithubRepoCodeFile {
+      path: "archive.zip".into(),
+      sha: "def456".into(),
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubRepoPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.owner = "acme".into();
+      this.repo = "widget".into();
+      this.active_tab_ix = REPO_TAB_CODE_IX;
+      this.code_files_loading = false;
+      this.code_file_loading = false;
+      this.code_lookup.insert(file.path.to_string(), file.clone());
+      this.code_selected_file = Some(file.clone());
+      this.code_selected_tree_id = Some(file.path.to_string());
+      this.binary_preview = Some(GithubRepoBinaryPreview::UnsupportedBinary);
+      cx.notify();
+    });
+
+    let bounds = cx
+      .debug_bounds(GITHUB_REPO_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR)
+      .expect("unsupported binary preview pane bounds")
+      .size;
+    assert!(bounds.width > gpui::px(0.0));
+    assert!(bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
   fn readme_relative_link_opens_code_tab_and_selects_file(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     cx.update(|cx| {
@@ -7792,6 +8111,36 @@ mod tests {
         Some("packages/solidjs/README.md")
       );
     });
+  }
+
+  #[test]
+  fn build_binary_preview_returns_raster_for_image_bytes() {
+    // Minimal PNG header bytes — enough for raster_image_from_bytes to produce an Image.
+    let png_bytes: Vec<u8> = vec![
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+      0x77, 0x53, 0xDE,
+    ];
+    let preview = GithubRepoPage::build_binary_preview(Path::new("photo.png"), Some(png_bytes));
+    assert!(matches!(
+      preview,
+      Some(GithubRepoBinaryPreview::RasterImage(_))
+    ));
+  }
+
+  #[test]
+  fn build_binary_preview_returns_unsupported_for_known_binary() {
+    let preview = GithubRepoPage::build_binary_preview(Path::new("slides.pdf"), None);
+    assert!(matches!(
+      preview,
+      Some(GithubRepoBinaryPreview::UnsupportedBinary)
+    ));
+  }
+
+  #[test]
+  fn build_binary_preview_returns_none_for_text_files() {
+    let preview = GithubRepoPage::build_binary_preview(Path::new("main.rs"), None);
+    assert!(preview.is_none());
   }
 
   #[test]
