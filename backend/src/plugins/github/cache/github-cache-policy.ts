@@ -483,6 +483,28 @@ export function createGithubRepositoryFileCachePolicy(
   }
 }
 
+export function createGithubRepositoryFileCommitCachePolicy(
+  userId: string,
+  owner: string,
+  repo: string,
+  path: string,
+  ref: string,
+): GithubCachePolicy {
+  const repositoryKey = normalizeRepositoryKey(owner, repo)
+  const normalizedRef = normalizeCacheSegment(ref)
+  const normalizedPath = normalizeCacheSegment(path)
+
+  return {
+    operation: 'repository.file.commit',
+    scope: 'viewer',
+    scopeId: userId,
+    resourceKey: `repo:${repositoryKey}:file-commit:ref:${normalizedRef}:path:${normalizedPath}`,
+    ttlMs: GITHUB_REPOSITORY_FILE_CACHE_TTL_MS,
+    staleMs: GITHUB_REPOSITORY_FILE_CACHE_STALE_MS,
+    tags: [getGithubRepositoryFileTag(owner, repo, ref)],
+  }
+}
+
 export function getGithubPullRequestMutationTags(
   {
     userId,

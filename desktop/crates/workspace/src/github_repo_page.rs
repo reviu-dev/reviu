@@ -52,7 +52,7 @@ use ui::{
 use crate::{
   ShowCommandPalette, ShowFileSearch,
   api::{
-    ApiClient, GithubIssue, GithubIssueDescriptionUpdate, GithubIssueDetails,
+    ApiClient, GithubFileCommit, GithubIssue, GithubIssueDescriptionUpdate, GithubIssueDetails,
     GithubIssueDetailsComment, GithubIssueStateReason, GithubIssueUser, GithubPullRequest,
     GithubPullRequestState, GithubRepositoryDetails,
   },
@@ -518,7 +518,6 @@ fn render_image_preview_status_message(
 #[derive(Clone, Debug)]
 struct GithubRepoCodeFile {
   path: SharedString,
-  sha: SharedString,
 }
 
 #[derive(Default)]
@@ -3171,6 +3170,8 @@ pub struct GithubRepoPage {
   code_editor: Entity<Editor>,
   binary_preview: Option<GithubRepoBinaryPreview>,
   code_file_asset_previews: HashMap<String, GithubRepoBinaryPreview>,
+  code_file_commit: Option<GithubFileCommit>,
+  code_file_commit_task: Option<Task<()>>,
   code_file_asset_tasks: HashMap<String, Task<()>>,
   show_markdown_preview: bool,
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
@@ -3479,6 +3480,8 @@ impl GithubRepoPage {
       binary_preview: None,
       code_file_asset_previews: HashMap::new(),
       code_file_asset_tasks: HashMap::new(),
+      code_file_commit: None,
+      code_file_commit_task: None,
       show_markdown_preview: false,
       svg_preview: None,
       svg_preview_source: None,
@@ -4806,7 +4809,6 @@ impl GithubRepoPage {
               .map(|entry| {
                 Rc::new(GithubRepoCodeFile {
                   path: entry.path.into(),
-                  sha: entry.sha.into(),
                 })
               })
               .collect();
@@ -4871,6 +4873,11 @@ impl GithubRepoPage {
     self.svg_preview = None;
     self.svg_preview_source = None;
     self.binary_preview = None;
+    self.code_file_commit = None;
+
+    if let Some(file) = selected.as_ref() {
+      self.fetch_code_file_commit(file.path.clone(), cx);
+    }
 
     if let Some(file) = selected {
       self.ensure_code_editor_for_path(file.path.as_ref(), cx);
@@ -4921,6 +4928,29 @@ impl GithubRepoPage {
     }
 
     cx.notify();
+  }
+
+  fn fetch_code_file_commit(&mut self, path: SharedString, cx: &mut Context<Self>) {
+    let Some(branch) = self.selected_branch.clone() else {
+      return;
+    };
+    let api = self.api.clone();
+    let owner = self.owner.clone();
+    let repo = self.repo.clone();
+
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        smol::unblock(move || api.fetch_github_file_commit(&owner, &repo, &path, &branch)).await;
+
+      let _ = this.update(cx, |this, cx| {
+        if let Ok(commit) = result {
+          this.code_file_commit = Some(commit);
+        }
+        cx.notify();
+      });
+    });
+
+    self.code_file_commit_task = Some(task);
   }
 
   fn find_code_file_for_repo_path(&self, path: &str) -> Option<Rc<GithubRepoCodeFile>> {
@@ -6524,7 +6554,6 @@ impl GithubRepoPage {
       });
     let is_markdown = is_markdown_path(Path::new(path));
     let is_svg = is_svg_path(Path::new(path));
-    let short_sha: SharedString = github_shared::short_sha(file.sha.as_ref()).into();
     let preview_active = (is_markdown || is_svg) && self.show_markdown_preview;
     let view = cx.entity();
     let preview_button = Button::new("repo-code-markdown-preview")
@@ -6564,12 +6593,25 @@ impl GithubRepoPage {
         h_flex()
           .items_center()
           .gap_2()
-          .child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(short_sha),
-          )
+          .min_w_0()
+          .when_some(self.code_file_commit.clone(), |this, commit| {
+            this.when_some(commit.message, |this, message| {
+              let commit_url = commit.html_url.clone();
+              this.child(
+                div().min_w_0().max_w(px(300.0)).child(
+                  Button::new("repo-code-commit-link")
+                    .label(message)
+                    .xsmall()
+                    .ghost()
+                    .when_some(commit_url, |this, url| {
+                      this.icon(IconName::ExternalLink).on_click(move |_, _, cx| {
+                        cx.open_url(&url);
+                      })
+                    }),
+                ),
+              )
+            })
+          })
           .when(is_markdown || is_svg, |this| this.child(preview_button)),
       )
   }
@@ -7954,7 +7996,6 @@ mod tests {
     let markdown = "# Preview\n\nRepository markdown preview should stay visible.\n";
     let file = Rc::new(GithubRepoCodeFile {
       path: "README.md".into(),
-      sha: "deadbeef".into(),
     });
     let (page, cx) = cx.add_window_view(|window, cx| GithubRepoPage::new(window, cx));
 
@@ -7994,7 +8035,6 @@ mod tests {
     init_gpui_test(cx);
     let file = Rc::new(GithubRepoCodeFile {
       path: "assets/logo.png".into(),
-      sha: "abc123".into(),
     });
     let (page, cx) = cx.add_window_view(|window, cx| GithubRepoPage::new(window, cx));
 
@@ -8047,7 +8087,6 @@ mod tests {
     init_gpui_test(cx);
     let file = Rc::new(GithubRepoCodeFile {
       path: "archive.zip".into(),
-      sha: "def456".into(),
     });
     let (page, cx) = cx.add_window_view(|window, cx| GithubRepoPage::new(window, cx));
 
@@ -8082,7 +8121,6 @@ mod tests {
     });
     let file = Rc::new(GithubRepoCodeFile {
       path: "packages/solidjs/README.md".into(),
-      sha: "sha-solid".into(),
     });
     let (page, cx) = cx.add_window_view(|window, cx| GithubRepoPage::new(window, cx));
 
@@ -8369,15 +8407,12 @@ mod tests {
     let files = vec![
       Rc::new(GithubRepoCodeFile {
         path: "README.md".into(),
-        sha: "sha-readme".into(),
       }),
       Rc::new(GithubRepoCodeFile {
         path: "src/lib.rs".into(),
-        sha: "sha-lib".into(),
       }),
       Rc::new(GithubRepoCodeFile {
         path: "src/main.rs".into(),
-        sha: "sha-main".into(),
       }),
     ];
 
@@ -8432,7 +8467,6 @@ mod tests {
       .map(|entry| {
         Rc::new(GithubRepoCodeFile {
           path: entry.path.into(),
-          sha: entry.sha.into(),
         })
       })
       .collect();

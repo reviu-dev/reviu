@@ -1452,6 +1452,15 @@ export async function fetchGithubRepositoryTreesConditionally(
   )
 }
 
+export async function fetchGithubRepositoryCommitsConditionally(
+  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/commits'>,
+): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/commits'>> {
+  return requestGithubConditionally<'GET /repos/{owner}/{repo}/commits'>(
+    'GET /repos/{owner}/{repo}/commits',
+    options,
+  )
+}
+
 export async function fetchGithubRepositoryBranchesConditionally(
   options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/branches'>,
 ): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/branches'>> {

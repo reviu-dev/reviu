@@ -83,6 +83,7 @@ import {
   createGithubRepositoryBranchesCachePolicy,
   createGithubRepositoryDetailsCachePolicy,
   createGithubRepositoryFileCachePolicy,
+  createGithubRepositoryFileCommitCachePolicy,
   createGithubRepositoryIssueDetailsCachePolicy,
   createGithubRepositoryIssuesCachePolicy,
   createGithubRepositoryPullRequestsCachePolicy,
@@ -165,6 +166,7 @@ import {
   fetchGithubPullRequestSearchGraphql,
   fetchGithubRepositoryAssignees,
   fetchGithubRepositoryBranchesConditionally,
+  fetchGithubRepositoryCommitsConditionally,
   fetchGithubRepositoryConditionally,
   fetchGithubRepositoryContentConditionally,
   fetchGithubRepositoryContentObjectConditionally,
@@ -1949,6 +1951,64 @@ async function fetchRepositoryFileWithCache(
     }))
 }
 
+interface GithubFileCommit {
+  message: string | null
+  sha: string | null
+  html_url: string | null
+}
+
+async function fetchRepositoryFileCommitWithCache(
+  userId: string,
+  githubToken: string,
+  owner: string,
+  repo: string,
+  path: string,
+  ref: string,
+) {
+  const baseCachePolicy = createGithubRepositoryFileCommitCachePolicy(userId, owner, repo, path, ref)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, owner, repo)
+
+  return withGithubMetrics(userId, cachePolicy.operation, () =>
+    githubCache.getOrLoad<GithubFileCommit>({
+      ...cachePolicy,
+      load: async ({ cachedEntry }) => {
+        const response = await fetchGithubRepositoryCommitsConditionally({
+          token: githubToken,
+          params: {
+            owner,
+            repo,
+            path,
+            sha: ref,
+            per_page: 1,
+          },
+          etag: cachedEntry?.etag,
+          lastModified: cachedEntry?.lastModified,
+        })
+
+        if (response.notModified) {
+          return {
+            notModified: true as const,
+            etag: response.etag,
+            lastModified: response.lastModified,
+          }
+        }
+
+        const commits = response.data!
+        const commit = Array.isArray(commits) && commits.length > 0 ? commits[0] : null
+
+        return {
+          payload: {
+            message: commit?.commit?.message?.split('\n')[0] ?? null,
+            sha: commit?.sha ?? null,
+            html_url: commit?.html_url ?? null,
+          } satisfies GithubFileCommit,
+          etag: response.etag,
+          lastModified: response.lastModified,
+        }
+      },
+    }))
+}
+
 function encodeGithubFileAsset(data: unknown): string | null {
   if (Buffer.isBuffer(data)) {
     return data.toString('base64')
@@ -3132,6 +3192,29 @@ export const githubRoutes = githubRouter
       const status = (error as { status?: number }).status
       if (status === 404) {
         return ctx.json({ content: null } satisfies GithubFileContent, 200)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/file/commit', async (ctx) => {
+    const { org, repo, path, ref } = ctx.req.query()
+
+    if (!org || !repo || !path || !ref) {
+      return ctx.json({ error: 'Missing org, repo, path, or ref' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const result = await fetchRepositoryFileCommitWithCache(user.id, githubToken, org, repo, path, ref)
+      setGithubCacheHeaders(ctx, result)
+      return ctx.json(result.payload, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 404) {
+        return ctx.json({ message: null, sha: null, html_url: null }, 200)
       }
       return ctx.json({ error: (error as Error).message }, 502)
     }

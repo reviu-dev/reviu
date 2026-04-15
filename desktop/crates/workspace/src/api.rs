@@ -1225,6 +1225,14 @@ struct GithubFileContentResponse {
   content: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubFileCommit {
+  pub message: Option<String>,
+  #[allow(dead_code)]
+  pub sha: Option<String>,
+  pub html_url: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct GithubFileAssetResponse {
   #[serde(rename = "contentBase64")]
@@ -2528,6 +2536,33 @@ impl ApiClient {
     }
     let payload = response.json::<GithubFileContentResponse>()?;
     Ok(payload.content)
+  }
+
+  pub fn fetch_github_file_commit(
+    &self,
+    owner: &str,
+    repo: &str,
+    path: &str,
+    reference: &str,
+  ) -> Result<GithubFileCommit> {
+    let response = self
+      .authed_request(Method::GET, "/github/file/commit")
+      .query(&[
+        ("org", owner),
+        ("repo", repo),
+        ("path", path),
+        ("ref", reference),
+      ])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", "/github/file/commit", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    Ok(response.json::<GithubFileCommit>()?)
   }
 
   pub fn fetch_github_file_asset(
