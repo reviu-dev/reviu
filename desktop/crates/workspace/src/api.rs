@@ -403,13 +403,11 @@ pub struct GithubPullRequest {
 
 impl GithubPullRequest {
   pub fn status(&self) -> GithubPullRequestStatus {
-    if self.merged_at.is_some() {
-      GithubPullRequestStatus::Merged
-    } else if self.draft {
-      GithubPullRequestStatus::Draft
-    } else {
-      self.state.as_status()
-    }
+    crate::github_shared::resolve_pull_request_status(
+      &self.state,
+      self.draft,
+      self.merged_at.is_some(),
+    )
   }
 }
 
@@ -565,15 +563,6 @@ pub struct GithubPullRequestFile {
 pub enum GithubPullRequestState {
   Open,
   Closed,
-}
-
-impl GithubPullRequestState {
-  pub fn as_status(&self) -> GithubPullRequestStatus {
-    match self {
-      GithubPullRequestState::Open => GithubPullRequestStatus::Open,
-      GithubPullRequestState::Closed => GithubPullRequestStatus::Closed,
-    }
-  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -853,13 +842,11 @@ pub struct GithubPullRequestDescriptionUpdate {
 
 impl GithubPullRequestDetails {
   pub fn status(&self) -> GithubPullRequestStatus {
-    if self.merged_at.is_some() {
-      GithubPullRequestStatus::Merged
-    } else if self.draft {
-      GithubPullRequestStatus::Draft
-    } else {
-      self.state.as_status()
-    }
+    crate::github_shared::resolve_pull_request_status(
+      &self.state,
+      self.draft,
+      self.merged_at.is_some(),
+    )
   }
 }
 
@@ -2852,7 +2839,7 @@ mod tests {
   }
 
   #[test]
-  fn pull_request_status_prioritizes_merged_then_draft_then_state() {
+  fn pull_request_status_prioritizes_merged_then_closed_then_draft() {
     let merged = make_pull_request(
       GithubPullRequestState::Open,
       true,
@@ -2860,7 +2847,13 @@ mod tests {
     );
     assert!(matches!(merged.status(), GithubPullRequestStatus::Merged));
 
-    let draft = make_pull_request(GithubPullRequestState::Closed, true, None);
+    let closed_draft = make_pull_request(GithubPullRequestState::Closed, true, None);
+    assert!(matches!(
+      closed_draft.status(),
+      GithubPullRequestStatus::Closed
+    ));
+
+    let draft = make_pull_request(GithubPullRequestState::Open, true, None);
     assert!(matches!(draft.status(), GithubPullRequestStatus::Draft));
 
     let closed = make_pull_request(GithubPullRequestState::Closed, false, None);
@@ -2868,13 +2861,19 @@ mod tests {
   }
 
   #[test]
-  fn pull_request_details_status_prioritizes_merged_then_draft_then_state() {
+  fn pull_request_details_status_prioritizes_merged_then_closed_then_draft() {
     let merged = make_pull_request_details(
       GithubPullRequestState::Open,
       true,
       Some("2026-02-15T12:00:00Z"),
     );
     assert!(matches!(merged.status(), GithubPullRequestStatus::Merged));
+
+    let closed_draft = make_pull_request_details(GithubPullRequestState::Closed, true, None);
+    assert!(matches!(
+      closed_draft.status(),
+      GithubPullRequestStatus::Closed
+    ));
 
     let draft = make_pull_request_details(GithubPullRequestState::Open, true, None);
     assert!(matches!(draft.status(), GithubPullRequestStatus::Draft));
