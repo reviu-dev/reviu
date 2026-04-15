@@ -31,6 +31,7 @@ actions!(
 mod about_page;
 mod active_local_repo;
 mod api;
+pub mod app_log;
 mod app_profile;
 mod app_update;
 mod auth_state;
@@ -46,7 +47,7 @@ mod file_search_palette;
 mod git_config_page;
 mod git_page;
 mod github_home_tabs;
-mod github_navigation;
+pub mod github_navigation;
 mod github_page;
 mod github_pr_details_page;
 mod github_repo_page;
@@ -61,7 +62,7 @@ mod shortcuts;
 pub mod status_bar;
 mod workspace;
 
-pub use app_profile::AppProfile;
+pub use app_profile::{AppProfile, URL_SCHEME_PROD};
 pub use crash_report::{
   StartupCrashReport, install_crash_reporter, show_startup_crash_report_notification,
   take_pending_startup_crash_report,

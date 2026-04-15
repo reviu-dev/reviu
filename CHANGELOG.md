@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.3.0
+
+### Chrome Extension
+
+A new Chrome extension lets you open any GitHub repository, pull request, or issue directly in Reviu with one click.
+
 ## 0.2.0
 
 ### Repository Pull Request Search and Filters

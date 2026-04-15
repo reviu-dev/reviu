@@ -62,7 +62,7 @@ pub(crate) fn should_open_externally(window: &Window) -> bool {
   window.modifiers().secondary()
 }
 
-pub(crate) fn open_repo_target(
+pub fn open_repo_target(
   owner: String,
   repo: String,
   tab: Option<CommandPaletteGithubRepoTab>,
@@ -89,7 +89,7 @@ pub(crate) fn open_repo_target(
   }
 }
 
-pub(crate) fn open_pr_target(
+pub fn open_pr_target(
   owner: String,
   repo: String,
   number: u64,

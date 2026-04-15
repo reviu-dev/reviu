@@ -8,10 +8,11 @@ use reqwest_client::ReqwestClient;
 use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
-use ui::{AppAssets, PAGE_HEADER_HEIGHT};
+use ui::{AppAssets, PAGE_HEADER_HEIGHT, parse_github_url_action};
 use workspace::{
-  AppProfile, AuthCallbackTarget, WorkspaceView, build_app_menus, install_app_key_bindings,
-  install_crash_reporter, show_startup_crash_report_notification,
+  AppProfile, AuthCallbackTarget, WorkspaceView, build_app_menus,
+  github_navigation::{open_pr_target, open_repo_target},
+  install_app_key_bindings, install_crash_reporter, show_startup_crash_report_notification,
   take_pending_startup_crash_report,
 };
 
@@ -225,15 +226,18 @@ fn main() {
         while let Ok(urls) = open_url_rx.try_recv() {
           let mut codes = Vec::new();
           let mut should_handle_subscription_callback = false;
+          let mut open_github_urls = Vec::new();
           for url in &urls {
             if let Some(code) = extract_auth_code(url) {
               codes.push(code);
-            }
-            if is_subscription_callback(url) {
+            } else if is_subscription_callback(url) {
               should_handle_subscription_callback = true;
+            } else if let Some(github_url) = extract_open_url(url) {
+              open_github_urls.push(github_url);
             }
           }
-          if codes.is_empty() && !should_handle_subscription_callback {
+          if codes.is_empty() && !should_handle_subscription_callback && open_github_urls.is_empty()
+          {
             continue;
           }
           cx.update(|cx| {
@@ -242,6 +246,9 @@ fn main() {
             }
             if should_handle_subscription_callback {
               AuthCallbackTarget::handle_subscription_callback(cx);
+            }
+            for github_url in open_github_urls {
+              handle_open_github_url(&github_url, cx);
             }
           });
         }
@@ -382,12 +389,76 @@ fn is_subscription_callback_for_scheme(url: &str, scheme: &str) -> bool {
   path == "subscription/callback"
 }
 
+fn extract_open_url(url: &str) -> Option<String> {
+  extract_open_url_for_scheme(url, current_desktop_url_scheme())
+    .or_else(|| extract_open_url_for_scheme(url, workspace::URL_SCHEME_PROD))
+}
+
+fn extract_open_url_for_scheme(url: &str, scheme: &str) -> Option<String> {
+  let url = url.strip_prefix(scheme)?;
+  let url = url.strip_prefix("://")?;
+  let (path, query) = url.split_once('?')?;
+  if path != "open" {
+    return None;
+  }
+  for pair in query.split('&') {
+    if let Some(value) = pair.strip_prefix("url=") {
+      if !value.is_empty() {
+        let decoded = percent_encoding::percent_decode_str(value)
+          .decode_utf8()
+          .ok()?;
+        return Some(decoded.into_owned());
+      }
+    }
+  }
+  None
+}
+
+fn handle_open_github_url(url: &str, cx: &mut App) {
+  use ui::CommandPaletteAction;
+
+  let Some(action) = parse_github_url_action(url) else {
+    return;
+  };
+  cx.activate(true);
+  match action {
+    CommandPaletteAction::OpenGithubPrDetails {
+      owner,
+      repo,
+      number,
+      open_changes_tab,
+      review_comment_id,
+    } => {
+      open_pr_target(
+        owner,
+        repo,
+        number,
+        open_changes_tab,
+        review_comment_id,
+        None,
+        cx,
+      );
+    }
+    CommandPaletteAction::OpenGithubRepoDetails {
+      owner,
+      repo,
+      tab,
+      issue_number,
+      issue_comment_id,
+    } => {
+      open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
+    }
+    _ => {}
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::{
-    contains_sensitive_fragment, extract_auth_code_for_scheme, is_sensitive_header,
-    is_sensitive_key, is_subscription_callback_for_scheme, is_truthy_env_value,
-    redact_sensitive_event_data, resolved_sentry_release_from, sentry_enabled_for,
+    contains_sensitive_fragment, extract_auth_code_for_scheme, extract_open_url_for_scheme,
+    is_sensitive_header, is_sensitive_key, is_subscription_callback_for_scheme,
+    is_truthy_env_value, redact_sensitive_event_data, resolved_sentry_release_from,
+    sentry_enabled_for,
   };
   use sentry::protocol::{Event, Request, Value};
   use std::borrow::Cow;
@@ -546,5 +617,65 @@ mod tests {
       "reviu-dev://subscription/callback",
       "reviu-dev"
     ));
+  }
+
+  #[test]
+  fn extract_open_url_decodes_github_pr_url() {
+    let url = extract_open_url_for_scheme(
+      "reviu://open?url=https%3A%2F%2Fgithub.com%2Fowner%2Frepo%2Fpull%2F42",
+      "reviu",
+    );
+    assert_eq!(
+      url.as_deref(),
+      Some("https://github.com/owner/repo/pull/42")
+    );
+  }
+
+  #[test]
+  fn extract_open_url_decodes_github_repo_url() {
+    let url = extract_open_url_for_scheme(
+      "reviu://open?url=https%3A%2F%2Fgithub.com%2Fowner%2Frepo",
+      "reviu",
+    );
+    assert_eq!(url.as_deref(), Some("https://github.com/owner/repo"));
+  }
+
+  #[test]
+  fn extract_open_url_supports_dev_scheme() {
+    let url = extract_open_url_for_scheme(
+      "reviu-dev://open?url=https%3A%2F%2Fgithub.com%2Fa%2Fb",
+      "reviu-dev",
+    );
+    assert_eq!(url.as_deref(), Some("https://github.com/a/b"));
+  }
+
+  #[test]
+  fn extract_open_url_rejects_non_open_path() {
+    let url = extract_open_url_for_scheme("reviu://auth/callback?url=https%3A%2F%2Fx", "reviu");
+    assert_eq!(url, None);
+  }
+
+  #[test]
+  fn extract_open_url_rejects_empty_url_param() {
+    let url = extract_open_url_for_scheme("reviu://open?url=", "reviu");
+    assert_eq!(url, None);
+  }
+
+  #[test]
+  fn extract_open_url_rejects_missing_query() {
+    let url = extract_open_url_for_scheme("reviu://open", "reviu");
+    assert_eq!(url, None);
+  }
+
+  #[test]
+  fn extract_open_url_handles_fragment_in_github_url() {
+    let url = extract_open_url_for_scheme(
+      "reviu://open?url=https%3A%2F%2Fgithub.com%2Fowner%2Frepo%2Fpull%2F1%23discussion_r123",
+      "reviu",
+    );
+    assert_eq!(
+      url.as_deref(),
+      Some("https://github.com/owner/repo/pull/1#discussion_r123")
+    );
   }
 }

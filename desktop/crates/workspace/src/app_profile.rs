@@ -1,4 +1,6 @@
 const APP_PROFILE_ENV: &str = "REVIU_PROFILE";
+pub const URL_SCHEME_PROD: &str = "reviu";
+pub const URL_SCHEME_DEV: &str = "reviu-dev";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AppProfile {
@@ -44,8 +46,8 @@ impl AppProfile {
 
   pub fn url_scheme(self) -> &'static str {
     match self {
-      Self::Prod => "reviu",
-      Self::Dev => "reviu-dev",
+      Self::Prod => URL_SCHEME_PROD,
+      Self::Dev => URL_SCHEME_DEV,
     }
   }
 
