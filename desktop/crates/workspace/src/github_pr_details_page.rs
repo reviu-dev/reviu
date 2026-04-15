@@ -2998,6 +2998,7 @@ impl GithubPrDetailsPage {
       context.number,
       self.selected_file.as_ref().map(|file| file.path.as_ref()),
       Some(self.active_tab_ix),
+      self.selected_commit_sha.as_deref(),
     );
   }
 
@@ -6019,6 +6020,7 @@ impl GithubPrDetailsPage {
     if should_disable_local_project {
       self.set_show_local_project_files(false, cx);
     }
+    self.sync_review_comment_handlers(cx);
     self.sync_sentry_pr_context();
     self.reload_files_for_current_pull_request(cx);
   }
@@ -6173,6 +6175,9 @@ impl GithubPrDetailsPage {
   }
 
   fn install_diff_editor_review_comment_handlers(&mut self, cx: &mut Context<Self>) {
+    if self.selected_commit_sha.is_some() {
+      return;
+    }
     let view = cx.entity().downgrade();
     self.diff_editor.update(cx, |editor, cx| {
       let handler: ReviewCommentEditHandler = Arc::new({
