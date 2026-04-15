@@ -12,16 +12,7 @@ pub(crate) struct ReviuProLaunchOffer {
 
 const STANDARD_GITHUB_UPGRADE_DESCRIPTION: &str = "Upgrade to Reviu Pro for $19/month to unlock GitHub notifications, repository browsing, pull request reviews, issues, and branch-to-PR shortcuts.";
 
-const ACTIVE_REVIU_PRO_LAUNCH_OFFER: Option<ReviuProLaunchOffer> = Some(ReviuProLaunchOffer {
-  badge: "Launch week",
-  title: "Founder pricing",
-  description: "Get Reviu Pro for $9/month until April 19, 2026. Keep that price while your subscription stays active.",
-  launch_price: "$9",
-  regular_price: "$19/month",
-  billing_period: "/ month",
-  checkout_cta: "Claim launch offer",
-  github_upgrade_description: "Launch week: upgrade to Reviu Pro for $9/month until April 19, 2026 to unlock GitHub notifications, repository browsing, pull request reviews, issues, and branch-to-PR shortcuts. Keep founder pricing while your subscription stays active.",
-});
+const ACTIVE_REVIU_PRO_LAUNCH_OFFER: Option<ReviuProLaunchOffer> = None;
 
 pub(crate) fn active_reviu_pro_launch_offer() -> Option<ReviuProLaunchOffer> {
   ACTIVE_REVIU_PRO_LAUNCH_OFFER

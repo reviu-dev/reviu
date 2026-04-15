@@ -7,7 +7,6 @@ import GitFeaturesSection from "../components/GitFeaturesSection.astro";
 import PricingSection from "../components/PricingSection.astro";
 import FaqSection from "../components/FaqSection.astro";
 import SiteFooter from "../components/SiteFooter.astro";
-import { launchOffer } from "../data/launchOffer";
 import Layout from "../layouts/Layout.astro";
 
 const description =
@@ -55,7 +54,7 @@ const structuredData = [
       {
         "@type": "Offer",
         name: "Reviu Pro",
-        price: launchOffer.enabled ? launchOffer.structuredDataPrice : "19",
+        price: "19",
         priceCurrency: "USD",
       },
     ],
