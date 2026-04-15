@@ -668,9 +668,9 @@ impl RenderContext {
   }
 
   fn next_details_id(&mut self) -> usize {
-    let id = self.next_details_id;
+    let local_id = self.next_details_id;
     self.next_details_id += 1;
-    id
+    compose_text_id(self.text_scope_id, local_id)
   }
 }
 
