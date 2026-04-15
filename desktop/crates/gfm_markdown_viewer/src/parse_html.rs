@@ -160,6 +160,15 @@ pub(crate) fn extract_summary(inner: &str) -> (Option<String>, String) {
 }
 
 pub(crate) fn summary_inlines_from_text(summary_text: &str) -> Vec<Inline> {
+  if summary_text.contains('<') {
+    if let Some(nodes) = parse_html_fragment_nodes(summary_text) {
+      let inlines = html_nodes_to_inlines(&nodes);
+      if !inlines.is_empty() {
+        return inlines;
+      }
+    }
+  }
+
   for block in parse_gfm(summary_text) {
     if let Block::Paragraph(inlines) = block {
       if !inline_to_plain_text(&inlines).is_empty() {
@@ -168,6 +177,7 @@ pub(crate) fn summary_inlines_from_text(summary_text: &str) -> Vec<Inline> {
       break;
     }
   }
+
   vec![Inline::Text(strip_html_tags(summary_text))]
 }
 
