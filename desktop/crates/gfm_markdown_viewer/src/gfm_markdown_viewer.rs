@@ -1054,13 +1054,16 @@ fn render_table(
   }
 
   let mut body = div().flex().flex_col();
-  for row in &table.rows {
+  for (row_index, row) in table.rows.iter().enumerate() {
     let mut row_el = div()
       .flex()
       .flex_row()
       .items_stretch()
       .border_t_1()
-      .border_color(theme.border);
+      .border_color(theme.border)
+      .when(row_index % 2 == 1, |this| {
+        this.bg(theme.accent.opacity(0.3))
+      });
     for (column, width) in column_widths.iter().enumerate().take(column_count) {
       let cell = row.get(column).map_or(&[][..], |cell| cell.as_slice());
       let basis = if total_width > 0.0 {
