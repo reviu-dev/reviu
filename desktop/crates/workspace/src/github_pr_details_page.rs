@@ -2921,9 +2921,7 @@ impl GithubPrDetailsPageHandle {
     let repo_string = repo.to_string();
     let back_target_value = back_target.clone();
     let open_target_value = open_target;
-    let window_handle = weak
-      .read_with(cx, |this, _| this.window_handle)
-      .ok();
+    let window_handle = weak.read_with(cx, |this, _| this.window_handle).ok();
     let _ = weak.update(cx, |this, cx| {
       this.back_target = back_target_value.clone();
       this.load_pull_request(owner_string, repo_string, number, open_target_value, cx);
@@ -14055,10 +14053,6 @@ mod tests {
       GithubPullRequestMergeReadinessStatus::Ready,
       vec![GithubPullRequestMergeMethod::Merge],
     );
-    let reviewers = vec![GithubPullRequestFilterOptionUser {
-      login: "reviewer1".to_string(),
-      avatar_url: None,
-    }];
     let reviews = vec![GithubPullRequestReview {
       id: 1,
       body: None,
@@ -14083,10 +14077,6 @@ mod tests {
       GithubPullRequestMergeReadinessStatus::Ready,
       vec![GithubPullRequestMergeMethod::Merge],
     );
-    let reviewers = vec![GithubPullRequestFilterOptionUser {
-      login: "reviewer1".to_string(),
-      avatar_url: None,
-    }];
     let reviews = vec![GithubPullRequestReview {
       id: 1,
       body: None,
@@ -14111,16 +14101,6 @@ mod tests {
       GithubPullRequestMergeReadinessStatus::Ready,
       vec![GithubPullRequestMergeMethod::Merge],
     );
-    let reviewers = vec![
-      GithubPullRequestFilterOptionUser {
-        login: "reviewer1".to_string(),
-        avatar_url: None,
-      },
-      GithubPullRequestFilterOptionUser {
-        login: "reviewer2".to_string(),
-        avatar_url: None,
-      },
-    ];
     let reviews = vec![
       GithubPullRequestReview {
         id: 1,
@@ -14159,16 +14139,6 @@ mod tests {
       GithubPullRequestMergeReadinessStatus::Ready,
       vec![GithubPullRequestMergeMethod::Merge],
     );
-    let reviewers = vec![
-      GithubPullRequestFilterOptionUser {
-        login: "reviewer1".to_string(),
-        avatar_url: None,
-      },
-      GithubPullRequestFilterOptionUser {
-        login: "reviewer2".to_string(),
-        avatar_url: None,
-      },
-    ];
     let reviews = vec![
       GithubPullRequestReview {
         id: 1,
