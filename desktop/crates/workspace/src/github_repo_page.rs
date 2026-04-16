@@ -1515,6 +1515,33 @@ fn should_keep_issue_sheet_open_for_repo_target(
     && issue_number.is_some()
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct IssueSheetOpenTarget {
+  owner: String,
+  repo: String,
+  issue_number: u64,
+  issue_comment_id: Option<u64>,
+}
+
+fn pending_issue_sheet_open_target(
+  active_tab_ix: usize,
+  owner: &str,
+  repo: &str,
+  issue_number: Option<u64>,
+  issue_comment_id: Option<u64>,
+) -> Option<IssueSheetOpenTarget> {
+  if active_tab_ix != REPO_TAB_ISSUES_IX {
+    return None;
+  }
+
+  Some(IssueSheetOpenTarget {
+    owner: normalize_non_empty_string(owner)?,
+    repo: normalize_non_empty_string(repo)?,
+    issue_number: issue_number?,
+    issue_comment_id,
+  })
+}
+
 fn clamp_issue_sheet_width(width: f32) -> f32 {
   width.clamp(
     ISSUE_DETAILS_SHEET_MIN_WIDTH_PX,
@@ -4584,14 +4611,32 @@ impl GithubRepoPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    self.open_issue_details_sheet_for_target(
+      issue.repository.owner.clone(),
+      issue.repository.repo.clone(),
+      issue.number,
+      issue_comment_id,
+      window,
+      cx,
+    );
+  }
+
+  fn open_issue_details_sheet_for_target(
+    &mut self,
+    owner: String,
+    repo: String,
+    issue_number: u64,
+    issue_comment_id: Option<u64>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     self.pending_issue_sheet_number = None;
     self.pending_issue_sheet_comment_id = None;
-    let issue_number = issue.number;
     let issue_details_view = cx.new(|cx| {
       GithubIssueDetailsSheetView::new(
         self.api.clone(),
-        issue.repository.owner.clone(),
-        issue.repository.repo.clone(),
+        owner,
+        repo,
         issue_number,
         issue_comment_id,
         cx,
@@ -5914,33 +5959,23 @@ impl GithubRepoPage {
   }
 
   fn try_open_pending_issue_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(issue_number) = self.pending_issue_sheet_number else {
+    let Some(target) = pending_issue_sheet_open_target(
+      self.active_tab_ix,
+      self.owner.as_ref(),
+      self.repo.as_ref(),
+      self.pending_issue_sheet_number,
+      self.pending_issue_sheet_comment_id,
+    ) else {
       return;
     };
-    if self.active_tab_ix != REPO_TAB_ISSUES_IX {
-      return;
-    }
-
-    let (loading, issue) = {
-      let issues = self.issues.read(cx);
-      let delegate = issues.delegate();
-      let issue = delegate
-        .all_rows
-        .iter()
-        .find(|row| row.issue.number == issue_number)
-        .map(|row| row.issue.clone());
-      (delegate.loading, issue)
-    };
-
-    if let Some(issue) = issue {
-      self.open_issue_details_sheet(issue, self.pending_issue_sheet_comment_id, window, cx);
-      return;
-    }
-
-    if !loading {
-      self.pending_issue_sheet_number = None;
-      self.pending_issue_sheet_comment_id = None;
-    }
+    self.open_issue_details_sheet_for_target(
+      target.owner,
+      target.repo,
+      target.issue_number,
+      target.issue_comment_id,
+      window,
+      cx,
+    );
   }
 
   fn load_repository(
@@ -8504,6 +8539,41 @@ mod tests {
     assert_eq!(
       issue_sheet_width_from_cursor_x(2000.0, 100.0),
       ISSUE_DETAILS_SHEET_MAX_WIDTH_PX
+    );
+  }
+
+  #[test]
+  fn pending_issue_sheet_open_target_uses_issue_number_without_list_row() {
+    assert_eq!(
+      pending_issue_sheet_open_target(
+        REPO_TAB_ISSUES_IX,
+        " acme ",
+        " widget ",
+        Some(42),
+        Some(9001),
+      ),
+      Some(IssueSheetOpenTarget {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+        issue_number: 42,
+        issue_comment_id: Some(9001),
+      })
+    );
+  }
+
+  #[test]
+  fn pending_issue_sheet_open_target_waits_for_issue_tab_and_complete_target() {
+    assert_eq!(
+      pending_issue_sheet_open_target(REPO_TAB_OVERVIEW_IX, "acme", "widget", Some(42), None,),
+      None
+    );
+    assert_eq!(
+      pending_issue_sheet_open_target(REPO_TAB_ISSUES_IX, "acme", "widget", None, None),
+      None
+    );
+    assert_eq!(
+      pending_issue_sheet_open_target(REPO_TAB_ISSUES_IX, "", "widget", Some(42), None),
+      None
     );
   }
 
