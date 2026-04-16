@@ -204,9 +204,11 @@ const GITHUB_GRAPHQL_SEARCH_ISSUES_QUERY = `
 const GITHUB_GRAPHQL_REPOSITORY_OVERVIEW_QUERY = `
   query RepositoryOverview($owner: String!, $name: String!) {
     repository(owner: $owner, name: $name) {
+      id
       name
       nameWithOwner
       isPrivate
+      viewerHasStarred
       description
       homepageUrl
       defaultBranchRef {
@@ -253,6 +255,32 @@ const GITHUB_GRAPHQL_REPOSITORY_OVERVIEW_QUERY = `
             name
             color
           }
+        }
+      }
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_ADD_STAR_MUTATION = `
+  mutation AddStar($starrableId: ID!) {
+    addStar(input: { starrableId: $starrableId }) {
+      starrable {
+        viewerHasStarred
+        ... on Repository {
+          stargazerCount
+        }
+      }
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_REMOVE_STAR_MUTATION = `
+  mutation RemoveStar($starrableId: ID!) {
+    removeStar(input: { starrableId: $starrableId }) {
+      starrable {
+        viewerHasStarred
+        ... on Repository {
+          stargazerCount
         }
       }
     }
@@ -344,9 +372,11 @@ interface GithubGraphqlConvertPullRequestToDraftResponse {
 
 interface GithubGraphqlRepositoryOverviewResponse {
   repository: {
+    id: string
     name: string
     nameWithOwner: string
     isPrivate: boolean
+    viewerHasStarred: boolean
     description: string | null
     homepageUrl: string | null
     defaultBranchRef: {
@@ -390,6 +420,26 @@ interface GithubGraphqlRepositoryOverviewResponse {
       }>
     }
   }
+}
+
+interface GithubGraphqlStarMutationResponse {
+  addStar?: {
+    starrable: {
+      viewerHasStarred: boolean
+      stargazerCount: number
+    }
+  }
+  removeStar?: {
+    starrable: {
+      viewerHasStarred: boolean
+      stargazerCount: number
+    }
+  }
+}
+
+interface GithubStarResult {
+  viewer_has_starred: boolean
+  stargazers_count: number
 }
 
 function readGithubHeader(
@@ -1464,6 +1514,38 @@ export async function fetchGithubRepositoryOverview(
   })
 
   return data.repository
+}
+
+export async function starGithubRepository(
+  { token, repositoryId }: { token: string, repositoryId: string },
+): Promise<GithubStarResult> {
+  const data = await requestGithubGraphqlData<GithubGraphqlStarMutationResponse>({
+    token,
+    query: GITHUB_GRAPHQL_ADD_STAR_MUTATION,
+    variables: { starrableId: repositoryId },
+  })
+
+  const starrable = data.addStar!.starrable
+  return {
+    viewer_has_starred: starrable.viewerHasStarred,
+    stargazers_count: starrable.stargazerCount,
+  }
+}
+
+export async function unstarGithubRepository(
+  { token, repositoryId }: { token: string, repositoryId: string },
+): Promise<GithubStarResult> {
+  const data = await requestGithubGraphqlData<GithubGraphqlStarMutationResponse>({
+    token,
+    query: GITHUB_GRAPHQL_REMOVE_STAR_MUTATION,
+    variables: { starrableId: repositoryId },
+  })
+
+  const starrable = data.removeStar!.starrable
+  return {
+    viewer_has_starred: starrable.viewerHasStarred,
+    stargazers_count: starrable.stargazerCount,
+  }
 }
 
 export async function fetchGithubRepositoryIssueConditionally(

@@ -188,6 +188,8 @@ import {
   removeGithubIssueLabel,
   removeGithubPullRequestReviewers,
   requestGithubPullRequestReviewers,
+  starGithubRepository,
+  unstarGithubRepository,
   updateGithubPullRequestBranch,
 } from '../plugins/github/service.js'
 
@@ -1369,9 +1371,11 @@ async function fetchRepositoryDetailsWithCache(
 
         return {
           payload: {
+            node_id: data.id,
             name: data.name,
             full_name: data.nameWithOwner,
             private: data.isPrivate,
+            viewer_has_starred: data.viewerHasStarred,
             description: data.description,
             homepage: data.homepageUrl,
             language: data.primaryLanguage?.name ?? null,
@@ -3278,6 +3282,40 @@ export const githubRoutes = githubRouter
       if (status === 404) {
         return ctx.json({ error: 'Repository not found' }, 404)
       }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .put('/repos/:owner/:repo/star', async (ctx) => {
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+    const repositoryId = ctx.req.query('node_id')
+
+    if (!repositoryId) {
+      return ctx.json({ error: 'node_id query parameter is required' }, 400)
+    }
+
+    try {
+      const result = await starGithubRepository({ token: githubToken, repositoryId })
+      return ctx.json(result, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .delete('/repos/:owner/:repo/star', async (ctx) => {
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+    const repositoryId = ctx.req.query('node_id')
+
+    if (!repositoryId) {
+      return ctx.json({ error: 'node_id query parameter is required' }, 400)
+    }
+
+    try {
+      const result = await unstarGithubRepository({ token: githubToken, repositoryId })
+      return ctx.json(result, 200)
+    }
+    catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })

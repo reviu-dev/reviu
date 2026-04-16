@@ -578,9 +578,11 @@ export interface GithubIssueDescriptionUpdate {
 }
 
 export interface GithubRepositoryDetails {
+  node_id: string
   name: GithubRepositoryResponse['name']
   full_name: GithubRepositoryResponse['full_name']
   private: GithubRepositoryResponse['private']
+  viewer_has_starred: boolean
   description: GithubRepositoryResponse['description']
   homepage: GithubRepositoryResponse['homepage']
   language: GithubRepositoryResponse['language']
