@@ -270,6 +270,13 @@ const GITHUB_GRAPHQL_REPOSITORY_OVERVIEW_QUERY = `
           }
         }
       }
+      mentionableUsers(first: 20) {
+        totalCount
+        nodes {
+          login
+          avatarUrl
+        }
+      }
     }
   }
 `
@@ -443,6 +450,13 @@ interface GithubGraphqlRepositoryOverviewResponse {
           name: string
           color: string | null
         }
+      }>
+    }
+    mentionableUsers: {
+      totalCount: number
+      nodes: Array<{
+        login: string
+        avatarUrl: string
       }>
     }
   }

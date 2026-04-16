@@ -340,6 +340,10 @@ pub struct GithubRepositoryDetails {
   pub languages: Vec<GithubRepositoryLanguage>,
   #[serde(rename = "recent_commits", default)]
   pub recent_commits: Vec<GithubRepositoryCommit>,
+  #[serde(default)]
+  pub contributors: Vec<GithubRepositoryContributor>,
+  #[serde(rename = "contributors_count", default)]
+  pub contributors_count: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -352,6 +356,13 @@ pub struct GithubRepositoryCommit {
   pub author_login: Option<String>,
   #[serde(rename = "author_avatar_url")]
   pub author_avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubRepositoryContributor {
+  pub login: String,
+  #[serde(rename = "avatar_url")]
+  pub avatar_url: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

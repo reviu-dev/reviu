@@ -615,6 +615,11 @@ export interface GithubRepositoryDetails {
     author_login: string | null
     author_avatar_url: string | null
   }>
+  contributors: Array<{
+    login: string
+    avatar_url: string
+  }>
+  contributors_count: number
 }
 
 export interface GithubUserRepository {

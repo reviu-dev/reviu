@@ -1405,6 +1405,11 @@ async function fetchRepositoryDetailsWithCache(
               author_login: node.author?.user?.login ?? null,
               author_avatar_url: node.author?.user?.avatarUrl ?? null,
             })),
+            contributors: data.mentionableUsers.nodes.map(user => ({
+              login: user.login,
+              avatar_url: user.avatarUrl,
+            })),
+            contributors_count: data.mentionableUsers.totalCount,
           } satisfies GithubRepositoryDetails,
         }
       },
