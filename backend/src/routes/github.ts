@@ -44,7 +44,6 @@ import type {
   GithubRepositoryBranch,
   GithubRepositoryBranchesParameters,
   GithubRepositoryDetails,
-  GithubRepositoryParameters,
   GithubRepositoryReadme,
   GithubRepositoryReadmeParameters,
   GithubRepositoryTree,
@@ -167,13 +166,13 @@ import {
   fetchGithubRepositoryAssignees,
   fetchGithubRepositoryBranchesConditionally,
   fetchGithubRepositoryCommitsConditionally,
-  fetchGithubRepositoryConditionally,
   fetchGithubRepositoryContentConditionally,
   fetchGithubRepositoryContentObjectConditionally,
   fetchGithubRepositoryIssueCommentsAllPages,
   fetchGithubRepositoryIssueCommentsConditionally,
   fetchGithubRepositoryIssueConditionally,
   fetchGithubRepositoryLabels,
+  fetchGithubRepositoryOverview,
   fetchGithubRepositoryReadmeConditionally,
   fetchGithubRepositoryTreesConditionally,
   fetchGithubUserRepositories,
@@ -1351,60 +1350,60 @@ async function fetchRepositoryDetailsWithCache(
   const result = await withGithubMetrics(userId, cachePolicy.operation, () =>
     githubCache.getOrLoad<GithubRepositoryDetails>({
       ...cachePolicy,
-      load: async ({ cachedEntry }) => {
-        const params: GithubRepositoryParameters = {
-          owner,
-          repo,
-        }
-
-        const response = await fetchGithubRepositoryConditionally({
+      load: async () => {
+        const data = await fetchGithubRepositoryOverview({
           token: githubToken,
-          params,
-          etag: cachedEntry?.etag,
-          lastModified: cachedEntry?.lastModified,
+          owner,
+          name: repo,
         })
 
-        if (response.notModified) {
-          return {
-            notModified: true as const,
-            etag: response.etag,
-            lastModified: response.lastModified,
-          }
-        }
-
-        const data = response.data!
+        const { totalSize, edges } = data.languages
+        const languages = totalSize > 0
+          ? edges.map(edge => ({
+              name: edge.node.name,
+              color: edge.node.color,
+              size: edge.size,
+              percentage: Math.round((edge.size / totalSize) * 1000) / 10,
+            }))
+          : []
 
         return {
           payload: {
             name: data.name,
-            full_name: data.full_name,
-            private: data.private,
+            full_name: data.nameWithOwner,
+            private: data.isPrivate,
             description: data.description,
-            homepage: data.homepage,
-            language: data.language,
-            default_branch: data.default_branch,
-            stargazers_count: data.stargazers_count,
-            forks_count: data.forks_count,
-            subscribers_count: data.subscribers_count,
-            open_issues_count: data.open_issues_count,
-            size: data.size,
-            pushed_at: data.pushed_at,
-            html_url: data.html_url,
+            homepage: data.homepageUrl,
+            language: data.primaryLanguage?.name ?? null,
+            default_branch: data.defaultBranchRef?.name ?? 'main',
+            stargazers_count: data.stargazerCount,
+            forks_count: data.forkCount,
+            subscribers_count: data.watchers.totalCount,
+            size: data.diskUsage ?? 0,
+            pushed_at: data.pushedAt,
+            html_url: data.url,
             owner: {
               login: data.owner.login,
-              name: data.owner.name || undefined,
-              avatar_url: data.owner.avatar_url,
+              avatar_url: data.owner.avatarUrl,
             },
-            license: data.license
+            license: data.licenseInfo
               ? {
-                  key: data.license.key,
-                  name: data.license.name,
-                  spdx_id: data.license.spdx_id,
+                  key: data.licenseInfo.key,
+                  name: data.licenseInfo.name,
+                  spdx_id: data.licenseInfo.spdxId,
+                }
+              : null,
+            languages,
+            last_commit: data.defaultBranchRef?.target
+              ? {
+                  sha: data.defaultBranchRef.target.oid,
+                  message: data.defaultBranchRef.target.message,
+                  committed_at: data.defaultBranchRef.target.committedDate,
+                  author_login: data.defaultBranchRef.target.author?.user?.login ?? null,
+                  author_avatar_url: data.defaultBranchRef.target.author?.user?.avatarUrl ?? null,
                 }
               : null,
           } satisfies GithubRepositoryDetails,
-          etag: response.etag,
-          lastModified: response.lastModified,
         }
       },
     }))

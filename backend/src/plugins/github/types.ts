@@ -588,19 +588,30 @@ export interface GithubRepositoryDetails {
   stargazers_count: GithubRepositoryResponse['stargazers_count']
   forks_count: GithubRepositoryResponse['forks_count']
   subscribers_count: GithubRepositoryResponse['subscribers_count']
-  open_issues_count: GithubRepositoryResponse['open_issues_count']
   size: GithubRepositoryResponse['size']
-  pushed_at: GithubRepositoryResponse['pushed_at']
+  pushed_at: GithubRepositoryResponse['pushed_at'] | null
   html_url: GithubRepositoryResponse['html_url']
   owner: {
     login: GithubRepositoryResponse['owner']['login']
-    name?: GithubRepositoryResponse['owner']['name']
     avatar_url: GithubRepositoryResponse['owner']['avatar_url']
   }
   license: {
     key: NonNullable<GithubRepositoryResponse['license']>['key']
     name: NonNullable<GithubRepositoryResponse['license']>['name']
     spdx_id: NonNullable<GithubRepositoryResponse['license']>['spdx_id']
+  } | null
+  languages: Array<{
+    name: string
+    color: string | null
+    size: number
+    percentage: number
+  }>
+  last_commit: {
+    sha: string
+    message: string
+    committed_at: string
+    author_login: string | null
+    author_avatar_url: string | null
   } | null
 }
 

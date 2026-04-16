@@ -201,6 +201,64 @@ const GITHUB_GRAPHQL_SEARCH_ISSUES_QUERY = `
   }
 `
 
+const GITHUB_GRAPHQL_REPOSITORY_OVERVIEW_QUERY = `
+  query RepositoryOverview($owner: String!, $name: String!) {
+    repository(owner: $owner, name: $name) {
+      name
+      nameWithOwner
+      isPrivate
+      description
+      homepageUrl
+      defaultBranchRef {
+        name
+        target {
+          ... on Commit {
+            oid
+            message
+            committedDate
+            author {
+              user {
+                login
+                avatarUrl
+              }
+            }
+          }
+        }
+      }
+      primaryLanguage {
+        name
+      }
+      stargazerCount
+      forkCount
+      watchers {
+        totalCount
+      }
+      diskUsage
+      pushedAt
+      url
+      owner {
+        login
+        avatarUrl
+      }
+      licenseInfo {
+        key
+        name
+        spdxId
+      }
+      languages(first: 20, orderBy: { field: SIZE, direction: DESC }) {
+        totalSize
+        edges {
+          size
+          node {
+            name
+            color
+          }
+        }
+      }
+    }
+  }
+`
+
 const GITHUB_GRAPHQL_MARK_PULL_REQUEST_READY_FOR_REVIEW_MUTATION = `
   mutation MarkPullRequestReadyForReview($pullRequestId: ID!) {
     markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
@@ -282,6 +340,56 @@ interface GithubGraphqlConvertPullRequestToDraftResponse {
       id: string
     } | null
   } | null
+}
+
+interface GithubGraphqlRepositoryOverviewResponse {
+  repository: {
+    name: string
+    nameWithOwner: string
+    isPrivate: boolean
+    description: string | null
+    homepageUrl: string | null
+    defaultBranchRef: {
+      name: string
+      target: {
+        oid: string
+        message: string
+        committedDate: string
+        author: {
+          user: {
+            login: string
+            avatarUrl: string
+          } | null
+        } | null
+      } | null
+    } | null
+    primaryLanguage: { name: string } | null
+    stargazerCount: number
+    forkCount: number
+    watchers: { totalCount: number }
+    diskUsage: number | null
+    pushedAt: string | null
+    url: string
+    owner: {
+      login: string
+      avatarUrl: string
+    }
+    licenseInfo: {
+      key: string
+      name: string
+      spdxId: string | null
+    } | null
+    languages: {
+      totalSize: number
+      edges: Array<{
+        size: number
+        node: {
+          name: string
+          color: string | null
+        }
+      }>
+    }
+  }
 }
 
 function readGithubHeader(
@@ -1346,13 +1454,16 @@ export async function fetchGithubRepository(
   })
 }
 
-export async function fetchGithubRepositoryConditionally(
-  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}'>,
-): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}'>> {
-  return requestGithubConditionally<'GET /repos/{owner}/{repo}'>(
-    'GET /repos/{owner}/{repo}',
-    options,
-  )
+export async function fetchGithubRepositoryOverview(
+  { token, owner, name }: { token: string, owner: string, name: string },
+): Promise<GithubGraphqlRepositoryOverviewResponse['repository']> {
+  const data = await requestGithubGraphqlData<GithubGraphqlRepositoryOverviewResponse>({
+    token,
+    query: GITHUB_GRAPHQL_REPOSITORY_OVERVIEW_QUERY,
+    variables: { owner, name },
+  })
+
+  return data.repository
 }
 
 export async function fetchGithubRepositoryIssueConditionally(

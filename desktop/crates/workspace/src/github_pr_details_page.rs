@@ -419,15 +419,6 @@ fn files_from_api(files: Vec<GithubPullRequestFile>) -> Vec<Rc<GithubPrFileDiff>
     .collect()
 }
 
-fn commit_subject(message: &str) -> String {
-  message
-    .lines()
-    .map(str::trim)
-    .find(|line| !line.is_empty())
-    .unwrap_or("No commit message")
-    .to_string()
-}
-
 fn commit_sort_timestamp(commit: &GithubPullRequestCommit) -> &str {
   commit
     .committed_at
@@ -2062,7 +2053,7 @@ impl GithubPrCommitSelectItem {
 
   fn for_commit(commit: &GithubPullRequestCommit, is_selected: bool) -> Self {
     let short = github_shared::short_sha(&commit.sha);
-    let subject = commit_subject(&commit.message);
+    let subject = github_shared::commit_subject(&commit.message);
     let author = commit
       .author
       .as_ref()
@@ -10115,19 +10106,13 @@ impl GithubPrDetailsPage {
     cx: &mut Context<Self>,
   ) -> AnyElement {
     let theme = cx.theme().clone();
-    let subject = commit_subject(&commit.message);
     let short_sha = github_shared::short_sha(&commit.sha);
     let commit_user = commit.author.as_ref().or(commit.committer.as_ref());
-    let author = commit_user
-      .map(|user| user.login.clone())
-      .unwrap_or_else(|| "unknown".to_string());
-    let avatar_url = commit_user.and_then(|user| user.avatar_url.clone());
-    let date_label = commit
+    let committed_at = commit
       .committed_at
       .as_deref()
       .or(commit.authored_at.as_deref())
-      .map(format_relative_time)
-      .unwrap_or_else(|| "-".into());
+      .unwrap_or("-");
     let selected = self.selected_commit_sha.as_deref() == Some(commit.sha.as_str());
     let sha = commit.sha.clone();
     let hover_bg = theme.accent.opacity(0.55);
@@ -10141,78 +10126,26 @@ impl GithubPrDetailsPage {
       &theme,
     );
 
-    let body = h_flex()
-      .id(format!("github-pr-overview-timeline-commit-row-{sha}"))
-      .w_full()
-      .min_w_0()
-      .items_center()
-      .gap_3()
-      .rounded(theme.radius)
-      .px_2()
-      .py_2()
-      .cursor_pointer()
-      .when(selected, |this| this.bg(hover_bg))
-      .hover(move |this| this.bg(hover_bg))
-      .on_click(cx.listener(move |this, _, window, cx| {
-        this.select_commit_filter(Some(sha.clone()), cx);
-        this.set_active_tab(PR_TAB_CHANGES_IX, window, cx);
-      }))
-      .child(
-        Avatar::new()
-          .name(author.clone())
-          .when_some(avatar_url.clone(), |this, url| this.src(url))
-          .small(),
-      )
-      .child(
-        v_flex()
-          .min_w_0()
-          .flex_1()
-          .gap_1()
-          .child(
-            div()
-              .min_w_0()
-              .overflow_hidden()
-              .text_ellipsis()
-              .text_sm()
-              .font_weight(gpui::FontWeight::SEMIBOLD)
-              .text_color(theme.foreground)
-              .child(subject),
-          )
-          .child(
-            h_flex()
-              .min_w_0()
-              .items_center()
-              .gap_1()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(
-                h_flex()
-                  .flex_shrink_0()
-                  .items_center()
-                  .gap_0p5()
-                  .child(
-                    Tag::secondary()
-                      .small()
-                      .rounded_full()
-                      .text_color(theme.muted_foreground)
-                      .child(short_sha.clone()),
-                  )
-                  .child(
-                    div()
-                      .id(format!("copy-commit-sha-tooltip-{short_sha}"))
-                      .hoverable_tooltip(|window, cx| Tooltip::new("Copy sha").build(window, cx))
-                      .child(
-                        Clipboard::new(format!("copy-commit-sha-{short_sha}"))
-                          .value(commit.sha.clone()),
-                      ),
-                  ),
-              )
-              .child(div().flex_shrink_0().child(author))
-              .child("·")
-              .child(div().flex_shrink_0().child(date_label)),
-          ),
-      )
-      .into_any_element();
+    let body = github_shared::render_commit_row_content(
+      &commit.sha,
+      &commit.message,
+      committed_at,
+      commit_user.map(|u| u.login.as_str()),
+      commit_user.and_then(|u| u.avatar_url.as_deref()),
+      &theme,
+    )
+    .id(format!("github-pr-overview-timeline-commit-row-{sha}"))
+    .rounded(theme.radius)
+    .px_2()
+    .py_2()
+    .cursor_pointer()
+    .when(selected, |this| this.bg(hover_bg))
+    .hover(move |this| this.bg(hover_bg))
+    .on_click(cx.listener(move |this, _, window, cx| {
+      this.select_commit_filter(Some(sha.clone()), cx);
+      this.set_active_tab(PR_TAB_CHANGES_IX, window, cx);
+    }))
+    .into_any_element();
 
     Self::render_overview_timeline_shell(
       format!("github-pr-overview-timeline-commit-{short_sha}"),
@@ -16482,10 +16415,10 @@ mod tests {
   #[test]
   fn commit_subject_uses_first_non_empty_line() {
     assert_eq!(
-      commit_subject("\n\nfeat: add filter\n\nbody details"),
+      github_shared::commit_subject("\n\nfeat: add filter\n\nbody details"),
       "feat: add filter"
     );
-    assert_eq!(commit_subject(""), "No commit message");
+    assert_eq!(github_shared::commit_subject(""), "No commit message");
   }
 
   #[test]

@@ -325,8 +325,6 @@ pub struct GithubRepositoryDetails {
   pub forks_count: u64,
   #[serde(rename = "subscribers_count")]
   pub subscribers_count: u64,
-  #[serde(rename = "open_issues_count")]
-  pub open_issues_count: u64,
   pub size: u64,
   #[serde(rename = "pushed_at")]
   pub pushed_at: Option<String>,
@@ -334,6 +332,31 @@ pub struct GithubRepositoryDetails {
   pub html_url: String,
   pub owner: GithubRepositoryDetailsOwner,
   pub license: Option<GithubRepositoryLicense>,
+  #[serde(default)]
+  pub languages: Vec<GithubRepositoryLanguage>,
+  #[serde(rename = "last_commit")]
+  pub last_commit: Option<GithubRepositoryLastCommit>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubRepositoryLastCommit {
+  pub sha: String,
+  pub message: String,
+  #[serde(rename = "committed_at")]
+  pub committed_at: String,
+  #[serde(rename = "author_login")]
+  pub author_login: Option<String>,
+  #[serde(rename = "author_avatar_url")]
+  pub author_avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubRepositoryLanguage {
+  pub name: String,
+  pub color: Option<String>,
+  pub size: u64,
+  pub percentage: f64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -3271,6 +3294,75 @@ mod tests {
         .map(|license| license.name.as_str()),
       Some("MIT License")
     );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_repository_details_parses_languages() {
+    let body = r##"{
+      "name": "widget",
+      "full_name": "acme/widget",
+      "description": "A sample repository",
+      "homepage": null,
+      "language": "TypeScript",
+      "default_branch": "main",
+      "stargazers_count": 100,
+      "forks_count": 10,
+      "subscribers_count": 5,
+      "open_issues_count": 3,
+      "size": 1024,
+      "pushed_at": "2026-02-20T12:00:00Z",
+      "html_url": "https://github.com/acme/widget",
+      "owner": {
+        "login": "acme",
+        "avatar_url": "https://example.com/avatar.png"
+      },
+      "license": null,
+      "languages": [
+        { "name": "TypeScript", "color": "#3178c6", "size": 45230, "percentage": 78.5 },
+        { "name": "Rust", "color": "#dea584", "size": 12400, "percentage": 21.5 }
+      ]
+    }"##;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let details = api
+      .fetch_github_repository_details("acme", "widget")
+      .expect("fetch repository details");
+    assert_eq!(details.languages.len(), 2);
+    assert_eq!(details.languages[0].name, "TypeScript");
+    assert_eq!(details.languages[0].color.as_deref(), Some(r"#3178c6"));
+    assert_eq!(details.languages[0].percentage, 78.5);
+    assert_eq!(details.languages[1].name, "Rust");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_repository_details_defaults_empty_languages() {
+    let body = r#"{
+      "name": "widget",
+      "full_name": "acme/widget",
+      "description": null,
+      "homepage": null,
+      "language": null,
+      "default_branch": "main",
+      "stargazers_count": 0,
+      "forks_count": 0,
+      "subscribers_count": 0,
+      "open_issues_count": 0,
+      "size": 0,
+      "pushed_at": null,
+      "html_url": "https://github.com/acme/widget",
+      "owner": { "login": "acme", "avatar_url": null },
+      "license": null
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let details = api
+      .fetch_github_repository_details("acme", "widget")
+      .expect("fetch repository details");
+    assert!(details.languages.is_empty());
     handle.join().expect("join server thread");
   }
 
