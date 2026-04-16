@@ -6375,11 +6375,7 @@ impl GithubRepoPage {
       .filter(|value| !value.trim().is_empty())
       .unwrap_or_else(|| "No description provided.".to_string());
     let languages = &repository.languages;
-    let license = repository
-      .license
-      .as_ref()
-      .map(|value| value.name.clone())
-      .unwrap_or_else(|| "Unknown".to_string());
+    let license = repository.license.as_ref().map(|value| value.name.clone());
     let homepage = repository
       .homepage
       .clone()
@@ -6528,11 +6524,12 @@ impl GithubRepoPage {
         .child({
           let info_items: Vec<(&str, String)> = {
             let mut items = vec![
-              ("License", license),
-              ("Default branch", repository.default_branch.clone()),
               ("Last push", pushed_at.to_string()),
               ("Size", format_repo_size(repository.size).to_string()),
             ];
+            if let Some(ref lic) = license {
+              items.push(("License", lic.clone()));
+            }
             if let Some(ref hp) = homepage {
               items.push(("Homepage", hp.clone()));
             }
