@@ -226,7 +226,6 @@ fn render_languages_section(
 
   v_flex()
     .gap_2()
-    .max_w(px(280.0))
     .child(div().text_sm().font_semibold().child("Languages"))
     .child(bar)
     .child(legend)
@@ -748,12 +747,6 @@ fn normalize_non_empty_string(value: &str) -> Option<String> {
   } else {
     Some(trimmed.to_string())
   }
-}
-
-fn homepage_button_label(homepage: &str) -> SharedString {
-  normalize_non_empty_string(homepage)
-    .unwrap_or_else(|| "Homepage".to_string())
-    .into()
 }
 
 fn effective_repo_branch(
@@ -6427,80 +6420,129 @@ impl GithubRepoPage {
         "Watchers {}",
         number_format::format_compact_number(repository.subscribers_count)
       )));
-    v_flex().w_full().h_full().min_h_0().p_4().child(
-      v_flex()
-        .w_full()
-        .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
-        .mx_auto()
-        .gap_4()
-        .child(
-          h_flex()
-            .items_center()
-            .justify_between()
-            .child(
-              h_flex()
-                .items_center()
-                .gap_3()
-                .child(
-                  Avatar::new()
-                    .name(repository.owner.login.clone())
-                    .when_some(repository.owner.avatar_url.clone(), |this, url| {
-                      this.src(url)
-                    })
-                    .small(),
-                )
-                .child(
-                  div()
-                    .text_lg()
-                    .font_semibold()
-                    .child(repository.full_name.clone()),
-                ),
-            )
-            .child(
-              h_flex()
-                .gap_2()
-                .child(
-                  Button::new("repo-open-on-github")
-                    .icon(IconName::ExternalLink)
-                    .small()
-                    .label("Open on GitHub")
-                    .on_click({
-                      let url = repository.html_url.clone();
-                      move |_, _, cx| {
-                        cx.open_url(&url);
-                      }
-                    }),
-                )
-                .when_some(homepage.clone(), |this, homepage| {
-                  let homepage_label = homepage_button_label(&homepage);
-                  this.child(
-                    Button::new("repo-open-homepage")
-                      .icon(IconName::ExternalLink)
-                      .ghost()
-                      .small()
-                      .label(homepage_label)
-                      .on_click(move |_, _, cx| {
-                        cx.open_url(&homepage);
-                      }),
+
+    let top_area = v_flex()
+      .w_full()
+      .gap_4()
+      .pb_4()
+      .border_b_1()
+      .border_color(theme.border)
+      .child(
+        h_flex()
+          .items_center()
+          .justify_between()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_3()
+              .child(
+                Avatar::new()
+                  .name(repository.owner.login.clone())
+                  .when_some(repository.owner.avatar_url.clone(), |this, url| {
+                    this.src(url)
+                  })
+                  .small(),
+              )
+              .child(
+                div()
+                  .text_lg()
+                  .font_semibold()
+                  .child(repository.full_name.clone()),
+              ),
+          )
+          .child(stats),
+      )
+      .child(
+        div()
+          .text_sm()
+          .text_color(theme.muted_foreground)
+          .child(description),
+      );
+
+    let left_area = v_flex()
+      .w(px(280.0))
+      .gap_4()
+      .child({
+        let info_items: Vec<(&str, String)> = {
+          let mut items = vec![
+            ("Last push", pushed_at.to_string()),
+            ("Size", format_repo_size(repository.size).to_string()),
+          ];
+          if let Some(ref lic) = license {
+            items.push(("License", lic.clone()));
+          }
+          items
+        };
+        v_flex()
+          .gap_2()
+          .child(div().text_sm().font_semibold().child("Repository info"))
+          .child(
+            v_flex()
+              .gap_1()
+              .text_sm()
+              .children(info_items.into_iter().map(|(label, value)| {
+                h_flex()
+                  .w_full()
+                  .justify_between()
+                  .child(
+                    div()
+                      .text_color(theme.muted_foreground)
+                      .child(label.to_string()),
                   )
-                }),
-            ),
-        )
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child(description),
-        )
-        .child(stats)
-        .when_some(repository.last_commit.as_ref(), |this, commit| {
-          let commit_url = format!("{}/commit/{}", repository.html_url, commit.sha);
-          let hover_bg = theme.accent.opacity(0.55);
+                  .child(div().child(value))
+              }))
+              .when_some(homepage, |this, hp| {
+                let link_color = theme.link;
+                this.child(
+                  h_flex()
+                    .w_full()
+                    .justify_between()
+                    .child(div().text_color(theme.muted_foreground).child("Homepage"))
+                    .child(
+                      div()
+                        .id("repo-info-homepage-link")
+                        .cursor_pointer()
+                        .text_color(link_color)
+                        .hover(|this| this.opacity(0.8))
+                        .on_click({
+                          let hp = hp.clone();
+                          move |_, _, cx| cx.open_url(&hp)
+                        })
+                        .child(
+                          div()
+                            .max_w(px(160.0))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(hp.replace("https://", "").replace("http://", "")),
+                        ),
+                    ),
+                )
+              }),
+          )
+      })
+      .when(!languages.is_empty(), {
+        let languages = languages.clone();
+        let theme = theme.clone();
+        move |this| this.child(render_languages_section(&languages, &theme))
+      });
+
+    let recent_commits = &repository.recent_commits;
+    let right_area = v_flex()
+      .gap_4()
+      .flex_1()
+      .min_w_0()
+      .when(!recent_commits.is_empty(), {
+        let html_url = repository.html_url.clone();
+        let commits = recent_commits.clone();
+        let theme = theme.clone();
+        move |this| {
           this.child(
             v_flex()
               .gap_2()
-              .child(div().text_sm().font_semibold().child("Last commit"))
-              .child(
+              .child(div().text_sm().font_semibold().child("Recent activity"))
+              .children(commits.iter().enumerate().map(|(ix, commit)| {
+                let commit_url = format!("{}/commit/{}", html_url, commit.sha);
+                let hover_bg = theme.accent.opacity(0.55);
                 github_shared::render_commit_row_content(
                   &commit.sha,
                   &commit.message,
@@ -6509,7 +6551,7 @@ impl GithubRepoPage {
                   commit.author_avatar_url.as_deref(),
                   &theme,
                 )
-                .id("repo-overview-last-commit")
+                .id(format!("repo-overview-recent-commit-{ix}"))
                 .rounded(theme.radius)
                 .px_2()
                 .py_2()
@@ -6517,50 +6559,29 @@ impl GithubRepoPage {
                 .hover(move |this| this.bg(hover_bg))
                 .on_click(move |_, _, cx| {
                   cx.open_url(&commit_url);
-                }),
-              ),
+                })
+              })),
           )
-        })
-        .child({
-          let info_items: Vec<(&str, String)> = {
-            let mut items = vec![
-              ("Last push", pushed_at.to_string()),
-              ("Size", format_repo_size(repository.size).to_string()),
-            ];
-            if let Some(ref lic) = license {
-              items.push(("License", lic.clone()));
-            }
-            if let Some(ref hp) = homepage {
-              items.push(("Homepage", hp.clone()));
-            }
-            items
-          };
-          v_flex()
-            .gap_2()
-            .max_w(px(280.0))
-            .child(div().text_sm().font_semibold().child("Repository info"))
-            .child(
-              v_flex()
-                .gap_1()
-                .text_sm()
-                .children(info_items.into_iter().map(|(label, value)| {
-                  h_flex()
-                    .w_full()
-                    .justify_between()
-                    .child(
-                      div()
-                        .text_color(theme.muted_foreground)
-                        .child(label.to_string()),
-                    )
-                    .child(div().child(value))
-                })),
-            )
-        })
-        .when(!languages.is_empty(), {
-          let languages = languages.clone();
-          move |this| this.child(render_languages_section(&languages, &theme))
-        }),
-    )
+        }
+      });
+
+    v_flex()
+      .w_full()
+      .h_full()
+      .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+      .mx_auto()
+      .min_h_0()
+      .py_6()
+      .gap_4()
+      .child(top_area)
+      .child(
+        h_flex()
+          .w_full()
+          .gap_10()
+          .items_start()
+          .child(left_area)
+          .child(right_area),
+      )
   }
 
   fn render_code_files_sidebar(
@@ -7088,7 +7109,7 @@ impl GithubRepoPage {
           div()
             .flex()
             .flex_col()
-            .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+            .w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
             .mx_auto()
             .child(body),
         ),
@@ -8389,15 +8410,6 @@ mod tests {
   fn repo_tab_count_label_formats_counts() {
     assert_eq!(repo_tab_count_label(0).as_ref(), "0");
     assert_eq!(repo_tab_count_label(42).as_ref(), "42");
-  }
-
-  #[test]
-  fn homepage_button_label_uses_trimmed_url_or_fallback() {
-    assert_eq!(
-      homepage_button_label(" https://example.com/docs ").as_ref(),
-      "https://example.com/docs"
-    );
-    assert_eq!(homepage_button_label("   ").as_ref(), "Homepage");
   }
 
   #[test]

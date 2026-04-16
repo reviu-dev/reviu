@@ -1398,15 +1398,13 @@ async function fetchRepositoryDetailsWithCache(
                 }
               : null,
             languages,
-            last_commit: data.defaultBranchRef?.target
-              ? {
-                  sha: data.defaultBranchRef.target.oid,
-                  message: data.defaultBranchRef.target.message,
-                  committed_at: data.defaultBranchRef.target.committedDate,
-                  author_login: data.defaultBranchRef.target.author?.user?.login ?? null,
-                  author_avatar_url: data.defaultBranchRef.target.author?.user?.avatarUrl ?? null,
-                }
-              : null,
+            recent_commits: (data.defaultBranchRef?.target?.history.nodes ?? []).map(node => ({
+              sha: node.oid,
+              message: node.message,
+              committed_at: node.committedDate,
+              author_login: node.author?.user?.login ?? null,
+              author_avatar_url: node.author?.user?.avatarUrl ?? null,
+            })),
           } satisfies GithubRepositoryDetails,
         }
       },

@@ -608,13 +608,13 @@ export interface GithubRepositoryDetails {
     size: number
     percentage: number
   }>
-  last_commit: {
+  recent_commits: Array<{
     sha: string
     message: string
     committed_at: string
     author_login: string | null
     author_avatar_url: string | null
-  } | null
+  }>
 }
 
 export interface GithubUserRepository {

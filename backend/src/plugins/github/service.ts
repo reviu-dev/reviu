@@ -224,6 +224,19 @@ const GITHUB_GRAPHQL_REPOSITORY_OVERVIEW_QUERY = `
                 avatarUrl
               }
             }
+            history(first: 6) {
+              nodes {
+                oid
+                message
+                committedDate
+                author {
+                  user {
+                    login
+                    avatarUrl
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -391,6 +404,19 @@ interface GithubGraphqlRepositoryOverviewResponse {
             avatarUrl: string
           } | null
         } | null
+        history: {
+          nodes: Array<{
+            oid: string
+            message: string
+            committedDate: string
+            author: {
+              user: {
+                login: string
+                avatarUrl: string
+              } | null
+            } | null
+          }>
+        }
       } | null
     } | null
     primaryLanguage: { name: string } | null

@@ -338,12 +338,12 @@ pub struct GithubRepositoryDetails {
   pub license: Option<GithubRepositoryLicense>,
   #[serde(default)]
   pub languages: Vec<GithubRepositoryLanguage>,
-  #[serde(rename = "last_commit")]
-  pub last_commit: Option<GithubRepositoryLastCommit>,
+  #[serde(rename = "recent_commits", default)]
+  pub recent_commits: Vec<GithubRepositoryCommit>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct GithubRepositoryLastCommit {
+pub struct GithubRepositoryCommit {
   pub sha: String,
   pub message: String,
   #[serde(rename = "committed_at")]
