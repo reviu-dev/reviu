@@ -6458,10 +6458,13 @@ impl GithubRepoPage {
           .child(description),
       );
 
+    let left_area_width = 280.0;
+    let left_right_gap = 40.0;
+
     let left_area = div()
       .flex()
       .flex_col()
-      .w(px(280.0))
+      .w(px(left_area_width))
       .gap_4()
       .child({
         let info_items: Vec<(&str, String)> = {
@@ -6573,8 +6576,9 @@ impl GithubRepoPage {
     let recent_commits = &repository.recent_commits;
     let right_area = v_flex()
       .gap_4()
-      .flex_1()
-      .min_w_0()
+      .w(px(
+        DETAILS_PAGE_CONTAINER_MAX_WIDTH - left_area_width - left_right_gap,
+      ))
       .when(!recent_commits.is_empty(), {
         let html_url = repository.html_url.clone();
         let commits = recent_commits.clone();
@@ -6621,7 +6625,7 @@ impl GithubRepoPage {
       .child(
         h_flex()
           .w_full()
-          .gap_10()
+          .gap(px(left_right_gap))
           .items_start()
           .child(left_area)
           .child(right_area),
