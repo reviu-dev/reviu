@@ -54,10 +54,10 @@ use crate::{
   api::{
     ApiClient, GithubFileCommit, GithubIssue, GithubIssueDescriptionUpdate, GithubIssueDetails,
     GithubIssueDetailsComment, GithubIssueStateReason, GithubIssueUser, GithubPullRequest,
-    GithubPullRequestState, GithubRepositoryDetails,
+    GithubPullRequestState, GithubRepositoryDetails, GithubRepositoryLanguage,
   },
   auth_state::{AuthState, AuthStateStore},
-  date_format::{format_long_date_opt, format_relative_time},
+  date_format::format_relative_time,
   file_preview::{
     FilePreviewKind, file_preview_kind, is_markdown_path, is_svg_path, raster_image_from_bytes,
     should_show_unsupported_binary_placeholder,
@@ -130,6 +130,105 @@ fn format_repo_size(size_kb: u64) -> SharedString {
     return format!("{:.1} MB", size_kb as f64 / KB_PER_MB as f64).into();
   }
   format!("{} KB", size_kb).into()
+}
+
+fn parse_language_color(color: Option<&str>) -> Option<gpui::Hsla> {
+  let color = color?.trim();
+  if color.is_empty() {
+    return None;
+  }
+  let hex = if color.starts_with('#') {
+    color.to_string()
+  } else {
+    format!("#{color}")
+  };
+  <gpui::Hsla as gpui_component::Colorize>::parse_hex(&hex).ok()
+}
+
+const LANGUAGES_MAX_VISIBLE: usize = 5;
+
+struct LanguageEntry {
+  name: String,
+  color: Option<gpui::Hsla>,
+  percentage: f64,
+}
+
+fn build_language_entries(
+  languages: &[GithubRepositoryLanguage],
+  theme: &gpui_component::Theme,
+) -> Vec<LanguageEntry> {
+  let top = &languages[..languages.len().min(LANGUAGES_MAX_VISIBLE)];
+  let rest = &languages[languages.len().min(LANGUAGES_MAX_VISIBLE)..];
+
+  let mut entries: Vec<LanguageEntry> = top
+    .iter()
+    .map(|lang| LanguageEntry {
+      name: lang.name.clone(),
+      color: parse_language_color(lang.color.as_deref()),
+      percentage: lang.percentage,
+    })
+    .collect();
+
+  if !rest.is_empty() {
+    let others_pct: f64 = rest.iter().map(|l| l.percentage).sum();
+    entries.push(LanguageEntry {
+      name: "Other".to_string(),
+      color: Some(theme.muted_foreground),
+      percentage: others_pct,
+    });
+  }
+
+  entries
+}
+
+fn render_languages_section(
+  languages: &[GithubRepositoryLanguage],
+  theme: &gpui_component::Theme,
+) -> impl IntoElement {
+  let entries = build_language_entries(languages, theme);
+
+  let bar = h_flex()
+    .w_full()
+    .h(px(8.0))
+    .rounded(theme.radius_lg)
+    .overflow_hidden()
+    .children(entries.iter().map(|entry| {
+      let fraction = entry.percentage as f32 / 100.0;
+      let color = entry.color.unwrap_or(theme.muted_foreground);
+      div()
+        .h_full()
+        .flex_basis(gpui::relative(fraction))
+        .bg(color)
+    }));
+
+  let legend = v_flex().gap_1().children(entries.iter().map(|entry| {
+    let color = entry.color.unwrap_or(theme.muted_foreground);
+    h_flex()
+      .w_full()
+      .gap_1p5()
+      .items_center()
+      .justify_between()
+      .child(
+        h_flex()
+          .gap_1p5()
+          .items_center()
+          .child(div().size(px(8.0)).rounded(px(4.0)).bg(color))
+          .child(div().text_xs().child(entry.name.clone())),
+      )
+      .child(
+        div()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child(format!("{:.1}%", entry.percentage)),
+      )
+  }));
+
+  v_flex()
+    .gap_2()
+    .max_w(px(280.0))
+    .child(div().text_sm().font_semibold().child("Languages"))
+    .child(bar)
+    .child(legend)
 }
 
 fn should_show_overview_loading_state(repository_loading: bool, has_repository: bool) -> bool {
@@ -6229,11 +6328,7 @@ impl GithubRepoPage {
       .clone()
       .filter(|value| !value.trim().is_empty())
       .unwrap_or_else(|| "No description provided.".to_string());
-    let language = repository
-      .language
-      .clone()
-      .filter(|value| !value.trim().is_empty())
-      .unwrap_or_else(|| "Unknown".to_string());
+    let languages = &repository.languages;
     let license = repository
       .license
       .as_ref()
@@ -6243,7 +6338,11 @@ impl GithubRepoPage {
       .homepage
       .clone()
       .filter(|value| !value.trim().is_empty());
-    let pushed_at = format_long_date_opt(repository.pushed_at.as_deref());
+    let pushed_at = repository
+      .pushed_at
+      .as_deref()
+      .map(format_relative_time)
+      .unwrap_or_else(|| "Unknown".into());
 
     let stats = h_flex().gap_2().flex_wrap().children([
       Tag::secondary()
@@ -6258,10 +6357,6 @@ impl GithubRepoPage {
         .small()
         .rounded_full()
         .child(format!("Watchers {}", repository.subscribers_count)),
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .child(format!("Open issues {}", repository.open_issues_count)),
     ]);
     v_flex().w_full().h_full().min_h_0().p_4().child(
       v_flex()
@@ -6272,30 +6367,54 @@ impl GithubRepoPage {
         .child(
           h_flex()
             .items_center()
-            .gap_3()
+            .justify_between()
             .child(
-              Avatar::new()
-                .name(repository.owner.login.clone())
-                .when_some(repository.owner.avatar_url.clone(), |this, url| {
-                  this.src(url)
-                })
-                .small(),
-            )
-            .child(
-              v_flex()
-                .gap_1()
+              h_flex()
+                .items_center()
+                .gap_3()
+                .child(
+                  Avatar::new()
+                    .name(repository.owner.login.clone())
+                    .when_some(repository.owner.avatar_url.clone(), |this, url| {
+                      this.src(url)
+                    })
+                    .small(),
+                )
                 .child(
                   div()
                     .text_lg()
                     .font_semibold()
                     .child(repository.full_name.clone()),
-                )
-                .child(
-                  div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child(repository.owner.login.clone()),
                 ),
+            )
+            .child(
+              h_flex()
+                .gap_2()
+                .child(
+                  Button::new("repo-open-on-github")
+                    .icon(IconName::ExternalLink)
+                    .small()
+                    .label("Open on GitHub")
+                    .on_click({
+                      let url = repository.html_url.clone();
+                      move |_, _, cx| {
+                        cx.open_url(&url);
+                      }
+                    }),
+                )
+                .when_some(homepage.clone(), |this, homepage| {
+                  let homepage_label = homepage_button_label(&homepage);
+                  this.child(
+                    Button::new("repo-open-homepage")
+                      .icon(IconName::ExternalLink)
+                      .ghost()
+                      .small()
+                      .label(homepage_label)
+                      .on_click(move |_, _, cx| {
+                        cx.open_url(&homepage);
+                      }),
+                  )
+                }),
             ),
         )
         .child(
@@ -6304,58 +6423,73 @@ impl GithubRepoPage {
             .text_color(theme.muted_foreground)
             .child(description),
         )
-        .child(
-          h_flex()
-            .gap_2()
-            .flex_wrap()
-            .child(
-              Button::new("repo-open-on-github")
-                .icon(IconName::ExternalLink)
-                .small()
-                .label("Open on GitHub")
-                .on_click({
-                  let url = repository.html_url.clone();
-                  move |_, _, cx| {
-                    cx.open_url(&url);
-                  }
-                }),
-            )
-            .when_some(homepage.clone(), |this, homepage| {
-              let homepage_label = homepage_button_label(&homepage);
-              this.child(
-                Button::new("repo-open-homepage")
-                  .icon(IconName::ExternalLink)
-                  .ghost()
-                  .small()
-                  .label(homepage_label)
-                  .on_click(move |_, _, cx| {
-                    cx.open_url(&homepage);
-                  }),
-              )
-            }),
-        )
         .child(stats)
-        .child(
+        .when_some(repository.last_commit.as_ref(), |this, commit| {
+          let commit_url = format!("{}/commit/{}", repository.html_url, commit.sha);
+          let hover_bg = theme.accent.opacity(0.55);
+          this.child(
+            v_flex()
+              .gap_2()
+              .child(div().text_sm().font_semibold().child("Last commit"))
+              .child(
+                github_shared::render_commit_row_content(
+                  &commit.sha,
+                  &commit.message,
+                  &commit.committed_at,
+                  commit.author_login.as_deref(),
+                  commit.author_avatar_url.as_deref(),
+                  &theme,
+                )
+                .id("repo-overview-last-commit")
+                .rounded(theme.radius)
+                .px_2()
+                .py_2()
+                .cursor_pointer()
+                .hover(move |this| this.bg(hover_bg))
+                .on_click(move |_, _, cx| {
+                  cx.open_url(&commit_url);
+                }),
+              ),
+          )
+        })
+        .child({
+          let info_items: Vec<(&str, String)> = {
+            let mut items = vec![
+              ("License", license),
+              ("Default branch", repository.default_branch.clone()),
+              ("Last push", pushed_at.to_string()),
+              ("Size", format_repo_size(repository.size).to_string()),
+            ];
+            if let Some(ref hp) = homepage {
+              items.push(("Homepage", hp.clone()));
+            }
+            items
+          };
           v_flex()
             .gap_2()
+            .max_w(px(280.0))
             .child(div().text_sm().font_semibold().child("Repository info"))
             .child(
-              h_flex()
-                .gap_6()
-                .flex_wrap()
-                .items_center()
+              v_flex()
+                .gap_1()
                 .text_sm()
-                .text_color(theme.muted_foreground)
-                .child(format!("Language: {}", language))
-                .child(format!("License: {}", license))
-                .child(format!("Default branch: {}", repository.default_branch))
-                .child(format!("Last push: {}", pushed_at))
-                .child(format!("Size: {}", format_repo_size(repository.size)))
-                .when_some(homepage, |this, homepage| {
-                  this.child(format!("Homepage: {}", homepage))
-                }),
-            ),
-        ),
+                .children(info_items.into_iter().map(|(label, value)| {
+                  h_flex()
+                    .w_full()
+                    .justify_between()
+                    .child(
+                      div()
+                        .text_color(theme.muted_foreground)
+                        .child(label.to_string()),
+                    )
+                    .child(div().child(value))
+                })),
+            )
+        })
+        .when(!languages.is_empty(), {
+          let languages = languages.clone();
+          move |this| this.child(render_languages_section(&languages, &theme))
+        }),
     )
   }
 
@@ -8921,5 +9055,14 @@ mod tests {
       "Reopened"
     );
     assert_eq!(issue_state_label("closed", None).as_ref(), "Closed");
+  }
+
+  #[test]
+  fn parse_language_color_handles_hex_variants() {
+    assert!(parse_language_color(Some("#3178c6")).is_some());
+    assert!(parse_language_color(Some("3178c6")).is_some());
+    assert!(parse_language_color(None).is_none());
+    assert!(parse_language_color(Some("")).is_none());
+    assert!(parse_language_color(Some("  ")).is_none());
   }
 }

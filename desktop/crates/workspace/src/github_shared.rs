@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use gpui::{App, Hsla, IntoElement, ParentElement as _, SharedString, Styled, div, prelude::*};
 use gpui_component::{
-  ActiveTheme as _, Colorize as _, Icon, IconName, Sizable as _, avatar::Avatar, h_flex,
-  label::Label, skeleton::Skeleton, tag::Tag, v_flex,
+  ActiveTheme as _, Colorize as _, Icon, IconName, Sizable as _, avatar::Avatar,
+  clipboard::Clipboard, h_flex, label::Label, skeleton::Skeleton, tag::Tag, tooltip::Tooltip,
+  v_flex,
 };
 use time::OffsetDateTime;
 use ui::{StatusTag, StatusThemeExt as _, UiIconName};
@@ -13,7 +14,7 @@ use crate::{
     ApiClient, GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel,
     GithubPullRequestState, GithubPullRequestStatus,
   },
-  date_format::format_relative_time_at,
+  date_format::{format_relative_time, format_relative_time_at},
 };
 
 pub(crate) const PULL_REQUEST_ROW_HEIGHT_PX: f32 = 56.0;
@@ -126,6 +127,90 @@ pub(crate) fn repo_section_header(
 
 pub(crate) fn short_sha(sha: &str) -> String {
   sha.chars().take(7).collect()
+}
+
+pub(crate) fn commit_subject(message: &str) -> String {
+  message
+    .lines()
+    .map(str::trim)
+    .find(|line| !line.is_empty())
+    .unwrap_or("No commit message")
+    .to_string()
+}
+
+pub(crate) fn render_commit_row_content(
+  sha: &str,
+  message: &str,
+  committed_at: &str,
+  author_login: Option<&str>,
+  author_avatar_url: Option<&str>,
+  theme: &gpui_component::Theme,
+) -> gpui::Div {
+  let subject = commit_subject(message);
+  let short = short_sha(sha);
+  let author = author_login.unwrap_or("unknown").to_string();
+  let date_label = format_relative_time(committed_at);
+  let full_sha = sha.to_string();
+
+  h_flex()
+    .w_full()
+    .min_w_0()
+    .items_center()
+    .gap_3()
+    .child(
+      Avatar::new()
+        .name(author.clone())
+        .when_some(author_avatar_url.map(str::to_string), |this, url| {
+          this.src(url)
+        })
+        .small(),
+    )
+    .child(
+      v_flex()
+        .min_w_0()
+        .flex_1()
+        .gap_1()
+        .child(
+          div()
+            .min_w_0()
+            .overflow_hidden()
+            .text_ellipsis()
+            .text_sm()
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(theme.foreground)
+            .child(subject),
+        )
+        .child(
+          h_flex()
+            .min_w_0()
+            .items_center()
+            .gap_1()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(
+              h_flex()
+                .flex_shrink_0()
+                .items_center()
+                .gap_0p5()
+                .child(
+                  Tag::secondary()
+                    .small()
+                    .rounded_full()
+                    .text_color(theme.muted_foreground)
+                    .child(short.clone()),
+                )
+                .child(
+                  div()
+                    .id(format!("copy-commit-sha-tooltip-{short}"))
+                    .hoverable_tooltip(|window, cx| Tooltip::new("Copy sha").build(window, cx))
+                    .child(Clipboard::new(format!("copy-commit-sha-{short}")).value(full_sha)),
+                ),
+            )
+            .child(div().flex_shrink_0().child(author))
+            .child("·")
+            .child(div().flex_shrink_0().child(date_label)),
+        ),
+    )
 }
 
 pub(crate) fn repo_label(owner: &str, repo: &str) -> String {
