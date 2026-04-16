@@ -77,6 +77,7 @@ use crate::{
   github_pr_details_page::{GithubPrDetailsPageHandle, GithubPrOpenTarget},
   github_shared,
   navigation::NavigationHistory,
+  number_format,
   workspace::WorkspaceApi,
 };
 
@@ -3244,6 +3245,7 @@ pub struct GithubRepoPage {
   repository_loading: bool,
   repository_error: Option<SharedString>,
   repository_task: Option<Task<()>>,
+  star_task: Option<Task<()>>,
   readme_request_generation: u64,
   readme_loading: bool,
   readme_error: Option<SharedString>,
@@ -3553,6 +3555,7 @@ impl GithubRepoPage {
       repository_loading: false,
       repository_error: None,
       repository_task: None,
+      star_task: None,
       readme_request_generation: 0,
       readme_loading: false,
       readme_error: None,
@@ -4464,6 +4467,49 @@ impl GithubRepoPage {
     });
     self.repository_task = Some(details_task);
     cx.notify();
+  }
+
+  fn toggle_star(&mut self, cx: &mut Context<Self>) {
+    let Some(repository) = self.repository.as_mut() else {
+      return;
+    };
+    let owner = self.owner.to_string();
+    let repo = self.repo.to_string();
+    let node_id = repository.node_id.clone();
+    let currently_starred = repository.viewer_has_starred;
+
+    // Optimistic update
+    repository.viewer_has_starred = !currently_starred;
+    if currently_starred {
+      repository.stargazers_count = repository.stargazers_count.saturating_sub(1);
+    } else {
+      repository.stargazers_count += 1;
+    }
+    cx.notify();
+
+    let api = self.api.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        if currently_starred {
+          api.unstar_github_repository(&owner, &repo, &node_id)
+        } else {
+          api.star_github_repository(&owner, &repo, &node_id)
+        }
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.star_task = None;
+        if let Ok(star_result) = result {
+          if let Some(repository) = this.repository.as_mut() {
+            repository.viewer_has_starred = star_result.viewer_has_starred;
+            repository.stargazers_count = star_result.stargazers_count;
+          }
+        }
+        cx.notify();
+      });
+    });
+    self.star_task = Some(task);
   }
 
   fn load_repository_branches(&mut self, cx: &mut Context<Self>) {
@@ -6344,20 +6390,47 @@ impl GithubRepoPage {
       .map(format_relative_time)
       .unwrap_or_else(|| "Unknown".into());
 
-    let stats = h_flex().gap_2().flex_wrap().children([
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .child(format!("Stars {}", repository.stargazers_count)),
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .child(format!("Forks {}", repository.forks_count)),
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .child(format!("Watchers {}", repository.subscribers_count)),
-    ]);
+    let starred = repository.viewer_has_starred;
+    let star_icon = if starred {
+      UiIconName::StarFilled
+    } else {
+      UiIconName::Star
+    };
+    let star_icon_color = if starred {
+      theme.status_yellow()
+    } else {
+      theme.muted_foreground
+    };
+    let star_label = number_format::format_compact_number(repository.stargazers_count);
+    let star_hover_bg = theme.accent.opacity(0.55);
+    let stats = h_flex()
+      .gap_2()
+      .flex_wrap()
+      .child(
+        h_flex()
+          .id("repo-toggle-star")
+          .items_center()
+          .gap_1()
+          .px_2()
+          .py_1()
+          .rounded(theme.radius)
+          .cursor_pointer()
+          .text_xs()
+          .hover(move |this| this.bg(star_hover_bg))
+          .on_click(cx.listener(|this, _, _, cx| {
+            this.toggle_star(cx);
+          }))
+          .child(Icon::new(star_icon).size_3p5().text_color(star_icon_color))
+          .child(star_label),
+      )
+      .child(Tag::secondary().small().rounded_full().child(format!(
+        "Forks {}",
+        number_format::format_compact_number(repository.forks_count)
+      )))
+      .child(Tag::secondary().small().rounded_full().child(format!(
+        "Watchers {}",
+        number_format::format_compact_number(repository.subscribers_count)
+      )));
     v_flex().w_full().h_full().min_h_0().p_4().child(
       v_flex()
         .w_full()

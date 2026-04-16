@@ -311,9 +311,13 @@ pub struct GithubRepositoryLicense {
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubRepositoryDetails {
+  #[serde(rename = "node_id", default)]
+  pub node_id: String,
   pub name: String,
   #[serde(rename = "full_name")]
   pub full_name: String,
+  #[serde(rename = "viewer_has_starred", default)]
+  pub viewer_has_starred: bool,
   pub description: Option<String>,
   pub homepage: Option<String>,
   pub language: Option<String>,
@@ -348,6 +352,14 @@ pub struct GithubRepositoryLastCommit {
   pub author_login: Option<String>,
   #[serde(rename = "author_avatar_url")]
   pub author_avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubStarResult {
+  #[serde(rename = "viewer_has_starred")]
+  pub viewer_has_starred: bool,
+  #[serde(rename = "stargazers_count")]
+  pub stargazers_count: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1566,6 +1578,52 @@ impl ApiClient {
       anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubRepositoryDetails>()?;
+    Ok(payload)
+  }
+
+  pub fn star_github_repository(
+    &self,
+    owner: &str,
+    repo: &str,
+    node_id: &str,
+  ) -> Result<GithubStarResult> {
+    let route = format!("/github/repos/{owner}/{repo}/star");
+    let response = self
+      .authed_request(Method::PUT, route.as_str())
+      .query(&[("node_id", node_id)])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("PUT", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubStarResult>()?;
+    Ok(payload)
+  }
+
+  pub fn unstar_github_repository(
+    &self,
+    owner: &str,
+    repo: &str,
+    node_id: &str,
+  ) -> Result<GithubStarResult> {
+    let route = format!("/github/repos/{owner}/{repo}/star");
+    let response = self
+      .authed_request(Method::DELETE, route.as_str())
+      .query(&[("node_id", node_id)])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("DELETE", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubStarResult>()?;
     Ok(payload)
   }
 
