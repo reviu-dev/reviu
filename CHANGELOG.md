@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 A new Chrome extension lets you open any GitHub repository, pull request, or issue directly in Reviu with one click.
 
+### Repository Overview Redesign
+
+The repository overview tab has been redesigned with a language breakdown, contributor avatars, recent commits, and the ability to star or unstar a repo.
+
 ### Image Preview in Repository Code Tab
 
 Selecting an image file (PNG, JPEG, WebP, GIF, etc.) in the repository code tab now shows an inline preview instead of raw binary content.
