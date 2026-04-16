@@ -6870,18 +6870,36 @@ impl GithubRepoPage {
           .when_some(self.code_file_commit.clone(), |this, commit| {
             this.when_some(commit.message, |this, message| {
               let commit_url = commit.html_url.clone();
+              let link_color = theme.link;
               this.child(
-                div().min_w_0().max_w(px(300.0)).child(
-                  Button::new("repo-code-commit-link")
-                    .label(message)
-                    .xsmall()
-                    .ghost()
-                    .when_some(commit_url, |this, url| {
-                      this.icon(IconName::ExternalLink).on_click(move |_, _, cx| {
+                h_flex()
+                  .id("repo-code-commit-link")
+                  .items_center()
+                  .gap_1()
+                  .min_w_0()
+                  .max_w(px(350.0))
+                  .text_xs()
+                  .text_color(link_color)
+                  .when_some(commit_url, |this, url| {
+                    this
+                      .cursor_pointer()
+                      .hover(|this| this.opacity(0.8))
+                      .on_click(move |_, _, cx| {
                         cx.open_url(&url);
                       })
-                    }),
-                ),
+                  })
+                  .child(
+                    Icon::new(UiIconName::GitCommitHorizontal)
+                      .size_3()
+                      .flex_shrink_0(),
+                  )
+                  .child(
+                    div()
+                      .min_w_0()
+                      .overflow_hidden()
+                      .text_ellipsis()
+                      .child(message),
+                  ),
               )
             })
           })
