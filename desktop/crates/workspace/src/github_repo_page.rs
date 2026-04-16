@@ -6440,8 +6440,7 @@ impl GithubRepoPage {
                   .name(repository.owner.login.clone())
                   .when_some(repository.owner.avatar_url.clone(), |this, url| {
                     this.src(url)
-                  })
-                  .small(),
+                  }),
               )
               .child(
                 div()
@@ -6459,7 +6458,9 @@ impl GithubRepoPage {
           .child(description),
       );
 
-    let left_area = v_flex()
+    let left_area = div()
+      .flex()
+      .flex_col()
       .w(px(280.0))
       .gap_4()
       .child({
@@ -6524,6 +6525,49 @@ impl GithubRepoPage {
         let languages = languages.clone();
         let theme = theme.clone();
         move |this| this.child(render_languages_section(&languages, &theme))
+      })
+      .when(!repository.contributors.is_empty(), |this| {
+        let contributors = &repository.contributors;
+        let total = repository.contributors_count;
+        let limit = contributors.len().min(12);
+        let remaining = total.saturating_sub(limit as u64);
+        this.child(
+          div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(div().text_sm().font_semibold().child("Contributors"))
+            .child(
+              h_flex()
+                .items_center()
+                .flex_wrap()
+                .children(contributors.iter().take(limit).enumerate().map(|(ix, c)| {
+                  let login = c.login.clone();
+                  div()
+                    .id(format!("contributor-{}", c.login))
+                    .hoverable_tooltip({
+                      let login = login.clone();
+                      move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(login.clone()).build(window, cx)
+                      }
+                    })
+                    .when(ix > 0, |this| this.ml(px(-4.0)))
+                    .child(Avatar::new().name(login).src(c.avatar_url.clone()).small())
+                }))
+                .when(remaining > 0, |this| {
+                  this.child(
+                    div()
+                      .text_xs()
+                      .ml_1()
+                      .text_color(theme.muted_foreground)
+                      .child(format!(
+                        "+{}",
+                        number_format::format_compact_number(remaining)
+                      )),
+                  )
+                }),
+            ),
+        )
       });
 
     let recent_commits = &repository.recent_commits;
