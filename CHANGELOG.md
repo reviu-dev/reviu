@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.4.0
+
+### Issue Reactions
+
+Issue details now show GitHub reactions on the description and comments, and you can add or remove your own reactions directly from the issue.
+
 ## 0.3.0
 
 ### Chrome Extension

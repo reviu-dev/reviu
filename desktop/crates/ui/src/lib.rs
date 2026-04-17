@@ -4,6 +4,7 @@ mod confirm_dialog;
 mod dropdown_select;
 mod github_url;
 mod icons;
+mod reaction_bar;
 mod search_file_palette;
 mod selectable_row;
 mod status_alert;
@@ -48,6 +49,7 @@ pub use icons::{
   file_icon_path_for_name, file_icon_path_for_name_with_theme, file_icon_path_for_path,
   file_icon_path_for_path_with_theme,
 };
+pub use reaction_bar::{ReactionBar, ReactionGroup, ReactionOption, ReactionToggle};
 pub use search_file_palette::{
   SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
 };

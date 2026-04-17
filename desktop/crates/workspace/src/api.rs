@@ -252,6 +252,10 @@ pub struct GithubIssue {
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubIssueDetailsComment {
+  #[serde(rename = "node_id", default)]
+  pub node_id: String,
+  #[serde(default)]
+  pub reactions: Vec<GithubReactionGroup>,
   pub id: u64,
   pub body: Option<String>,
   #[serde(rename = "created_at")]
@@ -264,6 +268,10 @@ pub struct GithubIssueDetailsComment {
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubIssueDetails {
+  #[serde(rename = "node_id", default)]
+  pub node_id: String,
+  #[serde(default)]
+  pub reactions: Vec<GithubReactionGroup>,
   pub id: u64,
   pub number: u64,
   pub title: String,
@@ -2524,7 +2532,7 @@ impl ApiClient {
       anyhow::bail!("unauthorized")
     }
     if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
+      return Err(Self::api_error_from_response(response));
     }
     let payload = response.json::<GithubReactionGroupsResponse>()?;
     Ok(payload.reactions)
@@ -2553,7 +2561,63 @@ impl ApiClient {
       anyhow::bail!("unauthorized")
     }
     if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<GithubReactionGroupsResponse>()?;
+    Ok(payload.reactions)
+  }
+
+  pub fn add_issue_reaction(
+    &self,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    subject_id: &str,
+    content: GithubReactionContent,
+  ) -> Result<Vec<GithubReactionGroup>> {
+    let route = format!("/github/repos/{owner}/{repo}/issues/{issue_number}/reactions");
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .json(&GithubReactionMutationRequest {
+        subject_id,
+        content,
+      })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<GithubReactionGroupsResponse>()?;
+    Ok(payload.reactions)
+  }
+
+  pub fn remove_issue_reaction(
+    &self,
+    owner: &str,
+    repo: &str,
+    issue_number: u64,
+    subject_id: &str,
+    content: GithubReactionContent,
+  ) -> Result<Vec<GithubReactionGroup>> {
+    let route = format!("/github/repos/{owner}/{repo}/issues/{issue_number}/reactions");
+    let response = self
+      .authed_request(Method::DELETE, route.as_str())
+      .json(&GithubReactionMutationRequest {
+        subject_id,
+        content,
+      })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("DELETE", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
     }
     let payload = response.json::<GithubReactionGroupsResponse>()?;
     Ok(payload.reactions)
@@ -4081,6 +4145,10 @@ mod tests {
   fn fetch_github_repository_issue_details_parses_success_payload() {
     let body = r#"{
       "issue": {
+        "node_id": "I_kwDOExample",
+        "reactions": [
+          { "content": "THUMBS_UP", "count": 2, "viewer_has_reacted": true }
+        ],
         "id": 501,
         "number": 77,
         "title": "Fix auth race condition",
@@ -4093,6 +4161,10 @@ mod tests {
         "labels": [{ "name": "bug", "color": "f29513" }],
         "comments": [
           {
+            "node_id": "IC_kwDOIssue",
+            "reactions": [
+              { "content": "HEART", "count": 1, "viewer_has_reacted": false }
+            ],
             "id": 9001,
             "body": "Looks good",
             "created_at": "2026-02-20T10:00:00Z",
@@ -4121,12 +4193,19 @@ mod tests {
       .expect("fetch repository issue details");
 
     assert_eq!(issue.number, 77);
+    assert_eq!(issue.node_id, "I_kwDOExample");
+    assert_eq!(issue.reactions[0].content, GithubReactionContent::ThumbsUp);
     assert_eq!(issue.title, "Fix auth race condition");
     assert_eq!(issue.state, "closed");
     assert_eq!(issue.state_reason, Some(GithubIssueStateReason::Completed));
     assert_eq!(issue.labels[0].color.as_deref(), Some("f29513"));
     assert_eq!(issue.comments.len(), 1);
     assert_eq!(issue.comments[0].id, 9001);
+    assert_eq!(issue.comments[0].node_id, "IC_kwDOIssue");
+    assert_eq!(
+      issue.comments[0].reactions[0].content,
+      GithubReactionContent::Heart
+    );
     assert_eq!(issue.comments[0].body.as_deref(), Some("Looks good"));
     assert_eq!(
       issue.comments[0]
@@ -5354,6 +5433,120 @@ mod tests {
     assert_eq!(
       request_line,
       "DELETE /github/pr/42/reactions?org=acme&repo=widget HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn add_pull_request_reaction_surfaces_backend_error_message() {
+    let body = r#"{"error":"The openai organization restricts OAuth app access. Ask an organization owner to approve Reviu, then try again."}"#;
+    let (base_url, handle) = start_single_response_server("403 FORBIDDEN", body);
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .add_pull_request_reaction(
+        "openai",
+        "reviu",
+        42,
+        "PR_kwDOExample",
+        GithubReactionContent::ThumbsUp,
+      )
+      .expect_err("add pull request reaction should fail");
+
+    assert_eq!(
+      err.to_string(),
+      "The openai organization restricts OAuth app access. Ask an organization owner to approve Reviu, then try again."
+    );
+    let api_error = err.downcast_ref::<ApiError>().expect("api error");
+    assert_eq!(api_error.status_code_u16(), Some(403));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn add_issue_reaction_serializes_subject_and_content() {
+    let body = r#"{
+      "reactions": [
+        { "content": "THUMBS_UP", "count": 3, "viewer_has_reacted": true }
+      ]
+    }"#;
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let reactions = api
+      .add_issue_reaction(
+        "acme",
+        "widget",
+        77,
+        "IC_kwDOIssue",
+        GithubReactionContent::ThumbsUp,
+      )
+      .expect("add issue reaction");
+
+    assert_eq!(reactions.len(), 1);
+    assert_eq!(reactions[0].content, GithubReactionContent::ThumbsUp);
+    assert!(reactions[0].viewer_has_reacted);
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.starts_with("POST /github/repos/acme/widget/issues/77/reactions HTTP/1.1"));
+    assert!(request.contains("\"subjectId\":\"IC_kwDOIssue\""));
+    assert!(request.contains("\"content\":\"THUMBS_UP\""));
+  }
+
+  #[test]
+  fn add_issue_reaction_surfaces_backend_error_message() {
+    let body = r#"{"error":"The openai organization restricts OAuth app access. Ask an organization owner to approve Reviu, then try again."}"#;
+    let (base_url, handle) = start_single_response_server("403 FORBIDDEN", body);
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .add_issue_reaction(
+        "openai",
+        "reviu",
+        77,
+        "I_kwDOExample",
+        GithubReactionContent::Heart,
+      )
+      .expect_err("add issue reaction should fail");
+
+    assert_eq!(
+      err.to_string(),
+      "The openai organization restricts OAuth app access. Ask an organization owner to approve Reviu, then try again."
+    );
+    let api_error = err.downcast_ref::<ApiError>().expect("api error");
+    assert_eq!(api_error.status_code_u16(), Some(403));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn remove_issue_reaction_uses_delete_reactions_route() {
+    let body = r#"{"reactions":[]}"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let reactions = api
+      .remove_issue_reaction(
+        "acme",
+        "widget",
+        77,
+        "I_kwDOExample",
+        GithubReactionContent::Heart,
+      )
+      .expect("remove issue reaction");
+
+    assert!(reactions.is_empty());
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "DELETE /github/repos/acme/widget/issues/77/reactions HTTP/1.1"
     );
   }
 
