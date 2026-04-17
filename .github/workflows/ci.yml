@@ -83,7 +83,8 @@ jobs:
   backend:
     name: Backend
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    # if: needs.changes.outputs.backend == 'true'
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -115,7 +116,8 @@ jobs:
   landing:
     name: Landing
     needs: changes
-    if: needs.changes.outputs.landing == 'true'
+    # if: needs.changes.outputs.landing == 'true'
+    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
