@@ -24,7 +24,7 @@ use crate::{
   app_update::{
     AppUpdateNotificationId, AppUpdateState, AppUpdateStore, AvailableAppUpdate, UpdateArtifact,
     current_arch, current_platform, download_update_artifact, install_update_artifact,
-    resolved_build_version,
+    ready_update_status_message, resolved_build_version, should_install_update_after_download,
   },
   auth_state::AuthStateStore,
   github_navigation::{open_pr_target, open_repo_target},
@@ -255,12 +255,28 @@ impl AboutPage {
     }
 
     if let Some(ready) = AppUpdateStore::try_ready_to_install(cx) {
-      if let Some(path) = ready.restart_binary_path {
-        cx.set_restart_path(path);
+      #[cfg(target_os = "windows")]
+      {
+        match install_update_artifact(&ready) {
+          Ok(()) => cx.quit(),
+          Err(err) => {
+            AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string());
+            self.update_check_status = Some(UpdateCheckStatus::Error(err.to_string()));
+            cx.notify();
+          }
+        }
+        return;
       }
-      cx.restart();
-      cx.notify();
-      return;
+
+      #[cfg(not(target_os = "windows"))]
+      {
+        if let Some(path) = ready.restart_binary_path {
+          cx.set_restart_path(path);
+        }
+        cx.restart();
+        cx.notify();
+        return;
+      }
     }
 
     let Some(update) = AppUpdateStore::try_available_update(cx) else {
@@ -280,6 +296,15 @@ impl AboutPage {
 
       match download_result {
         Ok(ready) => {
+          if !should_install_update_after_download() {
+            let _ = this.update(cx, |this, cx| {
+              AppUpdateStore::set_ready_to_install(cx, ready.clone());
+              this.update_check_status = None;
+              cx.notify();
+            });
+            return;
+          }
+
           let install_ready = ready.clone();
           let install_result = unblock(move || install_update_artifact(&install_ready)).await;
           let _ = this.update(cx, |this, cx| {
@@ -393,7 +418,7 @@ impl Render for AboutPage {
           theme.muted_foreground,
         )),
         Some(AppUpdateState::ReadyToInstall(_)) => Some((
-          "Update ready. Restart Reviu to finish applying it.".to_string(),
+          ready_update_status_message().to_string(),
           theme.status_green(),
         )),
         Some(AppUpdateState::Error { message, .. }) => {

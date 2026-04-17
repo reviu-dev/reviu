@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.4.0
 
+### Windows Support
+
+Reviu now runs on Windows, install it with the `.exe` installer from the downloads page, and get the same in-app update flow as macOS and Linux.
+
 ### Firefox Extension
 
 A Firefox extension is now available alongside the existing Chrome extension, letting you open any GitHub repository, pull request, or issue directly in Reviu from Firefox.
