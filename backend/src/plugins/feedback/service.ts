@@ -1,5 +1,7 @@
 import { env } from '../../lib/env.js'
 
+import { shipit } from '../../lib/shipit.js'
+
 type FeedbackType = 'bug' | 'feature'
 type AppProfile = 'prod' | 'dev'
 
@@ -46,29 +48,16 @@ const SHIPIT_TITLE_MAX_CHARS = 180
 const SHIPIT_BACKTRACE_MAX_CHARS = 12_000
 
 export async function createFeedbackIssue(params: CreateFeedbackParams) {
-  const res = await fetch(`${env.SHIPIT_API_URL}/api/v1/issues`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${env.SHIPIT_API_KEY}`,
-      'Content-Type': 'application/json',
+  return shipit.issues.create.mutate({
+    projectId: env.SHIPIT_PROJECT_ID,
+    title: params.title,
+    description: params.description,
+    labels: ['user-feedback', params.type],
+    status: 'backlog',
+    metadata: {
+      submittedBy: params.userEmail,
     },
-    body: JSON.stringify({
-      projectId: env.SHIPIT_PROJECT_ID,
-      title: params.title,
-      description: params.description,
-      labels: ['user-feedback', params.type],
-      status: 'backlog',
-      metadata: {
-        submittedBy: params.userEmail,
-      },
-    }),
   })
-
-  if (!res.ok) {
-    throw new Error(`ShipIt API error: ${res.status}`)
-  }
-
-  return res.json()
 }
 
 function trimSingleLine(value: string, maxChars: number) {
@@ -180,41 +169,27 @@ export async function createCrashReportIssue(params: CreateCrashReportParams) {
     `profile:${params.appProfile}`,
   ]
 
-  const res = await fetch(`${env.SHIPIT_API_URL}/api/v1/issues`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${env.SHIPIT_API_KEY}`,
-      'Content-Type': 'application/json',
+  return shipit.issues.create.mutate({
+    projectId: env.SHIPIT_PROJECT_ID,
+    title: buildCrashReportIssueTitle(params),
+    description: buildCrashReportIssueDescription(params),
+    labels,
+    status: 'backlog',
+    metadata: {
+      crashId: params.crashId,
+      appVersion: params.appVersion,
+      release: params.release ?? null,
+      platform: params.os,
+      arch: params.arch,
+      profile: params.appProfile,
+      workspacePage: params.workspacePage ?? null,
+      pathname: params.pathname ?? null,
+      gitRepoHash: params.gitContext?.repoHash ?? null,
+      githubRepository: params.githubPrContext
+        ? `${params.githubPrContext.owner}/${params.githubPrContext.repo}`
+        : null,
+      githubPrNumber: params.githubPrContext?.number ?? null,
+      submittedBy: params.userEmail ?? null,
     },
-    body: JSON.stringify({
-      projectId: env.SHIPIT_PROJECT_ID,
-      title: buildCrashReportIssueTitle(params),
-      description: buildCrashReportIssueDescription(params),
-      labels,
-      status: 'backlog',
-      metadata: {
-        crashId: params.crashId,
-        appVersion: params.appVersion,
-        release: params.release ?? null,
-        platform: params.os,
-        arch: params.arch,
-        profile: params.appProfile,
-        workspacePage: params.workspacePage ?? null,
-        pathname: params.pathname ?? null,
-        gitRepoHash: params.gitContext?.repoHash ?? null,
-        githubRepository: params.githubPrContext
-          ? `${params.githubPrContext.owner}/${params.githubPrContext.repo}`
-          : null,
-        githubPrNumber: params.githubPrContext?.number ?? null,
-        submittedBy: params.userEmail ?? null,
-      },
-    }),
   })
-
-  if (!res.ok) {
-    console.error('ShipIt API error response:', await res.text())
-    throw new Error(`ShipIt API error: ${res.status}`)
-  }
-
-  return res.json()
 }
