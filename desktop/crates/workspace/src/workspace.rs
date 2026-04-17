@@ -27,7 +27,7 @@ use crate::api::ApiClient;
 use crate::app_update::{
   AppUpdateNotificationId, AppUpdateState, AppUpdateStore, AvailableAppUpdate, UpdateArtifact,
   current_arch, current_platform, download_update_artifact, install_update_artifact,
-  resolved_build_version,
+  ready_update_button_label, resolved_build_version, should_install_update_after_download,
 };
 use crate::auth_state::{AuthState, AuthStateStore};
 use crate::billing_page::BillingPage;
@@ -597,11 +597,23 @@ impl WorkspaceView {
     }
 
     if let Some(ready) = AppUpdateStore::try_ready_to_install(cx) {
-      if let Some(path) = ready.restart_binary_path {
-        cx.set_restart_path(path);
+      #[cfg(target_os = "windows")]
+      {
+        match install_update_artifact(&ready) {
+          Ok(()) => cx.quit(),
+          Err(err) => AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string()),
+        }
+        return;
       }
-      cx.restart();
-      return;
+
+      #[cfg(not(target_os = "windows"))]
+      {
+        if let Some(path) = ready.restart_binary_path {
+          cx.set_restart_path(path);
+        }
+        cx.restart();
+        return;
+      }
     }
 
     let Some(update) = AppUpdateStore::try_available_update(cx) else {
@@ -618,6 +630,13 @@ impl WorkspaceView {
 
       match download_result {
         Ok(ready) => {
+          if !should_install_update_after_download() {
+            let _ = this.update(cx, |_, cx| {
+              AppUpdateStore::set_ready_to_install(cx, ready.clone());
+            });
+            return;
+          }
+
           let install_ready = ready.clone();
           let install_result = unblock(move || install_update_artifact(&install_ready)).await;
           let _ = this.update(cx, |_, cx| match install_result {
@@ -697,7 +716,7 @@ impl WorkspaceView {
   fn update_button_label(state: Option<AppUpdateState>) -> &'static str {
     match state {
       Some(AppUpdateState::Downloading(_)) => "Downloading...",
-      Some(AppUpdateState::ReadyToInstall(_)) => "Restart to update",
+      Some(AppUpdateState::ReadyToInstall(_)) => ready_update_button_label(),
       _ => "New version available",
     }
   }
@@ -1226,6 +1245,7 @@ mod tests {
   };
   use crate::app_update::{
     AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
+    ready_update_button_label,
   };
   use crate::shortcuts::{self, ShortcutId};
   use gpui::{Keystroke, Menu, MenuItem};
@@ -1529,7 +1549,7 @@ mod tests {
           restart_binary_path: None,
         }
       ))),
-      "Restart to update"
+      ready_update_button_label()
     );
   }
 

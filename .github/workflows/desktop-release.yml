@@ -250,3 +250,70 @@ jobs:
           path: |
             dist/release/linux/${{ matrix.target }}/Reviu-${{ env.VERSION }}-linux-${{ matrix.manifest_arch }}.tar.gz
             dist/release/desktop-update.manifest.json
+
+  build-windows:
+    name: Build Windows (${{ matrix.arch }})
+    needs: prepare-release
+    if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            manifest_arch: aarch64
+            target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+          - arch: x86_64
+            manifest_arch: x86_64
+            target: x86_64-pc-windows-msvc
+            runner: windows-latest
+    env:
+      VERSION: ${{ needs.prepare-release.outputs.version }}
+      TAG: ${{ needs.prepare-release.outputs.tag }}
+      TARGET: ${{ matrix.target }}
+      MANIFEST_ARCH: ${{ matrix.manifest_arch }}
+      API_BASE_URL: https://api.reviu.dev
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Windows packaging tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Command ISCC.exe -ErrorAction SilentlyContinue)) {
+            choco install innosetup --yes --no-progress
+          }
+          if (-not (Get-Command jq.exe -ErrorAction SilentlyContinue)) {
+            choco install jq --yes --no-progress
+          }
+
+          $innoDir = "${env:ProgramFiles(x86)}\Inno Setup 6"
+          if (Test-Path $innoDir) {
+            Add-Content -Path $env:GITHUB_PATH -Value $innoDir
+            "INNO_SETUP_COMPILER=$innoDir\ISCC.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+
+      - name: Build Windows installer
+        timeout-minutes: 35
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash ./desktop/scripts/build-windows-installer.sh "${VERSION}" "${MANIFEST_ARCH}"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-release-windows-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/release/windows/${{ matrix.target }}/Reviu-${{ env.VERSION }}-windows-${{ matrix.manifest_arch }}.exe
+            dist/release/desktop-update.manifest.json

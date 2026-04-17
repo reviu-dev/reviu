@@ -20,3 +20,6 @@ workspace = { workspace = true }
 reqwest_client = { workspace = true }
 sentry = { workspace = true }
 percent-encoding = { workspace = true }
+
+[build-dependencies]
+embed-resource = { workspace = true }

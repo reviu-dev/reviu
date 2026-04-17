@@ -6434,6 +6434,7 @@ name = "reviu"
 version = "0.3.0"
 dependencies = [
  "editor",
+ "embed-resource",
  "gpui",
  "gpui-component",
  "gpui-component-assets",

@@ -274,11 +274,48 @@ pub fn install_update_artifact(ready: &ReadyToInstallAppUpdate) -> Result<()> {
     install_update_linux(ready)
   }
 
-  #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+  #[cfg(target_os = "windows")]
+  {
+    install_update_windows(&ready.artifact_path)
+  }
+
+  #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
   {
     let _ = ready;
-    bail!("installer launch is currently supported on macOS and Linux only")
+    bail!("installer launch is currently supported on macOS, Linux, and Windows only")
   }
+}
+
+pub fn should_install_update_after_download() -> bool {
+  !cfg!(target_os = "windows")
+}
+
+pub fn ready_update_button_label() -> &'static str {
+  if cfg!(target_os = "windows") {
+    "Install update"
+  } else {
+    "Restart to update"
+  }
+}
+
+pub fn ready_update_status_message() -> &'static str {
+  if cfg!(target_os = "windows") {
+    "Update ready. Run the installer to finish applying it."
+  } else {
+    "Update ready. Restart Reviu to finish applying it."
+  }
+}
+
+#[cfg(target_os = "windows")]
+fn install_update_windows(artifact_path: &Path) -> Result<()> {
+  Command::new(artifact_path).spawn().with_context(|| {
+    format!(
+      "failed to launch Windows installer {}",
+      artifact_path.display()
+    )
+  })?;
+
+  Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -898,6 +935,31 @@ mod tests {
       updates_directory_for_profile(base, AppProfile::Dev),
       PathBuf::from("/tmp/reviu-updates/reviu.dev/updates")
     );
+  }
+
+  #[test]
+  fn update_install_timing_matches_current_platform() {
+    assert_eq!(
+      should_install_update_after_download(),
+      !cfg!(target_os = "windows")
+    );
+  }
+
+  #[test]
+  fn ready_update_copy_matches_current_platform() {
+    if cfg!(target_os = "windows") {
+      assert_eq!(ready_update_button_label(), "Install update");
+      assert_eq!(
+        ready_update_status_message(),
+        "Update ready. Run the installer to finish applying it."
+      );
+    } else {
+      assert_eq!(ready_update_button_label(), "Restart to update");
+      assert_eq!(
+        ready_update_status_message(),
+        "Update ready. Restart Reviu to finish applying it."
+      );
+    }
   }
 
   #[test]
