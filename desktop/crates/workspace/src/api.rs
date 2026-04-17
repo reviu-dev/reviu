@@ -512,9 +512,73 @@ pub struct GithubPullRequestIssueCommentUser {
   pub avatar_url: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum GithubReactionContent {
+  Confused,
+  Eyes,
+  Heart,
+  Hooray,
+  Laugh,
+  Rocket,
+  ThumbsDown,
+  ThumbsUp,
+}
+
+impl GithubReactionContent {
+  pub const ALL: [Self; 8] = [
+    Self::ThumbsUp,
+    Self::Laugh,
+    Self::Confused,
+    Self::Rocket,
+    Self::ThumbsDown,
+    Self::Hooray,
+    Self::Heart,
+    Self::Eyes,
+  ];
+
+  pub fn emoji(self) -> &'static str {
+    match self {
+      Self::ThumbsUp => "👍",
+      Self::ThumbsDown => "👎",
+      Self::Laugh => "😄",
+      Self::Hooray => "🎉",
+      Self::Confused => "😕",
+      Self::Heart => "❤️",
+      Self::Rocket => "🚀",
+      Self::Eyes => "👀",
+    }
+  }
+
+  pub fn label(self) -> &'static str {
+    match self {
+      Self::ThumbsUp => "Thumbs up",
+      Self::ThumbsDown => "Thumbs down",
+      Self::Laugh => "Laugh",
+      Self::Hooray => "Hooray",
+      Self::Confused => "Confused",
+      Self::Heart => "Heart",
+      Self::Rocket => "Rocket",
+      Self::Eyes => "Eyes",
+    }
+  }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubReactionGroup {
+  pub content: GithubReactionContent,
+  pub count: u64,
+  #[serde(rename = "viewer_has_reacted")]
+  pub viewer_has_reacted: bool,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubPullRequestIssueComment {
+  #[serde(rename = "node_id", default)]
+  pub node_id: String,
+  #[serde(default)]
+  pub reactions: Vec<GithubReactionGroup>,
   pub id: u64,
   pub body: String,
   #[serde(rename = "created_at")]
@@ -546,6 +610,10 @@ pub enum GithubPullRequestReviewState {
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubPullRequestReview {
+  #[serde(rename = "node_id", default)]
+  pub node_id: String,
+  #[serde(default)]
+  pub reactions: Vec<GithubReactionGroup>,
   pub id: u64,
   pub body: Option<String>,
   pub state: GithubPullRequestReviewState,
@@ -561,6 +629,10 @@ pub struct GithubPullRequestReview {
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubPullRequestReviewComment {
+  #[serde(rename = "node_id", default)]
+  pub node_id: String,
+  #[serde(default)]
+  pub reactions: Vec<GithubReactionGroup>,
   pub id: u64,
   #[serde(rename = "pull_request_review_id")]
   pub pull_request_review_id: Option<u64>,
@@ -643,6 +715,8 @@ pub enum GithubPullRequestMergeReadinessStatus {
 pub struct GithubPullRequestDetails {
   #[serde(rename = "node_id")]
   pub node_id: String,
+  #[serde(default)]
+  pub reactions: Vec<GithubReactionGroup>,
   pub number: u64,
   pub title: String,
   pub state: GithubPullRequestState,
@@ -1189,24 +1263,38 @@ struct GithubPullRequestCommitsResponse {
   commits: Vec<GithubPullRequestCommit>,
 }
 
-#[derive(Debug, Deserialize)]
-struct GithubPullRequestCommentsResponse {
-  comments: Vec<GithubPullRequestReviewComment>,
+#[derive(Debug, Deserialize, Default)]
+pub struct GithubPullRequestConversationPullRequest {
+  #[serde(rename = "node_id")]
+  pub node_id: String,
+  #[serde(default)]
+  pub reactions: Vec<GithubReactionGroup>,
 }
 
 #[derive(Debug, Deserialize)]
-struct GithubPullRequestIssueCommentsResponse {
-  comments: Vec<GithubPullRequestIssueComment>,
+pub struct GithubPullRequestConversation {
+  #[serde(default, rename = "pull_request")]
+  pub pull_request: GithubPullRequestConversationPullRequest,
+  #[serde(rename = "issue_comments")]
+  pub issue_comments: Vec<GithubPullRequestIssueComment>,
+  pub reviews: Vec<GithubPullRequestReview>,
+  #[serde(rename = "review_comments")]
+  pub review_comments: Vec<GithubPullRequestReviewComment>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullRequestConversationResponse {
+  conversation: GithubPullRequestConversation,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubReactionGroupsResponse {
+  reactions: Vec<GithubReactionGroup>,
 }
 
 #[derive(Debug, Deserialize)]
 struct GithubPullRequestCommentResponse {
   comment: GithubPullRequestReviewComment,
-}
-
-#[derive(Debug, Deserialize)]
-struct GithubPullRequestReviewsResponse {
-  reviews: Vec<GithubPullRequestReview>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1227,6 +1315,13 @@ struct UpdateGithubIssueCommentRequest<'a> {
 #[derive(Debug, Serialize)]
 struct UpdateGithubDescriptionRequest<'a> {
   body: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct GithubReactionMutationRequest<'a> {
+  #[serde(rename = "subjectId")]
+  subject_id: &'a str,
+  content: GithubReactionContent,
 }
 
 #[derive(Debug, Serialize)]
@@ -2383,13 +2478,13 @@ impl ApiClient {
     Ok(())
   }
 
-  pub fn fetch_pull_request_review_comments(
+  pub fn fetch_pull_request_conversation(
     &self,
     owner: &str,
     repo: &str,
     number: u64,
-  ) -> Result<Vec<GithubPullRequestReviewComment>> {
-    let route = format!("/github/pr/{number}/comments");
+  ) -> Result<GithubPullRequestConversation> {
+    let route = format!("/github/pr/{number}/conversation");
     let response = self
       .authed_request(Method::GET, route.as_str())
       .query(&[("org", owner), ("repo", repo)])
@@ -2402,54 +2497,66 @@ impl ApiClient {
     if !status.is_success() {
       anyhow::bail!("unexpected status: {}", status);
     }
-    let payload = response.json::<GithubPullRequestCommentsResponse>()?;
-    Ok(payload.comments)
+    let payload = response.json::<GithubPullRequestConversationResponse>()?;
+    Ok(payload.conversation)
   }
 
-  pub fn fetch_pull_request_issue_comments(
+  pub fn add_pull_request_reaction(
     &self,
     owner: &str,
     repo: &str,
     number: u64,
-  ) -> Result<Vec<GithubPullRequestIssueComment>> {
-    let route = format!("/github/pr/{number}/issue-comments");
+    subject_id: &str,
+    content: GithubReactionContent,
+  ) -> Result<Vec<GithubReactionGroup>> {
+    let route = format!("/github/pr/{number}/reactions");
     let response = self
-      .authed_request(Method::GET, route.as_str())
+      .authed_request(Method::POST, route.as_str())
       .query(&[("org", owner), ("repo", repo)])
+      .json(&GithubReactionMutationRequest {
+        subject_id,
+        content,
+      })
       .send()?;
     let status = response.status();
-    Self::record_http_status("GET", route.as_str(), status);
+    Self::record_http_status("POST", route.as_str(), status);
     if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
     if !status.is_success() {
       anyhow::bail!("unexpected status: {}", status);
     }
-    let payload = response.json::<GithubPullRequestIssueCommentsResponse>()?;
-    Ok(payload.comments)
+    let payload = response.json::<GithubReactionGroupsResponse>()?;
+    Ok(payload.reactions)
   }
 
-  pub fn fetch_pull_request_reviews(
+  pub fn remove_pull_request_reaction(
     &self,
     owner: &str,
     repo: &str,
     number: u64,
-  ) -> Result<Vec<GithubPullRequestReview>> {
-    let route = format!("/github/pr/{number}/reviews");
+    subject_id: &str,
+    content: GithubReactionContent,
+  ) -> Result<Vec<GithubReactionGroup>> {
+    let route = format!("/github/pr/{number}/reactions");
     let response = self
-      .authed_request(Method::GET, route.as_str())
+      .authed_request(Method::DELETE, route.as_str())
       .query(&[("org", owner), ("repo", repo)])
+      .json(&GithubReactionMutationRequest {
+        subject_id,
+        content,
+      })
       .send()?;
     let status = response.status();
-    Self::record_http_status("GET", route.as_str(), status);
+    Self::record_http_status("DELETE", route.as_str(), status);
     if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }
     if !status.is_success() {
       anyhow::bail!("unexpected status: {}", status);
     }
-    let payload = response.json::<GithubPullRequestReviewsResponse>()?;
-    Ok(payload.reviews)
+    let payload = response.json::<GithubReactionGroupsResponse>()?;
+    Ok(payload.reactions)
   }
 
   pub fn update_pull_request_review_comment(
@@ -2927,6 +3034,7 @@ mod tests {
   ) -> GithubPullRequestDetails {
     GithubPullRequestDetails {
       node_id: "PR_kwDOExample".to_string(),
+      reactions: Vec::new(),
       number: 42,
       title: "Test PR".to_string(),
       state,
@@ -5081,44 +5189,97 @@ mod tests {
   }
 
   #[test]
-  fn fetch_pull_request_issue_comments_parses_success_payload() {
+  fn fetch_pull_request_conversation_parses_success_payload() {
     let body = r#"{
-      "comments": [
-        {
-          "id": 11,
-          "body": "Can you add tests?",
-          "created_at": "2026-02-28T10:00:00Z",
-          "updated_at": "2026-02-28T10:05:00Z",
-          "user": { "login": "octocat", "avatar_url": null }
-        }
-      ]
+      "conversation": {
+        "pull_request": {
+          "node_id": "PR_kwDOExample",
+          "reactions": [
+            {
+              "content": "THUMBS_UP",
+              "count": 2,
+              "viewer_has_reacted": true
+            }
+          ]
+        },
+        "issue_comments": [
+          {
+            "node_id": "IC_kwDOExample",
+            "id": 11,
+            "body": "Can you add tests?",
+            "created_at": "2026-02-28T10:00:00Z",
+            "updated_at": "2026-02-28T10:05:00Z",
+            "user": { "login": "octocat", "avatar_url": null }
+          }
+        ],
+        "reviews": [
+          {
+            "node_id": "PRR_kwDOExample",
+            "id": 123,
+            "body": "Looks good",
+            "state": "APPROVED",
+            "submitted_at": "2026-02-28T12:00:00Z",
+            "commit_id": "1111111111111111111111111111111111111111",
+            "html_url": "https://github.com/acme/widget/pull/42#pullrequestreview-123",
+            "user": { "login": "reviewer", "avatar_url": null }
+          }
+        ],
+        "review_comments": [
+          {
+            "node_id": "PRRC_kwDOExample",
+            "id": 1,
+            "pull_request_review_id": 123,
+            "diff_hunk": "@@ -1 +1 @@",
+            "path": "src/main.rs",
+            "position": 1,
+            "original_position": 1,
+            "commit_id": "head123",
+            "original_commit_id": "base123",
+            "in_reply_to_id": null,
+            "user": { "login": "octocat", "avatar_url": null },
+            "body": "Looks good",
+            "created_at": "2026-02-15T12:00:00Z",
+            "updated_at": "2026-02-15T12:01:00Z",
+            "start_line": null,
+            "original_start_line": null,
+            "start_side": null,
+            "line": 1,
+            "original_line": 1,
+            "side": "RIGHT"
+          }
+        ]
+      }
     }"#;
     let (base_url, handle) = start_single_response_server("200 OK", body);
     let api = make_test_api_client(base_url);
 
-    let comments = api
-      .fetch_pull_request_issue_comments("acme", "widget", 42)
-      .expect("fetch pull request issue comments");
-    assert_eq!(comments.len(), 1);
-    assert_eq!(comments[0].id, 11);
-    assert_eq!(comments[0].body, "Can you add tests?");
+    let conversation = api
+      .fetch_pull_request_conversation("acme", "widget", 42)
+      .expect("fetch pull request conversation");
+    assert_eq!(conversation.pull_request.node_id, "PR_kwDOExample");
     assert_eq!(
-      comments[0].user.as_ref().map(|user| user.login.as_str()),
-      Some("octocat")
+      conversation.pull_request.reactions[0].content,
+      GithubReactionContent::ThumbsUp
     );
+    assert_eq!(conversation.issue_comments[0].node_id, "IC_kwDOExample");
+    assert_eq!(
+      conversation.reviews[0].state,
+      GithubPullRequestReviewState::Approved
+    );
+    assert_eq!(conversation.review_comments[0].path, "src/main.rs");
     handle.join().expect("join server thread");
   }
 
   #[test]
-  fn fetch_pull_request_issue_comments_uses_expected_route_with_query_params() {
-    let body = r#"{"comments":[]}"#;
+  fn fetch_pull_request_conversation_uses_expected_route_with_query_params() {
+    let body = r#"{"conversation":{"pull_request":{"node_id":"PR_kwDOExample","reactions":[]},"issue_comments":[],"reviews":[],"review_comments":[]}}"#;
     let (base_url, request_line, handle) =
       start_single_response_server_with_request_line("200 OK", body);
     let api = make_test_api_client(base_url);
 
     let _ = api
-      .fetch_pull_request_issue_comments("acme", "widget", 42)
-      .expect("fetch pull request issue comments");
+      .fetch_pull_request_conversation("acme", "widget", 42)
+      .expect("fetch pull request conversation");
 
     handle.join().expect("join server thread");
     let request_line = request_line
@@ -5128,52 +5289,62 @@ mod tests {
       .unwrap_or_default();
     assert_eq!(
       request_line,
-      "GET /github/pr/42/issue-comments?org=acme&repo=widget HTTP/1.1"
+      "GET /github/pr/42/conversation?org=acme&repo=widget HTTP/1.1"
     );
   }
 
   #[test]
-  fn fetch_pull_request_reviews_parses_success_payload() {
+  fn add_pull_request_reaction_serializes_subject_and_content() {
     let body = r#"{
-      "reviews": [
-        {
-          "id": 123,
-          "body": "Looks good",
-          "state": "APPROVED",
-          "submitted_at": "2026-02-28T12:00:00Z",
-          "commit_id": "1111111111111111111111111111111111111111",
-          "html_url": "https://github.com/acme/widget/pull/42#pullrequestreview-123",
-          "user": { "login": "octocat", "avatar_url": null }
-        }
+      "reactions": [
+        { "content": "THUMBS_UP", "count": 3, "viewer_has_reacted": true }
       ]
     }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
     let api = make_test_api_client(base_url);
 
-    let reviews = api
-      .fetch_pull_request_reviews("acme", "widget", 42)
-      .expect("fetch pull request reviews");
-    assert_eq!(reviews.len(), 1);
-    assert_eq!(reviews[0].id, 123);
-    assert_eq!(reviews[0].state, GithubPullRequestReviewState::Approved);
-    assert_eq!(
-      reviews[0].user.as_ref().map(|user| user.login.as_str()),
-      Some("octocat")
-    );
+    let reactions = api
+      .add_pull_request_reaction(
+        "acme",
+        "widget",
+        42,
+        "IC_kwDOExample",
+        GithubReactionContent::ThumbsUp,
+      )
+      .expect("add pull request reaction");
+
+    assert_eq!(reactions.len(), 1);
+    assert_eq!(reactions[0].content, GithubReactionContent::ThumbsUp);
+    assert!(reactions[0].viewer_has_reacted);
     handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.starts_with("POST /github/pr/42/reactions?org=acme&repo=widget HTTP/1.1"));
+    assert!(request.contains("\"subjectId\":\"IC_kwDOExample\""));
+    assert!(request.contains("\"content\":\"THUMBS_UP\""));
   }
 
   #[test]
-  fn fetch_pull_request_reviews_uses_expected_route_with_query_params() {
-    let body = r#"{"reviews":[]}"#;
+  fn remove_pull_request_reaction_uses_delete_reactions_route() {
+    let body = r#"{"reactions":[]}"#;
     let (base_url, request_line, handle) =
       start_single_response_server_with_request_line("200 OK", body);
     let api = make_test_api_client(base_url);
 
-    let _ = api
-      .fetch_pull_request_reviews("acme", "widget", 42)
-      .expect("fetch pull request reviews");
+    let reactions = api
+      .remove_pull_request_reaction(
+        "acme",
+        "widget",
+        42,
+        "IC_kwDOExample",
+        GithubReactionContent::Heart,
+      )
+      .expect("remove pull request reaction");
 
+    assert!(reactions.is_empty());
     handle.join().expect("join server thread");
     let request_line = request_line
       .lock()
@@ -5182,49 +5353,8 @@ mod tests {
       .unwrap_or_default();
     assert_eq!(
       request_line,
-      "GET /github/pr/42/reviews?org=acme&repo=widget HTTP/1.1"
+      "DELETE /github/pr/42/reactions?org=acme&repo=widget HTTP/1.1"
     );
-  }
-
-  #[test]
-  fn fetch_pull_request_review_comments_parses_success_payload() {
-    let body = r#"{
-      "comments": [
-        {
-          "id": 1,
-          "pull_request_review_id": 12,
-          "diff_hunk": "@@ -1 +1 @@",
-          "path": "src/main.rs",
-          "position": 1,
-          "original_position": 1,
-          "commit_id": "head123",
-          "original_commit_id": "base123",
-          "in_reply_to_id": null,
-          "user": { "login": "octocat", "avatar_url": null },
-          "body": "Looks good",
-          "created_at": "2026-02-15T12:00:00Z",
-          "updated_at": "2026-02-15T12:01:00Z",
-          "start_line": null,
-          "original_start_line": null,
-          "start_side": null,
-          "line": 1,
-          "original_line": 1,
-          "side": "RIGHT"
-        }
-      ]
-    }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let comments = api
-      .fetch_pull_request_review_comments("acme", "widget", 42)
-      .expect("fetch review comments");
-    assert_eq!(comments.len(), 1);
-    assert_eq!(comments[0].id, 1);
-    assert_eq!(comments[0].path, "src/main.rs");
-    assert_eq!(comments[0].user.login, "octocat");
-    assert_eq!(comments[0].side.as_deref(), Some("RIGHT"));
-    handle.join().expect("join server thread");
   }
 
   #[test]
@@ -6134,37 +6264,13 @@ mod tests {
   }
 
   #[test]
-  fn fetch_pull_request_review_comments_returns_unauthorized_error() {
+  fn fetch_pull_request_conversation_returns_unauthorized_error() {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
     let api = make_test_api_client(base_url);
 
     let err = api
-      .fetch_pull_request_review_comments("acme", "widget", 42)
+      .fetch_pull_request_conversation("acme", "widget", 42)
       .err();
-    assert!(err.is_some());
-    assert!(err.expect("error").to_string().contains("unauthorized"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_pull_request_issue_comments_returns_unauthorized_error() {
-    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
-    let api = make_test_api_client(base_url);
-
-    let err = api
-      .fetch_pull_request_issue_comments("acme", "widget", 42)
-      .err();
-    assert!(err.is_some());
-    assert!(err.expect("error").to_string().contains("unauthorized"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_pull_request_reviews_returns_unauthorized_error() {
-    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
-    let api = make_test_api_client(base_url);
-
-    let err = api.fetch_pull_request_reviews("acme", "widget", 42).err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");

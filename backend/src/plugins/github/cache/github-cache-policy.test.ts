@@ -4,6 +4,7 @@ import {
   createGithubNotificationsCachePolicy,
   createGithubPullRequestCommentsCachePolicy,
   createGithubPullRequestCommitsCachePolicy,
+  createGithubPullRequestConversationCachePolicy,
   createGithubPullRequestDetailsCachePolicy,
   createGithubPullRequestFilesCachePolicy,
   createGithubPullRequestIssueCommentsCachePolicy,
@@ -101,6 +102,23 @@ describe('github cache policy', () => {
       ttlMs: 15_000,
       staleMs: 120_000,
       tags: ['pull-request:openai/reviu:42:comments'],
+    })
+  })
+
+  it('builds the pull request conversation cache policy with all conversation tags', () => {
+    expect(createGithubPullRequestConversationCachePolicy('user-1', 'OpenAI', 'Reviu', 42)).toEqual({
+      operation: 'pull_request.conversation',
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'pull-request:openai/reviu:42:conversation',
+      ttlMs: 15_000,
+      staleMs: 120_000,
+      tags: [
+        'pull-request:openai/reviu:42',
+        'issue:openai/reviu:42:comments',
+        'pull-request:openai/reviu:42:comments',
+        'pull-request:openai/reviu:42:reviews',
+      ],
     })
   })
 

@@ -31,6 +31,22 @@ export const createPullRequestReviewBodySchema = z.object({
   body: z.string().optional(),
 })
 
+const githubReactionContentSchema = z.enum([
+  'CONFUSED',
+  'EYES',
+  'HEART',
+  'HOORAY',
+  'LAUGH',
+  'ROCKET',
+  'THUMBS_DOWN',
+  'THUMBS_UP',
+])
+
+export const pullRequestReactionMutationBodySchema = z.object({
+  subjectId: z.string().trim().min(1, 'Missing reaction subject id'),
+  content: githubReactionContentSchema,
+})
+
 export const createPullRequestBodySchema = z.object({
   title: z.string().trim().min(1, 'Missing pull request title'),
   base: z.string().trim().min(1, 'Missing base branch'),

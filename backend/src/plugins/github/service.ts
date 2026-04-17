@@ -24,10 +24,31 @@ import type {
   CreatePullRequestReviewResponse,
   DeleteIssueCommentParams,
   DeletePullRequestCommentParams,
+  GithubGraphqlAddReactionResponse,
+  GithubGraphqlConnection,
+  GithubGraphqlPullRequestConversationActor,
+  GithubGraphqlPullRequestConversationDatabaseNode,
+  GithubGraphqlPullRequestConversationResponse,
+  GithubGraphqlPullRequestIssueCommentNode,
+  GithubGraphqlPullRequestIssueCommentsPageResponse,
   GithubGraphqlPullRequestNode,
+  GithubGraphqlPullRequestReviewCommentNode,
+  GithubGraphqlPullRequestReviewNode,
+  GithubGraphqlPullRequestReviewsPageResponse,
+  GithubGraphqlPullRequestReviewThreadCommentsPageResponse,
+  GithubGraphqlPullRequestReviewThreadNode,
+  GithubGraphqlPullRequestReviewThreadsPageResponse,
+  GithubGraphqlReactionGroup,
+  GithubGraphqlRemoveReactionResponse,
   GithubIssue,
   GithubIssueDetailsCommentParameters,
   GithubIssueDetailsCommentResponse,
+  GithubPullRequestConversation,
+  GithubPullRequestIssueComment,
+  GithubPullRequestReview,
+  GithubPullRequestReviewComment,
+  GithubReactionContent,
+  GithubReactionGroup,
   GithubRepositoryParameters,
   GithubRepositoryResponse,
   GithubUserResponse,
@@ -325,6 +346,301 @@ const GITHUB_GRAPHQL_CONVERT_PULL_REQUEST_TO_DRAFT_MUTATION = `
       }
     }
   }
+`
+
+const GITHUB_GRAPHQL_REACTION_GROUP_FRAGMENT = `
+  fragment PullRequestReactionGroupFields on ReactionGroup {
+    content
+    viewerHasReacted
+    reactors {
+      totalCount
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_CONVERSATION_SHARED_FRAGMENTS = `
+  fragment PullRequestConversationActorFields on Actor {
+    __typename
+    login
+    avatarUrl
+  }
+
+  fragment PullRequestConversationDatabaseFields on Node {
+    id
+    ... on IssueComment {
+      databaseId
+      fullDatabaseId
+    }
+    ... on PullRequestReview {
+      databaseId
+      fullDatabaseId
+    }
+    ... on PullRequestReviewComment {
+      databaseId
+      fullDatabaseId
+    }
+  }
+
+  ${GITHUB_GRAPHQL_REACTION_GROUP_FRAGMENT}
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_ISSUE_COMMENT_FRAGMENT = `
+  fragment PullRequestIssueCommentFields on IssueComment {
+    ...PullRequestConversationDatabaseFields
+    reactionGroups {
+      ...PullRequestReactionGroupFields
+    }
+    body
+    createdAt
+    updatedAt
+    author {
+      ...PullRequestConversationActorFields
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_FRAGMENT = `
+  fragment PullRequestReviewFields on PullRequestReview {
+    ...PullRequestConversationDatabaseFields
+    reactionGroups {
+      ...PullRequestReactionGroupFields
+    }
+    body
+    state
+    submittedAt
+    commit {
+      oid
+    }
+    url
+    author {
+      ...PullRequestConversationActorFields
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_COMMENT_FRAGMENT = `
+  fragment PullRequestReviewCommentFields on PullRequestReviewComment {
+    ...PullRequestConversationDatabaseFields
+    reactionGroups {
+      ...PullRequestReactionGroupFields
+    }
+    diffHunk
+    path
+    position
+    originalPosition
+    commit {
+      oid
+    }
+    originalCommit {
+      oid
+    }
+    pullRequestReview {
+      ...PullRequestConversationDatabaseFields
+    }
+    replyTo {
+      ...PullRequestConversationDatabaseFields
+    }
+    author {
+      ...PullRequestConversationActorFields
+    }
+    body
+    createdAt
+    updatedAt
+    startLine
+    originalStartLine
+    line
+    originalLine
+  }
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_THREAD_FRAGMENT = `
+  fragment PullRequestReviewThreadFields on PullRequestReviewThread {
+    id
+    path
+    line
+    originalLine
+    startLine
+    originalStartLine
+    diffSide
+    startDiffSide
+    comments(first: 100) {
+      nodes {
+        ...PullRequestReviewCommentFields
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_CONVERSATION_FRAGMENTS = `
+  ${GITHUB_GRAPHQL_PULL_REQUEST_CONVERSATION_SHARED_FRAGMENTS}
+  ${GITHUB_GRAPHQL_PULL_REQUEST_ISSUE_COMMENT_FRAGMENT}
+  ${GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_FRAGMENT}
+  ${GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_COMMENT_FRAGMENT}
+  ${GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_THREAD_FRAGMENT}
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_ISSUE_COMMENT_FRAGMENTS = `
+  ${GITHUB_GRAPHQL_PULL_REQUEST_CONVERSATION_SHARED_FRAGMENTS}
+  ${GITHUB_GRAPHQL_PULL_REQUEST_ISSUE_COMMENT_FRAGMENT}
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_FRAGMENTS = `
+  ${GITHUB_GRAPHQL_PULL_REQUEST_CONVERSATION_SHARED_FRAGMENTS}
+  ${GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_FRAGMENT}
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_THREAD_FRAGMENTS = `
+  ${GITHUB_GRAPHQL_PULL_REQUEST_CONVERSATION_SHARED_FRAGMENTS}
+  ${GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_COMMENT_FRAGMENT}
+  ${GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_THREAD_FRAGMENT}
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_THREAD_COMMENT_FRAGMENTS = `
+  ${GITHUB_GRAPHQL_PULL_REQUEST_CONVERSATION_SHARED_FRAGMENTS}
+  ${GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_COMMENT_FRAGMENT}
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_CONVERSATION_QUERY = `
+  query PullRequestConversation($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        id
+        reactionGroups {
+          ...PullRequestReactionGroupFields
+        }
+        comments(first: 100) {
+          nodes {
+            ...PullRequestIssueCommentFields
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+        reviews(first: 100, states: [APPROVED, CHANGES_REQUESTED, COMMENTED]) {
+          nodes {
+            ...PullRequestReviewFields
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+        reviewThreads(first: 100) {
+          nodes {
+            ...PullRequestReviewThreadFields
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  }
+  ${GITHUB_GRAPHQL_PULL_REQUEST_CONVERSATION_FRAGMENTS}
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_ISSUE_COMMENTS_PAGE_QUERY = `
+  query PullRequestIssueCommentsPage($owner: String!, $name: String!, $number: Int!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        comments(first: 100, after: $after) {
+          nodes {
+            ...PullRequestIssueCommentFields
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  }
+  ${GITHUB_GRAPHQL_PULL_REQUEST_ISSUE_COMMENT_FRAGMENTS}
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_REVIEWS_PAGE_QUERY = `
+  query PullRequestReviewsPage($owner: String!, $name: String!, $number: Int!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        reviews(first: 100, after: $after, states: [APPROVED, CHANGES_REQUESTED, COMMENTED]) {
+          nodes {
+            ...PullRequestReviewFields
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  }
+  ${GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_FRAGMENTS}
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_THREADS_PAGE_QUERY = `
+  query PullRequestReviewThreadsPage($owner: String!, $name: String!, $number: Int!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        reviewThreads(first: 100, after: $after) {
+          nodes {
+            ...PullRequestReviewThreadFields
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  }
+  ${GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_THREAD_FRAGMENTS}
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_THREAD_COMMENTS_PAGE_QUERY = `
+  query PullRequestReviewThreadCommentsPage($threadId: ID!, $after: String) {
+    node(id: $threadId) {
+      ... on PullRequestReviewThread {
+        comments(first: 100, after: $after) {
+          nodes {
+            ...PullRequestReviewCommentFields
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  }
+  ${GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_THREAD_COMMENT_FRAGMENTS}
+`
+
+const GITHUB_GRAPHQL_ADD_REACTION_MUTATION = `
+  mutation AddReaction($subjectId: ID!, $content: ReactionContent!) {
+    addReaction(input: { subjectId: $subjectId, content: $content }) {
+      reactionGroups {
+        ...PullRequestReactionGroupFields
+      }
+    }
+  }
+  ${GITHUB_GRAPHQL_REACTION_GROUP_FRAGMENT}
+`
+
+const GITHUB_GRAPHQL_REMOVE_REACTION_MUTATION = `
+  mutation RemoveReaction($subjectId: ID!, $content: ReactionContent!) {
+    removeReaction(input: { subjectId: $subjectId, content: $content }) {
+      reactionGroups {
+        ...PullRequestReactionGroupFields
+      }
+    }
+  }
+  ${GITHUB_GRAPHQL_REACTION_GROUP_FRAGMENT}
 `
 
 interface GithubErrorLike {
@@ -1021,6 +1337,394 @@ export async function fetchGithubIssueSearchGraphql(
     .map(mapGithubGraphqlIssue)
 
   return { issues, issueCount: data.search.issueCount }
+}
+
+function graphqlConnectionNodes<T>(connection: GithubGraphqlConnection<T>): T[] {
+  return connection.nodes?.flatMap(node => (node ? [node] : [])) ?? []
+}
+
+function graphqlDatabaseId(
+  node: GithubGraphqlPullRequestConversationDatabaseNode | null | undefined,
+): number | null {
+  const value = node?.fullDatabaseId ?? node?.databaseId
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+
+  return null
+}
+
+function requireGraphqlDatabaseId(
+  node: GithubGraphqlPullRequestConversationDatabaseNode,
+  kind: string,
+): number {
+  const id = graphqlDatabaseId(node)
+  if (id == null) {
+    throw new Error(`GitHub GraphQL ${kind} is missing a database id`)
+  }
+
+  return id
+}
+
+function actorLogin(actor: GithubGraphqlPullRequestConversationActor | null | undefined): string | null {
+  const login = actor?.login?.trim()
+  return login || null
+}
+
+function normalizeGraphqlDiffSide(value: string | null | undefined): 'LEFT' | 'RIGHT' | null {
+  return value === 'LEFT' || value === 'RIGHT' ? value : null
+}
+
+function mapGithubGraphqlReactionGroups(
+  reactionGroups: GithubGraphqlReactionGroup[] | null | undefined,
+): GithubReactionGroup[] {
+  return (reactionGroups ?? [])
+    .map(group => ({
+      content: group.content,
+      count: group.reactors.totalCount,
+      viewer_has_reacted: group.viewerHasReacted,
+    }))
+    .filter(group => group.count > 0 || group.viewer_has_reacted)
+}
+
+function mapGithubGraphqlPullRequestIssueComment(
+  comment: GithubGraphqlPullRequestIssueCommentNode,
+): GithubPullRequestIssueComment {
+  const login = actorLogin(comment.author)
+
+  return {
+    node_id: comment.id,
+    reactions: mapGithubGraphqlReactionGroups(comment.reactionGroups),
+    id: requireGraphqlDatabaseId(comment, 'issue comment'),
+    body: comment.body,
+    created_at: comment.createdAt,
+    updated_at: comment.updatedAt,
+    user: login
+      ? {
+          login,
+          avatar_url: comment.author?.avatarUrl ?? '',
+        }
+      : null,
+  }
+}
+
+function mapGithubGraphqlPullRequestReview(
+  review: GithubGraphqlPullRequestReviewNode,
+): GithubPullRequestReview {
+  const login = actorLogin(review.author)
+
+  return {
+    node_id: review.id,
+    reactions: mapGithubGraphqlReactionGroups(review.reactionGroups),
+    id: requireGraphqlDatabaseId(review, 'review'),
+    body: review.body ?? '',
+    state: review.state,
+    submitted_at: review.submittedAt ?? undefined,
+    commit_id: review.commit?.oid ?? null,
+    html_url: review.url,
+    user: login
+      ? {
+          login,
+          avatar_url: review.author?.avatarUrl ?? '',
+        }
+      : null,
+  }
+}
+
+function mapGithubGraphqlPullRequestReviewComment(
+  comment: GithubGraphqlPullRequestReviewCommentNode,
+  thread: GithubGraphqlPullRequestReviewThreadNode,
+): GithubPullRequestReviewComment {
+  const login = actorLogin(comment.author) ?? 'unknown'
+
+  return {
+    node_id: comment.id,
+    reactions: mapGithubGraphqlReactionGroups(comment.reactionGroups),
+    id: requireGraphqlDatabaseId(comment, 'review comment'),
+    pull_request_review_id: graphqlDatabaseId(comment.pullRequestReview),
+    diff_hunk: comment.diffHunk,
+    path: comment.path || thread.path,
+    position: comment.position ?? undefined,
+    original_position: comment.originalPosition ?? undefined,
+    commit_id: comment.commit?.oid ?? '',
+    original_commit_id: comment.originalCommit?.oid ?? comment.commit?.oid ?? '',
+    in_reply_to_id: graphqlDatabaseId(comment.replyTo) ?? undefined,
+    user: {
+      login,
+      avatar_url: comment.author?.avatarUrl ?? '',
+    },
+    body: comment.body,
+    created_at: comment.createdAt,
+    updated_at: comment.updatedAt,
+    start_line: comment.startLine ?? thread.startLine,
+    original_start_line: comment.originalStartLine ?? thread.originalStartLine,
+    start_side: normalizeGraphqlDiffSide(thread.startDiffSide) ?? undefined,
+    line: comment.line ?? thread.line ?? undefined,
+    original_line: comment.originalLine ?? thread.originalLine ?? undefined,
+    side: normalizeGraphqlDiffSide(thread.diffSide) ?? undefined,
+  }
+}
+
+async function fetchRemainingGithubPullRequestIssueCommentNodes(
+  token: string,
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  initialPageInfo: GithubGraphqlConnection<GithubGraphqlPullRequestIssueCommentNode>['pageInfo'],
+): Promise<GithubGraphqlPullRequestIssueCommentNode[]> {
+  const nodes: GithubGraphqlPullRequestIssueCommentNode[] = []
+  let pageInfo = initialPageInfo
+  let page = 1
+
+  while (pageInfo.hasNextPage && pageInfo.endCursor && page < GITHUB_PAGINATED_COLLECTION_MAX_PAGES) {
+    const data = await requestGithubGraphqlData<GithubGraphqlPullRequestIssueCommentsPageResponse>({
+      token,
+      query: GITHUB_GRAPHQL_PULL_REQUEST_ISSUE_COMMENTS_PAGE_QUERY,
+      variables: {
+        owner,
+        name: repo,
+        number: pullNumber,
+        after: pageInfo.endCursor,
+      },
+    })
+    const connection = data.repository?.pullRequest?.comments
+    if (!connection) {
+      break
+    }
+
+    nodes.push(...graphqlConnectionNodes(connection))
+    pageInfo = connection.pageInfo
+    page += 1
+  }
+
+  return nodes
+}
+
+async function fetchRemainingGithubPullRequestReviewNodes(
+  token: string,
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  initialPageInfo: GithubGraphqlConnection<GithubGraphqlPullRequestReviewNode>['pageInfo'],
+): Promise<GithubGraphqlPullRequestReviewNode[]> {
+  const nodes: GithubGraphqlPullRequestReviewNode[] = []
+  let pageInfo = initialPageInfo
+  let page = 1
+
+  while (pageInfo.hasNextPage && pageInfo.endCursor && page < GITHUB_PAGINATED_COLLECTION_MAX_PAGES) {
+    const data = await requestGithubGraphqlData<GithubGraphqlPullRequestReviewsPageResponse>({
+      token,
+      query: GITHUB_GRAPHQL_PULL_REQUEST_REVIEWS_PAGE_QUERY,
+      variables: {
+        owner,
+        name: repo,
+        number: pullNumber,
+        after: pageInfo.endCursor,
+      },
+    })
+    const connection = data.repository?.pullRequest?.reviews
+    if (!connection) {
+      break
+    }
+
+    nodes.push(...graphqlConnectionNodes(connection))
+    pageInfo = connection.pageInfo
+    page += 1
+  }
+
+  return nodes
+}
+
+async function fetchRemainingGithubPullRequestReviewThreadNodes(
+  token: string,
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  initialPageInfo: GithubGraphqlConnection<GithubGraphqlPullRequestReviewThreadNode>['pageInfo'],
+): Promise<GithubGraphqlPullRequestReviewThreadNode[]> {
+  const nodes: GithubGraphqlPullRequestReviewThreadNode[] = []
+  let pageInfo = initialPageInfo
+  let page = 1
+
+  while (pageInfo.hasNextPage && pageInfo.endCursor && page < GITHUB_PAGINATED_COLLECTION_MAX_PAGES) {
+    const data = await requestGithubGraphqlData<GithubGraphqlPullRequestReviewThreadsPageResponse>({
+      token,
+      query: GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_THREADS_PAGE_QUERY,
+      variables: {
+        owner,
+        name: repo,
+        number: pullNumber,
+        after: pageInfo.endCursor,
+      },
+    })
+    const connection = data.repository?.pullRequest?.reviewThreads
+    if (!connection) {
+      break
+    }
+
+    nodes.push(...graphqlConnectionNodes(connection))
+    pageInfo = connection.pageInfo
+    page += 1
+  }
+
+  return nodes
+}
+
+async function fetchGithubPullRequestReviewThreadCommentNodes(
+  token: string,
+  thread: GithubGraphqlPullRequestReviewThreadNode,
+): Promise<GithubGraphqlPullRequestReviewCommentNode[]> {
+  const nodes = graphqlConnectionNodes(thread.comments)
+  let pageInfo = thread.comments.pageInfo
+  let page = 1
+
+  while (pageInfo.hasNextPage && pageInfo.endCursor && page < GITHUB_PAGINATED_COLLECTION_MAX_PAGES) {
+    const data = await requestGithubGraphqlData<GithubGraphqlPullRequestReviewThreadCommentsPageResponse>({
+      token,
+      query: GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_THREAD_COMMENTS_PAGE_QUERY,
+      variables: {
+        threadId: thread.id,
+        after: pageInfo.endCursor,
+      },
+    })
+    const connection = data.node?.comments
+    if (!connection) {
+      break
+    }
+
+    nodes.push(...graphqlConnectionNodes(connection))
+    pageInfo = connection.pageInfo
+    page += 1
+  }
+
+  return nodes
+}
+
+export async function fetchGithubPullRequestConversationGraphql(
+  {
+    token,
+    owner,
+    repo,
+    pullNumber,
+  }: {
+    token: string
+    owner: string
+    repo: string
+    pullNumber: number
+  },
+): Promise<GithubPullRequestConversation> {
+  const data = await requestGithubGraphqlData<GithubGraphqlPullRequestConversationResponse>({
+    token,
+    query: GITHUB_GRAPHQL_PULL_REQUEST_CONVERSATION_QUERY,
+    variables: {
+      owner,
+      name: repo,
+      number: pullNumber,
+    },
+  })
+  const pullRequest = data.repository?.pullRequest
+  if (!pullRequest) {
+    throw Object.assign(new Error('GitHub pull request not found'), { status: 404 })
+  }
+
+  const issueCommentNodes = [
+    ...graphqlConnectionNodes(pullRequest.comments),
+    ...await fetchRemainingGithubPullRequestIssueCommentNodes(
+      token,
+      owner,
+      repo,
+      pullNumber,
+      pullRequest.comments.pageInfo,
+    ),
+  ]
+  const reviewNodes = [
+    ...graphqlConnectionNodes(pullRequest.reviews),
+    ...await fetchRemainingGithubPullRequestReviewNodes(
+      token,
+      owner,
+      repo,
+      pullNumber,
+      pullRequest.reviews.pageInfo,
+    ),
+  ]
+  const reviewThreadNodes = [
+    ...graphqlConnectionNodes(pullRequest.reviewThreads),
+    ...await fetchRemainingGithubPullRequestReviewThreadNodes(
+      token,
+      owner,
+      repo,
+      pullNumber,
+      pullRequest.reviewThreads.pageInfo,
+    ),
+  ]
+
+  const reviewComments = (
+    await Promise.all(reviewThreadNodes.map(async (thread) => {
+      const comments = await fetchGithubPullRequestReviewThreadCommentNodes(token, thread)
+      return comments.map(comment => mapGithubGraphqlPullRequestReviewComment(comment, thread))
+    }))
+  ).flat()
+
+  return {
+    pull_request: {
+      node_id: pullRequest.id,
+      reactions: mapGithubGraphqlReactionGroups(pullRequest.reactionGroups),
+    },
+    issue_comments: issueCommentNodes.map(mapGithubGraphqlPullRequestIssueComment),
+    reviews: reviewNodes.map(mapGithubGraphqlPullRequestReview),
+    review_comments: reviewComments,
+  }
+}
+
+export async function addGithubReactionGraphql(
+  {
+    token,
+    subjectId,
+    content,
+  }: {
+    token: string
+    subjectId: string
+    content: GithubReactionContent
+  },
+): Promise<GithubReactionGroup[]> {
+  const data = await requestGithubGraphqlData<GithubGraphqlAddReactionResponse>({
+    token,
+    query: GITHUB_GRAPHQL_ADD_REACTION_MUTATION,
+    variables: {
+      subjectId,
+      content,
+    },
+  })
+
+  return mapGithubGraphqlReactionGroups(data.addReaction?.reactionGroups)
+}
+
+export async function removeGithubReactionGraphql(
+  {
+    token,
+    subjectId,
+    content,
+  }: {
+    token: string
+    subjectId: string
+    content: GithubReactionContent
+  },
+): Promise<GithubReactionGroup[]> {
+  const data = await requestGithubGraphqlData<GithubGraphqlRemoveReactionResponse>({
+    token,
+    query: GITHUB_GRAPHQL_REMOVE_REACTION_MUTATION,
+    variables: {
+      subjectId,
+      content,
+    },
+  })
+
+  return mapGithubGraphqlReactionGroups(data.removeReaction?.reactionGroups)
 }
 
 export async function fetchGithubUserRepositories(

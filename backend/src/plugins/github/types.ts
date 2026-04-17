@@ -181,6 +181,167 @@ export interface GithubGraphqlPullRequestNode {
   } | null
 }
 
+export interface GithubGraphqlPageInfo {
+  hasNextPage: boolean
+  endCursor: string | null
+}
+
+export interface GithubGraphqlConnection<T> {
+  nodes?: Array<T | null> | null
+  pageInfo: GithubGraphqlPageInfo
+}
+
+export type GithubReactionContent
+  = | 'CONFUSED'
+    | 'EYES'
+    | 'HEART'
+    | 'HOORAY'
+    | 'LAUGH'
+    | 'ROCKET'
+    | 'THUMBS_DOWN'
+    | 'THUMBS_UP'
+
+export interface GithubReactionGroup {
+  content: GithubReactionContent
+  count: number
+  viewer_has_reacted: boolean
+}
+
+export interface GithubGraphqlReactionGroup {
+  content: GithubReactionContent
+  viewerHasReacted: boolean
+  reactors: {
+    totalCount: number
+  }
+}
+
+export interface GithubGraphqlReactionGroupsSubject {
+  reactionGroups?: GithubGraphqlReactionGroup[] | null
+}
+
+export interface GithubGraphqlPullRequestConversationActor {
+  __typename?: string | null
+  login?: string | null
+  avatarUrl?: string | null
+}
+
+export interface GithubGraphqlPullRequestConversationDatabaseNode {
+  id: string
+  databaseId?: number | null
+  fullDatabaseId?: number | string | null
+}
+
+export interface GithubGraphqlPullRequestIssueCommentNode
+  extends GithubGraphqlPullRequestConversationDatabaseNode, GithubGraphqlReactionGroupsSubject {
+  body: string
+  createdAt: string
+  updatedAt: string
+  author: GithubGraphqlPullRequestConversationActor | null
+}
+
+export interface GithubGraphqlPullRequestReviewNode
+  extends GithubGraphqlPullRequestConversationDatabaseNode, GithubGraphqlReactionGroupsSubject {
+  body: string | null
+  state: PullRequestReviewResponse['state']
+  submittedAt: string | null
+  commit: {
+    oid: string
+  } | null
+  url: string
+  author: GithubGraphqlPullRequestConversationActor | null
+}
+
+export interface GithubGraphqlPullRequestReviewCommentNode
+  extends GithubGraphqlPullRequestConversationDatabaseNode, GithubGraphqlReactionGroupsSubject {
+  diffHunk: string
+  path: string
+  position: number | null
+  originalPosition: number | null
+  commit: {
+    oid: string
+  } | null
+  originalCommit: {
+    oid: string
+  } | null
+  pullRequestReview: GithubGraphqlPullRequestConversationDatabaseNode | null
+  replyTo: GithubGraphqlPullRequestConversationDatabaseNode | null
+  author: GithubGraphqlPullRequestConversationActor | null
+  body: string
+  createdAt: string
+  updatedAt: string
+  startLine: number | null
+  originalStartLine: number | null
+  line: number | null
+  originalLine: number | null
+}
+
+export interface GithubGraphqlPullRequestReviewThreadNode {
+  id: string
+  path: string
+  line: number | null
+  originalLine: number | null
+  startLine: number | null
+  originalStartLine: number | null
+  diffSide: string | null
+  startDiffSide: string | null
+  comments: GithubGraphqlConnection<GithubGraphqlPullRequestReviewCommentNode>
+}
+
+export interface GithubGraphqlPullRequestConversationPullRequestNode extends GithubGraphqlReactionGroupsSubject {
+  id: string
+  comments: GithubGraphqlConnection<GithubGraphqlPullRequestIssueCommentNode>
+  reviews: GithubGraphqlConnection<GithubGraphqlPullRequestReviewNode>
+  reviewThreads: GithubGraphqlConnection<GithubGraphqlPullRequestReviewThreadNode>
+}
+
+export interface GithubGraphqlPullRequestConversationResponse {
+  repository: {
+    pullRequest: GithubGraphqlPullRequestConversationPullRequestNode | null
+  } | null
+}
+
+export interface GithubGraphqlPullRequestIssueCommentsPageResponse {
+  repository: {
+    pullRequest: {
+      comments: GithubGraphqlConnection<GithubGraphqlPullRequestIssueCommentNode>
+    } | null
+  } | null
+}
+
+export interface GithubGraphqlPullRequestReviewsPageResponse {
+  repository: {
+    pullRequest: {
+      reviews: GithubGraphqlConnection<GithubGraphqlPullRequestReviewNode>
+    } | null
+  } | null
+}
+
+export interface GithubGraphqlPullRequestReviewThreadsPageResponse {
+  repository: {
+    pullRequest: {
+      reviewThreads: GithubGraphqlConnection<GithubGraphqlPullRequestReviewThreadNode>
+    } | null
+  } | null
+}
+
+export interface GithubGraphqlPullRequestReviewThreadCommentsPageResponse {
+  node: {
+    comments: GithubGraphqlConnection<GithubGraphqlPullRequestReviewCommentNode>
+  } | null
+}
+
+export interface GithubGraphqlAddReactionResponse {
+  addReaction: {
+    reactionGroups: GithubGraphqlReactionGroup[] | null
+  } | null
+}
+
+export interface GithubGraphqlRemoveReactionResponse {
+  removeReaction: {
+    reactionGroups: GithubGraphqlReactionGroup[] | null
+  } | null
+}
+
 export interface GithubGraphqlPullRequestResult {
   pullRequest: GithubPullRequest
 }
@@ -254,6 +415,8 @@ export interface GithubPullRequestReviewCommentUser {
 }
 
 export interface GithubPullRequestReviewComment {
+  node_id: string
+  reactions: GithubReactionGroup[]
   id: PullRequestCommentResponse['id']
   pull_request_review_id: PullRequestCommentResponse['pull_request_review_id']
   diff_hunk: PullRequestCommentResponse['diff_hunk']
@@ -281,6 +444,8 @@ export interface GithubPullRequestReviewUser {
 }
 
 export interface GithubPullRequestReview {
+  node_id: string
+  reactions: GithubReactionGroup[]
   id: PullRequestReviewResponse['id']
   body: PullRequestReviewResponse['body']
   state: PullRequestReviewResponse['state']
@@ -296,6 +461,8 @@ export interface GithubPullRequestIssueCommentUser {
 }
 
 export interface GithubPullRequestIssueComment {
+  node_id: string
+  reactions: GithubReactionGroup[]
   id: GithubIssueDetailsCommentResponse['id']
   body: GithubIssueDetailsCommentResponse['body']
   created_at: GithubIssueDetailsCommentResponse['created_at']
@@ -303,8 +470,21 @@ export interface GithubPullRequestIssueComment {
   user: GithubPullRequestIssueCommentUser | null
 }
 
+export interface GithubPullRequestConversationPullRequest {
+  node_id: string
+  reactions: GithubReactionGroup[]
+}
+
+export interface GithubPullRequestConversation {
+  pull_request: GithubPullRequestConversationPullRequest
+  issue_comments: GithubPullRequestIssueComment[]
+  reviews: GithubPullRequestReview[]
+  review_comments: GithubPullRequestReviewComment[]
+}
+
 export interface GithubPullRequestDetails {
   node_id: PullRequestDetailsResponse['node_id']
+  reactions: GithubReactionGroup[]
   number: PullRequestDetailsResponse['number']
   title: PullRequestDetailsResponse['title']
   state: PullRequestDetailsResponse['state']

@@ -39,6 +39,7 @@ pub enum UiIconName {
   SlidersHorizontal,
   Star,
   StarFilled,
+  SmilePlus,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -80,6 +81,7 @@ impl IconNamed for UiIconName {
       UiIconName::SlidersHorizontal => "icons/sliders-horizontal.svg",
       UiIconName::Star => "icons/star.svg",
       UiIconName::StarFilled => "icons/star-filled.svg",
+      UiIconName::SmilePlus => "icons/smile-plus.svg",
     }
     .into()
   }

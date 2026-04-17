@@ -142,6 +142,8 @@ export function mapGithubPullRequestReviewComment(
   comment: GithubReviewCommentResponse,
 ): GithubPullRequestReviewComment {
   return {
+    node_id: comment.node_id,
+    reactions: [],
     id: comment.id,
     pull_request_review_id: comment.pull_request_review_id,
     diff_hunk: comment.diff_hunk,
@@ -171,6 +173,8 @@ export function mapGithubPullRequestReview(
   review: GithubPullRequestReviewResponseSource,
 ): GithubPullRequestReview {
   return {
+    node_id: review.node_id,
+    reactions: [],
     id: review.id,
     body: review.body,
     state: review.state,
@@ -190,6 +194,8 @@ export function mapGithubPullRequestIssueComment(
   comment: GithubIssueDetailsCommentResponse,
 ): GithubPullRequestIssueComment {
   return {
+    node_id: comment.node_id,
+    reactions: [],
     id: comment.id,
     body: comment.body,
     created_at: comment.created_at,

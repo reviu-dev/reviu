@@ -32,6 +32,7 @@ import type {
   GithubPullRequestAuthor,
   GithubPullRequestChecksSummary,
   GithubPullRequestCommit,
+  GithubPullRequestConversation,
   GithubPullRequestDetails,
   GithubPullRequestFile,
   GithubPullRequestFilterOptions,
@@ -74,6 +75,7 @@ import {
   createGithubNotificationsCachePolicy,
   createGithubPullRequestCommentsCachePolicy,
   createGithubPullRequestCommitsCachePolicy,
+  createGithubPullRequestConversationCachePolicy,
   createGithubPullRequestDetailsCachePolicy,
   createGithubPullRequestFilesCachePolicy,
   createGithubPullRequestIssueCommentsCachePolicy,
@@ -131,6 +133,7 @@ import {
   mergePullRequestBodySchema,
   pullRequestFilterOptionsBodySchema,
   pullRequestLabelsMutationBodySchema,
+  pullRequestReactionMutationBodySchema,
   pullRequestSearchBodySchema,
   pullRequestSearchFiltersSchema,
   pullRequestStatusMutationBodySchema,
@@ -141,6 +144,7 @@ import {
 import {
   addGithubIssueAssignees,
   addGithubIssueLabels,
+  addGithubReactionGraphql,
   compareGithubRefs,
   convertGithubPullRequestToDraft,
   createGithubIssueComment,
@@ -159,6 +163,7 @@ import {
   fetchGithubPullRequestCommentsConditionally,
   fetchGithubPullRequestCommitsAllPages,
   fetchGithubPullRequestConditionally,
+  fetchGithubPullRequestConversationGraphql,
   fetchGithubPullRequestFilesAllPages,
   fetchGithubPullRequestReviewsConditionally,
   fetchGithubPullRequests,
@@ -187,6 +192,7 @@ import {
   removeGithubIssueAssignees,
   removeGithubIssueLabel,
   removeGithubPullRequestReviewers,
+  removeGithubReactionGraphql,
   requestGithubPullRequestReviewers,
   starGithubRepository,
   unstarGithubRepository,
@@ -916,6 +922,7 @@ async function fetchPullRequestDetailsWithCache(
         return {
           payload: {
             node_id: data.node_id,
+            reactions: [],
             number: data.number,
             title: data.title,
             state: data.state,
@@ -1337,6 +1344,29 @@ async function fetchPullRequestCommentsWithCache(
           ),
         }
       },
+    }))
+}
+
+async function fetchPullRequestConversationWithCache(
+  userId: string,
+  githubToken: string,
+  org: string,
+  repo: string,
+  pullNumber: number,
+) {
+  const cachePolicy = createGithubPullRequestConversationCachePolicy(userId, org, repo, pullNumber)
+
+  return withGithubMetrics(userId, cachePolicy.operation, () =>
+    githubCache.getOrLoad<GithubPullRequestConversation>({
+      ...cachePolicy,
+      load: async () => ({
+        payload: await fetchGithubPullRequestConversationGraphql({
+          token: githubToken,
+          owner: org,
+          repo,
+          pullNumber,
+        }),
+      }),
     }))
 }
 
@@ -2923,6 +2953,126 @@ export const githubRoutes = githubRouter
       return ctx.json({ reviews: result.payload }, 200)
     }
     catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/pr/:id/conversation', async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const result = await fetchPullRequestConversationWithCache(user.id, githubToken, org, repo, pullNumber)
+      setGithubCacheHeaders(ctx, result)
+      return ctx.json({ conversation: result.payload }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/:id/reactions', zValidator(
+    'json',
+    pullRequestReactionMutationBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const { subjectId, content } = ctx.req.valid('json')
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const reactions = await addGithubReactionGraphql({
+        token: githubToken,
+        subjectId,
+        content,
+      })
+      await invalidateGithubCacheTags([
+        ...getGithubPullRequestMutationTags({
+          userId: user.id,
+          owner: org,
+          repo,
+          pullNumber,
+          includeComments: true,
+          includeReviews: true,
+        }),
+        ...getGithubIssueMutationTags({
+          owner: org,
+          repo,
+          issueNumber: pullNumber,
+          includeComments: true,
+        }),
+      ])
+
+      return ctx.json({ reactions }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .delete('/pr/:id/reactions', zValidator(
+    'json',
+    pullRequestReactionMutationBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const { subjectId, content } = ctx.req.valid('json')
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const reactions = await removeGithubReactionGraphql({
+        token: githubToken,
+        subjectId,
+        content,
+      })
+      await invalidateGithubCacheTags([
+        ...getGithubPullRequestMutationTags({
+          userId: user.id,
+          owner: org,
+          repo,
+          pullNumber,
+          includeComments: true,
+          includeReviews: true,
+        }),
+        ...getGithubIssueMutationTags({
+          owner: org,
+          repo,
+          issueNumber: pullNumber,
+          includeComments: true,
+        }),
+      ])
+
+      return ctx.json({ reactions }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })

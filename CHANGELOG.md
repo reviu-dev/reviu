@@ -16,6 +16,10 @@ The repository overview tab has been redesigned with a language breakdown, contr
 
 Selecting an image file (PNG, JPEG, WebP, GIF, etc.) in the repository code tab now shows an inline preview instead of raw binary content.
 
+### Pull Request Reactions
+
+Pull request details now show GitHub reactions on the description, comments, and reviews, and you can add or remove your own reactions.
+
 ## 0.2.0
 
 ### Repository Pull Request Search and Filters
