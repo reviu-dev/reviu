@@ -5,7 +5,7 @@ FROM base AS builder
 RUN apk add --no-cache gcompat
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml tsconfig.json ./
+COPY package.json pnpm-lock.yaml tsconfig.json tsconfig.build.json ./
 COPY src ./src
 COPY migrations ./migrations
 COPY scripts ./scripts
