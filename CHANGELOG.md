@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.4.0
 
+### Firefox Extension
+
+A Firefox extension is now available alongside the existing Chrome extension, letting you open any GitHub repository, pull request, or issue directly in Reviu from Firefox.
+
 ### Issue Reactions
 
 Issue details now show GitHub reactions on the description and comments, and you can add or remove your own reactions directly from the issue.
