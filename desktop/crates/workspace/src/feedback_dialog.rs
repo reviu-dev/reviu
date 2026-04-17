@@ -52,11 +52,11 @@ fn open_feedback_dialog_inner(window: &mut Window, cx: &mut App) {
         .flex()
         .flex_col()
         .gap_3()
-        .pt_4()
         .child(Select::new(&type_select).placeholder("Select type..."))
         .child(Input::new(&title_input).w_full())
         .child(Input::new(&description_input).w_full()),
     )
+    .content_as_body()
     .confirm_text("Submit")
     .on_confirm(move |_, _, cx| {
       let feedback_type_val = type_select
