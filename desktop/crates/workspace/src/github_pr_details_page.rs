@@ -68,13 +68,13 @@ use crate::{
   active_local_repo::{ActiveLocalRepo, ActiveLocalRepoStore},
   api::{
     ApiClient, ApiError, GithubIssueDetailsComment, GithubPullRequestChecksRollupState,
-    GithubPullRequestChecksSummary, GithubPullRequestCommit, GithubPullRequestDescriptionUpdate,
-    GithubPullRequestDetails, GithubPullRequestFile, GithubPullRequestIssueComment,
-    GithubPullRequestIssueCommentUser, GithubPullRequestLabel, GithubPullRequestMergeMethod,
-    GithubPullRequestMergeReadiness, GithubPullRequestMergeReadinessStatus,
-    GithubPullRequestMergeResult, GithubPullRequestReview, GithubPullRequestReviewComment,
-    GithubPullRequestReviewEvent, GithubPullRequestReviewState, GithubPullRequestState,
-    GithubRepository,
+    GithubPullRequestChecksSummary, GithubPullRequestCommit, GithubPullRequestConversation,
+    GithubPullRequestDescriptionUpdate, GithubPullRequestDetails, GithubPullRequestFile,
+    GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser, GithubPullRequestLabel,
+    GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness,
+    GithubPullRequestMergeReadinessStatus, GithubPullRequestMergeResult, GithubPullRequestReview,
+    GithubPullRequestReviewComment, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
+    GithubPullRequestState, GithubReactionContent, GithubReactionGroup, GithubRepository,
   },
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, ConfigStore},
@@ -732,6 +732,8 @@ enum GithubPrOverviewConversationItemKind {
 struct GithubPrOverviewConversationItem {
   kind: GithubPrOverviewConversationItemKind,
   id: u64,
+  reaction_subject_id: String,
+  reactions: Vec<GithubReactionGroup>,
   timestamp: String,
   author_login: String,
   author_avatar_url: Option<String>,
@@ -744,6 +746,8 @@ struct GithubPrOverviewConversationItem {
 #[derive(Clone, Debug)]
 struct GithubPrOverviewConversationReply {
   id: u64,
+  reaction_subject_id: String,
+  reactions: Vec<GithubReactionGroup>,
   timestamp: String,
   author_login: String,
   author_avatar_url: Option<String>,
@@ -1557,6 +1561,8 @@ fn build_overview_conversation_items(
     GithubPrOverviewConversationItem {
       kind: GithubPrOverviewConversationItemKind::IssueComment,
       id: comment.id,
+      reaction_subject_id: comment.node_id.clone(),
+      reactions: comment.reactions.clone(),
       timestamp: comment.created_at.clone(),
       author_login: comment
         .user
@@ -1596,6 +1602,8 @@ fn build_overview_conversation_items(
     Some(GithubPrOverviewConversationItem {
       kind: GithubPrOverviewConversationItemKind::Review,
       id: review.id,
+      reaction_subject_id: review.node_id.clone(),
+      reactions: review.reactions.clone(),
       timestamp: submitted_at.clone(),
       author_login: review
         .user
@@ -1647,6 +1655,8 @@ fn build_overview_conversation_items(
       .filter(|comment| comment.id != root_comment.id)
       .map(|comment| GithubPrOverviewConversationReply {
         id: comment.id,
+        reaction_subject_id: comment.node_id.clone(),
+        reactions: comment.reactions.clone(),
         timestamp: comment.created_at.clone(),
         author_login: comment.user.login.clone(),
         author_avatar_url: comment.user.avatar_url.clone(),
@@ -1665,6 +1675,8 @@ fn build_overview_conversation_items(
     items.push(GithubPrOverviewConversationItem {
       kind: GithubPrOverviewConversationItemKind::ReviewComment,
       id: root_comment.id,
+      reaction_subject_id: root_comment.node_id.clone(),
+      reactions: root_comment.reactions.clone(),
       timestamp: root_comment.created_at.clone(),
       author_login: root_comment.user.login.clone(),
       author_avatar_url: root_comment.user.avatar_url.clone(),
@@ -1744,6 +1756,8 @@ fn pull_request_issue_comment_from_issue_details_comment(
   comment: GithubIssueDetailsComment,
 ) -> GithubPullRequestIssueComment {
   GithubPullRequestIssueComment {
+    node_id: String::new(),
+    reactions: Vec::new(),
     id: comment.id,
     body: comment.body.unwrap_or_default(),
     created_at: comment.created_at,
@@ -1886,12 +1900,18 @@ fn issue_comment_owned_by_login(comment: &GithubPullRequestIssueComment, login: 
 
 fn upsert_issue_comment_local(
   comments: &mut Vec<GithubPullRequestIssueComment>,
-  comment: GithubPullRequestIssueComment,
+  mut comment: GithubPullRequestIssueComment,
 ) {
   if let Some(existing) = comments
     .iter_mut()
     .find(|existing| existing.id == comment.id)
   {
+    if comment.node_id.is_empty() {
+      comment.node_id.clone_from(&existing.node_id);
+    }
+    if comment.reactions.is_empty() {
+      comment.reactions.clone_from(&existing.reactions);
+    }
     *existing = comment;
     return;
   }
@@ -1900,12 +1920,18 @@ fn upsert_issue_comment_local(
 
 fn upsert_review_comment_local(
   comments: &mut Vec<GithubPullRequestReviewComment>,
-  comment: GithubPullRequestReviewComment,
+  mut comment: GithubPullRequestReviewComment,
 ) {
   if let Some(existing) = comments
     .iter_mut()
     .find(|existing| existing.id == comment.id)
   {
+    if comment.node_id.is_empty() {
+      comment.node_id.clone_from(&existing.node_id);
+    }
+    if comment.reactions.is_empty() {
+      comment.reactions.clone_from(&existing.reactions);
+    }
     *existing = comment;
     return;
   }
@@ -1914,9 +1940,15 @@ fn upsert_review_comment_local(
 
 fn upsert_review_local(
   reviews: &mut Vec<GithubPullRequestReview>,
-  review: GithubPullRequestReview,
+  mut review: GithubPullRequestReview,
 ) {
   if let Some(existing) = reviews.iter_mut().find(|existing| existing.id == review.id) {
+    if review.node_id.is_empty() {
+      review.node_id.clone_from(&existing.node_id);
+    }
+    if review.reactions.is_empty() {
+      review.reactions.clone_from(&existing.reactions);
+    }
     *existing = review;
     return;
   }
@@ -2507,6 +2539,9 @@ pub struct GithubPrDetailsPage {
   submit_review_task: Option<Task<()>>,
   submit_review_loading: bool,
   submit_review_error: Option<SharedString>,
+  conversation_task: Option<Task<()>>,
+  reaction_task: Option<Task<()>>,
+  reaction_error: Option<(String, SharedString)>,
   issue_comments_task: Option<Task<()>>,
   issue_comments_loading: bool,
   issue_comments_error: Option<SharedString>,
@@ -3079,6 +3114,9 @@ impl GithubPrDetailsPage {
       submit_review_task: None,
       submit_review_loading: false,
       submit_review_error: None,
+      conversation_task: None,
+      reaction_task: None,
+      reaction_error: None,
       issue_comments_task: None,
       issue_comments_loading: false,
       issue_comments_error: None,
@@ -4386,15 +4424,13 @@ impl GithubPrDetailsPage {
     self.refresh_checks_for_current_pull_request(cx);
 
     if should_refresh_pr_overview_data(self.active_tab_ix) {
-      self.refresh_issue_comments_for_current_pull_request(cx);
-      self.refresh_reviews_for_current_pull_request(true, cx);
-      self.refresh_review_comments_for_current_pull_request(cx);
+      self.refresh_pull_request_conversation_for_current_pull_request(true, cx);
       self.refresh_review_people_options_for_current_context(cx);
     }
 
     if should_refresh_pr_changes_data(self.active_tab_ix) {
       self.saved_pr_selected_tree_id = self.current_selected_tree_path();
-      self.refresh_review_comments_for_current_pull_request(cx);
+      self.refresh_pull_request_conversation_for_current_pull_request(false, cx);
       self.reload_files_for_current_pull_request(cx);
     }
   }
@@ -4472,96 +4508,100 @@ impl GithubPrDetailsPage {
     self.details_task = Some(task);
   }
 
-  fn refresh_reviews_for_current_pull_request(
+  fn apply_pull_request_conversation(
     &mut self,
-    set_loading: bool,
+    conversation: GithubPullRequestConversation,
+    cx: &mut Context<Self>,
+  ) {
+    if let Some(pull_request) = self.pull_request.as_mut() {
+      if pull_request.node_id == conversation.pull_request.node_id {
+        pull_request.reactions = conversation.pull_request.reactions;
+      }
+    }
+    self.issue_comments = conversation.issue_comments;
+    self.reviews = conversation.reviews;
+    self.review_comments = conversation.review_comments;
+    self.issue_comments_loading = false;
+    self.issue_comments_error = None;
+    self.reviews_loading = false;
+    self.reviews_error = None;
+    self.review_comments_loading = false;
+    self.review_comments_error = None;
+    self.sync_review_comments(cx);
+    self.prefetch_overview_root_review_comment_files(cx);
+  }
+
+  fn refresh_pull_request_conversation_for_current_pull_request(
+    &mut self,
+    include_overview_loading: bool,
     cx: &mut Context<Self>,
   ) {
     let Some(context) = self.current_pr_context.as_ref().cloned() else {
       return;
     };
 
-    if set_loading {
+    self.fetch_pull_request_conversation_for_context(
+      context.owner,
+      context.repo,
+      context.number,
+      include_overview_loading,
+      "Refresh",
+      cx,
+    );
+  }
+
+  fn fetch_pull_request_conversation_for_context(
+    &mut self,
+    owner: String,
+    repo: String,
+    number: u64,
+    include_overview_loading: bool,
+    operation_label: &'static str,
+    cx: &mut Context<Self>,
+  ) {
+    if include_overview_loading {
+      self.issue_comments_loading = true;
+      self.issue_comments_error = None;
       self.reviews_loading = true;
       self.reviews_error = None;
     }
+    self.review_comments_loading = true;
+    self.review_comments_error = None;
 
     let api = self.api.clone();
-    let owner = context.owner;
-    let repo = context.repo;
-    let number = context.number;
-    let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.fetch_pull_request_reviews(&owner, &repo, number)).await;
-
-      let _ = this.update(cx, |this, cx| {
-        match result {
-          Ok(reviews) => {
-            this.reviews = reviews;
-            this.reviews_loading = false;
-            this.reviews_error = None;
-            this.add_pr_breadcrumb("Refresh PR reviews succeeded", Map::new());
-          }
-          Err(error) => {
-            let error_message = error.to_string();
-            this.reviews_loading = false;
-            this.reviews_error = Some(error_message.clone().into());
-            this.add_pr_breadcrumb("Refresh PR reviews failed", Map::new());
-            this.record_pr_error(
-              "github.pr.reviews.refresh",
-              error_message.as_str(),
-              Map::new(),
-            );
-          }
-        }
-        cx.notify();
-      });
-    });
-
-    self.reviews_task = Some(task);
-  }
-
-  fn refresh_issue_comments_for_current_pull_request(&mut self, cx: &mut Context<Self>) {
-    let Some(context) = self.current_pr_context.as_ref().cloned() else {
-      return;
-    };
-
-    self.issue_comments_loading = true;
-    self.issue_comments_error = None;
-
-    let api = self.api.clone();
-    let owner = context.owner;
-    let repo = context.repo;
-    let number = context.number;
     let task = cx.spawn(async move |this, cx| {
       let result =
-        unblock(move || api.fetch_pull_request_issue_comments(&owner, &repo, number)).await;
+        unblock(move || api.fetch_pull_request_conversation(&owner, &repo, number)).await;
 
       let _ = this.update(cx, |this, cx| {
         match result {
-          Ok(comments) => {
-            this.issue_comments = comments;
-            this.issue_comments_loading = false;
-            this.issue_comments_error = None;
-            this.add_pr_breadcrumb("Refresh PR issue comments succeeded", Map::new());
+          Ok(conversation) => {
+            this.apply_pull_request_conversation(conversation, cx);
+            let message = format!("{operation_label} PR conversation succeeded");
+            this.add_pr_breadcrumb(message.as_str(), Map::new());
           }
           Err(error) => {
             let error_message = error.to_string();
-            this.issue_comments_loading = false;
-            this.issue_comments_error = Some(error_message.clone().into());
-            this.add_pr_breadcrumb("Refresh PR issue comments failed", Map::new());
-            this.record_pr_error(
-              "github.pr.issue_comments.refresh",
-              error_message.as_str(),
-              Map::new(),
-            );
+            if include_overview_loading {
+              this.issue_comments_loading = false;
+              this.issue_comments_error = Some(error_message.clone().into());
+              this.reviews_loading = false;
+              this.reviews_error = Some(error_message.clone().into());
+            }
+            this.review_comments_loading = false;
+            this.review_comments_error = Some(error_message.clone().into());
+            let message = format!("{operation_label} PR conversation failed");
+            this.add_pr_breadcrumb(message.as_str(), Map::new());
+            this.record_pr_error("github.pr.conversation", error_message.as_str(), Map::new());
+            this.sync_review_comments(cx);
           }
         }
-        this.issue_comments_task = None;
+        this.conversation_task = None;
         cx.notify();
       });
     });
 
-    self.issue_comments_task = Some(task);
+    self.conversation_task = Some(task);
   }
 
   fn reload_current_pull_request(&mut self, cx: &mut Context<Self>) {
@@ -4572,53 +4612,6 @@ impl GithubPrDetailsPage {
     let open_target = self.current_open_target();
     self.load_pull_request(context.owner, context.repo, context.number, open_target, cx);
     self.active_tab_ix = active_tab_ix;
-  }
-
-  fn refresh_review_comments_for_current_pull_request(&mut self, cx: &mut Context<Self>) {
-    let Some(context) = self.current_pr_context.as_ref().cloned() else {
-      return;
-    };
-
-    self.review_comments_loading = true;
-    self.review_comments_error = None;
-
-    let api = self.api.clone();
-    let owner = context.owner;
-    let repo = context.repo;
-    let number = context.number;
-    let task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || api.fetch_pull_request_review_comments(&owner, &repo, number)).await;
-
-      let _ = this.update(cx, |this, cx| {
-        match result {
-          Ok(comments) => {
-            this.review_comments = comments;
-            this.review_comments_loading = false;
-            this.review_comments_error = None;
-            this.add_pr_breadcrumb("Refresh PR comments succeeded", Map::new());
-            this.sync_review_comments(cx);
-            this.prefetch_overview_root_review_comment_files(cx);
-          }
-          Err(error) => {
-            let error_message = error.to_string();
-            this.review_comments_loading = false;
-            this.review_comments_error = Some(error_message.clone().into());
-            this.add_pr_breadcrumb("Refresh PR comments failed", Map::new());
-            this.record_pr_error(
-              "github.pr.comments.refresh",
-              error_message.as_str(),
-              Map::new(),
-            );
-            this.sync_review_comments(cx);
-          }
-        }
-        this.review_comments_task = None;
-        cx.notify();
-      });
-    });
-
-    self.review_comments_task = Some(task);
   }
 
   fn refresh_commits_for_current_pull_request(&mut self, cx: &mut Context<Self>) {
@@ -6138,7 +6131,7 @@ impl GithubPrDetailsPage {
                   .retain(|r| !r.login.eq_ignore_ascii_case(&login));
               }
             }
-            this.refresh_reviews_for_current_pull_request(false, cx);
+            this.refresh_pull_request_conversation_for_current_pull_request(false, cx);
             this.add_pr_breadcrumb("Submit PR review succeeded", Map::new());
             if AuthStateStore::has_github_access(cx) {
               GithubPageHandle::refresh(cx);
@@ -6759,6 +6752,113 @@ impl GithubPrDetailsPage {
 
   fn upsert_review_comment(&mut self, comment: GithubPullRequestReviewComment) {
     upsert_review_comment_local(&mut self.review_comments, comment);
+  }
+
+  fn update_reaction_groups_for_subject(
+    &mut self,
+    subject_id: &str,
+    reactions: Vec<GithubReactionGroup>,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    if let Some(pull_request) = self.pull_request.as_mut() {
+      if pull_request.node_id == subject_id {
+        pull_request.reactions = reactions;
+        return true;
+      }
+    }
+
+    if let Some(comment) = self
+      .issue_comments
+      .iter_mut()
+      .find(|comment| comment.node_id == subject_id)
+    {
+      comment.reactions = reactions;
+      return true;
+    }
+
+    if let Some(review) = self
+      .reviews
+      .iter_mut()
+      .find(|review| review.node_id == subject_id)
+    {
+      review.reactions = reactions;
+      return true;
+    }
+
+    if let Some(comment) = self
+      .review_comments
+      .iter_mut()
+      .find(|comment| comment.node_id == subject_id)
+    {
+      comment.reactions = reactions;
+      self.sync_review_comments(cx);
+      return true;
+    }
+
+    false
+  }
+
+  fn submit_pull_request_reaction_toggle(
+    &mut self,
+    subject_id: String,
+    content: GithubReactionContent,
+    viewer_has_reacted: bool,
+    cx: &mut Context<Self>,
+  ) {
+    if self.reaction_task.is_some() || subject_id.trim().is_empty() {
+      return;
+    }
+
+    let Some((owner, repo, number)) = self.pull_request.as_ref().map(|pull_request| {
+      (
+        pull_request.repository.owner.clone(),
+        pull_request.repository.repo.clone(),
+        pull_request.number,
+      )
+    }) else {
+      self.reaction_error = Some((subject_id, "No pull request selected".into()));
+      cx.notify();
+      return;
+    };
+
+    self.reaction_error = None;
+    cx.notify();
+
+    let api = self.api.clone();
+    let task_subject_id = subject_id.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        if viewer_has_reacted {
+          api.remove_pull_request_reaction(&owner, &repo, number, &task_subject_id, content)
+        } else {
+          api.add_pull_request_reaction(&owner, &repo, number, &task_subject_id, content)
+        }
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.reaction_task = None;
+        match result {
+          Ok(reactions) => {
+            this.update_reaction_groups_for_subject(subject_id.as_str(), reactions, cx);
+            this.reaction_error = None;
+            this.add_pr_breadcrumb("Toggle PR reaction succeeded", Map::new());
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.reaction_error = Some((subject_id.clone(), error_message.clone().into()));
+            this.add_pr_breadcrumb("Toggle PR reaction failed", Map::new());
+            this.record_pr_error(
+              "github.pr.reaction.toggle",
+              error_message.as_str(),
+              Map::new(),
+            );
+          }
+        }
+        cx.notify();
+      });
+    });
+    self.reaction_task = Some(task);
   }
 
   fn submit_overview_issue_comment_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -8273,8 +8373,12 @@ impl GithubPrDetailsPage {
     self.review_popover_open = false;
     self.mark_review_form_reset_pending();
     self.submit_review_task = None;
+    self.conversation_task = None;
+    self.reaction_task = None;
+    self.reaction_error = None;
     self.issue_comments_task = None;
     self.reviews_task = None;
+    self.review_comments_task = None;
     self.submit_review_loading = false;
     self.review_people_options_task = None;
     self.review_people_options_loading = true;
@@ -8428,104 +8532,15 @@ impl GithubPrDetailsPage {
       });
     });
 
-    let issue_comments_api = self.api.clone();
-    let issue_comments_owner = owner.clone();
-    let issue_comments_repo = repo.clone();
-    let issue_comments_task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        issue_comments_api.fetch_pull_request_issue_comments(
-          &issue_comments_owner,
-          &issue_comments_repo,
-          number,
-        )
-      })
-      .await;
-
-      let _ = this.update(cx, |this, cx| {
-        match result {
-          Ok(comments) => {
-            this.issue_comments = comments;
-            this.issue_comments_loading = false;
-            this.issue_comments_error = None;
-            this.add_pr_breadcrumb("Load PR issue comments succeeded", Map::new());
-          }
-          Err(error) => {
-            let error_message = error.to_string();
-            this.issue_comments_loading = false;
-            this.issue_comments_error = Some(error_message.clone().into());
-            this.add_pr_breadcrumb("Load PR issue comments failed", Map::new());
-            this.record_pr_error(
-              "github.pr.issue_comments",
-              error_message.as_str(),
-              Map::new(),
-            );
-          }
-        }
-        cx.notify();
-      });
-    });
     self.refresh_review_people_options_for_current_context(cx);
-
-    let reviews_api = self.api.clone();
-    let reviews_owner = owner.clone();
-    let reviews_repo = repo.clone();
-    let reviews_task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        reviews_api.fetch_pull_request_reviews(&reviews_owner, &reviews_repo, number)
-      })
-      .await;
-
-      let _ = this.update(cx, |this, cx| {
-        match result {
-          Ok(reviews) => {
-            this.reviews = reviews;
-            this.reviews_loading = false;
-            this.reviews_error = None;
-            this.add_pr_breadcrumb("Load PR reviews succeeded", Map::new());
-          }
-          Err(error) => {
-            let error_message = error.to_string();
-            this.reviews_loading = false;
-            this.reviews_error = Some(error_message.clone().into());
-            this.add_pr_breadcrumb("Load PR reviews failed", Map::new());
-            this.record_pr_error("github.pr.reviews", error_message.as_str(), Map::new());
-          }
-        }
-        cx.notify();
-      });
-    });
-
-    let comments_api = self.api.clone();
-    let comments_owner = owner.clone();
-    let comments_repo = repo.clone();
-    let review_comments_task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        comments_api.fetch_pull_request_review_comments(&comments_owner, &comments_repo, number)
-      })
-      .await;
-
-      let _ = this.update(cx, |this, cx| {
-        match result {
-          Ok(comments) => {
-            this.review_comments = comments;
-            this.review_comments_loading = false;
-            this.review_comments_error = None;
-            this.add_pr_breadcrumb("Load PR comments succeeded", Map::new());
-            this.sync_review_comments(cx);
-            this.prefetch_overview_root_review_comment_files(cx);
-          }
-          Err(error) => {
-            let error_message = error.to_string();
-            this.review_comments_loading = false;
-            this.review_comments_error = Some(error_message.clone().into());
-            this.add_pr_breadcrumb("Load PR comments failed", Map::new());
-            this.record_pr_error("github.pr.comments", error_message.as_str(), Map::new());
-            this.sync_review_comments(cx);
-          }
-        }
-        cx.notify();
-      });
-    });
+    self.fetch_pull_request_conversation_for_context(
+      owner.clone(),
+      repo.clone(),
+      number,
+      true,
+      "Load",
+      cx,
+    );
 
     let commits_api = self.api.clone();
     let commits_owner = owner.clone();
@@ -8599,9 +8614,6 @@ impl GithubPrDetailsPage {
     });
 
     self.details_task = Some(details_task);
-    self.issue_comments_task = Some(issue_comments_task);
-    self.reviews_task = Some(reviews_task);
-    self.review_comments_task = Some(review_comments_task);
     self.commits_task = Some(commits_task);
     self.checks_task = Some(checks_task);
     self.fetch_merge_readiness_for_context(owner.clone(), repo.clone(), number, cx);
@@ -10271,6 +10283,145 @@ impl GithubPrDetailsPage {
       .into_any_element()
   }
 
+  fn render_reaction_bar(
+    &self,
+    subject_id: &str,
+    reactions: &[GithubReactionGroup],
+    id_prefix: String,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    if subject_id.is_empty() {
+      return div().into_any_element();
+    }
+
+    let theme = cx.theme().clone();
+    let reaction_loading = self.reaction_task.is_some();
+    let page = cx.entity().clone();
+    let subject_id = subject_id.to_string();
+    let visible_reactions = GithubReactionContent::ALL
+      .iter()
+      .filter_map(|content| {
+        reactions
+          .iter()
+          .find(|reaction| reaction.content == *content && reaction.count > 0)
+          .cloned()
+      })
+      .collect::<Vec<_>>();
+
+    h_flex()
+      .id(format!("{id_prefix}-reactions"))
+      .items_center()
+      .gap_1()
+      .flex_wrap()
+      .child(
+        Popover::new(format!("{id_prefix}-add-reaction-popover"))
+          .anchor(Corner::TopRight)
+          .appearance(false)
+          .trigger(
+            Button::new(format!("{id_prefix}-add-reaction"))
+              .xsmall()
+              .compact()
+              .ghost()
+              .icon(UiIconName::SmilePlus)
+              .tooltip("Add reaction")
+              .disabled(reaction_loading),
+          )
+          .content({
+            let reactions = reactions.to_vec();
+            let page = page.clone();
+            let subject_id = subject_id.clone();
+            let id_prefix = id_prefix.clone();
+            move |_, _, cx| {
+              let theme = cx.theme().clone();
+              let popover = cx.entity().clone();
+              let page = page.clone();
+              let subject_id = subject_id.clone();
+              let reactions = reactions.clone();
+              let id_prefix = id_prefix.clone();
+              div()
+                .id(format!("{id_prefix}-reaction-picker"))
+                .bg(theme.popover)
+                .text_color(theme.popover_foreground)
+                .border_1()
+                .border_color(theme.border)
+                .rounded(theme.radius)
+                .shadow_lg()
+                .p_1()
+                .child(
+                  v_flex()
+                    .gap_1()
+                    .children(GithubReactionContent::ALL.chunks(4).map(|row| {
+                      h_flex().gap_1().children(row.iter().map(|content| {
+                        let content = *content;
+                        let viewer_has_reacted = reactions
+                          .iter()
+                          .find(|reaction| reaction.content == content)
+                          .is_some_and(|reaction| reaction.viewer_has_reacted);
+                        let page = page.clone();
+                        let popover = popover.clone();
+                        let subject_id = subject_id.clone();
+                        Button::new(format!("{id_prefix}-picker-reaction-{:?}", content))
+                          .small()
+                          .compact()
+                          .ghost()
+                          .selected(viewer_has_reacted)
+                          .disabled(reaction_loading)
+                          .label(content.emoji())
+                          .tooltip(content.label())
+                          .on_click(move |_, window, cx| {
+                            let _ = popover.update(cx, |popover, cx| {
+                              popover.dismiss(window, cx);
+                            });
+                            page.update(cx, |this, cx| {
+                              this.submit_pull_request_reaction_toggle(
+                                subject_id.clone(),
+                                content,
+                                viewer_has_reacted,
+                                cx,
+                              );
+                            });
+                          })
+                      }))
+                    })),
+                )
+            }
+          }),
+      )
+      .children(visible_reactions.into_iter().map(|reaction| {
+        let content = reaction.content;
+        let viewer_has_reacted = reaction.viewer_has_reacted;
+        let page = page.clone();
+        let subject_id = subject_id.clone();
+        Button::new(format!("{id_prefix}-reaction-{:?}", content))
+          .xsmall()
+          .compact()
+          .ghost()
+          .selected(viewer_has_reacted)
+          .disabled(reaction_loading)
+          .label(format!("{} {}", content.emoji(), reaction.count))
+          .tooltip(content.label())
+          .on_click(move |_, _, cx| {
+            page.update(cx, |this, cx| {
+              this.submit_pull_request_reaction_toggle(
+                subject_id.clone(),
+                content,
+                viewer_has_reacted,
+                cx,
+              );
+            });
+          })
+      }))
+      .when_some(
+        self
+          .reaction_error
+          .as_ref()
+          .filter(|(error_subject_id, _)| error_subject_id == &subject_id)
+          .map(|(_, error)| error.clone()),
+        |this, error| this.child(div().text_xs().text_color(theme.status_red()).child(error)),
+      )
+      .into_any_element()
+  }
+
   fn render_overview_conversation_item(
     &self,
     item: &GithubPrOverviewConversationItem,
@@ -10566,6 +10717,7 @@ impl GithubPrDetailsPage {
 
     let replies = &item.replies;
     let thread_comment_ids = item.thread_comment_ids.clone();
+    let root_reaction_needs_bottom_padding = root_reply_composer.is_none() && replies.is_empty();
 
     v_flex()
       .id(format!(
@@ -10655,6 +10807,24 @@ impl GithubPrDetailsPage {
                 |this| this.pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX)),
               ),
           )
+          .when(!root_is_editing, |this| {
+            this.child(
+              div()
+                .when(root_reaction_needs_bottom_padding, |this| {
+                  this.pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
+                })
+                .child(self.render_reaction_bar(
+                  item.reaction_subject_id.as_str(),
+                  &item.reactions,
+                  format!(
+                    "pr-overview-root-reaction-{}-{}",
+                    conversation_source_priority(item.kind),
+                    item.id
+                  ),
+                  cx,
+                )),
+            )
+          })
           .when_some(root_reply_composer, |this, composer| this.child(composer))
           .when(!replies.is_empty(), |this| {
             this.child(v_flex().children(replies.iter().map(|reply| {
@@ -10955,6 +11125,14 @@ impl GithubPrDetailsPage {
                     ),
                 )
                 .child(reply_body)
+                .when(!reply_is_editing, |this| {
+                  this.child(self.render_reaction_bar(
+                    reply.reaction_subject_id.as_str(),
+                    &reply.reactions,
+                    format!("pr-overview-reply-reaction-{}-{}", item.id, reply.id),
+                    cx,
+                  ))
+                })
                 .when_some(reply_reply_composer, |this, composer| this.child(composer))
                 .into_any_element()
             })))
@@ -11935,27 +12113,37 @@ impl GithubPrDetailsPage {
               div().into_any_element()
             }
           } else {
-            div()
-              .border_1()
-              .border_color(theme.border)
-              .rounded(theme.radius)
-              .p_3()
-              .child({
-                let mut options = MarkdownRenderOptions::with_on_link(description_link_handler)
-                  .with_state(self.description_markdown_state.clone())
-                  .with_syntax_cache(self.syntax_highlight_cache.clone())
-                  .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
-                  .with_github_issue_reference_context(
-                    pr.repository.owner.as_str(),
-                    pr.repository.repo.as_str(),
-                  )
-                  .with_scope_id(pr_description_scope_id(pr.number))
-                  .with_hardbreaks();
-                if let Some(previews) = description_previews.clone() {
-                  options = options.with_github_code_reference_previews(previews);
-                }
-                render_markdown(body.as_str(), &options, cx)
-              })
+            v_flex()
+              .gap_2()
+              .child(
+                div()
+                  .border_1()
+                  .border_color(theme.border)
+                  .rounded(theme.radius)
+                  .p_3()
+                  .child({
+                    let mut options = MarkdownRenderOptions::with_on_link(description_link_handler)
+                      .with_state(self.description_markdown_state.clone())
+                      .with_syntax_cache(self.syntax_highlight_cache.clone())
+                      .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
+                      .with_github_issue_reference_context(
+                        pr.repository.owner.as_str(),
+                        pr.repository.repo.as_str(),
+                      )
+                      .with_scope_id(pr_description_scope_id(pr.number))
+                      .with_hardbreaks();
+                    if let Some(previews) = description_previews.clone() {
+                      options = options.with_github_code_reference_previews(previews);
+                    }
+                    render_markdown(body.as_str(), &options, cx)
+                  }),
+              )
+              .child(self.render_reaction_bar(
+                pr.node_id.as_str(),
+                &pr.reactions,
+                format!("pr-overview-description-reaction-{}", pr.number),
+                cx,
+              ))
               .into_any_element()
           }),
       )
@@ -13987,6 +14175,8 @@ mod tests {
       vec![GithubPullRequestMergeMethod::Merge],
     );
     let reviews = vec![GithubPullRequestReview {
+      node_id: "PRR_1".to_string(),
+      reactions: Vec::new(),
       id: 1,
       body: None,
       state: GithubPullRequestReviewState::Approved,
@@ -14011,6 +14201,8 @@ mod tests {
       vec![GithubPullRequestMergeMethod::Merge],
     );
     let reviews = vec![GithubPullRequestReview {
+      node_id: "PRR_1".to_string(),
+      reactions: Vec::new(),
       id: 1,
       body: None,
       state: GithubPullRequestReviewState::RequestChanges,
@@ -14036,6 +14228,8 @@ mod tests {
     );
     let reviews = vec![
       GithubPullRequestReview {
+        node_id: "PRR_1".to_string(),
+        reactions: Vec::new(),
         id: 1,
         body: None,
         state: GithubPullRequestReviewState::Approved,
@@ -14048,6 +14242,8 @@ mod tests {
         }),
       },
       GithubPullRequestReview {
+        node_id: "PRR_2".to_string(),
+        reactions: Vec::new(),
         id: 2,
         body: None,
         state: GithubPullRequestReviewState::Commented,
@@ -14074,6 +14270,8 @@ mod tests {
     );
     let reviews = vec![
       GithubPullRequestReview {
+        node_id: "PRR_1".to_string(),
+        reactions: Vec::new(),
         id: 1,
         body: None,
         state: GithubPullRequestReviewState::Approved,
@@ -14086,6 +14284,8 @@ mod tests {
         }),
       },
       GithubPullRequestReview {
+        node_id: "PRR_2".to_string(),
+        reactions: Vec::new(),
         id: 2,
         body: None,
         state: GithubPullRequestReviewState::RequestChanges,
@@ -14846,6 +15046,8 @@ mod tests {
       this.file_loading = false;
       this.commits_task = None;
       this.checks_task = None;
+      this.conversation_task = None;
+      this.reaction_task = None;
       this.issue_comments_task = None;
       this.reviews_task = None;
       this.review_comments_task = None;
@@ -14907,6 +15109,12 @@ mod tests {
         tasks.push(task);
       }
       if let Some(task) = this.checks_task.take() {
+        tasks.push(task);
+      }
+      if let Some(task) = this.conversation_task.take() {
+        tasks.push(task);
+      }
+      if let Some(task) = this.reaction_task.take() {
         tasks.push(task);
       }
       if let Some(task) = this.issue_comments_task.take() {
@@ -15935,6 +16143,8 @@ mod tests {
 
   fn make_issue_comment(id: u64, created_at: &str, body: &str) -> GithubPullRequestIssueComment {
     GithubPullRequestIssueComment {
+      node_id: format!("IC_{id}"),
+      reactions: Vec::new(),
       id,
       body: body.to_string(),
       created_at: created_at.to_string(),
@@ -15953,6 +16163,8 @@ mod tests {
     body: Option<&str>,
   ) -> GithubPullRequestReview {
     GithubPullRequestReview {
+      node_id: format!("PRR_{id}"),
+      reactions: Vec::new(),
       id,
       body: body.map(str::to_string),
       state: state,
@@ -15972,6 +16184,8 @@ mod tests {
     in_reply_to_id: Option<u64>,
   ) -> GithubPullRequestReviewComment {
     GithubPullRequestReviewComment {
+      node_id: format!("PRRC_{id}"),
+      reactions: Vec::new(),
       id,
       pull_request_review_id: Some(12),
       diff_hunk: "@@ -1 +1 @@".to_string(),
@@ -16271,11 +16485,22 @@ mod tests {
   #[test]
   fn upsert_issue_comment_local_updates_existing_and_appends_missing() {
     let mut comments = vec![make_issue_comment(1, "2026-02-28T10:00:00Z", "Initial")];
+    comments[0].reactions = vec![GithubReactionGroup {
+      content: GithubReactionContent::Heart,
+      count: 1,
+      viewer_has_reacted: true,
+    }];
     let mut updated = make_issue_comment(1, "2026-02-28T10:01:00Z", "Updated");
+    updated.node_id.clear();
     updated.updated_at = "2026-02-28T10:05:00Z".to_string();
     upsert_issue_comment_local(&mut comments, updated.clone());
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0].body, updated.body);
+    assert_eq!(comments[0].node_id, "IC_1");
+    assert_eq!(
+      comments[0].reactions[0].content,
+      GithubReactionContent::Heart
+    );
 
     upsert_issue_comment_local(
       &mut comments,
@@ -16288,11 +16513,22 @@ mod tests {
   #[test]
   fn upsert_review_comment_local_updates_existing_and_appends_missing() {
     let mut comments = vec![make_review_comment(1, "2026-02-28T10:00:00Z", None)];
+    comments[0].reactions = vec![GithubReactionGroup {
+      content: GithubReactionContent::Rocket,
+      count: 1,
+      viewer_has_reacted: false,
+    }];
     let mut updated = make_review_comment(1, "2026-02-28T10:01:00Z", None);
+    updated.node_id.clear();
     updated.body = "Updated review comment".to_string();
     upsert_review_comment_local(&mut comments, updated.clone());
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0].body, updated.body);
+    assert_eq!(comments[0].node_id, "PRRC_1");
+    assert_eq!(
+      comments[0].reactions[0].content,
+      GithubReactionContent::Rocket
+    );
 
     upsert_review_comment_local(
       &mut comments,
@@ -16355,6 +16591,7 @@ mod tests {
   fn make_pr_details_for_stats() -> GithubPullRequestDetails {
     GithubPullRequestDetails {
       node_id: "PR_kwDOExample".to_string(),
+      reactions: Vec::new(),
       number: 42,
       title: "Example PR".to_string(),
       state: GithubPullRequestState::Open,
@@ -16572,6 +16809,43 @@ mod tests {
     assert_eq!(items[0].id, 1);
     assert_eq!(items[0].replies.len(), 1);
     assert_eq!(items[0].replies[0].id, 2);
+  }
+
+  #[test]
+  fn build_overview_conversation_items_keeps_reaction_subjects_and_groups() {
+    let mut issue_comment = make_issue_comment(1, "2026-02-28T10:00:00Z", "Issue comment");
+    issue_comment.reactions = vec![GithubReactionGroup {
+      content: GithubReactionContent::ThumbsUp,
+      count: 2,
+      viewer_has_reacted: true,
+    }];
+    let mut root_comment = make_review_comment(2, "2026-02-28T10:01:00Z", None);
+    root_comment.reactions = vec![GithubReactionGroup {
+      content: GithubReactionContent::Heart,
+      count: 1,
+      viewer_has_reacted: false,
+    }];
+    let mut reply = make_review_comment(3, "2026-02-28T10:02:00Z", Some(2));
+    reply.reactions = vec![GithubReactionGroup {
+      content: GithubReactionContent::Eyes,
+      count: 1,
+      viewer_has_reacted: true,
+    }];
+
+    let items = build_overview_conversation_items(&[issue_comment], &[], &[root_comment, reply]);
+
+    assert_eq!(items[0].reaction_subject_id, "IC_1");
+    assert_eq!(
+      items[0].reactions[0].content,
+      GithubReactionContent::ThumbsUp
+    );
+    assert_eq!(items[1].reaction_subject_id, "PRRC_2");
+    assert_eq!(items[1].reactions[0].content, GithubReactionContent::Heart);
+    assert_eq!(items[1].replies[0].reaction_subject_id, "PRRC_3");
+    assert_eq!(
+      items[1].replies[0].reactions[0].content,
+      GithubReactionContent::Eyes
+    );
   }
 
   #[test]
