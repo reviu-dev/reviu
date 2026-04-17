@@ -6,10 +6,11 @@
   font-size: 12px;
   font-weight: 500;
   line-height: 20px;
-  color: oklch(0.145 0 0);
-  background-color: oklch(0.97 0 0);
-  border: 1px solid oklch(0.922 0 0);
-  border-radius: 0.625rem;
+  color: var(--fgColor-default, var(--color-fg-default));
+  background-color: var(--button-default-bgColor-rest, var(--color-btn-bg));
+  border: var(--borderWidth-thin, .0625rem) solid;
+  border-color: var(--button-default-borderColor-rest, var(--color-btn-border));
+  border-radius: var(--borderRadius-medium, .375rem);
   text-decoration: none;
   cursor: pointer;
   transition: background-color 0.15s ease;
@@ -17,9 +18,8 @@
 }
 
 #reviu-open-btn:hover {
-  background-color: oklch(0.93 0 0);
-  border-color: oklch(0.85 0 0);
-  color: oklch(0.145 0 0);
+  background-color: var(--button-default-bgColor-hover, var(--color-btn-hover-bg));
+  border-color: var(--button-default-borderColor-hover, var(--color-btn-hover-border));
   text-decoration: none;
 }
 
@@ -36,23 +36,4 @@
   padding: 8px 16px;
   font-size: 13px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-/* Dark theme */
-@media (prefers-color-scheme: dark) {
-  #reviu-open-btn {
-    color: oklch(0.985 0 0);
-    background-color: oklch(0.269 0 0);
-    border-color: oklch(0.269 0 0);
-  }
-
-  #reviu-open-btn:hover {
-    background-color: oklch(0.32 0 0);
-    border-color: oklch(0.4 0 0);
-    color: oklch(0.985 0 0);
-  }
-
-  #reviu-open-btn.reviu-floating {
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-  }
 }
