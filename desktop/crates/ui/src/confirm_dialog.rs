@@ -1,10 +1,16 @@
 use std::rc::Rc;
 
-use gpui::{AnyElement, App, ClickEvent, IntoElement, SharedString, Window};
+use gpui::{AnyElement, App, ClickEvent, IntoElement, ParentElement as _, SharedString, Window};
 use gpui_component::button::ButtonVariant;
 use gpui_component::dialog::{AlertDialog, DialogButtonProps};
 
 type ConfirmDialogHandler = dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConfirmDialogContentPlacement {
+  Description,
+  Body,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 struct ResolvedConfirmDialogProps {
@@ -21,6 +27,7 @@ pub struct ConfirmDialog {
   cancel_text: Option<SharedString>,
   confirm_variant: Option<ButtonVariant>,
   cancel_variant: Option<ButtonVariant>,
+  content_placement: ConfirmDialogContentPlacement,
   on_confirm: Option<Rc<ConfirmDialogHandler>>,
   on_cancel: Option<Rc<ConfirmDialogHandler>>,
 }
@@ -34,6 +41,7 @@ impl ConfirmDialog {
       cancel_text: None,
       confirm_variant: None,
       cancel_variant: None,
+      content_placement: ConfirmDialogContentPlacement::Description,
       on_confirm: None,
       on_cancel: None,
     }
@@ -61,6 +69,11 @@ impl ConfirmDialog {
 
   pub fn destructive(self) -> Self {
     self.confirm_variant(ButtonVariant::Danger)
+  }
+
+  pub fn content_as_body(mut self) -> Self {
+    self.content_placement = ConfirmDialogContentPlacement::Body;
+    self
   }
 
   pub fn on_confirm<F>(mut self, on_confirm: F) -> Self
@@ -105,18 +118,23 @@ impl ConfirmDialog {
       props = props.on_cancel(move |event, window, cx| on_cancel(event, window, cx));
     }
 
-    alert
+    let alert = alert
       .title(self.title)
-      .description(self.message)
       .close_button(true)
       .overlay_closable(true)
-      .button_props(props)
+      .button_props(props);
+
+    match self.content_placement {
+      ConfirmDialogContentPlacement::Description => alert.description(self.message),
+      ConfirmDialogContentPlacement::Body => alert.child(self.message),
+    }
   }
 }
 
 #[cfg(test)]
 mod tests {
   use super::ConfirmDialog;
+  use super::ConfirmDialogContentPlacement;
   use gpui_component::button::ButtonVariant;
 
   #[test]
@@ -136,5 +154,20 @@ mod tests {
     let props = dialog.resolved_props();
 
     assert_eq!(props.confirm_variant, ButtonVariant::Danger);
+  }
+
+  #[test]
+  fn content_defaults_to_description_and_can_render_as_body() {
+    let dialog = ConfirmDialog::new("Confirm", "Message");
+    assert_eq!(
+      dialog.content_placement,
+      ConfirmDialogContentPlacement::Description
+    );
+
+    let dialog = ConfirmDialog::new("Confirm", "Message").content_as_body();
+    assert_eq!(
+      dialog.content_placement,
+      ConfirmDialogContentPlacement::Body
+    );
   }
 }
