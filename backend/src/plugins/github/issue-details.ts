@@ -23,6 +23,8 @@ function buildGithubIssueDetailsPayload(
   },
 ): GithubIssueDetails {
   return {
+    node_id: issue.node_id,
+    reactions: [],
     id: issue.id,
     number: issue.number,
     title: issue.title,

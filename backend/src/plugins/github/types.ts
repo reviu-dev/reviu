@@ -111,7 +111,6 @@ export type RepositoryAssigneeResponse
 export type GithubUserResponse = Endpoints['GET /user']['response']['data']
 export type GithubIssueResponse = Endpoints['GET /repos/{owner}/{repo}/issues']['response']['data'][number]
 export type GithubIssueDetailsResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}']['response']['data']
-export type GithubIssueDetailsParameters = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}']['parameters']
 export type UpdateIssueParams = Endpoints['PATCH /repos/{owner}/{repo}/issues/{issue_number}']['parameters']
 export type UpdateIssueResponse = Endpoints['PATCH /repos/{owner}/{repo}/issues/{issue_number}']['response']['data']
 export type GithubIssueDetailsCommentResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}/comments']['response']['data'][number]
@@ -229,6 +228,51 @@ export interface GithubGraphqlPullRequestConversationDatabaseNode {
   id: string
   databaseId?: number | null
   fullDatabaseId?: number | string | null
+}
+
+export interface GithubGraphqlIssueDetailsCommentNode
+  extends GithubGraphqlPullRequestConversationDatabaseNode, GithubGraphqlReactionGroupsSubject {
+  body: string
+  createdAt: string
+  updatedAt: string
+  author: GithubGraphqlPullRequestConversationActor | null
+}
+
+export interface GithubGraphqlIssueDetailsIssueNode
+  extends GithubGraphqlPullRequestConversationDatabaseNode, GithubGraphqlReactionGroupsSubject {
+  number: number
+  title: string
+  body: string
+  state: string
+  stateReason: string | null
+  createdAt: string
+  updatedAt: string
+  closedAt: string | null
+  author: GithubGraphqlPullRequestConversationActor | null
+  labels: {
+    nodes?: Array<{ name: string, color: string } | null> | null
+  } | null
+  repository: {
+    owner: {
+      login: string
+    }
+    name: string
+  }
+  comments: GithubGraphqlConnection<GithubGraphqlIssueDetailsCommentNode>
+}
+
+export interface GithubGraphqlIssueDetailsResponse {
+  repository: {
+    issue: GithubGraphqlIssueDetailsIssueNode | null
+  } | null
+}
+
+export interface GithubGraphqlIssueDetailsCommentsPageResponse {
+  repository: {
+    issue: {
+      comments: GithubGraphqlConnection<GithubGraphqlIssueDetailsCommentNode>
+    } | null
+  } | null
 }
 
 export interface GithubGraphqlPullRequestIssueCommentNode
@@ -719,6 +763,8 @@ export interface GithubIssue {
 }
 
 export interface GithubIssueDetailsComment {
+  node_id: string
+  reactions: GithubReactionGroup[]
   id: GithubIssueDetailsCommentResponse['id']
   body: GithubIssueDetailsCommentResponse['body']
   created_at: GithubIssueDetailsCommentResponse['created_at']
@@ -731,6 +777,8 @@ export interface GithubIssueDetailsComment {
 }
 
 export interface GithubIssueDetails {
+  node_id: string
+  reactions: GithubReactionGroup[]
   id: GithubIssueResponse['id']
   number: GithubIssueResponse['number']
   title: GithubIssueResponse['title']

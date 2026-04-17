@@ -12,6 +12,8 @@ describe('github issue details helpers', () => {
       owner: 'openai',
       repo: 'reviu',
       cachedPayload: {
+        node_id: 'I_1',
+        reactions: [],
         id: 1,
         number: 42,
         title: 'Old title',
@@ -24,6 +26,8 @@ describe('github issue details helpers', () => {
         labels: [],
         comments: [
           {
+            node_id: 'IC_9001',
+            reactions: [],
             id: 9001,
             body: 'Existing comment',
             created_at: '2026-03-13T18:01:00Z',
@@ -44,6 +48,7 @@ describe('github issue details helpers', () => {
         },
       },
       issue: {
+        node_id: 'I_1',
         id: 1,
         number: 42,
         title: 'New title',
@@ -77,6 +82,8 @@ describe('github issue details helpers', () => {
       owner: 'openai',
       repo: 'reviu',
       cachedPayload: {
+        node_id: 'I_1',
+        reactions: [],
         id: 1,
         number: 42,
         title: 'Same title',
@@ -100,6 +107,7 @@ describe('github issue details helpers', () => {
       issue: null,
       issueComments: [
         {
+          node_id: 'IC_9002',
           id: 9002,
           body: 'New comment',
           created_at: '2026-03-13T18:06:00Z',

@@ -26,6 +26,10 @@ import type {
   DeletePullRequestCommentParams,
   GithubGraphqlAddReactionResponse,
   GithubGraphqlConnection,
+  GithubGraphqlIssueDetailsCommentNode,
+  GithubGraphqlIssueDetailsCommentsPageResponse,
+  GithubGraphqlIssueDetailsIssueNode,
+  GithubGraphqlIssueDetailsResponse,
   GithubGraphqlPullRequestConversationActor,
   GithubGraphqlPullRequestConversationDatabaseNode,
   GithubGraphqlPullRequestConversationResponse,
@@ -41,6 +45,7 @@ import type {
   GithubGraphqlReactionGroup,
   GithubGraphqlRemoveReactionResponse,
   GithubIssue,
+  GithubIssueDetails,
   GithubIssueDetailsCommentParameters,
   GithubIssueDetailsCommentResponse,
   GithubPullRequestConversation,
@@ -90,6 +95,7 @@ import type {
   WorkflowRunsParams,
   WorkflowRunsResponse,
 } from './types.js'
+
 import { request } from '@octokit/request'
 import { logger } from '../../lib/logger.js'
 import { getGithubMetricsContext } from './metrics/github-metrics-context.js'
@@ -643,6 +649,110 @@ const GITHUB_GRAPHQL_REMOVE_REACTION_MUTATION = `
   ${GITHUB_GRAPHQL_REACTION_GROUP_FRAGMENT}
 `
 
+const GITHUB_GRAPHQL_ISSUE_DETAILS_SHARED_FRAGMENTS = `
+  fragment IssueDetailsActorFields on Actor {
+    __typename
+    login
+    avatarUrl
+  }
+
+  fragment IssueDetailsDatabaseFields on Node {
+    id
+    ... on Issue {
+      databaseId
+      fullDatabaseId
+    }
+    ... on IssueComment {
+      databaseId
+      fullDatabaseId
+    }
+  }
+
+  ${GITHUB_GRAPHQL_REACTION_GROUP_FRAGMENT}
+`
+
+const GITHUB_GRAPHQL_ISSUE_DETAILS_COMMENT_FRAGMENT = `
+  fragment IssueDetailsCommentFields on IssueComment {
+    ...IssueDetailsDatabaseFields
+    reactionGroups {
+      ...PullRequestReactionGroupFields
+    }
+    body
+    createdAt
+    updatedAt
+    author {
+      ...IssueDetailsActorFields
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_ISSUE_DETAILS_QUERY = `
+  query IssueDetails($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      issue(number: $number) {
+        ...IssueDetailsDatabaseFields
+        reactionGroups {
+          ...PullRequestReactionGroupFields
+        }
+        number
+        title
+        body
+        state
+        stateReason
+        createdAt
+        updatedAt
+        closedAt
+        author {
+          ...IssueDetailsActorFields
+        }
+        labels(first: 100) {
+          nodes {
+            name
+            color
+          }
+        }
+        repository {
+          owner {
+            login
+          }
+          name
+        }
+        comments(first: 100) {
+          nodes {
+            ...IssueDetailsCommentFields
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  }
+  ${GITHUB_GRAPHQL_ISSUE_DETAILS_SHARED_FRAGMENTS}
+  ${GITHUB_GRAPHQL_ISSUE_DETAILS_COMMENT_FRAGMENT}
+`
+
+const GITHUB_GRAPHQL_ISSUE_DETAILS_COMMENTS_PAGE_QUERY = `
+  query IssueDetailsCommentsPage($owner: String!, $name: String!, $number: Int!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      issue(number: $number) {
+        comments(first: 100, after: $after) {
+          nodes {
+            ...IssueDetailsCommentFields
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  }
+  ${GITHUB_GRAPHQL_ISSUE_DETAILS_SHARED_FRAGMENTS}
+  ${GITHUB_GRAPHQL_ISSUE_DETAILS_COMMENT_FRAGMENT}
+`
+
 interface GithubErrorLike {
   status?: number
   response?: {
@@ -660,6 +770,24 @@ interface GithubGraphqlResponse<T> {
   errors?: Array<{
     message: string
   }>
+}
+
+const GITHUB_OAUTH_APP_ACCESS_RESTRICTION_MESSAGE
+  = 'This organization restricts OAuth app access. Ask an organization owner to approve Reviu, then try again.'
+
+function isGithubOauthAppAccessRestrictionError(message: string): boolean {
+  return message.includes('OAuth App access restrictions')
+    || message.includes('restricting access to your organization')
+    || message.includes('third-parties is limited')
+}
+
+function githubOauthAppAccessRestrictionMessage(message: string): string {
+  const organization = message.match(/the `([^`]+)` organization/)?.[1]
+  if (organization) {
+    return `The ${organization} organization restricts OAuth app access. Ask an organization owner to approve Reviu, then try again.`
+  }
+
+  return GITHUB_OAUTH_APP_ACCESS_RESTRICTION_MESSAGE
 }
 
 interface GithubGraphqlIssueNode {
@@ -1009,8 +1137,14 @@ async function requestGithubGraphqlData<T>(
     })
     const payload = response.data as GithubGraphqlResponse<T>
     if (payload.errors?.length) {
-      throw Object.assign(new Error(payload.errors.map(error => error.message).join('; ')), {
-        status: response.status,
+      const errorMessage = payload.errors.map(error => error.message).join('; ')
+      const isOauthAccessRestriction = isGithubOauthAppAccessRestrictionError(errorMessage)
+      throw Object.assign(new Error(
+        isOauthAccessRestriction
+          ? githubOauthAppAccessRestrictionMessage(errorMessage)
+          : errorMessage,
+      ), {
+        status: isOauthAccessRestriction ? 403 : response.status,
         response: {
           headers: response.headers,
         },
@@ -1033,6 +1167,10 @@ async function requestGithubGraphqlData<T>(
     return payload.data
   }
   catch (error) {
+    logger.error({
+      operation: getGithubMetricsContext()?.operation ?? null,
+      error: error instanceof Error ? error.message : String(error),
+    }, 'GitHub GraphQL request failed')
     const githubError = error as GithubErrorLike
     const durationMs = Date.now() - startedAt
     logGithubRateLimit(GITHUB_GRAPHQL_ROUTE, githubError.status ?? 0, githubError.response?.headers)
@@ -1082,6 +1220,10 @@ async function requestGithubConditionally<Route extends keyof Endpoints>(
     }
   }
   catch (error) {
+    logger.error({
+      operation: getGithubMetricsContext()?.operation ?? null,
+      error: error instanceof Error ? error.message : String(error),
+    }, 'GitHub Rest request failed')
     const githubError = error as GithubErrorLike
     const durationMs = Date.now() - startedAt
     logGithubRateLimit(route, githubError.status ?? 0, githubError.response?.headers)
@@ -1392,6 +1534,63 @@ function mapGithubGraphqlReactionGroups(
     .filter(group => group.count > 0 || group.viewer_has_reacted)
 }
 
+function mapGithubGraphqlIssueDetailsComment(
+  comment: GithubGraphqlIssueDetailsCommentNode,
+): GithubIssueDetails['comments'][number] {
+  const login = actorLogin(comment.author)
+
+  return {
+    node_id: comment.id,
+    reactions: mapGithubGraphqlReactionGroups(comment.reactionGroups),
+    id: requireGraphqlDatabaseId(comment, 'issue comment'),
+    body: comment.body,
+    created_at: comment.createdAt,
+    updated_at: comment.updatedAt,
+    user: login
+      ? {
+          login,
+          avatar_url: comment.author?.avatarUrl ?? '',
+        }
+      : null,
+  }
+}
+
+function mapGithubGraphqlIssueDetails(
+  issue: GithubGraphqlIssueDetailsIssueNode,
+  comments: GithubGraphqlIssueDetailsCommentNode[],
+): GithubIssueDetails {
+  const login = actorLogin(issue.author)
+  const stateReason = issue.stateReason?.toLowerCase() ?? null
+
+  return {
+    node_id: issue.id,
+    reactions: mapGithubGraphqlReactionGroups(issue.reactionGroups),
+    id: requireGraphqlDatabaseId(issue, 'issue'),
+    number: issue.number,
+    title: issue.title,
+    body: issue.body.trim() ? issue.body : null,
+    state: issue.state.toLowerCase() as GithubIssueDetails['state'],
+    state_reason: stateReason as GithubIssueDetails['state_reason'],
+    created_at: issue.createdAt,
+    updated_at: issue.updatedAt,
+    closed_at: issue.closedAt,
+    labels: (issue.labels?.nodes ?? []).flatMap(label =>
+      label ? [{ name: label.name, color: label.color }] : [],
+    ),
+    comments: comments.map(mapGithubGraphqlIssueDetailsComment),
+    user: login
+      ? {
+          login,
+          avatar_url: issue.author?.avatarUrl ?? '',
+        }
+      : null,
+    repository: {
+      owner: issue.repository.owner.login,
+      repo: issue.repository.name,
+    },
+  }
+}
+
 function mapGithubGraphqlPullRequestIssueComment(
   comment: GithubGraphqlPullRequestIssueCommentNode,
 ): GithubPullRequestIssueComment {
@@ -1468,6 +1667,41 @@ function mapGithubGraphqlPullRequestReviewComment(
     original_line: comment.originalLine ?? thread.originalLine ?? undefined,
     side: normalizeGraphqlDiffSide(thread.diffSide) ?? undefined,
   }
+}
+
+async function fetchRemainingGithubIssueDetailsCommentNodes(
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  initialPageInfo: GithubGraphqlConnection<GithubGraphqlIssueDetailsCommentNode>['pageInfo'],
+): Promise<GithubGraphqlIssueDetailsCommentNode[]> {
+  const nodes: GithubGraphqlIssueDetailsCommentNode[] = []
+  let pageInfo = initialPageInfo
+  let page = 1
+
+  while (pageInfo.hasNextPage && pageInfo.endCursor && page < GITHUB_PAGINATED_COLLECTION_MAX_PAGES) {
+    const data = await requestGithubGraphqlData<GithubGraphqlIssueDetailsCommentsPageResponse>({
+      token,
+      query: GITHUB_GRAPHQL_ISSUE_DETAILS_COMMENTS_PAGE_QUERY,
+      variables: {
+        owner,
+        name: repo,
+        number: issueNumber,
+        after: pageInfo.endCursor,
+      },
+    })
+    const connection = data.repository?.issue?.comments
+    if (!connection) {
+      break
+    }
+
+    nodes.push(...graphqlConnectionNodes(connection))
+    pageInfo = connection.pageInfo
+    page += 1
+  }
+
+  return nodes
 }
 
 async function fetchRemainingGithubPullRequestIssueCommentNodes(
@@ -1603,6 +1837,47 @@ async function fetchGithubPullRequestReviewThreadCommentNodes(
   }
 
   return nodes
+}
+
+export async function fetchGithubIssueDetailsGraphql(
+  {
+    token,
+    owner,
+    repo,
+    issueNumber,
+  }: {
+    token: string
+    owner: string
+    repo: string
+    issueNumber: number
+  },
+): Promise<GithubIssueDetails> {
+  const data = await requestGithubGraphqlData<GithubGraphqlIssueDetailsResponse>({
+    token,
+    query: GITHUB_GRAPHQL_ISSUE_DETAILS_QUERY,
+    variables: {
+      owner,
+      name: repo,
+      number: issueNumber,
+    },
+  })
+  const issue = data.repository?.issue
+  if (!issue) {
+    throw Object.assign(new Error('GitHub issue not found'), { status: 404 })
+  }
+
+  const commentNodes = [
+    ...graphqlConnectionNodes(issue.comments),
+    ...await fetchRemainingGithubIssueDetailsCommentNodes(
+      token,
+      owner,
+      repo,
+      issueNumber,
+      issue.comments.pageInfo,
+    ),
+  ]
+
+  return mapGithubGraphqlIssueDetails(issue, commentNodes)
 }
 
 export async function fetchGithubPullRequestConversationGraphql(
@@ -2290,15 +2565,6 @@ export async function unstarGithubRepository(
     viewer_has_starred: starrable.viewerHasStarred,
     stargazers_count: starrable.stargazerCount,
   }
-}
-
-export async function fetchGithubRepositoryIssueConditionally(
-  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/issues/{issue_number}'>,
-): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/issues/{issue_number}'>> {
-  return requestGithubConditionally<'GET /repos/{owner}/{repo}/issues/{issue_number}'>(
-    'GET /repos/{owner}/{repo}/issues/{issue_number}',
-    options,
-  )
 }
 
 export async function patchGithubIssue(

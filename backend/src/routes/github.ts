@@ -25,7 +25,6 @@ import type {
   GithubIssue,
   GithubIssueDetails,
   GithubIssueDetailsCommentParameters,
-  GithubIssueDetailsParameters,
   GithubIssueSearchFilters,
   GithubNotification,
   GithubPullRequest,
@@ -114,12 +113,6 @@ import {
   mapGithubPullRequestReview,
   mapGithubPullRequestReviewComment,
 } from '../plugins/github/formatter.js'
-import {
-  buildGithubIssueDetailsValidators,
-  GITHUB_ISSUE_DETAILS_COMMENTS_VALIDATOR_KEY,
-  GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY,
-  mergeGithubIssueDetailsPayload,
-} from '../plugins/github/issue-details.js'
 import { runWithGithubMetricsContext } from '../plugins/github/metrics/github-metrics-context.js'
 import { fetchGithubPullRequestChecksSummary } from '../plugins/github/pull-request-checks.js'
 import { fetchGithubPullRequestMergeReadiness } from '../plugins/github/pull-request-merge.js'
@@ -156,6 +149,7 @@ import {
   deleteGithubPullRequestComment,
   fetchGithubCommitConditionally,
   fetchGithubCommitFilesAllPages,
+  fetchGithubIssueDetailsGraphql,
   fetchGithubIssueSearchGraphql,
   fetchGithubNotifications,
   fetchGithubPullRequest,
@@ -175,7 +169,6 @@ import {
   fetchGithubRepositoryContentObjectConditionally,
   fetchGithubRepositoryIssueCommentsAllPages,
   fetchGithubRepositoryIssueCommentsConditionally,
-  fetchGithubRepositoryIssueConditionally,
   fetchGithubRepositoryLabels,
   fetchGithubRepositoryOverview,
   fetchGithubRepositoryReadmeConditionally,
@@ -1756,105 +1749,14 @@ async function fetchRepositoryIssueDetailsWithCache(
   return withGithubMetrics(userId, cachePolicy.operation, () =>
     githubCache.getOrLoad<GithubIssueDetails>({
       ...cachePolicy,
-      load: async ({ cachedEntry }) => {
-        const paramsIssue: GithubIssueDetailsParameters = {
-          owner,
-          repo,
-          issue_number: issueNumber,
-        }
-
-        const paramsComments: GithubIssueDetailsCommentParameters = {
-          owner,
-          repo,
-          issue_number: issueNumber,
-          per_page: 100,
-        }
-
-        const cachedIssueValidator = cachedEntry?.validators?.[GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY] ?? {
-          etag: cachedEntry?.etag,
-          lastModified: cachedEntry?.lastModified,
-        }
-        const cachedIssueCommentsValidator = cachedEntry?.validators?.[GITHUB_ISSUE_DETAILS_COMMENTS_VALIDATOR_KEY]
-        const cachedCommentsPagination = getCachedPaginationMetadata(cachedEntry)
-        const canUseConditionalIssueComments = canConditionallyRevalidateSinglePageCollection(cachedCommentsPagination)
-
-        const issueResponse = await fetchGithubRepositoryIssueConditionally({
+      load: async () => ({
+        payload: await fetchGithubIssueDetailsGraphql({
           token: githubToken,
-          params: paramsIssue,
-          etag: cachedIssueValidator.etag,
-          lastModified: cachedIssueValidator.lastModified,
-        })
-
-        const issueCommentsResponse = canUseConditionalIssueComments
-          ? await fetchGithubRepositoryIssueCommentsConditionally({
-              token: githubToken,
-              params: paramsComments,
-              etag: cachedIssueCommentsValidator?.etag,
-              lastModified: cachedIssueCommentsValidator?.lastModified,
-            })
-          : null
-
-        const paginatedIssueComments = issueCommentsResponse?.notModified
-          ? null
-          : await fetchGithubRepositoryIssueCommentsAllPages({
-              token: githubToken,
-              params: {
-                owner,
-                repo,
-                issue_number: issueNumber,
-              },
-              ...(issueCommentsResponse?.data
-                ? { initialPageItems: issueCommentsResponse.data }
-                : {}),
-            })
-
-        const nextValidators = buildGithubIssueDetailsValidators({
-          issue: {
-            etag: issueResponse.etag ?? cachedIssueValidator.etag,
-            lastModified: issueResponse.lastModified ?? cachedIssueValidator.lastModified,
-          },
-          issueComments: {
-            etag: issueCommentsResponse?.etag ?? cachedIssueCommentsValidator?.etag,
-            lastModified: issueCommentsResponse?.lastModified ?? cachedIssueCommentsValidator?.lastModified,
-          },
-        })
-
-        if (issueResponse.notModified && issueCommentsResponse?.notModified) {
-          return {
-            notModified: true as const,
-            etag: nextValidators[GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY]?.etag,
-            lastModified: nextValidators[GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY]?.lastModified,
-            validators: nextValidators,
-            pagination: cachedCommentsPagination ?? undefined,
-          }
-        }
-
-        if (!cachedEntry && (issueResponse.notModified || issueCommentsResponse?.notModified)) {
-          throw new Error('GitHub issue details revalidation requires an existing cache entry')
-        }
-
-        const payload = mergeGithubIssueDetailsPayload({
           owner,
           repo,
-          cachedPayload: cachedEntry?.payload ?? null,
-          issue: issueResponse.notModified ? null : issueResponse.data!,
-          issueComments: paginatedIssueComments?.items ?? null,
-        })
-
-        return {
-          payload,
-          etag: nextValidators[GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY]?.etag,
-          lastModified: nextValidators[GITHUB_ISSUE_DETAILS_ISSUE_VALIDATOR_KEY]?.lastModified,
-          validators: nextValidators,
-          pagination: paginatedIssueComments
-            ? buildPaginationMetadata(
-                paginatedIssueComments.pageCount,
-                paginatedIssueComments.itemCount,
-                paginatedIssueComments.truncated,
-              )
-            : cachedCommentsPagination ?? undefined,
-        }
-      },
+          issueNumber,
+        }),
+      }),
     }))
 }
 
@@ -3692,6 +3594,86 @@ export const githubRoutes = githubRouter
       return ctx.json({ issue: result.payload }, 200)
     }
     catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/repos/:owner/:repo/issues/:issue_number/reactions', zValidator(
+    'json',
+    pullRequestReactionMutationBodySchema,
+  ), async (ctx) => {
+    const { owner, repo, issue_number } = ctx.req.param()
+    const issueNumber = Number(issue_number)
+    const { subjectId, content } = ctx.req.valid('json')
+
+    if (!owner || !repo || Number.isNaN(issueNumber)) {
+      return ctx.json({ error: 'Missing owner, repo, or issue number' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const reactions = await addGithubReactionGraphql({
+        token: githubToken,
+        subjectId,
+        content,
+      })
+      await invalidateGithubCacheTags(getGithubIssueMutationTags({
+        owner,
+        repo,
+        issueNumber,
+        includeComments: true,
+      }))
+
+      return ctx.json({ reactions }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .delete('/repos/:owner/:repo/issues/:issue_number/reactions', zValidator(
+    'json',
+    pullRequestReactionMutationBodySchema,
+  ), async (ctx) => {
+    const { owner, repo, issue_number } = ctx.req.param()
+    const issueNumber = Number(issue_number)
+    const { subjectId, content } = ctx.req.valid('json')
+
+    if (!owner || !repo || Number.isNaN(issueNumber)) {
+      return ctx.json({ error: 'Missing owner, repo, or issue number' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const reactions = await removeGithubReactionGraphql({
+        token: githubToken,
+        subjectId,
+        content,
+      })
+      await invalidateGithubCacheTags(getGithubIssueMutationTags({
+        owner,
+        repo,
+        issueNumber,
+        includeComments: true,
+      }))
+
+      return ctx.json({ reactions }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })

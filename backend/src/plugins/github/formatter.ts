@@ -213,6 +213,8 @@ export function mapGithubIssueComment(
   comment: GithubIssueCommentResponseSource,
 ): GithubIssueDetailsComment {
   return {
+    node_id: comment.node_id,
+    reactions: [],
     id: comment.id,
     body: comment.body,
     created_at: comment.created_at,

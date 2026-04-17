@@ -57,7 +57,7 @@ use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DropdownSelectConfig,
-  DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState, Popover, SearchFileEntry,
+  DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState, Popover, ReactionBar, SearchFileEntry,
   SearchFileHandler, SelectableRowStyle, StatusThemeExt, UiIconName, WindowExt, dropdown_select,
   file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
   selectable_list_item,
@@ -1756,8 +1756,8 @@ fn pull_request_issue_comment_from_issue_details_comment(
   comment: GithubIssueDetailsComment,
 ) -> GithubPullRequestIssueComment {
   GithubPullRequestIssueComment {
-    node_id: String::new(),
-    reactions: Vec::new(),
+    node_id: comment.node_id,
+    reactions: comment.reactions,
     id: comment.id,
     body: comment.body.unwrap_or_default(),
     created_at: comment.created_at,
@@ -10290,135 +10290,32 @@ impl GithubPrDetailsPage {
     id_prefix: String,
     cx: &mut Context<Self>,
   ) -> AnyElement {
-    if subject_id.is_empty() {
-      return div().into_any_element();
-    }
-
-    let theme = cx.theme().clone();
     let reaction_loading = self.reaction_task.is_some();
     let page = cx.entity().clone();
     let subject_id = subject_id.to_string();
-    let visible_reactions = GithubReactionContent::ALL
-      .iter()
-      .filter_map(|content| {
-        reactions
-          .iter()
-          .find(|reaction| reaction.content == *content && reaction.count > 0)
-          .cloned()
-      })
-      .collect::<Vec<_>>();
+    let error = self
+      .reaction_error
+      .as_ref()
+      .filter(|(error_subject_id, _)| error_subject_id == &subject_id)
+      .map(|(_, error)| error.clone());
 
-    h_flex()
-      .id(format!("{id_prefix}-reactions"))
-      .items_center()
-      .gap_1()
-      .flex_wrap()
-      .child(
-        Popover::new(format!("{id_prefix}-add-reaction-popover"))
-          .anchor(Corner::TopRight)
-          .appearance(false)
-          .trigger(
-            Button::new(format!("{id_prefix}-add-reaction"))
-              .xsmall()
-              .compact()
-              .ghost()
-              .icon(UiIconName::SmilePlus)
-              .tooltip("Add reaction")
-              .disabled(reaction_loading),
-          )
-          .content({
-            let reactions = reactions.to_vec();
-            let page = page.clone();
-            let subject_id = subject_id.clone();
-            let id_prefix = id_prefix.clone();
-            move |_, _, cx| {
-              let theme = cx.theme().clone();
-              let popover = cx.entity().clone();
-              let page = page.clone();
-              let subject_id = subject_id.clone();
-              let reactions = reactions.clone();
-              let id_prefix = id_prefix.clone();
-              div()
-                .id(format!("{id_prefix}-reaction-picker"))
-                .bg(theme.popover)
-                .text_color(theme.popover_foreground)
-                .border_1()
-                .border_color(theme.border)
-                .rounded(theme.radius)
-                .shadow_lg()
-                .p_1()
-                .child(
-                  v_flex()
-                    .gap_1()
-                    .children(GithubReactionContent::ALL.chunks(4).map(|row| {
-                      h_flex().gap_1().children(row.iter().map(|content| {
-                        let content = *content;
-                        let viewer_has_reacted = reactions
-                          .iter()
-                          .find(|reaction| reaction.content == content)
-                          .is_some_and(|reaction| reaction.viewer_has_reacted);
-                        let page = page.clone();
-                        let popover = popover.clone();
-                        let subject_id = subject_id.clone();
-                        Button::new(format!("{id_prefix}-picker-reaction-{:?}", content))
-                          .small()
-                          .compact()
-                          .ghost()
-                          .selected(viewer_has_reacted)
-                          .disabled(reaction_loading)
-                          .label(content.emoji())
-                          .tooltip(content.label())
-                          .on_click(move |_, window, cx| {
-                            let _ = popover.update(cx, |popover, cx| {
-                              popover.dismiss(window, cx);
-                            });
-                            page.update(cx, |this, cx| {
-                              this.submit_pull_request_reaction_toggle(
-                                subject_id.clone(),
-                                content,
-                                viewer_has_reacted,
-                                cx,
-                              );
-                            });
-                          })
-                      }))
-                    })),
-                )
-            }
-          }),
-      )
-      .children(visible_reactions.into_iter().map(|reaction| {
-        let content = reaction.content;
-        let viewer_has_reacted = reaction.viewer_has_reacted;
+    ReactionBar::new(format!("{id_prefix}-reactions"))
+      .subject_id(subject_id)
+      .options(github_shared::github_reaction_options())
+      .reactions(github_shared::github_reaction_groups(reactions))
+      .loading(reaction_loading)
+      .error(error)
+      .on_toggle(move |toggle, _, cx| {
         let page = page.clone();
-        let subject_id = subject_id.clone();
-        Button::new(format!("{id_prefix}-reaction-{:?}", content))
-          .xsmall()
-          .compact()
-          .ghost()
-          .selected(viewer_has_reacted)
-          .disabled(reaction_loading)
-          .label(format!("{} {}", content.emoji(), reaction.count))
-          .tooltip(content.label())
-          .on_click(move |_, _, cx| {
-            page.update(cx, |this, cx| {
-              this.submit_pull_request_reaction_toggle(
-                subject_id.clone(),
-                content,
-                viewer_has_reacted,
-                cx,
-              );
-            });
-          })
-      }))
-      .when_some(
-        self
-          .reaction_error
-          .as_ref()
-          .filter(|(error_subject_id, _)| error_subject_id == &subject_id)
-          .map(|(_, error)| error.clone()),
-        |this, error| this.child(div().text_xs().text_color(theme.status_red()).child(error)),
-      )
+        page.update(cx, |this, cx| {
+          this.submit_pull_request_reaction_toggle(
+            toggle.subject_id.to_string(),
+            toggle.value,
+            toggle.viewer_has_reacted,
+            cx,
+          );
+        });
+      })
       .into_any_element()
   }
 
@@ -12113,14 +12010,14 @@ impl GithubPrDetailsPage {
               div().into_any_element()
             }
           } else {
-            v_flex()
-              .gap_2()
+            div()
+              .border_1()
+              .border_color(theme.border)
+              .rounded(theme.radius)
+              .p_3()
               .child(
-                div()
-                  .border_1()
-                  .border_color(theme.border)
-                  .rounded(theme.radius)
-                  .p_3()
+                v_flex()
+                  .gap_2()
                   .child({
                     let mut options = MarkdownRenderOptions::with_on_link(description_link_handler)
                       .with_state(self.description_markdown_state.clone())
@@ -12136,14 +12033,14 @@ impl GithubPrDetailsPage {
                       options = options.with_github_code_reference_previews(previews);
                     }
                     render_markdown(body.as_str(), &options, cx)
-                  }),
+                  })
+                  .child(self.render_reaction_bar(
+                    pr.node_id.as_str(),
+                    &pr.reactions,
+                    format!("pr-overview-description-reaction-{}", pr.number),
+                    cx,
+                  )),
               )
-              .child(self.render_reaction_bar(
-                pr.node_id.as_str(),
-                &pr.reactions,
-                format!("pr-overview-description-reaction-{}", pr.number),
-                cx,
-              ))
               .into_any_element()
           }),
       )

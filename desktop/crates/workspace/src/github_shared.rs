@@ -7,18 +7,44 @@ use gpui_component::{
   v_flex,
 };
 use time::OffsetDateTime;
-use ui::{StatusTag, StatusThemeExt as _, UiIconName};
+use ui::{
+  ReactionGroup as UiReactionGroup, ReactionOption as UiReactionOption, StatusTag,
+  StatusThemeExt as _, UiIconName,
+};
 
 use crate::{
   api::{
     ApiClient, GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel,
-    GithubPullRequestState, GithubPullRequestStatus,
+    GithubPullRequestState, GithubPullRequestStatus, GithubReactionContent, GithubReactionGroup,
   },
   date_format::{format_relative_time, format_relative_time_at},
 };
-
 pub(crate) const PULL_REQUEST_ROW_HEIGHT_PX: f32 = 56.0;
 pub(crate) const PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX: f32 = 80.0;
+
+pub(crate) fn github_reaction_options() -> Vec<UiReactionOption<GithubReactionContent>> {
+  GithubReactionContent::ALL
+    .into_iter()
+    .map(|content| UiReactionOption::new(content, content.emoji(), content.label()))
+    .collect()
+}
+
+pub(crate) fn github_reaction_groups(
+  reactions: &[GithubReactionGroup],
+) -> Vec<UiReactionGroup<GithubReactionContent>> {
+  reactions
+    .iter()
+    .map(|reaction| {
+      UiReactionGroup::new(
+        reaction.content,
+        reaction.content.emoji(),
+        reaction.content.label(),
+        reaction.count,
+        reaction.viewer_has_reacted,
+      )
+    })
+    .collect()
+}
 
 fn list_loading_skeleton(row_height: f32, cx: &App) -> impl IntoElement {
   let theme = cx.theme();

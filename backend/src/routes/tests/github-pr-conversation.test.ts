@@ -1,8 +1,13 @@
 import type { GithubCacheGetOrLoadOptions } from '../../plugins/github/cache/github-cache.js'
-import type { GithubPullRequestConversation, GithubReactionGroup } from '../../plugins/github/types.js'
+import type {
+  GithubIssueDetails,
+  GithubPullRequestConversation,
+  GithubReactionGroup,
+} from '../../plugins/github/types.js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const addGithubReactionGraphql = vi.fn()
+const fetchGithubIssueDetailsGraphql = vi.fn()
 const fetchGithubPullRequestConversationGraphql = vi.fn()
 const removeGithubReactionGraphql = vi.fn()
 const invalidateTags = vi.fn()
@@ -57,6 +62,7 @@ vi.mock('../../plugins/github/service.js', async () => {
   return {
     ...actual,
     addGithubReactionGraphql,
+    fetchGithubIssueDetailsGraphql,
     fetchGithubPullRequestConversationGraphql,
     removeGithubReactionGraphql,
   }
@@ -148,6 +154,41 @@ function makeReactions(): GithubReactionGroup[] {
     count: 3,
     viewer_has_reacted: true,
   }]
+}
+
+function makeIssueDetails(): GithubIssueDetails {
+  return {
+    node_id: 'I_kwDOExample',
+    reactions: [{
+      content: 'THUMBS_UP',
+      count: 2,
+      viewer_has_reacted: true,
+    }],
+    id: 501,
+    number: 77,
+    title: 'Fix auth race condition',
+    body: 'Issue body',
+    state: 'closed',
+    state_reason: 'completed',
+    created_at: '2026-02-20T08:00:00Z',
+    updated_at: '2026-02-21T09:30:00Z',
+    closed_at: '2026-02-21T09:30:00Z',
+    labels: [{
+      name: 'bug',
+      color: 'f29513',
+    }],
+    comments: [{
+      node_id: 'IC_kwDOIssue',
+      reactions: [],
+      id: 9001,
+      body: 'Looks good',
+      created_at: '2026-02-20T10:00:00Z',
+      updated_at: '2026-02-20T10:05:00Z',
+      user: { login: 'octocat', avatar_url: '' },
+    }],
+    user: { login: 'octocat', avatar_url: '' },
+    repository: { owner: 'acme', repo: 'widget' },
+  }
 }
 
 async function request(path: string, init?: RequestInit) {
@@ -265,6 +306,107 @@ describe('github pull request conversation route', () => {
     expect(removeGithubReactionGraphql).toHaveBeenCalledWith({
       token: 'github-token',
       subjectId: 'PRRC_kwDOExample',
+      content: 'HEART',
+    })
+    await expect(response.json()).resolves.toEqual({
+      reactions: [],
+    })
+  })
+
+  it('returns the GraphQL issue details payload', async () => {
+    fetchGithubIssueDetailsGraphql.mockResolvedValue(makeIssueDetails())
+
+    const response = await request('/repos/acme/widget/issues/77')
+
+    expect(response.status).toBe(200)
+    expect(fetchGithubIssueDetailsGraphql).toHaveBeenCalledWith({
+      token: 'github-token',
+      owner: 'acme',
+      repo: 'widget',
+      issueNumber: 77,
+    })
+    expect(response.headers.get('x-reviu-cache')).toBe('miss')
+    await expect(response.json()).resolves.toEqual({
+      issue: expect.objectContaining({
+        node_id: 'I_kwDOExample',
+        reactions: [expect.objectContaining({ content: 'THUMBS_UP' })],
+        comments: [expect.objectContaining({ node_id: 'IC_kwDOIssue' })],
+      }),
+    })
+  })
+
+  it('adds an issue reaction and invalidates issue details cache tags', async () => {
+    addGithubReactionGraphql.mockResolvedValue(makeReactions())
+
+    const response = await request('/repos/acme/widget/issues/77/reactions', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        subjectId: 'IC_kwDOIssue',
+        content: 'THUMBS_UP',
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(addGithubReactionGraphql).toHaveBeenCalledWith({
+      token: 'github-token',
+      subjectId: 'IC_kwDOIssue',
+      content: 'THUMBS_UP',
+    })
+    expect(invalidateTags).toHaveBeenCalledWith(expect.arrayContaining([
+      'issue:acme/widget:77',
+      'issue:acme/widget:77:comments',
+    ]))
+    await expect(response.json()).resolves.toEqual({
+      reactions: makeReactions(),
+    })
+  })
+
+  it('passes through issue reaction OAuth app access restriction errors', async () => {
+    addGithubReactionGraphql.mockRejectedValue(
+      Object.assign(
+        new Error('The openai organization restricts OAuth app access. Ask an organization owner to approve Reviu, then try again.'),
+        { status: 403 },
+      ),
+    )
+
+    const response = await request('/repos/openai/reviu/issues/77/reactions', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        subjectId: 'I_kwDOExample',
+        content: 'THUMBS_UP',
+      }),
+    })
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toEqual({
+      error: 'The openai organization restricts OAuth app access. Ask an organization owner to approve Reviu, then try again.',
+    })
+  })
+
+  it('removes an issue reaction', async () => {
+    removeGithubReactionGraphql.mockResolvedValue([])
+
+    const response = await request('/repos/acme/widget/issues/77/reactions', {
+      method: 'DELETE',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        subjectId: 'I_kwDOExample',
+        content: 'HEART',
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(removeGithubReactionGraphql).toHaveBeenCalledWith({
+      token: 'github-token',
+      subjectId: 'I_kwDOExample',
       content: 'HEART',
     })
     await expect(response.json()).resolves.toEqual({

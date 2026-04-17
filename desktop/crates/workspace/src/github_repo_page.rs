@@ -43,10 +43,11 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
   DETAILS_PAGE_CONTAINER_MAX_WIDTH, DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX,
-  Input, InputState, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusTag,
-  StatusThemeExt as _, UiIconName, VariableList, VariableListDelegate, VariableListEvent,
-  VariableListState, WindowExt, dropdown_select, file_icon_path_for_name_with_theme, h_resizable,
-  parse_github_url_action, resizable_panel, selectable_list_item,
+  Input, InputState, ReactionBar, SearchFileEntry, SearchFileHandler, SelectableRowStyle,
+  StatusTag, StatusThemeExt as _, UiIconName, VariableList, VariableListDelegate,
+  VariableListEvent, VariableListState, WindowExt, dropdown_select,
+  file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
+  selectable_list_item,
 };
 
 use crate::{
@@ -54,7 +55,8 @@ use crate::{
   api::{
     ApiClient, GithubFileCommit, GithubIssue, GithubIssueDescriptionUpdate, GithubIssueDetails,
     GithubIssueDetailsComment, GithubIssueStateReason, GithubIssueUser, GithubPullRequest,
-    GithubPullRequestState, GithubRepositoryDetails, GithubRepositoryLanguage,
+    GithubPullRequestState, GithubReactionContent, GithubReactionGroup, GithubRepositoryDetails,
+    GithubRepositoryLanguage,
   },
   auth_state::{AuthState, AuthStateStore},
   date_format::format_relative_time,
@@ -1184,16 +1186,44 @@ fn apply_issue_description_update_local(
 
 fn upsert_issue_details_comment_local(
   comments: &mut Vec<GithubIssueDetailsComment>,
-  comment: GithubIssueDetailsComment,
+  mut comment: GithubIssueDetailsComment,
 ) {
   if let Some(existing) = comments
     .iter_mut()
     .find(|existing| existing.id == comment.id)
   {
+    if comment.node_id.is_empty() {
+      comment.node_id.clone_from(&existing.node_id);
+    }
+    if comment.reactions.is_empty() {
+      comment.reactions.clone_from(&existing.reactions);
+    }
     *existing = comment;
     return;
   }
   comments.push(comment);
+}
+
+fn update_issue_reaction_groups_for_subject(
+  issue: &mut GithubIssueDetails,
+  subject_id: &str,
+  reactions: Vec<GithubReactionGroup>,
+) -> bool {
+  if issue.node_id == subject_id {
+    issue.reactions = reactions;
+    return true;
+  }
+
+  if let Some(comment) = issue
+    .comments
+    .iter_mut()
+    .find(|comment| comment.node_id == subject_id)
+  {
+    comment.reactions = reactions;
+    return true;
+  }
+
+  false
 }
 
 fn remove_issue_details_comment_local(
@@ -2011,6 +2041,8 @@ struct GithubIssueDetailsSheetView {
   description_initial_body: Option<String>,
   description_submitting: bool,
   description_error: Option<SharedString>,
+  reaction_task: Option<Task<()>>,
+  reaction_error: Option<(String, SharedString)>,
   issue_list: gpui::ListState,
   issue_list_count: usize,
 }
@@ -2056,6 +2088,8 @@ impl GithubIssueDetailsSheetView {
       description_initial_body: None,
       description_submitting: false,
       description_error: None,
+      reaction_task: None,
+      reaction_error: None,
       issue_list: gpui::ListState::new(0, gpui::ListAlignment::Top, px(300.)),
       issue_list_count: 0,
     };
@@ -2085,6 +2119,8 @@ impl GithubIssueDetailsSheetView {
     self.description_initial_body = None;
     self.description_submitting = false;
     self.description_error = None;
+    self.reaction_task = None;
+    self.reaction_error = None;
     let generation = self.request_generation;
 
     let api = self.api.clone();
@@ -2178,6 +2214,104 @@ impl GithubIssueDetailsSheetView {
         .code_reference_tasks
         .insert(reference.url.clone(), task);
     }
+  }
+
+  fn render_issue_reaction_bar(
+    &self,
+    subject_id: &str,
+    reactions: &[GithubReactionGroup],
+    id_prefix: String,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let reaction_loading = self.reaction_task.is_some();
+    let page = cx.entity().clone();
+    let subject_id = subject_id.to_string();
+    let error = self
+      .reaction_error
+      .as_ref()
+      .filter(|(error_subject_id, _)| error_subject_id == &subject_id)
+      .map(|(_, error)| error.clone());
+
+    ReactionBar::new(format!("{id_prefix}-reactions"))
+      .subject_id(subject_id)
+      .options(github_shared::github_reaction_options())
+      .reactions(github_shared::github_reaction_groups(reactions))
+      .loading(reaction_loading)
+      .error(error)
+      .on_toggle(move |toggle, _, cx| {
+        let page = page.clone();
+        page.update(cx, |this, cx| {
+          this.submit_issue_reaction_toggle(
+            toggle.subject_id.to_string(),
+            toggle.value,
+            toggle.viewer_has_reacted,
+            cx,
+          );
+        });
+      })
+      .into_any_element()
+  }
+
+  fn update_issue_reaction_groups_for_subject(
+    &mut self,
+    subject_id: &str,
+    reactions: Vec<GithubReactionGroup>,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(issue) = self.issue.as_mut() else {
+      return;
+    };
+
+    if update_issue_reaction_groups_for_subject(issue, subject_id, reactions) {
+      cx.notify();
+    }
+  }
+
+  fn submit_issue_reaction_toggle(
+    &mut self,
+    subject_id: String,
+    content: GithubReactionContent,
+    viewer_has_reacted: bool,
+    cx: &mut Context<Self>,
+  ) {
+    if self.reaction_task.is_some() || subject_id.trim().is_empty() {
+      return;
+    }
+
+    let owner = self.owner.clone();
+    let repo = self.repo.clone();
+    let issue_number = self.issue_number;
+    let api = self.api.clone();
+    self.reaction_error = None;
+    let task_subject_id = subject_id.clone();
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        if viewer_has_reacted {
+          api.remove_issue_reaction(&owner, &repo, issue_number, &task_subject_id, content)
+        } else {
+          api.add_issue_reaction(&owner, &repo, issue_number, &task_subject_id, content)
+        }
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.reaction_task = None;
+        match result {
+          Ok(reactions) => {
+            this.update_issue_reaction_groups_for_subject(subject_id.as_str(), reactions, cx);
+            this.reaction_error = None;
+          }
+          Err(error) => {
+            this.reaction_error = Some((subject_id.clone(), error.to_string().into()));
+          }
+        }
+        cx.notify();
+      });
+    });
+
+    self.reaction_task = Some(task);
+    cx.notify();
   }
 
   fn render_issue_comment_item(&self, comment_ix: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -2387,6 +2521,12 @@ impl GithubIssueDetailsSheetView {
           )),
       )
       .child(comment_body_element)
+      .child(self.render_issue_reaction_bar(
+        comment.node_id.as_str(),
+        &comment.reactions,
+        format!("issue-sheet-comment-reaction-{}", comment_id),
+        cx,
+      ))
       .into_any_element()
   }
 
@@ -3169,22 +3309,32 @@ impl Render for GithubIssueDetailsSheetView {
                 .border_color(theme.border)
                 .rounded(theme.radius)
                 .p_3()
-                .child({
-                  let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler)
-                    .with_state(self.markdown_state.clone())
-                    .with_syntax_cache(self.syntax_highlight_cache.clone())
-                    .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
-                    .with_github_issue_reference_context(
-                      issue.repository.owner.as_str(),
-                      issue.repository.repo.as_str(),
-                    )
-                    .with_scope_id(issue_description_scope_id(issue.id))
-                    .with_hardbreaks();
-                  if let Some(previews) = description_previews.clone() {
-                    options = options.with_github_code_reference_previews(previews);
-                  }
-                  render_markdown(body.as_ref(), &options, cx)
-                })
+                .child(
+                  v_flex()
+                    .gap_2()
+                    .child({
+                      let mut options = MarkdownRenderOptions::with_on_link(gfm_link_handler)
+                        .with_state(self.markdown_state.clone())
+                        .with_syntax_cache(self.syntax_highlight_cache.clone())
+                        .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
+                        .with_github_issue_reference_context(
+                          issue.repository.owner.as_str(),
+                          issue.repository.repo.as_str(),
+                        )
+                        .with_scope_id(issue_description_scope_id(issue.id))
+                        .with_hardbreaks();
+                      if let Some(previews) = description_previews.clone() {
+                        options = options.with_github_code_reference_previews(previews);
+                      }
+                      render_markdown(body.as_ref(), &options, cx)
+                    })
+                    .child(self.render_issue_reaction_bar(
+                      issue.node_id.as_str(),
+                      &issue.reactions,
+                      format!("issue-sheet-description-reaction-{}", issue.number),
+                      cx,
+                    )),
+                )
                 .into_any_element()
             }),
         )
@@ -7942,8 +8092,8 @@ mod tests {
   use super::*;
   use crate::api::{
     GithubIssueDescriptionUpdate, GithubIssueDetailsComment, GithubIssueUser,
-    GithubPullRequestAuthor, GithubPullRequestLabel, GithubPullRequestState, GithubRepository,
-    GithubRepositoryTreeEntry,
+    GithubPullRequestAuthor, GithubPullRequestLabel, GithubPullRequestState, GithubReactionContent,
+    GithubReactionGroup, GithubRepository, GithubRepositoryTreeEntry,
   };
   use crate::workspace::WorkspaceApi;
   use gpui::TestAppContext;
@@ -7954,6 +8104,8 @@ mod tests {
     login: Option<&str>,
   ) -> GithubIssueDetailsComment {
     GithubIssueDetailsComment {
+      node_id: format!("IC_{id}"),
+      reactions: Vec::new(),
       id,
       body: body.map(str::to_string),
       created_at: "2024-01-03T00:00:00Z".to_string(),
@@ -7968,6 +8120,8 @@ mod tests {
 
   fn test_issue_details_with_code_links() -> GithubIssueDetails {
     GithubIssueDetails {
+      node_id: "I_1".to_string(),
+      reactions: Vec::new(),
       id: 1,
       number: 42,
       title: "Issue".to_string(),
@@ -7980,6 +8134,8 @@ mod tests {
       labels: Vec::new(),
       comments: vec![
         GithubIssueDetailsComment {
+          node_id: "IC_7".to_string(),
+          reactions: Vec::new(),
           id: 7,
           body: Some(
             "[lib](https://github.com/acme/widget/blob/main/src/lib.rs#L3-L5)".to_string(),
@@ -7989,6 +8145,8 @@ mod tests {
           user: None,
         },
         GithubIssueDetailsComment {
+          node_id: "IC_8".to_string(),
+          reactions: Vec::new(),
           id: 8,
           body: Some("No code reference".to_string()),
           created_at: "2024-01-03T00:00:00Z".to_string(),
@@ -8940,6 +9098,54 @@ mod tests {
     );
     assert_eq!(comments.len(), 2);
     assert_eq!(comments[1].id, 2);
+  }
+
+  #[test]
+  fn upsert_issue_details_comment_local_preserves_reactions_when_mutation_payload_omits_them() {
+    let mut existing = make_issue_comment(1, Some("Initial"), Some("octocat"));
+    existing.node_id = "IC_kwDOExisting".to_string();
+    existing.reactions = vec![GithubReactionGroup {
+      content: GithubReactionContent::Heart,
+      count: 1,
+      viewer_has_reacted: true,
+    }];
+    let mut comments = vec![existing];
+    let mut updated = make_issue_comment(1, Some("Updated"), Some("octocat"));
+    updated.node_id.clear();
+    updated.reactions.clear();
+
+    upsert_issue_details_comment_local(&mut comments, updated);
+
+    assert_eq!(comments[0].node_id, "IC_kwDOExisting");
+    assert_eq!(
+      comments[0].reactions[0].content,
+      GithubReactionContent::Heart
+    );
+  }
+
+  #[test]
+  fn update_issue_reaction_groups_for_subject_updates_issue_or_comment() {
+    let mut issue = test_issue_details_with_code_links();
+    let reactions = vec![GithubReactionGroup {
+      content: GithubReactionContent::ThumbsUp,
+      count: 2,
+      viewer_has_reacted: true,
+    }];
+
+    assert!(update_issue_reaction_groups_for_subject(
+      &mut issue,
+      "I_1",
+      reactions.clone(),
+    ));
+    assert_eq!(issue.reactions[0].content, GithubReactionContent::ThumbsUp);
+
+    assert!(update_issue_reaction_groups_for_subject(
+      &mut issue, "IC_7", reactions,
+    ));
+    assert_eq!(
+      issue.comments[0].reactions[0].content,
+      GithubReactionContent::ThumbsUp
+    );
   }
 
   #[test]
