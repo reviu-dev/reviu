@@ -21,5 +21,8 @@ reqwest_client = { workspace = true }
 sentry = { workspace = true }
 percent-encoding = { workspace = true }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { workspace = true }
+
 [build-dependencies]
 embed-resource = { workspace = true }

@@ -6443,6 +6443,7 @@ dependencies = [
  "reqwest_client",
  "sentry",
  "ui",
+ "windows-sys 0.61.2",
  "workspace",
 ]
 
