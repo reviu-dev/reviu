@@ -117,3 +117,4 @@ debug = "line-tables-only"
 
 [patch.crates-io]
 gpui = { git = "https://github.com/zed-industries/zed" }
+tree-sitter-scss = { git = "https://github.com/tree-sitter-grammars/tree-sitter-scss", rev = "2ef6d42e3ad7a8208900f9346f4529806ae0f9f9" }
