@@ -190,6 +190,7 @@ jobs:
 
   build-linux:
     name: Build Linux (${{ matrix.arch }})
+    timeout-minutes: 40
     needs: prepare-release
     if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
     runs-on: ${{ matrix.runner }}
