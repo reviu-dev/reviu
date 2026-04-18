@@ -43,9 +43,9 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
   DETAILS_PAGE_CONTAINER_MAX_WIDTH, DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX,
-  Input, InputState, ReactionBar, SearchFileEntry, SearchFileHandler, SelectableRowStyle,
-  StatusTag, StatusThemeExt as _, UiIconName, VariableList, VariableListDelegate,
-  VariableListEvent, VariableListState, WindowExt, dropdown_select,
+  GithubEmojiInput, Input, InputState, ReactionBar, SearchFileEntry, SearchFileHandler,
+  SelectableRowStyle, StatusTag, StatusThemeExt as _, UiIconName, VariableList,
+  VariableListDelegate, VariableListEvent, VariableListState, WindowExt, dropdown_select,
   file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
   selectable_list_item,
 };
@@ -2410,7 +2410,7 @@ impl GithubIssueDetailsSheetView {
           .gap_2()
           .child(
             div().w_full().child(
-              Input::new(&input_state)
+              GithubEmojiInput::new(&input_state)
                 .disabled(self.edit_submitting)
                 .h(px(ISSUE_COMMENT_INPUT_HEIGHT_PX)),
             ),
@@ -2548,7 +2548,7 @@ impl GithubIssueDetailsSheetView {
       .child(
         div()
           .w_full()
-          .child(Input::new(comment_input).h(px(ISSUE_COMMENT_INPUT_HEIGHT_PX))),
+          .child(GithubEmojiInput::new(comment_input).h(px(ISSUE_COMMENT_INPUT_HEIGHT_PX))),
       )
       .when_some(self.comment_input_error.clone(), |this, error| {
         this.child(div().text_xs().text_color(theme.status_red()).child(error))
