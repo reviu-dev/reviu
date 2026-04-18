@@ -84,6 +84,119 @@ mod linux_single_instance {
   }
 }
 
+#[cfg(target_os = "windows")]
+mod windows_single_instance {
+  use std::ffi::OsStr;
+  use std::os::windows::ffi::OsStrExt;
+  use std::ptr;
+  use std::sync::mpsc;
+  use std::thread;
+  use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_PIPE_CONNECTED, GENERIC_WRITE, GetLastError, INVALID_HANDLE_VALUE,
+  };
+  use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_ATTRIBUTE_NORMAL, OPEN_EXISTING, PIPE_ACCESS_INBOUND, ReadFile, WriteFile,
+  };
+  use windows_sys::Win32::System::Pipes::{
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_MESSAGE,
+    PIPE_TYPE_MESSAGE, PIPE_WAIT,
+  };
+  use workspace::AppProfile;
+
+  const PIPE_BUFFER_SIZE: usize = 4096;
+
+  fn pipe_name() -> Vec<u16> {
+    let name = format!(r"\\.\pipe\{}-deeplink", AppProfile::current().url_scheme());
+    OsStr::new(&name).encode_wide().chain(Some(0)).collect()
+  }
+
+  pub fn try_forward_url(url: &str) -> bool {
+    let pipe_name = pipe_name();
+    let handle = unsafe {
+      CreateFileW(
+        pipe_name.as_ptr(),
+        GENERIC_WRITE,
+        0,
+        ptr::null(),
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        ptr::null_mut(),
+      )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+      return false;
+    }
+
+    let bytes = url.as_bytes();
+    let mut bytes_written = 0;
+    let write_result = unsafe {
+      WriteFile(
+        handle,
+        bytes.as_ptr(),
+        bytes.len() as u32,
+        &mut bytes_written,
+        ptr::null_mut(),
+      )
+    };
+    unsafe {
+      CloseHandle(handle);
+    }
+
+    write_result != 0 && bytes_written as usize == bytes.len()
+  }
+
+  pub fn listen(tx: mpsc::Sender<Vec<String>>) {
+    let _ = thread::Builder::new()
+      .name("WindowsDeeplinkListener".to_string())
+      .spawn(move || {
+        let pipe_name = pipe_name();
+        loop {
+          let pipe = unsafe {
+            CreateNamedPipeW(
+              pipe_name.as_ptr(),
+              PIPE_ACCESS_INBOUND,
+              PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+              1,
+              PIPE_BUFFER_SIZE as u32,
+              PIPE_BUFFER_SIZE as u32,
+              0,
+              ptr::null(),
+            )
+          };
+          if pipe == INVALID_HANDLE_VALUE {
+            return;
+          }
+
+          let connected = unsafe {
+            ConnectNamedPipe(pipe, ptr::null_mut()) != 0 || GetLastError() == ERROR_PIPE_CONNECTED
+          };
+          if connected {
+            let mut buffer = [0_u8; PIPE_BUFFER_SIZE];
+            let mut bytes_read = 0;
+            let read_result = unsafe {
+              ReadFile(
+                pipe,
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+                &mut bytes_read,
+                ptr::null_mut(),
+              )
+            };
+            if read_result != 0 && bytes_read > 0 {
+              let url = String::from_utf8_lossy(&buffer[..bytes_read as usize]).to_string();
+              let _ = tx.send(vec![url]);
+            }
+          }
+
+          unsafe {
+            DisconnectNamedPipe(pipe);
+            CloseHandle(pipe);
+          }
+        }
+      });
+  }
+}
+
 mod app_root;
 const INITIAL_WINDOW_WIDTH: f32 = 1200.0;
 const INITIAL_WINDOW_HEIGHT: f32 = 800.0;
@@ -109,14 +222,25 @@ fn macos_titlebar_options() -> TitlebarOptions {
 
 fn main() {
   let app_profile = AppProfile::current();
+  let startup_deeplink_url = startup_deeplink_url(app_profile);
 
   // On Linux, the .desktop file launches a new process for deeplinks.
   // If an instance is already running, forward the URL via Unix socket and exit.
   #[cfg(target_os = "linux")]
   {
-    let scheme = app_profile.url_scheme();
-    if let Some(url) = std::env::args().nth(1) {
-      if url.starts_with(&format!("{scheme}://")) && linux_single_instance::try_forward_url(&url) {
+    if let Some(url) = startup_deeplink_url.as_deref() {
+      if linux_single_instance::try_forward_url(url) {
+        std::process::exit(0);
+      }
+    }
+  }
+
+  // On Windows, protocol handlers launch a new process for deeplinks.
+  // Forward the URL to the running instance so the existing window handles it.
+  #[cfg(target_os = "windows")]
+  {
+    if let Some(url) = startup_deeplink_url.as_deref() {
+      if windows_single_instance::try_forward_url(url) {
         std::process::exit(0);
       }
     }
@@ -155,16 +279,15 @@ fn main() {
   #[cfg(target_os = "linux")]
   linux_single_instance::listen(open_url_tx.clone());
 
-  // If this instance was launched with a deeplink URL arg (Linux first launch),
+  // On Windows, listen for deeplinks forwarded from other instances via named pipe.
+  #[cfg(target_os = "windows")]
+  windows_single_instance::listen(open_url_tx.clone());
+
+  // If this instance was launched with a deeplink URL arg (first launch),
   // inject it into the channel so it gets processed once the app is ready.
-  #[cfg(target_os = "linux")]
-  {
-    let scheme = app_profile.url_scheme();
-    if let Some(url) = std::env::args().nth(1) {
-      if url.starts_with(&format!("{scheme}://")) {
-        let _ = open_url_tx.send(vec![url]);
-      }
-    }
+  #[cfg(any(target_os = "linux", target_os = "windows"))]
+  if let Some(url) = startup_deeplink_url.clone() {
+    let _ = open_url_tx.send(vec![url]);
   }
 
   let app = gpui_platform::application().with_assets(AppAssets);
@@ -284,6 +407,27 @@ fn sentry_enabled_for(debug_build: bool, dev_flag: Option<&str>) -> bool {
   }
 
   dev_flag.is_some_and(is_truthy_env_value)
+}
+
+fn startup_deeplink_url(app_profile: AppProfile) -> Option<String> {
+  startup_deeplink_url_from_args(std::env::args(), app_profile.url_scheme())
+}
+
+fn startup_deeplink_url_from_args<I, S>(args: I, scheme: &str) -> Option<String>
+where
+  I: IntoIterator<Item = S>,
+  S: AsRef<str>,
+{
+  let url = args.into_iter().nth(1)?.as_ref().to_string();
+  if url
+    .strip_prefix(scheme)
+    .and_then(|tail| tail.strip_prefix("://"))
+    .is_some()
+  {
+    Some(url)
+  } else {
+    None
+  }
 }
 
 fn is_truthy_env_value(value: &str) -> bool {
@@ -460,7 +604,7 @@ mod tests {
     contains_sensitive_fragment, extract_auth_code_for_scheme, extract_open_url_for_scheme,
     is_sensitive_header, is_sensitive_key, is_subscription_callback_for_scheme,
     is_truthy_env_value, redact_sensitive_event_data, resolved_sentry_release_from,
-    sentry_enabled_for,
+    sentry_enabled_for, startup_deeplink_url_from_args,
   };
   use sentry::protocol::{Event, Request, Value};
   use std::borrow::Cow;
@@ -509,6 +653,31 @@ mod tests {
     let fallback = Some(Cow::Borrowed("reviu@0.0.1"));
     let release = resolved_sentry_release_from(None, fallback);
     assert_eq!(release.as_deref(), Some("reviu@0.0.1"));
+  }
+
+  #[test]
+  fn startup_deeplink_url_reads_current_profile_url_arg() {
+    let url = startup_deeplink_url_from_args(
+      [
+        "reviu".to_string(),
+        "reviu://auth/callback?code=abc123".to_string(),
+      ],
+      "reviu",
+    );
+
+    assert_eq!(url.as_deref(), Some("reviu://auth/callback?code=abc123"));
+  }
+
+  #[test]
+  fn startup_deeplink_url_rejects_other_args() {
+    assert_eq!(
+      startup_deeplink_url_from_args(["reviu", "--help"], "reviu"),
+      None
+    );
+    assert_eq!(
+      startup_deeplink_url_from_args(["reviu", "reviu-dev://auth/callback?code=abc123"], "reviu"),
+      None
+    );
   }
 
   #[test]

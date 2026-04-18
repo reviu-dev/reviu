@@ -100,6 +100,13 @@ comrak = "0.22"
 imara-diff = "0.2.0"
 sentry = "0.46.2"
 percent-encoding = "2.3"
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_Pipes",
+] }
 
 # Workspace member crates
 buffer = { path = "crates/buffer" }
