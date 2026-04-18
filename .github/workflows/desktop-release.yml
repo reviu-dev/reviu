@@ -191,8 +191,7 @@ jobs:
   build-linux:
     name: Build Linux (${{ matrix.arch }})
     needs: prepare-release
-    # if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
-    if: false
+    if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
