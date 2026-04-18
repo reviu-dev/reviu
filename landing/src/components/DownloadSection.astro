@@ -37,10 +37,20 @@ const downloadPlatforms = [
   {
     id: "windows",
     title: "Windows",
-    badge: "Planned",
-    description: "Native Windows builds are planned.",
+    badge: "Available now",
     icon: MonitorIcon,
-    downloads: [],
+    downloads: [
+      {
+        label: "ARM64",
+        href: desktopDownloadUrls.windowsArm64,
+        event: "download-windows-arm64",
+      },
+      {
+        label: "x64",
+        href: desktopDownloadUrls.windowsX64,
+        event: "download-windows-x64",
+      },
+    ],
   },
 ] as const;
 ---
@@ -60,8 +70,8 @@ const downloadPlatforms = [
         Pick the build that matches your machine.
       </p>
       <p class="mt-6 text-lg/8 text-muted-foreground">
-        Reviu runs on macOS today with separate downloads for Apple Silicon and
-        Intel. Linux installs from one command, and Windows is planned next.
+        Reviu runs on macOS, Linux, and Windows. Pick a native build for your
+        CPU, or install Linux with a single command.
       </p>
     </div>
 
@@ -135,16 +145,7 @@ const downloadPlatforms = [
                     {platform.installCommand}
                   </code>
                 </div>
-              ) : (
-                <button
-                  type="button"
-                  disabled
-                  aria-disabled="true"
-                  class="inline-flex w-full cursor-not-allowed items-center justify-center rounded-md bg-muted px-3 py-2 text-sm/6 font-semibold text-muted-foreground"
-                >
-                  Planned
-                </button>
-              )}
+              ) : null}
             </div>
           </article>
         ))
