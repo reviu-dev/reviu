@@ -70,10 +70,10 @@ resolve_windows_target_from_manifest_arch() {
   esac
 }
 
-resolve_inno_architectures_from_manifest_arch() {
+resolve_inno_target_arch_from_manifest_arch() {
   case "$1" in
     x86_64)
-      echo "x64compatible and not arm64"
+      echo "x64"
       ;;
     aarch64)
       echo "arm64"
@@ -185,8 +185,8 @@ main() {
   local target
   target="$(resolve_windows_target_from_manifest_arch "${manifest_arch}")"
 
-  local architectures_allowed
-  architectures_allowed="$(resolve_inno_architectures_from_manifest_arch "${manifest_arch}")"
+  local target_arch
+  target_arch="$(resolve_inno_target_arch_from_manifest_arch "${manifest_arch}")"
 
   local installer_version
   installer_version="$(resolve_windows_installer_version "${version}")"
@@ -250,8 +250,7 @@ main() {
     "/dSourceDir=$(to_windows_path "${repo_root}")" \
     "/dBinaryPath=$(to_windows_path "${binary_path}")" \
     "/dIconPath=$(to_windows_path "${icon_path}")" \
-    "/dArchitecturesAllowed=${architectures_allowed}" \
-    "/dArchitecturesInstallIn64BitMode=${architectures_allowed}"
+    "/dTargetArch=${target_arch}"
 
   installer_size="$(wc -c < "${installer_path}" | tr -d '[:space:]')"
   installer_sha256="$(sha256_hex "${installer_path}")"

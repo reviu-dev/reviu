@@ -25,8 +25,13 @@ WizardStyle=modern
 CloseApplications=force
 DefaultDirName={autopf}\{#AppName}
 PrivilegesRequired=lowest
-ArchitecturesAllowed={#ArchitecturesAllowed}
-ArchitecturesInstallIn64BitMode={#ArchitecturesInstallIn64BitMode}
+#if TargetArch == "arm64"
+  #define ArchSpec "arm64"
+#else
+  #define ArchSpec "x64compatible and not arm64"
+#endif
+ArchitecturesAllowed={#ArchSpec}
+ArchitecturesInstallIn64BitMode={#ArchSpec}
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
