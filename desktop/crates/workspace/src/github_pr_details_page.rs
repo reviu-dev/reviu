@@ -57,10 +57,10 @@ use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DropdownSelectConfig,
-  DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState, Popover, ReactionBar, SearchFileEntry,
-  SearchFileHandler, SelectableRowStyle, StatusThemeExt, UiIconName, WindowExt, dropdown_select,
-  file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
-  selectable_list_item,
+  DropdownSelectItem, FILE_ICON_SIZE_PX, GithubEmojiInput, Input, InputState, Popover, ReactionBar,
+  SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusThemeExt, UiIconName, WindowExt,
+  dropdown_select, file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action,
+  resizable_panel, selectable_list_item,
 };
 
 use crate::{
@@ -8967,7 +8967,7 @@ impl GithubPrDetailsPage {
           )
           .child(
             div().w_full().child(
-              Input::new(&self.review_input)
+              GithubEmojiInput::new(&self.review_input)
                 .w_full()
                 .h(px(PR_REVIEW_INPUT_HEIGHT_PX)),
             ),
@@ -10250,9 +10250,12 @@ impl GithubPrDetailsPage {
       .gap_2()
       .pt_2()
       .pb_32()
-      .child(div().w_full().child(
-        Input::new(&self.overview_issue_comment_input).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
-      ))
+      .child(
+        div().w_full().child(
+          GithubEmojiInput::new(&self.overview_issue_comment_input)
+            .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+        ),
+      )
       .when_some(self.overview_issue_comment_error.clone(), |this, error| {
         this.child(div().text_xs().text_color(theme.status_red()).child(error))
       })
@@ -10480,7 +10483,7 @@ impl GithubPrDetailsPage {
           .gap_2()
           .child(
             div().w_full().child(
-              Input::new(&input_state)
+              GithubEmojiInput::new(&input_state)
                 .disabled(self.overview_edit_submitting)
                 .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
             ),
@@ -10568,7 +10571,7 @@ impl GithubPrDetailsPage {
             .child(
               div()
                 .w_full()
-                .child(Input::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))),
+                .child(GithubEmojiInput::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))),
             )
             .when_some(self.overview_reply_error.clone(), |this, error| {
               this.child(div().text_xs().text_color(theme.status_red()).child(error))
@@ -10842,11 +10845,9 @@ impl GithubPrDetailsPage {
                   let page_for_save = pr_page.clone();
                   v_flex()
                     .gap_2()
-                    .child(
-                      div()
-                        .w_full()
-                        .child(Input::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))),
-                    )
+                    .child(div().w_full().child(
+                      GithubEmojiInput::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+                    ))
                     .when_some(self.overview_edit_error.clone(), |this, error| {
                       this.child(div().text_xs().text_color(theme.status_red()).child(error))
                     })
@@ -10926,11 +10927,9 @@ impl GithubPrDetailsPage {
                       .pt_2()
                       .border_t_1()
                       .border_color(theme.border)
-                      .child(
-                        div()
-                          .w_full()
-                          .child(Input::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))),
-                      )
+                      .child(div().w_full().child(
+                        GithubEmojiInput::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+                      ))
                       .when_some(self.overview_reply_error.clone(), |this, error| {
                         this.child(div().text_xs().text_color(theme.status_red()).child(error))
                       })

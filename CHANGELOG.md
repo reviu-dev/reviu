@@ -16,6 +16,10 @@ A Firefox extension is now available alongside the existing Chrome extension, le
 
 Issue details now show GitHub reactions on the description and comments, and you can add or remove your own reactions directly from the issue.
 
+### Emoji Autocomplete in Comments
+
+Pull request and issue comment editors now suggest emojis in a wider picker when you type `:`, filter the list as you keep typing, and insert the selected emoji with Enter.
+
 ## 0.3.0
 
 ### Chrome Extension

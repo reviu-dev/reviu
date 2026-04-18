@@ -36,7 +36,7 @@ use gpui_component::{
 use parking_lot::RwLock;
 use smol::unblock;
 use syntax::languages;
-use ui::{StatusThemeExt as _, Theme, UiIconName};
+use ui::{GithubEmojiInput, StatusThemeExt as _, Theme, UiIconName};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
@@ -3392,7 +3392,7 @@ impl Editor {
               .on_action(cx.listener(Self::on_review_comment_edit_input_escape))
               .gap_2()
               .child(
-                Input::new(&input_state)
+                GithubEmojiInput::new(&input_state)
                   .disabled(is_edit_submitting)
                   .font_family(theme.font_family.clone())
                   .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
@@ -3728,7 +3728,7 @@ impl Editor {
                 v_flex()
                   .gap(px(REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX))
                   .child(
-                    Input::new(&input_state)
+                    GithubEmojiInput::new(&input_state)
                       .disabled(is_reply_submitting)
                       .font_family(theme.font_family.clone())
                       .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
@@ -3945,7 +3945,7 @@ impl Editor {
                 .pb(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
                 .gap(px(REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX))
                 .child(
-                  Input::new(&input_state)
+                  GithubEmojiInput::new(&input_state)
                     .disabled(is_create_submitting)
                     .font_family(theme.font_family.clone())
                     .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
