@@ -6,7 +6,56 @@ const SUPPORTED_PATTERNS = [
   /^https:\/\/github\.com\/[^/]+\/[^/]+\/?$/,
 ];
 
+const IGNORED_OWNERS = new Set([
+  "apps",
+  "marketplace",
+  "settings",
+  "notifications",
+  "organizations",
+  "orgs",
+  "new",
+  "topics",
+  "trending",
+  "collections",
+  "events",
+  "sponsors",
+  "about",
+  "pricing",
+  "features",
+  "security",
+  "enterprise",
+  "customer-stories",
+  "team",
+  "login",
+  "logout",
+  "join",
+  "signup",
+  "explore",
+  "watching",
+  "stars",
+  "issues",
+  "pulls",
+  "codespaces",
+  "discussions",
+  "search",
+  "dashboard",
+  "account",
+  "readme",
+  "contact",
+  "site",
+  "pricing",
+]);
+
 function isSupportedGithubUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const firstSegment = parsed.pathname.split("/")[1];
+    if (firstSegment && IGNORED_OWNERS.has(firstSegment.toLowerCase())) {
+      return false;
+    }
+  } catch (_) {
+    return false;
+  }
   return SUPPORTED_PATTERNS.some((pattern) => pattern.test(url));
 }
 
