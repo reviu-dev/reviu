@@ -190,9 +190,9 @@ jobs:
 
   build-linux:
     name: Build Linux (${{ matrix.arch }})
-    timeout-minutes: 40
     needs: prepare-release
-    if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
+    # if: ${{ needs.prepare-release.outputs.should_release == 'true' }}
+    if: false
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -303,7 +303,7 @@ jobs:
           }
 
       - name: Build Windows installer
-        timeout-minutes: 35
+        timeout-minutes: 45
         shell: bash
         run: |
           set -euo pipefail
