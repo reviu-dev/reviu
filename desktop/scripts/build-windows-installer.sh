@@ -239,7 +239,7 @@ main() {
   mkdir -p "${output_dir}"
 
   log "Creating Windows installer"
-  "${iscc}" \
+  MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 "${iscc}" \
     "$(to_windows_path "${iss_path}")" \
     "/dAppName=${app_name}" \
     "/dAppExeName=${binary_name}" \
