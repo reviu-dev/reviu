@@ -25,7 +25,7 @@ export const feedbackRoutes = feedbackRouter
         description,
         userEmail: user.email,
       })
-      return ctx.json({ issueId: result.issueId, url: result.url }, 201)
+      return ctx.json({ issueId: result.id }, 201)
     }
     catch (error) {
       logger.error({ error }, 'Failed to create feedback issue')

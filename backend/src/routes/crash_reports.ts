@@ -59,7 +59,7 @@ export const crashReportRoutes = crashReportsRouter
           ...payload,
           userEmail,
         })
-        return ctx.json({ issueId: result.issueId, url: result.url }, 201)
+        return ctx.json({ issueId: result.id }, 201)
       }
       catch (error) {
         logger.error({ error }, 'Failed to create crash report issue')
