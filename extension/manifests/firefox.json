@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Reviu - Open in App",
   "description": "Open GitHub pages directly in Reviu desktop app.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "browser_specific_settings": {
     "gecko": {
       "id": "firefox-extension@reviu.dev",
