@@ -12547,20 +12547,7 @@ impl GithubPrDetailsPage {
         .child(self.local_project_tree_error.clone().unwrap_or_default())
         .into_any_element()
     } else if !local_project_mode && self.files_loading {
-      v_flex()
-        .flex_1()
-        .h_full()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .child(Spinner::new().small())
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading files..."),
-        )
-        .into_any_element()
+      Self::render_changes_files_sidebar_skeleton(&theme)
     } else if !local_project_mode && self.files_error.is_some() {
       v_flex()
         .flex_1()
@@ -13331,6 +13318,145 @@ impl GithubPrDetailsPage {
     });
   }
 
+  fn render_changes_files_sidebar_skeleton(theme: &gpui_component::Theme) -> AnyElement {
+    v_flex()
+      .flex_1()
+      .p_2()
+      .gap_1()
+      .children((0..14).map(|ix| {
+        let width = match ix % 5 {
+          0 => 190.0,
+          1 => 145.0,
+          2 => 220.0,
+          3 => 110.0,
+          _ => 165.0,
+        };
+        let indent = if ix % 3 == 0 { 0.0 } else { 16.0 };
+
+        h_flex()
+          .h(px(28.0))
+          .items_center()
+          .gap_2()
+          .pl(px(8.0 + indent))
+          .pr_2()
+          .child(
+            Skeleton::new()
+              .w(px(15.0))
+              .h(px(12.0))
+              .rounded(theme.radius)
+              .secondary(),
+          )
+          .child(Skeleton::new().size(px(14.0)).rounded(theme.radius))
+          .child(
+            Skeleton::new()
+              .w(px(width))
+              .h(px(12.0))
+              .rounded(theme.radius),
+          )
+      }))
+      .into_any_element()
+  }
+
+  fn render_changes_diff_skeleton(theme: &gpui_component::Theme) -> AnyElement {
+    let header = h_flex()
+      .h(px(DIFF_HEADER_HEIGHT))
+      .bg(theme.sidebar)
+      .px_3()
+      .items_center()
+      .justify_between()
+      .border_b_1()
+      .border_color(theme.border)
+      .child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .min_w_0()
+          .child(
+            Skeleton::new()
+              .w(px(15.0))
+              .h(px(12.0))
+              .rounded(theme.radius)
+              .secondary(),
+          )
+          .child(Skeleton::new().size(px(14.0)).rounded(theme.radius))
+          .child(
+            Skeleton::new()
+              .w(px(220.0))
+              .h(px(14.0))
+              .rounded(theme.radius),
+          )
+          .child(
+            Skeleton::new()
+              .w(px(120.0))
+              .h(px(12.0))
+              .rounded(theme.radius)
+              .secondary(),
+          ),
+      )
+      .child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(Skeleton::new().size(px(20.0)).rounded(theme.radius))
+          .child(Skeleton::new().size(px(20.0)).rounded(theme.radius))
+          .child(
+            Skeleton::new()
+              .w(px(86.0))
+              .h(px(20.0))
+              .rounded(theme.radius),
+          )
+          .child(
+            Skeleton::new()
+              .w(px(64.0))
+              .h(px(20.0))
+              .rounded(theme.radius),
+          ),
+      );
+
+    let body = v_flex()
+      .flex_1()
+      .min_h_0()
+      .p_4()
+      .gap_2()
+      .children((0..22).map(|ix| {
+        let width = match ix % 7 {
+          0 => 320.0,
+          1 => 540.0,
+          2 => 220.0,
+          3 => 610.0,
+          4 => 380.0,
+          5 => 460.0,
+          _ => 280.0,
+        };
+
+        h_flex()
+          .h(px(20.0))
+          .items_center()
+          .gap_3()
+          .child(
+            Skeleton::new()
+              .w(px(28.0))
+              .h(px(12.0))
+              .rounded(theme.radius)
+              .secondary(),
+          )
+          .child(
+            Skeleton::new()
+              .w_full()
+              .max_w(px(width))
+              .h(px(12.0))
+              .rounded(theme.radius),
+          )
+      }));
+
+    v_flex()
+      .flex_1()
+      .min_h_0()
+      .child(header)
+      .child(body)
+      .into_any_element()
+  }
+
   fn render_changes_tab(
     &mut self,
     window: &mut Window,
@@ -13341,35 +13467,7 @@ impl GithubPrDetailsPage {
     let is_markdown = self.selected_file_is_markdown();
     let is_svg = self.selected_file_is_svg();
     let editor_content: gpui::AnyElement = if self.file_loading {
-      if self.selected_local_project_file.is_some() && self.selected_file.is_none() {
-        v_flex()
-          .flex_1()
-          .items_center()
-          .justify_center()
-          .gap_2()
-          .child(Spinner::new().small())
-          .child(
-            div()
-              .text_sm()
-              .text_color(theme.muted_foreground)
-              .child("Loading local file..."),
-          )
-          .into_any_element()
-      } else {
-        v_flex()
-          .flex_1()
-          .items_center()
-          .justify_center()
-          .gap_2()
-          .child(Spinner::new().small())
-          .child(
-            div()
-              .text_sm()
-              .text_color(theme.muted_foreground)
-              .child("Loading file contents..."),
-          )
-          .into_any_element()
-      }
+      Self::render_changes_diff_skeleton(&theme)
     } else if self.file_error.is_some() {
       v_flex()
         .flex_1()
@@ -13405,19 +13503,7 @@ impl GithubPrDetailsPage {
         .child(self.local_project_tree_error.clone().unwrap_or_default())
         .into_any_element()
     } else if !local_project_mode && self.files_loading {
-      v_flex()
-        .flex_1()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .child(Spinner::new().small())
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading diff..."),
-        )
-        .into_any_element()
+      Self::render_changes_diff_skeleton(&theme)
     } else if !local_project_mode && self.files_error.is_some() {
       v_flex()
         .flex_1()
