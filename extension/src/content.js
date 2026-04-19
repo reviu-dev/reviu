@@ -67,9 +67,7 @@ const PAGE_CONFIGS = [
   {
     name: "issue-list",
     pattern: /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/?/,
-    selector: "[class*='SearchBarActions-module__buttons']",
-    position: "prepend",
-    className: "prc-Button-ButtonBase-9n-Xk",
+    selector: null,
   },
   {
     name: "repo",
