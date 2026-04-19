@@ -51,7 +51,7 @@ use crate::{
     GithubPullRequestReviewStatus, GithubPullRequestSearchFilters,
     generate_github_home_pull_request_tab_id, normalize_github_home_pull_request_tab,
   },
-  github_navigation::{open_pr_target, open_repo_target},
+  github_navigation::{open_commit_target, open_pr_target, open_repo_target},
   github_pr_details_page::GithubPrDetailsPageHandle,
   github_shared,
   navigation::NavigationHistory,
@@ -3391,6 +3391,10 @@ impl GithubPage {
         issue_comment_id,
       } => {
         open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
+        open_commit_target(owner, repo, sha, None, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

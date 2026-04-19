@@ -46,6 +46,7 @@ mod file_preview;
 mod file_search_palette;
 mod git_config_page;
 mod git_page;
+mod github_commit_details_page;
 mod github_home_tabs;
 pub mod github_navigation;
 mod github_page;

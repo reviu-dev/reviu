@@ -498,6 +498,39 @@ pub struct GithubPullRequestCommit {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct GithubCommitUser {
+  pub login: String,
+  #[serde(rename = "avatar_url")]
+  pub avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubCommitStats {
+  pub additions: u64,
+  pub deletions: u64,
+  #[allow(dead_code)]
+  pub total: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubCommitDetails {
+  pub sha: String,
+  pub message: String,
+  #[serde(rename = "html_url")]
+  pub html_url: String,
+  #[serde(rename = "authored_at")]
+  pub authored_at: Option<String>,
+  #[serde(rename = "committed_at")]
+  pub committed_at: Option<String>,
+  #[serde(rename = "parent_sha")]
+  pub parent_sha: Option<String>,
+  pub author: Option<GithubCommitUser>,
+  pub committer: Option<GithubCommitUser>,
+  pub stats: Option<GithubCommitStats>,
+  pub files: Vec<GithubPullRequestFile>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestReviewCommentUser {
   pub login: String,
   #[serde(rename = "avatar_url")]
@@ -1271,6 +1304,11 @@ struct GithubPullRequestCommitsResponse {
   commits: Vec<GithubPullRequestCommit>,
 }
 
+#[derive(Debug, Deserialize)]
+struct GithubCommitDetailsResponse {
+  commit: GithubCommitDetails,
+}
+
 #[derive(Debug, Deserialize, Default)]
 pub struct GithubPullRequestConversationPullRequest {
   #[serde(rename = "node_id")]
@@ -1379,6 +1417,7 @@ pub struct GithubFileCommit {
   pub message: Option<String>,
   #[allow(dead_code)]
   pub sha: Option<String>,
+  #[allow(dead_code)]
   pub html_url: Option<String>,
 }
 
@@ -1693,6 +1732,28 @@ impl ApiClient {
     }
     let payload = response.json::<GithubRepositoryDetails>()?;
     Ok(payload)
+  }
+
+  pub fn fetch_github_commit(
+    &self,
+    owner: &str,
+    repo: &str,
+    sha: &str,
+  ) -> Result<GithubCommitDetails> {
+    let response = self
+      .authed_request(Method::GET, "/github/commit")
+      .query(&[("org", owner), ("repo", repo), ("sha", sha)])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", "/github/commit", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubCommitDetailsResponse>()?;
+    Ok(payload.commit)
   }
 
   pub fn star_github_repository(
@@ -3536,6 +3597,84 @@ mod tests {
       Some("MIT License")
     );
     handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_commit_parses_success_payload() {
+    let body = r#"{
+      "commit": {
+        "sha": "abc123",
+        "message": "feat: add commit page\n\nOpen commits in Reviu.",
+        "html_url": "https://github.com/acme/widget/commit/abc123",
+        "authored_at": "2026-03-01T10:00:00Z",
+        "committed_at": "2026-03-01T10:05:00Z",
+        "parent_sha": "parent123",
+        "author": { "login": "alice", "avatar_url": "https://example.com/alice.png" },
+        "committer": null,
+        "stats": { "additions": 12, "deletions": 3, "total": 15 },
+        "files": [
+          {
+            "filename": "src/lib.rs",
+            "status": "modified",
+            "patch": "@@ -1 +1 @@",
+            "previous_filename": null
+          }
+        ]
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let commit = api
+      .fetch_github_commit("acme", "widget", "abc123")
+      .expect("fetch commit");
+
+    assert_eq!(commit.sha, "abc123");
+    assert_eq!(commit.parent_sha.as_deref(), Some("parent123"));
+    assert_eq!(
+      commit.author.as_ref().map(|user| user.login.as_str()),
+      Some("alice")
+    );
+    assert_eq!(commit.stats.as_ref().map(|stats| stats.total), Some(15));
+    assert_eq!(commit.files.len(), 1);
+    assert_eq!(commit.files[0].filename, "src/lib.rs");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_commit_calls_expected_route_with_query_params() {
+    let body = r#"{
+      "commit": {
+        "sha": "abc123",
+        "message": "feat: add commit page",
+        "html_url": "https://github.com/acme/widget/commit/abc123",
+        "authored_at": null,
+        "committed_at": null,
+        "parent_sha": null,
+        "author": null,
+        "committer": null,
+        "stats": null,
+        "files": []
+      }
+    }"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_github_commit("acme", "widget", "abc123")
+      .expect("fetch commit");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "GET /github/commit?org=acme&repo=widget&sha=abc123 HTTP/1.1"
+    );
   }
 
   #[test]

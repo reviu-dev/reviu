@@ -64,6 +64,7 @@ use crate::{
     raster_image_from_bytes, should_show_unsupported_binary_placeholder,
   },
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
+  github_commit_details_page::GithubCommitDetailsPageHandle,
   github_navigation::should_open_externally,
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
@@ -4438,6 +4439,10 @@ impl GitPage {
             GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
           }
         }
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
+        GithubCommitDetailsPageHandle::show(owner.into(), repo.into(), sha.into(), cx);
         Ok(())
       }
       CommandPaletteAction::SwitchToPrBranch | CommandPaletteAction::ToggleUnchangedFiles => {

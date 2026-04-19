@@ -89,6 +89,11 @@ pub fn build_repo_path(owner: &str, repo: &str) -> SharedString {
   format!("/github/{owner}/{repo}").into()
 }
 
+/// Build path: `/github/{owner}/{repo}/commit/{sha}`
+pub fn build_commit_path(owner: &str, repo: &str, sha: &str) -> SharedString {
+  format!("/github/{owner}/{repo}/commit/{sha}").into()
+}
+
 /// Build path with tab suffix: `/github/{owner}/{repo}/{tab}`
 pub fn build_repo_tab_path(owner: &str, repo: &str, tab: &str) -> SharedString {
   format!("/github/{owner}/{repo}/{tab}").into()

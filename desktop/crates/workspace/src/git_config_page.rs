@@ -26,7 +26,7 @@ use ui::{
 use crate::{
   CloseWorkspacePage, ShowCommandPalette,
   auth_state::AuthStateStore,
-  github_navigation::{open_pr_target, open_repo_target},
+  github_navigation::{open_commit_target, open_pr_target, open_repo_target},
   github_page::GithubPageHandle,
   navigation::NavigationHistory,
 };
@@ -184,6 +184,10 @@ impl GitConfigPage {
         issue_comment_id,
       } => {
         open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
+        open_commit_target(owner, repo, sha, None, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

@@ -13,7 +13,7 @@ use std::time::Duration;
 use ui::{AppAssets, PAGE_HEADER_HEIGHT, parse_github_url_action};
 use workspace::{
   AppProfile, AuthCallbackTarget, WorkspaceView, build_app_menus,
-  github_navigation::{open_pr_target, open_repo_target},
+  github_navigation::{open_commit_target, open_pr_target, open_repo_target},
   install_app_key_bindings, install_crash_reporter, show_startup_crash_report_notification,
   take_pending_startup_crash_report,
 };
@@ -593,6 +593,9 @@ fn handle_open_github_url(url: &str, cx: &mut App) {
       issue_comment_id,
     } => {
       open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
+    }
+    CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
+      open_commit_target(owner, repo, sha, None, cx);
     }
     _ => {}
   }

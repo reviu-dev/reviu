@@ -1248,6 +1248,10 @@ mod tests {
       WORKSPACE_GITHUB_REPO_CODE_CONTEXT
     );
     assert_eq!(
+      key_context_for_pathname("/github/owner/repo/commit/abc123"),
+      WORKSPACE_GITHUB_REPO_CONTEXT
+    );
+    assert_eq!(
       key_context_for_pathname("/github/owner/repo/pull/42"),
       WORKSPACE_GITHUB_PR_CONTEXT
     );
