@@ -30,6 +30,7 @@ use gpui_component::{
   pagination::Pagination,
   scroll::ScrollableElement,
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
+  skeleton::Skeleton,
   spinner::Spinner,
   tab::{Tab, TabBar},
   tag::Tag,
@@ -6537,23 +6538,200 @@ impl GithubRepoPage {
       .child(tab_bar)
   }
 
+  fn render_overview_skeleton(theme: &gpui_component::Theme) -> gpui::Div {
+    let left_area_width = 280.0;
+    let left_right_gap = 40.0;
+    let radius = theme.radius;
+
+    let top_area = v_flex()
+      .w_full()
+      .gap_4()
+      .pb_4()
+      .border_b_1()
+      .border_color(theme.border)
+      .child(
+        h_flex()
+          .items_center()
+          .justify_between()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_3()
+              .child(Skeleton::new().size(px(45.0)).rounded_full())
+              .child(Skeleton::new().w(px(220.0)).h(px(20.0)).rounded(radius)),
+          )
+          .child(
+            h_flex()
+              .gap_2()
+              .child(Skeleton::new().w(px(56.0)).h(px(20.0)).rounded_full())
+              .child(Skeleton::new().w(px(72.0)).h(px(20.0)).rounded_full())
+              .child(Skeleton::new().w(px(90.0)).h(px(20.0)).rounded_full()),
+          ),
+      )
+      .child(
+        Skeleton::new()
+          .w_full()
+          .max_w(px(560.0))
+          .h(px(14.0))
+          .rounded(radius),
+      )
+      .child(
+        Skeleton::new()
+          .w(px(320.0))
+          .h(px(14.0))
+          .rounded(radius)
+          .secondary(),
+      );
+
+    let info_row = || {
+      h_flex()
+        .w_full()
+        .justify_between()
+        .child(
+          Skeleton::new()
+            .w(px(80.0))
+            .h(px(12.0))
+            .rounded(radius)
+            .secondary(),
+        )
+        .child(Skeleton::new().w(px(100.0)).h(px(12.0)).rounded(radius))
+    };
+
+    let left_area = v_flex()
+      .w(px(left_area_width))
+      .gap_4()
+      .child(
+        v_flex()
+          .gap_2()
+          .child(Skeleton::new().w(px(130.0)).h(px(14.0)).rounded(radius))
+          .child(
+            v_flex()
+              .gap_2()
+              .child(info_row())
+              .child(info_row())
+              .child(info_row()),
+          ),
+      )
+      .child(
+        v_flex()
+          .gap_2()
+          .child(Skeleton::new().w(px(90.0)).h(px(14.0)).rounded(radius))
+          .child(Skeleton::new().w_full().h(px(8.0)).rounded_full())
+          .child(
+            h_flex()
+              .gap_3()
+              .justify_between()
+              .child(
+                Skeleton::new()
+                  .w(px(70.0))
+                  .h(px(12.0))
+                  .rounded(radius)
+                  .secondary(),
+              )
+              .child(
+                Skeleton::new()
+                  .w(px(70.0))
+                  .h(px(12.0))
+                  .rounded(radius)
+                  .secondary(),
+              ),
+          )
+          .child(
+            h_flex()
+              .gap_3()
+              .justify_between()
+              .child(
+                Skeleton::new()
+                  .w(px(70.0))
+                  .h(px(12.0))
+                  .rounded(radius)
+                  .secondary(),
+              )
+              .child(
+                Skeleton::new()
+                  .w(px(70.0))
+                  .h(px(12.0))
+                  .rounded(radius)
+                  .secondary(),
+              ),
+          ),
+      )
+      .child(
+        v_flex()
+          .gap_2()
+          .child(Skeleton::new().w(px(110.0)).h(px(14.0)).rounded(radius))
+          .child(h_flex().items_center().children((0..8).map(|ix| {
+            let mut sk = Skeleton::new().size(px(24.0)).rounded_full();
+            if ix > 0 {
+              sk = sk.ml(px(-4.0));
+            }
+            sk
+          }))),
+      );
+
+    let right_area = v_flex()
+      .gap_4()
+      .w(px(
+        DETAILS_PAGE_CONTAINER_MAX_WIDTH - left_area_width - left_right_gap,
+      ))
+      .child(
+        v_flex()
+          .gap_2()
+          .child(Skeleton::new().w(px(130.0)).h(px(14.0)).rounded(radius))
+          .children((0..5).map(|_| {
+            h_flex()
+              .items_center()
+              .gap_3()
+              .px_2()
+              .py_4()
+              .child(Skeleton::new().size(px(24.0)).rounded_full())
+              .child(
+                v_flex()
+                  .flex_1()
+                  .gap_1()
+                  .child(
+                    Skeleton::new()
+                      .w_full()
+                      .max_w(px(420.0))
+                      .h(px(12.0))
+                      .rounded(radius),
+                  )
+                  .child(
+                    Skeleton::new()
+                      .w(px(180.0))
+                      .h(px(10.0))
+                      .rounded(radius)
+                      .secondary(),
+                  ),
+              )
+              .child(Skeleton::new().w(px(58.0)).h(px(18.0)).rounded(radius))
+          })),
+      );
+
+    v_flex()
+      .w_full()
+      .h_full()
+      .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
+      .mx_auto()
+      .min_h_0()
+      .py_6()
+      .gap_4()
+      .child(top_area)
+      .child(
+        h_flex()
+          .w_full()
+          .gap(px(left_right_gap))
+          .items_start()
+          .child(left_area)
+          .child(right_area),
+      )
+  }
+
   fn render_overview(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
     if should_show_overview_loading_state(self.repository_loading, self.repository.is_some()) {
-      return v_flex()
-        .flex_1()
-        .h_full()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .child(Spinner::new().small())
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading repository details..."),
-        );
+      return Self::render_overview_skeleton(&theme);
     }
 
     if let Some(error) = self.repository_error.as_ref() {
