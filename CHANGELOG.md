@@ -12,6 +12,10 @@ Repository commit links now open inside Reviu with commit metadata, changed file
 
 Create a new repository directly from Reviu. Pick yourself or one of your organizations as owner, set name, description, and visibility, then Reviu opens the new repository as soon as it's created. Available from the GitHub home screen and the command palette.
 
+### Fork Repository
+
+Fork any repository from its repo page in Reviu. Pick yourself or one of your organizations as owner, optionally rename the fork, and Reviu opens the new fork as soon as it's ready. Defaults to copying only the default branch for a faster fork.
+
 ## 0.4.0
 
 ### Windows Support

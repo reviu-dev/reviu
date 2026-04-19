@@ -69,6 +69,18 @@ export const createRepositoryBodySchema = z.object({
   private: z.boolean(),
 })
 
+export const forkRepositoryBodySchema = z.object({
+  organization: z.string().trim().min(1).optional(),
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100, 'Repository name must be at most 100 characters')
+    .regex(/^[\w.-]+$/, 'Repository name may only contain letters, numbers, dots, hyphens and underscores')
+    .optional(),
+  defaultBranchOnly: z.boolean().default(true),
+})
+
 export const mergePullRequestBodySchema = z.object({
   method: z.enum(['merge', 'squash', 'rebase']),
   expectedHeadSha: z.string().trim().min(1, 'Missing expected head sha'),

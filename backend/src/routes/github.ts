@@ -127,6 +127,7 @@ import {
   createPullRequestReviewBodySchema,
   createPullRequestThreadReplyBodySchema,
   createRepositoryBodySchema,
+  forkRepositoryBodySchema,
   issueCommentBodySchema,
   issueSearchFiltersSchema,
   mergePullRequestBodySchema,
@@ -184,6 +185,7 @@ import {
   fetchGithubRepositoryTreesConditionally,
   fetchGithubUserOrganizations,
   fetchGithubUserRepositories,
+  forkGithubRepository,
   markGithubNotificationDone,
   markGithubNotificationRead,
   markGithubPullRequestReadyForReview,
@@ -4089,6 +4091,51 @@ export const githubRoutes = githubRouter
           html_url: data.html_url,
         },
       }, 201)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/repos/:owner/:repo/forks', async (ctx) => {
+    const { owner, repo } = ctx.req.param()
+    const payload = await ctx.req.json().catch(() => null)
+    const parsedBody = forkRepositoryBodySchema.safeParse(payload ?? {})
+
+    if (!parsedBody.success) {
+      const message = parsedBody.error.issues[0]?.message || 'Invalid fork payload'
+      return ctx.json({ error: message }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+    const { organization, name, defaultBranchOnly } = parsedBody.data
+
+    try {
+      const data = await forkGithubRepository({
+        token: githubToken,
+        params: {
+          owner,
+          repo,
+          ...(organization ? { organization } : {}),
+          ...(name ? { name } : {}),
+          default_branch_only: defaultBranchOnly,
+        },
+      })
+      await invalidateGithubCacheTags([getGithubUserRepositoriesTag(user.id)])
+      return ctx.json({
+        repository: {
+          owner: data.owner.login,
+          repo: data.name,
+          full_name: data.full_name,
+          description: data.description,
+          private: data.private,
+          html_url: data.html_url,
+        },
+      }, 202)
     }
     catch (error) {
       const status = (error as { status?: number }).status

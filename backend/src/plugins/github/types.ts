@@ -50,6 +50,8 @@ export type CreateUserRepositoryParams
   = Endpoints['POST /user/repos']['parameters']
 export type CreateOrgRepositoryParams
   = Endpoints['POST /orgs/{org}/repos']['parameters']
+export type ForkRepositoryParams
+  = Endpoints['POST /repos/{owner}/{repo}/forks']['parameters']
 export type NotificationsParams = Endpoints['GET /notifications']['parameters']
 export type GetContentParams
   = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['parameters']
@@ -115,6 +117,7 @@ export type UserRepositoryResponse = Endpoints['GET /user/repos']['response']['d
 export type UserOrganizationResponse = Endpoints['GET /user/orgs']['response']['data'][number]
 export type CreateUserRepositoryResponse = Endpoints['POST /user/repos']['response']['data']
 export type CreateOrgRepositoryResponse = Endpoints['POST /orgs/{org}/repos']['response']['data']
+export type ForkRepositoryResponse = Endpoints['POST /repos/{owner}/{repo}/forks']['response']['data']
 export type RepositoryLabelResponse
   = Endpoints['GET /repos/{owner}/{repo}/labels']['response']['data'][number]
 export type RepositoryAssigneeResponse

@@ -4694,6 +4694,16 @@ impl GithubRepoPage {
     self.star_task = Some(task);
   }
 
+  fn open_fork_dialog(&mut self, window: &mut Window, cx: &mut App) {
+    crate::github_fork_repository_dialog::open_fork_repository_dialog(
+      self.api.clone(),
+      self.owner.to_string(),
+      self.repo.to_string(),
+      window,
+      cx,
+    );
+  }
+
   fn load_repository_branches(&mut self, cx: &mut Context<Self>) {
     let owner = self.owner.to_string();
     let repo = self.repo.to_string();
@@ -6780,6 +6790,8 @@ impl GithubRepoPage {
     };
     let star_label = number_format::format_compact_number(repository.stargazers_count);
     let star_hover_bg = theme.accent.opacity(0.55);
+    let fork_hover_bg = theme.accent.opacity(0.55);
+    let forks_label = number_format::format_compact_number(repository.forks_count);
     let stats = h_flex()
       .gap_2()
       .flex_wrap()
@@ -6800,10 +6812,27 @@ impl GithubRepoPage {
           .child(Icon::new(star_icon).size_3p5().text_color(star_icon_color))
           .child(star_label),
       )
-      .child(Tag::secondary().small().rounded_full().child(format!(
-        "Forks {}",
-        number_format::format_compact_number(repository.forks_count)
-      )))
+      .child(
+        h_flex()
+          .id("repo-fork")
+          .items_center()
+          .gap_1()
+          .px_2()
+          .py_1()
+          .rounded(theme.radius)
+          .cursor_pointer()
+          .text_xs()
+          .hover(move |this| this.bg(fork_hover_bg))
+          .on_click(cx.listener(|this, _, window, cx| {
+            this.open_fork_dialog(window, cx);
+          }))
+          .child(
+            Icon::new(UiIconName::GitFork)
+              .size_3p5()
+              .text_color(theme.muted_foreground),
+          )
+          .child(format!("Fork {forks_label}")),
+      )
       .child(Tag::secondary().small().rounded_full().child(format!(
         "Watchers {}",
         number_format::format_compact_number(repository.subscribers_count)

@@ -30,6 +30,8 @@ import type {
   CreateUserRepositoryResponse,
   DeleteIssueCommentParams,
   DeletePullRequestCommentParams,
+  ForkRepositoryParams,
+  ForkRepositoryResponse,
   GithubGraphqlAddReactionResponse,
   GithubGraphqlConnection,
   GithubGraphqlIssueDetailsCommentNode,
@@ -2043,6 +2045,16 @@ export async function createGithubRepositoryForOrg(
   { token: string, params: CreateOrgRepositoryParams },
 ): Promise<CreateOrgRepositoryResponse> {
   return requestGithubData('POST /orgs/{org}/repos', {
+    token,
+    params,
+  })
+}
+
+export async function forkGithubRepository(
+  { token, params }:
+  { token: string, params: ForkRepositoryParams },
+): Promise<ForkRepositoryResponse> {
+  return requestGithubData('POST /repos/{owner}/{repo}/forks', {
     token,
     params,
   })
