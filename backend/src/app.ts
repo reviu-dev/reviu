@@ -5,7 +5,6 @@ import { secureHeaders } from 'hono/secure-headers'
 import { auth } from './lib/auth.js'
 import { logger } from './lib/logger.js'
 import { getTrustedOrigins } from './lib/utils.js'
-import { clientAnalyticsMiddleware } from './middlewares/client-analytics.js'
 import { loggerMiddleware } from './middlewares/logger.js'
 import { rateLimitMiddleware } from './middlewares/rate-limit.js'
 import { routes } from './routes/index.js'
@@ -14,7 +13,6 @@ const app = new Hono()
 
 app.use(secureHeaders())
 app.use(loggerMiddleware)
-app.use(clientAnalyticsMiddleware)
 
 app.onError((err, c) => {
   logger.error({ error: err }, 'Unexpected error occurred while handling request')

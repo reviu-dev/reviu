@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { UserWithRole } from 'better-auth/client/plugins'
-import { useAsyncState, watchDebounced } from '@vueuse/core'
+import { useAsyncState, useTimeAgo, watchDebounced } from '@vueuse/core'
 import { MoreHorizontal, Search, UserPlus } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
 import { toast } from 'vue-sonner'
@@ -34,6 +34,13 @@ import {
 } from '@/components/ui/table'
 import { betterAuthClient } from '@/lib/auth-client'
 import { getInitials } from '@/lib/utils'
+
+type UserRow = UserWithRole & {
+  clientVersion?: string | null
+  clientPlatform?: string | null
+  clientArch?: string | null
+  clientVersionUpdatedAt?: string | Date | null
+}
 
 const emit = defineEmits<{
   createUser: []
@@ -83,7 +90,7 @@ const { state: usersData, execute: refetchUsers } = useAsyncState(
   },
 )
 
-const users = computed(() => usersData.value?.users || [])
+const users = computed(() => (usersData.value?.users || []) as UserRow[])
 const totalUsers = computed(() => usersData.value?.total || 0)
 const totalPages = computed(() => Math.ceil(totalUsers.value / pageSize.value))
 
@@ -101,6 +108,12 @@ function formatDate(date: string | Date) {
     month: 'short',
     day: 'numeric',
   })
+}
+
+function formatTimeAgo(date: string | Date | null | undefined) {
+  if (!date)
+    return null
+  return useTimeAgo(new Date(date)).value
 }
 
 function getRoleBadgeVariant(role: string | undefined) {
@@ -177,6 +190,15 @@ defineExpose({
             <TableHead>
               Created
             </TableHead>
+            <TableHead>
+              Version
+            </TableHead>
+            <TableHead>
+              Platform
+            </TableHead>
+            <TableHead>
+              Arch
+            </TableHead>
             <TableHead class="w-[70px]">
               Actions
             </TableHead>
@@ -190,12 +212,15 @@ defineExpose({
               <TableCell><Skeleton class="h-4 w-16" /></TableCell>
               <TableCell><Skeleton class="h-4 w-16" /></TableCell>
               <TableCell><Skeleton class="h-4 w-24" /></TableCell>
+              <TableCell><Skeleton class="h-4 w-20" /></TableCell>
+              <TableCell><Skeleton class="h-4 w-16" /></TableCell>
+              <TableCell><Skeleton class="h-4 w-16" /></TableCell>
               <TableCell><Skeleton class="h-8 w-8" /></TableCell>
             </TableRow>
           </template>
           <template v-else-if="users.length === 0">
             <TableRow>
-              <TableCell colspan="6" class="text-center text-muted-foreground">
+              <TableCell colspan="9" class="text-center text-muted-foreground">
                 No users found
               </TableCell>
             </TableRow>
@@ -237,6 +262,25 @@ defineExpose({
               <TableCell>
                 <div class="text-sm text-muted-foreground">
                   {{ formatDate(user.createdAt) }}
+                </div>
+              </TableCell>
+              <TableCell>
+                <div v-if="user.clientVersion" class="flex flex-col gap-0.5">
+                  <span class="font-mono text-sm">{{ user.clientVersion }}</span>
+                  <span v-if="user.clientVersionUpdatedAt" class="text-xs text-muted-foreground">
+                    {{ formatTimeAgo(user.clientVersionUpdatedAt) }}
+                  </span>
+                </div>
+                <span v-else class="text-sm text-muted-foreground">-</span>
+              </TableCell>
+              <TableCell>
+                <div class="text-sm text-muted-foreground">
+                  {{ user.clientPlatform ?? '-' }}
+                </div>
+              </TableCell>
+              <TableCell>
+                <div class="text-sm text-muted-foreground">
+                  {{ user.clientArch ?? '-' }}
                 </div>
               </TableCell>
               <TableCell>

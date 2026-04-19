@@ -20,11 +20,6 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/pages/GithubCache.vue'),
   },
   {
-    name: 'ClientAnalytics',
-    path: '/client-analytics',
-    component: () => import('@/pages/ClientAnalytics.vue'),
-  },
-  {
     name: 'ManageUsers',
     path: '/manage-users',
     component: () => import('@/pages/ManageUsers.vue'),

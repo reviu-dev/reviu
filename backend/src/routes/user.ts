@@ -1,8 +1,12 @@
+import { eq } from 'drizzle-orm'
 import { pick } from 'es-toolkit'
 import { Hono } from 'hono'
+import { db } from '../db/index.js'
+import { user as userTable } from '../db/schemas/index.js'
 import { auth } from '../lib/auth.js'
 import { env } from '../lib/env.js'
 import { logger } from '../lib/logger.js'
+import { parseDesktopUserAgent } from '../lib/user-agent.js'
 import { authMiddlewareUser } from '../middlewares/auth.js'
 import { fetchGithubViewer } from '../plugins/github/service.js'
 
@@ -11,6 +15,23 @@ const userRouter = new Hono()
 export const userRoutes = userRouter
   .get('/me', authMiddlewareUser, async (ctx) => {
     const user = ctx.get('user')!
+
+    const desktopClient = parseDesktopUserAgent(ctx.req.header('user-agent'))
+    if (desktopClient) {
+      try {
+        await db.update(userTable)
+          .set({
+            clientVersion: desktopClient.version,
+            clientPlatform: desktopClient.platform,
+            clientArch: desktopClient.arch,
+            clientVersionUpdatedAt: new Date(),
+          })
+          .where(eq(userTable.id, user.id))
+      }
+      catch (error) {
+        logger.warn({ error, userId: user.id }, 'Failed to update client version for user')
+      }
+    }
 
     const polarState = await auth.api.state(
       {

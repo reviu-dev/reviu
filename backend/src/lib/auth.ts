@@ -59,6 +59,26 @@ export const auth = betterAuth({
         type: 'date',
         input: false,
       },
+      clientVersion: {
+        type: 'string',
+        input: false,
+        required: false,
+      },
+      clientPlatform: {
+        type: 'string',
+        input: false,
+        required: false,
+      },
+      clientArch: {
+        type: 'string',
+        input: false,
+        required: false,
+      },
+      clientVersionUpdatedAt: {
+        type: 'date',
+        input: false,
+        required: false,
+      },
     },
   },
   plugins: [

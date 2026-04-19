@@ -17,6 +17,10 @@ export const user = pgTable('user', {
   banReason: text('ban_reason'),
   banExpires: timestamp('ban_expires'),
   proGrantedAt: timestamp('pro_granted_at'),
+  clientVersion: text('client_version'),
+  clientPlatform: text('client_platform'),
+  clientArch: text('client_arch'),
+  clientVersionUpdatedAt: timestamp('client_version_updated_at'),
 })
 
 export const session = pgTable(

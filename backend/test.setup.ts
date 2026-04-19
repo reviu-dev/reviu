@@ -32,7 +32,6 @@ function setupEnv() {
     SHIPIT_API_KEY: 'shipit-api-key',
     SHIPIT_API_URL: 'https://shipit.example.com',
     SHIPIT_PROJECT_ID: 'shipit-project-id',
-    CLIENT_ANALYTICS_RETENTION_DAYS: '30',
     LOG_GITHUB_CACHE: 'true',
   }
 

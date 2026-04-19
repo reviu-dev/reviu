@@ -3,7 +3,6 @@ import { serve } from '@hono/node-server'
 import { app } from './app.js'
 import { env } from './lib/env.js'
 import { logger } from './lib/logger.js'
-import { flushClientAnalyticsNow, startClientAnalyticsPersistence, stopClientAnalyticsPersistence } from './plugins/client-analytics/client-analytics-store.js'
 import { flushGithubMetricsNow, startGithubMetricsPersistence, stopGithubMetricsPersistence } from './plugins/github/metrics/github-metrics-store.js'
 
 const server = serve({
@@ -14,7 +13,6 @@ const server = serve({
 })
 
 startGithubMetricsPersistence()
-startClientAnalyticsPersistence()
 
 let shuttingDown = false
 
@@ -38,14 +36,10 @@ async function shutdown(exitCode: number) {
 
   shuttingDown = true
   stopGithubMetricsPersistence()
-  stopClientAnalyticsPersistence()
 
   try {
     await closeServer()
-    await Promise.all([
-      flushGithubMetricsNow(),
-      flushClientAnalyticsNow(),
-    ])
+    await flushGithubMetricsNow()
   }
   catch (error) {
     logger.error({ error }, 'Failed to shutdown server cleanly')

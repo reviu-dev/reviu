@@ -17,8 +17,6 @@
     "test:watch": "vitest",
     "github:metrics:prune": "node dist/scripts/prune-github-metrics.js",
     "github:metrics:prune:dev": "tsx src/scripts/prune-github-metrics.ts",
-    "client-analytics:prune": "node dist/scripts/prune-client-analytics.js",
-    "client-analytics:prune:dev": "tsx src/scripts/prune-client-analytics.ts",
     "migrate": "tsx scripts/migrate.ts",
     "knip": "knip"
   },
