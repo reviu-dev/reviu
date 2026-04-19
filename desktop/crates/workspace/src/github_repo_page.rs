@@ -6521,19 +6521,37 @@ impl GithubRepoPage {
       );
 
     let github_url = format!("https://github.com/{}/{}", self.owner, self.repo);
+    let archive_ref = self
+      .selected_branch
+      .as_ref()
+      .map(|branch| branch.to_string())
+      .unwrap_or_else(|| "HEAD".to_string());
+    let zip_url = format!(
+      "https://github.com/{}/{}/archive/{}.zip",
+      self.owner, self.repo, archive_ref
+    );
     let actions_menu = Button::new("repo-actions-menu")
       .icon(UiIconName::EllipsisVertical)
       .ghost()
       .compact()
       .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
-        let url = github_url.clone();
-        menu.item(
-          PopupMenuItem::new("View on GitHub")
-            .icon(Icon::new(IconName::ExternalLink))
-            .on_click(move |_, _, cx| {
-              cx.open_url(&url);
-            }),
-        )
+        let view_url = github_url.clone();
+        let download_url = zip_url.clone();
+        menu
+          .item(
+            PopupMenuItem::new("View on GitHub")
+              .icon(Icon::new(IconName::ExternalLink))
+              .on_click(move |_, _, cx| {
+                cx.open_url(&view_url);
+              }),
+          )
+          .item(
+            PopupMenuItem::new("Download ZIP")
+              .icon(Icon::new(UiIconName::Download))
+              .on_click(move |_, _, cx| {
+                cx.open_url(&download_url);
+              }),
+          )
       });
 
     div()
