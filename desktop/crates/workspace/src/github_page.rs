@@ -1030,6 +1030,14 @@ impl VariableListDelegate for GithubNotificationListDelegate {
   fn loading(&self, _: &App) -> bool {
     self.loading
   }
+
+  fn render_loading(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<VariableListState<Self>>,
+  ) -> impl IntoElement {
+    github_shared::notification_list_loading_skeleton(GITHUB_HOME_NOTIFICATION_ROW_HEIGHT_PX, cx)
+  }
 }
 
 struct GithubPullRequestListDelegate {

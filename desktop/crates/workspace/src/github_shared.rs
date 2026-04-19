@@ -102,6 +102,10 @@ pub(crate) fn issue_list_loading_skeleton(row_height: f32, cx: &App) -> impl Int
   list_loading_skeleton(row_height, cx)
 }
 
+pub(crate) fn notification_list_loading_skeleton(row_height: f32, cx: &App) -> impl IntoElement {
+  list_loading_skeleton(row_height, cx)
+}
+
 pub(crate) fn make_asset_url_resolver(
   api: &ApiClient,
 ) -> Arc<dyn Fn(&str) -> Option<String> + Send + Sync> {
