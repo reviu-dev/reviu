@@ -11,6 +11,7 @@ import type {
 import type {
   AddIssueAssigneesParams,
   AddIssueLabelsParams,
+  CommitResponse,
   CompareParams,
   CreateIssueCommentParams,
   CreatePullRequestCommentParams,
@@ -20,6 +21,7 @@ import type {
   DeleteIssueCommentParams,
   DeletePullRequestCommentParams,
   GetContentParams,
+  GithubCommitDetails,
   GithubFileAsset,
   GithubFileContent,
   GithubIssue,
@@ -81,6 +83,7 @@ import {
   createGithubPullRequestReviewsCachePolicy,
   createGithubPullRequestSearchCachePolicy,
   createGithubRepositoryBranchesCachePolicy,
+  createGithubRepositoryCommitCachePolicy,
   createGithubRepositoryDetailsCachePolicy,
   createGithubRepositoryFileCachePolicy,
   createGithubRepositoryFileCommitCachePolicy,
@@ -1118,6 +1121,96 @@ async function fetchPullRequestCommitsWithCache(
           nextPullRequestValidator,
           commits.map(mapGithubPullRequestCommit),
         )
+      },
+    }))
+}
+
+function mapGithubCommitUser(
+  user: CommitResponse['author'] | CommitResponse['committer'],
+): GithubCommitDetails['author'] {
+  if (!user) {
+    return null
+  }
+
+  return {
+    login: user.login,
+    avatar_url: user.avatar_url,
+  }
+}
+
+function mapGithubCommitDetails(
+  commit: CommitResponse,
+  files: GithubCommitDetails['files'],
+): GithubCommitDetails {
+  return {
+    sha: commit.sha,
+    message: commit.commit.message,
+    html_url: commit.html_url,
+    authored_at: commit.commit.author?.date ?? null,
+    committed_at: commit.commit.committer?.date ?? null,
+    parent_sha: commit.parents.at(0)?.sha ?? null,
+    author: mapGithubCommitUser(commit.author),
+    committer: mapGithubCommitUser(commit.committer),
+    stats: commit.stats
+      ? {
+          additions: commit.stats.additions,
+          deletions: commit.stats.deletions,
+          total: commit.stats.total,
+        }
+      : null,
+    files,
+  }
+}
+
+async function fetchRepositoryCommitWithCache(
+  userId: string,
+  githubToken: string,
+  org: string,
+  repo: string,
+  sha: string,
+) {
+  const baseCachePolicy = createGithubRepositoryCommitCachePolicy(userId, org, repo, sha)
+  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, org, repo)
+
+  return withGithubMetrics(userId, cachePolicy.operation, () =>
+    githubCache.getOrLoad<GithubCommitDetails>({
+      ...cachePolicy,
+      load: async ({ cachedEntry }) => {
+        const response = await fetchGithubCommitConditionally({
+          token: githubToken,
+          params: {
+            owner: org,
+            repo,
+            ref: sha,
+            per_page: 100,
+          },
+          etag: cachedEntry?.etag,
+          lastModified: cachedEntry?.lastModified,
+        })
+
+        if (response.notModified) {
+          return {
+            notModified: true as const,
+            etag: response.etag,
+            lastModified: response.lastModified,
+          }
+        }
+
+        const commit = response.data!
+        const files = await fetchGithubCommitFilesAllPages({
+          token: githubToken,
+          params: {
+            owner: org,
+            repo,
+            ref: sha,
+          },
+        })
+
+        return {
+          payload: mapGithubCommitDetails(commit, files.map(mapGithubPullRequestFile)),
+          etag: response.etag,
+          lastModified: response.lastModified,
+        }
       },
     }))
 }
@@ -3227,6 +3320,29 @@ export const githubRoutes = githubRouter
       const status = (error as { status?: number }).status
       if (status === 403 || status === 404 || status === 422) {
         return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/commit', async (ctx) => {
+    const { org, repo, sha } = ctx.req.query()
+
+    if (!org || !repo || !sha) {
+      return ctx.json({ error: 'Missing org, repo, or sha' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const result = await fetchRepositoryCommitWithCache(user.id, githubToken, org, repo, sha)
+      setGithubCacheHeaders(ctx, result)
+      return ctx.json({ commit: result.payload }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 404) {
+        return ctx.json({ error: 'Commit not found' }, 404)
       }
       return ctx.json({ error: (error as Error).message }, 502)
     }

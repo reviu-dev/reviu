@@ -84,6 +84,7 @@ fn workspace_page_tag(page: WorkspacePage) -> &'static str {
     WorkspacePage::Github => "github",
     WorkspacePage::GithubRepo => "github_repo",
     WorkspacePage::GithubPrDetails => "github_pr_details",
+    WorkspacePage::GithubCommitDetails => "github_commit_details",
     WorkspacePage::Billing => "billing",
     WorkspacePage::GitConfig => "git_config",
     WorkspacePage::Settings => "settings",
@@ -441,6 +442,10 @@ mod tests {
     assert_eq!(
       workspace_page_tag(WorkspacePage::GithubPrDetails),
       "github_pr_details"
+    );
+    assert_eq!(
+      workspace_page_tag(WorkspacePage::GithubCommitDetails),
+      "github_commit_details"
     );
   }
 

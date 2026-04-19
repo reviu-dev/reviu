@@ -87,7 +87,8 @@ use crate::{
   git_page::GitPageHandle,
   github_home_tabs::{GithubPullRequestFilterOptionLabel, GithubPullRequestFilterOptionUser},
   github_navigation::{
-    SamePrGfmNavigation, open_repo_target, same_pr_gfm_navigation, should_open_externally,
+    SamePrGfmNavigation, open_commit_target, open_repo_target, same_pr_gfm_navigation,
+    should_open_externally,
   },
   github_page::GithubPageHandle,
   github_repo_page::GithubRepoPageHandle,
@@ -6321,6 +6322,14 @@ impl GithubPrDetailsPage {
         issue_comment_id,
       } => {
         open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
+        true
+      }
+      CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
+        let return_repo = self
+          .current_pr_context
+          .as_ref()
+          .map(|context| (context.owner.clone(), context.repo.clone()));
+        open_commit_target(owner, repo, sha, return_repo, cx);
         true
       }
       _ => false,
@@ -13231,6 +13240,14 @@ impl GithubPrDetailsPage {
         issue_comment_id,
       } => {
         open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
+        let return_repo = self
+          .current_pr_context
+          .as_ref()
+          .map(|context| (context.owner.clone(), context.repo.clone()));
+        open_commit_target(owner, repo, sha, return_repo, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

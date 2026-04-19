@@ -9,6 +9,7 @@ import {
   createGithubPullRequestFilesCachePolicy,
   createGithubPullRequestIssueCommentsCachePolicy,
   createGithubPullRequestSearchCachePolicy,
+  createGithubRepositoryCommitCachePolicy,
   createGithubRepositoryFileCachePolicy,
   createGithubRepositoryIssueDetailsCachePolicy,
   createGithubRepositoryIssuesCachePolicy,
@@ -78,6 +79,18 @@ describe('github cache policy', () => {
       ttlMs: 60_000,
       staleMs: 600_000,
       tags: ['pull-request:openai/reviu:42:commits'],
+    })
+  })
+
+  it('builds the repository commit cache policy', () => {
+    expect(createGithubRepositoryCommitCachePolicy('user-1', 'OpenAI', 'Reviu', 'ABC123')).toEqual({
+      operation: 'repository.commit',
+      scope: 'viewer',
+      scopeId: 'user-1',
+      resourceKey: 'repo:openai/reviu:commit:ABC123',
+      ttlMs: 86_400_000,
+      staleMs: 604_800_000,
+      tags: ['repo:openai/reviu:commit:ABC123'],
     })
   })
 

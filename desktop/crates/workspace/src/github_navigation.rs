@@ -2,6 +2,7 @@ use gpui::{App, Window};
 use ui::CommandPaletteGithubRepoTab;
 
 use crate::{
+  github_commit_details_page::GithubCommitDetailsPageHandle,
   github_pr_details_page::{GithubPrDetailsPageHandle, GithubPrOpenTarget},
   github_repo_page::GithubRepoPageHandle,
 };
@@ -117,6 +118,27 @@ pub fn open_pr_target(
       review_comment_id,
       cx,
     );
+  }
+}
+
+pub fn open_commit_target(
+  owner: String,
+  repo: String,
+  sha: String,
+  return_repo: Option<(String, String)>,
+  cx: &mut App,
+) {
+  if let Some((return_owner, return_repo)) = return_repo {
+    GithubCommitDetailsPageHandle::show_with_repo_return(
+      owner.into(),
+      repo.into(),
+      sha.into(),
+      return_owner.into(),
+      return_repo.into(),
+      cx,
+    );
+  } else {
+    GithubCommitDetailsPageHandle::show(owner.into(), repo.into(), sha.into(), cx);
   }
 }
 

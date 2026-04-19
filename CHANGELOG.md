@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.5.0
+
+### Commit Details in Reviu
+
+Repository commit links now open inside Reviu with commit metadata, changed files, and an inline or split diff, keeping review context in the desktop app.
+
 ## 0.4.0
 
 ### Windows Support

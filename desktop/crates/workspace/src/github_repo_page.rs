@@ -72,8 +72,8 @@ use crate::{
     normalize_github_pull_request_filters,
   },
   github_navigation::{
-    SameRepoIssueLinkNavigation, open_pr_target, open_repo_target, same_repo_issue_link_navigation,
-    should_open_externally,
+    SameRepoIssueLinkNavigation, open_commit_target, open_pr_target, open_repo_target,
+    same_repo_issue_link_navigation, should_open_externally,
   },
   github_page::GithubPageHandle,
   github_pr_details_page::{GithubPrDetailsPageHandle, GithubPrOpenTarget},
@@ -2647,6 +2647,17 @@ impl GithubIssueDetailsSheetView {
           number,
           review_comment_id.is_some(),
           review_comment_id,
+          Some((self.owner.to_string(), self.repo.to_string())),
+          cx,
+        );
+        true
+      }
+      CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
+        window.close_sheet(cx);
+        open_commit_target(
+          owner,
+          repo,
+          sha,
           Some((self.owner.to_string(), self.repo.to_string())),
           cx,
         );
@@ -6412,6 +6423,20 @@ impl GithubRepoPage {
         }
         Ok(())
       }
+      CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
+        if self.owner.as_ref().is_empty() || self.repo.as_ref().is_empty() {
+          open_commit_target(owner, repo, sha, None, cx);
+        } else {
+          open_commit_target(
+            owner,
+            repo,
+            sha,
+            Some((self.owner.to_string(), self.repo.to_string())),
+            cx,
+          );
+        }
+        Ok(())
+      }
       CommandPaletteAction::OpenSettingsPage => {
         NavigationHistory::navigate("/settings", cx);
         Ok(())
@@ -6765,7 +6790,8 @@ impl GithubRepoPage {
         DETAILS_PAGE_CONTAINER_MAX_WIDTH - left_area_width - left_right_gap,
       ))
       .when(!recent_commits.is_empty(), {
-        let html_url = repository.html_url.clone();
+        let owner = self.owner.to_string();
+        let repo = self.repo.to_string();
         let commits = recent_commits.clone();
         let theme = theme.clone();
         move |this| {
@@ -6774,7 +6800,9 @@ impl GithubRepoPage {
               .gap_2()
               .child(div().text_sm().font_semibold().child("Recent activity"))
               .children(commits.iter().enumerate().map(|(ix, commit)| {
-                let commit_url = format!("{}/commit/{}", html_url, commit.sha);
+                let owner = owner.clone();
+                let repo = repo.clone();
+                let sha = commit.sha.clone();
                 let hover_bg = theme.accent.opacity(0.55);
                 github_shared::render_commit_row_content(
                   &commit.sha,
@@ -6791,7 +6819,13 @@ impl GithubRepoPage {
                 .cursor_pointer()
                 .hover(move |this| this.bg(hover_bg))
                 .on_click(move |_, _, cx| {
-                  cx.open_url(&commit_url);
+                  open_commit_target(
+                    owner.clone(),
+                    repo.clone(),
+                    sha.clone(),
+                    Some((owner.clone(), repo.clone())),
+                    cx,
+                  );
                 })
               })),
           )
@@ -7054,7 +7088,9 @@ impl GithubRepoPage {
           .min_w_0()
           .when_some(self.code_file_commit.clone(), |this, commit| {
             this.when_some(commit.message, |this, message| {
-              let commit_url = commit.html_url.clone();
+              let commit_owner = self.owner.to_string();
+              let commit_repo = self.repo.to_string();
+              let commit_sha = commit.sha.clone();
               let link_color = theme.link;
               this.child(
                 h_flex()
@@ -7065,12 +7101,20 @@ impl GithubRepoPage {
                   .max_w(px(350.0))
                   .text_xs()
                   .text_color(link_color)
-                  .when_some(commit_url, |this, url| {
+                  .when_some(commit_sha, |this, sha| {
+                    let owner = commit_owner.clone();
+                    let repo = commit_repo.clone();
                     this
                       .cursor_pointer()
                       .hover(|this| this.opacity(0.8))
                       .on_click(move |_, _, cx| {
-                        cx.open_url(&url);
+                        open_commit_target(
+                          owner.clone(),
+                          repo.clone(),
+                          sha.clone(),
+                          Some((owner.clone(), repo.clone())),
+                          cx,
+                        );
                       })
                   })
                   .child(

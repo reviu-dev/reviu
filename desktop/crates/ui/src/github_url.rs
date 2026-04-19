@@ -16,6 +16,11 @@ enum GithubUrlTarget {
     open_changes_tab: bool,
     review_comment_id: Option<u64>,
   },
+  Commit {
+    owner: String,
+    repo: String,
+    sha: String,
+  },
 }
 
 pub fn parse_github_url_action(url: &str) -> Option<CommandPaletteAction> {
@@ -50,6 +55,9 @@ fn github_url_target_to_action(target: GithubUrlTarget) -> CommandPaletteAction 
       open_changes_tab,
       review_comment_id,
     },
+    GithubUrlTarget::Commit { owner, repo, sha } => {
+      CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha }
+    }
   }
 }
 
@@ -128,6 +136,20 @@ fn parse_github_issue_url(url: &str) -> Option<(String, String, u64)> {
   Some((owner, repo, number))
 }
 
+fn parse_github_commit_url(url: &str) -> Option<(String, String, String)> {
+  let (owner, repo, path_parts) = parse_github_repository_parts(url)?;
+  if path_parts.first().map(|part| part.as_str()) != Some("commit") {
+    return None;
+  }
+
+  let sha = path_parts.get(1)?.trim();
+  if sha.is_empty() {
+    return None;
+  }
+
+  Some((owner, repo, sha.to_string()))
+}
+
 #[cfg(test)]
 fn parse_github_repository_url(url: &str) -> Option<(String, String)> {
   let (owner, repo, _) = parse_github_repository_parts(url)?;
@@ -170,6 +192,10 @@ fn parse_github_url_target(url: &str) -> Option<GithubUrlTarget> {
     });
   }
 
+  if let Some((owner, repo, sha)) = parse_github_commit_url(url) {
+    return Some(GithubUrlTarget::Commit { owner, repo, sha });
+  }
+
   let (owner, repo, path_parts) = parse_github_repository_parts(url)?;
   let tab = match path_parts.first().map(|part| part.as_str()) {
     Some("pulls") => Some(CommandPaletteGithubRepoTab::PullRequests),
@@ -194,8 +220,9 @@ fn parse_github_url_target(url: &str) -> Option<GithubUrlTarget> {
 #[cfg(test)]
 mod tests {
   use super::{
-    GithubUrlTarget, parse_github_issue_url, parse_github_pull_request_url,
-    parse_github_repository_url, parse_github_url_action, parse_github_url_target,
+    GithubUrlTarget, parse_github_commit_url, parse_github_issue_url,
+    parse_github_pull_request_url, parse_github_repository_url, parse_github_url_action,
+    parse_github_url_target,
   };
   use crate::CommandPaletteAction;
   use crate::command_palette::CommandPaletteGithubRepoTab;
@@ -232,6 +259,17 @@ mod tests {
   fn parse_github_issue_url_accepts_standard_url() {
     let parsed = parse_github_issue_url("https://github.com/joris-gallot/guit/issues/23");
     assert_eq!(parsed, Some(("joris-gallot".into(), "guit".into(), 23)));
+  }
+
+  #[test]
+  fn parse_github_commit_url_accepts_standard_url() {
+    let parsed = parse_github_commit_url(
+      "https://github.com/joris-gallot/guit/commit/abc123def456?diff=split",
+    );
+    assert_eq!(
+      parsed,
+      Some(("joris-gallot".into(), "guit".into(), "abc123def456".into()))
+    );
   }
 
   #[test]
@@ -351,6 +389,19 @@ mod tests {
   }
 
   #[test]
+  fn parse_github_url_target_routes_commit_url_to_commit_details() {
+    let parsed = parse_github_url_target("https://github.com/colinhacks/zod/commit/abc123");
+    assert!(matches!(
+      parsed,
+      Some(GithubUrlTarget::Commit {
+        owner,
+        repo,
+        sha,
+      }) if owner == "colinhacks" && repo == "zod" && sha == "abc123"
+    ));
+  }
+
+  #[test]
   fn parse_github_url_target_routes_pr_review_comment_link_to_changes_tab_target() {
     let parsed =
       parse_github_url_target("https://github.com/colinhacks/zod/pull/5533/changes#r2616576383");
@@ -409,6 +460,19 @@ mod tests {
         issue_number: None,
         issue_comment_id: None
       }) if owner == "colinhacks" && repo == "zod"
+    ));
+  }
+
+  #[test]
+  fn parse_github_url_action_routes_commit_url_to_commit_details() {
+    let action = parse_github_url_action("https://github.com/colinhacks/zod/commit/abc123");
+    assert!(matches!(
+      action,
+      Some(CommandPaletteAction::OpenGithubCommitDetails {
+        owner,
+        repo,
+        sha,
+      }) if owner == "colinhacks" && repo == "zod" && sha == "abc123"
     ));
   }
 }

@@ -713,6 +713,30 @@ export interface GithubPullRequestFile {
   previous_filename: PullRequestFileResponse['previous_filename']
 }
 
+export interface GithubCommitUser {
+  login: NonNullable<CommitResponse['author']>['login']
+  avatar_url: NonNullable<CommitResponse['author']>['avatar_url'] | null
+}
+
+export interface GithubCommitStats {
+  additions: NonNullable<CommitResponse['stats']>['additions']
+  deletions: NonNullable<CommitResponse['stats']>['deletions']
+  total: NonNullable<CommitResponse['stats']>['total']
+}
+
+export interface GithubCommitDetails {
+  sha: CommitResponse['sha']
+  message: CommitResponse['commit']['message']
+  html_url: CommitResponse['html_url']
+  authored_at: NonNullable<CommitResponse['commit']['author']>['date'] | null
+  committed_at: NonNullable<CommitResponse['commit']['committer']>['date'] | null
+  parent_sha: CommitResponse['parents'][number]['sha'] | null
+  author: GithubCommitUser | null
+  committer: GithubCommitUser | null
+  stats: GithubCommitStats | null
+  files: GithubPullRequestFile[]
+}
+
 export interface GithubNotificationRepositoryOwner {
   login: NotificationResponse['repository']['owner']['login']
   avatar_url: NotificationResponse['repository']['owner']['avatar_url']

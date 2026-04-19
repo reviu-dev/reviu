@@ -60,6 +60,8 @@ const GITHUB_REPOSITORY_FILE_CACHE_TTL_MS = 60_000 // 60s
 const GITHUB_REPOSITORY_FILE_CACHE_STALE_MS = 10 * 60_000 // 10min
 const GITHUB_REPOSITORY_FILE_BY_SHA_CACHE_TTL_MS = 24 * 60 * 60_000 // 24h
 const GITHUB_REPOSITORY_FILE_BY_SHA_CACHE_STALE_MS = 7 * 24 * 60 * 60_000 // 7d
+const GITHUB_REPOSITORY_COMMIT_CACHE_TTL_MS = 24 * 60 * 60_000 // 24h
+const GITHUB_REPOSITORY_COMMIT_CACHE_STALE_MS = 7 * 24 * 60 * 60_000 // 7d
 
 function normalizeRepositoryKey(owner: string, repo: string) {
   return `${owner.toLowerCase()}/${repo.toLowerCase()}`
@@ -145,6 +147,10 @@ function getGithubRepositoryFileTag(owner: string, repo: string, ref: string) {
   const repositoryKey = normalizeRepositoryKey(owner, repo)
   const refPrefix = isGitSha(ref) ? 'blob' : 'ref'
   return `repo:${repositoryKey}:file:${refPrefix}:${normalizeCacheSegment(ref)}`
+}
+
+function getGithubRepositoryCommitTag(owner: string, repo: string, sha: string) {
+  return `repo:${normalizeRepositoryKey(owner, repo)}:commit:${normalizeCacheSegment(sha)}`
 }
 
 export function createGithubNotificationsCachePolicy(userId: string): GithubCachePolicy {
@@ -248,6 +254,25 @@ export function createGithubPullRequestCommitsCachePolicy(
     ttlMs: GITHUB_PULL_REQUEST_COMMITS_CACHE_TTL_MS,
     staleMs: GITHUB_PULL_REQUEST_COMMITS_CACHE_STALE_MS,
     tags: [getGithubPullRequestCommitsTag(owner, repo, pullNumber)],
+  }
+}
+
+export function createGithubRepositoryCommitCachePolicy(
+  userId: string,
+  owner: string,
+  repo: string,
+  sha: string,
+): GithubCachePolicy {
+  const repositoryKey = normalizeRepositoryKey(owner, repo)
+
+  return {
+    operation: 'repository.commit',
+    scope: 'viewer',
+    scopeId: userId,
+    resourceKey: `repo:${repositoryKey}:commit:${normalizeCacheSegment(sha)}`,
+    ttlMs: GITHUB_REPOSITORY_COMMIT_CACHE_TTL_MS,
+    staleMs: GITHUB_REPOSITORY_COMMIT_CACHE_STALE_MS,
+    tags: [getGithubRepositoryCommitTag(owner, repo, sha)],
   }
 }
 

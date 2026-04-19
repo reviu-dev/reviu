@@ -197,6 +197,11 @@ pub enum CommandPaletteAction {
     open_changes_tab: bool,
     review_comment_id: Option<u64>,
   },
+  OpenGithubCommitDetails {
+    owner: String,
+    repo: String,
+    sha: String,
+  },
   SwitchToPrBranch,
   ToggleUnchangedFiles,
   OpenGitHistorySidebar,
