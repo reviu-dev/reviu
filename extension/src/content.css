@@ -1,4 +1,7 @@
-#reviu-open-btn {
+/* Baseline style used only for the floating fallback button. When a page
+   config provides GitHub Primer classes, those take over and these rules
+   don't apply. */
+#reviu-open-btn.reviu-default-style {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -17,13 +20,13 @@
   white-space: nowrap;
 }
 
-#reviu-open-btn:hover {
+#reviu-open-btn.reviu-default-style:hover {
   background-color: var(--button-default-bgColor-hover, var(--color-btn-hover-bg));
   border-color: var(--button-default-borderColor-hover, var(--color-btn-hover-border));
   text-decoration: none;
 }
 
-#reviu-open-btn svg {
+#reviu-open-btn.reviu-default-style svg {
   flex-shrink: 0;
 }
 
