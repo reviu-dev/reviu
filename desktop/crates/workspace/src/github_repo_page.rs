@@ -7491,24 +7491,58 @@ impl GithubRepoPage {
       .child(resizable_panel().child(editor_panel))
   }
 
+  fn render_readme_skeleton(theme: &gpui_component::Theme) -> AnyElement {
+    let radius = theme.radius;
+    let line = |w: f32| {
+      Skeleton::new()
+        .w(px(w))
+        .h(px(12.0))
+        .rounded(radius)
+        .into_any_element()
+    };
+    let full_line = || {
+      Skeleton::new()
+        .w_full()
+        .h(px(12.0))
+        .rounded(radius)
+        .into_any_element()
+    };
+
+    v_flex()
+      .w_full()
+      .gap_4()
+      .child(Skeleton::new().w(px(280.0)).h(px(28.0)).rounded(radius))
+      .child(
+        v_flex()
+          .gap_2()
+          .child(full_line())
+          .child(full_line())
+          .child(line(420.0)),
+      )
+      .child(Skeleton::new().w(px(180.0)).h(px(20.0)).rounded(radius))
+      .child(
+        v_flex()
+          .gap_2()
+          .child(full_line())
+          .child(line(560.0))
+          .child(full_line()),
+      )
+      .child(
+        Skeleton::new()
+          .w_full()
+          .h(px(140.0))
+          .rounded(radius)
+          .secondary(),
+      )
+      .child(v_flex().gap_2().child(full_line()).child(line(360.0)))
+      .into_any_element()
+  }
+
   fn render_readme(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
     let body = if self.readme_loading {
-      v_flex()
-        .w_full()
-        .min_h(px(240.))
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .child(Spinner::new().small())
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading README..."),
-        )
-        .into_any_element()
+      Self::render_readme_skeleton(&theme)
     } else if let Some(error) = self.readme_error.as_ref() {
       v_flex()
         .w_full()
