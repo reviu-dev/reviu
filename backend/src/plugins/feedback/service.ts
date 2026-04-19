@@ -76,14 +76,14 @@ function trimMultiline(value: string, maxChars: number) {
   return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`
 }
 
-export function buildCrashReportIssueTitle(params: CreateCrashReportParams) {
+function buildCrashReportIssueTitle(params: CreateCrashReportParams) {
   return trimSingleLine(
     `Desktop crash on ${params.os}/${params.arch}: ${params.message}`,
     SHIPIT_TITLE_MAX_CHARS,
   )
 }
 
-export function buildCrashReportIssueDescription(params: CreateCrashReportParams) {
+function buildCrashReportIssueDescription(params: CreateCrashReportParams) {
   const sections = [
     '# Desktop Crash Report',
     '',
