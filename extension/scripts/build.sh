@@ -28,6 +28,7 @@ build_target() {
   local zip_name="reviu-$target-extension-v${version}.zip"
 
   rm -rf "$build_dir"
+  rm -f "$OUT_DIR"/reviu-"$target"-extension-v*.zip
   mkdir -p "$build_dir"
 
   cp -R "$SRC_DIR/"* "$build_dir/"
