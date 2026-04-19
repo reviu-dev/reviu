@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 Repository commit links now open inside Reviu with commit metadata, changed files, and an inline or split diff, keeping review context in the desktop app.
 
+### Create GitHub Repository
+
+Create a new repository directly from Reviu. Pick yourself or one of your organizations as owner, set name, description, and visibility, then Reviu opens the new repository as soon as it's created. Available from the GitHub home screen and the command palette.
+
 ## 0.4.0
 
 ### Windows Support

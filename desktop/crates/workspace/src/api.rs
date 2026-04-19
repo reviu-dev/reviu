@@ -212,6 +212,32 @@ pub struct GithubUserRepository {
   pub updated_at: String,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubUserOrganization {
+  pub login: String,
+  #[serde(rename = "avatarUrl")]
+  pub avatar_url: Option<String>,
+  pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct GithubCreatedRepository {
+  pub owner: String,
+  pub repo: String,
+  #[serde(rename = "full_name")]
+  pub full_name: String,
+  pub description: Option<String>,
+  pub private: bool,
+  #[serde(rename = "html_url")]
+  pub html_url: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum CreateRepositoryOwner {
+  Viewer,
+  Organization(String),
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GithubIssueStateReason {
@@ -513,6 +539,7 @@ pub struct GithubCommitStats {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct GithubCommitAssociatedPullRequest {
   pub number: u64,
   pub title: String,
@@ -1260,6 +1287,24 @@ struct GithubUserRepositoriesResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct GithubUserOrganizationsResponse {
+  organizations: Vec<GithubUserOrganization>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubCreatedRepositoryResponse {
+  repository: GithubCreatedRepository,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateRepositoryRequest<'a> {
+  name: &'a str,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  description: Option<&'a str>,
+  private: bool,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubIssueDetailsResponse {
   issue: GithubIssueDetails,
 }
@@ -1727,6 +1772,54 @@ impl ApiClient {
     }
     let payload = response.json::<GithubUserRepositoriesResponse>()?;
     Ok(payload.repositories)
+  }
+
+  pub fn fetch_github_user_organizations(&self) -> Result<Vec<GithubUserOrganization>> {
+    let response = self
+      .authed_request(Method::GET, "/github/user/orgs")
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", "/github/user/orgs", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<GithubUserOrganizationsResponse>()?;
+    Ok(payload.organizations)
+  }
+
+  pub fn create_github_repository(
+    &self,
+    owner: &CreateRepositoryOwner,
+    name: &str,
+    description: Option<&str>,
+    private: bool,
+  ) -> Result<GithubCreatedRepository> {
+    let route = match owner {
+      CreateRepositoryOwner::Viewer => "/github/repos".to_string(),
+      CreateRepositoryOwner::Organization(org) => format!("/github/orgs/{org}/repos"),
+    };
+    let trimmed_description = description.map(str::trim).filter(|v| !v.is_empty());
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .json(&CreateRepositoryRequest {
+        name: name.trim(),
+        description: trimmed_description,
+        private,
+      })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<GithubCreatedRepositoryResponse>()?;
+    Ok(payload.repository)
   }
 
   pub fn fetch_github_repository_details(
