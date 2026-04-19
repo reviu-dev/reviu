@@ -513,6 +513,18 @@ pub struct GithubCommitStats {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct GithubCommitAssociatedPullRequest {
+  pub number: u64,
+  pub title: String,
+  pub state: String,
+  #[serde(rename = "merged_at")]
+  pub merged_at: Option<String>,
+  #[serde(rename = "html_url")]
+  #[allow(dead_code)]
+  pub html_url: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct GithubCommitDetails {
   pub sha: String,
   pub message: String,
@@ -528,6 +540,8 @@ pub struct GithubCommitDetails {
   pub committer: Option<GithubCommitUser>,
   pub stats: Option<GithubCommitStats>,
   pub files: Vec<GithubPullRequestFile>,
+  #[serde(rename = "associated_pull_request", default)]
+  pub associated_pull_request: Option<GithubCommitAssociatedPullRequest>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

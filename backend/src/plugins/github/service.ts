@@ -10,6 +10,8 @@ import type {
   CommitCombinedStatusResponse,
   CommitFileResponse,
   CommitParams,
+  CommitPullResponse,
+  CommitPullsParams,
   CommitResponse,
   CompareParams,
   CreateIssueCommentParams,
@@ -2349,6 +2351,16 @@ export async function fetchGithubBranchRules(
   { token: string, params: BranchRulesParams },
 ): Promise<BranchRulesResponse> {
   return requestGithubData('GET /repos/{owner}/{repo}/rules/branches/{branch}', {
+    token,
+    params,
+  })
+}
+
+export async function fetchGithubPullRequestsAssociatedWithCommit(
+  { token, params }:
+  { token: string, params: CommitPullsParams },
+): Promise<CommitPullResponse[]> {
+  return requestGithubData('GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls', {
     token,
     params,
   })

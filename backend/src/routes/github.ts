@@ -11,6 +11,7 @@ import type {
 import type {
   AddIssueAssigneesParams,
   AddIssueLabelsParams,
+  CommitPullResponse,
   CommitResponse,
   CompareParams,
   CreateIssueCommentParams,
@@ -164,6 +165,7 @@ import {
   fetchGithubPullRequestFilesAllPages,
   fetchGithubPullRequestReviewsConditionally,
   fetchGithubPullRequests,
+  fetchGithubPullRequestsAssociatedWithCommit,
   fetchGithubPullRequestSearchGraphql,
   fetchGithubRepositoryAssignees,
   fetchGithubRepositoryBranchesConditionally,
@@ -1141,6 +1143,7 @@ function mapGithubCommitUser(
 function mapGithubCommitDetails(
   commit: CommitResponse,
   files: GithubCommitDetails['files'],
+  associatedPullRequest: GithubCommitDetails['associated_pull_request'],
 ): GithubCommitDetails {
   return {
     sha: commit.sha,
@@ -1159,6 +1162,25 @@ function mapGithubCommitDetails(
         }
       : null,
     files,
+    associated_pull_request: associatedPullRequest,
+  }
+}
+
+function pickAssociatedPullRequest(
+  pulls: CommitPullResponse[],
+): GithubCommitDetails['associated_pull_request'] {
+  if (pulls.length === 0) {
+    return null
+  }
+  const merged = pulls.find(pull => pull.merged_at !== null)
+  const open = pulls.find(pull => pull.state === 'open')
+  const pull = merged ?? open ?? pulls[0]
+  return {
+    number: pull.number,
+    title: pull.title,
+    state: pull.state,
+    merged_at: pull.merged_at,
+    html_url: pull.html_url,
   }
 }
 
@@ -1197,17 +1219,31 @@ async function fetchRepositoryCommitWithCache(
         }
 
         const commit = response.data!
-        const files = await fetchGithubCommitFilesAllPages({
-          token: githubToken,
-          params: {
-            owner: org,
-            repo,
-            ref: sha,
-          },
-        })
+        const [files, associatedPulls] = await Promise.all([
+          fetchGithubCommitFilesAllPages({
+            token: githubToken,
+            params: {
+              owner: org,
+              repo,
+              ref: sha,
+            },
+          }),
+          fetchGithubPullRequestsAssociatedWithCommit({
+            token: githubToken,
+            params: {
+              owner: org,
+              repo,
+              commit_sha: sha,
+            },
+          }).catch(() => [] as CommitPullResponse[]),
+        ])
 
         return {
-          payload: mapGithubCommitDetails(commit, files.map(mapGithubPullRequestFile)),
+          payload: mapGithubCommitDetails(
+            commit,
+            files.map(mapGithubPullRequestFile),
+            pickAssociatedPullRequest(associatedPulls),
+          ),
           etag: response.etag,
           lastModified: response.lastModified,
         }

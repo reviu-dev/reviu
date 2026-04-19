@@ -33,6 +33,8 @@ export type PullRequestFilesParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['parameters']
 export type CommitParams
   = Endpoints['GET /repos/{owner}/{repo}/commits/{ref}']['parameters']
+export type CommitPullsParams
+  = Endpoints['GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls']['parameters']
 export type CommitCheckRunsParams
   = Endpoints['GET /repos/{owner}/{repo}/commits/{ref}/check-runs']['parameters']
 export type CommitCombinedStatusParams
@@ -93,6 +95,8 @@ export type PullRequestFileResponse
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/files']['response']['data'][number]
 export type CommitResponse = Endpoints['GET /repos/{owner}/{repo}/commits/{ref}']['response']['data']
 export type CommitFileResponse = NonNullable<CommitResponse['files']>[number]
+export type CommitPullResponse
+  = Endpoints['GET /repos/{owner}/{repo}/commits/{commit_sha}/pulls']['response']['data'][number]
 export type CommitCheckRunsResponse
   = Endpoints['GET /repos/{owner}/{repo}/commits/{ref}/check-runs']['response']['data']
 export type CommitCombinedStatusResponse
@@ -724,6 +728,14 @@ export interface GithubCommitStats {
   total: NonNullable<CommitResponse['stats']>['total']
 }
 
+export interface GithubCommitAssociatedPullRequest {
+  number: CommitPullResponse['number']
+  title: CommitPullResponse['title']
+  state: CommitPullResponse['state']
+  merged_at: CommitPullResponse['merged_at']
+  html_url: CommitPullResponse['html_url']
+}
+
 export interface GithubCommitDetails {
   sha: CommitResponse['sha']
   message: CommitResponse['commit']['message']
@@ -735,6 +747,7 @@ export interface GithubCommitDetails {
   committer: GithubCommitUser | null
   stats: GithubCommitStats | null
   files: GithubPullRequestFile[]
+  associated_pull_request: GithubCommitAssociatedPullRequest | null
 }
 
 export interface GithubNotificationRepositoryOwner {
