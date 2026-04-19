@@ -213,6 +213,7 @@ pub struct GithubUserRepository {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct GithubUserOrganization {
   pub login: String,
   #[serde(rename = "avatarUrl")]
@@ -221,6 +222,7 @@ pub struct GithubUserOrganization {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct GithubCreatedRepository {
   pub owner: String,
   pub repo: String,
@@ -1304,6 +1306,16 @@ struct CreateRepositoryRequest<'a> {
   private: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct ForkRepositoryRequest<'a> {
+  #[serde(skip_serializing_if = "Option::is_none")]
+  organization: Option<&'a str>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  name: Option<&'a str>,
+  #[serde(rename = "defaultBranchOnly")]
+  default_branch_only: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct GithubIssueDetailsResponse {
   issue: GithubIssueDetails,
@@ -1808,6 +1820,40 @@ impl ApiClient {
         name: name.trim(),
         description: trimmed_description,
         private,
+      })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<GithubCreatedRepositoryResponse>()?;
+    Ok(payload.repository)
+  }
+
+  pub fn fork_github_repository(
+    &self,
+    source_owner: &str,
+    source_repo: &str,
+    target_owner: &CreateRepositoryOwner,
+    name: Option<&str>,
+    default_branch_only: bool,
+  ) -> Result<GithubCreatedRepository> {
+    let route = format!("/github/repos/{source_owner}/{source_repo}/forks");
+    let organization = match target_owner {
+      CreateRepositoryOwner::Viewer => None,
+      CreateRepositoryOwner::Organization(org) => Some(org.as_str()),
+    };
+    let trimmed_name = name.map(str::trim).filter(|v| !v.is_empty());
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .json(&ForkRepositoryRequest {
+        organization,
+        name: trimmed_name,
+        default_branch_only,
       })
       .send()?;
     let status = response.status();
