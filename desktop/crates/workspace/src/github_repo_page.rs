@@ -234,8 +234,8 @@ fn render_languages_section(
     .child(legend)
 }
 
-fn should_show_overview_loading_state(repository_loading: bool, has_repository: bool) -> bool {
-  repository_loading && !has_repository
+fn should_show_overview_loading_state(repository_loading: bool) -> bool {
+  repository_loading
 }
 
 fn saved_code_selection_for_refresh(
@@ -6730,7 +6730,7 @@ impl GithubRepoPage {
   fn render_overview(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
-    if should_show_overview_loading_state(self.repository_loading, self.repository.is_some()) {
+    if should_show_overview_loading_state(self.repository_loading) {
       return Self::render_overview_skeleton(&theme);
     }
 
@@ -8572,10 +8572,9 @@ mod tests {
   }
 
   #[test]
-  fn overview_loading_state_requires_loading_and_missing_repository() {
-    assert!(should_show_overview_loading_state(true, false));
-    assert!(!should_show_overview_loading_state(false, false));
-    assert!(!should_show_overview_loading_state(true, true));
+  fn overview_loading_state_matches_repository_loading() {
+    assert!(should_show_overview_loading_state(true));
+    assert!(!should_show_overview_loading_state(false));
   }
 
   #[gpui::test]
