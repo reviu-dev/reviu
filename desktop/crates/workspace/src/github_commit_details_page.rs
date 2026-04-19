@@ -47,7 +47,7 @@ use crate::{
 const COMMIT_FILE_SIDEBAR_WIDTH: f32 = 360.0;
 const COMMIT_FILE_SIDEBAR_MIN_WIDTH: f32 = 320.0;
 const COMMIT_FILE_SIDEBAR_MAX_WIDTH: f32 = 1200.0;
-const COMMIT_HEADER_HEIGHT: f32 = 48.0;
+const COMMIT_HEADER_HEIGHT: f32 = 40.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GithubCommitFileStatus {
