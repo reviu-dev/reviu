@@ -777,7 +777,7 @@ impl GithubCommitDetailsPage {
       .flex_col()
       .border_b_1()
       .border_color(theme.border)
-      .px_4()
+      .px_3()
       .py_2()
       .gap_1()
       .child(
