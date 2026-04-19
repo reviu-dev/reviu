@@ -3373,6 +3373,11 @@ impl GithubPage {
         NavigationHistory::navigate("/github", cx);
         Ok(())
       }
+      CommandPaletteAction::CreateGithubRepository => {
+        let api = WorkspaceApi::global(cx).api.clone();
+        crate::github_create_repository_dialog::open_create_repository_dialog(api, window, cx);
+        Ok(())
+      }
       CommandPaletteAction::OpenGithubPrDetails {
         owner,
         repo,
@@ -3797,6 +3802,7 @@ impl Render for GithubPage {
       .child(notifications_list);
 
     let repositories_count = self.repositories.read(cx).delegate().matched_rows.len();
+    let create_repo_api = self.api.clone();
     let repositories_panel = v_flex()
       .debug_selector(|| GITHUB_HOME_REPOSITORIES_PANEL_DEBUG_SELECTOR.to_string())
       .gap_2()
@@ -3811,16 +3817,31 @@ impl Render for GithubPage {
               .items_center()
               .gap_2()
               .child(Icon::new(IconName::Folder).size_4())
-              .child("My Repositories"),
+              .child("My Repositories")
+              .when(repositories_count > 0, |this| {
+                this.child(
+                  Tag::secondary()
+                    .small()
+                    .rounded_full()
+                    .child(repositories_count.to_string()),
+                )
+              }),
           )
-          .when(repositories_count > 0, |this| {
-            this.child(
-              Tag::secondary()
-                .small()
-                .rounded_full()
-                .child(repositories_count.to_string()),
-            )
-          }),
+          .child(
+            Button::new("github-home-create-repository")
+              .label("New")
+              .icon(IconName::Plus)
+              .outline()
+              .xsmall()
+              .tooltip("Create a new GitHub repository")
+              .on_click(move |_, window, cx| {
+                crate::github_create_repository_dialog::open_create_repository_dialog(
+                  create_repo_api.clone(),
+                  window,
+                  cx,
+                );
+              }),
+          ),
       )
       .when_some(self.repositories_error.clone(), |this, error| {
         this.child(div().text_sm().text_color(theme.status_red()).child(error))

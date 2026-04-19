@@ -99,6 +99,7 @@ import {
   getGithubPullRequestCommitsTag,
   getGithubPullRequestFilesTag,
   getGithubPullRequestMutationTags,
+  getGithubUserRepositoriesTag,
 
   withGithubPublicScope,
 } from '../plugins/github/cache/github-cache-policy.js'
@@ -125,6 +126,7 @@ import {
   createPullRequestLineCommentBodySchema,
   createPullRequestReviewBodySchema,
   createPullRequestThreadReplyBodySchema,
+  createRepositoryBodySchema,
   issueCommentBodySchema,
   issueSearchFiltersSchema,
   mergePullRequestBodySchema,
@@ -149,6 +151,8 @@ import {
   createGithubPullRequestComment,
   createGithubPullRequestCommentReply,
   createGithubPullRequestReview,
+  createGithubRepositoryForOrg,
+  createGithubRepositoryForUser,
   deleteGithubIssueComment,
   deleteGithubPullRequestComment,
   fetchGithubCommitConditionally,
@@ -178,6 +182,7 @@ import {
   fetchGithubRepositoryOverview,
   fetchGithubRepositoryReadmeConditionally,
   fetchGithubRepositoryTreesConditionally,
+  fetchGithubUserOrganizations,
   fetchGithubUserRepositories,
   markGithubNotificationDone,
   markGithubNotificationRead,
@@ -3979,6 +3984,111 @@ export const githubRoutes = githubRouter
         includeComments: true,
       }))
       return ctx.json({ success: true }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/user/orgs', async (ctx) => {
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const data = await fetchGithubUserOrganizations({ token: githubToken })
+      const organizations = data.map(org => ({
+        login: org.login,
+        avatarUrl: org.avatar_url,
+        description: org.description,
+      }))
+      return ctx.json({ organizations }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/repos', async (ctx) => {
+    const payload = await ctx.req.json().catch(() => null)
+    const parsedBody = createRepositoryBodySchema.safeParse(payload)
+
+    if (!parsedBody.success) {
+      const message = parsedBody.error.issues[0]?.message || 'Invalid repository payload'
+      return ctx.json({ error: message }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+    const { name, description, private: isPrivate } = parsedBody.data
+
+    try {
+      const data = await createGithubRepositoryForUser({
+        token: githubToken,
+        params: {
+          name,
+          ...(description ? { description } : {}),
+          private: isPrivate,
+          auto_init: true,
+        },
+      })
+      await invalidateGithubCacheTags([getGithubUserRepositoriesTag(user.id)])
+      return ctx.json({
+        repository: {
+          owner: data.owner.login,
+          repo: data.name,
+          full_name: data.full_name,
+          description: data.description,
+          private: data.private,
+          html_url: data.html_url,
+        },
+      }, 201)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/orgs/:org/repos', async (ctx) => {
+    const { org } = ctx.req.param()
+    const payload = await ctx.req.json().catch(() => null)
+    const parsedBody = createRepositoryBodySchema.safeParse(payload)
+
+    if (!parsedBody.success) {
+      const message = parsedBody.error.issues[0]?.message || 'Invalid repository payload'
+      return ctx.json({ error: message }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+    const { name, description, private: isPrivate } = parsedBody.data
+
+    try {
+      const data = await createGithubRepositoryForOrg({
+        token: githubToken,
+        params: {
+          org,
+          name,
+          ...(description ? { description } : {}),
+          private: isPrivate,
+          auto_init: true,
+        },
+      })
+      await invalidateGithubCacheTags([getGithubUserRepositoriesTag(user.id)])
+      return ctx.json({
+        repository: {
+          owner: data.owner.login,
+          repo: data.name,
+          full_name: data.full_name,
+          description: data.description,
+          private: data.private,
+          html_url: data.html_url,
+        },
+      }, 201)
     }
     catch (error) {
       const status = (error as { status?: number }).status

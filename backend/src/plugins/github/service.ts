@@ -16,6 +16,8 @@ import type {
   CompareParams,
   CreateIssueCommentParams,
   CreateIssueCommentResponse,
+  CreateOrgRepositoryParams,
+  CreateOrgRepositoryResponse,
   CreatePullRequestCommentParams,
   CreatePullRequestCommentReplyParams,
   CreatePullRequestCommentReplyResponse,
@@ -24,6 +26,8 @@ import type {
   CreatePullRequestResponse,
   CreatePullRequestReviewParams,
   CreatePullRequestReviewResponse,
+  CreateUserRepositoryParams,
+  CreateUserRepositoryResponse,
   DeleteIssueCommentParams,
   DeletePullRequestCommentParams,
   GithubGraphqlAddReactionResponse,
@@ -90,6 +94,7 @@ import type {
   UpdatePullRequestCommentResponse,
   UpdatePullRequestParams,
   UpdatePullRequestResponse,
+  UserOrganizationResponse,
   UserRepositoriesParams,
   UserRepositoryResponse,
   WorkflowRunJobsParams,
@@ -2009,6 +2014,35 @@ export async function fetchGithubUserRepositories(
   { token: string, params: UserRepositoriesParams },
 ): Promise<UserRepositoryResponse[]> {
   return requestGithubData('GET /user/repos', {
+    token,
+    params,
+  })
+}
+
+export async function fetchGithubUserOrganizations(
+  { token }: { token: string },
+): Promise<UserOrganizationResponse[]> {
+  return requestGithubData('GET /user/orgs', {
+    token,
+    params: { per_page: 100 },
+  })
+}
+
+export async function createGithubRepositoryForUser(
+  { token, params }:
+  { token: string, params: CreateUserRepositoryParams },
+): Promise<CreateUserRepositoryResponse> {
+  return requestGithubData('POST /user/repos', {
+    token,
+    params,
+  })
+}
+
+export async function createGithubRepositoryForOrg(
+  { token, params }:
+  { token: string, params: CreateOrgRepositoryParams },
+): Promise<CreateOrgRepositoryResponse> {
+  return requestGithubData('POST /orgs/{org}/repos', {
     token,
     params,
   })

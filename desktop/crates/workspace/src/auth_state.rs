@@ -92,6 +92,13 @@ impl AuthState {
   pub fn should_show_billing_entry(&self) -> bool {
     matches!(self, AuthState::Authenticated(user) if user.should_show_billing_entry())
   }
+
+  pub fn github_login(&self) -> Option<String> {
+    match self {
+      AuthState::Authenticated(user) => user.github_login.clone(),
+      _ => None,
+    }
+  }
 }
 
 #[cfg(test)]

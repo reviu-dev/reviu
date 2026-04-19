@@ -83,7 +83,7 @@ export function getGithubNotificationsTag(userId: string) {
   return `viewer:${userId}:notifications`
 }
 
-function getGithubUserRepositoriesTag(userId: string) {
+export function getGithubUserRepositoriesTag(userId: string) {
   return `viewer:${userId}:repos-me`
 }
 

@@ -46,6 +46,10 @@ export type WorkflowRunJobsParams
 export type BranchRulesParams
   = Endpoints['GET /repos/{owner}/{repo}/rules/branches/{branch}']['parameters']
 export type UserRepositoriesParams = Endpoints['GET /user/repos']['parameters']
+export type CreateUserRepositoryParams
+  = Endpoints['POST /user/repos']['parameters']
+export type CreateOrgRepositoryParams
+  = Endpoints['POST /orgs/{org}/repos']['parameters']
 export type NotificationsParams = Endpoints['GET /notifications']['parameters']
 export type GetContentParams
   = Endpoints['GET /repos/{owner}/{repo}/contents/{path}']['parameters']
@@ -108,6 +112,9 @@ export type WorkflowRunJobsResponse
 export type BranchRulesResponse
   = Endpoints['GET /repos/{owner}/{repo}/rules/branches/{branch}']['response']['data']
 export type UserRepositoryResponse = Endpoints['GET /user/repos']['response']['data'][number]
+export type UserOrganizationResponse = Endpoints['GET /user/orgs']['response']['data'][number]
+export type CreateUserRepositoryResponse = Endpoints['POST /user/repos']['response']['data']
+export type CreateOrgRepositoryResponse = Endpoints['POST /orgs/{org}/repos']['response']['data']
 export type RepositoryLabelResponse
   = Endpoints['GET /repos/{owner}/{repo}/labels']['response']['data'][number]
 export type RepositoryAssigneeResponse

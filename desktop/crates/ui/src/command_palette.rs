@@ -180,6 +180,7 @@ pub enum CommandPaletteAction {
   ApplyStash(CommandPaletteStash),
   DropStash(CommandPaletteStash),
   PopStash(CommandPaletteStash),
+  CreateGithubRepository,
   OpenRepository,
   OpenGitPage,
   OpenGithubPage,
@@ -679,6 +680,7 @@ pub enum CommandPaletteCommandId {
   ApplyStash,
   DropStash,
   PopStash,
+  CreateGithubRepository,
   OpenRepository,
   OpenGitPage,
   OpenGithubPage,
@@ -1008,6 +1010,14 @@ impl CommandPaletteCommand {
     }
   }
 
+  pub fn create_github_repository() -> Self {
+    Self {
+      id: CommandPaletteCommandId::CreateGithubRepository,
+      name: "Create GitHub repository".into(),
+      description: Some("Create a new repository under your account or an organization".into()),
+    }
+  }
+
   pub fn open_git_page() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenGitPage,
@@ -1120,6 +1130,7 @@ impl CommandPaletteCommand {
 
     if include_github {
       commands.push(Self::open_github_from_url());
+      commands.push(Self::create_github_repository());
     }
 
     if current_page != CommandPalettePage::GitConfig {
@@ -1185,6 +1196,7 @@ impl CommandPaletteCommand {
       }
       CommandPaletteCommandId::DropStash => Icon::new(IconName::Delete),
       CommandPaletteCommandId::DeleteBranch => Icon::new(IconName::Delete),
+      CommandPaletteCommandId::CreateGithubRepository => Icon::new(IconName::Plus),
       CommandPaletteCommandId::OpenRepository => Icon::new(IconName::FolderOpen),
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
@@ -2161,6 +2173,9 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::OpenGithubPage => {
         self.trigger_action(CommandPaletteAction::OpenGithubPage, window, cx);
+      }
+      CommandPaletteCommandId::CreateGithubRepository => {
+        self.trigger_action(CommandPaletteAction::CreateGithubRepository, window, cx);
       }
       CommandPaletteCommandId::OpenGithubFromUrl => {
         let query = self.commands_list.read(cx).delegate().query.to_string();

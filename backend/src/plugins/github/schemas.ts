@@ -54,6 +54,21 @@ export const createPullRequestBodySchema = z.object({
   draft: z.boolean().optional(),
 })
 
+export const createRepositoryBodySchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, 'Missing repository name')
+    .max(100, 'Repository name must be at most 100 characters')
+    .regex(/^[\w.-]+$/, 'Repository name may only contain letters, numbers, dots, hyphens and underscores'),
+  description: z
+    .string()
+    .trim()
+    .max(350, 'Description must be at most 350 characters')
+    .optional(),
+  private: z.boolean(),
+})
+
 export const mergePullRequestBodySchema = z.object({
   method: z.enum(['merge', 'squash', 'rebase']),
   expectedHeadSha: z.string().trim().min(1, 'Missing expected head sha'),
