@@ -7029,6 +7029,77 @@ impl GithubRepoPage {
       )
   }
 
+  fn render_code_files_sidebar_skeleton(theme: &gpui_component::Theme) -> AnyElement {
+    v_flex()
+      .flex_1()
+      .p_2()
+      .gap_1()
+      .children((0..14).map(|ix| {
+        let width = match ix % 5 {
+          0 => 180.0,
+          1 => 140.0,
+          2 => 220.0,
+          3 => 110.0,
+          _ => 165.0,
+        };
+        let indent = if ix % 3 == 0 { 0.0 } else { 16.0 };
+
+        h_flex()
+          .h(px(28.0))
+          .items_center()
+          .gap_2()
+          .pl(px(8.0 + indent))
+          .pr_2()
+          .child(Skeleton::new().size(px(14.0)).rounded(theme.radius))
+          .child(
+            Skeleton::new()
+              .w(px(width))
+              .h(px(12.0))
+              .rounded(theme.radius),
+          )
+      }))
+      .into_any_element()
+  }
+
+  fn render_code_editor_skeleton(theme: &gpui_component::Theme) -> AnyElement {
+    v_flex()
+      .flex_1()
+      .min_h_0()
+      .p_4()
+      .gap_2()
+      .children((0..24).map(|ix| {
+        let width = match ix % 7 {
+          0 => 320.0,
+          1 => 540.0,
+          2 => 220.0,
+          3 => 610.0,
+          4 => 380.0,
+          5 => 460.0,
+          _ => 280.0,
+        };
+
+        h_flex()
+          .h(px(20.0))
+          .items_center()
+          .gap_3()
+          .child(
+            Skeleton::new()
+              .w(px(28.0))
+              .h(px(12.0))
+              .rounded(theme.radius)
+              .secondary(),
+          )
+          .child(
+            Skeleton::new()
+              .w_full()
+              .max_w(px(width))
+              .h(px(12.0))
+              .rounded(theme.radius),
+          )
+      }))
+      .into_any_element()
+  }
+
   fn render_code_files_sidebar(
     &mut self,
     window: &mut Window,
@@ -7099,20 +7170,7 @@ impl GithubRepoPage {
       );
 
     let list = if self.code_files_loading {
-      v_flex()
-        .flex_1()
-        .h_full()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .child(Spinner::new().small())
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading files..."),
-        )
-        .into_any_element()
+      Self::render_code_files_sidebar_skeleton(&theme)
     } else if self.code_files_error.is_some() {
       v_flex()
         .flex_1()
@@ -7320,34 +7378,8 @@ impl GithubRepoPage {
     let is_svg = self.selected_code_file_is_svg();
     let preview_active = self.show_markdown_preview && (is_markdown || is_svg);
 
-    let editor_content: gpui::AnyElement = if self.code_files_loading {
-      v_flex()
-        .flex_1()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .child(Spinner::new().small())
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading files..."),
-        )
-        .into_any_element()
-    } else if self.code_file_loading {
-      v_flex()
-        .flex_1()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .child(Spinner::new().small())
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading file contents..."),
-        )
-        .into_any_element()
+    let editor_content: gpui::AnyElement = if self.code_files_loading || self.code_file_loading {
+      Self::render_code_editor_skeleton(&theme)
     } else if self.code_file_error.is_some() {
       v_flex()
         .flex_1()
