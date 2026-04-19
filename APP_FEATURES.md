@@ -19,10 +19,10 @@ Core product shape:
 
 ## Current product truth
 
-- Public platform messaging that is safe today: `macOS (Apple Silicon and Intel)`.
+- Public platform messaging that is safe today: `macOS (Apple Silicon and Intel)`, `Windows (ARM64 and x64)`, and `Linux` (install script).
 - Local Git features do not require an account.
 - GitHub features require `Sign in with GitHub` and `Reviu Pro`.
-- Current pricing shown in the app and landing: `$19/month`.
+- Current pricing shown in the app and landing: `$9/month` or `$79/year`.
 - Current landing and terms also message a `14-day free trial`.
 
 If pricing changes, update desktop billing, landing copy, structured data, and terms together.
@@ -113,7 +113,7 @@ Accurate themes already present on the landing:
 - Reviu is a desktop Git client.
 - The local Git workflow is keyboard-first.
 - Reviu Pro is the GitHub layer.
-- Platform messaging stays on `macOS with Apple Silicon and Intel`.
+- Platform messaging covers `macOS (Apple Silicon and Intel)`, `Windows (ARM64 and x64)`, and `Linux` (install script).
 
 What the current landing underrepresents:
 
@@ -135,7 +135,6 @@ Good claims:
 
 Avoid these unless they are explicitly shipped and verified:
 
-- `Windows` or `Linux` support.
 - Browser extension claims.
 - Team workflows or enterprise features that do not exist yet.
 - Pricing that does not match app billing and landing copy.
