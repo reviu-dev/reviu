@@ -12,9 +12,9 @@ use gfm_markdown_viewer::{
   MarkdownRenderState, extract_github_blob_line_references, render_markdown,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Image, ObjectFit,
-  ParentElement, Pixels, Render, RenderImage, SharedString, Styled, Subscription, Task, Window,
-  div, img, prelude::*, px, size,
+  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Image,
+  ObjectFit, ParentElement, Pixels, Render, RenderImage, SharedString, Styled, Subscription, Task,
+  Window, div, img, prelude::*, px, size,
 };
 #[cfg(test)]
 use gpui_component::IndexPath;
@@ -27,6 +27,7 @@ use gpui_component::{
   input::InputEvent,
   label::Label,
   list::ListItem,
+  menu::{DropdownMenu as _, PopupMenuItem},
   pagination::Pagination,
   scroll::ScrollableElement,
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
@@ -6519,6 +6520,22 @@ impl GithubRepoPage {
         ),
       );
 
+    let github_url = format!("https://github.com/{}/{}", self.owner, self.repo);
+    let actions_menu = Button::new("repo-actions-menu")
+      .icon(UiIconName::EllipsisVertical)
+      .ghost()
+      .compact()
+      .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+        let url = github_url.clone();
+        menu.item(
+          PopupMenuItem::new("View on GitHub")
+            .icon(Icon::new(IconName::ExternalLink))
+            .on_click(move |_, _, cx| {
+              cx.open_url(&url);
+            }),
+        )
+      });
+
     div()
       .px_3()
       .py_2()
@@ -6529,21 +6546,26 @@ impl GithubRepoPage {
       .border_b_1()
       .border_color(theme.title_bar_border)
       .child(
-        div().flex().items_center().justify_between().child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child(
-              Button::new("repo-back")
-                .icon(IconName::ArrowLeft)
-                .ghost()
-                .compact()
-                .on_click(|_, _, cx| {
-                  NavigationHistory::navigate_back(cx);
-                }),
-            )
-            .child(div().text_sm().font_medium().child(repo_label)),
-        ),
+        div()
+          .flex()
+          .items_center()
+          .justify_between()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child(
+                Button::new("repo-back")
+                  .icon(IconName::ArrowLeft)
+                  .ghost()
+                  .compact()
+                  .on_click(|_, _, cx| {
+                    NavigationHistory::navigate_back(cx);
+                  }),
+              )
+              .child(div().text_sm().font_medium().child(repo_label)),
+          )
+          .child(actions_menu),
       )
       .child(tab_bar)
   }
