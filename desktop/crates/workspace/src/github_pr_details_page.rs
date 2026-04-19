@@ -5297,6 +5297,18 @@ impl GithubPrDetailsPage {
     self.overview_reply_submitting = false;
   }
 
+  fn reset_overview_comment_inputs(&mut self, window: &mut Window, cx: &mut App) {
+    self
+      .overview_issue_comment_input
+      .update(cx, |input, cx| input.set_value("", window, cx));
+    if let Some(input) = self.overview_edit_input.as_ref() {
+      input.update(cx, |input, cx| input.set_value("", window, cx));
+    }
+    if let Some(input) = self.overview_reply_input.as_ref() {
+      input.update(cx, |input, cx| input.set_value("", window, cx));
+    }
+  }
+
   fn start_overview_comment_edit(
     &mut self,
     target: OverviewCommentTarget,
@@ -8486,6 +8498,7 @@ impl GithubPrDetailsPage {
       self
         .label_input
         .update(cx, |input, cx| input.set_value("", window, cx));
+      self.reset_overview_comment_inputs(window, cx);
     });
 
     let details_api = self.api.clone();
