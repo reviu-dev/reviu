@@ -26,8 +26,8 @@ use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, FILE_ICON_SIZE_PX, SelectableRowStyle,
-  StatusThemeExt as _, WindowExt, file_icon_path_for_name_with_theme, h_resizable, resizable_panel,
-  selectable_list_item,
+  StatusThemeExt as _, UiIconName, WindowExt, file_icon_path_for_name_with_theme, h_resizable,
+  resizable_panel, selectable_list_item,
 };
 
 use crate::{
@@ -797,21 +797,56 @@ impl GithubCommitDetailsPage {
                   .truncate(),
               ),
           )
-          .when_some(
-            self.commit.as_ref().map(|commit| commit.html_url.clone()),
-            |this, url| {
-              this.child(
-                Button::new("github-commit-open-external")
-                  .icon(IconName::ExternalLink)
-                  .label("Open on GitHub")
-                  .ghost()
-                  .compact()
-                  .small()
-                  .on_click(move |_, _, cx| {
-                    cx.open_url(&url);
-                  }),
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .when_some(
+                self
+                  .commit
+                  .as_ref()
+                  .and_then(|commit| commit.associated_pull_request.clone()),
+                |this, pull| {
+                  let owner = self.owner.to_string();
+                  let repo = self.repo.to_string();
+                  let label = format!("PR #{}", pull.number);
+                  this.child(
+                    Button::new("github-commit-open-pr")
+                      .icon(UiIconName::GitPullRequest)
+                      .label(label)
+                      .ghost()
+                      .compact()
+                      .small()
+                      .on_click(move |_, _, cx| {
+                        open_pr_target(
+                          owner.clone(),
+                          repo.clone(),
+                          pull.number,
+                          false,
+                          None,
+                          None,
+                          cx,
+                        );
+                      }),
+                  )
+                },
               )
-            },
+              .when_some(
+                self.commit.as_ref().map(|commit| commit.html_url.clone()),
+                |this, url| {
+                  this.child(
+                    Button::new("github-commit-open-external")
+                      .icon(IconName::ExternalLink)
+                      .label("Open on GitHub")
+                      .ghost()
+                      .compact()
+                      .small()
+                      .on_click(move |_, _, cx| {
+                        cx.open_url(&url);
+                      }),
+                  )
+                },
+              ),
           ),
       )
       .child(summary)
