@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 Find any repository on GitHub directly from the command palette. Trigger "Search GitHub repository", start typing, and Reviu shows matching repositories live with names, descriptions, and star counts. Press Enter to open the selected repository in Reviu.
 
+### Grouped Command Palette
+
+Command palette entries are now grouped by purpose, Changes, Sync, Branches, Stash, Pull request, Repository, GitHub, Navigation, and more, with section headers that make it easier to scan and find the right command.
+
 ## 0.5.0
 
 ### Commit Details in Reviu

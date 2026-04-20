@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 
 use crate::github_url::parse_github_url_action;
 use crate::{SelectableRowStyle, UiIconName, file_icon_path_for_name, selectable_list_item};
@@ -18,6 +18,7 @@ use gpui_component::{
 
 const LIST_INPUT_HEIGHT: f32 = 35.0;
 const LIST_ITEM_HEIGHT: f32 = 32.0; // Height of each list item in pixels (h_8)
+const SECTION_HEADER_HEIGHT: f32 = 28.0;
 pub const COMMAND_PALETTE_CONTEXT: &str = "CommandPalette";
 
 fn list_base_item(
@@ -559,31 +560,65 @@ impl ListDelegate for BranchesListWithCommandsDelegate {
 
 struct CommandListDelegate {
   _commands: Vec<Rc<CommandPaletteCommand>>,
-  matched_commands: Vec<Rc<CommandPaletteCommand>>,
+  matched_sections: Vec<(CommandPaletteGroup, Vec<Rc<CommandPaletteCommand>>)>,
   selected_index: Option<IndexPath>,
   query: SharedString,
+}
+
+fn bucketize_commands(
+  commands: &[Rc<CommandPaletteCommand>],
+) -> Vec<(CommandPaletteGroup, Vec<Rc<CommandPaletteCommand>>)> {
+  let mut buckets: BTreeMap<CommandPaletteGroup, Vec<Rc<CommandPaletteCommand>>> = BTreeMap::new();
+  for command in commands {
+    buckets
+      .entry(command.group())
+      .or_default()
+      .push(command.clone());
+  }
+  buckets.into_iter().collect()
 }
 
 impl CommandListDelegate {
   fn prepare(&mut self, query: impl Into<SharedString>) {
     self.query = query.into();
-
-    let commands: Vec<Rc<CommandPaletteCommand>> = self
+    let filtered: Vec<Rc<CommandPaletteCommand>> = self
       ._commands
       .iter()
-      .filter(|command| command.matches(&self.query))
+      .filter(|c| c.matches(&self.query))
       .cloned()
       .collect();
+    self.matched_sections = bucketize_commands(&filtered);
+  }
 
-    self.matched_commands = commands;
+  fn matched_total_count(&self) -> usize {
+    self.matched_sections.iter().map(|(_, v)| v.len()).sum()
+  }
+
+  fn visible_sections_count(&self) -> usize {
+    self.matched_sections.len()
+  }
+
+  fn item_at(&self, ix: IndexPath) -> Option<Rc<CommandPaletteCommand>> {
+    self
+      .matched_sections
+      .get(ix.section)
+      .and_then(|(_, items)| items.get(ix.row).cloned())
   }
 }
 
 impl ListDelegate for CommandListDelegate {
   type Item = ListItem;
 
-  fn items_count(&self, _section: usize, _cx: &App) -> usize {
-    self.matched_commands.len()
+  fn sections_count(&self, _cx: &App) -> usize {
+    self.matched_sections.len()
+  }
+
+  fn items_count(&self, section: usize, _cx: &App) -> usize {
+    self
+      .matched_sections
+      .get(section)
+      .map(|(_, items)| items.len())
+      .unwrap_or(0)
   }
 
   fn render_item(
@@ -592,11 +627,15 @@ impl ListDelegate for CommandListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let total_items = self.matched_commands.len();
+    let total_in_section = self
+      .matched_sections
+      .get(ix.section)
+      .map(|(_, items)| items.len())
+      .unwrap_or(0);
     let theme = cx.theme().clone();
 
-    self.matched_commands.get(ix.row).map(|command| {
-      list_base_item(ix, total_items, self.selected_index, &theme)
+    self.item_at(ix).map(|command| {
+      list_base_item(ix, total_in_section, self.selected_index, &theme)
         .child(
           h_flex()
             .items_center()
@@ -611,6 +650,27 @@ impl ListDelegate for CommandListDelegate {
             .icon(IconName::ArrowRight)
         })
     })
+  }
+
+  fn render_section_header(
+    &mut self,
+    section: usize,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<impl IntoElement> {
+    if self.matched_sections.len() <= 1 {
+      return None;
+    }
+    let (group, _) = self.matched_sections.get(section)?;
+    Some(
+      h_flex()
+        .px_3()
+        .pt_2()
+        .pb_1()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(group.label()),
+    )
   }
 
   fn set_selected_index(
@@ -696,6 +756,37 @@ pub enum CommandPaletteCommandId {
   OpenBillingPage,
   OpenAboutPage,
   SendFeedback,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum CommandPaletteGroup {
+  Changes,
+  Sync,
+  Branches,
+  RebaseMergeProgress,
+  Stash,
+  PullRequest,
+  Repository,
+  Github,
+  Navigation,
+  Feedback,
+}
+
+impl CommandPaletteGroup {
+  pub fn label(&self) -> &'static str {
+    match self {
+      Self::Changes => "Changes",
+      Self::Sync => "Sync",
+      Self::Branches => "Branches",
+      Self::RebaseMergeProgress => "In progress",
+      Self::Stash => "Stash",
+      Self::PullRequest => "Pull request",
+      Self::Repository => "Repository",
+      Self::Github => "GitHub",
+      Self::Navigation => "Navigation",
+      Self::Feedback => "Feedback",
+    }
+  }
 }
 
 impl CommandPaletteCommand {
@@ -1170,6 +1261,72 @@ impl CommandPaletteCommand {
     commands
   }
 
+  pub fn group(&self) -> CommandPaletteGroup {
+    match self.id {
+      CommandPaletteCommandId::Commit
+      | CommandPaletteCommandId::Amend
+      | CommandPaletteCommandId::UndoLastCommit
+      | CommandPaletteCommandId::StageSelectedFile
+      | CommandPaletteCommandId::UnstageSelectedFile
+      | CommandPaletteCommandId::StageAll
+      | CommandPaletteCommandId::UnstageAll
+      | CommandPaletteCommandId::AcceptAllCurrentConflicts
+      | CommandPaletteCommandId::AcceptAllIncomingConflicts
+      | CommandPaletteCommandId::CherryPick
+      | CommandPaletteCommandId::CheckoutDetached => CommandPaletteGroup::Changes,
+
+      CommandPaletteCommandId::Pull
+      | CommandPaletteCommandId::Fetch
+      | CommandPaletteCommandId::Push
+      | CommandPaletteCommandId::ForcePush => CommandPaletteGroup::Sync,
+
+      CommandPaletteCommandId::SwitchBranch
+      | CommandPaletteCommandId::CreateBranch
+      | CommandPaletteCommandId::CreateBranchFrom
+      | CommandPaletteCommandId::DeleteBranch
+      | CommandPaletteCommandId::MergeBranch
+      | CommandPaletteCommandId::RebaseBranch
+      | CommandPaletteCommandId::InteractiveRebase
+      | CommandPaletteCommandId::InteractiveRebaseOntoBranch
+      | CommandPaletteCommandId::InteractiveRebaseEditBranch
+      | CommandPaletteCommandId::InteractiveRebaseHeadCount => CommandPaletteGroup::Branches,
+
+      CommandPaletteCommandId::ContinueRebase
+      | CommandPaletteCommandId::SkipRebase
+      | CommandPaletteCommandId::AbortRebase
+      | CommandPaletteCommandId::AbortMerge => CommandPaletteGroup::RebaseMergeProgress,
+
+      CommandPaletteCommandId::Stash
+      | CommandPaletteCommandId::StashIncludeUntracked
+      | CommandPaletteCommandId::ApplyStash
+      | CommandPaletteCommandId::DropStash
+      | CommandPaletteCommandId::PopStash => CommandPaletteGroup::Stash,
+
+      CommandPaletteCommandId::CreatePullRequest
+      | CommandPaletteCommandId::SwitchToPrBranch
+      | CommandPaletteCommandId::ToggleUnchangedFiles => CommandPaletteGroup::PullRequest,
+
+      CommandPaletteCommandId::SwitchRepository | CommandPaletteCommandId::OpenRepository => {
+        CommandPaletteGroup::Repository
+      }
+
+      CommandPaletteCommandId::SearchGithubRepository
+      | CommandPaletteCommandId::CreateGithubRepository
+      | CommandPaletteCommandId::OpenGithubFromUrl
+      | CommandPaletteCommandId::OpenGithubPage => CommandPaletteGroup::Github,
+
+      CommandPaletteCommandId::OpenGitPage
+      | CommandPaletteCommandId::OpenGitConfigPage
+      | CommandPaletteCommandId::OpenSettingsPage
+      | CommandPaletteCommandId::OpenBillingPage
+      | CommandPaletteCommandId::OpenAboutPage
+      | CommandPaletteCommandId::OpenGitHistorySidebar
+      | CommandPaletteCommandId::OpenGitChangesSidebar => CommandPaletteGroup::Navigation,
+
+      CommandPaletteCommandId::SendFeedback => CommandPaletteGroup::Feedback,
+    }
+  }
+
   fn icon(&self) -> Icon {
     match self.id {
       CommandPaletteCommandId::SwitchRepository => Icon::new(IconName::FolderOpen),
@@ -1504,8 +1661,8 @@ impl CommandPalette {
       .collect();
 
     let commands_list_delegate = CommandListDelegate {
+      matched_sections: bucketize_commands(&default_commands),
       _commands: default_commands.clone(),
-      matched_commands: default_commands.clone(),
       selected_index: None,
       query: "".into(),
     };
@@ -1523,8 +1680,8 @@ impl CommandPalette {
       .map(Rc::new)
       .collect::<Vec<_>>();
     let interactive_rebase_mode_list_delegate = CommandListDelegate {
+      matched_sections: bucketize_commands(&interactive_rebase_mode_commands),
       _commands: interactive_rebase_mode_commands.clone(),
-      matched_commands: interactive_rebase_mode_commands.clone(),
       selected_index: None,
       query: "".into(),
     };
@@ -1537,7 +1694,7 @@ impl CommandPalette {
         window,
         |command_palette, list_state, ev: &ListEvent, window, cx| {
           if let ListEvent::Confirm(ix) = ev
-            && let Some(command) = list_state.read(cx).delegate().matched_commands.get(ix.row)
+            && let Some(command) = list_state.read(cx).delegate().item_at(*ix)
           {
             command_palette.select_command(command.id, cx, window);
           }
@@ -1548,7 +1705,7 @@ impl CommandPalette {
         window,
         |command_palette, list_state, ev: &ListEvent, window, cx| {
           if let ListEvent::Confirm(ix) = ev
-            && let Some(command) = list_state.read(cx).delegate().matched_commands.get(ix.row)
+            && let Some(command) = list_state.read(cx).delegate().item_at(*ix)
           {
             command_palette.select_command(command.id, cx, window);
           }
@@ -2259,9 +2416,23 @@ impl CommandPalette {
     placeholder: &'static str,
     cx: &Context<Self>,
   ) -> impl IntoElement {
+    self.render_search_list_with_sections(list, count, 0, placeholder, cx)
+  }
+
+  fn render_search_list_with_sections<D: ListDelegate>(
+    &self,
+    list: &Entity<ListState<D>>,
+    item_count: usize,
+    visible_headers: usize,
+    placeholder: &'static str,
+    cx: &Context<Self>,
+  ) -> impl IntoElement {
+    let height_px = LIST_ITEM_HEIGHT * item_count as f32
+      + SECTION_HEADER_HEIGHT * visible_headers as f32
+      + LIST_INPUT_HEIGHT;
     List::new(list)
       .w_full()
-      .h(px(LIST_ITEM_HEIGHT * count as f32 + LIST_INPUT_HEIGHT))
+      .h(px(height_px))
       .border_1()
       .search_placeholder(placeholder)
       .border_color(cx.theme().border)
@@ -2271,18 +2442,19 @@ impl CommandPalette {
   fn render_root(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
-    let count_commands = self
-      .commands_list
-      .read(cx)
-      .delegate()
-      .matched_commands
-      .len();
+    let commands_delegate = self.commands_list.read(cx).delegate();
+    let count_commands = commands_delegate.matched_total_count();
+    let visible_headers = {
+      let sections = commands_delegate.visible_sections_count();
+      if sections > 1 { sections } else { 0 }
+    };
 
     v_flex()
       .h_full()
-      .child(self.render_search_list(
+      .child(self.render_search_list_with_sections(
         &self.commands_list,
         count_commands,
+        visible_headers,
         "Search commands...",
         cx,
       ))
@@ -2463,8 +2635,7 @@ impl CommandPalette {
       .interactive_rebase_mode_list
       .read(cx)
       .delegate()
-      .matched_commands
-      .len();
+      .matched_total_count();
 
     v_flex()
       .h_full()
@@ -2707,6 +2878,86 @@ mod tests {
     assert_eq!(command.name.as_ref(), "Search GitHub repository");
     assert!(command.matches("search github"));
     assert!(command.matches("repository on github"));
+  }
+
+  #[test]
+  fn commands_are_bucketed_into_the_expected_groups() {
+    use super::CommandPaletteGroup;
+
+    assert_eq!(
+      CommandPaletteCommand::commit().group(),
+      CommandPaletteGroup::Changes
+    );
+    assert_eq!(
+      CommandPaletteCommand::push("Push").group(),
+      CommandPaletteGroup::Sync
+    );
+    assert_eq!(
+      CommandPaletteCommand::switch_branch().group(),
+      CommandPaletteGroup::Branches
+    );
+    assert_eq!(
+      CommandPaletteCommand::continue_rebase().group(),
+      CommandPaletteGroup::RebaseMergeProgress
+    );
+    assert_eq!(
+      CommandPaletteCommand::stash().group(),
+      CommandPaletteGroup::Stash
+    );
+    assert_eq!(
+      CommandPaletteCommand::create_pull_request().group(),
+      CommandPaletteGroup::PullRequest
+    );
+    assert_eq!(
+      CommandPaletteCommand::switch_repository().group(),
+      CommandPaletteGroup::Repository
+    );
+    assert_eq!(
+      CommandPaletteCommand::search_github_repository().group(),
+      CommandPaletteGroup::Github
+    );
+    assert_eq!(
+      CommandPaletteCommand::open_settings_page().group(),
+      CommandPaletteGroup::Navigation
+    );
+    assert_eq!(
+      CommandPaletteCommand::send_feedback().group(),
+      CommandPaletteGroup::Feedback
+    );
+  }
+
+  #[test]
+  fn command_palette_group_order_is_stable_and_total() {
+    use super::CommandPaletteGroup;
+    // Ord is derived from declaration order — make the contract explicit.
+    let mut groups = [
+      CommandPaletteGroup::Feedback,
+      CommandPaletteGroup::Navigation,
+      CommandPaletteGroup::Github,
+      CommandPaletteGroup::Repository,
+      CommandPaletteGroup::PullRequest,
+      CommandPaletteGroup::Stash,
+      CommandPaletteGroup::RebaseMergeProgress,
+      CommandPaletteGroup::Branches,
+      CommandPaletteGroup::Sync,
+      CommandPaletteGroup::Changes,
+    ];
+    groups.sort();
+    assert_eq!(
+      groups,
+      [
+        CommandPaletteGroup::Changes,
+        CommandPaletteGroup::Sync,
+        CommandPaletteGroup::Branches,
+        CommandPaletteGroup::RebaseMergeProgress,
+        CommandPaletteGroup::Stash,
+        CommandPaletteGroup::PullRequest,
+        CommandPaletteGroup::Repository,
+        CommandPaletteGroup::Github,
+        CommandPaletteGroup::Navigation,
+        CommandPaletteGroup::Feedback,
+      ]
+    );
   }
 
   #[test]
