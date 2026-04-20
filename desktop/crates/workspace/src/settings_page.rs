@@ -21,7 +21,7 @@ use ui::{
 use crate::{
   CloseWorkspacePage, ShowCommandPalette,
   auth_state::AuthStateStore,
-  config::AppSettings as PersistedSettings,
+  config::{AppSettings as PersistedSettings, CloneProtocol},
   github_navigation::{open_commit_target, open_pr_target, open_repo_target},
   github_page::GithubPageHandle,
   navigation::NavigationHistory,
@@ -44,6 +44,7 @@ pub struct SettingsPage {
   git_unified_file_view: bool,
   split_diff_view: bool,
   hide_whitespace: bool,
+  clone_protocol: CloneProtocol,
   shortcut_recording: Option<ShortcutId>,
   shortcut_error: Option<ShortcutCaptureError>,
   size: Size,
@@ -66,6 +67,7 @@ impl SettingsPage {
       git_unified_file_view: settings.git_unified_file_view,
       split_diff_view: settings.split_diff_view,
       hide_whitespace: settings.hide_whitespace,
+      clone_protocol: settings.clone_protocol,
       shortcut_recording: None,
       shortcut_error: None,
       size: Size::default(),
@@ -245,6 +247,33 @@ impl SettingsPage {
           )
           .description(
             "Show all changed files in a single list instead of separate staged/unstaged groups.",
+          ),
+          SettingItem::new(
+            "Clone Protocol",
+            SettingField::dropdown(
+              vec![
+                ("https".into(), "HTTPS".into()),
+                ("ssh".into(), "SSH".into()),
+              ],
+              {
+                let view = view.clone();
+                move |cx: &App| view.read(cx).clone_protocol.as_str().into()
+              },
+              {
+                let view = view.clone();
+                move |val: SharedString, cx: &mut App| {
+                  let protocol = CloneProtocol::from_str(val.as_ref());
+                  view.update(cx, |view, _| {
+                    view.clone_protocol = protocol;
+                  });
+                  PersistedSettings::update(cx, |s| s.clone_protocol = protocol);
+                }
+              },
+            )
+            .default_value(self.clone_protocol.as_str()),
+          )
+          .description(
+            "Protocol used when cloning a GitHub repository. HTTPS uses your credential helper; SSH uses your configured SSH key.",
           ),
         ]),
       ]),

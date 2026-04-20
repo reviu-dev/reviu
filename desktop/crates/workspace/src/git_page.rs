@@ -254,6 +254,22 @@ impl GitPageHandle {
       );
     });
   }
+
+  pub fn show_repository(repo_root: PathBuf, cx: &mut App) {
+    NavigationHistory::navigate("/git", cx);
+
+    let Some(weak) = cx
+      .try_global::<Self>()
+      .and_then(|handle| handle.git_page.clone())
+    else {
+      ConfigStore::persist_recent_repository(&repo_root);
+      return;
+    };
+
+    let _ = weak.update(cx, |this, cx| {
+      this.set_selected_repo(repo_root, cx);
+    });
+  }
 }
 
 struct CreatePullRequestDialog {
