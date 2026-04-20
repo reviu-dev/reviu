@@ -575,15 +575,7 @@ fn handle_open_github_url(url: &str, cx: &mut App) {
       open_changes_tab,
       review_comment_id,
     } => {
-      open_pr_target(
-        owner,
-        repo,
-        number,
-        open_changes_tab,
-        review_comment_id,
-        None,
-        cx,
-      );
+      open_pr_target(owner, repo, number, open_changes_tab, review_comment_id, cx);
     }
     CommandPaletteAction::OpenGithubRepoDetails {
       owner,
@@ -595,7 +587,7 @@ fn handle_open_github_url(url: &str, cx: &mut App) {
       open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
     }
     CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
-      open_commit_target(owner, repo, sha, None, cx);
+      open_commit_target(owner, repo, sha, cx);
     }
     _ => {}
   }

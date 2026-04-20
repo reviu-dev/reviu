@@ -2654,7 +2654,6 @@ pub struct GithubPrDetailsPage {
   svg_preview_task: Option<Task<()>>,
   active_tab_ix: usize,
   current_pr_context: Option<CurrentPrContext>,
-  back_target: GithubPrBackTarget,
   pull_request: Option<GithubPullRequestDetails>,
   error: Option<SharedString>,
 }
@@ -2691,15 +2690,6 @@ enum GithubPrLocalProjectPostAction {
   OpenGitPageMergeBase { base_branch_name: String },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum GithubPrBackTarget {
-  GithubHome,
-  Repo {
-    owner: SharedString,
-    repo: SharedString,
-  },
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GithubPrOpenTarget {
   open_changes_tab: bool,
@@ -2720,14 +2710,6 @@ impl GithubPrOpenTarget {
     } else {
       PR_TAB_OVERVIEW_IX
     }
-  }
-}
-
-fn resolve_pr_back_target(owner: SharedString, repo: SharedString) -> GithubPrBackTarget {
-  if owner.as_ref().trim().is_empty() || repo.as_ref().trim().is_empty() {
-    GithubPrBackTarget::GithubHome
-  } else {
-    GithubPrBackTarget::Repo { owner, repo }
   }
 }
 
@@ -2813,13 +2795,6 @@ fn find_matching_recent_local_repo(
     })
 }
 
-fn next_back_target_for_pr_palette(back_target: &GithubPrBackTarget) -> GithubPrBackTarget {
-  match back_target {
-    GithubPrBackTarget::GithubHome => GithubPrBackTarget::GithubHome,
-    GithubPrBackTarget::Repo { owner, repo } => resolve_pr_back_target(owner.clone(), repo.clone()),
-  }
-}
-
 #[derive(Clone, Default)]
 pub struct GithubPrDetailsPageHandle {
   page: Option<gpui::WeakEntity<GithubPrDetailsPage>>,
@@ -2835,14 +2810,7 @@ impl GithubPrDetailsPageHandle {
   }
 
   pub fn show(owner: SharedString, repo: SharedString, number: u64, cx: &mut App) {
-    Self::show_with_back_target_and_open_target(
-      owner,
-      repo,
-      number,
-      GithubPrBackTarget::GithubHome,
-      GithubPrOpenTarget::default(),
-      cx,
-    );
+    Self::show_with_open_target_inner(owner, repo, number, GithubPrOpenTarget::default(), cx);
   }
 
   pub fn show_with_open_target(
@@ -2853,49 +2821,11 @@ impl GithubPrDetailsPageHandle {
     review_comment_id: Option<u64>,
     cx: &mut App,
   ) {
-    Self::show_with_back_target_and_open_target(
+    Self::show_with_open_target_inner(
       owner,
       repo,
       number,
-      GithubPrBackTarget::GithubHome,
       GithubPrOpenTarget::new(open_changes_tab, review_comment_id),
-      cx,
-    );
-  }
-
-  pub fn show_with_repo_return(
-    owner: SharedString,
-    repo: SharedString,
-    number: u64,
-    return_owner: SharedString,
-    return_repo: SharedString,
-    cx: &mut App,
-  ) {
-    Self::show_with_back_target_and_open_target(
-      owner,
-      repo,
-      number,
-      resolve_pr_back_target(return_owner, return_repo),
-      GithubPrOpenTarget::default(),
-      cx,
-    );
-  }
-
-  pub(crate) fn show_with_repo_return_open_target(
-    owner: SharedString,
-    repo: SharedString,
-    number: u64,
-    return_owner: SharedString,
-    return_repo: SharedString,
-    open_target: GithubPrOpenTarget,
-    cx: &mut App,
-  ) {
-    Self::show_with_back_target_and_open_target(
-      owner,
-      repo,
-      number,
-      resolve_pr_back_target(return_owner, return_repo),
-      open_target,
       cx,
     );
   }
@@ -2932,11 +2862,10 @@ impl GithubPrDetailsPageHandle {
       .unwrap_or(false)
   }
 
-  fn show_with_back_target_and_open_target(
+  fn show_with_open_target_inner(
     owner: SharedString,
     repo: SharedString,
     number: u64,
-    back_target: GithubPrBackTarget,
     open_target: GithubPrOpenTarget,
     cx: &mut App,
   ) {
@@ -2946,12 +2875,9 @@ impl GithubPrDetailsPageHandle {
 
     let owner_string = owner.to_string();
     let repo_string = repo.to_string();
-    let back_target_value = back_target.clone();
-    let open_target_value = open_target;
     let window_handle = weak.read_with(cx, |this, _| this.window_handle).ok();
     let _ = weak.update(cx, |this, cx| {
-      this.back_target = back_target_value.clone();
-      this.load_pull_request(owner_string, repo_string, number, open_target_value, cx);
+      this.load_pull_request(owner_string, repo_string, number, open_target, cx);
     });
 
     if let Some(handle) = window_handle {
@@ -3233,7 +3159,6 @@ impl GithubPrDetailsPage {
       svg_preview_task: None,
       active_tab_ix: 0,
       current_pr_context: None,
-      back_target: GithubPrBackTarget::GithubHome,
       pull_request: None,
       error: None,
     };
@@ -6301,10 +6226,9 @@ impl GithubPrDetailsPage {
           });
         }
 
-        self.back_target = next_back_target_for_pr_palette(&self.back_target);
         self.load_pull_request(
-          owner,
-          repo,
+          owner.clone(),
+          repo.clone(),
           number,
           GithubPrOpenTarget {
             open_changes_tab: review_comment_id.is_some(),
@@ -6312,6 +6236,7 @@ impl GithubPrDetailsPage {
           },
           cx,
         );
+        NavigationHistory::navigate(crate::navigation::build_pr_path(&owner, &repo, number), cx);
         true
       }
       CommandPaletteAction::OpenGithubRepoDetails {
@@ -6325,11 +6250,7 @@ impl GithubPrDetailsPage {
         true
       }
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
-        let return_repo = self
-          .current_pr_context
-          .as_ref()
-          .map(|context| (context.owner.clone(), context.repo.clone()));
-        open_commit_target(owner, repo, sha, return_repo, cx);
+        open_commit_target(owner, repo, sha, cx);
         true
       }
       _ => false,
@@ -13199,7 +13120,6 @@ impl GithubPrDetailsPage {
         open_changes_tab,
         review_comment_id,
       } => {
-        self.back_target = next_back_target_for_pr_palette(&self.back_target);
         self.load_pull_request(
           owner.clone(),
           repo.clone(),
@@ -13224,11 +13144,7 @@ impl GithubPrDetailsPage {
         Ok(())
       }
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
-        let return_repo = self
-          .current_pr_context
-          .as_ref()
-          .map(|context| (context.owner.clone(), context.repo.clone()));
-        open_commit_target(owner, repo, sha, return_repo, cx);
+        open_commit_target(owner, repo, sha, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
@@ -17346,45 +17262,6 @@ mod tests {
         ReviewCommentNavigationDirection::Previous
       ),
       Some(2)
-    );
-  }
-
-  #[test]
-  fn resolve_pr_back_target_defaults_to_github_home_when_repo_is_empty() {
-    let target = resolve_pr_back_target("".into(), "".into());
-    assert_eq!(target, GithubPrBackTarget::GithubHome);
-  }
-
-  #[test]
-  fn resolve_pr_back_target_uses_repo_when_owner_and_repo_are_present() {
-    let target = resolve_pr_back_target("acme".into(), "widget".into());
-    assert_eq!(
-      target,
-      GithubPrBackTarget::Repo {
-        owner: "acme".into(),
-        repo: "widget".into(),
-      }
-    );
-  }
-
-  #[test]
-  fn next_back_target_for_pr_palette_preserves_github_home() {
-    let target = next_back_target_for_pr_palette(&GithubPrBackTarget::GithubHome);
-    assert_eq!(target, GithubPrBackTarget::GithubHome);
-  }
-
-  #[test]
-  fn next_back_target_for_pr_palette_preserves_repo_target() {
-    let target = next_back_target_for_pr_palette(&GithubPrBackTarget::Repo {
-      owner: "acme".into(),
-      repo: "widget".into(),
-    });
-    assert_eq!(
-      target,
-      GithubPrBackTarget::Repo {
-        owner: "acme".into(),
-        repo: "widget".into(),
-      }
     );
   }
 

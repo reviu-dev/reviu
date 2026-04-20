@@ -245,14 +245,6 @@ fn build_commit_tree_item(
   item
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum GithubCommitBackTarget {
-  Repo {
-    owner: SharedString,
-    repo: SharedString,
-  },
-}
-
 #[derive(Clone, Default)]
 pub struct GithubCommitDetailsPageHandle {
   page: Option<gpui::WeakEntity<GithubCommitDetailsPage>>,
@@ -268,42 +260,6 @@ impl GithubCommitDetailsPageHandle {
   }
 
   pub fn show(owner: SharedString, repo: SharedString, sha: SharedString, cx: &mut App) {
-    Self::show_with_back_target(
-      owner.clone(),
-      repo.clone(),
-      sha,
-      GithubCommitBackTarget::Repo { owner, repo },
-      cx,
-    );
-  }
-
-  pub fn show_with_repo_return(
-    owner: SharedString,
-    repo: SharedString,
-    sha: SharedString,
-    return_owner: SharedString,
-    return_repo: SharedString,
-    cx: &mut App,
-  ) {
-    Self::show_with_back_target(
-      owner,
-      repo,
-      sha,
-      GithubCommitBackTarget::Repo {
-        owner: return_owner,
-        repo: return_repo,
-      },
-      cx,
-    );
-  }
-
-  fn show_with_back_target(
-    owner: SharedString,
-    repo: SharedString,
-    sha: SharedString,
-    back_target: GithubCommitBackTarget,
-    cx: &mut App,
-  ) {
     let Some(weak) = cx.global::<Self>().page.clone() else {
       return;
     };
@@ -312,7 +268,7 @@ impl GithubCommitDetailsPageHandle {
     let repo_string = repo.to_string();
     let sha_string = sha.to_string();
     let _ = weak.update(cx, |this, cx| {
-      this.load_commit(owner_string, repo_string, sha_string, back_target, cx);
+      this.load_commit(owner_string, repo_string, sha_string, cx);
     });
 
     NavigationHistory::navigate(
@@ -348,7 +304,6 @@ pub struct GithubCommitDetailsPage {
   owner: SharedString,
   repo: SharedString,
   sha: SharedString,
-  back_target: GithubCommitBackTarget,
   commit: Option<GithubCommitDetails>,
   commit_loading: bool,
   commit_error: Option<SharedString>,
@@ -395,10 +350,6 @@ impl GithubCommitDetailsPage {
       owner: "".into(),
       repo: "".into(),
       sha: "".into(),
-      back_target: GithubCommitBackTarget::Repo {
-        owner: "".into(),
-        repo: "".into(),
-      },
       commit: None,
       commit_loading: false,
       commit_error: None,
@@ -429,7 +380,6 @@ impl GithubCommitDetailsPage {
       self.owner.to_string(),
       self.repo.to_string(),
       self.sha.to_string(),
-      self.back_target.clone(),
       cx,
     );
   }
@@ -448,18 +398,10 @@ impl GithubCommitDetailsPage {
     self.clear_diff_editor(cx);
   }
 
-  fn load_commit(
-    &mut self,
-    owner: String,
-    repo: String,
-    sha: String,
-    back_target: GithubCommitBackTarget,
-    cx: &mut Context<Self>,
-  ) {
+  fn load_commit(&mut self, owner: String, repo: String, sha: String, cx: &mut Context<Self>) {
     self.owner = owner.clone().into();
     self.repo = repo.clone().into();
     self.sha = sha.clone().into();
-    self.back_target = back_target;
     self.commit = None;
     self.commit_loading = true;
     self.commit_error = None;
@@ -761,15 +703,12 @@ impl GithubCommitDetailsPage {
     };
 
     let short_sha = github_shared::short_sha(self.sha.as_ref());
-    let back_target = self.back_target.clone();
     let back_button = Button::new("github-commit-back")
       .icon(IconName::ArrowLeft)
       .ghost()
       .compact()
-      .on_click(move |_, _, cx| match &back_target {
-        GithubCommitBackTarget::Repo { owner, repo } => {
-          crate::github_repo_page::GithubRepoPageHandle::show(owner.clone(), repo.clone(), cx);
-        }
+      .on_click(|_, _, cx| {
+        NavigationHistory::navigate_back(cx);
       });
 
     div()
@@ -818,15 +757,7 @@ impl GithubCommitDetailsPage {
                       .compact()
                       .small()
                       .on_click(move |_, _, cx| {
-                        open_pr_target(
-                          owner.clone(),
-                          repo.clone(),
-                          pull.number,
-                          false,
-                          None,
-                          None,
-                          cx,
-                        );
+                        open_pr_target(owner.clone(), repo.clone(), pull.number, false, None, cx);
                       }),
                   )
                 },
@@ -1453,15 +1384,7 @@ impl GithubCommitDetailsPage {
         open_changes_tab,
         review_comment_id,
       } => {
-        open_pr_target(
-          owner,
-          repo,
-          number,
-          open_changes_tab,
-          review_comment_id,
-          None,
-          cx,
-        );
+        open_pr_target(owner, repo, number, open_changes_tab, review_comment_id, cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubRepoDetails {
@@ -1475,16 +1398,7 @@ impl GithubCommitDetailsPage {
         Ok(())
       }
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
-        self.load_commit(
-          owner.clone(),
-          repo.clone(),
-          sha.clone(),
-          GithubCommitBackTarget::Repo {
-            owner: owner.clone().into(),
-            repo: repo.clone().into(),
-          },
-          cx,
-        );
+        self.load_commit(owner.clone(), repo.clone(), sha.clone(), cx);
         NavigationHistory::navigate(
           crate::navigation::build_commit_path(&owner, &repo, &sha),
           cx,

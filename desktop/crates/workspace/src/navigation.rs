@@ -3,6 +3,8 @@ use gpui_router::use_navigate;
 
 use crate::auth_state::AuthStateStore;
 
+const NAVIGATION_HISTORY_MAX_ENTRIES: usize = 100;
+
 pub struct NavigationHistory {
   stack: Vec<SharedString>,
 }
@@ -12,6 +14,15 @@ impl Global for NavigationHistory {}
 impl NavigationHistory {
   pub fn init(cx: &mut App) {
     cx.set_global(Self { stack: Vec::new() });
+  }
+
+  fn push_entry(&mut self, entry: SharedString) {
+    self.stack.push(entry);
+    let len = self.stack.len();
+    if len > NAVIGATION_HISTORY_MAX_ENTRIES {
+      let excess = len - NAVIGATION_HISTORY_MAX_ENTRIES;
+      self.stack.drain(0..excess);
+    }
   }
 
   /// Navigate to `path`, pushing the current location onto the history stack.
@@ -28,13 +39,13 @@ impl NavigationHistory {
     // GitHub access gating: redirect protected GitHub routes to /github when no access.
     if requires_github_access(&path) && !AuthStateStore::has_github_access(cx) {
       if current != "/github" {
-        cx.global_mut::<Self>().stack.push(current);
+        cx.global_mut::<Self>().push_entry(current);
       }
       Self::set_pathname("/github", cx);
       return;
     }
 
-    cx.global_mut::<Self>().stack.push(current);
+    cx.global_mut::<Self>().push_entry(current);
     Self::set_pathname(&path, cx);
   }
 
@@ -268,6 +279,40 @@ mod tests {
       assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/github");
       assert_eq!(cx.global::<NavigationHistory>().stack.len(), 1);
       assert_eq!(cx.global::<NavigationHistory>().stack[0].as_ref(), "/git");
+    });
+  }
+
+  #[gpui::test]
+  async fn test_navigate_caps_history_at_max_entries(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      init_navigation_test(cx);
+
+      NavigationHistory::navigate_replace("/git", cx);
+      for i in 0..(NAVIGATION_HISTORY_MAX_ENTRIES + 5) {
+        NavigationHistory::navigate(format!("/page-{i}"), cx);
+      }
+
+      assert_eq!(
+        cx.global::<NavigationHistory>().stack.len(),
+        NAVIGATION_HISTORY_MAX_ENTRIES
+      );
+      // Navigated 105 times; kept the last 100 pushed entries (/page-4 .. /page-103).
+      assert_eq!(
+        cx.global::<NavigationHistory>()
+          .stack
+          .first()
+          .unwrap()
+          .as_ref(),
+        "/page-4"
+      );
+      assert_eq!(
+        cx.global::<NavigationHistory>()
+          .stack
+          .last()
+          .unwrap()
+          .as_ref(),
+        "/page-103"
+      );
     });
   }
 

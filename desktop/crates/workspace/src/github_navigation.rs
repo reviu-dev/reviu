@@ -3,8 +3,7 @@ use ui::CommandPaletteGithubRepoTab;
 
 use crate::{
   github_commit_details_page::GithubCommitDetailsPageHandle,
-  github_pr_details_page::{GithubPrDetailsPageHandle, GithubPrOpenTarget},
-  github_repo_page::GithubRepoPageHandle,
+  github_pr_details_page::GithubPrDetailsPageHandle, github_repo_page::GithubRepoPageHandle,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,50 +95,20 @@ pub fn open_pr_target(
   number: u64,
   open_changes_tab: bool,
   review_comment_id: Option<u64>,
-  return_repo: Option<(String, String)>,
   cx: &mut App,
 ) {
-  if let Some((return_owner, return_repo)) = return_repo {
-    GithubPrDetailsPageHandle::show_with_repo_return_open_target(
-      owner.into(),
-      repo.into(),
-      number,
-      return_owner.into(),
-      return_repo.into(),
-      GithubPrOpenTarget::new(open_changes_tab, review_comment_id),
-      cx,
-    );
-  } else {
-    GithubPrDetailsPageHandle::show_with_open_target(
-      owner.into(),
-      repo.into(),
-      number,
-      open_changes_tab,
-      review_comment_id,
-      cx,
-    );
-  }
+  GithubPrDetailsPageHandle::show_with_open_target(
+    owner.into(),
+    repo.into(),
+    number,
+    open_changes_tab,
+    review_comment_id,
+    cx,
+  );
 }
 
-pub fn open_commit_target(
-  owner: String,
-  repo: String,
-  sha: String,
-  return_repo: Option<(String, String)>,
-  cx: &mut App,
-) {
-  if let Some((return_owner, return_repo)) = return_repo {
-    GithubCommitDetailsPageHandle::show_with_repo_return(
-      owner.into(),
-      repo.into(),
-      sha.into(),
-      return_owner.into(),
-      return_repo.into(),
-      cx,
-    );
-  } else {
-    GithubCommitDetailsPageHandle::show(owner.into(), repo.into(), sha.into(), cx);
-  }
+pub fn open_commit_target(owner: String, repo: String, sha: String, cx: &mut App) {
+  GithubCommitDetailsPageHandle::show(owner.into(), repo.into(), sha.into(), cx);
 }
 
 #[cfg(test)]
