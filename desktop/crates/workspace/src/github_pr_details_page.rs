@@ -8941,10 +8941,7 @@ impl GithubPrDetailsPage {
                   .label("Approve")
                   .disabled(is_current_user_pr_author)
                   .when(is_current_user_pr_author, |this| {
-                    this.tooltip({
-                      let tooltip = author_cannot_approve_tooltip.clone();
-                      move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)
-                    })
+                    this.tooltip(author_cannot_approve_tooltip.clone())
                   }),
               )
               .child(
@@ -8952,10 +8949,7 @@ impl GithubPrDetailsPage {
                   .label("Request changes")
                   .disabled(is_current_user_pr_author)
                   .when(is_current_user_pr_author, |this| {
-                    this.tooltip({
-                      let tooltip = author_cannot_request_changes_tooltip.clone();
-                      move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx)
-                    })
+                    this.tooltip(author_cannot_request_changes_tooltip.clone())
                   }),
               ),
           )
