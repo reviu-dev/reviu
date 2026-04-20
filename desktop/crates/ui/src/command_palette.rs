@@ -181,6 +181,7 @@ pub enum CommandPaletteAction {
   DropStash(CommandPaletteStash),
   PopStash(CommandPaletteStash),
   CreateGithubRepository,
+  SearchGithubRepository,
   OpenRepository,
   OpenGitPage,
   OpenGithubPage,
@@ -681,6 +682,7 @@ pub enum CommandPaletteCommandId {
   DropStash,
   PopStash,
   CreateGithubRepository,
+  SearchGithubRepository,
   OpenRepository,
   OpenGitPage,
   OpenGithubPage,
@@ -1018,6 +1020,14 @@ impl CommandPaletteCommand {
     }
   }
 
+  pub fn search_github_repository() -> Self {
+    Self {
+      id: CommandPaletteCommandId::SearchGithubRepository,
+      name: "Search GitHub repository".into(),
+      description: Some("Find a repository on GitHub by name or owner".into()),
+    }
+  }
+
   pub fn open_git_page() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenGitPage,
@@ -1130,6 +1140,7 @@ impl CommandPaletteCommand {
 
     if include_github {
       commands.push(Self::open_github_from_url());
+      commands.push(Self::search_github_repository());
       commands.push(Self::create_github_repository());
     }
 
@@ -1197,6 +1208,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::DropStash => Icon::new(IconName::Delete),
       CommandPaletteCommandId::DeleteBranch => Icon::new(IconName::Delete),
       CommandPaletteCommandId::CreateGithubRepository => Icon::new(IconName::Plus),
+      CommandPaletteCommandId::SearchGithubRepository => Icon::new(IconName::Search),
       CommandPaletteCommandId::OpenRepository => Icon::new(IconName::FolderOpen),
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
@@ -2177,6 +2189,9 @@ impl CommandPalette {
       CommandPaletteCommandId::CreateGithubRepository => {
         self.trigger_action(CommandPaletteAction::CreateGithubRepository, window, cx);
       }
+      CommandPaletteCommandId::SearchGithubRepository => {
+        self.trigger_action(CommandPaletteAction::SearchGithubRepository, window, cx);
+      }
       CommandPaletteCommandId::OpenGithubFromUrl => {
         let query = self.commands_list.read(cx).delegate().query.to_string();
         if let Some(action) = parse_github_url_action(&query) {
@@ -2683,6 +2698,41 @@ mod tests {
     assert_eq!(command.id, CommandPaletteCommandId::SwitchRepository);
     assert_eq!(command.name.as_ref(), "Switch repository");
     assert!(command.matches("recent repository"));
+  }
+
+  #[test]
+  fn search_github_repository_command_is_available_with_expected_metadata() {
+    let command = CommandPaletteCommand::search_github_repository();
+    assert_eq!(command.id, CommandPaletteCommandId::SearchGithubRepository);
+    assert_eq!(command.name.as_ref(), "Search GitHub repository");
+    assert!(command.matches("search github"));
+    assert!(command.matches("repository on github"));
+  }
+
+  #[test]
+  fn default_global_commands_include_search_github_repository_when_github_is_enabled() {
+    let commands = CommandPaletteCommand::default_global_commands(
+      super::CommandPalettePage::Git,
+      /* include_github */ true,
+    );
+    assert!(
+      commands
+        .iter()
+        .any(|c| c.id == CommandPaletteCommandId::SearchGithubRepository)
+    );
+  }
+
+  #[test]
+  fn default_global_commands_omit_search_github_repository_when_github_is_disabled() {
+    let commands = CommandPaletteCommand::default_global_commands(
+      super::CommandPalettePage::Git,
+      /* include_github */ false,
+    );
+    assert!(
+      !commands
+        .iter()
+        .any(|c| c.id == CommandPaletteCommandId::SearchGithubRepository)
+    );
   }
 
   #[test]

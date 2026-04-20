@@ -54,6 +54,7 @@ pub mod github_navigation;
 mod github_page;
 mod github_pr_details_page;
 mod github_repo_page;
+mod github_search_dialog;
 mod github_shared;
 mod interactive_rebase_todo_view;
 pub mod navigation;

@@ -213,6 +213,19 @@ pub struct GithubUserRepository {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct GithubRepositorySearchItem {
+  pub owner: String,
+  pub name: String,
+  #[serde(rename = "full_name")]
+  pub full_name: String,
+  pub description: Option<String>,
+  pub stars: u64,
+  pub private: bool,
+  #[serde(default, rename = "owner_avatar_url")]
+  pub owner_avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubUserOrganization {
   pub login: String,
@@ -1289,6 +1302,11 @@ struct GithubUserRepositoriesResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct GithubRepositorySearchResponse {
+  repositories: Vec<GithubRepositorySearchItem>,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubUserOrganizationsResponse {
   organizations: Vec<GithubUserOrganization>,
 }
@@ -1783,6 +1801,23 @@ impl ApiClient {
       anyhow::bail!("unexpected status: {}", status);
     }
     let payload = response.json::<GithubUserRepositoriesResponse>()?;
+    Ok(payload.repositories)
+  }
+
+  pub fn search_github_repositories(&self, query: &str) -> Result<Vec<GithubRepositorySearchItem>> {
+    let response = self
+      .authed_request(Method::GET, "/github/search")
+      .query(&[("q", query)])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", "/github/search", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<GithubRepositorySearchResponse>()?;
     Ok(payload.repositories)
   }
 

@@ -4503,6 +4503,12 @@ impl GitPage {
         crate::github_create_repository_dialog::open_create_repository_dialog(api, window, cx);
         Ok(())
       }
+      CommandPaletteAction::SearchGithubRepository => {
+        should_post_action_refresh = false;
+        let api = WorkspaceApi::global(cx).api.clone();
+        crate::github_search_dialog::open_github_search_dialog(api, window, cx);
+        Ok(())
+      }
       CommandPaletteAction::OpenGitHistorySidebar => {
         self.set_sidebar_mode(GitSidebarMode::History, window, cx);
         Ok(())

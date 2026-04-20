@@ -29,6 +29,7 @@ use crate::{
     self, ShortcutCategory, ShortcutDefinition, ShortcutId, ShortcutOverrides,
     resolved_display_shortcut_keystroke_in, shortcut_definitions,
   },
+  workspace::WorkspaceApi,
 };
 
 #[derive(Clone)]
@@ -672,6 +673,11 @@ impl SettingsPage {
       }
       CommandPaletteAction::SendFeedback => {
         crate::feedback_dialog::open_feedback_dialog(window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::SearchGithubRepository => {
+        let api = WorkspaceApi::global(cx).api.clone();
+        crate::github_search_dialog::open_github_search_dialog(api, window, cx);
         Ok(())
       }
       _ => Err("Command not available.".into()),

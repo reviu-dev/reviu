@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.6.0
+
+### Search GitHub Repositories
+
+Find any repository on GitHub directly from the command palette. Trigger "Search GitHub repository", start typing, and Reviu shows matching repositories live with names, descriptions, and star counts. Press Enter to open the selected repository in Reviu.
+
 ## 0.5.0
 
 ### Commit Details in Reviu
