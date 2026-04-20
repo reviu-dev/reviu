@@ -8790,7 +8790,7 @@ impl GithubPrDetailsPage {
       .map(|pr| github_shared::pr_url(&pr.repository.owner, &pr.repository.repo, pr.number));
 
     Button::new("pr-actions-menu")
-      .icon(IconName::Ellipsis)
+      .icon(UiIconName::EllipsisVertical)
       .ghost()
       .small()
       .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
