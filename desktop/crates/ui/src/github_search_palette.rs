@@ -122,7 +122,11 @@ impl ListDelegate for GithubSearchListDelegate {
               .flex_shrink()
               .child(Label::new(primary).truncate())
               .when(entry.private, |this| {
-                this.child(Icon::new(UiIconName::Lock).size_3().text_color(theme.muted_foreground))
+                this.child(
+                  Icon::new(UiIconName::Lock)
+                    .size_3()
+                    .text_color(theme.muted_foreground),
+                )
               }),
           )
           .when_some(description, |this, description| {
@@ -172,11 +176,7 @@ impl ListDelegate for GithubSearchListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> impl IntoElement {
-    render_placeholder(
-      cx,
-      IconName::Search,
-      "No repositories match your search.",
-    )
+    render_placeholder(cx, IconName::Search, "No repositories match your search.")
   }
 
   fn render_initial(
@@ -185,12 +185,8 @@ impl ListDelegate for GithubSearchListDelegate {
     cx: &mut Context<ListState<Self>>,
   ) -> Option<AnyElement> {
     Some(
-      render_placeholder(
-        cx,
-        IconName::Search,
-        "Type to search GitHub repositories.",
-      )
-      .into_any_element(),
+      render_placeholder(cx, IconName::Search, "Type to search GitHub repositories.")
+        .into_any_element(),
     )
   }
 
@@ -257,11 +253,7 @@ impl ListDelegate for GithubSearchListDelegate {
   }
 }
 
-fn render_placeholder(
-  cx: &App,
-  icon: IconName,
-  message: &'static str,
-) -> impl IntoElement {
+fn render_placeholder(cx: &App, icon: IconName, message: &'static str) -> impl IntoElement {
   v_flex()
     .size_full()
     .items_center()
