@@ -9882,13 +9882,7 @@ impl GithubPrDetailsPage {
         .flex()
         .items_center()
         .justify_center()
-        .child(
-          div()
-            .size(px(8.0))
-            .rounded_full()
-            .border_1()
-            .border_color(theme.status_orange()),
-        )
+        .child(div().size(px(9.0)).rounded_full().bg(theme.status_orange()))
         .into_any_element(),
       GithubPullRequestChecksRollupState::Failure => div()
         .w(px(22.0))
