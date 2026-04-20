@@ -2481,15 +2481,6 @@ export async function fetchGithubPullRequestCommentsAllPages(
   })
 }
 
-export async function fetchGithubPullRequestReviewsConditionally(
-  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews'>,
-): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews'>> {
-  return requestGithubConditionally<'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews'>(
-    'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews',
-    options,
-  )
-}
-
 export async function createGithubPullRequestComment(
   { token, params }: { token: string, params: CreatePullRequestCommentParams },
 ): Promise<CreatePullRequestCommentResponse> {
@@ -2643,15 +2634,6 @@ async function fetchGithubRepositoryIssueComments(
     token,
     params,
   })
-}
-
-export async function fetchGithubRepositoryIssueCommentsConditionally(
-  options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/issues/{issue_number}/comments'>,
-): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/issues/{issue_number}/comments'>> {
-  return requestGithubConditionally<'GET /repos/{owner}/{repo}/issues/{issue_number}/comments'>(
-    'GET /repos/{owner}/{repo}/issues/{issue_number}/comments',
-    options,
-  )
 }
 
 export async function fetchGithubRepositoryIssueCommentsAllPages(

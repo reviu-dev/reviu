@@ -4,7 +4,6 @@ import type {
   GithubCacheLoadedPayload,
   GithubCacheLoadResult,
   GithubCacheNotModifiedPayload,
-  GithubCachePaginationMetadata,
   GithubCacheValidator,
   GithubCacheValidators,
 } from '../plugins/github/cache/github-cache.js'
@@ -27,7 +26,6 @@ import type {
   GithubFileContent,
   GithubIssue,
   GithubIssueDetails,
-  GithubIssueDetailsCommentParameters,
   GithubIssueSearchFilters,
   GithubNotification,
   GithubPullRequest,
@@ -38,11 +36,8 @@ import type {
   GithubPullRequestDetails,
   GithubPullRequestFile,
   GithubPullRequestFilterOptions,
-  GithubPullRequestIssueComment,
   GithubPullRequestMergeReadiness,
   GithubPullRequestMergeResult,
-  GithubPullRequestReview,
-  GithubPullRequestReviewComment,
   GithubPullRequestSearchFilters,
   GithubRepositoryBranch,
   GithubRepositoryBranchesParameters,
@@ -55,9 +50,7 @@ import type {
   ListPullsParams,
   MergePullRequestParams,
   NotificationsParams,
-  PullRequestCommentsParams,
   PullRequestParams,
-  PullRequestReviewsParams,
   RemoveIssueAssigneesParams,
   RemovePullRequestReviewersParams,
   RequestPullRequestReviewersParams,
@@ -75,13 +68,10 @@ import { logger } from '../lib/logger.js'
 import { authMiddlewarePro } from '../middlewares/auth.js'
 import {
   createGithubNotificationsCachePolicy,
-  createGithubPullRequestCommentsCachePolicy,
   createGithubPullRequestCommitsCachePolicy,
   createGithubPullRequestConversationCachePolicy,
   createGithubPullRequestDetailsCachePolicy,
   createGithubPullRequestFilesCachePolicy,
-  createGithubPullRequestIssueCommentsCachePolicy,
-  createGithubPullRequestReviewsCachePolicy,
   createGithubPullRequestSearchCachePolicy,
   createGithubRepositoryBranchesCachePolicy,
   createGithubRepositoryCommitCachePolicy,
@@ -114,7 +104,6 @@ import {
   mapGithubPullRequestCommit,
   mapGithubPullRequestDescriptionUpdate,
   mapGithubPullRequestFile,
-  mapGithubPullRequestIssueComment,
   mapGithubPullRequestReview,
   mapGithubPullRequestReviewComment,
 } from '../plugins/github/formatter.js'
@@ -162,13 +151,10 @@ import {
   fetchGithubIssueSearchGraphql,
   fetchGithubNotifications,
   fetchGithubPullRequest,
-  fetchGithubPullRequestCommentsAllPages,
-  fetchGithubPullRequestCommentsConditionally,
   fetchGithubPullRequestCommitsAllPages,
   fetchGithubPullRequestConditionally,
   fetchGithubPullRequestConversationGraphql,
   fetchGithubPullRequestFilesAllPages,
-  fetchGithubPullRequestReviewsConditionally,
   fetchGithubPullRequests,
   fetchGithubPullRequestsAssociatedWithCommit,
   fetchGithubPullRequestSearchGraphql,
@@ -177,8 +163,6 @@ import {
   fetchGithubRepositoryCommitsConditionally,
   fetchGithubRepositoryContentConditionally,
   fetchGithubRepositoryContentObjectConditionally,
-  fetchGithubRepositoryIssueCommentsAllPages,
-  fetchGithubRepositoryIssueCommentsConditionally,
   fetchGithubRepositoryLabels,
   fetchGithubRepositoryOverview,
   fetchGithubRepositoryReadmeConditionally,
@@ -236,30 +220,6 @@ function getCachedValidator(
   return cachedEntry?.validators?.[key] ?? {
     etag: cachedEntry?.etag,
     lastModified: cachedEntry?.lastModified,
-  }
-}
-
-function getCachedPaginationMetadata(
-  cachedEntry: { pagination?: GithubCachePaginationMetadata } | null,
-): GithubCachePaginationMetadata | null {
-  return cachedEntry?.pagination ?? null
-}
-
-function canConditionallyRevalidateSinglePageCollection(
-  pagination: GithubCachePaginationMetadata | null,
-) {
-  return Boolean(pagination && !pagination.truncated && pagination.pageCount <= 1)
-}
-
-function buildPaginationMetadata(
-  pageCount: number,
-  itemCount: number,
-  truncated: boolean,
-): GithubCachePaginationMetadata {
-  return {
-    pageCount,
-    itemCount,
-    truncated,
   }
 }
 
@@ -1256,224 +1216,6 @@ async function fetchRepositoryCommitWithCache(
           ),
           etag: response.etag,
           lastModified: response.lastModified,
-        }
-      },
-    }))
-}
-
-async function fetchPullRequestIssueCommentsWithCache(
-  userId: string,
-  githubToken: string,
-  org: string,
-  repo: string,
-  pullNumber: number,
-) {
-  const baseCachePolicy = createGithubPullRequestIssueCommentsCachePolicy(userId, org, repo, pullNumber)
-  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, org, repo)
-
-  return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad<GithubPullRequestIssueComment[]>({
-      ...cachePolicy,
-      load: async ({ cachedEntry }) => {
-        const cachedPagination = getCachedPaginationMetadata(cachedEntry)
-        const canUseConditionalComments = canConditionallyRevalidateSinglePageCollection(cachedPagination)
-        const params: GithubIssueDetailsCommentParameters = {
-          owner: org,
-          repo,
-          issue_number: pullNumber,
-          per_page: 100,
-        }
-
-        if (canUseConditionalComments) {
-          const response = await fetchGithubRepositoryIssueCommentsConditionally({
-            token: githubToken,
-            params,
-            etag: cachedEntry?.etag,
-            lastModified: cachedEntry?.lastModified,
-          })
-
-          if (response.notModified) {
-            return {
-              notModified: true as const,
-              etag: response.etag,
-              lastModified: response.lastModified,
-              pagination: cachedPagination ?? undefined,
-            }
-          }
-
-          const paginatedComments = await fetchGithubRepositoryIssueCommentsAllPages({
-            token: githubToken,
-            params: {
-              owner: org,
-              repo,
-              issue_number: pullNumber,
-            },
-            initialPageItems: response.data!,
-          })
-
-          return {
-            payload: paginatedComments.items.map(mapGithubPullRequestIssueComment),
-            etag: response.etag,
-            lastModified: response.lastModified,
-            pagination: buildPaginationMetadata(
-              paginatedComments.pageCount,
-              paginatedComments.itemCount,
-              paginatedComments.truncated,
-            ),
-          }
-        }
-
-        const paginatedComments = await fetchGithubRepositoryIssueCommentsAllPages({
-          token: githubToken,
-          params: {
-            owner: org,
-            repo,
-            issue_number: pullNumber,
-          },
-        })
-
-        return {
-          payload: paginatedComments.items.map(mapGithubPullRequestIssueComment),
-          pagination: buildPaginationMetadata(
-            paginatedComments.pageCount,
-            paginatedComments.itemCount,
-            paginatedComments.truncated,
-          ),
-        }
-      },
-    }))
-}
-
-async function fetchPullRequestReviewsWithCache(
-  userId: string,
-  githubToken: string,
-  org: string,
-  repo: string,
-  pullNumber: number,
-) {
-  const baseCachePolicy = createGithubPullRequestReviewsCachePolicy(userId, org, repo, pullNumber)
-  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, org, repo)
-
-  return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad<GithubPullRequestReview[]>({
-      ...cachePolicy,
-      load: async ({ cachedEntry }) => {
-        const params: PullRequestReviewsParams = {
-          owner: org,
-          repo,
-          pull_number: pullNumber,
-          per_page: 100,
-        }
-
-        const response = await fetchGithubPullRequestReviewsConditionally({
-          token: githubToken,
-          params,
-          etag: cachedEntry?.etag,
-          lastModified: cachedEntry?.lastModified,
-        })
-
-        if (response.notModified) {
-          return {
-            notModified: true as const,
-            etag: response.etag,
-            lastModified: response.lastModified,
-          }
-        }
-
-        const reviews = response.data!
-          .map(mapGithubPullRequestReview)
-          .filter(review =>
-            review.state === 'APPROVED'
-            || review.state === 'CHANGES_REQUESTED'
-            || review.state === 'COMMENTED')
-
-        return {
-          payload: reviews,
-          etag: response.etag,
-          lastModified: response.lastModified,
-        }
-      },
-    }))
-}
-
-async function fetchPullRequestCommentsWithCache(
-  userId: string,
-  githubToken: string,
-  org: string,
-  repo: string,
-  pullNumber: number,
-) {
-  const baseCachePolicy = createGithubPullRequestCommentsCachePolicy(userId, org, repo, pullNumber)
-  const cachePolicy = await resolveRepositoryReadCachePolicy(baseCachePolicy, org, repo)
-
-  return withGithubMetrics(userId, cachePolicy.operation, () =>
-    githubCache.getOrLoad<GithubPullRequestReviewComment[]>({
-      ...cachePolicy,
-      load: async ({ cachedEntry }) => {
-        const cachedPagination = getCachedPaginationMetadata(cachedEntry)
-        const canUseConditionalComments = canConditionallyRevalidateSinglePageCollection(cachedPagination)
-        const params: PullRequestCommentsParams = {
-          owner: org,
-          repo,
-          pull_number: pullNumber,
-          per_page: 100,
-        }
-
-        if (canUseConditionalComments) {
-          const response = await fetchGithubPullRequestCommentsConditionally({
-            token: githubToken,
-            params,
-            etag: cachedEntry?.etag,
-            lastModified: cachedEntry?.lastModified,
-          })
-
-          if (response.notModified) {
-            return {
-              notModified: true as const,
-              etag: response.etag,
-              lastModified: response.lastModified,
-              pagination: cachedPagination ?? undefined,
-            }
-          }
-
-          const paginatedComments = await fetchGithubPullRequestCommentsAllPages({
-            token: githubToken,
-            params: {
-              owner: org,
-              repo,
-              pull_number: pullNumber,
-            },
-            initialPageItems: response.data!,
-          })
-
-          return {
-            payload: paginatedComments.items.map(mapGithubPullRequestReviewComment),
-            etag: response.etag,
-            lastModified: response.lastModified,
-            pagination: buildPaginationMetadata(
-              paginatedComments.pageCount,
-              paginatedComments.itemCount,
-              paginatedComments.truncated,
-            ),
-          }
-        }
-
-        const paginatedComments = await fetchGithubPullRequestCommentsAllPages({
-          token: githubToken,
-          params: {
-            owner: org,
-            repo,
-            pull_number: pullNumber,
-          },
-        })
-
-        return {
-          payload: paginatedComments.items.map(mapGithubPullRequestReviewComment),
-          pagination: buildPaginationMetadata(
-            paginatedComments.pageCount,
-            paginatedComments.itemCount,
-            paginatedComments.truncated,
-          ),
         }
       },
     }))
@@ -2957,46 +2699,6 @@ export const githubRoutes = githubRouter
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })
-  .get('/pr/:id/issue-comments', async (ctx) => {
-    const { org, repo } = ctx.req.query()
-    const pullNumber = Number(ctx.req.param('id'))
-
-    if (!org || !repo || Number.isNaN(pullNumber)) {
-      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
-    }
-
-    const user = ctx.get('user')!
-    const githubToken = user.github.accessToken
-
-    try {
-      const result = await fetchPullRequestIssueCommentsWithCache(user.id, githubToken, org, repo, pullNumber)
-      setGithubCacheHeaders(ctx, result)
-      return ctx.json({ comments: result.payload }, 200)
-    }
-    catch (error) {
-      return ctx.json({ error: (error as Error).message }, 502)
-    }
-  })
-  .get('/pr/:id/reviews', async (ctx) => {
-    const { org, repo } = ctx.req.query()
-    const pullNumber = Number(ctx.req.param('id'))
-
-    if (!org || !repo || Number.isNaN(pullNumber)) {
-      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
-    }
-
-    const user = ctx.get('user')!
-    const githubToken = user.github.accessToken
-
-    try {
-      const result = await fetchPullRequestReviewsWithCache(user.id, githubToken, org, repo, pullNumber)
-      setGithubCacheHeaders(ctx, result)
-      return ctx.json({ reviews: result.payload }, 200)
-    }
-    catch (error) {
-      return ctx.json({ error: (error as Error).message }, 502)
-    }
-  })
   .get('/pr/:id/conversation', async (ctx) => {
     const { org, repo } = ctx.req.query()
     const pullNumber = Number(ctx.req.param('id'))
@@ -3114,26 +2816,6 @@ export const githubRoutes = githubRouter
       if (status === 403 || status === 404 || status === 422) {
         return ctx.json({ error: (error as Error).message }, status)
       }
-      return ctx.json({ error: (error as Error).message }, 502)
-    }
-  })
-  .get('/pr/:id/comments', async (ctx) => {
-    const { org, repo } = ctx.req.query()
-    const pullNumber = Number(ctx.req.param('id'))
-
-    if (!org || !repo || Number.isNaN(pullNumber)) {
-      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
-    }
-
-    const user = ctx.get('user')!
-    const githubToken = user.github.accessToken
-
-    try {
-      const result = await fetchPullRequestCommentsWithCache(user.id, githubToken, org, repo, pullNumber)
-      setGithubCacheHeaders(ctx, result)
-      return ctx.json({ comments: result.payload }, 200)
-    }
-    catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })

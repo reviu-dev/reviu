@@ -38,8 +38,6 @@ const GITHUB_PULL_REQUEST_COMMENTS_CACHE_TTL_MS = 15_000 // 15s
 const GITHUB_PULL_REQUEST_COMMENTS_CACHE_STALE_MS = 2 * 60_000 // 2min
 const GITHUB_PULL_REQUEST_CONVERSATION_CACHE_TTL_MS = 15_000 // 15s
 const GITHUB_PULL_REQUEST_CONVERSATION_CACHE_STALE_MS = 2 * 60_000 // 2min
-const GITHUB_PULL_REQUEST_REVIEWS_CACHE_TTL_MS = 20_000 // 20s
-const GITHUB_PULL_REQUEST_REVIEWS_CACHE_STALE_MS = 2 * 60_000 // 2min
 const GITHUB_REPOSITORY_DETAILS_CACHE_TTL_MS = 2 * 60_000 // 2min
 const GITHUB_REPOSITORY_DETAILS_CACHE_STALE_MS = 10 * 60_000 // 10min
 const GITHUB_REPOSITORY_README_CACHE_TTL_MS = 2 * 60_000 // 2min
@@ -311,25 +309,6 @@ export function createGithubPullRequestCommentsCachePolicy(
     ttlMs: GITHUB_PULL_REQUEST_COMMENTS_CACHE_TTL_MS,
     staleMs: GITHUB_PULL_REQUEST_COMMENTS_CACHE_STALE_MS,
     tags: [getGithubPullRequestCommentsTag(owner, repo, pullNumber)],
-  }
-}
-
-export function createGithubPullRequestReviewsCachePolicy(
-  userId: string,
-  owner: string,
-  repo: string,
-  pullNumber: number,
-): GithubCachePolicy {
-  const repositoryKey = normalizeRepositoryKey(owner, repo)
-
-  return {
-    operation: 'pull_request.reviews',
-    scope: 'viewer',
-    scopeId: userId,
-    resourceKey: `pull-request:${repositoryKey}:${pullNumber}:reviews`,
-    ttlMs: GITHUB_PULL_REQUEST_REVIEWS_CACHE_TTL_MS,
-    staleMs: GITHUB_PULL_REQUEST_REVIEWS_CACHE_STALE_MS,
-    tags: [getGithubPullRequestReviewsTag(owner, repo, pullNumber)],
   }
 }
 

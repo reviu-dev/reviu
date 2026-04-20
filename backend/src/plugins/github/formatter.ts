@@ -5,7 +5,6 @@ import type {
   GithubIssueCommentResponseSource,
   GithubIssueDescriptionUpdate,
   GithubIssueDetailsComment,
-  GithubIssueDetailsCommentResponse,
   GithubLabel,
   GithubPullRequest,
   GithubPullRequestAuthor,
@@ -14,7 +13,6 @@ import type {
   GithubPullRequestDescriptionUpdate,
   GithubPullRequestFile,
   GithubPullRequestFileSource,
-  GithubPullRequestIssueComment,
   GithubPullRequestReview,
   GithubPullRequestReviewComment,
   GithubPullRequestReviewResponseSource,
@@ -185,25 +183,6 @@ export function mapGithubPullRequestReview(
       ? {
           login: review.user.login,
           avatar_url: review.user.avatar_url,
-        }
-      : null,
-  }
-}
-
-export function mapGithubPullRequestIssueComment(
-  comment: GithubIssueDetailsCommentResponse,
-): GithubPullRequestIssueComment {
-  return {
-    node_id: comment.node_id,
-    reactions: [],
-    id: comment.id,
-    body: comment.body,
-    created_at: comment.created_at,
-    updated_at: comment.updated_at,
-    user: comment.user
-      ? {
-          login: comment.user.login,
-          avatar_url: comment.user.avatar_url,
         }
       : null,
   }
