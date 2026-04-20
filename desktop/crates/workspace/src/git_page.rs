@@ -13677,12 +13677,17 @@ mod tests {
       .iter()
       .position(|id| *id == CommandPaletteCommandId::SwitchRepository)
       .expect("should include switch repository");
+    let forget_repository_ix = command_ids
+      .iter()
+      .position(|id| *id == CommandPaletteCommandId::ForgetRepository)
+      .expect("should include forget repository");
     let open_repository_ix = command_ids
       .iter()
       .position(|id| *id == CommandPaletteCommandId::OpenRepository)
       .expect("should include open repository");
 
-    assert_eq!(switch_repository_ix + 1, open_repository_ix);
+    assert_eq!(switch_repository_ix + 1, forget_repository_ix);
+    assert_eq!(forget_repository_ix + 1, open_repository_ix);
   }
 
   #[gpui::test]
