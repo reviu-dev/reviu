@@ -345,16 +345,44 @@ impl ConfigStore {
     };
 
     let mut repositories = Vec::new();
+    let mut missing_paths: Vec<String> = Vec::new();
     for row in rows {
       match row {
-        Ok(path) => repositories.push(RecentRepository {
-          path: PathBuf::from(path),
-        }),
+        Ok(path_string) => {
+          let path = PathBuf::from(&path_string);
+          if path.is_dir() {
+            repositories.push(RecentRepository { path });
+          } else {
+            missing_paths.push(path_string);
+          }
+        }
         Err(err) => eprintln!("Failed to decode recent repository row: {}", err),
       }
     }
 
+    if !missing_paths.is_empty() {
+      for path in &missing_paths {
+        self.forget_recent_repository_path(path);
+      }
+    }
+
     repositories
+  }
+
+  pub fn forget_recent_repository(path: &Path) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    store.forget_recent_repository_path(&path.to_string_lossy());
+  }
+
+  fn forget_recent_repository_path(&self, path: &str) {
+    if let Err(err) = self.conn.execute(
+      &format!("DELETE FROM {} WHERE path = ?1", RECENT_REPOS_TABLE.name),
+      params![path],
+    ) {
+      eprintln!("Failed to forget recent repository: {}", err);
+    }
   }
 
   pub fn persist_recent_repository(path: &Path) {
@@ -783,24 +811,90 @@ mod tests {
     ))
   }
 
+  fn unique_test_repo_dir(label: &str) -> PathBuf {
+    static NEXT_REPO_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_REPO_ID.fetch_add(1, Ordering::Relaxed);
+    let path =
+      std::env::temp_dir().join(format!("reviu-config-{label}-{}-{id}", std::process::id()));
+    fs::create_dir_all(&path).expect("create temp repo dir");
+    path
+  }
+
   #[test]
   fn recent_repositories_use_test_db_override() {
     let db_path = unique_test_db_path("recent");
     let _ = fs::remove_file(&db_path);
     ConfigStore::set_test_db_path(Some(db_path));
 
-    let repo_a = Path::new("/tmp/reviu-config-test-repo-a");
-    let repo_b = Path::new("/tmp/reviu-config-test-repo-b");
-    ConfigStore::persist_recent_repository(repo_a);
-    ConfigStore::persist_recent_repository(repo_b);
+    let repo_a = unique_test_repo_dir("recent-a");
+    let repo_b = unique_test_repo_dir("recent-b");
+    ConfigStore::persist_recent_repository(&repo_a);
+    ConfigStore::persist_recent_repository(&repo_b);
 
     let paths: Vec<PathBuf> = ConfigStore::load_recent_repositories()
       .into_iter()
       .map(|repo| repo.path)
       .collect();
-    assert!(paths.contains(&repo_a.to_path_buf()));
-    assert!(paths.contains(&repo_b.to_path_buf()));
+    assert!(paths.contains(&repo_a));
+    assert!(paths.contains(&repo_b));
 
+    let _ = fs::remove_dir_all(&repo_a);
+    let _ = fs::remove_dir_all(&repo_b);
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn forget_recent_repository_removes_entry() {
+    let db_path = unique_test_db_path("forget");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    let repo_a = unique_test_repo_dir("forget-a");
+    let repo_b = unique_test_repo_dir("forget-b");
+    ConfigStore::persist_recent_repository(&repo_a);
+    ConfigStore::persist_recent_repository(&repo_b);
+    ConfigStore::forget_recent_repository(&repo_a);
+
+    let paths: Vec<PathBuf> = ConfigStore::load_recent_repositories()
+      .into_iter()
+      .map(|repo| repo.path)
+      .collect();
+    assert!(!paths.contains(&repo_a));
+    assert!(paths.contains(&repo_b));
+
+    let _ = fs::remove_dir_all(&repo_a);
+    let _ = fs::remove_dir_all(&repo_b);
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn load_recent_repositories_drops_paths_that_no_longer_exist() {
+    let db_path = unique_test_db_path("autoclean");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    let present = unique_test_repo_dir("autoclean-present");
+    let missing = unique_test_repo_dir("autoclean-missing");
+    ConfigStore::persist_recent_repository(&present);
+    ConfigStore::persist_recent_repository(&missing);
+
+    // Simulate the repo being deleted from disk after being persisted.
+    fs::remove_dir_all(&missing).expect("remove missing repo");
+
+    let paths: Vec<PathBuf> = ConfigStore::load_recent_repositories()
+      .into_iter()
+      .map(|repo| repo.path)
+      .collect();
+    assert_eq!(paths, vec![present.clone()]);
+
+    // A second load should also not resurrect the missing entry.
+    let paths_again: Vec<PathBuf> = ConfigStore::load_recent_repositories()
+      .into_iter()
+      .map(|repo| repo.path)
+      .collect();
+    assert_eq!(paths_again, vec![present.clone()]);
+
+    let _ = fs::remove_dir_all(&present);
     ConfigStore::set_test_db_path(None);
   }
 

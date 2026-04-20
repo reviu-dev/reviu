@@ -126,6 +126,7 @@ impl CommandPaletteStash {
 #[derive(Clone, Debug)]
 pub enum CommandPaletteAction {
   SwitchRepository(CommandPaletteRepository),
+  ForgetRepository(CommandPaletteRepository),
   SwitchBranch(CommandPaletteBranch),
   CheckoutDetached {
     target: String,
@@ -706,6 +707,7 @@ pub enum CommandPaletteInitialScreen {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandPaletteCommandId {
   SwitchRepository,
+  ForgetRepository,
   SwitchBranch,
   CheckoutDetached,
   Commit,
@@ -802,6 +804,14 @@ impl CommandPaletteCommand {
       id: CommandPaletteCommandId::SwitchRepository,
       name: "Switch repository".into(),
       description: Some("Switch to another recent repository".into()),
+    }
+  }
+
+  pub fn forget_repository() -> Self {
+    Self {
+      id: CommandPaletteCommandId::ForgetRepository,
+      name: "Forget repository".into(),
+      description: Some("Remove a repository from the recent list".into()),
     }
   }
 
@@ -1306,9 +1316,9 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::SwitchToPrBranch
       | CommandPaletteCommandId::ToggleUnchangedFiles => CommandPaletteGroup::PullRequest,
 
-      CommandPaletteCommandId::SwitchRepository | CommandPaletteCommandId::OpenRepository => {
-        CommandPaletteGroup::Repository
-      }
+      CommandPaletteCommandId::SwitchRepository
+      | CommandPaletteCommandId::ForgetRepository
+      | CommandPaletteCommandId::OpenRepository => CommandPaletteGroup::Repository,
 
       CommandPaletteCommandId::SearchGithubRepository
       | CommandPaletteCommandId::CreateGithubRepository
@@ -1330,6 +1340,7 @@ impl CommandPaletteCommand {
   fn icon(&self) -> Icon {
     match self.id {
       CommandPaletteCommandId::SwitchRepository => Icon::new(IconName::FolderOpen),
+      CommandPaletteCommandId::ForgetRepository => Icon::new(IconName::Delete),
       CommandPaletteCommandId::SwitchBranch => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::CheckoutDetached => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::Commit => Icon::new(IconName::Check),
@@ -1470,6 +1481,7 @@ impl CommandPaletteConfig {
 enum CommandPaletteScreen {
   Root,
   SwitchRepository,
+  ForgetRepository,
   SwitchBranch,
   CheckoutDetached,
   CreateBranch,
@@ -1722,11 +1734,13 @@ impl CommandPalette {
             };
 
             if let Some(repository) = repository {
-              command_palette.trigger_action(
-                CommandPaletteAction::SwitchRepository((*repository).clone()),
-                window,
-                cx,
-              );
+              let action = match command_palette.screen {
+                CommandPaletteScreen::ForgetRepository => {
+                  CommandPaletteAction::ForgetRepository((*repository).clone())
+                }
+                _ => CommandPaletteAction::SwitchRepository((*repository).clone()),
+              };
+              command_palette.trigger_action(action, window, cx);
             }
           }
         },
@@ -2103,7 +2117,7 @@ impl CommandPalette {
 
   pub fn focus_screen_input(&self, window: &mut Window, cx: &mut Context<Self>) {
     match self.screen {
-      CommandPaletteScreen::SwitchRepository => {
+      CommandPaletteScreen::SwitchRepository | CommandPaletteScreen::ForgetRepository => {
         self.repositories_list.update(cx, |state, cx| {
           state.focus(window, cx);
         });
@@ -2211,6 +2225,9 @@ impl CommandPalette {
     match command {
       CommandPaletteCommandId::SwitchRepository => {
         self.set_screen(CommandPaletteScreen::SwitchRepository, cx, window);
+      }
+      CommandPaletteCommandId::ForgetRepository => {
+        self.set_screen(CommandPaletteScreen::ForgetRepository, cx, window);
       }
       CommandPaletteCommandId::SwitchBranch => {
         self.set_screen(CommandPaletteScreen::SwitchBranch, cx, window);
@@ -2486,6 +2503,29 @@ impl CommandPalette {
       })
   }
 
+  fn render_forget_repository(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+
+    let count_items = self
+      .repositories_list
+      .read(cx)
+      .delegate()
+      .matched_repositories
+      .len();
+
+    v_flex()
+      .h_full()
+      .child(self.render_search_list(
+        &self.repositories_list,
+        count_items,
+        "Select repository to forget...",
+        cx,
+      ))
+      .when(self.error.is_some(), |parent| {
+        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
+      })
+  }
+
   fn render_switch_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
@@ -2723,6 +2763,9 @@ impl Render for CommandPalette {
       CommandPaletteScreen::SwitchRepository => {
         self.render_switch_repository(cx).into_any_element()
       }
+      CommandPaletteScreen::ForgetRepository => {
+        self.render_forget_repository(cx).into_any_element()
+      }
       CommandPaletteScreen::SwitchBranch => self.render_switch_branch(cx).into_any_element(),
       CommandPaletteScreen::CheckoutDetached => {
         self.render_checkout_detached(cx).into_any_element()
@@ -2869,6 +2912,17 @@ mod tests {
     assert_eq!(command.id, CommandPaletteCommandId::SwitchRepository);
     assert_eq!(command.name.as_ref(), "Switch repository");
     assert!(command.matches("recent repository"));
+  }
+
+  #[test]
+  fn forget_repository_command_is_available_with_expected_metadata() {
+    use super::CommandPaletteGroup;
+    let command = CommandPaletteCommand::forget_repository();
+    assert_eq!(command.id, CommandPaletteCommandId::ForgetRepository);
+    assert_eq!(command.name.as_ref(), "Forget repository");
+    assert!(command.matches("forget"));
+    assert!(command.matches("recent list"));
+    assert_eq!(command.group(), CommandPaletteGroup::Repository);
   }
 
   #[test]
