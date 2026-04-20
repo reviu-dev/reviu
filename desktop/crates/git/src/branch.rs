@@ -253,6 +253,27 @@ pub fn pull(repo_root: &Path) -> Result<()> {
   bail!("git pull failed: {}", stderr.trim())
 }
 
+pub fn clone(url: &str, destination: &Path) -> Result<()> {
+  if destination.exists() {
+    bail!("destination already exists: {}", destination.display());
+  }
+
+  let output = Command::new("git")
+    .arg("clone")
+    .arg("--")
+    .arg(url)
+    .arg(destination)
+    .output()
+    .context("run git clone")?;
+
+  if output.status.success() {
+    return Ok(());
+  }
+
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  bail!("git clone failed: {}", stderr.trim())
+}
+
 pub fn sync_current_branch_to_head(
   repo_root: &Path,
   branch_name: &str,

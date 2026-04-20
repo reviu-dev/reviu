@@ -77,6 +77,28 @@ pub struct RecentRepository {
   pub path: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloneProtocol {
+  Https,
+  Ssh,
+}
+
+impl CloneProtocol {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Https => "https",
+      Self::Ssh => "ssh",
+    }
+  }
+
+  pub fn from_str(value: &str) -> Self {
+    match value {
+      "ssh" => Self::Ssh,
+      _ => Self::Https,
+    }
+  }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct AppSettings {
   pub auto_switch_theme: bool,
@@ -86,6 +108,7 @@ pub struct AppSettings {
   pub git_unified_file_view: bool,
   pub split_diff_view: bool,
   pub hide_whitespace: bool,
+  pub clone_protocol: CloneProtocol,
 }
 
 impl Global for AppSettings {}
@@ -113,6 +136,7 @@ impl Default for AppSettings {
       git_unified_file_view: false,
       split_diff_view: false,
       hide_whitespace: false,
+      clone_protocol: CloneProtocol::Https,
     }
   }
 }
@@ -203,6 +227,7 @@ impl ConfigStore {
     let mut has_git_unified_file_view = false;
     let mut has_split_diff_view = false;
     let mut has_hide_whitespace = false;
+    let mut has_clone_protocol = false;
     let mut stmt = self
       .conn
       .prepare(&format!("PRAGMA table_info({})", SETTINGS_TABLE.name))?;
@@ -223,6 +248,9 @@ impl ConfigStore {
       }
       if column == "hide_whitespace" {
         has_hide_whitespace = true;
+      }
+      if column == "clone_protocol" {
+        has_clone_protocol = true;
       }
     }
 
@@ -270,6 +298,16 @@ impl ConfigStore {
       self.conn.execute(
         &format!(
           "ALTER TABLE {} ADD COLUMN hide_whitespace INTEGER NOT NULL DEFAULT 0",
+          SETTINGS_TABLE.name
+        ),
+        [],
+      )?;
+    }
+
+    if !has_clone_protocol {
+      self.conn.execute(
+        &format!(
+          "ALTER TABLE {} ADD COLUMN clone_protocol TEXT NOT NULL DEFAULT 'https'",
           SETTINGS_TABLE.name
         ),
         [],
@@ -355,7 +393,7 @@ impl ConfigStore {
   fn load_app_settings_inner(&self) -> AppSettings {
     let settings = self.conn.query_row(
       &format!(
-        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace FROM {} WHERE id = 1",
+        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol FROM {} WHERE id = 1",
         SETTINGS_TABLE.name
       ),
       [],
@@ -367,6 +405,7 @@ impl ConfigStore {
         let git_unified_file_view: i64 = row.get(4)?;
         let split_diff_view: i64 = row.get(5)?;
         let hide_whitespace: i64 = row.get(6)?;
+        let clone_protocol: String = row.get(7)?;
         Ok(AppSettings {
           auto_switch_theme: auto_switch_theme != 0,
           dark_mode: dark_mode != 0,
@@ -375,6 +414,7 @@ impl ConfigStore {
           git_unified_file_view: git_unified_file_view != 0,
           split_diff_view: split_diff_view != 0,
           hide_whitespace: hide_whitespace != 0,
+          clone_protocol: CloneProtocol::from_str(&clone_protocol),
         })
       },
     );
@@ -620,8 +660,8 @@ impl ConfigStore {
   fn persist_app_settings_inner(&self, settings: AppSettings) {
     if let Err(err) = self.conn.execute(
       &format!(
-        "INSERT INTO {} (id, auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace)
-         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO {} (id, auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT(id) DO UPDATE
          SET auto_switch_theme = excluded.auto_switch_theme,
              dark_mode = excluded.dark_mode,
@@ -629,7 +669,8 @@ impl ConfigStore {
              font_size = excluded.font_size,
              git_unified_file_view = excluded.git_unified_file_view,
              split_diff_view = excluded.split_diff_view,
-             hide_whitespace = excluded.hide_whitespace",
+             hide_whitespace = excluded.hide_whitespace,
+             clone_protocol = excluded.clone_protocol",
         SETTINGS_TABLE.name
       ),
       params![
@@ -660,6 +701,7 @@ impl ConfigStore {
         } else {
           0_i64
         },
+        settings.clone_protocol.as_str(),
       ],
     ) {
       eprintln!("Failed to persist app settings: {}", err);
@@ -776,6 +818,7 @@ mod tests {
       git_unified_file_view: true,
       split_diff_view: true,
       hide_whitespace: true,
+      clone_protocol: CloneProtocol::Ssh,
     };
     ConfigStore::persist_app_settings(settings);
 
@@ -787,6 +830,7 @@ mod tests {
     assert!(loaded.git_unified_file_view);
     assert!(loaded.split_diff_view);
     assert!(loaded.hide_whitespace);
+    assert_eq!(loaded.clone_protocol, CloneProtocol::Ssh);
 
     ConfigStore::set_test_db_path(None);
   }

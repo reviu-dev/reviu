@@ -13,8 +13,8 @@ use gfm_markdown_viewer::{
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Image,
-  ObjectFit, ParentElement, Pixels, Render, RenderImage, SharedString, Styled, Subscription, Task,
-  Window, div, img, prelude::*, px, size,
+  ObjectFit, ParentElement, PathPromptOptions, Pixels, Render, RenderImage, SharedString, Styled,
+  Subscription, Task, Window, div, img, prelude::*, px, size,
 };
 #[cfg(test)]
 use gpui_component::IndexPath;
@@ -28,6 +28,7 @@ use gpui_component::{
   label::Label,
   list::ListItem,
   menu::{DropdownMenu as _, PopupMenuItem},
+  notification::Notification,
   pagination::Pagination,
   scroll::ScrollableElement,
   select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
@@ -61,12 +62,14 @@ use crate::{
     GithubRepositoryLanguage,
   },
   auth_state::{AuthState, AuthStateStore},
+  config::{AppSettings, CloneProtocol, ConfigStore},
   date_format::format_relative_time,
   file_preview::{
     FilePreviewKind, file_preview_kind, is_markdown_path, is_svg_path, raster_image_from_bytes,
     should_show_unsupported_binary_placeholder,
   },
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
+  git_page::GitPageHandle,
   github_home_tabs::{
     GithubIssueSearchFilters, GithubIssueSearchSort, GithubPullRequestFilterOptionLabel,
     GithubPullRequestFilterOptionUser, GithubPullRequestFilterOptions,
@@ -3429,6 +3432,11 @@ pub struct GithubRepoPage {
   repository_error: Option<SharedString>,
   repository_task: Option<Task<()>>,
   star_task: Option<Task<()>>,
+  local_clone_path: Option<PathBuf>,
+  local_clone_detected: bool,
+  local_clone_detection_task: Option<Task<()>>,
+  clone_in_progress: bool,
+  clone_task: Option<Task<()>>,
   readme_request_generation: u64,
   readme_loading: bool,
   readme_error: Option<SharedString>,
@@ -3739,6 +3747,11 @@ impl GithubRepoPage {
       repository_error: None,
       repository_task: None,
       star_task: None,
+      local_clone_path: None,
+      local_clone_detected: false,
+      local_clone_detection_task: None,
+      clone_in_progress: false,
+      clone_task: None,
       readme_request_generation: 0,
       readme_loading: false,
       readme_error: None,
@@ -4703,6 +4716,125 @@ impl GithubRepoPage {
       window,
       cx,
     );
+  }
+
+  fn detect_local_clone(&mut self, cx: &mut Context<Self>) {
+    let owner = self.owner.to_string();
+    let repo = self.repo.to_string();
+    if owner.trim().is_empty() || repo.trim().is_empty() {
+      return;
+    }
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        let target_owner = owner.to_lowercase();
+        let target_repo = repo.to_lowercase();
+        for recent in ConfigStore::load_recent_repositories() {
+          let Ok(Some(remote)) = git::current_github_remote_repo(&recent.path) else {
+            continue;
+          };
+          if remote.owner.eq_ignore_ascii_case(&target_owner)
+            && remote.repo.eq_ignore_ascii_case(&target_repo)
+          {
+            return Some(recent.path);
+          }
+          let _ = target_owner.as_str();
+          let _ = target_repo.as_str();
+        }
+        None
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.local_clone_detection_task = None;
+        this.local_clone_path = result;
+        this.local_clone_detected = true;
+        cx.notify();
+      });
+    });
+
+    self.local_clone_detection_task = Some(task);
+  }
+
+  fn start_clone_repository(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    if self.clone_in_progress {
+      return;
+    }
+
+    let owner = self.owner.to_string();
+    let repo = self.repo.to_string();
+    if owner.trim().is_empty() || repo.trim().is_empty() {
+      return;
+    }
+
+    let protocol = AppSettings::get(cx).clone_protocol;
+
+    let receiver = cx.prompt_for_paths(PathPromptOptions {
+      files: false,
+      directories: true,
+      multiple: false,
+      prompt: Some("Pick a parent folder for the clone".into()),
+    });
+
+    self.clone_in_progress = true;
+    cx.notify();
+
+    let window_handle = self.window_handle;
+    let task = cx.spawn(async move |this, cx| {
+      let parent = match receiver.await {
+        Ok(Ok(Some(paths))) => paths.into_iter().next(),
+        _ => None,
+      };
+
+      let Some(parent) = parent else {
+        let _ = this.update(cx, |this, cx| {
+          this.clone_in_progress = false;
+          this.clone_task = None;
+          cx.notify();
+        });
+        return;
+      };
+
+      let destination = parent.join(&repo);
+      let url = match protocol {
+        CloneProtocol::Https => format!("https://github.com/{owner}/{repo}.git"),
+        CloneProtocol::Ssh => format!("git@github.com:{owner}/{repo}.git"),
+      };
+      println!("Cloning from {url} into {}", destination.display());
+      let destination_for_task = destination.clone();
+      let clone_result = unblock(move || git::clone(&url, &destination_for_task)).await;
+
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        let _ = this.update(cx, |this, cx| {
+          this.clone_in_progress = false;
+          this.clone_task = None;
+          cx.notify();
+        });
+
+        match clone_result {
+          Ok(()) => {
+            window.push_notification(
+              Notification::success(format!("Cloned into {}", destination.display())),
+              cx,
+            );
+            let _ = this.update(cx, |this, cx| {
+              this.local_clone_path = Some(destination.clone());
+              this.local_clone_detected = true;
+              cx.notify();
+            });
+            GitPageHandle::show_repository(destination, cx);
+          }
+          Err(error) => {
+            window.push_notification(
+              Notification::error(error.to_string()).title("Clone failed"),
+              cx,
+            );
+          }
+        }
+      });
+    });
+
+    self.clone_task = Some(task);
   }
 
   fn load_repository_branches(&mut self, cx: &mut Context<Self>) {
@@ -6169,8 +6301,12 @@ impl GithubRepoPage {
     self.repository = None;
     self.repository_loading = true;
     self.repository_error = None;
+    self.local_clone_path = None;
+    self.local_clone_detected = false;
+    self.local_clone_detection_task = None;
     self.reset_readme_state(cx);
     self.reset_code_state(cx);
+    self.detect_local_clone(cx);
 
     self.pull_requests_error = None;
     self.open_pull_request_count = None;
@@ -6554,6 +6690,9 @@ impl GithubRepoPage {
           )
       });
 
+    let show_clone_button = self.local_clone_detected && self.local_clone_path.is_none();
+    let clone_in_progress = self.clone_in_progress;
+
     div()
       .px_3()
       .py_2()
@@ -6583,7 +6722,27 @@ impl GithubRepoPage {
               )
               .child(div().text_sm().font_medium().child(repo_label)),
           )
-          .child(actions_menu),
+          .child(
+            h_flex()
+              .items_center()
+              .gap_1()
+              .when(show_clone_button, |this| {
+                this.child(
+                  Button::new("repo-clone")
+                    .label("Clone")
+                    .icon(UiIconName::Download)
+                    .outline()
+                    .small()
+                    .loading(clone_in_progress)
+                    .disabled(clone_in_progress)
+                    .tooltip("Clone this repository locally")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                      this.start_clone_repository(window, cx);
+                    })),
+                )
+              })
+              .child(actions_menu),
+          ),
       )
       .child(tab_bar)
   }

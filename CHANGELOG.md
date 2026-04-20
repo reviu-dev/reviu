@@ -16,6 +16,10 @@ Create a new repository directly from Reviu. Pick yourself or one of your organi
 
 Fork any repository from its repo page in Reviu. Pick yourself or one of your organizations as owner, optionally rename the fork, and Reviu opens the new fork as soon as it's ready. Defaults to copying only the default branch for a faster fork.
 
+### Clone Repository
+
+Clone any GitHub repository from its repo page with one click. Pick a parent folder, and Reviu runs the clone and opens the new local repository on the Git page. HTTPS is used by default, with an SSH option available in Settings under Git.
+
 ## 0.4.0
 
 ### Windows Support
