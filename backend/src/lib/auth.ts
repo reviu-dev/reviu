@@ -11,6 +11,7 @@ import { db } from '../db/index.js'
 
 import { user } from '../db/schemas/index.js'
 import { env } from './env.js'
+import { logger } from './logger.js'
 import { polarClient } from './polar.js'
 import { withRedisClient } from './redis.js'
 import { getTrustedOrigins } from './utils.js'
@@ -109,6 +110,11 @@ export const auth = betterAuth({
           onSubscriptionActive: async (payload) => {
             const { email } = payload.data.customer
 
+            if (!email) {
+              logger.error('Received Polar webhook for active subscription without email, skipping user update')
+              return
+            }
+
             await db.update(user)
               .set({
                 proGrantedAt: new Date(),
@@ -117,6 +123,11 @@ export const auth = betterAuth({
           },
           onSubscriptionRevoked: async (payload) => {
             const { email } = payload.data.customer
+
+            if (!email) {
+              logger.error('Received Polar webhook for revoked subscription without email, skipping user update')
+              return
+            }
 
             await db.update(user)
               .set({

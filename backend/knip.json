@@ -8,8 +8,5 @@
   ],
   "ignore": [
     "migrations/**"
-  ],
-  "ignoreDependencies": [
-    "pino-pretty"
   ]
 }

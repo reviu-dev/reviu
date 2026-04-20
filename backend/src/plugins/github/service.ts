@@ -2263,7 +2263,7 @@ export async function fetchGithubCommitConditionally(
 }
 
 export async function fetchGithubPullRequestCommitsAllPages(
-  { token, params, perPage = 100}: {
+  { token, params, perPage = 100 }: {
     token: string
     params: Omit<PullRequestCommitsParams, 'per_page' | 'page'>
     perPage?: number
@@ -2313,7 +2313,7 @@ async function fetchGithubPullRequestFilesPage(
 }
 
 export async function fetchGithubPullRequestFilesAllPages(
-  { token, params, perPage = 100}: {
+  { token, params, perPage = 100 }: {
     token: string
     params: Omit<PullRequestFilesParams, 'per_page' | 'page'>
     perPage?: number
@@ -2413,7 +2413,7 @@ export async function fetchGithubPullRequestsAssociatedWithCommit(
 }
 
 export async function fetchGithubCommitFilesAllPages(
-  { token, params, perPage = 100}: {
+  { token, params, perPage = 100 }: {
     token: string
     params: Omit<CommitParams, 'per_page' | 'page'>
     perPage?: number
@@ -2518,7 +2518,7 @@ export async function patchGithubPullRequestComment(
 }
 
 export async function deleteGithubPullRequestComment(
-  { token, params}: { token: string, params: DeletePullRequestCommentParams },
+  { token, params }: { token: string, params: DeletePullRequestCommentParams },
 ): Promise<void> {
   await requestGithubWithoutData('DELETE /repos/{owner}/{repo}/pulls/comments/{comment_id}', {
     token,
