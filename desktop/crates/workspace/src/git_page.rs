@@ -3355,6 +3355,39 @@ impl GitPage {
     cx.notify();
   }
 
+  fn clear_selected_repo(&mut self, cx: &mut Context<Self>) {
+    if self.selected_repo.is_none() {
+      return;
+    }
+    self.selected_repo = None;
+    self.invalidate_open_file_task();
+    self.selected_file = None;
+    self.select_first_file_after_restore = false;
+    self.operation_error = None;
+    self.editor = None;
+    self.binary_preview = None;
+    self.interactive_rebase_todo_view = None;
+    self.merge_in_progress = false;
+    self.rebase_in_progress = false;
+    self.force_push_after_rebase = false;
+    self.push_pull_in_progress = false;
+    self.publish_branch_and_create_pr_in_progress = false;
+    self.status_entries.clear();
+    self.branch_status = None;
+    self.history_commits.clear();
+    self.history_revision = None;
+    self.history_loading = false;
+    self.history_expanded_commit_oids.clear();
+    self.history_commit_files.clear();
+    self.history_commit_files_loading.clear();
+    self.pending_history_file_loads.clear();
+    self.history_opened_commit_file = None;
+    ActiveLocalRepoStore::set(cx, None);
+    self.clear_branch_pr_lookup();
+    self.refresh_repo_select(cx);
+    cx.notify();
+  }
+
   fn refresh_repo_select(&mut self, _cx: &mut Context<Self>) {
     let selected_repo = self.selected_repo.clone();
     let mut recent = ConfigStore::load_recent_repositories();
@@ -4272,6 +4305,9 @@ impl GitPage {
     if palette_repositories_len > 1 {
       commands.push(CommandPaletteCommand::switch_repository());
     }
+    if palette_repositories_len > 0 {
+      commands.push(CommandPaletteCommand::forget_repository());
+    }
     commands.push(CommandPaletteCommand::open_repository());
     commands.extend(CommandPaletteCommand::default_global_commands(
       CommandPalettePage::Git,
@@ -4707,6 +4743,26 @@ impl GitPage {
           return Err(message);
         }
         self.set_selected_repo(repo_root, cx);
+        Ok(())
+      }
+      CommandPaletteAction::ForgetRepository(repository) => {
+        should_post_action_refresh = false;
+        let repo_root = PathBuf::from(repository.path.as_ref());
+        let forgetting_selected = self.selected_repo.as_deref() == Some(repo_root.as_path());
+        ConfigStore::forget_recent_repository(&repo_root);
+
+        if forgetting_selected {
+          let next_repo = ConfigStore::load_recent_repositories()
+            .into_iter()
+            .map(|repo| repo.path)
+            .find(|path| path != &repo_root);
+          match next_repo {
+            Some(next) => self.set_selected_repo(next, cx),
+            None => self.clear_selected_repo(cx),
+          }
+        } else {
+          self.refresh_repo_select(cx);
+        }
         Ok(())
       }
       CommandPaletteAction::SwitchBranch(branch) => {
@@ -11590,6 +11646,133 @@ mod tests {
     });
     assert_eq!(selected_repo, Some(repo_b.path.clone()));
     assert!(header_contains_repo);
+  }
+
+  #[gpui::test]
+  async fn command_palette_forget_repository_removes_it_from_dropdown(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo_a = TempRepo::init("git-page-cmd-forget-repo-a");
+    let repo_b = TempRepo::init("git-page-cmd-forget-repo-b");
+    let _ = commit_text_file(&repo_a.path, Path::new("README.md"), "a1\n", "initial");
+    let _ = commit_text_file(&repo_b.path, Path::new("README.md"), "b1\n", "initial");
+
+    ConfigStore::persist_recent_repository(&repo_a.path);
+    ConfigStore::persist_recent_repository(&repo_b.path);
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let result = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo_a.path.clone());
+      this.refresh_repo_select(cx);
+      this.handle_command_palette_action(
+        CommandPaletteAction::ForgetRepository(CommandPaletteRepository {
+          path: repo_b.path.to_string_lossy().to_string().into(),
+        }),
+        _window,
+        cx,
+      )
+    });
+    assert!(result.is_ok());
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let (selected_repo, still_contains_forgotten) = git_page.read_with(cx, |this, _cx| {
+      (
+        this.selected_repo.clone(),
+        this
+          .repo_dropdown_items
+          .iter()
+          .any(|item| item.path == repo_b.path),
+      )
+    });
+    // The forgotten repo should be gone from the dropdown, but the selection is untouched.
+    assert_eq!(selected_repo, Some(repo_a.path.clone()));
+    assert!(!still_contains_forgotten);
+
+    let persisted: Vec<PathBuf> = ConfigStore::load_recent_repositories()
+      .into_iter()
+      .map(|r| r.path)
+      .collect();
+    assert!(!persisted.contains(&repo_b.path));
+    assert!(persisted.contains(&repo_a.path));
+  }
+
+  #[gpui::test]
+  async fn command_palette_forget_selected_repository_switches_to_next_remaining(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo_a = TempRepo::init("git-page-cmd-forget-selected-a");
+    let repo_b = TempRepo::init("git-page-cmd-forget-selected-b");
+    let _ = commit_text_file(&repo_a.path, Path::new("README.md"), "a1\n", "initial");
+    let _ = commit_text_file(&repo_b.path, Path::new("README.md"), "b1\n", "initial");
+
+    ConfigStore::persist_recent_repository(&repo_a.path);
+    ConfigStore::persist_recent_repository(&repo_b.path);
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let result = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo_b.path.clone());
+      this.refresh_repo_select(cx);
+      this.handle_command_palette_action(
+        CommandPaletteAction::ForgetRepository(CommandPaletteRepository {
+          path: repo_b.path.to_string_lossy().to_string().into(),
+        }),
+        _window,
+        cx,
+      )
+    });
+    assert!(result.is_ok());
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let (selected_repo, dropdown_has_b) = git_page.read_with(cx, |this, _cx| {
+      (
+        this.selected_repo.clone(),
+        this
+          .repo_dropdown_items
+          .iter()
+          .any(|item| item.path == repo_b.path),
+      )
+    });
+    assert_eq!(selected_repo, Some(repo_a.path.clone()));
+    assert!(!dropdown_has_b);
+  }
+
+  #[gpui::test]
+  async fn command_palette_forget_last_repository_clears_selection(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-cmd-forget-last");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    ConfigStore::persist_recent_repository(&repo.path);
+
+    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    cx.executor().allow_parking();
+
+    let result = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.refresh_repo_select(cx);
+      this.handle_command_palette_action(
+        CommandPaletteAction::ForgetRepository(CommandPaletteRepository {
+          path: repo.path.to_string_lossy().to_string().into(),
+        }),
+        _window,
+        cx,
+      )
+    });
+    assert!(result.is_ok());
+
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let (selected_repo, dropdown_items_len) = git_page.read_with(cx, |this, _cx| {
+      (this.selected_repo.clone(), this.repo_dropdown_items.len())
+    });
+    assert_eq!(selected_repo, None);
+    assert_eq!(dropdown_items_len, 0);
   }
 
   #[gpui::test]
