@@ -189,7 +189,7 @@ export function desktopSignInSuccessPage(deepLinkUrl: string) {
           <polyline points="20 6 9 17 4 12"/>
         </svg>
       </div>
-      <p id="status">Connected — opening Reviu...</p>
+      <p id="status">Connected - opening Reviu...</p>
       <p class="hint">You can close this tab.</p>
     </div>
   `
