@@ -6643,6 +6643,7 @@ impl GithubRepoPage {
     let actions_menu = Button::new("repo-actions-menu")
       .icon(UiIconName::EllipsisVertical)
       .ghost()
+      .small()
       .compact()
       .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
         let view_url = github_url.clone();
