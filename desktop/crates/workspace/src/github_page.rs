@@ -2443,15 +2443,7 @@ impl GithubPage {
                   .as_deref()
                   .and_then(extract_number_from_api_url)
                 {
-                  open_pr_target(
-                    owner.to_string(),
-                    repo.to_string(),
-                    number,
-                    false,
-                    None,
-                    None,
-                    cx,
-                  );
+                  open_pr_target(owner.to_string(), repo.to_string(), number, false, None, cx);
                 }
               }
               "Issue" => {
@@ -3385,15 +3377,7 @@ impl GithubPage {
         open_changes_tab,
         review_comment_id,
       } => {
-        open_pr_target(
-          owner,
-          repo,
-          number,
-          open_changes_tab,
-          review_comment_id,
-          None,
-          cx,
-        );
+        open_pr_target(owner, repo, number, open_changes_tab, review_comment_id, cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubRepoDetails {
@@ -3407,7 +3391,7 @@ impl GithubPage {
         Ok(())
       }
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
-        open_commit_target(owner, repo, sha, None, cx);
+        open_commit_target(owner, repo, sha, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

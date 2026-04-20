@@ -472,7 +472,6 @@ impl WorkspaceView {
             number,
             false,
             None,
-            None,
             cx,
           );
         }

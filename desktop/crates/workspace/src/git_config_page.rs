@@ -165,15 +165,7 @@ impl GitConfigPage {
         open_changes_tab,
         review_comment_id,
       } => {
-        open_pr_target(
-          owner,
-          repo,
-          number,
-          open_changes_tab,
-          review_comment_id,
-          None,
-          cx,
-        );
+        open_pr_target(owner, repo, number, open_changes_tab, review_comment_id, cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubRepoDetails {
@@ -187,7 +179,7 @@ impl GitConfigPage {
         Ok(())
       }
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
-        open_commit_target(owner, repo, sha, None, cx);
+        open_commit_target(owner, repo, sha, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

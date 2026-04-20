@@ -81,7 +81,7 @@ use crate::{
     same_repo_issue_link_navigation, should_open_externally,
   },
   github_page::GithubPageHandle,
-  github_pr_details_page::{GithubPrDetailsPageHandle, GithubPrOpenTarget},
+  github_pr_details_page::GithubPrDetailsPageHandle,
   github_shared,
   navigation::NavigationHistory,
   number_format,
@@ -2652,20 +2652,13 @@ impl GithubIssueDetailsSheetView {
           number,
           review_comment_id.is_some(),
           review_comment_id,
-          Some((self.owner.to_string(), self.repo.to_string())),
           cx,
         );
         true
       }
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
         window.close_sheet(cx);
-        open_commit_target(
-          owner,
-          repo,
-          sha,
-          Some((self.owner.to_string(), self.repo.to_string())),
-          cx,
-        );
+        open_commit_target(owner, repo, sha, cx);
         true
       }
       _ => false,
@@ -3857,16 +3850,14 @@ impl GithubRepoPage {
       self.merged_pull_requests.clone(),
       self.closed_pull_requests.clone(),
     ] {
-      let subscription = cx.subscribe(&list, |this, state, event: &VariableListEvent, cx| {
+      let subscription = cx.subscribe(&list, |_, state, event: &VariableListEvent, cx| {
         if let VariableListEvent::Confirm(ix) = event {
           let row = state.read(cx).delegate().matched_rows.get(*ix).cloned();
           if let Some(row) = row {
-            GithubPrDetailsPageHandle::show_with_repo_return(
+            GithubPrDetailsPageHandle::show(
               row.pr.repository.owner.clone().into(),
               row.pr.repository.repo.clone().into(),
               row.pr.number,
-              this.owner.clone(),
-              this.repo.clone(),
               cx,
             );
           }
@@ -6549,40 +6540,18 @@ impl GithubRepoPage {
         open_changes_tab,
         review_comment_id,
       } => {
-        if self.owner.as_ref().is_empty() || self.repo.as_ref().is_empty() {
-          GithubPrDetailsPageHandle::show_with_open_target(
-            owner.into(),
-            repo.into(),
-            number,
-            open_changes_tab,
-            review_comment_id,
-            cx,
-          );
-        } else {
-          GithubPrDetailsPageHandle::show_with_repo_return_open_target(
-            owner.into(),
-            repo.into(),
-            number,
-            self.owner.clone(),
-            self.repo.clone(),
-            GithubPrOpenTarget::new(open_changes_tab, review_comment_id),
-            cx,
-          );
-        }
+        GithubPrDetailsPageHandle::show_with_open_target(
+          owner.into(),
+          repo.into(),
+          number,
+          open_changes_tab,
+          review_comment_id,
+          cx,
+        );
         Ok(())
       }
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
-        if self.owner.as_ref().is_empty() || self.repo.as_ref().is_empty() {
-          open_commit_target(owner, repo, sha, None, cx);
-        } else {
-          open_commit_target(
-            owner,
-            repo,
-            sha,
-            Some((self.owner.to_string(), self.repo.to_string())),
-            cx,
-          );
-        }
+        open_commit_target(owner, repo, sha, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
@@ -7225,13 +7194,7 @@ impl GithubRepoPage {
                 .cursor_pointer()
                 .hover(move |this| this.bg(hover_bg))
                 .on_click(move |_, _, cx| {
-                  open_commit_target(
-                    owner.clone(),
-                    repo.clone(),
-                    sha.clone(),
-                    Some((owner.clone(), repo.clone())),
-                    cx,
-                  );
+                  open_commit_target(owner.clone(), repo.clone(), sha.clone(), cx);
                 })
               })),
           )
@@ -7572,13 +7535,7 @@ impl GithubRepoPage {
                       .cursor_pointer()
                       .hover(|this| this.opacity(0.8))
                       .on_click(move |_, _, cx| {
-                        open_commit_target(
-                          owner.clone(),
-                          repo.clone(),
-                          sha.clone(),
-                          Some((owner.clone(), repo.clone())),
-                          cx,
-                        );
+                        open_commit_target(owner.clone(), repo.clone(), sha.clone(), cx);
                       })
                   })
                   .child(
