@@ -3,7 +3,8 @@ use std::{collections::HashMap, ops::Range};
 use gpui::{
   App, AppContext as _, Context, Empty, Entity, EntityInputHandler as _, Focusable as _, Global,
   Half as _, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render,
-  RenderOnce, SharedString, StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _, px,
+  RenderOnce, SharedString, StyleRefinement, Styled, Window, deferred, div,
+  prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
   ActiveTheme as _, Sizable, Size, h_flex,
@@ -311,60 +312,63 @@ impl Render for GithubEmojiCompletionOverlay {
     let top = EMOJI_MENU_TOP_OFFSET_PX + cursor_position.line as f32 * EMOJI_MENU_LINE_HEIGHT_PX;
     let overlay = cx.entity();
 
-    div()
-      .id(("github-emoji-completion-menu", self.input.entity_id()))
-      .absolute()
-      .left(px(EMOJI_MENU_LEFT_OFFSET_PX))
-      .top(px(top))
-      .w(px(EMOJI_MENU_WIDTH_PX))
-      .max_h(px(EMOJI_MENU_MAX_HEIGHT_PX))
-      .overflow_hidden()
-      .occlude()
-      .bg(cx.theme().popover)
-      .text_color(cx.theme().popover_foreground)
-      .border_1()
-      .border_color(cx.theme().border)
-      .rounded(cx.theme().radius)
-      .shadow_lg()
-      .p_1()
-      .children(snapshot.items.into_iter().enumerate().map(|(ix, emoji)| {
-        let selected = ix == selected_ix;
-        let overlay_for_click = overlay.clone();
-        let overlay_for_hover = overlay.clone();
-        h_flex()
-          .id(("github-emoji-completion-item", ix))
-          .w_full()
-          .items_center()
-          .gap_2()
-          .px_2()
-          .py_1()
-          .rounded(cx.theme().radius.half())
-          .text_xs()
-          .line_height(gpui::relative(1.1))
-          .cursor_pointer()
-          .when(selected, |this| {
-            this
-              .bg(cx.theme().accent)
-              .text_color(cx.theme().accent_foreground)
-          })
-          .hover(|this| this.bg(cx.theme().accent.opacity(0.8)))
-          .on_mouse_move(move |_, _, cx| {
-            overlay_for_hover.update(cx, |overlay, cx| {
-              if overlay.selected_ix != ix {
-                overlay.selected_ix = ix;
-                cx.notify();
-              }
-            });
-          })
-          .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-            overlay_for_click.update(cx, |overlay, cx| {
-              overlay.insert_item_at(ix, window, cx);
-              cx.stop_propagation();
-            });
-          })
-          .child(SharedString::from(emoji_completion_label(emoji)))
-      }))
-      .into_any_element()
+    deferred(
+      div()
+        .id(("github-emoji-completion-menu", self.input.entity_id()))
+        .absolute()
+        .left(px(EMOJI_MENU_LEFT_OFFSET_PX))
+        .top(px(top))
+        .w(px(EMOJI_MENU_WIDTH_PX))
+        .max_h(px(EMOJI_MENU_MAX_HEIGHT_PX))
+        .overflow_hidden()
+        .occlude()
+        .bg(cx.theme().popover)
+        .text_color(cx.theme().popover_foreground)
+        .border_1()
+        .border_color(cx.theme().border)
+        .rounded(cx.theme().radius)
+        .shadow_lg()
+        .p_1()
+        .children(snapshot.items.into_iter().enumerate().map(|(ix, emoji)| {
+          let selected = ix == selected_ix;
+          let overlay_for_click = overlay.clone();
+          let overlay_for_hover = overlay.clone();
+          h_flex()
+            .id(("github-emoji-completion-item", ix))
+            .w_full()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .rounded(cx.theme().radius.half())
+            .text_xs()
+            .line_height(gpui::relative(1.1))
+            .cursor_pointer()
+            .when(selected, |this| {
+              this
+                .bg(cx.theme().accent)
+                .text_color(cx.theme().accent_foreground)
+            })
+            .hover(|this| this.bg(cx.theme().accent.opacity(0.8)))
+            .on_mouse_move(move |_, _, cx| {
+              overlay_for_hover.update(cx, |overlay, cx| {
+                if overlay.selected_ix != ix {
+                  overlay.selected_ix = ix;
+                  cx.notify();
+                }
+              });
+            })
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+              overlay_for_click.update(cx, |overlay, cx| {
+                overlay.insert_item_at(ix, window, cx);
+                cx.stop_propagation();
+              });
+            })
+            .child(SharedString::from(emoji_completion_label(emoji)))
+        })),
+    )
+    .with_priority(2)
+    .into_any_element()
   }
 }
 
