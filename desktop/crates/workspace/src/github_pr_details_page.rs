@@ -13166,6 +13166,11 @@ impl GithubPrDetailsPage {
         self.set_show_local_project_files(next, cx);
         Ok(())
       }
+      CommandPaletteAction::SearchGithubRepository => {
+        let api = WorkspaceApi::global(cx).api.clone();
+        crate::github_search_dialog::open_github_search_dialog(api, window, cx);
+        Ok(())
+      }
       _ => Err("Command not available.".into()),
     }
   }

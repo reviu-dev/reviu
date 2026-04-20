@@ -29,6 +29,7 @@ use crate::{
   github_navigation::{open_commit_target, open_pr_target, open_repo_target},
   github_page::GithubPageHandle,
   navigation::NavigationHistory,
+  workspace::WorkspaceApi,
 };
 
 pub struct GitConfigPage {
@@ -197,6 +198,11 @@ impl GitConfigPage {
       CommandPaletteAction::OpenGitConfigPage => Ok(()),
       CommandPaletteAction::SendFeedback => {
         crate::feedback_dialog::open_feedback_dialog(window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::SearchGithubRepository => {
+        let api = WorkspaceApi::global(cx).api.clone();
+        crate::github_search_dialog::open_github_search_dialog(api, window, cx);
         Ok(())
       }
       _ => Err("Command not available.".into()),

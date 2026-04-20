@@ -237,6 +237,26 @@ const GITHUB_GRAPHQL_SEARCH_ISSUES_QUERY = `
   }
 `
 
+const GITHUB_GRAPHQL_SEARCH_REPOSITORIES_QUERY = `
+  query SearchRepositories($query: String!, $first: Int!) {
+    search(query: $query, type: REPOSITORY, first: $first) {
+      repositoryCount
+      nodes {
+        ... on Repository {
+          nameWithOwner
+          description
+          stargazerCount
+          isPrivate
+          owner {
+            login
+            avatarUrl
+          }
+        }
+      }
+    }
+  }
+`
+
 const GITHUB_GRAPHQL_REPOSITORY_OVERVIEW_QUERY = `
   query RepositoryOverview($owner: String!, $name: String!) {
     repository(owner: $owner, name: $name) {
@@ -827,6 +847,21 @@ interface GithubGraphqlSearchPullRequestsResponse {
   }
 }
 
+interface GithubGraphqlRepositorySearchNode {
+  nameWithOwner: string
+  description: string | null
+  stargazerCount: number
+  isPrivate: boolean
+  owner: { login: string, avatarUrl: string }
+}
+
+interface GithubGraphqlSearchRepositoriesResponse {
+  search: {
+    repositoryCount: number
+    nodes?: Array<GithubGraphqlRepositorySearchNode | null> | null
+  }
+}
+
 interface GithubGraphqlMarkPullRequestReadyForReviewResponse {
   markPullRequestReadyForReview?: {
     pullRequest?: {
@@ -1407,6 +1442,53 @@ export async function fetchGithubPullRequestsConditionally(
     'GET /repos/{owner}/{repo}/pulls',
     options,
   )
+}
+
+interface GithubRepositorySearchResult {
+  owner: string
+  name: string
+  full_name: string
+  description: string | null
+  stars: number
+  private: boolean
+  owner_avatar_url: string | null
+}
+
+export async function fetchGithubRepositorySearchGraphql(
+  {
+    token,
+    query,
+    limit,
+  }: {
+    token: string
+    query: string
+    limit: number
+  },
+): Promise<{ repositories: GithubRepositorySearchResult[], repositoryCount: number }> {
+  const data = await requestGithubGraphqlData<GithubGraphqlSearchRepositoriesResponse>({
+    token,
+    query: GITHUB_GRAPHQL_SEARCH_REPOSITORIES_QUERY,
+    variables: {
+      query,
+      first: limit,
+    },
+  })
+
+  const nodes = data.search.nodes?.flatMap(node => (node ? [node] : [])) ?? []
+  const repositories = nodes.map((node) => {
+    const [owner, name] = node.nameWithOwner.split('/', 2)
+    return {
+      owner: owner ?? node.owner.login,
+      name: name ?? node.nameWithOwner,
+      full_name: node.nameWithOwner,
+      description: node.description,
+      stars: node.stargazerCount,
+      private: node.isPrivate,
+      owner_avatar_url: node.owner.avatarUrl ?? null,
+    }
+  })
+
+  return { repositories, repositoryCount: data.search.repositoryCount }
 }
 
 export async function fetchGithubPullRequestSearchGraphql(

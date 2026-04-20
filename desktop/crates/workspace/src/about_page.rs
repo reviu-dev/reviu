@@ -169,6 +169,11 @@ impl AboutPage {
         crate::feedback_dialog::open_feedback_dialog(window, cx);
         Ok(())
       }
+      CommandPaletteAction::SearchGithubRepository => {
+        let api = WorkspaceApi::global(cx).api.clone();
+        crate::github_search_dialog::open_github_search_dialog(api, window, cx);
+        Ok(())
+      }
       _ => Err("Command not available.".into()),
     }
   }

@@ -166,6 +166,7 @@ import {
   fetchGithubRepositoryLabels,
   fetchGithubRepositoryOverview,
   fetchGithubRepositoryReadmeConditionally,
+  fetchGithubRepositorySearchGraphql,
   fetchGithubRepositoryTreesConditionally,
   fetchGithubUserOrganizations,
   fetchGithubUserRepositories,
@@ -190,6 +191,7 @@ import {
 
 const LATEST_PULL_REQUESTS_LIMIT = 20
 const REPOSITORY_GRAPHQL_SEARCH_LIMIT = 100
+const REPOSITORY_SEARCH_LIMIT = 10
 const REPOSITORY_DEFAULT_PER_PAGE = 30
 const REPOSITORY_MAX_PER_PAGE = 50
 const GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY = 'pullRequest'
@@ -3149,6 +3151,27 @@ export const githubRoutes = githubRouter
       if (status === 404) {
         return ctx.json({ contentBase64: null } satisfies GithubFileAsset, 200)
       }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/search', async (ctx) => {
+    const query = ctx.req.query('q')?.trim() ?? ''
+    if (!query) {
+      return ctx.json({ repositories: [] }, 200)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const { repositories } = await fetchGithubRepositorySearchGraphql({
+        token: githubToken,
+        query,
+        limit: REPOSITORY_SEARCH_LIMIT,
+      })
+      return ctx.json({ repositories }, 200)
+    }
+    catch (error) {
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })
