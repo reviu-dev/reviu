@@ -14,14 +14,14 @@ import {
 
 const navItems = [
   {
-    title: 'Github Cache',
-    to: { name: 'GithubCache' },
-    icon: DatabaseZap,
-  },
-  {
     title: 'Manage Users',
     to: { name: 'ManageUsers' },
     icon: Users,
+  },
+  {
+    title: 'Github Cache',
+    to: { name: 'GithubCache' },
+    icon: DatabaseZap,
   },
 ]
 </script>

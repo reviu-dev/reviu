@@ -4,7 +4,7 @@ export const routes: RouteRecordRaw[] = [
   {
     name: 'Home',
     path: '/',
-    redirect: { name: 'GithubCache' },
+    redirect: { name: 'ManageUsers' },
   },
   {
     name: 'Signin',
