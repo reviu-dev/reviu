@@ -905,15 +905,18 @@ async function fetchPullRequestDetailsWithCache(
         )
 
         let mergeBaseSha = data.base.sha
-        const baseRef = data.base.ref
-        const headRef = data.head.ref
         const headOwner = data.head.repo.owner.login
+        const isCrossRepo = headOwner !== org
+        const baseRef = data.base.sha
+        const headRef = isCrossRepo
+          ? `${headOwner}:${data.head.sha}`
+          : data.head.sha
 
         try {
           const compareParams: CompareParams = {
             owner: org,
             repo,
-            basehead: `${baseRef}...${headOwner}:${headRef}`,
+            basehead: `${baseRef}...${headRef}`,
           }
 
           const compare = await compareGithubRefs({ token: githubToken, params: compareParams })
