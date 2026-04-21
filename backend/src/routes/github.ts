@@ -3434,7 +3434,7 @@ export const githubRoutes = githubRouter
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })
-  .get('/repos/:owner/:repo/trees/:tree_sha', async (ctx) => {
+  .get('/repos/:owner/:repo/trees/:tree_sha{.+}', async (ctx) => {
     const { owner, repo, tree_sha } = ctx.req.param()
     const recursive = ctx.req.query('recursive')
 
