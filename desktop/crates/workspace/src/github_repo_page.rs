@@ -7301,10 +7301,11 @@ impl GithubRepoPage {
                 let repo = repo.clone();
                 let sha = commit.sha.clone();
                 let hover_bg = theme.accent.opacity(0.55);
-                github_shared::render_commit_row_content(
+                github_shared::render_commit_row_content_with_authors(
                   &commit.sha,
                   &commit.message,
                   &commit.committed_at,
+                  &commit.authors,
                   commit.author_login.as_deref(),
                   commit.author_avatar_url.as_deref(),
                   &theme,

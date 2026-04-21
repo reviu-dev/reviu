@@ -407,6 +407,8 @@ pub struct GithubRepositoryCommit {
   pub author_login: Option<String>,
   #[serde(rename = "author_avatar_url")]
   pub author_avatar_url: Option<String>,
+  #[serde(default)]
+  pub authors: Vec<GithubCommitAuthorIdentity>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -616,6 +618,15 @@ pub struct GithubPullRequestCommitUser {
   pub avatar_url: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct GithubCommitAuthorIdentity {
+  pub name: Option<String>,
+  pub email: Option<String>,
+  pub login: Option<String>,
+  #[serde(rename = "avatar_url")]
+  pub avatar_url: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestCommit {
   pub sha: String,
@@ -628,6 +639,8 @@ pub struct GithubPullRequestCommit {
   pub parent_sha: Option<String>,
   pub author: Option<GithubPullRequestCommitUser>,
   pub committer: Option<GithubPullRequestCommitUser>,
+  #[serde(default)]
+  pub authors: Vec<GithubCommitAuthorIdentity>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -4099,6 +4112,29 @@ mod tests {
         "login": "acme",
         "avatar_url": "https://example.com/avatar.png"
       },
+      "recent_commits": [
+        {
+          "sha": "abc123",
+          "message": "feat: add overview authors",
+          "committed_at": "2026-04-20T12:00:00Z",
+          "author_login": "octocat",
+          "author_avatar_url": "https://example.com/octocat.png",
+          "authors": [
+            {
+              "name": "Octo Cat",
+              "email": "octocat@example.com",
+              "login": "octocat",
+              "avatar_url": "https://example.com/octocat.png"
+            },
+            {
+              "name": "Co Author",
+              "email": "coauthor@example.com",
+              "login": null,
+              "avatar_url": null
+            }
+          ]
+        }
+      ],
       "license": {
         "key": "mit",
         "name": "MIT License",
@@ -4115,6 +4151,12 @@ mod tests {
     assert_eq!(details.owner.login, "acme");
     assert_eq!(details.default_branch, "main");
     assert_eq!(details.stargazers_count, 123);
+    assert_eq!(details.recent_commits.len(), 1);
+    assert_eq!(details.recent_commits[0].authors.len(), 2);
+    assert_eq!(
+      details.recent_commits[0].authors[1].email.as_deref(),
+      Some("coauthor@example.com")
+    );
     assert_eq!(
       details
         .license
@@ -5885,7 +5927,21 @@ mod tests {
           "committed_at": "2026-02-27T10:05:00Z",
           "parent_sha": "0000000000000000000000000000000000000000",
           "author": { "login": "octocat", "avatar_url": null },
-          "committer": { "login": "octocat", "avatar_url": null }
+          "committer": { "login": "octocat", "avatar_url": null },
+          "authors": [
+            {
+              "name": "Octo Cat",
+              "email": "octocat@example.com",
+              "login": "octocat",
+              "avatar_url": "https://example.com/octocat.png"
+            },
+            {
+              "name": "Co Author",
+              "email": "coauthor@example.com",
+              "login": null,
+              "avatar_url": null
+            }
+          ]
         }
       ]
     }"#;
@@ -5905,6 +5961,12 @@ mod tests {
     assert_eq!(
       commits[0].parent_sha.as_deref(),
       Some("0000000000000000000000000000000000000000")
+    );
+    assert_eq!(commits[0].authors.len(), 2);
+    assert_eq!(commits[0].authors[0].login.as_deref(), Some("octocat"));
+    assert_eq!(
+      commits[0].authors[1].email.as_deref(),
+      Some("coauthor@example.com")
     );
     handle.join().expect("join server thread");
   }
