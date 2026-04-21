@@ -41,6 +41,7 @@ pub enum UiIconName {
   Star,
   StarFilled,
   SmilePlus,
+  BrandX,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -84,6 +85,7 @@ impl IconNamed for UiIconName {
       UiIconName::Star => "icons/star.svg",
       UiIconName::StarFilled => "icons/star-filled.svg",
       UiIconName::SmilePlus => "icons/smile-plus.svg",
+      UiIconName::BrandX => "icons/brands/x.svg",
     }
     .into()
   }

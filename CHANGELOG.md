@@ -12,6 +12,10 @@ Find any repository on GitHub directly from the command palette. Trigger "Search
 
 Command palette entries are now grouped by purpose, Changes, Sync, Branches, Stash, Pull request, Repository, GitHub, Navigation, and more, with section headers that make it easier to scan and find the right command.
 
+### GitHub Profiles
+
+Open a GitHub user profile inside Reviu to see their avatar, profile links, follower counts, repository totals, language mix, and recent repositories without leaving the desktop app.
+
 ### Watch Repositories
 
 The repository page now includes a Watch button next to Star and Fork. Open the dropdown to switch between "Participating and @mentions", "All Activity", and "Ignore".

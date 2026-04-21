@@ -896,6 +896,53 @@ export interface GithubRepositoryDetails {
   contributors_count: number
 }
 
+export interface GithubUserProfileLanguage {
+  name: string
+  color: string | null
+  size: number
+  percentage: number
+}
+
+export interface GithubUserProfileRepository {
+  owner: string
+  repo: string
+  full_name: string
+  description: string | null
+  private: boolean
+  fork: boolean
+  archived: boolean
+  html_url: string
+  language: string | null
+  language_color: string | null
+  stargazers_count: number
+  forks_count: number
+  updated_at: string
+  pushed_at: string | null
+  languages: GithubUserProfileLanguage[]
+}
+
+export interface GithubUserProfile {
+  login: string
+  name: string | null
+  avatar_url: string | null
+  bio: string | null
+  company: string | null
+  location: string | null
+  website_url: string | null
+  twitter_username: string | null
+  html_url: string
+  created_at: string
+  followers_count: number
+  following_count: number
+  repositories_count: number
+  repositories_indexed_count: number
+  repositories_truncated: boolean
+  stargazers_count: number
+  forks_count: number
+  languages: GithubUserProfileLanguage[]
+  repositories: GithubUserProfileRepository[]
+}
+
 export interface GithubUserRepository {
   owner: string
   repo: string

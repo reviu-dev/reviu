@@ -169,6 +169,7 @@ import {
   fetchGithubRepositorySearchGraphql,
   fetchGithubRepositoryTreesConditionally,
   fetchGithubUserOrganizations,
+  fetchGithubUserProfileGraphql,
   fetchGithubUserRepositories,
   forkGithubRepository,
   githubSubscriptionModeFromGraphql,
@@ -194,6 +195,7 @@ import {
 const LATEST_PULL_REQUESTS_LIMIT = 20
 const REPOSITORY_GRAPHQL_SEARCH_LIMIT = 100
 const REPOSITORY_SEARCH_LIMIT = 10
+const USER_PROFILE_REPOSITORIES_LIMIT = 100
 const REPOSITORY_DEFAULT_PER_PAGE = 30
 const REPOSITORY_MAX_PER_PAGE = 50
 const GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY = 'pullRequest'
@@ -3188,6 +3190,30 @@ export const githubRoutes = githubRouter
       return ctx.json({ repositories: result.payload }, 200)
     }
     catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/users/:login', async (ctx) => {
+    const { login } = ctx.req.param()
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const profile = await fetchGithubUserProfileGraphql({
+        token: githubToken,
+        login,
+        repositoriesLimit: USER_PROFILE_REPOSITORIES_LIMIT,
+      })
+      if (!profile) {
+        return ctx.json({ error: 'GitHub user not found' }, 404)
+      }
+      return ctx.json(profile, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 404) {
+        return ctx.json({ error: 'GitHub user not found' }, 404)
+      }
       return ctx.json({ error: (error as Error).message }, 502)
     }
   })

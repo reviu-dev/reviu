@@ -64,6 +64,9 @@ import type {
   GithubReactionGroup,
   GithubRepositoryParameters,
   GithubRepositoryResponse,
+  GithubUserProfile,
+  GithubUserProfileLanguage,
+  GithubUserProfileRepository,
   GithubUserResponse,
   ListPullsParams,
   MergePullRequestParams,
@@ -250,6 +253,66 @@ const GITHUB_GRAPHQL_SEARCH_REPOSITORIES_QUERY = `
           owner {
             login
             avatarUrl
+          }
+        }
+      }
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_USER_PROFILE_QUERY = `
+  query UserProfile($login: String!, $first: Int!) {
+    user(login: $login) {
+      login
+      name
+      avatarUrl(size: 160)
+      bio
+      company
+      location
+      websiteUrl
+      twitterUsername
+      url
+      createdAt
+      followers {
+        totalCount
+      }
+      following {
+        totalCount
+      }
+      repositories(
+        first: $first
+        ownerAffiliations: OWNER
+        orderBy: { field: UPDATED_AT, direction: DESC }
+      ) {
+        totalCount
+        nodes {
+          name
+          nameWithOwner
+          description
+          isPrivate
+          isFork
+          isArchived
+          url
+          stargazerCount
+          forkCount
+          updatedAt
+          pushedAt
+          owner {
+            login
+          }
+          primaryLanguage {
+            name
+            color
+          }
+          languages(first: 10, orderBy: { field: SIZE, direction: DESC }) {
+            totalSize
+            edges {
+              size
+              node {
+                name
+                color
+              }
+            }
           }
         }
       }
@@ -861,6 +924,55 @@ interface GithubGraphqlSearchRepositoriesResponse {
     repositoryCount: number
     nodes?: Array<GithubGraphqlRepositorySearchNode | null> | null
   }
+}
+
+interface GithubGraphqlLanguageConnection {
+  totalSize: number
+  edges: Array<{
+    size: number
+    node: {
+      name: string
+      color: string | null
+    }
+  }>
+}
+
+interface GithubGraphqlUserProfileRepositoryNode {
+  name: string
+  nameWithOwner: string
+  description: string | null
+  isPrivate: boolean
+  isFork: boolean
+  isArchived: boolean
+  url: string
+  stargazerCount: number
+  forkCount: number
+  updatedAt: string
+  pushedAt: string | null
+  owner: { login: string }
+  primaryLanguage: { name: string, color: string | null } | null
+  languages: GithubGraphqlLanguageConnection
+}
+
+interface GithubGraphqlUserProfileResponse {
+  user: {
+    login: string
+    name: string | null
+    avatarUrl: string | null
+    bio: string | null
+    company: string | null
+    location: string | null
+    websiteUrl: string | null
+    twitterUsername: string | null
+    url: string
+    createdAt: string
+    followers: { totalCount: number }
+    following: { totalCount: number }
+    repositories: {
+      totalCount: number
+      nodes?: Array<GithubGraphqlUserProfileRepositoryNode | null> | null
+    }
+  } | null
 }
 
 interface GithubGraphqlMarkPullRequestReadyForReviewResponse {
@@ -2654,6 +2766,126 @@ export async function fetchGithubRepository(
     token,
     params,
   })
+}
+
+function mapGithubGraphqlLanguages(
+  languages: GithubGraphqlLanguageConnection,
+): GithubUserProfileLanguage[] {
+  const { totalSize, edges } = languages
+  if (totalSize <= 0) {
+    return []
+  }
+
+  return edges.map(edge => ({
+    name: edge.node.name,
+    color: edge.node.color,
+    size: edge.size,
+    percentage: Math.round((edge.size / totalSize) * 1000) / 10,
+  }))
+}
+
+function aggregateGithubGraphqlRepositoryLanguages(
+  repositories: GithubGraphqlUserProfileRepositoryNode[],
+): GithubUserProfileLanguage[] {
+  const totals = new Map<string, { name: string, color: string | null, size: number }>()
+
+  for (const repository of repositories) {
+    for (const edge of repository.languages.edges) {
+      const current = totals.get(edge.node.name)
+      totals.set(edge.node.name, {
+        name: edge.node.name,
+        color: current?.color ?? edge.node.color,
+        size: (current?.size ?? 0) + edge.size,
+      })
+    }
+  }
+
+  const totalSize = [...totals.values()].reduce((sum, language) => sum + language.size, 0)
+  if (totalSize <= 0) {
+    return []
+  }
+
+  return [...totals.values()]
+    .sort((a, b) => b.size - a.size)
+    .map(language => ({
+      ...language,
+      percentage: Math.round((language.size / totalSize) * 1000) / 10,
+    }))
+}
+
+function mapGithubUserProfileRepository(
+  repository: GithubGraphqlUserProfileRepositoryNode,
+): GithubUserProfileRepository {
+  const [owner, repo] = repository.nameWithOwner.split('/', 2)
+
+  return {
+    owner: owner ?? repository.owner.login,
+    repo: repo ?? repository.name,
+    full_name: repository.nameWithOwner,
+    description: repository.description,
+    private: repository.isPrivate,
+    fork: repository.isFork,
+    archived: repository.isArchived,
+    html_url: repository.url,
+    language: repository.primaryLanguage?.name ?? null,
+    language_color: repository.primaryLanguage?.color ?? null,
+    stargazers_count: repository.stargazerCount,
+    forks_count: repository.forkCount,
+    updated_at: repository.updatedAt,
+    pushed_at: repository.pushedAt,
+    languages: mapGithubGraphqlLanguages(repository.languages),
+  }
+}
+
+export async function fetchGithubUserProfileGraphql(
+  {
+    token,
+    login,
+    repositoriesLimit,
+  }: {
+    token: string
+    login: string
+    repositoriesLimit: number
+  },
+): Promise<GithubUserProfile | null> {
+  const data = await requestGithubGraphqlData<GithubGraphqlUserProfileResponse>({
+    token,
+    query: GITHUB_GRAPHQL_USER_PROFILE_QUERY,
+    variables: {
+      login,
+      first: repositoriesLimit,
+    },
+  })
+
+  const user = data.user
+  if (!user) {
+    return null
+  }
+
+  const repositories = user.repositories.nodes?.flatMap(node => (node ? [node] : [])) ?? []
+  const mappedRepositories = repositories.map(mapGithubUserProfileRepository)
+
+  return {
+    login: user.login,
+    name: user.name,
+    avatar_url: user.avatarUrl,
+    bio: user.bio,
+    company: user.company,
+    location: user.location,
+    website_url: user.websiteUrl,
+    twitter_username: user.twitterUsername,
+    html_url: user.url,
+    created_at: user.createdAt,
+    followers_count: user.followers.totalCount,
+    following_count: user.following.totalCount,
+    repositories_count: user.repositories.totalCount,
+    repositories_indexed_count: repositories.length,
+    repositories_truncated: user.repositories.totalCount > repositories.length,
+    stargazers_count: repositories.reduce((sum, repository) => sum + repository.stargazerCount, 0),
+    forks_count: repositories.reduce((sum, repository) => sum + repository.forkCount, 0),
+    languages: aggregateGithubGraphqlRepositoryLanguages(repositories),
+    repositories: mappedRepositories,
+  }
 }
 
 export async function fetchGithubRepositoryOverview(

@@ -68,6 +68,7 @@ use crate::{
   github_navigation::should_open_externally,
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
+  github_profile_page::GithubProfilePageHandle,
   github_repo_page::GithubRepoPageHandle,
   github_shared,
   interactive_rebase_todo_view::{
@@ -4495,6 +4496,10 @@ impl GitPage {
       }
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
         GithubCommitDetailsPageHandle::show(owner.into(), repo.into(), sha.into(), cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubProfile { login } => {
+        GithubProfilePageHandle::show(login.into(), cx);
         Ok(())
       }
       CommandPaletteAction::SwitchToPrBranch | CommandPaletteAction::ToggleUnchangedFiles => {

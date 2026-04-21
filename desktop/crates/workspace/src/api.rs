@@ -459,6 +459,72 @@ pub struct GithubRepositoryLanguage {
 
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
+pub struct GithubUserProfileRepository {
+  pub owner: String,
+  pub repo: String,
+  #[serde(rename = "full_name")]
+  pub full_name: String,
+  pub description: Option<String>,
+  pub private: bool,
+  pub fork: bool,
+  pub archived: bool,
+  #[serde(rename = "html_url")]
+  pub html_url: String,
+  pub language: Option<String>,
+  #[serde(rename = "language_color")]
+  pub language_color: Option<String>,
+  #[serde(rename = "stargazers_count")]
+  pub stargazers_count: u64,
+  #[serde(rename = "forks_count")]
+  pub forks_count: u64,
+  #[serde(rename = "updated_at")]
+  pub updated_at: String,
+  #[serde(rename = "pushed_at")]
+  pub pushed_at: Option<String>,
+  #[serde(default)]
+  pub languages: Vec<GithubRepositoryLanguage>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubUserProfile {
+  pub login: String,
+  pub name: Option<String>,
+  #[serde(rename = "avatar_url")]
+  pub avatar_url: Option<String>,
+  pub bio: Option<String>,
+  pub company: Option<String>,
+  pub location: Option<String>,
+  #[serde(rename = "website_url")]
+  pub website_url: Option<String>,
+  #[serde(rename = "twitter_username")]
+  pub twitter_username: Option<String>,
+  #[serde(rename = "html_url")]
+  pub html_url: String,
+  #[serde(rename = "created_at")]
+  pub created_at: String,
+  #[serde(rename = "followers_count")]
+  pub followers_count: u64,
+  #[serde(rename = "following_count")]
+  pub following_count: u64,
+  #[serde(rename = "repositories_count")]
+  pub repositories_count: u64,
+  #[serde(rename = "repositories_indexed_count")]
+  pub repositories_indexed_count: u64,
+  #[serde(rename = "repositories_truncated")]
+  pub repositories_truncated: bool,
+  #[serde(rename = "stargazers_count")]
+  pub stargazers_count: u64,
+  #[serde(rename = "forks_count")]
+  pub forks_count: u64,
+  #[serde(default)]
+  pub languages: Vec<GithubRepositoryLanguage>,
+  #[serde(default)]
+  pub repositories: Vec<GithubUserProfileRepository>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct GithubRepositoryTreeEntry {
   pub path: String,
   pub mode: String,
@@ -1828,6 +1894,20 @@ impl ApiClient {
     }
     let payload = response.json::<GithubUserRepositoriesResponse>()?;
     Ok(payload.repositories)
+  }
+
+  pub fn fetch_github_user_profile(&self, login: &str) -> Result<GithubUserProfile> {
+    let route = format!("/github/users/{login}");
+    let response = self.authed_request(Method::GET, route.as_str()).send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    response.json::<GithubUserProfile>().map_err(Into::into)
   }
 
   pub fn search_github_repositories(&self, query: &str) -> Result<Vec<GithubRepositorySearchItem>> {
@@ -3788,6 +3868,113 @@ mod tests {
       .clone()
       .unwrap_or_default();
     assert_eq!(request_line, "GET /github/repos/me HTTP/1.1");
+  }
+
+  #[test]
+  fn fetch_github_user_profile_parses_success_payload() {
+    let body = r##"{
+      "login": "octocat",
+      "name": "The Octocat",
+      "avatar_url": "https://avatars.githubusercontent.com/u/583231?v=4",
+      "bio": "GitHub mascot",
+      "company": "@github",
+      "location": "San Francisco",
+      "website_url": "https://github.blog",
+      "twitter_username": "octocat",
+      "html_url": "https://github.com/octocat",
+      "created_at": "2011-01-25T18:44:36Z",
+      "followers_count": 99,
+      "following_count": 5,
+      "repositories_count": 2,
+      "repositories_indexed_count": 2,
+      "repositories_truncated": false,
+      "stargazers_count": 20,
+      "forks_count": 4,
+      "languages": [
+        { "name": "TypeScript", "color": "#3178c6", "size": 1000, "percentage": 50.0 }
+      ],
+      "repositories": [
+        {
+          "owner": "octocat",
+          "repo": "hello-world",
+          "full_name": "octocat/hello-world",
+          "description": "Example repo",
+          "private": false,
+          "fork": false,
+          "archived": false,
+          "html_url": "https://github.com/octocat/hello-world",
+          "language": "TypeScript",
+          "language_color": "#3178c6",
+          "stargazers_count": 12,
+          "forks_count": 3,
+          "updated_at": "2026-04-10T10:00:00Z",
+          "pushed_at": "2026-04-10T09:00:00Z",
+          "languages": [
+            { "name": "TypeScript", "color": "#3178c6", "size": 700, "percentage": 70.0 }
+          ]
+        }
+      ]
+    }"##;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let profile = api
+      .fetch_github_user_profile("octocat")
+      .expect("fetch github user profile");
+
+    assert_eq!(profile.login, "octocat");
+    assert_eq!(profile.name.as_deref(), Some("The Octocat"));
+    assert_eq!(profile.followers_count, 99);
+    assert_eq!(profile.stargazers_count, 20);
+    assert_eq!(profile.languages.len(), 1);
+    assert_eq!(profile.languages[0].name, "TypeScript");
+    assert_eq!(profile.repositories.len(), 1);
+    assert_eq!(profile.repositories[0].full_name, "octocat/hello-world");
+    assert_eq!(
+      profile.repositories[0].language.as_deref(),
+      Some("TypeScript")
+    );
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_user_profile_calls_expected_route() {
+    let body = r#"{
+      "login": "octocat",
+      "name": null,
+      "avatar_url": null,
+      "bio": null,
+      "company": null,
+      "location": null,
+      "website_url": null,
+      "twitter_username": null,
+      "html_url": "https://github.com/octocat",
+      "created_at": "2011-01-25T18:44:36Z",
+      "followers_count": 0,
+      "following_count": 0,
+      "repositories_count": 0,
+      "repositories_indexed_count": 0,
+      "repositories_truncated": false,
+      "stargazers_count": 0,
+      "forks_count": 0,
+      "languages": [],
+      "repositories": []
+    }"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_github_user_profile("octocat")
+      .expect("fetch github user profile");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(request_line, "GET /github/users/octocat HTTP/1.1");
   }
 
   #[test]
@@ -6543,6 +6730,17 @@ mod tests {
     let api = make_test_api_client(base_url);
 
     let err = api.fetch_github_user_repositories().err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn fetch_github_user_profile_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api.fetch_github_user_profile("octocat").err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");

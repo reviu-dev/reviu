@@ -87,8 +87,8 @@ use crate::{
   git_page::GitPageHandle,
   github_home_tabs::{GithubPullRequestFilterOptionLabel, GithubPullRequestFilterOptionUser},
   github_navigation::{
-    SamePrGfmNavigation, open_commit_target, open_repo_target, same_pr_gfm_navigation,
-    should_open_externally,
+    SamePrGfmNavigation, open_commit_target, open_profile_target, open_repo_target,
+    same_pr_gfm_navigation, should_open_externally,
   },
   github_page::GithubPageHandle,
   github_repo_page::GithubRepoPageHandle,
@@ -6251,6 +6251,10 @@ impl GithubPrDetailsPage {
       }
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
         open_commit_target(owner, repo, sha, cx);
+        true
+      }
+      CommandPaletteAction::OpenGithubProfile { login } => {
+        open_profile_target(login, cx);
         true
       }
       _ => false,
@@ -13139,6 +13143,10 @@ impl GithubPrDetailsPage {
       }
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
         open_commit_target(owner, repo, sha, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubProfile { login } => {
+        open_profile_target(login, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

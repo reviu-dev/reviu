@@ -38,6 +38,7 @@ use crate::git_page::{GitPage, GitPageHandle};
 use crate::github_commit_details_page::{GithubCommitDetailsPage, GithubCommitDetailsPageHandle};
 use crate::github_page::{GithubPage, GithubPageHandle};
 use crate::github_pr_details_page::{GithubPrDetailsPage, GithubPrDetailsPageHandle};
+use crate::github_profile_page::{GithubProfilePage, GithubProfilePageHandle};
 use crate::github_repo_page::{GithubRepoPage, GithubRepoPageHandle};
 use crate::navigation::NavigationHistory;
 use crate::notification_count::NotificationCountStore;
@@ -56,6 +57,7 @@ const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
 pub enum WorkspacePage {
   Git,
   Github,
+  GithubProfile,
   GithubRepo,
   GithubPrDetails,
   GithubCommitDetails,
@@ -75,6 +77,10 @@ pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
     // Commit details: /github/{owner}/{repo}/commit/{sha}
     if segments.len() >= 5 && segments[3] == "commit" {
       return WorkspacePage::GithubCommitDetails;
+    }
+    // Profile page: /github/{login}
+    if segments.len() == 2 {
+      return WorkspacePage::GithubProfile;
     }
     // Repo page: /github/{owner}/{repo}[/{tab}]
     if segments.len() >= 3 {
@@ -115,9 +121,10 @@ fn page_has_file_search(pathname: &str) -> bool {
 fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
   match page {
     WorkspacePage::Git => UserMenuPage::Git,
-    WorkspacePage::Github | WorkspacePage::GithubRepo | WorkspacePage::GithubCommitDetails => {
-      UserMenuPage::Github
-    }
+    WorkspacePage::Github
+    | WorkspacePage::GithubProfile
+    | WorkspacePage::GithubRepo
+    | WorkspacePage::GithubCommitDetails => UserMenuPage::Github,
     WorkspacePage::GithubPrDetails => UserMenuPage::GithubPrDetails,
     WorkspacePage::Billing => UserMenuPage::Billing,
     WorkspacePage::GitConfig => UserMenuPage::GitConfig,
@@ -130,6 +137,7 @@ fn primary_navigation_selected_index(page: WorkspacePage) -> Option<usize> {
   match page {
     WorkspacePage::Git => Some(0),
     WorkspacePage::Github
+    | WorkspacePage::GithubProfile
     | WorkspacePage::GithubRepo
     | WorkspacePage::GithubPrDetails
     | WorkspacePage::GithubCommitDetails => Some(1),
@@ -144,6 +152,7 @@ fn refresh_label_for_workspace_page(page: WorkspacePage) -> Option<&'static str>
   match page {
     WorkspacePage::Git => Some("Refresh Git"),
     WorkspacePage::Github => Some("Refresh GitHub"),
+    WorkspacePage::GithubProfile => Some("Refresh Profile"),
     WorkspacePage::GithubRepo => Some("Refresh Repo"),
     WorkspacePage::GithubPrDetails => Some("Refresh PR"),
     WorkspacePage::GithubCommitDetails => Some("Refresh Commit"),
@@ -158,6 +167,7 @@ fn refresh_in_progress_for_workspace_page(page: WorkspacePage, cx: &App) -> bool
   match page {
     WorkspacePage::Git => GitPageHandle::is_refreshing(cx),
     WorkspacePage::Github => GithubPageHandle::is_refreshing(cx),
+    WorkspacePage::GithubProfile => GithubProfilePageHandle::is_refreshing(cx),
     WorkspacePage::GithubRepo => GithubRepoPageHandle::is_refreshing(cx),
     WorkspacePage::GithubPrDetails => GithubPrDetailsPageHandle::is_refreshing(cx),
     WorkspacePage::GithubCommitDetails => GithubCommitDetailsPageHandle::is_refreshing(cx),
@@ -284,6 +294,7 @@ pub struct WorkspaceView {
   git_page: Entity<GitPage>,
   git_config_page: Entity<GitConfigPage>,
   github_page: Entity<GithubPage>,
+  github_profile_page: Entity<GithubProfilePage>,
   github_repo_page: Entity<GithubRepoPage>,
   github_pr_details_page: Entity<GithubPrDetailsPage>,
   github_commit_details_page: Entity<GithubCommitDetailsPage>,
@@ -373,6 +384,7 @@ impl WorkspaceView {
     let git_page = cx.new(|cx| GitPage::new(window, cx));
     let git_config_page = cx.new(|cx| GitConfigPage::new(window, cx));
     let github_page = cx.new(|cx| GithubPage::new(window, cx));
+    let github_profile_page = cx.new(|cx| GithubProfilePage::new(window, cx));
     let github_repo_page = cx.new(|cx| GithubRepoPage::new(window, cx));
     let github_pr_details_page = cx.new(|cx| GithubPrDetailsPage::new(window, cx));
     let github_commit_details_page = cx.new(|cx| GithubCommitDetailsPage::new(window, cx));
@@ -384,6 +396,7 @@ impl WorkspaceView {
       git_page,
       git_config_page,
       github_page,
+      github_profile_page,
       github_repo_page,
       github_pr_details_page,
       github_commit_details_page,
@@ -769,6 +782,7 @@ impl WorkspaceView {
     match page {
       WorkspacePage::Git => GitPageHandle::refresh_page(cx),
       WorkspacePage::Github => GithubPageHandle::refresh(cx),
+      WorkspacePage::GithubProfile => GithubProfilePageHandle::refresh(cx),
       WorkspacePage::GithubRepo => GithubRepoPageHandle::refresh(cx),
       WorkspacePage::GithubPrDetails => GithubPrDetailsPageHandle::refresh(cx),
       WorkspacePage::GithubCommitDetails => GithubCommitDetailsPageHandle::refresh(cx),
@@ -1157,6 +1171,7 @@ impl Render for WorkspaceView {
 
     let git_page = self.git_page.clone();
     let github_page = self.github_page.clone();
+    let github_profile_page = self.github_profile_page.clone();
     let github_repo_page = self.github_repo_page.clone();
     let github_pr_details_page = self.github_pr_details_page.clone();
     let github_commit_details_page = self.github_commit_details_page.clone();
@@ -1174,6 +1189,10 @@ impl Render for WorkspaceView {
       .child(Route::new().path("github").element({
         let github_page = github_page.clone();
         move |_w, _cx| github_page.clone()
+      }))
+      .child(Route::new().path("github/{login}").element({
+        let github_profile_page = github_profile_page.clone();
+        move |_w, _cx| github_profile_page.clone()
       }))
       .child(Route::new().path("github/{owner}/{repo}").element({
         let github_repo_page = github_repo_page.clone();
@@ -1392,6 +1411,10 @@ mod tests {
   #[test]
   fn workspace_page_from_pathname_maps_github_repo() {
     assert_eq!(
+      workspace_page_from_pathname("/github/octocat"),
+      WorkspacePage::GithubProfile
+    );
+    assert_eq!(
       workspace_page_from_pathname("/github/owner/repo"),
       WorkspacePage::GithubRepo
     );
@@ -1455,6 +1478,10 @@ mod tests {
       UserMenuPage::Github
     );
     assert_eq!(
+      user_menu_page_for_workspace_page(WorkspacePage::GithubProfile),
+      UserMenuPage::Github
+    );
+    assert_eq!(
       user_menu_page_for_workspace_page(WorkspacePage::GithubPrDetails),
       UserMenuPage::GithubPrDetails
     );
@@ -1472,6 +1499,10 @@ mod tests {
     );
     assert_eq!(
       primary_navigation_selected_index(WorkspacePage::Github),
+      Some(1)
+    );
+    assert_eq!(
+      primary_navigation_selected_index(WorkspacePage::GithubProfile),
       Some(1)
     );
     assert_eq!(
@@ -1508,6 +1539,7 @@ mod tests {
   fn workspace_refresh_support_matches_git_and_github_surfaces() {
     assert!(page_supports_refresh(WorkspacePage::Git));
     assert!(page_supports_refresh(WorkspacePage::Github));
+    assert!(page_supports_refresh(WorkspacePage::GithubProfile));
     assert!(page_supports_refresh(WorkspacePage::GithubRepo));
     assert!(page_supports_refresh(WorkspacePage::GithubPrDetails));
     assert!(page_supports_refresh(WorkspacePage::GithubCommitDetails));
@@ -1534,6 +1566,10 @@ mod tests {
     assert_eq!(
       refresh_label_for_workspace_page(WorkspacePage::Github),
       Some("Refresh GitHub")
+    );
+    assert_eq!(
+      refresh_label_for_workspace_page(WorkspacePage::GithubProfile),
+      Some("Refresh Profile")
     );
     assert_eq!(
       refresh_label_for_workspace_page(WorkspacePage::GithubRepo),
@@ -1614,6 +1650,7 @@ impl Focusable for WorkspaceView {
     match WorkspaceRoute::global(cx).page {
       WorkspacePage::Git => self.git_page.read(cx).focus_handle(cx),
       WorkspacePage::Github => self.github_page.read(cx).focus_handle(cx),
+      WorkspacePage::GithubProfile => self.github_profile_page.read(cx).focus_handle(cx),
       WorkspacePage::GithubRepo => self.github_repo_page.read(cx).focus_handle(cx),
       WorkspacePage::GithubPrDetails => self.github_pr_details_page.read(cx).focus_handle(cx),
       WorkspacePage::GithubCommitDetails => {
