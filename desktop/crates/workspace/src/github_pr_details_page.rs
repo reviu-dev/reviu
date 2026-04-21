@@ -2529,6 +2529,9 @@ pub struct GithubPrDetailsPage {
   merge_submit_task: Option<Task<()>>,
   merge_submit_loading: bool,
   merge_submit_error: Option<SharedString>,
+  auto_merge_submit_task: Option<Task<()>>,
+  auto_merge_submit_loading: bool,
+  auto_merge_submit_error: Option<SharedString>,
   status_action_task: Option<Task<()>>,
   status_action_loading: bool,
   update_branch_task: Option<Task<()>>,
@@ -3030,6 +3033,9 @@ impl GithubPrDetailsPage {
       merge_submit_task: None,
       merge_submit_loading: false,
       merge_submit_error: None,
+      auto_merge_submit_task: None,
+      auto_merge_submit_loading: false,
+      auto_merge_submit_error: None,
       status_action_task: None,
       status_action_loading: false,
       update_branch_task: None,
@@ -4776,6 +4782,130 @@ impl GithubPrDetailsPage {
     self.merge_submit_task = Some(task);
   }
 
+  fn submit_enable_auto_merge(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    if self.auto_merge_submit_loading {
+      return;
+    }
+
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      self.auto_merge_submit_error = Some("No pull request selected".into());
+      return;
+    };
+
+    let Some(readiness) = self.merge_readiness.as_ref() else {
+      self.auto_merge_submit_error = Some("Merge readiness is not available yet.".into());
+      return;
+    };
+
+    let Some(method) = self.selected_merge_method() else {
+      self.auto_merge_submit_error = Some("No merge method is available.".into());
+      return;
+    };
+
+    if !readiness.viewer_can_enable_auto_merge {
+      self.auto_merge_submit_error = Some(
+        "Auto-merge is not available for this pull request.".into(),
+      );
+      return;
+    }
+
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let pull_request_id = pull_request.node_id.clone();
+    let commit_title = self.merge_commit_title_input.read(cx).value().to_string();
+    let commit_message = self.merge_commit_message_input.read(cx).value().to_string();
+    let api = self.api.clone();
+    self.auto_merge_submit_loading = true;
+    self.auto_merge_submit_error = None;
+    self.merge_submit_error = None;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.enable_pull_request_auto_merge(
+          &owner,
+          &repo,
+          number,
+          &pull_request_id,
+          method,
+          Some(commit_title.as_str()),
+          Some(commit_message.as_str()),
+        )
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.auto_merge_submit_loading = false;
+        this.auto_merge_submit_task = None;
+        match result {
+          Ok(()) => {
+            this.merge_popover_open = false;
+            this.mark_merge_form_reset_pending();
+            this.add_pr_breadcrumb("Enable auto-merge succeeded", Map::new());
+            this.reload_merge_readiness_for_current_pull_request(cx);
+            cx.refresh_windows();
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.auto_merge_submit_error = Some(error_message.clone().into());
+            this.add_pr_breadcrumb("Enable auto-merge failed", Map::new());
+            this.record_pr_error("github.pr.enable_auto_merge", error_message.as_str(), Map::new());
+          }
+        }
+        cx.notify();
+      });
+    });
+
+    self.auto_merge_submit_task = Some(task);
+  }
+
+  fn submit_disable_auto_merge(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    if self.auto_merge_submit_loading {
+      return;
+    }
+
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      self.auto_merge_submit_error = Some("No pull request selected".into());
+      return;
+    };
+
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let pull_request_id = pull_request.node_id.clone();
+    let api = self.api.clone();
+    self.auto_merge_submit_loading = true;
+    self.auto_merge_submit_error = None;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.disable_pull_request_auto_merge(&owner, &repo, number, &pull_request_id)
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.auto_merge_submit_loading = false;
+        this.auto_merge_submit_task = None;
+        match result {
+          Ok(()) => {
+            this.add_pr_breadcrumb("Disable auto-merge succeeded", Map::new());
+            this.reload_merge_readiness_for_current_pull_request(cx);
+            cx.refresh_windows();
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.auto_merge_submit_error = Some(error_message.clone().into());
+            this.add_pr_breadcrumb("Disable auto-merge failed", Map::new());
+            this.record_pr_error("github.pr.disable_auto_merge", error_message.as_str(), Map::new());
+          }
+        }
+        cx.notify();
+      });
+    });
+
+    self.auto_merge_submit_task = Some(task);
+  }
+
   fn is_current_user_pr_author(&self, cx: &App) -> bool {
     let Some(pull_request) = self.pull_request.as_ref() else {
       return false;
@@ -4838,6 +4968,13 @@ impl GithubPrDetailsPage {
       rebaseable: existing.and_then(|readiness| readiness.rebaseable),
       auto_merge_enabled: existing
         .map(|readiness| readiness.auto_merge_enabled)
+        .unwrap_or(false),
+      auto_merge: existing.and_then(|readiness| readiness.auto_merge.clone()),
+      viewer_can_enable_auto_merge: existing
+        .map(|readiness| readiness.viewer_can_enable_auto_merge)
+        .unwrap_or(false),
+      viewer_can_disable_auto_merge: existing
+        .map(|readiness| readiness.viewer_can_disable_auto_merge)
         .unwrap_or(false),
     })
   }
@@ -8311,6 +8448,9 @@ impl GithubPrDetailsPage {
     self.merge_popover_open = false;
     self.merge_submit_task = None;
     self.merge_submit_loading = false;
+    self.auto_merge_submit_task = None;
+    self.auto_merge_submit_loading = false;
+    self.auto_merge_submit_error = None;
     self.status_action_task = None;
     self.status_action_loading = false;
     self.update_branch_task = None;
@@ -8600,6 +8740,25 @@ impl GithubPrDetailsPage {
     });
     let show_commit_fields = selected_method.is_some_and(merge_method_supports_commit_message);
     let merge_button_disabled = self.pull_request.is_none();
+    let auto_merge_details = merge_readiness
+      .as_ref()
+      .and_then(|readiness| readiness.auto_merge.clone());
+    let auto_merge_enabled = auto_merge_details.is_some()
+      || merge_readiness
+        .as_ref()
+        .is_some_and(|readiness| readiness.auto_merge_enabled);
+    let can_enable_auto_merge = !auto_merge_enabled
+      && merge_readiness
+        .as_ref()
+        .is_some_and(|readiness| readiness.viewer_can_enable_auto_merge)
+      && selected_method.is_some()
+      && matches!(merge_status, GithubPullRequestMergeReadinessStatus::Blocked);
+    let can_disable_auto_merge = auto_merge_enabled
+      && merge_readiness
+        .as_ref()
+        .is_some_and(|readiness| readiness.viewer_can_disable_auto_merge);
+    let auto_merge_submit_loading = self.auto_merge_submit_loading;
+    let auto_merge_submit_error = self.auto_merge_submit_error.clone();
     let merge_message = self
       .merge_submit_error
       .clone()
@@ -8741,6 +8900,41 @@ impl GithubPrDetailsPage {
                 .child(message),
             )
           })
+          .when(auto_merge_enabled, |this| {
+            let details = auto_merge_details.clone();
+            let label = match details.as_ref() {
+              Some(details) => {
+                let method_label = merge_method_label(details.merge_method);
+                match details.enabled_by.as_ref() {
+                  Some(user) => format!(
+                    "Auto-merge enabled by @{} ({}). GitHub will merge once all requirements are met.",
+                    user.login, method_label,
+                  ),
+                  None => format!(
+                    "Auto-merge enabled ({}). GitHub will merge once all requirements are met.",
+                    method_label,
+                  ),
+                }
+              }
+              None => {
+                "Auto-merge is enabled. GitHub will merge once all requirements are met.".to_string()
+              }
+            };
+            this.child(
+              div()
+                .text_xs()
+                .text_color(theme.status_green())
+                .child(label),
+            )
+          })
+          .when_some(auto_merge_submit_error, |this, message| {
+            this.child(
+              div()
+                .text_xs()
+                .text_color(theme.status_red())
+                .child(message),
+            )
+          })
           .child(
             h_flex()
               .items_center()
@@ -8751,24 +8945,54 @@ impl GithubPrDetailsPage {
                   .ghost()
                   .small()
                   .label("Cancel")
-                  .disabled(self.merge_submit_loading)
+                  .disabled(self.merge_submit_loading || auto_merge_submit_loading)
                   .on_click(cx.listener(|this, _, window, cx| {
                     this.merge_popover_open = false;
                     this.reset_merge_form(window, cx);
                     cx.notify();
                   })),
               )
-              .child(
-                Button::new("pr-merge-submit")
-                  .primary()
-                  .small()
-                  .label("Merge pull request")
-                  .loading(self.merge_submit_loading)
-                  .disabled(!can_submit_merge)
-                  .on_click(cx.listener(|this, _, window, cx| {
-                    this.submit_pull_request_merge(window, cx);
-                  })),
-              ),
+              .when(can_enable_auto_merge, |this| {
+                this.child(
+                  Button::new("pr-auto-merge-enable")
+                    .with_variant(ButtonVariant::Secondary)
+                    .outline()
+                    .small()
+                    .label("Enable auto-merge")
+                    .loading(auto_merge_submit_loading)
+                    .disabled(self.merge_submit_loading)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                      this.submit_enable_auto_merge(window, cx);
+                    })),
+                )
+              })
+              .when(can_disable_auto_merge, |this| {
+                this.child(
+                  Button::new("pr-auto-merge-disable")
+                    .with_variant(ButtonVariant::Secondary)
+                    .outline()
+                    .small()
+                    .label("Disable auto-merge")
+                    .loading(auto_merge_submit_loading)
+                    .disabled(self.merge_submit_loading)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                      this.submit_disable_auto_merge(window, cx);
+                    })),
+                )
+              })
+              .when(!auto_merge_enabled, |this| {
+                this.child(
+                  Button::new("pr-merge-submit")
+                    .primary()
+                    .small()
+                    .label("Merge pull request")
+                    .loading(self.merge_submit_loading)
+                    .disabled(!can_submit_merge || auto_merge_submit_loading)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                      this.submit_pull_request_merge(window, cx);
+                    })),
+                )
+              }),
           ),
       )
       .into_any_element()
@@ -13844,6 +14068,9 @@ mod tests {
       mergeable_state: Some("clean".to_string()),
       rebaseable: Some(true),
       auto_merge_enabled: false,
+      auto_merge: None,
+      viewer_can_enable_auto_merge: false,
+      viewer_can_disable_auto_merge: false,
       available_methods: methods,
     }
   }
