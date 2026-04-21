@@ -1,12 +1,13 @@
 use gpui::{
-  App, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
-  SharedString, Styled, Task, Window, div, prelude::*, px,
+  App, Context, Corner, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement,
+  Render, SharedString, Styled, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   h_flex,
+  menu::{DropdownMenu as _, PopupMenuItem},
   skeleton::Skeleton,
   tag::Tag,
   v_flex,
@@ -72,6 +73,14 @@ fn strip_url_scheme(value: &str) -> String {
     .trim_start_matches("http://")
     .trim_end_matches('/')
     .to_string()
+}
+
+fn profile_github_url(login: &str, html_url: Option<&str>) -> String {
+  html_url
+    .map(str::trim)
+    .filter(|url| !url.is_empty())
+    .map(ToString::to_string)
+    .unwrap_or_else(|| format!("https://github.com/{}", login.trim()))
 }
 
 fn repository_language_color(
@@ -328,11 +337,13 @@ impl GithubProfilePage {
     } else {
       self.login.to_string()
     };
-    let profile_url = self
-      .profile
-      .as_ref()
-      .map(|profile| profile.html_url.clone())
-      .unwrap_or_else(|| format!("https://github.com/{title}"));
+    let profile_url = profile_github_url(
+      &title,
+      self
+        .profile
+        .as_ref()
+        .map(|profile| profile.html_url.as_str()),
+    );
 
     h_flex()
       .w_full()
@@ -359,13 +370,20 @@ impl GithubProfilePage {
           .child(div().text_sm().font_medium().child(title)),
       )
       .child(
-        Button::new("github-profile-open-external")
-          .icon(IconName::ExternalLink)
+        Button::new("github-profile-actions-menu")
+          .icon(UiIconName::EllipsisVertical)
           .ghost()
+          .small()
           .compact()
-          .tooltip("Open profile on GitHub")
-          .on_click(move |_, _, cx| {
-            cx.open_url(&profile_url);
+          .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+            let view_url = profile_url.clone();
+            menu.item(
+              PopupMenuItem::new("View on GitHub")
+                .icon(Icon::new(IconName::ExternalLink))
+                .on_click(move |_, _, cx| {
+                  cx.open_url(&view_url);
+                }),
+            )
           }),
       )
   }
@@ -531,7 +549,6 @@ impl GithubProfilePage {
       )
       .child(
         v_flex()
-          .gap_1()
           .child(div().text_xl().font_semibold().child(display_name))
           .child(
             div()
@@ -912,7 +929,7 @@ impl Focusable for GithubProfilePage {
 
 #[cfg(test)]
 mod tests {
-  use super::profile_login_from_pathname;
+  use super::{profile_github_url, profile_login_from_pathname};
 
   #[test]
   fn profile_login_from_pathname_matches_single_login_route() {
@@ -922,5 +939,25 @@ mod tests {
     );
     assert_eq!(profile_login_from_pathname("/github/acme/reviu"), None);
     assert_eq!(profile_login_from_pathname("/github"), None);
+  }
+
+  #[test]
+  fn profile_github_url_prefers_api_html_url() {
+    assert_eq!(
+      profile_github_url("octocat", Some("https://github.com/the-octocat")),
+      "https://github.com/the-octocat"
+    );
+  }
+
+  #[test]
+  fn profile_github_url_falls_back_to_login() {
+    assert_eq!(
+      profile_github_url("octocat", None),
+      "https://github.com/octocat"
+    );
+    assert_eq!(
+      profile_github_url("octocat", Some("  ")),
+      "https://github.com/octocat"
+    );
   }
 }
