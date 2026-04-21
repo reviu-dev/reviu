@@ -378,6 +378,8 @@ pub struct GithubRepositoryDetails {
   pub forks_count: u64,
   #[serde(rename = "subscribers_count")]
   pub subscribers_count: u64,
+  #[serde(rename = "viewer_subscription_mode", default)]
+  pub viewer_subscription_mode: RepoSubscriptionMode,
   pub size: u64,
   #[serde(rename = "pushed_at")]
   pub pushed_at: Option<String>,
@@ -420,6 +422,30 @@ pub struct GithubStarResult {
   pub viewer_has_starred: bool,
   #[serde(rename = "stargazers_count")]
   pub stargazers_count: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RepoSubscriptionMode {
+  #[default]
+  Default,
+  All,
+  Ignore,
+}
+
+impl RepoSubscriptionMode {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Default => "default",
+      Self::All => "all",
+      Self::Ignore => "ignore",
+    }
+  }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct RepoSubscriptionStateResponse {
+  mode: RepoSubscriptionMode,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1988,6 +2014,29 @@ impl ApiClient {
     }
     let payload = response.json::<GithubStarResult>()?;
     Ok(payload)
+  }
+
+  pub fn set_github_repository_subscription(
+    &self,
+    owner: &str,
+    repo: &str,
+    mode: RepoSubscriptionMode,
+  ) -> Result<RepoSubscriptionMode> {
+    let route = format!("/github/repos/{owner}/{repo}/subscription");
+    let response = self
+      .authed_request(Method::PUT, route.as_str())
+      .json(&serde_json::json!({ "mode": mode.as_str() }))
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("PUT", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<RepoSubscriptionStateResponse>()?;
+    Ok(payload.mode)
   }
 
   pub fn fetch_github_repository_tree(

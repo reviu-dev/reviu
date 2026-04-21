@@ -171,6 +171,7 @@ import {
   fetchGithubUserOrganizations,
   fetchGithubUserRepositories,
   forkGithubRepository,
+  githubSubscriptionModeFromGraphql,
   markGithubNotificationDone,
   markGithubNotificationRead,
   markGithubPullRequestReadyForReview,
@@ -184,6 +185,7 @@ import {
   removeGithubPullRequestReviewers,
   removeGithubReactionGraphql,
   requestGithubPullRequestReviewers,
+  setGithubRepositorySubscription,
   starGithubRepository,
   unstarGithubRepository,
   updateGithubPullRequestBranch,
@@ -1289,6 +1291,7 @@ async function fetchRepositoryDetailsWithCache(
             stargazers_count: data.stargazerCount,
             forks_count: data.forkCount,
             subscribers_count: data.watchers.totalCount,
+            viewer_subscription_mode: githubSubscriptionModeFromGraphql(data.viewerSubscription),
             size: data.diskUsage ?? 0,
             pushed_at: data.pushedAt,
             html_url: data.url,
@@ -3235,6 +3238,33 @@ export const githubRoutes = githubRouter
 
     try {
       const result = await unstarGithubRepository({ token: githubToken, repositoryId })
+      return ctx.json(result, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .put('/repos/:owner/:repo/subscription', async (ctx) => {
+    const { owner, repo } = ctx.req.param()
+    const payload = await ctx.req.json().catch(() => null)
+    const mode = (payload as { mode?: unknown } | null)?.mode
+    if (mode !== 'default' && mode !== 'all' && mode !== 'ignore') {
+      return ctx.json(
+        { error: 'mode must be one of: default, all, ignore' },
+        400,
+      )
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const result = await setGithubRepositorySubscription({
+        token: githubToken,
+        owner,
+        repo,
+        mode,
+      })
       return ctx.json(result, 200)
     }
     catch (error) {

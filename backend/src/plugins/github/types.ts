@@ -863,6 +863,7 @@ export interface GithubRepositoryDetails {
   stargazers_count: GithubRepositoryResponse['stargazers_count']
   forks_count: GithubRepositoryResponse['forks_count']
   subscribers_count: GithubRepositoryResponse['subscribers_count']
+  viewer_subscription_mode: 'default' | 'all' | 'ignore'
   size: GithubRepositoryResponse['size']
   pushed_at: GithubRepositoryResponse['pushed_at'] | null
   html_url: GithubRepositoryResponse['html_url']

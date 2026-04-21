@@ -301,6 +301,7 @@ const GITHUB_GRAPHQL_REPOSITORY_OVERVIEW_QUERY = `
       }
       stargazerCount
       forkCount
+      viewerSubscription
       watchers {
         totalCount
       }
@@ -917,6 +918,7 @@ interface GithubGraphqlRepositoryOverviewResponse {
     primaryLanguage: { name: string } | null
     stargazerCount: number
     forkCount: number
+    viewerSubscription: 'UNSUBSCRIBED' | 'SUBSCRIBED' | 'IGNORED' | null
     watchers: { totalCount: number }
     diskUsage: number | null
     pushedAt: string | null
@@ -2696,6 +2698,68 @@ export async function unstarGithubRepository(
     viewer_has_starred: starrable.viewerHasStarred,
     stargazers_count: starrable.stargazerCount,
   }
+}
+
+type GithubRepositorySubscriptionMode = 'default' | 'all' | 'ignore'
+
+interface GithubRepositorySubscriptionState {
+  mode: GithubRepositorySubscriptionMode
+}
+
+export function githubSubscriptionModeFromGraphql(
+  value: 'UNSUBSCRIBED' | 'SUBSCRIBED' | 'IGNORED' | null | undefined,
+): GithubRepositorySubscriptionMode {
+  switch (value) {
+    case 'SUBSCRIBED':
+      return 'all'
+    case 'IGNORED':
+      return 'ignore'
+    default:
+      return 'default'
+  }
+}
+
+export async function setGithubRepositorySubscription(
+  {
+    token,
+    owner,
+    repo,
+    mode,
+  }: {
+    token: string
+    owner: string
+    repo: string
+    mode: GithubRepositorySubscriptionMode
+  },
+): Promise<GithubRepositorySubscriptionState> {
+  if (mode === 'default') {
+    await requestGithubWithoutData('DELETE /repos/{owner}/{repo}/subscription', {
+      token,
+      params: { owner, repo },
+    })
+    return { mode: 'default' }
+  }
+
+  const subscribed = mode === 'all'
+  const ignored = mode === 'ignore'
+  const data = await requestGithubData('PUT /repos/{owner}/{repo}/subscription', {
+    token,
+    params: { owner, repo, subscribed, ignored },
+  })
+  return { mode: subscriptionStateFromFlags(data.subscribed, data.ignored) }
+}
+
+function subscriptionStateFromFlags(
+  subscribed: boolean,
+  ignored: boolean,
+): GithubRepositorySubscriptionMode {
+  if (ignored) {
+    return 'ignore'
+  }
+  if (subscribed) {
+    return 'all'
+  }
+  return 'default'
 }
 
 export async function patchGithubIssue(
