@@ -100,6 +100,11 @@ pub fn build_repo_path(owner: &str, repo: &str) -> SharedString {
   format!("/github/{owner}/{repo}").into()
 }
 
+/// Build path: `/github/{login}`
+pub fn build_github_profile_path(login: &str) -> SharedString {
+  format!("/github/{login}").into()
+}
+
 /// Build path: `/github/{owner}/{repo}/commit/{sha}`
 pub fn build_commit_path(owner: &str, repo: &str, sha: &str) -> SharedString {
   format!("/github/{owner}/{repo}/commit/{sha}").into()

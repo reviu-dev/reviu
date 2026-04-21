@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gpui::{App, Hsla, IntoElement, ParentElement as _, SharedString, Styled, div, prelude::*};
 use gpui_component::{
-  ActiveTheme as _, Colorize as _, Icon, IconName, Sizable as _, avatar::Avatar,
+  ActiveTheme as _, Colorize, Icon, IconName, Sizable as _, StyledExt as _, avatar::Avatar,
   clipboard::Clipboard, h_flex, label::Label, skeleton::Skeleton, tag::Tag, tooltip::Tooltip,
   v_flex,
 };
@@ -16,6 +16,7 @@ use crate::{
   api::{
     ApiClient, GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel,
     GithubPullRequestState, GithubPullRequestStatus, GithubReactionContent, GithubReactionGroup,
+    GithubRepositoryLanguage,
   },
   date_format::{format_relative_time, format_relative_time_at},
 };
@@ -245,6 +246,104 @@ pub(crate) fn render_commit_row_content(
 
 pub(crate) fn repo_label(owner: &str, repo: &str) -> String {
   format!("{owner}/{repo}")
+}
+
+pub(crate) fn parse_language_color(color: Option<&str>) -> Option<Hsla> {
+  let color = color?.trim();
+  if color.is_empty() {
+    return None;
+  }
+  let hex = if color.starts_with('#') {
+    color.to_string()
+  } else {
+    format!("#{color}")
+  };
+  <Hsla as Colorize>::parse_hex(&hex).ok()
+}
+
+const LANGUAGES_MAX_VISIBLE: usize = 5;
+
+struct LanguageEntry {
+  name: String,
+  color: Option<Hsla>,
+  percentage: f64,
+}
+
+fn build_language_entries(
+  languages: &[GithubRepositoryLanguage],
+  theme: &gpui_component::Theme,
+) -> Vec<LanguageEntry> {
+  let top = &languages[..languages.len().min(LANGUAGES_MAX_VISIBLE)];
+  let rest = &languages[languages.len().min(LANGUAGES_MAX_VISIBLE)..];
+
+  let mut entries: Vec<LanguageEntry> = top
+    .iter()
+    .map(|lang| LanguageEntry {
+      name: lang.name.clone(),
+      color: parse_language_color(lang.color.as_deref()),
+      percentage: lang.percentage,
+    })
+    .collect();
+
+  if !rest.is_empty() {
+    let others_pct: f64 = rest.iter().map(|l| l.percentage).sum();
+    entries.push(LanguageEntry {
+      name: "Other".to_string(),
+      color: Some(theme.muted_foreground),
+      percentage: others_pct,
+    });
+  }
+
+  entries
+}
+
+pub(crate) fn render_languages_section(
+  languages: &[GithubRepositoryLanguage],
+  theme: &gpui_component::Theme,
+) -> impl IntoElement {
+  let entries = build_language_entries(languages, theme);
+
+  let bar = h_flex()
+    .w_full()
+    .h(gpui::px(8.0))
+    .rounded(theme.radius_lg)
+    .overflow_hidden()
+    .children(entries.iter().map(|entry| {
+      let fraction = entry.percentage as f32 / 100.0;
+      let color = entry.color.unwrap_or(theme.muted_foreground);
+      div()
+        .h_full()
+        .flex_basis(gpui::relative(fraction))
+        .bg(color)
+    }));
+
+  let legend = v_flex().gap_1().children(entries.iter().map(|entry| {
+    let color = entry.color.unwrap_or(theme.muted_foreground);
+    h_flex()
+      .w_full()
+      .gap_1p5()
+      .items_center()
+      .justify_between()
+      .child(
+        h_flex()
+          .gap_1p5()
+          .items_center()
+          .child(div().size(gpui::px(8.0)).rounded(gpui::px(4.0)).bg(color))
+          .child(div().text_xs().child(entry.name.clone())),
+      )
+      .child(
+        div()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child(format!("{:.1}%", entry.percentage)),
+      )
+  }));
+
+  v_flex()
+    .gap_2()
+    .child(div().text_sm().font_semibold().child("Languages"))
+    .child(bar)
+    .child(legend)
 }
 
 pub(crate) fn issue_url(owner: &str, repo: &str, issue_number: u64) -> String {
@@ -674,11 +773,11 @@ mod tests {
   use super::{
     PULL_REQUEST_ROW_HEIGHT_PX, PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX, github_label_color,
     is_unauthorized_error_message, issue_url, line_snippets_from_content,
-    logins_match_case_insensitive, next_trimmed_text_update, normalize_non_empty_text, pr_url,
-    pull_request_activity_text_at, pull_request_author_display_name, pull_request_author_is_bot,
-    pull_request_comments_count_text, pull_request_list_row_body, pull_request_row_height_px,
-    pull_request_status_color, pull_request_status_icon_name, pull_request_status_label,
-    pull_request_updated_text_at, repo_label, short_sha,
+    logins_match_case_insensitive, next_trimmed_text_update, normalize_non_empty_text,
+    parse_language_color, pr_url, pull_request_activity_text_at, pull_request_author_display_name,
+    pull_request_author_is_bot, pull_request_comments_count_text, pull_request_list_row_body,
+    pull_request_row_height_px, pull_request_status_color, pull_request_status_icon_name,
+    pull_request_status_label, pull_request_updated_text_at, repo_label, short_sha,
   };
   use crate::api::{
     GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel, GithubPullRequestState,
@@ -1045,6 +1144,15 @@ mod tests {
       pull_request_row_height_px(&make_pull_request(&["bug"])),
       PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX
     );
+  }
+
+  #[test]
+  fn parse_language_color_handles_hex_variants() {
+    assert!(parse_language_color(Some("#3178c6")).is_some());
+    assert!(parse_language_color(Some("3178c6")).is_some());
+    assert!(parse_language_color(None).is_none());
+    assert!(parse_language_color(Some("")).is_none());
+    assert!(parse_language_color(Some("  ")).is_none());
   }
 
   #[gpui::test]

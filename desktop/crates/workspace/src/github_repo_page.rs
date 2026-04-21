@@ -60,7 +60,7 @@ use crate::{
     ApiClient, GithubFileCommit, GithubIssue, GithubIssueDescriptionUpdate, GithubIssueDetails,
     GithubIssueDetailsComment, GithubIssueStateReason, GithubIssueUser, GithubPullRequest,
     GithubPullRequestState, GithubReactionContent, GithubReactionGroup, GithubRepositoryDetails,
-    GithubRepositoryLanguage, RepoSubscriptionMode,
+    RepoSubscriptionMode,
   },
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, CloneProtocol, ConfigStore},
@@ -78,8 +78,8 @@ use crate::{
     normalize_github_pull_request_filters,
   },
   github_navigation::{
-    SameRepoIssueLinkNavigation, open_commit_target, open_pr_target, open_repo_target,
-    same_repo_issue_link_navigation, should_open_externally,
+    SameRepoIssueLinkNavigation, open_commit_target, open_pr_target, open_profile_target,
+    open_repo_target, same_repo_issue_link_navigation, should_open_externally,
   },
   github_page::GithubPageHandle,
   github_pr_details_page::GithubPrDetailsPageHandle,
@@ -216,104 +216,6 @@ impl RenderOnce for RepoWatchMenuTrigger {
       .child(self.label)
       .child(Icon::new(IconName::ChevronDown).size_3p5())
   }
-}
-
-fn parse_language_color(color: Option<&str>) -> Option<gpui::Hsla> {
-  let color = color?.trim();
-  if color.is_empty() {
-    return None;
-  }
-  let hex = if color.starts_with('#') {
-    color.to_string()
-  } else {
-    format!("#{color}")
-  };
-  <gpui::Hsla as gpui_component::Colorize>::parse_hex(&hex).ok()
-}
-
-const LANGUAGES_MAX_VISIBLE: usize = 5;
-
-struct LanguageEntry {
-  name: String,
-  color: Option<gpui::Hsla>,
-  percentage: f64,
-}
-
-fn build_language_entries(
-  languages: &[GithubRepositoryLanguage],
-  theme: &gpui_component::Theme,
-) -> Vec<LanguageEntry> {
-  let top = &languages[..languages.len().min(LANGUAGES_MAX_VISIBLE)];
-  let rest = &languages[languages.len().min(LANGUAGES_MAX_VISIBLE)..];
-
-  let mut entries: Vec<LanguageEntry> = top
-    .iter()
-    .map(|lang| LanguageEntry {
-      name: lang.name.clone(),
-      color: parse_language_color(lang.color.as_deref()),
-      percentage: lang.percentage,
-    })
-    .collect();
-
-  if !rest.is_empty() {
-    let others_pct: f64 = rest.iter().map(|l| l.percentage).sum();
-    entries.push(LanguageEntry {
-      name: "Other".to_string(),
-      color: Some(theme.muted_foreground),
-      percentage: others_pct,
-    });
-  }
-
-  entries
-}
-
-fn render_languages_section(
-  languages: &[GithubRepositoryLanguage],
-  theme: &gpui_component::Theme,
-) -> impl IntoElement {
-  let entries = build_language_entries(languages, theme);
-
-  let bar = h_flex()
-    .w_full()
-    .h(px(8.0))
-    .rounded(theme.radius_lg)
-    .overflow_hidden()
-    .children(entries.iter().map(|entry| {
-      let fraction = entry.percentage as f32 / 100.0;
-      let color = entry.color.unwrap_or(theme.muted_foreground);
-      div()
-        .h_full()
-        .flex_basis(gpui::relative(fraction))
-        .bg(color)
-    }));
-
-  let legend = v_flex().gap_1().children(entries.iter().map(|entry| {
-    let color = entry.color.unwrap_or(theme.muted_foreground);
-    h_flex()
-      .w_full()
-      .gap_1p5()
-      .items_center()
-      .justify_between()
-      .child(
-        h_flex()
-          .gap_1p5()
-          .items_center()
-          .child(div().size(px(8.0)).rounded(px(4.0)).bg(color))
-          .child(div().text_xs().child(entry.name.clone())),
-      )
-      .child(
-        div()
-          .text_xs()
-          .text_color(theme.muted_foreground)
-          .child(format!("{:.1}%", entry.percentage)),
-      )
-  }));
-
-  v_flex()
-    .gap_2()
-    .child(div().text_sm().font_semibold().child("Languages"))
-    .child(bar)
-    .child(legend)
 }
 
 fn should_show_overview_loading_state(repository_loading: bool) -> bool {
@@ -2751,6 +2653,11 @@ impl GithubIssueDetailsSheetView {
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
         window.close_sheet(cx);
         open_commit_target(owner, repo, sha, cx);
+        true
+      }
+      CommandPaletteAction::OpenGithubProfile { login } => {
+        window.close_sheet(cx);
+        open_profile_target(login, cx);
         true
       }
       _ => false,
@@ -6762,6 +6669,10 @@ impl GithubRepoPage {
         open_commit_target(owner, repo, sha, cx);
         Ok(())
       }
+      CommandPaletteAction::OpenGithubProfile { login } => {
+        open_profile_target(login, cx);
+        Ok(())
+      }
       CommandPaletteAction::OpenSettingsPage => {
         NavigationHistory::navigate("/settings", cx);
         Ok(())
@@ -7323,7 +7234,7 @@ impl GithubRepoPage {
       .when(!languages.is_empty(), {
         let languages = languages.clone();
         let theme = theme.clone();
-        move |this| this.child(render_languages_section(&languages, &theme))
+        move |this| this.child(github_shared::render_languages_section(&languages, &theme))
       })
       .when(!repository.contributors.is_empty(), |this| {
         let contributors = &repository.contributors;
@@ -10182,14 +10093,5 @@ mod tests {
       "Reopened"
     );
     assert_eq!(issue_state_label("closed", None).as_ref(), "Closed");
-  }
-
-  #[test]
-  fn parse_language_color_handles_hex_variants() {
-    assert!(parse_language_color(Some("#3178c6")).is_some());
-    assert!(parse_language_color(Some("3178c6")).is_some());
-    assert!(parse_language_color(None).is_none());
-    assert!(parse_language_color(Some("")).is_none());
-    assert!(parse_language_color(Some("  ")).is_none());
   }
 }

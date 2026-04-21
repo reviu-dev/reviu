@@ -37,7 +37,7 @@ use crate::{
   config::AppSettings,
   date_format::format_relative_time,
   file_preview::{FilePreviewKind, file_preview_kind},
-  github_navigation::{open_pr_target, open_repo_target},
+  github_navigation::{open_pr_target, open_profile_target, open_repo_target},
   github_page::GithubPageHandle,
   github_shared,
   navigation::NavigationHistory,
@@ -1403,6 +1403,10 @@ impl GithubCommitDetailsPage {
           crate::navigation::build_commit_path(&owner, &repo, &sha),
           cx,
         );
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubProfile { login } => {
+        open_profile_target(login, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

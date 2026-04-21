@@ -2,6 +2,9 @@ use crate::command_palette::{CommandPaletteAction, CommandPaletteGithubRepoTab};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum GithubUrlTarget {
+  Profile {
+    login: String,
+  },
   Repo {
     owner: String,
     repo: String,
@@ -29,6 +32,7 @@ pub fn parse_github_url_action(url: &str) -> Option<CommandPaletteAction> {
 
 fn github_url_target_to_action(target: GithubUrlTarget) -> CommandPaletteAction {
   match target {
+    GithubUrlTarget::Profile { login } => CommandPaletteAction::OpenGithubProfile { login },
     GithubUrlTarget::Repo {
       owner,
       repo,
@@ -61,7 +65,7 @@ fn github_url_target_to_action(target: GithubUrlTarget) -> CommandPaletteAction 
   }
 }
 
-fn parse_github_repository_parts(url: &str) -> Option<(String, String, Vec<String>)> {
+fn parse_github_path_parts(url: &str) -> Option<Vec<String>> {
   let url = url.trim();
   let tail = url
     .strip_prefix("https://github.com/")
@@ -79,16 +83,60 @@ fn parse_github_repository_parts(url: &str) -> Option<(String, String, Vec<Strin
     .split('/')
     .map(str::trim)
     .filter(|part| !part.is_empty())
+    .map(ToString::to_string)
     .collect::<Vec<_>>();
+  Some(parts)
+}
+
+fn parse_github_repository_parts(url: &str) -> Option<(String, String, Vec<String>)> {
+  let parts = parse_github_path_parts(url)?;
   if parts.len() < 2 {
     return None;
   }
 
-  let owner = parts[0].to_string();
-  let repo = parts[1].to_string();
-  let rest = parts[2..].iter().map(|part| (*part).to_string()).collect();
+  let owner = parts[0].clone();
+  let repo = parts[1].clone();
+  let rest = parts[2..].to_vec();
 
   Some((owner, repo, rest))
+}
+
+fn is_reserved_github_profile_segment(segment: &str) -> bool {
+  let segment = segment.to_ascii_lowercase();
+  matches!(
+    segment.as_str(),
+    "about"
+      | "apps"
+      | "codespaces"
+      | "collections"
+      | "dashboard"
+      | "events"
+      | "explore"
+      | "features"
+      | "issues"
+      | "login"
+      | "marketplace"
+      | "new"
+      | "notifications"
+      | "orgs"
+      | "organizations"
+      | "pricing"
+      | "pulls"
+      | "search"
+      | "settings"
+      | "sponsors"
+      | "topics"
+      | "trending"
+  )
+}
+
+fn parse_github_profile_url(url: &str) -> Option<String> {
+  let parts = parse_github_path_parts(url)?;
+  let login = parts.first()?.trim();
+  if parts.len() != 1 || login.is_empty() || is_reserved_github_profile_segment(login) {
+    return None;
+  }
+  Some(login.to_string())
 }
 
 fn parse_github_fragment(url: &str) -> Option<&str> {
@@ -157,6 +205,10 @@ fn parse_github_repository_url(url: &str) -> Option<(String, String)> {
 }
 
 fn parse_github_url_target(url: &str) -> Option<GithubUrlTarget> {
+  if let Some(login) = parse_github_profile_url(url) {
+    return Some(GithubUrlTarget::Profile { login });
+  }
+
   if let Some((owner, repo, number)) = parse_github_pull_request_url(url) {
     let (_, _, path_parts) = parse_github_repository_parts(url)?;
     let review_comment_id = parse_github_review_comment_fragment(url);
@@ -220,7 +272,7 @@ fn parse_github_url_target(url: &str) -> Option<GithubUrlTarget> {
 #[cfg(test)]
 mod tests {
   use super::{
-    GithubUrlTarget, parse_github_commit_url, parse_github_issue_url,
+    GithubUrlTarget, parse_github_commit_url, parse_github_issue_url, parse_github_profile_url,
     parse_github_pull_request_url, parse_github_repository_url, parse_github_url_action,
     parse_github_url_target,
   };
@@ -231,6 +283,21 @@ mod tests {
   fn parse_github_pull_request_url_accepts_standard_url() {
     let parsed = parse_github_pull_request_url("https://github.com/joris-gallot/guit/pull/23");
     assert_eq!(parsed, Some(("joris-gallot".into(), "guit".into(), 23)));
+  }
+
+  #[test]
+  fn parse_github_profile_url_accepts_user_home_url() {
+    let parsed = parse_github_profile_url("https://github.com/octocat?tab=repositories");
+    assert_eq!(parsed, Some("octocat".into()));
+  }
+
+  #[test]
+  fn parse_github_profile_url_rejects_reserved_github_paths() {
+    assert_eq!(parse_github_profile_url("https://github.com/pulls"), None);
+    assert_eq!(
+      parse_github_profile_url("https://github.com/settings"),
+      None
+    );
   }
 
   #[test]
@@ -319,6 +386,15 @@ mod tests {
         issue_number: None,
         issue_comment_id: None
       }) if owner == "joris-gallot" && repo == "guit"
+    ));
+  }
+
+  #[test]
+  fn parse_github_url_target_returns_profile_for_user_url() {
+    let parsed = parse_github_url_target("https://github.com/octocat");
+    assert!(matches!(
+      parsed,
+      Some(GithubUrlTarget::Profile { login }) if login == "octocat"
     ));
   }
 
@@ -460,6 +536,15 @@ mod tests {
         issue_number: None,
         issue_comment_id: None
       }) if owner == "colinhacks" && repo == "zod"
+    ));
+  }
+
+  #[test]
+  fn parse_github_url_action_routes_profile_url_to_profile() {
+    let action = parse_github_url_action("https://github.com/octocat");
+    assert!(matches!(
+      action,
+      Some(CommandPaletteAction::OpenGithubProfile { login }) if login == "octocat"
     ));
   }
 

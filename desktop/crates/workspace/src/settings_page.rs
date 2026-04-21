@@ -22,7 +22,7 @@ use crate::{
   CloseWorkspacePage, ShowCommandPalette,
   auth_state::AuthStateStore,
   config::{AppSettings as PersistedSettings, CloneProtocol},
-  github_navigation::{open_commit_target, open_pr_target, open_repo_target},
+  github_navigation::{open_commit_target, open_pr_target, open_profile_target, open_repo_target},
   github_page::GithubPageHandle,
   navigation::NavigationHistory,
   shortcuts::{
@@ -656,6 +656,10 @@ impl SettingsPage {
       }
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
         open_commit_target(owner, repo, sha, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubProfile { login } => {
+        open_profile_target(login, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => Ok(()),

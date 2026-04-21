@@ -23,7 +23,7 @@ use crate::{
   api::{ApiClient, CustomerStateSubscription, CustomerStateSubscriptionStatus},
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_long_date_opt, parse_rfc3339},
-  github_navigation::{open_commit_target, open_pr_target, open_repo_target},
+  github_navigation::{open_commit_target, open_pr_target, open_profile_target, open_repo_target},
   github_page::GithubPageHandle,
   navigation::NavigationHistory,
   pricing_copy::{
@@ -343,6 +343,10 @@ impl BillingPage {
       }
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
         open_commit_target(owner, repo, sha, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubProfile { login } => {
+        open_profile_target(login, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

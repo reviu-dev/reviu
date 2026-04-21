@@ -53,6 +53,7 @@ mod github_home_tabs;
 pub mod github_navigation;
 mod github_page;
 mod github_pr_details_page;
+mod github_profile_page;
 mod github_repo_page;
 mod github_search_dialog;
 mod github_shared;

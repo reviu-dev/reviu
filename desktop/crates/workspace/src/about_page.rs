@@ -27,7 +27,7 @@ use crate::{
     ready_update_status_message, resolved_build_version, should_install_update_after_download,
   },
   auth_state::AuthStateStore,
-  github_navigation::{open_commit_target, open_pr_target, open_repo_target},
+  github_navigation::{open_commit_target, open_pr_target, open_profile_target, open_repo_target},
   github_page::GithubPageHandle,
   navigation::NavigationHistory,
   workspace::WorkspaceApi,
@@ -150,6 +150,10 @@ impl AboutPage {
       }
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
         open_commit_target(owner, repo, sha, cx);
+        Ok(())
+      }
+      CommandPaletteAction::OpenGithubProfile { login } => {
+        open_profile_target(login, cx);
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {

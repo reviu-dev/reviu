@@ -194,6 +194,9 @@ pub enum CommandPaletteAction {
     issue_number: Option<u64>,
     issue_comment_id: Option<u64>,
   },
+  OpenGithubProfile {
+    login: String,
+  },
   OpenGithubPrDetails {
     owner: String,
     repo: String,

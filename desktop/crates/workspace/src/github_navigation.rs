@@ -3,7 +3,8 @@ use ui::CommandPaletteGithubRepoTab;
 
 use crate::{
   github_commit_details_page::GithubCommitDetailsPageHandle,
-  github_pr_details_page::GithubPrDetailsPageHandle, github_repo_page::GithubRepoPageHandle,
+  github_pr_details_page::GithubPrDetailsPageHandle, github_profile_page::GithubProfilePageHandle,
+  github_repo_page::GithubRepoPageHandle,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,6 +88,10 @@ pub fn open_repo_target(
       GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
     }
   }
+}
+
+pub fn open_profile_target(login: String, cx: &mut App) {
+  GithubProfilePageHandle::show(login.into(), cx);
 }
 
 pub fn open_pr_target(
