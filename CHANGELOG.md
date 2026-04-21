@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.7.0
+
+### GitHub Mentions in Markdown
+
+User mentions in GitHub markdown now show the profile avatar next to the linked username, matching the way mentions appear on GitHub while keeping profile navigation inside Reviu.
+
 ## 0.6.0
 
 ### Auto-merge for Pull Requests
