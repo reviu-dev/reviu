@@ -939,7 +939,7 @@ dependencies = [
 
 [[package]]
 name = "buffer"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "ropey 1.6.1",
 ]
@@ -2060,7 +2060,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "editor"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "blake3",
  "buffer",
@@ -2797,7 +2797,7 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
 name = "git"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -6441,7 +6441,7 @@ dependencies = [
 
 [[package]]
 name = "reviu"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "editor",
  "embed-resource",
@@ -7700,7 +7700,7 @@ dependencies = [
 
 [[package]]
 name = "syntax"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cc",
  "gpui",
@@ -7877,7 +7877,7 @@ dependencies = [
 
 [[package]]
 name = "terminal"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -8782,7 +8782,7 @@ dependencies = [
 
 [[package]]
 name = "ui"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -10415,7 +10415,7 @@ dependencies = [
 
 [[package]]
 name = "workspace"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "base64",
