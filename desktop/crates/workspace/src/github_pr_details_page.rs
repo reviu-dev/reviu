@@ -4803,9 +4803,8 @@ impl GithubPrDetailsPage {
     };
 
     if !readiness.viewer_can_enable_auto_merge {
-      self.auto_merge_submit_error = Some(
-        "Auto-merge is not available for this pull request.".into(),
-      );
+      self.auto_merge_submit_error =
+        Some("Auto-merge is not available for this pull request.".into());
       return;
     }
 
@@ -4849,7 +4848,11 @@ impl GithubPrDetailsPage {
             let error_message = error.to_string();
             this.auto_merge_submit_error = Some(error_message.clone().into());
             this.add_pr_breadcrumb("Enable auto-merge failed", Map::new());
-            this.record_pr_error("github.pr.enable_auto_merge", error_message.as_str(), Map::new());
+            this.record_pr_error(
+              "github.pr.enable_auto_merge",
+              error_message.as_str(),
+              Map::new(),
+            );
           }
         }
         cx.notify();
@@ -4896,7 +4899,11 @@ impl GithubPrDetailsPage {
             let error_message = error.to_string();
             this.auto_merge_submit_error = Some(error_message.clone().into());
             this.add_pr_breadcrumb("Disable auto-merge failed", Map::new());
-            this.record_pr_error("github.pr.disable_auto_merge", error_message.as_str(), Map::new());
+            this.record_pr_error(
+              "github.pr.disable_auto_merge",
+              error_message.as_str(),
+              Map::new(),
+            );
           }
         }
         cx.notify();
