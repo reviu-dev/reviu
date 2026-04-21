@@ -12,9 +12,10 @@ use gfm_markdown_viewer::{
   MarkdownRenderState, extract_github_blob_line_references, render_markdown,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Image,
-  ObjectFit, ParentElement, PathPromptOptions, Pixels, Render, RenderImage, SharedString, Styled,
-  Subscription, Task, Window, div, img, prelude::*, px, size,
+  AnyElement, AnyWindowHandle, App, Context, Corner, Div, Entity, FocusHandle, Focusable, Hsla,
+  Image, InteractiveElement, Interactivity, ObjectFit, ParentElement, PathPromptOptions, Pixels,
+  Render, RenderImage, RenderOnce, SharedString, Stateful, StatefulInteractiveElement as _,
+  StyleRefinement, Styled, Subscription, Task, Window, div, img, prelude::*, px, size,
 };
 #[cfg(test)]
 use gpui_component::IndexPath;
@@ -59,7 +60,7 @@ use crate::{
     ApiClient, GithubFileCommit, GithubIssue, GithubIssueDescriptionUpdate, GithubIssueDetails,
     GithubIssueDetailsComment, GithubIssueStateReason, GithubIssueUser, GithubPullRequest,
     GithubPullRequestState, GithubReactionContent, GithubReactionGroup, GithubRepositoryDetails,
-    GithubRepositoryLanguage,
+    GithubRepositoryLanguage, RepoSubscriptionMode,
   },
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, CloneProtocol, ConfigStore},
@@ -138,6 +139,83 @@ fn format_repo_size(size_kb: u64) -> SharedString {
     return format!("{:.1} MB", size_kb as f64 / KB_PER_MB as f64).into();
   }
   format!("{} KB", size_kb).into()
+}
+
+#[derive(IntoElement)]
+struct RepoWatchMenuTrigger {
+  base: Stateful<Div>,
+  style: StyleRefinement,
+  label: SharedString,
+  icon_color: Hsla,
+  hover_bg: Hsla,
+  radius: Pixels,
+  selected: bool,
+}
+
+impl RepoWatchMenuTrigger {
+  fn new(label: impl Into<SharedString>, icon_color: Hsla, hover_bg: Hsla, radius: Pixels) -> Self {
+    Self {
+      base: h_flex().id("repo-watch-menu"),
+      style: StyleRefinement::default(),
+      label: label.into(),
+      icon_color,
+      hover_bg,
+      radius,
+      selected: false,
+    }
+  }
+}
+
+impl Selectable for RepoWatchMenuTrigger {
+  fn selected(mut self, selected: bool) -> Self {
+    self.selected = selected;
+    self
+  }
+
+  fn is_selected(&self) -> bool {
+    self.selected
+  }
+}
+
+impl Styled for RepoWatchMenuTrigger {
+  fn style(&mut self) -> &mut StyleRefinement {
+    &mut self.style
+  }
+}
+
+impl InteractiveElement for RepoWatchMenuTrigger {
+  fn interactivity(&mut self) -> &mut Interactivity {
+    self.base.interactivity()
+  }
+}
+
+impl gpui_component::menu::DropdownMenu for RepoWatchMenuTrigger {}
+
+impl RenderOnce for RepoWatchMenuTrigger {
+  fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    let hover_bg = self.hover_bg;
+
+    self
+      .base
+      .items_center()
+      .gap_1()
+      .px_2()
+      .py_1()
+      .rounded(self.radius)
+      .cursor_pointer()
+      .text_xs()
+      .text_color(cx.theme().foreground)
+      .hover(move |this| this.bg(hover_bg))
+      .when(self.selected, |this| this.bg(hover_bg))
+      .refine_style(&self.style)
+      .child(
+        Icon::new(UiIconName::Eye)
+          .size_3p5()
+          .text_color(self.icon_color),
+      )
+      .child(self.label)
+      .child(Icon::new(IconName::ChevronDown).size_3p5())
+  }
 }
 
 fn parse_language_color(color: Option<&str>) -> Option<gpui::Hsla> {
@@ -753,6 +831,20 @@ fn normalize_non_empty_string(value: &str) -> Option<String> {
     None
   } else {
     Some(trimmed.to_string())
+  }
+}
+
+fn adjust_subscribers_count(
+  current: u64,
+  previous: RepoSubscriptionMode,
+  next: RepoSubscriptionMode,
+) -> u64 {
+  let was_watching_all = matches!(previous, RepoSubscriptionMode::All);
+  let will_watch_all = matches!(next, RepoSubscriptionMode::All);
+  match (was_watching_all, will_watch_all) {
+    (true, false) => current.saturating_sub(1),
+    (false, true) => current.saturating_add(1),
+    _ => current,
   }
 }
 
@@ -3425,6 +3517,9 @@ pub struct GithubRepoPage {
   repository_error: Option<SharedString>,
   repository_task: Option<Task<()>>,
   star_task: Option<Task<()>>,
+  subscription_mode: RepoSubscriptionMode,
+  subscription_task: Option<Task<()>>,
+  subscription_generation: u64,
   local_clone_path: Option<PathBuf>,
   local_clone_detected: bool,
   local_clone_detection_task: Option<Task<()>>,
@@ -3740,6 +3835,9 @@ impl GithubRepoPage {
       repository_error: None,
       repository_task: None,
       star_task: None,
+      subscription_mode: RepoSubscriptionMode::Default,
+      subscription_task: None,
+      subscription_generation: 0,
       local_clone_path: None,
       local_clone_detected: false,
       local_clone_detection_task: None,
@@ -4626,6 +4724,9 @@ impl GithubRepoPage {
               .and_then(|branch| normalize_non_empty_string(branch.as_ref()))
               .or_else(|| normalize_non_empty_string(&repository.default_branch))
               .map(SharedString::from);
+            if this.subscription_task.is_none() {
+              this.subscription_mode = repository.viewer_subscription_mode;
+            }
             this.repository = Some(repository);
             this.selected_branch = selected_branch.clone();
             let branch_items = build_repo_branch_select_items(
@@ -4699,6 +4800,59 @@ impl GithubRepoPage {
     self.star_task = Some(task);
   }
 
+  fn render_watch_button(
+    &self,
+    repository: &GithubRepositoryDetails,
+    theme: &gpui_component::Theme,
+    cx: &Context<Self>,
+  ) -> AnyElement {
+    let mode = self.subscription_mode;
+    let count_label = number_format::format_compact_number(repository.subscribers_count);
+    let (label, icon_color) = match mode {
+      RepoSubscriptionMode::All => (format!("Unwatch {count_label}"), theme.status_green()),
+      RepoSubscriptionMode::Ignore => (format!("Ignored {count_label}"), theme.muted_foreground),
+      RepoSubscriptionMode::Default => (format!("Watch {count_label}"), theme.muted_foreground),
+    };
+    let watch_hover_bg = theme.accent.opacity(0.55);
+    let view = cx.entity();
+
+    RepoWatchMenuTrigger::new(label, icon_color, watch_hover_bg, theme.radius)
+      .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+        let view_default = view.clone();
+        let view_all = view.clone();
+        let view_ignore = view.clone();
+        menu
+          .item(
+            PopupMenuItem::new("Participating and @mentions")
+              .checked(matches!(mode, RepoSubscriptionMode::Default))
+              .on_click(move |_, _, cx| {
+                view_default.update(cx, |this, cx| {
+                  this.set_subscription_mode(RepoSubscriptionMode::Default, cx);
+                });
+              }),
+          )
+          .item(
+            PopupMenuItem::new("All Activity")
+              .checked(matches!(mode, RepoSubscriptionMode::All))
+              .on_click(move |_, _, cx| {
+                view_all.update(cx, |this, cx| {
+                  this.set_subscription_mode(RepoSubscriptionMode::All, cx);
+                });
+              }),
+          )
+          .item(
+            PopupMenuItem::new("Ignore")
+              .checked(matches!(mode, RepoSubscriptionMode::Ignore))
+              .on_click(move |_, _, cx| {
+                view_ignore.update(cx, |this, cx| {
+                  this.set_subscription_mode(RepoSubscriptionMode::Ignore, cx);
+                });
+              }),
+          )
+      })
+      .into_any_element()
+  }
+
   fn open_fork_dialog(&mut self, window: &mut Window, cx: &mut App) {
     crate::github_fork_repository_dialog::open_fork_repository_dialog(
       self.api.clone(),
@@ -4707,6 +4861,55 @@ impl GithubRepoPage {
       window,
       cx,
     );
+  }
+
+  fn set_subscription_mode(&mut self, target: RepoSubscriptionMode, cx: &mut Context<Self>) {
+    if self.subscription_mode == target {
+      return;
+    }
+    let previous_mode = self.subscription_mode;
+    let previous_subscribers = self.repository.as_ref().map(|repo| repo.subscribers_count);
+
+    // Optimistic update
+    self.subscription_mode = target;
+    if let Some(repository) = self.repository.as_mut() {
+      repository.subscribers_count =
+        adjust_subscribers_count(repository.subscribers_count, previous_mode, target);
+    }
+    cx.notify();
+
+    self.subscription_generation = self.subscription_generation.wrapping_add(1);
+    let generation = self.subscription_generation;
+    let owner = self.owner.to_string();
+    let repo = self.repo.to_string();
+    let api = self.api.clone();
+
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.set_github_repository_subscription(&owner, &repo, target)).await;
+
+      let _ = this.update(cx, |this, cx| {
+        if this.subscription_generation != generation {
+          return;
+        }
+        this.subscription_task = None;
+        match result {
+          Ok(mode) => {
+            this.subscription_mode = mode;
+          }
+          Err(_) => {
+            this.subscription_mode = previous_mode;
+            if let (Some(repository), Some(count)) =
+              (this.repository.as_mut(), previous_subscribers)
+            {
+              repository.subscribers_count = count;
+            }
+          }
+        }
+        cx.notify();
+      });
+    });
+    self.subscription_task = Some(task);
   }
 
   fn detect_local_clone(&mut self, cx: &mut Context<Self>) {
@@ -6292,6 +6495,8 @@ impl GithubRepoPage {
     self.repository = None;
     self.repository_loading = true;
     self.repository_error = None;
+    self.subscription_mode = RepoSubscriptionMode::Default;
+    self.subscription_task = None;
     self.local_clone_path = None;
     self.local_clone_detected = false;
     self.local_clone_detection_task = None;
@@ -6345,6 +6550,9 @@ impl GithubRepoPage {
           Ok(repository) => {
             let selected_branch =
               normalize_non_empty_string(&repository.default_branch).map(SharedString::from);
+            if this.subscription_task.is_none() {
+              this.subscription_mode = repository.viewer_subscription_mode;
+            }
             this.repository = Some(repository);
             this.selected_branch = selected_branch.clone();
             let branch_items = build_repo_branch_select_items(
@@ -7007,10 +7215,7 @@ impl GithubRepoPage {
           )
           .child(format!("Fork {forks_label}")),
       )
-      .child(Tag::secondary().small().rounded_full().child(format!(
-        "Watchers {}",
-        number_format::format_compact_number(repository.subscribers_count)
-      )));
+      .child(self.render_watch_button(repository, &theme, cx));
 
     let top_area = v_flex()
       .w_full()
@@ -8740,6 +8945,26 @@ mod tests {
         },
       }),
     }
+  }
+
+  #[test]
+  fn adjust_subscribers_count_tracks_transitions_to_and_from_all_activity() {
+    use super::RepoSubscriptionMode::{All, Default, Ignore};
+    use super::adjust_subscribers_count;
+
+    // Transitions that cross the "All" boundary move the counter.
+    assert_eq!(adjust_subscribers_count(10, Default, All), 11);
+    assert_eq!(adjust_subscribers_count(10, Ignore, All), 11);
+    assert_eq!(adjust_subscribers_count(10, All, Default), 9);
+    assert_eq!(adjust_subscribers_count(10, All, Ignore), 9);
+
+    // Transitions that don't involve "All" keep the counter unchanged.
+    assert_eq!(adjust_subscribers_count(10, Default, Ignore), 10);
+    assert_eq!(adjust_subscribers_count(10, Ignore, Default), 10);
+    assert_eq!(adjust_subscribers_count(10, Default, Default), 10);
+
+    // Saturates at zero for the edge case.
+    assert_eq!(adjust_subscribers_count(0, All, Default), 0);
   }
 
   #[test]
