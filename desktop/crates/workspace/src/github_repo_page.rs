@@ -7561,6 +7561,7 @@ impl GithubRepoPage {
           })
         },
       )
+      .p_1()
       .flex_1()
       .w_full()
       .into_any_element()
