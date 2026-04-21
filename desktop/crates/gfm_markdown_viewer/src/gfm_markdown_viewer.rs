@@ -27,7 +27,8 @@ use gpui::{
   AnyElement, App, CursorStyle, Div, MouseButton, SharedString, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, clipboard::Clipboard, h_flex,
+  ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, avatar::Avatar,
+  clipboard::Clipboard, h_flex,
 };
 #[cfg(test)]
 use syntax::TokenType;
@@ -1198,6 +1199,274 @@ fn render_inline_selectable_text(
   .into_any_element()
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum GithubMentionTextSegment {
+  Text(String),
+  Mention(String),
+}
+
+fn is_github_login_start_byte(byte: u8) -> bool {
+  byte.is_ascii_alphanumeric()
+}
+
+fn is_github_login_byte(byte: u8) -> bool {
+  byte.is_ascii_alphanumeric() || byte == b'-'
+}
+
+fn is_github_mention_prefix_char(ch: char) -> bool {
+  ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.')
+}
+
+fn is_github_mention_suffix_char(ch: char) -> bool {
+  ch.is_alphanumeric() || matches!(ch, '_' | '/' | '@')
+}
+
+fn find_github_mention(value: &str, mut cursor: usize) -> Option<(usize, usize, String)> {
+  let bytes = value.as_bytes();
+  while cursor < value.len() {
+    let Some(relative_at_ix) = value[cursor..].find('@') else {
+      break;
+    };
+    let at_ix = cursor + relative_at_ix;
+    let prefix_char = value[..at_ix].chars().next_back();
+    if prefix_char.is_some_and(is_github_mention_prefix_char) {
+      cursor = at_ix + 1;
+      continue;
+    }
+
+    let login_start = at_ix + 1;
+    if login_start >= value.len() || !is_github_login_start_byte(bytes[login_start]) {
+      cursor = at_ix + 1;
+      continue;
+    }
+
+    let mut login_end = login_start;
+    while login_end < value.len() && is_github_login_byte(bytes[login_end]) {
+      login_end += 1;
+    }
+
+    let login = &value[login_start..login_end];
+    let suffix_char = value[login_end..].chars().next();
+    if login.len() > 39
+      || login.ends_with('-')
+      || suffix_char.is_some_and(is_github_mention_suffix_char)
+    {
+      cursor = login_end;
+      continue;
+    }
+
+    return Some((at_ix, login_end, login.to_string()));
+  }
+
+  None
+}
+
+fn split_github_mention_segments(value: &str) -> Vec<GithubMentionTextSegment> {
+  let mut segments = Vec::new();
+  let mut cursor = 0usize;
+
+  while let Some((mention_start, mention_end, login)) = find_github_mention(value, cursor) {
+    if mention_start > cursor {
+      segments.push(GithubMentionTextSegment::Text(
+        value[cursor..mention_start].to_string(),
+      ));
+    }
+
+    segments.push(GithubMentionTextSegment::Mention(login));
+    cursor = mention_end;
+  }
+
+  if cursor < value.len() {
+    segments.push(GithubMentionTextSegment::Text(value[cursor..].to_string()));
+  }
+
+  segments
+}
+
+fn inline_contains_github_mention(inline: &Inline) -> bool {
+  match inline {
+    Inline::Text(value) => split_github_mention_segments(value)
+      .iter()
+      .any(|segment| matches!(segment, GithubMentionTextSegment::Mention(_))),
+    Inline::Strong(_) | Inline::Emphasis(_) | Inline::Strikethrough(_) => false,
+    Inline::Code(_)
+    | Inline::Link { .. }
+    | Inline::Image { .. }
+    | Inline::SoftBreak
+    | Inline::HardBreak => false,
+  }
+}
+
+fn render_github_mention(
+  login: &str,
+  options: &MarkdownRenderOptions,
+  interactive: bool,
+  cx: &App,
+  ctx: &mut RenderContext,
+) -> AnyElement {
+  let theme = cx.theme();
+  let link_color = github_link_color(theme.background);
+  let url: Arc<str> = format!("https://github.com/{login}").into();
+  let avatar_url = format!("{}.png?size=40", url.as_ref());
+  let label = format!("@{login}");
+  let mention_id = ctx.next_text_id();
+  let on_link = options.on_link.clone();
+
+  h_flex()
+    .id(format!("markdown-github-mention-{mention_id}"))
+    .items_center()
+    .gap_1()
+    .flex_shrink_0()
+    .text_sm()
+    .font_medium()
+    .text_color(link_color)
+    .cursor(CursorStyle::PointingHand)
+    .when(interactive, |this| {
+      this.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+        cx.stop_propagation();
+        let handled = on_link
+          .as_ref()
+          .map(|handler| handler(url.as_ref(), window, cx))
+          .unwrap_or(LinkAction::Open);
+        if handled == LinkAction::Open {
+          cx.open_url(url.as_ref());
+        }
+      })
+    })
+    .child(
+      Avatar::new()
+        .name(login.to_string())
+        .src(avatar_url)
+        .with_size(px(18.0)),
+    )
+    .child(label)
+    .into_any_element()
+}
+
+fn flush_inline_text_chunk(
+  row_container: gpui::Div,
+  text_chunk: &mut Vec<Inline>,
+  options: &MarkdownRenderOptions,
+  interactive: bool,
+  cx: &App,
+  ctx: &mut RenderContext,
+) -> (gpui::Div, bool) {
+  if text_chunk.is_empty() {
+    return (row_container, false);
+  }
+
+  let row_container = row_container.child(render_inline_selectable_text(
+    text_chunk,
+    options,
+    interactive,
+    cx,
+    ctx,
+  ));
+  text_chunk.clear();
+  (row_container, true)
+}
+
+fn render_inline_row(
+  row: &[Inline],
+  options: &MarkdownRenderOptions,
+  interactive: bool,
+  image_render_context: Option<&MarkdownImageRenderContext<'_>>,
+  cx: &App,
+  ctx: &mut RenderContext,
+) -> (gpui::Div, bool) {
+  let mut row_container = h_flex().items_center().gap_1().flex_wrap().min_w_0();
+  let mut row_has_content = false;
+  let mut text_chunk: Vec<Inline> = Vec::new();
+
+  for inline in row {
+    if let Some(image_render_context) = image_render_context
+      && let Some(image_data) = inline_image_data(inline)
+    {
+      let (next_container, _) = flush_inline_text_chunk(
+        row_container,
+        &mut text_chunk,
+        options,
+        interactive,
+        cx,
+        ctx,
+      );
+      row_container = next_container;
+      row_container = row_container.child(render_inline_image(&image_data, image_render_context));
+      row_has_content = true;
+      continue;
+    }
+
+    if let Inline::Text(value) = inline {
+      for segment in split_github_mention_segments(value) {
+        match segment {
+          GithubMentionTextSegment::Text(text) => text_chunk.push(Inline::Text(text)),
+          GithubMentionTextSegment::Mention(login) => {
+            let (next_container, _) = flush_inline_text_chunk(
+              row_container,
+              &mut text_chunk,
+              options,
+              interactive,
+              cx,
+              ctx,
+            );
+            row_container = next_container;
+            row_container =
+              row_container.child(render_github_mention(&login, options, interactive, cx, ctx));
+            row_has_content = true;
+          }
+        }
+      }
+    } else {
+      text_chunk.push(inline.clone());
+    }
+  }
+
+  let (next_container, flushed) = flush_inline_text_chunk(
+    row_container,
+    &mut text_chunk,
+    options,
+    interactive,
+    cx,
+    ctx,
+  );
+  row_container = next_container;
+  row_has_content |= flushed;
+
+  (row_container, row_has_content)
+}
+
+fn render_inline_with_mentions(
+  inlines: &[Inline],
+  options: &MarkdownRenderOptions,
+  interactive: bool,
+  cx: &App,
+  ctx: &mut RenderContext,
+) -> AnyElement {
+  let rows = split_inlines_by_hard_breaks(inlines);
+  let mut content = div().flex().flex_col().min_w_0();
+  let mut has_content = false;
+
+  for (row_ix, row) in rows.iter().enumerate() {
+    let (row_container, row_has_content) =
+      render_inline_row(row, options, interactive, None, cx, ctx);
+    if row_has_content {
+      content = content.child(row_container);
+      has_content = true;
+    }
+
+    if row_ix + 1 < rows.len() {
+      content = content.child(div().h(px(MARKDOWN_IMAGE_HARD_BREAK_SPACER_PX)));
+      has_content = true;
+    }
+  }
+
+  if has_content {
+    content.into_any_element()
+  } else {
+    div().into_any_element()
+  }
+}
+
 fn render_inline_with_images(
   inlines: &[Inline],
   options: &MarkdownRenderOptions,
@@ -1224,50 +1493,50 @@ fn render_inline_with_images(
   for (row_ix, row) in rows.iter().enumerate() {
     let mut row_container = h_flex().items_center().gap_1().flex_wrap().min_w_0();
     let mut row_has_content = false;
-    let mut text_chunk: Vec<Inline> = Vec::new();
+    let mut inline_row: Vec<Inline> = Vec::new();
 
     for inline in row {
-      if let Some(image_data) = inline_image_data(inline) {
-        if !text_chunk.is_empty() {
-          row_container = row_container.child(render_inline_selectable_text(
-            &text_chunk,
+      if let Some(image_data) = inline_image_data(inline)
+        && image_data.is_block_sized()
+      {
+        // Flush current row, then render the image as a block on its own line.
+        if !inline_row.is_empty() {
+          let (flushed_container, flushed_content) = render_inline_row(
+            &inline_row,
             options,
             interactive,
+            Some(&image_render_context),
             cx,
             ctx,
-          ));
-          text_chunk.clear();
-          row_has_content = true;
+          );
+          row_container = flushed_container;
+          row_has_content = flushed_content;
+          inline_row.clear();
         }
-
-        if image_data.is_block_sized() {
-          // Flush current row, then render the image as a block on its own line.
-          if row_has_content {
-            content = content.child(row_container);
-          }
-          content = content.child(render_block_image(&image_data, &image_render_context));
-          has_content = true;
-          row_container = h_flex().items_center().gap_1().flex_wrap().min_w_0();
-          row_has_content = false;
-        } else {
-          row_container =
-            row_container.child(render_inline_image(&image_data, &image_render_context));
-          row_has_content = true;
+        if row_has_content {
+          content = content.child(row_container);
         }
-      } else {
-        text_chunk.push(inline.clone());
+        content = content.child(render_block_image(&image_data, &image_render_context));
+        has_content = true;
+        row_container = h_flex().items_center().gap_1().flex_wrap().min_w_0();
+        row_has_content = false;
+        continue;
       }
+
+      inline_row.push(inline.clone());
     }
 
-    if !text_chunk.is_empty() {
-      row_container = row_container.child(render_inline_selectable_text(
-        &text_chunk,
+    if !inline_row.is_empty() {
+      let (flushed_container, flushed_content) = render_inline_row(
+        &inline_row,
         options,
         interactive,
+        Some(&image_render_context),
         cx,
         ctx,
-      ));
-      row_has_content = true;
+      );
+      row_container = flushed_container;
+      row_has_content = flushed_content;
     }
 
     if row_has_content {
@@ -1299,6 +1568,10 @@ pub(crate) fn render_inline_text(
     return render_inline_with_images(inlines, options, true, cx, ctx);
   }
 
+  if inlines.iter().any(inline_contains_github_mention) {
+    return render_inline_with_mentions(inlines, options, true, cx, ctx);
+  }
+
   render_inline_selectable_text(inlines, options, true, cx, ctx)
 }
 
@@ -1310,6 +1583,10 @@ fn render_inline_static(
 ) -> AnyElement {
   if inlines.iter().any(inline_contains_image) {
     return render_inline_with_images(inlines, options, false, cx, ctx);
+  }
+
+  if inlines.iter().any(inline_contains_github_mention) {
+    return render_inline_with_mentions(inlines, options, false, cx, ctx);
   }
 
   render_inline_selectable_text(inlines, options, false, cx, ctx)
@@ -2267,6 +2544,50 @@ mod tests {
       link_ranges[1].url.as_ref(),
       "https://example.com/already-linked"
     );
+  }
+
+  #[test]
+  fn split_github_mention_segments_detects_user_mentions() {
+    let segments = split_github_mention_segments("Ping @test and @foo-bar.");
+
+    assert_eq!(
+      segments,
+      vec![
+        GithubMentionTextSegment::Text("Ping ".to_string()),
+        GithubMentionTextSegment::Mention("test".to_string()),
+        GithubMentionTextSegment::Text(" and ".to_string()),
+        GithubMentionTextSegment::Mention("foo-bar".to_string()),
+        GithubMentionTextSegment::Text(".".to_string()),
+      ]
+    );
+  }
+
+  #[test]
+  fn split_github_mention_segments_ignores_emails_and_invalid_logins() {
+    let segments =
+      split_github_mention_segments("Email test@user.com, not @foo_bar or @foo- or @-user.");
+
+    assert_eq!(
+      segments,
+      vec![GithubMentionTextSegment::Text(
+        "Email test@user.com, not @foo_bar or @foo- or @-user.".to_string()
+      )]
+    );
+  }
+
+  #[test]
+  fn inline_contains_github_mention_only_checks_plain_text() {
+    assert!(inline_contains_github_mention(&Inline::Text(
+      "Ping @user".to_string()
+    )));
+    assert!(!inline_contains_github_mention(&Inline::Code(
+      "@user".to_string()
+    )));
+    assert!(!inline_contains_github_mention(&Inline::Link {
+      url: "https://github.com/user".to_string(),
+      title: None,
+      content: vec![Inline::Text("@user".to_string())],
+    }));
   }
 
   #[test]
