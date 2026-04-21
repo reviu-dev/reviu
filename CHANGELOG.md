@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.6.0
 
+### Auto-merge for Pull Requests
+
+The merge popover on a pull request now includes an Enable auto-merge action when the PR is blocked by pending reviews or checks. Pick a merge method and Reviu asks GitHub to merge the PR as soon as the requirements are satisfied. A Disable auto-merge button appears while it is active.
+
 ### Search GitHub Repositories
 
 Find any repository on GitHub directly from the command palette. Trigger "Search GitHub repository", start typing, and Reviu shows matching repositories live with names, descriptions, and star counts. Press Enter to open the selected repository in Reviu.

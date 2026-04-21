@@ -1,11 +1,22 @@
 import type {
+  GithubPullRequestAutoMergeState,
   GithubPullRequestMergeMethod,
   GithubPullRequestMergeReadiness,
   GithubRepositoryResponse,
   PullRequestDetailsResponse,
   PullRequestParams,
 } from './types.js'
-import { fetchGithubPullRequest, fetchGithubRepository } from './service.js'
+import {
+  fetchGithubPullRequest,
+  fetchGithubPullRequestAutoMergeGraphql,
+  fetchGithubRepository,
+} from './service.js'
+
+const EMPTY_AUTO_MERGE_STATE: GithubPullRequestAutoMergeState = {
+  auto_merge: null,
+  viewer_can_enable_auto_merge: false,
+  viewer_can_disable_auto_merge: false,
+}
 
 const MERGEABILITY_RETRY_ATTEMPTS = 3
 const MERGEABILITY_RETRY_DELAY_MS = 150
@@ -92,6 +103,7 @@ function isReadyMergeableState(mergeableState: string | null | undefined) {
 export function buildGithubPullRequestMergeReadiness(
   pullRequest: PullRequestDetailsResponse,
   repository?: GithubRepositoryResponse | null,
+  autoMergeState: GithubPullRequestAutoMergeState = EMPTY_AUTO_MERGE_STATE,
 ): GithubPullRequestMergeReadiness {
   const canViewerMerge = viewerCanMerge(pullRequest, repository)
   const methods = availableMergeMethods(pullRequest, repository)
@@ -103,7 +115,10 @@ export function buildGithubPullRequestMergeReadiness(
     viewer_can_merge: canViewerMerge,
     mergeable_state: mergeableState,
     rebaseable: pullRequest.rebaseable ?? null,
-    auto_merge_enabled: Boolean(pullRequest.auto_merge),
+    auto_merge_enabled: Boolean(pullRequest.auto_merge) || autoMergeState.auto_merge != null,
+    auto_merge: autoMergeState.auto_merge,
+    viewer_can_enable_auto_merge: autoMergeState.viewer_can_enable_auto_merge,
+    viewer_can_disable_auto_merge: autoMergeState.viewer_can_disable_auto_merge,
   } satisfies Omit<
     GithubPullRequestMergeReadiness,
     'status' | 'message' | 'can_merge_now'
@@ -186,6 +201,7 @@ export async function fetchGithubPullRequestMergeReadiness(
     params,
     fetchPullRequest = fetchGithubPullRequest,
     fetchRepository = fetchGithubRepository,
+    fetchAutoMerge = fetchGithubPullRequestAutoMergeGraphql,
   }: {
     token: string
     params: PullRequestParams
@@ -194,10 +210,15 @@ export async function fetchGithubPullRequestMergeReadiness(
       token: string
       params: { owner: string, repo: string }
     }) => Promise<GithubRepositoryResponse>
+    fetchAutoMerge?: (input: {
+      token: string
+      params: PullRequestParams
+    }) => Promise<GithubPullRequestAutoMergeState>
   },
 ): Promise<GithubPullRequestMergeReadiness> {
   let lastReadiness: GithubPullRequestMergeReadiness | null = null
   let repositoryMetadata: GithubRepositoryResponse | null = null
+  let autoMergeState: GithubPullRequestAutoMergeState | null = null
 
   for (let attempt = 0; attempt < MERGEABILITY_RETRY_ATTEMPTS; attempt += 1) {
     const pullRequest = await fetchPullRequest({ token, params })
@@ -212,7 +233,16 @@ export async function fetchGithubPullRequestMergeReadiness(
       })
     }
 
-    lastReadiness = buildGithubPullRequestMergeReadiness(pullRequest, repositoryMetadata)
+    if (!autoMergeState) {
+      try {
+        autoMergeState = await fetchAutoMerge({ token, params })
+      }
+      catch {
+        autoMergeState = EMPTY_AUTO_MERGE_STATE
+      }
+    }
+
+    lastReadiness = buildGithubPullRequestMergeReadiness(pullRequest, repositoryMetadata, autoMergeState)
 
     if (pullRequest.mergeable != null || lastReadiness.status !== 'checking') {
       return lastReadiness
@@ -234,5 +264,8 @@ export async function fetchGithubPullRequestMergeReadiness(
     mergeable_state: null,
     rebaseable: null,
     auto_merge_enabled: false,
+    auto_merge: null,
+    viewer_can_enable_auto_merge: false,
+    viewer_can_disable_auto_merge: false,
   }
 }

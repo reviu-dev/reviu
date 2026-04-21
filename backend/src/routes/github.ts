@@ -116,6 +116,7 @@ import {
   createPullRequestReviewBodySchema,
   createPullRequestThreadReplyBodySchema,
   createRepositoryBodySchema,
+  enablePullRequestAutoMergeBodySchema,
   forkRepositoryBodySchema,
   issueCommentBodySchema,
   issueSearchFiltersSchema,
@@ -145,6 +146,8 @@ import {
   createGithubRepositoryForUser,
   deleteGithubIssueComment,
   deleteGithubPullRequestComment,
+  disableGithubPullRequestAutoMerge,
+  enableGithubPullRequestAutoMerge,
   fetchGithubCommitConditionally,
   fetchGithubCommitFilesAllPages,
   fetchGithubIssueDetailsGraphql,
@@ -2437,6 +2440,101 @@ export const githubRoutes = githubRouter
     try {
       await withGithubMetrics(user.id, 'pull_request.convert_to_draft', () =>
         convertGithubPullRequestToDraft({
+          token: githubToken,
+          pullRequestId,
+        }))
+
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+      }))
+
+      return ctx.body(null, 204)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/:id/auto-merge', async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const payload = await ctx.req.json().catch(() => ({}))
+    const parsedBody = enablePullRequestAutoMergeBodySchema.safeParse(payload)
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+    if (!parsedBody.success) {
+      const firstIssue = parsedBody.error.issues[0]
+      const message = firstIssue?.message ?? 'Invalid auto-merge payload'
+      return ctx.json({ error: message }, 400)
+    }
+
+    const { pullRequestId, method, commitTitle, commitMessage } = parsedBody.data
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      await withGithubMetrics(user.id, 'pull_request.enable_auto_merge', () =>
+        enableGithubPullRequestAutoMerge({
+          token: githubToken,
+          pullRequestId,
+          mergeMethod: method,
+          commitHeadline: commitTitle,
+          commitBody: commitMessage,
+        }))
+
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+      }))
+
+      return ctx.body(null, 204)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .delete('/pr/:id/auto-merge', async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const payload = await ctx.req.json().catch(() => ({}))
+    const parsedBody = pullRequestStatusMutationBodySchema.safeParse(payload)
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+    if (!parsedBody.success) {
+      const firstIssue = parsedBody.error.issues[0]
+      const message = firstIssue?.path[0] === 'pullRequestId'
+        ? (firstIssue.message === 'Invalid input: expected string, received undefined'
+            ? 'Missing pull request id'
+            : firstIssue.message)
+        : 'Invalid auto-merge payload'
+      return ctx.json({ error: message }, 400)
+    }
+
+    const { pullRequestId } = parsedBody.data
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      await withGithubMetrics(user.id, 'pull_request.disable_auto_merge', () =>
+        disableGithubPullRequestAutoMerge({
           token: githubToken,
           pullRequestId,
         }))

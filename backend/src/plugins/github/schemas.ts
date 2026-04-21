@@ -92,6 +92,13 @@ export const pullRequestStatusMutationBodySchema = z.object({
   pullRequestId: z.string().trim().min(1, 'Missing pull request id'),
 })
 
+export const enablePullRequestAutoMergeBodySchema = z.object({
+  pullRequestId: z.string().trim().min(1, 'Missing pull request id'),
+  method: z.enum(['merge', 'squash', 'rebase']),
+  commitTitle: z.string().optional(),
+  commitMessage: z.string().optional(),
+})
+
 const pullRequestUsersMutationListSchema = z
   .array(z.string().trim().min(1, 'Missing user login'))
   .min(1, 'Missing users')

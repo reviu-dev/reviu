@@ -579,6 +579,25 @@ export type GithubPullRequestMergeReadinessStatus
     | 'closed'
     | 'merged'
 
+export interface GithubPullRequestAutoMergeEnabledBy {
+  login: string
+  avatar_url: string
+}
+
+export interface GithubPullRequestAutoMergeDetails {
+  merge_method: GithubPullRequestMergeMethod
+  commit_headline: string | null
+  commit_body: string | null
+  enabled_at: string | null
+  enabled_by: GithubPullRequestAutoMergeEnabledBy | null
+}
+
+export interface GithubPullRequestAutoMergeState {
+  auto_merge: GithubPullRequestAutoMergeDetails | null
+  viewer_can_enable_auto_merge: boolean
+  viewer_can_disable_auto_merge: boolean
+}
+
 export interface GithubPullRequestMergeReadiness {
   status: GithubPullRequestMergeReadinessStatus
   message: string
@@ -590,6 +609,9 @@ export interface GithubPullRequestMergeReadiness {
   mergeable_state: PullRequestDetailsResponse['mergeable_state'] | null
   rebaseable: PullRequestDetailsResponse['rebaseable']
   auto_merge_enabled: boolean
+  auto_merge: GithubPullRequestAutoMergeDetails | null
+  viewer_can_enable_auto_merge: boolean
+  viewer_can_disable_auto_merge: boolean
 }
 
 export interface GithubPullRequestMergeResult {

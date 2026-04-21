@@ -951,6 +951,29 @@ pub struct GithubPullRequestDetails {
 
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
+pub struct GithubPullRequestAutoMergeEnabledBy {
+  pub login: String,
+  #[serde(rename = "avatar_url")]
+  pub avatar_url: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubPullRequestAutoMergeDetails {
+  #[serde(rename = "merge_method")]
+  pub merge_method: GithubPullRequestMergeMethod,
+  #[serde(rename = "commit_headline")]
+  pub commit_headline: Option<String>,
+  #[serde(rename = "commit_body")]
+  pub commit_body: Option<String>,
+  #[serde(rename = "enabled_at")]
+  pub enabled_at: Option<String>,
+  #[serde(rename = "enabled_by")]
+  pub enabled_by: Option<GithubPullRequestAutoMergeEnabledBy>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct GithubPullRequestMergeReadiness {
   pub status: GithubPullRequestMergeReadinessStatus,
   pub message: String,
@@ -969,6 +992,12 @@ pub struct GithubPullRequestMergeReadiness {
   pub rebaseable: Option<bool>,
   #[serde(rename = "auto_merge_enabled")]
   pub auto_merge_enabled: bool,
+  #[serde(default, rename = "auto_merge")]
+  pub auto_merge: Option<GithubPullRequestAutoMergeDetails>,
+  #[serde(default, rename = "viewer_can_enable_auto_merge")]
+  pub viewer_can_enable_auto_merge: bool,
+  #[serde(default, rename = "viewer_can_disable_auto_merge")]
+  pub viewer_can_disable_auto_merge: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1582,6 +1611,17 @@ struct CreateGithubPullRequestMergeRequest<'a> {
   method: GithubPullRequestMergeMethod,
   #[serde(rename = "expectedHeadSha")]
   expected_head_sha: &'a str,
+  #[serde(rename = "commitTitle", skip_serializing_if = "Option::is_none")]
+  commit_title: Option<&'a str>,
+  #[serde(rename = "commitMessage", skip_serializing_if = "Option::is_none")]
+  commit_message: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct EnableGithubPullRequestAutoMergeRequest<'a> {
+  #[serde(rename = "pullRequestId")]
+  pull_request_id: &'a str,
+  method: GithubPullRequestMergeMethod,
   #[serde(rename = "commitTitle", skip_serializing_if = "Option::is_none")]
   commit_title: Option<&'a str>,
   #[serde(rename = "commitMessage", skip_serializing_if = "Option::is_none")]
@@ -2704,6 +2744,68 @@ impl ApiClient {
       .send()?;
     let status = response.status();
     Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    Ok(())
+  }
+
+  pub fn enable_pull_request_auto_merge(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    pull_request_id: &str,
+    method: GithubPullRequestMergeMethod,
+    commit_title: Option<&str>,
+    commit_message: Option<&str>,
+  ) -> Result<()> {
+    let route = format!("/github/pr/{number}/auto-merge");
+    let trimmed_title = commit_title
+      .map(str::trim)
+      .filter(|value| !value.is_empty());
+    let trimmed_message = commit_message
+      .map(str::trim)
+      .filter(|value| !value.is_empty());
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&EnableGithubPullRequestAutoMergeRequest {
+        pull_request_id,
+        method,
+        commit_title: trimmed_title,
+        commit_message: trimmed_message,
+      })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    Ok(())
+  }
+
+  pub fn disable_pull_request_auto_merge(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    pull_request_id: &str,
+  ) -> Result<()> {
+    let route = format!("/github/pr/{number}/auto-merge");
+    let response = self
+      .authed_request(Method::DELETE, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&GithubPullRequestStatusMutationRequest { pull_request_id })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("DELETE", route.as_str(), status);
     if status == StatusCode::UNAUTHORIZED {
       anyhow::bail!("unauthorized")
     }

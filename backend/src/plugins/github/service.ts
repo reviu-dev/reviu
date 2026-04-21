@@ -56,8 +56,10 @@ import type {
   GithubIssueDetails,
   GithubIssueDetailsCommentParameters,
   GithubIssueDetailsCommentResponse,
+  GithubPullRequestAutoMergeState,
   GithubPullRequestConversation,
   GithubPullRequestIssueComment,
+  GithubPullRequestMergeMethod,
   GithubPullRequestReview,
   GithubPullRequestReviewComment,
   GithubReactionContent,
@@ -442,6 +444,57 @@ const GITHUB_GRAPHQL_CONVERT_PULL_REQUEST_TO_DRAFT_MUTATION = `
     convertPullRequestToDraft(input: { pullRequestId: $pullRequestId }) {
       pullRequest {
         id
+      }
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_ENABLE_PULL_REQUEST_AUTO_MERGE_MUTATION = `
+  mutation EnablePullRequestAutoMerge(
+    $pullRequestId: ID!
+    $mergeMethod: PullRequestMergeMethod!
+    $commitHeadline: String
+    $commitBody: String
+  ) {
+    enablePullRequestAutoMerge(input: {
+      pullRequestId: $pullRequestId
+      mergeMethod: $mergeMethod
+      commitHeadline: $commitHeadline
+      commitBody: $commitBody
+    }) {
+      pullRequest {
+        id
+      }
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_DISABLE_PULL_REQUEST_AUTO_MERGE_MUTATION = `
+  mutation DisablePullRequestAutoMerge($pullRequestId: ID!) {
+    disablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId }) {
+      pullRequest {
+        id
+      }
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_AUTO_MERGE_QUERY = `
+  query PullRequestAutoMerge($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        viewerCanEnableAutoMerge
+        viewerCanDisableAutoMerge
+        autoMergeRequest {
+          mergeMethod
+          commitHeadline
+          commitBody
+          enabledAt
+          enabledBy {
+            login
+            avatarUrl
+          }
+        }
       }
     }
   }
@@ -987,6 +1040,41 @@ interface GithubGraphqlConvertPullRequestToDraftResponse {
   convertPullRequestToDraft?: {
     pullRequest?: {
       id: string
+    } | null
+  } | null
+}
+
+interface GithubGraphqlEnablePullRequestAutoMergeResponse {
+  enablePullRequestAutoMerge?: {
+    pullRequest?: {
+      id: string
+    } | null
+  } | null
+}
+
+interface GithubGraphqlDisablePullRequestAutoMergeResponse {
+  disablePullRequestAutoMerge?: {
+    pullRequest?: {
+      id: string
+    } | null
+  } | null
+}
+
+interface GithubGraphqlPullRequestAutoMergeResponse {
+  repository?: {
+    pullRequest?: {
+      viewerCanEnableAutoMerge: boolean
+      viewerCanDisableAutoMerge: boolean
+      autoMergeRequest: {
+        mergeMethod: 'MERGE' | 'SQUASH' | 'REBASE'
+        commitHeadline: string | null
+        commitBody: string | null
+        enabledAt: string | null
+        enabledBy: {
+          login: string
+          avatarUrl: string
+        } | null
+      } | null
     } | null
   } | null
 }
@@ -2357,6 +2445,108 @@ export async function convertGithubPullRequestToDraft(
 
   if (!data.convertPullRequestToDraft?.pullRequest?.id) {
     throw new Error('GitHub GraphQL response is missing the updated pull request')
+  }
+}
+
+export async function enableGithubPullRequestAutoMerge(
+  {
+    token,
+    pullRequestId,
+    mergeMethod,
+    commitHeadline,
+    commitBody,
+  }: {
+    token: string
+    pullRequestId: string
+    mergeMethod: GithubPullRequestMergeMethod
+    commitHeadline?: string
+    commitBody?: string
+  },
+): Promise<void> {
+  const data = await requestGithubGraphqlData<GithubGraphqlEnablePullRequestAutoMergeResponse>({
+    token,
+    query: GITHUB_GRAPHQL_ENABLE_PULL_REQUEST_AUTO_MERGE_MUTATION,
+    variables: {
+      pullRequestId,
+      mergeMethod: mergeMethod.toUpperCase(),
+      commitHeadline: commitHeadline ?? null,
+      commitBody: commitBody ?? null,
+    },
+  })
+
+  if (!data.enablePullRequestAutoMerge?.pullRequest?.id) {
+    throw new Error('GitHub GraphQL response is missing the updated pull request')
+  }
+}
+
+export async function disableGithubPullRequestAutoMerge(
+  {
+    token,
+    pullRequestId,
+  }: {
+    token: string
+    pullRequestId: string
+  },
+): Promise<void> {
+  const data = await requestGithubGraphqlData<GithubGraphqlDisablePullRequestAutoMergeResponse>({
+    token,
+    query: GITHUB_GRAPHQL_DISABLE_PULL_REQUEST_AUTO_MERGE_MUTATION,
+    variables: {
+      pullRequestId,
+    },
+  })
+
+  if (!data.disablePullRequestAutoMerge?.pullRequest?.id) {
+    throw new Error('GitHub GraphQL response is missing the updated pull request')
+  }
+}
+
+export async function fetchGithubPullRequestAutoMergeGraphql(
+  {
+    token,
+    params,
+  }: {
+    token: string
+    params: PullRequestParams
+  },
+): Promise<GithubPullRequestAutoMergeState> {
+  const data = await requestGithubGraphqlData<GithubGraphqlPullRequestAutoMergeResponse>({
+    token,
+    query: GITHUB_GRAPHQL_PULL_REQUEST_AUTO_MERGE_QUERY,
+    variables: {
+      owner: params.owner,
+      name: params.repo,
+      number: params.pull_number,
+    },
+  })
+
+  const pullRequest = data.repository?.pullRequest
+  if (!pullRequest) {
+    return {
+      auto_merge: null,
+      viewer_can_enable_auto_merge: false,
+      viewer_can_disable_auto_merge: false,
+    }
+  }
+
+  const autoMerge = pullRequest.autoMergeRequest
+  return {
+    auto_merge: autoMerge
+      ? {
+          merge_method: autoMerge.mergeMethod.toLowerCase() as GithubPullRequestMergeMethod,
+          commit_headline: autoMerge.commitHeadline,
+          commit_body: autoMerge.commitBody,
+          enabled_at: autoMerge.enabledAt,
+          enabled_by: autoMerge.enabledBy
+            ? {
+                login: autoMerge.enabledBy.login,
+                avatar_url: autoMerge.enabledBy.avatarUrl,
+              }
+            : null,
+        }
+      : null,
+    viewer_can_enable_auto_merge: pullRequest.viewerCanEnableAutoMerge,
+    viewer_can_disable_auto_merge: pullRequest.viewerCanDisableAutoMerge,
   }
 }
 

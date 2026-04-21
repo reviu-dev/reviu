@@ -97,6 +97,9 @@ function makeMergeReadiness(
     mergeable_state: 'clean',
     rebaseable: true,
     auto_merge_enabled: false,
+    auto_merge: null,
+    viewer_can_enable_auto_merge: false,
+    viewer_can_disable_auto_merge: false,
     ...overrides,
   }
 }
