@@ -38,6 +38,8 @@ import type {
   GithubGraphqlIssueDetailsCommentsPageResponse,
   GithubGraphqlIssueDetailsIssueNode,
   GithubGraphqlIssueDetailsResponse,
+  GithubGraphqlPullRequestCommitNode,
+  GithubGraphqlPullRequestCommitsResponse,
   GithubGraphqlPullRequestConversationActor,
   GithubGraphqlPullRequestConversationDatabaseNode,
   GithubGraphqlPullRequestConversationResponse,
@@ -77,8 +79,6 @@ import type {
   NotificationsParams,
   PullRequestCommentResponse,
   PullRequestCommentsParams,
-  PullRequestCommitResponse,
-  PullRequestCommitsParams,
   PullRequestDetailsResponse,
   PullRequestFileResponse,
   PullRequestFilesParams,
@@ -350,6 +350,16 @@ const GITHUB_GRAPHQL_REPOSITORY_OVERVIEW_QUERY = `
                 oid
                 message
                 committedDate
+                authors(first: 10) {
+                  nodes {
+                    name
+                    email
+                    user {
+                      login
+                      avatarUrl
+                    }
+                  }
+                }
                 author {
                   user {
                     login
@@ -695,6 +705,58 @@ const GITHUB_GRAPHQL_PULL_REQUEST_CONVERSATION_QUERY = `
     }
   }
   ${GITHUB_GRAPHQL_PULL_REQUEST_CONVERSATION_FRAGMENTS}
+`
+
+const GITHUB_GRAPHQL_PULL_REQUEST_COMMITS_QUERY = `
+  query PullRequestCommits($owner: String!, $name: String!, $number: Int!, $after: String) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        commits(first: 100, after: $after) {
+          nodes {
+            commit {
+              oid
+              message
+              authoredDate
+              committedDate
+              parents(first: 1) {
+                nodes {
+                  oid
+                }
+              }
+              author {
+                name
+                email
+                user {
+                  login
+                  avatarUrl
+                }
+              }
+              committer {
+                user {
+                  login
+                  avatarUrl
+                }
+              }
+              authors(first: 10) {
+                nodes {
+                  name
+                  email
+                  user {
+                    login
+                    avatarUrl
+                  }
+                }
+              }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  }
 `
 
 const GITHUB_GRAPHQL_PULL_REQUEST_ISSUE_COMMENTS_PAGE_QUERY = `
@@ -1105,6 +1167,16 @@ interface GithubGraphqlRepositoryOverviewResponse {
             oid: string
             message: string
             committedDate: string
+            authors: {
+              nodes: Array<{
+                name: string | null
+                email: string | null
+                user: {
+                  login: string
+                  avatarUrl: string
+                } | null
+              }>
+            }
             author: {
               user: {
                 login: string
@@ -2629,16 +2701,6 @@ export async function updateGithubPullRequestBranch(
   })
 }
 
-async function fetchGithubPullRequestCommitsPage(
-  { token, params }:
-  { token: string, params: PullRequestCommitsParams },
-): Promise<PullRequestCommitResponse[]> {
-  return requestGithubData('GET /repos/{owner}/{repo}/pulls/{pull_number}/commits', {
-    token,
-    params,
-  })
-}
-
 export async function fetchGithubCommitConditionally(
   options: GithubConditionalRequestOptions<'GET /repos/{owner}/{repo}/commits/{ref}'>,
 ): Promise<GithubConditionalResponse<'GET /repos/{owner}/{repo}/commits/{ref}'>> {
@@ -2648,30 +2710,42 @@ export async function fetchGithubCommitConditionally(
   )
 }
 
-export async function fetchGithubPullRequestCommitsAllPages(
-  { token, params, perPage = 100 }: {
+export async function fetchGithubPullRequestCommitsGraphql(
+  { token, params }: {
     token: string
-    params: Omit<PullRequestCommitsParams, 'per_page' | 'page'>
-    perPage?: number
+    params: { owner: string, repo: string, pull_number: number }
   },
-): Promise<PullRequestCommitResponse[]> {
-  const commits: PullRequestCommitResponse[] = []
+): Promise<GithubGraphqlPullRequestCommitNode[]> {
+  const commits: GithubGraphqlPullRequestCommitNode[] = []
+  let after: string | null = null
   let page = 1
 
   while (true) {
-    const data = await fetchGithubPullRequestCommitsPage({
+    const data: GithubGraphqlPullRequestCommitsResponse = await requestGithubGraphqlData({
       token,
-      params: {
-        ...params,
-        per_page: perPage,
-        page,
+      query: GITHUB_GRAPHQL_PULL_REQUEST_COMMITS_QUERY,
+      variables: {
+        owner: params.owner,
+        name: params.repo,
+        number: params.pull_number,
+        after,
       },
     })
-    commits.push(...data)
 
-    if (data.length < perPage) {
+    const connection = data.repository?.pullRequest?.commits
+    if (!connection) {
       break
     }
+
+    commits.push(...graphqlConnectionNodes(connection))
+    if (
+      !connection.pageInfo.hasNextPage
+      || !connection.pageInfo.endCursor
+      || page >= GITHUB_PAGINATED_COLLECTION_MAX_PAGES
+    ) {
+      break
+    }
+    after = connection.pageInfo.endCursor
     page += 1
   }
 

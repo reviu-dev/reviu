@@ -5,8 +5,6 @@ export type CompareParams
   = Endpoints['GET /repos/{owner}/{repo}/compare/{basehead}']['parameters']
 export type PullRequestParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}']['parameters']
-export type PullRequestCommitsParams
-  = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/commits']['parameters']
 export type PullRequestCommentsParams
   = Endpoints['GET /repos/{owner}/{repo}/pulls/{pull_number}/comments']['parameters']
 export type UpdatePullRequestParams
@@ -200,6 +198,45 @@ export interface GithubGraphqlPageInfo {
 export interface GithubGraphqlConnection<T> {
   nodes?: Array<T | null> | null
   pageInfo: GithubGraphqlPageInfo
+}
+
+export interface GithubGraphqlCommitAuthorIdentityNode {
+  name: string | null
+  email: string | null
+  user: {
+    login: string
+    avatarUrl: string
+  } | null
+}
+
+export interface GithubGraphqlPullRequestCommitNode {
+  commit: {
+    oid: string
+    message: string
+    authoredDate: string | null
+    committedDate: string | null
+    parents: {
+      nodes?: Array<{ oid: string } | null> | null
+    }
+    author: GithubGraphqlCommitAuthorIdentityNode | null
+    committer: {
+      user: {
+        login: string
+        avatarUrl: string
+      } | null
+    } | null
+    authors: {
+      nodes?: Array<GithubGraphqlCommitAuthorIdentityNode | null> | null
+    }
+  }
+}
+
+export interface GithubGraphqlPullRequestCommitsResponse {
+  repository?: {
+    pullRequest?: {
+      commits: GithubGraphqlConnection<GithubGraphqlPullRequestCommitNode>
+    } | null
+  } | null
 }
 
 export type GithubReactionContent
@@ -727,7 +764,14 @@ export interface GithubPullRequestDescriptionUpdate {
 
 export interface GithubPullRequestCommitUser {
   login: NonNullable<PullRequestCommitResponse['author']>['login']
-  avatar_url: NonNullable<PullRequestCommitResponse['author']>['avatar_url']
+  avatar_url: NonNullable<PullRequestCommitResponse['author']>['avatar_url'] | null
+}
+
+export interface GithubCommitAuthorIdentity {
+  name: string | null
+  email: string | null
+  login: string | null
+  avatar_url: string | null
 }
 
 export interface GithubPullRequestCommit {
@@ -738,6 +782,7 @@ export interface GithubPullRequestCommit {
   parent_sha: PullRequestCommitResponse['parents'][number]['sha'] | null
   author: GithubPullRequestCommitUser | null
   committer: GithubPullRequestCommitUser | null
+  authors: GithubCommitAuthorIdentity[]
 }
 
 export interface GithubPullRequestFile {
@@ -910,6 +955,7 @@ export interface GithubRepositoryDetails {
     committed_at: string
     author_login: string | null
     author_avatar_url: string | null
+    authors: GithubCommitAuthorIdentity[]
   }>
   contributors: Array<{
     login: string

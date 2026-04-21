@@ -96,12 +96,13 @@ import {
 import { githubCache } from '../plugins/github/cache/github-cache-runtime.js'
 import { githubRepositoryVisibility } from '../plugins/github/cache/github-repository-visibility-runtime.js'
 import {
+  mapGithubGraphqlCommitAuthors,
   mapGithubGraphqlPullRequest,
+  mapGithubGraphqlPullRequestCommit,
   mapGithubIssueComment,
   mapGithubIssueDescriptionUpdate,
   mapGithubPullRequest,
   mapGithubPullRequestAuthor,
-  mapGithubPullRequestCommit,
   mapGithubPullRequestDescriptionUpdate,
   mapGithubPullRequestFile,
   mapGithubPullRequestReview,
@@ -154,7 +155,7 @@ import {
   fetchGithubIssueSearchGraphql,
   fetchGithubNotifications,
   fetchGithubPullRequest,
-  fetchGithubPullRequestCommitsAllPages,
+  fetchGithubPullRequestCommitsGraphql,
   fetchGithubPullRequestConditionally,
   fetchGithubPullRequestConversationGraphql,
   fetchGithubPullRequestFilesAllPages,
@@ -1088,7 +1089,7 @@ async function fetchPullRequestCommitsWithCache(
           )
         }
 
-        const commits = await fetchGithubPullRequestCommitsAllPages({
+        const commits = await fetchGithubPullRequestCommitsGraphql({
           token: githubToken,
           params: {
             owner: org,
@@ -1100,7 +1101,7 @@ async function fetchPullRequestCommitsWithCache(
         return buildLoadedCacheResult(
           GITHUB_PULL_REQUEST_COLLECTION_VALIDATOR_KEY,
           nextPullRequestValidator,
-          commits.map(mapGithubPullRequestCommit),
+          commits.map(mapGithubGraphqlPullRequestCommit),
         )
       },
     }))
@@ -1318,6 +1319,7 @@ async function fetchRepositoryDetailsWithCache(
               committed_at: node.committedDate,
               author_login: node.author?.user?.login ?? null,
               author_avatar_url: node.author?.user?.avatarUrl ?? null,
+              authors: mapGithubGraphqlCommitAuthors(node.authors.nodes),
             })),
             contributors: data.mentionableUsers.nodes.map(user => ({
               login: user.login,

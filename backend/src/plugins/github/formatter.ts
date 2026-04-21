@@ -1,5 +1,7 @@
 import type {
   CreatePullRequestResponse,
+  GithubCommitAuthorIdentity,
+  GithubGraphqlPullRequestCommitNode,
   GithubGraphqlPullRequestNode,
   GithubGraphqlPullRequestResult,
   GithubIssueCommentResponseSource,
@@ -17,7 +19,6 @@ import type {
   GithubPullRequestReviewComment,
   GithubPullRequestReviewResponseSource,
   GithubReviewCommentResponse,
-  PullRequestCommitResponse,
   PullRequestResponse,
   UpdateIssueResponse,
   UpdatePullRequestResponse,
@@ -223,33 +224,102 @@ export function mapGithubIssueDescriptionUpdate(
   }
 }
 
-function mapGithubPullRequestCommitUser(
-  user: PullRequestCommitResponse['author'] | PullRequestCommitResponse['committer'],
+function normalizeNullableText(value: string | null | undefined): string | null {
+  const trimmed = value?.trim()
+  return trimmed || null
+}
+
+function commitAuthorDedupeKeys(author: GithubCommitAuthorIdentity): string[] {
+  const keys: string[] = []
+  if (author.login) {
+    keys.push(`login:${author.login.toLowerCase()}`)
+  }
+  if (author.email) {
+    keys.push(`email:${author.email.toLowerCase()}`)
+  }
+  if (keys.length === 0 && author.name) {
+    keys.push(`name:${author.name.toLowerCase()}`)
+  }
+  return keys
+}
+
+function pushUniqueCommitAuthor(
+  authors: GithubCommitAuthorIdentity[],
+  seen: Set<string>,
+  author: GithubCommitAuthorIdentity,
+) {
+  if (!author.name && !author.email && !author.login) {
+    return
+  }
+
+  const keys = commitAuthorDedupeKeys(author)
+  if (keys.some(key => seen.has(key))) {
+    return
+  }
+
+  for (const key of keys) {
+    seen.add(key)
+  }
+  authors.push(author)
+}
+
+function mapGithubGraphqlPullRequestCommitUser(
+  user: { login?: string | null, avatarUrl?: string | null } | null | undefined,
 ): GithubPullRequestCommitUser | null {
-  if (!user) {
+  const login = normalizeNullableText(user?.login)
+  if (!login) {
     return null
   }
 
   return {
-    login: user.login,
-    avatar_url: user.avatar_url,
+    login,
+    avatar_url: normalizeNullableText(user?.avatarUrl),
   }
 }
 
-export function mapGithubPullRequestCommit(
-  commit: PullRequestCommitResponse,
+export function mapGithubGraphqlCommitAuthors(
+  commitAuthors: Array<{
+    name?: string | null
+    email?: string | null
+    user?: {
+      login?: string | null
+      avatarUrl?: string | null
+    } | null
+  }>,
+): GithubCommitAuthorIdentity[] {
+  const authors: GithubCommitAuthorIdentity[] = []
+  const seen = new Set<string>()
+
+  for (const author of commitAuthors) {
+    const login = normalizeNullableText(author.user?.login)
+    pushUniqueCommitAuthor(authors, seen, {
+      name: normalizeNullableText(author.name) ?? login,
+      email: normalizeNullableText(author.email),
+      login,
+      avatar_url: normalizeNullableText(author.user?.avatarUrl),
+    })
+  }
+
+  return authors
+}
+
+export function mapGithubGraphqlPullRequestCommit(
+  node: GithubGraphqlPullRequestCommitNode,
 ): GithubPullRequestCommit {
+  const commit = node.commit
+  const parent = (commit.parents.nodes ?? []).find(parent => parent?.oid)
+
   return {
-    sha: commit.sha,
-    message: commit.commit.message,
-    authored_at: commit.commit.author?.date ?? null,
-    committed_at: commit.commit.committer?.date ?? null,
-    parent_sha: commit.parents.at(0)?.sha ?? null,
-    author: mapGithubPullRequestCommitUser(commit.author),
-    committer: mapGithubPullRequestCommitUser(commit.committer),
+    sha: commit.oid,
+    message: commit.message,
+    authored_at: commit.authoredDate,
+    committed_at: commit.committedDate,
+    parent_sha: parent?.oid ?? null,
+    author: mapGithubGraphqlPullRequestCommitUser(commit.author?.user),
+    committer: mapGithubGraphqlPullRequestCommitUser(commit.committer?.user),
+    authors: mapGithubGraphqlCommitAuthors((commit.authors.nodes ?? []).filter(author => author !== null)),
   }
 }
-
 export function mapGithubPullRequestFile(file: GithubPullRequestFileSource): GithubPullRequestFile {
   return {
     filename: file.filename,

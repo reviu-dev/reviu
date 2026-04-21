@@ -10304,10 +10304,11 @@ impl GithubPrDetailsPage {
       &theme,
     );
 
-    let body = github_shared::render_commit_row_content(
+    let body = github_shared::render_commit_row_content_with_authors(
       &commit.sha,
       &commit.message,
       committed_at,
+      &commit.authors,
       commit_user.map(|u| u.login.as_str()),
       commit_user.and_then(|u| u.avatar_url.as_deref()),
       &theme,
@@ -14038,6 +14039,7 @@ mod tests {
         login: "octocat".to_string(),
         avatar_url: None,
       }),
+      authors: vec![],
     }
   }
 

@@ -14,9 +14,9 @@ use ui::{
 
 use crate::{
   api::{
-    ApiClient, GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel,
-    GithubPullRequestState, GithubPullRequestStatus, GithubReactionContent, GithubReactionGroup,
-    GithubRepositoryLanguage,
+    ApiClient, GithubCommitAuthorIdentity, GithubPullRequest, GithubPullRequestAuthor,
+    GithubPullRequestLabel, GithubPullRequestState, GithubPullRequestStatus, GithubReactionContent,
+    GithubReactionGroup, GithubRepositoryLanguage,
   },
   date_format::{format_relative_time, format_relative_time_at},
 };
@@ -169,17 +169,107 @@ pub(crate) fn commit_subject(message: &str) -> String {
     .to_string()
 }
 
-pub(crate) fn render_commit_row_content(
+fn commit_author_display_name(author: &GithubCommitAuthorIdentity) -> String {
+  author
+    .login
+    .as_ref()
+    .or(author.name.as_ref())
+    .or(author.email.as_ref())
+    .filter(|value| !value.trim().is_empty())
+    .cloned()
+    .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn fallback_commit_author(
+  author_login: Option<&str>,
+  author_avatar_url: Option<&str>,
+) -> GithubCommitAuthorIdentity {
+  GithubCommitAuthorIdentity {
+    name: author_login.map(str::to_string),
+    email: None,
+    login: author_login.map(str::to_string),
+    avatar_url: author_avatar_url.map(str::to_string),
+  }
+}
+
+fn commit_authors_for_display(
+  authors: &[GithubCommitAuthorIdentity],
+  author_login: Option<&str>,
+  author_avatar_url: Option<&str>,
+) -> Vec<GithubCommitAuthorIdentity> {
+  if authors.is_empty() {
+    vec![fallback_commit_author(author_login, author_avatar_url)]
+  } else {
+    authors.to_vec()
+  }
+}
+
+pub(crate) fn commit_authors_label(authors: &[GithubCommitAuthorIdentity]) -> String {
+  match authors {
+    [] => "unknown".to_string(),
+    [author] => commit_author_display_name(author),
+    [first, second] => format!(
+      "{} and {}",
+      commit_author_display_name(first),
+      commit_author_display_name(second)
+    ),
+    [first, second, rest @ ..] => {
+      let remaining_count = rest.len();
+      let suffix = if remaining_count == 1 {
+        "other"
+      } else {
+        "others"
+      };
+      format!(
+        "{}, {}, and {} {}",
+        commit_author_display_name(first),
+        commit_author_display_name(second),
+        remaining_count,
+        suffix
+      )
+    }
+  }
+}
+
+fn render_commit_author_avatars(authors: &[GithubCommitAuthorIdentity]) -> gpui::Div {
+  let mut avatars = h_flex().items_center().flex_shrink_0();
+  for (ix, author) in authors.iter().take(3).enumerate() {
+    avatars = avatars.child(
+      div().when(ix > 0, |this| this.ml(gpui::px(-4.0))).child(
+        Avatar::new()
+          .name(commit_author_display_name(author))
+          .when_some(author.avatar_url.clone(), |this, url| this.src(url))
+          .small(),
+      ),
+    );
+  }
+
+  if authors.len() > 3 {
+    avatars = avatars.child(
+      Tag::secondary()
+        .small()
+        .rounded_full()
+        .ml_1()
+        .child(format!("+{}", authors.len() - 3)),
+    );
+  }
+
+  avatars
+}
+
+pub(crate) fn render_commit_row_content_with_authors(
   sha: &str,
   message: &str,
   committed_at: &str,
+  authors: &[GithubCommitAuthorIdentity],
   author_login: Option<&str>,
   author_avatar_url: Option<&str>,
   theme: &gpui_component::Theme,
 ) -> gpui::Div {
   let subject = commit_subject(message);
   let short = short_sha(sha);
-  let author = author_login.unwrap_or("unknown").to_string();
+  let authors = commit_authors_for_display(authors, author_login, author_avatar_url);
+  let author = commit_authors_label(&authors);
   let date_label = format_relative_time(committed_at);
   let full_sha = sha.to_string();
 
@@ -188,14 +278,7 @@ pub(crate) fn render_commit_row_content(
     .min_w_0()
     .items_center()
     .gap_3()
-    .child(
-      Avatar::new()
-        .name(author.clone())
-        .when_some(author_avatar_url.map(str::to_string), |this, url| {
-          this.src(url)
-        })
-        .small(),
-    )
+    .child(render_commit_author_avatars(&authors))
     .child(
       v_flex()
         .min_w_0()
@@ -771,8 +854,8 @@ pub(crate) fn next_trimmed_text_update(raw_value: &str, initial_value: &str) -> 
 #[cfg(test)]
 mod tests {
   use super::{
-    PULL_REQUEST_ROW_HEIGHT_PX, PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX, github_label_color,
-    is_unauthorized_error_message, issue_url, line_snippets_from_content,
+    PULL_REQUEST_ROW_HEIGHT_PX, PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX, commit_authors_label,
+    github_label_color, is_unauthorized_error_message, issue_url, line_snippets_from_content,
     logins_match_case_insensitive, next_trimmed_text_update, normalize_non_empty_text,
     parse_language_color, pr_url, pull_request_activity_text_at, pull_request_author_display_name,
     pull_request_author_is_bot, pull_request_comments_count_text, pull_request_list_row_body,
@@ -780,8 +863,8 @@ mod tests {
     pull_request_status_label, pull_request_updated_text_at, repo_label, short_sha,
   };
   use crate::api::{
-    GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel, GithubPullRequestState,
-    GithubPullRequestStatus, GithubRepository,
+    GithubCommitAuthorIdentity, GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel,
+    GithubPullRequestState, GithubPullRequestStatus, GithubRepository,
   };
   use crate::date_format::format_relative_time_at;
   use gpui::{
@@ -1143,6 +1226,46 @@ mod tests {
     assert_eq!(
       pull_request_row_height_px(&make_pull_request(&["bug"])),
       PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX
+    );
+  }
+
+  #[test]
+  fn commit_authors_label_formats_single_and_multiple_authors() {
+    let author = |login: Option<&str>, name: Option<&str>| GithubCommitAuthorIdentity {
+      name: name.map(str::to_string),
+      email: None,
+      login: login.map(str::to_string),
+      avatar_url: None,
+    };
+
+    assert_eq!(commit_authors_label(&[]), "unknown");
+    assert_eq!(
+      commit_authors_label(&[author(Some("octocat"), Some("Octo Cat"))]),
+      "octocat"
+    );
+    assert_eq!(
+      commit_authors_label(&[
+        author(Some("octocat"), Some("Octo Cat")),
+        author(None, Some("Co Author")),
+      ]),
+      "octocat and Co Author"
+    );
+    assert_eq!(
+      commit_authors_label(&[
+        author(Some("octocat"), Some("Octo Cat")),
+        author(None, Some("Co Author")),
+        author(Some("user"), None),
+      ]),
+      "octocat, Co Author, and 1 other"
+    );
+    assert_eq!(
+      commit_authors_label(&[
+        author(Some("octocat"), Some("Octo Cat")),
+        author(None, Some("Co Author")),
+        author(Some("user"), None),
+        author(Some("foo-bar"), None),
+      ]),
+      "octocat, Co Author, and 2 others"
     );
   }
 
