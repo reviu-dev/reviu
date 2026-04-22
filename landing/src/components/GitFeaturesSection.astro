@@ -12,13 +12,13 @@ import gitLight from "../assets/app_screenshots/git_light.png";
 
 const features = [
   {
-    name: "A real-time diff editor.",
+    name: "A real-time diff editor",
     description:
       "Edit your changes directly inside the diff view. Review and modify code in one place instead of switching between your editor and your Git client.",
     icon: PencilLineIcon,
   },
   {
-    name: "Inline and split diff views.",
+    name: "Inline and split diff views",
     description:
       "Switch between inline and split diff layouts. Stage, unstage, and restore individual hunks to keep your commits precise.",
     icon: SplitIcon,
@@ -30,19 +30,19 @@ const features = [
     icon: GitMergeConflictIcon,
   },
   {
-    name: "The full local Git workflow.",
+    name: "The full local Git workflow",
     description:
       "Commit, amend, undo, fetch, pull, push, force push with lease, branch, rebase, stash, and cherry-pick - all in one place.",
     icon: GitCommitHorizontalIcon,
   },
   {
-    name: "Keyboard-first command palette.",
+    name: "Keyboard-first command palette",
     description:
       "Every Git action is reachable from the command palette. Navigate and operate entirely from the keyboard.",
     icon: CommandIcon,
   },
   {
-    name: "Your branch, your PR - one click away.",
+    name: "Your branch, your PR, one click away",
     description:
       "A button in the header connects your current branch to its pull request. Open an existing PR or create a new one without leaving Reviu. Requires Reviu Pro.",
     icon: GitPullRequestIcon,
@@ -111,7 +111,7 @@ const features = [
               class="reviu-reveal relative pl-9"
               style={`--reveal-delay: ${index * 80 + 200}ms;`}
             >
-              <dt class="flex items-center gap-2 font-semibold text-foreground">
+              <dt class="flex items-start gap-2 font-semibold text-foreground">
                 <span>
                   <Icon
                     aria-hidden="true"
@@ -121,7 +121,7 @@ const features = [
                 </span>
                 {feature.pro && <Badge compact>Pro</Badge>}
               </dt>
-              <dd class="inline">{feature.description}</dd>
+              <dd class="inline text-sm">{feature.description}</dd>
             </div>
           );
         })

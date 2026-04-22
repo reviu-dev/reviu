@@ -40,6 +40,10 @@ objc2-app-kit = { version = "0.3", features = [
   "NSMenuItem",
 ] }
 
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+image = { workspace = true }
+tray-icon = { workspace = true }
+
 [dev-dependencies]
 git2 = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }

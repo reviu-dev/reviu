@@ -11,37 +11,37 @@ import SearchCheckIcon from "@lucide/astro/icons/search-check";
 
 const features = [
   {
-    name: "Review the full changeset.",
+    name: "Review the full changeset",
     description:
       "Open pull request diffs in a desktop view with inline and split layouts.",
     icon: GitPullRequestArrowIcon,
   },
   {
-    name: "Comment where the code changed.",
+    name: "Comment where the code changed",
     description:
       "Start a review comment from the diff and keep replies tied to the exact lines under discussion.",
     icon: MessageCircleReplyIcon,
   },
   {
-    name: "Checks stay visible.",
+    name: "Checks stay visible",
     description:
       "Track passing, pending, and failing status from the same PR page before you merge.",
     icon: BadgeCheckIcon,
   },
   {
-    name: "Review and merge in one place.",
+    name: "Review and merge in one place",
     description:
       "Approve, request changes, convert draft, or merge without bouncing back to GitHub in the browser.",
     icon: GitMergeIcon,
   },
   {
-    name: "Resolve conflicts in the Git page.",
+    name: "Resolve conflicts in the Git page",
     description:
       "When a pull request hits merge conflicts, jump from the PR to the Git page, fix the branch locally, and keep moving.",
     icon: GitMergeConflictIcon,
   },
   {
-    name: "Browse the full project from the PR.",
+    name: "Browse the full project from the PR",
     description:
       "When you're on the PR branch locally, toggle unchanged files to see the surrounding code - not just what changed.",
     icon: SearchCheckIcon,
@@ -115,7 +115,7 @@ const features = [
                 />
                 {feature.name}
               </dt>
-              <dd class="inline">{feature.description}</dd>
+              <dd class="inline text-sm">{feature.description}</dd>
             </div>
           );
         })

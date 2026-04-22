@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.7.0
 
+### GitHub Notifications in the System Tray
+
+Windows and Linux now show the Reviu tray icon with unread GitHub notification counts, matching the existing macOS menu bar behavior.
+
 ### GitHub Mentions in Markdown
 
 User mentions in GitHub markdown now show the profile avatar next to the linked username, matching the way mentions appear on GitHub while keeping profile navigation inside Reviu.
