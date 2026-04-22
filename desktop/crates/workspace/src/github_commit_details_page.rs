@@ -9,16 +9,17 @@ use editor::{DiffViewMode, Editor};
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
 use gpui::{
   AnyElement, App, Context, Corner, Entity, FocusHandle, Focusable, ParentElement, Render,
-  SharedString, Styled, Task, Window, div, img, prelude::*, px,
+  RenderImage, SharedString, Styled, Task, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt,
+  ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable as _, StyledExt,
   button::{Button, ButtonVariants as _},
   h_flex,
   label::Label,
   menu::{DropdownMenu as _, PopupMenuItem},
   skeleton::Skeleton,
   tag::Tag,
+  text::TextView,
   tree::{TreeItem, TreeState, tree},
   v_flex,
 };
@@ -36,7 +37,7 @@ use crate::{
   auth_state::AuthStateStore,
   config::AppSettings,
   date_format::format_relative_time,
-  file_preview::{FilePreviewKind, file_preview_kind},
+  file_preview::{FilePreviewKind, file_preview_kind, is_markdown_path, is_svg_path},
   github_navigation::{open_pr_target, open_profile_target, open_repo_target},
   github_page::GithubPageHandle,
   github_shared,
@@ -48,6 +49,10 @@ const COMMIT_FILE_SIDEBAR_WIDTH: f32 = 360.0;
 const COMMIT_FILE_SIDEBAR_MIN_WIDTH: f32 = 320.0;
 const COMMIT_FILE_SIDEBAR_MAX_WIDTH: f32 = 1200.0;
 const COMMIT_HEADER_HEIGHT: f32 = 40.0;
+const GITHUB_COMMIT_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str =
+  "github-commit-markdown-preview-editor-pane";
+const GITHUB_COMMIT_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str =
+  "github-commit-markdown-preview-render-pane";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GithubCommitFileStatus {
@@ -319,6 +324,10 @@ pub struct GithubCommitDetailsPage {
   diff_editor: Entity<Editor>,
   diff_view: DiffViewMode,
   hide_whitespace: bool,
+  show_markdown_preview: bool,
+  svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
+  svg_preview_source: Option<SharedString>,
+  svg_preview_task: Option<Task<()>>,
 }
 
 impl GithubCommitDetailsPage {
@@ -369,6 +378,10 @@ impl GithubCommitDetailsPage {
         DiffViewMode::Inline
       },
       hide_whitespace: app_settings.hide_whitespace,
+      show_markdown_preview: false,
+      svg_preview: None,
+      svg_preview_source: None,
+      svg_preview_task: None,
     }
   }
 
@@ -392,6 +405,10 @@ impl GithubCommitDetailsPage {
     self.selected_tree_id = None;
     self.file_contents.clear();
     self.file_content_tasks.clear();
+    self.show_markdown_preview = false;
+    self.svg_preview = None;
+    self.svg_preview_source = None;
+    self.svg_preview_task = None;
     self.tree_state.update(cx, |state, cx| {
       state.set_items(Vec::new(), cx);
     });
@@ -463,6 +480,15 @@ impl GithubCommitDetailsPage {
 
     self.selected_file = selected.clone();
     self.selected_tree_id = selected.as_ref().map(|file| file.path.to_string());
+    if selected.as_ref().map_or(true, |file| {
+      let path = Path::new(file.path.as_ref());
+      !is_markdown_path(path) && !is_svg_path(path)
+    }) {
+      self.show_markdown_preview = false;
+    }
+    self.svg_preview = None;
+    self.svg_preview_source = None;
+    self.svg_preview_task = None;
 
     if let Some(file) = selected {
       self.ensure_diff_editor_for_path(file.path.as_ref(), cx);
@@ -487,6 +513,36 @@ impl GithubCommitDetailsPage {
   fn ensure_diff_editor_for_path(&mut self, path: &str, cx: &mut Context<Self>) {
     self.diff_editor = Self::build_detached_diff_editor(path, cx);
     self.sync_diff_view(cx);
+  }
+
+  fn split_disabled_for_file(file: &GithubCommitFileDiff) -> bool {
+    matches!(
+      file.status,
+      GithubCommitFileStatus::Added | GithubCommitFileStatus::Deleted
+    )
+  }
+
+  fn split_disabled_for_selected_file(&self) -> bool {
+    self
+      .selected_file
+      .as_ref()
+      .is_some_and(|file| Self::split_disabled_for_file(file))
+  }
+
+  fn selected_file_is_markdown(&self) -> bool {
+    self
+      .selected_file
+      .as_ref()
+      .map(|file| is_markdown_path(Path::new(file.path.as_ref())))
+      .unwrap_or(false)
+  }
+
+  fn selected_file_is_svg(&self) -> bool {
+    self
+      .selected_file
+      .as_ref()
+      .map(|file| is_svg_path(Path::new(file.path.as_ref())))
+      .unwrap_or(false)
   }
 
   fn clear_diff_editor(&mut self, cx: &mut Context<Self>) {
@@ -672,19 +728,125 @@ impl GithubCommitDetailsPage {
     });
   }
 
+  fn effective_diff_view(&self) -> DiffViewMode {
+    if self.show_markdown_preview
+      && (self.selected_file_is_markdown() || self.selected_file_is_svg())
+    {
+      return DiffViewMode::Inline;
+    }
+
+    if self.split_disabled_for_selected_file() {
+      return DiffViewMode::Inline;
+    }
+
+    self.diff_view
+  }
+
   fn sync_diff_view(&mut self, cx: &mut Context<Self>) {
-    self.diff_editor.update(cx, |editor, cx| {
-      editor.set_diff_view_mode(self.diff_view, cx)
-    });
+    let diff_view = self.effective_diff_view();
+    self
+      .diff_editor
+      .update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
   }
 
   fn toggle_diff_view(&mut self, cx: &mut Context<Self>) {
+    if self.split_disabled_for_selected_file() {
+      return;
+    }
+    if self.show_markdown_preview
+      && (self.selected_file_is_markdown() || self.selected_file_is_svg())
+    {
+      return;
+    }
+
     self.diff_view = match self.diff_view {
       DiffViewMode::Inline => DiffViewMode::Split,
       DiffViewMode::Split => DiffViewMode::Inline,
     };
+    AppSettings::update(cx, |s| {
+      s.split_diff_view = self.diff_view == DiffViewMode::Split
+    });
     self.sync_diff_view(cx);
     cx.notify();
+  }
+
+  fn toggle_hide_whitespace(&mut self, cx: &mut Context<Self>) {
+    self.hide_whitespace = !self.hide_whitespace;
+    if let Some(file) = self.selected_file.clone()
+      && let Some(contents) = self.file_contents.get(file.path.as_ref()).cloned()
+    {
+      let head = contents.head.as_deref().unwrap_or("");
+      let base = contents.base.as_deref();
+      if let Ok(diff) = compute_buffer_diff(
+        DiffKind::Uncommitted,
+        base,
+        head,
+        Path::new(file.path.as_ref()),
+        self.hide_whitespace,
+      ) {
+        let diff_set = Some(DiffSet {
+          uncommitted: diff,
+          unstaged: FileDiff {
+            kind: DiffKind::Unstaged,
+            hunks: Vec::new(),
+          },
+          staged: FileDiff {
+            kind: DiffKind::Staged,
+            hunks: Vec::new(),
+          },
+        });
+        self.diff_editor.update(cx, |editor, cx| {
+          editor.set_diffs(diff_set, cx);
+        });
+      }
+    }
+    cx.notify();
+  }
+
+  fn toggle_markdown_preview(&mut self, cx: &mut Context<Self>) {
+    if !self.selected_file_is_markdown() && !self.selected_file_is_svg() {
+      self.show_markdown_preview = false;
+      self.sync_diff_view(cx);
+      cx.notify();
+      return;
+    }
+
+    self.show_markdown_preview = !self.show_markdown_preview;
+    self.sync_diff_view(cx);
+    cx.notify();
+  }
+
+  fn update_svg_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if !self.show_markdown_preview || !self.selected_file_is_svg() {
+      return;
+    }
+
+    let document = self.diff_editor.read(cx).document().read(cx);
+    let svg_source = document.slice_to_string(0..document.len());
+    let svg_source: SharedString = svg_source.into();
+
+    if self.svg_preview_source.as_ref() == Some(&svg_source) {
+      return;
+    }
+
+    self.svg_preview_source = Some(svg_source.clone());
+    let renderer = cx.svg_renderer();
+    let svg_bytes = svg_source.as_ref().as_bytes().to_vec();
+    let background =
+      cx.background_spawn(async move { renderer.render_single_frame(svg_bytes.as_slice(), 1.0) });
+
+    let task = cx.spawn_in(window, async move |this, cx| {
+      let result = background.await;
+      let _ = this.update_in(cx, |this, window, cx| {
+        if let Some(Ok(image)) = this.svg_preview.take() {
+          let _ = window.drop_image(image);
+        }
+        this.svg_preview = Some(result.map_err(|err| err.to_string().into()));
+        cx.notify();
+      });
+    });
+
+    self.svg_preview_task = Some(task);
   }
 
   fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1124,11 +1286,73 @@ impl GithubCommitDetailsPage {
       });
     let status_letter = commit_file_status_letter(file.status);
     let status_color = commit_file_status_color(file.status, &theme);
-    let (toggle_label, toggle_icon) = match self.diff_view {
-      DiffViewMode::Inline => ("Split", IconName::PanelLeft),
-      DiffViewMode::Split => ("Inline", IconName::PanelLeftClose),
+    let is_markdown = is_markdown_path(path);
+    let is_svg = is_svg_path(path);
+    let preview_active = (is_markdown || is_svg) && self.show_markdown_preview;
+    let split_disabled = Self::split_disabled_for_file(file) || preview_active;
+    let (toggle_label, toggle_icon) = if split_disabled {
+      ("Split", IconName::PanelLeft)
+    } else {
+      match self.diff_view {
+        DiffViewMode::Inline => ("Split", IconName::PanelLeft),
+        DiffViewMode::Split => ("Inline", IconName::PanelLeftClose),
+      }
     };
     let view = cx.entity();
+    let toggle_button = Button::new("github-commit-toggle-diff-view")
+      .label(toggle_label)
+      .icon(toggle_icon)
+      .xsmall()
+      .ghost()
+      .disabled(split_disabled || self.file_loading)
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.toggle_diff_view(cx);
+        });
+      });
+
+    let view = cx.entity();
+    let hide_whitespace = self.hide_whitespace;
+    let whitespace_icon = if hide_whitespace {
+      IconName::Eye
+    } else {
+      IconName::EyeOff
+    };
+    let tooltip = if hide_whitespace {
+      "Show whitespace changes"
+    } else {
+      "Hide whitespace changes"
+    };
+    let whitespace_button = Button::new("github-commit-whitespace-toggle")
+      .label("Whitespace")
+      .icon(whitespace_icon)
+      .tooltip(tooltip)
+      .xsmall()
+      .ghost()
+      .disabled(self.file_loading)
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.toggle_hide_whitespace(cx);
+        });
+      });
+
+    let view = cx.entity();
+    let preview_button = Button::new("github-commit-markdown-preview")
+      .label("Preview")
+      .icon(if preview_active {
+        IconName::EyeOff
+      } else {
+        IconName::Eye
+      })
+      .xsmall()
+      .ghost()
+      .selected(preview_active)
+      .disabled(self.file_loading)
+      .on_click(move |_, _, cx| {
+        view.update(cx, |this, cx| {
+          this.toggle_markdown_preview(cx);
+        });
+      });
 
     h_flex()
       .h(px(COMMIT_HEADER_HEIGHT))
@@ -1159,16 +1383,12 @@ impl GithubCommitDetailsPage {
           }),
       )
       .child(
-        Button::new("github-commit-toggle-diff-view")
-          .label(toggle_label)
-          .icon(toggle_icon)
-          .xsmall()
-          .ghost()
-          .on_click(move |_, _, cx| {
-            view.update(cx, |this, cx| {
-              this.toggle_diff_view(cx);
-            });
-          }),
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(whitespace_button)
+          .child(toggle_button)
+          .when(is_markdown || is_svg, |this| this.child(preview_button)),
       )
       .into_any_element()
   }
@@ -1252,7 +1472,7 @@ impl GithubCommitDetailsPage {
       .into_any_element()
   }
 
-  fn render_diff_content(&self, cx: &mut Context<Self>) -> AnyElement {
+  fn render_diff_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     if self.file_loading {
       return Self::render_diff_content_skeleton(cx);
@@ -1267,6 +1487,96 @@ impl GithubCommitDetailsPage {
         .text_sm()
         .text_color(theme.status_red())
         .child(error.clone())
+        .into_any_element();
+    }
+
+    let is_markdown = self.selected_file_is_markdown();
+    let is_svg = self.selected_file_is_svg();
+    if self.show_markdown_preview && (is_markdown || is_svg) {
+      let preview_panel = if is_svg {
+        self.update_svg_preview(window, cx);
+        let preview = match self.svg_preview.clone() {
+          Some(Ok(image)) => img(image).max_w_full().max_h_full().into_any_element(),
+          Some(Err(error)) => div()
+            .text_sm()
+            .text_color(theme.status_red())
+            .child(error)
+            .into_any_element(),
+          None => div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Rendering SVG preview...")
+            .into_any_element(),
+        };
+        div()
+          .flex_1()
+          .min_h_0()
+          .min_w(px(0.0))
+          .bg(theme.background)
+          .child(
+            div()
+              .flex_1()
+              .min_h_0()
+              .min_w(px(0.0))
+              .p_4()
+              .items_center()
+              .justify_center()
+              .child(preview),
+          )
+          .into_any_element()
+      } else {
+        let markdown = self.diff_editor.read(cx).document().read(cx);
+        let markdown = markdown.slice_to_string(0..markdown.len());
+        div()
+          .flex_1()
+          .min_h_0()
+          .min_w(px(0.0))
+          .bg(theme.background)
+          .child(
+            div().size_full().pb_4().px_4().child(
+              TextView::markdown("github-commit-markdown-preview-text", markdown)
+                .size_full()
+                .selectable(true)
+                .scrollable(true),
+            ),
+          )
+          .into_any_element()
+      };
+
+      return div()
+        .flex_1()
+        .min_h_0()
+        .child(
+          h_resizable("github-commit-markdown-preview")
+            .child(
+              resizable_panel().child(
+                div()
+                  .size_full()
+                  .min_w(px(0.0))
+                  .min_h_0()
+                  .flex()
+                  .flex_col()
+                  .debug_selector(|| {
+                    GITHUB_COMMIT_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR.to_string()
+                  })
+                  .child(self.diff_editor.clone()),
+              ),
+            )
+            .child(
+              resizable_panel().child(
+                div()
+                  .size_full()
+                  .min_w(px(0.0))
+                  .min_h_0()
+                  .flex()
+                  .flex_col()
+                  .debug_selector(|| {
+                    GITHUB_COMMIT_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR.to_string()
+                  })
+                  .child(preview_panel),
+              ),
+            ),
+        )
         .into_any_element();
     }
 
@@ -1311,7 +1621,7 @@ impl GithubCommitDetailsPage {
       if let Some(file) = selected_file {
         editor_panel = editor_panel.child(self.render_diff_header(&file, cx));
       }
-      editor_panel = editor_panel.child(self.render_diff_content(cx));
+      editor_panel = editor_panel.child(self.render_diff_content(window, cx));
     }
 
     h_resizable("github-commit-details-layout")
@@ -1471,11 +1781,25 @@ impl Render for GithubCommitDetailsPage {
 #[cfg(test)]
 mod tests {
   use super::{
-    GithubCommitFileDiff, GithubCommitFileStatus, build_commit_tree_items, commit_file_status,
-    commit_file_status_letter,
+    GithubCommitDetailsPage, GithubCommitFileDiff, GithubCommitFileStatus, build_commit_tree_items,
+    commit_file_status, commit_file_status_letter,
   };
-  use gpui::SharedString;
+  use crate::{config::AppSettings, workspace::WorkspaceApi};
+  use editor::DiffViewMode;
+  use gpui::{SharedString, TestAppContext};
   use std::rc::Rc;
+
+  fn init_gpui_test(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      gpui_component::init(cx);
+      if !cx.has_global::<WorkspaceApi>() {
+        cx.set_global(WorkspaceApi::new());
+      }
+      if !cx.has_global::<AppSettings>() {
+        cx.set_global(AppSettings::default());
+      }
+    });
+  }
 
   fn make_file(path: &str, status: GithubCommitFileStatus) -> Rc<GithubCommitFileDiff> {
     Rc::new(GithubCommitFileDiff {
@@ -1547,5 +1871,38 @@ mod tests {
     assert!(lookup.contains_key("src/lib.rs"));
     assert_eq!(selected_index, Some(0));
     assert_eq!(selected_id.as_deref(), Some("src/lib.rs"));
+  }
+
+  #[test]
+  fn commit_split_disables_added_and_deleted_files() {
+    assert!(GithubCommitDetailsPage::split_disabled_for_file(
+      &make_file("created.rs", GithubCommitFileStatus::Added,)
+    ));
+    assert!(GithubCommitDetailsPage::split_disabled_for_file(
+      &make_file("removed.rs", GithubCommitFileStatus::Deleted,)
+    ));
+    assert!(!GithubCommitDetailsPage::split_disabled_for_file(
+      &make_file("changed.rs", GithubCommitFileStatus::Modified,)
+    ));
+  }
+
+  #[gpui::test]
+  fn commit_markdown_preview_forces_inline_diff(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubCommitDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.selected_file = Some(make_file("README.md", GithubCommitFileStatus::Modified));
+      this.diff_view = DiffViewMode::Split;
+
+      this.toggle_markdown_preview(cx);
+
+      assert!(this.show_markdown_preview);
+      assert_eq!(this.effective_diff_view(), DiffViewMode::Inline);
+      assert_eq!(
+        this.diff_editor.read(cx).diff_view_mode(),
+        DiffViewMode::Inline
+      );
+    });
   }
 }
