@@ -21,14 +21,14 @@ use crate::selection::*;
 use crate::types::*;
 pub use crate::types::{
   Block, CodeBlock, Details, GithubCodeReferencePreview, GithubIssueReferenceContext, Inline,
-  LinkAction, List, MarkdownRenderState, ParsedMarkdown, Table,
+  LinkAction, List, MarkdownRenderState, ParsedMarkdown, SuggestionContext, Table,
 };
 use gpui::{
   AnyElement, App, CursorStyle, Div, MouseButton, SharedString, Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, avatar::Avatar,
-  clipboard::Clipboard, h_flex,
+  clipboard::Clipboard, h_flex, v_flex,
 };
 #[cfg(test)]
 use syntax::TokenType;
@@ -72,6 +72,7 @@ pub struct MarkdownRenderOptions {
   pub image_base_url: Option<SharedString>,
   pub syntax_cache: Option<Arc<crate::syntax_cache::SyntaxHighlightCache>>,
   pub asset_url_resolver: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
+  pub suggestion_context: Option<SuggestionContext>,
 }
 
 impl MarkdownRenderOptions {
@@ -152,6 +153,11 @@ impl MarkdownRenderOptions {
 
   pub fn with_hardbreaks(mut self) -> Self {
     self.hardbreaks = true;
+    self
+  }
+
+  pub fn with_suggestion_context(mut self, ctx: SuggestionContext) -> Self {
+    self.suggestion_context = Some(ctx);
     self
   }
 }
@@ -805,6 +811,11 @@ fn render_block(
     Block::CodeBlock(code) => {
       if let Some(override_fn) = options.overrides.code_block.as_ref() {
         return override_fn(code, cx);
+      }
+      if code.lang.as_deref() == Some("suggestion")
+        && let Some(suggestion_ctx) = options.suggestion_context.as_ref()
+      {
+        return render_suggestion_block(code, suggestion_ctx, options, cx, ctx);
       }
       render_code_block(code, options, cx, ctx)
     }
@@ -1683,6 +1694,146 @@ fn render_code_block(
         .invisible()
         .group_hover(&hover_group_id, |this| this.visible())
         .child(Clipboard::new(("markdown-code-block-copy", text_id)).value(copy_value)),
+    )
+    .into_any_element()
+}
+
+fn render_suggestion_block(
+  code: &CodeBlock,
+  suggestion_ctx: &SuggestionContext,
+  options: &MarkdownRenderOptions,
+  cx: &App,
+  ctx: &mut RenderContext,
+) -> AnyElement {
+  let theme = cx.theme();
+  let lang_hint = code_block_language_hint_from_path(suggestion_ctx.path.as_ref());
+
+  let old_value = suggestion_ctx.original_lines.join("\n");
+  let old_code = CodeBlock {
+    lang: lang_hint.clone(),
+    value: old_value,
+  };
+  let new_code = CodeBlock {
+    lang: lang_hint,
+    value: code.value.clone(),
+  };
+
+  let old_text_id = ctx.next_text_id();
+  let new_text_id = ctx.next_text_id();
+  let (old_text, old_spans, old_link_ranges) =
+    build_code_block_spans(&old_code, options.syntax_cache.as_ref());
+  let (new_text, new_spans, new_link_ranges) =
+    build_code_block_spans(&new_code, options.syntax_cache.as_ref());
+
+  let min_content_width_px = estimate_code_block_min_content_width_px(old_text.as_ref())
+    .max(estimate_code_block_min_content_width_px(new_text.as_ref()));
+
+  let old_empty = suggestion_ctx.original_lines.is_empty();
+  let new_empty = code.value.is_empty();
+  let removed_bg = theme.red_light.opacity(0.18);
+  let added_bg = theme.green_light.opacity(0.22);
+  let copy_value: SharedString = code.value.clone().into();
+  let hover_group_id: SharedString = format!("markdown-suggestion-hover-{old_text_id}").into();
+  let scroll_id: SharedString = format!("markdown-suggestion-scroll-{old_text_id}").into();
+
+  let header = h_flex()
+    .items_center()
+    .gap_2()
+    .px_3()
+    .py_1p5()
+    .border_b_1()
+    .border_color(theme.border)
+    .bg(theme.muted)
+    .child(
+      div()
+        .text_xs()
+        .font_medium()
+        .text_color(theme.muted_foreground)
+        .child("Suggested change"),
+    );
+
+  let build_section = |bg: gpui::Hsla,
+                       text: SharedString,
+                       spans: Vec<InlineSpan>,
+                       link_ranges: Vec<LinkRange>,
+                       text_id: usize,
+                       skip: bool| {
+    if skip {
+      return None;
+    }
+    Some(
+      div().w_full().bg(bg).min_w_0().child(
+        div()
+          .min_w(px(min_content_width_px))
+          .px(px(MARKDOWN_CODE_BLOCK_PADDING_X_PX))
+          .py(px(MARKDOWN_CODE_BLOCK_PADDING_TOP_PX))
+          .whitespace_nowrap()
+          .child(
+            div()
+              .pl(px(MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX))
+              .font_family(theme.mono_font_family.clone())
+              .text_size(theme.mono_font_size)
+              .text_color(theme.foreground)
+              .child(SelectableText::new(
+                text,
+                spans,
+                link_ranges,
+                options.state.clone(),
+                options.on_link.clone(),
+                text_id,
+                code_block_selectable_text_options(),
+              )),
+          ),
+      ),
+    )
+  };
+
+  let scroll_content = div()
+    .id(scroll_id)
+    .w_full()
+    .min_w_0()
+    .overflow_x_scroll()
+    .child(
+      v_flex()
+        .w_full()
+        .min_w_0()
+        .children(build_section(
+          removed_bg,
+          old_text,
+          old_spans,
+          old_link_ranges,
+          old_text_id,
+          old_empty,
+        ))
+        .children(build_section(
+          added_bg,
+          new_text,
+          new_spans,
+          new_link_ranges,
+          new_text_id,
+          new_empty,
+        )),
+    );
+
+  div()
+    .w_full()
+    .min_w_0()
+    .relative()
+    .group(hover_group_id.clone())
+    .border_1()
+    .border_color(theme.border)
+    .rounded_md()
+    .overflow_hidden()
+    .child(header)
+    .child(scroll_content)
+    .child(
+      div()
+        .absolute()
+        .top_2()
+        .right_2()
+        .invisible()
+        .group_hover(&hover_group_id, |this| this.visible())
+        .child(Clipboard::new(("markdown-suggestion-copy", old_text_id)).value(copy_value)),
     )
     .into_any_element()
 }

@@ -14,7 +14,7 @@ use editor::{
 };
 use gfm_markdown_viewer::{
   GithubBlobLineReference, GithubCodeReferencePreview, LinkAction, MarkdownRenderOptions,
-  MarkdownRenderState, extract_github_blob_line_references,
+  MarkdownRenderState, SuggestionContext, extract_github_blob_line_references,
   render_github_code_reference_preview_card, render_markdown,
 };
 use git::{
@@ -1886,6 +1886,23 @@ fn upsert_label(labels: &mut Vec<GithubPullRequestLabel>, label: GithubPullReque
 
 fn remove_label(labels: &mut Vec<GithubPullRequestLabel>, name: &str) {
   labels.retain(|label| !label.name.eq_ignore_ascii_case(name));
+}
+
+fn build_suggestion_context(
+  review_comments: &[GithubPullRequestReviewComment],
+  comment_id: u64,
+) -> Option<SuggestionContext> {
+  let comment = review_comments.iter().find(|c| c.id == comment_id)?;
+  let line = comment.line?;
+  let original_lines = github_shared::extract_original_lines_from_diff_hunk(
+    &comment.diff_hunk,
+    comment.start_line,
+    line,
+  );
+  Some(SuggestionContext {
+    original_lines,
+    path: Arc::from(comment.path.as_str()),
+  })
 }
 
 fn review_comment_owned_by_login(comment: &GithubPullRequestReviewComment, login: &str) -> bool {
@@ -10517,13 +10534,18 @@ impl GithubPrDetailsPage {
       }
     });
 
-    let markdown_options = MarkdownRenderOptions::with_on_link(link_handler.clone())
+    let mut markdown_options = MarkdownRenderOptions::with_on_link(link_handler.clone())
       .with_state(self.description_markdown_state.clone())
       .with_syntax_cache(self.syntax_highlight_cache.clone())
       .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
       .with_github_issue_reference_context(pr_owner.as_ref(), pr_repo.as_ref())
       .with_scope_id(scope_id)
       .with_hardbreaks();
+    if item.kind == GithubPrOverviewConversationItemKind::ReviewComment
+      && let Some(ctx) = build_suggestion_context(&self.review_comments, item.id)
+    {
+      markdown_options = markdown_options.with_suggestion_context(ctx);
+    }
 
     // Determine root comment target and editability
     let root_target = match item.kind {
@@ -10899,14 +10921,19 @@ impl GithubPrDetailsPage {
               let reply_scope_id = scope_id
                 .wrapping_mul(1_000_003)
                 .wrapping_add(reply.id as usize);
-              let reply_markdown_options =
-                MarkdownRenderOptions::with_on_link(link_handler.clone())
+              let reply_markdown_options = {
+                let mut opts = MarkdownRenderOptions::with_on_link(link_handler.clone())
                   .with_state(self.description_markdown_state.clone())
                   .with_syntax_cache(self.syntax_highlight_cache.clone())
                   .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
                   .with_github_issue_reference_context(pr_owner.as_ref(), pr_repo.as_ref())
                   .with_scope_id(reply_scope_id)
                   .with_hardbreaks();
+                if let Some(ctx) = build_suggestion_context(&self.review_comments, reply.id) {
+                  opts = opts.with_suggestion_context(ctx);
+                }
+                opts
+              };
 
               let reply_target = OverviewCommentTarget {
                 kind: OverviewCommentKind::Review,

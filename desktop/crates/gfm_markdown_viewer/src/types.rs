@@ -30,6 +30,15 @@ pub struct CodeBlock {
   pub value: String,
 }
 
+/// Context used by the viewer to render `` ```suggestion `` code fences as a
+/// GitHub-style diff (the lines currently on the anchored side of the comment
+/// on top, the suggestion content underneath).
+#[derive(Clone, Debug)]
+pub struct SuggestionContext {
+  pub original_lines: Vec<String>,
+  pub path: Arc<str>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GithubBlobLineReference {
   pub url: String,
