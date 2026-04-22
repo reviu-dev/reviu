@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const addGithubReactionGraphql = vi.fn()
 const fetchGithubIssueDetailsGraphql = vi.fn()
+const fetchGithubIssueReferenceTarget = vi.fn()
 const fetchGithubPullRequestConversationGraphql = vi.fn()
 const removeGithubReactionGraphql = vi.fn()
 const invalidateTags = vi.fn()
@@ -63,6 +64,7 @@ vi.mock('../../plugins/github/service.js', async () => {
     ...actual,
     addGithubReactionGraphql,
     fetchGithubIssueDetailsGraphql,
+    fetchGithubIssueReferenceTarget,
     fetchGithubPullRequestConversationGraphql,
     removeGithubReactionGraphql,
   }
@@ -332,6 +334,29 @@ describe('github pull request conversation route', () => {
         reactions: [expect.objectContaining({ content: 'THUMBS_UP' })],
         comments: [expect.objectContaining({ node_id: 'IC_kwDOIssue' })],
       }),
+    })
+  })
+
+  it('resolves issue-number links to pull request targets', async () => {
+    fetchGithubIssueReferenceTarget.mockResolvedValue({
+      kind: 'pull_request',
+      number: 24877,
+    })
+
+    const response = await request('/repos/acme/widget/issues/24877/target')
+
+    expect(response.status).toBe(200)
+    expect(fetchGithubIssueReferenceTarget).toHaveBeenCalledWith({
+      token: 'github-token',
+      owner: 'acme',
+      repo: 'widget',
+      issueNumber: 24877,
+    })
+    await expect(response.json()).resolves.toEqual({
+      target: {
+        kind: 'pull_request',
+        number: 24877,
+      },
     })
   })
 

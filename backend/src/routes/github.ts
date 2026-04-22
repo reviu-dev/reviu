@@ -153,6 +153,7 @@ import {
   fetchGithubCommitConditionally,
   fetchGithubCommitFilesAllPages,
   fetchGithubIssueDetailsGraphql,
+  fetchGithubIssueReferenceTarget,
   fetchGithubIssueSearchGraphql,
   fetchGithubNotifications,
   fetchGithubPullRequest,
@@ -3633,6 +3634,36 @@ export const githubRoutes = githubRouter
       const result = await fetchRepositoryIssueDetailsWithCache(user.id, githubToken, owner, repo, issueNumber)
       setGithubCacheHeaders(ctx, result)
       return ctx.json({ issue: result.payload }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .get('/repos/:owner/:repo/issues/:issue_number/target', async (ctx) => {
+    const { owner, repo, issue_number } = ctx.req.param()
+
+    const issueNumber = Number(issue_number)
+
+    if (!owner || !repo || Number.isNaN(issueNumber)) {
+      return ctx.json({ error: 'Missing owner, repo, or issue number' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const target = await withGithubMetrics(user.id, 'repository.issue_reference.target', () =>
+        fetchGithubIssueReferenceTarget({
+          token: githubToken,
+          owner,
+          repo,
+          issueNumber,
+        }))
+      return ctx.json({ target }, 200)
     }
     catch (error) {
       const status = (error as { status?: number }).status

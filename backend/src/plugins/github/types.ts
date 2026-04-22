@@ -121,6 +121,7 @@ export type RepositoryAssigneeResponse
 export type GithubUserResponse = Endpoints['GET /user']['response']['data']
 export type GithubIssueResponse = Endpoints['GET /repos/{owner}/{repo}/issues']['response']['data'][number]
 export type GithubIssueDetailsResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}']['response']['data']
+export type GithubIssueReferenceResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}']['response']['data']
 export type UpdateIssueParams = Endpoints['PATCH /repos/{owner}/{repo}/issues/{issue_number}']['parameters']
 export type UpdateIssueResponse = Endpoints['PATCH /repos/{owner}/{repo}/issues/{issue_number}']['response']['data']
 export type GithubIssueDetailsCommentResponse = Endpoints['GET /repos/{owner}/{repo}/issues/{issue_number}/comments']['response']['data'][number]
@@ -921,6 +922,11 @@ export interface GithubIssueDetails {
     avatar_url: NonNullable<GithubIssueResponse['user']>['avatar_url']
   } | null
   repository: GithubRepository
+}
+
+export interface GithubIssueReferenceTarget {
+  kind: 'issue' | 'pull_request'
+  number: GithubIssueReferenceResponse['number']
 }
 
 export interface GithubIssueDescriptionUpdate {

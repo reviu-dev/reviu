@@ -60,6 +60,7 @@ import type {
   GithubIssueDetails,
   GithubIssueDetailsCommentParameters,
   GithubIssueDetailsCommentResponse,
+  GithubIssueReferenceTarget,
   GithubPullRequestAutoMergeState,
   GithubPullRequestConversation,
   GithubPullRequestIssueComment,
@@ -2266,6 +2267,34 @@ export async function fetchGithubIssueDetailsGraphql(
   ]
 
   return mapGithubGraphqlIssueDetails(issue, commentNodes)
+}
+
+export async function fetchGithubIssueReferenceTarget(
+  {
+    token,
+    owner,
+    repo,
+    issueNumber,
+  }: {
+    token: string
+    owner: string
+    repo: string
+    issueNumber: number
+  },
+): Promise<GithubIssueReferenceTarget> {
+  const issue = await requestGithubData('GET /repos/{owner}/{repo}/issues/{issue_number}', {
+    token,
+    params: {
+      owner,
+      repo,
+      issue_number: issueNumber,
+    },
+  })
+
+  return {
+    kind: issue.pull_request ? 'pull_request' : 'issue',
+    number: issue.number,
+  }
 }
 
 export async function fetchGithubPullRequestConversationGraphql(

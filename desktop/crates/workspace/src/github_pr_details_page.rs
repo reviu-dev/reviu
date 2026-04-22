@@ -68,11 +68,11 @@ use crate::{
   ShowCommandPalette, ShowFileSearch,
   active_local_repo::{ActiveLocalRepo, ActiveLocalRepoStore},
   api::{
-    ApiClient, ApiError, GithubIssueDetailsComment, GithubPullRequestChecksRollupState,
-    GithubPullRequestChecksSummary, GithubPullRequestCommit, GithubPullRequestConversation,
-    GithubPullRequestDescriptionUpdate, GithubPullRequestDetails, GithubPullRequestFile,
-    GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser, GithubPullRequestLabel,
-    GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness,
+    ApiClient, ApiError, GithubIssueDetailsComment, GithubIssueReferenceTargetKind,
+    GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary, GithubPullRequestCommit,
+    GithubPullRequestConversation, GithubPullRequestDescriptionUpdate, GithubPullRequestDetails,
+    GithubPullRequestFile, GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser,
+    GithubPullRequestLabel, GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness,
     GithubPullRequestMergeReadinessStatus, GithubPullRequestMergeResult, GithubPullRequestReview,
     GithubPullRequestReviewComment, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
     GithubPullRequestState, GithubReactionContent, GithubReactionGroup, GithubRepository,
@@ -88,7 +88,7 @@ use crate::{
   git_page::GitPageHandle,
   github_home_tabs::{GithubPullRequestFilterOptionLabel, GithubPullRequestFilterOptionUser},
   github_navigation::{
-    SamePrGfmNavigation, open_commit_target, open_profile_target, open_repo_target,
+    SamePrGfmNavigation, open_commit_target, open_pr_target, open_profile_target, open_repo_target,
     same_pr_gfm_navigation, should_open_externally,
   },
   github_page::GithubPageHandle,
@@ -6540,6 +6540,13 @@ impl GithubPrDetailsPage {
         issue_number,
         issue_comment_id,
       } => {
+        if tab == Some(ui::CommandPaletteGithubRepoTab::Issues)
+          && let Some(issue_number) = issue_number
+        {
+          self.open_resolved_issue_reference(owner, repo, issue_number, issue_comment_id, cx);
+          return true;
+        }
+
         open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
         true
       }
@@ -6553,6 +6560,48 @@ impl GithubPrDetailsPage {
       }
       _ => false,
     }
+  }
+
+  fn open_resolved_issue_reference(
+    &mut self,
+    owner: String,
+    repo: String,
+    issue_number: u64,
+    issue_comment_id: Option<u64>,
+    cx: &mut Context<Self>,
+  ) {
+    let api = self.api.clone();
+    let fallback_owner = owner.clone();
+    let fallback_repo = repo.clone();
+    cx.spawn(async move |_, cx| {
+      let result =
+        unblock(move || api.resolve_github_issue_reference_target(&owner, &repo, issue_number))
+          .await;
+
+      cx.update(|cx| match result {
+        Ok(target) if target.kind == GithubIssueReferenceTargetKind::PullRequest => {
+          open_pr_target(
+            fallback_owner,
+            fallback_repo,
+            target.number,
+            false,
+            None,
+            cx,
+          );
+        }
+        _ => {
+          open_repo_target(
+            fallback_owner,
+            fallback_repo,
+            Some(ui::CommandPaletteGithubRepoTab::Issues),
+            Some(issue_number),
+            issue_comment_id,
+            cx,
+          );
+        }
+      });
+    })
+    .detach();
   }
 
   fn handle_review_comment_link_target(
