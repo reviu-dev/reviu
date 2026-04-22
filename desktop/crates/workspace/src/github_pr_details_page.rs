@@ -13,9 +13,10 @@ use editor::{
   ReviewCommentEditHandler, ReviewCommentLinkHandler, ReviewCommentSide,
 };
 use gfm_markdown_viewer::{
-  GithubBlobLineReference, GithubCodeReferencePreview, LinkAction, MarkdownRenderOptions,
-  MarkdownRenderState, SuggestionContext, extract_github_blob_line_references,
-  render_github_code_reference_preview_card, render_markdown,
+  GithubBlobLineReference, GithubCodeReferencePreview, GithubDiffLine, GithubDiffLineKind,
+  LinkAction, MarkdownRenderOptions, MarkdownRenderState, SuggestionContext,
+  extract_github_blob_line_references, render_github_code_reference_preview_card,
+  render_github_diff_code_reference_preview_card, render_markdown,
 };
 use git::{
   DiffKind, DiffSet, FileDiff, GitStore, RepoStatusKind, compute_buffer_diff, create_stash,
@@ -676,6 +677,7 @@ fn review_comment_to_editor_comment(
     avatar_url: comment.user.avatar_url.as_deref().map(Arc::from),
     line_label,
     body: Arc::from(comment.body.as_str()),
+    suggestion_context: suggestion_context_from_review_comment(comment),
     created_at: Arc::from(format_relative_time(&comment.created_at).to_string()),
   })
 }
@@ -753,6 +755,12 @@ struct GithubPrOverviewConversationReply {
   author_login: String,
   author_avatar_url: Option<String>,
   body: String,
+}
+
+#[derive(Clone, Debug)]
+struct GithubPrReviewCommentPreview {
+  code: GithubCodeReferencePreview,
+  diff_lines: Vec<GithubDiffLine>,
 }
 
 #[derive(Clone, Debug)]
@@ -1893,15 +1901,140 @@ fn build_suggestion_context(
   comment_id: u64,
 ) -> Option<SuggestionContext> {
   let comment = review_comments.iter().find(|c| c.id == comment_id)?;
-  let line = comment.line?;
-  let original_lines = github_shared::extract_original_lines_from_diff_hunk(
+  suggestion_context_from_review_comment(comment)
+}
+
+fn suggestion_context_from_review_comment(
+  comment: &GithubPullRequestReviewComment,
+) -> Option<SuggestionContext> {
+  let (_, line) = review_comment_preview_line_range(comment)?;
+  let start_line = comment
+    .start_line
+    .or(comment.line)
+    .or(comment.original_start_line)
+    .or(comment.original_line);
+  let original_range = github_shared::extract_original_line_range_from_diff_hunk(
     &comment.diff_hunk,
-    comment.start_line,
-    line,
-  );
+    start_line,
+    line as i64,
+  )?;
   Some(SuggestionContext {
-    original_lines,
+    original_start_line: Some(original_range.start_line),
+    suggested_start_line: Some(original_range.start_line),
+    original_lines: original_range.lines,
     path: Arc::from(comment.path.as_str()),
+  })
+}
+
+fn gfm_diff_line_kind(kind: github_shared::DiffHunkLineKind) -> GithubDiffLineKind {
+  match kind {
+    github_shared::DiffHunkLineKind::Context => GithubDiffLineKind::Context,
+    github_shared::DiffHunkLineKind::Added => GithubDiffLineKind::Added,
+    github_shared::DiffHunkLineKind::Removed => GithubDiffLineKind::Removed,
+  }
+}
+
+fn gfm_diff_lines_from_hunk(diff_hunk: &str) -> Vec<GithubDiffLine> {
+  github_shared::parse_diff_hunk_lines(diff_hunk)
+    .into_iter()
+    .map(|line| GithubDiffLine {
+      old_line: line.old_line,
+      new_line: line.new_line,
+      content: Arc::from(line.content.as_str()),
+      kind: gfm_diff_line_kind(line.kind),
+    })
+    .collect()
+}
+
+fn diff_line_number_for_side(
+  line: &GithubDiffLine,
+  side: ReviewCommentPreviewSide,
+) -> Option<usize> {
+  match side {
+    ReviewCommentPreviewSide::Left => line.old_line,
+    ReviewCommentPreviewSide::Right => line.new_line,
+  }
+}
+
+fn diff_line_matches_range(
+  line: &GithubDiffLine,
+  side: ReviewCommentPreviewSide,
+  start_line: usize,
+  end_line: usize,
+) -> bool {
+  diff_line_number_for_side(line, side)
+    .is_some_and(|line_number| line_number >= start_line && line_number <= end_line)
+}
+
+fn gfm_diff_lines_from_hunk_for_range(
+  diff_hunk: &str,
+  side: ReviewCommentPreviewSide,
+  start_line: usize,
+  end_line: usize,
+) -> Vec<GithubDiffLine> {
+  let lines = gfm_diff_lines_from_hunk(diff_hunk);
+  let mut filtered = Vec::new();
+  let mut ix = 0;
+
+  while ix < lines.len() {
+    if lines[ix].kind == GithubDiffLineKind::Context {
+      if diff_line_matches_range(&lines[ix], side, start_line, end_line) {
+        filtered.push(lines[ix].clone());
+      }
+      ix += 1;
+      continue;
+    }
+
+    let block_start = ix;
+    while ix < lines.len() && lines[ix].kind != GithubDiffLineKind::Context {
+      ix += 1;
+    }
+    let block = &lines[block_start..ix];
+    let block_intersects_range = block
+      .iter()
+      .any(|line| diff_line_matches_range(line, side, start_line, end_line));
+    if !block_intersects_range {
+      continue;
+    }
+
+    let has_added = block
+      .iter()
+      .any(|line| line.kind == GithubDiffLineKind::Added);
+    let has_removed = block
+      .iter()
+      .any(|line| line.kind == GithubDiffLineKind::Removed);
+    if has_added && has_removed {
+      filtered.extend(block.iter().cloned());
+    } else {
+      filtered.extend(
+        block
+          .iter()
+          .filter(|line| diff_line_matches_range(line, side, start_line, end_line))
+          .cloned(),
+      );
+    }
+  }
+
+  filtered
+}
+
+fn suggestion_context_from_review_comment_preview(
+  preview: &GithubPrReviewCommentPreview,
+) -> Option<SuggestionContext> {
+  if preview.code.snippets.is_empty() {
+    return None;
+  }
+
+  Some(SuggestionContext {
+    original_start_line: Some(preview.code.start_line),
+    suggested_start_line: Some(preview.code.start_line),
+    original_lines: preview
+      .code
+      .snippets
+      .iter()
+      .map(|line| line.as_ref().to_string())
+      .collect(),
+    path: preview.code.path.clone(),
   })
 }
 
@@ -7695,7 +7828,7 @@ impl GithubPrDetailsPage {
   fn overview_root_review_comment_preview(
     &self,
     comment_id: u64,
-  ) -> Option<GithubCodeReferencePreview> {
+  ) -> Option<GithubPrReviewCommentPreview> {
     let comments_by_id: HashMap<u64, &GithubPullRequestReviewComment> = self
       .review_comments
       .iter()
@@ -7762,15 +7895,25 @@ impl GithubPrDetailsPage {
       actual_end_line,
     );
 
-    Some(GithubCodeReferencePreview {
-      url: Arc::<str>::from(url),
-      repo: Arc::<str>::from(github_shared::repo_label(owner.as_str(), repo.as_str())),
-      path: Arc::<str>::from(comment.path.as_str()),
-      reference: Arc::<str>::from(reference),
+    let diff_lines = gfm_diff_lines_from_hunk_for_range(
+      comment.diff_hunk.as_str(),
+      review_comment_preview_side(comment),
       start_line,
-      end_line: actual_end_line,
-      snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
-      full_content: Some(Arc::<str>::from(content)),
+      actual_end_line,
+    );
+
+    Some(GithubPrReviewCommentPreview {
+      code: GithubCodeReferencePreview {
+        url: Arc::<str>::from(url),
+        repo: Arc::<str>::from(github_shared::repo_label(owner.as_str(), repo.as_str())),
+        path: Arc::<str>::from(comment.path.as_str()),
+        reference: Arc::<str>::from(reference),
+        start_line,
+        end_line: actual_end_line,
+        snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
+        full_content: Some(Arc::<str>::from(content)),
+      },
+      diff_lines,
     })
   }
 
@@ -10534,6 +10677,13 @@ impl GithubPrDetailsPage {
       }
     });
 
+    let review_comment_preview = if item.kind == GithubPrOverviewConversationItemKind::ReviewComment
+    {
+      self.overview_root_review_comment_preview(item.id)
+    } else {
+      None
+    };
+
     let mut markdown_options = MarkdownRenderOptions::with_on_link(link_handler.clone())
       .with_state(self.description_markdown_state.clone())
       .with_syntax_cache(self.syntax_highlight_cache.clone())
@@ -10542,7 +10692,11 @@ impl GithubPrDetailsPage {
       .with_scope_id(scope_id)
       .with_hardbreaks();
     if item.kind == GithubPrOverviewConversationItemKind::ReviewComment
-      && let Some(ctx) = build_suggestion_context(&self.review_comments, item.id)
+      && let Some(ctx) = build_suggestion_context(&self.review_comments, item.id).or_else(|| {
+        review_comment_preview
+          .as_ref()
+          .and_then(suggestion_context_from_review_comment_preview)
+      })
     {
       markdown_options = markdown_options.with_suggestion_context(ctx);
     }
@@ -10566,13 +10720,6 @@ impl GithubPrDetailsPage {
     let root_is_editing = overview_root_is_editing(editing_target, root_target);
     let root_is_last_review_message =
       allows_overview_review_reply_action(item.kind, &item.thread_comment_ids, item.id);
-
-    let review_comment_preview = if item.kind == GithubPrOverviewConversationItemKind::ReviewComment
-    {
-      self.overview_root_review_comment_preview(item.id)
-    } else {
-      None
-    };
 
     // Root edit button
     let root_edit_button = if root_is_editable && !overview_submission_in_flight {
@@ -10818,8 +10965,13 @@ impl GithubPrDetailsPage {
       .border_color(theme.border)
       .rounded(theme.radius)
       .when_some(review_comment_preview, |this, preview| {
+        let preview_card = if preview.diff_lines.is_empty() {
+          render_github_code_reference_preview_card(&preview.code, cx)
+        } else {
+          render_github_diff_code_reference_preview_card(&preview.code, &preview.diff_lines, cx)
+        };
         this.child(
-          render_github_code_reference_preview_card(&preview, cx)
+          preview_card
             .my_0()
             .border_b_1()
             .border_t_0()
@@ -16452,6 +16604,71 @@ mod tests {
     comment.original_start_line = Some(0);
     comment.original_line = Some(-1);
     assert_eq!(review_comment_preview_line_range(&comment), None);
+  }
+
+  #[test]
+  fn suggestion_context_from_review_comment_falls_back_to_original_line_fields() {
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.diff_hunk = "@@ -10,3 +10,3 @@\n keep\n current\n keep".to_string();
+    comment.start_line = None;
+    comment.line = None;
+    comment.original_start_line = None;
+    comment.original_line = Some(11);
+
+    let ctx = suggestion_context_from_review_comment(&comment).expect("suggestion context");
+
+    assert_eq!(ctx.original_start_line, Some(11));
+    assert_eq!(ctx.suggested_start_line, Some(11));
+    assert_eq!(ctx.original_lines, vec!["current".to_string()]);
+  }
+
+  #[test]
+  fn suggestion_context_from_review_comment_preview_uses_preview_snippets() {
+    let preview = GithubPrReviewCommentPreview {
+      code: GithubCodeReferencePreview {
+        url: Arc::from("https://github.com/acme/widget/blob/head/src/main.rs#L12"),
+        repo: Arc::from("acme/widget"),
+        path: Arc::from("src/main.rs"),
+        reference: Arc::from("head"),
+        start_line: 12,
+        end_line: 12,
+        snippets: vec![Arc::from("let current = true;")],
+        full_content: None,
+      },
+      diff_lines: Vec::new(),
+    };
+
+    let ctx = suggestion_context_from_review_comment_preview(&preview).expect("context");
+
+    assert_eq!(ctx.original_start_line, Some(12));
+    assert_eq!(ctx.suggested_start_line, Some(12));
+    assert_eq!(ctx.original_lines, vec!["let current = true;".to_string()]);
+  }
+
+  #[test]
+  fn gfm_diff_lines_from_hunk_for_range_limits_large_added_hunks() {
+    let hunk = "@@ -0,0 +1,5 @@\n+one\n+two\n+three\n+four\n+five";
+    let lines = gfm_diff_lines_from_hunk_for_range(hunk, ReviewCommentPreviewSide::Right, 3, 4);
+
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].new_line, Some(3));
+    assert_eq!(lines[0].content.as_ref(), "three");
+    assert_eq!(lines[1].new_line, Some(4));
+    assert_eq!(lines[1].content.as_ref(), "four");
+  }
+
+  #[test]
+  fn gfm_diff_lines_from_hunk_for_range_keeps_modified_pairs() {
+    let hunk = "@@ -10,2 +10,2 @@\n unchanged\n-old value\n+new value";
+    let lines = gfm_diff_lines_from_hunk_for_range(hunk, ReviewCommentPreviewSide::Right, 11, 11);
+
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].kind, GithubDiffLineKind::Removed);
+    assert_eq!(lines[0].old_line, Some(11));
+    assert_eq!(lines[0].content.as_ref(), "old value");
+    assert_eq!(lines[1].kind, GithubDiffLineKind::Added);
+    assert_eq!(lines[1].new_line, Some(11));
+    assert_eq!(lines[1].content.as_ref(), "new value");
   }
 
   #[test]

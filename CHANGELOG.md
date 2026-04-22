@@ -12,6 +12,10 @@ User mentions in GitHub markdown now show the profile avatar next to the linked 
 
 Pull request timelines, repository overviews, and the commit details page now show commit co-authors when GitHub includes them, making shared work visible during review.
 
+### GitHub Review Suggestions
+
+Suggested changes in pull request review comments now render with GitHub-style red and green diff rows, including line numbers. Review comment code previews also keep the surrounding diff colors, making proposed replacements easier to compare.
+
 ## 0.6.0
 
 ### Auto-merge for Pull Requests

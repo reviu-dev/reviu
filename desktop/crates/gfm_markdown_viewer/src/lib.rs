@@ -12,7 +12,7 @@ pub(crate) mod types;
 
 pub use gfm_markdown_viewer::{
   MarkdownRenderOptions, MarkdownRenderState, render_github_code_reference_preview_card,
-  render_markdown, render_parsed_markdown,
+  render_github_diff_code_reference_preview_card, render_markdown, render_parsed_markdown,
 };
 pub use height_estimation::{
   estimate_github_code_reference_preview_height_px, estimate_markdown_height_px,
@@ -24,6 +24,6 @@ pub use parse::{
 };
 pub use syntax_cache::SyntaxHighlightCache;
 pub use types::{
-  GithubBlobLineReference, GithubCodeReferencePreview, GithubIssueReferenceContext, LinkAction,
-  ParsedMarkdown, SuggestionContext,
+  GithubBlobLineReference, GithubCodeReferencePreview, GithubDiffLine, GithubDiffLineKind,
+  GithubIssueReferenceContext, LinkAction, ParsedMarkdown, SuggestionContext,
 };

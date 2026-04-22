@@ -20,8 +20,9 @@ use crate::preview_segments::{MarkdownRenderSegment, split_markdown_preview_segm
 use crate::selection::*;
 use crate::types::*;
 pub use crate::types::{
-  Block, CodeBlock, Details, GithubCodeReferencePreview, GithubIssueReferenceContext, Inline,
-  LinkAction, List, MarkdownRenderState, ParsedMarkdown, SuggestionContext, Table,
+  Block, CodeBlock, Details, GithubCodeReferencePreview, GithubDiffLine, GithubDiffLineKind,
+  GithubIssueReferenceContext, Inline, LinkAction, List, MarkdownRenderState, ParsedMarkdown,
+  SuggestionContext, Table,
 };
 use gpui::{
   AnyElement, App, CursorStyle, Div, MouseButton, SharedString, Window, div, prelude::*, px,
@@ -198,6 +199,214 @@ fn short_github_reference(reference: &str) -> String {
     return shortened;
   }
   trimmed.to_string()
+}
+
+fn github_diff_line_background(kind: GithubDiffLineKind, cx: &App) -> gpui::Hsla {
+  let theme = cx.theme();
+  match kind {
+    GithubDiffLineKind::Removed => theme.red_light.opacity(0.18),
+    GithubDiffLineKind::Added => theme.green_light.opacity(0.22),
+    GithubDiffLineKind::Context => theme.background,
+  }
+}
+
+fn render_github_diff_lines(
+  lines: &[GithubDiffLine],
+  path: &str,
+  text_seed: usize,
+  state: MarkdownRenderState,
+  min_content_width_px: f32,
+  cx: &App,
+) -> Div {
+  let theme = cx.theme();
+  let language_hint = code_block_language_hint_from_path(path);
+  let snippets: Vec<Arc<str>> = lines.iter().map(|line| line.content.clone()).collect();
+  let per_line_spans =
+    build_preview_code_spans_per_line(&snippets, language_hint.as_deref(), None, 1);
+  let line_number_width = lines
+    .iter()
+    .filter_map(|line| line.old_line.or(line.new_line))
+    .max()
+    .map(|line| ((line.to_string().len() as f32) * 8.0).max(28.0))
+    .unwrap_or(28.0);
+  let gutter_width = line_number_width + 16.0;
+
+  let mut rows = v_flex().w_full().min_w(px(min_content_width_px));
+
+  for (ix, line) in lines.iter().enumerate() {
+    let (line_text, line_spans) = per_line_spans.get(ix).cloned().unwrap_or_else(|| {
+      (
+        SharedString::from(line.content.as_ref().to_string()),
+        Vec::new(),
+      )
+    });
+    let text_id = compose_text_id(text_seed, ix + 1);
+
+    rows = rows.child(
+      h_flex()
+        .items_center()
+        .bg(github_diff_line_background(line.kind, cx))
+        .min_w(px(min_content_width_px))
+        .child(
+          div()
+            .w(px(gutter_width))
+            .px_2()
+            .text_right()
+            .text_xs()
+            .font_family(theme.mono_font_family.clone())
+            .text_color(theme.muted_foreground)
+            .child(
+              line
+                .old_line
+                .map(|line| line.to_string())
+                .unwrap_or_default(),
+            ),
+        )
+        .child(
+          div()
+            .w(px(gutter_width))
+            .px_2()
+            .text_right()
+            .text_xs()
+            .font_family(theme.mono_font_family.clone())
+            .text_color(theme.muted_foreground)
+            .child(
+              line
+                .new_line
+                .map(|line| line.to_string())
+                .unwrap_or_default(),
+            ),
+        )
+        .child(
+          div()
+            .flex_1()
+            .min_w_0()
+            .font_family(theme.mono_font_family.clone())
+            .text_sm()
+            .whitespace_nowrap()
+            .text_color(theme.foreground)
+            .child(SelectableText::new(
+              line_text,
+              line_spans,
+              Vec::new(),
+              state.clone(),
+              None,
+              text_id,
+              SelectableTextOptions {
+                interactive: false,
+                show_indentation_dots: true,
+                show_inline_code_backgrounds: false,
+              },
+            )),
+        ),
+    );
+  }
+
+  rows
+}
+
+pub fn render_github_diff_code_reference_preview_card(
+  preview: &GithubCodeReferencePreview,
+  diff_lines: &[GithubDiffLine],
+  cx: &App,
+) -> Div {
+  let theme = cx.theme();
+  let link_color = github_link_color(theme.background);
+  let mut preview_id_hasher = DefaultHasher::new();
+  preview.url.hash(&mut preview_id_hasher);
+  preview.start_line.hash(&mut preview_id_hasher);
+  preview.end_line.hash(&mut preview_id_hasher);
+  diff_lines.len().hash(&mut preview_id_hasher);
+  let preview_hash = preview_id_hasher.finish();
+  let preview_scroll_id: SharedString = format!(
+    "markdown-diff-code-reference-preview-scroll-{}",
+    preview_hash
+  )
+  .into();
+  let snippet_text_seed = preview_hash as usize;
+  let min_preview_content_width_px =
+    (estimate_code_reference_preview_min_content_width_px(preview) + 110.0).max(
+      diff_lines
+        .iter()
+        .map(|line| estimate_code_block_min_content_width_px(line.content.as_ref()))
+        .fold(0.0, f32::max)
+        + 110.0,
+    );
+  let url = preview.url.clone();
+  let file_label = format!("{}/{}", preview.repo.as_ref(), preview.path.as_ref());
+  let line_label = if preview.start_line == preview.end_line {
+    format!(
+      "Line {} in {}",
+      preview.start_line,
+      short_github_reference(preview.reference.as_ref())
+    )
+  } else {
+    format!(
+      "Lines {}-{} in {}",
+      preview.start_line,
+      preview.end_line,
+      short_github_reference(preview.reference.as_ref())
+    )
+  };
+
+  div()
+    .flex()
+    .flex_col()
+    .my(px(MARKDOWN_CODE_REFERENCE_CARD_MARGIN_Y_PX))
+    .border_1()
+    .border_color(theme.border)
+    .rounded_md()
+    .overflow_hidden()
+    .child(
+      div()
+        .bg(theme.accent.opacity(0.3))
+        .border_b_1()
+        .border_color(theme.border)
+        .px(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX))
+        .py(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX))
+        .cursor(CursorStyle::PointingHand)
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+          cx.stop_propagation();
+          cx.open_url(url.as_ref());
+        })
+        .child(
+          div()
+            .flex()
+            .flex_col()
+            .child(
+              div()
+                .text_sm()
+                .font_medium()
+                .text_color(link_color)
+                .child(file_label),
+            )
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(line_label),
+            ),
+        ),
+    )
+    .child(
+      div()
+        .id(preview_scroll_id)
+        .w_full()
+        .min_w_0()
+        .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
+        .overflow_scroll()
+        .on_scroll_wheel(|_, _, cx| {
+          cx.stop_propagation();
+        })
+        .child(render_github_diff_lines(
+          diff_lines,
+          preview.path.as_ref(),
+          snippet_text_seed,
+          MarkdownRenderState::new(),
+          min_preview_content_width_px,
+          cx,
+        )),
+    )
 }
 
 pub fn render_github_code_reference_preview_card(
@@ -812,10 +1021,17 @@ fn render_block(
       if let Some(override_fn) = options.overrides.code_block.as_ref() {
         return override_fn(code, cx);
       }
-      if code.lang.as_deref() == Some("suggestion")
-        && let Some(suggestion_ctx) = options.suggestion_context.as_ref()
-      {
-        return render_suggestion_block(code, suggestion_ctx, options, cx, ctx);
+      if code.lang.as_deref() == Some("suggestion") {
+        if let Some(suggestion_ctx) = options.suggestion_context.as_ref() {
+          return render_suggestion_block(code, suggestion_ctx, options, cx, ctx);
+        }
+        let fallback_ctx = SuggestionContext {
+          original_start_line: None,
+          suggested_start_line: None,
+          original_lines: Vec::new(),
+          path: Arc::from(""),
+        };
+        return render_suggestion_block(code, &fallback_ctx, options, cx, ctx);
       }
       render_code_block(code, options, cx, ctx)
     }
@@ -1706,32 +1922,46 @@ fn render_suggestion_block(
   ctx: &mut RenderContext,
 ) -> AnyElement {
   let theme = cx.theme();
-  let lang_hint = code_block_language_hint_from_path(suggestion_ctx.path.as_ref());
-
-  let old_value = suggestion_ctx.original_lines.join("\n");
-  let old_code = CodeBlock {
-    lang: lang_hint.clone(),
-    value: old_value,
-  };
-  let new_code = CodeBlock {
-    lang: lang_hint,
-    value: code.value.clone(),
-  };
-
   let old_text_id = ctx.next_text_id();
-  let new_text_id = ctx.next_text_id();
-  let (old_text, old_spans, old_link_ranges) =
-    build_code_block_spans(&old_code, options.syntax_cache.as_ref());
-  let (new_text, new_spans, new_link_ranges) =
-    build_code_block_spans(&new_code, options.syntax_cache.as_ref());
+  let original_start_line = suggestion_ctx.original_start_line;
+  let suggested_start_line = suggestion_ctx.suggested_start_line;
+  let suggested_value = code.value.strip_suffix('\n').unwrap_or(code.value.as_str());
+  let suggested_lines: Vec<String> = if suggested_value.is_empty() {
+    Vec::new()
+  } else {
+    suggested_value.split('\n').map(str::to_string).collect()
+  };
+  let mut diff_lines =
+    Vec::with_capacity(suggestion_ctx.original_lines.len() + suggested_lines.len());
+  diff_lines.extend(
+    suggestion_ctx
+      .original_lines
+      .iter()
+      .enumerate()
+      .map(|(ix, line)| GithubDiffLine {
+        old_line: original_start_line.map(|start| start + ix),
+        new_line: None,
+        content: Arc::from(line.as_str()),
+        kind: GithubDiffLineKind::Removed,
+      }),
+  );
+  diff_lines.extend(
+    suggested_lines
+      .iter()
+      .enumerate()
+      .map(|(ix, line)| GithubDiffLine {
+        old_line: None,
+        new_line: suggested_start_line.map(|start| start + ix),
+        content: Arc::from(line.as_str()),
+        kind: GithubDiffLineKind::Added,
+      }),
+  );
 
-  let min_content_width_px = estimate_code_block_min_content_width_px(old_text.as_ref())
-    .max(estimate_code_block_min_content_width_px(new_text.as_ref()));
-
-  let old_empty = suggestion_ctx.original_lines.is_empty();
-  let new_empty = code.value.is_empty();
-  let removed_bg = theme.red_light.opacity(0.18);
-  let added_bg = theme.green_light.opacity(0.22);
+  let min_content_width_px = diff_lines
+    .iter()
+    .map(|line| estimate_code_block_min_content_width_px(line.content.as_ref()))
+    .fold(0.0, f32::max)
+    + 120.0;
   let copy_value: SharedString = code.value.clone().into();
   let hover_group_id: SharedString = format!("markdown-suggestion-hover-{old_text_id}").into();
   let scroll_id: SharedString = format!("markdown-suggestion-scroll-{old_text_id}").into();
@@ -1752,68 +1982,19 @@ fn render_suggestion_block(
         .child("Suggested change"),
     );
 
-  let build_section = |bg: gpui::Hsla,
-                       text: SharedString,
-                       spans: Vec<InlineSpan>,
-                       link_ranges: Vec<LinkRange>,
-                       text_id: usize,
-                       skip: bool| {
-    if skip {
-      return None;
-    }
-    Some(
-      div().w_full().bg(bg).min_w_0().child(
-        div()
-          .min_w(px(min_content_width_px))
-          .px(px(MARKDOWN_CODE_BLOCK_PADDING_X_PX))
-          .py(px(MARKDOWN_CODE_BLOCK_PADDING_TOP_PX))
-          .whitespace_nowrap()
-          .child(
-            div()
-              .pl(px(MARKDOWN_CODE_BLOCK_TEXT_SHIFT_X_PX))
-              .font_family(theme.mono_font_family.clone())
-              .text_size(theme.mono_font_size)
-              .text_color(theme.foreground)
-              .child(SelectableText::new(
-                text,
-                spans,
-                link_ranges,
-                options.state.clone(),
-                options.on_link.clone(),
-                text_id,
-                code_block_selectable_text_options(),
-              )),
-          ),
-      ),
-    )
-  };
-
   let scroll_content = div()
     .id(scroll_id)
     .w_full()
     .min_w_0()
     .overflow_x_scroll()
-    .child(
-      v_flex()
-        .w_full()
-        .min_w_0()
-        .children(build_section(
-          removed_bg,
-          old_text,
-          old_spans,
-          old_link_ranges,
-          old_text_id,
-          old_empty,
-        ))
-        .children(build_section(
-          added_bg,
-          new_text,
-          new_spans,
-          new_link_ranges,
-          new_text_id,
-          new_empty,
-        )),
-    );
+    .child(render_github_diff_lines(
+      &diff_lines,
+      suggestion_ctx.path.as_ref(),
+      old_text_id,
+      options.state.clone(),
+      min_content_width_px,
+      cx,
+    ));
 
   div()
     .w_full()

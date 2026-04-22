@@ -5,6 +5,7 @@ use std::{
 };
 
 use blake3::Hasher;
+use gfm_markdown_viewer::SuggestionContext;
 use git::{DiffHunk, DiffLine, DiffLineKind, FileDiff};
 
 const GAP_THRESHOLD_LINES: usize = 6;
@@ -52,6 +53,7 @@ pub struct ReviewComment {
   pub avatar_url: Option<Arc<str>>,
   pub line_label: Option<Arc<str>>,
   pub body: Arc<str>,
+  pub suggestion_context: Option<SuggestionContext>,
   pub created_at: Arc<str>,
 }
 
@@ -1566,6 +1568,7 @@ mod tests {
       avatar_url: None,
       line_label: Some(Arc::from("L1")),
       body: Arc::from(body.to_string()),
+      suggestion_context: None,
       created_at: Arc::from("2026-02-12"),
     }
   }
