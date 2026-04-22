@@ -16,6 +16,10 @@ Pull request timelines, repository overviews, and the commit details page now sh
 
 Suggested changes in pull request review comments now render with GitHub-style red and green diff rows, including line numbers. Review comment code previews also keep the surrounding diff colors, making proposed replacements easier to compare.
 
+### GitHub Suggestion Word Diff
+
+Suggested changes now highlight the exact words that differ inside red and green review suggestion rows, making small edits easier to spot without reading the whole line again.
+
 ## 0.6.0
 
 ### Auto-merge for Pull Requests

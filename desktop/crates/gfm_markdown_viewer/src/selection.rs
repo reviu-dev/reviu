@@ -590,7 +590,7 @@ pub(crate) fn build_runs(
       len: span.range.end.saturating_sub(span.range.start),
       font,
       color,
-      background_color: None,
+      background_color: inline_span_background(span.background, cx),
       underline,
       strikethrough,
     });
@@ -600,6 +600,15 @@ pub(crate) fn build_runs(
     apply_selection_to_runs(runs, selection, theme.selection)
   } else {
     runs
+  }
+}
+
+fn inline_span_background(background: Option<InlineBackground>, cx: &App) -> Option<Hsla> {
+  let theme = cx.theme();
+  match background {
+    Some(InlineBackground::DiffWordAdded) => Some(theme.green_light.opacity(0.42)),
+    Some(InlineBackground::DiffWordRemoved) => Some(theme.red_light.opacity(0.38)),
+    None => None,
   }
 }
 

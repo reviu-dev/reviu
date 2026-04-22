@@ -34,6 +34,7 @@ use gpui_component::{
 #[cfg(test)]
 use syntax::TokenType;
 use syntax::{HighlightSpan, SyntaxHighlighter, languages};
+use unicode_segmentation::UnicodeSegmentation;
 
 type BlockRenderFn = dyn Fn(AnyElement, &App) -> AnyElement + Send + Sync;
 type HeadingRenderFn = dyn Fn(u8, AnyElement, &App) -> AnyElement + Send + Sync;
@@ -42,6 +43,7 @@ type ListItemRenderFn = dyn Fn(ListItemView, &App) -> AnyElement + Send + Sync;
 type ThematicBreakRenderFn = dyn Fn(&App) -> AnyElement + Send + Sync;
 type TableRenderFn = dyn Fn(&Table, &App) -> AnyElement + Send + Sync;
 pub(crate) type LinkHandlerFn = dyn Fn(&str, &mut Window, &mut App) -> LinkAction + Send + Sync;
+const WORD_DIFF_MAX_COMBINED_BYTES: usize = 2_048;
 
 // Data types imported from crate::types
 
@@ -210,6 +212,306 @@ fn github_diff_line_background(kind: GithubDiffLineKind, cx: &App) -> gpui::Hsla
   }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DiffWordHighlight {
+  ranges: Vec<Range<usize>>,
+  background: InlineBackground,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IdentifierCharKind {
+  Lower,
+  Upper,
+  Digit,
+  Underscore,
+  Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WordToken {
+  text: String,
+  range: Range<usize>,
+}
+
+fn identifier_char_kind(ch: char) -> IdentifierCharKind {
+  if ch == '_' {
+    IdentifierCharKind::Underscore
+  } else if ch.is_lowercase() {
+    IdentifierCharKind::Lower
+  } else if ch.is_uppercase() {
+    IdentifierCharKind::Upper
+  } else if ch.is_numeric() {
+    IdentifierCharKind::Digit
+  } else {
+    IdentifierCharKind::Other
+  }
+}
+
+fn split_identifier_token_ranges(segment: &str) -> Vec<Range<usize>> {
+  let chars: Vec<_> = segment.char_indices().collect();
+  if chars.is_empty() {
+    return Vec::new();
+  }
+
+  let mut ranges = Vec::new();
+  let mut start = 0usize;
+
+  for idx in 1..chars.len() {
+    let (byte_offset, current) = chars[idx];
+    let (_, previous) = chars[idx - 1];
+    let previous_kind = identifier_char_kind(previous);
+    let current_kind = identifier_char_kind(current);
+    let next_kind = chars
+      .get(idx + 1)
+      .map(|(_, next)| identifier_char_kind(*next));
+
+    let should_split = match (previous_kind, current_kind) {
+      (IdentifierCharKind::Underscore, _) | (_, IdentifierCharKind::Underscore) => true,
+      (IdentifierCharKind::Digit, IdentifierCharKind::Digit) => false,
+      (IdentifierCharKind::Digit, _) | (_, IdentifierCharKind::Digit) => true,
+      (IdentifierCharKind::Lower, IdentifierCharKind::Upper) => true,
+      (IdentifierCharKind::Upper, IdentifierCharKind::Upper) => {
+        next_kind == Some(IdentifierCharKind::Lower)
+      }
+      _ => false,
+    };
+
+    if should_split {
+      ranges.push(start..byte_offset);
+      start = byte_offset;
+    }
+  }
+
+  ranges.push(start..segment.len());
+  ranges
+}
+
+fn word_tokens(text: &str, include_whitespace: bool) -> Vec<WordToken> {
+  let mut tokens = Vec::new();
+  for (idx, segment) in text.split_word_bound_indices() {
+    if !include_whitespace && segment.trim().is_empty() {
+      continue;
+    }
+    let subranges = split_identifier_token_ranges(segment);
+    if subranges.is_empty() {
+      tokens.push(WordToken {
+        text: segment.to_string(),
+        range: idx..idx + segment.len(),
+      });
+      continue;
+    }
+
+    for subrange in subranges {
+      tokens.push(WordToken {
+        text: segment[subrange.clone()].to_string(),
+        range: idx + subrange.start..idx + subrange.end,
+      });
+    }
+  }
+  tokens
+}
+
+fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+  ranges.sort_by_key(|range| range.start);
+  let mut merged: Vec<Range<usize>> = Vec::new();
+  for range in ranges {
+    if let Some(last) = merged.last_mut()
+      && range.start <= last.end
+    {
+      last.end = last.end.max(range.end);
+      continue;
+    }
+    merged.push(range);
+  }
+  merged
+}
+
+fn word_diff_ranges(old_text: &str, new_text: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+  if old_text == new_text {
+    return (Vec::new(), Vec::new());
+  }
+
+  if old_text.len().saturating_add(new_text.len()) > WORD_DIFF_MAX_COMBINED_BYTES {
+    return (Vec::new(), Vec::new());
+  }
+
+  let (removed, added) = word_diff_ranges_impl(old_text, new_text, false);
+  if removed.is_empty() && added.is_empty() && old_text != new_text {
+    return word_diff_ranges_impl(old_text, new_text, true);
+  }
+  (removed, added)
+}
+
+fn word_diff_ranges_impl(
+  old_text: &str,
+  new_text: &str,
+  include_whitespace: bool,
+) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+  let old_tokens = word_tokens(old_text, include_whitespace);
+  let new_tokens = word_tokens(new_text, include_whitespace);
+
+  let old_len = old_tokens.len();
+  let new_len = new_tokens.len();
+  if old_len == 0 && new_len == 0 {
+    return (Vec::new(), Vec::new());
+  }
+
+  let mut dp = vec![vec![0usize; new_len + 1]; old_len + 1];
+  for i in 0..old_len {
+    for j in 0..new_len {
+      if old_tokens[i].text == new_tokens[j].text {
+        dp[i + 1][j + 1] = dp[i][j] + 1;
+      } else {
+        dp[i + 1][j + 1] = dp[i][j + 1].max(dp[i + 1][j]);
+      }
+    }
+  }
+
+  let mut matched_old = vec![false; old_len];
+  let mut matched_new = vec![false; new_len];
+  let mut i = old_len;
+  let mut j = new_len;
+  while i > 0 && j > 0 {
+    if old_tokens[i - 1].text == new_tokens[j - 1].text {
+      matched_old[i - 1] = true;
+      matched_new[j - 1] = true;
+      i -= 1;
+      j -= 1;
+    } else if dp[i - 1][j] >= dp[i][j - 1] {
+      i -= 1;
+    } else {
+      j -= 1;
+    }
+  }
+
+  let removed = old_tokens
+    .iter()
+    .enumerate()
+    .filter_map(|(idx, token)| (!matched_old[idx]).then_some(token.range.clone()))
+    .collect();
+  let added = new_tokens
+    .iter()
+    .enumerate()
+    .filter_map(|(idx, token)| (!matched_new[idx]).then_some(token.range.clone()))
+    .collect();
+
+  (merge_ranges(removed), merge_ranges(added))
+}
+
+fn apply_inline_background_ranges(
+  spans: Vec<InlineSpan>,
+  ranges: &[Range<usize>],
+  background: InlineBackground,
+) -> Vec<InlineSpan> {
+  if ranges.is_empty() {
+    return spans;
+  }
+
+  let ranges = merge_ranges(ranges.to_vec());
+  let mut result = Vec::new();
+  let mut range_index = 0usize;
+  let mut current_range = ranges.get(range_index);
+
+  for span in spans {
+    let span_start = span.range.start;
+    let span_end = span.range.end;
+    let mut cursor = span_start;
+
+    while let Some(range) = current_range {
+      if range.end <= span_start {
+        range_index += 1;
+        current_range = ranges.get(range_index);
+        continue;
+      }
+      if range.start >= span_end {
+        break;
+      }
+
+      let overlap_start = range.start.max(span_start);
+      let overlap_end = range.end.min(span_end);
+
+      if overlap_start > cursor {
+        let mut prefix = span.clone();
+        prefix.range = cursor..overlap_start;
+        result.push(prefix);
+      }
+
+      if overlap_end > overlap_start {
+        let mut highlighted = span.clone();
+        highlighted.range = overlap_start..overlap_end;
+        highlighted.background = Some(background);
+        result.push(highlighted);
+      }
+
+      cursor = overlap_end;
+      if range.end <= span_end {
+        range_index += 1;
+        current_range = ranges.get(range_index);
+      } else {
+        break;
+      }
+    }
+
+    if cursor < span_end {
+      let mut suffix = span.clone();
+      suffix.range = cursor..span_end;
+      result.push(suffix);
+    }
+  }
+
+  result
+}
+
+fn github_diff_word_highlights(lines: &[GithubDiffLine]) -> Vec<Option<DiffWordHighlight>> {
+  let mut highlights = vec![None; lines.len()];
+  let mut ix = 0usize;
+
+  while ix < lines.len() {
+    if lines[ix].kind == GithubDiffLineKind::Context {
+      ix += 1;
+      continue;
+    }
+
+    let block_start = ix;
+    while ix < lines.len() && lines[ix].kind != GithubDiffLineKind::Context {
+      ix += 1;
+    }
+    let block_end = ix;
+
+    let removed_indices: Vec<_> = (block_start..block_end)
+      .filter(|idx| lines[*idx].kind == GithubDiffLineKind::Removed)
+      .collect();
+    let added_indices: Vec<_> = (block_start..block_end)
+      .filter(|idx| lines[*idx].kind == GithubDiffLineKind::Added)
+      .collect();
+    let pair_count = removed_indices.len().min(added_indices.len());
+
+    for pair_ix in 0..pair_count {
+      let removed_idx = removed_indices[pair_ix];
+      let added_idx = added_indices[pair_ix];
+      let (removed_ranges, added_ranges) = word_diff_ranges(
+        lines[removed_idx].content.as_ref(),
+        lines[added_idx].content.as_ref(),
+      );
+
+      if !removed_ranges.is_empty() {
+        highlights[removed_idx] = Some(DiffWordHighlight {
+          ranges: removed_ranges,
+          background: InlineBackground::DiffWordRemoved,
+        });
+      }
+      if !added_ranges.is_empty() {
+        highlights[added_idx] = Some(DiffWordHighlight {
+          ranges: added_ranges,
+          background: InlineBackground::DiffWordAdded,
+        });
+      }
+    }
+  }
+
+  highlights
+}
+
 fn render_github_diff_lines(
   lines: &[GithubDiffLine],
   path: &str,
@@ -223,6 +525,7 @@ fn render_github_diff_lines(
   let snippets: Vec<Arc<str>> = lines.iter().map(|line| line.content.clone()).collect();
   let per_line_spans =
     build_preview_code_spans_per_line(&snippets, language_hint.as_deref(), None, 1);
+  let word_highlights = github_diff_word_highlights(lines);
   let line_number_width = lines
     .iter()
     .filter_map(|line| line.old_line.or(line.new_line))
@@ -234,12 +537,16 @@ fn render_github_diff_lines(
   let mut rows = v_flex().w_full().min_w(px(min_content_width_px));
 
   for (ix, line) in lines.iter().enumerate() {
-    let (line_text, line_spans) = per_line_spans.get(ix).cloned().unwrap_or_else(|| {
+    let (line_text, mut line_spans) = per_line_spans.get(ix).cloned().unwrap_or_else(|| {
       (
         SharedString::from(line.content.as_ref().to_string()),
         Vec::new(),
       )
     });
+    if let Some(highlight) = word_highlights.get(ix).and_then(Option::as_ref) {
+      line_spans =
+        apply_inline_background_ranges(line_spans, &highlight.ranges, highlight.background);
+    }
     let text_id = compose_text_id(text_seed, ix + 1);
 
     rows = rows.child(
@@ -755,6 +1062,7 @@ fn split_spans_per_line(
             style: base_style,
             link: None,
             syntax_token: None,
+            background: None,
           }],
         );
       };
@@ -774,6 +1082,7 @@ fn split_spans_per_line(
             style: span.style,
             link: span.link.clone(),
             syntax_token: span.syntax_token,
+            background: span.background,
           })
         })
         .collect();
@@ -785,6 +1094,7 @@ fn split_spans_per_line(
           style: base_style,
           link: None,
           syntax_token: None,
+          background: None,
         });
       } else {
         let mut filled = Vec::with_capacity(line_spans.len() * 2);
@@ -796,6 +1106,7 @@ fn split_spans_per_line(
               style: base_style,
               link: None,
               syntax_token: None,
+              background: None,
             });
           }
           filled.push(span.clone());
@@ -807,6 +1118,7 @@ fn split_spans_per_line(
             style: base_style,
             link: None,
             syntax_token: None,
+            background: None,
           });
         }
         line_spans = filled;
@@ -2266,6 +2578,7 @@ fn build_code_block_spans(
         style: base_style,
         link: None,
         syntax_token: None,
+        background: None,
       }];
       return (text, plain_spans, Vec::new());
     }
@@ -2289,6 +2602,7 @@ fn build_code_block_spans(
         style: base_style,
         link: None,
         syntax_token: None,
+        background: None,
       }]
     });
 
@@ -2342,6 +2656,7 @@ pub(crate) fn syntax_highlight_spans_for_code(
         style: base_style,
         link: None,
         syntax_token: None,
+        background: None,
       });
     }
 
@@ -2350,6 +2665,7 @@ pub(crate) fn syntax_highlight_spans_for_code(
       style: base_style,
       link: None,
       syntax_token: Some(token_type),
+      background: None,
     });
     current_pos = end;
   }
@@ -2360,6 +2676,7 @@ pub(crate) fn syntax_highlight_spans_for_code(
       style: base_style,
       link: None,
       syntax_token: None,
+      background: None,
     });
   }
 
@@ -2608,6 +2925,7 @@ impl SpanBuilder {
       style,
       link,
       syntax_token: None,
+      background: None,
     });
   }
 
@@ -4569,5 +4887,80 @@ Apres"#,
       .iter()
       .any(|(_, spans)| spans.iter().any(|s| s.syntax_token.is_some()));
     assert!(has_token, "expected at least one syntax token");
+  }
+
+  #[test]
+  fn word_diff_ranges_highlight_added_camel_case_segment() {
+    let old_text = "const getLastNotification = () => true;";
+    let new_text = "const getLastDataNotification = () => true;";
+
+    let (removed, added) = word_diff_ranges(old_text, new_text);
+
+    assert!(removed.is_empty());
+    assert_eq!(added.len(), 1);
+    assert_eq!(&new_text[added[0].clone()], "Data");
+  }
+
+  #[test]
+  fn apply_inline_background_ranges_preserves_syntax_tokens() {
+    let spans = vec![InlineSpan {
+      range: 0..10,
+      style: InlineStyle {
+        code: true,
+        ..InlineStyle::default()
+      },
+      link: None,
+      syntax_token: Some(TokenType::Keyword),
+      background: None,
+    }];
+
+    let spans = apply_inline_background_ranges(spans, &[2..5], InlineBackground::DiffWordAdded);
+
+    assert_eq!(spans.len(), 3);
+    assert_eq!(spans[0].range, 0..2);
+    assert_eq!(spans[0].background, None);
+    assert_eq!(spans[1].range, 2..5);
+    assert_eq!(spans[1].syntax_token, Some(TokenType::Keyword));
+    assert_eq!(spans[1].background, Some(InlineBackground::DiffWordAdded));
+    assert_eq!(spans[2].range, 5..10);
+  }
+
+  #[test]
+  fn github_diff_word_highlights_pairs_removed_and_added_lines() {
+    let lines = vec![
+      GithubDiffLine {
+        old_line: Some(12),
+        new_line: None,
+        content: Arc::from("type ConfigWithOptionalSecrets = Registry &"),
+        kind: GithubDiffLineKind::Removed,
+      },
+      GithubDiffLine {
+        old_line: None,
+        new_line: Some(12),
+        content: Arc::from("// Some configurations might be missing without `admin_configuration`"),
+        kind: GithubDiffLineKind::Added,
+      },
+      GithubDiffLine {
+        old_line: None,
+        new_line: Some(13),
+        content: Arc::from("type ConfigWithOptionalSecrets = Registry &"),
+        kind: GithubDiffLineKind::Added,
+      },
+    ];
+
+    let highlights = github_diff_word_highlights(&lines);
+
+    assert_eq!(highlights.len(), 3);
+    assert!(highlights[0].is_some());
+    assert_eq!(
+      highlights[0].as_ref().unwrap().background,
+      InlineBackground::DiffWordRemoved
+    );
+    assert!(highlights[1].is_some());
+    assert_eq!(
+      highlights[1].as_ref().unwrap().background,
+      InlineBackground::DiffWordAdded
+    );
+    assert!(highlights[2].is_none());
   }
 }

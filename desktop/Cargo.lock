@@ -2767,6 +2767,7 @@ dependencies = [
  "syntax",
  "tree-sitter",
  "tree-sitter-html",
+ "unicode-segmentation",
 ]
 
 [[package]]

@@ -160,12 +160,19 @@ pub(crate) struct InlineStyle {
   pub(crate) code: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InlineBackground {
+  DiffWordAdded,
+  DiffWordRemoved,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct InlineSpan {
   pub(crate) range: Range<usize>,
   pub(crate) style: InlineStyle,
   pub(crate) link: Option<Arc<str>>,
   pub(crate) syntax_token: Option<TokenType>,
+  pub(crate) background: Option<InlineBackground>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
