@@ -3081,16 +3081,26 @@ impl GithubPrDetailsPageHandle {
 
 impl GithubPrDetailsPage {
   fn sync_route(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if !cx.has_global::<gpui_router::RouterState>() {
+      return;
+    }
+
+    let Some(current_context) = self.current_pr_context.as_ref() else {
+      return;
+    };
+
     let pathname = NavigationHistory::current_pathname(cx);
     let Some(route_target) = github_pr_route_target_from_pathname(&pathname) else {
       return;
     };
 
-    let same_pr = self.current_pr_context.as_ref().is_some_and(|context| {
-      context.owner.eq_ignore_ascii_case(&route_target.owner)
-        && context.repo.eq_ignore_ascii_case(&route_target.repo)
-        && context.number == route_target.number
-    });
+    let same_pr = current_context
+      .owner
+      .eq_ignore_ascii_case(&route_target.owner)
+      && current_context
+        .repo
+        .eq_ignore_ascii_case(&route_target.repo)
+      && current_context.number == route_target.number;
 
     if !same_pr {
       self.load_pull_request(
