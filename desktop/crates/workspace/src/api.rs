@@ -331,6 +331,19 @@ pub struct GithubIssueDetails {
   pub repository: GithubRepository,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GithubIssueReferenceTargetKind {
+  Issue,
+  PullRequest,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct GithubIssueReferenceTarget {
+  pub kind: GithubIssueReferenceTargetKind,
+  pub number: u64,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubIssueDescriptionUpdate {
@@ -1476,6 +1489,11 @@ struct GithubIssueDetailsResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct GithubIssueReferenceTargetResponse {
+  target: GithubIssueReferenceTarget,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubIssueCommentResponse {
   comment: GithubIssueDetailsComment,
 }
@@ -2381,6 +2399,26 @@ impl ApiClient {
     }
     let payload = response.json::<GithubIssueDetailsResponse>()?;
     Ok(payload.issue)
+  }
+
+  pub fn resolve_github_issue_reference_target(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+  ) -> Result<GithubIssueReferenceTarget> {
+    let route = format!("/github/repos/{owner}/{repo}/issues/{number}/target");
+    let response = self.authed_request(Method::GET, route.as_str()).send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubIssueReferenceTargetResponse>()?;
+    Ok(payload.target)
   }
 
   pub fn update_issue_description(
@@ -4935,6 +4973,37 @@ mod tests {
     assert_eq!(
       request_line,
       "GET /github/repos/acme/widget/issues/77 HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn resolve_github_issue_reference_target_parses_pull_request_target() {
+    let body = r#"{
+      "target": {
+        "kind": "pull_request",
+        "number": 24877
+      }
+    }"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let target = api
+      .resolve_github_issue_reference_target("acme", "widget", 24877)
+      .expect("resolve issue reference target");
+
+    assert_eq!(target.kind, GithubIssueReferenceTargetKind::PullRequest);
+    assert_eq!(target.number, 24877);
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "GET /github/repos/acme/widget/issues/24877/target HTTP/1.1"
     );
   }
 

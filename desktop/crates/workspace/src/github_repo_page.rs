@@ -58,9 +58,9 @@ use crate::{
   ShowCommandPalette, ShowFileSearch,
   api::{
     ApiClient, GithubFileCommit, GithubIssue, GithubIssueDescriptionUpdate, GithubIssueDetails,
-    GithubIssueDetailsComment, GithubIssueStateReason, GithubIssueUser, GithubPullRequest,
-    GithubPullRequestState, GithubReactionContent, GithubReactionGroup, GithubRepositoryDetails,
-    RepoSubscriptionMode,
+    GithubIssueDetailsComment, GithubIssueReferenceTargetKind, GithubIssueStateReason,
+    GithubIssueUser, GithubPullRequest, GithubPullRequestState, GithubReactionContent,
+    GithubReactionGroup, GithubRepositoryDetails, RepoSubscriptionMode,
   },
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, CloneProtocol, ConfigStore},
@@ -2597,6 +2597,46 @@ impl GithubIssueDetailsSheetView {
         issue_number,
         issue_comment_id,
       } => {
+        if tab == Some(CommandPaletteGithubRepoTab::Issues)
+          && let Some(target_issue_number) = issue_number
+        {
+          if should_keep_issue_sheet_open_for_repo_target(
+            self.owner.as_str(),
+            self.repo.as_str(),
+            &owner,
+            &repo,
+            tab,
+            issue_number,
+          ) && target_issue_number == self.issue_number
+          {
+            match same_repo_issue_link_navigation(
+              self.issue_number,
+              target_issue_number,
+              issue_comment_id,
+            ) {
+              SameRepoIssueLinkNavigation::Noop => {
+                return true;
+              }
+              SameRepoIssueLinkNavigation::ScrollComment { comment_id } => {
+                self.pending_comment_scroll_id = Some(comment_id);
+                self.pending_comment_scroll_attempts = 4;
+                cx.notify();
+                return true;
+              }
+              SameRepoIssueLinkNavigation::ReloadIssue { .. } => {}
+            }
+          } else {
+            self.open_resolved_issue_reference(
+              owner,
+              repo,
+              target_issue_number,
+              issue_comment_id,
+              cx,
+            );
+            return true;
+          }
+        }
+
         if should_keep_issue_sheet_open_for_repo_target(
           self.owner.as_str(),
           self.repo.as_str(),
@@ -2662,6 +2702,48 @@ impl GithubIssueDetailsSheetView {
       }
       _ => false,
     }
+  }
+
+  fn open_resolved_issue_reference(
+    &mut self,
+    owner: String,
+    repo: String,
+    issue_number: u64,
+    issue_comment_id: Option<u64>,
+    cx: &mut Context<Self>,
+  ) {
+    let api = self.api.clone();
+    let fallback_owner = owner.clone();
+    let fallback_repo = repo.clone();
+    cx.spawn(async move |_, cx| {
+      let result =
+        unblock(move || api.resolve_github_issue_reference_target(&owner, &repo, issue_number))
+          .await;
+
+      cx.update(|cx| match result {
+        Ok(target) if target.kind == GithubIssueReferenceTargetKind::PullRequest => {
+          open_pr_target(
+            fallback_owner,
+            fallback_repo,
+            target.number,
+            false,
+            None,
+            cx,
+          );
+        }
+        _ => {
+          open_repo_target(
+            fallback_owner,
+            fallback_repo,
+            Some(CommandPaletteGithubRepoTab::Issues),
+            Some(issue_number),
+            issue_comment_id,
+            cx,
+          );
+        }
+      });
+    })
+    .detach();
   }
 
   fn editable_issue_comment_ids(&self, cx: &App) -> HashSet<u64> {
