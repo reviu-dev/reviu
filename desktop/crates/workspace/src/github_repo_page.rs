@@ -4093,30 +4093,18 @@ impl GithubRepoPage {
       || self.closed_pull_requests.read(cx).delegate().loading
   }
 
-  fn pull_requests_total_count(&self, cx: &App) -> usize {
-    match (
-      self.open_pull_request_count,
-      self.merged_pull_request_count,
-      self.closed_pull_request_count,
-    ) {
-      (Some(open), Some(merged), Some(closed)) => (open + merged + closed) as usize,
-      _ => {
-        self.pull_requests.read(cx).delegate().all_rows.len()
-          + self.merged_pull_requests.read(cx).delegate().all_rows.len()
-          + self.closed_pull_requests.read(cx).delegate().all_rows.len()
-      }
-    }
+  fn pull_requests_open_count(&self, cx: &App) -> usize {
+    self
+      .open_pull_request_count
+      .map(|c| c as usize)
+      .unwrap_or_else(|| self.pull_requests.read(cx).delegate().all_rows.len())
   }
 
-  fn issues_total_count(&self, cx: &App) -> usize {
-    match (self.open_issue_count, self.closed_issue_count) {
-      (Some(open), Some(closed)) => (open + closed) as usize,
-      _ => {
-        self.issues.read(cx).delegate().all_rows.len()
-          + self.closed_issues.read(cx).delegate().all_rows.len()
-          + self.not_planned_issues.read(cx).delegate().all_rows.len()
-      }
-    }
+  fn issues_open_count(&self, cx: &App) -> usize {
+    self
+      .open_issue_count
+      .map(|c| c as usize)
+      .unwrap_or_else(|| self.issues.read(cx).delegate().all_rows.len())
   }
 
   fn pull_requests_matched_count(
@@ -6793,8 +6781,8 @@ impl GithubRepoPage {
       } else {
         github_shared::repo_label(self.owner.as_ref(), self.repo.as_ref()).into()
       };
-    let pull_requests_count = self.pull_requests_total_count(cx);
-    let issues_count = self.issues_total_count(cx);
+    let pull_requests_count = self.pull_requests_open_count(cx);
+    let issues_count = self.issues_open_count(cx);
 
     let tab_bar = TabBar::new("github-repo-tabs")
       .w_full()
