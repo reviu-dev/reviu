@@ -285,15 +285,29 @@ impl SettingsPage {
     ]
   }
 
-  #[cfg(target_os = "macos")]
   fn menu_bar_settings_groups(
     &self,
     view: gpui::Entity<Self>,
     default_menu_bar_icon: bool,
   ) -> Vec<SettingGroup> {
-    vec![SettingGroup::new().title("Menu Bar").items(vec![
+    #[cfg(target_os = "macos")]
+    let title = "Menu Bar";
+    #[cfg(not(target_os = "macos"))]
+    let title = "System Tray";
+    #[cfg(target_os = "macos")]
+    let label = "Show in Menu Bar";
+    #[cfg(not(target_os = "macos"))]
+    let label = "Show in System Tray";
+    #[cfg(target_os = "macos")]
+    let description =
+      "Show the Reviu icon in the macOS menu bar with unread GitHub notification counts.";
+    #[cfg(not(target_os = "macos"))]
+    let description =
+      "Show the Reviu icon in the system tray with unread GitHub notification counts.";
+
+    vec![SettingGroup::new().title(title).items(vec![
         SettingItem::new(
-          "Show in Menu Bar",
+          label,
           SettingField::checkbox(
             {
               let view = view.clone();
@@ -316,19 +330,8 @@ impl SettingsPage {
           )
           .default_value(default_menu_bar_icon),
         )
-        .description(
-          "Show the Reviu icon in the macOS menu bar with unread GitHub notification counts.",
-        ),
+        .description(description),
       ])]
-  }
-
-  #[cfg(not(target_os = "macos"))]
-  fn menu_bar_settings_groups(
-    &self,
-    _view: gpui::Entity<Self>,
-    _default_menu_bar_icon: bool,
-  ) -> Vec<SettingGroup> {
-    Vec::new()
   }
 
   fn keyboard_shortcuts_page(

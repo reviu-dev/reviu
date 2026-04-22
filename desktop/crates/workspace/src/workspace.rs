@@ -310,6 +310,8 @@ pub struct WorkspaceView {
   _periodic_update_check_task: Option<Task<()>>,
   _update_download_task: Option<Task<()>>,
   _notification_poll_task: Option<Task<()>>,
+  #[cfg(any(target_os = "linux", target_os = "windows"))]
+  _status_bar_event_task: Option<Task<()>>,
   _subscriptions: Vec<Subscription>,
 }
 
@@ -412,6 +414,8 @@ impl WorkspaceView {
       _periodic_update_check_task: None,
       _update_download_task: None,
       _notification_poll_task: None,
+      #[cfg(any(target_os = "linux", target_os = "windows"))]
+      _status_bar_event_task: None,
       _subscriptions: Vec::new(),
     };
 
@@ -433,6 +437,8 @@ impl WorkspaceView {
     view.check_for_updates(cx);
     view.start_periodic_update_checks(cx);
     view.start_notification_polling(cx);
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    view.start_status_bar_event_polling(cx);
     if PersistedSettings::get(cx).menu_bar_icon {
       crate::status_bar::init_status_bar(STATUS_BAR_ICON_PNG);
     }
@@ -453,9 +459,15 @@ impl WorkspaceView {
   }
 
   fn handle_pending_status_bar_notification(&self, cx: &mut App) {
+    if crate::status_bar::take_open_reviu_request() {
+      cx.activate(true);
+    }
+
     let Some(notification) = crate::status_bar::take_pending_notification() else {
       return;
     };
+
+    cx.activate(true);
 
     if notification.unread {
       let api = WorkspaceApi::global(cx).api.clone();
@@ -622,6 +634,27 @@ impl WorkspaceView {
     });
 
     self._notification_poll_task = Some(task);
+  }
+
+  #[cfg(any(target_os = "linux", target_os = "windows"))]
+  fn start_status_bar_event_polling(&mut self, cx: &mut Context<Self>) {
+    let task = cx.spawn(async move |this, cx| {
+      loop {
+        cx.background_executor()
+          .timer(Duration::from_millis(250))
+          .await;
+
+        if !crate::status_bar::has_pending_interaction() {
+          continue;
+        }
+
+        let _ = this.update(cx, |this, cx| {
+          this.handle_pending_status_bar_notification(cx);
+        });
+      }
+    });
+
+    self._status_bar_event_task = Some(task);
   }
 
   fn trigger_update_download(&mut self, cx: &mut Context<Self>) {

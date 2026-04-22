@@ -55,7 +55,7 @@ If pricing changes, update desktop billing, landing copy, structured data, and t
 ### GitHub home
 
 - GitHub notifications feed in-app.
-- Unread counts and desktop-facing GitHub attention surface inside Reviu.
+- Unread counts in the app, macOS menu bar, and Windows/Linux system tray.
 - Saved pull request lists and repository sections on the GitHub home page.
 - Upgrade and sign-in flows directly in the desktop app.
 
