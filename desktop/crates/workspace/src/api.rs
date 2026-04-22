@@ -685,6 +685,8 @@ pub struct GithubCommitDetails {
   pub parent_sha: Option<String>,
   pub author: Option<GithubCommitUser>,
   pub committer: Option<GithubCommitUser>,
+  #[serde(default)]
+  pub authors: Vec<GithubCommitAuthorIdentity>,
   pub stats: Option<GithubCommitStats>,
   pub files: Vec<GithubPullRequestFile>,
   #[serde(rename = "associated_pull_request", default)]
