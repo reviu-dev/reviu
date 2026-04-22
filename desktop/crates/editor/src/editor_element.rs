@@ -1085,6 +1085,8 @@ impl Element for EditorElement {
     cx: &mut App,
   ) -> Self::PrepaintState {
     let measured_line_height = window.line_height();
+    let style = window.text_style();
+    let font_size = style.font_size.to_pixels(window.rem_size());
     let scroll_hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
     let is_primary = self.is_primary();
 
@@ -1098,6 +1100,7 @@ impl Element for EditorElement {
     };
     self.editor.update(cx, |editor, _| {
       editor.editor_line_height = measured_line_height;
+      editor.invalidate_layout_cache_if_font_size_changed(font_size);
       if is_primary {
         editor.viewport_height = bounds.size.height;
         editor.viewport_width = bounds.size.width;
@@ -1218,8 +1221,6 @@ impl Element for EditorElement {
       let sample_chars = sample.chars().count().max(1) as f32;
       (shaped.x_for_index(sample.len()) / sample_chars).max(px(1.0))
     };
-    let style = window.text_style();
-    let font_size = style.font_size.to_pixels(window.rem_size());
     let measured_char_width = measure_char_width(&style, EDITOR_CHAR_WIDTH_SAMPLE);
     let mut review_comment_style = style.clone();
     review_comment_style.font_family = REVIEW_COMMENT_UI_FONT_FAMILY.into();

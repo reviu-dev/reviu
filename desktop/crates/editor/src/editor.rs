@@ -458,6 +458,7 @@ pub struct Editor {
   // Performance: cache and viewport
   pub line_layouts: HashMap<usize, Arc<ShapedLine>>,
   pub virtual_line_layouts: HashMap<usize, Arc<ShapedLine>>,
+  pub(crate) last_layout_font_size: Pixels,
 
   pub scroll_offset_y: f32, // Vertical scroll offset in lines (0.0 = top, 1.5 = 1.5 lines down)
   pub editor_line_height: Pixels,
@@ -851,6 +852,7 @@ impl Editor {
       is_selecting: false,
       line_layouts: HashMap::new(),
       virtual_line_layouts: HashMap::new(),
+      last_layout_font_size: px(0.0),
       scroll_offset_y: 0.0,
       editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
       editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
@@ -5413,6 +5415,24 @@ impl Editor {
     self.line_layouts.remove(&line);
   }
 
+  pub(crate) fn invalidate_layout_cache_if_font_size_changed(&mut self, font_size: Pixels) -> bool {
+    let previous_font_size_px = if self.last_layout_font_size > px(0.0) {
+      (self.last_layout_font_size / px(1.0)).max(1.0)
+    } else {
+      0.0
+    };
+    let font_size_px = (font_size / px(1.0)).max(1.0);
+    self.last_layout_font_size = font_size;
+
+    if previous_font_size_px > 0.0 && (font_size_px - previous_font_size_px).abs() > 0.05 {
+      self.line_layouts.clear();
+      self.virtual_line_layouts.clear();
+      return true;
+    }
+
+    false
+  }
+
   /// Invalidate all lines from start_line onwards (for multi-line edits)
   pub(crate) fn invalidate_lines_from(&mut self, start_line: usize) {
     self
@@ -8378,6 +8398,7 @@ pub mod tests {
           is_selecting: false,
           line_layouts: HashMap::new(),
           virtual_line_layouts: HashMap::new(),
+          last_layout_font_size: px(0.0),
           scroll_offset_y: 0.0,
           editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
           editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
@@ -9644,6 +9665,25 @@ pub mod tests {
     assert!(ctx.is_line_cached(0));
     assert!(!ctx.is_line_cached(1));
     assert!(ctx.is_line_cached(2));
+  }
+
+  #[gpui::test]
+  fn test_font_size_change_invalidates_layout_cache(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "line1\nline2\nline3");
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.last_layout_font_size = px(16.0);
+      editor
+        .line_layouts
+        .insert(0, Arc::new(ShapedLine::default()));
+      editor
+        .virtual_line_layouts
+        .insert(1, Arc::new(ShapedLine::default()));
+
+      assert!(editor.invalidate_layout_cache_if_font_size_changed(px(20.0)));
+      assert!(editor.line_layouts.is_empty());
+      assert!(editor.virtual_line_layouts.is_empty());
+    });
   }
 
   #[gpui::test]
