@@ -20,10 +20,6 @@ Pull request timelines, repository overviews, and the commit details page now sh
 
 Suggested changes in pull request review comments now render with GitHub-style red and green diff rows, including line numbers. Review comment code previews also keep the surrounding diff colors, making proposed replacements easier to compare.
 
-### GitHub Issue Reference Navigation
-
-Issue-style references in GitHub markdown now resolve before navigation, so links like `#24877` open the matching pull request when GitHub treats that number as a PR.
-
 ## 0.6.0
 
 ### Auto-merge for Pull Requests
