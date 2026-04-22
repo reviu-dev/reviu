@@ -8,14 +8,15 @@ use std::{
 use editor::{DiffViewMode, Editor};
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
 use gpui::{
-  AnyElement, App, Context, Entity, FocusHandle, Focusable, ParentElement, Render, SharedString,
-  Styled, Task, Window, div, img, prelude::*, px,
+  AnyElement, App, Context, Corner, Entity, FocusHandle, Focusable, ParentElement, Render,
+  SharedString, Styled, Task, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt,
   button::{Button, ButtonVariants as _},
   h_flex,
   label::Label,
+  menu::{DropdownMenu as _, PopupMenuItem},
   skeleton::Skeleton,
   tag::Tag,
   tree::{TreeItem, TreeState, tree},
@@ -765,14 +766,20 @@ impl GithubCommitDetailsPage {
                 self.commit.as_ref().map(|commit| commit.html_url.clone()),
                 |this, url| {
                   this.child(
-                    Button::new("github-commit-open-external")
-                      .icon(IconName::ExternalLink)
-                      .label("Open on GitHub")
+                    Button::new("github-commit-actions-menu")
+                      .icon(UiIconName::EllipsisVertical)
                       .ghost()
-                      .compact()
                       .small()
-                      .on_click(move |_, _, cx| {
-                        cx.open_url(&url);
+                      .compact()
+                      .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+                        let view_url = url.clone();
+                        menu.item(
+                          PopupMenuItem::new("View on GitHub")
+                            .icon(Icon::new(IconName::ExternalLink))
+                            .on_click(move |_, _, cx| {
+                              cx.open_url(&view_url);
+                            }),
+                        )
                       }),
                   )
                 },
