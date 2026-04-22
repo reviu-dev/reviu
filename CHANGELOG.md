@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 Windows and Linux now show the Reviu tray icon with unread GitHub notification counts, matching the existing macOS menu bar behavior.
 
+### GitHub Review Suggestions
+
+Suggested changes in review comments render as GitHub-style diff rows and can be committed directly to the pull request branch with a custom title, optional message, and the reviewer as co-author.
+
 ### GitHub Mentions in Markdown
 
 User mentions in GitHub markdown now show the profile avatar next to the linked username, matching the way mentions appear on GitHub while keeping profile navigation inside Reviu.
@@ -15,10 +19,6 @@ User mentions in GitHub markdown now show the profile avatar next to the linked 
 ### GitHub Commit Co-Authors
 
 Pull request timelines, repository overviews, and the commit details page now show commit co-authors when GitHub includes them, making shared work visible during review.
-
-### GitHub Review Suggestions
-
-Suggested changes in review comments render as GitHub-style diff rows and can be committed directly to the pull request branch with a custom title, optional message, and the reviewer as co-author.
 
 ## 0.6.0
 
