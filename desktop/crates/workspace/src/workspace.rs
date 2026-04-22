@@ -9,7 +9,7 @@ use gpui::{
   MenuItem, Render, Subscription, Task, Window, WindowButton, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, Theme, ThemeMode, h_flex,
+  ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, StyledExt, Theme, ThemeMode, h_flex,
   kbd::Kbd,
   notification::Notification,
   spinner::Spinner,
@@ -1102,15 +1102,27 @@ impl WorkspaceView {
         .id("linux-titlebar-drag")
         .flex_1()
         .h_full()
-        .on_mouse_down(gpui::MouseButton::Left, |_, window, _cx| {
-          window.start_window_move();
+        .on_mouse_down(gpui::MouseButton::Left, |ev, window, _cx| {
+          if ev.click_count >= 2 {
+            window.zoom_window();
+          } else {
+            window.start_window_move();
+          }
         })
         .on_mouse_down(gpui::MouseButton::Right, |ev, window, _cx| {
           window.show_window_menu(ev.position);
         });
       bar.child(left).child(drag_area).child(right)
     } else {
-      bar.child(left).child(right)
+      let zoom_area = div().id("titlebar-zoom").flex_1().h_full().on_mouse_down(
+        gpui::MouseButton::Left,
+        |ev, window, _cx| {
+          if ev.click_count >= 2 {
+            window.zoom_window();
+          }
+        },
+      );
+      bar.child(left).child(zoom_area).child(right)
     }
   }
 }
