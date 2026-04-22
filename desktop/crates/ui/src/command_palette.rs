@@ -210,6 +210,7 @@ pub enum CommandPaletteAction {
     sha: String,
   },
   SwitchToPrBranch,
+  CopyPrBranch,
   ToggleUnchangedFiles,
   OpenGitHistorySidebar,
   OpenGitChangesSidebar,
@@ -753,6 +754,7 @@ pub enum CommandPaletteCommandId {
   OpenGithubPage,
   OpenGithubFromUrl,
   SwitchToPrBranch,
+  CopyPrBranch,
   ToggleUnchangedFiles,
   OpenGitHistorySidebar,
   OpenGitChangesSidebar,
@@ -1156,6 +1158,14 @@ impl CommandPaletteCommand {
     }
   }
 
+  pub fn copy_pr_branch() -> Self {
+    Self {
+      id: CommandPaletteCommandId::CopyPrBranch,
+      name: "Copy PR branch name".into(),
+      description: Some("Copy the source branch name of the current pull request".into()),
+    }
+  }
+
   pub fn toggle_unchanged_files(currently_shown: bool) -> Self {
     if currently_shown {
       Self {
@@ -1317,6 +1327,7 @@ impl CommandPaletteCommand {
 
       CommandPaletteCommandId::CreatePullRequest
       | CommandPaletteCommandId::SwitchToPrBranch
+      | CommandPaletteCommandId::CopyPrBranch
       | CommandPaletteCommandId::ToggleUnchangedFiles => CommandPaletteGroup::PullRequest,
 
       CommandPaletteCommandId::SwitchRepository
@@ -1389,6 +1400,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::OpenGithubPage => Icon::new(IconName::Github),
       CommandPaletteCommandId::OpenGithubFromUrl => Icon::new(IconName::Github),
       CommandPaletteCommandId::SwitchToPrBranch => Icon::new(UiIconName::GitBranch),
+      CommandPaletteCommandId::CopyPrBranch => Icon::new(IconName::Copy),
       CommandPaletteCommandId::ToggleUnchangedFiles => Icon::new(UiIconName::ScanEye),
       CommandPaletteCommandId::OpenGitHistorySidebar => Icon::new(UiIconName::History),
       CommandPaletteCommandId::OpenGitChangesSidebar => Icon::new(UiIconName::FileCode),
@@ -2382,6 +2394,9 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::SwitchToPrBranch => {
         self.trigger_action(CommandPaletteAction::SwitchToPrBranch, window, cx);
+      }
+      CommandPaletteCommandId::CopyPrBranch => {
+        self.trigger_action(CommandPaletteAction::CopyPrBranch, window, cx);
       }
       CommandPaletteCommandId::ToggleUnchangedFiles => {
         self.trigger_action(CommandPaletteAction::ToggleUnchangedFiles, window, cx);
