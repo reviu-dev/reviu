@@ -604,10 +604,10 @@ pub(crate) fn build_runs(
 }
 
 fn inline_span_background(background: Option<InlineBackground>, cx: &App) -> Option<Hsla> {
-  let theme = cx.theme();
+  let ui_theme = ui::Theme::new(cx.theme().is_dark());
   match background {
-    Some(InlineBackground::DiffWordAdded) => Some(theme.green_light.opacity(0.42)),
-    Some(InlineBackground::DiffWordRemoved) => Some(theme.red_light.opacity(0.38)),
+    Some(InlineBackground::DiffWordAdded) => Some(ui_theme.diff_word_added_background()),
+    Some(InlineBackground::DiffWordRemoved) => Some(ui_theme.diff_word_removed_background()),
     None => None,
   }
 }

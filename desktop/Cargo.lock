@@ -2908,6 +2908,7 @@ dependencies = [
  "syntax",
  "tree-sitter",
  "tree-sitter-html",
+ "ui",
  "unicode-segmentation",
 ]
 

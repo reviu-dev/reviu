@@ -12,6 +12,7 @@ once_cell.workspace = true
 reqwest.workspace = true
 base64.workspace = true
 syntax.workspace = true
+ui.workspace = true
 unicode-segmentation.workspace = true
 tree-sitter.workspace = true
 tree-sitter-html.workspace = true
