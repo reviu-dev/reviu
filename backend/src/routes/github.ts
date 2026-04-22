@@ -149,6 +149,7 @@ import {
   deleteGithubPullRequestComment,
   disableGithubPullRequestAutoMerge,
   enableGithubPullRequestAutoMerge,
+  fetchGithubCommitAuthorsGraphql,
   fetchGithubCommitConditionally,
   fetchGithubCommitFilesAllPages,
   fetchGithubIssueDetailsGraphql,
@@ -1124,6 +1125,7 @@ function mapGithubCommitDetails(
   commit: CommitResponse,
   files: GithubCommitDetails['files'],
   associatedPullRequest: GithubCommitDetails['associated_pull_request'],
+  authors: GithubCommitDetails['authors'],
 ): GithubCommitDetails {
   return {
     sha: commit.sha,
@@ -1134,6 +1136,7 @@ function mapGithubCommitDetails(
     parent_sha: commit.parents.at(0)?.sha ?? null,
     author: mapGithubCommitUser(commit.author),
     committer: mapGithubCommitUser(commit.committer),
+    authors,
     stats: commit.stats
       ? {
           additions: commit.stats.additions,
@@ -1199,7 +1202,7 @@ async function fetchRepositoryCommitWithCache(
         }
 
         const commit = response.data!
-        const [files, associatedPulls] = await Promise.all([
+        const [files, associatedPulls, authorsNode] = await Promise.all([
           fetchGithubCommitFilesAllPages({
             token: githubToken,
             params: {
@@ -1216,13 +1219,28 @@ async function fetchRepositoryCommitWithCache(
               commit_sha: sha,
             },
           }).catch(() => [] as CommitPullResponse[]),
+          fetchGithubCommitAuthorsGraphql({
+            token: githubToken,
+            params: {
+              owner: org,
+              repo,
+              oid: commit.sha,
+            },
+          }).catch(() => null),
         ])
+
+        const authors = authorsNode
+          ? mapGithubGraphqlCommitAuthors(
+              (authorsNode.authors.nodes ?? []).filter(author => author !== null),
+            )
+          : []
 
         return {
           payload: mapGithubCommitDetails(
             commit,
             files.map(mapGithubPullRequestFile),
             pickAssociatedPullRequest(associatedPulls),
+            authors,
           ),
           etag: response.etag,
           lastModified: response.lastModified,

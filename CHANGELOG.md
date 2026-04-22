@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 User mentions in GitHub markdown now show the profile avatar next to the linked username, matching the way mentions appear on GitHub while keeping profile navigation inside Reviu.
 
+### GitHub Commit Co-Authors
+
+Pull request timelines, repository overviews, and the commit details page now show commit co-authors when GitHub includes them, making shared work visible during review.
+
 ## 0.6.0
 
 ### Auto-merge for Pull Requests

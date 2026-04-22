@@ -239,6 +239,18 @@ export interface GithubGraphqlPullRequestCommitsResponse {
   } | null
 }
 
+export interface GithubGraphqlCommitAuthorsNode {
+  authors: {
+    nodes?: Array<GithubGraphqlCommitAuthorIdentityNode | null> | null
+  }
+}
+
+export interface GithubGraphqlCommitAuthorsResponse {
+  repository?: {
+    object?: GithubGraphqlCommitAuthorsNode | null
+  } | null
+}
+
 export type GithubReactionContent
   = | 'CONFUSED'
     | 'EYES'
@@ -820,6 +832,7 @@ export interface GithubCommitDetails {
   parent_sha: CommitResponse['parents'][number]['sha'] | null
   author: GithubCommitUser | null
   committer: GithubCommitUser | null
+  authors: GithubCommitAuthorIdentity[]
   stats: GithubCommitStats | null
   files: GithubPullRequestFile[]
   associated_pull_request: GithubCommitAssociatedPullRequest | null

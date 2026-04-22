@@ -33,6 +33,8 @@ import type {
   ForkRepositoryParams,
   ForkRepositoryResponse,
   GithubGraphqlAddReactionResponse,
+  GithubGraphqlCommitAuthorsNode,
+  GithubGraphqlCommitAuthorsResponse,
   GithubGraphqlConnection,
   GithubGraphqlIssueDetailsCommentNode,
   GithubGraphqlIssueDetailsCommentsPageResponse,
@@ -752,6 +754,27 @@ const GITHUB_GRAPHQL_PULL_REQUEST_COMMITS_QUERY = `
           pageInfo {
             hasNextPage
             endCursor
+          }
+        }
+      }
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_COMMIT_AUTHORS_QUERY = `
+  query CommitAuthors($owner: String!, $name: String!, $oid: GitObjectID!) {
+    repository(owner: $owner, name: $name) {
+      object(oid: $oid) {
+        ... on Commit {
+          authors(first: 10) {
+            nodes {
+              name
+              email
+              user {
+                login
+                avatarUrl
+              }
+            }
           }
         }
       }
@@ -2708,6 +2731,25 @@ export async function fetchGithubCommitConditionally(
     'GET /repos/{owner}/{repo}/commits/{ref}',
     options,
   )
+}
+
+export async function fetchGithubCommitAuthorsGraphql(
+  { token, params }: {
+    token: string
+    params: { owner: string, repo: string, oid: string }
+  },
+): Promise<GithubGraphqlCommitAuthorsNode | null> {
+  const data: GithubGraphqlCommitAuthorsResponse = await requestGithubGraphqlData({
+    token,
+    query: GITHUB_GRAPHQL_COMMIT_AUTHORS_QUERY,
+    variables: {
+      owner: params.owner,
+      name: params.repo,
+      oid: params.oid,
+    },
+  })
+
+  return data.repository?.object ?? null
 }
 
 export async function fetchGithubPullRequestCommitsGraphql(

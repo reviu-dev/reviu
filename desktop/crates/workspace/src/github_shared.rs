@@ -192,7 +192,7 @@ fn fallback_commit_author(
   }
 }
 
-fn commit_authors_for_display(
+pub(crate) fn commit_authors_for_display(
   authors: &[GithubCommitAuthorIdentity],
   author_login: Option<&str>,
   author_avatar_url: Option<&str>,
@@ -231,7 +231,7 @@ pub(crate) fn commit_authors_label(authors: &[GithubCommitAuthorIdentity]) -> St
   }
 }
 
-fn render_commit_author_avatars(authors: &[GithubCommitAuthorIdentity]) -> gpui::Div {
+pub(crate) fn render_commit_author_avatars(authors: &[GithubCommitAuthorIdentity]) -> gpui::Div {
   let mut avatars = h_flex().items_center().flex_shrink_0();
   for (ix, author) in authors.iter().take(3).enumerate() {
     avatars = avatars.child(

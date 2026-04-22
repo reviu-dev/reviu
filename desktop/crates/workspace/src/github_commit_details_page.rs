@@ -13,7 +13,6 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt,
-  avatar::Avatar,
   button::{Button, ButtonVariants as _},
   h_flex,
   label::Label,
@@ -790,6 +789,11 @@ impl GithubCommitDetailsPage {
     };
     let subject = github_shared::commit_subject(&commit.message);
     let user = commit.author.as_ref().or(commit.committer.as_ref());
+    let authors = github_shared::commit_authors_for_display(
+      &commit.authors,
+      user.map(|u| u.login.as_str()),
+      user.and_then(|u| u.avatar_url.as_deref()),
+    );
     let committed_at = commit
       .committed_at
       .as_deref()
@@ -805,14 +809,7 @@ impl GithubCommitDetailsPage {
           .items_center()
           .gap_2()
           .min_w_0()
-          .when_some(user, |this, user| {
-            this.child(
-              Avatar::new()
-                .name(user.login.clone())
-                .when_some(user.avatar_url.clone(), |this, url| this.src(url))
-                .small(),
-            )
-          })
+          .child(github_shared::render_commit_author_avatars(&authors))
           .child(
             div()
               .text_sm()
