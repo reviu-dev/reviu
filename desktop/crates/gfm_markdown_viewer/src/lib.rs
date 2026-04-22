@@ -16,7 +16,8 @@ pub use gfm_markdown_viewer::{
 };
 pub use height_estimation::{
   estimate_github_code_reference_preview_height_px, estimate_markdown_height_px,
-  estimate_parsed_markdown_height_px,
+  estimate_markdown_height_px_with_suggestion_context, estimate_parsed_markdown_height_px,
+  estimate_parsed_markdown_height_px_with_suggestion_context,
 };
 pub use image::is_github_user_attachment_url;
 pub use parse::{
@@ -25,5 +26,6 @@ pub use parse::{
 pub use syntax_cache::SyntaxHighlightCache;
 pub use types::{
   GithubBlobLineReference, GithubCodeReferencePreview, GithubDiffLine, GithubDiffLineKind,
-  GithubIssueReferenceContext, LinkAction, ParsedMarkdown, SuggestionContext,
+  GithubIssueReferenceContext, LinkAction, ParsedMarkdown, SuggestionActionContext,
+  SuggestionContext,
 };

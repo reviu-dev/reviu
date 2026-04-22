@@ -14,9 +14,10 @@ use editor::{
 };
 use gfm_markdown_viewer::{
   GithubBlobLineReference, GithubCodeReferencePreview, GithubDiffLine, GithubDiffLineKind,
-  LinkAction, MarkdownRenderOptions, MarkdownRenderState, SuggestionContext,
-  extract_github_blob_line_references, render_github_code_reference_preview_card,
-  render_github_diff_code_reference_preview_card, render_markdown,
+  LinkAction, MarkdownRenderOptions, MarkdownRenderState, SuggestionActionContext,
+  SuggestionContext, extract_github_blob_line_references,
+  render_github_code_reference_preview_card, render_github_diff_code_reference_preview_card,
+  render_markdown,
 };
 use git::{
   DiffKind, DiffSet, FileDiff, GitStore, RepoStatusKind, compute_buffer_diff, create_stash,
@@ -28,7 +29,7 @@ use gpui::{
   AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Corner, Entity, FocusHandle, Focusable,
   Hsla, Image, InteractiveElement, ListAlignment, ListState as GpuiListState, MouseButton,
   ObjectFit, ParentElement, PathBuilder, Render, RenderImage, SharedString, Styled, Task, Window,
-  canvas, div, img, list, point, prelude::*, px, white,
+  canvas, deferred, div, img, list, point, prelude::*, px, white,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable as _, StyledExt,
@@ -59,9 +60,9 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DropdownSelectConfig,
   DropdownSelectItem, FILE_ICON_SIZE_PX, GithubEmojiInput, Input, InputState, Popover, ReactionBar,
-  SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusThemeExt, UiIconName, WindowExt,
-  dropdown_select, file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action,
-  resizable_panel, selectable_list_item,
+  SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusTag, StatusThemeExt, UiIconName,
+  WindowExt, dropdown_select, file_icon_path_for_name_with_theme, h_resizable,
+  parse_github_url_action, resizable_panel, selectable_list_item,
 };
 
 use crate::{
@@ -295,6 +296,16 @@ impl GithubPrStatusAction {
 struct OverviewCommentTarget {
   kind: OverviewCommentKind,
   id: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SuggestedChangeCommitTarget {
+  comment_id: u64,
+  author_login: Arc<str>,
+  path: Arc<str>,
+  original_start_line: usize,
+  original_lines: Vec<String>,
+  suggested_lines: Vec<String>,
 }
 
 enum OverviewCommentUpdateResult {
@@ -771,6 +782,7 @@ enum GithubPrOverviewConversationItemKind {
 struct GithubPrOverviewConversationItem {
   kind: GithubPrOverviewConversationItemKind,
   id: u64,
+  is_outdated: bool,
   reaction_subject_id: String,
   reactions: Vec<GithubReactionGroup>,
   timestamp: String,
@@ -785,6 +797,7 @@ struct GithubPrOverviewConversationItem {
 #[derive(Clone, Debug)]
 struct GithubPrOverviewConversationReply {
   id: u64,
+  is_outdated: bool,
   reaction_subject_id: String,
   reactions: Vec<GithubReactionGroup>,
   timestamp: String,
@@ -1606,6 +1619,7 @@ fn build_overview_conversation_items(
     GithubPrOverviewConversationItem {
       kind: GithubPrOverviewConversationItemKind::IssueComment,
       id: comment.id,
+      is_outdated: false,
       reaction_subject_id: comment.node_id.clone(),
       reactions: comment.reactions.clone(),
       timestamp: comment.created_at.clone(),
@@ -1647,6 +1661,7 @@ fn build_overview_conversation_items(
     Some(GithubPrOverviewConversationItem {
       kind: GithubPrOverviewConversationItemKind::Review,
       id: review.id,
+      is_outdated: false,
       reaction_subject_id: review.node_id.clone(),
       reactions: review.reactions.clone(),
       timestamp: submitted_at.clone(),
@@ -1700,6 +1715,7 @@ fn build_overview_conversation_items(
       .filter(|comment| comment.id != root_comment.id)
       .map(|comment| GithubPrOverviewConversationReply {
         id: comment.id,
+        is_outdated: comment.is_outdated,
         reaction_subject_id: comment.node_id.clone(),
         reactions: comment.reactions.clone(),
         timestamp: comment.created_at.clone(),
@@ -1720,6 +1736,7 @@ fn build_overview_conversation_items(
     items.push(GithubPrOverviewConversationItem {
       kind: GithubPrOverviewConversationItemKind::ReviewComment,
       id: root_comment.id,
+      is_outdated: root_comment.is_outdated,
       reaction_subject_id: root_comment.node_id.clone(),
       reactions: root_comment.reactions.clone(),
       timestamp: root_comment.created_at.clone(),
@@ -2775,6 +2792,14 @@ pub struct GithubPrDetailsPage {
   overview_reply_target_comment_id: Option<u64>,
   overview_reply_submitting: bool,
   overview_reply_error: Option<SharedString>,
+  suggested_change_commit_target: Option<SuggestedChangeCommitTarget>,
+  suggested_change_commit_title_input: Entity<InputState>,
+  suggested_change_commit_message_input: Entity<InputState>,
+  suggested_change_include_co_author: bool,
+  suggested_change_commit_loading: bool,
+  suggested_change_commit_error: Option<SharedString>,
+  suggested_change_commit_task: Option<Task<()>>,
+  stale_suggested_change_comment_ids: HashSet<u64>,
   selected_file_review_comment_ids: Vec<u64>,
   active_review_comment_id: Option<u64>,
   review_comment_handlers_enabled: bool,
@@ -3219,6 +3244,14 @@ impl GithubPrDetailsPage {
         .rows(6)
         .placeholder("Add comment...")
     });
+    let suggested_change_commit_title_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Apply suggestion from code review"));
+    let suggested_change_commit_message_input = cx.new(|cx| {
+      InputState::new(window, cx)
+        .multi_line(true)
+        .rows(4)
+        .placeholder("Commit message (optional)")
+    });
     let assignee_input = cx.new(|cx| InputState::new(window, cx).placeholder("Assign a user..."));
     let requested_reviewer_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Request review..."));
@@ -3317,6 +3350,14 @@ impl GithubPrDetailsPage {
       overview_reply_target_comment_id: None,
       overview_reply_submitting: false,
       overview_reply_error: None,
+      suggested_change_commit_target: None,
+      suggested_change_commit_title_input,
+      suggested_change_commit_message_input,
+      suggested_change_include_co_author: true,
+      suggested_change_commit_loading: false,
+      suggested_change_commit_error: None,
+      suggested_change_commit_task: None,
+      stale_suggested_change_comment_ids: HashSet::new(),
       selected_file_review_comment_ids: Vec::new(),
       active_review_comment_id: None,
       review_comment_handlers_enabled: true,
@@ -4680,6 +4721,7 @@ impl GithubPrDetailsPage {
     self.issue_comments = conversation.issue_comments;
     self.reviews = conversation.reviews;
     self.review_comments = conversation.review_comments;
+    self.stale_suggested_change_comment_ids.clear();
     self.issue_comments_loading = false;
     self.issue_comments_error = None;
     self.reviews_loading = false;
@@ -6382,6 +6424,234 @@ impl GithubPrDetailsPage {
         input.focus(window, cx);
       });
     });
+  }
+
+  fn suggested_change_default_commit_title() -> &'static str {
+    "Apply suggestion from code review"
+  }
+
+  fn suggested_change_commit_available(&self) -> bool {
+    self.selected_commit_sha.is_none()
+      && self
+        .pull_request
+        .as_ref()
+        .is_some_and(|pr| matches!(pr.state, GithubPullRequestState::Open))
+  }
+
+  fn normalized_suggested_change_line(line: &str) -> &str {
+    line.strip_suffix('\r').unwrap_or(line)
+  }
+
+  fn suggested_change_original_lines_match_current_head(
+    file_contents: &HashMap<String, GithubPrFileContents>,
+    path: &str,
+    original_start_line: Option<usize>,
+    original_lines: &[String],
+  ) -> Option<bool> {
+    let original_start_line = original_start_line?;
+    let contents = file_contents.get(path)?;
+    let head = contents.head.as_ref()?;
+    let normalized_head = head.replace("\r\n", "\n");
+    let mut lines: Vec<&str> = normalized_head.split('\n').collect();
+    if normalized_head.ends_with('\n') {
+      lines.pop();
+    }
+    let start_index = original_start_line.checked_sub(1)?;
+    let actual = lines.get(start_index..start_index + original_lines.len())?;
+
+    Some(
+      actual
+        .iter()
+        .map(|line| Self::normalized_suggested_change_line(line))
+        .eq(
+          original_lines
+            .iter()
+            .map(|line| Self::normalized_suggested_change_line(line.as_str())),
+        ),
+    )
+  }
+
+  fn review_comment_is_outdated_for_ui(&self, comment_id: u64, is_outdated: bool) -> bool {
+    if is_outdated
+      || self
+        .stale_suggested_change_comment_ids
+        .contains(&comment_id)
+    {
+      return true;
+    }
+
+    build_suggestion_context(&self.review_comments, comment_id)
+      .and_then(|context| {
+        Self::suggested_change_original_lines_match_current_head(
+          &self.file_contents,
+          context.path.as_ref(),
+          context.original_start_line,
+          &context.original_lines,
+        )
+      })
+      .is_some_and(|matches| !matches)
+  }
+
+  fn suggested_change_target_matches_context(
+    target: &SuggestedChangeCommitTarget,
+    comment_id: u64,
+    context: &SuggestionActionContext,
+  ) -> bool {
+    target.comment_id == comment_id
+      && target.path == context.path
+      && Some(target.original_start_line) == context.original_start_line
+      && target.original_lines == context.original_lines
+      && target.suggested_lines == context.suggested_lines
+  }
+
+  fn open_suggested_change_commit(
+    &mut self,
+    target: SuggestedChangeCommitTarget,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.suggested_change_commit_target = Some(target);
+    self.suggested_change_include_co_author = true;
+    self.suggested_change_commit_error = None;
+    self
+      .suggested_change_commit_title_input
+      .update(cx, |input, cx| {
+        input.set_value(Self::suggested_change_default_commit_title(), window, cx);
+      });
+    self
+      .suggested_change_commit_message_input
+      .update(cx, |input, cx| input.set_value("", window, cx));
+
+    let title_input = self.suggested_change_commit_title_input.clone();
+    window.on_next_frame(move |window, cx| {
+      title_input.update(cx, |input, cx| input.focus(window, cx));
+    });
+    cx.notify();
+  }
+
+  fn close_suggested_change_commit(&mut self, cx: &mut Context<Self>) {
+    if self.suggested_change_commit_loading {
+      return;
+    }
+    self.suggested_change_commit_target = None;
+    self.suggested_change_commit_error = None;
+    cx.notify();
+  }
+
+  fn submit_suggested_change_commit(&mut self, cx: &mut Context<Self>) {
+    if self.suggested_change_commit_loading {
+      return;
+    }
+
+    let Some(target) = self.suggested_change_commit_target.clone() else {
+      self.suggested_change_commit_error = Some("No suggested change selected.".into());
+      cx.notify();
+      return;
+    };
+
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      self.suggested_change_commit_error = Some("No pull request selected.".into());
+      cx.notify();
+      return;
+    };
+
+    if !matches!(pull_request.state, GithubPullRequestState::Open) {
+      self.suggested_change_commit_error =
+        Some("Suggested changes can only be committed on open pull requests.".into());
+      cx.notify();
+      return;
+    }
+
+    if self.selected_commit_sha.is_some() {
+      self.suggested_change_commit_error =
+        Some("Switch back to the latest changes before committing a suggestion.".into());
+      cx.notify();
+      return;
+    }
+
+    let commit_title = self
+      .suggested_change_commit_title_input
+      .read(cx)
+      .value()
+      .trim()
+      .to_string();
+    if commit_title.is_empty() {
+      self.suggested_change_commit_error = Some("Commit title is required.".into());
+      cx.notify();
+      return;
+    }
+
+    let commit_message = self
+      .suggested_change_commit_message_input
+      .read(cx)
+      .value()
+      .to_string();
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let expected_head_sha = pull_request.head_sha.clone();
+    let include_co_author = self.suggested_change_include_co_author;
+    let comment_id = target.comment_id;
+    let api = self.api.clone();
+
+    self.suggested_change_commit_loading = true;
+    self.suggested_change_commit_error = None;
+    cx.notify();
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        api.apply_pull_request_suggested_change(
+          &owner,
+          &repo,
+          number,
+          target.comment_id,
+          &commit_title,
+          Some(commit_message.as_str()),
+          &expected_head_sha,
+          target.path.as_ref(),
+          target.original_start_line,
+          &target.original_lines,
+          &target.suggested_lines,
+          include_co_author,
+          Some(target.author_login.as_ref()),
+        )
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.suggested_change_commit_loading = false;
+        this.suggested_change_commit_task = None;
+        match result {
+          Ok(_) => {
+            this.suggested_change_commit_target = None;
+            this.suggested_change_commit_error = None;
+            this.add_pr_breadcrumb("Commit suggested change succeeded", Map::new());
+            this.reload_current_pull_request(cx);
+            this.refresh_pull_request_conversation_for_current_pull_request(false, cx);
+            if AuthStateStore::has_github_access(cx) {
+              GithubPageHandle::refresh(cx);
+            }
+            cx.refresh_windows();
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            if error_message.contains("Suggested change no longer matches the file") {
+              this.stale_suggested_change_comment_ids.insert(comment_id);
+            }
+            this.suggested_change_commit_error = Some(error_message.clone().into());
+            this.add_pr_breadcrumb("Commit suggested change failed", Map::new());
+            this.record_pr_error(
+              "github.pr.suggested_change.commit",
+              error_message.as_str(),
+              Map::new(),
+            );
+          }
+        }
+        cx.notify();
+      });
+    });
+
+    self.suggested_change_commit_task = Some(task);
   }
 
   fn submit_pull_request_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -10784,6 +11054,200 @@ impl GithubPrDetailsPage {
       .into_any_element()
   }
 
+  fn render_outdated_review_comment_tag(&self, theme: &gpui_component::Theme) -> AnyElement {
+    StatusTag::new(theme.status_yellow())
+      .outline()
+      .child("Outdated")
+      .into_any_element()
+  }
+
+  fn suggested_change_commit_action_renderer(
+    &self,
+    comment_id: u64,
+    author_login: Arc<str>,
+    is_outdated: bool,
+    cx: &mut Context<Self>,
+  ) -> Arc<dyn Fn(SuggestionActionContext, &App) -> AnyElement + Send + Sync> {
+    let page = cx.entity().clone();
+    let can_commit = self.suggested_change_commit_available();
+    let current_target = self.suggested_change_commit_target.clone();
+    let title_input = self.suggested_change_commit_title_input.clone();
+    let message_input = self.suggested_change_commit_message_input.clone();
+    let include_co_author = self.suggested_change_include_co_author;
+    let loading = self.suggested_change_commit_loading;
+    let error = self.suggested_change_commit_error.clone();
+    let file_contents = self.file_contents.clone();
+    let locally_stale = self
+      .stale_suggested_change_comment_ids
+      .contains(&comment_id);
+
+    Arc::new(move |context: SuggestionActionContext, cx: &App| {
+      let theme = cx.theme().clone();
+      let is_open = current_target.as_ref().is_some_and(|target| {
+        Self::suggested_change_target_matches_context(target, comment_id, &context)
+      });
+      let has_line_anchor = context.original_start_line.is_some();
+      let lines_match_current_head = Self::suggested_change_original_lines_match_current_head(
+        &file_contents,
+        context.path.as_ref(),
+        context.original_start_line,
+        &context.original_lines,
+      )
+      .unwrap_or(true);
+      let suggestion_is_outdated = is_outdated || locally_stale || !lines_match_current_head;
+      let can_submit = !loading
+        && has_line_anchor
+        && !suggestion_is_outdated
+        && github_shared::normalize_non_empty_text(title_input.read(cx).value().as_str()).is_some();
+      let disabled_reason = if suggestion_is_outdated {
+        Some("Outdated suggestions cannot be applied.")
+      } else if can_commit {
+        None
+      } else {
+        Some("Switch back to the latest open pull request changes before committing a suggestion.")
+      };
+
+      div()
+        .relative()
+        .child({
+          let button = Button::new(format!(
+            "pr-commit-suggestion-{comment_id}-{}",
+            context.original_start_line.unwrap_or_default()
+          ))
+          .xsmall()
+          .compact()
+          .label("Commit suggestion")
+          .disabled(!can_commit || !has_line_anchor || suggestion_is_outdated || loading)
+          .on_click({
+            let page = page.clone();
+            let author_login = author_login.clone();
+            let context = context.clone();
+            move |_, window, cx| {
+              if is_open {
+                page.update(cx, |this, cx| {
+                  this.close_suggested_change_commit(cx);
+                });
+                return;
+              }
+
+              let Some(original_start_line) = context.original_start_line else {
+                return;
+              };
+              let target = SuggestedChangeCommitTarget {
+                comment_id,
+                author_login: author_login.clone(),
+                path: context.path.clone(),
+                original_start_line,
+                original_lines: context.original_lines.clone(),
+                suggested_lines: context.suggested_lines.clone(),
+              };
+              page.update(cx, |this, cx| {
+                this.open_suggested_change_commit(target, window, cx);
+              });
+            }
+          });
+
+          if let Some(disabled_reason) = disabled_reason {
+            button.tooltip(disabled_reason)
+          } else {
+            button
+          }
+        })
+        .when(is_open, |this| {
+          this.child(deferred(
+            v_flex()
+              .id(format!("pr-commit-suggestion-popover-{comment_id}"))
+              .absolute()
+              .top_full()
+              .right_0()
+              .mt_1()
+              .w(px(360.0))
+              .p_3()
+              .gap_3()
+              .border_1()
+              .border_color(theme.border)
+              .rounded_md()
+              .occlude()
+              .bg(theme.popover)
+              .text_color(theme.popover_foreground)
+              .shadow_lg()
+              .child(
+                div()
+                  .text_sm()
+                  .font_medium()
+                  .text_color(theme.foreground)
+                  .child("Commit suggested change"),
+              )
+              .child(div().w_full().child(Input::new(&title_input).w_full()))
+              .child(
+                div()
+                  .w_full()
+                  .child(Input::new(&message_input).w_full().h(px(86.0))),
+              )
+              .child(
+                Switch::new(format!("pr-commit-suggestion-coauthor-{comment_id}"))
+                  .small()
+                  .checked(include_co_author)
+                  .label(format!("Co-authored-by @{}", author_login))
+                  .disabled(loading)
+                  .on_click({
+                    let page = page.clone();
+                    move |checked, _, cx| {
+                      page.update(cx, |this, cx| {
+                        this.suggested_change_include_co_author = *checked;
+                        cx.notify();
+                      });
+                    }
+                  }),
+              )
+              .when_some(error.clone(), |this, error| {
+                this.child(div().text_xs().text_color(theme.status_red()).child(error))
+              })
+              .child(
+                h_flex()
+                  .items_center()
+                  .justify_end()
+                  .gap_2()
+                  .child(
+                    Button::new(format!("pr-commit-suggestion-cancel-{comment_id}"))
+                      .ghost()
+                      .xsmall()
+                      .compact()
+                      .label("Cancel")
+                      .disabled(loading)
+                      .on_click({
+                        let page = page.clone();
+                        move |_, _, cx| {
+                          page.update(cx, |this, cx| {
+                            this.close_suggested_change_commit(cx);
+                          });
+                        }
+                      }),
+                  )
+                  .child(
+                    Button::new(format!("pr-commit-suggestion-submit-{comment_id}"))
+                      .primary()
+                      .xsmall()
+                      .compact()
+                      .label("Commit")
+                      .loading(loading)
+                      .disabled(!can_submit)
+                      .on_click({
+                        let page = page.clone();
+                        move |_, _, cx| {
+                          page.update(cx, |this, cx| {
+                            this.submit_suggested_change_commit(cx);
+                          });
+                        }
+                      }),
+                  ),
+              ),
+          ))
+        })
+        .into_any_element()
+    })
+  }
+
   fn render_overview_conversation_item(
     &self,
     item: &GithubPrOverviewConversationItem,
@@ -10833,7 +11297,15 @@ impl GithubPrDetailsPage {
           .and_then(suggestion_context_from_review_comment_preview)
       })
     {
-      markdown_options = markdown_options.with_suggestion_context(ctx);
+      let action = self.suggested_change_commit_action_renderer(
+        item.id,
+        Arc::from(item.author_login.as_str()),
+        item.is_outdated,
+        cx,
+      );
+      markdown_options = markdown_options
+        .with_suggestion_context(ctx)
+        .with_suggestion_action(action);
     }
 
     // Determine root comment target and editability
@@ -10855,6 +11327,8 @@ impl GithubPrDetailsPage {
     let root_is_editing = overview_root_is_editing(editing_target, root_target);
     let root_is_last_review_message =
       allows_overview_review_reply_action(item.kind, &item.thread_comment_ids, item.id);
+    let root_is_outdated = item.kind == GithubPrOverviewConversationItemKind::ReviewComment
+      && self.review_comment_is_outdated_for_ui(item.id, item.is_outdated);
 
     // Root edit button
     let root_edit_button = if root_is_editable && !overview_submission_in_flight {
@@ -11160,7 +11634,10 @@ impl GithubPrDetailsPage {
                           .text_xs()
                           .text_color(theme.muted_foreground)
                           .child(timestamp),
-                      ),
+                      )
+                      .when(root_is_outdated, |this| {
+                        this.child(self.render_outdated_review_comment_tag(&theme))
+                      }),
                   )
                   .child(
                     h_flex()
@@ -11217,7 +11694,15 @@ impl GithubPrDetailsPage {
                   .with_scope_id(reply_scope_id)
                   .with_hardbreaks();
                 if let Some(ctx) = build_suggestion_context(&self.review_comments, reply.id) {
-                  opts = opts.with_suggestion_context(ctx);
+                  let action = self.suggested_change_commit_action_renderer(
+                    reply.id,
+                    Arc::from(reply.author_login.as_str()),
+                    reply.is_outdated,
+                    cx,
+                  );
+                  opts = opts
+                    .with_suggestion_context(ctx)
+                    .with_suggestion_action(action);
                 }
                 opts
               };
@@ -11229,6 +11714,8 @@ impl GithubPrDetailsPage {
               let reply_is_editable = editable_review_comment_ids.contains(&reply.id);
               let reply_is_last_message =
                 allows_overview_review_reply_action(item.kind, &thread_comment_ids, reply.id);
+              let reply_is_outdated =
+                self.review_comment_is_outdated_for_ui(reply.id, reply.is_outdated);
 
               // Reply action buttons
               let reply_edit_button = if reply_is_editable && !overview_submission_in_flight {
@@ -11490,7 +11977,10 @@ impl GithubPrDetailsPage {
                             .text_xs()
                             .text_color(theme.muted_foreground)
                             .child(reply_timestamp),
-                        ),
+                        )
+                        .when(reply_is_outdated, |this| {
+                          this.child(self.render_outdated_review_comment_tag(&theme))
+                        }),
                     )
                     .child(
                       h_flex()
@@ -16728,6 +17218,7 @@ mod tests {
     GithubPullRequestReviewComment {
       node_id: format!("PRRC_{id}"),
       reactions: Vec::new(),
+      is_outdated: false,
       id,
       pull_request_review_id: Some(12),
       diff_hunk: "@@ -1 +1 @@".to_string(),
@@ -16841,6 +17332,50 @@ mod tests {
     assert_eq!(ctx.original_start_line, Some(12));
     assert_eq!(ctx.suggested_start_line, Some(12));
     assert_eq!(ctx.original_lines, vec!["let current = true;".to_string()]);
+  }
+
+  #[test]
+  fn suggested_change_original_lines_detects_stale_head_content() {
+    let file_contents = HashMap::from([(
+      "src/main.rs".to_string(),
+      GithubPrFileContents {
+        base: None,
+        head: Some("fn main() {\n  println!(\"new\");\n}\n".to_string()),
+      },
+    )]);
+    let original_lines = vec!["  println!(\"old\");".to_string()];
+
+    assert_eq!(
+      GithubPrDetailsPage::suggested_change_original_lines_match_current_head(
+        &file_contents,
+        "src/main.rs",
+        Some(2),
+        &original_lines,
+      ),
+      Some(false)
+    );
+  }
+
+  #[test]
+  fn suggested_change_original_lines_match_current_head_content() {
+    let file_contents = HashMap::from([(
+      "src/main.rs".to_string(),
+      GithubPrFileContents {
+        base: None,
+        head: Some("fn main() {\r\n  println!(\"old\");\r\n}\r\n".to_string()),
+      },
+    )]);
+    let original_lines = vec!["  println!(\"old\");".to_string()];
+
+    assert_eq!(
+      GithubPrDetailsPage::suggested_change_original_lines_match_current_head(
+        &file_contents,
+        "src/main.rs",
+        Some(2),
+        &original_lines,
+      ),
+      Some(true)
+    );
   }
 
   #[test]
