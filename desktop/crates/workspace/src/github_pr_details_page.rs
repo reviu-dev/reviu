@@ -151,6 +151,42 @@ fn pr_tab_url_segment(tab_ix: usize) -> &'static str {
   }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GithubPrRouteTarget {
+  owner: String,
+  repo: String,
+  number: u64,
+  tab_ix: usize,
+}
+
+fn github_pr_route_target_from_pathname(pathname: &str) -> Option<GithubPrRouteTarget> {
+  let mut segments = pathname.trim_start_matches('/').split('/');
+  if segments.next()? != "github" {
+    return None;
+  }
+  let owner = segments.next()?.to_string();
+  let repo = segments.next()?.to_string();
+  if segments.next()? != "pull" {
+    return None;
+  }
+  let number = segments.next()?.parse().ok()?;
+  let tab_ix = match segments.next() {
+    Some("changes") => PR_TAB_CHANGES_IX,
+    Some(_) | None => PR_TAB_OVERVIEW_IX,
+  };
+
+  if segments.next().is_some() {
+    return None;
+  }
+
+  Some(GithubPrRouteTarget {
+    owner,
+    repo,
+    number,
+    tab_ix,
+  })
+}
+
 fn adjacent_pr_tab_ix(current: usize, direction: TabNavigationDirection) -> usize {
   const PR_TAB_COUNT: usize = 2;
 
@@ -3044,6 +3080,34 @@ impl GithubPrDetailsPageHandle {
 }
 
 impl GithubPrDetailsPage {
+  fn sync_route(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let pathname = NavigationHistory::current_pathname(cx);
+    let Some(route_target) = github_pr_route_target_from_pathname(&pathname) else {
+      return;
+    };
+
+    let same_pr = self.current_pr_context.as_ref().is_some_and(|context| {
+      context.owner.eq_ignore_ascii_case(&route_target.owner)
+        && context.repo.eq_ignore_ascii_case(&route_target.repo)
+        && context.number == route_target.number
+    });
+
+    if !same_pr {
+      self.load_pull_request(
+        route_target.owner,
+        route_target.repo,
+        route_target.number,
+        GithubPrOpenTarget::new(route_target.tab_ix == PR_TAB_CHANGES_IX, None),
+        cx,
+      );
+      return;
+    }
+
+    if self.active_tab_ix != route_target.tab_ix {
+      self.set_active_tab_inner(route_target.tab_ix, window, cx, false);
+    }
+  }
+
   fn build_detached_diff_editor(
     path: impl Into<PathBuf>,
     cx: &mut Context<Self>,
@@ -7498,6 +7562,16 @@ impl GithubPrDetailsPage {
   }
 
   fn set_active_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+    self.set_active_tab_inner(ix, window, cx, true);
+  }
+
+  fn set_active_tab_inner(
+    &mut self,
+    ix: usize,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+    sync_url: bool,
+  ) {
     self.active_tab_ix = ix;
     self.sync_sentry_pr_context();
     let mut data = Map::new();
@@ -7505,8 +7579,7 @@ impl GithubPrDetailsPage {
     self.add_pr_breadcrumb("Changed PR tab", data);
     cx.notify();
 
-    // Sync URL with active tab
-    if let Some(ctx) = &self.current_pr_context {
+    if sync_url && let Some(ctx) = &self.current_pr_context {
       let tab_segment = pr_tab_url_segment(ix);
       let path = if tab_segment.is_empty() {
         crate::navigation::build_pr_path(&ctx.owner, &ctx.repo, ctx.number)
@@ -13942,6 +14015,7 @@ impl GithubPrDetailsPage {
 impl Render for GithubPrDetailsPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
+    self.sync_route(window, cx);
     self.maybe_refresh_resolved_local_repo_match(window, cx);
 
     // Poll syntax highlight cache — if background highlights completed, schedule re-render
@@ -17818,5 +17892,39 @@ mod tests {
   fn github_pr_open_target_new_routes_review_comment_links_to_changes_tab() {
     let target = GithubPrOpenTarget::new(false, Some(42));
     assert_eq!(target.tab_ix(), 1);
+  }
+
+  #[test]
+  fn github_pr_route_target_parses_overview_route() {
+    assert_eq!(
+      github_pr_route_target_from_pathname("/github/acme/widget/pull/42"),
+      Some(GithubPrRouteTarget {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+        number: 42,
+        tab_ix: PR_TAB_OVERVIEW_IX,
+      })
+    );
+  }
+
+  #[test]
+  fn github_pr_route_target_parses_changes_route() {
+    assert_eq!(
+      github_pr_route_target_from_pathname("/github/acme/widget/pull/42/changes"),
+      Some(GithubPrRouteTarget {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+        number: 42,
+        tab_ix: PR_TAB_CHANGES_IX,
+      })
+    );
+  }
+
+  #[test]
+  fn github_pr_route_target_ignores_non_pr_routes() {
+    assert_eq!(
+      github_pr_route_target_from_pathname("/github/acme/widget/issues/42"),
+      None
+    );
   }
 }
