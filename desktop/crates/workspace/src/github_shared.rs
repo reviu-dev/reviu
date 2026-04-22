@@ -160,6 +160,53 @@ pub(crate) fn short_sha(sha: &str) -> String {
   sha.chars().take(7).collect()
 }
 
+/// Returns the lines on the RIGHT (new) side of a GitHub review comment's
+/// `diff_hunk` that span the comment's anchor range (`start_line..=line`).
+/// Used to build the "before" side of a `Suggested change` block.
+pub(crate) fn extract_original_lines_from_diff_hunk(
+  diff_hunk: &str,
+  start_line: Option<i64>,
+  line: i64,
+) -> Vec<String> {
+  let target_start = start_line.unwrap_or(line);
+  let target_end = line;
+  if target_start <= 0 || target_end < target_start {
+    return Vec::new();
+  }
+
+  let mut iter = diff_hunk.lines();
+  let header = iter.next().unwrap_or("");
+  let Some(new_start) = parse_diff_hunk_new_start(header) else {
+    return Vec::new();
+  };
+
+  let mut output = Vec::new();
+  let mut current = new_start as i64;
+  for raw in iter {
+    if raw.starts_with('-') {
+      continue;
+    }
+    let content = raw.strip_prefix(['+', ' ']).unwrap_or(raw);
+    if current >= target_start && current <= target_end {
+      output.push(content.to_string());
+    }
+    current += 1;
+    if current > target_end {
+      break;
+    }
+  }
+  output
+}
+
+fn parse_diff_hunk_new_start(header: &str) -> Option<u32> {
+  let plus = header.find('+')?;
+  let after_plus = &header[plus + 1..];
+  let end = after_plus
+    .find(|c: char| c == ' ' || c == ',')
+    .unwrap_or(after_plus.len());
+  after_plus[..end].parse::<u32>().ok()
+}
+
 pub(crate) fn commit_subject(message: &str) -> String {
   message
     .lines()
@@ -855,12 +902,13 @@ pub(crate) fn next_trimmed_text_update(raw_value: &str, initial_value: &str) -> 
 mod tests {
   use super::{
     PULL_REQUEST_ROW_HEIGHT_PX, PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX, commit_authors_label,
-    github_label_color, is_unauthorized_error_message, issue_url, line_snippets_from_content,
-    logins_match_case_insensitive, next_trimmed_text_update, normalize_non_empty_text,
-    parse_language_color, pr_url, pull_request_activity_text_at, pull_request_author_display_name,
-    pull_request_author_is_bot, pull_request_comments_count_text, pull_request_list_row_body,
-    pull_request_row_height_px, pull_request_status_color, pull_request_status_icon_name,
-    pull_request_status_label, pull_request_updated_text_at, repo_label, short_sha,
+    extract_original_lines_from_diff_hunk, github_label_color, is_unauthorized_error_message,
+    issue_url, line_snippets_from_content, logins_match_case_insensitive, next_trimmed_text_update,
+    normalize_non_empty_text, parse_language_color, pr_url, pull_request_activity_text_at,
+    pull_request_author_display_name, pull_request_author_is_bot, pull_request_comments_count_text,
+    pull_request_list_row_body, pull_request_row_height_px, pull_request_status_color,
+    pull_request_status_icon_name, pull_request_status_label, pull_request_updated_text_at,
+    repo_label, short_sha,
   };
   use crate::api::{
     GithubCommitAuthorIdentity, GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel,
@@ -1297,5 +1345,44 @@ mod tests {
       .height;
 
     assert!(labeled_height > unlabeled_height);
+  }
+
+  #[test]
+  fn extract_original_lines_from_diff_hunk_single_line() {
+    let hunk = "@@ -18,7 +18,7 @@\n context0\n context1\n context2\n-removed\n+changed line\n context3\n context4";
+    assert_eq!(
+      extract_original_lines_from_diff_hunk(hunk, None, 21),
+      vec!["changed line".to_string()]
+    );
+  }
+
+  #[test]
+  fn extract_original_lines_from_diff_hunk_multi_line_range() {
+    let hunk = "@@ -10,6 +10,6 @@\n keep\n line-a\n line-b\n line-c\n keep\n keep";
+    assert_eq!(
+      extract_original_lines_from_diff_hunk(hunk, Some(11), 13),
+      vec![
+        "line-a".to_string(),
+        "line-b".to_string(),
+        "line-c".to_string()
+      ]
+    );
+  }
+
+  #[test]
+  fn extract_original_lines_from_diff_hunk_returns_empty_on_bad_header() {
+    assert_eq!(
+      extract_original_lines_from_diff_hunk("no header here", None, 5),
+      Vec::<String>::new()
+    );
+  }
+
+  #[test]
+  fn extract_original_lines_from_diff_hunk_skips_old_side() {
+    let hunk = "@@ -5,4 +5,3 @@\n kept1\n-dropped\n kept2\n kept3";
+    assert_eq!(
+      extract_original_lines_from_diff_hunk(hunk, None, 6),
+      vec!["kept2".to_string()]
+    );
   }
 }

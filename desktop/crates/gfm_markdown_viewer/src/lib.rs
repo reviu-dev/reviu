@@ -25,5 +25,5 @@ pub use parse::{
 pub use syntax_cache::SyntaxHighlightCache;
 pub use types::{
   GithubBlobLineReference, GithubCodeReferencePreview, GithubIssueReferenceContext, LinkAction,
-  ParsedMarkdown,
+  ParsedMarkdown, SuggestionContext,
 };

@@ -9,7 +9,7 @@ use gpui::{
   MenuItem, Render, Subscription, Task, Window, WindowButton, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, StyledExt, Theme, ThemeMode, h_flex,
+  ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, Theme, ThemeMode, h_flex,
   kbd::Kbd,
   notification::Notification,
   spinner::Spinner,
