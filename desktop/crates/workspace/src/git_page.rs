@@ -7548,7 +7548,6 @@ impl GitPage {
             .with_variant(ButtonVariant::Secondary)
             .xsmall()
             .p_2()
-            .tooltip("Open the pull request for this branch")
             .on_click(move |_, window, cx| {
               if should_open_externally(window) {
                 cx.open_url(&pr_url);
