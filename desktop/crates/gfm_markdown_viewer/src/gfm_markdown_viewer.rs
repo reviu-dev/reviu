@@ -212,9 +212,10 @@ fn short_github_reference(reference: &str) -> String {
 
 fn github_diff_line_background(kind: GithubDiffLineKind, cx: &App) -> gpui::Hsla {
   let theme = cx.theme();
+  let ui_theme = ui::Theme::new(theme.is_dark());
   match kind {
-    GithubDiffLineKind::Removed => theme.red_light.opacity(0.18),
-    GithubDiffLineKind::Added => theme.green_light.opacity(0.22),
+    GithubDiffLineKind::Removed => ui_theme.diff_removed_background(),
+    GithubDiffLineKind::Added => ui_theme.diff_added_background(),
     GithubDiffLineKind::Context => theme.background,
   }
 }
@@ -673,7 +674,7 @@ pub fn render_github_diff_code_reference_preview_card(
     .overflow_hidden()
     .child(
       div()
-        .bg(theme.accent.opacity(0.3))
+        .bg(theme.sidebar)
         .border_b_1()
         .border_color(theme.border)
         .px(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX))
@@ -2304,7 +2305,7 @@ fn render_suggestion_block(
     .py_1p5()
     .border_b_1()
     .border_color(theme.border)
-    .bg(theme.muted)
+    .bg(theme.sidebar)
     .child(
       div()
         .text_xs()
