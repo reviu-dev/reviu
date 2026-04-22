@@ -4502,7 +4502,9 @@ impl GitPage {
         GithubProfilePageHandle::show(login.into(), cx);
         Ok(())
       }
-      CommandPaletteAction::SwitchToPrBranch | CommandPaletteAction::ToggleUnchangedFiles => {
+      CommandPaletteAction::SwitchToPrBranch
+      | CommandPaletteAction::CopyPrBranch
+      | CommandPaletteAction::ToggleUnchangedFiles => {
         Err(anyhow::anyhow!("Command not available."))
       }
       CommandPaletteAction::CreatePullRequest => {

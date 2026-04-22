@@ -25,10 +25,10 @@ use git::{
   search_repo_head_contents, switch_to_branch_name, sync_current_branch_to_head,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Hsla, Image,
-  InteractiveElement, ListAlignment, ListState as GpuiListState, MouseButton, ObjectFit,
-  ParentElement, PathBuilder, Render, RenderImage, SharedString, Styled, Task, Window, canvas, div,
-  img, list, point, prelude::*, px, white,
+  AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Corner, Entity, FocusHandle, Focusable,
+  Hsla, Image, InteractiveElement, ListAlignment, ListState as GpuiListState, MouseButton,
+  ObjectFit, ParentElement, PathBuilder, Render, RenderImage, SharedString, Styled, Task, Window,
+  canvas, div, img, list, point, prelude::*, px, white,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable as _, StyledExt,
@@ -4330,6 +4330,9 @@ impl GithubPrDetailsPage {
       commands.push(CommandPaletteCommand::toggle_unchanged_files(
         self.show_local_project_files,
       ));
+    }
+    if self.pull_request.is_some() {
+      commands.push(CommandPaletteCommand::copy_pr_branch());
     }
     commands.extend(CommandPaletteCommand::default_global_commands(
       CommandPalettePage::GithubPrDetails,
@@ -13645,6 +13648,18 @@ impl GithubPrDetailsPage {
         });
         Ok(())
       }
+      CommandPaletteAction::CopyPrBranch => {
+        let Some(pull_request) = self.pull_request.as_ref() else {
+          return Err("No pull request loaded.".into());
+        };
+        let branch_name = pull_request.head_ref_name.to_string();
+        cx.write_to_clipboard(ClipboardItem::new_string(branch_name.clone()));
+        window.push_notification(
+          Notification::success(format!("Copied branch name: {branch_name}")),
+          cx,
+        );
+        Ok(())
+      }
       CommandPaletteAction::OpenGitPage => {
         NavigationHistory::navigate("/git", cx);
         Ok(())
@@ -15160,6 +15175,56 @@ mod tests {
 
     let action = page.read_with(cx, |this, _cx| this.pull_request_status_action());
     assert_eq!(action, Some(GithubPrStatusAction::ConvertToDraft));
+  }
+
+  #[gpui::test]
+  fn copy_pr_branch_command_writes_head_ref_to_clipboard(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let mut mounted_page = None;
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let page = cx.new(|cx| GithubPrDetailsPage::new(window, cx));
+      mounted_page = Some(page.clone());
+      gpui_component::Root::new(page, window, cx)
+    });
+    let page = mounted_page.expect("pr details page");
+
+    page.update_in(cx, |this, window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      let result =
+        this.handle_command_palette_action(ui::CommandPaletteAction::CopyPrBranch, window, cx);
+      assert!(result.is_ok());
+      let clipboard = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .expect("clipboard text");
+      assert_eq!(clipboard, "feature");
+    });
+  }
+
+  #[gpui::test]
+  fn copy_pr_branch_command_is_included_when_pull_request_is_loaded(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    let no_pr_commands = page.read_with(cx, |this, cx| this.command_palette_commands(cx));
+    assert!(
+      !no_pr_commands
+        .iter()
+        .any(|command| command.id == ui::CommandPaletteCommandId::CopyPrBranch),
+      "copy PR branch should be hidden without a loaded pull request"
+    );
+
+    page.update_in(cx, |this, _window, _cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+    });
+
+    let with_pr_commands = page.read_with(cx, |this, cx| this.command_palette_commands(cx));
+    assert!(
+      with_pr_commands
+        .iter()
+        .any(|command| command.id == ui::CommandPaletteCommandId::CopyPrBranch),
+      "copy PR branch should be present once a pull request is loaded"
+    );
   }
 
   #[gpui::test]
