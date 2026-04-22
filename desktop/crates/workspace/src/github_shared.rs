@@ -160,51 +160,148 @@ pub(crate) fn short_sha(sha: &str) -> String {
   sha.chars().take(7).collect()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DiffHunkLineKind {
+  Context,
+  Added,
+  Removed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DiffHunkLine {
+  pub old_line: Option<usize>,
+  pub new_line: Option<usize>,
+  pub content: String,
+  pub kind: DiffHunkLineKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DiffHunkLineRange {
+  pub start_line: usize,
+  pub lines: Vec<String>,
+}
+
 /// Returns the lines on the RIGHT (new) side of a GitHub review comment's
 /// `diff_hunk` that span the comment's anchor range (`start_line..=line`).
 /// Used to build the "before" side of a `Suggested change` block.
+#[cfg(test)]
 pub(crate) fn extract_original_lines_from_diff_hunk(
   diff_hunk: &str,
   start_line: Option<i64>,
   line: i64,
 ) -> Vec<String> {
+  extract_original_line_range_from_diff_hunk(diff_hunk, start_line, line)
+    .map(|range| range.lines)
+    .unwrap_or_default()
+}
+
+pub(crate) fn extract_original_line_range_from_diff_hunk(
+  diff_hunk: &str,
+  start_line: Option<i64>,
+  line: i64,
+) -> Option<DiffHunkLineRange> {
   let target_start = start_line.unwrap_or(line);
   let target_end = line;
   if target_start <= 0 || target_end < target_start {
-    return Vec::new();
+    return None;
   }
 
-  let mut iter = diff_hunk.lines();
-  let header = iter.next().unwrap_or("");
-  let Some(new_start) = parse_diff_hunk_new_start(header) else {
-    return Vec::new();
-  };
+  let lines = parse_diff_hunk_lines(diff_hunk);
+  extract_diff_hunk_line_range_by_side(&lines, target_start, target_end, true)
+    .or_else(|| extract_diff_hunk_line_range_by_side(&lines, target_start, target_end, false))
+}
 
+fn extract_diff_hunk_line_range_by_side(
+  lines: &[DiffHunkLine],
+  target_start: i64,
+  target_end: i64,
+  use_new_side: bool,
+) -> Option<DiffHunkLineRange> {
   let mut output = Vec::new();
-  let mut current = new_start as i64;
-  for raw in iter {
-    if raw.starts_with('-') {
+  let mut first_line = None;
+  for line in lines {
+    let line_number = if use_new_side {
+      line.new_line
+    } else {
+      line.old_line
+    };
+    let Some(line_number) = line_number else {
       continue;
+    };
+    let line_number = line_number as i64;
+    if line_number >= target_start && line_number <= target_end {
+      first_line.get_or_insert(line_number as usize);
+      output.push(line.content.clone());
     }
-    let content = raw.strip_prefix(['+', ' ']).unwrap_or(raw);
-    if current >= target_start && current <= target_end {
-      output.push(content.to_string());
-    }
-    current += 1;
-    if current > target_end {
+    if line_number > target_end {
       break;
     }
   }
-  output
+
+  Some(DiffHunkLineRange {
+    start_line: first_line?,
+    lines: output,
+  })
 }
 
-fn parse_diff_hunk_new_start(header: &str) -> Option<u32> {
-  let plus = header.find('+')?;
-  let after_plus = &header[plus + 1..];
-  let end = after_plus
+pub(crate) fn parse_diff_hunk_lines(diff_hunk: &str) -> Vec<DiffHunkLine> {
+  let mut iter = diff_hunk.lines();
+  let header = iter.next().unwrap_or("");
+  let Some((mut old_line, mut new_line)) = parse_diff_hunk_starts(header) else {
+    return Vec::new();
+  };
+
+  let mut lines = Vec::new();
+  for raw in iter {
+    if raw.starts_with("\\ No newline") {
+      continue;
+    }
+
+    if let Some(content) = raw.strip_prefix('-') {
+      lines.push(DiffHunkLine {
+        old_line: Some(old_line),
+        new_line: None,
+        content: content.to_string(),
+        kind: DiffHunkLineKind::Removed,
+      });
+      old_line += 1;
+    } else if let Some(content) = raw.strip_prefix('+') {
+      lines.push(DiffHunkLine {
+        old_line: None,
+        new_line: Some(new_line),
+        content: content.to_string(),
+        kind: DiffHunkLineKind::Added,
+      });
+      new_line += 1;
+    } else {
+      let content = raw.strip_prefix(' ').unwrap_or(raw);
+      lines.push(DiffHunkLine {
+        old_line: Some(old_line),
+        new_line: Some(new_line),
+        content: content.to_string(),
+        kind: DiffHunkLineKind::Context,
+      });
+      old_line += 1;
+      new_line += 1;
+    }
+  }
+
+  lines
+}
+
+fn parse_diff_hunk_starts(header: &str) -> Option<(usize, usize)> {
+  let old_start = parse_diff_hunk_start(header, '-')?;
+  let new_start = parse_diff_hunk_start(header, '+')?;
+  Some((old_start, new_start))
+}
+
+fn parse_diff_hunk_start(header: &str, marker: char) -> Option<usize> {
+  let marker_ix = header.find(marker)?;
+  let after_marker = &header[marker_ix + marker.len_utf8()..];
+  let end = after_marker
     .find(|c: char| c == ' ' || c == ',')
-    .unwrap_or(after_plus.len());
-  after_plus[..end].parse::<u32>().ok()
+    .unwrap_or(after_marker.len());
+  after_marker[..end].parse::<usize>().ok()
 }
 
 pub(crate) fn commit_subject(message: &str) -> String {
@@ -901,14 +998,15 @@ pub(crate) fn next_trimmed_text_update(raw_value: &str, initial_value: &str) -> 
 #[cfg(test)]
 mod tests {
   use super::{
-    PULL_REQUEST_ROW_HEIGHT_PX, PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX, commit_authors_label,
+    DiffHunkLineKind, PULL_REQUEST_ROW_HEIGHT_PX, PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX,
+    commit_authors_label, extract_original_line_range_from_diff_hunk,
     extract_original_lines_from_diff_hunk, github_label_color, is_unauthorized_error_message,
     issue_url, line_snippets_from_content, logins_match_case_insensitive, next_trimmed_text_update,
-    normalize_non_empty_text, parse_language_color, pr_url, pull_request_activity_text_at,
-    pull_request_author_display_name, pull_request_author_is_bot, pull_request_comments_count_text,
-    pull_request_list_row_body, pull_request_row_height_px, pull_request_status_color,
-    pull_request_status_icon_name, pull_request_status_label, pull_request_updated_text_at,
-    repo_label, short_sha,
+    normalize_non_empty_text, parse_diff_hunk_lines, parse_language_color, pr_url,
+    pull_request_activity_text_at, pull_request_author_display_name, pull_request_author_is_bot,
+    pull_request_comments_count_text, pull_request_list_row_body, pull_request_row_height_px,
+    pull_request_status_color, pull_request_status_icon_name, pull_request_status_label,
+    pull_request_updated_text_at, repo_label, short_sha,
   };
   use crate::api::{
     GithubCommitAuthorIdentity, GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel,
@@ -1384,5 +1482,48 @@ mod tests {
       extract_original_lines_from_diff_hunk(hunk, None, 6),
       vec!["kept2".to_string()]
     );
+  }
+
+  #[test]
+  fn extract_original_line_range_from_diff_hunk_reports_start_line() {
+    let hunk = "@@ -10,6 +10,6 @@\n keep\n line-a\n line-b\n line-c\n keep\n keep";
+    let range = extract_original_line_range_from_diff_hunk(hunk, Some(11), 13).expect("line range");
+    assert_eq!(range.start_line, 11);
+    assert_eq!(
+      range.lines,
+      vec![
+        "line-a".to_string(),
+        "line-b".to_string(),
+        "line-c".to_string()
+      ]
+    );
+  }
+
+  #[test]
+  fn extract_original_line_range_from_diff_hunk_falls_back_to_old_side() {
+    let hunk = "@@ -12,2 +20,2 @@\n-old current\n+new current\n keep";
+    let range = extract_original_line_range_from_diff_hunk(hunk, None, 12).expect("line range");
+    assert_eq!(range.start_line, 12);
+    assert_eq!(range.lines, vec!["old current".to_string()]);
+  }
+
+  #[test]
+  fn parse_diff_hunk_lines_tracks_old_and_new_line_numbers() {
+    let hunk = "@@ -10,3 +10,4 @@\n context\n-removed\n+added\n+added 2\n context 2";
+    let lines = parse_diff_hunk_lines(hunk);
+
+    assert_eq!(lines.len(), 5);
+    assert_eq!(lines[0].kind, DiffHunkLineKind::Context);
+    assert_eq!(lines[0].old_line, Some(10));
+    assert_eq!(lines[0].new_line, Some(10));
+    assert_eq!(lines[1].kind, DiffHunkLineKind::Removed);
+    assert_eq!(lines[1].old_line, Some(11));
+    assert_eq!(lines[1].new_line, None);
+    assert_eq!(lines[2].kind, DiffHunkLineKind::Added);
+    assert_eq!(lines[2].old_line, None);
+    assert_eq!(lines[2].new_line, Some(11));
+    assert_eq!(lines[3].new_line, Some(12));
+    assert_eq!(lines[4].old_line, Some(12));
+    assert_eq!(lines[4].new_line, Some(13));
   }
 }

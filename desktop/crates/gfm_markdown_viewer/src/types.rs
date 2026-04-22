@@ -35,8 +35,25 @@ pub struct CodeBlock {
 /// on top, the suggestion content underneath).
 #[derive(Clone, Debug)]
 pub struct SuggestionContext {
+  pub original_start_line: Option<usize>,
+  pub suggested_start_line: Option<usize>,
   pub original_lines: Vec<String>,
   pub path: Arc<str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GithubDiffLineKind {
+  Context,
+  Added,
+  Removed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GithubDiffLine {
+  pub old_line: Option<usize>,
+  pub new_line: Option<usize>,
+  pub content: Arc<str>,
+  pub kind: GithubDiffLineKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

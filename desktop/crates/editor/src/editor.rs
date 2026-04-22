@@ -594,6 +594,7 @@ struct ReviewCommentMessageLayout {
   avatar_url: Option<Arc<str>>,
   line_label: Option<Arc<str>>,
   body: Arc<str>,
+  suggestion_context: Option<gfm_markdown_viewer::SuggestionContext>,
   created_at: Arc<str>,
 }
 
@@ -3016,6 +3017,7 @@ impl Editor {
           avatar_url: comment.avatar_url.clone(),
           line_label: comment.line_label.clone(),
           body: comment.body.clone(),
+          suggestion_context: comment.suggestion_context.clone(),
           created_at: comment.created_at.clone(),
         });
       }
@@ -3081,6 +3083,7 @@ impl Editor {
           avatar_url: comment.avatar_url.clone(),
           line_label: comment.line_label.clone(),
           body: comment.body.clone(),
+          suggestion_context: comment.suggestion_context.clone(),
           created_at: comment.created_at.clone(),
         }],
         collapsed: self.collapsed_review_comments.contains(&comment.id),
@@ -3474,6 +3477,9 @@ impl Editor {
             let mut options = self
               .review_comment_markdown_options(state, review_comment_markdown_scope_id(message.id));
             options.on_link = Some(link_handler.clone());
+            if let Some(ctx) = message.suggestion_context.clone() {
+              options = options.with_suggestion_context(ctx);
+            }
             render_parsed_markdown(&parsed, &options, cx).into_any_element()
           }
         } else {
@@ -3492,6 +3498,9 @@ impl Editor {
             let mut options = self
               .review_comment_markdown_options(state, review_comment_markdown_scope_id(message.id));
             options.on_link = Some(link_handler.clone());
+            if let Some(ctx) = message.suggestion_context.clone() {
+              options = options.with_suggestion_context(ctx);
+            }
             render_parsed_markdown(&parsed, &options, cx).into_any_element()
           } else {
             let segments = self.review_comment_body_segments(message.id, message.body.as_ref());
@@ -3515,6 +3524,9 @@ impl Editor {
                     review_comment_markdown_segment_scope_id(message.id, segment_index),
                   );
                   options.on_link = Some(link_handler.clone());
+                  if let Some(ctx) = message.suggestion_context.clone() {
+                    options = options.with_suggestion_context(ctx);
+                  }
                   rendered = rendered
                     .child(render_parsed_markdown(&parsed, &options, cx).into_any_element());
                   has_rendered_content = true;
@@ -4408,6 +4420,7 @@ impl Editor {
         avatar_url: None,
         line_label: None,
         body: Arc::from(""),
+        suggestion_context: None,
         created_at: Arc::from(""),
       });
       review_comment_body_heights_px.insert(
@@ -4425,6 +4438,7 @@ impl Editor {
         avatar_url: None,
         line_label: None,
         body: Arc::from(""),
+        suggestion_context: None,
         created_at: Arc::from(""),
       });
       review_comment_body_heights_px.insert(
@@ -8677,6 +8691,7 @@ pub mod tests {
           avatar_url: None,
           line_label: None,
           body: Arc::from("hello"),
+          suggestion_context: None,
           created_at: Arc::from("2026-02-17"),
         }],
         cx,
@@ -8805,6 +8820,7 @@ pub mod tests {
             avatar_url: None,
             line_label: None,
             body: Arc::from("thread one"),
+            suggestion_context: None,
             created_at: Arc::from("2026-02-18"),
           },
           ReviewComment {
@@ -8816,6 +8832,7 @@ pub mod tests {
             avatar_url: None,
             line_label: None,
             body: Arc::from("thread one reply"),
+            suggestion_context: None,
             created_at: Arc::from("2026-02-18"),
           },
           ReviewComment {
@@ -8827,6 +8844,7 @@ pub mod tests {
             avatar_url: None,
             line_label: None,
             body: Arc::from("thread two"),
+            suggestion_context: None,
             created_at: Arc::from("2026-02-18"),
           },
         ],
@@ -8849,6 +8867,7 @@ pub mod tests {
             avatar_url: None,
             line_label: None,
             body: Arc::from("thread one updated"),
+            suggestion_context: None,
             created_at: Arc::from("2026-02-18"),
           },
           ReviewComment {
@@ -8860,6 +8879,7 @@ pub mod tests {
             avatar_url: None,
             line_label: None,
             body: Arc::from("thread one reply"),
+            suggestion_context: None,
             created_at: Arc::from("2026-02-18"),
           },
           ReviewComment {
@@ -8871,6 +8891,7 @@ pub mod tests {
             avatar_url: None,
             line_label: None,
             body: Arc::from("thread two"),
+            suggestion_context: None,
             created_at: Arc::from("2026-02-18"),
           },
         ],
