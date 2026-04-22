@@ -82,6 +82,15 @@ mod macos {
     });
   }
 
+  pub fn remove_status_bar() {
+    STATUS_ITEM.with(|cell| {
+      if let Some(item) = cell.borrow_mut().take() {
+        let status_bar = NSStatusBar::systemStatusBar();
+        status_bar.removeStatusItem(&item);
+      }
+    });
+  }
+
   pub fn update_status_bar(count: usize, notifications: &[GithubNotification]) {
     let mtm = unsafe { MainThreadMarker::new_unchecked() };
 
@@ -203,6 +212,23 @@ pub fn init_status_bar(icon_png: &[u8]) {
 
 #[cfg(not(target_os = "macos"))]
 pub fn init_status_bar(_icon_png: &[u8]) {}
+
+#[cfg(target_os = "macos")]
+pub fn remove_status_bar() {
+  macos::remove_status_bar();
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn remove_status_bar() {}
+
+pub fn set_status_bar_enabled(enabled: bool, icon_png: &[u8]) {
+  println!("Setting status bar enabled: {enabled}");
+  if enabled {
+    init_status_bar(icon_png);
+  } else {
+    remove_status_bar();
+  }
+}
 
 #[cfg(target_os = "macos")]
 pub fn update_status_bar(count: usize, notifications: &[GithubNotification]) {

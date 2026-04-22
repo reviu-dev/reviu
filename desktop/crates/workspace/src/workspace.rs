@@ -53,6 +53,9 @@ use ui::{
 
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
 
+pub const STATUS_BAR_ICON_PNG: &[u8] =
+  include_bytes!("../../reviu/assets/reviu_status_bar_icon.png");
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspacePage {
   Git,
@@ -430,9 +433,9 @@ impl WorkspaceView {
     view.check_for_updates(cx);
     view.start_periodic_update_checks(cx);
     view.start_notification_polling(cx);
-    crate::status_bar::init_status_bar(include_bytes!(
-      "../../reviu/assets/reviu_status_bar_icon.png"
-    ));
+    if PersistedSettings::get(cx).menu_bar_icon {
+      crate::status_bar::init_status_bar(STATUS_BAR_ICON_PNG);
+    }
 
     view
   }
@@ -609,7 +612,9 @@ impl WorkspaceView {
             let unread = notifications.iter().filter(|n| n.unread).count();
             NotificationCountStore::set(cx, unread);
             set_dock_badge(unread);
-            crate::status_bar::update_status_bar(unread, &notifications);
+            if PersistedSettings::get(cx).menu_bar_icon {
+              crate::status_bar::update_status_bar(unread, &notifications);
+            }
             cx.refresh_windows();
           }
         });

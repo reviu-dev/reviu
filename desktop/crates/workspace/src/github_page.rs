@@ -26,6 +26,7 @@ use sentry::protocol::{Map, Value};
 use smol::unblock;
 use time::{OffsetDateTime, macros::format_description};
 
+use crate::config::AppSettings;
 use crate::dock_badge::set_dock_badge;
 use crate::notification_count::NotificationCountStore;
 use ui::{
@@ -3234,7 +3235,7 @@ impl GithubPage {
         let unread = rows.iter().filter(|r| r.notification.unread).count();
         NotificationCountStore::set(cx, unread);
         set_dock_badge(unread);
-        {
+        if AppSettings::get(cx).menu_bar_icon {
           let notifications: Vec<_> = rows.iter().map(|r| (*r.notification).clone()).collect();
           crate::status_bar::update_status_bar(unread, &notifications);
         }

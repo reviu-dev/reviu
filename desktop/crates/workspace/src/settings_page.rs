@@ -46,6 +46,7 @@ pub struct SettingsPage {
   split_diff_view: bool,
   hide_whitespace: bool,
   clone_protocol: CloneProtocol,
+  menu_bar_icon: bool,
   shortcut_recording: Option<ShortcutId>,
   shortcut_error: Option<ShortcutCaptureError>,
   size: Size,
@@ -69,6 +70,7 @@ impl SettingsPage {
       split_diff_view: settings.split_diff_view,
       hide_whitespace: settings.hide_whitespace,
       clone_protocol: settings.clone_protocol,
+      menu_bar_icon: settings.menu_bar_icon,
       shortcut_recording: None,
       shortcut_error: None,
       size: Size::default(),
@@ -86,6 +88,7 @@ impl SettingsPage {
     let default_indent_rainbow = self.indent_rainbow;
     let default_git_unified_file_view = self.git_unified_file_view;
     let default_split_diff_view = self.split_diff_view;
+    let default_menu_bar_icon = self.menu_bar_icon;
     let is_admin = AuthStateStore::is_admin(cx);
 
     vec![
@@ -277,9 +280,55 @@ impl SettingsPage {
             "Protocol used when cloning a GitHub repository. HTTPS uses your credential helper; SSH uses your configured SSH key.",
           ),
         ]),
-      ]),
+      ].into_iter().chain(self.menu_bar_settings_groups(view.clone(), default_menu_bar_icon))),
       Self::keyboard_shortcuts_page(view.clone(), is_admin, window, cx),
     ]
+  }
+
+  #[cfg(target_os = "macos")]
+  fn menu_bar_settings_groups(
+    &self,
+    view: gpui::Entity<Self>,
+    default_menu_bar_icon: bool,
+  ) -> Vec<SettingGroup> {
+    vec![SettingGroup::new().title("Menu Bar").items(vec![
+        SettingItem::new(
+          "Show in Menu Bar",
+          SettingField::checkbox(
+            {
+              let view = view.clone();
+              move |cx: &App| view.read(cx).menu_bar_icon
+            },
+            {
+              let view = view.clone();
+              move |val: bool, cx: &mut App| {
+                view.update(cx, |view, _| {
+                  view.menu_bar_icon = val;
+                });
+
+                PersistedSettings::update(cx, |s| s.menu_bar_icon = val);
+                crate::status_bar::set_status_bar_enabled(
+                  val,
+                  crate::workspace::STATUS_BAR_ICON_PNG,
+                );
+              }
+            },
+          )
+          .default_value(default_menu_bar_icon),
+        )
+        .description(
+          "Show the Reviu icon in the macOS menu bar with unread GitHub notification counts.",
+        ),
+      ])]
+  }
+
+  #[cfg(not(target_os = "macos"))]
+  fn menu_bar_settings_groups(
+    &self,
+    _view: gpui::Entity<Self>,
+    _default_menu_bar_icon: bool,
+  ) -> Vec<SettingGroup> {
+    Vec::new()
   }
 
   fn keyboard_shortcuts_page(
