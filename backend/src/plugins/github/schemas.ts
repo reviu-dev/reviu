@@ -26,6 +26,18 @@ export const createPullRequestThreadReplyBodySchema = z.object({
   body: z.string().trim().min(1, 'Missing comment body'),
 })
 
+export const applySuggestedChangeBodySchema = z.object({
+  commitTitle: z.string().trim().min(1, 'Missing commit title'),
+  commitMessage: z.string().optional(),
+  expectedHeadSha: z.string().trim().min(1, 'Missing expected head sha'),
+  path: z.string().trim().min(1, 'Missing suggestion path'),
+  originalStartLine: z.number().int().positive(),
+  originalLines: z.array(z.string()),
+  suggestedLines: z.array(z.string()),
+  includeCoAuthor: z.boolean().default(true),
+  suggestionAuthorLogin: z.string().trim().min(1).optional(),
+})
+
 export const createPullRequestReviewBodySchema = z.object({
   event: z.enum(['COMMENT', 'APPROVE', 'REQUEST_CHANGES']),
   body: z.string().optional(),

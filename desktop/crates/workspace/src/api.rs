@@ -850,6 +850,8 @@ pub struct GithubPullRequestReviewComment {
   pub node_id: String,
   #[serde(default)]
   pub reactions: Vec<GithubReactionGroup>,
+  #[serde(default, rename = "is_outdated")]
+  pub is_outdated: bool,
   pub id: u64,
   #[serde(rename = "pull_request_review_id")]
   pub pull_request_review_id: Option<u64>,
@@ -1035,6 +1037,13 @@ pub struct GithubPullRequestMergeResult {
   pub sha: String,
   pub message: String,
   pub method: GithubPullRequestMergeMethod,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubSuggestedChangeCommitResult {
+  pub sha: String,
+  pub url: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -1528,6 +1537,11 @@ struct GithubPullRequestMergeResultResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct GithubSuggestedChangeCommitResponse {
+  commit: GithubSuggestedChangeCommitResult,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubAssetResolveResponse {
   url: String,
 }
@@ -1630,6 +1644,30 @@ struct CreateGithubPullRequestCommentRequest<'a> {
 #[derive(Debug, Serialize)]
 struct ReplyGithubPullRequestCommentRequest<'a> {
   body: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct ApplyGithubSuggestedChangeRequest<'a> {
+  #[serde(rename = "commitTitle")]
+  commit_title: &'a str,
+  #[serde(rename = "commitMessage", skip_serializing_if = "Option::is_none")]
+  commit_message: Option<&'a str>,
+  #[serde(rename = "expectedHeadSha")]
+  expected_head_sha: &'a str,
+  path: &'a str,
+  #[serde(rename = "originalStartLine")]
+  original_start_line: usize,
+  #[serde(rename = "originalLines")]
+  original_lines: &'a [String],
+  #[serde(rename = "suggestedLines")]
+  suggested_lines: &'a [String],
+  #[serde(rename = "includeCoAuthor")]
+  include_co_author: bool,
+  #[serde(
+    rename = "suggestionAuthorLogin",
+    skip_serializing_if = "Option::is_none"
+  )]
+  suggestion_author_login: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3269,6 +3307,54 @@ impl ApiClient {
       anyhow::bail!("unexpected status: {}", status);
     }
     Ok(())
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn apply_pull_request_suggested_change(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    comment_id: u64,
+    commit_title: &str,
+    commit_message: Option<&str>,
+    expected_head_sha: &str,
+    path: &str,
+    original_start_line: usize,
+    original_lines: &[String],
+    suggested_lines: &[String],
+    include_co_author: bool,
+    suggestion_author_login: Option<&str>,
+  ) -> Result<GithubSuggestedChangeCommitResult> {
+    let route = format!("/github/pr/{number}/comments/{comment_id}/suggested-change");
+    let trimmed_message = commit_message
+      .map(str::trim)
+      .filter(|value| !value.is_empty());
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&ApplyGithubSuggestedChangeRequest {
+        commit_title: commit_title.trim(),
+        commit_message: trimmed_message,
+        expected_head_sha,
+        path,
+        original_start_line,
+        original_lines,
+        suggested_lines,
+        include_co_author,
+        suggestion_author_login,
+      })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<GithubSuggestedChangeCommitResponse>()?;
+    Ok(payload.commit)
   }
 
   pub fn submit_pull_request_review(
@@ -6513,6 +6599,54 @@ mod tests {
       request_line.contains("/github/pr/42/comments/2/replies"),
       "unexpected request line: {request_line}"
     );
+  }
+
+  #[test]
+  fn apply_pull_request_suggested_change_serializes_commit_payload() {
+    let body = r#"{
+      "commit": {
+        "sha": "abc123",
+        "url": "https://github.com/acme/widget/commit/abc123"
+      }
+    }"#;
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let result = api
+      .apply_pull_request_suggested_change(
+        "acme",
+        "widget",
+        42,
+        2,
+        "Apply suggestion from code review",
+        Some("Thanks"),
+        "head123",
+        "src/main.rs",
+        10,
+        &["old".to_string()],
+        &["new".to_string()],
+        true,
+        Some("octocat"),
+      )
+      .expect("apply suggested change");
+
+    assert_eq!(result.sha, "abc123");
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request.starts_with(
+        "POST /github/pr/42/comments/2/suggested-change?org=acme&repo=widget HTTP/1.1"
+      )
+    );
+    assert!(request.contains("\"commitTitle\":\"Apply suggestion from code review\""));
+    assert!(request.contains("\"expectedHeadSha\":\"head123\""));
+    assert!(request.contains("\"originalStartLine\":10"));
+    assert!(request.contains("\"includeCoAuthor\":true"));
+    assert!(request.contains("\"suggestionAuthorLogin\":\"octocat\""));
   }
 
   #[test]

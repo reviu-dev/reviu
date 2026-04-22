@@ -22,7 +22,7 @@ use crate::types::*;
 pub use crate::types::{
   Block, CodeBlock, Details, GithubCodeReferencePreview, GithubDiffLine, GithubDiffLineKind,
   GithubIssueReferenceContext, Inline, LinkAction, List, MarkdownRenderState, ParsedMarkdown,
-  SuggestionContext, Table,
+  SuggestionActionContext, SuggestionContext, Table,
 };
 use gpui::{
   AnyElement, App, CursorStyle, Div, MouseButton, SharedString, Window, div, prelude::*, px,
@@ -42,6 +42,7 @@ type CodeBlockRenderFn = dyn Fn(&CodeBlock, &App) -> AnyElement + Send + Sync;
 type ListItemRenderFn = dyn Fn(ListItemView, &App) -> AnyElement + Send + Sync;
 type ThematicBreakRenderFn = dyn Fn(&App) -> AnyElement + Send + Sync;
 type TableRenderFn = dyn Fn(&Table, &App) -> AnyElement + Send + Sync;
+type SuggestionActionRenderFn = dyn Fn(SuggestionActionContext, &App) -> AnyElement + Send + Sync;
 pub(crate) type LinkHandlerFn = dyn Fn(&str, &mut Window, &mut App) -> LinkAction + Send + Sync;
 const WORD_DIFF_MAX_COMBINED_BYTES: usize = 2_048;
 
@@ -76,6 +77,7 @@ pub struct MarkdownRenderOptions {
   pub syntax_cache: Option<Arc<crate::syntax_cache::SyntaxHighlightCache>>,
   pub asset_url_resolver: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
   pub suggestion_context: Option<SuggestionContext>,
+  pub suggestion_action: Option<Arc<SuggestionActionRenderFn>>,
 }
 
 impl MarkdownRenderOptions {
@@ -161,6 +163,11 @@ impl MarkdownRenderOptions {
 
   pub fn with_suggestion_context(mut self, ctx: SuggestionContext) -> Self {
     self.suggestion_context = Some(ctx);
+    self
+  }
+
+  pub fn with_suggestion_action(mut self, render: Arc<SuggestionActionRenderFn>) -> Self {
+    self.suggestion_action = Some(render);
     self
   }
 }
@@ -2277,10 +2284,22 @@ fn render_suggestion_block(
   let copy_value: SharedString = code.value.clone().into();
   let hover_group_id: SharedString = format!("markdown-suggestion-hover-{old_text_id}").into();
   let scroll_id: SharedString = format!("markdown-suggestion-scroll-{old_text_id}").into();
+  let action = options.suggestion_action.as_ref().map(|render| {
+    render(
+      SuggestionActionContext {
+        path: suggestion_ctx.path.clone(),
+        original_start_line,
+        original_lines: suggestion_ctx.original_lines.clone(),
+        suggested_lines: suggested_lines.clone(),
+      },
+      cx,
+    )
+  });
 
   let header = h_flex()
     .items_center()
-    .gap_2()
+    .justify_between()
+    .gap_3()
     .px_3()
     .py_1p5()
     .border_b_1()
@@ -2292,6 +2311,13 @@ fn render_suggestion_block(
         .font_medium()
         .text_color(theme.muted_foreground)
         .child("Suggested change"),
+    )
+    .child(
+      h_flex()
+        .items_center()
+        .gap_1()
+        .when_some(action, |this, action| this.child(action))
+        .child(Clipboard::new(("markdown-suggestion-copy", old_text_id)).value(copy_value)),
     );
 
   let scroll_content = div()
@@ -2316,18 +2342,8 @@ fn render_suggestion_block(
     .border_1()
     .border_color(theme.border)
     .rounded_md()
-    .overflow_hidden()
     .child(header)
     .child(scroll_content)
-    .child(
-      div()
-        .absolute()
-        .top_2()
-        .right_2()
-        .invisible()
-        .group_hover(&hover_group_id, |this| this.visible())
-        .child(Clipboard::new(("markdown-suggestion-copy", old_text_id)).value(copy_value)),
-    )
     .into_any_element()
 }
 
@@ -4343,7 +4359,7 @@ Apres"#,
       },
     ];
 
-    let height = estimate_blocks_height_px(&blocks, 80, 20.0, 0);
+    let height = estimate_blocks_height_px(&blocks, 80, 20.0, 0, None);
     let expected = 20.0 + MARKDOWN_BASE_BLOCK_GAP_PX + MARKDOWN_HEADING_EXTRA_TOP_MARGIN_PX + 24.0;
     assert_eq!(height, expected);
   }

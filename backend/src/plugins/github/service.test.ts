@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { extractGithubRateLimitInfo, isGithubRateLimitNearLimit } from './service.js'
+import {
+  __githubServiceTestUtils,
+  extractGithubRateLimitInfo,
+  isGithubRateLimitNearLimit,
+} from './service.js'
 
 describe('github service rate limit parsing', () => {
   it('extracts GitHub rate limit headers from a response', () => {
@@ -50,5 +54,35 @@ describe('github service rate limit parsing', () => {
       remaining: 4,
       resource: 'search',
     })).toBe(false)
+  })
+})
+
+describe('github suggested change content patching', () => {
+  it('replaces the anchored original lines with the suggested lines', () => {
+    const content = 'fn main() {\n  println!("old");\n}\n'
+
+    expect(__githubServiceTestUtils.applySuggestedLinesToContent(content, {
+      original_start_line: 2,
+      original_lines: ['  println!("old");'],
+      suggested_lines: ['  println!("new");'],
+    })).toBe('fn main() {\n  println!("new");\n}\n')
+  })
+
+  it('preserves crlf line endings', () => {
+    const content = 'one\r\ntwo\r\nthree\r\n'
+
+    expect(__githubServiceTestUtils.applySuggestedLinesToContent(content, {
+      original_start_line: 2,
+      original_lines: ['two'],
+      suggested_lines: ['dos'],
+    })).toBe('one\r\ndos\r\nthree\r\n')
+  })
+
+  it('rejects stale suggestions when the original lines changed', () => {
+    expect(() => __githubServiceTestUtils.applySuggestedLinesToContent('one\ntwo\n', {
+      original_start_line: 2,
+      original_lines: ['changed'],
+      suggested_lines: ['dos'],
+    })).toThrow('Suggested change no longer matches the file.')
   })
 })

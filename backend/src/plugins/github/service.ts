@@ -113,6 +113,7 @@ import type {
   WorkflowRunsResponse,
 } from './types.js'
 
+import { Buffer } from 'node:buffer'
 import { request } from '@octokit/request'
 import { logger } from '../../lib/logger.js'
 import { getGithubMetricsContext } from './metrics/github-metrics-context.js'
@@ -492,6 +493,27 @@ const GITHUB_GRAPHQL_DISABLE_PULL_REQUEST_AUTO_MERGE_MUTATION = `
   }
 `
 
+const GITHUB_GRAPHQL_CREATE_COMMIT_ON_BRANCH_MUTATION = `
+  mutation CreateCommitOnBranch(
+    $branch: CommittableBranch!
+    $expectedHeadOid: GitObjectID!
+    $fileChanges: FileChanges!
+    $message: CommitMessage!
+  ) {
+    createCommitOnBranch(input: {
+      branch: $branch
+      expectedHeadOid: $expectedHeadOid
+      fileChanges: $fileChanges
+      message: $message
+    }) {
+      commit {
+        oid
+        url
+      }
+    }
+  }
+`
+
 const GITHUB_GRAPHQL_PULL_REQUEST_AUTO_MERGE_QUERY = `
   query PullRequestAutoMerge($owner: String!, $name: String!, $number: Int!) {
     repository(owner: $owner, name: $name) {
@@ -621,6 +643,7 @@ const GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_COMMENT_FRAGMENT = `
 const GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_THREAD_FRAGMENT = `
   fragment PullRequestReviewThreadFields on PullRequestReviewThread {
     id
+    isOutdated
     path
     line
     originalLine
@@ -1526,6 +1549,90 @@ async function requestGithubGraphqlData<T>(
   }
 }
 
+interface GithubGraphqlCreateCommitOnBranchResponse {
+  createCommitOnBranch?: {
+    commit?: {
+      oid: string
+      url: string
+    } | null
+  } | null
+}
+
+interface ApplyGithubSuggestedChangeParams {
+  owner: string
+  repo: string
+  pull_number: number
+  comment_id: number
+  commit_title: string
+  commit_message?: string
+  expected_head_sha: string
+  path: string
+  original_start_line: number
+  original_lines: string[]
+  suggested_lines: string[]
+  include_co_author: boolean
+  suggestion_author_login?: string
+}
+
+interface GithubSuggestedChangeCommitResult {
+  sha: string
+  url: string
+}
+
+function githubSuggestedChangeError(message: string, status: number) {
+  return Object.assign(new Error(message), { status })
+}
+
+function normalizeSuggestionLine(line: string) {
+  return line.replace(/\r$/, '')
+}
+
+function applySuggestedLinesToContent(
+  content: string,
+  {
+    original_start_line,
+    original_lines,
+    suggested_lines,
+  }: Pick<ApplyGithubSuggestedChangeParams, 'original_start_line' | 'original_lines' | 'suggested_lines'>,
+) {
+  const lineEnding = content.includes('\r\n') ? '\r\n' : '\n'
+  const normalizedContent = content.replace(/\r\n/g, '\n')
+  const hadFinalNewline = normalizedContent.endsWith('\n')
+  const lines = normalizedContent.split('\n')
+  if (hadFinalNewline) {
+    lines.pop()
+  }
+
+  const startIndex = original_start_line - 1
+  if (startIndex < 0 || startIndex > lines.length) {
+    throw githubSuggestedChangeError('Suggested change no longer matches the file.', 409)
+  }
+
+  const expectedOriginalLines = original_lines.map(normalizeSuggestionLine)
+  const actualOriginalLines = lines
+    .slice(startIndex, startIndex + expectedOriginalLines.length)
+    .map(normalizeSuggestionLine)
+
+  if (
+    actualOriginalLines.length !== expectedOriginalLines.length
+    || actualOriginalLines.some((line, index) => line !== expectedOriginalLines[index])
+  ) {
+    throw githubSuggestedChangeError('Suggested change no longer matches the file.', 409)
+  }
+
+  lines.splice(
+    startIndex,
+    expectedOriginalLines.length,
+    ...suggested_lines.map(normalizeSuggestionLine),
+  )
+
+  return `${lines.join(lineEnding)}${hadFinalNewline ? lineEnding : ''}`
+}
+
+export const __githubServiceTestUtils = {
+  applySuggestedLinesToContent,
+}
+
 async function requestGithubConditionally<Route extends keyof Endpoints>(
   route: Route,
   { token, params, etag, lastModified, headers }: GithubConditionalRequestOptions<Route>,
@@ -2033,6 +2140,7 @@ function mapGithubGraphqlPullRequestReviewComment(
   return {
     node_id: comment.id,
     reactions: mapGithubGraphqlReactionGroups(comment.reactionGroups),
+    is_outdated: thread.isOutdated,
     id: requireGraphqlDatabaseId(comment, 'review comment'),
     pull_request_review_id: graphqlDatabaseId(comment.pullRequestReview),
     diff_hunk: comment.diffHunk,
@@ -2516,6 +2624,114 @@ export async function fetchGithubPullRequest(
     token,
     params,
   })
+}
+
+export async function applyGithubSuggestedChange(
+  { token, params }: { token: string, params: ApplyGithubSuggestedChangeParams },
+): Promise<GithubSuggestedChangeCommitResult> {
+  const pullRequest = await fetchGithubPullRequest({
+    token,
+    params: {
+      owner: params.owner,
+      repo: params.repo,
+      pull_number: params.pull_number,
+    },
+  })
+
+  if (pullRequest.state !== 'open') {
+    throw githubSuggestedChangeError('Suggested changes can only be committed on open pull requests.', 409)
+  }
+
+  if (pullRequest.head.sha !== params.expected_head_sha) {
+    throw githubSuggestedChangeError('The pull request branch changed. Refresh and try again.', 409)
+  }
+
+  const comment = await requestGithubData('GET /repos/{owner}/{repo}/pulls/comments/{comment_id}', {
+    token,
+    params: {
+      owner: params.owner,
+      repo: params.repo,
+      comment_id: params.comment_id,
+    },
+  })
+
+  if (comment.path !== params.path) {
+    throw githubSuggestedChangeError('Suggested change no longer matches the review comment.', 409)
+  }
+
+  const headRepositoryNameWithOwner = pullRequest.head.repo?.full_name
+  if (!headRepositoryNameWithOwner) {
+    throw githubSuggestedChangeError('The pull request head repository is not available.', 409)
+  }
+  const [headOwner, headRepo] = headRepositoryNameWithOwner.split('/')
+  if (!headOwner || !headRepo) {
+    throw githubSuggestedChangeError('The pull request head repository is not available.', 409)
+  }
+
+  const contentResponse = await requestGithubData('GET /repos/{owner}/{repo}/contents/{path}', {
+    token,
+    params: {
+      owner: headOwner,
+      repo: headRepo,
+      path: params.path,
+      ref: pullRequest.head.ref,
+    },
+  })
+
+  if (Array.isArray(contentResponse) || contentResponse.type !== 'file' || !contentResponse.content) {
+    throw githubSuggestedChangeError('Suggested changes can only be applied to text files.', 422)
+  }
+
+  const currentContent = Buffer
+    .from(contentResponse.content.replace(/\n/g, ''), 'base64')
+    .toString('utf8')
+  const nextContent = applySuggestedLinesToContent(currentContent, params)
+
+  if (nextContent === currentContent) {
+    throw githubSuggestedChangeError('Suggested change is already applied.', 409)
+  }
+
+  let commitBody = params.commit_message?.trim() ?? ''
+  if (params.include_co_author) {
+    const authorLogin = params.suggestion_author_login || comment.user?.login
+    const authorId = comment.user?.id
+    if (authorLogin && authorId) {
+      const trailer = `Co-authored-by: ${authorLogin} <${authorId}+${authorLogin}@users.noreply.github.com>`
+      commitBody = commitBody ? `${commitBody}\n\n${trailer}` : trailer
+    }
+  }
+
+  const data = await requestGithubGraphqlData<GithubGraphqlCreateCommitOnBranchResponse>({
+    token,
+    query: GITHUB_GRAPHQL_CREATE_COMMIT_ON_BRANCH_MUTATION,
+    variables: {
+      branch: {
+        repositoryNameWithOwner: headRepositoryNameWithOwner,
+        branchName: pullRequest.head.ref,
+      },
+      expectedHeadOid: params.expected_head_sha,
+      message: {
+        headline: params.commit_title.trim(),
+        body: commitBody || null,
+      },
+      fileChanges: {
+        additions: [{
+          path: params.path,
+          contents: Buffer.from(nextContent, 'utf8').toString('base64'),
+        }],
+      },
+    },
+  })
+
+  const commit = data.createCommitOnBranch?.commit
+  if (!commit?.oid) {
+    throw new Error('GitHub GraphQL response is missing the created commit')
+  }
+
+  return {
+    sha: commit.oid,
+    url: commit.url,
+  }
 }
 
 export async function createGithubPullRequest(

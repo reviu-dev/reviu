@@ -12,16 +12,46 @@ pub fn estimate_markdown_height_px(source: &str, wrap_columns: usize, line_heigh
   estimate_parsed_markdown_height_px(&parsed, wrap_columns, line_height_px)
 }
 
+pub fn estimate_markdown_height_px_with_suggestion_context(
+  source: &str,
+  wrap_columns: usize,
+  line_height_px: f32,
+  suggestion_context: Option<&SuggestionContext>,
+) -> f32 {
+  let parsed = parse_markdown_for_render(source);
+  estimate_parsed_markdown_height_px_with_suggestion_context(
+    &parsed,
+    wrap_columns,
+    line_height_px,
+    suggestion_context,
+  )
+}
+
 pub fn estimate_parsed_markdown_height_px(
   parsed: &ParsedMarkdown,
   wrap_columns: usize,
   line_height_px: f32,
+) -> f32 {
+  estimate_parsed_markdown_height_px_with_suggestion_context(
+    parsed,
+    wrap_columns,
+    line_height_px,
+    None,
+  )
+}
+
+pub fn estimate_parsed_markdown_height_px_with_suggestion_context(
+  parsed: &ParsedMarkdown,
+  wrap_columns: usize,
+  line_height_px: f32,
+  suggestion_context: Option<&SuggestionContext>,
 ) -> f32 {
   estimate_blocks_height_px(
     parsed.blocks.as_ref(),
     wrap_columns.max(MARKDOWN_MIN_WRAP_COLUMNS),
     line_height_px.max(1.0),
     0,
+    suggestion_context,
   )
 }
 
@@ -30,6 +60,7 @@ pub(crate) fn estimate_blocks_height_px(
   wrap_columns: usize,
   line_height_px: f32,
   indent: usize,
+  suggestion_context: Option<&SuggestionContext>,
 ) -> f32 {
   if blocks.is_empty() {
     return line_height_px;
@@ -43,7 +74,13 @@ pub(crate) fn estimate_blocks_height_px(
         total += MARKDOWN_HEADING_EXTRA_TOP_MARGIN_PX;
       }
     }
-    total += estimate_block_height_px(block, wrap_columns, line_height_px, indent);
+    total += estimate_block_height_px(
+      block,
+      wrap_columns,
+      line_height_px,
+      indent,
+      suggestion_context,
+    );
   }
 
   total.max(line_height_px)
@@ -54,6 +91,7 @@ pub(crate) fn estimate_block_height_px(
   wrap_columns: usize,
   line_height_px: f32,
   indent: usize,
+  suggestion_context: Option<&SuggestionContext>,
 ) -> f32 {
   match block {
     Block::Paragraph(inlines) => estimate_inline_content_height_px(
@@ -72,25 +110,68 @@ pub(crate) fn estimate_block_height_px(
       };
       lines as f32 * line_height_px * scale
     }
-    Block::List(list) => estimate_list_height_px(list, wrap_columns, line_height_px, indent),
+    Block::List(list) => estimate_list_height_px(
+      list,
+      wrap_columns,
+      line_height_px,
+      indent,
+      suggestion_context,
+    ),
     Block::CodeBlock(code) => {
+      if code.lang.as_deref() == Some("suggestion") {
+        return estimate_suggestion_block_height_px(code, line_height_px, suggestion_context);
+      }
+
       let code_lines = code.value.lines().count().max(1) as f32;
       (code_lines * line_height_px * MARKDOWN_CODE_LINE_HEIGHT_SCALE
         + MARKDOWN_CODE_BLOCK_VERTICAL_CHROME_PX)
         .min(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX)
     }
-    Block::BlockQuote(children) => {
-      estimate_blocks_height_px(children, wrap_columns, line_height_px, indent + 1)
-    }
+    Block::BlockQuote(children) => estimate_blocks_height_px(
+      children,
+      wrap_columns,
+      line_height_px,
+      indent + 1,
+      suggestion_context,
+    ),
     Block::ThematicBreak => 1.0,
     Block::Table(table) => estimate_table_height_px(table, line_height_px),
-    Block::Details(details) => {
-      estimate_details_height_px(details, wrap_columns, line_height_px, indent)
-    }
-    Block::Aligned { blocks, .. } => {
-      estimate_blocks_height_px(blocks, wrap_columns, line_height_px, indent)
-    }
+    Block::Details(details) => estimate_details_height_px(
+      details,
+      wrap_columns,
+      line_height_px,
+      indent,
+      suggestion_context,
+    ),
+    Block::Aligned { blocks, .. } => estimate_blocks_height_px(
+      blocks,
+      wrap_columns,
+      line_height_px,
+      indent,
+      suggestion_context,
+    ),
   }
+}
+
+fn estimate_suggestion_block_height_px(
+  code: &CodeBlock,
+  line_height_px: f32,
+  suggestion_context: Option<&SuggestionContext>,
+) -> f32 {
+  let suggested_value = code.value.strip_suffix('\n').unwrap_or(code.value.as_str());
+  let suggested_line_count = if suggested_value.is_empty() {
+    0
+  } else {
+    suggested_value.split('\n').count()
+  };
+  let original_line_count = suggestion_context
+    .map(|context| context.original_lines.len())
+    .unwrap_or_default();
+  let diff_line_count = (original_line_count + suggested_line_count).max(1) as f32;
+
+  MARKDOWN_SUGGESTION_BLOCK_HEADER_PX
+    + MARKDOWN_SUGGESTION_BLOCK_BORDER_PX
+    + diff_line_count * line_height_px * MARKDOWN_CODE_LINE_HEIGHT_SCALE
 }
 
 pub(crate) fn estimate_list_height_px(
@@ -98,6 +179,7 @@ pub(crate) fn estimate_list_height_px(
   wrap_columns: usize,
   line_height_px: f32,
   indent: usize,
+  suggestion_context: Option<&SuggestionContext>,
 ) -> f32 {
   if list.items.is_empty() {
     return line_height_px;
@@ -114,7 +196,13 @@ pub(crate) fn estimate_list_height_px(
     if ix > 0 {
       total += MARKDOWN_LIST_ITEM_GAP_PX;
     }
-    total += estimate_blocks_height_px(&item.blocks, item_wrap_columns, line_height_px, indent + 1);
+    total += estimate_blocks_height_px(
+      &item.blocks,
+      item_wrap_columns,
+      line_height_px,
+      indent + 1,
+      suggestion_context,
+    );
   }
 
   total.max(line_height_px)
@@ -125,6 +213,7 @@ pub(crate) fn estimate_details_height_px(
   wrap_columns: usize,
   line_height_px: f32,
   indent: usize,
+  suggestion_context: Option<&SuggestionContext>,
 ) -> f32 {
   let summary_cols = wrap_columns_for_indent(wrap_columns, indent)
     .saturating_sub(3)
@@ -136,7 +225,13 @@ pub(crate) fn estimate_details_height_px(
     return summary_height;
   }
 
-  let body = estimate_blocks_height_px(&details.blocks, wrap_columns, line_height_px, indent + 1);
+  let body = estimate_blocks_height_px(
+    &details.blocks,
+    wrap_columns,
+    line_height_px,
+    indent + 1,
+    suggestion_context,
+  );
   summary_height + MARKDOWN_BASE_BLOCK_GAP_PX + body
 }
 
@@ -385,8 +480,12 @@ pub(crate) fn estimate_code_reference_preview_min_content_width_px(
 
 #[cfg(test)]
 mod tests {
-  use super::estimate_parsed_markdown_height_px;
+  use super::{
+    estimate_parsed_markdown_height_px, estimate_parsed_markdown_height_px_with_suggestion_context,
+  };
   use crate::parsed_cache::parse_markdown_for_render;
+  use crate::types::SuggestionContext;
+  use std::sync::Arc;
 
   #[test]
   fn explicit_image_dimensions_reserve_more_than_a_single_text_line() {
@@ -413,6 +512,30 @@ mod tests {
     assert!(
       height > 100.0,
       "attachment links should reserve block image space"
+    );
+  }
+
+  #[test]
+  fn suggestion_context_reserves_original_and_suggested_diff_rows() {
+    let parsed = parse_markdown_for_render(
+      r#"```suggestion
+new line
+```"#,
+    );
+    let default_height = estimate_parsed_markdown_height_px(&parsed, 72, 20.0);
+    let context = SuggestionContext {
+      original_start_line: Some(10),
+      suggested_start_line: Some(10),
+      original_lines: vec!["old line".to_string(), "older line".to_string()],
+      path: Arc::from("src/main.rs"),
+    };
+
+    let suggestion_height =
+      estimate_parsed_markdown_height_px_with_suggestion_context(&parsed, 72, 20.0, Some(&context));
+
+    assert!(
+      suggestion_height > default_height,
+      "suggestion height should include original diff rows"
     );
   }
 }

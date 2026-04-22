@@ -383,6 +383,7 @@ export interface GithubGraphqlPullRequestReviewCommentNode
 
 export interface GithubGraphqlPullRequestReviewThreadNode {
   id: string
+  isOutdated: boolean
   path: string
   line: number | null
   originalLine: number | null
@@ -523,6 +524,7 @@ export interface GithubPullRequestReviewCommentUser {
 export interface GithubPullRequestReviewComment {
   node_id: string
   reactions: GithubReactionGroup[]
+  is_outdated: boolean
   id: PullRequestCommentResponse['id']
   pull_request_review_id: PullRequestCommentResponse['pull_request_review_id']
   diff_hunk: PullRequestCommentResponse['diff_hunk']

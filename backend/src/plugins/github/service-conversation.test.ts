@@ -80,6 +80,7 @@ describe('github pull request conversation service', () => {
               reviewThreads: {
                 nodes: [{
                   id: 'PRRT_kwDOExample',
+                  isOutdated: false,
                   path: 'src/main.rs',
                   line: 5,
                   originalLine: 4,
@@ -192,6 +193,7 @@ describe('github pull request conversation service', () => {
       review_comments: [{
         node_id: 'PRRC_kwDOExample',
         reactions: [],
+        is_outdated: false,
         id: 1001,
         pull_request_review_id: 123,
         diff_hunk: '@@ -1 +1 @@',

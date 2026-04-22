@@ -112,6 +112,7 @@ import { runWithGithubMetricsContext } from '../plugins/github/metrics/github-me
 import { fetchGithubPullRequestChecksSummary } from '../plugins/github/pull-request-checks.js'
 import { fetchGithubPullRequestMergeReadiness } from '../plugins/github/pull-request-merge.js'
 import {
+  applySuggestedChangeBodySchema,
   createPullRequestBodySchema,
   createPullRequestLineCommentBodySchema,
   createPullRequestReviewBodySchema,
@@ -136,6 +137,7 @@ import {
   addGithubIssueAssignees,
   addGithubIssueLabels,
   addGithubReactionGraphql,
+  applyGithubSuggestedChange,
   compareGithubRefs,
   convertGithubPullRequestToDraft,
   createGithubIssueComment,
@@ -3091,6 +3093,63 @@ export const githubRoutes = githubRouter
     catch (error) {
       const status = (error as { status?: number }).status
       if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/:id/comments/:commentId/suggested-change', zValidator(
+    'json',
+    applySuggestedChangeBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const commentId = Number(ctx.req.param('commentId'))
+    const body = ctx.req.valid('json')
+
+    if (!org || !repo || Number.isNaN(pullNumber) || Number.isNaN(commentId)) {
+      return ctx.json({ error: 'Missing org, repo, id, or commentId' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const commit = await applyGithubSuggestedChange({
+        token: githubToken,
+        params: {
+          owner: org,
+          repo,
+          pull_number: pullNumber,
+          comment_id: commentId,
+          commit_title: body.commitTitle,
+          commit_message: body.commitMessage,
+          expected_head_sha: body.expectedHeadSha,
+          path: body.path,
+          original_start_line: body.originalStartLine,
+          original_lines: body.originalLines,
+          suggested_lines: body.suggestedLines,
+          include_co_author: body.includeCoAuthor,
+          suggestion_author_login: body.suggestionAuthorLogin,
+        },
+      })
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+        includeComments: true,
+      }))
+      await invalidateGithubCacheTags([
+        getGithubPullRequestCommitsTag(org, repo, pullNumber),
+        getGithubPullRequestFilesTag(org, repo, pullNumber),
+      ])
+
+      return ctx.json({ commit }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 409 || status === 422) {
         return ctx.json({ error: (error as Error).message }, status)
       }
       return ctx.json({ error: (error as Error).message }, 502)

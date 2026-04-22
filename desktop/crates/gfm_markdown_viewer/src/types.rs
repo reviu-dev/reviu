@@ -41,6 +41,14 @@ pub struct SuggestionContext {
   pub path: Arc<str>,
 }
 
+#[derive(Clone, Debug)]
+pub struct SuggestionActionContext {
+  pub path: Arc<str>,
+  pub original_start_line: Option<usize>,
+  pub original_lines: Vec<String>,
+  pub suggested_lines: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GithubDiffLineKind {
   Context,

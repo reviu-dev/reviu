@@ -127,6 +127,7 @@ function makeConversation(): GithubPullRequestConversation {
     review_comments: [{
       node_id: 'PRRC_kwDOExample',
       reactions: [],
+      is_outdated: false,
       id: 1,
       pull_request_review_id: 123,
       diff_hunk: '@@ -1 +1 @@',

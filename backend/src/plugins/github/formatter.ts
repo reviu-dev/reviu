@@ -143,6 +143,7 @@ export function mapGithubPullRequestReviewComment(
   return {
     node_id: comment.node_id,
     reactions: [],
+    is_outdated: false,
     id: comment.id,
     pull_request_review_id: comment.pull_request_review_id,
     diff_hunk: comment.diff_hunk,

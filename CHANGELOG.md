@@ -18,7 +18,7 @@ Pull request timelines, repository overviews, and the commit details page now sh
 
 ### GitHub Review Suggestions
 
-Suggested changes in pull request review comments now render with GitHub-style red and green diff rows, including line numbers. Review comment code previews also keep the surrounding diff colors, making proposed replacements easier to compare.
+Suggested changes in review comments render as GitHub-style diff rows and can be committed directly to the pull request branch with a custom title, optional message, and the reviewer as co-author.
 
 ## 0.6.0
 

@@ -13,9 +13,10 @@ use std::{
 use buffer::TransactionId;
 use gfm_markdown_viewer::{
   GithubCodeReferencePreview, LinkAction, MarkdownRenderOptions, MarkdownRenderState,
-  ParsedMarkdown, estimate_github_code_reference_preview_height_px, estimate_markdown_height_px,
-  estimate_parsed_markdown_height_px, parse_markdown, render_github_code_reference_preview_card,
-  render_parsed_markdown,
+  ParsedMarkdown, estimate_github_code_reference_preview_height_px,
+  estimate_markdown_height_px_with_suggestion_context,
+  estimate_parsed_markdown_height_px_with_suggestion_context, parse_markdown,
+  render_github_code_reference_preview_card, render_parsed_markdown,
 };
 use git::{ApplyLocation, DiffSet, FileDiff, GitFileBases, GitStore, RepoFile};
 use gpui::{
@@ -1453,6 +1454,7 @@ impl Editor {
     body: &str,
     wrap_columns: usize,
     markdown_line_height_px: f32,
+    suggestion_context: Option<&gfm_markdown_viewer::SuggestionContext>,
   ) -> f32 {
     let segments = self.review_comment_body_segments(comment_id, body);
     let mut markdown_height = 0.0;
@@ -1464,8 +1466,12 @@ impl Editor {
           if markdown.trim().is_empty() {
             continue;
           }
-          markdown_height +=
-            estimate_markdown_height_px(&markdown, wrap_columns, markdown_line_height_px);
+          markdown_height += estimate_markdown_height_px_with_suggestion_context(
+            &markdown,
+            wrap_columns,
+            markdown_line_height_px,
+            suggestion_context,
+          );
         }
         ReviewCommentBodySegment::Preview(preview) => {
           previews_height += self.review_comment_code_reference_preview_height_px(&preview);
@@ -1517,16 +1523,25 @@ impl Editor {
     body: &str,
     wrap_columns: usize,
     markdown_line_height_px: f32,
+    suggestion_context: Option<&gfm_markdown_viewer::SuggestionContext>,
   ) -> f32 {
     let entry = self.ensure_review_comment_markdown_cache_entry(comment_id, body);
     let key = (wrap_columns, markdown_line_height_px.to_bits());
-    if let Some(height) = entry.estimated_heights_px.get(&key) {
+    if suggestion_context.is_none()
+      && let Some(height) = entry.estimated_heights_px.get(&key)
+    {
       return *height;
     }
 
-    let estimated =
-      estimate_parsed_markdown_height_px(&entry.parsed, wrap_columns, markdown_line_height_px);
-    entry.estimated_heights_px.insert(key, estimated);
+    let estimated = estimate_parsed_markdown_height_px_with_suggestion_context(
+      &entry.parsed,
+      wrap_columns,
+      markdown_line_height_px,
+      suggestion_context,
+    );
+    if suggestion_context.is_none() {
+      entry.estimated_heights_px.insert(key, estimated);
+    }
     estimated
   }
 
@@ -4383,9 +4398,13 @@ impl Editor {
     let mut projection_comments = self.review_comments.clone();
 
     for index in 0..self.review_comments.len() {
-      let (comment_id, body) = {
+      let (comment_id, body, suggestion_context) = {
         let comment = &self.review_comments[index];
-        (comment.id, comment.body.clone())
+        (
+          comment.id,
+          comment.body.clone(),
+          comment.suggestion_context.clone(),
+        )
       };
       let estimated_height = if self.editing_review_comment_id == Some(comment_id) {
         review_comment_composer_body_height_px(self.review_comment_line_height_px)
@@ -4400,6 +4419,7 @@ impl Editor {
             body.as_ref(),
             wrap_columns,
             markdown_line_height_px,
+            suggestion_context.as_ref(),
           )
         } else {
           self.cached_review_comment_body_height_px(
@@ -4407,6 +4427,7 @@ impl Editor {
             body.as_ref(),
             wrap_columns,
             markdown_line_height_px,
+            suggestion_context.as_ref(),
           )
         }
       };
