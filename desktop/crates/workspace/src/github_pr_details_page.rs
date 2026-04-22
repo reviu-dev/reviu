@@ -6592,6 +6592,7 @@ impl GithubPrDetailsPage {
     let expected_head_sha = pull_request.head_sha.clone();
     let include_co_author = self.suggested_change_include_co_author;
     let comment_id = target.comment_id;
+    let modified_path = target.path.clone();
     let api = self.api.clone();
 
     self.suggested_change_commit_loading = true;
@@ -6626,8 +6627,8 @@ impl GithubPrDetailsPage {
             this.suggested_change_commit_target = None;
             this.suggested_change_commit_error = None;
             this.add_pr_breadcrumb("Commit suggested change succeeded", Map::new());
-            this.reload_current_pull_request(cx);
-            this.refresh_pull_request_conversation_for_current_pull_request(false, cx);
+            this.file_contents.remove(modified_path.as_ref());
+            this.refresh_current_page(cx);
             if AuthStateStore::has_github_access(cx) {
               GithubPageHandle::refresh(cx);
             }
