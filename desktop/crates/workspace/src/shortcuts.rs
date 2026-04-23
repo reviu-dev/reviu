@@ -298,8 +298,8 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 23] = [
   ShortcutDefinition {
     id: ShortcutId::PreviousAnnotation,
     title: "Previous Annotation",
-    description: "Jump to the previous conflict or review comment.",
-    scope_label: "Git conflicts and PR Changes comments",
+    description: "Jump to the previous conflict, change, or review comment.",
+    scope_label: "Git conflicts and changes, PR Changes comments",
     category: ShortcutCategory::Review,
     keystroke: "cmd-alt-up",
     context: REVIEW_ANNOTATION_CONTEXT,
@@ -309,8 +309,8 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 23] = [
   ShortcutDefinition {
     id: ShortcutId::NextAnnotation,
     title: "Next Annotation",
-    description: "Jump to the next conflict or review comment.",
-    scope_label: "Git conflicts and PR Changes comments",
+    description: "Jump to the next conflict, change, or review comment.",
+    scope_label: "Git conflicts and changes, PR Changes comments",
     category: ShortcutCategory::Review,
     keystroke: "cmd-alt-down",
     context: REVIEW_ANNOTATION_CONTEXT,

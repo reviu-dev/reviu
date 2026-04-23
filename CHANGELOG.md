@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.7.0
 
+### Jump Between Changes in a File
+
+The previous/next arrows above the diff now step through every change in the file when there are no conflicts. The existing `cmd-alt-up` and `cmd-alt-down` shortcuts work in both modes: conflicts when present, otherwise hunks.
+
 ### GitHub Notifications in the System Tray
 
 Windows and Linux now show the Reviu tray icon with unread GitHub notification counts, matching the existing macOS menu bar behavior.
