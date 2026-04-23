@@ -436,11 +436,13 @@ fn editor_actions_enabled(
   review_comment_edit_input_focused: bool,
   review_comment_create_input_focused: bool,
   review_comment_reply_input_focused: bool,
+  external_input_focused: bool,
 ) -> bool {
   !find_input_focused
     && !review_comment_edit_input_focused
     && !review_comment_create_input_focused
     && !review_comment_reply_input_focused
+    && !external_input_focused
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -7504,11 +7506,15 @@ impl Render for Editor {
       && self.replying_to_review_comment_id.is_none()
       && (self.review_comment_create_draft.is_none() || self.review_comment_create_drag_active);
     let find_panel = self.render_find_panel(editor_entity.clone(), window, cx);
+    let focus_handle = self.focus_handle.clone();
+    let external_input_focused =
+      focus_handle.contains_focused(window, cx) && !focus_handle.is_focused(window);
     let editor_actions_enabled = editor_actions_enabled(
       self.is_find_input_focused(window, cx),
       self.is_review_comment_edit_input_focused(window, cx),
       self.is_review_comment_create_input_focused(window, cx),
       self.is_review_comment_reply_input_focused(window, cx),
+      external_input_focused,
     );
 
     let build_gutter = |gutter_element: GutterElement,
@@ -8522,12 +8528,13 @@ pub mod tests {
 
   #[gpui::test]
   fn test_editor_actions_enabled_depends_on_nested_input_focus(_cx: &mut TestAppContext) {
-    assert!(editor_actions_enabled(false, false, false, false));
-    assert!(!editor_actions_enabled(true, false, false, false));
-    assert!(!editor_actions_enabled(false, true, false, false));
-    assert!(!editor_actions_enabled(false, false, true, false));
-    assert!(!editor_actions_enabled(false, false, false, true));
-    assert!(!editor_actions_enabled(true, true, true, true));
+    assert!(editor_actions_enabled(false, false, false, false, false));
+    assert!(!editor_actions_enabled(true, false, false, false, false));
+    assert!(!editor_actions_enabled(false, true, false, false, false));
+    assert!(!editor_actions_enabled(false, false, true, false, false));
+    assert!(!editor_actions_enabled(false, false, false, true, false));
+    assert!(!editor_actions_enabled(false, false, false, false, true));
+    assert!(!editor_actions_enabled(true, true, true, true, true));
   }
 
   #[gpui::test]
