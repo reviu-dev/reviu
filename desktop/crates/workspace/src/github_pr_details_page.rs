@@ -10,7 +10,8 @@ use editor::{
   REVIEW_COMMENT_CARD_PADDING_X_PX, REVIEW_COMMENT_HEADER_BODY_GAP_PX,
   REVIEW_COMMENT_VERTICAL_PADDING_PX, ReviewComment, ReviewCommentCodeReferencePreview,
   ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
-  ReviewCommentEditHandler, ReviewCommentLinkHandler, ReviewCommentSide,
+  ReviewCommentEditHandler, ReviewCommentLinkHandler, ReviewCommentResolveHandler,
+  ReviewCommentSide, ReviewCommentSuggestionActionFactory,
 };
 use gfm_markdown_viewer::{
   GithubBlobLineReference, GithubCodeReferencePreview, GithubDiffLine, GithubDiffLineKind,
@@ -726,6 +727,12 @@ fn review_comment_to_editor_comment(
     body: Arc::from(comment.body.as_str()),
     suggestion_context: suggestion_context_from_review_comment(comment),
     created_at: Arc::from(format_relative_time(&comment.created_at).to_string()),
+    thread_id: (!comment.thread_id.is_empty())
+      .then(|| Arc::<str>::from(comment.thread_id.as_str())),
+    is_resolved: comment.is_resolved,
+    is_outdated: comment.is_outdated,
+    viewer_can_resolve: comment.viewer_can_resolve,
+    viewer_can_unresolve: comment.viewer_can_unresolve,
   })
 }
 
@@ -6719,6 +6726,10 @@ impl GithubPrDetailsPage {
       let _ = this.update(cx, |this, cx| {
         this.resolve_thread_in_flight.remove(&thread_id_for_result);
         this.resolve_thread_tasks.remove(&thread_id_for_result);
+        let editor_thread_id = thread_id_for_result.clone();
+        this.diff_editor.update(cx, |editor, cx| {
+          editor.clear_review_comment_resolve_in_flight(editor_thread_id.as_str(), cx);
+        });
         match result {
           Ok(()) => {
             this.resolve_thread_errors.remove(&thread_id_for_result);
@@ -6872,6 +6883,41 @@ impl GithubPrDetailsPage {
       });
       editor.set_review_comment_delete_handler(Some(delete_handler), cx);
 
+      let resolve_handler: ReviewCommentResolveHandler = Arc::new({
+        let view = view.clone();
+        move |thread_id: Arc<str>, root_comment_id: u64, currently_resolved, _window, cx| {
+          let _ = view.update(cx, |this, cx| {
+            this.toggle_review_thread_resolution(
+              thread_id.as_ref().to_string(),
+              root_comment_id,
+              currently_resolved,
+              cx,
+            );
+          });
+        }
+      });
+      editor.set_review_comment_resolve_handler(Some(resolve_handler), cx);
+
+      let suggestion_factory: ReviewCommentSuggestionActionFactory = Arc::new({
+        let view = view.clone();
+        move |comment_id, author_login, is_outdated, cx| {
+          let renderer = view.upgrade().map(|page| {
+            page.read(cx).suggested_change_commit_action_renderer(
+              page.clone(),
+              comment_id,
+              author_login,
+              is_outdated,
+              cx,
+            )
+          });
+          match renderer {
+            Some(renderer) => renderer,
+            None => Arc::new(|_ctx, _cx| div().into_any_element()),
+          }
+        }
+      });
+      editor.set_review_comment_suggestion_action_factory(Some(suggestion_factory), cx);
+
       let link_handler: ReviewCommentLinkHandler = Arc::new({
         let view = view.clone();
         move |url, window, cx| {
@@ -6904,6 +6950,8 @@ impl GithubPrDetailsPage {
       editor.set_review_comment_edit_handler(None, cx);
       editor.set_review_comment_delete_handler(None, cx);
       editor.set_review_comment_create_handler(None, cx);
+      editor.set_review_comment_resolve_handler(None, cx);
+      editor.set_review_comment_suggestion_action_factory(None, cx);
       editor.set_review_comment_asset_url_resolver(None, cx);
       editor.set_review_comment_pr_number(None, cx);
       editor.set_editable_review_comment_ids(std::iter::empty::<u64>(), cx);
@@ -11216,12 +11264,12 @@ impl GithubPrDetailsPage {
 
   fn suggested_change_commit_action_renderer(
     &self,
+    page: Entity<Self>,
     comment_id: u64,
     author_login: Arc<str>,
     is_outdated: bool,
-    cx: &mut Context<Self>,
+    _cx: &App,
   ) -> Arc<dyn Fn(SuggestionActionContext, &App) -> AnyElement + Send + Sync> {
-    let page = cx.entity().clone();
     let can_commit = self.suggested_change_commit_available();
     let current_target = self.suggested_change_commit_target.clone();
     let title_input = self.suggested_change_commit_title_input.clone();
@@ -11451,6 +11499,7 @@ impl GithubPrDetailsPage {
       })
     {
       let action = self.suggested_change_commit_action_renderer(
+        cx.entity().clone(),
         item.id,
         Arc::from(item.author_login.as_str()),
         item.is_outdated,
@@ -11943,6 +11992,7 @@ impl GithubPrDetailsPage {
                   .with_hardbreaks();
                 if let Some(ctx) = build_suggestion_context(&self.review_comments, reply.id) {
                   let action = self.suggested_change_commit_action_renderer(
+                    cx.entity().clone(),
                     reply.id,
                     Arc::from(reply.author_login.as_str()),
                     reply.is_outdated,
