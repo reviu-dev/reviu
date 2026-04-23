@@ -55,6 +55,11 @@ pub struct ReviewComment {
   pub body: Arc<str>,
   pub suggestion_context: Option<SuggestionContext>,
   pub created_at: Arc<str>,
+  pub thread_id: Option<Arc<str>>,
+  pub is_resolved: bool,
+  pub is_outdated: bool,
+  pub viewer_can_resolve: bool,
+  pub viewer_can_unresolve: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1570,6 +1575,11 @@ mod tests {
       body: Arc::from(body.to_string()),
       suggestion_context: None,
       created_at: Arc::from("2026-02-12"),
+      thread_id: None,
+      is_resolved: false,
+      is_outdated: false,
+      viewer_can_resolve: false,
+      viewer_can_unresolve: false,
     }
   }
 

@@ -164,6 +164,18 @@ pub type ReviewCommentEditHandler = Arc<dyn Fn(u64, Arc<str>, &mut Window, &mut 
 pub type ReviewCommentCreateHandler =
   Arc<dyn Fn(ReviewCommentCreateRequest, &mut Window, &mut App)>;
 pub type ReviewCommentDeleteHandler = Arc<dyn Fn(u64, &mut Window, &mut App)>;
+pub type ReviewCommentResolveHandler = Arc<dyn Fn(Arc<str>, u64, bool, &mut Window, &mut App)>;
+pub type ReviewCommentSuggestionActionFactory = Arc<
+  dyn Fn(
+      u64,
+      Arc<str>,
+      bool,
+      &App,
+    ) -> Arc<
+      dyn Fn(gfm_markdown_viewer::SuggestionActionContext, &App) -> gpui::AnyElement + Send + Sync,
+    > + Send
+    + Sync,
+>;
 pub type ReviewCommentLinkHandler = Arc<dyn Fn(&str, &mut Window, &mut App) -> bool>;
 type ReviewCommentAssetUrlResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
@@ -516,6 +528,10 @@ pub struct Editor {
   review_comment_edit_error: Option<(u64, Arc<str>)>,
   review_comment_delete_handler: Option<ReviewCommentDeleteHandler>,
   review_comment_delete_submitting_id: Option<u64>,
+  review_comment_resolve_handler: Option<ReviewCommentResolveHandler>,
+  review_comment_resolve_in_flight: HashSet<Arc<str>>,
+  auto_collapsed_resolved_thread_ids: HashSet<u64>,
+  review_comment_suggestion_action_factory: Option<ReviewCommentSuggestionActionFactory>,
   review_comment_create_handler: Option<ReviewCommentCreateHandler>,
   review_comment_link_handler: Option<ReviewCommentLinkHandler>,
   review_comment_asset_url_resolver: Option<ReviewCommentAssetUrlResolver>,
@@ -599,6 +615,11 @@ struct ReviewCommentMessageLayout {
   body: Arc<str>,
   suggestion_context: Option<gfm_markdown_viewer::SuggestionContext>,
   created_at: Arc<str>,
+  thread_id: Option<Arc<str>>,
+  is_resolved: bool,
+  is_outdated: bool,
+  viewer_can_resolve: bool,
+  viewer_can_unresolve: bool,
 }
 
 #[derive(Clone)]
@@ -906,6 +927,10 @@ impl Editor {
       review_comment_edit_error: None,
       review_comment_delete_handler: None,
       review_comment_delete_submitting_id: None,
+      review_comment_resolve_handler: None,
+      review_comment_resolve_in_flight: HashSet::new(),
+      auto_collapsed_resolved_thread_ids: HashSet::new(),
+      review_comment_suggestion_action_factory: None,
       review_comment_create_handler: None,
       review_comment_link_handler: None,
       review_comment_asset_url_resolver: None,
@@ -1158,6 +1183,46 @@ impl Editor {
           .extend(comment_ids.iter().copied());
       }
     }
+    // Auto-collapse newly resolved threads on first sight; preserve user
+    // overrides on subsequent refreshes by tracking which thread roots we've
+    // already auto-collapsed.
+    let resolved_thread_roots: HashSet<u64> = self
+      .review_comment_threads
+      .iter()
+      .filter_map(|(thread_root, comment_ids)| {
+        let root = comments_by_id.get(thread_root)?;
+        if root.is_resolved {
+          Some((*thread_root, comment_ids.clone()))
+        } else {
+          None
+        }
+      })
+      .map(|(root, _)| root)
+      .collect();
+    for (thread_root, comment_ids) in self.review_comment_threads.clone() {
+      let Some(root) = comments_by_id.get(&thread_root) else {
+        continue;
+      };
+      if root.is_resolved
+        && !self
+          .auto_collapsed_resolved_thread_ids
+          .contains(&thread_root)
+      {
+        self
+          .collapsed_review_comments
+          .extend(comment_ids.iter().copied());
+        self.auto_collapsed_resolved_thread_ids.insert(thread_root);
+      }
+    }
+    self
+      .auto_collapsed_resolved_thread_ids
+      .retain(|id| resolved_thread_roots.contains(id));
+    self.review_comment_resolve_in_flight.retain(|thread_id| {
+      self
+        .review_comments
+        .iter()
+        .any(|comment| comment.thread_id.as_deref() == Some(thread_id.as_ref()))
+    });
     self
       .review_comment_markdown_states
       .retain(|id, _| self.review_comments.iter().any(|comment| comment.id == *id));
@@ -1634,6 +1699,47 @@ impl Editor {
       return;
     }
     cx.notify();
+  }
+
+  pub fn set_review_comment_resolve_handler(
+    &mut self,
+    handler: Option<ReviewCommentResolveHandler>,
+    cx: &mut Context<Self>,
+  ) {
+    self.review_comment_resolve_handler = handler;
+    if self.review_comment_resolve_handler.is_none() {
+      self.review_comment_resolve_in_flight.clear();
+    }
+    cx.notify();
+  }
+
+  pub fn set_review_comment_suggestion_action_factory(
+    &mut self,
+    factory: Option<ReviewCommentSuggestionActionFactory>,
+    cx: &mut Context<Self>,
+  ) {
+    self.review_comment_suggestion_action_factory = factory;
+    self.review_comment_markdown_cache.clear();
+    cx.notify();
+  }
+
+  pub fn clear_review_comment_resolve_in_flight(
+    &mut self,
+    thread_id: &str,
+    cx: &mut Context<Self>,
+  ) {
+    if self.review_comment_resolve_in_flight.is_empty() {
+      return;
+    }
+    let removed = self
+      .review_comment_resolve_in_flight
+      .iter()
+      .find(|id| id.as_ref() == thread_id)
+      .cloned();
+    if let Some(id) = removed {
+      self.review_comment_resolve_in_flight.remove(&id);
+      cx.notify();
+    }
   }
 
   pub fn set_review_comment_link_handler(
@@ -2372,6 +2478,47 @@ impl Editor {
     self.toggle_review_comment_thread(self.thread_id_for_comment(id), cx);
   }
 
+  fn toggle_review_comment_thread_resolution(
+    &mut self,
+    thread_id: Arc<str>,
+    first_message_id: u64,
+    currently_resolved: bool,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.review_comment_resolve_in_flight.contains(&thread_id) {
+      return;
+    }
+    let Some(handler) = self.review_comment_resolve_handler.clone() else {
+      return;
+    };
+    self
+      .review_comment_resolve_in_flight
+      .insert(thread_id.clone());
+    // Remove the auto-collapse marker so a fresh re-resolve auto-collapses
+    // again on the next refresh; if the user just resolved, we also want the
+    // thread to collapse immediately rather than stay expanded.
+    self
+      .auto_collapsed_resolved_thread_ids
+      .remove(&first_message_id);
+    if !currently_resolved
+      && let Some(comment_ids) = self.review_comment_threads.get(&first_message_id).cloned()
+    {
+      self
+        .collapsed_review_comments
+        .extend(comment_ids.iter().copied());
+      self
+        .auto_collapsed_resolved_thread_ids
+        .insert(first_message_id);
+    }
+    if self.diffs.is_some() {
+      self.rebuild_projection(cx);
+    } else {
+      cx.notify();
+    }
+    handler(thread_id, first_message_id, currently_resolved, window, cx);
+  }
+
   fn ensure_find_input(
     &mut self,
     window: &mut Window,
@@ -3037,6 +3184,11 @@ impl Editor {
           body: comment.body.clone(),
           suggestion_context: comment.suggestion_context.clone(),
           created_at: comment.created_at.clone(),
+          thread_id: comment.thread_id.clone(),
+          is_resolved: comment.is_resolved,
+          is_outdated: comment.is_outdated,
+          viewer_can_resolve: comment.viewer_can_resolve,
+          viewer_can_unresolve: comment.viewer_can_unresolve,
         });
       }
 
@@ -3103,6 +3255,11 @@ impl Editor {
           body: comment.body.clone(),
           suggestion_context: comment.suggestion_context.clone(),
           created_at: comment.created_at.clone(),
+          thread_id: comment.thread_id.clone(),
+          is_resolved: comment.is_resolved,
+          is_outdated: comment.is_outdated,
+          viewer_can_resolve: comment.viewer_can_resolve,
+          viewer_can_unresolve: comment.viewer_can_unresolve,
         }],
         collapsed: self.collapsed_review_comments.contains(&comment.id),
       });
@@ -3265,6 +3422,59 @@ impl Editor {
       } else {
         None
       };
+      let resolve_thread_id = first_message.thread_id.clone();
+      let thread_is_resolved = first_message.is_resolved;
+      let resolve_in_flight = resolve_thread_id
+        .as_ref()
+        .is_some_and(|id| self.review_comment_resolve_in_flight.contains(id));
+      let can_toggle_resolution = resolve_thread_id.is_some()
+        && self.review_comment_resolve_handler.is_some()
+        && !resolve_in_flight
+        && if thread_is_resolved {
+          first_message.viewer_can_unresolve
+        } else {
+          first_message.viewer_can_resolve
+        };
+      let first_message_resolve_button = resolve_thread_id.clone().map(|thread_id_arc| {
+        let editor = editor_entity.clone();
+        let label = if resolve_in_flight {
+          if thread_is_resolved {
+            "Unresolving..."
+          } else {
+            "Resolving..."
+          }
+        } else if thread_is_resolved {
+          "Unresolve conversation"
+        } else {
+          "Resolve conversation"
+        };
+        let thread_id_for_click = thread_id_arc.clone();
+        div()
+          .on_mouse_down(MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation();
+          })
+          .child(
+            Button::new(format!("review-comment-resolve-{}", first_message_id))
+              .ghost()
+              .xsmall()
+              .compact()
+              .label(label)
+              .disabled(!can_toggle_resolution)
+              .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                let thread_id_for_click = thread_id_for_click.clone();
+                editor.update(cx, |editor, cx| {
+                  editor.toggle_review_comment_thread_resolution(
+                    thread_id_for_click,
+                    first_message_id,
+                    thread_is_resolved,
+                    window,
+                    cx,
+                  );
+                });
+              }),
+          )
+      });
       let first_message_reply_button = if last_message_id == Some(first_message_id) {
         let is_replying = self.replying_to_review_comment_id == Some(first_message_id);
         let disabled_reason = if review_comment_submission_in_flight {
@@ -3371,6 +3581,9 @@ impl Editor {
           h_flex()
             .items_center()
             .gap_1()
+            .when_some(first_message_resolve_button, |this, button| {
+              this.child(button)
+            })
             .when_some(first_message_reply_button, |this, button| {
               this.child(button)
             })
@@ -3520,6 +3733,10 @@ impl Editor {
             options.on_link = Some(link_handler.clone());
             if let Some(ctx) = message.suggestion_context.clone() {
               options = options.with_suggestion_context(ctx);
+              if let Some(factory) = self.review_comment_suggestion_action_factory.as_ref() {
+                let action = factory(message.id, message.author.clone(), message.is_outdated, cx);
+                options = options.with_suggestion_action(action);
+              }
             }
             render_parsed_markdown(&parsed, &options, cx).into_any_element()
           }
@@ -3541,6 +3758,10 @@ impl Editor {
             options.on_link = Some(link_handler.clone());
             if let Some(ctx) = message.suggestion_context.clone() {
               options = options.with_suggestion_context(ctx);
+              if let Some(factory) = self.review_comment_suggestion_action_factory.as_ref() {
+                let action = factory(message.id, message.author.clone(), message.is_outdated, cx);
+                options = options.with_suggestion_action(action);
+              }
             }
             render_parsed_markdown(&parsed, &options, cx).into_any_element()
           } else {
@@ -3567,6 +3788,11 @@ impl Editor {
                   options.on_link = Some(link_handler.clone());
                   if let Some(ctx) = message.suggestion_context.clone() {
                     options = options.with_suggestion_context(ctx);
+                    if let Some(factory) = self.review_comment_suggestion_action_factory.as_ref() {
+                      let action =
+                        factory(message.id, message.author.clone(), message.is_outdated, cx);
+                      options = options.with_suggestion_action(action);
+                    }
                   }
                   rendered = rendered
                     .child(render_parsed_markdown(&parsed, &options, cx).into_any_element());
@@ -4443,6 +4669,11 @@ impl Editor {
         body: Arc::from(""),
         suggestion_context: None,
         created_at: Arc::from(""),
+        thread_id: None,
+        is_resolved: false,
+        is_outdated: false,
+        viewer_can_resolve: false,
+        viewer_can_unresolve: false,
       });
       review_comment_body_heights_px.insert(
         REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID,
@@ -4461,6 +4692,11 @@ impl Editor {
         body: Arc::from(""),
         suggestion_context: None,
         created_at: Arc::from(""),
+        thread_id: None,
+        is_resolved: false,
+        is_outdated: false,
+        viewer_can_resolve: false,
+        viewer_can_unresolve: false,
       });
       review_comment_body_heights_px.insert(
         REVIEW_COMMENT_REPLY_DRAFT_COMMENT_ID,
@@ -8384,6 +8620,10 @@ pub mod tests {
           review_comment_edit_error: None,
           review_comment_delete_handler: None,
           review_comment_delete_submitting_id: None,
+          review_comment_resolve_handler: None,
+          review_comment_resolve_in_flight: HashSet::new(),
+          auto_collapsed_resolved_thread_ids: HashSet::new(),
+          review_comment_suggestion_action_factory: None,
           review_comment_create_handler: None,
           review_comment_link_handler: None,
           review_comment_asset_url_resolver: None,
@@ -8733,6 +8973,11 @@ pub mod tests {
           body: Arc::from("hello"),
           suggestion_context: None,
           created_at: Arc::from("2026-02-17"),
+          thread_id: None,
+          is_resolved: false,
+          is_outdated: false,
+          viewer_can_resolve: false,
+          viewer_can_unresolve: false,
         }],
         cx,
       );
@@ -8862,6 +9107,11 @@ pub mod tests {
             body: Arc::from("thread one"),
             suggestion_context: None,
             created_at: Arc::from("2026-02-18"),
+            thread_id: None,
+            is_resolved: false,
+            is_outdated: false,
+            viewer_can_resolve: false,
+            viewer_can_unresolve: false,
           },
           ReviewComment {
             id: 2,
@@ -8874,6 +9124,11 @@ pub mod tests {
             body: Arc::from("thread one reply"),
             suggestion_context: None,
             created_at: Arc::from("2026-02-18"),
+            thread_id: None,
+            is_resolved: false,
+            is_outdated: false,
+            viewer_can_resolve: false,
+            viewer_can_unresolve: false,
           },
           ReviewComment {
             id: 3,
@@ -8886,6 +9141,11 @@ pub mod tests {
             body: Arc::from("thread two"),
             suggestion_context: None,
             created_at: Arc::from("2026-02-18"),
+            thread_id: None,
+            is_resolved: false,
+            is_outdated: false,
+            viewer_can_resolve: false,
+            viewer_can_unresolve: false,
           },
         ],
         cx,
@@ -8909,6 +9169,11 @@ pub mod tests {
             body: Arc::from("thread one updated"),
             suggestion_context: None,
             created_at: Arc::from("2026-02-18"),
+            thread_id: None,
+            is_resolved: false,
+            is_outdated: false,
+            viewer_can_resolve: false,
+            viewer_can_unresolve: false,
           },
           ReviewComment {
             id: 2,
@@ -8921,6 +9186,11 @@ pub mod tests {
             body: Arc::from("thread one reply"),
             suggestion_context: None,
             created_at: Arc::from("2026-02-18"),
+            thread_id: None,
+            is_resolved: false,
+            is_outdated: false,
+            viewer_can_resolve: false,
+            viewer_can_unresolve: false,
           },
           ReviewComment {
             id: 3,
@@ -8933,6 +9203,11 @@ pub mod tests {
             body: Arc::from("thread two"),
             suggestion_context: None,
             created_at: Arc::from("2026-02-18"),
+            thread_id: None,
+            is_resolved: false,
+            is_outdated: false,
+            viewer_can_resolve: false,
+            viewer_can_unresolve: false,
           },
         ],
         cx,
