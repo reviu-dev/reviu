@@ -16,6 +16,10 @@ Suggested changes in review comments render as GitHub-style diff rows and can be
 
 Review comment threads on a pull request can now be resolved and unresolved directly from the Reviu overview. Resolved threads collapse into a summary with a Show toggle so the discussion stays out of the way once it's addressed, and the Resolve / Unresolve button respects GitHub's permissions.
 
+### Drag-and-drop Image Upload
+
+Drag a PNG, JPEG, GIF, or WebP file onto any comment, reply, review, or description composer in a pull request or issue to upload it and embed it as markdown. A placeholder appears immediately while the upload runs and is replaced by the final image link when it completes.
+
 ### GitHub Mentions in Markdown
 
 User mentions in GitHub markdown now show the profile avatar next to the linked username, matching the way mentions appear on GitHub while keeping profile navigation inside Reviu.
