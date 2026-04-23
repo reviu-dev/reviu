@@ -13934,6 +13934,17 @@ impl GithubPrDetailsPage {
       .and_then(|parent| parent.to_str())
       .unwrap_or("")
       .to_string();
+    let old_file_name = if file.status == GithubPrFileStatus::Renamed {
+      file.old_path.as_ref().map(|old_path| {
+        Path::new(old_path.as_ref())
+          .file_name()
+          .and_then(|name| name.to_str())
+          .map(|name| name.to_string())
+          .unwrap_or_else(|| old_path.to_string())
+      })
+    } else {
+      None
+    };
     let icon = file_icon_path_for_name_with_theme(&file_name, &theme)
       .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
       .unwrap_or_else(|| {
@@ -14066,13 +14077,47 @@ impl GithubPrDetailsPage {
               .child(status_letter),
           )
           .child(icon)
-          .child({
-            let mut label = Label::new(file_name);
-            if !dir_path.is_empty() {
-              label = label.secondary(format!("- {}", dir_path));
-            }
-            label.truncate()
-          }),
+          .child(
+            h_flex()
+              .min_w_0()
+              .flex_1()
+              .items_center()
+              .gap_1()
+              .when_some(old_file_name.clone(), |this, old_name| {
+                this
+                  .child(
+                    div()
+                      .min_w_0()
+                      .overflow_hidden()
+                      .text_ellipsis_start()
+                      .text_color(theme.muted_foreground)
+                      .line_through()
+                      .child(old_name),
+                  )
+                  .child(
+                    Icon::new(IconName::ArrowRight)
+                      .size_3()
+                      .text_color(theme.muted_foreground),
+                  )
+              })
+              .child({
+                let mut label = Label::new(file_name);
+                if !dir_path.is_empty() && old_file_name.is_none() {
+                  label = label.secondary(format!("- {}", dir_path));
+                }
+                label.truncate()
+              })
+              .when(old_file_name.is_some() && !dir_path.is_empty(), |this| {
+                this.child(
+                  div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis_start()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("- {}", dir_path)),
+                )
+              }),
+          ),
       )
       .child(
         h_flex()
