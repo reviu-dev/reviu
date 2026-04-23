@@ -26,3 +26,6 @@ lerna-debug.log*
 
 # misc
 .DS_Store
+
+# local mock for dev-only asset storage (see src/plugins/assets/runtime.ts)
+.assets-mock/

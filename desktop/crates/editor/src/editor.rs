@@ -20,10 +20,10 @@ use gfm_markdown_viewer::{
 };
 use git::{ApplyLocation, DiffSet, FileDiff, GitFileBases, GitStore, RepoFile};
 use gpui::{
-  App, Bounds, Context, Corner, CursorStyle, Entity, EntityInputHandler, FocusHandle, Focusable,
-  MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
-  ShapedLine, SharedString, Subscription, Task, UTF16Selection, Window, black, div, point,
-  prelude::*, px, white,
+  App, Bounds, Context, Corner, CursorStyle, Entity, EntityInputHandler, ExternalPaths,
+  FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+  ScrollHandle, ShapedLine, SharedString, Subscription, Task, UTF16Selection, Window, black, div,
+  point, prelude::*, px, white,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, Selectable, Sizable,
@@ -177,6 +177,8 @@ pub type ReviewCommentSuggestionActionFactory = Arc<
     + Sync,
 >;
 pub type ReviewCommentLinkHandler = Arc<dyn Fn(&str, &mut Window, &mut App) -> bool>;
+pub type ReviewCommentImageUploadHandler =
+  Arc<dyn Fn(&ExternalPaths, Entity<InputState>, &mut Window, &mut App)>;
 type ReviewCommentAssetUrlResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -537,6 +539,7 @@ pub struct Editor {
   review_comment_create_handler: Option<ReviewCommentCreateHandler>,
   review_comment_link_handler: Option<ReviewCommentLinkHandler>,
   review_comment_asset_url_resolver: Option<ReviewCommentAssetUrlResolver>,
+  review_comment_image_upload_handler: Option<ReviewCommentImageUploadHandler>,
   review_comment_create_input: Option<Entity<InputState>>,
   review_comment_create_draft: Option<ReviewCommentCreateDraft>,
   review_comment_create_drag_start_display_line: Option<usize>,
@@ -936,6 +939,7 @@ impl Editor {
       review_comment_create_handler: None,
       review_comment_link_handler: None,
       review_comment_asset_url_resolver: None,
+      review_comment_image_upload_handler: None,
       review_comment_create_input: None,
       review_comment_create_draft: None,
       review_comment_create_drag_start_display_line: None,
@@ -1760,6 +1764,34 @@ impl Editor {
   ) {
     self.review_comment_asset_url_resolver = resolver;
     cx.notify();
+  }
+
+  pub fn set_review_comment_image_upload_handler(
+    &mut self,
+    handler: Option<ReviewCommentImageUploadHandler>,
+    cx: &mut Context<Self>,
+  ) {
+    self.review_comment_image_upload_handler = handler;
+    cx.notify();
+  }
+
+  fn review_comment_drop_zone(
+    &self,
+    id: impl Into<gpui::ElementId>,
+    input: Entity<InputState>,
+    cx: &mut Context<Self>,
+  ) -> gpui::Stateful<gpui::Div> {
+    let handler = self.review_comment_image_upload_handler.clone();
+    div()
+      .id(id.into())
+      .w_full()
+      .rounded_md()
+      .drag_over::<ExternalPaths>(|this, _, _, cx| this.bg(cx.theme().drop_target))
+      .on_drop(cx.listener(move |_, paths: &ExternalPaths, window, cx| {
+        if let Some(handler) = handler.as_ref() {
+          handler(paths, input.clone(), window, cx);
+        }
+      }))
   }
 
   fn clear_review_comment_edit_state(&mut self) {
@@ -3651,10 +3683,18 @@ impl Editor {
               .on_action(cx.listener(Self::on_review_comment_edit_input_escape))
               .gap_2()
               .child(
-                GithubEmojiInput::new(&input_state)
-                  .disabled(is_edit_submitting)
-                  .font_family(theme.font_family.clone())
-                  .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
+                self
+                  .review_comment_drop_zone(
+                    format!("review-comment-edit-drop-zone-{}", message_id),
+                    input_state.clone(),
+                    cx,
+                  )
+                  .child(
+                    GithubEmojiInput::new(&input_state)
+                      .disabled(is_edit_submitting)
+                      .font_family(theme.font_family.clone())
+                      .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
+                  ),
               )
               .child(
                 h_flex()
@@ -3983,10 +4023,18 @@ impl Editor {
                 v_flex()
                   .gap(px(REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX))
                   .child(
-                    GithubEmojiInput::new(&input_state)
-                      .disabled(is_reply_submitting)
-                      .font_family(theme.font_family.clone())
-                      .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
+                    self
+                      .review_comment_drop_zone(
+                        format!("review-comment-reply-drop-zone-{}", reply_to_id),
+                        input_state.clone(),
+                        cx,
+                      )
+                      .child(
+                        GithubEmojiInput::new(&input_state)
+                          .disabled(is_reply_submitting)
+                          .font_family(theme.font_family.clone())
+                          .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
+                      ),
                   )
                   .child(
                     h_flex()
@@ -4200,10 +4248,18 @@ impl Editor {
                 .pb(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
                 .gap(px(REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX))
                 .child(
-                  GithubEmojiInput::new(&input_state)
-                    .disabled(is_create_submitting)
-                    .font_family(theme.font_family.clone())
-                    .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
+                  self
+                    .review_comment_drop_zone(
+                      "review-comment-create-drop-zone",
+                      input_state.clone(),
+                      cx,
+                    )
+                    .child(
+                      GithubEmojiInput::new(&input_state)
+                        .disabled(is_create_submitting)
+                        .font_family(theme.font_family.clone())
+                        .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
+                    ),
                 )
                 .child(
                   h_flex()
@@ -8634,6 +8690,7 @@ pub mod tests {
           review_comment_create_handler: None,
           review_comment_link_handler: None,
           review_comment_asset_url_resolver: None,
+          review_comment_image_upload_handler: None,
           review_comment_create_input: None,
           review_comment_create_draft: None,
           review_comment_create_drag_start_display_line: None,

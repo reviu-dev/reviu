@@ -33,6 +33,12 @@ function setupEnv() {
     SHIPIT_API_URL: 'https://shipit.example.com',
     SHIPIT_PROJECT_ID: 'shipit-project-id',
     LOG_GITHUB_CACHE: 'true',
+    HETZNER_STORAGE_SECRET_KEY: 'hetzner-secret',
+    HETZNER_STORAGE_ACCESS_KEY: 'hetzner-access',
+    HETZNER_STORAGE_BUCKET: 'reviu',
+    HETZNER_STORAGE_REGION: 'hel1',
+    HETZNER_STORAGE_ENDPOINT: 'https://hel1.your-objectstorage.com',
+    ASSETS_USE_MOCK: 'true',
   }
 
   for (const [key, value] of Object.entries(env)) {

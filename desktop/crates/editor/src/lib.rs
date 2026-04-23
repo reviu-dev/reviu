@@ -16,7 +16,8 @@ pub use editor::{
   ConflictNavigationDirection, ConflictNavigationState, ConflictResolution, DiffViewMode, Editor,
   HunkAction, ReviewCommentCodeReferencePreview, ReviewCommentCreateHandler,
   ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentEditHandler,
-  ReviewCommentLinkHandler, ReviewCommentResolveHandler, ReviewCommentSuggestionActionFactory,
+  ReviewCommentImageUploadHandler, ReviewCommentLinkHandler, ReviewCommentResolveHandler,
+  ReviewCommentSuggestionActionFactory,
 };
 pub use editor_element::{EditorElement, PositionMap, benchmark_word_diff_ranges};
 pub use gutter_element::GutterElement;

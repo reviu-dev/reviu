@@ -32,6 +32,14 @@ const envSchema = z.object({
   SHIPIT_API_KEY: z.string(),
   SHIPIT_PROJECT_ID: z.string(),
   SHIPIT_API_URL: z.url(),
+  HETZNER_STORAGE_SECRET_KEY: z.string(),
+  HETZNER_STORAGE_ACCESS_KEY: z.string(),
+  HETZNER_STORAGE_BUCKET: z.string(),
+  HETZNER_STORAGE_REGION: z.string(),
+  HETZNER_STORAGE_ENDPOINT: z.url(),
+  ASSETS_USE_MOCK: z.stringbool().default(false),
+  ASSETS_MOCK_ROOT: z.string().optional(),
+  ASSETS_BASE_URL: z.url().optional(),
 })
 
 export type Env = z.infer<typeof envSchema>
