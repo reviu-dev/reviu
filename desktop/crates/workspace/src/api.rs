@@ -1552,6 +1552,11 @@ struct GithubSuggestedChangeCommitResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct UploadAssetResponse {
+  url: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct GithubReviewThreadResolutionResponse {
   #[allow(dead_code)]
   thread: GithubReviewThreadResolution,
@@ -3426,6 +3431,32 @@ impl ApiClient {
     }
     let _ = response.json::<GithubReviewThreadResolutionResponse>()?;
     Ok(())
+  }
+
+  pub fn upload_asset(
+    &self,
+    bytes: Vec<u8>,
+    content_type: &str,
+    file_name: &str,
+  ) -> Result<String> {
+    let part = reqwest::blocking::multipart::Part::bytes(bytes)
+      .file_name(file_name.to_string())
+      .mime_str(content_type)?;
+    let form = reqwest::blocking::multipart::Form::new().part("file", part);
+    let response = self
+      .authed_request(Method::POST, "/assets/upload")
+      .multipart(form)
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", "/assets/upload", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<UploadAssetResponse>()?;
+    Ok(payload.url)
   }
 
   pub fn submit_pull_request_review(

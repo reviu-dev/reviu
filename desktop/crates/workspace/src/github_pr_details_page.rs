@@ -10,8 +10,8 @@ use editor::{
   REVIEW_COMMENT_CARD_PADDING_X_PX, REVIEW_COMMENT_HEADER_BODY_GAP_PX,
   REVIEW_COMMENT_VERTICAL_PADDING_PX, ReviewComment, ReviewCommentCodeReferencePreview,
   ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
-  ReviewCommentEditHandler, ReviewCommentLinkHandler, ReviewCommentResolveHandler,
-  ReviewCommentSide, ReviewCommentSuggestionActionFactory,
+  ReviewCommentEditHandler, ReviewCommentImageUploadHandler, ReviewCommentLinkHandler,
+  ReviewCommentResolveHandler, ReviewCommentSide, ReviewCommentSuggestionActionFactory,
 };
 use gfm_markdown_viewer::{
   GithubBlobLineReference, GithubCodeReferencePreview, GithubDiffLine, GithubDiffLineKind,
@@ -27,10 +27,11 @@ use git::{
   search_repo_head_contents, switch_to_branch_name, sync_current_branch_to_head,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Corner, Entity, FocusHandle, Focusable,
-  Hsla, Image, InteractiveElement, ListAlignment, ListState as GpuiListState, MouseButton,
-  ObjectFit, ParentElement, PathBuilder, Render, RenderImage, SharedString, Styled, Task, Window,
-  canvas, deferred, div, img, list, point, prelude::*, px, white,
+  AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Corner, Entity, ExternalPaths,
+  FocusHandle, Focusable, Hsla, Image, InteractiveElement, ListAlignment,
+  ListState as GpuiListState, MouseButton, ObjectFit, ParentElement, PathBuilder, Render,
+  RenderImage, SharedString, Styled, Task, Window, canvas, deferred, div, img, list, point,
+  prelude::*, px, white,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable as _, StyledExt,
@@ -151,6 +152,54 @@ fn pr_tab_url_segment(tab_ix: usize) -> &'static str {
     PR_TAB_CHANGES_IX => "changes",
     _ => "", // overview = no suffix
   }
+}
+
+fn upload_placeholder_id() -> String {
+  use std::sync::atomic::{AtomicU64, Ordering};
+  static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+  let n = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+  // Derive a unique, URL-safe token for the placeholder. Uniqueness is
+  // scoped to the lifetime of the process which is more than enough: the
+  // placeholder lives in the input buffer for at most a few seconds.
+  format!("reviu-upload-{n}")
+}
+
+fn replace_placeholder_in_input(
+  input: &mut InputState,
+  placeholder: &str,
+  replacement: &str,
+  window: &mut Window,
+  cx: &mut Context<InputState>,
+) {
+  let current = input.value().to_string();
+  let Some(index) = current.find(placeholder) else {
+    return;
+  };
+  let mut next = String::with_capacity(current.len() + replacement.len());
+  next.push_str(&current[..index]);
+  next.push_str(replacement);
+  next.push_str(&current[index + placeholder.len()..]);
+  input.set_value(next, window, cx);
+}
+
+fn image_content_type_and_name_for_path(path: &Path) -> Option<(String, String)> {
+  let extension = path
+    .extension()
+    .and_then(|ext| ext.to_str())
+    .map(|ext| ext.to_ascii_lowercase())?;
+  let content_type = match extension.as_str() {
+    "png" => "image/png",
+    "jpg" | "jpeg" => "image/jpeg",
+    "gif" => "image/gif",
+    "webp" => "image/webp",
+    _ => return None,
+  };
+  let file_name = path
+    .file_name()
+    .and_then(|name| name.to_str())
+    .unwrap_or("image")
+    .to_string();
+  Some((content_type.to_string(), file_name))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -6931,6 +6980,17 @@ impl GithubPrDetailsPage {
         Some(github_shared::make_asset_url_resolver(&self.api)),
         cx,
       );
+
+      let image_upload_handler: ReviewCommentImageUploadHandler = Arc::new({
+        let view = view.clone();
+        move |paths, input, window, cx| {
+          let paths = paths.clone();
+          let _ = view.update(cx, |this, cx| {
+            this.handle_diff_editor_review_comment_drop(&paths, input, window, cx);
+          });
+        }
+      });
+      editor.set_review_comment_image_upload_handler(Some(image_upload_handler), cx);
     });
   }
 
@@ -6953,6 +7013,7 @@ impl GithubPrDetailsPage {
       editor.set_review_comment_resolve_handler(None, cx);
       editor.set_review_comment_suggestion_action_factory(None, cx);
       editor.set_review_comment_asset_url_resolver(None, cx);
+      editor.set_review_comment_image_upload_handler(None, cx);
       editor.set_review_comment_pr_number(None, cx);
       editor.set_editable_review_comment_ids(std::iter::empty::<u64>(), cx);
       editor.set_review_comments(Vec::new(), cx);
@@ -7794,6 +7855,165 @@ impl GithubPrDetailsPage {
       OverviewCommentKind::Issue => self.issue_comments_task = Some(task),
       OverviewCommentKind::Review => self.review_comments_task = Some(task),
     }
+  }
+
+  fn upload_dropped_images(
+    &mut self,
+    paths: &ExternalPaths,
+    input: Entity<InputState>,
+    on_error: impl Fn(&mut Self, String, &mut Context<Self>) + Send + 'static + Clone,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let api = self.api.clone();
+    for path in paths.paths() {
+      let Some((content_type, file_name)) = image_content_type_and_name_for_path(path) else {
+        continue;
+      };
+      let placeholder_id = upload_placeholder_id();
+      let placeholder_markdown = format!(
+        "![Uploading {}…](uploading://{})\n",
+        file_name, placeholder_id
+      );
+      // Insert the placeholder immediately so the user sees feedback while
+      // the upload runs. It's replaced with the final markdown (or stripped
+      // on error) once the task resolves.
+      input.update(cx, |input, cx| {
+        input.insert(placeholder_markdown.clone(), window, cx);
+      });
+      let path = path.clone();
+      let api = api.clone();
+      let input = input.clone();
+      let window_handle = window.window_handle();
+      let on_error = on_error.clone();
+      cx.spawn(async move |this, cx| {
+        let upload = unblock(move || {
+          let bytes = std::fs::read(&path).map_err(anyhow::Error::from)?;
+          api.upload_asset(bytes, &content_type, &file_name)
+        })
+        .await;
+        let _ = this.update(cx, |this, cx| match upload {
+          Ok(url) => {
+            let markdown = format!("![image]({url})\n");
+            let _ = window_handle.update(cx, |_, window, cx| {
+              input.update(cx, |input, cx| {
+                replace_placeholder_in_input(input, &placeholder_markdown, &markdown, window, cx);
+              });
+            });
+          }
+          Err(error) => {
+            // Strip the placeholder so the composer isn't left with a dangling
+            // `uploading://` URL after a failed upload.
+            let _ = window_handle.update(cx, |_, window, cx| {
+              input.update(cx, |input, cx| {
+                replace_placeholder_in_input(input, &placeholder_markdown, "", window, cx);
+              });
+            });
+            on_error(this, error.to_string(), cx);
+            cx.notify();
+          }
+        });
+      })
+      .detach();
+    }
+  }
+
+  fn handle_overview_issue_comment_drop(
+    &mut self,
+    paths: &ExternalPaths,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let input = self.overview_issue_comment_input.clone();
+    self.upload_dropped_images(
+      paths,
+      input,
+      |this, message, _cx| {
+        this.overview_issue_comment_error = Some(message.into());
+      },
+      window,
+      cx,
+    );
+  }
+
+  fn handle_overview_reply_drop(
+    &mut self,
+    paths: &ExternalPaths,
+    input: Entity<InputState>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.upload_dropped_images(
+      paths,
+      input,
+      |this, message, _cx| {
+        this.overview_reply_error = Some(message.into());
+      },
+      window,
+      cx,
+    );
+  }
+
+  fn handle_overview_edit_drop(
+    &mut self,
+    paths: &ExternalPaths,
+    input: Entity<InputState>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.upload_dropped_images(
+      paths,
+      input,
+      |this, message, _cx| {
+        this.overview_edit_error = Some(message.into());
+      },
+      window,
+      cx,
+    );
+  }
+
+  fn handle_pr_description_edit_drop(
+    &mut self,
+    paths: &ExternalPaths,
+    input: Entity<InputState>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.upload_dropped_images(
+      paths,
+      input,
+      |this, message, _cx| {
+        this.pr_description_error = Some(message.into());
+      },
+      window,
+      cx,
+    );
+  }
+
+  // Handles drops inside any of the diff-editor review-comment composers
+  // (inline edit, create, reply). We don't have a per-composer error field
+  // on the page side — the upload runs fire-and-forget and surfaces errors
+  // via breadcrumbs for now.
+  fn handle_diff_editor_review_comment_drop(
+    &mut self,
+    paths: &ExternalPaths,
+    input: Entity<InputState>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.upload_dropped_images(
+      paths,
+      input,
+      |this, message, _cx| {
+        this.add_pr_breadcrumb("Diff editor image upload failed", {
+          let mut map = Map::new();
+          map.insert("error".into(), Value::String(message));
+          map
+        });
+      },
+      window,
+      cx,
+    );
   }
 
   fn submit_overview_review_comment_reply(&mut self, cx: &mut Context<Self>) {
@@ -11132,10 +11352,18 @@ impl GithubPrDetailsPage {
       .pt_2()
       .pb_32()
       .child(
-        div().w_full().child(
-          GithubEmojiInput::new(&self.overview_issue_comment_input)
-            .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
-        ),
+        div()
+          .id("pr-overview-issue-comment-drop-zone")
+          .w_full()
+          .rounded(theme.radius)
+          .drag_over::<ExternalPaths>(|this, _, _, cx| this.bg(cx.theme().drop_target))
+          .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+            this.handle_overview_issue_comment_drop(paths, window, cx);
+          }))
+          .child(
+            GithubEmojiInput::new(&self.overview_issue_comment_input)
+              .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+          ),
       )
       .when_some(self.overview_issue_comment_error.clone(), |this, error| {
         this.child(div().text_xs().text_color(theme.status_red()).child(error))
@@ -11627,14 +11855,26 @@ impl GithubPrDetailsPage {
           .is_some();
         let page_for_cancel = pr_page.clone();
         let page_for_save = pr_page.clone();
+        let input_for_drop = input_state.clone();
         let content = v_flex()
           .gap_2()
           .child(
-            div().w_full().child(
-              GithubEmojiInput::new(&input_state)
-                .disabled(self.overview_edit_submitting)
-                .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
-            ),
+            div()
+              .id(format!("pr-overview-edit-drop-zone-{}", item.id))
+              .w_full()
+              .rounded(theme.radius)
+              .drag_over::<ExternalPaths>(|this, _, _, cx| this.bg(cx.theme().drop_target))
+              .on_drop(cx.listener({
+                let input = input_for_drop.clone();
+                move |this, paths: &ExternalPaths, window, cx| {
+                  this.handle_overview_edit_drop(paths, input.clone(), window, cx);
+                }
+              }))
+              .child(
+                GithubEmojiInput::new(&input_state)
+                  .disabled(self.overview_edit_submitting)
+                  .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+              ),
           )
           .when_some(self.overview_edit_error.clone(), |this, error| {
             this.child(div().text_xs().text_color(theme.status_red()).child(error))
@@ -11711,6 +11951,7 @@ impl GithubPrDetailsPage {
           github_shared::normalize_non_empty_text(input_state.read(cx).value().as_str()).is_some();
         let page_for_cancel = pr_page.clone();
         let page_for_save = pr_page.clone();
+        let input_for_drop = input_state.clone();
         Some(
           v_flex()
             .gap_2()
@@ -11720,7 +11961,16 @@ impl GithubPrDetailsPage {
             .border_color(theme.border)
             .child(
               div()
+                .id(format!("pr-overview-reply-drop-zone-{}", item.id))
                 .w_full()
+                .rounded(theme.radius)
+                .drag_over::<ExternalPaths>(|this, _, _, cx| this.bg(cx.theme().drop_target))
+                .on_drop(cx.listener({
+                  let input = input_for_drop.clone();
+                  move |this, paths: &ExternalPaths, window, cx| {
+                    this.handle_overview_reply_drop(paths, input.clone(), window, cx);
+                  }
+                }))
                 .child(GithubEmojiInput::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))),
             )
             .when_some(self.overview_reply_error.clone(), |this, error| {
@@ -12086,11 +12336,28 @@ impl GithubPrDetailsPage {
                     .is_some();
                   let page_for_cancel = pr_page.clone();
                   let page_for_save = pr_page.clone();
+                  let input_for_drop = input_state.clone();
                   v_flex()
                     .gap_2()
-                    .child(div().w_full().child(
-                      GithubEmojiInput::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
-                    ))
+                    .child(
+                      div()
+                        .id(format!("pr-overview-reply-edit-drop-zone-{}", reply.id))
+                        .w_full()
+                        .rounded(theme.radius)
+                        .drag_over::<ExternalPaths>(|this, _, _, cx| {
+                          this.bg(cx.theme().drop_target)
+                        })
+                        .on_drop(cx.listener({
+                          let input = input_for_drop.clone();
+                          move |this, paths: &ExternalPaths, window, cx| {
+                            this.handle_overview_edit_drop(paths, input.clone(), window, cx);
+                          }
+                        }))
+                        .child(
+                          GithubEmojiInput::new(&input_state)
+                            .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+                        ),
+                    )
                     .when_some(self.overview_edit_error.clone(), |this, error| {
                       this.child(div().text_xs().text_color(theme.status_red()).child(error))
                     })
@@ -12164,15 +12431,32 @@ impl GithubPrDetailsPage {
                       .is_some();
                   let page_for_cancel = pr_page.clone();
                   let page_for_save = pr_page.clone();
+                  let input_for_drop = input_state.clone();
                   Some(
                     v_flex()
                       .gap_2()
                       .pt_2()
                       .border_t_1()
                       .border_color(theme.border)
-                      .child(div().w_full().child(
-                        GithubEmojiInput::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
-                      ))
+                      .child(
+                        div()
+                          .id(format!("pr-overview-reply-composer-drop-zone-{}", reply.id))
+                          .w_full()
+                          .rounded(theme.radius)
+                          .drag_over::<ExternalPaths>(|this, _, _, cx| {
+                            this.bg(cx.theme().drop_target)
+                          })
+                          .on_drop(cx.listener({
+                            let input = input_for_drop.clone();
+                            move |this, paths: &ExternalPaths, window, cx| {
+                              this.handle_overview_reply_drop(paths, input.clone(), window, cx);
+                            }
+                          }))
+                          .child(
+                            GithubEmojiInput::new(&input_state)
+                              .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+                          ),
+                      )
                       .when_some(self.overview_reply_error.clone(), |this, error| {
                         this.child(div().text_xs().text_color(theme.status_red()).child(error))
                       })
@@ -13208,14 +13492,26 @@ impl GithubPrDetailsPage {
                 .is_some();
               let page_for_cancel = pr_page.clone();
               let page_for_save = pr_page.clone();
+              let input_for_drop = input_state.clone();
               v_flex()
                 .gap_2()
                 .child(
-                  div().w_full().child(
-                    Input::new(&input_state)
-                      .disabled(self.pr_description_submitting)
-                      .h(px(OVERVIEW_DESCRIPTION_INPUT_HEIGHT_PX)),
-                  ),
+                  div()
+                    .id("pr-description-edit-drop-zone")
+                    .w_full()
+                    .rounded(theme.radius)
+                    .drag_over::<ExternalPaths>(|this, _, _, cx| this.bg(cx.theme().drop_target))
+                    .on_drop(cx.listener({
+                      let input = input_for_drop.clone();
+                      move |this, paths: &ExternalPaths, window, cx| {
+                        this.handle_pr_description_edit_drop(paths, input.clone(), window, cx);
+                      }
+                    }))
+                    .child(
+                      Input::new(&input_state)
+                        .disabled(self.pr_description_submitting)
+                        .h(px(OVERVIEW_DESCRIPTION_INPUT_HEIGHT_PX)),
+                    ),
                 )
                 .when_some(self.pr_description_error.clone(), |this, error| {
                   this.child(div().text_xs().text_color(theme.status_red()).child(error))
