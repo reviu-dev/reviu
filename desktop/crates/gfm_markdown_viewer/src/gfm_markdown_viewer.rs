@@ -703,16 +703,17 @@ pub fn render_github_diff_code_reference_preview_card(
             ),
         ),
     )
-    .child(
+    .child({
+      let preview_scroll_handle = preview_card_scroll_handle(preview_hash);
+      let preview_is_scrollable = scroll_handle_indicates_scrollable(&preview_scroll_handle);
       div()
         .id(preview_scroll_id)
         .w_full()
         .min_w_0()
         .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
         .overflow_scroll()
-        .on_scroll_wheel(|_, _, cx| {
-          cx.stop_propagation();
-        })
+        .track_scroll(&preview_scroll_handle)
+        .when(preview_is_scrollable, |this| this.occlude())
         .child(render_github_diff_lines(
           diff_lines,
           preview.path.as_ref(),
@@ -720,8 +721,8 @@ pub fn render_github_diff_code_reference_preview_card(
           MarkdownRenderState::new(),
           min_preview_content_width_px,
           cx,
-        )),
-    )
+        ))
+    })
 }
 
 pub fn render_github_code_reference_preview_card(
@@ -868,7 +869,9 @@ pub fn render_github_code_reference_preview_card(
             ),
         ),
     )
-    .child(
+    .child({
+      let preview_scroll_handle = preview_card_scroll_handle(preview_hash);
+      let preview_is_scrollable = scroll_handle_indicates_scrollable(&preview_scroll_handle);
       div()
         .id(preview_scroll_id)
         .w_full()
@@ -877,9 +880,8 @@ pub fn render_github_code_reference_preview_card(
         .min_w_0()
         .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
         .overflow_scroll()
-        .on_scroll_wheel(|_, _, cx| {
-          cx.stop_propagation();
-        })
+        .track_scroll(&preview_scroll_handle)
+        .when(preview_is_scrollable, |this| this.occlude())
         .child(
           div()
             .min_w(px(min_preview_content_width_px))
@@ -893,8 +895,8 @@ pub fn render_github_code_reference_preview_card(
                 .gap(px(MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX))
                 .child(snippet_rows),
             ),
-        ),
-    )
+        )
+    })
 }
 
 fn code_block_language_hint_from_path(path: &str) -> Option<String> {
@@ -2162,6 +2164,48 @@ fn render_heading_text(
   container.into_any_element()
 }
 
+fn scroll_handle_indicates_scrollable(handle: &gpui::ScrollHandle) -> bool {
+  // Only occlude when the block scrolls vertically. Horizontal-only scroll
+  // (e.g. wide code blocks, suggestion blocks) doesn't conflict with page
+  // scroll, so we let wheel events pass through to the page.
+  handle.max_offset().y > px(0.0)
+}
+
+// ScrollHandles hold `Rc<RefCell<_>>` and are !Send, so we cache them in a
+// thread-local. GPUI renders on the main thread; this keeps the handle
+// state persistent across frames without needing Send/Sync on the cache.
+thread_local! {
+  static SCROLLABLE_HANDLES: std::cell::RefCell<HashMap<u64, gpui::ScrollHandle>> =
+    std::cell::RefCell::new(HashMap::new());
+}
+
+fn scrollable_handle(key: u64) -> gpui::ScrollHandle {
+  SCROLLABLE_HANDLES.with(|map| {
+    map
+      .borrow_mut()
+      .entry(key)
+      .or_insert_with(gpui::ScrollHandle::new)
+      .clone()
+  })
+}
+
+fn code_block_scroll_handle(instance_id: usize, text_id: usize) -> gpui::ScrollHandle {
+  // Namespace by combining the markdown instance id with the text id so
+  // separate markdown views don't share state.
+  let key = 0x1000_0000_0000_0000_u64 | ((instance_id as u64) << 32) | (text_id as u32 as u64);
+  scrollable_handle(key)
+}
+
+fn suggestion_block_scroll_handle(instance_id: usize, text_id: usize) -> gpui::ScrollHandle {
+  let key = 0x2000_0000_0000_0000_u64 | ((instance_id as u64) << 32) | (text_id as u32 as u64);
+  scrollable_handle(key)
+}
+
+fn preview_card_scroll_handle(preview_hash: u64) -> gpui::ScrollHandle {
+  // Keep the high bit clear to avoid collisions with the namespaced keys above.
+  scrollable_handle(preview_hash & 0x0fff_ffff_ffff_ffff)
+}
+
 fn render_code_block(
   code: &CodeBlock,
   options: &MarkdownRenderOptions,
@@ -2199,15 +2243,20 @@ fn render_code_block(
       ),
   );
 
+  let scroll_handle = code_block_scroll_handle(options.state.instance_id, text_id);
+  let is_scrollable = scroll_handle_indicates_scrollable(&scroll_handle);
   let scroll_container = if options.expand_code_blocks {
-    scroll_content.overflow_x_scroll().into_any_element()
+    scroll_content
+      .overflow_x_scroll()
+      .track_scroll(&scroll_handle)
+      .when(is_scrollable, |this| this.occlude())
+      .into_any_element()
   } else {
     scroll_content
       .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
       .overflow_scroll()
-      .on_scroll_wheel(|_, _, cx| {
-        cx.stop_propagation();
-      })
+      .track_scroll(&scroll_handle)
+      .when(is_scrollable, |this| this.occlude())
       .into_any_element()
   };
   let copy_value = code_block_copy_value(code);
@@ -2321,11 +2370,16 @@ fn render_suggestion_block(
         .child(Clipboard::new(("markdown-suggestion-copy", old_text_id)).value(copy_value)),
     );
 
+  let suggestion_scroll_handle =
+    suggestion_block_scroll_handle(options.state.instance_id, old_text_id);
+  let suggestion_is_scrollable = scroll_handle_indicates_scrollable(&suggestion_scroll_handle);
   let scroll_content = div()
     .id(scroll_id)
     .w_full()
     .min_w_0()
     .overflow_x_scroll()
+    .track_scroll(&suggestion_scroll_handle)
+    .when(suggestion_is_scrollable, |this| this.occlude())
     .child(render_github_diff_lines(
       &diff_lines,
       suggestion_ctx.path.as_ref(),
