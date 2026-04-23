@@ -852,6 +852,16 @@ pub struct GithubPullRequestReviewComment {
   pub reactions: Vec<GithubReactionGroup>,
   #[serde(default, rename = "is_outdated")]
   pub is_outdated: bool,
+  #[serde(default, rename = "thread_id")]
+  pub thread_id: String,
+  #[serde(default, rename = "is_resolved")]
+  pub is_resolved: bool,
+  #[serde(default, rename = "is_collapsed")]
+  pub is_collapsed: bool,
+  #[serde(default, rename = "viewer_can_resolve")]
+  pub viewer_can_resolve: bool,
+  #[serde(default, rename = "viewer_can_unresolve")]
+  pub viewer_can_unresolve: bool,
   pub id: u64,
   #[serde(rename = "pull_request_review_id")]
   pub pull_request_review_id: Option<u64>,
@@ -1539,6 +1549,21 @@ struct GithubPullRequestMergeResultResponse {
 #[derive(Debug, Deserialize)]
 struct GithubSuggestedChangeCommitResponse {
   commit: GithubSuggestedChangeCommitResult,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubReviewThreadResolutionResponse {
+  #[allow(dead_code)]
+  thread: GithubReviewThreadResolution,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct GithubReviewThreadResolution {
+  pub thread_id: String,
+  pub is_resolved: bool,
+  pub viewer_can_resolve: bool,
+  pub viewer_can_unresolve: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3355,6 +3380,52 @@ impl ApiClient {
     }
     let payload = response.json::<GithubSuggestedChangeCommitResponse>()?;
     Ok(payload.commit)
+  }
+
+  pub fn resolve_pull_request_review_thread(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    thread_id: &str,
+  ) -> Result<()> {
+    self.toggle_pull_request_review_thread_resolution(owner, repo, number, thread_id, true)
+  }
+
+  pub fn unresolve_pull_request_review_thread(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    thread_id: &str,
+  ) -> Result<()> {
+    self.toggle_pull_request_review_thread_resolution(owner, repo, number, thread_id, false)
+  }
+
+  fn toggle_pull_request_review_thread_resolution(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    thread_id: &str,
+    resolve: bool,
+  ) -> Result<()> {
+    let action = if resolve { "resolve" } else { "unresolve" };
+    let route = format!("/github/pr/{number}/review-threads/{thread_id}/{action}");
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let _ = response.json::<GithubReviewThreadResolutionResponse>()?;
+    Ok(())
   }
 
   pub fn submit_pull_request_review(

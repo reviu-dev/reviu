@@ -12,6 +12,10 @@ Windows and Linux now show the Reviu tray icon with unread GitHub notification c
 
 Suggested changes in review comments render as GitHub-style diff rows and can be committed directly to the pull request branch with a custom title, optional message, and the reviewer as co-author.
 
+### GitHub Resolve Conversations
+
+Review comment threads on a pull request can now be resolved and unresolved directly from the Reviu overview. Resolved threads collapse into a summary with a Show toggle so the discussion stays out of the way once it's addressed, and the Resolve / Unresolve button respects GitHub's permissions.
+
 ### GitHub Mentions in Markdown
 
 User mentions in GitHub markdown now show the profile avatar next to the linked username, matching the way mentions appear on GitHub while keeping profile navigation inside Reviu.
