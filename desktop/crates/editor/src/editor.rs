@@ -706,6 +706,19 @@ pub struct ConflictNavigationState {
   pub active_start_line: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HunkNavigationDirection {
+  Previous,
+  Next,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HunkNavigationState {
+  pub active_index: usize,
+  pub total: usize,
+  pub active_display_line: usize,
+}
+
 #[derive(Clone, Debug)]
 struct GroupToken {
   state: HunkState,
@@ -5593,6 +5606,117 @@ impl Editor {
     self.reveal_conflict_start_line(regions[target_index].start_line, cx);
   }
 
+  fn ordered_hunk_display_lines(&self) -> Vec<(Arc<str>, usize)> {
+    let Some(projection) = &self.projection else {
+      return Vec::new();
+    };
+    let mut seen: HashSet<Arc<str>> = HashSet::new();
+    let mut result = Vec::new();
+    for (display_line, line) in projection.lines.iter().enumerate() {
+      let group_id = match line {
+        DisplayLine::Doc {
+          change: Some(_),
+          group_id: Some(id),
+          ..
+        }
+        | DisplayLine::Modified {
+          group_id: Some(id), ..
+        }
+        | DisplayLine::Removed {
+          group_id: Some(id), ..
+        }
+        | DisplayLine::NoNewline {
+          group_id: Some(id), ..
+        } => id,
+        _ => continue,
+      };
+      if seen.insert(group_id.clone()) {
+        result.push((group_id.clone(), display_line));
+      }
+    }
+    result
+  }
+
+  fn active_hunk_index(&self, ordered: &[(Arc<str>, usize)], cx: &App) -> Option<usize> {
+    if ordered.is_empty() {
+      return None;
+    }
+
+    let cursor_doc_line = {
+      let document = self.document.read(cx);
+      document.char_to_line(self.cursor_offset().min(document.len()))
+    };
+    let cursor_display_line = self
+      .doc_to_display_line(cursor_doc_line)
+      .unwrap_or(usize::MAX);
+
+    let mut active = 0;
+    for (idx, (_, display_line)) in ordered.iter().enumerate() {
+      if *display_line <= cursor_display_line {
+        active = idx;
+      } else {
+        break;
+      }
+    }
+    Some(active)
+  }
+
+  pub fn hunk_navigation_state(&self, cx: &App) -> Option<HunkNavigationState> {
+    let ordered = self.ordered_hunk_display_lines();
+    let active_index = self.active_hunk_index(&ordered, cx)?;
+    let active_display_line = ordered[active_index].1;
+
+    Some(HunkNavigationState {
+      active_index,
+      total: ordered.len(),
+      active_display_line,
+    })
+  }
+
+  pub fn navigate_hunk(&mut self, direction: HunkNavigationDirection, cx: &mut Context<Self>) {
+    let ordered = self.ordered_hunk_display_lines();
+    let Some(active_index) = self.active_hunk_index(&ordered, cx) else {
+      return;
+    };
+
+    let target_index = match direction {
+      HunkNavigationDirection::Previous => {
+        if active_index == 0 {
+          ordered.len().saturating_sub(1)
+        } else {
+          active_index - 1
+        }
+      }
+      HunkNavigationDirection::Next => (active_index + 1) % ordered.len(),
+    };
+    self.reveal_hunk_display_line(ordered[target_index].1, cx);
+  }
+
+  fn reveal_hunk_display_line(&mut self, display_line: usize, cx: &mut Context<Self>) {
+    let total_display_lines = self.display_line_count(self.document.read(cx).len_lines());
+
+    let target_doc_line = self.display_to_doc_line(display_line).or_else(|| {
+      let projection = self.projection.as_ref()?;
+      projection
+        .display_to_doc
+        .iter()
+        .skip(display_line)
+        .find_map(|entry| *entry)
+    });
+
+    if let Some(doc_line) = target_doc_line {
+      let doc_line_count = self.document.read(cx).len_lines();
+      let clamped = doc_line.min(doc_line_count.saturating_sub(1));
+      let target_offset = self.document.read(cx).line_to_char(clamped);
+      self.move_to(target_offset, cx);
+    }
+    self.hovered_conflict_start_line = None;
+    self.last_mouse_position = None;
+    self.center_display_line_in_viewport(display_line, total_display_lines);
+    self.ensure_cursor_visible_with_policy(CursorRevealPolicy::WithPadding, cx);
+    cx.notify();
+  }
+
   pub fn resolve_all_conflicts(&mut self, resolution: ConflictResolution, cx: &mut Context<Self>) {
     if self.is_read_only {
       return;
@@ -8423,6 +8547,55 @@ pub mod tests {
   }
 
   #[gpui::test]
+  fn hunk_navigation_moves_between_hunks_and_wraps(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb\nc\nd\ne\nf\n");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.projection = Some(Arc::new(projection_with_two_hunks(6, &[1, 4])));
+
+      let initial_state = editor
+        .hunk_navigation_state(cx)
+        .expect("initial hunk navigation state");
+      assert_eq!(initial_state.active_index, 0);
+      assert_eq!(initial_state.total, 2);
+      assert_eq!(initial_state.active_display_line, 1);
+
+      editor.navigate_hunk(HunkNavigationDirection::Next, cx);
+      let second_state = editor
+        .hunk_navigation_state(cx)
+        .expect("second hunk navigation state");
+      assert_eq!(second_state.active_index, 1);
+      assert_eq!(second_state.active_display_line, 4);
+      let second_offset = editor.document().read(cx).line_to_char(4);
+      assert_eq!(editor.cursor_offset(), second_offset);
+
+      editor.navigate_hunk(HunkNavigationDirection::Next, cx);
+      let wrapped_state = editor
+        .hunk_navigation_state(cx)
+        .expect("wrapped hunk navigation state");
+      assert_eq!(wrapped_state.active_index, 0);
+      assert_eq!(wrapped_state.active_display_line, 1);
+
+      editor.navigate_hunk(HunkNavigationDirection::Previous, cx);
+      let previous_state = editor
+        .hunk_navigation_state(cx)
+        .expect("previous hunk navigation state");
+      assert_eq!(previous_state.active_index, 1);
+      assert_eq!(previous_state.active_display_line, 4);
+    });
+  }
+
+  #[gpui::test]
+  fn hunk_navigation_state_is_none_when_no_hunks(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb\nc\n");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.projection = Some(Arc::new(projection_with_doc_lines(3)));
+      assert!(editor.hunk_navigation_state(cx).is_none());
+    });
+  }
+
+  #[gpui::test]
   fn review_comment_body_segments_inserts_preview_between_markdown_lines(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "line");
     let url = "https://github.com/acme/widget/blob/main/docker-compose.yml#L11";
@@ -9001,6 +9174,43 @@ pub mod tests {
         change: None,
         hunk: None,
         group_id: None,
+        secondary: false,
+      });
+      display_to_doc.push(Some(line));
+      doc_to_display.push(Some(line));
+      visible_doc_lines.push(line);
+    }
+
+    Projection {
+      lines,
+      display_to_doc,
+      doc_to_display,
+      visible_doc_lines,
+      start_gap: None,
+      end_gap: None,
+      groups: HashMap::new(),
+    }
+  }
+
+  fn projection_with_two_hunks(line_count: usize, hunk_lines: &[usize]) -> Projection {
+    let mut lines = Vec::with_capacity(line_count);
+    let mut display_to_doc = Vec::with_capacity(line_count);
+    let mut doc_to_display = Vec::with_capacity(line_count);
+    let mut visible_doc_lines = Vec::with_capacity(line_count);
+
+    for line in 0..line_count {
+      let group_id = hunk_lines
+        .iter()
+        .position(|l| *l == line)
+        .map(|idx| Arc::<str>::from(format!("hunk-{idx}")));
+      let change = group_id.as_ref().map(|_| ChangeKind::Added);
+      let hunk = group_id.as_ref().map(|_| HunkState::Unstaged);
+      lines.push(DisplayLine::Doc {
+        doc_line: line,
+        old_line: None,
+        change,
+        hunk,
+        group_id,
         secondary: false,
       });
       display_to_doc.push(Some(line));
