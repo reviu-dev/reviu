@@ -41,8 +41,11 @@ pub enum UiIconName {
   Star,
   StarFilled,
   SmilePlus,
-  BrandX,
   Trash,
+  FoldVertical,
+  UnfoldVertical,
+  // Brands
+  BrandX,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -87,6 +90,8 @@ impl IconNamed for UiIconName {
       UiIconName::StarFilled => "icons/star-filled.svg",
       UiIconName::SmilePlus => "icons/smile-plus.svg",
       UiIconName::Trash => "icons/trash.svg",
+      UiIconName::FoldVertical => "icons/fold-vertical.svg",
+      UiIconName::UnfoldVertical => "icons/unfold-vertical.svg",
       // Brands
       UiIconName::BrandX => "icons/brands/x.svg",
     }
