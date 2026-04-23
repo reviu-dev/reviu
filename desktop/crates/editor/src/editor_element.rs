@@ -2232,10 +2232,10 @@ impl Element for EditorElement {
               editor.last_scroll_x = clamped_scroll_x;
             }
             let viewport = editor.viewport_range(line_height, total_lines);
-            let doc_viewport = editor.doc_range_for_display_viewport(viewport.clone());
+            let doc_viewports = editor.doc_ranges_for_display_viewport(viewport.clone());
             editor.document.update(cx, |doc, cx| {
-              doc.schedule_viewport_highlights(
-                doc_viewport.clone(),
+              doc.schedule_viewport_highlights_for_ranges(
+                &doc_viewports,
                 None,
                 crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
                 cx,

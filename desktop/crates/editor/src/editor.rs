@@ -4653,6 +4653,7 @@ impl Editor {
 
     if let Some(conflict_start_line) = self.pending_conflict_reveal_start_line.take() {
       self.reveal_conflict_start_line(conflict_start_line, cx);
+      self.schedule_visible_viewport_highlights(cx);
       return;
     }
 
@@ -4663,7 +4664,25 @@ impl Editor {
       total_lines,
     );
 
+    self.schedule_visible_viewport_highlights(cx);
     cx.notify();
+  }
+
+  fn schedule_visible_viewport_highlights(&mut self, cx: &mut Context<Self>) {
+    let line_height = self.measured_editor_line_height();
+    let doc_line_count = self.document.read(cx).len_lines();
+    let total_display_lines = self.display_line_count(doc_line_count);
+    let display_viewport = self.viewport_range(line_height, total_display_lines);
+    let doc_viewports = self.doc_ranges_for_display_viewport(display_viewport);
+
+    self.document.update(cx, |doc, cx| {
+      doc.schedule_viewport_highlights_for_ranges(
+        &doc_viewports,
+        None,
+        crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
+        cx,
+      );
+    });
   }
 
   fn rebuild_projection(&mut self, cx: &mut Context<Self>) {
@@ -5536,7 +5555,7 @@ impl Editor {
     let line_height = self.measured_editor_line_height();
     let total_display_lines = self.display_line_count(doc_line_count);
     let display_viewport = self.viewport_range(line_height, total_display_lines);
-    let doc_viewport = self.doc_range_for_display_viewport(display_viewport);
+    let doc_viewports = self.doc_ranges_for_display_viewport(display_viewport);
     let replacement_line_count = replacement.matches('\n').count();
     let force_end_line = start_line
       .saturating_add(replacement_line_count)
@@ -5552,8 +5571,8 @@ impl Editor {
       if !doc.should_defer_full_highlight() {
         doc.schedule_recompute_highlights(cx);
       }
-      doc.schedule_viewport_highlights(
-        doc_viewport.clone(),
+      doc.schedule_viewport_highlights_for_ranges(
+        &doc_viewports,
         Some(force_range.clone()),
         crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
         cx,
@@ -5907,6 +5926,52 @@ impl Editor {
     )
   }
 
+  pub(crate) fn doc_ranges_for_display_viewport(
+    &self,
+    viewport: Range<usize>,
+  ) -> Vec<Range<usize>> {
+    let Some(projection) = &self.projection else {
+      return (viewport.start < viewport.end)
+        .then_some(viewport)
+        .into_iter()
+        .collect();
+    };
+
+    let viewport_start = viewport.start;
+    let viewport_end = viewport.end;
+    if viewport_start >= viewport_end {
+      return Vec::new();
+    }
+
+    let mapped_lines = (viewport_start..viewport_end)
+      .filter_map(|display_line| {
+        projection
+          .display_to_doc_line(display_line)
+          .map(|doc_line| (display_line, doc_line))
+      })
+      .collect::<Vec<_>>();
+
+    if mapped_lines.is_empty() {
+      return Vec::new();
+    }
+
+    let mut ranges = Vec::new();
+    let mut start_line = mapped_lines[0].1;
+    let mut previous_line = mapped_lines[0].1;
+
+    for (_, doc_line) in mapped_lines.iter().skip(1) {
+      if *doc_line < previous_line || *doc_line > previous_line.saturating_add(1) {
+        ranges.push(start_line..(previous_line + 1));
+        start_line = *doc_line;
+      }
+      previous_line = *doc_line;
+    }
+
+    ranges.push(start_line..(previous_line + 1));
+    ranges
+  }
+
+  #[cfg(test)]
   pub(crate) fn doc_range_for_display_viewport(&self, viewport: Range<usize>) -> Range<usize> {
     let Some(projection) = &self.projection else {
       return viewport;
@@ -7457,7 +7522,7 @@ impl EntityInputHandler for Editor {
     let doc_line_count = self.document.read(cx).len_lines();
     let total_display_lines = self.display_line_count(doc_line_count);
     let display_viewport = self.viewport_range(line_height, total_display_lines);
-    let doc_viewport = self.doc_range_for_display_viewport(display_viewport);
+    let doc_viewports = self.doc_ranges_for_display_viewport(display_viewport);
     let new_line_count = new_text.matches('\n').count();
     let force_end_line = start_line.saturating_add(new_line_count).max(end_line);
     let force_range = start_line..(force_end_line + 1);
@@ -7473,8 +7538,8 @@ impl EntityInputHandler for Editor {
       if !doc.should_defer_full_highlight() {
         doc.schedule_recompute_highlights(cx);
       }
-      doc.schedule_viewport_highlights(
-        doc_viewport.clone(),
+      doc.schedule_viewport_highlights_for_ranges(
+        &doc_viewports,
         Some(force_range.clone()),
         crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
         cx,
@@ -7543,7 +7608,7 @@ impl EntityInputHandler for Editor {
     let doc_line_count = self.document.read(cx).len_lines();
     let total_display_lines = self.display_line_count(doc_line_count);
     let display_viewport = self.viewport_range(line_height, total_display_lines);
-    let doc_viewport = self.doc_range_for_display_viewport(display_viewport);
+    let doc_viewports = self.doc_ranges_for_display_viewport(display_viewport);
     let end_line = self.document.read(cx).char_to_line(range.end);
     let new_line_count = new_text.matches('\n').count();
     let force_end_line = start_line.saturating_add(new_line_count).max(end_line);
@@ -7556,8 +7621,8 @@ impl EntityInputHandler for Editor {
       if !doc.should_defer_full_highlight() {
         doc.schedule_recompute_highlights(cx);
       }
-      doc.schedule_viewport_highlights(
-        doc_viewport.clone(),
+      doc.schedule_viewport_highlights_for_ranges(
+        &doc_viewports,
         Some(force_range.clone()),
         crate::document::VIEWPORT_HIGHLIGHT_MARGIN_LINES,
         cx,
@@ -8832,9 +8897,17 @@ pub mod tests {
 
   impl EditorTestContext {
     /// Create a test context with specific text content
-    pub fn with_text(mut cx: TestAppContext, text: &str) -> Self {
+    pub fn with_text(cx: TestAppContext, text: &str) -> Self {
+      Self::with_text_and_extension(cx, text, None)
+    }
+
+    pub fn with_text_and_extension(
+      mut cx: TestAppContext,
+      text: &str,
+      file_ext: Option<&str>,
+    ) -> Self {
       let editor = cx.new(|cx| {
-        let doc = cx.new(|cx| Document::new(text, None, cx));
+        let doc = cx.new(|cx| Document::new(text, file_ext, cx));
         let cursor_blink = cx.new(CursorBlink::new);
 
         Editor {
@@ -9159,6 +9232,76 @@ pub mod tests {
       end_gap: None,
       groups: HashMap::new(),
     })
+  }
+
+  fn projection_with_visible_doc_segments(
+    doc_line_count: usize,
+    visible_segments: &[Range<usize>],
+  ) -> Projection {
+    let mut lines = Vec::new();
+    let mut display_to_doc = Vec::new();
+    let mut doc_to_display = vec![None; doc_line_count];
+    let mut visible_doc_lines = Vec::new();
+    let mut start_gap = None;
+    let mut end_gap = None;
+    let mut previous_end = 0;
+
+    for segment in visible_segments {
+      if segment.start > previous_end {
+        let gap = GapId {
+          start: previous_end,
+          end: segment.start,
+        };
+        if previous_end == 0 {
+          start_gap = Some(gap);
+        }
+        lines.push(DisplayLine::Gap {
+          id: gap,
+          hidden_range: previous_end..segment.start,
+        });
+        display_to_doc.push(None);
+      }
+
+      for doc_line in segment.clone() {
+        let display_line = lines.len();
+        lines.push(DisplayLine::Doc {
+          doc_line,
+          old_line: Some(doc_line),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        });
+        display_to_doc.push(Some(doc_line));
+        doc_to_display[doc_line] = Some(display_line);
+        visible_doc_lines.push(doc_line);
+      }
+
+      previous_end = segment.end;
+    }
+
+    if previous_end < doc_line_count {
+      let gap = GapId {
+        start: previous_end,
+        end: doc_line_count,
+      };
+      end_gap = Some(gap);
+      lines.push(DisplayLine::Gap {
+        id: gap,
+        hidden_range: previous_end..doc_line_count,
+      });
+      display_to_doc.push(None);
+    }
+
+    Projection {
+      lines,
+      display_to_doc,
+      doc_to_display,
+      visible_doc_lines,
+      start_gap,
+      end_gap,
+      groups: HashMap::new(),
+    }
   }
 
   fn projection_with_doc_lines(line_count: usize) -> Projection {
@@ -10549,6 +10692,65 @@ pub mod tests {
       editor.apply_projection_result(projection_with_doc_lines(10), 10, cx);
 
       assert_eq!(editor.scroll_offset_y, 8.0);
+    });
+  }
+
+  #[gpui::test]
+  fn test_apply_projection_result_requests_highlights_for_projected_viewport(
+    cx: &mut TestAppContext,
+  ) {
+    const LINE_COUNT: usize = 50_005;
+    let filler = "x".repeat(420);
+    let text = (0..LINE_COUNT)
+      .map(|line| format!("fn line_{line}() {{ let value = {line}; }} // {filler}"))
+      .collect::<Vec<_>>()
+      .join("\n");
+
+    let mut ctx = EditorTestContext::with_text_and_extension(cx.clone(), &text, Some("rs"));
+    let visible_segments = vec![4997..5004, 19_997..20_004, 34_997..35_004, 49_997..50_004];
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.viewport_height = px(800.0);
+      editor.editor_line_height = px(20.0);
+      editor.apply_projection_result(
+        projection_with_visible_doc_segments(LINE_COUNT, &visible_segments),
+        LINE_COUNT,
+        cx,
+      );
+    });
+
+    ctx.cx.executor().allow_parking();
+    ctx.cx.run_until_parked();
+
+    ctx.editor.read_with(&ctx.cx, |editor, cx| {
+      let doc = editor.document().read(cx);
+      for line in [4997, 5000, 19_997, 20_000, 34_997, 35_000, 49_997, 50_000] {
+        let highlights = doc
+          .get_highlights_for_line(line)
+          .unwrap_or_else(|| panic!("projected visible line {line} should be highlighted"));
+        assert!(
+          !highlights.is_empty(),
+          "projected visible line {line} should receive syntax highlight spans"
+        );
+      }
+    });
+  }
+
+  #[gpui::test]
+  fn test_doc_ranges_for_display_viewport_keeps_all_visible_segments(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.projection = Some(Arc::new(projection_with_visible_doc_segments(
+        50_005,
+        &[4997..5004, 19_997..20_004, 34_997..35_004, 49_997..50_004],
+      )));
+
+      let ranges = editor.doc_ranges_for_display_viewport(0..editor.display_line_count(50_005));
+      assert_eq!(
+        ranges,
+        vec![4997..5004, 19_997..20_004, 34_997..35_004, 49_997..50_004]
+      );
     });
   }
 

@@ -213,6 +213,17 @@ impl Document {
     margin_lines: usize,
     cx: &mut Context<Self>,
   ) {
+    let viewports = [viewport];
+    self.schedule_viewport_highlights_for_ranges(&viewports, force_range, margin_lines, cx);
+  }
+
+  pub fn schedule_viewport_highlights_for_ranges(
+    &mut self,
+    viewports: &[Range<usize>],
+    force_range: Option<Range<usize>>,
+    margin_lines: usize,
+    cx: &mut Context<Self>,
+  ) {
     self.pending_viewport_highlight_task = None;
 
     let Some(ref mut highlighter) = self.highlighter else {
@@ -224,13 +235,18 @@ impl Document {
       return;
     }
 
-    let start_line = viewport.start.saturating_sub(margin_lines);
-    let end_line = (viewport.end + margin_lines).min(line_count);
-    if start_line >= end_line {
+    let ranges = normalize_viewport_ranges(viewports, line_count, margin_lines);
+    if ranges.is_empty() {
       return;
     }
 
-    let text = build_viewport_text(&self.buffer, start_line, end_line);
+    let segments = ranges
+      .into_iter()
+      .map(|range| ViewportHighlightSegment {
+        start_line: range.start,
+        text: build_viewport_text(&self.buffer, range.start, range.end),
+      })
+      .collect::<Vec<_>>();
     let config = highlighter.config;
     let highlights_cache = self.highlights.clone();
     let dirty_highlight_lines = self.dirty_highlight_lines.clone();
@@ -241,7 +257,14 @@ impl Document {
     let task = cx.spawn(async move |this, cx| {
       let result = cx
         .background_executor()
-        .spawn(async move { highlight_text_to_line_spans(&text, config) })
+        .spawn(async move {
+          let mut highlighted_segments = Vec::with_capacity(segments.len());
+          for segment in segments {
+            let line_spans = highlight_text_to_line_spans(&segment.text, config)?;
+            highlighted_segments.push((segment.start_line, line_spans));
+          }
+          Ok::<_, String>(highlighted_segments)
+        })
         .await;
 
       if viewport_highlight_generation.load(Ordering::Relaxed) != my_generation {
@@ -249,7 +272,7 @@ impl Document {
       }
 
       match result {
-        Ok(line_spans) => {
+        Ok(segment_spans) => {
           let _ = this.update(cx, |_doc, cx| {
             let mut highlights = highlights_cache.write();
             if highlights.len() < line_count {
@@ -259,30 +282,32 @@ impl Document {
             let mut dirty_lines = dirty_highlight_lines.write();
             let mut updated = false;
 
-            for (offset, spans) in line_spans.into_iter().enumerate() {
-              let line_idx = start_line + offset;
-              if line_idx >= highlights.len() {
-                break;
-              }
-
-              let replace = match highlights[line_idx].as_ref() {
-                None => true,
-                Some(existing) => {
-                  if let Some(force_range) = force_range.as_ref() {
-                    force_range.contains(&line_idx) || existing.quality != HighlightQuality::Full
-                  } else {
-                    existing.quality != HighlightQuality::Full
-                  }
+            for (start_line, line_spans) in segment_spans {
+              for (offset, spans) in line_spans.into_iter().enumerate() {
+                let line_idx = start_line + offset;
+                if line_idx >= highlights.len() {
+                  break;
                 }
-              };
 
-              if replace {
-                highlights[line_idx] = Some(LineHighlight {
-                  spans,
-                  quality: HighlightQuality::Viewport,
-                });
-                dirty_lines.push(line_idx);
-                updated = true;
+                let replace = match highlights[line_idx].as_ref() {
+                  None => true,
+                  Some(existing) => {
+                    if let Some(force_range) = force_range.as_ref() {
+                      force_range.contains(&line_idx) || existing.quality != HighlightQuality::Full
+                    } else {
+                      existing.quality != HighlightQuality::Full
+                    }
+                  }
+                };
+
+                if replace {
+                  highlights[line_idx] = Some(LineHighlight {
+                    spans,
+                    quality: HighlightQuality::Viewport,
+                  });
+                  dirty_lines.push(line_idx);
+                  updated = true;
+                }
               }
             }
 
@@ -440,6 +465,36 @@ fn should_defer_full_highlight(line_count: usize, char_count: usize) -> bool {
   line_count > FULL_HIGHLIGHT_MAX_LINES || char_count > FULL_HIGHLIGHT_MAX_CHARS
 }
 
+fn normalize_viewport_ranges(
+  viewports: &[Range<usize>],
+  line_count: usize,
+  margin_lines: usize,
+) -> Vec<Range<usize>> {
+  let mut ranges = viewports
+    .iter()
+    .filter_map(|viewport| {
+      let start_line = viewport.start.saturating_sub(margin_lines);
+      let end_line = (viewport.end + margin_lines).min(line_count);
+      (start_line < end_line).then_some(start_line..end_line)
+    })
+    .collect::<Vec<_>>();
+
+  ranges.sort_by_key(|range| range.start);
+
+  let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+  for range in ranges {
+    if let Some(last) = merged.last_mut()
+      && range.start <= last.end
+    {
+      last.end = last.end.max(range.end);
+    } else {
+      merged.push(range);
+    }
+  }
+
+  merged
+}
+
 fn build_viewport_text(buffer: &TextBuffer, start_line: usize, end_line: usize) -> String {
   let mut text = String::new();
   for line_idx in start_line..end_line {
@@ -491,6 +546,11 @@ fn highlight_text_to_line_spans(
 struct HighlightBatch {
   start_line: usize,
   lines: Vec<Arc<[HighlightSpan]>>,
+}
+
+struct ViewportHighlightSegment {
+  start_line: usize,
+  text: String,
 }
 
 fn stream_highlights(
@@ -676,6 +736,13 @@ mod tests {
       FULL_HIGHLIGHT_MAX_CHARS + 1
     ));
     assert!(!should_defer_full_highlight(10, FULL_HIGHLIGHT_MAX_CHARS));
+  }
+
+  #[test]
+  fn test_normalize_viewport_ranges_merges_overlapping_margin_expansions() {
+    let ranges = normalize_viewport_ranges(&[10..12, 14..16, 40..42], 100, 3);
+
+    assert_eq!(ranges, vec![7..19, 37..45]);
   }
 
   #[gpui::test]
