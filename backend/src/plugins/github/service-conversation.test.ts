@@ -5,6 +5,8 @@ import {
   fetchGithubIssueDetailsGraphql,
   fetchGithubPullRequestConversationGraphql,
   removeGithubReactionGraphql,
+  resolveGithubPullRequestReviewThreadGraphql,
+  unresolveGithubPullRequestReviewThreadGraphql,
 } from './service.js'
 
 const { requestMock } = vi.hoisted(() => ({
@@ -81,6 +83,10 @@ describe('github pull request conversation service', () => {
                 nodes: [{
                   id: 'PRRT_kwDOExample',
                   isOutdated: false,
+                  isResolved: true,
+                  isCollapsed: true,
+                  viewerCanResolve: false,
+                  viewerCanUnresolve: true,
                   path: 'src/main.rs',
                   line: 5,
                   originalLine: 4,
@@ -194,6 +200,11 @@ describe('github pull request conversation service', () => {
         node_id: 'PRRC_kwDOExample',
         reactions: [],
         is_outdated: false,
+        thread_id: 'PRRT_kwDOExample',
+        is_resolved: true,
+        is_collapsed: true,
+        viewer_can_resolve: false,
+        viewer_can_unresolve: true,
         id: 1001,
         pull_request_review_id: 123,
         diff_hunk: '@@ -1 +1 @@',
@@ -275,6 +286,93 @@ describe('github pull request conversation service', () => {
       status: 403,
       message: 'The openai organization restricts OAuth app access. Ask an organization owner to approve Reviu, then try again.',
     })
+  })
+
+  it('resolves a review thread and returns the updated resolution state', async () => {
+    requestMock.mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      data: {
+        data: {
+          resolveReviewThread: {
+            thread: {
+              id: 'PRRT_kwDOExample',
+              isResolved: true,
+              viewerCanResolve: false,
+              viewerCanUnresolve: true,
+            },
+          },
+        },
+      },
+    })
+
+    const thread = await resolveGithubPullRequestReviewThreadGraphql({
+      token: 'github-token',
+      threadId: 'PRRT_kwDOExample',
+    })
+
+    expect(requestMock).toHaveBeenCalledWith(
+      'POST /graphql',
+      expect.objectContaining({
+        variables: { threadId: 'PRRT_kwDOExample' },
+      }),
+    )
+    expect(thread).toEqual({
+      thread_id: 'PRRT_kwDOExample',
+      is_resolved: true,
+      viewer_can_resolve: false,
+      viewer_can_unresolve: true,
+    })
+  })
+
+  it('unresolves a review thread and returns the updated resolution state', async () => {
+    requestMock.mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      data: {
+        data: {
+          unresolveReviewThread: {
+            thread: {
+              id: 'PRRT_kwDOExample',
+              isResolved: false,
+              viewerCanResolve: true,
+              viewerCanUnresolve: false,
+            },
+          },
+        },
+      },
+    })
+
+    const thread = await unresolveGithubPullRequestReviewThreadGraphql({
+      token: 'github-token',
+      threadId: 'PRRT_kwDOExample',
+    })
+
+    expect(requestMock).toHaveBeenCalledWith(
+      'POST /graphql',
+      expect.objectContaining({
+        variables: { threadId: 'PRRT_kwDOExample' },
+      }),
+    )
+    expect(thread).toEqual({
+      thread_id: 'PRRT_kwDOExample',
+      is_resolved: false,
+      viewer_can_resolve: true,
+      viewer_can_unresolve: false,
+    })
+  })
+
+  it('throws when the resolve mutation returns no thread', async () => {
+    requestMock.mockResolvedValueOnce({
+      status: 200,
+      headers: {},
+      data: { data: { resolveReviewThread: { thread: null } } },
+    })
+
+    await expect(resolveGithubPullRequestReviewThreadGraphql({
+      token: 'github-token',
+      threadId: 'PRRT_kwDOExample',
+    })).rejects.toThrow('GitHub GraphQL response is missing the review thread')
   })
 
   it('removes a GraphQL reaction and returns updated reaction groups', async () => {

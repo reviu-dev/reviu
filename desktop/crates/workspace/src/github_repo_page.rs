@@ -2379,7 +2379,7 @@ impl GithubIssueDetailsSheetView {
           .ghost()
           .xsmall()
           .compact()
-          .icon(IconName::Delete)
+          .icon(UiIconName::Trash)
           .tooltip("Delete comment")
           .on_click(move |_, window, cx| {
             page.update(cx, |this, cx| {

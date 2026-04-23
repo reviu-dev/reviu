@@ -194,8 +194,10 @@ import {
   removeGithubPullRequestReviewers,
   removeGithubReactionGraphql,
   requestGithubPullRequestReviewers,
+  resolveGithubPullRequestReviewThreadGraphql,
   setGithubRepositorySubscription,
   starGithubRepository,
+  unresolveGithubPullRequestReviewThreadGraphql,
   unstarGithubRepository,
   updateGithubPullRequestBranch,
 } from '../plugins/github/service.js'
@@ -3150,6 +3152,76 @@ export const githubRoutes = githubRouter
     catch (error) {
       const status = (error as { status?: number }).status
       if (status === 403 || status === 404 || status === 409 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/:id/review-threads/:threadId/resolve', async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const threadId = ctx.req.param('threadId')
+
+    if (!org || !repo || Number.isNaN(pullNumber) || !threadId) {
+      return ctx.json({ error: 'Missing org, repo, id, or threadId' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const thread = await resolveGithubPullRequestReviewThreadGraphql({
+        token: githubToken,
+        threadId,
+      })
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+        includeComments: true,
+      }))
+
+      return ctx.json({ thread }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .post('/pr/:id/review-threads/:threadId/unresolve', async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const threadId = ctx.req.param('threadId')
+
+    if (!org || !repo || Number.isNaN(pullNumber) || !threadId) {
+      return ctx.json({ error: 'Missing org, repo, id, or threadId' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const thread = await unresolveGithubPullRequestReviewThreadGraphql({
+        token: githubToken,
+        threadId,
+      })
+      await invalidateGithubCacheTags(getGithubPullRequestMutationTags({
+        userId: user.id,
+        owner: org,
+        repo,
+        pullNumber,
+        includeComments: true,
+      }))
+
+      return ctx.json({ thread }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
         return ctx.json({ error: (error as Error).message }, status)
       }
       return ctx.json({ error: (error as Error).message }, 502)

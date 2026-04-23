@@ -644,6 +644,10 @@ const GITHUB_GRAPHQL_PULL_REQUEST_REVIEW_THREAD_FRAGMENT = `
   fragment PullRequestReviewThreadFields on PullRequestReviewThread {
     id
     isOutdated
+    isResolved
+    isCollapsed
+    viewerCanResolve
+    viewerCanUnresolve
     path
     line
     originalLine
@@ -891,6 +895,32 @@ const GITHUB_GRAPHQL_ADD_REACTION_MUTATION = `
     }
   }
   ${GITHUB_GRAPHQL_REACTION_GROUP_FRAGMENT}
+`
+
+const GITHUB_GRAPHQL_RESOLVE_REVIEW_THREAD_MUTATION = `
+  mutation ResolveReviewThread($threadId: ID!) {
+    resolveReviewThread(input: { threadId: $threadId }) {
+      thread {
+        id
+        isResolved
+        viewerCanResolve
+        viewerCanUnresolve
+      }
+    }
+  }
+`
+
+const GITHUB_GRAPHQL_UNRESOLVE_REVIEW_THREAD_MUTATION = `
+  mutation UnresolveReviewThread($threadId: ID!) {
+    unresolveReviewThread(input: { threadId: $threadId }) {
+      thread {
+        id
+        isResolved
+        viewerCanResolve
+        viewerCanUnresolve
+      }
+    }
+  }
 `
 
 const GITHUB_GRAPHQL_REMOVE_REACTION_MUTATION = `
@@ -1143,6 +1173,32 @@ interface GithubGraphqlMarkPullRequestReadyForReviewResponse {
       id: string
     } | null
   } | null
+}
+
+interface GithubGraphqlReviewThreadResolutionNode {
+  id: string
+  isResolved: boolean
+  viewerCanResolve: boolean
+  viewerCanUnresolve: boolean
+}
+
+interface GithubGraphqlResolveReviewThreadResponse {
+  resolveReviewThread?: {
+    thread?: GithubGraphqlReviewThreadResolutionNode | null
+  } | null
+}
+
+interface GithubGraphqlUnresolveReviewThreadResponse {
+  unresolveReviewThread?: {
+    thread?: GithubGraphqlReviewThreadResolutionNode | null
+  } | null
+}
+
+interface GithubPullRequestReviewThreadResolution {
+  thread_id: string
+  is_resolved: boolean
+  viewer_can_resolve: boolean
+  viewer_can_unresolve: boolean
 }
 
 interface GithubGraphqlConvertPullRequestToDraftResponse {
@@ -2141,6 +2197,11 @@ function mapGithubGraphqlPullRequestReviewComment(
     node_id: comment.id,
     reactions: mapGithubGraphqlReactionGroups(comment.reactionGroups),
     is_outdated: thread.isOutdated,
+    thread_id: thread.id,
+    is_resolved: thread.isResolved,
+    is_collapsed: thread.isCollapsed,
+    viewer_can_resolve: thread.viewerCanResolve,
+    viewer_can_unresolve: thread.viewerCanUnresolve,
     id: requireGraphqlDatabaseId(comment, 'review comment'),
     pull_request_review_id: graphqlDatabaseId(comment.pullRequestReview),
     diff_hunk: comment.diffHunk,
@@ -2525,6 +2586,45 @@ export async function removeGithubReactionGraphql(
   })
 
   return mapGithubGraphqlReactionGroups(data.removeReaction?.reactionGroups)
+}
+
+function mapGithubGraphqlReviewThreadResolution(
+  thread: GithubGraphqlReviewThreadResolutionNode | null | undefined,
+): GithubPullRequestReviewThreadResolution {
+  if (!thread) {
+    throw new Error('GitHub GraphQL response is missing the review thread')
+  }
+
+  return {
+    thread_id: thread.id,
+    is_resolved: thread.isResolved,
+    viewer_can_resolve: thread.viewerCanResolve,
+    viewer_can_unresolve: thread.viewerCanUnresolve,
+  }
+}
+
+export async function resolveGithubPullRequestReviewThreadGraphql(
+  { token, threadId }: { token: string, threadId: string },
+): Promise<GithubPullRequestReviewThreadResolution> {
+  const data = await requestGithubGraphqlData<GithubGraphqlResolveReviewThreadResponse>({
+    token,
+    query: GITHUB_GRAPHQL_RESOLVE_REVIEW_THREAD_MUTATION,
+    variables: { threadId },
+  })
+
+  return mapGithubGraphqlReviewThreadResolution(data.resolveReviewThread?.thread)
+}
+
+export async function unresolveGithubPullRequestReviewThreadGraphql(
+  { token, threadId }: { token: string, threadId: string },
+): Promise<GithubPullRequestReviewThreadResolution> {
+  const data = await requestGithubGraphqlData<GithubGraphqlUnresolveReviewThreadResponse>({
+    token,
+    query: GITHUB_GRAPHQL_UNRESOLVE_REVIEW_THREAD_MUTATION,
+    variables: { threadId },
+  })
+
+  return mapGithubGraphqlReviewThreadResolution(data.unresolveReviewThread?.thread)
 }
 
 export async function fetchGithubUserRepositories(

@@ -11,6 +11,8 @@ const fetchGithubIssueDetailsGraphql = vi.fn()
 const fetchGithubIssueReferenceTarget = vi.fn()
 const fetchGithubPullRequestConversationGraphql = vi.fn()
 const removeGithubReactionGraphql = vi.fn()
+const resolveGithubPullRequestReviewThreadGraphql = vi.fn()
+const unresolveGithubPullRequestReviewThreadGraphql = vi.fn()
 const invalidateTags = vi.fn()
 const getOrLoad = vi.fn(async <T>(options: GithubCacheGetOrLoadOptions<T>) => {
   const loaded = await options.load({ cachedEntry: null })
@@ -67,6 +69,8 @@ vi.mock('../../plugins/github/service.js', async () => {
     fetchGithubIssueReferenceTarget,
     fetchGithubPullRequestConversationGraphql,
     removeGithubReactionGraphql,
+    resolveGithubPullRequestReviewThreadGraphql,
+    unresolveGithubPullRequestReviewThreadGraphql,
   }
 })
 
@@ -128,6 +132,11 @@ function makeConversation(): GithubPullRequestConversation {
       node_id: 'PRRC_kwDOExample',
       reactions: [],
       is_outdated: false,
+      thread_id: 'PRRT_kwDOExample',
+      is_resolved: false,
+      is_collapsed: false,
+      viewer_can_resolve: true,
+      viewer_can_unresolve: false,
       id: 1,
       pull_request_review_id: 123,
       diff_hunk: '@@ -1 +1 @@',
@@ -289,6 +298,72 @@ describe('github pull request conversation route', () => {
     await expect(response.json()).resolves.toEqual({
       reactions: makeReactions(),
     })
+  })
+
+  it('resolves a review thread and invalidates conversation cache tags', async () => {
+    resolveGithubPullRequestReviewThreadGraphql.mockResolvedValue({
+      thread_id: 'PRRT_kwDOExample',
+      is_resolved: true,
+      viewer_can_resolve: false,
+      viewer_can_unresolve: true,
+    })
+
+    const response = await request(
+      '/pr/42/review-threads/PRRT_kwDOExample/resolve?org=acme&repo=widget',
+      { method: 'POST' },
+    )
+
+    expect(response.status).toBe(200)
+    expect(resolveGithubPullRequestReviewThreadGraphql).toHaveBeenCalledWith({
+      token: 'github-token',
+      threadId: 'PRRT_kwDOExample',
+    })
+    expect(invalidateTags).toHaveBeenCalledWith(expect.arrayContaining([
+      'pull-request:acme/widget:42:comments',
+    ]))
+    await expect(response.json()).resolves.toEqual({
+      thread: {
+        thread_id: 'PRRT_kwDOExample',
+        is_resolved: true,
+        viewer_can_resolve: false,
+        viewer_can_unresolve: true,
+      },
+    })
+  })
+
+  it('unresolves a review thread', async () => {
+    unresolveGithubPullRequestReviewThreadGraphql.mockResolvedValue({
+      thread_id: 'PRRT_kwDOExample',
+      is_resolved: false,
+      viewer_can_resolve: true,
+      viewer_can_unresolve: false,
+    })
+
+    const response = await request(
+      '/pr/42/review-threads/PRRT_kwDOExample/unresolve?org=acme&repo=widget',
+      { method: 'POST' },
+    )
+
+    expect(response.status).toBe(200)
+    expect(unresolveGithubPullRequestReviewThreadGraphql).toHaveBeenCalledWith({
+      token: 'github-token',
+      threadId: 'PRRT_kwDOExample',
+    })
+  })
+
+  it('passes through forbidden errors when resolving a review thread', async () => {
+    resolveGithubPullRequestReviewThreadGraphql.mockRejectedValue(
+      Object.assign(new Error('Not allowed'), { status: 403 }),
+    )
+
+    const response = await request(
+      '/pr/42/review-threads/PRRT_kwDOExample/resolve?org=acme&repo=widget',
+      { method: 'POST' },
+    )
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toEqual({ error: 'Not allowed' })
+    expect(invalidateTags).not.toHaveBeenCalled()
   })
 
   it('removes a pull request conversation reaction', async () => {

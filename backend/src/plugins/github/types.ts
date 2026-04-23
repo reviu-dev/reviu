@@ -384,6 +384,10 @@ export interface GithubGraphqlPullRequestReviewCommentNode
 export interface GithubGraphqlPullRequestReviewThreadNode {
   id: string
   isOutdated: boolean
+  isResolved: boolean
+  isCollapsed: boolean
+  viewerCanResolve: boolean
+  viewerCanUnresolve: boolean
   path: string
   line: number | null
   originalLine: number | null
@@ -525,6 +529,11 @@ export interface GithubPullRequestReviewComment {
   node_id: string
   reactions: GithubReactionGroup[]
   is_outdated: boolean
+  thread_id: string
+  is_resolved: boolean
+  is_collapsed: boolean
+  viewer_can_resolve: boolean
+  viewer_can_unresolve: boolean
   id: PullRequestCommentResponse['id']
   pull_request_review_id: PullRequestCommentResponse['pull_request_review_id']
   diff_hunk: PullRequestCommentResponse['diff_hunk']

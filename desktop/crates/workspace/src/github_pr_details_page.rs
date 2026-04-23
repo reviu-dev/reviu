@@ -783,6 +783,10 @@ struct GithubPrOverviewConversationItem {
   kind: GithubPrOverviewConversationItemKind,
   id: u64,
   is_outdated: bool,
+  thread_id: Option<String>,
+  is_resolved: bool,
+  viewer_can_resolve: bool,
+  viewer_can_unresolve: bool,
   reaction_subject_id: String,
   reactions: Vec<GithubReactionGroup>,
   timestamp: String,
@@ -1620,6 +1624,10 @@ fn build_overview_conversation_items(
       kind: GithubPrOverviewConversationItemKind::IssueComment,
       id: comment.id,
       is_outdated: false,
+      thread_id: None,
+      is_resolved: false,
+      viewer_can_resolve: false,
+      viewer_can_unresolve: false,
       reaction_subject_id: comment.node_id.clone(),
       reactions: comment.reactions.clone(),
       timestamp: comment.created_at.clone(),
@@ -1662,6 +1670,10 @@ fn build_overview_conversation_items(
       kind: GithubPrOverviewConversationItemKind::Review,
       id: review.id,
       is_outdated: false,
+      thread_id: None,
+      is_resolved: false,
+      viewer_can_resolve: false,
+      viewer_can_unresolve: false,
       reaction_subject_id: review.node_id.clone(),
       reactions: review.reactions.clone(),
       timestamp: submitted_at.clone(),
@@ -1737,6 +1749,10 @@ fn build_overview_conversation_items(
       kind: GithubPrOverviewConversationItemKind::ReviewComment,
       id: root_comment.id,
       is_outdated: root_comment.is_outdated,
+      thread_id: (!root_comment.thread_id.is_empty()).then(|| root_comment.thread_id.clone()),
+      is_resolved: root_comment.is_resolved,
+      viewer_can_resolve: root_comment.viewer_can_resolve,
+      viewer_can_unresolve: root_comment.viewer_can_unresolve,
       reaction_subject_id: root_comment.node_id.clone(),
       reactions: root_comment.reactions.clone(),
       timestamp: root_comment.created_at.clone(),
@@ -2800,6 +2816,10 @@ pub struct GithubPrDetailsPage {
   suggested_change_commit_error: Option<SharedString>,
   suggested_change_commit_task: Option<Task<()>>,
   stale_suggested_change_comment_ids: HashSet<u64>,
+  resolve_thread_in_flight: HashSet<String>,
+  resolve_thread_tasks: HashMap<String, Task<()>>,
+  resolve_thread_errors: HashMap<String, SharedString>,
+  expanded_resolved_threads: HashSet<u64>,
   selected_file_review_comment_ids: Vec<u64>,
   active_review_comment_id: Option<u64>,
   review_comment_handlers_enabled: bool,
@@ -3358,6 +3378,10 @@ impl GithubPrDetailsPage {
       suggested_change_commit_error: None,
       suggested_change_commit_task: None,
       stale_suggested_change_comment_ids: HashSet::new(),
+      resolve_thread_in_flight: HashSet::new(),
+      resolve_thread_tasks: HashMap::new(),
+      resolve_thread_errors: HashMap::new(),
+      expanded_resolved_threads: HashSet::new(),
       selected_file_review_comment_ids: Vec::new(),
       active_review_comment_id: None,
       review_comment_handlers_enabled: true,
@@ -6653,6 +6677,82 @@ impl GithubPrDetailsPage {
     });
 
     self.suggested_change_commit_task = Some(task);
+  }
+
+  fn toggle_review_thread_resolution(
+    &mut self,
+    thread_id: String,
+    root_comment_id: u64,
+    currently_resolved: bool,
+    cx: &mut Context<Self>,
+  ) {
+    if thread_id.is_empty() || self.resolve_thread_in_flight.contains(&thread_id) {
+      return;
+    }
+
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      return;
+    };
+
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let api = self.api.clone();
+    let target = thread_id.clone();
+
+    self.resolve_thread_in_flight.insert(thread_id.clone());
+    self.resolve_thread_errors.remove(&thread_id);
+    self.expanded_resolved_threads.remove(&root_comment_id);
+    cx.notify();
+
+    let thread_id_for_result = thread_id.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        if currently_resolved {
+          api.unresolve_pull_request_review_thread(&owner, &repo, number, target.as_str())
+        } else {
+          api.resolve_pull_request_review_thread(&owner, &repo, number, target.as_str())
+        }
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.resolve_thread_in_flight.remove(&thread_id_for_result);
+        this.resolve_thread_tasks.remove(&thread_id_for_result);
+        match result {
+          Ok(()) => {
+            this.resolve_thread_errors.remove(&thread_id_for_result);
+            let breadcrumb = if currently_resolved {
+              "Unresolve review thread succeeded"
+            } else {
+              "Resolve review thread succeeded"
+            };
+            this.add_pr_breadcrumb(breadcrumb, Map::new());
+            this.refresh_pull_request_conversation_for_current_pull_request(false, cx);
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this
+              .resolve_thread_errors
+              .insert(thread_id_for_result.clone(), error_message.clone().into());
+            let breadcrumb = if currently_resolved {
+              "Unresolve review thread failed"
+            } else {
+              "Resolve review thread failed"
+            };
+            this.add_pr_breadcrumb(breadcrumb, Map::new());
+            this.record_pr_error(
+              "github.pr.review_thread.resolve",
+              error_message.as_str(),
+              Map::new(),
+            );
+          }
+        }
+        cx.notify();
+      });
+    });
+
+    self.resolve_thread_tasks.insert(thread_id, task);
   }
 
   fn submit_pull_request_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -11055,8 +11155,17 @@ impl GithubPrDetailsPage {
       .into_any_element()
   }
 
-  fn render_outdated_review_comment_tag(&self, theme: &gpui_component::Theme) -> AnyElement {
-    StatusTag::new(theme.status_yellow())
+  fn render_outdated_review_comment_tag(
+    &self,
+    theme: &gpui_component::Theme,
+    is_resolved: bool,
+  ) -> AnyElement {
+    let color = if is_resolved {
+      theme.status_gray()
+    } else {
+      theme.status_yellow()
+    };
+    StatusTag::new(color)
       .outline()
       .child("Outdated")
       .into_any_element()
@@ -11330,6 +11439,28 @@ impl GithubPrDetailsPage {
       allows_overview_review_reply_action(item.kind, &item.thread_comment_ids, item.id);
     let root_is_outdated = item.kind == GithubPrOverviewConversationItemKind::ReviewComment
       && self.review_comment_is_outdated_for_ui(item.id, item.is_outdated);
+    let resolvable_thread_id = if item.kind == GithubPrOverviewConversationItemKind::ReviewComment {
+      item.thread_id.clone()
+    } else {
+      None
+    };
+    let thread_is_resolved = resolvable_thread_id.is_some() && item.is_resolved;
+    let resolve_in_flight = resolvable_thread_id
+      .as_ref()
+      .is_some_and(|id| self.resolve_thread_in_flight.contains(id));
+    let can_toggle_resolution = resolvable_thread_id.is_some()
+      && !resolve_in_flight
+      && if item.is_resolved {
+        item.viewer_can_unresolve
+      } else {
+        item.viewer_can_resolve
+      };
+    let resolve_error = resolvable_thread_id
+      .as_ref()
+      .and_then(|id| self.resolve_thread_errors.get(id))
+      .cloned();
+    let thread_expanded = self.expanded_resolved_threads.contains(&item.id);
+    let thread_collapsed = thread_is_resolved && !thread_expanded;
 
     // Root edit button
     let root_edit_button = if root_is_editable && !overview_submission_in_flight {
@@ -11368,7 +11499,7 @@ impl GithubPrDetailsPage {
               .ghost()
               .xsmall()
               .compact()
-              .icon(IconName::Delete)
+              .icon(UiIconName::Trash)
               .tooltip("Delete comment")
               .on_click(move |_, window, cx| {
                 cx.stop_propagation();
@@ -11637,20 +11768,95 @@ impl GithubPrDetailsPage {
                           .child(timestamp),
                       )
                       .when(root_is_outdated, |this| {
-                        this.child(self.render_outdated_review_comment_tag(&theme))
+                        this.child(
+                          self.render_outdated_review_comment_tag(&theme, thread_is_resolved),
+                        )
                       }),
                   )
                   .child(
                     h_flex()
                       .items_center()
                       .gap_1()
+                      .when_some(
+                        resolvable_thread_id.clone().map(|thread_id| {
+                          (
+                            thread_id,
+                            item.id,
+                            item.is_resolved,
+                            can_toggle_resolution,
+                            resolve_in_flight,
+                          )
+                        }),
+                        |this, (thread_id, root_comment_id, is_resolved, can_toggle, in_flight)| {
+                          let page = pr_page.clone();
+                          let label = if in_flight {
+                            if is_resolved {
+                              "Unresolving..."
+                            } else {
+                              "Resolving..."
+                            }
+                          } else if is_resolved {
+                            "Unresolve conversation"
+                          } else {
+                            "Resolve conversation"
+                          };
+                          this.child(
+                            Button::new(format!("pr-overview-resolve-thread-{}", root_comment_id))
+                              .ghost()
+                              .xsmall()
+                              .compact()
+                              .label(label)
+                              .disabled(!can_toggle)
+                              .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                let thread_id = thread_id.clone();
+                                page.update(cx, |this, cx| {
+                                  this.toggle_review_thread_resolution(
+                                    thread_id,
+                                    root_comment_id,
+                                    is_resolved,
+                                    cx,
+                                  );
+                                });
+                              }),
+                          )
+                        },
+                      )
+                      .when_some(
+                        resolvable_thread_id
+                          .clone()
+                          .filter(|_| thread_is_resolved)
+                          .map(|_| (item.id, thread_expanded)),
+                        |this, (root_comment_id, expanded)| {
+                          let page = pr_page.clone();
+                          let label = if expanded { "Hide" } else { "Show" };
+                          this.child(
+                            Button::new(format!("pr-overview-resolve-toggle-{}", root_comment_id))
+                              .ghost()
+                              .xsmall()
+                              .compact()
+                              .label(label)
+                              .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                page.update(cx, |this, cx| {
+                                  if expanded {
+                                    this.expanded_resolved_threads.remove(&root_comment_id);
+                                  } else {
+                                    this.expanded_resolved_threads.insert(root_comment_id);
+                                  }
+                                  cx.notify();
+                                });
+                              }),
+                          )
+                        },
+                      )
                       .when_some(root_edit_button, |this, button| this.child(button))
                       .when_some(root_delete_button, |this, button| this.child(button))
                       .when_some(root_reply_button, |this, button| this.child(button)),
                   ),
               )
               .when_else(
-                root_body.is_some(),
+                root_body.is_some() && !thread_collapsed,
                 |this| {
                   this.child(
                     v_flex()
@@ -11659,9 +11865,18 @@ impl GithubPrDetailsPage {
                   )
                 },
                 |this| this.pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX)),
-              ),
+              )
+              .when_some(resolve_error.clone(), |this, error| {
+                this.child(
+                  div()
+                    .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
+                    .text_xs()
+                    .text_color(theme.status_red())
+                    .child(error),
+                )
+              }),
           )
-          .when(!root_is_editing, |this| {
+          .when(!root_is_editing && !thread_collapsed, |this| {
             this.child(
               div()
                 .when(root_reaction_needs_bottom_padding, |this| {
@@ -11679,8 +11894,11 @@ impl GithubPrDetailsPage {
                 )),
             )
           })
-          .when_some(root_reply_composer, |this, composer| this.child(composer))
-          .when(!replies.is_empty(), |this| {
+          .when_some(
+            root_reply_composer.filter(|_| !thread_collapsed),
+            |this, composer| this.child(composer),
+          )
+          .when(!replies.is_empty() && !thread_collapsed, |this| {
             this.child(v_flex().children(replies.iter().map(|reply| {
               let reply_timestamp = format_relative_time(&reply.timestamp);
               let reply_scope_id = scope_id
@@ -11754,7 +11972,7 @@ impl GithubPrDetailsPage {
                         .ghost()
                         .xsmall()
                         .compact()
-                        .icon(IconName::Delete)
+                        .icon(UiIconName::Trash)
                         .tooltip("Delete comment")
                         .on_click(move |_, window, cx| {
                           cx.stop_propagation();
@@ -11980,7 +12198,9 @@ impl GithubPrDetailsPage {
                             .child(reply_timestamp),
                         )
                         .when(reply_is_outdated, |this| {
-                          this.child(self.render_outdated_review_comment_tag(&theme))
+                          this.child(
+                            self.render_outdated_review_comment_tag(&theme, thread_is_resolved),
+                          )
                         }),
                     )
                     .child(
@@ -17220,6 +17440,11 @@ mod tests {
       node_id: format!("PRRC_{id}"),
       reactions: Vec::new(),
       is_outdated: false,
+      thread_id: String::new(),
+      is_resolved: false,
+      is_collapsed: false,
+      viewer_can_resolve: false,
+      viewer_can_unresolve: false,
       id,
       pull_request_review_id: Some(12),
       diff_hunk: "@@ -1 +1 @@".to_string(),

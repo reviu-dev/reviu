@@ -1354,7 +1354,7 @@ impl CommandPaletteCommand {
   fn icon(&self) -> Icon {
     match self.id {
       CommandPaletteCommandId::SwitchRepository => Icon::new(IconName::FolderOpen),
-      CommandPaletteCommandId::ForgetRepository => Icon::new(IconName::Delete),
+      CommandPaletteCommandId::ForgetRepository => Icon::new(UiIconName::Trash),
       CommandPaletteCommandId::SwitchBranch => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::CheckoutDetached => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::Commit => Icon::new(IconName::Check),
@@ -1387,8 +1387,8 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::ApplyStash | CommandPaletteCommandId::PopStash => {
         Icon::new(UiIconName::ArrowUpFromLine)
       }
-      CommandPaletteCommandId::DropStash => Icon::new(IconName::Delete),
-      CommandPaletteCommandId::DeleteBranch => Icon::new(IconName::Delete),
+      CommandPaletteCommandId::DropStash => Icon::new(UiIconName::Trash),
+      CommandPaletteCommandId::DeleteBranch => Icon::new(UiIconName::Trash),
       CommandPaletteCommandId::CreateGithubRepository => Icon::new(IconName::Plus),
       CommandPaletteCommandId::SearchGithubRepository => Icon::new(IconName::Search),
       CommandPaletteCommandId::OpenRepository => Icon::new(IconName::FolderOpen),
