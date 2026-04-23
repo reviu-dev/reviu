@@ -154,54 +154,6 @@ fn pr_tab_url_segment(tab_ix: usize) -> &'static str {
   }
 }
 
-fn upload_placeholder_id() -> String {
-  use std::sync::atomic::{AtomicU64, Ordering};
-  static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-  let n = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-  // Derive a unique, URL-safe token for the placeholder. Uniqueness is
-  // scoped to the lifetime of the process which is more than enough: the
-  // placeholder lives in the input buffer for at most a few seconds.
-  format!("reviu-upload-{n}")
-}
-
-fn replace_placeholder_in_input(
-  input: &mut InputState,
-  placeholder: &str,
-  replacement: &str,
-  window: &mut Window,
-  cx: &mut Context<InputState>,
-) {
-  let current = input.value().to_string();
-  let Some(index) = current.find(placeholder) else {
-    return;
-  };
-  let mut next = String::with_capacity(current.len() + replacement.len());
-  next.push_str(&current[..index]);
-  next.push_str(replacement);
-  next.push_str(&current[index + placeholder.len()..]);
-  input.set_value(next, window, cx);
-}
-
-fn image_content_type_and_name_for_path(path: &Path) -> Option<(String, String)> {
-  let extension = path
-    .extension()
-    .and_then(|ext| ext.to_str())
-    .map(|ext| ext.to_ascii_lowercase())?;
-  let content_type = match extension.as_str() {
-    "png" => "image/png",
-    "jpg" | "jpeg" => "image/jpeg",
-    "gif" => "image/gif",
-    "webp" => "image/webp",
-    _ => return None,
-  };
-  let file_name = path
-    .file_name()
-    .and_then(|name| name.to_str())
-    .unwrap_or("image")
-    .to_string();
-  Some((content_type.to_string(), file_name))
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GithubPrRouteTarget {
   owner: String,
@@ -7865,57 +7817,7 @@ impl GithubPrDetailsPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let api = self.api.clone();
-    for path in paths.paths() {
-      let Some((content_type, file_name)) = image_content_type_and_name_for_path(path) else {
-        continue;
-      };
-      let placeholder_id = upload_placeholder_id();
-      let placeholder_markdown = format!(
-        "![Uploading {}…](uploading://{})\n",
-        file_name, placeholder_id
-      );
-      // Insert the placeholder immediately so the user sees feedback while
-      // the upload runs. It's replaced with the final markdown (or stripped
-      // on error) once the task resolves.
-      input.update(cx, |input, cx| {
-        input.insert(placeholder_markdown.clone(), window, cx);
-      });
-      let path = path.clone();
-      let api = api.clone();
-      let input = input.clone();
-      let window_handle = window.window_handle();
-      let on_error = on_error.clone();
-      cx.spawn(async move |this, cx| {
-        let upload = unblock(move || {
-          let bytes = std::fs::read(&path).map_err(anyhow::Error::from)?;
-          api.upload_asset(bytes, &content_type, &file_name)
-        })
-        .await;
-        let _ = this.update(cx, |this, cx| match upload {
-          Ok(url) => {
-            let markdown = format!("![image]({url})\n");
-            let _ = window_handle.update(cx, |_, window, cx| {
-              input.update(cx, |input, cx| {
-                replace_placeholder_in_input(input, &placeholder_markdown, &markdown, window, cx);
-              });
-            });
-          }
-          Err(error) => {
-            // Strip the placeholder so the composer isn't left with a dangling
-            // `uploading://` URL after a failed upload.
-            let _ = window_handle.update(cx, |_, window, cx| {
-              input.update(cx, |input, cx| {
-                replace_placeholder_in_input(input, &placeholder_markdown, "", window, cx);
-              });
-            });
-            on_error(this, error.to_string(), cx);
-            cx.notify();
-          }
-        });
-      })
-      .detach();
-    }
+    github_shared::upload_dropped_images(paths, input, self.api.clone(), on_error, window, cx);
   }
 
   fn handle_overview_issue_comment_drop(

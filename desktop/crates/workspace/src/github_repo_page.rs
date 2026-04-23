@@ -12,10 +12,11 @@ use gfm_markdown_viewer::{
   MarkdownRenderState, extract_github_blob_line_references, render_markdown,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Corner, Div, Entity, FocusHandle, Focusable, Hsla,
-  Image, InteractiveElement, Interactivity, ObjectFit, ParentElement, PathPromptOptions, Pixels,
-  Render, RenderImage, RenderOnce, SharedString, Stateful, StatefulInteractiveElement as _,
-  StyleRefinement, Styled, Subscription, Task, Window, div, img, prelude::*, px, size,
+  AnyElement, AnyWindowHandle, App, Context, Corner, Div, Entity, ExternalPaths, FocusHandle,
+  Focusable, Hsla, Image, InteractiveElement, Interactivity, ObjectFit, ParentElement,
+  PathPromptOptions, Pixels, Render, RenderImage, RenderOnce, SharedString, Stateful,
+  StatefulInteractiveElement as _, StyleRefinement, Styled, Subscription, Task, Window, div, img,
+  prelude::*, px, size,
 };
 #[cfg(test)]
 use gpui_component::IndexPath;
@@ -2405,14 +2406,26 @@ impl GithubIssueDetailsSheetView {
           .is_some();
         let page_for_cancel = issue_details_page.clone();
         let page_for_save = issue_details_page.clone();
+        let input_for_drop = input_state.clone();
         v_flex()
           .gap_2()
           .child(
-            div().w_full().child(
-              GithubEmojiInput::new(&input_state)
-                .disabled(self.edit_submitting)
-                .h(px(ISSUE_COMMENT_INPUT_HEIGHT_PX)),
-            ),
+            div()
+              .id(format!("issue-sheet-edit-drop-zone-{}", comment_id))
+              .w_full()
+              .rounded(theme.radius)
+              .drag_over::<ExternalPaths>(|this, _, _, cx| this.bg(cx.theme().drop_target))
+              .on_drop(cx.listener({
+                let input = input_for_drop.clone();
+                move |this, paths: &ExternalPaths, window, cx| {
+                  this.handle_issue_edit_drop(paths, input.clone(), window, cx);
+                }
+              }))
+              .child(
+                GithubEmojiInput::new(&input_state)
+                  .disabled(self.edit_submitting)
+                  .h(px(ISSUE_COMMENT_INPUT_HEIGHT_PX)),
+              ),
           )
           .when_some(self.edit_error.clone(), |this, error| {
             this.child(div().text_xs().text_color(theme.status_red()).child(error))
@@ -2540,13 +2553,23 @@ impl GithubIssueDetailsSheetView {
     let comment_submission_in_flight =
       self.comment_input_submitting || self.edit_submitting || self.description_submitting;
 
+    let comment_input_for_drop = comment_input.clone();
     v_flex()
       .gap_2()
       .pt_2()
       .pb_8()
       .child(
         div()
+          .id("issue-sheet-comment-drop-zone")
           .w_full()
+          .rounded(theme.radius)
+          .drag_over::<ExternalPaths>(|this, _, _, cx| this.bg(cx.theme().drop_target))
+          .on_drop(cx.listener({
+            let input = comment_input_for_drop.clone();
+            move |this, paths: &ExternalPaths, window, cx| {
+              this.handle_issue_comment_drop(paths, input.clone(), window, cx);
+            }
+          }))
           .child(GithubEmojiInput::new(comment_input).h(px(ISSUE_COMMENT_INPUT_HEIGHT_PX))),
       )
       .when_some(self.comment_input_error.clone(), |this, error| {
@@ -2981,6 +3004,63 @@ impl GithubIssueDetailsSheetView {
     cx.notify();
   }
 
+  fn handle_issue_comment_drop(
+    &mut self,
+    paths: &ExternalPaths,
+    input: Entity<InputState>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    github_shared::upload_dropped_images(
+      paths,
+      input,
+      self.api.clone(),
+      |this, message, _cx| {
+        this.comment_input_error = Some(message.into());
+      },
+      window,
+      cx,
+    );
+  }
+
+  fn handle_issue_edit_drop(
+    &mut self,
+    paths: &ExternalPaths,
+    input: Entity<InputState>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    github_shared::upload_dropped_images(
+      paths,
+      input,
+      self.api.clone(),
+      |this, message, _cx| {
+        this.edit_error = Some(message.into());
+      },
+      window,
+      cx,
+    );
+  }
+
+  fn handle_issue_description_edit_drop(
+    &mut self,
+    paths: &ExternalPaths,
+    input: Entity<InputState>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    github_shared::upload_dropped_images(
+      paths,
+      input,
+      self.api.clone(),
+      |this, message, _cx| {
+        this.description_error = Some(message.into());
+      },
+      window,
+      cx,
+    );
+  }
+
   fn submit_issue_comment_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if self.comment_input_submitting || self.edit_submitting || self.description_submitting {
       return;
@@ -3346,14 +3426,26 @@ impl Render for GithubIssueDetailsSheetView {
                   .is_some();
                 let page_for_cancel = issue_details_page.clone();
                 let page_for_save = issue_details_page.clone();
+                let input_for_drop = input_state.clone();
                 v_flex()
                   .gap_2()
                   .child(
-                    div().w_full().child(
-                      Input::new(&input_state)
-                        .disabled(self.description_submitting)
-                        .h(px(ISSUE_DESCRIPTION_INPUT_HEIGHT_PX)),
-                    ),
+                    div()
+                      .id("issue-sheet-description-drop-zone")
+                      .w_full()
+                      .rounded(theme.radius)
+                      .drag_over::<ExternalPaths>(|this, _, _, cx| this.bg(cx.theme().drop_target))
+                      .on_drop(cx.listener({
+                        let input = input_for_drop.clone();
+                        move |this, paths: &ExternalPaths, window, cx| {
+                          this.handle_issue_description_edit_drop(paths, input.clone(), window, cx);
+                        }
+                      }))
+                      .child(
+                        Input::new(&input_state)
+                          .disabled(self.description_submitting)
+                          .h(px(ISSUE_DESCRIPTION_INPUT_HEIGHT_PX)),
+                      ),
                   )
                   .when_some(self.description_error.clone(), |this, error| {
                     this.child(div().text_xs().text_color(theme.status_red()).child(error))

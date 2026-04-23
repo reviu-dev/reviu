@@ -1,11 +1,16 @@
+use std::path::Path;
 use std::sync::Arc;
 
-use gpui::{App, Hsla, IntoElement, ParentElement as _, SharedString, Styled, div, prelude::*};
+use gpui::{
+  App, Context, Entity, ExternalPaths, Hsla, IntoElement, ParentElement as _, SharedString, Styled,
+  Window, div, prelude::*,
+};
 use gpui_component::{
   ActiveTheme as _, Colorize, Icon, IconName, Sizable as _, StyledExt as _, avatar::Avatar,
-  clipboard::Clipboard, h_flex, label::Label, skeleton::Skeleton, tag::Tag, tooltip::Tooltip,
-  v_flex,
+  clipboard::Clipboard, h_flex, input::InputState, label::Label, skeleton::Skeleton, tag::Tag,
+  tooltip::Tooltip, v_flex,
 };
+use smol::unblock;
 use time::OffsetDateTime;
 use ui::{
   ReactionGroup as UiReactionGroup, ReactionOption as UiReactionOption, StatusTag,
@@ -128,6 +133,113 @@ pub(crate) fn try_open_github_asset_url(url: &str, api: &ApiClient, cx: &mut gpu
     Err(_) => cx.open_url(url),
   }
   true
+}
+
+pub(crate) fn image_content_type_and_name_for_path(path: &Path) -> Option<(String, String)> {
+  let extension = path
+    .extension()
+    .and_then(|ext| ext.to_str())
+    .map(|ext| ext.to_ascii_lowercase())?;
+  let content_type = match extension.as_str() {
+    "png" => "image/png",
+    "jpg" | "jpeg" => "image/jpeg",
+    "gif" => "image/gif",
+    "webp" => "image/webp",
+    _ => return None,
+  };
+  let file_name = path
+    .file_name()
+    .and_then(|name| name.to_str())
+    .unwrap_or("image")
+    .to_string();
+  Some((content_type.to_string(), file_name))
+}
+
+pub(crate) fn upload_placeholder_id() -> String {
+  use std::sync::atomic::{AtomicU64, Ordering};
+  static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+  let n = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+  format!("reviu-upload-{n}")
+}
+
+pub(crate) fn replace_placeholder_in_input(
+  input: &mut InputState,
+  placeholder: &str,
+  replacement: &str,
+  window: &mut Window,
+  cx: &mut Context<InputState>,
+) {
+  let current = input.value().to_string();
+  let Some(index) = current.find(placeholder) else {
+    return;
+  };
+  let mut next = String::with_capacity(current.len() + replacement.len());
+  next.push_str(&current[..index]);
+  next.push_str(replacement);
+  next.push_str(&current[index + placeholder.len()..]);
+  input.set_value(next, window, cx);
+}
+
+/// Spawn detached upload tasks for each image path in `paths`. For each image:
+/// - inserts an `![Uploading …]()` placeholder at the input's cursor immediately
+/// - uploads the bytes via the backend
+/// - replaces the placeholder with the final `![image](url)` markdown on success
+/// - strips the placeholder and invokes `on_error` on failure
+///
+/// Non-image paths are skipped silently.
+pub(crate) fn upload_dropped_images<V: 'static>(
+  paths: &ExternalPaths,
+  input: Entity<InputState>,
+  api: ApiClient,
+  on_error: impl Fn(&mut V, String, &mut Context<V>) + Send + 'static + Clone,
+  window: &mut Window,
+  cx: &mut Context<V>,
+) {
+  for path in paths.paths() {
+    let Some((content_type, file_name)) = image_content_type_and_name_for_path(path) else {
+      continue;
+    };
+    let placeholder_id = upload_placeholder_id();
+    let placeholder_markdown = format!(
+      "![Uploading {}…](uploading://{})\n",
+      file_name, placeholder_id
+    );
+    input.update(cx, |input, cx| {
+      input.insert(placeholder_markdown.clone(), window, cx);
+    });
+    let path = path.clone();
+    let api = api.clone();
+    let input = input.clone();
+    let window_handle = window.window_handle();
+    let on_error = on_error.clone();
+    cx.spawn(async move |this, cx| {
+      let upload = unblock(move || {
+        let bytes = std::fs::read(&path).map_err(anyhow::Error::from)?;
+        api.upload_asset(bytes, &content_type, &file_name)
+      })
+      .await;
+      let _ = this.update(cx, |this, cx| match upload {
+        Ok(url) => {
+          let markdown = format!("![image]({url})\n");
+          let _ = window_handle.update(cx, |_, window, cx| {
+            input.update(cx, |input, cx| {
+              replace_placeholder_in_input(input, &placeholder_markdown, &markdown, window, cx);
+            });
+          });
+        }
+        Err(error) => {
+          let _ = window_handle.update(cx, |_, window, cx| {
+            input.update(cx, |input, cx| {
+              replace_placeholder_in_input(input, &placeholder_markdown, "", window, cx);
+            });
+          });
+          on_error(this, error.to_string(), cx);
+          cx.notify();
+        }
+      });
+    })
+    .detach();
+  }
 }
 
 pub(crate) fn repo_section_header(
