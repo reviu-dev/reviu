@@ -1024,8 +1024,8 @@ impl WorkspaceView {
         .expect("refresh label should exist for refreshable workspace pages");
       let refresh_in_progress = refresh_in_progress_for_workspace_page(page, cx);
       Button::new("workspace-global-refresh")
-        .icon(UiIconName::RefreshCcw)
-        .loading_icon(Icon::new(UiIconName::RefreshCcw))
+        .icon(UiIconName::RefreshCw)
+        .loading_icon(Icon::new(UiIconName::RefreshCw))
         .loading(refresh_in_progress)
         .ghost()
         .compact()

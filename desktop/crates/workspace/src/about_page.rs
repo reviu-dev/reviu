@@ -484,7 +484,7 @@ impl Render for AboutPage {
               h_flex().justify_start().child(
                 Button::new("about-check-updates")
                   .small()
-                  .icon(UiIconName::RefreshCcw)
+                  .icon(UiIconName::RefreshCw)
                   .label(if self.check_in_progress {
                     "Checking..."
                   } else {
