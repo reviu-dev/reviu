@@ -20,17 +20,18 @@ use gfm_markdown_viewer::{
 };
 use git::{ApplyLocation, DiffSet, FileDiff, GitFileBases, GitStore, RepoFile};
 use gpui::{
-  App, Bounds, Context, CursorStyle, Entity, EntityInputHandler, FocusHandle, Focusable,
+  App, Bounds, Context, Corner, CursorStyle, Entity, EntityInputHandler, FocusHandle, Focusable,
   MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
   ShapedLine, SharedString, Subscription, Task, UTF16Selection, Window, black, div, point,
   prelude::*, px, white,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, IconName, Sizable,
+  ActiveTheme as _, Disableable as _, Icon, IconName, Selectable, Sizable,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   h_flex,
   input::{Escape as InputEscape, Input, InputEvent, InputState},
+  menu::{DropdownMenu as _, PopupMenuItem},
   resizable::{h_resizable, resizable_panel},
   v_flex,
 };
@@ -3132,6 +3133,56 @@ impl Editor {
     review_comment_overlay_x_offset_for_scroll(self.scroll_handle.offset().x)
   }
 
+  fn render_review_comment_actions_menu(
+    message_id: u64,
+    body: Arc<str>,
+    can_delete: bool,
+    button_id: String,
+    editor_entity: Entity<Editor>,
+  ) -> gpui::AnyElement {
+    let editor_edit = editor_entity.clone();
+    let editor_delete = editor_entity;
+    let body_for_edit = body;
+    div()
+      .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+      .child(
+        Button::new(button_id)
+          .ghost()
+          .xsmall()
+          .compact()
+          .icon(IconName::Ellipsis)
+          .tooltip("More actions")
+          .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+            let editor_edit = editor_edit.clone();
+            let editor_delete = editor_delete.clone();
+            let body_for_edit = body_for_edit.clone();
+            let mut menu = menu.item(
+              PopupMenuItem::new("Edit")
+                .icon(Icon::new(UiIconName::SquarePen))
+                .on_click(move |_, window, cx| {
+                  let body = body_for_edit.clone();
+                  editor_edit.update(cx, |editor, cx| {
+                    editor.start_review_comment_edit(message_id, body, window, cx);
+                  });
+                }),
+            );
+            if can_delete {
+              menu = menu.item(
+                PopupMenuItem::new("Delete")
+                  .icon(Icon::new(UiIconName::Trash))
+                  .on_click(move |_, window, cx| {
+                    editor_delete.update(cx, |editor, cx| {
+                      editor.request_review_comment_delete(message_id, window, cx);
+                    });
+                  }),
+              );
+            }
+            menu
+          }),
+      )
+      .into_any_element()
+  }
+
   fn render_review_comments_overlay(
     &mut self,
     editor_entity: Entity<Editor>,
@@ -3199,86 +3250,62 @@ impl Editor {
         })
         .child(toggle_button);
       let first_message_id = first_message.id;
-      let first_message_edit_button = if !review_comment_submission_in_flight
+      let first_message_actions_menu = if !review_comment_submission_in_flight
         && self.editable_review_comment_ids.contains(&first_message.id)
       {
-        let editor = editor_entity.clone();
         let body = first_message.body.clone();
-        Some(
-          div()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-              cx.stop_propagation();
-            })
-            .child(
-              Button::new(format!("review-comment-edit-{}", first_message_id))
-                .ghost()
-                .xsmall()
-                .compact()
-                .icon(UiIconName::SquarePen)
-                .tooltip("Edit comment")
-                .on_click(move |_, window, cx| {
-                  cx.stop_propagation();
-                  editor.update(cx, |editor, cx| {
-                    editor.start_review_comment_edit(first_message_id, body.clone(), window, cx);
-                  });
-                }),
-            ),
-        )
+        let can_delete = review_comment_delete_handler.is_some();
+        Some(Self::render_review_comment_actions_menu(
+          first_message_id,
+          body,
+          can_delete,
+          format!("review-comment-actions-{}", first_message_id),
+          editor_entity.clone(),
+        ))
       } else {
         None
       };
-      let first_message_delete_button = if !review_comment_submission_in_flight
-        && self.editable_review_comment_ids.contains(&first_message.id)
-        && review_comment_delete_handler.is_some()
-      {
+      let first_message_reply_button = if last_message_id == Some(first_message_id) {
+        let is_replying = self.replying_to_review_comment_id == Some(first_message_id);
+        let disabled_reason = if review_comment_submission_in_flight {
+          Some("A comment submission is in progress.")
+        } else if self.replying_to_review_comment_id.is_some() && !is_replying {
+          Some("Finish or cancel the open reply first.")
+        } else {
+          None
+        };
+        let disabled = disabled_reason.is_some();
         let editor = editor_entity.clone();
         Some(
           div()
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
               cx.stop_propagation();
             })
-            .child(
-              Button::new(format!("review-comment-delete-{}", first_message_id))
-                .ghost()
-                .xsmall()
-                .compact()
-                .icon(UiIconName::Trash)
-                .tooltip("Delete comment")
-                .on_click(move |_, window, cx| {
-                  cx.stop_propagation();
-                  editor.update(cx, |editor, cx| {
-                    editor.request_review_comment_delete(first_message_id, window, cx);
-                  });
-                }),
-            ),
-        )
-      } else {
-        None
-      };
-      let first_message_reply_button = if !review_comment_submission_in_flight
-        && self.replying_to_review_comment_id.is_none()
-        && last_message_id == Some(first_message_id)
-      {
-        let editor = editor_entity.clone();
-        Some(
-          div()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-              cx.stop_propagation();
-            })
-            .child(
-              Button::new(format!("review-comment-reply-{}", first_message_id))
+            .child({
+              let button = Button::new(format!("review-comment-reply-{}", first_message_id))
                 .ghost()
                 .xsmall()
                 .compact()
                 .icon(UiIconName::MessageCircleReply)
-                .tooltip("Reply")
+                .label("Reply")
+                .selected(is_replying)
+                .disabled(disabled)
                 .on_click(move |_, window, cx| {
                   cx.stop_propagation();
                   editor.update(cx, |editor, cx| {
-                    editor.start_review_comment_reply(first_message_id, window, cx);
+                    if is_replying {
+                      editor.cancel_review_comment_reply(cx);
+                    } else {
+                      editor.start_review_comment_reply(first_message_id, window, cx);
+                    }
                   });
-                }),
-            ),
+                });
+              if let Some(reason) = disabled_reason {
+                button.tooltip(reason)
+              } else {
+                button
+              }
+            }),
         )
       } else {
         None
@@ -3344,13 +3371,10 @@ impl Editor {
           h_flex()
             .items_center()
             .gap_1()
-            .when_some(first_message_edit_button, |this, button| this.child(button))
-            .when_some(first_message_delete_button, |this, button| {
-              this.child(button)
-            })
             .when_some(first_message_reply_button, |this, button| {
               this.child(button)
             })
+            .when_some(first_message_actions_menu, |this, menu| this.child(menu))
             .child(toggle_button),
         );
 
@@ -3575,89 +3599,64 @@ impl Editor {
             .child(body)
         } else {
           let message_line_label: Option<Arc<str>> = None;
-          let message_edit_button = if !review_comment_submission_in_flight
+          let message_actions_menu = if !review_comment_submission_in_flight
             && self.editable_review_comment_ids.contains(&message.id)
           {
-            let editor = editor_entity.clone();
             let message_id = message.id;
             let body = message.body.clone();
-            Some(
-              div()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                  cx.stop_propagation();
-                })
-                .child(
-                  Button::new(format!("review-comment-edit-{}", message_id))
-                    .ghost()
-                    .xsmall()
-                    .compact()
-                    .icon(UiIconName::SquarePen)
-                    .tooltip("Edit comment")
-                    .on_click(move |_, window, cx| {
-                      cx.stop_propagation();
-                      editor.update(cx, |editor, cx| {
-                        editor.start_review_comment_edit(message_id, body.clone(), window, cx);
-                      });
-                    }),
-                ),
-            )
+            let can_delete = review_comment_delete_handler.is_some();
+            Some(Self::render_review_comment_actions_menu(
+              message_id,
+              body,
+              can_delete,
+              format!("review-comment-actions-{}", message_id),
+              editor_entity.clone(),
+            ))
           } else {
             None
           };
-          let message_delete_button = if !review_comment_submission_in_flight
-            && self.editable_review_comment_ids.contains(&message.id)
-            && review_comment_delete_handler.is_some()
-          {
-            let editor = editor_entity.clone();
+          let message_reply_button = if is_last_message {
             let message_id = message.id;
+            let is_replying = self.replying_to_review_comment_id == Some(message_id);
+            let disabled_reason = if review_comment_submission_in_flight {
+              Some("A comment submission is in progress.")
+            } else if self.replying_to_review_comment_id.is_some() && !is_replying {
+              Some("Finish or cancel the open reply first.")
+            } else {
+              None
+            };
+            let disabled = disabled_reason.is_some();
+            let editor = editor_entity.clone();
             Some(
               div()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                   cx.stop_propagation();
                 })
-                .child(
-                  Button::new(format!("review-comment-delete-{}", message_id))
-                    .ghost()
-                    .xsmall()
-                    .compact()
-                    .icon(UiIconName::Trash)
-                    .tooltip("Delete comment")
-                    .on_click(move |_, window, cx| {
-                      cx.stop_propagation();
-                      editor.update(cx, |editor, cx| {
-                        editor.request_review_comment_delete(message_id, window, cx);
-                      });
-                    }),
-                ),
-            )
-          } else {
-            None
-          };
-          let message_reply_button = if !review_comment_submission_in_flight
-            && self.replying_to_review_comment_id.is_none()
-            && is_last_message
-          {
-            let editor = editor_entity.clone();
-            let message_id = message.id;
-            Some(
-              div()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                  cx.stop_propagation();
-                })
-                .child(
-                  Button::new(format!("review-comment-reply-{}", message_id))
+                .child({
+                  let button = Button::new(format!("review-comment-reply-{}", message_id))
                     .ghost()
                     .xsmall()
                     .compact()
                     .icon(UiIconName::MessageCircleReply)
-                    .tooltip("Reply")
+                    .label("Reply")
+                    .selected(is_replying)
+                    .disabled(disabled)
                     .on_click(move |_, window, cx| {
                       cx.stop_propagation();
                       editor.update(cx, |editor, cx| {
-                        editor.start_review_comment_reply(message_id, window, cx);
+                        if is_replying {
+                          editor.cancel_review_comment_reply(cx);
+                        } else {
+                          editor.start_review_comment_reply(message_id, window, cx);
+                        }
                       });
-                    }),
-                ),
+                    });
+                  if let Some(reason) = disabled_reason {
+                    button.tooltip(reason)
+                  } else {
+                    button
+                  }
+                }),
             )
           } else {
             None
@@ -3717,9 +3716,8 @@ impl Editor {
                   h_flex()
                     .items_center()
                     .gap_1()
-                    .when_some(message_edit_button, |this, button| this.child(button))
-                    .when_some(message_delete_button, |this, button| this.child(button))
-                    .when_some(message_reply_button, |this, button| this.child(button)),
+                    .when_some(message_reply_button, |this, button| this.child(button))
+                    .when_some(message_actions_menu, |this, menu| this.child(menu)),
                 ),
             )
             .child(body)
