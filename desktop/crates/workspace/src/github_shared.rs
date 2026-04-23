@@ -2,13 +2,22 @@ use std::path::Path;
 use std::sync::Arc;
 
 use gpui::{
-  App, Context, Entity, ExternalPaths, Hsla, IntoElement, ParentElement as _, SharedString, Styled,
-  Window, div, prelude::*,
+  AnyElement, App, Context, Corner, Entity, ExternalPaths, Hsla, IntoElement, MouseButton,
+  ParentElement as _, SharedString, Styled, Window, div, prelude::*,
 };
 use gpui_component::{
-  ActiveTheme as _, Colorize, Icon, IconName, Sizable as _, StyledExt as _, avatar::Avatar,
-  clipboard::Clipboard, h_flex, input::InputState, label::Label, skeleton::Skeleton, tag::Tag,
-  tooltip::Tooltip, v_flex,
+  ActiveTheme as _, Colorize, Icon, IconName, Sizable as _, StyledExt as _,
+  avatar::Avatar,
+  button::{Button, ButtonVariants as _},
+  clipboard::Clipboard,
+  h_flex,
+  input::InputState,
+  label::Label,
+  menu::{DropdownMenu as _, PopupMenuItem},
+  skeleton::Skeleton,
+  tag::Tag,
+  tooltip::Tooltip,
+  v_flex,
 };
 use smol::unblock;
 use time::OffsetDateTime;
@@ -133,6 +142,44 @@ pub(crate) fn try_open_github_asset_url(url: &str, api: &ApiClient, cx: &mut gpu
     Err(_) => cx.open_url(url),
   }
   true
+}
+
+/// Shared "⋯" actions menu for a comment with Edit and Delete items.
+/// The caller passes closures for each action so we don't couple the menu
+/// to any specific page type — PR overview, issue sheet, etc. all use it.
+pub(crate) fn render_comment_actions_menu(
+  button_id: String,
+  on_edit: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+  on_delete: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+) -> AnyElement {
+  let on_edit = Arc::new(on_edit);
+  let on_delete = Arc::new(on_delete);
+  div()
+    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    .child(
+      Button::new(button_id)
+        .ghost()
+        .xsmall()
+        .compact()
+        .icon(IconName::Ellipsis)
+        .tooltip("More actions")
+        .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+          let on_edit = on_edit.clone();
+          let on_delete = on_delete.clone();
+          menu
+            .item(
+              PopupMenuItem::new("Edit")
+                .icon(Icon::new(UiIconName::SquarePen))
+                .on_click(move |event, window, cx| on_edit(event, window, cx)),
+            )
+            .item(
+              PopupMenuItem::new("Delete")
+                .icon(Icon::new(UiIconName::Trash))
+                .on_click(move |event, window, cx| on_delete(event, window, cx)),
+            )
+        }),
+    )
+    .into_any_element()
 }
 
 pub(crate) fn image_content_type_and_name_for_path(path: &Path) -> Option<(String, String)> {

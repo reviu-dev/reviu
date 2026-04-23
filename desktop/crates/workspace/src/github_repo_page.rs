@@ -2354,41 +2354,22 @@ impl GithubIssueDetailsSheetView {
       }
     });
 
-    let edit_button = if is_editable && !comment_submission_in_flight && !is_editing {
-      let page = issue_details_page.clone();
-      Some(
-        Button::new(format!("issue-sheet-comment-edit-{}", comment_id))
-          .ghost()
-          .xsmall()
-          .compact()
-          .icon(UiIconName::SquarePen)
-          .tooltip("Edit comment")
-          .on_click(move |_, window, cx| {
-            page.update(cx, |this, cx| {
-              this.start_issue_comment_edit(comment_id, window, cx);
-            });
-          })
-          .into_any_element(),
-      )
-    } else {
-      None
-    };
-    let delete_button = if is_editable && !comment_submission_in_flight {
-      let page = issue_details_page.clone();
-      Some(
-        Button::new(format!("issue-sheet-comment-delete-{}", comment_id))
-          .ghost()
-          .xsmall()
-          .compact()
-          .icon(UiIconName::Trash)
-          .tooltip("Delete comment")
-          .on_click(move |_, window, cx| {
-            page.update(cx, |this, cx| {
-              this.confirm_issue_comment_delete(comment_id, window, cx);
-            });
-          })
-          .into_any_element(),
-      )
+    let actions_menu = if is_editable && !comment_submission_in_flight && !is_editing {
+      let page_edit = issue_details_page.clone();
+      let page_delete = issue_details_page.clone();
+      Some(github_shared::render_comment_actions_menu(
+        format!("issue-sheet-comment-actions-{}", comment_id),
+        move |_, window, cx| {
+          page_edit.update(cx, |this, cx| {
+            this.start_issue_comment_edit(comment_id, window, cx);
+          });
+        },
+        move |_, window, cx| {
+          page_delete.update(cx, |this, cx| {
+            this.confirm_issue_comment_delete(comment_id, window, cx);
+          });
+        },
+      ))
     } else {
       None
     };
@@ -2514,23 +2495,41 @@ impl GithubIssueDetailsSheetView {
                   .text_sm()
                   .text_color(theme.foreground)
                   .child(comment_author),
+              )
+              .child(
+                div()
+                  .flex()
+                  .gap_1()
+                  .items_end()
+                  .child(
+                    div()
+                      .text_xs()
+                      .text_color(theme.muted_foreground)
+                      .child(comment_created_at),
+                  )
+                  .when(comment.created_at != comment.updated_at, |this| {
+                    this
+                      .child(
+                        div()
+                          .text_xs()
+                          .text_color(theme.muted_foreground)
+                          .child("•"),
+                      )
+                      .child(
+                        div()
+                          .text_xs()
+                          .text_color(theme.muted_foreground)
+                          .child(format!("edited {comment_updated_at}")),
+                      )
+                  }),
               ),
           )
           .child(
             h_flex()
               .items_center()
               .gap_1()
-              .when_some(edit_button, |this, button| this.child(button))
-              .when_some(delete_button, |this, button| this.child(button)),
+              .when_some(actions_menu, |this, menu| this.child(menu)),
           ),
-      )
-      .child(
-        div()
-          .text_xs()
-          .text_color(theme.muted_foreground)
-          .child(format!(
-            "Created {comment_created_at} • Updated {comment_updated_at}"
-          )),
       )
       .child(comment_body_element)
       .child(self.render_issue_reaction_bar(

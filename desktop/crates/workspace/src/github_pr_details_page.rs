@@ -11340,40 +11340,19 @@ impl GithubPrDetailsPage {
   ) -> AnyElement {
     let page_edit = page.clone();
     let page_delete = page;
-    div()
-      .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-      .child(
-        Button::new(button_id)
-          .ghost()
-          .xsmall()
-          .compact()
-          .icon(IconName::Ellipsis)
-          .tooltip("More actions")
-          .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
-            let page_edit = page_edit.clone();
-            let page_delete = page_delete.clone();
-            menu
-              .item(
-                PopupMenuItem::new("Edit")
-                  .icon(Icon::new(UiIconName::SquarePen))
-                  .on_click(move |_, window, cx| {
-                    page_edit.update(cx, |this, cx| {
-                      this.start_overview_comment_edit(target, window, cx);
-                    });
-                  }),
-              )
-              .item(
-                PopupMenuItem::new("Delete")
-                  .icon(Icon::new(UiIconName::Trash))
-                  .on_click(move |_, window, cx| {
-                    page_delete.update(cx, |this, cx| {
-                      this.confirm_overview_comment_delete(target, window, cx);
-                    });
-                  }),
-              )
-          }),
-      )
-      .into_any_element()
+    github_shared::render_comment_actions_menu(
+      button_id,
+      move |_, window, cx| {
+        page_edit.update(cx, |this, cx| {
+          this.start_overview_comment_edit(target, window, cx);
+        });
+      },
+      move |_, window, cx| {
+        page_delete.update(cx, |this, cx| {
+          this.confirm_overview_comment_delete(target, window, cx);
+        });
+      },
+    )
   }
 
   fn render_outdated_review_comment_tag(
