@@ -11155,6 +11155,49 @@ impl GithubPrDetailsPage {
       .into_any_element()
   }
 
+  fn render_overview_comment_actions_menu(
+    target: OverviewCommentTarget,
+    button_id: String,
+    page: Entity<Self>,
+  ) -> AnyElement {
+    let page_edit = page.clone();
+    let page_delete = page;
+    div()
+      .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+      .child(
+        Button::new(button_id)
+          .ghost()
+          .xsmall()
+          .compact()
+          .icon(IconName::Ellipsis)
+          .tooltip("More actions")
+          .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+            let page_edit = page_edit.clone();
+            let page_delete = page_delete.clone();
+            menu
+              .item(
+                PopupMenuItem::new("Edit")
+                  .icon(Icon::new(UiIconName::SquarePen))
+                  .on_click(move |_, window, cx| {
+                    page_edit.update(cx, |this, cx| {
+                      this.start_overview_comment_edit(target, window, cx);
+                    });
+                  }),
+              )
+              .item(
+                PopupMenuItem::new("Delete")
+                  .icon(Icon::new(UiIconName::Trash))
+                  .on_click(move |_, window, cx| {
+                    page_delete.update(cx, |this, cx| {
+                      this.confirm_overview_comment_delete(target, window, cx);
+                    });
+                  }),
+              )
+          }),
+      )
+      .into_any_element()
+  }
+
   fn render_outdated_review_comment_tag(
     &self,
     theme: &gpui_component::Theme,
@@ -11462,86 +11505,65 @@ impl GithubPrDetailsPage {
     let thread_expanded = self.expanded_resolved_threads.contains(&item.id);
     let thread_collapsed = thread_is_resolved && !thread_expanded;
 
-    // Root edit button
-    let root_edit_button = if root_is_editable && !overview_submission_in_flight {
+    // Root edit/delete actions menu
+    let root_actions_menu = if root_is_editable && !overview_submission_in_flight {
       root_target.map(|target| {
-        let page = pr_page.clone();
-        div()
-          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-          .child(
-            Button::new(format!("pr-overview-comment-edit-{}", target.id))
-              .ghost()
-              .xsmall()
-              .compact()
-              .icon(UiIconName::SquarePen)
-              .tooltip("Edit comment")
-              .on_click(move |_, window, cx| {
-                cx.stop_propagation();
-                page.update(cx, |this, cx| {
-                  this.start_overview_comment_edit(target, window, cx);
-                });
-              }),
-          )
-          .into_any_element()
-      })
-    } else {
-      None
-    };
-
-    // Root delete button
-    let root_delete_button = if root_is_editable && !overview_submission_in_flight {
-      root_target.map(|target| {
-        let page = pr_page.clone();
-        div()
-          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-          .child(
-            Button::new(format!("pr-overview-comment-delete-{}", target.id))
-              .ghost()
-              .xsmall()
-              .compact()
-              .icon(UiIconName::Trash)
-              .tooltip("Delete comment")
-              .on_click(move |_, window, cx| {
-                cx.stop_propagation();
-                page.update(cx, |this, cx| {
-                  this.confirm_overview_comment_delete(target, window, cx);
-                });
-              }),
-          )
-          .into_any_element()
-      })
-    } else {
-      None
-    };
-
-    // Root reply button
-    let root_reply_button =
-      if root_is_last_review_message && replying_target.is_none() && !overview_submission_in_flight
-      {
-        let page = pr_page.clone();
-        let item_id = item.id;
-        Some(
-          div()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(
-              Button::new(format!("pr-overview-comment-reply-{}", item_id))
-                .ghost()
-                .xsmall()
-                .compact()
-                .icon(UiIconName::MessageCircleReply)
-                .tooltip("Reply")
-                .on_click(move |_, window, cx| {
-                  cx.stop_propagation();
-                  page.update(cx, |this, cx| {
-                    this.start_overview_review_comment_reply(item_id, window, cx);
-                  });
-                }),
-            )
-            .into_any_element(),
+        Self::render_overview_comment_actions_menu(
+          target,
+          format!("pr-overview-comment-actions-{}", target.id),
+          pr_page.clone(),
         )
+      })
+    } else {
+      None
+    };
+
+    // Root reply button (toggle)
+    let root_reply_button = if root_is_last_review_message {
+      let page = pr_page.clone();
+      let item_id = item.id;
+      let is_replying = replying_target == Some(item_id);
+      let disabled_reason = if overview_submission_in_flight {
+        Some("A comment submission is in progress.")
+      } else if replying_target.is_some() && !is_replying {
+        Some("Finish or cancel the open reply first.")
       } else {
         None
       };
+      let disabled = disabled_reason.is_some();
+      Some(
+        div()
+          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+          .child({
+            let button = Button::new(format!("pr-overview-comment-reply-{}", item_id))
+              .ghost()
+              .xsmall()
+              .compact()
+              .icon(UiIconName::MessageCircleReply)
+              .label("Reply")
+              .selected(is_replying)
+              .disabled(disabled)
+              .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                page.update(cx, |this, cx| {
+                  if is_replying {
+                    this.cancel_overview_review_comment_reply(cx);
+                  } else {
+                    this.start_overview_review_comment_reply(item_id, window, cx);
+                  }
+                });
+              });
+            if let Some(reason) = disabled_reason {
+              button.tooltip(reason)
+            } else {
+              button
+            }
+          })
+          .into_any_element(),
+      )
+    } else {
+      None
+    };
 
     // Root body (edit mode or markdown)
     let root_body: Option<AnyElement> = if root_is_editing {
@@ -11623,6 +11645,7 @@ impl GithubPrDetailsPage {
           v_flex()
             .gap_2()
             .pt_2()
+            .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
             .border_t_1()
             .border_color(theme.border)
             .child(Spinner::new().small())
@@ -11643,6 +11666,7 @@ impl GithubPrDetailsPage {
           v_flex()
             .gap_2()
             .pt_2()
+            .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
             .border_t_1()
             .border_color(theme.border)
             .child(
@@ -11830,11 +11854,17 @@ impl GithubPrDetailsPage {
                         |this, (root_comment_id, expanded)| {
                           let page = pr_page.clone();
                           let label = if expanded { "Hide" } else { "Show" };
+                          let icon = if expanded {
+                            UiIconName::FoldVertical
+                          } else {
+                            UiIconName::UnfoldVertical
+                          };
                           this.child(
                             Button::new(format!("pr-overview-resolve-toggle-{}", root_comment_id))
                               .ghost()
                               .xsmall()
                               .compact()
+                              .icon(icon)
                               .label(label)
                               .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
@@ -11850,9 +11880,8 @@ impl GithubPrDetailsPage {
                           )
                         },
                       )
-                      .when_some(root_edit_button, |this, button| this.child(button))
-                      .when_some(root_delete_button, |this, button| this.child(button))
-                      .when_some(root_reply_button, |this, button| this.child(button)),
+                      .when_some(root_reply_button, |this, button| this.child(button))
+                      .when_some(root_actions_menu, |this, menu| this.child(menu)),
                   ),
               )
               .when_else(
@@ -11936,80 +11965,57 @@ impl GithubPrDetailsPage {
               let reply_is_outdated =
                 self.review_comment_is_outdated_for_ui(reply.id, reply.is_outdated);
 
-              // Reply action buttons
-              let reply_edit_button = if reply_is_editable && !overview_submission_in_flight {
-                let page = pr_page.clone();
-                Some(
-                  div()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                      Button::new(format!("pr-overview-reply-edit-{}", reply.id))
-                        .ghost()
-                        .xsmall()
-                        .compact()
-                        .icon(UiIconName::SquarePen)
-                        .tooltip("Edit comment")
-                        .on_click(move |_, window, cx| {
-                          cx.stop_propagation();
-                          page.update(cx, |this, cx| {
-                            this.start_overview_comment_edit(reply_target, window, cx);
-                          });
-                        }),
-                    )
-                    .into_any_element(),
-                )
+              // Reply edit/delete actions menu
+              let reply_actions_menu = if reply_is_editable && !overview_submission_in_flight {
+                Some(Self::render_overview_comment_actions_menu(
+                  reply_target,
+                  format!("pr-overview-reply-actions-{}", reply.id),
+                  pr_page.clone(),
+                ))
               } else {
                 None
               };
 
-              let reply_delete_button = if reply_is_editable && !overview_submission_in_flight {
-                let page = pr_page.clone();
-                Some(
-                  div()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                      Button::new(format!("pr-overview-reply-delete-{}", reply.id))
-                        .ghost()
-                        .xsmall()
-                        .compact()
-                        .icon(UiIconName::Trash)
-                        .tooltip("Delete comment")
-                        .on_click(move |_, window, cx| {
-                          cx.stop_propagation();
-                          page.update(cx, |this, cx| {
-                            this.confirm_overview_comment_delete(reply_target, window, cx);
-                          });
-                        }),
-                    )
-                    .into_any_element(),
-                )
-              } else {
-                None
-              };
-
-              let reply_reply_button = if reply_is_last_message
-                && replying_target.is_none()
-                && !overview_submission_in_flight
-              {
+              let reply_reply_button = if reply_is_last_message {
                 let page = pr_page.clone();
                 let reply_id = reply.id;
+                let is_replying = replying_target == Some(reply_id);
+                let disabled_reason = if overview_submission_in_flight {
+                  Some("A comment submission is in progress.")
+                } else if replying_target.is_some() && !is_replying {
+                  Some("Finish or cancel the open reply first.")
+                } else {
+                  None
+                };
+                let disabled = disabled_reason.is_some();
                 Some(
                   div()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                      Button::new(format!("pr-overview-reply-action-{}", reply_id))
+                    .child({
+                      let button = Button::new(format!("pr-overview-reply-action-{}", reply_id))
                         .ghost()
                         .xsmall()
                         .compact()
                         .icon(UiIconName::MessageCircleReply)
-                        .tooltip("Reply")
+                        .label("Reply")
+                        .selected(is_replying)
+                        .disabled(disabled)
                         .on_click(move |_, window, cx| {
                           cx.stop_propagation();
                           page.update(cx, |this, cx| {
-                            this.start_overview_review_comment_reply(reply_id, window, cx);
+                            if is_replying {
+                              this.cancel_overview_review_comment_reply(cx);
+                            } else {
+                              this.start_overview_review_comment_reply(reply_id, window, cx);
+                            }
                           });
-                        }),
-                    )
+                        });
+                      if let Some(reason) = disabled_reason {
+                        button.tooltip(reason)
+                      } else {
+                        button
+                      }
+                    })
                     .into_any_element(),
                 )
               } else {
@@ -12207,9 +12213,8 @@ impl GithubPrDetailsPage {
                       h_flex()
                         .items_center()
                         .gap_1()
-                        .when_some(reply_edit_button, |this, button| this.child(button))
-                        .when_some(reply_delete_button, |this, button| this.child(button))
-                        .when_some(reply_reply_button, |this, button| this.child(button)),
+                        .when_some(reply_reply_button, |this, button| this.child(button))
+                        .when_some(reply_actions_menu, |this, menu| this.child(menu)),
                     ),
                 )
                 .child(reply_body)
