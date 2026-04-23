@@ -7494,9 +7494,9 @@ impl GitPage {
 
     let fetch_button = Button::new("git-fetch-button")
       .label("Fetch")
-      .icon(UiIconName::RefreshCcw)
+      .icon(UiIconName::RefreshCw)
       .outline()
-      .loading_icon(Icon::new(UiIconName::RefreshCcw))
+      .loading_icon(Icon::new(UiIconName::RefreshCw))
       .loading(self.fetch_in_progress)
       .with_variant(ButtonVariant::Secondary)
       .xsmall()

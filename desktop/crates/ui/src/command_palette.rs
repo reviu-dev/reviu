@@ -1380,7 +1380,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::StageAll => Icon::new(IconName::Plus),
       CommandPaletteCommandId::UnstageAll => Icon::new(UiIconName::ArrowUpFromLine),
       CommandPaletteCommandId::Pull => Icon::new(IconName::ArrowDown),
-      CommandPaletteCommandId::Fetch => Icon::new(UiIconName::RefreshCcw),
+      CommandPaletteCommandId::Fetch => Icon::new(UiIconName::RefreshCw),
       CommandPaletteCommandId::Stash | CommandPaletteCommandId::StashIncludeUntracked => {
         Icon::new(UiIconName::ArrowDownFromLine)
       }

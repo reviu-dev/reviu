@@ -658,7 +658,7 @@ impl BillingPage {
     let theme = cx.theme().clone();
 
     let refresh_button = Button::new("billing-refresh")
-      .icon(UiIconName::RefreshCcw)
+      .icon(UiIconName::RefreshCw)
       .ghost()
       .compact()
       .loading(self.refresh_loading)
