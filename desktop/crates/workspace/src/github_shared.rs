@@ -144,42 +144,90 @@ pub(crate) fn try_open_github_asset_url(url: &str, api: &ApiClient, cx: &mut gpu
   true
 }
 
-/// Shared "⋯" actions menu for a comment with Edit and Delete items.
-/// The caller passes closures for each action so we don't couple the menu
-/// to any specific page type — PR overview, issue sheet, etc. all use it.
+pub(crate) type CommentMenuAction = Arc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static>;
+
+#[derive(Clone, Default)]
+pub(crate) struct CommentActionsMenu {
+  pub(crate) on_quote_reply: Option<CommentMenuAction>,
+  pub(crate) on_edit: Option<CommentMenuAction>,
+  pub(crate) on_delete: Option<CommentMenuAction>,
+}
+
+impl CommentActionsMenu {
+  pub(crate) fn is_empty(&self) -> bool {
+    self.on_quote_reply.is_none() && self.on_edit.is_none() && self.on_delete.is_none()
+  }
+}
+
+/// Shared "⋯" actions menu for a comment. Caller passes whichever actions
+/// apply; the menu is rendered only when at least one is available. Keeps
+/// the menu decoupled from any specific page type (PR overview, issue
+/// sheet, editor overlay) so each caller just wires closures that know how
+/// to perform the action on its own entity.
 pub(crate) fn render_comment_actions_menu(
   button_id: String,
-  on_edit: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
-  on_delete: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-  let on_edit = Arc::new(on_edit);
-  let on_delete = Arc::new(on_delete);
-  div()
-    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-    .child(
-      Button::new(button_id)
-        .ghost()
-        .xsmall()
-        .compact()
-        .icon(IconName::Ellipsis)
-        .tooltip("More actions")
-        .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
-          let on_edit = on_edit.clone();
-          let on_delete = on_delete.clone();
-          menu
-            .item(
-              PopupMenuItem::new("Edit")
-                .icon(Icon::new(UiIconName::SquarePen))
-                .on_click(move |event, window, cx| on_edit(event, window, cx)),
-            )
-            .item(
-              PopupMenuItem::new("Delete")
-                .icon(Icon::new(UiIconName::Trash))
-                .on_click(move |event, window, cx| on_delete(event, window, cx)),
-            )
-        }),
-    )
-    .into_any_element()
+  actions: CommentActionsMenu,
+) -> Option<AnyElement> {
+  if actions.is_empty() {
+    return None;
+  }
+
+  Some(
+    div()
+      .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+      .child(
+        Button::new(button_id)
+          .ghost()
+          .xsmall()
+          .compact()
+          .icon(IconName::Ellipsis)
+          .tooltip("More actions")
+          .dropdown_menu_with_anchor(Corner::TopRight, move |mut menu, _, _| {
+            let actions = actions.clone();
+            if let Some(on_quote_reply) = actions.on_quote_reply {
+              menu = menu.item(
+                PopupMenuItem::new("Quote reply")
+                  .icon(Icon::new(UiIconName::MessageCircleReply))
+                  .on_click(move |event, window, cx| on_quote_reply(event, window, cx)),
+              );
+            }
+            if let Some(on_edit) = actions.on_edit {
+              menu = menu.item(
+                PopupMenuItem::new("Edit")
+                  .icon(Icon::new(UiIconName::SquarePen))
+                  .on_click(move |event, window, cx| on_edit(event, window, cx)),
+              );
+            }
+            if let Some(on_delete) = actions.on_delete {
+              menu = menu.item(
+                PopupMenuItem::new("Delete")
+                  .icon(Icon::new(UiIconName::Trash))
+                  .on_click(move |event, window, cx| on_delete(event, window, cx)),
+              );
+            }
+            menu
+          }),
+      )
+      .into_any_element(),
+  )
+}
+
+/// Format a comment body as a GitHub-style quote block followed by an
+/// empty line so the cursor lands ready to type.
+pub(crate) fn quote_reply_markdown(body: &str) -> String {
+  let mut out = String::new();
+  let body = body.trim_end_matches('\n');
+  if body.is_empty() {
+    out.push_str("> \n");
+  } else {
+    for line in body.split('\n') {
+      out.push_str("> ");
+      out.push_str(line);
+      out.push('\n');
+    }
+  }
+  out.push('\n');
+  out
 }
 
 pub(crate) fn image_content_type_and_name_for_path(path: &Path) -> Option<(String, String)> {

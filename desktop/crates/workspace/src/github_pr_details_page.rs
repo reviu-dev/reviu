@@ -5767,6 +5767,63 @@ impl GithubPrDetailsPage {
     cx.notify();
   }
 
+  // Inserts the target comment as a quote block + @mention into the "Add
+  // comment" composer at the bottom of the overview, scrolls there, and
+  // focuses the input. Matches the GitHub "Quote reply" flow.
+  fn start_overview_quote_reply(
+    &mut self,
+    target: OverviewCommentTarget,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(body) = self.body_for_overview_target(target) else {
+      return;
+    };
+    let quote = github_shared::quote_reply_markdown(&body);
+    let input = self.overview_issue_comment_input.clone();
+    input.update(cx, |input, cx| {
+      let current = input.value().to_string();
+      let needs_separator = !current.is_empty() && !current.ends_with("\n\n");
+      if needs_separator {
+        let prefix = if current.ends_with('\n') {
+          "\n"
+        } else {
+          "\n\n"
+        };
+        let next = format!("{current}{prefix}{quote}");
+        input.set_value(next, window, cx);
+      } else {
+        let next = format!("{current}{quote}");
+        input.set_value(next, window, cx);
+      }
+    });
+    self
+      .overview_list
+      .scroll_to_reveal_item(self.overview_list_count.saturating_sub(1));
+    let input_for_focus = input.clone();
+    window.on_next_frame(move |window, cx| {
+      input_for_focus.update(cx, |input, cx| {
+        input.focus(window, cx);
+      });
+    });
+    cx.notify();
+  }
+
+  fn body_for_overview_target(&self, target: OverviewCommentTarget) -> Option<String> {
+    match target.kind {
+      OverviewCommentKind::Issue => self
+        .issue_comments
+        .iter()
+        .find(|comment| comment.id == target.id)
+        .map(|comment| comment.body.clone()),
+      OverviewCommentKind::Review => self
+        .review_comments
+        .iter()
+        .find(|comment| comment.id == target.id)
+        .map(|comment| comment.body.clone()),
+    }
+  }
+
   fn subscribe_to_tree_search_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     cx.subscribe_in(
       &self.tree_search_input,
@@ -11337,22 +11394,33 @@ impl GithubPrDetailsPage {
     target: OverviewCommentTarget,
     button_id: String,
     page: Entity<Self>,
-  ) -> AnyElement {
-    let page_edit = page.clone();
-    let page_delete = page;
-    github_shared::render_comment_actions_menu(
-      button_id,
-      move |_, window, cx| {
+    include_edit_delete: bool,
+  ) -> Option<AnyElement> {
+    let page_quote = page.clone();
+    let on_quote_reply: github_shared::CommentMenuAction = Arc::new(move |_, window, cx| {
+      page_quote.update(cx, |this, cx| {
+        this.start_overview_quote_reply(target, window, cx);
+      });
+    });
+    let mut actions = github_shared::CommentActionsMenu {
+      on_quote_reply: Some(on_quote_reply),
+      ..Default::default()
+    };
+    if include_edit_delete {
+      let page_edit = page.clone();
+      let page_delete = page;
+      actions.on_edit = Some(Arc::new(move |_, window, cx| {
         page_edit.update(cx, |this, cx| {
           this.start_overview_comment_edit(target, window, cx);
         });
-      },
-      move |_, window, cx| {
+      }));
+      actions.on_delete = Some(Arc::new(move |_, window, cx| {
         page_delete.update(cx, |this, cx| {
           this.confirm_overview_comment_delete(target, window, cx);
         });
-      },
-    )
+      }));
+    }
+    github_shared::render_comment_actions_menu(button_id, actions)
   }
 
   fn render_outdated_review_comment_tag(
@@ -11663,13 +11731,14 @@ impl GithubPrDetailsPage {
     let thread_expanded = self.expanded_resolved_threads.contains(&item.id);
     let thread_collapsed = thread_is_resolved && !thread_expanded;
 
-    // Root edit/delete actions menu
-    let root_actions_menu = if root_is_editable && !overview_submission_in_flight {
-      root_target.map(|target| {
+    // Root actions menu (Quote reply always, Edit/Delete when editable)
+    let root_actions_menu = if !overview_submission_in_flight {
+      root_target.and_then(|target| {
         Self::render_overview_comment_actions_menu(
           target,
           format!("pr-overview-comment-actions-{}", target.id),
           pr_page.clone(),
+          root_is_editable,
         )
       })
     } else {
@@ -12146,13 +12215,14 @@ impl GithubPrDetailsPage {
               let reply_is_outdated =
                 self.review_comment_is_outdated_for_ui(reply.id, reply.is_outdated);
 
-              // Reply edit/delete actions menu
-              let reply_actions_menu = if reply_is_editable && !overview_submission_in_flight {
-                Some(Self::render_overview_comment_actions_menu(
+              // Reply actions menu (Quote reply always, Edit/Delete when editable)
+              let reply_actions_menu = if !overview_submission_in_flight {
+                Self::render_overview_comment_actions_menu(
                   reply_target,
                   format!("pr-overview-reply-actions-{}", reply.id),
                   pr_page.clone(),
-                ))
+                  reply_is_editable,
+                )
               } else {
                 None
               };

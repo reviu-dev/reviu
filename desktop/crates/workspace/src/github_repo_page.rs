@@ -2354,22 +2354,35 @@ impl GithubIssueDetailsSheetView {
       }
     });
 
-    let actions_menu = if is_editable && !comment_submission_in_flight && !is_editing {
-      let page_edit = issue_details_page.clone();
-      let page_delete = issue_details_page.clone();
-      Some(github_shared::render_comment_actions_menu(
-        format!("issue-sheet-comment-actions-{}", comment_id),
-        move |_, window, cx| {
+    let actions_menu = if !comment_submission_in_flight && !is_editing {
+      let page_quote = issue_details_page.clone();
+      let on_quote_reply: github_shared::CommentMenuAction = Arc::new(move |_, window, cx| {
+        page_quote.update(cx, |this, cx| {
+          this.start_issue_quote_reply(comment_id, window, cx);
+        });
+      });
+      let mut actions = github_shared::CommentActionsMenu {
+        on_quote_reply: Some(on_quote_reply),
+        ..Default::default()
+      };
+      if is_editable {
+        let page_edit = issue_details_page.clone();
+        let page_delete = issue_details_page.clone();
+        actions.on_edit = Some(Arc::new(move |_, window, cx| {
           page_edit.update(cx, |this, cx| {
             this.start_issue_comment_edit(comment_id, window, cx);
           });
-        },
-        move |_, window, cx| {
+        }));
+        actions.on_delete = Some(Arc::new(move |_, window, cx| {
           page_delete.update(cx, |this, cx| {
             this.confirm_issue_comment_delete(comment_id, window, cx);
           });
-        },
-      ))
+        }));
+      }
+      github_shared::render_comment_actions_menu(
+        format!("issue-sheet-comment-actions-{}", comment_id),
+        actions,
+      )
     } else {
       None
     };
@@ -3058,6 +3071,59 @@ impl GithubIssueDetailsSheetView {
       window,
       cx,
     );
+  }
+
+  // Inserts the target comment as a quote block + @mention into the "Add
+  // comment" composer at the bottom of the sheet, scrolls there, and focuses
+  // the input. Matches the GitHub "Quote reply" flow.
+  fn start_issue_quote_reply(
+    &mut self,
+    comment_id: u64,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.comment_input_submitting || self.edit_submitting || self.description_submitting {
+      return;
+    }
+    let Some(issue) = self.issue.as_ref() else {
+      return;
+    };
+    let Some(comment) = issue
+      .comments
+      .iter()
+      .find(|comment| comment.id == comment_id)
+    else {
+      return;
+    };
+    let body = comment.body.clone().unwrap_or_default();
+    let quote = github_shared::quote_reply_markdown(&body);
+
+    let input = self.ensure_comment_input(window, cx);
+    input.update(cx, |input, cx| {
+      let current = input.value().to_string();
+      let needs_separator = !current.is_empty() && !current.ends_with("\n\n");
+      let next = if needs_separator {
+        let prefix = if current.ends_with('\n') {
+          "\n"
+        } else {
+          "\n\n"
+        };
+        format!("{current}{prefix}{quote}")
+      } else {
+        format!("{current}{quote}")
+      };
+      input.set_value(next, window, cx);
+    });
+    self
+      .issue_list
+      .scroll_to_reveal_item(self.issue_list_count.saturating_sub(1));
+    let input_for_focus = input.clone();
+    window.on_next_frame(move |window, cx| {
+      input_for_focus.update(cx, |input, cx| {
+        input.focus(window, cx);
+      });
+    });
+    cx.notify();
   }
 
   fn submit_issue_comment_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
