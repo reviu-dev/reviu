@@ -2697,7 +2697,6 @@ impl CommandPalette {
       }
       Err(err) => {
         window.push_notification(Notification::error(err), cx);
-        window.close_dialog(cx);
       }
     }
   }
