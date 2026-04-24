@@ -13,6 +13,7 @@ use gpui_component::{
   input::{Input, InputEvent, InputState},
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  notification::Notification,
   v_flex,
 };
 
@@ -2205,8 +2206,7 @@ impl CommandPalette {
     }
 
     let Some(action) = parse_github_url_action(&url) else {
-      self.error = Some("Invalid GitHub URL".into());
-      cx.notify();
+      window.push_notification(Notification::error("Invalid GitHub URL"), cx);
       return;
     };
 
@@ -2279,8 +2279,10 @@ impl CommandPalette {
 
     let input = state.read(cx).value().to_string();
     let Some(count) = Self::parse_interactive_rebase_head_count(&input) else {
-      self.error = Some("Commit count must be an integer >= 2".into());
-      cx.notify();
+      window.push_notification(
+        Notification::error("Commit count must be an integer >= 2"),
+        cx,
+      );
       return;
     };
 
