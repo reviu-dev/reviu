@@ -3248,13 +3248,6 @@ impl GitPage {
     });
   }
 
-  fn should_surface_command_palette_error_inline(message: &str) -> bool {
-    message == "No repository selected."
-      || message == "Command not available."
-      || message == "No rebase in progress."
-      || message.ends_with("is currently disabled.")
-  }
-
   fn command_palette_error_notification_title(
     action: &CommandPaletteAction,
   ) -> Option<&'static str> {
@@ -3283,19 +3276,10 @@ impl GitPage {
     err: anyhow::Error,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Option<SharedString> {
-    let message = err.to_string();
-    if Self::should_surface_command_palette_error_inline(&message) {
-      return Some(message.into());
-    }
-
-    if let Some(title) = Self::command_palette_error_notification_title(action) {
-      let message: SharedString = message.into();
-      self.push_git_action_error_notification_in_window(title, message.clone(), window, cx);
-      return None;
-    }
-
-    Some(format!("Action failed: {message}").into())
+  ) {
+    let message: SharedString = err.to_string().into();
+    let title = Self::command_palette_error_notification_title(action).unwrap_or("Action failed");
+    self.push_git_action_error_notification_in_window(title, message, window, cx);
   }
 
   fn branch_select_handler(&self, cx: &Context<Self>) -> BranchSelectHandler {
@@ -4471,7 +4455,6 @@ impl GitPage {
   ) -> Result<(), SharedString> {
     let mut should_post_action_refresh = true;
     let action_for_error = action.clone();
-    let mut palette_error = None;
     let result = match action {
       CommandPaletteAction::OpenRepository => {
         self.start_open_repository(window, cx);
@@ -4862,6 +4845,9 @@ impl GitPage {
         delete_branch(&root_path, &branch_ref)
       }
       CommandPaletteAction::MergeBranch { name } => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
         let branch_ref = BranchRef {
           name: name.name.to_string(),
           kind: match name.kind {
@@ -5076,8 +5062,7 @@ impl GitPage {
     };
 
     if let Err(err) = result {
-      palette_error =
-        self.handle_command_palette_operation_error(&action_for_error, err, window, cx);
+      self.handle_command_palette_operation_error(&action_for_error, err, window, cx);
     }
 
     if should_post_action_refresh {
@@ -5086,10 +5071,6 @@ impl GitPage {
       if let Some(editor) = self.editor.clone() {
         editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
       }
-    }
-
-    if let Some(message) = palette_error {
-      return Err(message);
     }
 
     Ok(())

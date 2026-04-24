@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 use crate::github_url::parse_github_url_action;
 use crate::{SelectableRowStyle, UiIconName, file_icon_path_for_name, selectable_list_item};
 use gpui::{
-  App, Context, Div, Entity, FocusHandle, Focusable, Global, InteractiveElement, IntoElement,
+  App, Context, Entity, FocusHandle, Focusable, Global, InteractiveElement, IntoElement,
   ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
@@ -1726,7 +1726,6 @@ pub struct CommandPalette {
   open_github_url_input: Entity<InputState>,
   default_stash_message: SharedString,
   create_branch_base: Option<Rc<CommandPaletteBranch>>,
-  error: Option<SharedString>,
   on_action: Option<CommandPaletteHandler>,
   _subscriptions: Vec<Subscription>,
 }
@@ -2143,7 +2142,6 @@ impl CommandPalette {
       branches_with_commands_list,
       open_github_url_input,
       interactive_rebase_head_count_input,
-      error: None,
       on_action: Some(config.on_action),
       _subscriptions,
     }
@@ -2435,7 +2433,6 @@ impl CommandPalette {
     }
 
     self.screen = screen;
-    self.error = None;
     cx.notify();
 
     cx.on_next_frame(window, |this, window, cx| {
@@ -2699,8 +2696,8 @@ impl CommandPalette {
         window.close_dialog(cx);
       }
       Err(err) => {
-        self.error = Some(err);
-        cx.notify();
+        window.push_notification(Notification::error(err), cx);
+        window.close_dialog(cx);
       }
     }
   }
@@ -2736,8 +2733,6 @@ impl CommandPalette {
   }
 
   fn render_root(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     let commands_delegate = self.commands_list.read(cx).delegate();
     let count_commands = commands_delegate.matched_total_count();
     let visible_headers = {
@@ -2754,14 +2749,9 @@ impl CommandPalette {
         "Search commands...",
         cx,
       ))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
   }
 
   fn render_switch_repository(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     let count_items = self
       .repositories_list
       .read(cx)
@@ -2769,22 +2759,15 @@ impl CommandPalette {
       .matched_repositories
       .len();
 
-    v_flex()
-      .h_full()
-      .child(self.render_search_list(
-        &self.repositories_list,
-        count_items,
-        "Search repositories...",
-        cx,
-      ))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
+    v_flex().h_full().child(self.render_search_list(
+      &self.repositories_list,
+      count_items,
+      "Search repositories...",
+      cx,
+    ))
   }
 
   fn render_forget_repository(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     let count_items = self
       .repositories_list
       .read(cx)
@@ -2792,22 +2775,15 @@ impl CommandPalette {
       .matched_repositories
       .len();
 
-    v_flex()
-      .h_full()
-      .child(self.render_search_list(
-        &self.repositories_list,
-        count_items,
-        "Select repository to forget...",
-        cx,
-      ))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
+    v_flex().h_full().child(self.render_search_list(
+      &self.repositories_list,
+      count_items,
+      "Select repository to forget...",
+      cx,
+    ))
   }
 
   fn render_switch_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     let count_items = self
       .branches_with_commands_list
       .read(cx)
@@ -2815,61 +2791,36 @@ impl CommandPalette {
       .matched_branches_and_commands
       .len();
 
-    v_flex()
-      .h_full()
-      .child(self.render_search_list(
-        &self.branches_with_commands_list,
-        count_items,
-        "Search branches...",
-        cx,
-      ))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
+    v_flex().h_full().child(self.render_search_list(
+      &self.branches_with_commands_list,
+      count_items,
+      "Search branches...",
+      cx,
+    ))
   }
 
   fn render_create_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     v_flex()
       .gap_3()
-      .child(Input::new(&self.create_branch_input).border_color(theme.border))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
+      .child(Input::new(&self.create_branch_input).border_color(cx.theme().border))
   }
 
   fn render_checkout_detached(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     v_flex()
       .gap_3()
-      .child(Input::new(&self.checkout_detached_input).border_color(theme.border))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
+      .child(Input::new(&self.checkout_detached_input).border_color(cx.theme().border))
   }
 
   fn render_cherry_pick(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     v_flex()
       .gap_3()
-      .child(Input::new(&self.cherry_pick_input).border_color(theme.border))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
+      .child(Input::new(&self.cherry_pick_input).border_color(cx.theme().border))
   }
 
   fn render_stash(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     v_flex()
       .gap_3()
-      .child(Input::new(&self.stash_input).border_color(theme.border))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
+      .child(Input::new(&self.stash_input).border_color(cx.theme().border))
   }
 
   fn render_stash_include_untracked(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2877,16 +2828,14 @@ impl CommandPalette {
   }
 
   fn render_select_stash(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     let count_stashes = self.stashes_list.read(cx).delegate().matched_stashes.len();
 
-    v_flex()
-      .h_full()
-      .child(self.render_search_list(&self.stashes_list, count_stashes, "Search stashes...", cx))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
+    v_flex().h_full().child(self.render_search_list(
+      &self.stashes_list,
+      count_stashes,
+      "Search stashes...",
+      cx,
+    ))
   }
 
   fn render_apply_stash(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2902,8 +2851,6 @@ impl CommandPalette {
   }
 
   fn render_delete_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     let count_branches = self
       .delete_branches_list
       .read(cx)
@@ -2911,22 +2858,15 @@ impl CommandPalette {
       .matched_branches
       .len();
 
-    v_flex()
-      .h_full()
-      .child(self.render_search_list(
-        &self.delete_branches_list,
-        count_branches,
-        "Select branch to delete...",
-        cx,
-      ))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
+    v_flex().h_full().child(self.render_search_list(
+      &self.delete_branches_list,
+      count_branches,
+      "Select branch to delete...",
+      cx,
+    ))
   }
 
   fn render_merge_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     let count_branches = self
       .branches_list
       .read(cx)
@@ -2934,39 +2874,27 @@ impl CommandPalette {
       .matched_branches
       .len();
 
-    v_flex()
-      .h_full()
-      .child(self.render_search_list(
-        &self.branches_list,
-        count_branches,
-        "Search branches...",
-        cx,
-      ))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
+    v_flex().h_full().child(self.render_search_list(
+      &self.branches_list,
+      count_branches,
+      "Search branches...",
+      cx,
+    ))
   }
 
   fn render_interactive_rebase_mode(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     let count_modes = self
       .interactive_rebase_mode_list
       .read(cx)
       .delegate()
       .matched_total_count();
 
-    v_flex()
-      .h_full()
-      .child(self.render_search_list(
-        &self.interactive_rebase_mode_list,
-        count_modes,
-        "Select interactive rebase mode...",
-        cx,
-      ))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
+    v_flex().h_full().child(self.render_search_list(
+      &self.interactive_rebase_mode_list,
+      count_modes,
+      "Select interactive rebase mode...",
+      cx,
+    ))
   }
 
   fn render_interactive_rebase_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2974,14 +2902,9 @@ impl CommandPalette {
   }
 
   fn render_interactive_rebase_head_count(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     v_flex()
       .gap_3()
-      .child(Input::new(&self.interactive_rebase_head_count_input).border_color(theme.border))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
+      .child(Input::new(&self.interactive_rebase_head_count_input).border_color(cx.theme().border))
   }
 
   fn render_rebase_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2989,19 +2912,12 @@ impl CommandPalette {
   }
 
   fn render_open_github_from_url(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     v_flex()
       .gap_3()
-      .child(Input::new(&self.open_github_url_input).border_color(theme.border))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
+      .child(Input::new(&self.open_github_url_input).border_color(cx.theme().border))
   }
 
   fn render_create_branch_from(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
     let count_branches = self
       .branches_list
       .read(cx)
@@ -3009,21 +2925,12 @@ impl CommandPalette {
       .matched_branches
       .len();
 
-    v_flex()
-      .h_full()
-      .child(self.render_search_list(
-        &self.branches_list,
-        count_branches,
-        "Search branches...",
-        cx,
-      ))
-      .when(self.error.is_some(), |parent| {
-        parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
-      })
-  }
-
-  fn render_error(&self, theme: &gpui_component::Theme, error: &SharedString) -> Div {
-    div().text_sm().text_color(theme.red).child(error.clone())
+    v_flex().h_full().child(self.render_search_list(
+      &self.branches_list,
+      count_branches,
+      "Search branches...",
+      cx,
+    ))
   }
 }
 
