@@ -24,7 +24,7 @@ const desktopUpdateManifestSchema = z.object({
 })
 
 const DESKTOP_UPDATE_MANIFEST_CACHE_TTL_MS = 5 * 60 * 1000
-const DESKTOP_UPDATE_RELEASE_OWNER = 'joris-gallot'
+const DESKTOP_UPDATE_RELEASE_OWNER = 'reviu-dev'
 const DESKTOP_UPDATE_RELEASE_REPO = 'reviu'
 const DESKTOP_UPDATE_MANIFEST_FILE_NAME = 'desktop-update.manifest.json'
 
