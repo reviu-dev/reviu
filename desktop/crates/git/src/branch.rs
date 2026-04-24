@@ -963,17 +963,28 @@ fn run_git_rebase_command(repo_root: &Path, flag: &str, operation_name: &str) ->
   bail!("{operation_name} failed: {details}")
 }
 
-pub fn rebase_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RebaseBranchOutcome {
+  AlreadyUpToDate,
+  Rebased,
+}
+
+pub fn rebase_branch(repo_root: &Path, branch: &BranchRef) -> Result<RebaseBranchOutcome> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
   let refname = match branch.kind {
     BranchKind::Local => format!("refs/heads/{}", branch.name),
     BranchKind::Remote => format!("refs/remotes/{}", branch.name),
   };
-  let oid = repo
+  let target_oid = repo
     .refname_to_id(&refname)
     .with_context(|| format!("resolve branch {:?}", branch.name))?;
-  let upstream = repo.find_annotated_commit(oid)?;
+  let head_oid = repo.head()?.peel_to_commit()?.id();
+  if head_oid == target_oid || repo.graph_descendant_of(head_oid, target_oid)? {
+    return Ok(RebaseBranchOutcome::AlreadyUpToDate);
+  }
+
+  let upstream = repo.find_annotated_commit(target_oid)?;
   let signature = repo_signature(&repo)?;
   let mut rebase = repo.rebase(None, Some(&upstream), None, None)?;
 
@@ -1000,7 +1011,7 @@ pub fn rebase_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
   let mut checkout = CheckoutBuilder::new();
   checkout.safe();
   repo.checkout_head(Some(&mut checkout))?;
-  Ok(())
+  Ok(RebaseBranchOutcome::Rebased)
 }
 
 pub fn continue_rebase(repo_root: &Path) -> Result<()> {
