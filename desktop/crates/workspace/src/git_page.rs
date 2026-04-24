@@ -115,6 +115,20 @@ const TERMINAL_SIDEBAR_MAX_WIDTH: f32 = 1200.0;
 type RepoSelectHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 type BranchSelectHandler = Rc<dyn Fn(BranchRef, &mut Window, &mut App)>;
 
+fn interactive_rebase_success_message(target: &InteractiveRebaseTarget) -> String {
+  match target {
+    InteractiveRebaseTarget::Branch(branch) => {
+      format!("Rebased interactively onto {}", branch.name)
+    }
+    InteractiveRebaseTarget::BranchInPlace(branch) => {
+      format!("Edited commits since {}", branch.name)
+    }
+    InteractiveRebaseTarget::HeadCount(count) => {
+      format!("Rebased last {count} commits")
+    }
+  }
+}
+
 fn render_image_preview_status_message(
   message: impl Into<SharedString>,
   color: gpui::Hsla,
@@ -5431,6 +5445,7 @@ impl GitPage {
     let commit_input = self.commit_input.clone();
     let window_handle = window.window_handle();
     let editor = self.editor.clone();
+    let success_message = interactive_rebase_success_message(&target);
     let task = cx.spawn(async move |this, cx| {
       let repo_root_for_rebase = repo_root.clone();
       let result =
@@ -5463,6 +5478,7 @@ impl GitPage {
           this.operation_error = None;
           let _ = cx.update_window(window_handle, |_, window, cx| {
             commit_input.update(cx, |input, cx| input.set_value("", window, cx));
+            window.push_notification(Notification::success(success_message), cx);
           });
         }
         this.reload_status(cx);
