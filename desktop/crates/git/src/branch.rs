@@ -238,19 +238,32 @@ pub fn fetch(repo_root: &Path) -> Result<()> {
   Ok(())
 }
 
-pub fn pull(repo_root: &Path) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullOutcome {
+  AlreadyUpToDate,
+  Pulled,
+}
+
+pub fn pull(repo_root: &Path) -> Result<PullOutcome> {
+  let head_before = current_head_sha(repo_root).ok().flatten();
+
   let output = Command::new("git")
     .current_dir(repo_root)
     .args(["pull"])
     .output()
     .context("run git pull")?;
 
-  if output.status.success() {
-    return Ok(());
+  if !output.status.success() {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    bail!("git pull failed: {}", stderr.trim())
   }
 
-  let stderr = String::from_utf8_lossy(&output.stderr);
-  bail!("git pull failed: {}", stderr.trim())
+  let head_after = current_head_sha(repo_root).ok().flatten();
+  if head_before == head_after {
+    Ok(PullOutcome::AlreadyUpToDate)
+  } else {
+    Ok(PullOutcome::Pulled)
+  }
 }
 
 pub fn clone(url: &str, destination: &Path) -> Result<()> {
@@ -735,7 +748,13 @@ pub fn delete_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
   }
 }
 
-pub fn merge_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeBranchOutcome {
+  AlreadyUpToDate,
+  Merged,
+}
+
+pub fn merge_branch(repo_root: &Path, branch: &BranchRef) -> Result<MergeBranchOutcome> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
   let head = repo
@@ -755,7 +774,7 @@ pub fn merge_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
 
   let (analysis, _) = repo.merge_analysis(&[&annotated])?;
   if analysis.is_up_to_date() {
-    return Ok(());
+    return Ok(MergeBranchOutcome::AlreadyUpToDate);
   }
 
   if analysis.is_fast_forward() {
@@ -769,7 +788,7 @@ pub fn merge_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
     let mut checkout = CheckoutBuilder::new();
     checkout.force();
     repo.checkout_head(Some(&mut checkout))?;
-    return Ok(());
+    return Ok(MergeBranchOutcome::Merged);
   }
 
   if analysis.is_normal() {
@@ -794,7 +813,7 @@ pub fn merge_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
     checkout.safe();
     repo.checkout_head(Some(&mut checkout))?;
     repo.cleanup_state()?;
-    return Ok(());
+    return Ok(MergeBranchOutcome::Merged);
   }
 
   bail!("unsupported merge analysis")

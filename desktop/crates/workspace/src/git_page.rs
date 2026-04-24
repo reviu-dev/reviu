@@ -13,13 +13,13 @@ use editor::{
 use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
   HistoryCommitNode, HistoryRevision, InteractiveRebaseTarget, InteractiveRebaseTodoEntry,
-  RebaseBranchOutcome, RepoStage, RepoStatusEntry, RepoStatusKind, abort_merge, abort_rebase,
-  amend_commit, apply_stash, branch_has_unpublished_commits, checkout_detached_target,
-  cherry_pick_commits, commit_changes, continue_rebase, create_branch, create_branch_from,
-  create_stash, current_branch_status, current_github_remote_repo, current_head_sha,
-  current_history_revision, current_rebase_commit_message, default_stash_message, delete_branch,
-  delete_untracked_file, detached_head_label, diff_set_from_patch, drop_stash, fetch,
-  head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
+  MergeBranchOutcome, PullOutcome, RebaseBranchOutcome, RepoStage, RepoStatusEntry, RepoStatusKind,
+  abort_merge, abort_rebase, amend_commit, apply_stash, branch_has_unpublished_commits,
+  checkout_detached_target, cherry_pick_commits, commit_changes, continue_rebase, create_branch,
+  create_branch_from, create_stash, current_branch_status, current_github_remote_repo,
+  current_head_sha, current_history_revision, current_rebase_commit_message, default_stash_message,
+  delete_branch, delete_untracked_file, detached_head_label, diff_set_from_patch, drop_stash,
+  fetch, head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
   list_commit_changed_files, list_commit_history, list_interactive_rebase_commits,
   list_repo_status, list_stashes, load_commit_file_diff, merge_branch, pop_stash, pull, push,
   rebase_branch, resolve_branch_ref, restore_file, skip_rebase, stage_all, stage_file,
@@ -3230,6 +3230,12 @@ impl GitPage {
     );
   }
 
+  fn push_git_action_success_notification(&self, message: SharedString, cx: &mut Context<Self>) {
+    let _ = cx.update_window(self.window_handle, move |_, window, cx| {
+      window.push_notification(Notification::success(message), cx);
+    });
+  }
+
   fn push_git_error_notification_with_id<T: Sized + 'static>(
     &self,
     title: impl Into<SharedString>,
@@ -4244,9 +4250,13 @@ impl GitPage {
         commands.push(CommandPaletteCommand::accept_all_current_conflicts());
         commands.push(CommandPaletteCommand::accept_all_incoming_conflicts());
       }
-      commands.push(CommandPaletteCommand::pull());
+      if self.should_show_pull_palette_command() {
+        commands.push(CommandPaletteCommand::pull());
+      }
       commands.push(CommandPaletteCommand::fetch());
-      commands.push(CommandPaletteCommand::cherry_pick());
+      if self.should_show_cherry_pick_palette_command() {
+        commands.push(CommandPaletteCommand::cherry_pick());
+      }
 
       let (show_stash, show_stash_with_untracked) = Self::stash_command_flags(&self.status_entries);
 
@@ -4318,11 +4328,15 @@ impl GitPage {
         if !delete_branches.is_empty() {
           commands.push(CommandPaletteCommand::delete_branch());
         }
-        commands.push(CommandPaletteCommand::merge_branch());
+        if self.should_show_merge_branch_palette_command() {
+          commands.push(CommandPaletteCommand::merge_branch());
+        }
         if self.merge_in_progress {
           commands.push(CommandPaletteCommand::abort_merge());
         }
-        commands.push(CommandPaletteCommand::rebase_branch());
+        if self.should_show_rebase_branch_palette_command() {
+          commands.push(CommandPaletteCommand::rebase_branch());
+        }
         if self.should_show_interactive_rebase_palette_command() {
           commands.push(CommandPaletteCommand::interactive_rebase());
         }
@@ -4419,10 +4433,22 @@ impl GitPage {
     self.add_git_breadcrumb("Merge started", start_data);
 
     match merge_branch(&root_path, &branch_ref) {
-      Ok(()) => {
+      Ok(outcome) => {
         let mut data = Map::new();
         data.insert("target_branch".into(), branch_ref.name.clone().into());
-        self.add_git_breadcrumb("Merge succeeded", data);
+        let notification = match outcome {
+          MergeBranchOutcome::AlreadyUpToDate => {
+            self.add_git_breadcrumb("Merge already up to date", data);
+            Notification::info(format!("Already up to date with {}", branch_ref.name))
+          }
+          MergeBranchOutcome::Merged => {
+            self.add_git_breadcrumb("Merge succeeded", data);
+            Notification::success(format!("Merged {}", branch_ref.name))
+          }
+        };
+        if let Some(window) = window {
+          window.push_notification(notification, cx);
+        }
         Ok(())
       }
       Err(err) => {
@@ -4856,11 +4882,21 @@ impl GitPage {
             CommandPaletteBranchKind::Remote => BranchKind::Remote,
           },
         };
-        delete_branch(&root_path, &branch_ref)
+        let result = delete_branch(&root_path, &branch_ref);
+        if result.is_ok() {
+          window.push_notification(
+            Notification::success(format!("Deleted branch {}", branch_ref.name)),
+            cx,
+          );
+        }
+        result
       }
       CommandPaletteAction::MergeBranch { name } => {
         if self.selected_repo.is_none() {
           return Err("No repository selected.".into());
+        }
+        if !self.should_show_merge_branch_palette_command() {
+          return Err("Merge command is currently disabled.".into());
         }
         let branch_ref = BranchRef {
           name: name.name.to_string(),
@@ -4880,6 +4916,7 @@ impl GitPage {
           self
             .commit_input
             .update(cx, |input, cx| input.set_value("", window, cx));
+          window.push_notification(Notification::success("Aborted merge"), cx);
         }
         result
       }
@@ -4887,6 +4924,9 @@ impl GitPage {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
+        if !self.should_show_rebase_branch_palette_command() {
+          return Err("Rebase command is currently disabled.".into());
+        }
         let branch_ref = BranchRef {
           name: name.name.to_string(),
           kind: match name.kind {
@@ -5016,6 +5056,7 @@ impl GitPage {
           self
             .commit_input
             .update(cx, |input, cx| input.set_value("", window, cx));
+          window.push_notification(Notification::success("Aborted rebase"), cx);
         }
         result
       }
@@ -5043,6 +5084,9 @@ impl GitPage {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
+        if !self.should_show_pull_palette_command() {
+          return Err("Pull command is currently disabled.".into());
+        }
         should_post_action_refresh = false;
         self.pull_repository(root_path, cx);
         Ok(())
@@ -5062,31 +5106,68 @@ impl GitPage {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        create_stash(&root_path, include_untracked, message.as_deref())
+        let result = create_stash(&root_path, include_untracked, message.as_deref());
+        if result.is_ok() {
+          window.push_notification(Notification::success("Stashed changes"), cx);
+        }
+        result
       }
       CommandPaletteAction::ApplyStash(stash) => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        apply_stash(&root_path, stash.index)
+        let result = apply_stash(&root_path, stash.index);
+        if result.is_ok() {
+          window.push_notification(
+            Notification::success(format!("Applied stash {}", stash.name)),
+            cx,
+          );
+        }
+        result
       }
       CommandPaletteAction::DropStash(stash) => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        drop_stash(&root_path, stash.index)
+        let result = drop_stash(&root_path, stash.index);
+        if result.is_ok() {
+          window.push_notification(
+            Notification::success(format!("Dropped stash {}", stash.name)),
+            cx,
+          );
+        }
+        result
       }
       CommandPaletteAction::PopStash(stash) => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        pop_stash(&root_path, stash.index)
+        let result = pop_stash(&root_path, stash.index);
+        if result.is_ok() {
+          window.push_notification(
+            Notification::success(format!("Popped stash {}", stash.name)),
+            cx,
+          );
+        }
+        result
       }
       CommandPaletteAction::CherryPick { commit_hashes } => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        cherry_pick_commits(&root_path, &commit_hashes)
+        if !self.should_show_cherry_pick_palette_command() {
+          return Err("Cherry-pick command is currently disabled.".into());
+        }
+        let count = commit_hashes.len();
+        let result = cherry_pick_commits(&root_path, &commit_hashes);
+        if result.is_ok() {
+          let label = if count == 1 { "commit" } else { "commits" };
+          window.push_notification(
+            Notification::success(format!("Cherry-picked {count} {label}")),
+            cx,
+          );
+        }
+        result
       }
     };
 
@@ -5571,12 +5652,17 @@ impl GitPage {
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || undo_last_commit(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
-        if let Err(error) = result {
-          this.push_git_action_error_notification(
-            "Undo last commit failed",
-            error.to_string().into(),
-            cx,
-          );
+        match result {
+          Ok(()) => {
+            this.push_git_action_success_notification("Undid last commit".into(), cx);
+          }
+          Err(error) => {
+            this.push_git_action_error_notification(
+              "Undo last commit failed",
+              error.to_string().into(),
+              cx,
+            );
+          }
         }
         this.reload_status(cx);
         if let Some(editor) = editor.clone() {
@@ -5609,6 +5695,7 @@ impl GitPage {
         match result {
           Ok(()) => {
             this.add_git_breadcrumb("Fetch succeeded", Map::new());
+            this.push_git_action_success_notification("Fetched from remotes".into(), cx);
           }
           Err(error) => {
             let error_message = error.to_string();
@@ -5634,6 +5721,9 @@ impl GitPage {
     if self.push_pull_in_progress {
       return;
     }
+    if !self.should_show_pull_palette_command() {
+      return;
+    }
     self.add_git_breadcrumb("Pull started", Map::new());
     self.push_pull_in_progress = true;
     let editor = self.editor.clone();
@@ -5642,8 +5732,13 @@ impl GitPage {
       let _ = this.update(cx, |this, cx| {
         this.push_pull_in_progress = false;
         match result {
-          Ok(()) => {
+          Ok(PullOutcome::AlreadyUpToDate) => {
+            this.add_git_breadcrumb("Pull already up to date", Map::new());
+            this.push_git_action_success_notification("Already up to date".into(), cx);
+          }
+          Ok(PullOutcome::Pulled) => {
             this.add_git_breadcrumb("Pull succeeded", Map::new());
+            this.push_git_action_success_notification("Pulled".into(), cx);
           }
           Err(error) => {
             let error_message = error.to_string();
@@ -5683,6 +5778,7 @@ impl GitPage {
           Ok(()) => {
             this.force_push_after_rebase = false;
             this.add_git_breadcrumb("Push succeeded", Map::new());
+            this.push_git_action_success_notification("Pushed".into(), cx);
           }
           Err(error) => {
             let error_message = error.to_string();
@@ -5718,6 +5814,7 @@ impl GitPage {
           Ok(()) => {
             this.force_push_after_rebase = false;
             this.add_git_breadcrumb("Force push succeeded", Map::new());
+            this.push_git_action_success_notification("Force-pushed".into(), cx);
           }
           Err(error) => {
             let error_message = error.to_string();
@@ -6875,6 +6972,28 @@ impl GitPage {
       && self.has_head_commit
       && self.status_entries.is_empty()
       && !Self::is_detached_head(self.branch_status.as_ref())
+  }
+
+  fn should_show_pull_palette_command(&self) -> bool {
+    !self.rebase_in_progress
+      && !self.merge_in_progress
+      && self.selected_repo.is_some()
+      && self
+        .branch_status
+        .as_ref()
+        .is_some_and(|status| status.has_upstream)
+  }
+
+  fn should_show_merge_branch_palette_command(&self) -> bool {
+    !self.rebase_in_progress && !self.merge_in_progress && self.selected_repo.is_some()
+  }
+
+  fn should_show_rebase_branch_palette_command(&self) -> bool {
+    !self.rebase_in_progress && !self.merge_in_progress && self.selected_repo.is_some()
+  }
+
+  fn should_show_cherry_pick_palette_command(&self) -> bool {
+    !self.rebase_in_progress && !self.merge_in_progress && self.selected_repo.is_some()
   }
 
   fn selected_file_entry(&self) -> Option<&RepoStatusEntry> {
