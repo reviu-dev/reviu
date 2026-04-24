@@ -736,6 +736,11 @@ impl SettingsPage {
         crate::github_search_dialog::open_github_search_dialog(api, window, cx);
         Ok(())
       }
+      CommandPaletteAction::CreateGithubRepository => {
+        let api = WorkspaceApi::global(cx).api.clone();
+        crate::github_create_repository_dialog::open_create_repository_dialog(api, window, cx);
+        Ok(())
+      }
       _ => Err("Command not available.".into()),
     }
   }
