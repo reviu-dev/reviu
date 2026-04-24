@@ -229,6 +229,24 @@ pub fn restore_file(repo_root: &Path, rel_path: &Path) -> Result<()> {
   Ok(())
 }
 
+pub fn restore_renamed_file(repo_root: &Path, old_path: &Path, new_path: &Path) -> Result<()> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  if let Ok(head) = repo.head().and_then(|head| head.peel_to_commit()) {
+    let head_object = head.into_object();
+    let paths = [old_path, new_path];
+    repo
+      .reset_default(Some(&head_object), paths)
+      .with_context(|| format!("reset index for rename {old_path:?} -> {new_path:?}"))?;
+  }
+  let new_target = repo_root.join(new_path);
+  if new_target.exists() {
+    fs::remove_file(&new_target)
+      .with_context(|| format!("remove renamed file {:?}", new_target))?;
+  }
+  restore_file(repo_root, old_path)
+}
+
 pub fn delete_untracked_file(repo_root: &Path, rel_path: &Path) -> Result<()> {
   let target = repo_root.join(rel_path);
   let meta = fs::metadata(&target).with_context(|| format!("metadata {:?}", target))?;
@@ -507,6 +525,42 @@ mod tests {
     assert_eq!(contents, "v1\n");
     let entries = list_repo_status(&temp.path).expect("list status");
     assert!(entries.is_empty());
+  }
+
+  #[test]
+  fn restore_renamed_file_restores_old_and_deletes_new() {
+    let temp = TempDir::new("status-restore-renamed");
+    init_repo(&temp.path);
+    let old_path = Path::new("old.txt");
+    let new_path = Path::new("new.txt");
+    commit_file(&temp.path, old_path, "v1\n", "initial");
+    std::fs::rename(temp.path.join(old_path), temp.path.join(new_path))
+      .expect("rename file in worktree");
+
+    restore_renamed_file(&temp.path, old_path, new_path).expect("restore renamed file");
+
+    assert!(temp.path.join(old_path).exists());
+    assert!(!temp.path.join(new_path).exists());
+    let contents = std::fs::read_to_string(temp.path.join(old_path)).expect("read restored file");
+    assert_eq!(contents, "v1\n");
+    let entries = list_repo_status(&temp.path).expect("list status");
+    assert!(entries.is_empty());
+  }
+
+  #[test]
+  fn restore_renamed_file_when_new_path_is_missing_restores_old() {
+    let temp = TempDir::new("status-restore-renamed-missing-new");
+    init_repo(&temp.path);
+    let old_path = Path::new("old.txt");
+    let new_path = Path::new("new.txt");
+    commit_file(&temp.path, old_path, "v1\n", "initial");
+    std::fs::remove_file(temp.path.join(old_path)).expect("remove file in worktree");
+
+    restore_renamed_file(&temp.path, old_path, new_path).expect("restore when new is missing");
+
+    assert!(temp.path.join(old_path).exists());
+    let contents = std::fs::read_to_string(temp.path.join(old_path)).expect("read restored file");
+    assert_eq!(contents, "v1\n");
   }
 
   #[test]
