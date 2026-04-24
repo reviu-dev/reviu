@@ -2158,8 +2158,6 @@ impl CommandPalette {
     if let InputEvent::PressEnter { secondary: _ } = event {
       let branch_name = state.read(cx).value().to_string();
       if branch_name.is_empty() {
-        self.error = Some("Branch name cannot be empty".into());
-        cx.notify();
         return;
       }
 
@@ -2203,8 +2201,6 @@ impl CommandPalette {
 
     let url = state.read(cx).value().to_string();
     if url.trim().is_empty() {
-      self.error = Some("GitHub URL cannot be empty".into());
-      cx.notify();
       return;
     }
 
@@ -2235,8 +2231,6 @@ impl CommandPalette {
 
     let input = state.read(cx).value().to_string();
     let Some(target) = Self::parse_checkout_detached_target(&input) else {
-      self.error = Some("Commit hash or tag cannot be empty".into());
-      cx.notify();
       return;
     };
 
@@ -2261,8 +2255,6 @@ impl CommandPalette {
 
     let input = state.read(cx).value().to_string();
     let Some(commit_hashes) = Self::parse_cherry_pick_commit_hashes(&input) else {
-      self.error = Some("Commit hash list cannot be empty".into());
-      cx.notify();
       return;
     };
 
