@@ -269,7 +269,7 @@ impl GithubProfilePage {
   fn handle_command_palette_action(
     &mut self,
     action: CommandPaletteAction,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     match action {
@@ -324,6 +324,11 @@ impl GithubProfilePage {
       }
       CommandPaletteAction::OpenGitConfigPage => {
         NavigationHistory::navigate("/git-config", cx);
+        Ok(())
+      }
+      CommandPaletteAction::CreateGithubRepository => {
+        let api = WorkspaceApi::global(cx).api.clone();
+        crate::github_create_repository_dialog::open_create_repository_dialog(api, window, cx);
         Ok(())
       }
       _ => Err("Command not available.".into()),
