@@ -49,7 +49,7 @@
 - Search in codebase: `osgrep "query"` (or `rg` when needed).
 - Always use Context7 MCP for library/API docs, setup/config, and codegen guidance.
 - Add tests for each feature/fix.
-- **Changelog**: after each feature or fix, add an entry to `CHANGELOG.md`. Use the next unreleased version section (create it if it doesn't exist). Follow the existing format: `## X.Y.Z` heading, then `### Feature Title` with a short paragraph. Keep changelog copy user-facing and outcome-focused. Do not describe internal implementation details unless they matter to users.
+- **Changelog**: after each feature, add an entry to `CHANGELOG.md`. Use the next unreleased version section (create it if it doesn't exist). Follow the existing format: `## X.Y.Z` heading, then `### Feature Title` with a short paragraph. Keep changelog copy user-facing and outcome-focused. Do not describe internal implementation details unless they matter to users.
 - **Copy tone**: avoid cliché phrases like "at a glance". Prefer direct alternatives ("immediately", "quickly", or restructure the sentence).
 
 ## Validation commands
