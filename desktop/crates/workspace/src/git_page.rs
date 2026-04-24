@@ -9264,7 +9264,7 @@ mod tests {
   #[gpui::test]
   fn git_page_handle_refreshing_ignores_lingering_tasks(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     cx.update(|_, cx| {
       assert!(!GitPageHandle::is_refreshing(cx));
@@ -9612,6 +9612,19 @@ mod tests {
     });
   }
 
+  fn add_git_page_window_with_root(
+    cx: &mut TestAppContext,
+  ) -> (Entity<GitPage>, &mut gpui::VisualTestContext) {
+    let mut mounted_git_page: Option<Entity<GitPage>> = None;
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let git_page = cx.new(|cx| GitPage::new_for_test(window, cx));
+      mounted_git_page = Some(git_page.clone());
+      gpui_component::Root::new(git_page, window, cx)
+    });
+    let git_page = mounted_git_page.expect("git page");
+    (git_page, cx)
+  }
+
   fn tiny_png_bytes() -> Vec<u8> {
     vec![
       137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 4,
@@ -9660,7 +9673,7 @@ mod tests {
     .expect("switch to feature");
     let _ = commit_text_file(&repo.path, rel_path, "feature change\n", "feature change");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     cx.update(|_, cx| {
       GitPageHandle::show_repository_and_merge_base(repo.path.clone(), base_branch.clone(), cx);
@@ -9745,7 +9758,7 @@ mod tests {
       "repo should already be in merge mode before reopening via handle"
     );
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     cx.update(|_, cx| {
       GitPageHandle::show_repository_and_merge_base(repo.path.clone(), base_branch.clone(), cx);
@@ -9844,7 +9857,7 @@ mod tests {
       "feature change",
     );
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     cx.update(|_, cx| {
       GitPageHandle::show_repository_and_merge_base(repo.path.clone(), base_branch.clone(), cx);
@@ -9927,7 +9940,7 @@ mod tests {
       "feature change",
     );
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     cx.update(|_, cx| {
       GitPageHandle::show_repository_and_merge_base(repo.path.clone(), base_branch.clone(), cx);
@@ -10214,7 +10227,7 @@ mod tests {
       );
     });
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     let command_ids = git_page.update(cx, |this, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -10264,7 +10277,7 @@ mod tests {
       );
     });
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, _window, cx| {
       this.refresh_branch_pr_lookup(cx);
@@ -10302,7 +10315,7 @@ mod tests {
       );
     });
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, _window, cx| {
       this.branch_status = Some(make_branch_status("feature/parser", 0, 0, false));
@@ -10353,7 +10366,7 @@ mod tests {
       );
     });
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     let create_pr_hidden = git_page.update(cx, |this, cx| {
       this.selected_repo = Some(repo_root.clone());
@@ -10424,7 +10437,7 @@ mod tests {
       );
     });
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update(cx, |this, cx| {
       this.selected_repo = Some(repo_root.clone());
@@ -10818,7 +10831,7 @@ mod tests {
   fn palette_commit_and_rebase_commands_follow_commit_button_rules(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-palette-commit-rules");
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, _window, _cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -11146,7 +11159,7 @@ mod tests {
   #[gpui::test]
   fn focus_changes_sidebar_list_selects_first_entry_when_unselected(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, window, cx| {
       this.status_entries = vec![
@@ -11167,7 +11180,7 @@ mod tests {
   #[gpui::test]
   fn focus_history_sidebar_tree_selects_first_commit_and_takes_focus(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, window, cx| {
       this.history_commits = vec![make_commit("c1", &[]), make_commit("c2", &["c1"])];
@@ -11200,7 +11213,7 @@ mod tests {
     cx.executor().allow_parking();
     let repo = TempRepo::init("git-page-history-sidebar-focus");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -11227,7 +11240,7 @@ mod tests {
   #[gpui::test]
   fn focus_page_restores_page_shortcut_focus(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, window, cx| {
       let external_focus = cx.focus_handle();
@@ -11247,7 +11260,7 @@ mod tests {
     let _ = commit_text_file(&repo_a.path, Path::new("README.md"), "a1\n", "initial");
     let _ = commit_text_file(&repo_b.path, Path::new("README.md"), "b1\n", "initial");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, window, cx| {
@@ -11277,7 +11290,7 @@ mod tests {
   #[gpui::test]
   fn branch_select_confirm_refocuses_page_shortcuts(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(PathBuf::from("/tmp/reviu-focus-select-branch"));
@@ -11304,7 +11317,7 @@ mod tests {
   #[gpui::test]
   fn interactive_rebase_todo_view_open_and_cancel_returns_to_editor(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(PathBuf::from("/tmp/repo"));
@@ -11338,7 +11351,7 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("modify file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, window, cx| {
@@ -11497,7 +11510,7 @@ mod tests {
     let repo = TempRepo::init("git-page-cmd-create-branch");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, _window, cx| {
@@ -11602,7 +11615,7 @@ mod tests {
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     create_branch(&repo.path, "feature").expect("create feature branch");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, _window, cx| {
@@ -11656,7 +11669,7 @@ mod tests {
     )
     .expect("switch back to base");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, _window, cx| {
@@ -11769,7 +11782,7 @@ mod tests {
       .expect("read clone branch status")
       .name;
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, _window, cx| {
@@ -11808,7 +11821,7 @@ mod tests {
     let repo = TempRepo::init("git-page-cmd-checkout-detached");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, window, cx| {
@@ -11850,7 +11863,7 @@ mod tests {
     ConfigStore::persist_recent_repository(&repo_a.path);
     ConfigStore::persist_recent_repository(&repo_b.path);
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, _window, cx| {
@@ -11892,7 +11905,7 @@ mod tests {
     ConfigStore::persist_recent_repository(&repo_a.path);
     ConfigStore::persist_recent_repository(&repo_b.path);
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, _window, cx| {
@@ -11944,7 +11957,7 @@ mod tests {
     ConfigStore::persist_recent_repository(&repo_a.path);
     ConfigStore::persist_recent_repository(&repo_b.path);
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, _window, cx| {
@@ -11983,7 +11996,7 @@ mod tests {
 
     ConfigStore::persist_recent_repository(&repo.path);
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, _window, cx| {
@@ -12016,7 +12029,7 @@ mod tests {
     let repo = TempRepo::init("git-page-cmd-switch-repo-missing");
     let missing_repo = repo.path.join("does-not-exist");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     let result = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -12123,7 +12136,7 @@ mod tests {
       )
       .expect("force stale remote tracking ref");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, window, cx| {
@@ -12171,7 +12184,7 @@ mod tests {
     );
     push_branch_to_remote(&source.path, &base_branch, "origin");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, window, cx| {
@@ -12245,7 +12258,7 @@ mod tests {
       "feature change",
     );
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, _window, cx| {
@@ -12387,7 +12400,7 @@ mod tests {
     )
     .expect("clone remote");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     let result = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(clone_dir.path.clone());
@@ -12507,7 +12520,7 @@ mod tests {
     )
     .expect("clone remote");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     let result = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(clone_dir.path.clone());
@@ -12604,7 +12617,7 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("write unstaged change");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     let result = git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -12638,7 +12651,7 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("write unstaged change");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     let result = git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.status_entries = list_repo_status(&repo.path).expect("list status before commit");
@@ -12673,7 +12686,7 @@ mod tests {
     let _ = commit_text_file(&source.path, rel_path, "v2-source\n", "source change");
     let expected_head = head_oid(&source.path);
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let push_result = git_page.update_in(cx, |this, window, cx| {
@@ -12726,7 +12739,7 @@ mod tests {
     let non_force = push(&source.path, false).err();
     assert!(non_force.is_some(), "non-force push should fail");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let push_result = git_page.update_in(cx, |this, window, cx| {
@@ -12764,7 +12777,7 @@ mod tests {
       .expect("parent")
       .id();
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let undo_result = git_page.update_in(cx, |this, window, cx| {
@@ -12832,7 +12845,7 @@ mod tests {
     let rel_path = Path::new("README.md");
     let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let amend_result = git_page.update_in(cx, |this, window, cx| {
@@ -12863,7 +12876,7 @@ mod tests {
   fn command_palette_commit_menu_actions_return_error_when_disabled(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-cmd-commit-menu-disabled");
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     for (action, expected_error) in [
       (
@@ -12907,7 +12920,7 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("modify tracked file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     let stage_without_selection = git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -12947,7 +12960,7 @@ mod tests {
     std::fs::write(repo.path.join(first), "a2\n").expect("modify first");
     std::fs::write(repo.path.join(second), "b2\n").expect("modify second");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, window, cx| {
@@ -12986,7 +12999,7 @@ mod tests {
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("modify file");
     stage_file(&repo.path, rel_path).expect("stage file before command");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, window, cx| {
@@ -13019,7 +13032,7 @@ mod tests {
     let conflict_text = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\nafter\n";
     std::fs::write(repo.path.join(rel_path), conflict_text).expect("write conflict markers");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
@@ -13079,7 +13092,7 @@ mod tests {
     let conflict_text = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\nafter\n";
     std::fs::write(repo.path.join(rel_path), conflict_text).expect("write conflict markers");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
@@ -13139,7 +13152,7 @@ mod tests {
     let conflict_text = "pre\n<<<<<<< HEAD\nours1\n=======\ntheirs1\n>>>>>>> branch\nmid\n<<<<<<< HEAD\nours2\n=======\ntheirs2\n>>>>>>> branch\npost\n";
     std::fs::write(repo.path.join(rel_path), conflict_text).expect("write conflict markers");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
@@ -13200,7 +13213,7 @@ mod tests {
     let modified_contents = format!("{}\n", modified_lines.join("\n"));
     std::fs::write(repo.path.join(rel_path), modified_contents).expect("write modified file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
@@ -13268,7 +13281,7 @@ mod tests {
     .expect("switch back to base");
     force_checkout_head(&repo.path);
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, _window, cx| {
@@ -13338,7 +13351,7 @@ mod tests {
     .expect("switch back to base");
     force_checkout_head(&repo.path);
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let result = git_page.update_in(cx, |this, _window, cx| {
@@ -13471,7 +13484,7 @@ mod tests {
     .expect("switch back to base");
     force_checkout_head(&repo.path);
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     let result = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -13529,7 +13542,7 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("write tracked change");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     let stash_result = git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -13592,7 +13605,7 @@ mod tests {
     let rel_path = Path::new("notes.txt");
     std::fs::write(repo.path.join(rel_path), "notes\n").expect("write untracked file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     let stash_result = git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -13652,7 +13665,7 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("write tracked change");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     let stash_result = git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -13703,7 +13716,7 @@ mod tests {
   #[gpui::test]
   async fn command_palette_branch_actions_require_selected_repo(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     let actions = vec![
       CommandPaletteAction::CheckoutDetached {
@@ -13812,7 +13825,7 @@ mod tests {
       .expect("read current branch")
       .name;
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     let (command_ids, delete_branches) = git_page.update(cx, |this, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -13866,7 +13879,7 @@ mod tests {
       .expect("read clone branch status")
       .name;
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     let (command_ids, delete_branches) = git_page.update(cx, |this, cx| {
       this.selected_repo = Some(clone_dir.path.clone());
@@ -13898,7 +13911,7 @@ mod tests {
       .expect("read current branch")
       .name;
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     let (command_ids, delete_branches) = git_page.update(cx, |this, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -13924,7 +13937,7 @@ mod tests {
     let repo = TempRepo::init("git-page-command-palette-order");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "initial\n", "initial");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     let command_ids = git_page.update(cx, |this, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -14024,7 +14037,7 @@ mod tests {
     .expect("switch back to base");
     force_checkout_head(&repo.path);
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     let result = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -14124,7 +14137,7 @@ mod tests {
       "merge state should be active after conflict"
     );
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
@@ -14227,7 +14240,7 @@ mod tests {
       "merge state should be active after conflict"
     );
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
@@ -14327,7 +14340,7 @@ mod tests {
     std::fs::write(repo.path.join(rel_path), "resolved\n").expect("write resolved contents");
     stage_file(&repo.path, rel_path).expect("stage resolved file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
@@ -14438,7 +14451,7 @@ mod tests {
       "rebase state should be active after conflict"
     );
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
@@ -14542,7 +14555,7 @@ mod tests {
       "rebase state should be active after conflict"
     );
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
@@ -14644,7 +14657,7 @@ mod tests {
     std::fs::write(repo.path.join(rel_path), "resolved\n").expect("write resolved contents");
     stage_file(&repo.path, rel_path).expect("stage resolved file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
@@ -14749,7 +14762,7 @@ mod tests {
     std::fs::write(repo.path.join(rel_path), "resolved\n").expect("write resolved contents");
     stage_file(&repo.path, rel_path).expect("stage resolved file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
@@ -14831,7 +14844,7 @@ mod tests {
       "rebase state should be active after conflict"
     );
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
@@ -14942,7 +14955,7 @@ mod tests {
       .expect("write resolved first conflict");
     stage_file(&repo.path, readme_path).expect("stage resolved first conflict");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
@@ -15018,7 +15031,7 @@ mod tests {
     .expect("switch back to base");
     force_checkout_head(&repo.path);
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     let result = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -15071,7 +15084,7 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
     let commit_oid = commit_text_file(&repo.path, rel_path, "v2\n", "update").to_string();
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, _window, cx| {
@@ -15108,7 +15121,7 @@ mod tests {
     let old_commit_oid = commit_text_file(&repo.path, rel_path, "v1\n", "initial").to_string();
     let _ = commit_text_file(&repo.path, rel_path, "v2\n", "update");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, _window, cx| {
@@ -15153,7 +15166,7 @@ mod tests {
     let old_commit_oid = commit_text_file(&repo.path, rel_path, "v1\n", "initial").to_string();
     let _ = commit_text_file(&repo.path, rel_path, "v2\n", "update");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let open_task = git_page.update_in(cx, |this, _window, cx| {
@@ -15194,7 +15207,7 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("update worktree file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
@@ -15242,7 +15255,7 @@ mod tests {
     .expect("create image preview parent");
     std::fs::write(&absolute_path, tiny_png_bytes()).expect("write png image");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
@@ -15288,7 +15301,7 @@ mod tests {
     .expect("create binary placeholder parent");
     std::fs::write(&absolute_path, b"%PDF-1.7\n").expect("write pdf file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
@@ -15324,7 +15337,7 @@ mod tests {
     let markdown = "# Preview\n\nThe markdown preview pane should stay visible.\n";
     std::fs::write(repo.path.join(&rel_path), markdown).expect("write markdown file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, _window, cx| {
       let editor_root = editor_root.path.clone();
@@ -15368,7 +15381,7 @@ mod tests {
       );
     });
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.show_terminal_sidebar = true;
@@ -15395,7 +15408,7 @@ mod tests {
       );
     });
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.focus_page(window, cx);
@@ -15423,7 +15436,7 @@ mod tests {
       );
     });
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.show_terminal_sidebar = true;
@@ -15453,7 +15466,7 @@ mod tests {
       );
     });
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.focus_page(window, cx);
@@ -15473,7 +15486,7 @@ mod tests {
     let old_commit_oid = commit_text_file(&repo.path, rel_path, "v1\n", "initial").to_string();
     let _ = commit_text_file(&repo.path, rel_path, "v2\n", "update");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let history_task = git_page.update_in(cx, |this, _window, cx| {
@@ -15530,7 +15543,7 @@ mod tests {
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, window, cx| {
       let cached_oid = "cached-oid".to_string();
@@ -15580,7 +15593,7 @@ mod tests {
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let invalid_oid = "0123456789012345678901234567890123456789".to_string();
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, _window, cx| {
@@ -15687,7 +15700,7 @@ mod tests {
   #[gpui::test]
   async fn commit_changes_inner_requires_selected_repo(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, window, cx| {
       this.status_entries = vec![make_status_entry("README.md", RepoStage::Unstaged)];
@@ -15704,7 +15717,7 @@ mod tests {
   async fn commit_changes_inner_requires_non_empty_message_and_changes(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-commit-guards");
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -15729,7 +15742,7 @@ mod tests {
   async fn push_changes_action_requires_selected_repo_and_push_capability(cx: &mut TestAppContext) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-push-guards");
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -15752,7 +15765,7 @@ mod tests {
   ) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-pull-shortcut-guards");
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = None;
@@ -15774,7 +15787,7 @@ mod tests {
   ) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-force-push-guards");
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -15797,7 +15810,7 @@ mod tests {
   ) {
     init_gpui_test(cx);
     let repo = TempRepo::init("git-page-undo-guards");
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -15839,7 +15852,7 @@ mod tests {
       "remote should be behind before push"
     );
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let push_task = git_page.update_in(cx, |this, _window, cx| {
@@ -16010,7 +16023,7 @@ mod tests {
     let non_force = push(&source.path, false).err();
     assert!(non_force.is_some(), "non-force push should fail");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let force_task = git_page.update_in(cx, |this, _window, cx| {
@@ -16035,7 +16048,7 @@ mod tests {
   #[gpui::test]
   async fn stage_restore_actions_require_selected_repo(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
 
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = None;
@@ -16068,7 +16081,7 @@ mod tests {
     std::fs::write(repo.path.join(first), "a2\n").expect("modify first");
     std::fs::write(repo.path.join(second), "b2\n").expect("modify second");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, _window, cx| {
@@ -16100,7 +16113,7 @@ mod tests {
     std::fs::write(repo.path.join(second), "b2\n").expect("modify second");
     stage_all(&repo.path).expect("stage all before ui action");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, _window, cx| {
@@ -16139,7 +16152,7 @@ mod tests {
         .all(|entry| entry.stage == RepoStage::Staged)
     );
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, window, cx| {
@@ -16171,7 +16184,7 @@ mod tests {
         .all(|entry| entry.stage == RepoStage::Unstaged)
     );
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, window, cx| {
@@ -16200,7 +16213,7 @@ mod tests {
     std::fs::write(repo.path.join(first), "a2\n").expect("modify first");
     std::fs::write(repo.path.join(second), "b2\n").expect("modify second");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, _window, cx| {
@@ -16234,7 +16247,7 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("modify tracked file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     let task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -16292,7 +16305,7 @@ mod tests {
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("modify file");
     stage_file(&repo.path, rel_path).expect("stage file before ui action");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, _window, cx| {
@@ -16320,7 +16333,7 @@ mod tests {
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("modify tracked file");
     stage_file(&repo.path, rel_path).expect("stage tracked file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     let task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -16344,7 +16357,7 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("modify file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, _window, cx| {
@@ -16374,7 +16387,7 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("modify tracked file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     let task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -16401,7 +16414,7 @@ mod tests {
     let absolute = repo.path.join(rel_path);
     std::fs::write(&absolute, "temporary\n").expect("write untracked file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, _window, cx| {
@@ -16436,7 +16449,7 @@ mod tests {
     assert_eq!(entries_before[0].path, rel_path);
     assert_eq!(entries_before[0].status, RepoStatusKind::Deleted);
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, _window, cx| {
@@ -16468,7 +16481,7 @@ mod tests {
     std::fs::write(repo.path.join(first_path), "first change\n").expect("modify first file");
     std::fs::write(repo.path.join(second_path), "second change\n").expect("modify second file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
@@ -16525,7 +16538,7 @@ mod tests {
     std::fs::write(repo.path.join(tracked_path), "v2\n").expect("modify tracked file");
     std::fs::write(repo.path.join(untracked_path), "temporary\n").expect("write untracked file");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
@@ -16566,7 +16579,7 @@ mod tests {
     let entries = list_repo_status(&repo.path).expect("list status after edit");
     assert!(!entries.is_empty());
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let commit_task = git_page.update_in(cx, |this, window, cx| {
@@ -16615,7 +16628,7 @@ mod tests {
     let entries = list_repo_status(&repo.path).expect("list status after edit");
     assert!(!entries.is_empty());
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, window, cx| {
@@ -16678,7 +16691,7 @@ mod tests {
       .expect("parent")
       .id();
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let undo_task = git_page.update_in(cx, |this, _window, cx| {
@@ -16708,7 +16721,7 @@ mod tests {
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     create_branch(&repo.path, "feature").expect("create feature branch");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     git_page.update_in(cx, |this, _window, cx| {
       seed_repo_branch_state(this, &repo.path, cx);
@@ -16749,7 +16762,7 @@ mod tests {
     let repo = TempRepo::init("git-page-poll-once-refresh-race");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
@@ -16805,7 +16818,7 @@ mod tests {
     )
     .expect("switch back to base branch");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
 
     let initial_reload = git_page.update_in(cx, |this, _window, cx| {
@@ -16968,7 +16981,7 @@ mod tests {
     let repo = TempRepo::init("git-page-poll-once-detached");
     let oid = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     git_page.update_in(cx, |this, _window, cx| {
       seed_repo_branch_state(this, &repo.path, cx);
@@ -17013,7 +17026,7 @@ mod tests {
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     create_branch(&repo.path, "feature").expect("create feature branch");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     git_page.update_in(cx, |this, _window, cx| {
       seed_repo_branch_state(this, &repo.path, cx);
@@ -17060,7 +17073,7 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v1\n", "initial");
     create_branch(&repo.path, "feature").expect("create feature branch");
 
-    let (git_page, cx) = cx.add_window_view(|window, cx| GitPage::new_for_test(window, cx));
+    let (git_page, cx) = add_git_page_window_with_root(cx);
     cx.executor().allow_parking();
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
