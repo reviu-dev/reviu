@@ -22,8 +22,8 @@ use git::{
   fetch, head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
   list_commit_changed_files, list_commit_history, list_interactive_rebase_commits,
   list_repo_status, list_stashes, load_commit_file_diff, merge_branch, pop_stash, pull, push,
-  rebase_branch, resolve_branch_ref, restore_file, skip_rebase, stage_all, stage_file,
-  start_interactive_rebase, switch_branch, undo_last_commit, unstage_all, unstage_file,
+  rebase_branch, resolve_branch_ref, restore_file, restore_renamed_file, skip_rebase, stage_all,
+  stage_file, start_interactive_rebase, switch_branch, undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global, Image,
@@ -1212,6 +1212,7 @@ impl ListDelegate for GitFileListDelegate {
     );
 
     let rel_path = row.entry.path.clone();
+    let old_path = row.entry.old_path.clone();
     let stage = row.entry.stage;
     let git_page = self.git_page.clone();
 
@@ -1293,12 +1294,14 @@ impl ListDelegate for GitFileListDelegate {
                         .tooltip("Discard changes")
                         .on_click({
                           let rel_path = rel_path.clone();
+                          let old_path = old_path.clone();
                           let git_page = git_page.clone();
                           move |_event, window, cx| {
                             let _ = git_page.update(cx, |page, cx| {
                               page.restore_file_click_action(
                                 window,
                                 rel_path.clone(),
+                                old_path.clone(),
                                 status_kind,
                                 cx,
                               );
@@ -6613,15 +6616,17 @@ impl GitPage {
     &mut self,
     window: &mut Window,
     rel_path: PathBuf,
+    old_path: Option<PathBuf>,
     status: RepoStatusKind,
     cx: &mut Context<Self>,
   ) {
-    self.confirm_restore_file_action(window, rel_path, status, cx);
+    self.confirm_restore_file_action(window, rel_path, old_path, status, cx);
   }
 
   fn restore_file_action(
     &mut self,
     rel_path: PathBuf,
+    old_path: Option<PathBuf>,
     status: RepoStatusKind,
     cx: &mut Context<Self>,
   ) {
@@ -6629,7 +6634,9 @@ impl GitPage {
       return;
     };
     let rel_path_for_job = rel_path.clone();
+    let old_path_for_job = old_path.clone();
     let should_delete = Self::restore_uses_delete(status);
+    let is_rename_restore = status == RepoStatusKind::Renamed && old_path.is_some();
     let rel_path_label = rel_path.to_string_lossy().replace(['\n', '\r'], "");
     let mut start_data = Map::new();
     start_data.insert("file".into(), rel_path_label.clone().into());
@@ -6639,6 +6646,9 @@ impl GitPage {
       let result = unblock(move || {
         if should_delete {
           delete_untracked_file(&repo_root, &rel_path_for_job)
+        } else if is_rename_restore {
+          let old = old_path_for_job.as_deref().expect("rename has old_path");
+          restore_renamed_file(&repo_root, old, &rel_path_for_job)
         } else {
           restore_file(&repo_root, &rel_path_for_job)
         }
@@ -6694,6 +6704,10 @@ impl GitPage {
         for entry in entries {
           let result = if Self::restore_uses_delete(entry.status) {
             delete_untracked_file(&repo_root, &entry.path)
+          } else if entry.status == RepoStatusKind::Renamed
+            && let Some(old_path) = entry.old_path.as_deref()
+          {
+            restore_renamed_file(&repo_root, old_path, &entry.path)
           } else {
             restore_file(&repo_root, &entry.path)
           };
@@ -6783,6 +6797,7 @@ impl GitPage {
     &mut self,
     window: &mut Window,
     rel_path: PathBuf,
+    old_path: Option<PathBuf>,
     status: RepoStatusKind,
     cx: &mut Context<Self>,
   ) {
@@ -6806,18 +6821,21 @@ impl GitPage {
     let confirm_text: SharedString = confirm_text.into();
     let view = cx.entity();
     let rel_path_for_action = rel_path.clone();
+    let old_path_for_action = old_path.clone();
 
     window.open_alert_dialog(cx, move |alert, _, _| {
       let view = view.clone();
       let rel_path_for_action = rel_path_for_action.clone();
+      let old_path_for_action = old_path_for_action.clone();
       ConfirmDialog::new(title.clone(), div().child(message.clone()))
         .confirm_text(confirm_text.clone())
         .cancel_text("Cancel")
         .destructive()
         .on_confirm(move |_, _, cx| {
           let rel_path_for_action = rel_path_for_action.clone();
+          let old_path_for_action = old_path_for_action.clone();
           view.update(cx, |view, cx| {
-            view.restore_file_action(rel_path_for_action, status, cx);
+            view.restore_file_action(rel_path_for_action, old_path_for_action, status, cx);
           });
           true
         })
@@ -16065,7 +16083,12 @@ mod tests {
       this.unstage_file_action(PathBuf::from("README.md"), cx);
       assert!(this.status_task.is_none());
 
-      this.restore_file_action(PathBuf::from("README.md"), RepoStatusKind::Modified, cx);
+      this.restore_file_action(
+        PathBuf::from("README.md"),
+        None,
+        RepoStatusKind::Modified,
+        cx,
+      );
       assert!(this.status_task.is_none());
     });
   }
@@ -16362,7 +16385,7 @@ mod tests {
 
     let task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
-      this.restore_file_action(rel_path.to_path_buf(), RepoStatusKind::Modified, cx);
+      this.restore_file_action(rel_path.to_path_buf(), None, RepoStatusKind::Modified, cx);
       this.status_task.take().expect("restore file task")
     });
     task.await;
@@ -16391,7 +16414,12 @@ mod tests {
     cx.executor().allow_parking();
     let task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
-      this.restore_file_action(PathBuf::from("missing.txt"), RepoStatusKind::Modified, cx);
+      this.restore_file_action(
+        PathBuf::from("missing.txt"),
+        None,
+        RepoStatusKind::Modified,
+        cx,
+      );
       this.status_task.take().expect("restore missing file task")
     });
     task.await;
@@ -16419,7 +16447,7 @@ mod tests {
 
     let task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
-      this.restore_file_action(rel_path.to_path_buf(), RepoStatusKind::Untracked, cx);
+      this.restore_file_action(rel_path.to_path_buf(), None, RepoStatusKind::Untracked, cx);
       this.status_task.take().expect("delete untracked task")
     });
     task.await;
@@ -16454,7 +16482,7 @@ mod tests {
 
     let task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
-      this.restore_file_action(rel_path.to_path_buf(), RepoStatusKind::Deleted, cx);
+      this.restore_file_action(rel_path.to_path_buf(), None, RepoStatusKind::Deleted, cx);
       this.status_task.take().expect("restore deleted file task")
     });
     task.await;
@@ -16466,6 +16494,44 @@ mod tests {
     assert!(
       list_repo_status(&repo.path)
         .expect("status after deleted restore")
+        .is_empty()
+    );
+  }
+
+  #[gpui::test]
+  async fn restore_file_action_undoes_rename(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-restore-rename");
+    let old_path = Path::new("old.txt");
+    let new_path = Path::new("new.txt");
+    let _ = commit_text_file(&repo.path, old_path, "v1\n", "initial");
+    std::fs::rename(repo.path.join(old_path), repo.path.join(new_path))
+      .expect("rename file in worktree");
+
+    let (git_page, cx) = add_git_page_window_with_root(cx);
+    cx.executor().allow_parking();
+
+    let task = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.restore_file_action(
+        new_path.to_path_buf(),
+        Some(old_path.to_path_buf()),
+        RepoStatusKind::Renamed,
+        cx,
+      );
+      this.status_task.take().expect("restore rename task")
+    });
+    task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(repo.path.join(old_path).exists());
+    assert!(!repo.path.join(new_path).exists());
+    let contents =
+      std::fs::read_to_string(repo.path.join(old_path)).expect("read restored old file");
+    assert_eq!(contents, "v1\n");
+    assert!(
+      list_repo_status(&repo.path)
+        .expect("status after rename restore")
         .is_empty()
     );
   }
@@ -16509,7 +16575,7 @@ mod tests {
     });
 
     let restore_task = git_page.update_in(cx, |this, _window, cx| {
-      this.restore_file_action(restore_path.clone(), RepoStatusKind::Modified, cx);
+      this.restore_file_action(restore_path.clone(), None, RepoStatusKind::Modified, cx);
       this.status_task.take().expect("restore file task")
     });
     restore_task.await;
@@ -16564,6 +16630,55 @@ mod tests {
     assert!(
       list_repo_status(&repo.path)
         .expect("status after restore all")
+        .is_empty()
+    );
+  }
+
+  #[gpui::test]
+  async fn restore_all_action_undoes_renamed_files(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-restore-all-rename");
+    let old_path = Path::new("old.txt");
+    let new_path = Path::new("new.txt");
+    let _ = commit_text_file(&repo.path, old_path, "v1\n", "initial");
+    // Stage the rename so libgit2 reports it as a single Renamed entry.
+    std::fs::rename(repo.path.join(old_path), repo.path.join(new_path))
+      .expect("rename file in worktree");
+    stage_all(&repo.path).expect("stage rename");
+
+    let (git_page, cx) = add_git_page_window_with_root(cx);
+    cx.executor().allow_parking();
+
+    let reload_task = git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.reload_status(cx);
+      this.status_task.take().expect("reload status task")
+    });
+    reload_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let entries_before = git_page.read_with(cx, |this, _| this.status_entries.clone());
+    assert_eq!(entries_before.len(), 1);
+    assert_eq!(entries_before[0].status, RepoStatusKind::Renamed);
+    assert_eq!(entries_before[0].path, new_path);
+    assert_eq!(entries_before[0].old_path.as_deref(), Some(old_path));
+
+    let restore_all_task = git_page.update_in(cx, |this, _window, cx| {
+      this.restore_all_action(cx);
+      this.status_task.take().expect("restore all task")
+    });
+    restore_all_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    assert!(repo.path.join(old_path).exists());
+    assert!(!repo.path.join(new_path).exists());
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join(old_path)).expect("read restored file"),
+      "v1\n"
+    );
+    assert!(
+      list_repo_status(&repo.path)
+        .expect("status after restore all rename")
         .is_empty()
     );
   }
