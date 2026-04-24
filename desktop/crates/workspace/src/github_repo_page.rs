@@ -3640,8 +3640,10 @@ impl Render for GithubIssueDetailsSheetView {
 
     div()
       .id("github-issue-details-sheet-content")
+      .relative()
       .size_full()
       .child(content)
+      .vertical_scrollbar(&self.issue_list)
   }
 }
 
