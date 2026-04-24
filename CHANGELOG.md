@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.7.0
 
+### Recent Commands in the Command Palette
+
+The command palette now shows a Recent section at the top listing the commands you use most often, weighted so recent and frequent commands both surface first.
+
 ### Jump Between Changes in a File
 
 The previous/next arrows above the diff now step through every change in the file when there are no conflicts. The existing `cmd-alt-up` and `cmd-alt-down` shortcuts work in both modes: conflicts when present, otherwise hunks.

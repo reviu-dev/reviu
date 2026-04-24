@@ -55,12 +55,20 @@ const GITHUB_HOME_PULL_REQUEST_TABS_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS github_home_pull_request_tabs (id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL, filters_json TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
 };
 
-const CONFIG_TABLES: [ConfigTable; 5] = [
+const COMMAND_USAGES_TABLE: ConfigTable = ConfigTable {
+  name: "command_usages",
+  create_sql: "CREATE TABLE IF NOT EXISTS command_usages (command_id TEXT PRIMARY KEY, recent_timestamps TEXT NOT NULL)",
+};
+
+pub const COMMAND_USAGE_TIMESTAMP_CAP: usize = 30;
+
+const CONFIG_TABLES: [ConfigTable; 6] = [
   RECENT_REPOS_TABLE,
   SETTINGS_TABLE,
   PINNED_REPOS_TABLE,
   SHORTCUT_OVERRIDES_TABLE,
   GITHUB_HOME_PULL_REQUEST_TABS_TABLE,
+  COMMAND_USAGES_TABLE,
 ];
 
 #[cfg(test)]
@@ -479,6 +487,77 @@ impl ConfigStore {
       return;
     };
     store.persist_app_settings_inner(settings);
+  }
+
+  pub fn load_command_usages() -> HashMap<String, Vec<i64>> {
+    let Some(store) = Self::open_with_tables() else {
+      return HashMap::default();
+    };
+    store.load_command_usages_inner()
+  }
+
+  fn load_command_usages_inner(&self) -> HashMap<String, Vec<i64>> {
+    let mut stmt = match self.conn.prepare(&format!(
+      "SELECT command_id, recent_timestamps FROM {}",
+      COMMAND_USAGES_TABLE.name
+    )) {
+      Ok(stmt) => stmt,
+      Err(err) => {
+        eprintln!("Failed to load command usages: {}", err);
+        return HashMap::default();
+      }
+    };
+
+    let rows = match stmt.query_map([], |row| {
+      Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) {
+      Ok(rows) => rows,
+      Err(err) => {
+        eprintln!("Failed to read command usages: {}", err);
+        return HashMap::default();
+      }
+    };
+
+    let mut usages = HashMap::default();
+    for row in rows {
+      let Ok((command_id, timestamps_json)) = row else {
+        continue;
+      };
+      let Ok(timestamps) = serde_json::from_str::<Vec<i64>>(&timestamps_json) else {
+        continue;
+      };
+      usages.insert(command_id, timestamps);
+    }
+
+    usages
+  }
+
+  pub fn persist_command_usage(command_id: &str, timestamps: &[i64]) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    store.persist_command_usage_inner(command_id, timestamps);
+  }
+
+  fn persist_command_usage_inner(&self, command_id: &str, timestamps: &[i64]) {
+    let json = match serde_json::to_string(timestamps) {
+      Ok(value) => value,
+      Err(err) => {
+        eprintln!("Failed to serialize command usage timestamps: {}", err);
+        return;
+      }
+    };
+
+    if let Err(err) = self.conn.execute(
+      &format!(
+        "INSERT INTO {} (command_id, recent_timestamps) VALUES (?1, ?2)
+         ON CONFLICT(command_id) DO UPDATE SET recent_timestamps = excluded.recent_timestamps",
+        COMMAND_USAGES_TABLE.name
+      ),
+      params![command_id, json],
+    ) {
+      eprintln!("Failed to persist command usage: {}", err);
+    }
   }
 
   pub fn load_pinned_repos() -> Vec<String> {
@@ -1069,5 +1148,28 @@ mod tests {
       config_db_path_for_profile(None, AppProfile::Dev),
       PathBuf::from("reviu.dev.sqlite")
     );
+  }
+
+  #[test]
+  fn command_usages_round_trip() {
+    let db_path = unique_test_db_path("command-usages");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    ConfigStore::persist_command_usage("commit", &[1_000, 2_000, 3_000]);
+    ConfigStore::persist_command_usage("push", &[5_000]);
+
+    let usages = ConfigStore::load_command_usages();
+    assert_eq!(usages.get("commit"), Some(&vec![1_000, 2_000, 3_000]));
+    assert_eq!(usages.get("push"), Some(&vec![5_000]));
+
+    ConfigStore::persist_command_usage("commit", &[1_000, 2_000, 3_000, 4_000]);
+    let usages = ConfigStore::load_command_usages();
+    assert_eq!(
+      usages.get("commit"),
+      Some(&vec![1_000, 2_000, 3_000, 4_000])
+    );
+
+    ConfigStore::set_test_db_path(None);
   }
 }

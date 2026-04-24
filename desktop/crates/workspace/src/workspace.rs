@@ -372,6 +372,8 @@ impl WorkspaceView {
     let settings = ConfigStore::load_app_settings();
     cx.set_global(settings);
     cx.set_global(shortcuts::load_shortcut_overrides());
+    cx.set_global(crate::command_usage::CommandUsageStore::load());
+    crate::command_usage::install_palette_usage_recorder(cx);
     set_indent_rainbow_enabled(settings.indent_rainbow);
     Theme::global_mut(cx).font_size = px(settings.font_size);
     if settings.auto_switch_theme {

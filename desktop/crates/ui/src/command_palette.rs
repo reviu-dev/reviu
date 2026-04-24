@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 use crate::github_url::parse_github_url_action;
 use crate::{SelectableRowStyle, UiIconName, file_icon_path_for_name, selectable_list_item};
 use gpui::{
-  App, Context, Div, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
+  App, Context, Div, Entity, FocusHandle, Focusable, Global, InteractiveElement, IntoElement,
   ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
@@ -20,6 +20,18 @@ const LIST_INPUT_HEIGHT: f32 = 35.0;
 const LIST_ITEM_HEIGHT: f32 = 32.0; // Height of each list item in pixels (h_8)
 const SECTION_HEADER_HEIGHT: f32 = 28.0;
 pub const COMMAND_PALETTE_CONTEXT: &str = "CommandPalette";
+
+pub type CommandPaletteUsageRecorder = fn(CommandPaletteCommandId, &App);
+
+pub struct CommandPaletteUsageRecorderGlobal(pub CommandPaletteUsageRecorder);
+
+impl Global for CommandPaletteUsageRecorderGlobal {}
+
+pub type CommandPaletteUsageScorer = fn(&App, CommandPaletteCommandId, i64) -> f64;
+
+pub struct CommandPaletteUsageScorerGlobal(pub CommandPaletteUsageScorer);
+
+impl Global for CommandPaletteUsageScorerGlobal {}
 
 fn list_base_item(
   ix: IndexPath,
@@ -565,6 +577,8 @@ impl ListDelegate for BranchesListWithCommandsDelegate {
 
 struct CommandListDelegate {
   _commands: Vec<Rc<CommandPaletteCommand>>,
+  recent_commands: Vec<Rc<CommandPaletteCommand>>,
+  show_recent: bool,
   matched_sections: Vec<(CommandPaletteGroup, Vec<Rc<CommandPaletteCommand>>)>,
   selected_index: Option<IndexPath>,
   query: SharedString,
@@ -583,6 +597,47 @@ fn bucketize_commands(
   buckets.into_iter().collect()
 }
 
+fn build_matched_sections(
+  filtered: &[Rc<CommandPaletteCommand>],
+  recent: &[Rc<CommandPaletteCommand>],
+  query: &str,
+  show_recent: bool,
+) -> Vec<(CommandPaletteGroup, Vec<Rc<CommandPaletteCommand>>)> {
+  let mut sections = bucketize_commands(filtered);
+  if show_recent && query.is_empty() && !recent.is_empty() {
+    sections.insert(0, (CommandPaletteGroup::Recent, recent.to_vec()));
+  }
+  sections
+}
+
+fn compute_recent_commands(
+  commands: &[Rc<CommandPaletteCommand>],
+  cx: &App,
+  top_n: usize,
+) -> Vec<Rc<CommandPaletteCommand>> {
+  let Some(scorer) = cx
+    .try_global::<CommandPaletteUsageScorerGlobal>()
+    .map(|g| g.0)
+  else {
+    return Vec::new();
+  };
+  let now_secs = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .map(|d| d.as_secs() as i64)
+    .unwrap_or(0);
+
+  let mut scored: Vec<(Rc<CommandPaletteCommand>, f64)> = commands
+    .iter()
+    .map(|c| {
+      let score = scorer(cx, c.id, now_secs);
+      (c.clone(), score)
+    })
+    .filter(|(_, s)| *s > 0.0)
+    .collect();
+  scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+  scored.into_iter().take(top_n).map(|(c, _)| c).collect()
+}
+
 impl CommandListDelegate {
   fn prepare(&mut self, query: impl Into<SharedString>) {
     self.query = query.into();
@@ -592,7 +647,12 @@ impl CommandListDelegate {
       .filter(|c| c.matches(&self.query))
       .cloned()
       .collect();
-    self.matched_sections = bucketize_commands(&filtered);
+    self.matched_sections = build_matched_sections(
+      &filtered,
+      &self.recent_commands,
+      self.query.as_ref(),
+      self.show_recent,
+    );
   }
 
   fn matched_total_count(&self) -> usize {
@@ -708,7 +768,7 @@ pub enum CommandPaletteInitialScreen {
   SwitchBranch,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CommandPaletteCommandId {
   SwitchRepository,
   ForgetRepository,
@@ -765,8 +825,128 @@ pub enum CommandPaletteCommandId {
   SendFeedback,
 }
 
+impl CommandPaletteCommandId {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::SwitchRepository => "switch_repository",
+      Self::ForgetRepository => "forget_repository",
+      Self::SwitchBranch => "switch_branch",
+      Self::CheckoutDetached => "checkout_detached",
+      Self::Commit => "commit",
+      Self::ContinueRebase => "continue_rebase",
+      Self::SkipRebase => "skip_rebase",
+      Self::Push => "push",
+      Self::ForcePush => "force_push",
+      Self::UndoLastCommit => "undo_last_commit",
+      Self::Amend => "amend",
+      Self::StageSelectedFile => "stage_selected_file",
+      Self::UnstageSelectedFile => "unstage_selected_file",
+      Self::AcceptAllCurrentConflicts => "accept_all_current_conflicts",
+      Self::AcceptAllIncomingConflicts => "accept_all_incoming_conflicts",
+      Self::CreateBranch => "create_branch",
+      Self::CreateBranchFrom => "create_branch_from",
+      Self::DeleteBranch => "delete_branch",
+      Self::MergeBranch => "merge_branch",
+      Self::AbortMerge => "abort_merge",
+      Self::RebaseBranch => "rebase_branch",
+      Self::InteractiveRebase => "interactive_rebase",
+      Self::InteractiveRebaseOntoBranch => "interactive_rebase_onto_branch",
+      Self::InteractiveRebaseEditBranch => "interactive_rebase_edit_branch",
+      Self::InteractiveRebaseHeadCount => "interactive_rebase_head_count",
+      Self::AbortRebase => "abort_rebase",
+      Self::CreatePullRequest => "create_pull_request",
+      Self::CherryPick => "cherry_pick",
+      Self::StageAll => "stage_all",
+      Self::UnstageAll => "unstage_all",
+      Self::Pull => "pull",
+      Self::Fetch => "fetch",
+      Self::Stash => "stash",
+      Self::StashIncludeUntracked => "stash_include_untracked",
+      Self::ApplyStash => "apply_stash",
+      Self::DropStash => "drop_stash",
+      Self::PopStash => "pop_stash",
+      Self::CreateGithubRepository => "create_github_repository",
+      Self::SearchGithubRepository => "search_github_repository",
+      Self::OpenRepository => "open_repository",
+      Self::OpenGitPage => "open_git_page",
+      Self::OpenGithubPage => "open_github_page",
+      Self::OpenGithubFromUrl => "open_github_from_url",
+      Self::SwitchToPrBranch => "switch_to_pr_branch",
+      Self::CopyPrBranch => "copy_pr_branch",
+      Self::ToggleUnchangedFiles => "toggle_unchanged_files",
+      Self::OpenGitHistorySidebar => "open_git_history_sidebar",
+      Self::OpenGitChangesSidebar => "open_git_changes_sidebar",
+      Self::OpenGitConfigPage => "open_git_config_page",
+      Self::OpenSettingsPage => "open_settings_page",
+      Self::OpenBillingPage => "open_billing_page",
+      Self::OpenAboutPage => "open_about_page",
+      Self::SendFeedback => "send_feedback",
+    }
+  }
+
+  pub fn from_str(value: &str) -> Option<Self> {
+    match value {
+      "switch_repository" => Some(Self::SwitchRepository),
+      "forget_repository" => Some(Self::ForgetRepository),
+      "switch_branch" => Some(Self::SwitchBranch),
+      "checkout_detached" => Some(Self::CheckoutDetached),
+      "commit" => Some(Self::Commit),
+      "continue_rebase" => Some(Self::ContinueRebase),
+      "skip_rebase" => Some(Self::SkipRebase),
+      "push" => Some(Self::Push),
+      "force_push" => Some(Self::ForcePush),
+      "undo_last_commit" => Some(Self::UndoLastCommit),
+      "amend" => Some(Self::Amend),
+      "stage_selected_file" => Some(Self::StageSelectedFile),
+      "unstage_selected_file" => Some(Self::UnstageSelectedFile),
+      "accept_all_current_conflicts" => Some(Self::AcceptAllCurrentConflicts),
+      "accept_all_incoming_conflicts" => Some(Self::AcceptAllIncomingConflicts),
+      "create_branch" => Some(Self::CreateBranch),
+      "create_branch_from" => Some(Self::CreateBranchFrom),
+      "delete_branch" => Some(Self::DeleteBranch),
+      "merge_branch" => Some(Self::MergeBranch),
+      "abort_merge" => Some(Self::AbortMerge),
+      "rebase_branch" => Some(Self::RebaseBranch),
+      "interactive_rebase" => Some(Self::InteractiveRebase),
+      "interactive_rebase_onto_branch" => Some(Self::InteractiveRebaseOntoBranch),
+      "interactive_rebase_edit_branch" => Some(Self::InteractiveRebaseEditBranch),
+      "interactive_rebase_head_count" => Some(Self::InteractiveRebaseHeadCount),
+      "abort_rebase" => Some(Self::AbortRebase),
+      "create_pull_request" => Some(Self::CreatePullRequest),
+      "cherry_pick" => Some(Self::CherryPick),
+      "stage_all" => Some(Self::StageAll),
+      "unstage_all" => Some(Self::UnstageAll),
+      "pull" => Some(Self::Pull),
+      "fetch" => Some(Self::Fetch),
+      "stash" => Some(Self::Stash),
+      "stash_include_untracked" => Some(Self::StashIncludeUntracked),
+      "apply_stash" => Some(Self::ApplyStash),
+      "drop_stash" => Some(Self::DropStash),
+      "pop_stash" => Some(Self::PopStash),
+      "create_github_repository" => Some(Self::CreateGithubRepository),
+      "search_github_repository" => Some(Self::SearchGithubRepository),
+      "open_repository" => Some(Self::OpenRepository),
+      "open_git_page" => Some(Self::OpenGitPage),
+      "open_github_page" => Some(Self::OpenGithubPage),
+      "open_github_from_url" => Some(Self::OpenGithubFromUrl),
+      "switch_to_pr_branch" => Some(Self::SwitchToPrBranch),
+      "copy_pr_branch" => Some(Self::CopyPrBranch),
+      "toggle_unchanged_files" => Some(Self::ToggleUnchangedFiles),
+      "open_git_history_sidebar" => Some(Self::OpenGitHistorySidebar),
+      "open_git_changes_sidebar" => Some(Self::OpenGitChangesSidebar),
+      "open_git_config_page" => Some(Self::OpenGitConfigPage),
+      "open_settings_page" => Some(Self::OpenSettingsPage),
+      "open_billing_page" => Some(Self::OpenBillingPage),
+      "open_about_page" => Some(Self::OpenAboutPage),
+      "send_feedback" => Some(Self::SendFeedback),
+      _ => None,
+    }
+  }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CommandPaletteGroup {
+  Recent,
   Changes,
   Sync,
   Branches,
@@ -782,6 +962,7 @@ pub enum CommandPaletteGroup {
 impl CommandPaletteGroup {
   pub fn label(&self) -> &'static str {
     match self {
+      Self::Recent => "Recent",
       Self::Changes => "Changes",
       Self::Sync => "Sync",
       Self::Branches => "Branches",
@@ -1687,9 +1868,15 @@ impl CommandPalette {
       .map(|command| Rc::new(command.clone()))
       .collect();
 
+    let recent_commands = compute_recent_commands(&default_commands, cx, 5);
+    let initial_commands_sections =
+      build_matched_sections(&default_commands, &recent_commands, "", true);
+
     let commands_list_delegate = CommandListDelegate {
-      matched_sections: bucketize_commands(&default_commands),
+      matched_sections: initial_commands_sections,
       _commands: default_commands.clone(),
+      recent_commands,
+      show_recent: true,
       selected_index: None,
       query: "".into(),
     };
@@ -1709,6 +1896,8 @@ impl CommandPalette {
     let interactive_rebase_mode_list_delegate = CommandListDelegate {
       matched_sections: bucketize_commands(&interactive_rebase_mode_commands),
       _commands: interactive_rebase_mode_commands.clone(),
+      recent_commands: Vec::new(),
+      show_recent: false,
       selected_index: None,
       query: "".into(),
     };
@@ -1749,13 +1938,17 @@ impl CommandPalette {
             };
 
             if let Some(repository) = repository {
-              let action = match command_palette.screen {
-                CommandPaletteScreen::ForgetRepository => {
-                  CommandPaletteAction::ForgetRepository((*repository).clone())
-                }
-                _ => CommandPaletteAction::SwitchRepository((*repository).clone()),
+              let (id, action) = match command_palette.screen {
+                CommandPaletteScreen::ForgetRepository => (
+                  CommandPaletteCommandId::ForgetRepository,
+                  CommandPaletteAction::ForgetRepository((*repository).clone()),
+                ),
+                _ => (
+                  CommandPaletteCommandId::SwitchRepository,
+                  CommandPaletteAction::SwitchRepository((*repository).clone()),
+                ),
               };
-              command_palette.trigger_action(action, window, cx);
+              command_palette.trigger_action(id, action, window, cx);
             }
           }
         },
@@ -1778,6 +1971,7 @@ impl CommandPalette {
               match branch_action.as_ref() {
                 BranchListWithCommands::SwitchBranch(branch) => {
                   command_palette.trigger_action(
+                    CommandPaletteCommandId::SwitchBranch,
                     CommandPaletteAction::SwitchBranch((**branch).clone()),
                     window,
                     cx,
@@ -1807,26 +2001,34 @@ impl CommandPalette {
                 };
 
                 if let Some(branch) = branch {
-                  let action = match command_palette.screen {
-                    CommandPaletteScreen::MergeBranch => CommandPaletteAction::MergeBranch {
-                      name: (*branch).clone(),
-                    },
-                    CommandPaletteScreen::RebaseBranch => CommandPaletteAction::RebaseBranch {
-                      name: (*branch).clone(),
-                    },
-                    CommandPaletteScreen::InteractiveRebaseBranch => {
+                  let (id, action) = match command_palette.screen {
+                    CommandPaletteScreen::MergeBranch => (
+                      CommandPaletteCommandId::MergeBranch,
+                      CommandPaletteAction::MergeBranch {
+                        name: (*branch).clone(),
+                      },
+                    ),
+                    CommandPaletteScreen::RebaseBranch => (
+                      CommandPaletteCommandId::RebaseBranch,
+                      CommandPaletteAction::RebaseBranch {
+                        name: (*branch).clone(),
+                      },
+                    ),
+                    CommandPaletteScreen::InteractiveRebaseBranch => (
+                      CommandPaletteCommandId::InteractiveRebaseOntoBranch,
                       CommandPaletteAction::InteractiveRebaseBranch {
                         name: (*branch).clone(),
-                      }
-                    }
-                    CommandPaletteScreen::InteractiveRebaseEditBranch => {
+                      },
+                    ),
+                    CommandPaletteScreen::InteractiveRebaseEditBranch => (
+                      CommandPaletteCommandId::InteractiveRebaseEditBranch,
                       CommandPaletteAction::InteractiveRebaseEditBranch {
                         name: (*branch).clone(),
-                      }
-                    }
+                      },
+                    ),
                     _ => unreachable!(),
                   };
-                  command_palette.trigger_action(action, window, cx);
+                  command_palette.trigger_action(id, action, window, cx);
                 }
               }
               CommandPaletteScreen::CreateBranchFrom => {
@@ -1858,6 +2060,7 @@ impl CommandPalette {
 
             if let Some(branch) = branch {
               command_palette.trigger_action(
+                CommandPaletteCommandId::DeleteBranch,
                 CommandPaletteAction::DeleteBranch((*branch).clone()),
                 window,
                 cx,
@@ -1877,19 +2080,22 @@ impl CommandPalette {
             };
 
             if let Some(stash) = stash {
-              let action = match command_palette.screen {
-                CommandPaletteScreen::ApplyStash => {
-                  CommandPaletteAction::ApplyStash(stash.as_ref().clone())
-                }
-                CommandPaletteScreen::DropStash => {
-                  CommandPaletteAction::DropStash(stash.as_ref().clone())
-                }
-                CommandPaletteScreen::PopStash => {
-                  CommandPaletteAction::PopStash(stash.as_ref().clone())
-                }
+              let (id, action) = match command_palette.screen {
+                CommandPaletteScreen::ApplyStash => (
+                  CommandPaletteCommandId::ApplyStash,
+                  CommandPaletteAction::ApplyStash(stash.as_ref().clone()),
+                ),
+                CommandPaletteScreen::DropStash => (
+                  CommandPaletteCommandId::DropStash,
+                  CommandPaletteAction::DropStash(stash.as_ref().clone()),
+                ),
+                CommandPaletteScreen::PopStash => (
+                  CommandPaletteCommandId::PopStash,
+                  CommandPaletteAction::PopStash(stash.as_ref().clone()),
+                ),
                 _ => return,
               };
-              command_palette.trigger_action(action, window, cx);
+              command_palette.trigger_action(id, action, window, cx);
             }
           }
         },
@@ -1962,6 +2168,7 @@ impl CommandPalette {
           let base = base_branch.as_ref().clone();
 
           self.trigger_action(
+            CommandPaletteCommandId::CreateBranchFrom,
             CommandPaletteAction::CreateBranchFrom {
               name: branch_name,
               base,
@@ -1971,6 +2178,7 @@ impl CommandPalette {
           );
         } else {
           self.trigger_action(
+            CommandPaletteCommandId::CreateBranch,
             CommandPaletteAction::CreateBranch {
               name: branch_name.clone(),
             },
@@ -2006,7 +2214,12 @@ impl CommandPalette {
       return;
     };
 
-    self.trigger_action(action, window, cx);
+    self.trigger_action(
+      CommandPaletteCommandId::OpenGithubFromUrl,
+      action,
+      window,
+      cx,
+    );
   }
 
   fn on_checkout_detached_input_event(
@@ -2028,6 +2241,7 @@ impl CommandPalette {
     };
 
     self.trigger_action(
+      CommandPaletteCommandId::CheckoutDetached,
       CommandPaletteAction::CheckoutDetached { target },
       window,
       cx,
@@ -2053,6 +2267,7 @@ impl CommandPalette {
     };
 
     self.trigger_action(
+      CommandPaletteCommandId::CherryPick,
       CommandPaletteAction::CherryPick { commit_hashes },
       window,
       cx,
@@ -2078,6 +2293,7 @@ impl CommandPalette {
     };
 
     self.trigger_action(
+      CommandPaletteCommandId::InteractiveRebaseHeadCount,
       CommandPaletteAction::InteractiveRebaseHeadCount { count },
       window,
       cx,
@@ -2104,6 +2320,7 @@ impl CommandPalette {
 
     match self.screen {
       CommandPaletteScreen::Stash => self.trigger_action(
+        CommandPaletteCommandId::Stash,
         CommandPaletteAction::Stash {
           include_untracked: false,
           message,
@@ -2112,6 +2329,7 @@ impl CommandPalette {
         cx,
       ),
       CommandPaletteScreen::StashIncludeUntracked => self.trigger_action(
+        CommandPaletteCommandId::StashIncludeUntracked,
         CommandPaletteAction::Stash {
           include_untracked: true,
           message,
@@ -2254,43 +2472,58 @@ impl CommandPalette {
         self.set_screen(CommandPaletteScreen::CheckoutDetached, cx, window);
       }
       CommandPaletteCommandId::Commit => {
-        self.trigger_action(CommandPaletteAction::Commit, window, cx);
+        self.trigger_action(command, CommandPaletteAction::Commit, window, cx);
       }
       CommandPaletteCommandId::ContinueRebase => {
-        self.trigger_action(CommandPaletteAction::ContinueRebase, window, cx);
+        self.trigger_action(command, CommandPaletteAction::ContinueRebase, window, cx);
       }
       CommandPaletteCommandId::SkipRebase => {
-        self.trigger_action(CommandPaletteAction::SkipRebase, window, cx);
+        self.trigger_action(command, CommandPaletteAction::SkipRebase, window, cx);
       }
       CommandPaletteCommandId::Push => {
-        self.trigger_action(CommandPaletteAction::Push, window, cx);
+        self.trigger_action(command, CommandPaletteAction::Push, window, cx);
       }
       CommandPaletteCommandId::ForcePush => {
-        self.trigger_action(CommandPaletteAction::ForcePush, window, cx);
+        self.trigger_action(command, CommandPaletteAction::ForcePush, window, cx);
       }
       CommandPaletteCommandId::UndoLastCommit => {
-        self.trigger_action(CommandPaletteAction::UndoLastCommit, window, cx);
+        self.trigger_action(command, CommandPaletteAction::UndoLastCommit, window, cx);
       }
       CommandPaletteCommandId::Amend => {
-        self.trigger_action(CommandPaletteAction::Amend, window, cx);
+        self.trigger_action(command, CommandPaletteAction::Amend, window, cx);
       }
       CommandPaletteCommandId::StageSelectedFile => {
-        self.trigger_action(CommandPaletteAction::StageSelectedFile, window, cx);
+        self.trigger_action(command, CommandPaletteAction::StageSelectedFile, window, cx);
       }
       CommandPaletteCommandId::UnstageSelectedFile => {
-        self.trigger_action(CommandPaletteAction::UnstageSelectedFile, window, cx);
+        self.trigger_action(
+          command,
+          CommandPaletteAction::UnstageSelectedFile,
+          window,
+          cx,
+        );
       }
       CommandPaletteCommandId::AcceptAllCurrentConflicts => {
-        self.trigger_action(CommandPaletteAction::AcceptAllCurrentConflicts, window, cx);
+        self.trigger_action(
+          command,
+          CommandPaletteAction::AcceptAllCurrentConflicts,
+          window,
+          cx,
+        );
       }
       CommandPaletteCommandId::AcceptAllIncomingConflicts => {
-        self.trigger_action(CommandPaletteAction::AcceptAllIncomingConflicts, window, cx);
+        self.trigger_action(
+          command,
+          CommandPaletteAction::AcceptAllIncomingConflicts,
+          window,
+          cx,
+        );
       }
       CommandPaletteCommandId::MergeBranch => {
         self.set_screen(CommandPaletteScreen::MergeBranch, cx, window);
       }
       CommandPaletteCommandId::AbortMerge => {
-        self.trigger_action(CommandPaletteAction::AbortMerge, window, cx);
+        self.trigger_action(command, CommandPaletteAction::AbortMerge, window, cx);
       }
       CommandPaletteCommandId::RebaseBranch => {
         self.set_screen(CommandPaletteScreen::RebaseBranch, cx, window);
@@ -2317,7 +2550,7 @@ impl CommandPalette {
         self.set_screen(CommandPaletteScreen::InteractiveRebaseHeadCount, cx, window);
       }
       CommandPaletteCommandId::AbortRebase => {
-        self.trigger_action(CommandPaletteAction::AbortRebase, window, cx);
+        self.trigger_action(command, CommandPaletteAction::AbortRebase, window, cx);
       }
       CommandPaletteCommandId::CreateBranch => {
         self.set_screen(CommandPaletteScreen::CreateBranch, cx, window);
@@ -2326,7 +2559,7 @@ impl CommandPalette {
         self.set_screen(CommandPaletteScreen::DeleteBranch, cx, window);
       }
       CommandPaletteCommandId::CreatePullRequest => {
-        self.trigger_action(CommandPaletteAction::CreatePullRequest, window, cx);
+        self.trigger_action(command, CommandPaletteAction::CreatePullRequest, window, cx);
       }
       CommandPaletteCommandId::CherryPick => {
         self.cherry_pick_input.update(cx, |input, cx| {
@@ -2335,16 +2568,16 @@ impl CommandPalette {
         self.set_screen(CommandPaletteScreen::CherryPick, cx, window);
       }
       CommandPaletteCommandId::StageAll => {
-        self.trigger_action(CommandPaletteAction::StageAll, window, cx);
+        self.trigger_action(command, CommandPaletteAction::StageAll, window, cx);
       }
       CommandPaletteCommandId::UnstageAll => {
-        self.trigger_action(CommandPaletteAction::UnstageAll, window, cx);
+        self.trigger_action(command, CommandPaletteAction::UnstageAll, window, cx);
       }
       CommandPaletteCommandId::Pull => {
-        self.trigger_action(CommandPaletteAction::Pull, window, cx);
+        self.trigger_action(command, CommandPaletteAction::Pull, window, cx);
       }
       CommandPaletteCommandId::Fetch => {
-        self.trigger_action(CommandPaletteAction::Fetch, window, cx);
+        self.trigger_action(command, CommandPaletteAction::Fetch, window, cx);
       }
       CommandPaletteCommandId::Stash => {
         self.prepare_stash_input(window, cx);
@@ -2367,24 +2600,34 @@ impl CommandPalette {
         self.set_screen(CommandPaletteScreen::CreateBranchFrom, cx, window);
       }
       CommandPaletteCommandId::OpenRepository => {
-        self.trigger_action(CommandPaletteAction::OpenRepository, window, cx);
+        self.trigger_action(command, CommandPaletteAction::OpenRepository, window, cx);
       }
       CommandPaletteCommandId::OpenGitPage => {
-        self.trigger_action(CommandPaletteAction::OpenGitPage, window, cx);
+        self.trigger_action(command, CommandPaletteAction::OpenGitPage, window, cx);
       }
       CommandPaletteCommandId::OpenGithubPage => {
-        self.trigger_action(CommandPaletteAction::OpenGithubPage, window, cx);
+        self.trigger_action(command, CommandPaletteAction::OpenGithubPage, window, cx);
       }
       CommandPaletteCommandId::CreateGithubRepository => {
-        self.trigger_action(CommandPaletteAction::CreateGithubRepository, window, cx);
+        self.trigger_action(
+          command,
+          CommandPaletteAction::CreateGithubRepository,
+          window,
+          cx,
+        );
       }
       CommandPaletteCommandId::SearchGithubRepository => {
-        self.trigger_action(CommandPaletteAction::SearchGithubRepository, window, cx);
+        self.trigger_action(
+          command,
+          CommandPaletteAction::SearchGithubRepository,
+          window,
+          cx,
+        );
       }
       CommandPaletteCommandId::OpenGithubFromUrl => {
         let query = self.commands_list.read(cx).delegate().query.to_string();
         if let Some(action) = parse_github_url_action(&query) {
-          self.trigger_action(action, window, cx);
+          self.trigger_action(command, action, window, cx);
         } else {
           self.open_github_url_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
@@ -2393,40 +2636,56 @@ impl CommandPalette {
         }
       }
       CommandPaletteCommandId::SwitchToPrBranch => {
-        self.trigger_action(CommandPaletteAction::SwitchToPrBranch, window, cx);
+        self.trigger_action(command, CommandPaletteAction::SwitchToPrBranch, window, cx);
       }
       CommandPaletteCommandId::CopyPrBranch => {
-        self.trigger_action(CommandPaletteAction::CopyPrBranch, window, cx);
+        self.trigger_action(command, CommandPaletteAction::CopyPrBranch, window, cx);
       }
       CommandPaletteCommandId::ToggleUnchangedFiles => {
-        self.trigger_action(CommandPaletteAction::ToggleUnchangedFiles, window, cx);
+        self.trigger_action(
+          command,
+          CommandPaletteAction::ToggleUnchangedFiles,
+          window,
+          cx,
+        );
       }
       CommandPaletteCommandId::OpenGitConfigPage => {
-        self.trigger_action(CommandPaletteAction::OpenGitConfigPage, window, cx);
+        self.trigger_action(command, CommandPaletteAction::OpenGitConfigPage, window, cx);
       }
       CommandPaletteCommandId::OpenSettingsPage => {
-        self.trigger_action(CommandPaletteAction::OpenSettingsPage, window, cx);
+        self.trigger_action(command, CommandPaletteAction::OpenSettingsPage, window, cx);
       }
       CommandPaletteCommandId::OpenBillingPage => {
-        self.trigger_action(CommandPaletteAction::OpenBillingPage, window, cx);
+        self.trigger_action(command, CommandPaletteAction::OpenBillingPage, window, cx);
       }
       CommandPaletteCommandId::OpenAboutPage => {
-        self.trigger_action(CommandPaletteAction::OpenAboutPage, window, cx);
+        self.trigger_action(command, CommandPaletteAction::OpenAboutPage, window, cx);
       }
       CommandPaletteCommandId::SendFeedback => {
-        self.trigger_action(CommandPaletteAction::SendFeedback, window, cx);
+        self.trigger_action(command, CommandPaletteAction::SendFeedback, window, cx);
       }
       CommandPaletteCommandId::OpenGitHistorySidebar => {
-        self.trigger_action(CommandPaletteAction::OpenGitHistorySidebar, window, cx);
+        self.trigger_action(
+          command,
+          CommandPaletteAction::OpenGitHistorySidebar,
+          window,
+          cx,
+        );
       }
       CommandPaletteCommandId::OpenGitChangesSidebar => {
-        self.trigger_action(CommandPaletteAction::OpenGitChangesSidebar, window, cx);
+        self.trigger_action(
+          command,
+          CommandPaletteAction::OpenGitChangesSidebar,
+          window,
+          cx,
+        );
       }
     }
   }
 
   fn trigger_action(
     &mut self,
+    id: CommandPaletteCommandId,
     action: CommandPaletteAction,
     window: &mut Window,
     cx: &mut Context<Self>,
@@ -2436,7 +2695,15 @@ impl CommandPalette {
     };
 
     match handler(action, window, cx) {
-      Ok(()) => window.close_dialog(cx),
+      Ok(()) => {
+        let recorder = cx
+          .try_global::<CommandPaletteUsageRecorderGlobal>()
+          .map(|g| g.0);
+        if let Some(recorder) = recorder {
+          recorder(id, cx);
+        }
+        window.close_dialog(cx);
+      }
       Err(err) => {
         self.error = Some(err);
         cx.notify();
@@ -2832,8 +3099,9 @@ impl Render for CommandPalette {
 mod tests {
   use super::{
     CommandPalette, CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig,
-    CommandPaletteHandler, CommandPaletteInitialScreen,
+    CommandPaletteGroup, CommandPaletteHandler, CommandPaletteInitialScreen,
   };
+  use std::rc::Rc;
   use std::sync::Arc;
 
   #[test]
@@ -3261,5 +3529,143 @@ mod tests {
     assert_eq!(pop_stash.id, CommandPaletteCommandId::PopStash);
     assert!(stash.matches("tracked changes"));
     assert!(apply_stash.matches("without dropping"));
+  }
+
+  #[test]
+  fn command_palette_command_id_string_round_trip() {
+    let all_ids = [
+      CommandPaletteCommandId::SwitchRepository,
+      CommandPaletteCommandId::ForgetRepository,
+      CommandPaletteCommandId::SwitchBranch,
+      CommandPaletteCommandId::CheckoutDetached,
+      CommandPaletteCommandId::Commit,
+      CommandPaletteCommandId::ContinueRebase,
+      CommandPaletteCommandId::SkipRebase,
+      CommandPaletteCommandId::Push,
+      CommandPaletteCommandId::ForcePush,
+      CommandPaletteCommandId::UndoLastCommit,
+      CommandPaletteCommandId::Amend,
+      CommandPaletteCommandId::StageSelectedFile,
+      CommandPaletteCommandId::UnstageSelectedFile,
+      CommandPaletteCommandId::AcceptAllCurrentConflicts,
+      CommandPaletteCommandId::AcceptAllIncomingConflicts,
+      CommandPaletteCommandId::CreateBranch,
+      CommandPaletteCommandId::CreateBranchFrom,
+      CommandPaletteCommandId::DeleteBranch,
+      CommandPaletteCommandId::MergeBranch,
+      CommandPaletteCommandId::AbortMerge,
+      CommandPaletteCommandId::RebaseBranch,
+      CommandPaletteCommandId::InteractiveRebase,
+      CommandPaletteCommandId::InteractiveRebaseOntoBranch,
+      CommandPaletteCommandId::InteractiveRebaseEditBranch,
+      CommandPaletteCommandId::InteractiveRebaseHeadCount,
+      CommandPaletteCommandId::AbortRebase,
+      CommandPaletteCommandId::CreatePullRequest,
+      CommandPaletteCommandId::CherryPick,
+      CommandPaletteCommandId::StageAll,
+      CommandPaletteCommandId::UnstageAll,
+      CommandPaletteCommandId::Pull,
+      CommandPaletteCommandId::Fetch,
+      CommandPaletteCommandId::Stash,
+      CommandPaletteCommandId::StashIncludeUntracked,
+      CommandPaletteCommandId::ApplyStash,
+      CommandPaletteCommandId::DropStash,
+      CommandPaletteCommandId::PopStash,
+      CommandPaletteCommandId::CreateGithubRepository,
+      CommandPaletteCommandId::SearchGithubRepository,
+      CommandPaletteCommandId::OpenRepository,
+      CommandPaletteCommandId::OpenGitPage,
+      CommandPaletteCommandId::OpenGithubPage,
+      CommandPaletteCommandId::OpenGithubFromUrl,
+      CommandPaletteCommandId::SwitchToPrBranch,
+      CommandPaletteCommandId::CopyPrBranch,
+      CommandPaletteCommandId::ToggleUnchangedFiles,
+      CommandPaletteCommandId::OpenGitHistorySidebar,
+      CommandPaletteCommandId::OpenGitChangesSidebar,
+      CommandPaletteCommandId::OpenGitConfigPage,
+      CommandPaletteCommandId::OpenSettingsPage,
+      CommandPaletteCommandId::OpenBillingPage,
+      CommandPaletteCommandId::OpenAboutPage,
+      CommandPaletteCommandId::SendFeedback,
+    ];
+
+    for id in all_ids {
+      let key = id.as_str();
+      assert_eq!(
+        CommandPaletteCommandId::from_str(key),
+        Some(id),
+        "round-trip failed for {:?}",
+        id
+      );
+    }
+
+    let mut keys = all_ids.iter().map(|id| id.as_str()).collect::<Vec<_>>();
+    keys.sort();
+    let len_before_dedup = keys.len();
+    keys.dedup();
+    assert_eq!(keys.len(), len_before_dedup, "duplicate as_str keys");
+
+    assert_eq!(CommandPaletteCommandId::from_str("nonexistent"), None);
+  }
+
+  #[test]
+  fn build_matched_sections_prepends_recent_on_empty_query() {
+    let commit = Rc::new(CommandPaletteCommand::commit());
+    let fetch = Rc::new(CommandPaletteCommand::fetch());
+    let filtered = vec![commit.clone(), fetch];
+    let recent = vec![commit];
+
+    let sections = super::build_matched_sections(&filtered, &recent, "", true);
+    assert_eq!(
+      sections.first().map(|(g, _)| *g),
+      Some(CommandPaletteGroup::Recent)
+    );
+    assert_eq!(
+      sections.first().map(|(_, items)| items.len()),
+      Some(1),
+      "Recent section should contain the one recent command"
+    );
+  }
+
+  #[test]
+  fn build_matched_sections_skips_recent_when_query_non_empty() {
+    let commit = Rc::new(CommandPaletteCommand::commit());
+    let filtered = vec![commit.clone()];
+    let recent = vec![commit];
+
+    let sections = super::build_matched_sections(&filtered, &recent, "commit", true);
+    assert!(
+      !sections
+        .iter()
+        .any(|(g, _)| *g == CommandPaletteGroup::Recent)
+    );
+  }
+
+  #[test]
+  fn build_matched_sections_skips_recent_when_disabled() {
+    let commit = Rc::new(CommandPaletteCommand::commit());
+    let filtered = vec![commit.clone()];
+    let recent = vec![commit];
+
+    let sections = super::build_matched_sections(&filtered, &recent, "", false);
+    assert!(
+      !sections
+        .iter()
+        .any(|(g, _)| *g == CommandPaletteGroup::Recent)
+    );
+  }
+
+  #[test]
+  fn build_matched_sections_skips_recent_when_empty() {
+    let commit = Rc::new(CommandPaletteCommand::commit());
+    let filtered = vec![commit];
+    let recent: Vec<Rc<CommandPaletteCommand>> = Vec::new();
+
+    let sections = super::build_matched_sections(&filtered, &recent, "", true);
+    assert!(
+      !sections
+        .iter()
+        .any(|(g, _)| *g == CommandPaletteGroup::Recent)
+    );
   }
 }
