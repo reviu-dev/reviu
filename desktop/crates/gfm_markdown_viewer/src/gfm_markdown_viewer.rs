@@ -31,7 +31,7 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, avatar::Avatar,
-  clipboard::Clipboard, h_flex, v_flex,
+  clipboard::Clipboard, h_flex, scroll::ScrollableElement, v_flex,
 };
 #[cfg(test)]
 use syntax::TokenType;
@@ -666,9 +666,36 @@ pub fn render_github_diff_code_reference_preview_card(
     )
   };
 
+  let preview_scroll_key = preview_card_scroll_key(preview_hash);
+  let preview_scroll_handle = scrollable_handle(preview_scroll_key);
+  let preview_content = restrict_scroll_to_wheel_axis(
+    div()
+      .id(preview_scroll_id)
+      .w_full()
+      .min_w_0()
+      .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
+      .overflow_scroll(),
+  )
+  .track_scroll(&preview_scroll_handle)
+  .child(render_github_diff_lines(
+    diff_lines,
+    preview.path.as_ref(),
+    snippet_text_seed,
+    MarkdownRenderState::new(),
+    min_preview_content_width_px,
+    cx,
+  ));
+  let preview_scrolled = scroll_chain_guard(
+    preview_content,
+    &preview_scroll_handle,
+    ScrollChainAxes::both(),
+  )
+  .into_any_element();
+
   div()
     .flex()
     .flex_col()
+    .relative()
     .my(px(MARKDOWN_CODE_REFERENCE_CARD_MARGIN_Y_PX))
     .border_1()
     .border_color(theme.border)
@@ -705,33 +732,9 @@ pub fn render_github_diff_code_reference_preview_card(
             ),
         ),
     )
-    .child({
-      let preview_scroll_key = preview_card_scroll_key(preview_hash);
-      let preview_scroll_handle = scrollable_handle(preview_scroll_key);
-      let preview_content = restrict_scroll_to_wheel_axis(
-        div()
-          .id(preview_scroll_id)
-          .w_full()
-          .min_w_0()
-          .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
-          .overflow_scroll(),
-      )
-      .track_scroll(&preview_scroll_handle)
-      .child(render_github_diff_lines(
-        diff_lines,
-        preview.path.as_ref(),
-        snippet_text_seed,
-        MarkdownRenderState::new(),
-        min_preview_content_width_px,
-        cx,
-      ));
-      scroll_chain_guard(
-        preview_content,
-        &preview_scroll_handle,
-        ScrollChainAxes::both(),
-      )
-      .into_any_element()
-    })
+    .child(preview_scrolled)
+    .horizontal_scrollbar(&preview_scroll_handle)
+    .vertical_scrollbar(&preview_scroll_handle)
 }
 
 pub fn render_github_code_reference_preview_card(
@@ -839,9 +842,44 @@ pub fn render_github_code_reference_preview_card(
     }
   }
 
+  let preview_scroll_key = preview_card_scroll_key(preview_hash);
+  let preview_scroll_handle = scrollable_handle(preview_scroll_key);
+  let preview_content = restrict_scroll_to_wheel_axis(
+    div()
+      .id(preview_scroll_id)
+      .w_full()
+      .px(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX))
+      .py(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX))
+      .min_w_0()
+      .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
+      .overflow_scroll(),
+  )
+  .track_scroll(&preview_scroll_handle)
+  .child(
+    div()
+      .min_w(px(min_preview_content_width_px))
+      .whitespace_nowrap()
+      .text_sm()
+      .text_color(theme.foreground)
+      .child(
+        div()
+          .flex()
+          .flex_col()
+          .gap(px(MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX))
+          .child(snippet_rows),
+      ),
+  );
+  let preview_scrolled = scroll_chain_guard(
+    preview_content,
+    &preview_scroll_handle,
+    ScrollChainAxes::both(),
+  )
+  .into_any_element();
+
   div()
     .flex()
     .flex_col()
+    .relative()
     .my(px(MARKDOWN_CODE_REFERENCE_CARD_MARGIN_Y_PX))
     .border_1()
     .border_color(theme.border)
@@ -878,41 +916,9 @@ pub fn render_github_code_reference_preview_card(
             ),
         ),
     )
-    .child({
-      let preview_scroll_key = preview_card_scroll_key(preview_hash);
-      let preview_scroll_handle = scrollable_handle(preview_scroll_key);
-      let preview_content = restrict_scroll_to_wheel_axis(
-        div()
-          .id(preview_scroll_id)
-          .w_full()
-          .px(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX))
-          .py(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX))
-          .min_w_0()
-          .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
-          .overflow_scroll(),
-      )
-      .track_scroll(&preview_scroll_handle)
-      .child(
-        div()
-          .min_w(px(min_preview_content_width_px))
-          .whitespace_nowrap()
-          .text_sm()
-          .text_color(theme.foreground)
-          .child(
-            div()
-              .flex()
-              .flex_col()
-              .gap(px(MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX))
-              .child(snippet_rows),
-          ),
-      );
-      scroll_chain_guard(
-        preview_content,
-        &preview_scroll_handle,
-        ScrollChainAxes::both(),
-      )
-      .into_any_element()
-    })
+    .child(preview_scrolled)
+    .horizontal_scrollbar(&preview_scroll_handle)
+    .vertical_scrollbar(&preview_scroll_handle)
 }
 
 fn code_block_language_hint_from_path(path: &str) -> Option<String> {
@@ -1665,7 +1671,6 @@ fn render_table(
     .id(table_scroll_id)
     .w_full()
     .min_w_0()
-    .overflow_x_scroll()
     .child(
       div()
         .border_1()
@@ -1674,6 +1679,7 @@ fn render_table(
         .overflow_hidden()
         .child(div().flex().flex_col().child(header_row).child(body)),
     )
+    .overflow_x_scrollbar()
     .into_any_element()
 }
 
@@ -2470,7 +2476,8 @@ fn render_code_block(
 
   let scroll_key = code_block_scroll_key(options.state.instance_id, text_id);
   let scroll_handle = scrollable_handle(scroll_key);
-  let scroll_container = if options.expand_code_blocks {
+  let expanded = options.expand_code_blocks;
+  let scroll_container = if expanded {
     let scroll_content = scroll_content
       .overflow_x_scroll()
       .track_scroll(&scroll_handle);
@@ -2490,7 +2497,7 @@ fn render_code_block(
   let copy_value = code_block_copy_value(code);
   let hover_group_id = code_block_hover_group_id(text_id);
 
-  div()
+  let mut wrapper: Div = div()
     .w_full()
     .min_w_0()
     .relative()
@@ -2499,6 +2506,11 @@ fn render_code_block(
     .rounded_md()
     .overflow_hidden()
     .child(scroll_container)
+    .horizontal_scrollbar(&scroll_handle);
+  if !expanded {
+    wrapper = wrapper.vertical_scrollbar(&scroll_handle);
+  }
+  wrapper
     .child(
       div()
         .absolute()
@@ -2628,6 +2640,7 @@ fn render_suggestion_block(
     .rounded_md()
     .child(header)
     .child(scroll_content)
+    .horizontal_scrollbar(&suggestion_scroll_handle)
     .into_any_element()
 }
 
