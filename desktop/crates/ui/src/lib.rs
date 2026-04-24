@@ -27,6 +27,8 @@ pub use command_palette::{
   CommandPaletteBranchKind, CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteGroup, CommandPaletteHandler,
   CommandPaletteInitialScreen, CommandPalettePage, CommandPaletteRepository, CommandPaletteStash,
+  CommandPaletteUsageRecorder, CommandPaletteUsageRecorderGlobal, CommandPaletteUsageScorer,
+  CommandPaletteUsageScorerGlobal,
 };
 pub use confirm_dialog::ConfirmDialog;
 pub use dropdown_select::{
