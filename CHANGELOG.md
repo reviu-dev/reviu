@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.8.0
+
+### Clearer Feedback for Command Palette Actions
+
+Command palette actions now confirm success with a toast, including "Already up to date" for rebase, merge, and pull when there's nothing to do. Errors keep the palette open so you can retry, and commands that don't apply in the current state are hidden.
+
 ## 0.7.0
 
 ### Recent Commands in the Command Palette
