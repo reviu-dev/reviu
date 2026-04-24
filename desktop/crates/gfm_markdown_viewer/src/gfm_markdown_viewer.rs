@@ -25,7 +25,9 @@ pub use crate::types::{
   SuggestionActionContext, SuggestionContext, Table,
 };
 use gpui::{
-  AnyElement, App, CursorStyle, Div, MouseButton, SharedString, Window, div, prelude::*, px,
+  AnyElement, App, Bounds, CursorStyle, DispatchPhase, Div, Element, ElementId, GlobalElementId,
+  Hitbox, HitboxBehavior, InspectorElementId, LayoutId, MouseButton, Pixels, Point,
+  ScrollWheelEvent, SharedString, Stateful, Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, avatar::Avatar,
@@ -704,24 +706,31 @@ pub fn render_github_diff_code_reference_preview_card(
         ),
     )
     .child({
-      let preview_scroll_handle = preview_card_scroll_handle(preview_hash);
-      let preview_is_scrollable = scroll_handle_indicates_scrollable(&preview_scroll_handle);
-      div()
-        .id(preview_scroll_id)
-        .w_full()
-        .min_w_0()
-        .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
-        .overflow_scroll()
-        .track_scroll(&preview_scroll_handle)
-        .when(preview_is_scrollable, |this| this.occlude())
-        .child(render_github_diff_lines(
-          diff_lines,
-          preview.path.as_ref(),
-          snippet_text_seed,
-          MarkdownRenderState::new(),
-          min_preview_content_width_px,
-          cx,
-        ))
+      let preview_scroll_key = preview_card_scroll_key(preview_hash);
+      let preview_scroll_handle = scrollable_handle(preview_scroll_key);
+      let preview_content = restrict_scroll_to_wheel_axis(
+        div()
+          .id(preview_scroll_id)
+          .w_full()
+          .min_w_0()
+          .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
+          .overflow_scroll(),
+      )
+      .track_scroll(&preview_scroll_handle)
+      .child(render_github_diff_lines(
+        diff_lines,
+        preview.path.as_ref(),
+        snippet_text_seed,
+        MarkdownRenderState::new(),
+        min_preview_content_width_px,
+        cx,
+      ));
+      scroll_chain_guard(
+        preview_content,
+        &preview_scroll_handle,
+        ScrollChainAxes::both(),
+      )
+      .into_any_element()
     })
 }
 
@@ -870,32 +879,39 @@ pub fn render_github_code_reference_preview_card(
         ),
     )
     .child({
-      let preview_scroll_handle = preview_card_scroll_handle(preview_hash);
-      let preview_is_scrollable = scroll_handle_indicates_scrollable(&preview_scroll_handle);
-      div()
-        .id(preview_scroll_id)
-        .w_full()
-        .px(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX))
-        .py(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX))
-        .min_w_0()
-        .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
-        .overflow_scroll()
-        .track_scroll(&preview_scroll_handle)
-        .when(preview_is_scrollable, |this| this.occlude())
-        .child(
-          div()
-            .min_w(px(min_preview_content_width_px))
-            .whitespace_nowrap()
-            .text_sm()
-            .text_color(theme.foreground)
-            .child(
-              div()
-                .flex()
-                .flex_col()
-                .gap(px(MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX))
-                .child(snippet_rows),
-            ),
-        )
+      let preview_scroll_key = preview_card_scroll_key(preview_hash);
+      let preview_scroll_handle = scrollable_handle(preview_scroll_key);
+      let preview_content = restrict_scroll_to_wheel_axis(
+        div()
+          .id(preview_scroll_id)
+          .w_full()
+          .px(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX))
+          .py(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX))
+          .min_w_0()
+          .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
+          .overflow_scroll(),
+      )
+      .track_scroll(&preview_scroll_handle)
+      .child(
+        div()
+          .min_w(px(min_preview_content_width_px))
+          .whitespace_nowrap()
+          .text_sm()
+          .text_color(theme.foreground)
+          .child(
+            div()
+              .flex()
+              .flex_col()
+              .gap(px(MARKDOWN_CODE_REFERENCE_CARD_INTERNAL_GAP_PX))
+              .child(snippet_rows),
+          ),
+      );
+      scroll_chain_guard(
+        preview_content,
+        &preview_scroll_handle,
+        ScrollChainAxes::both(),
+      )
+      .into_any_element()
     })
 }
 
@@ -2164,12 +2180,38 @@ fn render_heading_text(
   container.into_any_element()
 }
 
-fn scroll_handle_indicates_scrollable(handle: &gpui::ScrollHandle) -> bool {
-  // Only occlude when the block scrolls vertically. Horizontal-only scroll
-  // (e.g. wide code blocks, suggestion blocks) doesn't conflict with page
-  // scroll, so we let wheel events pass through to the page.
-  handle.max_offset().y > px(0.0)
+#[derive(Clone, Copy)]
+struct ScrollChainAxes {
+  horizontal: bool,
+  vertical: bool,
+  restrict_to_wheel_axis: bool,
 }
+
+impl ScrollChainAxes {
+  fn both() -> Self {
+    Self {
+      horizontal: true,
+      vertical: true,
+      restrict_to_wheel_axis: true,
+    }
+  }
+
+  fn horizontal() -> Self {
+    Self {
+      horizontal: true,
+      vertical: false,
+      restrict_to_wheel_axis: true,
+    }
+  }
+}
+
+#[derive(Clone, Copy)]
+enum ScrollChainAxis {
+  Horizontal,
+  Vertical,
+}
+
+const SCROLL_CHAIN_EDGE_TOLERANCE_PX: f32 = 0.5;
 
 // ScrollHandles hold `Rc<RefCell<_>>` and are !Send, so we cache them in a
 // thread-local. GPUI renders on the main thread; this keeps the handle
@@ -2189,21 +2231,204 @@ fn scrollable_handle(key: u64) -> gpui::ScrollHandle {
   })
 }
 
-fn code_block_scroll_handle(instance_id: usize, text_id: usize) -> gpui::ScrollHandle {
+fn restrict_scroll_to_wheel_axis(mut container: Stateful<Div>) -> Stateful<Div> {
+  container.style().restrict_scroll_to_axis = Some(true);
+  container
+}
+
+fn scroll_chain_guard(
+  child: Stateful<Div>,
+  scroll_handle: &gpui::ScrollHandle,
+  axes: ScrollChainAxes,
+) -> ScrollChainGuard {
+  ScrollChainGuard {
+    child,
+    scroll_handle: scroll_handle.clone(),
+    axes,
+  }
+}
+
+struct ScrollChainGuard {
+  child: Stateful<Div>,
+  scroll_handle: gpui::ScrollHandle,
+  axes: ScrollChainAxes,
+}
+
+impl IntoElement for ScrollChainGuard {
+  type Element = Self;
+
+  fn into_element(self) -> Self::Element {
+    self
+  }
+}
+
+impl Element for ScrollChainGuard {
+  type RequestLayoutState = <Stateful<Div> as Element>::RequestLayoutState;
+  type PrepaintState = (Hitbox, <Stateful<Div> as Element>::PrepaintState);
+
+  fn id(&self) -> Option<ElementId> {
+    <Stateful<Div> as Element>::id(&self.child)
+  }
+
+  fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+    <Stateful<Div> as Element>::source_location(&self.child)
+  }
+
+  fn request_layout(
+    &mut self,
+    id: Option<&GlobalElementId>,
+    inspector_id: Option<&InspectorElementId>,
+    window: &mut Window,
+    cx: &mut App,
+  ) -> (LayoutId, Self::RequestLayoutState) {
+    self.child.request_layout(id, inspector_id, window, cx)
+  }
+
+  fn prepaint(
+    &mut self,
+    id: Option<&GlobalElementId>,
+    inspector_id: Option<&InspectorElementId>,
+    bounds: Bounds<Pixels>,
+    state: &mut Self::RequestLayoutState,
+    window: &mut Window,
+    cx: &mut App,
+  ) -> Self::PrepaintState {
+    let hitbox = window.insert_hitbox(bounds, HitboxBehavior::BlockMouseExceptScroll);
+    let child_state = self
+      .child
+      .prepaint(id, inspector_id, bounds, state, window, cx);
+    (hitbox, child_state)
+  }
+
+  fn paint(
+    &mut self,
+    id: Option<&GlobalElementId>,
+    inspector_id: Option<&InspectorElementId>,
+    bounds: Bounds<Pixels>,
+    request_layout: &mut Self::RequestLayoutState,
+    prepaint: &mut Self::PrepaintState,
+    window: &mut Window,
+    cx: &mut App,
+  ) {
+    let current_view = window.current_view();
+    let hitbox = prepaint.0.clone();
+    let scroll_handle = self.scroll_handle.clone();
+    let axes = self.axes;
+    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+      if phase != DispatchPhase::Capture || !hitbox.should_handle_scroll(window) {
+        return;
+      }
+
+      if scroll_handle_apply_wheel(&scroll_handle, event, window.line_height(), axes) {
+        cx.notify(current_view);
+        cx.stop_propagation();
+      }
+    });
+
+    self.child.paint(
+      id,
+      inspector_id,
+      bounds,
+      request_layout,
+      &mut prepaint.1,
+      window,
+      cx,
+    );
+  }
+}
+
+fn scroll_handle_apply_wheel(
+  scroll_handle: &gpui::ScrollHandle,
+  event: &ScrollWheelEvent,
+  line_height: Pixels,
+  axes: ScrollChainAxes,
+) -> bool {
+  let Some((axis, delta)) = scroll_chain_axis_delta(event.delta.pixel_delta(line_height), axes)
+  else {
+    return false;
+  };
+  let mut offset = scroll_handle.offset();
+  let max_offset = scroll_handle.max_offset();
+
+  match axis {
+    ScrollChainAxis::Horizontal => {
+      let Some(next_x) = scroll_axis_next_offset(offset.x, max_offset.x, delta) else {
+        return false;
+      };
+      offset.x = next_x;
+    }
+    ScrollChainAxis::Vertical => {
+      let Some(next_y) = scroll_axis_next_offset(offset.y, max_offset.y, delta) else {
+        return false;
+      };
+      offset.y = next_y;
+    }
+  }
+
+  scroll_handle.set_offset(offset);
+  true
+}
+
+fn scroll_chain_axis_delta(
+  delta: Point<Pixels>,
+  axes: ScrollChainAxes,
+) -> Option<(ScrollChainAxis, Pixels)> {
+  let mut delta_x = px(0.0);
+  if axes.horizontal {
+    if delta.x != px(0.0) {
+      delta_x = delta.x;
+    } else if !axes.restrict_to_wheel_axis && !axes.vertical {
+      delta_x = delta.y;
+    }
+  }
+
+  let mut delta_y = px(0.0);
+  if axes.vertical {
+    if delta.y != px(0.0) {
+      delta_y = delta.y;
+    } else if !axes.restrict_to_wheel_axis && !axes.horizontal {
+      delta_y = delta.x;
+    }
+  }
+
+  match (delta_x != px(0.0), delta_y != px(0.0)) {
+    (true, true) if delta_x.abs() > delta_y.abs() => Some((ScrollChainAxis::Horizontal, delta_x)),
+    (true, true) => Some((ScrollChainAxis::Vertical, delta_y)),
+    (true, false) => Some((ScrollChainAxis::Horizontal, delta_x)),
+    (false, true) => Some((ScrollChainAxis::Vertical, delta_y)),
+    (false, false) => None,
+  }
+}
+
+fn scroll_axis_next_offset(offset: Pixels, max_offset: Pixels, delta: Pixels) -> Option<Pixels> {
+  let edge_tolerance = px(SCROLL_CHAIN_EDGE_TOLERANCE_PX);
+
+  if max_offset <= edge_tolerance {
+    return None;
+  }
+
+  if delta < px(0.0) {
+    (offset > -max_offset + edge_tolerance).then_some((offset + delta).max(-max_offset))
+  } else if delta > px(0.0) {
+    (offset < -edge_tolerance).then_some((offset + delta).min(px(0.0)))
+  } else {
+    None
+  }
+}
+
+fn code_block_scroll_key(instance_id: usize, text_id: usize) -> u64 {
   // Namespace by combining the markdown instance id with the text id so
   // separate markdown views don't share state.
-  let key = 0x1000_0000_0000_0000_u64 | ((instance_id as u64) << 32) | (text_id as u32 as u64);
-  scrollable_handle(key)
+  0x1000_0000_0000_0000_u64 | ((instance_id as u64) << 32) | (text_id as u32 as u64)
 }
 
-fn suggestion_block_scroll_handle(instance_id: usize, text_id: usize) -> gpui::ScrollHandle {
-  let key = 0x2000_0000_0000_0000_u64 | ((instance_id as u64) << 32) | (text_id as u32 as u64);
-  scrollable_handle(key)
+fn suggestion_block_scroll_key(instance_id: usize, text_id: usize) -> u64 {
+  0x2000_0000_0000_0000_u64 | ((instance_id as u64) << 32) | (text_id as u32 as u64)
 }
 
-fn preview_card_scroll_handle(preview_hash: u64) -> gpui::ScrollHandle {
+fn preview_card_scroll_key(preview_hash: u64) -> u64 {
   // Keep the high bit clear to avoid collisions with the namespaced keys above.
-  scrollable_handle(preview_hash & 0x0fff_ffff_ffff_ffff)
+  preview_hash & 0x0fff_ffff_ffff_ffff
 }
 
 fn render_code_block(
@@ -2226,7 +2451,7 @@ fn render_code_block(
     code_block_selectable_text_options(),
   );
   let scroll_id: SharedString = format!("markdown-code-block-scroll-{text_id}").into();
-  let scroll_content = div().id(scroll_id).w_full().min_w_0().child(
+  let scroll_content = restrict_scroll_to_wheel_axis(div().id(scroll_id).w_full().min_w_0()).child(
     div()
       .min_w(px(min_content_width_px))
       .px(px(MARKDOWN_CODE_BLOCK_PADDING_X_PX))
@@ -2243,21 +2468,24 @@ fn render_code_block(
       ),
   );
 
-  let scroll_handle = code_block_scroll_handle(options.state.instance_id, text_id);
-  let is_scrollable = scroll_handle_indicates_scrollable(&scroll_handle);
+  let scroll_key = code_block_scroll_key(options.state.instance_id, text_id);
+  let scroll_handle = scrollable_handle(scroll_key);
   let scroll_container = if options.expand_code_blocks {
-    scroll_content
+    let scroll_content = scroll_content
       .overflow_x_scroll()
-      .track_scroll(&scroll_handle)
-      .when(is_scrollable, |this| this.occlude())
-      .into_any_element()
+      .track_scroll(&scroll_handle);
+    scroll_chain_guard(
+      scroll_content,
+      &scroll_handle,
+      ScrollChainAxes::horizontal(),
+    )
+    .into_any_element()
   } else {
-    scroll_content
+    let scroll_content = scroll_content
       .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
       .overflow_scroll()
-      .track_scroll(&scroll_handle)
-      .when(is_scrollable, |this| this.occlude())
-      .into_any_element()
+      .track_scroll(&scroll_handle);
+    scroll_chain_guard(scroll_content, &scroll_handle, ScrollChainAxes::both()).into_any_element()
   };
   let copy_value = code_block_copy_value(code);
   let hover_group_id = code_block_hover_group_id(text_id);
@@ -2370,24 +2598,25 @@ fn render_suggestion_block(
         .child(Clipboard::new(("markdown-suggestion-copy", old_text_id)).value(copy_value)),
     );
 
-  let suggestion_scroll_handle =
-    suggestion_block_scroll_handle(options.state.instance_id, old_text_id);
-  let suggestion_is_scrollable = scroll_handle_indicates_scrollable(&suggestion_scroll_handle);
-  let scroll_content = div()
-    .id(scroll_id)
-    .w_full()
-    .min_w_0()
-    .overflow_x_scroll()
-    .track_scroll(&suggestion_scroll_handle)
-    .when(suggestion_is_scrollable, |this| this.occlude())
-    .child(render_github_diff_lines(
-      &diff_lines,
-      suggestion_ctx.path.as_ref(),
-      old_text_id,
-      options.state.clone(),
-      min_content_width_px,
-      cx,
-    ));
+  let suggestion_scroll_key = suggestion_block_scroll_key(options.state.instance_id, old_text_id);
+  let suggestion_scroll_handle = scrollable_handle(suggestion_scroll_key);
+  let scroll_content =
+    restrict_scroll_to_wheel_axis(div().id(scroll_id).w_full().min_w_0().overflow_x_scroll())
+      .track_scroll(&suggestion_scroll_handle)
+      .child(render_github_diff_lines(
+        &diff_lines,
+        suggestion_ctx.path.as_ref(),
+        old_text_id,
+        options.state.clone(),
+        min_content_width_px,
+        cx,
+      ));
+  let scroll_content = scroll_chain_guard(
+    scroll_content,
+    &suggestion_scroll_handle,
+    ScrollChainAxes::horizontal(),
+  )
+  .into_any_element();
 
   div()
     .w_full()
