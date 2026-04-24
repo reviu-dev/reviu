@@ -45,6 +45,7 @@ use gpui_component::{
   menu::{DropdownMenu as _, PopupMenuItem},
   notification::Notification,
   radio::{Radio, RadioGroup},
+  scroll::ScrollableElement,
   skeleton::Skeleton,
   spinner::Spinner,
   switch::Switch,
@@ -15136,9 +15137,11 @@ impl Render for GithubPrDetailsPage {
 
     let overview_content = div()
       .id("overview-tab")
+      .relative()
       .flex_1()
       .min_h_0()
       .child(overview_inner)
+      .vertical_scrollbar(&self.overview_list)
       .into_any_element();
 
     let changes_content = div()
