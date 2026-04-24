@@ -8101,11 +8101,12 @@ impl GitPage {
           }),
       );
 
+    let show_save_button = !is_history_commit_file && !editor_state.is_read_only;
     let save_button = Button::new("editor-save")
       .label("Save")
       .xsmall()
       .ghost()
-      .disabled(!file_dirty || is_history_commit_file || editor_state.is_read_only)
+      .disabled(!file_dirty)
       .on_click(move |_, _, cx| {
         editor_entity.update(cx, |editor, cx| editor.save(cx));
       });
@@ -8304,7 +8305,7 @@ impl GitPage {
               .child(accept_all_current_button)
               .child(accept_all_incoming_button)
           })
-          .child(save_button)
+          .when(show_save_button, |this| this.child(save_button))
           .when(is_markdown || is_svg, |this| this.child(preview_button))
           .when(show_whitespace_button, |this| this.child(whitespace_button))
           .child(toggle_button),
