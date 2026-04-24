@@ -13,17 +13,17 @@ use editor::{
 use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
   HistoryCommitNode, HistoryRevision, InteractiveRebaseTarget, InteractiveRebaseTodoEntry,
-  RepoStage, RepoStatusEntry, RepoStatusKind, abort_merge, abort_rebase, amend_commit, apply_stash,
-  branch_has_unpublished_commits, checkout_detached_target, cherry_pick_commits, commit_changes,
-  continue_rebase, create_branch, create_branch_from, create_stash, current_branch_status,
-  current_github_remote_repo, current_head_sha, current_history_revision,
-  current_rebase_commit_message, default_stash_message, delete_branch, delete_untracked_file,
-  detached_head_label, diff_set_from_patch, drop_stash, fetch, head_commit_status,
-  is_merge_in_progress, is_rebase_in_progress, list_branches, list_commit_changed_files,
-  list_commit_history, list_interactive_rebase_commits, list_repo_status, list_stashes,
-  load_commit_file_diff, merge_branch, pop_stash, pull, push, rebase_branch, resolve_branch_ref,
-  restore_file, skip_rebase, stage_all, stage_file, start_interactive_rebase, switch_branch,
-  undo_last_commit, unstage_all, unstage_file,
+  RebaseBranchOutcome, RepoStage, RepoStatusEntry, RepoStatusKind, abort_merge, abort_rebase,
+  amend_commit, apply_stash, branch_has_unpublished_commits, checkout_detached_target,
+  cherry_pick_commits, commit_changes, continue_rebase, create_branch, create_branch_from,
+  create_stash, current_branch_status, current_github_remote_repo, current_head_sha,
+  current_history_revision, current_rebase_commit_message, default_stash_message, delete_branch,
+  delete_untracked_file, detached_head_label, diff_set_from_patch, drop_stash, fetch,
+  head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
+  list_commit_changed_files, list_commit_history, list_interactive_rebase_commits,
+  list_repo_status, list_stashes, load_commit_file_diff, merge_branch, pop_stash, pull, push,
+  rebase_branch, resolve_branch_ref, restore_file, skip_rebase, stage_all, stage_file,
+  start_interactive_rebase, switch_branch, undo_last_commit, unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global, Image,
@@ -4884,11 +4884,26 @@ impl GitPage {
         start_data.insert("target_branch".into(), branch_ref.name.clone().into());
         self.add_git_breadcrumb("Rebase started", start_data);
         match rebase_branch(&root_path, &branch_ref) {
-          Ok(()) => {
-            self.force_push_after_rebase = true;
+          Ok(outcome) => {
             let mut data = Map::new();
             data.insert("target_branch".into(), branch_ref.name.clone().into());
-            self.add_git_breadcrumb("Rebase succeeded", data);
+            match outcome {
+              RebaseBranchOutcome::AlreadyUpToDate => {
+                self.add_git_breadcrumb("Rebase already up to date", data);
+                window.push_notification(
+                  Notification::info(format!("Already up to date with {}", branch_ref.name)),
+                  cx,
+                );
+              }
+              RebaseBranchOutcome::Rebased => {
+                self.force_push_after_rebase = true;
+                self.add_git_breadcrumb("Rebase succeeded", data);
+                window.push_notification(
+                  Notification::success(format!("Rebased onto {}", branch_ref.name)),
+                  cx,
+                );
+              }
+            }
             Ok(())
           }
           Err(err) => {
