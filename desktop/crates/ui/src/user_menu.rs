@@ -113,16 +113,6 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
               );
             }
 
-            if current_page != UserMenuPage::About
-              && let Some(handler) = on_open_about.clone()
-            {
-              menu = menu.item(PopupMenuItem::new("About").icon(UiIconName::Info).on_click(
-                move |_, window, cx| {
-                  handler(window, cx);
-                },
-              ));
-            }
-
             if let Some(handler) = on_open_browser_extensions.clone() {
               menu = menu.item(
                 PopupMenuItem::new("Browser extension")
@@ -133,6 +123,15 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
               );
             }
 
+            if current_page != UserMenuPage::About
+              && let Some(handler) = on_open_about.clone()
+            {
+              menu = menu.item(PopupMenuItem::new("About").icon(UiIconName::Info).on_click(
+                move |_, window, cx| {
+                  handler(window, cx);
+                },
+              ));
+            }
             menu
           })
           .into_any_element(),
@@ -233,16 +232,6 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
               );
             }
 
-            if current_page != UserMenuPage::About
-              && let Some(handler) = on_open_about.clone()
-            {
-              menu = menu.item(PopupMenuItem::new("About").icon(UiIconName::Info).on_click(
-                move |_, window, cx| {
-                  handler(window, cx);
-                },
-              ));
-            }
-
             if let Some(handler) = on_open_browser_extensions.clone() {
               menu = menu.item(
                 PopupMenuItem::new("Browser extension")
@@ -251,6 +240,16 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
                     handler(window, cx);
                   }),
               );
+            }
+
+            if current_page != UserMenuPage::About
+              && let Some(handler) = on_open_about.clone()
+            {
+              menu = menu.item(PopupMenuItem::new("About").icon(UiIconName::Info).on_click(
+                move |_, window, cx| {
+                  handler(window, cx);
+                },
+              ));
             }
 
             if let Some(handler) = on_sign_out.clone() {
