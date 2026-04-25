@@ -223,8 +223,6 @@ pub enum CommandPaletteAction {
   SwitchToPrBranch,
   CopyPrBranch,
   ToggleUnchangedFiles,
-  OpenGitHistorySidebar,
-  OpenGitChangesSidebar,
   OpenGitConfigPage,
   OpenSettingsPage,
   OpenBillingPage,
@@ -821,8 +819,6 @@ pub enum CommandPaletteCommandId {
   SwitchToPrBranch,
   CopyPrBranch,
   ToggleUnchangedFiles,
-  OpenGitHistorySidebar,
-  OpenGitChangesSidebar,
   OpenGitConfigPage,
   OpenSettingsPage,
   OpenBillingPage,
@@ -879,8 +875,6 @@ impl CommandPaletteCommandId {
       Self::SwitchToPrBranch => "switch_to_pr_branch",
       Self::CopyPrBranch => "copy_pr_branch",
       Self::ToggleUnchangedFiles => "toggle_unchanged_files",
-      Self::OpenGitHistorySidebar => "open_git_history_sidebar",
-      Self::OpenGitChangesSidebar => "open_git_changes_sidebar",
       Self::OpenGitConfigPage => "open_git_config_page",
       Self::OpenSettingsPage => "open_settings_page",
       Self::OpenBillingPage => "open_billing_page",
@@ -937,8 +931,6 @@ impl CommandPaletteCommandId {
       "switch_to_pr_branch" => Some(Self::SwitchToPrBranch),
       "copy_pr_branch" => Some(Self::CopyPrBranch),
       "toggle_unchanged_files" => Some(Self::ToggleUnchangedFiles),
-      "open_git_history_sidebar" => Some(Self::OpenGitHistorySidebar),
-      "open_git_changes_sidebar" => Some(Self::OpenGitChangesSidebar),
       "open_git_config_page" => Some(Self::OpenGitConfigPage),
       "open_settings_page" => Some(Self::OpenSettingsPage),
       "open_billing_page" => Some(Self::OpenBillingPage),
@@ -1381,22 +1373,6 @@ impl CommandPaletteCommand {
     }
   }
 
-  pub fn open_git_history_sidebar() -> Self {
-    Self {
-      id: CommandPaletteCommandId::OpenGitHistorySidebar,
-      name: "Open History in sidebar".into(),
-      description: Some("Switch Git sidebar to History".into()),
-    }
-  }
-
-  pub fn open_git_changes_sidebar() -> Self {
-    Self {
-      id: CommandPaletteCommandId::OpenGitChangesSidebar,
-      name: "Open Changes in sidebar".into(),
-      description: Some("Switch Git sidebar to Changes".into()),
-    }
-  }
-
   pub fn open_settings_page() -> Self {
     Self {
       id: CommandPaletteCommandId::OpenSettingsPage,
@@ -1473,11 +1449,6 @@ impl CommandPaletteCommand {
       commands.push(Self::open_about_page());
     }
 
-    if current_page == CommandPalettePage::Git {
-      commands.push(Self::open_git_history_sidebar());
-      commands.push(Self::open_git_changes_sidebar());
-    }
-
     commands.push(Self::send_feedback());
 
     commands
@@ -1542,9 +1513,7 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::OpenGitConfigPage
       | CommandPaletteCommandId::OpenSettingsPage
       | CommandPaletteCommandId::OpenBillingPage
-      | CommandPaletteCommandId::OpenAboutPage
-      | CommandPaletteCommandId::OpenGitHistorySidebar
-      | CommandPaletteCommandId::OpenGitChangesSidebar => CommandPaletteGroup::Navigation,
+      | CommandPaletteCommandId::OpenAboutPage => CommandPaletteGroup::Navigation,
 
       CommandPaletteCommandId::SendFeedback => CommandPaletteGroup::Feedback,
     }
@@ -1601,8 +1570,6 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::SwitchToPrBranch => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::CopyPrBranch => Icon::new(IconName::Copy),
       CommandPaletteCommandId::ToggleUnchangedFiles => Icon::new(UiIconName::ScanEye),
-      CommandPaletteCommandId::OpenGitHistorySidebar => Icon::new(UiIconName::History),
-      CommandPaletteCommandId::OpenGitChangesSidebar => Icon::new(UiIconName::FileCode),
       CommandPaletteCommandId::OpenGitConfigPage => Self::git_config_icon(),
       CommandPaletteCommandId::OpenSettingsPage => Icon::new(IconName::Settings2),
       CommandPaletteCommandId::OpenBillingPage => Icon::new(UiIconName::CreditCard),
@@ -2672,22 +2639,6 @@ impl CommandPalette {
       CommandPaletteCommandId::SendFeedback => {
         self.trigger_action(command, CommandPaletteAction::SendFeedback, window, cx);
       }
-      CommandPaletteCommandId::OpenGitHistorySidebar => {
-        self.trigger_action(
-          command,
-          CommandPaletteAction::OpenGitHistorySidebar,
-          window,
-          cx,
-        );
-      }
-      CommandPaletteCommandId::OpenGitChangesSidebar => {
-        self.trigger_action(
-          command,
-          CommandPaletteAction::OpenGitChangesSidebar,
-          window,
-          cx,
-        );
-      }
     }
   }
 
@@ -3537,8 +3488,6 @@ mod tests {
       CommandPaletteCommandId::SwitchToPrBranch,
       CommandPaletteCommandId::CopyPrBranch,
       CommandPaletteCommandId::ToggleUnchangedFiles,
-      CommandPaletteCommandId::OpenGitHistorySidebar,
-      CommandPaletteCommandId::OpenGitChangesSidebar,
       CommandPaletteCommandId::OpenGitConfigPage,
       CommandPaletteCommandId::OpenSettingsPage,
       CommandPaletteCommandId::OpenBillingPage,

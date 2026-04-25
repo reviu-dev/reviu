@@ -4624,14 +4624,6 @@ impl GitPage {
         crate::github_search_dialog::open_github_search_dialog(api, window, cx);
         Ok(())
       }
-      CommandPaletteAction::OpenGitHistorySidebar => {
-        self.set_sidebar_mode(GitSidebarMode::History, window, cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenGitChangesSidebar => {
-        self.set_sidebar_mode(GitSidebarMode::Changes, window, cx);
-        Ok(())
-      }
       CommandPaletteAction::CheckoutDetached { target } => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
@@ -14095,8 +14087,6 @@ mod tests {
           | CommandPaletteCommandId::OpenGitPage
           | CommandPaletteCommandId::OpenGithubPage
           | CommandPaletteCommandId::OpenGithubFromUrl
-          | CommandPaletteCommandId::OpenGitHistorySidebar
-          | CommandPaletteCommandId::OpenGitChangesSidebar
           | CommandPaletteCommandId::OpenGitConfigPage
           | CommandPaletteCommandId::OpenSettingsPage
           | CommandPaletteCommandId::OpenBillingPage

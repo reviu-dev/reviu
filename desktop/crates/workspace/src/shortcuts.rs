@@ -500,8 +500,8 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 27] = [
   },
   ShortcutDefinition {
     id: ShortcutId::OpenGitHistorySidebar,
-    title: "Open History Sidebar",
-    description: "Open the Git history sidebar.",
+    title: "Focus History Tree",
+    description: "Switch the Git sidebar to History and focus the commit tree.",
     scope_label: "Git page",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-shift-h",
@@ -511,8 +511,8 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 27] = [
   },
   ShortcutDefinition {
     id: ShortcutId::OpenGitChangesSidebar,
-    title: "Open Changes Sidebar",
-    description: "Open the Git changes sidebar.",
+    title: "Focus Changes List",
+    description: "Switch the Git sidebar to Changes and focus the file list.",
     scope_label: "Git page",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-shift-e",
