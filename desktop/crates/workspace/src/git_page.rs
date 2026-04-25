@@ -1650,6 +1650,7 @@ pub struct GitPage {
   history_rows_cache: Vec<HistoryRenderRow>,
   history_tree_nodes: HashMap<String, HistoryTreeNode>,
   selected_file: Option<PathBuf>,
+  selected_file_index_hint: Option<IndexPath>,
   select_first_file_after_restore: bool,
   force_list_selection: bool,
   editor: Option<Entity<Editor>>,
@@ -2539,11 +2540,14 @@ impl GitPage {
 
   fn selected_file_index(&self, cx: &Context<Self>) -> Option<IndexPath> {
     let selected = self.selected_file.as_ref()?;
-    self
-      .file_list
-      .read(cx)
-      .delegate()
-      .find_index_for_path(selected)
+    let delegate = self.file_list.read(cx).delegate();
+    if let Some(hint) = self.selected_file_index_hint
+      && let Some(row) = delegate.row_at(hint)
+      && row.entry.path == *selected
+    {
+      return Some(hint);
+    }
+    delegate.find_index_for_path(selected)
   }
 
   fn set_file_list_selected_index(&self, index: Option<IndexPath>, cx: &mut Context<Self>) {
@@ -2875,6 +2879,7 @@ impl GitPage {
       history_rows_cache: Vec::new(),
       history_tree_nodes: HashMap::new(),
       selected_file: None,
+      selected_file_index_hint: None,
       select_first_file_after_restore: false,
       force_list_selection: false,
       editor: None,
@@ -2978,6 +2983,7 @@ impl GitPage {
       history_rows_cache: Vec::new(),
       history_tree_nodes: HashMap::new(),
       selected_file: None,
+      selected_file_index_hint: None,
       select_first_file_after_restore: false,
       force_list_selection: false,
       editor: None,
@@ -3326,6 +3332,7 @@ impl GitPage {
         ListEvent::Select(ix) | ListEvent::Confirm(ix) => {
           let row = state.read(cx).delegate().row_at(*ix);
           if let Some(row) = row {
+            this.selected_file_index_hint = Some(*ix);
             this.open_file(row.entry.path.clone(), cx);
           }
         }
