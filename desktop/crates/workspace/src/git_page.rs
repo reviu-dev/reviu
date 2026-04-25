@@ -1265,6 +1265,7 @@ impl ListDelegate for GitFileListDelegate {
                     Button::new(format!("stage-{}", ix.row))
                       .icon(toggle_stage_icon)
                       .xsmall()
+                      .tab_stop(false)
                       .tooltip(toggle_stage_tooltip)
                       .on_click({
                         let rel_path = rel_path.clone();
@@ -1291,6 +1292,7 @@ impl ListDelegate for GitFileListDelegate {
                       Button::new(format!("restore-{}", ix.row))
                         .icon(IconName::Undo)
                         .xsmall()
+                        .tab_stop(false)
                         .tooltip("Discard changes")
                         .on_click({
                           let rel_path = rel_path.clone();
@@ -2827,6 +2829,7 @@ impl GitPage {
     let git_page_weak = cx.entity().downgrade();
     let file_list =
       cx.new(|cx| ListState::new(GitFileListDelegate::new(git_page_weak), window, cx));
+    let _ = file_list.read(cx).focus_handle(cx).tab_stop(true);
     let history_tree = cx.new(|cx| TreeState::new(cx));
 
     let commit_input = cx.new(|cx| {
@@ -2932,6 +2935,7 @@ impl GitPage {
     let git_page_weak = cx.entity().downgrade();
     let file_list =
       cx.new(|cx| ListState::new(GitFileListDelegate::new(git_page_weak), window, cx));
+    let _ = file_list.read(cx).focus_handle(cx).tab_stop(true);
     let history_tree = cx.new(|cx| TreeState::new(cx));
     let commit_input = cx.new(|cx| {
       InputState::new(window, cx)
@@ -5249,6 +5253,92 @@ impl GitPage {
     cx: &mut Context<Self>,
   ) {
     self.navigate_annotation_in_editor(AnnotationDirection::Next, cx);
+    cx.stop_propagation();
+  }
+
+  fn toggle_hunk_stage_action(
+    &mut self,
+    _: &crate::ToggleHunkStage,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+    editor.update(cx, |editor, cx| {
+      let Some(group_id) = editor.active_hunk_group_id(cx) else {
+        return;
+      };
+      let Some(state) = editor
+        .projection()
+        .and_then(|p| p.groups.get(&group_id))
+        .map(|g| g.state)
+      else {
+        return;
+      };
+      let action = match state {
+        HunkState::Unstaged => HunkAction::Stage,
+        HunkState::Staged => HunkAction::Unstage,
+      };
+      editor.enqueue_group_action(group_id, action, cx);
+    });
+    cx.stop_propagation();
+  }
+
+  fn restore_hunk_action(
+    &mut self,
+    _: &crate::RestoreHunk,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+    editor.update(cx, |editor, cx| {
+      let Some(group_id) = editor.active_hunk_group_id(cx) else {
+        return;
+      };
+      editor.enqueue_group_action(group_id, HunkAction::Restore, cx);
+    });
+    cx.stop_propagation();
+  }
+
+  fn toggle_file_stage_action(
+    &mut self,
+    _: &crate::ToggleFileStage,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.selected_repo.is_none() {
+      return;
+    }
+    let Some(entry) = self.selected_file_entry().cloned() else {
+      return;
+    };
+    if Self::selected_file_can_unstage(entry.stage) {
+      self.unstage_file_action(entry.path, cx);
+    } else {
+      self.stage_file_click_action(window, entry.path, entry.status, cx);
+    }
+    cx.stop_propagation();
+  }
+
+  fn restore_file_shortcut_action(
+    &mut self,
+    _: &crate::RestoreFile,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.selected_repo.is_none() {
+      return;
+    }
+    let Some(entry) = self.selected_file_entry().cloned() else {
+      return;
+    };
+    if !Self::can_restore_file_stage(entry.stage) {
+      return;
+    }
+    self.confirm_restore_file_action(window, entry.path, entry.old_path, entry.status, cx);
     cx.stop_propagation();
   }
 
@@ -8774,7 +8864,13 @@ impl GitPage {
             .title("Operation failed"),
         )
       })
-      .child(div().w_full().min_w_0().child(Input::new(&input).w_full()))
+      .child(
+        div()
+          .w_full()
+          .min_w_0()
+          .key_context("CommitInput")
+          .child(Input::new(&input).w_full()),
+      )
       .child(
         div()
           .w_full()
@@ -8941,6 +9037,7 @@ impl GitPage {
         .into_any_element();
     }
 
+    let file_list_focused = self.file_list.read(cx).focus_handle(cx).is_focused(window);
     let list_container = div()
       .id("git-sidebar-file-list-container")
       .relative()
@@ -8953,7 +9050,19 @@ impl GitPage {
           .w_full()
           .min_h_0()
           .p(px(6.)),
-      );
+      )
+      .when(file_list_focused, |this| {
+        this.child(
+          div()
+            .absolute()
+            .top_0()
+            .right_0()
+            .bottom_0()
+            .left_0()
+            .border_2()
+            .border_color(cx.theme().ring.alpha(0.5)),
+        )
+      });
 
     base_sidebar
       .relative()
@@ -9195,6 +9304,10 @@ impl Render for GitPage {
       .on_action(cx.listener(GitPage::toggle_diff_view_action))
       .on_action(cx.listener(GitPage::previous_annotation_action))
       .on_action(cx.listener(GitPage::next_annotation_action))
+      .on_action(cx.listener(GitPage::toggle_hunk_stage_action))
+      .on_action(cx.listener(GitPage::restore_hunk_action))
+      .on_action(cx.listener(GitPage::toggle_file_stage_action))
+      .on_action(cx.listener(GitPage::restore_file_shortcut_action))
       .child(self.render_header(window, cx))
       .child(content)
   }

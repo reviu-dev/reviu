@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.8.0
 
+### Keyboard Navigation on the Git Page
+
+The focused hunk is highlighted with a blue gutter and border so you can see where you are while stepping through changes. Tab now cycles through the file list, and dedicated shortcuts act on the focused hunk or selected file: Shift-Enter and Shift-Backspace stage or restore the hunk, Cmd-Enter and Cmd-Backspace stage or restore the whole file.
+
 ### Skipped Checks in Pull Request Overview
 
 Skipped GitHub checks now appear separately from successful ones, with their own gray slice in the overview ring and count in the summary. Each row shows its status and duration, and jobs are prefixed with the workflow name.

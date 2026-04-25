@@ -306,6 +306,15 @@ impl Theme {
       a: 1.0,
     }
   }
+
+  pub fn hunk_focused_border(&self) -> Hsla {
+    Hsla {
+      h: 210.0 / 360.0,
+      s: 1.0,
+      l: 0.5,
+      a: 1.0,
+    }
+  }
 }
 
 impl Default for Theme {

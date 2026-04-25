@@ -19,8 +19,9 @@ use crate::{
   CloseWorkspacePage, CommitChanges, ForcePushChanges, NavigateBack, NextAnnotation, NextPageTab,
   OpenGitChangesSidebar, OpenGitHistorySidebar, OpenGitPage, OpenGithubPage, OpenRepository,
   OpenSettingsPage, PreviousAnnotation, PreviousPageTab, PullChanges, PushChanges,
-  RefreshCurrentPage, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch, SwitchToPrBranch,
-  ToggleDiffView, ToggleTerminalSidebar,
+  RefreshCurrentPage, RestoreFile, RestoreHunk, ShowBranchSwitcher, ShowCommandPalette,
+  ShowFileSearch, SwitchToPrBranch, ToggleDiffView, ToggleFileStage, ToggleHunkStage,
+  ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -49,6 +50,7 @@ const FILE_SEARCH_CONTEXT: &str =
   "WorkspaceGit || WorkspaceGithubRepoCode || WorkspaceGithubPrChanges";
 const OPEN_REPOSITORY_CONTEXT: &str = "WorkspaceGit";
 const COMMIT_CHANGES_CONTEXT: &str = "WorkspaceGit";
+const COMMIT_CHANGES_DESCENDANT_FOCUS: &str = "CommitInput";
 const PULL_CHANGES_CONTEXT: &str = "WorkspaceGit";
 const PUSH_CHANGES_CONTEXT: &str = "WorkspaceGit";
 const FORCE_PUSH_CHANGES_CONTEXT: &str = "WorkspaceGit";
@@ -66,6 +68,8 @@ const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
 const TOGGLE_DIFF_VIEW_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
 const SWITCH_TO_PR_BRANCH_CONTEXT: &str = "WorkspaceGithubPr || WorkspaceGithubPrChanges";
 const REVIEW_ANNOTATION_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
+const HUNK_ACTION_CONTEXT: &str = "WorkspaceGit";
+const HUNK_ACTION_DESCENDANT_FOCUS: &str = "List || Editor";
 const PAGE_TAB_CONTEXT: &str =
   "WorkspaceGithubRepo || WorkspaceGithubRepoCode || WorkspaceGithubPr || WorkspaceGithubPrChanges";
 
@@ -144,6 +148,10 @@ pub enum ShortcutId {
   SwitchToPrBranch,
   PreviousAnnotation,
   NextAnnotation,
+  ToggleHunkStage,
+  RestoreHunk,
+  ToggleFileStage,
+  RestoreFile,
   PreviousPageTab,
   NextPageTab,
 }
@@ -172,6 +180,10 @@ impl ShortcutId {
       ShortcutId::SwitchToPrBranch => "switch_to_pr_branch",
       ShortcutId::PreviousAnnotation => "previous_annotation",
       ShortcutId::NextAnnotation => "next_annotation",
+      ShortcutId::ToggleHunkStage => "toggle_hunk_stage",
+      ShortcutId::RestoreHunk => "restore_hunk",
+      ShortcutId::ToggleFileStage => "toggle_file_stage",
+      ShortcutId::RestoreFile => "restore_file",
       ShortcutId::PreviousPageTab => "previous_page_tab",
       ShortcutId::NextPageTab => "next_page_tab",
     }
@@ -200,6 +212,10 @@ impl ShortcutId {
       "switch_to_pr_branch" => Some(ShortcutId::SwitchToPrBranch),
       "previous_annotation" => Some(ShortcutId::PreviousAnnotation),
       "next_annotation" => Some(ShortcutId::NextAnnotation),
+      "toggle_hunk_stage" => Some(ShortcutId::ToggleHunkStage),
+      "restore_hunk" => Some(ShortcutId::RestoreHunk),
+      "toggle_file_stage" => Some(ShortcutId::ToggleFileStage),
+      "restore_file" => Some(ShortcutId::RestoreFile),
       "previous_page_tab" => Some(ShortcutId::PreviousPageTab),
       "next_page_tab" => Some(ShortcutId::NextPageTab),
       _ => None,
@@ -228,7 +244,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 23] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 27] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -316,6 +332,50 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 23] = [
     context: REVIEW_ANNOTATION_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
     active_contexts: &GIT_AND_PR_CHANGES_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ToggleHunkStage,
+    title: "Stage / Unstage Hunk",
+    description: "Stage the focused hunk, or unstage it if already staged.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "shift-enter",
+    context: HUNK_ACTION_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::RestoreHunk,
+    title: "Restore Hunk",
+    description: "Discard the focused hunk and restore the file to its previous state.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "shift-backspace",
+    context: HUNK_ACTION_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ToggleFileStage,
+    title: "Stage / Unstage File",
+    description: "Stage the selected file, or unstage it if already staged.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-enter",
+    context: HUNK_ACTION_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::RestoreFile,
+    title: "Restore File",
+    description: "Discard all changes in the selected file.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-backspace",
+    context: HUNK_ACTION_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::PreviousPageTab,
@@ -737,7 +797,19 @@ const RESERVED_APP_BINDINGS: [ReservedAppBinding; 39] = [
 
 impl ShortcutDefinition {
   fn key_binding_with_keystroke(self, keystroke: &str, generation: u32) -> KeyBinding {
-    let context = shortcut_binding_context(&guarded_shortcut_context(self.context), generation);
+    let base = shortcut_binding_context(&guarded_shortcut_context(self.context), generation);
+    let context = match self.id {
+      ShortcutId::ToggleHunkStage
+      | ShortcutId::RestoreHunk
+      | ShortcutId::ToggleFileStage
+      | ShortcutId::RestoreFile => {
+        format!("({}) > ({})", base, HUNK_ACTION_DESCENDANT_FOCUS)
+      }
+      ShortcutId::CommitChanges => {
+        format!("({}) > ({})", base, COMMIT_CHANGES_DESCENDANT_FOCUS)
+      }
+      _ => base,
+    };
 
     match self.id {
       ShortcutId::ShowCommandPalette => {
@@ -777,6 +849,10 @@ impl ShortcutDefinition {
         KeyBinding::new(keystroke, PreviousAnnotation, Some(&context))
       }
       ShortcutId::NextAnnotation => KeyBinding::new(keystroke, NextAnnotation, Some(&context)),
+      ShortcutId::ToggleHunkStage => KeyBinding::new(keystroke, ToggleHunkStage, Some(&context)),
+      ShortcutId::RestoreHunk => KeyBinding::new(keystroke, RestoreHunk, Some(&context)),
+      ShortcutId::ToggleFileStage => KeyBinding::new(keystroke, ToggleFileStage, Some(&context)),
+      ShortcutId::RestoreFile => KeyBinding::new(keystroke, RestoreFile, Some(&context)),
       ShortcutId::PreviousPageTab => KeyBinding::new(keystroke, PreviousPageTab, Some(&context)),
       ShortcutId::NextPageTab => KeyBinding::new(keystroke, NextPageTab, Some(&context)),
     }
@@ -1136,6 +1212,10 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::SwitchToPrBranch => f(&SwitchToPrBranch),
     ShortcutId::PreviousAnnotation => f(&PreviousAnnotation),
     ShortcutId::NextAnnotation => f(&NextAnnotation),
+    ShortcutId::ToggleHunkStage => f(&ToggleHunkStage),
+    ShortcutId::RestoreHunk => f(&RestoreHunk),
+    ShortcutId::ToggleFileStage => f(&ToggleFileStage),
+    ShortcutId::RestoreFile => f(&RestoreFile),
     ShortcutId::PreviousPageTab => f(&PreviousPageTab),
     ShortcutId::NextPageTab => f(&NextPageTab),
   }
@@ -1303,12 +1383,22 @@ mod tests {
   #[test]
   fn git_only_shortcuts_are_scoped_to_the_git_page() {
     assert!(has_binding("/git", "cmd-o"));
-    assert!(has_binding("/git", "cmd-enter"));
+    assert!(has_binding_with_bindings_in_contexts(
+      "/git",
+      &["List"],
+      "cmd-enter",
+      workspace_key_bindings(),
+    ));
     assert!(has_binding("/git", "cmd-u"));
     assert!(has_binding("/git", "cmd-y"));
     assert!(has_binding("/git", "cmd-shift-y"));
     assert!(!has_binding("/github", "cmd-o"));
-    assert!(!has_binding("/github/owner/repo/code", "cmd-enter"));
+    assert!(!has_binding_with_bindings_in_contexts(
+      "/github/owner/repo/code",
+      &["List"],
+      "cmd-enter",
+      workspace_key_bindings(),
+    ));
     assert!(!has_binding("/github", "cmd-u"));
     assert!(!has_binding("/github", "cmd-y"));
     assert!(!has_binding("/github", "cmd-shift-y"));
@@ -1556,7 +1646,7 @@ mod tests {
     assert_eq!(
       error,
       ShortcutOverrideError::ShortcutConflict {
-        shortcut_id: ShortcutId::CommitChanges,
+        shortcut_id: ShortcutId::ToggleFileStage,
       }
     );
   }
