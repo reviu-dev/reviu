@@ -34,6 +34,9 @@ const PENDING_CHECK_STATUSES = new Set([
 const SUCCESS_CHECK_CONCLUSIONS = new Set([
   'success',
   'neutral',
+])
+
+const SKIPPED_CHECK_CONCLUSIONS = new Set([
   'skipped',
 ])
 
@@ -81,6 +84,10 @@ function normalizeCheckState(
     return 'success'
   }
 
+  if (SKIPPED_CHECK_CONCLUSIONS.has(normalizedConclusion)) {
+    return 'skipped'
+  }
+
   if (FAILURE_CHECK_CONCLUSIONS.has(normalizedConclusion)) {
     return 'failure'
   }
@@ -97,6 +104,14 @@ function rollupStates(states: GithubPullRequestChecksRollupState[]): GithubPullR
     return 'pending'
   }
 
+  if (states.includes('success')) {
+    return 'success'
+  }
+
+  if (states.includes('skipped')) {
+    return 'skipped'
+  }
+
   return 'success'
 }
 
@@ -104,12 +119,14 @@ function summarizeCountableChecks(items: CountableCheckItem[]) {
   const successfulChecks = items.filter(item => item.state === 'success').length
   const failedChecks = items.filter(item => item.state === 'failure').length
   const pendingChecks = items.filter(item => item.state === 'pending').length
+  const skippedChecks = items.filter(item => item.state === 'skipped').length
 
   return {
     total_checks: items.length,
     successful_checks: successfulChecks,
     failed_checks: failedChecks,
     pending_checks: pendingChecks,
+    skipped_checks: skippedChecks,
     overall_state: rollupStates(items.map(item => item.state)),
   }
 }
@@ -408,10 +425,12 @@ export function buildGithubPullRequestChecksSummary({
     successful_checks: overallSummary.successful_checks,
     failed_checks: overallSummary.failed_checks,
     pending_checks: overallSummary.pending_checks,
+    skipped_checks: overallSummary.skipped_checks,
     required_checks_total: requiredSummary.total_checks,
     required_checks_passed: requiredSummary.successful_checks,
     required_checks_failed: requiredSummary.failed_checks,
     required_checks_pending: requiredSummary.pending_checks,
+    required_checks_skipped: requiredSummary.skipped_checks,
     required_contexts: requiredContexts,
     missing_required_contexts: missingRequiredContexts,
     requires_up_to_date_branch: requiresUpToDateBranch,

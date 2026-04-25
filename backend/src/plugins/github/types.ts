@@ -682,7 +682,7 @@ export interface GithubPullRequestMergeResult {
   method: GithubPullRequestMergeMethod
 }
 
-export type GithubPullRequestChecksRollupState = 'success' | 'pending' | 'failure'
+export type GithubPullRequestChecksRollupState = 'success' | 'pending' | 'failure' | 'skipped'
 
 export interface GithubPullRequestWorkflowStep {
   number: number
@@ -768,10 +768,12 @@ export interface GithubPullRequestChecksSummary {
   successful_checks: number
   failed_checks: number
   pending_checks: number
+  skipped_checks: number
   required_checks_total: number
   required_checks_passed: number
   required_checks_failed: number
   required_checks_pending: number
+  required_checks_skipped: number
   required_contexts: string[]
   missing_required_contexts: string[]
   requires_up_to_date_branch: boolean

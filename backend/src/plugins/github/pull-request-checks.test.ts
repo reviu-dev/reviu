@@ -202,6 +202,87 @@ describe('pull request checks summary', () => {
     expect(summary.required_state).toBe('failure')
   })
 
+  it('classifies skipped check conclusions as their own state and tracks them in the counts', () => {
+    const summary = buildGithubPullRequestChecksSummary({
+      pullRequest: makePullRequest(),
+      workflowRuns: makeWorkflowRuns([
+        {
+          id: 100,
+          name: 'CI',
+          display_title: 'CI',
+          event: 'pull_request',
+          status: 'completed',
+          conclusion: 'success',
+          created_at: '2026-04-24T10:00:00Z',
+          updated_at: '2026-04-24T10:05:00Z',
+          run_started_at: '2026-04-24T10:00:00Z',
+          run_number: 1,
+          run_attempt: 1,
+          html_url: 'https://github.com/acme/widget/actions/runs/100',
+          head_sha: 'head-sha',
+        },
+      ]),
+      workflowRunJobsByRunId: new Map([
+        [100, makeWorkflowJobs([
+          {
+            id: 200,
+            name: 'build',
+            status: 'completed',
+            conclusion: 'success',
+            started_at: '2026-04-24T10:00:00Z',
+            completed_at: '2026-04-24T10:02:00Z',
+            html_url: 'https://github.com/acme/widget/actions/runs/100/job/200',
+            check_run_url: 'https://api.github.com/repos/acme/widget/check-runs/300',
+            steps: [],
+          },
+          {
+            id: 201,
+            name: 'deploy',
+            status: 'completed',
+            conclusion: 'skipped',
+            started_at: '2026-04-24T10:02:00Z',
+            completed_at: '2026-04-24T10:02:00Z',
+            html_url: 'https://github.com/acme/widget/actions/runs/100/job/201',
+            check_run_url: 'https://api.github.com/repos/acme/widget/check-runs/301',
+            steps: [],
+          },
+        ])],
+      ]),
+    })
+
+    const jobsByName = new Map(summary.actions_runs[0].jobs.map(job => [job.name, job]))
+    expect(jobsByName.get('build')?.state).toBe('success')
+    expect(jobsByName.get('deploy')?.state).toBe('skipped')
+    expect(summary.successful_checks).toBe(1)
+    expect(summary.skipped_checks).toBe(1)
+    expect(summary.failed_checks).toBe(0)
+    expect(summary.pending_checks).toBe(0)
+    expect(summary.overall_state).toBe('success')
+  })
+
+  it('reports overall_state as skipped when every check is skipped', () => {
+    const summary = buildGithubPullRequestChecksSummary({
+      pullRequest: makePullRequest(),
+      checkRuns: makeCheckRuns([
+        {
+          id: 1,
+          name: 'lint',
+          status: 'completed',
+          conclusion: 'skipped',
+          started_at: '2026-04-24T10:00:00Z',
+          completed_at: '2026-04-24T10:00:00Z',
+          html_url: null,
+          details_url: null,
+          output: { title: null, summary: null, text: null, annotations_count: 0 },
+          app: null,
+        },
+      ]),
+    })
+
+    expect(summary.skipped_checks).toBe(1)
+    expect(summary.overall_state).toBe('skipped')
+  })
+
   it('deduplicates legacy statuses by context and keeps the latest update', () => {
     const summary = buildGithubPullRequestChecksSummary({
       pullRequest: makePullRequest(),

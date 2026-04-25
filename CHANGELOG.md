@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.8.0
 
+### Skipped Checks in Pull Request Overview
+
+Skipped GitHub checks now appear separately from successful ones, with their own gray slice in the overview ring and count in the summary. Each row shows its status and duration, and jobs are prefixed with the workflow name.
+
 ### Clearer Feedback for Command Palette Actions
 
 Command palette actions now confirm success with a toast, including "Already up to date" for rebase, merge, and pull when there's nothing to do. Errors keep the palette open so you can retry, and commands that don't apply in the current state are hidden.
