@@ -5698,6 +5698,15 @@ impl Editor {
     Some(ordered[active_index].0.clone())
   }
 
+  pub fn highlighted_hunk_group_id(&self, cx: &App) -> Option<Arc<str>> {
+    let ordered = self.ordered_hunk_display_lines();
+    if ordered.len() <= 1 {
+      return None;
+    }
+    let active_index = self.active_hunk_index(&ordered, cx)?;
+    Some(ordered[active_index].0.clone())
+  }
+
   pub fn navigate_hunk(&mut self, direction: HunkNavigationDirection, cx: &mut Context<Self>) {
     let ordered = self.ordered_hunk_display_lines();
     let Some(active_index) = self.active_hunk_index(&ordered, cx) else {

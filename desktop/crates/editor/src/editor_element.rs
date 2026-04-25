@@ -1443,7 +1443,7 @@ impl Element for EditorElement {
     let removed_bg = theme.diff_removed_background();
     let removed_staged_bg = theme.diff_removed_staged_background();
     let conflict_line_kinds = self.editor.read(cx).conflict_line_kinds(cx);
-    let active_hunk_group_id = self.editor.read(cx).active_hunk_group_id(cx);
+    let active_hunk_group_id = self.editor.read(cx).highlighted_hunk_group_id(cx);
     let active_hunk_focus_color = theme.hunk_focused_border();
     let mut group_border_colors: HashMap<Arc<str>, (gpui::Hsla, gpui::Hsla)> = HashMap::new();
     if let Some(projection) = projection.as_ref() {

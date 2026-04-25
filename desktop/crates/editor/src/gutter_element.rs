@@ -421,7 +421,7 @@ impl Element for GutterElement {
         }
       };
 
-      let active_hunk_group_id = editor.active_hunk_group_id(cx);
+      let active_hunk_group_id = editor.highlighted_hunk_group_id(cx);
       let active_hunk_focus_color = theme.hunk_focused_border();
 
       // Format line numbers for visible lines

@@ -8401,27 +8401,30 @@ impl GitPage {
           .items_center()
           .gap_2()
           .flex_shrink_0()
-          .when_some(annotation_navigation, |this, annotation_navigation| {
-            this.child(
-              h_flex()
-                .items_center()
-                .gap_1()
-                .child(previous_annotation_button)
-                .child(
-                  div()
-                    .w(px(52.0))
-                    .text_xs()
-                    .text_center()
-                    .text_color(theme.muted_foreground)
-                    .child(format!(
-                      "{}/{}",
-                      annotation_navigation.active_index + 1,
-                      annotation_navigation.total
-                    )),
-                )
-                .child(next_annotation_button),
-            )
-          })
+          .when_some(
+            annotation_navigation.filter(|state| state.total > 1),
+            |this, annotation_navigation| {
+              this.child(
+                h_flex()
+                  .items_center()
+                  .gap_1()
+                  .child(previous_annotation_button)
+                  .child(
+                    div()
+                      .w(px(52.0))
+                      .text_xs()
+                      .text_center()
+                      .text_color(theme.muted_foreground)
+                      .child(format!(
+                        "{}/{}",
+                        annotation_navigation.active_index + 1,
+                        annotation_navigation.total
+                      )),
+                  )
+                  .child(next_annotation_button),
+              )
+            },
+          )
           .when(show_accept_all_conflict_actions, |this| {
             this
               .child(accept_all_current_button)
