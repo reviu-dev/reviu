@@ -410,6 +410,20 @@ impl Element for GutterElement {
         }
       };
 
+      let group_id_for_any_line = |line: &DisplayLine| -> Option<Arc<str>> {
+        match line {
+          DisplayLine::Doc { group_id, .. } => group_id.clone(),
+          DisplayLine::Modified { group_id, .. } => group_id.clone(),
+          DisplayLine::Removed { group_id, .. } => group_id.clone(),
+          DisplayLine::NoNewline { group_id, .. } => group_id.clone(),
+          DisplayLine::ReviewComment { group_id, .. } => group_id.clone(),
+          _ => None,
+        }
+      };
+
+      let active_hunk_group_id = editor.active_hunk_group_id(cx);
+      let active_hunk_focus_color = theme.hunk_focused_border();
+
       // Format line numbers for visible lines
       let mut line_numbers = Vec::new();
       let mut line_backgrounds = Vec::new();
@@ -531,6 +545,12 @@ impl Element for GutterElement {
           ));
         }
 
+        let any_group_id: Option<Arc<str>> = display_line.as_ref().and_then(&group_id_for_any_line);
+        let is_active_hunk_line = match (&active_hunk_group_id, &any_group_id) {
+          (Some(active), Some(line_group)) => active.as_ref() == line_group.as_ref(),
+          _ => false,
+        };
+
         if let Some(conflict_kind) = conflict_kind
           && let Some(color) = conflict_border_color(&theme, conflict_kind)
         {
@@ -585,7 +605,7 @@ impl Element for GutterElement {
 
         let group_id: Option<Arc<str>> = display_line.as_ref().and_then(&group_id_for_line);
         if show_stripes {
-          let stripe_color = match conflict_kind {
+          let base_stripe_color = match conflict_kind {
             Some(conflict_kind) => conflict_stripe_color(&theme, conflict_kind),
             None => group_id.as_ref().and_then(|group_id| {
               group_kinds.get(group_id).map(|kind| match kind {
@@ -594,6 +614,12 @@ impl Element for GutterElement {
                 GroupKind::Mixed => stripe_modified,
               })
             }),
+          };
+
+          let stripe_color = if is_active_hunk_line && conflict_kind.is_none() {
+            Some(active_hunk_focus_color)
+          } else {
+            base_stripe_color
           };
 
           if let Some(stripe_color) = stripe_color {
@@ -607,45 +633,55 @@ impl Element for GutterElement {
 
         if conflict_kind.is_none()
           && let Some(group_id) = group_id
-          && let (Some(projection), Some((top_color, bottom_color))) =
-            (projection.as_ref(), group_border_colors.get(&group_id))
+          && let Some(projection) = projection.as_ref()
         {
-          let prev_group = display_idx
-            .checked_sub(1)
-            .and_then(|idx| projection.lines.get(idx))
-            .and_then(&group_id_for_line);
-          let next_group = projection
-            .lines
-            .get(display_idx + 1)
-            .and_then(&group_id_for_line);
+          let staged_colors = group_border_colors.get(&group_id).copied();
+          let border_colors = staged_colors.or_else(|| {
+            is_active_hunk_line.then_some((active_hunk_focus_color, active_hunk_focus_color))
+          });
+          if let Some(border_colors) = border_colors {
+            let (top_color, bottom_color) = if is_active_hunk_line {
+              (active_hunk_focus_color, active_hunk_focus_color)
+            } else {
+              border_colors
+            };
+            let prev_group = display_idx
+              .checked_sub(1)
+              .and_then(|idx| projection.lines.get(idx))
+              .and_then(&group_id_for_line);
+            let next_group = projection
+              .lines
+              .get(display_idx + 1)
+              .and_then(&group_id_for_line);
 
-          let is_top = prev_group.as_deref() != Some(group_id.as_ref());
-          let is_bottom = next_group.as_deref() != Some(group_id.as_ref());
-          let border_thickness = px(1.0);
-          let stripe_width = if show_stripes { px(4.0) } else { px(0.0) };
-          let width = if bounds.size.width > stripe_width {
-            bounds.size.width - stripe_width
-          } else {
-            px(0.0)
-          };
-          let x = bounds.left() + stripe_width;
-          let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
+            let is_top = prev_group.as_deref() != Some(group_id.as_ref());
+            let is_bottom = next_group.as_deref() != Some(group_id.as_ref());
+            let border_thickness = px(1.0);
+            let stripe_width = if show_stripes { px(4.0) } else { px(0.0) };
+            let width = if bounds.size.width > stripe_width {
+              bounds.size.width - stripe_width
+            } else {
+              px(0.0)
+            };
+            let x = bounds.left() + stripe_width;
+            let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
 
-          if is_top {
-            group_borders.push(fill(
-              Bounds::new(point(x, y), size(width, border_thickness)),
-              *top_color,
-            ));
-          }
+            if is_top {
+              group_borders.push(fill(
+                Bounds::new(point(x, y), size(width, border_thickness)),
+                top_color,
+              ));
+            }
 
-          if is_bottom {
-            group_borders.push(fill(
-              Bounds::new(
-                point(x, y + line_height - border_thickness),
-                size(width, border_thickness),
-              ),
-              *bottom_color,
-            ));
+            if is_bottom {
+              group_borders.push(fill(
+                Bounds::new(
+                  point(x, y + line_height - border_thickness),
+                  size(width, border_thickness),
+                ),
+                bottom_color,
+              ));
+            }
           }
         }
       }

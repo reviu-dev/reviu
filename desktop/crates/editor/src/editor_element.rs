@@ -1443,6 +1443,8 @@ impl Element for EditorElement {
     let removed_bg = theme.diff_removed_background();
     let removed_staged_bg = theme.diff_removed_staged_background();
     let conflict_line_kinds = self.editor.read(cx).conflict_line_kinds(cx);
+    let active_hunk_group_id = self.editor.read(cx).active_hunk_group_id(cx);
+    let active_hunk_focus_color = theme.hunk_focused_border();
     let mut group_border_colors: HashMap<Arc<str>, (gpui::Hsla, gpui::Hsla)> = HashMap::new();
     if let Some(projection) = projection.as_ref() {
       for (group_id, group) in &projection.groups {
@@ -1681,54 +1683,64 @@ impl Element for EditorElement {
 
       if conflict_kind.is_none()
         && let (Some(projection), Some(group_id)) = (projection.as_ref(), group_id)
-        && let Some((top_color, bottom_color)) = group_border_colors.get(group_id.as_ref())
       {
-        let prev_group = display_idx
-          .checked_sub(1)
-          .and_then(|idx| projection.lines.get(idx))
-          .and_then(|line| match line {
-            DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
-            DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
-            DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
-            DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
-            DisplayLine::ReviewComment { group_id, .. } => group_id.as_ref(),
-            _ => None,
-          });
-        let next_group = projection
-          .lines
-          .get(display_idx + 1)
-          .and_then(|line| match line {
-            DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
-            DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
-            DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
-            DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
-            DisplayLine::ReviewComment { group_id, .. } => group_id.as_ref(),
-            _ => None,
-          });
+        let is_active = active_hunk_group_id.as_deref() == Some(group_id.as_ref());
+        let staged_colors = group_border_colors.get(group_id.as_ref()).copied();
+        if let Some(border_colors) = staged_colors
+          .or_else(|| is_active.then_some((active_hunk_focus_color, active_hunk_focus_color)))
+        {
+          let (top_color, bottom_color) = if is_active {
+            (active_hunk_focus_color, active_hunk_focus_color)
+          } else {
+            border_colors
+          };
+          let prev_group = display_idx
+            .checked_sub(1)
+            .and_then(|idx| projection.lines.get(idx))
+            .and_then(|line| match line {
+              DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
+              DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
+              DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
+              DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
+              DisplayLine::ReviewComment { group_id, .. } => group_id.as_ref(),
+              _ => None,
+            });
+          let next_group = projection
+            .lines
+            .get(display_idx + 1)
+            .and_then(|line| match line {
+              DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
+              DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
+              DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
+              DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
+              DisplayLine::ReviewComment { group_id, .. } => group_id.as_ref(),
+              _ => None,
+            });
 
-        let is_top = prev_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
-        let is_bottom = next_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
-        let border_thickness = px(1.0);
-        let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
+          let is_top = prev_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
+          let is_bottom = next_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
+          let border_thickness = px(1.0);
+          let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
 
-        if is_top {
-          group_borders.push(fill(
-            Bounds::new(
-              point(bounds.left(), y),
-              size(bounds.size.width, border_thickness),
-            ),
-            *top_color,
-          ));
-        }
+          if is_top {
+            group_borders.push(fill(
+              Bounds::new(
+                point(bounds.left(), y),
+                size(bounds.size.width, border_thickness),
+              ),
+              top_color,
+            ));
+          }
 
-        if is_bottom {
-          group_borders.push(fill(
-            Bounds::new(
-              point(bounds.left(), y + line_height - border_thickness),
-              size(bounds.size.width, border_thickness),
-            ),
-            *bottom_color,
-          ));
+          if is_bottom {
+            group_borders.push(fill(
+              Bounds::new(
+                point(bounds.left(), y + line_height - border_thickness),
+                size(bounds.size.width, border_thickness),
+              ),
+              bottom_color,
+            ));
+          }
         }
       }
     }
