@@ -6,12 +6,13 @@ use std::{
 };
 
 use editor::{
-  CloseFind, DiffViewMode, Editor, Find, REVIEW_COMMENT_CARD_CONTENT_GAP_PX,
-  REVIEW_COMMENT_CARD_PADDING_X_PX, REVIEW_COMMENT_HEADER_BODY_GAP_PX,
-  REVIEW_COMMENT_VERTICAL_PADDING_PX, ReviewComment, ReviewCommentCodeReferencePreview,
-  ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
-  ReviewCommentEditHandler, ReviewCommentImageUploadHandler, ReviewCommentLinkHandler,
-  ReviewCommentResolveHandler, ReviewCommentSide, ReviewCommentSuggestionActionFactory,
+  CloseFind, DiffViewMode, Editor, Find, HunkNavigationDirection,
+  REVIEW_COMMENT_CARD_CONTENT_GAP_PX, REVIEW_COMMENT_CARD_PADDING_X_PX,
+  REVIEW_COMMENT_HEADER_BODY_GAP_PX, REVIEW_COMMENT_VERTICAL_PADDING_PX, ReviewComment,
+  ReviewCommentCodeReferencePreview, ReviewCommentCreateHandler, ReviewCommentCreateRequest,
+  ReviewCommentDeleteHandler, ReviewCommentEditHandler, ReviewCommentImageUploadHandler,
+  ReviewCommentLinkHandler, ReviewCommentResolveHandler, ReviewCommentSide,
+  ReviewCommentSuggestionActionFactory,
 };
 use gfm_markdown_viewer::{
   GithubBlobLineReference, GithubCodeReferencePreview, GithubDiffLine, GithubDiffLineKind,
@@ -14249,7 +14250,6 @@ impl GithubPrDetailsPage {
     let preview_active = (is_markdown || is_svg) && self.show_markdown_preview;
     let file_loading = self.file_loading;
     let split_disabled = self.split_disabled_for_selected_file() || preview_active;
-    let has_review_comments = !self.selected_file_review_comment_ids.is_empty();
     let (toggle_label, toggle_icon) = if split_disabled {
       ("Split", IconName::PanelLeft)
     } else {
@@ -14258,30 +14258,39 @@ impl GithubPrDetailsPage {
         DiffViewMode::Split => ("Inline", IconName::PanelLeftClose),
       }
     };
+    let hunk_navigation = self
+      .diff_editor
+      .read(cx)
+      .hunk_navigation_state(cx)
+      .filter(|state| state.total > 1);
     let view = cx.entity();
-    let previous_comment_button = Button::new("pr-review-comment-prev")
+    let previous_change_button = Button::new("pr-change-prev")
       .icon(IconName::ArrowUp)
       .xsmall()
       .ghost()
       .compact()
-      .tooltip("Previous comment")
-      .disabled(!has_review_comments || file_loading)
+      .tooltip("Previous change")
+      .disabled(file_loading || hunk_navigation.is_none())
       .on_click(move |_, _, cx| {
         view.update(cx, |this, cx| {
-          this.navigate_review_comment(ReviewCommentNavigationDirection::Previous, cx);
+          this.diff_editor.update(cx, |editor, cx| {
+            editor.navigate_hunk(HunkNavigationDirection::Previous, cx);
+          });
         });
       });
     let view = cx.entity();
-    let next_comment_button = Button::new("pr-review-comment-next")
+    let next_change_button = Button::new("pr-change-next")
       .icon(IconName::ArrowDown)
       .xsmall()
       .ghost()
       .compact()
-      .tooltip("Next comment")
-      .disabled(!has_review_comments || file_loading)
+      .tooltip("Next change")
+      .disabled(file_loading || hunk_navigation.is_none())
       .on_click(move |_, _, cx| {
         view.update(cx, |this, cx| {
-          this.navigate_review_comment(ReviewCommentNavigationDirection::Next, cx);
+          this.diff_editor.update(cx, |editor, cx| {
+            editor.navigate_hunk(HunkNavigationDirection::Next, cx);
+          });
         });
       });
     let view = cx.entity();
@@ -14411,8 +14420,23 @@ impl GithubPrDetailsPage {
         h_flex()
           .items_center()
           .gap_2()
-          .child(previous_comment_button)
-          .child(next_comment_button)
+          .when_some(hunk_navigation, |this, state| {
+            this.child(
+              h_flex()
+                .items_center()
+                .gap_1()
+                .child(previous_change_button)
+                .child(
+                  div()
+                    .w(px(52.0))
+                    .text_xs()
+                    .text_center()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("{}/{}", state.active_index + 1, state.total)),
+                )
+                .child(next_change_button),
+            )
+          })
           .when(show_whitespace_button, |this| this.child(whitespace_button))
           .child(toggle_button)
           .when(is_markdown || is_svg, |this| this.child(preview_button)),
@@ -14633,13 +14657,45 @@ impl GithubPrDetailsPage {
       return;
     }
 
-    self.navigate_review_comment(ReviewCommentNavigationDirection::Previous, cx);
+    self.diff_editor.update(cx, |editor, cx| {
+      editor.navigate_hunk(HunkNavigationDirection::Previous, cx);
+    });
     cx.stop_propagation();
   }
 
   fn next_annotation_action(
     &mut self,
     _: &crate::NextAnnotation,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
+      return;
+    }
+
+    self.diff_editor.update(cx, |editor, cx| {
+      editor.navigate_hunk(HunkNavigationDirection::Next, cx);
+    });
+    cx.stop_propagation();
+  }
+
+  fn previous_review_comment_action(
+    &mut self,
+    _: &crate::PreviousReviewComment,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
+      return;
+    }
+
+    self.navigate_review_comment(ReviewCommentNavigationDirection::Previous, cx);
+    cx.stop_propagation();
+  }
+
+  fn next_review_comment_action(
+    &mut self,
+    _: &crate::NextReviewComment,
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -15215,6 +15271,8 @@ impl Render for GithubPrDetailsPage {
       .on_action(cx.listener(GithubPrDetailsPage::switch_to_pr_branch_action))
       .on_action(cx.listener(GithubPrDetailsPage::previous_annotation_action))
       .on_action(cx.listener(GithubPrDetailsPage::next_annotation_action))
+      .on_action(cx.listener(GithubPrDetailsPage::previous_review_comment_action))
+      .on_action(cx.listener(GithubPrDetailsPage::next_review_comment_action))
       .on_action(cx.listener(GithubPrDetailsPage::toggle_diff_view_action))
       .on_action(cx.listener(GithubPrDetailsPage::previous_page_tab_action))
       .on_action(cx.listener(GithubPrDetailsPage::next_page_tab_action))

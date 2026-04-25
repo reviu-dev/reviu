@@ -17,11 +17,11 @@ use std::collections::HashSet;
 use crate::config::ConfigStore;
 use crate::{
   CloseWorkspacePage, CommitChanges, ForcePushChanges, NavigateBack, NextAnnotation, NextPageTab,
-  OpenGitChangesSidebar, OpenGitHistorySidebar, OpenGitPage, OpenGithubPage, OpenRepository,
-  OpenSettingsPage, PreviousAnnotation, PreviousPageTab, PullChanges, PushChanges,
-  RefreshCurrentPage, RestoreFile, RestoreHunk, ShowBranchSwitcher, ShowCommandPalette,
-  ShowFileSearch, SwitchToPrBranch, ToggleDiffView, ToggleFileStage, ToggleHunkStage,
-  ToggleTerminalSidebar,
+  NextReviewComment, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenGitPage, OpenGithubPage,
+  OpenRepository, OpenSettingsPage, PreviousAnnotation, PreviousPageTab, PreviousReviewComment,
+  PullChanges, PushChanges, RefreshCurrentPage, RestoreFile, RestoreHunk, ShowBranchSwitcher,
+  ShowCommandPalette, ShowFileSearch, SwitchToPrBranch, ToggleDiffView, ToggleFileStage,
+  ToggleHunkStage, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -68,6 +68,7 @@ const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
 const TOGGLE_DIFF_VIEW_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
 const SWITCH_TO_PR_BRANCH_CONTEXT: &str = "WorkspaceGithubPr || WorkspaceGithubPrChanges";
 const REVIEW_ANNOTATION_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
+const REVIEW_COMMENT_CONTEXT: &str = "WorkspaceGithubPrChanges";
 const HUNK_ACTION_CONTEXT: &str = "WorkspaceGit";
 const HUNK_ACTION_DESCENDANT_FOCUS: &str = "List || Editor";
 const PAGE_TAB_CONTEXT: &str =
@@ -148,6 +149,8 @@ pub enum ShortcutId {
   SwitchToPrBranch,
   PreviousAnnotation,
   NextAnnotation,
+  PreviousReviewComment,
+  NextReviewComment,
   ToggleHunkStage,
   RestoreHunk,
   ToggleFileStage,
@@ -180,6 +183,8 @@ impl ShortcutId {
       ShortcutId::SwitchToPrBranch => "switch_to_pr_branch",
       ShortcutId::PreviousAnnotation => "previous_annotation",
       ShortcutId::NextAnnotation => "next_annotation",
+      ShortcutId::PreviousReviewComment => "previous_review_comment",
+      ShortcutId::NextReviewComment => "next_review_comment",
       ShortcutId::ToggleHunkStage => "toggle_hunk_stage",
       ShortcutId::RestoreHunk => "restore_hunk",
       ShortcutId::ToggleFileStage => "toggle_file_stage",
@@ -212,6 +217,8 @@ impl ShortcutId {
       "switch_to_pr_branch" => Some(ShortcutId::SwitchToPrBranch),
       "previous_annotation" => Some(ShortcutId::PreviousAnnotation),
       "next_annotation" => Some(ShortcutId::NextAnnotation),
+      "previous_review_comment" => Some(ShortcutId::PreviousReviewComment),
+      "next_review_comment" => Some(ShortcutId::NextReviewComment),
       "toggle_hunk_stage" => Some(ShortcutId::ToggleHunkStage),
       "restore_hunk" => Some(ShortcutId::RestoreHunk),
       "toggle_file_stage" => Some(ShortcutId::ToggleFileStage),
@@ -244,7 +251,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 27] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 29] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -313,9 +320,9 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 27] = [
   },
   ShortcutDefinition {
     id: ShortcutId::PreviousAnnotation,
-    title: "Previous Annotation",
-    description: "Jump to the previous conflict, change, or review comment.",
-    scope_label: "Git conflicts and changes, PR Changes comments",
+    title: "Previous Change",
+    description: "Jump to the previous conflict or change in the diff.",
+    scope_label: "Git conflicts and changes, PR Changes",
     category: ShortcutCategory::Review,
     keystroke: "cmd-alt-up",
     context: REVIEW_ANNOTATION_CONTEXT,
@@ -324,14 +331,36 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 27] = [
   },
   ShortcutDefinition {
     id: ShortcutId::NextAnnotation,
-    title: "Next Annotation",
-    description: "Jump to the next conflict, change, or review comment.",
-    scope_label: "Git conflicts and changes, PR Changes comments",
+    title: "Next Change",
+    description: "Jump to the next conflict or change in the diff.",
+    scope_label: "Git conflicts and changes, PR Changes",
     category: ShortcutCategory::Review,
     keystroke: "cmd-alt-down",
     context: REVIEW_ANNOTATION_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
     active_contexts: &GIT_AND_PR_CHANGES_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::PreviousReviewComment,
+    title: "Previous Review Comment",
+    description: "Jump to the previous review comment in the PR diff.",
+    scope_label: "PR Changes",
+    category: ShortcutCategory::Review,
+    keystroke: "cmd-alt-shift-up",
+    context: REVIEW_COMMENT_CONTEXT,
+    display_context: WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
+    active_contexts: &[WORKSPACE_GITHUB_PR_CHANGES_CONTEXT],
+  },
+  ShortcutDefinition {
+    id: ShortcutId::NextReviewComment,
+    title: "Next Review Comment",
+    description: "Jump to the next review comment in the PR diff.",
+    scope_label: "PR Changes",
+    category: ShortcutCategory::Review,
+    keystroke: "cmd-alt-shift-down",
+    context: REVIEW_COMMENT_CONTEXT,
+    display_context: WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
+    active_contexts: &[WORKSPACE_GITHUB_PR_CHANGES_CONTEXT],
   },
   ShortcutDefinition {
     id: ShortcutId::ToggleHunkStage,
@@ -849,6 +878,12 @@ impl ShortcutDefinition {
         KeyBinding::new(keystroke, PreviousAnnotation, Some(&context))
       }
       ShortcutId::NextAnnotation => KeyBinding::new(keystroke, NextAnnotation, Some(&context)),
+      ShortcutId::PreviousReviewComment => {
+        KeyBinding::new(keystroke, PreviousReviewComment, Some(&context))
+      }
+      ShortcutId::NextReviewComment => {
+        KeyBinding::new(keystroke, NextReviewComment, Some(&context))
+      }
       ShortcutId::ToggleHunkStage => KeyBinding::new(keystroke, ToggleHunkStage, Some(&context)),
       ShortcutId::RestoreHunk => KeyBinding::new(keystroke, RestoreHunk, Some(&context)),
       ShortcutId::ToggleFileStage => KeyBinding::new(keystroke, ToggleFileStage, Some(&context)),
@@ -1212,6 +1247,8 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::SwitchToPrBranch => f(&SwitchToPrBranch),
     ShortcutId::PreviousAnnotation => f(&PreviousAnnotation),
     ShortcutId::NextAnnotation => f(&NextAnnotation),
+    ShortcutId::PreviousReviewComment => f(&PreviousReviewComment),
+    ShortcutId::NextReviewComment => f(&NextReviewComment),
     ShortcutId::ToggleHunkStage => f(&ToggleHunkStage),
     ShortcutId::RestoreHunk => f(&RestoreHunk),
     ShortcutId::ToggleFileStage => f(&ToggleFileStage),
