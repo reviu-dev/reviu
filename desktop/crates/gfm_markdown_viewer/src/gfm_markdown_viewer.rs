@@ -34,7 +34,7 @@ use gpui_component::{
 #[cfg(test)]
 use syntax::TokenType;
 use syntax::{HighlightSpan, SyntaxHighlighter, languages};
-use ui::{ScrollChainAxes, restrict_scroll_to_wheel_axis, scroll_chain_guard};
+use ui::{ScrollAxes, restrict_scroll_to_wheel_axis, scrollable_node};
 use unicode_segmentation::UnicodeSegmentation;
 
 type BlockRenderFn = dyn Fn(AnyElement, &App) -> AnyElement + Send + Sync;
@@ -684,10 +684,11 @@ pub fn render_github_diff_code_reference_preview_card(
     min_preview_content_width_px,
     cx,
   ));
-  let preview_scrolled = scroll_chain_guard(
+  let preview_scrolled = scrollable_node(
     preview_content,
     &preview_scroll_handle,
-    ScrollChainAxes::both(),
+    ScrollAxes::both(),
+    preview_scroll_key,
   )
   .into_any_element();
 
@@ -868,10 +869,11 @@ pub fn render_github_code_reference_preview_card(
           .child(snippet_rows),
       ),
   );
-  let preview_scrolled = scroll_chain_guard(
+  let preview_scrolled = scrollable_node(
     preview_content,
     &preview_scroll_handle,
-    ScrollChainAxes::both(),
+    ScrollAxes::both(),
+    preview_scroll_key,
   )
   .into_any_element();
 
@@ -2262,10 +2264,11 @@ fn render_code_block(
     let scroll_content = scroll_content
       .overflow_x_scroll()
       .track_scroll(&scroll_handle);
-    scroll_chain_guard(
+    scrollable_node(
       scroll_content,
       &scroll_handle,
-      ScrollChainAxes::horizontal(),
+      ScrollAxes::horizontal(),
+      scroll_key,
     )
     .into_any_element()
   } else {
@@ -2273,7 +2276,13 @@ fn render_code_block(
       .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
       .overflow_scroll()
       .track_scroll(&scroll_handle);
-    scroll_chain_guard(scroll_content, &scroll_handle, ScrollChainAxes::both()).into_any_element()
+    scrollable_node(
+      scroll_content,
+      &scroll_handle,
+      ScrollAxes::both(),
+      scroll_key,
+    )
+    .into_any_element()
   };
   let copy_value = code_block_copy_value(code);
   let hover_group_id = code_block_hover_group_id(text_id);
@@ -2404,10 +2413,11 @@ fn render_suggestion_block(
         min_content_width_px,
         cx,
       ));
-  let scroll_content = scroll_chain_guard(
+  let scroll_content = scrollable_node(
     scroll_content,
     &suggestion_scroll_handle,
-    ScrollChainAxes::horizontal(),
+    ScrollAxes::horizontal(),
+    suggestion_scroll_key,
   )
   .into_any_element();
 

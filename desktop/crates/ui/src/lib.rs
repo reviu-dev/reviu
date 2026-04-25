@@ -7,7 +7,7 @@ mod github_search_palette;
 mod github_url;
 mod icons;
 mod reaction_bar;
-mod scroll_chain;
+mod scroll_routing;
 mod search_file_palette;
 mod selectable_row;
 mod status_alert;
@@ -60,8 +60,9 @@ pub use icons::{
   file_icon_path_for_path_with_theme,
 };
 pub use reaction_bar::{ReactionBar, ReactionGroup, ReactionOption, ReactionToggle};
-pub use scroll_chain::{
-  ScrollChainAxes, ScrollChainGuard, restrict_scroll_to_wheel_axis, scroll_chain_guard,
+pub use scroll_routing::{
+  ScrollAxes, ScrollDispatcher, ScrollableNode, restrict_scroll_to_wheel_axis, scroll_dispatcher,
+  scrollable_node,
 };
 pub use search_file_palette::{
   SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
