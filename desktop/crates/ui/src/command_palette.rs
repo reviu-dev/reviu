@@ -943,6 +943,18 @@ impl CommandPaletteCommandId {
       _ => None,
     }
   }
+
+  /// Parent command id whose recents score should also be boosted when this
+  /// command is triggered. Lets sub-menu variants surface their parent in
+  /// the Recent section even though only the parent lives in the root list.
+  pub fn parent_for_recents(self) -> Option<Self> {
+    match self {
+      Self::InteractiveRebaseEditBranch
+      | Self::InteractiveRebaseOntoBranch
+      | Self::InteractiveRebaseHeadCount => Some(Self::InteractiveRebase),
+      _ => None,
+    }
+  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -2692,6 +2704,9 @@ impl CommandPalette {
           .map(|g| g.0);
         if let Some(recorder) = recorder {
           recorder(id, cx);
+          if let Some(parent) = id.parent_for_recents() {
+            recorder(parent, cx);
+          }
         }
         window.close_dialog(cx);
       }
@@ -3003,6 +3018,27 @@ mod tests {
   };
   use std::rc::Rc;
   use std::sync::Arc;
+
+  #[test]
+  fn interactive_rebase_variants_have_interactive_rebase_as_recents_parent() {
+    assert_eq!(
+      CommandPaletteCommandId::InteractiveRebaseEditBranch.parent_for_recents(),
+      Some(CommandPaletteCommandId::InteractiveRebase)
+    );
+    assert_eq!(
+      CommandPaletteCommandId::InteractiveRebaseOntoBranch.parent_for_recents(),
+      Some(CommandPaletteCommandId::InteractiveRebase)
+    );
+    assert_eq!(
+      CommandPaletteCommandId::InteractiveRebaseHeadCount.parent_for_recents(),
+      Some(CommandPaletteCommandId::InteractiveRebase)
+    );
+    assert_eq!(
+      CommandPaletteCommandId::InteractiveRebase.parent_for_recents(),
+      None
+    );
+    assert_eq!(CommandPaletteCommandId::Commit.parent_for_recents(), None);
+  }
 
   #[test]
   fn open_github_from_url_command_matches_pull_and_repo_urls() {
