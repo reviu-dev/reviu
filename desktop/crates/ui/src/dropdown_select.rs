@@ -2,8 +2,9 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-  AnyElement, App, AppContext as _, Context, Corner, Entity, Focusable, IntoElement, ParentElement,
-  Pixels, RenderOnce, SharedString, Styled, Task, WeakEntity, Window, div, px, relative,
+  AnyElement, App, AppContext as _, Context, Corner, Entity, FocusHandle, Focusable, IntoElement,
+  ParentElement, Pixels, RenderOnce, SharedString, Styled, Task, WeakEntity, Window, div, px,
+  relative,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath,
@@ -263,11 +264,17 @@ pub fn dropdown_select<I: DropdownSelectItem + 'static>(
 
 struct DropdownSelectRuntime<I: DropdownSelectItem + 'static> {
   list: Option<Entity<ListState<DropdownSelectListDelegate<I>>>>,
+  open: bool,
+  previous_focus: Option<FocusHandle>,
 }
 
 impl<I: DropdownSelectItem + 'static> Default for DropdownSelectRuntime<I> {
   fn default() -> Self {
-    Self { list: None }
+    Self {
+      list: None,
+      open: false,
+      previous_focus: None,
+    }
   }
 }
 
@@ -473,6 +480,9 @@ impl<I: DropdownSelectItem + 'static> RenderOnce for DropdownSelect<I> {
     let search_placeholder = self.config.search_placeholder.clone();
     let placeholder = self.config.placeholder.clone();
 
+    let popover_id = SharedString::from(format!("dropdown-select-popover:{}", self.config.id));
+    let runtime_for_click = runtime.clone();
+
     let trigger = Button::new(self.config.id.clone())
       .ghost()
       .rounded_none()
@@ -481,6 +491,19 @@ impl<I: DropdownSelectItem + 'static> RenderOnce for DropdownSelect<I> {
       .when_some(trigger_height, |this, height| this.h(height))
       .when(trigger_height.is_none(), |this| this.h_full())
       .disabled(self.config.disabled)
+      .on_click({
+        let runtime = runtime_for_click.clone();
+        move |event, window, cx| {
+          if event.is_keyboard() {
+            let previous_focus = window.focused(cx);
+            runtime.update(cx, |runtime: &mut DropdownSelectRuntime<I>, cx| {
+              runtime.open = true;
+              runtime.previous_focus = previous_focus;
+              cx.notify();
+            });
+          }
+        }
+      })
       .child(
         h_flex()
           .w_full()
@@ -565,39 +588,55 @@ impl<I: DropdownSelectItem + 'static> RenderOnce for DropdownSelect<I> {
     );
 
     let list_focus = list_state.read(cx).focus_handle(cx);
-    let popover = Popover::new(SharedString::from(format!(
-      "dropdown-select-popover:{}",
-      self.config.id
-    )))
-    .anchor(anchor)
-    .appearance(false)
-    .overlay_closable(true)
-    .track_focus(&list_focus)
-    .trigger(trigger)
-    .content(move |_, window, cx| {
-      let popover_weak = cx.entity().downgrade();
-      list_state.update(
-        cx,
-        |state: &mut ListState<DropdownSelectListDelegate<I>>, cx| {
-          state.delegate_mut().set_popover(popover_weak);
-          state.focus(window, cx);
-        },
-      );
+    let current_open = runtime.read(cx).open;
+    let runtime_for_open_change = runtime.clone();
+    let popover = Popover::new(popover_id)
+      .anchor(anchor)
+      .appearance(false)
+      .overlay_closable(true)
+      .open(current_open)
+      .on_open_change(move |new_open, window, cx| {
+        let new_open = *new_open;
+        let previous_focus =
+          runtime_for_open_change.update(cx, |runtime: &mut DropdownSelectRuntime<I>, cx| {
+            runtime.open = new_open;
+            cx.notify();
+            if !new_open {
+              runtime.previous_focus.take()
+            } else {
+              None
+            }
+          });
+        if let Some(handle) = previous_focus {
+          handle.focus(window, cx);
+        }
+      })
+      .track_focus(&list_focus)
+      .trigger(trigger)
+      .content(move |_, window, cx| {
+        let popover_weak = cx.entity().downgrade();
+        list_state.update(
+          cx,
+          |state: &mut ListState<DropdownSelectListDelegate<I>>, cx| {
+            state.delegate_mut().set_popover(popover_weak);
+            state.focus(window, cx);
+          },
+        );
 
-      div()
-        .w(menu_width)
-        .bg(cx.theme().background)
-        .border_1()
-        .border_color(cx.theme().border)
-        .rounded(cx.theme().radius)
-        .shadow_md()
-        .overflow_hidden()
-        .child(
-          List::new(&list_state)
-            .search_placeholder(search_placeholder.clone())
-            .max_h(px(320.)),
-        )
-    });
+        div()
+          .w(menu_width)
+          .bg(cx.theme().background)
+          .border_1()
+          .border_color(cx.theme().border)
+          .rounded(cx.theme().radius)
+          .shadow_md()
+          .overflow_hidden()
+          .child(
+            List::new(&list_state)
+              .search_placeholder(search_placeholder.clone())
+              .max_h(px(320.)),
+          )
+      });
 
     div().h_full().w(self.config.width).child(popover)
   }
