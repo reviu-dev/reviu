@@ -171,6 +171,7 @@ pub struct DropdownSelectConfig<I: DropdownSelectItem + 'static> {
   pub options: Vec<I>,
   pub disabled: bool,
   pub searchable: bool,
+  pub tab_stop: bool,
   pub width: Pixels,
   pub menu_width: Pixels,
   pub anchor: Corner,
@@ -188,11 +189,17 @@ impl<I: DropdownSelectItem + 'static> DropdownSelectConfig<I> {
       options: Vec::new(),
       disabled: false,
       searchable: true,
+      tab_stop: true,
       width: px(240.),
       menu_width: px(240.),
       anchor: Corner::TopLeft,
       on_select: None,
     }
+  }
+
+  pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+    self.tab_stop = tab_stop;
+    self
   }
 
   pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
@@ -488,6 +495,7 @@ impl<I: DropdownSelectItem + 'static> RenderOnce for DropdownSelect<I> {
       .rounded_none()
       .border_0()
       .w_full()
+      .tab_stop(self.config.tab_stop)
       .when_some(trigger_height, |this, height| this.h(height))
       .when(trigger_height.is_none(), |this| this.h_full())
       .disabled(self.config.disabled)
