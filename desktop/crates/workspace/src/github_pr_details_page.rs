@@ -63,9 +63,10 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DropdownSelectConfig,
   DropdownSelectItem, FILE_ICON_SIZE_PX, GithubEmojiInput, Input, InputState, Popover, ReactionBar,
-  SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusTag, StatusThemeExt, UiIconName,
-  WindowExt, dropdown_select, file_icon_path_for_name_with_theme, h_resizable,
-  parse_github_url_action, resizable_panel, selectable_list_item,
+  ScrollChainAxes, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusTag,
+  StatusThemeExt, UiIconName, WindowExt, dropdown_select, file_icon_path_for_name_with_theme,
+  h_resizable, parse_github_url_action, resizable_panel, restrict_scroll_to_wheel_axis,
+  scroll_chain_guard, selectable_list_item,
 };
 
 use crate::{
@@ -2889,6 +2890,7 @@ pub struct GithubPrDetailsPage {
   description_markdown_state: MarkdownRenderState,
   syntax_highlight_cache: Arc<gfm_markdown_viewer::SyntaxHighlightCache>,
   overview_checks_open: bool,
+  overview_checks_scroll_handle: gpui::ScrollHandle,
   overview_timeline_items: Vec<GithubPrOverviewTimelineItem>,
   overview_list: GpuiListState,
   overview_list_count: usize,
@@ -3455,6 +3457,7 @@ impl GithubPrDetailsPage {
       description_markdown_state: MarkdownRenderState::new(),
       syntax_highlight_cache: Arc::new(gfm_markdown_viewer::SyntaxHighlightCache::new()),
       overview_checks_open: false,
+      overview_checks_scroll_handle: gpui::ScrollHandle::new(),
       overview_timeline_items: Vec::new(),
       overview_list: GpuiListState::new(0, ListAlignment::Top, px(300.)),
       overview_list_count: 0,
@@ -9342,6 +9345,7 @@ impl GithubPrDetailsPage {
     self.checks_loading = true;
     self.checks_error = None;
     self.checks = None;
+    self.overview_checks_open = false;
     self.merge_readiness_task = None;
     self.merge_readiness_loading = true;
     self.merge_readiness_error = None;
@@ -10647,27 +10651,44 @@ impl GithubPrDetailsPage {
     };
     let header_hover_bg = theme.muted.opacity(0.35);
 
-    let content = v_flex()
+    let inner = restrict_scroll_to_wheel_axis(
+      v_flex()
+        .id("github-pr-overview-checks-scroll")
+        .w_full()
+        .max_h(px(320.0))
+        .overflow_y_scroll(),
+    )
+    .track_scroll(&self.overview_checks_scroll_handle)
+    .when(row_count == 0, |this| {
+      this.child(
+        div()
+          .px_4()
+          .py_3()
+          .text_sm()
+          .text_color(theme.muted_foreground)
+          .child("GitHub has not reported individual check details."),
+      )
+    })
+    .children(
+      rows
+        .into_iter()
+        .enumerate()
+        .map(|(ix, row)| self.render_overview_check_row(row, ix, row_count, theme)),
+    );
+    let inner_guarded = scroll_chain_guard(
+      inner,
+      &self.overview_checks_scroll_handle,
+      ScrollChainAxes::vertical(),
+    );
+
+    let content = div()
+      .relative()
       .w_full()
       .border_t_1()
       .border_color(theme.border)
       .bg(theme.muted.opacity(0.45))
-      .when(row_count == 0, |this| {
-        this.child(
-          div()
-            .px_4()
-            .py_3()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("GitHub has not reported individual check details."),
-        )
-      })
-      .children(
-        rows
-          .into_iter()
-          .enumerate()
-          .map(|(ix, row)| self.render_overview_check_row(row, ix, row_count, theme)),
-      );
+      .child(inner_guarded)
+      .vertical_scrollbar(&self.overview_checks_scroll_handle);
 
     let header = h_flex()
       .id("github-pr-overview-checks-header")
