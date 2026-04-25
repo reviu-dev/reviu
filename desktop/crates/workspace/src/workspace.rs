@@ -1325,6 +1325,7 @@ impl Render for WorkspaceView {
       .on_action(cx.listener(|_, _: &crate::OpenAboutPage, _window, cx| {
         NavigationHistory::navigate("/about", cx);
       }))
+      .child(ui::scroll_dispatcher())
       .child(self.render_global_bar(window, page, &pathname, cx))
       .child(div().flex_1().min_h_0().child(routes))
       .into_any_element()

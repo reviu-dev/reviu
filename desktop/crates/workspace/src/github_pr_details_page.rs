@@ -63,10 +63,10 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DropdownSelectConfig,
   DropdownSelectItem, FILE_ICON_SIZE_PX, GithubEmojiInput, Input, InputState, Popover, ReactionBar,
-  ScrollChainAxes, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusTag,
-  StatusThemeExt, UiIconName, WindowExt, dropdown_select, file_icon_path_for_name_with_theme,
-  h_resizable, parse_github_url_action, resizable_panel, restrict_scroll_to_wheel_axis,
-  scroll_chain_guard, selectable_list_item,
+  ScrollAxes, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusTag, StatusThemeExt,
+  UiIconName, WindowExt, dropdown_select, file_icon_path_for_name_with_theme, h_resizable,
+  parse_github_url_action, resizable_panel, restrict_scroll_to_wheel_axis, scrollable_node,
+  selectable_list_item,
 };
 
 use crate::{
@@ -110,6 +110,7 @@ const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const DIFF_HEADER_HEIGHT: f32 = 40.0;
 const PR_TAB_OVERVIEW_IX: usize = 0;
 const PR_TAB_CHANGES_IX: usize = 1;
+const OVERVIEW_CHECKS_SCROLL_GUARD_ID: u64 = 0xCEDC_2025_C8EC_0001;
 
 fn should_refresh_pr_overview_data(active_tab_ix: usize) -> bool {
   active_tab_ix == PR_TAB_OVERVIEW_IX
@@ -10675,10 +10676,11 @@ impl GithubPrDetailsPage {
         .enumerate()
         .map(|(ix, row)| self.render_overview_check_row(row, ix, row_count, theme)),
     );
-    let inner_guarded = scroll_chain_guard(
+    let inner_guarded = scrollable_node(
       inner,
       &self.overview_checks_scroll_handle,
-      ScrollChainAxes::vertical(),
+      ScrollAxes::vertical(),
+      OVERVIEW_CHECKS_SCROLL_GUARD_ID,
     );
 
     let content = div()
