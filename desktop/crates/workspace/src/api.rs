@@ -1062,6 +1062,7 @@ pub enum GithubPullRequestChecksRollupState {
   Success,
   Pending,
   Failure,
+  Skipped,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1194,6 +1195,8 @@ pub struct GithubPullRequestChecksSummary {
   pub failed_checks: u64,
   #[serde(rename = "pending_checks")]
   pub pending_checks: u64,
+  #[serde(default, rename = "skipped_checks")]
+  pub skipped_checks: u64,
   #[serde(rename = "required_checks_total")]
   pub required_checks_total: u64,
   #[serde(rename = "required_checks_passed")]
@@ -1202,6 +1205,8 @@ pub struct GithubPullRequestChecksSummary {
   pub required_checks_failed: u64,
   #[serde(rename = "required_checks_pending")]
   pub required_checks_pending: u64,
+  #[serde(default, rename = "required_checks_skipped")]
+  pub required_checks_skipped: u64,
   #[serde(rename = "required_contexts")]
   pub required_contexts: Vec<String>,
   #[serde(rename = "missing_required_contexts")]
