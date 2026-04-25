@@ -19,6 +19,8 @@ actions!(
     SwitchToPrBranch,
     PreviousAnnotation,
     NextAnnotation,
+    PreviousReviewComment,
+    NextReviewComment,
     ToggleHunkStage,
     RestoreHunk,
     ToggleFileStage,
