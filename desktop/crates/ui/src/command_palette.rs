@@ -952,6 +952,7 @@ impl CommandPaletteCommandId {
       Self::InteractiveRebaseEditBranch
       | Self::InteractiveRebaseOntoBranch
       | Self::InteractiveRebaseHeadCount => Some(Self::InteractiveRebase),
+      Self::CreateBranch | Self::CreateBranchFrom => Some(Self::SwitchBranch),
       _ => None,
     }
   }
@@ -3038,6 +3039,22 @@ mod tests {
       None
     );
     assert_eq!(CommandPaletteCommandId::Commit.parent_for_recents(), None);
+  }
+
+  #[test]
+  fn create_branch_variants_have_switch_branch_as_recents_parent() {
+    assert_eq!(
+      CommandPaletteCommandId::CreateBranch.parent_for_recents(),
+      Some(CommandPaletteCommandId::SwitchBranch)
+    );
+    assert_eq!(
+      CommandPaletteCommandId::CreateBranchFrom.parent_for_recents(),
+      Some(CommandPaletteCommandId::SwitchBranch)
+    );
+    assert_eq!(
+      CommandPaletteCommandId::SwitchBranch.parent_for_recents(),
+      None
+    );
   }
 
   #[test]
