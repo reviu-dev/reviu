@@ -36,12 +36,10 @@ impl Global for CommandPaletteUsageScorerGlobal {}
 
 fn list_base_item(
   ix: IndexPath,
-  total_items: usize,
+  is_last_overall: bool,
   selected_index: Option<IndexPath>,
   theme: &gpui_component::Theme,
 ) -> ListItem {
-  let is_last_item = ix.row + 1 == total_items;
-
   selectable_list_item(
     ix,
     Some(ix) == selected_index,
@@ -49,7 +47,7 @@ fn list_base_item(
     theme,
   )
   .h_8()
-  .when(is_last_item, |item| item.rounded_b(theme.radius))
+  .when(is_last_overall, |item| item.rounded_b(theme.radius))
 }
 
 fn update_selected_index<D: ListDelegate>(
@@ -281,7 +279,8 @@ impl ListDelegate for BranchesListDelegate {
     let total_items = self.matched_branches.len();
     let theme = cx.theme().clone();
 
-    let base_item = list_base_item(ix, total_items, self.selected_index, &theme);
+    let is_last = ix.row + 1 == total_items;
+    let base_item = list_base_item(ix, is_last, self.selected_index, &theme);
 
     self.matched_branches.get(ix.row).map(|branch| {
       base_item.child(
@@ -360,7 +359,8 @@ impl ListDelegate for RepositoriesListDelegate {
     let total_items = self.matched_repositories.len();
     let theme = cx.theme().clone();
 
-    let base_item = list_base_item(ix, total_items, self.selected_index, &theme);
+    let is_last = ix.row + 1 == total_items;
+    let base_item = list_base_item(ix, is_last, self.selected_index, &theme);
 
     self.matched_repositories.get(ix.row).map(|repository| {
       base_item.child(
@@ -438,7 +438,8 @@ impl ListDelegate for StashesListDelegate {
   ) -> Option<Self::Item> {
     let total_items = self.matched_stashes.len();
     let theme = cx.theme().clone();
-    let base_item = list_base_item(ix, total_items, self.selected_index, &theme);
+    let is_last = ix.row + 1 == total_items;
+    let base_item = list_base_item(ix, is_last, self.selected_index, &theme);
 
     self.matched_stashes.get(ix.row).map(|stash| {
       let label: SharedString = format!("#{} {}", stash.index, stash.name.as_ref()).into();
@@ -527,7 +528,8 @@ impl ListDelegate for BranchesListWithCommandsDelegate {
     let total_items = self.matched_branches_and_commands.len();
     let theme = cx.theme().clone();
 
-    let base_item = list_base_item(ix, total_items, self.selected_index, &theme);
+    let is_last = ix.row + 1 == total_items;
+    let base_item = list_base_item(ix, is_last, self.selected_index, &theme);
 
     self
       .matched_branches_and_commands
@@ -693,15 +695,17 @@ impl ListDelegate for CommandListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let total_in_section = self
+    let last_section_ix = self.matched_sections.len().saturating_sub(1);
+    let total_in_last_section = self
       .matched_sections
-      .get(ix.section)
+      .last()
       .map(|(_, items)| items.len())
       .unwrap_or(0);
+    let is_last_overall = ix.section == last_section_ix && ix.row + 1 == total_in_last_section;
     let theme = cx.theme().clone();
 
     self.item_at(ix).map(|command| {
-      list_base_item(ix, total_in_section, self.selected_index, &theme)
+      list_base_item(ix, is_last_overall, self.selected_index, &theme)
         .child(
           h_flex()
             .items_center()
