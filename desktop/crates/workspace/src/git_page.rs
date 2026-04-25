@@ -7700,7 +7700,7 @@ impl GitPage {
             .bottom_0()
             .left_0()
             .border_2()
-            .border_color(theme.ring.alpha(0.5)),
+            .border_color(theme.ring.alpha(0.1)),
         )
       })
       .into_any_element()
@@ -9092,7 +9092,7 @@ impl GitPage {
             .bottom_0()
             .left_0()
             .border_2()
-            .border_color(cx.theme().ring.alpha(0.5)),
+            .border_color(cx.theme().ring.alpha(0.1)),
         )
       });
 
