@@ -1617,6 +1617,7 @@ impl AuthCallbackTarget {
 
 pub struct GitPage {
   focus_handle: FocusHandle,
+  history_tree_wrapper_focus: FocusHandle,
   api: ApiClient,
   repo_dropdown_items: Vec<RecentRepoItem>,
   branch_dropdown_items: Vec<BranchSelectItem>,
@@ -2846,6 +2847,7 @@ impl GitPage {
 
     let mut view = Self {
       focus_handle: cx.focus_handle(),
+      history_tree_wrapper_focus: cx.focus_handle().tab_stop(true),
       api: WorkspaceApi::global(cx).api.clone(),
       repo_dropdown_items,
       branch_dropdown_items: Vec::new(),
@@ -2925,6 +2927,7 @@ impl GitPage {
 
     view.subscribe_to_file_list(cx);
     view.subscribe_to_commit_input(window, cx);
+    view.subscribe_to_history_tree_focus(window, cx);
     view.reload_status(cx);
     view.refresh_branches(cx);
     view.start_polling(cx);
@@ -2950,6 +2953,7 @@ impl GitPage {
 
     let mut view = Self {
       focus_handle: cx.focus_handle(),
+      history_tree_wrapper_focus: cx.focus_handle().tab_stop(true),
       api: ApiClient::new(),
       repo_dropdown_items: Vec::new(),
       branch_dropdown_items: Vec::new(),
@@ -3025,6 +3029,7 @@ impl GitPage {
 
     view.subscribe_to_file_list(cx);
     view.subscribe_to_commit_input(window, cx);
+    view.subscribe_to_history_tree_focus(window, cx);
     GitPageHandle::register(cx);
     view
   }
@@ -3337,6 +3342,19 @@ impl GitPage {
           }
         }
         ListEvent::Cancel => {}
+      },
+    )
+    .detach();
+  }
+
+  fn subscribe_to_history_tree_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    cx.on_focus_in(
+      &self.history_tree_wrapper_focus.clone(),
+      window,
+      |this, window, cx| {
+        this.history_tree.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
       },
     )
     .detach();
@@ -7664,12 +7682,27 @@ impl GitPage {
       },
     );
 
+    let tree_focused = self.history_tree_wrapper_focus.contains_focused(window, cx);
     div()
       .id("git-history-scroll-container")
+      .track_focus(&self.history_tree_wrapper_focus)
+      .relative()
       .flex_1()
       .min_h_0()
       .key_context(crate::shortcuts::GIT_HISTORY_TREE_CONTEXT)
       .child(tree_view.flex_1().w_full())
+      .when(tree_focused, |this| {
+        this.child(
+          div()
+            .absolute()
+            .top_0()
+            .right_0()
+            .bottom_0()
+            .left_0()
+            .border_2()
+            .border_color(theme.ring.alpha(0.5)),
+        )
+      })
       .into_any_element()
   }
 
