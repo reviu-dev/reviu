@@ -1,0 +1,85 @@
+---
+import { Image } from "astro:assets";
+import PuzzleIcon from "@lucide/astro/icons/puzzle";
+import FirefoxIcon from "../assets/icons/firefoxbrowser.svg";
+import ChromeIcon from "../assets/icons/googlechrome.svg";
+import { browserExtensionUrls } from "../../constants";
+
+const browsers = [
+  {
+    id: "firefox",
+    name: "Firefox",
+    icon: FirefoxIcon,
+    href: browserExtensionUrls.firefox,
+    event: "install-extension-firefox",
+  },
+  {
+    id: "chrome",
+    name: "Chrome",
+    icon: ChromeIcon,
+    href: browserExtensionUrls.chrome,
+    event: "install-extension-chrome",
+  },
+] as const;
+---
+
+<section
+  id="browser-extensions"
+  class="py-24 sm:py-32"
+  data-reveal-root
+  data-reveal-threshold="0.2"
+>
+  <div class="mx-auto max-w-5xl px-6 lg:px-8">
+    <div class="reviu-reveal mx-auto max-w-3xl text-center">
+      <h2 class="text-base/7 font-semibold text-primary">Browser extension</h2>
+      <p
+        class="mt-2 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-5xl"
+      >
+        Open GitHub pull requests in Reviu, straight from your browser.
+      </p>
+      <p class="mt-6 text-lg/8 text-muted-foreground">
+        Install the Reviu extension and a button on every GitHub pull request
+        opens it in the desktop app for review.
+      </p>
+    </div>
+
+    <div
+      class="mt-12 mx-auto grid max-w-md grid-cols-1 gap-6 sm:max-w-none sm:grid-cols-2"
+    >
+      {
+        browsers.map((browser, index) => (
+          <a
+            href={browser.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-umami-event={browser.event}
+            class="reviu-reveal reviu-hover-lift group flex h-full items-center gap-5 rounded-3xl border border-border bg-background p-6 transition-colors hover:border-primary/40"
+            style={`--reveal-delay: ${index * 125 + 150}ms;`}
+          >
+            <div class="inline-flex size-14 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+              <Image
+                src={browser.icon}
+                alt={`${browser.name} logo`}
+                width={32}
+                height={32}
+                class="size-8"
+              />
+            </div>
+            <div class="flex-1">
+              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                Install for
+              </p>
+              <p class="mt-1 text-2xl font-semibold text-foreground">
+                {browser.name}
+              </p>
+            </div>
+            <PuzzleIcon
+              class="size-5 text-muted-foreground transition-colors group-hover:text-primary"
+              aria-hidden="true"
+            />
+          </a>
+        ))
+      }
+    </div>
+  </div>
+</section>

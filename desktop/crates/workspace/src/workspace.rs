@@ -947,6 +947,9 @@ impl WorkspaceView {
     let open_about = Rc::new(|_window: &mut Window, cx: &mut App| {
       NavigationHistory::navigate("/about", cx);
     });
+    let open_browser_extensions = Rc::new(|window: &mut Window, cx: &mut App| {
+      crate::browser_extensions_dialog::open_browser_extensions_dialog(window, cx);
+    });
     let sign_in = Rc::new(|_window: &mut Window, cx: &mut App| {
       AuthCallbackTarget::start_sign_in(cx);
     });
@@ -980,6 +983,7 @@ impl WorkspaceView {
           on_open_git_config: Some(open_git_config),
           on_open_settings: Some(open_settings),
           on_open_about: Some(open_about),
+          on_open_browser_extensions: Some(open_browser_extensions.clone()),
           on_sign_in: Some(sign_in),
           on_sign_out: Some(sign_out),
         })
@@ -995,6 +999,7 @@ impl WorkspaceView {
         on_open_git_config: Some(open_git_config),
         on_open_settings: Some(open_settings),
         on_open_about: Some(open_about),
+        on_open_browser_extensions: Some(open_browser_extensions),
         on_sign_in: None,
         on_sign_out: None,
       }),

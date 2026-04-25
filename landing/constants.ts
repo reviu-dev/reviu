@@ -11,3 +11,8 @@ export const desktopDownloadUrls = {
 
 export const latestAppleSiliconDownloadUrl = desktopDownloadUrls.macAppleSilicon;
 export const latestMacIntelDownloadUrl = desktopDownloadUrls.macIntel;
+
+export const browserExtensionUrls = {
+  firefox: "https://addons.mozilla.org/en-US/firefox/addon/reviu-open-in-app/",
+  chrome: "https://chromewebstore.google.com/detail/ofifncflkbaboknlejdkifijpdkhheac",
+} as const;

@@ -44,8 +44,11 @@ pub enum UiIconName {
   Trash,
   FoldVertical,
   UnfoldVertical,
+  Puzzle,
   // Brands
   BrandX,
+  GoogleChrome,
+  FirefoxBrowser,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -92,8 +95,11 @@ impl IconNamed for UiIconName {
       UiIconName::Trash => "icons/trash.svg",
       UiIconName::FoldVertical => "icons/fold-vertical.svg",
       UiIconName::UnfoldVertical => "icons/unfold-vertical.svg",
+      UiIconName::Puzzle => "icons/puzzle.svg",
       // Brands
       UiIconName::BrandX => "icons/brands/x.svg",
+      UiIconName::GoogleChrome => "icons/brands/googlechrome.svg",
+      UiIconName::FirefoxBrowser => "icons/brands/firefoxbrowser.svg",
     }
     .into()
   }

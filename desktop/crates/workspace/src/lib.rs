@@ -36,6 +36,7 @@ mod app_profile;
 mod app_update;
 mod auth_state;
 mod billing_page;
+mod browser_extensions_dialog;
 mod command_usage;
 mod dock_badge;
 

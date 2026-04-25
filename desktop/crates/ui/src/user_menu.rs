@@ -57,6 +57,7 @@ pub struct UserMenuConfig {
   pub on_open_git_config: Option<UserMenuHandler>,
   pub on_open_settings: Option<UserMenuHandler>,
   pub on_open_about: Option<UserMenuHandler>,
+  pub on_open_browser_extensions: Option<UserMenuHandler>,
   pub on_sign_in: Option<UserMenuHandler>,
   pub on_sign_out: Option<UserMenuHandler>,
 }
@@ -69,8 +70,13 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
       let on_open_git_config = config.on_open_git_config.clone();
       let on_open_settings = config.on_open_settings.clone();
       let on_open_about = config.on_open_about.clone();
+      let on_open_browser_extensions = config.on_open_browser_extensions.clone();
 
-      if on_open_git_config.is_none() && on_open_settings.is_none() && on_open_about.is_none() {
+      if on_open_git_config.is_none()
+        && on_open_settings.is_none()
+        && on_open_about.is_none()
+        && on_open_browser_extensions.is_none()
+      {
         return None;
       }
 
@@ -117,6 +123,16 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
               ));
             }
 
+            if let Some(handler) = on_open_browser_extensions.clone() {
+              menu = menu.item(
+                PopupMenuItem::new("Browser extension")
+                  .icon(UiIconName::Puzzle)
+                  .on_click(move |_, window, cx| {
+                    handler(window, cx);
+                  }),
+              );
+            }
+
             menu
           })
           .into_any_element(),
@@ -136,6 +152,7 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
       let on_open_git_config = config.on_open_git_config.clone();
       let on_open_settings = config.on_open_settings.clone();
       let on_open_about = config.on_open_about.clone();
+      let on_open_browser_extensions = config.on_open_browser_extensions.clone();
       let on_sign_out = config.on_sign_out.clone();
 
       Some(
@@ -224,6 +241,16 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
                   handler(window, cx);
                 },
               ));
+            }
+
+            if let Some(handler) = on_open_browser_extensions.clone() {
+              menu = menu.item(
+                PopupMenuItem::new("Browser extension")
+                  .icon(UiIconName::Puzzle)
+                  .on_click(move |_, window, cx| {
+                    handler(window, cx);
+                  }),
+              );
             }
 
             if let Some(handler) = on_sign_out.clone() {
