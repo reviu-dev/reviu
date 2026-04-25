@@ -8,6 +8,7 @@ use gpui_component::{
   button::{Button, ButtonVariants as _},
   h_flex,
   menu::{DropdownMenu as _, PopupMenuItem},
+  scroll::ScrollableElement,
   skeleton::Skeleton,
   tag::Tag,
   v_flex,
@@ -147,6 +148,7 @@ pub struct GithubProfilePage {
   profile_loading: bool,
   profile_error: Option<SharedString>,
   profile_task: Option<Task<()>>,
+  content_scroll_handle: gpui::ScrollHandle,
 }
 
 impl GithubProfilePage {
@@ -161,6 +163,7 @@ impl GithubProfilePage {
       profile_loading: false,
       profile_error: None,
       profile_task: None,
+      content_scroll_handle: gpui::ScrollHandle::new(),
     }
   }
 
@@ -814,82 +817,96 @@ impl GithubProfilePage {
       .px_6()
       .child(self.render_sidebar(profile, cx))
       .child(
-        v_flex()
-          .id("github-profile-content-scroll")
-          .min_w_0()
+        div()
+          .relative()
           .flex_1()
           .h_full()
+          .min_w_0()
           .min_h_0()
-          .overflow_y_scroll()
-          .py_6()
-          .gap_4()
-          .child(
-            h_flex()
-              .w_full()
-              .gap_3()
-              .flex_wrap()
-              .child(self.render_stat("Repositories", repo_count, Icon::new(IconName::Folder), cx))
-              .child(self.render_stat(
-                stars_label,
-                number_format::format_compact_number(profile.stargazers_count),
-                Icon::new(UiIconName::Star),
-                cx,
-              ))
-              .child(self.render_stat(
-                forks_label,
-                number_format::format_compact_number(profile.forks_count),
-                Icon::new(UiIconName::GitFork),
-                cx,
-              )),
-          )
           .child(
             v_flex()
-              .w_full()
-              .gap_2()
+              .id("github-profile-content-scroll")
+              .size_full()
+              .min_h_0()
+              .overflow_y_scroll()
+              .track_scroll(&self.content_scroll_handle)
+              .py_6()
+              .pr_4()
+              .gap_4()
               .child(
                 h_flex()
-                  .items_center()
-                  .justify_between()
-                  .child(div().text_sm().font_semibold().child("Repositories"))
-                  .child(
-                    div()
-                      .text_xs()
-                      .text_color(theme.muted_foreground)
-                      .child(repository_summary),
-                  ),
+                  .w_full()
+                  .gap_3()
+                  .flex_wrap()
+                  .child(self.render_stat(
+                    "Repositories",
+                    repo_count,
+                    Icon::new(IconName::Folder),
+                    cx,
+                  ))
+                  .child(self.render_stat(
+                    stars_label,
+                    number_format::format_compact_number(profile.stargazers_count),
+                    Icon::new(UiIconName::Star),
+                    cx,
+                  ))
+                  .child(self.render_stat(
+                    forks_label,
+                    number_format::format_compact_number(profile.forks_count),
+                    Icon::new(UiIconName::GitFork),
+                    cx,
+                  )),
               )
               .child(
                 v_flex()
                   .w_full()
-                  .border_1()
-                  .border_color(theme.border)
-                  .rounded(theme.radius)
-                  .overflow_hidden()
-                  .when(profile.repositories.is_empty(), |this| {
-                    this.child(
-                      div()
-                        .p_4()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child("No repositories found."),
-                    )
-                  })
-                  .children(
-                    profile
-                      .repositories
-                      .iter()
-                      .enumerate()
-                      .map(|(ix, repository)| {
-                        let is_last = ix + 1 == profile.repositories.len();
-                        self
-                          .render_repository_row(repository, cx)
-                          .when(!is_last, |this| {
-                            this.border_b_1().border_color(theme.border)
-                          })
-                      }),
+                  .gap_2()
+                  .child(
+                    h_flex()
+                      .items_center()
+                      .justify_between()
+                      .child(div().text_sm().font_semibold().child("Repositories"))
+                      .child(
+                        div()
+                          .text_xs()
+                          .text_color(theme.muted_foreground)
+                          .child(repository_summary),
+                      ),
+                  )
+                  .child(
+                    v_flex()
+                      .w_full()
+                      .border_1()
+                      .border_color(theme.border)
+                      .rounded(theme.radius)
+                      .overflow_hidden()
+                      .when(profile.repositories.is_empty(), |this| {
+                        this.child(
+                          div()
+                            .p_4()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child("No repositories found."),
+                        )
+                      })
+                      .children(
+                        profile
+                          .repositories
+                          .iter()
+                          .enumerate()
+                          .map(|(ix, repository)| {
+                            let is_last = ix + 1 == profile.repositories.len();
+                            self
+                              .render_repository_row(repository, cx)
+                              .when(!is_last, |this| {
+                                this.border_b_1().border_color(theme.border)
+                              })
+                          }),
+                      ),
                   ),
               ),
-          ),
+          )
+          .vertical_scrollbar(&self.content_scroll_handle),
       )
   }
 }
