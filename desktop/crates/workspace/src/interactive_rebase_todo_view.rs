@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use git::{
@@ -5,19 +6,18 @@ use git::{
   InteractiveRebaseTodoEntry,
 };
 use gpui::{
-  App, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent,
-  ParentElement, Render, RenderOnce, SharedString, Styled, Subscription, WeakEntity, Window, div,
-  prelude::*, px, white,
+  AnyElement, App, Context, Corner, Entity, FocusHandle, Focusable, InteractiveElement,
+  IntoElement, KeyDownEvent, ParentElement, Render, RenderOnce, SharedString, Styled, Subscription,
+  WeakEntity, Window, div, prelude::*, px, white,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, IconName, IndexPath, Selectable, Sizable,
   button::{Button, ButtonVariant, ButtonVariants as _},
   h_flex,
   list::{List, ListDelegate, ListEvent, ListState},
-  select::{Select, SelectEvent, SelectItem, SelectState},
   v_flex,
 };
-use ui::StatusThemeExt;
+use ui::{DropdownSelectConfig, DropdownSelectItem, StatusThemeExt, dropdown_select};
 
 pub type InteractiveRebaseTodoViewHandler = Arc<
   dyn Fn(
@@ -59,7 +59,6 @@ impl InteractiveRebaseTodoViewConfig {
 struct InteractiveRebaseRow {
   commit: InteractiveRebaseCommit,
   action: InteractiveRebaseAction,
-  action_select: Entity<SelectState<Vec<InteractiveRebaseActionOption>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,7 +73,6 @@ struct InteractiveRebaseTodoListItem {
   index: usize,
   total_rows: usize,
   action: InteractiveRebaseAction,
-  action_select: Entity<SelectState<Vec<InteractiveRebaseActionOption>>>,
   short_oid: String,
   summary: String,
   selected: bool,
@@ -94,7 +92,6 @@ impl InteractiveRebaseTodoListItem {
       index,
       total_rows,
       action: row.action,
-      action_select: row.action_select.clone(),
       short_oid: row.commit.short_oid.clone(),
       summary: row.commit.summary.clone(),
       selected: false,
@@ -138,6 +135,28 @@ impl RenderOnce for InteractiveRebaseTodoListItem {
       theme.border.opacity(0.0)
     };
 
+    let view_for_action = self.view.clone();
+    let row_index = self.index;
+    let action_options = vec![
+      InteractiveRebaseActionItem::new(InteractiveRebaseAction::Pick, action),
+      InteractiveRebaseActionItem::new(InteractiveRebaseAction::Squash, action),
+      InteractiveRebaseActionItem::new(InteractiveRebaseAction::Fixup, action),
+      InteractiveRebaseActionItem::new(InteractiveRebaseAction::Drop, action),
+    ];
+    let action_dropdown_config =
+      DropdownSelectConfig::new(format!("interactive-rebase-action-{}", self.index))
+        .options(action_options)
+        .searchable(false)
+        .tab_stop(false)
+        .width(px(130.))
+        .menu_width(px(130.))
+        .anchor(Corner::TopLeft)
+        .on_select(Rc::new(move |new_action, _, cx| {
+          let _ = view_for_action.update(cx, |view, cx| {
+            view.set_row_action(row_index, new_action, cx);
+          });
+        }));
+
     h_flex()
       .id(row_id)
       .w_full()
@@ -147,14 +166,10 @@ impl RenderOnce for InteractiveRebaseTodoListItem {
       .border_2()
       .rounded(theme.radius)
       .child(
-        div().id(action_id).w(px(130.)).child(
-          Select::new(&self.action_select)
-            .small()
-            .menu_width(px(130.))
-            .when(action == InteractiveRebaseAction::Drop, |select| {
-              select.text_color(theme.red)
-            }),
-        ),
+        div()
+          .id(action_id)
+          .w(px(130.))
+          .child(dropdown_select(action_dropdown_config)),
       )
       .child(
         h_flex()
@@ -165,6 +180,7 @@ impl RenderOnce for InteractiveRebaseTodoListItem {
               .icon(IconName::ArrowUp)
               .small()
               .ghost()
+              .tab_stop(false)
               .disabled(is_first)
               .on_click(move |_, _, cx| {
                 let _ = view_for_move_up.update(cx, |view, cx| {
@@ -177,6 +193,7 @@ impl RenderOnce for InteractiveRebaseTodoListItem {
               .icon(IconName::ArrowDown)
               .small()
               .ghost()
+              .tab_stop(false)
               .disabled(is_last)
               .on_click(move |_, _, cx| {
                 let _ = view_for_move_down.update(cx, |view, cx| {
@@ -280,19 +297,56 @@ impl ListDelegate for InteractiveRebaseTodoListDelegate {
 }
 
 #[derive(Clone, Copy)]
-struct InteractiveRebaseActionOption {
+struct InteractiveRebaseActionItem {
   action: InteractiveRebaseAction,
+  selected: bool,
 }
 
-impl SelectItem for InteractiveRebaseActionOption {
-  type Value = InteractiveRebaseAction;
-
-  fn title(&self) -> SharedString {
-    InteractiveRebaseTodoView::action_label(self.action).into()
+impl InteractiveRebaseActionItem {
+  fn new(action: InteractiveRebaseAction, current: InteractiveRebaseAction) -> Self {
+    Self {
+      action,
+      selected: action == current,
+    }
   }
+
+  fn label_color(action: InteractiveRebaseAction, theme: &gpui_component::Theme) -> gpui::Hsla {
+    if action == InteractiveRebaseAction::Drop {
+      theme.red
+    } else {
+      theme.foreground
+    }
+  }
+}
+
+impl DropdownSelectItem for InteractiveRebaseActionItem {
+  type Value = InteractiveRebaseAction;
 
   fn value(&self) -> &Self::Value {
     &self.action
+  }
+
+  fn selected(&self) -> bool {
+    self.selected
+  }
+
+  fn matches(&self, query: &str) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+      return true;
+    }
+    InteractiveRebaseTodoView::action_label(self.action)
+      .to_lowercase()
+      .contains(&query.to_lowercase())
+  }
+
+  fn render_item(&self, _window: &mut Window, cx: &mut App) -> AnyElement {
+    let theme = cx.theme().clone();
+    let color = Self::label_color(self.action, &theme);
+    div()
+      .text_color(color)
+      .child(InteractiveRebaseTodoView::action_label(self.action))
+      .into_any_element()
   }
 }
 
@@ -317,27 +371,9 @@ impl InteractiveRebaseTodoView {
   ) -> Self {
     let mut rows = Vec::with_capacity(config.commits.len());
     for commit in config.commits {
-      let action_select = cx.new(|cx| {
-        let mut state = SelectState::new(Self::action_options(), None, window, cx);
-        state.set_selected_value(&InteractiveRebaseAction::Pick, window, cx);
-        state
-      });
-      let action_select_for_subscription = action_select.clone();
-      cx.subscribe(
-        &action_select,
-        move |this, _, event: &SelectEvent<Vec<InteractiveRebaseActionOption>>, cx| {
-          let SelectEvent::Confirm(Some(action)) = event else {
-            return;
-          };
-          this.set_row_action_for_select(&action_select_for_subscription, *action, cx);
-        },
-      )
-      .detach();
-
       rows.push(InteractiveRebaseRow {
         commit,
         action: InteractiveRebaseAction::Pick,
-        action_select,
       });
     }
 
@@ -349,6 +385,7 @@ impl InteractiveRebaseTodoView {
         cx,
       )
     });
+    let _ = rows_list.read(cx).focus_handle(cx).tab_stop(true);
     let has_rows = !rows.is_empty();
     rows_list.update(cx, |list, cx| {
       if has_rows {
@@ -377,23 +414,6 @@ impl InteractiveRebaseTodoView {
       on_cancel: Some(config.on_cancel),
       _subscriptions,
     }
-  }
-
-  fn action_options() -> Vec<InteractiveRebaseActionOption> {
-    vec![
-      InteractiveRebaseActionOption {
-        action: InteractiveRebaseAction::Pick,
-      },
-      InteractiveRebaseActionOption {
-        action: InteractiveRebaseAction::Squash,
-      },
-      InteractiveRebaseActionOption {
-        action: InteractiveRebaseAction::Fixup,
-      },
-      InteractiveRebaseActionOption {
-        action: InteractiveRebaseAction::Drop,
-      },
-    ]
   }
 
   fn action_label(action: InteractiveRebaseAction) -> &'static str {
@@ -461,17 +481,13 @@ impl InteractiveRebaseTodoView {
     Ok(())
   }
 
-  fn set_row_action_for_select(
+  fn set_row_action(
     &mut self,
-    action_select: &Entity<SelectState<Vec<InteractiveRebaseActionOption>>>,
+    index: usize,
     action: InteractiveRebaseAction,
     cx: &mut Context<Self>,
   ) {
-    let Some(row) = self
-      .rows
-      .iter_mut()
-      .find(|row| row.action_select == *action_select)
-    else {
+    let Some(row) = self.rows.get_mut(index) else {
       return;
     };
     row.action = action;
@@ -575,23 +591,14 @@ impl InteractiveRebaseTodoView {
   fn apply_action_to_selected_row(
     &mut self,
     action: InteractiveRebaseAction,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     let selected_index = self.rows_list.read(cx).selected_index();
     let Some(index) = selected_index.map(|ix| ix.row) else {
       return;
     };
-    let Some(row) = self.rows.get_mut(index) else {
-      return;
-    };
-
-    row.action = action;
-    row.action_select.update(cx, |select, cx| {
-      select.set_selected_value(&action, window, cx)
-    });
-    self.error = None;
-    cx.notify();
+    self.set_row_action(index, action, cx);
   }
 
   fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -672,7 +679,7 @@ impl Focusable for InteractiveRebaseTodoView {
 }
 
 impl Render for InteractiveRebaseTodoView {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let target_label: SharedString = match &self.target {
       InteractiveRebaseTarget::Branch(branch) => format!("Target: {}", branch.name).into(),
@@ -684,6 +691,7 @@ impl Render for InteractiveRebaseTodoView {
     let validation_error = self.validate_rows().err();
     let can_submit = validation_error.is_none();
     let error = self.error.clone().or(validation_error);
+    let list_focused = self.rows_list.read(cx).focus_handle(cx).is_focused(window);
 
     v_flex()
       .track_focus(&self.focus_handle)
@@ -718,6 +726,7 @@ impl Render for InteractiveRebaseTodoView {
       .child(
         div()
           .id("interactive-rebase-rows")
+          .relative()
           .flex_1()
           .min_h_0()
           .overflow_hidden()
@@ -730,7 +739,19 @@ impl Render for InteractiveRebaseTodoView {
               .flex_1()
               .min_h_0()
               .p(px(6.)),
-          ),
+          )
+          .when(list_focused, |this| {
+            this.child(
+              div()
+                .absolute()
+                .top_0()
+                .right_0()
+                .bottom_0()
+                .left_0()
+                .border_2()
+                .border_color(cx.theme().ring.alpha(0.5)),
+            )
+          }),
       )
       .when_some(error, |parent, error| {
         parent.child(div().text_sm().text_color(theme.red).child(error))
@@ -763,28 +784,18 @@ mod tests {
   use gpui::{Keystroke, Modifiers};
 
   #[test]
-  fn action_options_use_expected_order_and_labels() {
-    let options = InteractiveRebaseTodoView::action_options();
-
-    assert_eq!(
-      options
-        .iter()
-        .map(|option| option.action)
-        .collect::<Vec<_>>(),
-      vec![
-        InteractiveRebaseAction::Pick,
-        InteractiveRebaseAction::Squash,
-        InteractiveRebaseAction::Fixup,
-        InteractiveRebaseAction::Drop,
-      ]
-    );
-    assert_eq!(
-      options
-        .iter()
-        .map(|option| option.title().to_string())
-        .collect::<Vec<_>>(),
-      vec!["pick", "squash", "fixup", "drop"]
-    );
+  fn action_labels_match_expected_keywords() {
+    let actions = [
+      InteractiveRebaseAction::Pick,
+      InteractiveRebaseAction::Squash,
+      InteractiveRebaseAction::Fixup,
+      InteractiveRebaseAction::Drop,
+    ];
+    let labels: Vec<&str> = actions
+      .iter()
+      .map(|action| InteractiveRebaseTodoView::action_label(*action))
+      .collect();
+    assert_eq!(labels, vec!["pick", "squash", "fixup", "drop"]);
   }
 
   #[test]
