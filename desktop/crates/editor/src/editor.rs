@@ -5480,9 +5480,6 @@ impl Editor {
 
   pub(crate) fn highlighted_conflict_doc_range(&self, cx: &App) -> Option<Range<usize>> {
     let regions = self.conflict_regions(cx);
-    if regions.len() <= 1 {
-      return None;
-    }
     let active_index = self.active_conflict_index(regions.as_ref(), cx)?;
     let region = &regions[active_index];
     Some(region.start_line..region.replace_end_line)
@@ -5722,9 +5719,7 @@ impl Editor {
       let document = self.document.read(cx);
       document.char_to_line(self.cursor_offset().min(document.len()))
     };
-    let cursor_display_line = self
-      .doc_to_display_line(cursor_doc_line)
-      .unwrap_or(usize::MAX);
+    let cursor_display_line = self.cursor_display_line_for_anchoring(cursor_doc_line);
 
     let mut active = 0;
     for (idx, (_, display_line)) in ordered.iter().enumerate() {
@@ -5735,6 +5730,21 @@ impl Editor {
       }
     }
     Some(active)
+  }
+
+  fn cursor_display_line_for_anchoring(&self, cursor_doc_line: usize) -> usize {
+    if let Some(display) = self.doc_to_display_line(cursor_doc_line) {
+      return display;
+    }
+    let Some(projection) = self.projection.as_ref() else {
+      return 0;
+    };
+    if let Some(previous) = projection.previous_visible_doc_line(cursor_doc_line)
+      && let Some(display) = projection.doc_to_display_line(previous)
+    {
+      return display.saturating_add(1);
+    }
+    0
   }
 
   pub fn hunk_navigation_state(&self, cx: &App) -> Option<HunkNavigationState> {
@@ -5757,9 +5767,6 @@ impl Editor {
 
   pub fn highlighted_hunk_group_id(&self, cx: &App) -> Option<Arc<str>> {
     let ordered = self.ordered_hunk_display_lines();
-    if ordered.len() <= 1 {
-      return None;
-    }
     let active_index = self.active_hunk_index(&ordered, cx)?;
     Some(ordered[active_index].0.clone())
   }
