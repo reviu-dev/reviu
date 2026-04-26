@@ -17,6 +17,7 @@ actions!(
     ForcePushChanges,
     ToggleDiffView,
     SwitchToPrBranch,
+    ToggleHideWhitespace,
     PreviousAnnotation,
     NextAnnotation,
     PreviousReviewComment,

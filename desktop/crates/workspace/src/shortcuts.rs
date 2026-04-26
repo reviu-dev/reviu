@@ -21,7 +21,8 @@ use crate::{
   OpenGitPage, OpenGithubPage, OpenRepository, OpenSettingsPage, PreviousAnnotation,
   PreviousPageTab, PreviousReviewComment, PullChanges, PushChanges, RefreshCurrentPage,
   RestoreFile, RestoreHunk, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
-  SwitchToPrBranch, ToggleDiffView, ToggleFileStage, ToggleHunkStage, ToggleTerminalSidebar,
+  SwitchToPrBranch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage,
+  ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -64,7 +65,8 @@ const TOGGLE_TERMINAL_CONTEXT: &str = "WorkspaceGit";
 const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceGit";
 const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
 const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
-const TOGGLE_DIFF_VIEW_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
+const TOGGLE_DIFF_VIEW_CONTEXT: &str =
+  "WorkspaceGit || WorkspaceGithubPrChanges || WorkspaceGithubCommit";
 const SWITCH_TO_PR_BRANCH_CONTEXT: &str = "WorkspaceGithubPr || WorkspaceGithubPrChanges";
 const REVIEW_ANNOTATION_CONTEXT: &str =
   "WorkspaceGit || WorkspaceGithubPrChanges || WorkspaceGithubCommit";
@@ -152,6 +154,7 @@ pub enum ShortcutId {
   OpenGitChangesSidebar,
   ToggleDiffView,
   SwitchToPrBranch,
+  ToggleHideWhitespace,
   PreviousAnnotation,
   NextAnnotation,
   PreviousReviewComment,
@@ -187,6 +190,7 @@ impl ShortcutId {
       ShortcutId::OpenGitChangesSidebar => "open_git_changes_sidebar",
       ShortcutId::ToggleDiffView => "toggle_diff_view",
       ShortcutId::SwitchToPrBranch => "switch_to_pr_branch",
+      ShortcutId::ToggleHideWhitespace => "toggle_hide_whitespace",
       ShortcutId::PreviousAnnotation => "previous_annotation",
       ShortcutId::NextAnnotation => "next_annotation",
       ShortcutId::PreviousReviewComment => "previous_review_comment",
@@ -222,6 +226,7 @@ impl ShortcutId {
       "open_git_changes_sidebar" => Some(ShortcutId::OpenGitChangesSidebar),
       "toggle_diff_view" => Some(ShortcutId::ToggleDiffView),
       "switch_to_pr_branch" => Some(ShortcutId::SwitchToPrBranch),
+      "toggle_hide_whitespace" => Some(ShortcutId::ToggleHideWhitespace),
       "previous_annotation" => Some(ShortcutId::PreviousAnnotation),
       "next_annotation" => Some(ShortcutId::NextAnnotation),
       "previous_review_comment" => Some(ShortcutId::PreviousReviewComment),
@@ -259,7 +264,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 30] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 31] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -451,9 +456,20 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 30] = [
     id: ShortcutId::ToggleDiffView,
     title: "Toggle Diff View",
     description: "Switch between inline and split diff view.",
-    scope_label: "Git page and PR Changes page",
+    scope_label: "Git page, PR Changes, and commit details",
     category: ShortcutCategory::Review,
     keystroke: "cmd-/",
+    context: TOGGLE_DIFF_VIEW_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_AND_PR_CHANGES_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ToggleHideWhitespace,
+    title: "Toggle Hide Whitespace",
+    description: "Show or hide whitespace-only changes in the diff.",
+    scope_label: "Git page, PR Changes, and commit details",
+    category: ShortcutCategory::Review,
+    keystroke: "cmd-alt-/",
     context: TOGGLE_DIFF_VIEW_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
     active_contexts: &GIT_AND_PR_CHANGES_ACTIVE_CONTEXTS,
@@ -893,6 +909,9 @@ impl ShortcutDefinition {
         KeyBinding::new(keystroke, OpenGitChangesSidebar, Some(&context))
       }
       ShortcutId::ToggleDiffView => KeyBinding::new(keystroke, ToggleDiffView, Some(&context)),
+      ShortcutId::ToggleHideWhitespace => {
+        KeyBinding::new(keystroke, ToggleHideWhitespace, Some(&context))
+      }
       ShortcutId::SwitchToPrBranch => KeyBinding::new(keystroke, SwitchToPrBranch, Some(&context)),
       ShortcutId::PreviousAnnotation => {
         KeyBinding::new(keystroke, PreviousAnnotation, Some(&context))
@@ -1269,6 +1288,7 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::OpenGitHistorySidebar => f(&OpenGitHistorySidebar),
     ShortcutId::OpenGitChangesSidebar => f(&OpenGitChangesSidebar),
     ShortcutId::ToggleDiffView => f(&ToggleDiffView),
+    ShortcutId::ToggleHideWhitespace => f(&ToggleHideWhitespace),
     ShortcutId::SwitchToPrBranch => f(&SwitchToPrBranch),
     ShortcutId::PreviousAnnotation => f(&PreviousAnnotation),
     ShortcutId::NextAnnotation => f(&NextAnnotation),

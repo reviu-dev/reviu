@@ -14724,6 +14724,20 @@ impl GithubPrDetailsPage {
     cx.stop_propagation();
   }
 
+  fn toggle_hide_whitespace_action(
+    &mut self,
+    _: &crate::ToggleHideWhitespace,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
+      return;
+    }
+
+    self.toggle_hide_whitespace(cx);
+    cx.stop_propagation();
+  }
+
   fn previous_page_tab_action(
     &mut self,
     _: &crate::PreviousPageTab,
@@ -15277,6 +15291,7 @@ impl Render for GithubPrDetailsPage {
       .on_action(cx.listener(GithubPrDetailsPage::previous_review_comment_action))
       .on_action(cx.listener(GithubPrDetailsPage::next_review_comment_action))
       .on_action(cx.listener(GithubPrDetailsPage::toggle_diff_view_action))
+      .on_action(cx.listener(GithubPrDetailsPage::toggle_hide_whitespace_action))
       .on_action(cx.listener(GithubPrDetailsPage::previous_page_tab_action))
       .on_action(cx.listener(GithubPrDetailsPage::next_page_tab_action))
       .on_action(cx.listener(GithubPrDetailsPage::show_file_search_action))
