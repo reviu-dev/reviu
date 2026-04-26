@@ -412,7 +412,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 29] = [
     description: "Move to the previous repository or pull request tab.",
     scope_label: "Repository and pull request pages",
     category: ShortcutCategory::Review,
-    keystroke: "cmd-shift-[",
+    keystroke: "cmd-alt-left",
     context: PAGE_TAB_CONTEXT,
     display_context: WORKSPACE_GITHUB_REPO_CONTEXT,
     active_contexts: &REPO_AND_PR_PAGE_ACTIVE_CONTEXTS,
@@ -423,7 +423,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 29] = [
     description: "Move to the next repository or pull request tab.",
     scope_label: "Repository and pull request pages",
     category: ShortcutCategory::Review,
-    keystroke: "cmd-shift-]",
+    keystroke: "cmd-alt-right",
     context: PAGE_TAB_CONTEXT,
     display_context: WORKSPACE_GITHUB_REPO_CONTEXT,
     active_contexts: &REPO_AND_PR_PAGE_ACTIVE_CONTEXTS,
@@ -1524,7 +1524,7 @@ mod tests {
 
   #[test]
   fn page_tab_shortcuts_are_scoped_to_repo_and_pr_pages() {
-    for keystroke in ["cmd-shift-[", "cmd-shift-]"] {
+    for keystroke in ["cmd-alt-left", "cmd-alt-right"] {
       assert!(!has_binding("/git", keystroke));
       assert!(!has_binding("/github", keystroke));
       assert!(has_binding("/github/owner/repo", keystroke));
