@@ -749,7 +749,7 @@ impl Render for InteractiveRebaseTodoView {
                 .bottom_0()
                 .left_0()
                 .border_2()
-                .border_color(cx.theme().ring.alpha(0.5)),
+                .border_color(cx.theme().ring.alpha(0.1)),
             )
           }),
       )
