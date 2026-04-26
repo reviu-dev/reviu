@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 The focused hunk is highlighted with a blue gutter and border so you can see where you are while stepping through changes. Tab now cycles through the file list, and dedicated shortcuts act on the focused hunk or selected file: Shift-Enter and Shift-Backspace stage or restore the hunk, Cmd-Enter and Cmd-Backspace stage or restore the whole file.
 
+### Keyboard Navigation on GitHub Pages
+
+Cmd-Alt-Left and Cmd-Alt-Right cycle through tabs on the GitHub home, repository, and pull request pages. In PR Changes and commit details, Cmd-Alt-Up and Cmd-Alt-Down jump between changes; Cmd-Alt-Shift-Up and Cmd-Alt-Shift-Down move through review comments. Switching tabs automatically focuses the relevant search input or file tree so Tab keeps working as you go.
+
 ### Clearer Feedback for Command Palette Actions
 
 Command palette actions now confirm success with a toast, including "Already up to date" for rebase, merge, and pull when there's nothing to do. Errors keep the palette open so you can retry, and commands that don't apply in the current state are hidden.
