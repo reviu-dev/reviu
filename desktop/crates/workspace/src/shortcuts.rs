@@ -41,6 +41,7 @@ pub const WORKSPACE_GITHUB_REPO_CODE_CONTEXT: &str =
 pub const WORKSPACE_GITHUB_PR_CONTEXT: &str = "Workspace WorkspaceGithubPr";
 pub const WORKSPACE_GITHUB_PR_CHANGES_CONTEXT: &str =
   "Workspace WorkspaceGithubPr WorkspaceGithubPrChanges";
+pub const WORKSPACE_GITHUB_COMMIT_CONTEXT: &str = "Workspace WorkspaceGithubCommit";
 pub const WORKSPACE_BILLING_CONTEXT: &str = "Workspace WorkspaceBilling";
 pub const WORKSPACE_GIT_CONFIG_CONTEXT: &str = "Workspace WorkspaceGitConfig";
 pub const WORKSPACE_SETTINGS_CONTEXT: &str = "Workspace WorkspaceSettings";
@@ -60,27 +61,29 @@ const OPEN_SETTINGS_CONTEXT: &str = "Workspace";
 const NAVIGATE_BACK_CONTEXT: &str = "Workspace";
 const OPEN_GIT_PAGE_CONTEXT: &str = "Workspace";
 const OPEN_GITHUB_PAGE_CONTEXT: &str = "Workspace";
-const REFRESH_CURRENT_PAGE_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubHome || WorkspaceGithubRepo || WorkspaceGithubRepoCode || WorkspaceGithubPr || WorkspaceGithubPrChanges";
+const REFRESH_CURRENT_PAGE_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubHome || WorkspaceGithubRepo || WorkspaceGithubRepoCode || WorkspaceGithubPr || WorkspaceGithubPrChanges || WorkspaceGithubCommit";
 const TOGGLE_TERMINAL_CONTEXT: &str = "WorkspaceGit";
 const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceGit";
 const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
 const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
 const TOGGLE_DIFF_VIEW_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
 const SWITCH_TO_PR_BRANCH_CONTEXT: &str = "WorkspaceGithubPr || WorkspaceGithubPrChanges";
-const REVIEW_ANNOTATION_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
+const REVIEW_ANNOTATION_CONTEXT: &str =
+  "WorkspaceGit || WorkspaceGithubPrChanges || WorkspaceGithubCommit";
 const REVIEW_COMMENT_CONTEXT: &str = "WorkspaceGithubPrChanges";
 const HUNK_ACTION_CONTEXT: &str = "WorkspaceGit";
 const HUNK_ACTION_DESCENDANT_FOCUS: &str = "List || Editor";
 const PAGE_TAB_CONTEXT: &str =
   "WorkspaceGithubRepo || WorkspaceGithubRepoCode || WorkspaceGithubPr || WorkspaceGithubPrChanges";
 
-const ALL_WORKSPACE_ACTIVE_CONTEXTS: [&str; 10] = [
+const ALL_WORKSPACE_ACTIVE_CONTEXTS: [&str; 11] = [
   WORKSPACE_GIT_CONTEXT,
   WORKSPACE_GITHUB_HOME_CONTEXT,
   WORKSPACE_GITHUB_REPO_CONTEXT,
   WORKSPACE_GITHUB_REPO_CODE_CONTEXT,
   WORKSPACE_GITHUB_PR_CONTEXT,
   WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
+  WORKSPACE_GITHUB_COMMIT_CONTEXT,
   WORKSPACE_BILLING_CONTEXT,
   WORKSPACE_GIT_CONFIG_CONTEXT,
   WORKSPACE_SETTINGS_CONTEXT,
@@ -93,13 +96,14 @@ const FILE_SEARCH_ACTIVE_CONTEXTS: [&str; 3] = [
   WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
 ];
 
-const REFRESHABLE_PAGE_ACTIVE_CONTEXTS: [&str; 6] = [
+const REFRESHABLE_PAGE_ACTIVE_CONTEXTS: [&str; 7] = [
   WORKSPACE_GIT_CONTEXT,
   WORKSPACE_GITHUB_HOME_CONTEXT,
   WORKSPACE_GITHUB_REPO_CONTEXT,
   WORKSPACE_GITHUB_REPO_CODE_CONTEXT,
   WORKSPACE_GITHUB_PR_CONTEXT,
   WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
+  WORKSPACE_GITHUB_COMMIT_CONTEXT,
 ];
 
 const GIT_ONLY_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_GIT_CONTEXT];
@@ -111,8 +115,11 @@ const SECONDARY_PAGE_ACTIVE_CONTEXTS: [&str; 4] = [
   WORKSPACE_ABOUT_CONTEXT,
 ];
 
-const GIT_AND_PR_CHANGES_ACTIVE_CONTEXTS: [&str; 2] =
-  [WORKSPACE_GIT_CONTEXT, WORKSPACE_GITHUB_PR_CHANGES_CONTEXT];
+const GIT_AND_PR_CHANGES_ACTIVE_CONTEXTS: [&str; 3] = [
+  WORKSPACE_GIT_CONTEXT,
+  WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
+  WORKSPACE_GITHUB_COMMIT_CONTEXT,
+];
 
 const PR_PAGE_ACTIVE_CONTEXTS: [&str; 2] = [
   WORKSPACE_GITHUB_PR_CONTEXT,
@@ -1087,6 +1094,10 @@ pub fn key_context_for_pathname(pathname: &str) -> &'static str {
       return WORKSPACE_GITHUB_PR_CONTEXT;
     }
 
+    if segments.len() >= 5 && segments[3] == "commit" {
+      return WORKSPACE_GITHUB_COMMIT_CONTEXT;
+    }
+
     if segments.len() >= 4 && segments[3] == "code" && !segments.contains(&"pull") {
       return WORKSPACE_GITHUB_REPO_CODE_CONTEXT;
     }
@@ -1366,7 +1377,7 @@ mod tests {
     );
     assert_eq!(
       key_context_for_pathname("/github/owner/repo/commit/abc123"),
-      WORKSPACE_GITHUB_REPO_CONTEXT
+      WORKSPACE_GITHUB_COMMIT_CONTEXT
     );
     assert_eq!(
       key_context_for_pathname("/github/owner/repo/pull/42"),

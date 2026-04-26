@@ -5,7 +5,7 @@ use std::{
   sync::Arc,
 };
 
-use editor::{DiffViewMode, Editor};
+use editor::{DiffViewMode, Editor, HunkNavigationDirection};
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
 use gpui::{
   AnyElement, App, Context, Corner, Entity, FocusHandle, Focusable, ParentElement, Render,
@@ -305,6 +305,7 @@ impl GithubCommitDetailsPageHandle {
 
 pub struct GithubCommitDetailsPage {
   focus_handle: FocusHandle,
+  pending_tree_focus: bool,
   api: ApiClient,
   owner: SharedString,
   repo: SharedString,
@@ -355,6 +356,7 @@ impl GithubCommitDetailsPage {
 
     Self {
       focus_handle: cx.focus_handle(),
+      pending_tree_focus: false,
       api: WorkspaceApi::global(cx).api.clone(),
       owner: "".into(),
       repo: "".into(),
@@ -443,6 +445,7 @@ impl GithubCommitDetailsPage {
             });
             this.commit = Some(commit);
             this.commit_error = None;
+            this.pending_tree_focus = true;
             if let Some(selected_id) = selected_id {
               this.select_file_by_path(&selected_id, cx);
             }
@@ -876,6 +879,7 @@ impl GithubCommitDetailsPage {
     div()
       .flex()
       .flex_col()
+      .bg(theme.sidebar)
       .border_b_1()
       .border_color(theme.border)
       .px_3()
@@ -1357,6 +1361,7 @@ impl GithubCommitDetailsPage {
     h_flex()
       .h(px(COMMIT_HEADER_HEIGHT))
       .px_3()
+      .bg(theme.sidebar)
       .items_center()
       .justify_between()
       .border_b_1()
@@ -1398,6 +1403,7 @@ impl GithubCommitDetailsPage {
 
     h_flex()
       .h(px(COMMIT_HEADER_HEIGHT))
+      .bg(theme.sidebar)
       .px_3()
       .items_center()
       .justify_between()
@@ -1644,6 +1650,30 @@ impl GithubCommitDetailsPage {
     self.open_command_palette(window, cx);
   }
 
+  fn previous_annotation_action(
+    &mut self,
+    _: &crate::PreviousAnnotation,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.diff_editor.update(cx, |editor, cx| {
+      editor.navigate_hunk(HunkNavigationDirection::Previous, cx);
+    });
+    cx.stop_propagation();
+  }
+
+  fn next_annotation_action(
+    &mut self,
+    _: &crate::NextAnnotation,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.diff_editor.update(cx, |editor, cx| {
+      editor.navigate_hunk(HunkNavigationDirection::Next, cx);
+    });
+    cx.stop_propagation();
+  }
+
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = AuthStateStore::has_github_access(cx);
     let commands = CommandPaletteCommand::default_global_commands(
@@ -1766,12 +1796,22 @@ impl Focusable for GithubCommitDetailsPage {
 
 impl Render for GithubCommitDetailsPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    if self.pending_tree_focus {
+      self.pending_tree_focus = false;
+      cx.on_next_frame(window, |this, window, cx| {
+        this
+          .tree_state
+          .update(cx, |state, cx| state.focus(window, cx));
+      });
+    }
     div()
       .size_full()
       .flex()
       .flex_col()
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(Self::show_command_palette_action))
+      .on_action(cx.listener(Self::previous_annotation_action))
+      .on_action(cx.listener(Self::next_annotation_action))
       .child(self.render_header(cx))
       .child(
         div()
