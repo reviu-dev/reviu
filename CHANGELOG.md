@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 The focused hunk is highlighted with a blue gutter and border so you can see where you are while stepping through changes. Tab now cycles through the file list, and dedicated shortcuts act on the focused hunk or selected file: Shift-Enter and Shift-Backspace stage or restore the hunk, Cmd-Enter and Cmd-Backspace stage or restore the whole file.
 
+### Keyboard Conflict Resolution
+
+Resolve merge conflicts without leaving the keyboard. Cmd-Alt-Up and Cmd-Alt-Down step through conflicts, then Shift-Enter accepts the current change, Shift-Backspace accepts the incoming change, and Cmd-Shift-Enter accepts both. After each resolution Reviu jumps to the next conflict so you can clear them all in a row.
+
 ### Keyboard Navigation on GitHub Pages
 
 Cmd-Alt-Left and Cmd-Alt-Right cycle through tabs on the GitHub home, repository, and pull request pages. In PR Changes and commit details, Cmd-Alt-Up and Cmd-Alt-Down jump between changes; Cmd-Alt-Shift-Up and Cmd-Alt-Shift-Down move through review comments. Switching tabs automatically focuses the relevant search input or file tree so Tab keeps working as you go.

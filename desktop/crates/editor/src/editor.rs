@@ -579,6 +579,7 @@ pub struct Editor {
   diff_view_mode: DiffViewMode,
   ignore_whitespace: bool,
   pub is_read_only: bool,
+  is_unmerged: bool,
 
   // Track syntax highlighting version to invalidate cache when highlights change
   pub last_highlights_version: usize,
@@ -646,6 +647,7 @@ struct ProjectionBuildInput {
   markdown_line_height_px: f32,
   review_comment_body_heights_px: HashMap<u64, f32>,
   conflict_doc_line_ranges: Vec<Range<usize>>,
+  is_unmerged: bool,
 }
 
 fn staged_diff_from_bases(bases: &GitFileBases, rel_path: &Path) -> Option<FileDiff> {
@@ -992,6 +994,7 @@ impl Editor {
       diff_view_mode: DiffViewMode::Inline,
       ignore_whitespace: false,
       is_read_only: loaded.is_read_only,
+      is_unmerged: false,
     };
     editor.init(cx);
     editor
@@ -4632,6 +4635,8 @@ impl Editor {
         &input.conflict_doc_line_ranges,
         &input.expanded_gaps,
       )
+    } else if input.is_unmerged {
+      Projection::full(input.doc_line_count)
     } else {
       Projection::from_diffs(
         input.doc_line_count,
@@ -4808,6 +4813,7 @@ impl Editor {
       .iter()
       .map(|region| region.start_line..region.replace_end_line)
       .collect();
+    let is_unmerged = self.is_unmerged;
 
     let build_input = ProjectionBuildInput {
       doc_line_count,
@@ -4825,6 +4831,7 @@ impl Editor {
       markdown_line_height_px,
       review_comment_body_heights_px,
       conflict_doc_line_ranges,
+      is_unmerged,
     };
     let build_in_background =
       Self::should_build_projection_in_background(build_input.doc_line_count);
@@ -5407,6 +5414,14 @@ impl Editor {
     self.conflict_cache.read().line_kinds.clone()
   }
 
+  pub fn set_is_unmerged(&mut self, value: bool, cx: &mut Context<Self>) {
+    if self.is_unmerged == value {
+      return;
+    }
+    self.is_unmerged = value;
+    self.rebuild_projection(cx);
+  }
+
   pub fn has_unresolved_conflict_markers(&self, cx: &App) -> bool {
     !self.conflict_regions(cx).is_empty()
   }
@@ -5484,7 +5499,7 @@ impl Editor {
       || self.projection_task.is_some()
   }
 
-  fn reveal_conflict_start_line(&mut self, conflict_start_line: usize, cx: &mut Context<Self>) {
+  pub fn reveal_conflict_start_line(&mut self, conflict_start_line: usize, cx: &mut Context<Self>) {
     let target_display_line = self
       .doc_to_display_line(conflict_start_line)
       .unwrap_or(conflict_start_line);
@@ -9122,6 +9137,7 @@ pub mod tests {
           diff_view_mode: DiffViewMode::Inline,
           ignore_whitespace: false,
           is_read_only: false,
+          is_unmerged: false,
           last_highlights_version: 0,
           last_highlights_epoch: 0,
           cursor_blink,

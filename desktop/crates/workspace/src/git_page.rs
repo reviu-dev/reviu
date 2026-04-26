@@ -2350,6 +2350,8 @@ impl GitPage {
       self.sync_diff_view(cx);
     }
 
+    self.sync_editor_unmerged_state(cx);
+
     if self.select_first_file_after_restore {
       self.select_first_file_after_restore = false;
       if let Some(first_path) = self.status_entries.first().map(|entry| entry.path.clone()) {
@@ -5282,6 +5284,10 @@ impl GitPage {
     let Some(editor) = self.editor.clone() else {
       return;
     };
+    if self.resolve_active_conflict_in_editor(&editor, ConflictResolution::Current, cx) {
+      cx.stop_propagation();
+      return;
+    }
     editor.update(cx, |editor, cx| {
       let Some(group_id) = editor.active_hunk_group_id(cx) else {
         return;
@@ -5311,6 +5317,10 @@ impl GitPage {
     let Some(editor) = self.editor.clone() else {
       return;
     };
+    if self.resolve_active_conflict_in_editor(&editor, ConflictResolution::Incoming, cx) {
+      cx.stop_propagation();
+      return;
+    }
     editor.update(cx, |editor, cx| {
       let Some(group_id) = editor.active_hunk_group_id(cx) else {
         return;
@@ -5318,6 +5328,60 @@ impl GitPage {
       editor.enqueue_group_action(group_id, HunkAction::Restore, cx);
     });
     cx.stop_propagation();
+  }
+
+  fn accept_both_conflict_action(
+    &mut self,
+    _: &crate::AcceptBothConflict,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+    self.resolve_active_conflict_in_editor(&editor, ConflictResolution::Both, cx);
+    cx.stop_propagation();
+  }
+
+  fn sync_editor_unmerged_state(&mut self, cx: &mut Context<Self>) {
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+    if self.history_opened_commit_file.is_some() {
+      editor.update(cx, |editor, cx| editor.set_is_unmerged(false, cx));
+      return;
+    }
+    let is_unmerged = self
+      .selected_file_entry()
+      .is_some_and(|entry| entry.status == RepoStatusKind::Conflicted);
+    editor.update(cx, |editor, cx| editor.set_is_unmerged(is_unmerged, cx));
+  }
+
+  fn resolve_active_conflict_in_editor(
+    &self,
+    editor: &Entity<Editor>,
+    resolution: ConflictResolution,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let file_status = if self.history_opened_commit_file.is_some() {
+      None
+    } else {
+      self.selected_file_entry().map(|entry| entry.status)
+    };
+    if !matches!(file_status, Some(RepoStatusKind::Conflicted)) {
+      return false;
+    }
+    editor.update(cx, |editor, cx| {
+      let Some(state) = editor.conflict_navigation_state(cx) else {
+        return false;
+      };
+      editor.resolve_conflict_region(state.active_start_line, resolution, cx);
+      editor.save(cx);
+      if let Some(next_state) = editor.conflict_navigation_state(cx) {
+        editor.reveal_conflict_start_line(next_state.active_start_line, cx);
+      }
+      true
+    })
   }
 
   fn toggle_file_stage_action(
@@ -6052,9 +6116,13 @@ impl GitPage {
           Editor::new_with_loaded_file(editor_repo_root, editor_file_path, loaded, cx)
         });
         let hide_ws = this.hide_whitespace;
+        let is_unmerged = this
+          .selected_file_entry()
+          .is_some_and(|entry| entry.status == RepoStatusKind::Conflicted);
         editor.update(cx, |editor, cx| {
           editor.set_diff_view_mode(diff_view, cx);
           editor.set_ignore_whitespace(hide_ws, cx);
+          editor.set_is_unmerged(is_unmerged, cx);
           if should_reveal_first_conflict {
             editor.reveal_first_conflict(cx);
           }
@@ -9337,6 +9405,7 @@ impl Render for GitPage {
       .on_action(cx.listener(GitPage::restore_hunk_action))
       .on_action(cx.listener(GitPage::toggle_file_stage_action))
       .on_action(cx.listener(GitPage::restore_file_shortcut_action))
+      .on_action(cx.listener(GitPage::accept_both_conflict_action))
       .child(self.render_header(window, cx))
       .child(content)
   }
