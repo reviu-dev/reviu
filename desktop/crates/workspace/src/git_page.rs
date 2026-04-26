@@ -7737,9 +7737,7 @@ impl GitPage {
         .menu_width(px(TRIGGER_DROPDOWN_SELECT_WIDTH))
         .on_select(on_repo_select),
     );
-    let repo_dropdown = div()
-      .key_context(crate::shortcuts::GIT_REPO_SELECT_CONTEXT)
-      .child(repo_dropdown);
+    let repo_dropdown = div().child(repo_dropdown);
 
     let branch_dropdown = dropdown_select(
       DropdownSelectConfig::new("git-header-branch-select")
@@ -7753,9 +7751,7 @@ impl GitPage {
         .disabled(self.selected_repo.is_none())
         .on_select(on_branch_select),
     );
-    let branch_dropdown = div()
-      .key_context(crate::shortcuts::GIT_BRANCH_SELECT_CONTEXT)
-      .child(branch_dropdown);
+    let branch_dropdown = div().child(branch_dropdown);
 
     let branch_info = self.branch_status.as_ref().map(|status| {
       let ahead = status.ahead;

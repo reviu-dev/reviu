@@ -27,8 +27,6 @@ use crate::{
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
 const SHORTCUT_KEYMAP_GENERATION_CONTEXT_KEY: &str = "workspace_shortcuts_generation";
 pub const WORKSPACE_SHORTCUT_RECORDING_CONTEXT: &str = "WorkspaceShortcutRecording";
-pub const GIT_REPO_SELECT_CONTEXT: &str = "GitRepoSelect";
-pub const GIT_BRANCH_SELECT_CONTEXT: &str = "GitBranchSelect";
 pub const GIT_HISTORY_TREE_CONTEXT: &str = "GitHistoryTree";
 pub const GITHUB_PR_CHANGES_TREE_CONTEXT: &str = "GithubPrChangesTree";
 
@@ -1135,9 +1133,7 @@ fn shortcut_binding_context(context: &str, generation: u32) -> String {
 }
 
 fn guarded_shortcut_context(context: &str) -> String {
-  format!(
-    "({context}) && !{COMMAND_PALETTE_CONTEXT} && !{WORKSPACE_SHORTCUT_RECORDING_CONTEXT} && !{GIT_REPO_SELECT_CONTEXT} && !{GIT_BRANCH_SELECT_CONTEXT}"
-  )
+  format!("({context}) && !{COMMAND_PALETTE_CONTEXT} && !{WORKSPACE_SHORTCUT_RECORDING_CONTEXT}")
 }
 
 fn default_app_key_bindings() -> Vec<KeyBinding> {
@@ -1600,38 +1596,6 @@ mod tests {
       "cmd-p",
       bindings,
     ));
-  }
-
-  #[test]
-  fn repo_and_branch_select_contexts_disable_git_page_shortcuts() {
-    let bindings = workspace_key_bindings();
-
-    for context in [GIT_REPO_SELECT_CONTEXT, GIT_BRANCH_SELECT_CONTEXT] {
-      assert!(!has_binding_with_bindings_in_contexts(
-        "/git",
-        &[context],
-        SHOW_COMMAND_PALETTE_SHORTCUT,
-        bindings.clone(),
-      ));
-      assert!(!has_binding_with_bindings_in_contexts(
-        "/git",
-        &[context],
-        "cmd-p",
-        bindings.clone(),
-      ));
-      assert!(!has_binding_with_bindings_in_contexts(
-        "/git",
-        &[context],
-        "cmd-o",
-        bindings.clone(),
-      ));
-      assert!(!has_binding_with_bindings_in_contexts(
-        "/git",
-        &[context],
-        "cmd-enter",
-        bindings.clone(),
-      ));
-    }
   }
 
   #[test]
