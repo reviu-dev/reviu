@@ -4444,7 +4444,7 @@ impl GitPage {
   fn merge_branch_action(
     &mut self,
     branch_ref: BranchRef,
-    window: Option<&mut Window>,
+    mut window: Option<&mut Window>,
     reveal_first_conflict_on_open: bool,
     cx: &mut Context<Self>,
   ) -> Result<(), anyhow::Error> {
@@ -4502,6 +4502,9 @@ impl GitPage {
 
           let merge_message =
             Self::merge_commit_message(branch_ref.name.as_str(), target_branch.as_str());
+          if let Some(w) = window.as_deref_mut() {
+            self.set_sidebar_mode(GitSidebarMode::Changes, w, cx);
+          }
           self.set_commit_input_value(&merge_message, window, cx);
           if reveal_first_conflict_on_open {
             self.open_file_revealing_first_conflict(path, cx);
@@ -4710,7 +4713,8 @@ impl GitPage {
                   .commit_input
                   .update(cx, |input, cx| input.set_value(&rebase_message, window, cx));
               }
-              self.open_file(path, cx);
+              self.set_sidebar_mode(GitSidebarMode::Changes, window, cx);
+              self.open_file_revealing_first_conflict(path, cx);
               Ok(())
             } else {
               let mut data = Map::new();
@@ -4931,7 +4935,7 @@ impl GitPage {
             CommandPaletteBranchKind::Remote => BranchKind::Remote,
           },
         };
-        self.merge_branch_action(branch_ref, Some(window), false, cx)
+        self.merge_branch_action(branch_ref, Some(window), true, cx)
       }
       CommandPaletteAction::AbortMerge => {
         let Some(root_path) = self.selected_repo.clone() else {
@@ -5004,7 +5008,8 @@ impl GitPage {
                   .commit_input
                   .update(cx, |input, cx| input.set_value(&rebase_message, window, cx));
               }
-              self.open_file(path, cx);
+              self.set_sidebar_mode(GitSidebarMode::Changes, window, cx);
+              self.open_file_revealing_first_conflict(path, cx);
               Ok(())
             } else {
               let mut data = Map::new();
