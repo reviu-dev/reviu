@@ -5746,9 +5746,60 @@ impl Editor {
     }
     self.hovered_conflict_start_line = None;
     self.last_mouse_position = None;
-    self.center_display_line_in_viewport(display_line, total_display_lines);
+    let center_line = self.hunk_center_display_line(display_line);
+    self.center_display_line_in_viewport(center_line, total_display_lines);
     self.ensure_cursor_visible_with_policy(CursorRevealPolicy::WithPadding, cx);
     cx.notify();
+  }
+
+  fn hunk_center_display_line(&self, start_display_line: usize) -> usize {
+    let Some(projection) = self.projection.as_ref() else {
+      return start_display_line;
+    };
+    let group_id = match projection.lines.get(start_display_line) {
+      Some(DisplayLine::Doc {
+        group_id: Some(id), ..
+      })
+      | Some(DisplayLine::Modified {
+        group_id: Some(id), ..
+      })
+      | Some(DisplayLine::Removed {
+        group_id: Some(id), ..
+      })
+      | Some(DisplayLine::NoNewline {
+        group_id: Some(id), ..
+      }) => id.clone(),
+      _ => return start_display_line,
+    };
+    let mut end = start_display_line;
+    for (idx, line) in projection
+      .lines
+      .iter()
+      .enumerate()
+      .skip(start_display_line + 1)
+    {
+      let line_group = match line {
+        DisplayLine::Doc {
+          group_id: Some(id), ..
+        }
+        | DisplayLine::Modified {
+          group_id: Some(id), ..
+        }
+        | DisplayLine::Removed {
+          group_id: Some(id), ..
+        }
+        | DisplayLine::NoNewline {
+          group_id: Some(id), ..
+        } => Some(id),
+        _ => None,
+      };
+      if line_group.map(|id| id.as_ref()) == Some(group_id.as_ref()) {
+        end = idx;
+      } else {
+        break;
+      }
+    }
+    start_display_line + (end - start_display_line) / 2
   }
 
   pub fn resolve_all_conflicts(&mut self, resolution: ConflictResolution, cx: &mut Context<Self>) {
