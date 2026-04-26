@@ -315,6 +315,78 @@ impl Theme {
       a: 1.0,
     }
   }
+
+  pub fn current_conflict_background(&self) -> Hsla {
+    if self.is_dark {
+      Hsla {
+        h: 45.0 / 360.0,
+        s: 0.55,
+        l: 0.24,
+        a: 0.55,
+      }
+    } else {
+      Hsla {
+        h: 45.0 / 360.0,
+        s: 0.7,
+        l: 0.88,
+        a: 0.7,
+      }
+    }
+  }
+
+  pub fn current_conflict_stripe(&self) -> Hsla {
+    if self.is_dark {
+      Hsla {
+        h: 42.0 / 360.0,
+        s: 0.95,
+        l: 0.55,
+        a: 1.0,
+      }
+    } else {
+      Hsla {
+        h: 38.0 / 360.0,
+        s: 0.95,
+        l: 0.5,
+        a: 1.0,
+      }
+    }
+  }
+
+  pub fn incoming_conflict_background(&self) -> Hsla {
+    if self.is_dark {
+      Hsla {
+        h: 275.0 / 360.0,
+        s: 0.45,
+        l: 0.30,
+        a: 0.55,
+      }
+    } else {
+      Hsla {
+        h: 275.0 / 360.0,
+        s: 0.55,
+        l: 0.9,
+        a: 0.7,
+      }
+    }
+  }
+
+  pub fn incoming_conflict_stripe(&self) -> Hsla {
+    if self.is_dark {
+      Hsla {
+        h: 275.0 / 360.0,
+        s: 0.75,
+        l: 0.65,
+        a: 1.0,
+      }
+    } else {
+      Hsla {
+        h: 275.0 / 360.0,
+        s: 0.7,
+        l: 0.55,
+        a: 1.0,
+      }
+    }
+  }
 }
 
 impl Default for Theme {

@@ -41,36 +41,18 @@ fn conflict_doc_line(display_line: &DisplayLine) -> Option<usize> {
   }
 }
 
-fn incoming_conflict_background(theme: &ui::Theme) -> gpui::Hsla {
-  if theme.is_dark {
-    gpui::Hsla {
-      h: 212.0 / 360.0,
-      s: 0.44,
-      l: 0.24,
-      a: 0.6,
-    }
-  } else {
-    gpui::Hsla {
-      h: 212.0 / 360.0,
-      s: 0.42,
-      l: 0.9,
-      a: 0.72,
-    }
-  }
-}
-
 fn conflict_background(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
   match kind {
-    ConflictLineKind::Current => Some(theme.diff_added_background()),
+    ConflictLineKind::Current => Some(theme.current_conflict_background()),
     ConflictLineKind::CurrentMarker => {
-      let mut color = theme.diff_added_background();
+      let mut color = theme.current_conflict_background();
       color.a = (color.a * CONFLICT_MARKER_ALPHA_MULTIPLIER).min(1.0);
       Some(color)
     }
     ConflictLineKind::Divider => None,
-    ConflictLineKind::Incoming => Some(incoming_conflict_background(theme)),
+    ConflictLineKind::Incoming => Some(theme.incoming_conflict_background()),
     ConflictLineKind::IncomingMarker => {
-      let mut color = incoming_conflict_background(theme);
+      let mut color = theme.incoming_conflict_background();
       color.a = (color.a * CONFLICT_MARKER_ALPHA_MULTIPLIER).min(1.0);
       Some(color)
     }
@@ -85,24 +67,12 @@ enum ConflictBlockKind {
 
 fn conflict_stripe_color(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
   match kind {
-    ConflictLineKind::Current | ConflictLineKind::CurrentMarker => Some(theme.diff_gutter_added()),
+    ConflictLineKind::Current | ConflictLineKind::CurrentMarker => {
+      Some(theme.current_conflict_stripe())
+    }
     ConflictLineKind::Divider => None,
     ConflictLineKind::Incoming | ConflictLineKind::IncomingMarker => {
-      if theme.is_dark {
-        Some(gpui::Hsla {
-          h: 212.0 / 360.0,
-          s: 0.96,
-          l: 0.58,
-          a: 1.0,
-        })
-      } else {
-        Some(gpui::Hsla {
-          h: 212.0 / 360.0,
-          s: 0.95,
-          l: 0.5,
-          a: 1.0,
-        })
-      }
+      Some(theme.incoming_conflict_stripe())
     }
   }
 }
@@ -119,8 +89,8 @@ fn conflict_block_kind(kind: ConflictLineKind) -> Option<ConflictBlockKind> {
 
 fn conflict_border_color(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
   match conflict_block_kind(kind)? {
-    ConflictBlockKind::Current => Some(theme.diff_gutter_added()),
-    ConflictBlockKind::Incoming => conflict_stripe_color(theme, kind),
+    ConflictBlockKind::Current => Some(theme.current_conflict_stripe()),
+    ConflictBlockKind::Incoming => Some(theme.incoming_conflict_stripe()),
   }
 }
 
@@ -136,13 +106,12 @@ fn conflict_border_edges(
   ))
 }
 
-fn conflict_kind_for_display_line(
+fn conflict_doc_line_for_display_line(
   display_line: usize,
   projection: Option<&Projection>,
   doc_line_count: usize,
-  conflict_line_kinds: &HashMap<usize, ConflictLineKind>,
-) -> Option<ConflictLineKind> {
-  let doc_line = if let Some(projection) = projection {
+) -> Option<usize> {
+  if let Some(projection) = projection {
     projection
       .lines
       .get(display_line)
@@ -151,7 +120,16 @@ fn conflict_kind_for_display_line(
     Some(display_line)
   } else {
     None
-  }?;
+  }
+}
+
+fn conflict_kind_for_display_line(
+  display_line: usize,
+  projection: Option<&Projection>,
+  doc_line_count: usize,
+  conflict_line_kinds: &HashMap<usize, ConflictLineKind>,
+) -> Option<ConflictLineKind> {
+  let doc_line = conflict_doc_line_for_display_line(display_line, projection, doc_line_count)?;
   conflict_line_kinds.get(&doc_line).copied()
 }
 
@@ -423,6 +401,7 @@ impl Element for GutterElement {
 
       let active_hunk_group_id = editor.highlighted_hunk_group_id(cx);
       let active_hunk_focus_color = theme.hunk_focused_border();
+      let active_conflict_doc_range = editor.highlighted_conflict_doc_range(cx);
 
       // Format line numbers for visible lines
       let mut line_numbers = Vec::new();
@@ -551,9 +530,21 @@ impl Element for GutterElement {
           _ => false,
         };
 
+        let conflict_doc_line =
+          conflict_doc_line_for_display_line(display_idx, projection.as_deref(), doc_line_count);
+        let is_active_conflict_line = conflict_doc_line
+          .zip(active_conflict_doc_range.as_ref())
+          .map(|(line, range)| range.contains(&line))
+          .unwrap_or(false);
+
         if let Some(conflict_kind) = conflict_kind
-          && let Some(color) = conflict_border_color(&theme, conflict_kind)
+          && let Some(default_color) = conflict_border_color(&theme, conflict_kind)
         {
+          let color = if is_active_conflict_line {
+            active_hunk_focus_color
+          } else {
+            default_color
+          };
           let previous_conflict_kind = display_idx.checked_sub(1).and_then(|idx| {
             conflict_kind_for_display_line(
               idx,
@@ -617,6 +608,8 @@ impl Element for GutterElement {
           };
 
           let stripe_color = if is_active_hunk_line && conflict_kind.is_none() {
+            Some(active_hunk_focus_color)
+          } else if is_active_conflict_line && conflict_kind.is_some() {
             Some(active_hunk_focus_color)
           } else {
             base_stripe_color
@@ -991,26 +984,44 @@ mod tests {
   }
 
   #[test]
-  fn conflict_stripe_color_current_matches_classic_added_stripe() {
+  fn conflict_stripe_color_current_uses_current_conflict_stripe() {
     let theme = ui::Theme::dark();
     assert_eq!(
       conflict_stripe_color(&theme, ConflictLineKind::Current),
-      Some(theme.diff_gutter_added())
+      Some(theme.current_conflict_stripe())
     );
     assert_eq!(
       conflict_stripe_color(&theme, ConflictLineKind::CurrentMarker),
-      Some(theme.diff_gutter_added())
+      Some(theme.current_conflict_stripe())
     );
   }
 
   #[test]
-  fn conflict_stripe_color_incoming_is_fully_opaque() {
+  fn conflict_stripe_color_incoming_uses_incoming_conflict_stripe() {
+    let theme = ui::Theme::dark();
+    assert_eq!(
+      conflict_stripe_color(&theme, ConflictLineKind::Incoming),
+      Some(theme.incoming_conflict_stripe())
+    );
+    assert_eq!(
+      conflict_stripe_color(&theme, ConflictLineKind::IncomingMarker),
+      Some(theme.incoming_conflict_stripe())
+    );
+  }
+
+  #[test]
+  fn conflict_stripe_color_is_fully_opaque() {
     let dark = ui::Theme::dark();
     let light = ui::Theme::light();
-    let dark_color = conflict_stripe_color(&dark, ConflictLineKind::Incoming).expect("dark");
-    let light_color = conflict_stripe_color(&light, ConflictLineKind::Incoming).expect("light");
-    assert_eq!(dark_color.a, 1.0);
-    assert_eq!(light_color.a, 1.0);
+    for kind in [
+      ConflictLineKind::Current,
+      ConflictLineKind::CurrentMarker,
+      ConflictLineKind::Incoming,
+      ConflictLineKind::IncomingMarker,
+    ] {
+      assert_eq!(conflict_stripe_color(&dark, kind).expect("dark").a, 1.0);
+      assert_eq!(conflict_stripe_color(&light, kind).expect("light").a, 1.0);
+    }
   }
 
   #[test]

@@ -200,6 +200,80 @@ struct PendingStagedGroup {
   signature: Arc<str>,
 }
 
+fn push_foldable_gap(
+  gap_start: usize,
+  gap_end: usize,
+  reveal: GapReveal,
+  old_offset: isize,
+  doc_line_count: usize,
+  lines: &mut Vec<DisplayLine>,
+  start_gap: &mut Option<GapId>,
+  end_gap: &mut Option<GapId>,
+) {
+  if gap_end <= gap_start {
+    return;
+  }
+
+  let gap_len = gap_end - gap_start;
+  let gap_id = GapId {
+    start: gap_start,
+    end: gap_end,
+  };
+  let skip_marker = gap_start == 0 || gap_end == doc_line_count;
+
+  let push_doc_range = |range: Range<usize>, lines: &mut Vec<DisplayLine>| {
+    for doc_line in range {
+      let old_line = (doc_line as isize + old_offset).max(0) as usize;
+      lines.push(DisplayLine::Doc {
+        doc_line,
+        old_line: Some(old_line),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      });
+    }
+  };
+
+  if gap_len <= GAP_THRESHOLD_LINES {
+    push_doc_range(gap_start..gap_end, lines);
+    return;
+  }
+
+  let head = reveal.head.min(gap_len);
+  let tail = reveal.tail.min(gap_len.saturating_sub(head));
+  let head_end = gap_start.saturating_add(head).min(gap_end);
+  let tail_start = gap_end.saturating_sub(tail);
+
+  if head_end >= tail_start {
+    push_doc_range(gap_start..gap_end, lines);
+    return;
+  }
+
+  push_doc_range(gap_start..head_end, lines);
+
+  let remaining = tail_start.saturating_sub(head_end);
+  if remaining > GAP_THRESHOLD_LINES {
+    if skip_marker {
+      if gap_start == 0 {
+        *start_gap = Some(gap_id);
+      }
+      if gap_end == doc_line_count {
+        *end_gap = Some(gap_id);
+      }
+    } else {
+      lines.push(DisplayLine::Gap {
+        id: gap_id,
+        hidden_range: head_end..tail_start,
+      });
+    }
+  } else {
+    push_doc_range(head_end..tail_start, lines);
+  }
+
+  push_doc_range(tail_start..gap_end, lines);
+}
+
 impl Projection {
   pub fn from_diffs(
     doc_line_count: usize,
@@ -247,104 +321,16 @@ impl Projection {
                         reveal: GapReveal,
                         old_offset: isize,
                         lines: &mut Vec<DisplayLine>| {
-      if gap_end <= gap_start {
-        return;
-      }
-
-      let gap_len = gap_end - gap_start;
-      let gap_id = GapId {
-        start: gap_start,
-        end: gap_end,
-      };
-      let skip_marker = gap_start == 0 || gap_end == doc_line_count;
-
-      if gap_len <= GAP_THRESHOLD_LINES {
-        for doc_line in gap_start..gap_end {
-          let old_line = (doc_line as isize + old_offset).max(0) as usize;
-          lines.push(DisplayLine::Doc {
-            doc_line,
-            old_line: Some(old_line),
-            change: None,
-            hunk: None,
-            group_id: None,
-            secondary: false,
-          });
-        }
-        return;
-      }
-
-      let head = reveal.head.min(gap_len);
-      let tail = reveal.tail.min(gap_len.saturating_sub(head));
-      let head_end = gap_start.saturating_add(head).min(gap_end);
-      let tail_start = gap_end.saturating_sub(tail);
-
-      if head_end >= tail_start {
-        for doc_line in gap_start..gap_end {
-          let old_line = (doc_line as isize + old_offset).max(0) as usize;
-          lines.push(DisplayLine::Doc {
-            doc_line,
-            old_line: Some(old_line),
-            change: None,
-            hunk: None,
-            group_id: None,
-            secondary: false,
-          });
-        }
-        return;
-      }
-
-      for doc_line in gap_start..head_end {
-        let old_line = (doc_line as isize + old_offset).max(0) as usize;
-        lines.push(DisplayLine::Doc {
-          doc_line,
-          old_line: Some(old_line),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        });
-      }
-
-      let remaining = tail_start.saturating_sub(head_end);
-      if remaining > GAP_THRESHOLD_LINES {
-        if skip_marker {
-          if gap_start == 0 {
-            start_gap = Some(gap_id);
-          }
-          if gap_end == doc_line_count {
-            end_gap = Some(gap_id);
-          }
-        } else {
-          lines.push(DisplayLine::Gap {
-            id: gap_id,
-            hidden_range: head_end..tail_start,
-          });
-        }
-      } else {
-        for doc_line in head_end..tail_start {
-          let old_line = (doc_line as isize + old_offset).max(0) as usize;
-          lines.push(DisplayLine::Doc {
-            doc_line,
-            old_line: Some(old_line),
-            change: None,
-            hunk: None,
-            group_id: None,
-            secondary: false,
-          });
-        }
-      }
-
-      for doc_line in tail_start..gap_end {
-        let old_line = (doc_line as isize + old_offset).max(0) as usize;
-        lines.push(DisplayLine::Doc {
-          doc_line,
-          old_line: Some(old_line),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        });
-      }
+      push_foldable_gap(
+        gap_start,
+        gap_end,
+        reveal,
+        old_offset,
+        doc_line_count,
+        lines,
+        &mut start_gap,
+        &mut end_gap,
+      );
     };
 
     let mut old_line_offset: isize = 0;
@@ -450,6 +436,109 @@ impl Projection {
       });
     }
     Projection::from_lines(doc_line_count, lines, HashMap::new(), None, None)
+  }
+
+  pub fn from_conflict_regions(
+    doc_line_count: usize,
+    conflict_doc_line_ranges: &[Range<usize>],
+    expanded_gaps: &HashMap<GapId, GapReveal>,
+  ) -> Self {
+    if conflict_doc_line_ranges.is_empty() {
+      return Self::full(doc_line_count);
+    }
+
+    const CONFLICT_CONTEXT_LINES: usize = 3;
+
+    let mut sorted: Vec<Range<usize>> = conflict_doc_line_ranges
+      .iter()
+      .filter(|range| range.start < range.end)
+      .map(|range| {
+        let start = range.start.saturating_sub(CONFLICT_CONTEXT_LINES);
+        let end = range
+          .end
+          .saturating_add(CONFLICT_CONTEXT_LINES)
+          .min(doc_line_count);
+        start..end
+      })
+      .collect();
+    sorted.sort_by_key(|range| range.start);
+
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(sorted.len());
+    for range in sorted {
+      if let Some(last) = merged.last_mut()
+        && range.start <= last.end
+      {
+        last.end = last.end.max(range.end);
+      } else {
+        merged.push(range);
+      }
+    }
+
+    let mut lines = Vec::new();
+    let mut start_gap: Option<GapId> = None;
+    let mut end_gap: Option<GapId> = None;
+    let mut cursor: usize = 0;
+
+    let push = |gap_start: usize,
+                gap_end: usize,
+                lines: &mut Vec<DisplayLine>,
+                start_gap: &mut Option<GapId>,
+                end_gap: &mut Option<GapId>| {
+      let reveal = expanded_gaps
+        .get(&GapId {
+          start: gap_start,
+          end: gap_end,
+        })
+        .copied()
+        .unwrap_or_default();
+      push_foldable_gap(
+        gap_start,
+        gap_end,
+        reveal,
+        0,
+        doc_line_count,
+        lines,
+        start_gap,
+        end_gap,
+      );
+    };
+
+    for range in merged {
+      let region_start = range.start.min(doc_line_count);
+      let region_end = range.end.min(doc_line_count);
+      if cursor < region_start {
+        push(
+          cursor,
+          region_start,
+          &mut lines,
+          &mut start_gap,
+          &mut end_gap,
+        );
+      }
+      for doc_line in region_start..region_end {
+        lines.push(DisplayLine::Doc {
+          doc_line,
+          old_line: Some(doc_line),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        });
+      }
+      cursor = cursor.max(region_end);
+    }
+
+    if cursor < doc_line_count {
+      push(
+        cursor,
+        doc_line_count,
+        &mut lines,
+        &mut start_gap,
+        &mut end_gap,
+      );
+    }
+
+    Projection::from_lines(doc_line_count, lines, HashMap::new(), start_gap, end_gap)
   }
 
   pub fn display_to_doc_line(&self, display_line: usize) -> Option<usize> {
@@ -1669,6 +1758,74 @@ mod tests {
       has_unstaged,
       "projection should keep unstaged lines visible"
     );
+  }
+
+  #[test]
+  fn from_conflict_regions_folds_distant_context_and_keeps_conflicts_visible() {
+    let doc_line_count = 200;
+    let conflicts = vec![80..90, 150..160];
+    let projection = Projection::from_conflict_regions(doc_line_count, &conflicts, &HashMap::new());
+
+    let visible_doc_lines: HashSet<usize> = projection
+      .lines
+      .iter()
+      .filter_map(|line| match line {
+        DisplayLine::Doc { doc_line, .. } => Some(*doc_line),
+        _ => None,
+      })
+      .collect();
+
+    for doc_line in (80..90).chain(150..160) {
+      assert!(
+        visible_doc_lines.contains(&doc_line),
+        "conflict line {doc_line} must be visible"
+      );
+    }
+
+    for doc_line in [77, 78, 79, 90, 91, 92, 147, 148, 149, 160, 161, 162] {
+      assert!(
+        visible_doc_lines.contains(&doc_line),
+        "context line {doc_line} (3 lines around a conflict) must be visible"
+      );
+    }
+
+    assert!(
+      visible_doc_lines.len() < doc_line_count,
+      "some context lines should fold so the projection is shorter than the file"
+    );
+
+    let inline_gap_count = projection
+      .lines
+      .iter()
+      .filter(|line| matches!(line, DisplayLine::Gap { .. }))
+      .count();
+    assert_eq!(
+      inline_gap_count, 1,
+      "the gap between the two conflicts should render an inline expand control"
+    );
+
+    assert!(
+      projection.start_gap.is_some(),
+      "leading context above the first conflict should fold into start_gap"
+    );
+    assert!(
+      projection.end_gap.is_some(),
+      "trailing context after the last conflict should fold into end_gap"
+    );
+  }
+
+  #[test]
+  fn from_conflict_regions_without_ranges_returns_full_projection() {
+    let projection = Projection::from_conflict_regions(5, &[], &HashMap::new());
+    let doc_lines: Vec<usize> = projection
+      .lines
+      .iter()
+      .filter_map(|line| match line {
+        DisplayLine::Doc { doc_line, .. } => Some(*doc_line),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(doc_lines, vec![0, 1, 2, 3, 4]);
   }
 
   #[test]
