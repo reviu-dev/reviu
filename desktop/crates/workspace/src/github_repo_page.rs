@@ -3684,6 +3684,7 @@ pub struct GithubRepoPage {
   readme_syntax_highlight_cache: Arc<gfm_markdown_viewer::SyntaxHighlightCache>,
   code_request_generation: u64,
   code_tree_state: Entity<TreeState>,
+  code_tree_wrapper_focus: FocusHandle,
   code_files_loading: bool,
   code_files_error: Option<SharedString>,
   code_tree_task: Option<Task<()>>,
@@ -4002,6 +4003,7 @@ impl GithubRepoPage {
       readme_syntax_highlight_cache: Arc::new(gfm_markdown_viewer::SyntaxHighlightCache::new()),
       code_request_generation: 0,
       code_tree_state,
+      code_tree_wrapper_focus: cx.focus_handle().tab_stop(true),
       code_files_loading: false,
       code_files_error: None,
       code_tree_task: None,
@@ -4087,6 +4089,7 @@ impl GithubRepoPage {
     this.subscribe_to_issue_filter_inputs(window, cx);
     this.subscribe_to_branch_select(cx);
     this.subscribe_to_filter_selects(cx);
+    this.subscribe_to_code_tree_focus(window, cx);
     this
   }
 
@@ -4636,6 +4639,19 @@ impl GithubRepoPage {
 
       self._subscriptions.push(subscription);
     }
+  }
+
+  fn subscribe_to_code_tree_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    cx.on_focus_in(
+      &self.code_tree_wrapper_focus.clone(),
+      window,
+      |this, window, cx| {
+        this.code_tree_state.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      },
+    )
+    .detach();
   }
 
   fn subscribe_to_branch_select(&mut self, cx: &mut Context<Self>) {
@@ -7811,11 +7827,27 @@ impl GithubRepoPage {
       .into_any_element()
     };
 
-    v_flex()
-      .bg(theme.sidebar)
-      .size_full()
-      .child(header)
-      .child(div().flex_1().min_h_0().child(list))
+    let tree_focused = self.code_tree_wrapper_focus.contains_focused(window, cx);
+    v_flex().bg(theme.sidebar).size_full().child(header).child(
+      div()
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .track_focus(&self.code_tree_wrapper_focus)
+        .child(list)
+        .when(tree_focused, |this| {
+          this.child(
+            div()
+              .absolute()
+              .top_0()
+              .right_0()
+              .bottom_0()
+              .left_0()
+              .border_2()
+              .border_color(theme.ring.alpha(0.1)),
+          )
+        }),
+    )
   }
 
   fn render_code_header(
