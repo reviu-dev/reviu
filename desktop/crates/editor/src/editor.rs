@@ -5653,6 +5653,7 @@ impl Editor {
     self.last_mouse_position = None;
     self.is_dirty = true;
     self.schedule_diff_recompute(cx);
+    self.rebuild_projection(cx);
     cx.notify();
   }
 
