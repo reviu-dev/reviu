@@ -2863,6 +2863,8 @@ pub struct GithubPrDetailsPage {
   expanded_resolved_threads: HashSet<u64>,
   selected_file_review_comment_ids: Vec<u64>,
   active_review_comment_id: Option<u64>,
+  active_overview_conversation_id: Option<u64>,
+  show_overview_conversation_counter: bool,
   review_comment_handlers_enabled: bool,
   description_code_reference_requests: Vec<GithubBlobLineReference>,
   review_comment_code_reference_cache: HashMap<String, Option<ReviewCommentCodeReferencePreview>>,
@@ -3426,6 +3428,8 @@ impl GithubPrDetailsPage {
       expanded_resolved_threads: HashSet::new(),
       selected_file_review_comment_ids: Vec::new(),
       active_review_comment_id: None,
+      active_overview_conversation_id: None,
+      show_overview_conversation_counter: false,
       review_comment_handlers_enabled: true,
       description_code_reference_requests: Vec::new(),
       review_comment_code_reference_cache: HashMap::new(),
@@ -7313,6 +7317,106 @@ impl GithubPrDetailsPage {
     cx.notify();
   }
 
+  fn render_overview_conversation_counter(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    if !self.show_overview_conversation_counter {
+      return None;
+    }
+    let active_id = self.active_overview_conversation_id?;
+    let ids = self.overview_conversation_ids();
+    if ids.is_empty() {
+      return None;
+    }
+    let active_index = ids.iter().position(|id| *id == active_id)?;
+    let theme = cx.theme().clone();
+    let view = cx.entity();
+
+    Some(
+      div()
+        .absolute()
+        .top(px(16.0))
+        .left(px(24.0))
+        .child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .py_1()
+            .pl_3()
+            .pr_1()
+            .rounded(theme.radius)
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .shadow_sm()
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(format!("{}/{}", active_index + 1, ids.len())),
+            )
+            .child(
+              Button::new("github-pr-overview-conversation-counter-close")
+                .ghost()
+                .xsmall()
+                .compact()
+                .tab_stop(false)
+                .icon(IconName::Close)
+                .on_click(move |_, _, cx| {
+                  view.update(cx, |this, cx| {
+                    this.show_overview_conversation_counter = false;
+                    cx.notify();
+                  });
+                }),
+            ),
+        )
+        .into_any_element(),
+    )
+  }
+
+  fn overview_conversation_ids(&self) -> Vec<u64> {
+    self
+      .overview_timeline_items
+      .iter()
+      .filter_map(|item| match item {
+        GithubPrOverviewTimelineItem::Conversation(conversation) => Some(conversation.id),
+        _ => None,
+      })
+      .collect()
+  }
+
+  fn navigate_overview_conversation(
+    &mut self,
+    direction: ReviewCommentNavigationDirection,
+    cx: &mut Context<Self>,
+  ) {
+    let conversation_ids = self.overview_conversation_ids();
+    let Some(index) = next_review_comment_navigation_index(
+      &conversation_ids,
+      self.active_overview_conversation_id,
+      direction,
+    ) else {
+      return;
+    };
+    let Some(conversation_id) = conversation_ids.get(index).copied() else {
+      return;
+    };
+
+    let timeline_position = self.overview_timeline_items.iter().position(|item| {
+      matches!(
+        item,
+        GithubPrOverviewTimelineItem::Conversation(conversation)
+          if conversation.id == conversation_id
+      )
+    });
+    if let Some(timeline_ix) = timeline_position {
+      // Item index 0 is the header; timeline items start at 1.
+      let list_ix = timeline_ix + 1;
+      self.overview_list.scroll_to_reveal_item(list_ix);
+    }
+    self.active_overview_conversation_id = Some(conversation_id);
+    self.show_overview_conversation_counter = true;
+    cx.notify();
+  }
+
   fn submit_review_comment_edit(&mut self, comment_id: u64, body: String, cx: &mut Context<Self>) {
     if self.selected_commit_sha.is_some() {
       let message = Arc::<str>::from("Review comments are disabled for commit-level diffs");
@@ -9440,6 +9544,8 @@ impl GithubPrDetailsPage {
     self.overview_reply_error = None;
     self.selected_file_review_comment_ids.clear();
     self.active_review_comment_id = None;
+    self.active_overview_conversation_id = None;
+    self.show_overview_conversation_counter = false;
     self.description_code_reference_requests.clear();
     self.review_comment_code_reference_cache.clear();
     self.review_comment_code_reference_tasks.clear();
@@ -11309,6 +11415,27 @@ impl GithubPrDetailsPage {
       )
     };
     let body = self.render_overview_conversation_item(item, pr_number, pr_owner, pr_repo, cx);
+
+    let is_active = self.active_overview_conversation_id == Some(item.id);
+    let body = if is_active {
+      div()
+        .relative()
+        .child(body)
+        .child(
+          div()
+            .absolute()
+            .top_0()
+            .right_0()
+            .bottom_0()
+            .left_0()
+            .border_2()
+            .rounded(theme.radius)
+            .border_color(theme.ring.alpha(0.1)),
+        )
+        .into_any_element()
+    } else {
+      body
+    };
 
     Self::render_overview_timeline_shell(
       format!(
@@ -13593,6 +13720,17 @@ impl GithubPrDetailsPage {
       &self.review_comments,
     );
     self.overview_timeline_items = timeline_items;
+    if let Some(active_id) = self.active_overview_conversation_id
+      && !self.overview_timeline_items.iter().any(|item| {
+        matches!(
+          item,
+          GithubPrOverviewTimelineItem::Conversation(conversation)
+            if conversation.id == active_id
+        )
+      })
+    {
+      self.active_overview_conversation_id = None;
+    }
 
     let is_timeline_loading = self.commits_loading
       || self.issue_comments_loading
@@ -14688,11 +14826,15 @@ impl GithubPrDetailsPage {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.active_tab_ix != PR_TAB_CHANGES_IX {
-      return;
+    match self.active_tab_ix {
+      PR_TAB_CHANGES_IX => {
+        self.navigate_review_comment(ReviewCommentNavigationDirection::Previous, cx);
+      }
+      PR_TAB_OVERVIEW_IX => {
+        self.navigate_overview_conversation(ReviewCommentNavigationDirection::Previous, cx);
+      }
+      _ => return,
     }
-
-    self.navigate_review_comment(ReviewCommentNavigationDirection::Previous, cx);
     cx.stop_propagation();
   }
 
@@ -14702,11 +14844,15 @@ impl GithubPrDetailsPage {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.active_tab_ix != PR_TAB_CHANGES_IX {
-      return;
+    match self.active_tab_ix {
+      PR_TAB_CHANGES_IX => {
+        self.navigate_review_comment(ReviewCommentNavigationDirection::Next, cx);
+      }
+      PR_TAB_OVERVIEW_IX => {
+        self.navigate_overview_conversation(ReviewCommentNavigationDirection::Next, cx);
+      }
+      _ => return,
     }
-
-    self.navigate_review_comment(ReviewCommentNavigationDirection::Next, cx);
     cx.stop_propagation();
   }
 
@@ -15248,6 +15394,7 @@ impl Render for GithubPrDetailsPage {
       self.render_overview_skeleton(&theme)
     };
 
+    let overview_counter = self.render_overview_conversation_counter(cx);
     let overview_content = div()
       .id("overview-tab")
       .relative()
@@ -15255,6 +15402,7 @@ impl Render for GithubPrDetailsPage {
       .min_h_0()
       .child(overview_inner)
       .vertical_scrollbar(&self.overview_list)
+      .when_some(overview_counter, |this, counter| this.child(counter))
       .into_any_element();
 
     let changes_content = div()

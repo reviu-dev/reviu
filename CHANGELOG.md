@@ -14,7 +14,7 @@ Resolve merge conflicts without leaving the keyboard. Cmd-Alt-Up and Cmd-Alt-Dow
 
 ### Keyboard Navigation on GitHub Pages
 
-Cmd-Alt-Left and Cmd-Alt-Right cycle through tabs on the GitHub home, repository, and pull request pages. In PR Changes and commit details, Cmd-Alt-Up and Cmd-Alt-Down jump between changes; Cmd-Alt-Shift-Up and Cmd-Alt-Shift-Down move through review comments. Switching tabs automatically focuses the relevant search input or file tree so Tab keeps working as you go.
+Cmd-Alt-Left and Cmd-Alt-Right cycle through tabs on the GitHub home, repository, and pull request pages. In PR Changes and commit details, Cmd-Alt-Up and Cmd-Alt-Down jump between changes; Cmd-Alt-Shift-Up and Cmd-Alt-Shift-Down move through review comments - and now work on the PR Overview tab too, with the active conversation outlined and a floating counter showing your position in the list. Cmd-D marks the focused notification as done from the GitHub home list.
 
 ### Clearer Feedback for Command Palette Actions
 
