@@ -645,6 +645,7 @@ struct ProjectionBuildInput {
   editor_line_height_px: f32,
   markdown_line_height_px: f32,
   review_comment_body_heights_px: HashMap<u64, f32>,
+  conflict_doc_line_ranges: Vec<Range<usize>>,
 }
 
 fn staged_diff_from_bases(bases: &GitFileBases, rel_path: &Path) -> Option<FileDiff> {
@@ -4625,15 +4626,23 @@ impl Editor {
   }
 
   fn build_projection_from_diffs(input: &ProjectionBuildInput) -> Projection {
-    Projection::from_diffs(
-      input.doc_line_count,
-      &input.diffs.uncommitted,
-      &input.diffs.unstaged,
-      &input.diffs.staged,
-      &input.expanded_gaps,
-      input.align_modified,
-    )
-    .with_review_comments(
+    let projection = if !input.conflict_doc_line_ranges.is_empty() {
+      Projection::from_conflict_regions(
+        input.doc_line_count,
+        &input.conflict_doc_line_ranges,
+        &input.expanded_gaps,
+      )
+    } else {
+      Projection::from_diffs(
+        input.doc_line_count,
+        &input.diffs.uncommitted,
+        &input.diffs.unstaged,
+        &input.diffs.staged,
+        &input.expanded_gaps,
+        input.align_modified,
+      )
+    };
+    projection.with_review_comments(
       &input.projection_comments,
       &input.collapsed_review_comments,
       input.review_comment_wrap_columns,
@@ -4794,6 +4803,12 @@ impl Editor {
       );
     }
 
+    let conflict_doc_line_ranges = self
+      .conflict_regions(cx)
+      .iter()
+      .map(|region| region.start_line..region.replace_end_line)
+      .collect();
+
     let build_input = ProjectionBuildInput {
       doc_line_count,
       diffs: self
@@ -4809,6 +4824,7 @@ impl Editor {
       editor_line_height_px,
       markdown_line_height_px,
       review_comment_body_heights_px,
+      conflict_doc_line_ranges,
     };
     let build_in_background =
       Self::should_build_projection_in_background(build_input.doc_line_count);
@@ -5447,6 +5463,16 @@ impl Editor {
       .map(|region| region.start_line)
   }
 
+  pub(crate) fn highlighted_conflict_doc_range(&self, cx: &App) -> Option<Range<usize>> {
+    let regions = self.conflict_regions(cx);
+    if regions.len() <= 1 {
+      return None;
+    }
+    let active_index = self.active_conflict_index(regions.as_ref(), cx)?;
+    let region = &regions[active_index];
+    Some(region.start_line..region.replace_end_line)
+  }
+
   pub fn first_display_line_for_conflict(&self, conflict_start_line: usize) -> Option<usize> {
     self.doc_to_display_line(conflict_start_line)
   }
@@ -5467,13 +5493,29 @@ impl Editor {
       document.line_to_char(conflict_start_line)
     };
     let total_lines = self.display_line_count(self.document.read(cx).len_lines());
+    let center_line = self
+      .conflict_center_display_line(conflict_start_line, cx)
+      .unwrap_or(target_display_line);
 
     self.move_to(target_offset, cx);
     self.hovered_conflict_start_line = None;
     self.last_mouse_position = None;
-    self.center_display_line_in_viewport(target_display_line, total_lines);
+    self.center_display_line_in_viewport(center_line, total_lines);
     self.ensure_cursor_visible_with_policy(CursorRevealPolicy::WithPadding, cx);
     cx.notify();
+  }
+
+  fn conflict_center_display_line(&self, conflict_start_line: usize, cx: &App) -> Option<usize> {
+    let regions = self.conflict_regions(cx);
+    let region = regions
+      .iter()
+      .find(|region| region.start_line == conflict_start_line)?;
+    let last_doc_line = region.replace_end_line.saturating_sub(1);
+    let start_display = self.doc_to_display_line(region.start_line)?;
+    let end_display = self
+      .doc_to_display_line(last_doc_line)
+      .unwrap_or(start_display);
+    Some(start_display + (end_display.saturating_sub(start_display)) / 2)
   }
 
   pub fn reveal_first_conflict(&mut self, cx: &mut Context<Self>) {

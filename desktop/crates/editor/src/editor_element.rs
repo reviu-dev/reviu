@@ -123,36 +123,18 @@ fn conflict_doc_line(display_line: &DisplayLine) -> Option<usize> {
   }
 }
 
-fn incoming_conflict_background(theme: &Theme) -> gpui::Hsla {
-  if theme.is_dark {
-    gpui::Hsla {
-      h: 212.0 / 360.0,
-      s: 0.44,
-      l: 0.24,
-      a: 0.6,
-    }
-  } else {
-    gpui::Hsla {
-      h: 212.0 / 360.0,
-      s: 0.42,
-      l: 0.9,
-      a: 0.72,
-    }
-  }
-}
-
 fn conflict_background(theme: &Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
   match kind {
-    ConflictLineKind::Current => Some(theme.diff_added_background()),
+    ConflictLineKind::Current => Some(theme.current_conflict_background()),
     ConflictLineKind::CurrentMarker => {
-      let mut color = theme.diff_added_background();
+      let mut color = theme.current_conflict_background();
       color.a = (color.a * CONFLICT_MARKER_ALPHA_MULTIPLIER).min(1.0);
       Some(color)
     }
     ConflictLineKind::Divider => None,
-    ConflictLineKind::Incoming => Some(incoming_conflict_background(theme)),
+    ConflictLineKind::Incoming => Some(theme.incoming_conflict_background()),
     ConflictLineKind::IncomingMarker => {
-      let mut color = incoming_conflict_background(theme);
+      let mut color = theme.incoming_conflict_background();
       color.a = (color.a * CONFLICT_MARKER_ALPHA_MULTIPLIER).min(1.0);
       Some(color)
     }
@@ -163,24 +145,6 @@ fn conflict_background(theme: &Theme, kind: ConflictLineKind) -> Option<gpui::Hs
 enum ConflictBlockKind {
   Current,
   Incoming,
-}
-
-fn incoming_conflict_border_color(theme: &Theme) -> gpui::Hsla {
-  if theme.is_dark {
-    gpui::Hsla {
-      h: 212.0 / 360.0,
-      s: 0.96,
-      l: 0.58,
-      a: 1.0,
-    }
-  } else {
-    gpui::Hsla {
-      h: 212.0 / 360.0,
-      s: 0.95,
-      l: 0.5,
-      a: 1.0,
-    }
-  }
 }
 
 fn conflict_block_kind(kind: ConflictLineKind) -> Option<ConflictBlockKind> {
@@ -195,8 +159,8 @@ fn conflict_block_kind(kind: ConflictLineKind) -> Option<ConflictBlockKind> {
 
 fn conflict_border_color(theme: &Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
   match conflict_block_kind(kind)? {
-    ConflictBlockKind::Current => Some(theme.diff_gutter_added()),
-    ConflictBlockKind::Incoming => Some(incoming_conflict_border_color(theme)),
+    ConflictBlockKind::Current => Some(theme.current_conflict_stripe()),
+    ConflictBlockKind::Incoming => Some(theme.incoming_conflict_stripe()),
   }
 }
 
@@ -212,13 +176,12 @@ fn conflict_border_edges(
   ))
 }
 
-fn conflict_kind_for_display_line(
+fn conflict_doc_line_for_display_line(
   display_line: usize,
   projection: Option<&Projection>,
   doc_line_count: usize,
-  conflict_line_kinds: &HashMap<usize, ConflictLineKind>,
-) -> Option<ConflictLineKind> {
-  let doc_line = if let Some(projection) = projection {
+) -> Option<usize> {
+  if let Some(projection) = projection {
     projection
       .lines
       .get(display_line)
@@ -227,7 +190,16 @@ fn conflict_kind_for_display_line(
     Some(display_line)
   } else {
     None
-  }?;
+  }
+}
+
+fn conflict_kind_for_display_line(
+  display_line: usize,
+  projection: Option<&Projection>,
+  doc_line_count: usize,
+  conflict_line_kinds: &HashMap<usize, ConflictLineKind>,
+) -> Option<ConflictLineKind> {
+  let doc_line = conflict_doc_line_for_display_line(display_line, projection, doc_line_count)?;
   conflict_line_kinds.get(&doc_line).copied()
 }
 
@@ -1445,6 +1417,7 @@ impl Element for EditorElement {
     let conflict_line_kinds = self.editor.read(cx).conflict_line_kinds(cx);
     let active_hunk_group_id = self.editor.read(cx).highlighted_hunk_group_id(cx);
     let active_hunk_focus_color = theme.hunk_focused_border();
+    let active_conflict_doc_range = self.editor.read(cx).highlighted_conflict_doc_range(cx);
     let mut group_border_colors: HashMap<Arc<str>, (gpui::Hsla, gpui::Hsla)> = HashMap::new();
     if let Some(projection) = projection.as_ref() {
       for (group_id, group) in &projection.groups {
@@ -1606,8 +1579,19 @@ impl Element for EditorElement {
       }
 
       if let Some(conflict_kind) = conflict_kind
-        && let Some(color) = conflict_border_color(&theme, conflict_kind)
+        && let Some(default_color) = conflict_border_color(&theme, conflict_kind)
       {
+        let doc_line =
+          conflict_doc_line_for_display_line(*display_idx, projection.as_deref(), doc_line_count);
+        let is_active_conflict = doc_line
+          .zip(active_conflict_doc_range.as_ref())
+          .map(|(line, range)| range.contains(&line))
+          .unwrap_or(false);
+        let color = if is_active_conflict {
+          active_hunk_focus_color
+        } else {
+          default_color
+        };
         let previous_conflict_kind = display_idx.checked_sub(1).and_then(|idx| {
           conflict_kind_for_display_line(
             idx,
