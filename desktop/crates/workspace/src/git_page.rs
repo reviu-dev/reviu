@@ -5260,6 +5260,16 @@ impl GitPage {
     cx.stop_propagation();
   }
 
+  fn toggle_hide_whitespace_action(
+    &mut self,
+    _: &crate::ToggleHideWhitespace,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.toggle_hide_whitespace(cx);
+    cx.stop_propagation();
+  }
+
   fn previous_annotation_action(
     &mut self,
     _: &crate::PreviousAnnotation,
@@ -9404,6 +9414,7 @@ impl Render for GitPage {
       .on_action(cx.listener(GitPage::push_changes_shortcut_action))
       .on_action(cx.listener(GitPage::force_push_changes_shortcut_action))
       .on_action(cx.listener(GitPage::toggle_diff_view_action))
+      .on_action(cx.listener(GitPage::toggle_hide_whitespace_action))
       .on_action(cx.listener(GitPage::previous_annotation_action))
       .on_action(cx.listener(GitPage::next_annotation_action))
       .on_action(cx.listener(GitPage::toggle_hunk_stage_action))
