@@ -73,8 +73,7 @@ const REVIEW_ANNOTATION_CONTEXT: &str =
 const REVIEW_COMMENT_CONTEXT: &str = "WorkspaceGithubPrChanges";
 const HUNK_ACTION_CONTEXT: &str = "WorkspaceGit";
 const HUNK_ACTION_DESCENDANT_FOCUS: &str = "List || Editor";
-const PAGE_TAB_CONTEXT: &str =
-  "WorkspaceGithubRepo || WorkspaceGithubRepoCode || WorkspaceGithubPr || WorkspaceGithubPrChanges";
+const PAGE_TAB_CONTEXT: &str = "WorkspaceGithubHome || WorkspaceGithubRepo || WorkspaceGithubRepoCode || WorkspaceGithubPr || WorkspaceGithubPrChanges";
 
 const ALL_WORKSPACE_ACTIVE_CONTEXTS: [&str; 11] = [
   WORKSPACE_GIT_CONTEXT,
@@ -126,7 +125,8 @@ const PR_PAGE_ACTIVE_CONTEXTS: [&str; 2] = [
   WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
 ];
 
-const REPO_AND_PR_PAGE_ACTIVE_CONTEXTS: [&str; 4] = [
+const REPO_AND_PR_PAGE_ACTIVE_CONTEXTS: [&str; 5] = [
+  WORKSPACE_GITHUB_HOME_CONTEXT,
   WORKSPACE_GITHUB_REPO_CONTEXT,
   WORKSPACE_GITHUB_REPO_CODE_CONTEXT,
   WORKSPACE_GITHUB_PR_CONTEXT,
@@ -416,23 +416,23 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 29] = [
   ShortcutDefinition {
     id: ShortcutId::PreviousPageTab,
     title: "Previous Tab",
-    description: "Move to the previous repository or pull request tab.",
-    scope_label: "Repository and pull request pages",
+    description: "Move to the previous tab on the GitHub home, repository, or pull request page.",
+    scope_label: "GitHub home, repository, and pull request pages",
     category: ShortcutCategory::Review,
     keystroke: "cmd-alt-left",
     context: PAGE_TAB_CONTEXT,
-    display_context: WORKSPACE_GITHUB_REPO_CONTEXT,
+    display_context: WORKSPACE_GITHUB_HOME_CONTEXT,
     active_contexts: &REPO_AND_PR_PAGE_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::NextPageTab,
     title: "Next Tab",
-    description: "Move to the next repository or pull request tab.",
-    scope_label: "Repository and pull request pages",
+    description: "Move to the next tab on the GitHub home, repository, or pull request page.",
+    scope_label: "GitHub home, repository, and pull request pages",
     category: ShortcutCategory::Review,
     keystroke: "cmd-alt-right",
     context: PAGE_TAB_CONTEXT,
-    display_context: WORKSPACE_GITHUB_REPO_CONTEXT,
+    display_context: WORKSPACE_GITHUB_HOME_CONTEXT,
     active_contexts: &REPO_AND_PR_PAGE_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
@@ -1537,7 +1537,7 @@ mod tests {
   fn page_tab_shortcuts_are_scoped_to_repo_and_pr_pages() {
     for keystroke in ["cmd-alt-left", "cmd-alt-right"] {
       assert!(!has_binding("/git", keystroke));
-      assert!(!has_binding("/github", keystroke));
+      assert!(has_binding("/github", keystroke));
       assert!(has_binding("/github/owner/repo", keystroke));
       assert!(has_binding("/github/owner/repo/code", keystroke));
       assert!(has_binding("/github/owner/repo/pull/42", keystroke));

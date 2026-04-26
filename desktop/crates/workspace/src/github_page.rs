@@ -2607,7 +2607,7 @@ impl GithubPage {
   fn set_active_pull_request_tab(
     &mut self,
     index: usize,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     if index == self.pull_request_tabs.len() {
@@ -2617,6 +2617,11 @@ impl GithubPage {
 
       self.active_pull_request_tab_id = Some(GITHUB_HOME_MANAGE_TABS_ID.to_string());
       self.apply_active_pull_request_rows(cx);
+      let focus_handle = self.focus_handle.clone();
+      window.focus(&focus_handle, cx);
+      cx.on_next_frame(window, move |_, window, cx| {
+        window.focus(&focus_handle, cx);
+      });
       cx.notify();
       return;
     }
@@ -2638,6 +2643,10 @@ impl GithubPage {
     if should_refresh {
       self.refresh_active_pull_request_tab(cx);
     }
+    self.focus_search(window, cx);
+    cx.on_next_frame(window, |this, window, cx| {
+      this.focus_search(window, cx);
+    });
     cx.notify();
   }
 
@@ -3321,6 +3330,48 @@ impl GithubPage {
     self.open_command_palette(window, cx);
   }
 
+  fn pull_request_tab_count(&self) -> usize {
+    self.pull_request_tabs.len() + 1
+  }
+
+  fn current_pull_request_tab_index(&self) -> usize {
+    self
+      .active_pull_request_tab_index()
+      .unwrap_or(self.pull_request_tabs.len())
+  }
+
+  fn previous_page_tab_action(
+    &mut self,
+    _: &crate::PreviousPageTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let count = self.pull_request_tab_count();
+    if count == 0 {
+      return;
+    }
+    let current = self.current_pull_request_tab_index();
+    let next = (current + count - 1) % count;
+    self.set_active_pull_request_tab(next, window, cx);
+    cx.stop_propagation();
+  }
+
+  fn next_page_tab_action(
+    &mut self,
+    _: &crate::NextPageTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let count = self.pull_request_tab_count();
+    if count == 0 {
+      return;
+    }
+    let current = self.current_pull_request_tab_index();
+    let next = (current + 1) % count;
+    self.set_active_pull_request_tab(next, window, cx);
+    cx.stop_propagation();
+  }
+
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = AuthStateStore::has_github_access(cx);
     let commands =
@@ -3540,6 +3591,8 @@ impl GithubPage {
       .bg(theme.background)
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GithubPage::show_command_palette_action))
+      .on_action(cx.listener(GithubPage::previous_page_tab_action))
+      .on_action(cx.listener(GithubPage::next_page_tab_action))
       .child(
         div().w_full().h_full().min_h_0().overflow_y_scrollbar().child(
           div().flex().flex_col()
@@ -3877,6 +3930,8 @@ impl Render for GithubPage {
       .bg(theme.background)
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GithubPage::show_command_palette_action))
+      .on_action(cx.listener(GithubPage::previous_page_tab_action))
+      .on_action(cx.listener(GithubPage::next_page_tab_action))
       .child(
         v_flex()
           .w_full()
