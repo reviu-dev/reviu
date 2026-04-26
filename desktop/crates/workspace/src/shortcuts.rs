@@ -71,7 +71,7 @@ const TOGGLE_DIFF_VIEW_CONTEXT: &str =
 const SWITCH_TO_PR_BRANCH_CONTEXT: &str = "WorkspaceGithubPr || WorkspaceGithubPrChanges";
 const REVIEW_ANNOTATION_CONTEXT: &str =
   "WorkspaceGit || WorkspaceGithubPrChanges || WorkspaceGithubCommit";
-const REVIEW_COMMENT_CONTEXT: &str = "WorkspaceGithubPrChanges";
+const REVIEW_COMMENT_CONTEXT: &str = "WorkspaceGithubPr";
 const HUNK_ACTION_CONTEXT: &str = "WorkspaceGit";
 const HUNK_ACTION_DESCENDANT_FOCUS: &str = "List || Editor";
 const PAGE_TAB_CONTEXT: &str = "WorkspaceGithubHome || WorkspaceGithubRepo || WorkspaceGithubRepoCode || WorkspaceGithubPr || WorkspaceGithubPrChanges";
@@ -360,24 +360,24 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 32] = [
   ShortcutDefinition {
     id: ShortcutId::PreviousReviewComment,
     title: "Previous Review Comment",
-    description: "Jump to the previous review comment in the PR diff.",
-    scope_label: "PR Changes",
+    description: "Jump to the previous review comment on the PR Overview or in the PR diff.",
+    scope_label: "PR Overview and PR Changes",
     category: ShortcutCategory::Review,
     keystroke: "cmd-alt-shift-up",
     context: REVIEW_COMMENT_CONTEXT,
     display_context: WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
-    active_contexts: &[WORKSPACE_GITHUB_PR_CHANGES_CONTEXT],
+    active_contexts: &PR_PAGE_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::NextReviewComment,
     title: "Next Review Comment",
-    description: "Jump to the next review comment in the PR diff.",
-    scope_label: "PR Changes",
+    description: "Jump to the next review comment on the PR Overview or in the PR diff.",
+    scope_label: "PR Overview and PR Changes",
     category: ShortcutCategory::Review,
     keystroke: "cmd-alt-shift-down",
     context: REVIEW_COMMENT_CONTEXT,
     display_context: WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
-    active_contexts: &[WORKSPACE_GITHUB_PR_CHANGES_CONTEXT],
+    active_contexts: &PR_PAGE_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::ToggleHunkStage,
