@@ -937,6 +937,7 @@ impl VariableListDelegate for GithubNotificationListDelegate {
                             .ghost()
                             .xsmall()
                             .compact()
+                            .tab_stop(false)
                             .icon(IconName::Check)
                             .tooltip("Mark as done")
                             .on_click({
