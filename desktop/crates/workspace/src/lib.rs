@@ -27,6 +27,7 @@ actions!(
     ToggleFileStage,
     RestoreFile,
     AcceptBothConflict,
+    MarkNotificationDone,
     PreviousPageTab,
     NextPageTab,
     OpenBillingPage,
