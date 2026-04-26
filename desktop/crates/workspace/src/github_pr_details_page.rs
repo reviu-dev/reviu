@@ -8254,6 +8254,8 @@ impl GithubPrDetailsPage {
           this.focus_changes_tree(window, cx);
         }
       });
+    } else {
+      self.refocus_page_shortcuts(window, cx);
     }
   }
 
@@ -14198,7 +14200,8 @@ impl GithubPrDetailsPage {
       .child(search_controls)
       .child(
         div()
-          .p_1()
+          .pb_1()
+          .px_1()
           .flex_1()
           .min_h_0()
           .key_context(crate::shortcuts::GITHUB_PR_CHANGES_TREE_CONTEXT)

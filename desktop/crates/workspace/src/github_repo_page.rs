@@ -5370,7 +5370,15 @@ impl GithubRepoPage {
 
     if tab_ix == REPO_TAB_CODE_IX {
       self.load_code_tree_if_needed(cx);
-      window.focus(&self.focus_handle, cx);
+      let tree = self.code_tree_state.clone();
+      tree.update(cx, |state, cx| state.focus(window, cx));
+      cx.on_next_frame(window, move |this, window, cx| {
+        if this.active_tab_ix == REPO_TAB_CODE_IX {
+          this
+            .code_tree_state
+            .update(cx, |state, cx| state.focus(window, cx));
+        }
+      });
       cx.notify();
       return;
     }
@@ -7796,7 +7804,8 @@ impl GithubRepoPage {
           })
         },
       )
-      .p_1()
+      .pb_1()
+      .px_1()
       .flex_1()
       .w_full()
       .into_any_element()
