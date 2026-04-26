@@ -795,6 +795,35 @@ impl GithubNotificationListDelegate {
     }
   }
 
+  fn selected_notification_id(&self) -> Option<String> {
+    let ix = self.selected_index?;
+    self.row_at(ix).map(|row| row.notification.id.clone())
+  }
+
+  fn mark_done(
+    list_entity: &Entity<VariableListState<Self>>,
+    api: ApiClient,
+    thread_id: String,
+    cx: &mut App,
+  ) {
+    let local_id = thread_id.clone();
+    list_entity.update(cx, move |state, cx| {
+      let delegate = state.delegate_mut();
+      delegate
+        .all_rows
+        .retain(|row| row.notification.id != local_id);
+      delegate.prepare(delegate.query.clone());
+      let unread = delegate.unread_count();
+      NotificationCountStore::set(cx, unread);
+      set_dock_badge(unread);
+      cx.notify();
+    });
+    cx.spawn(async move |_| {
+      let _ = unblock(move || api.mark_notification_done(&thread_id)).await;
+    })
+    .detach();
+  }
+
   fn unread_count(&self) -> usize {
     self
       .all_rows
@@ -944,24 +973,12 @@ impl VariableListDelegate for GithubNotificationListDelegate {
                               let notification_id = notification_id.clone();
                               move |_, _window, cx| {
                                 cx.stop_propagation();
-                                let api = api.clone();
-                                let thread_id = notification_id.clone();
-
-                                list_entity.update(cx, |state, cx| {
-                                  let delegate = state.delegate_mut();
-                                  delegate.all_rows.retain(|r| r.notification.id != thread_id);
-                                  delegate.prepare(delegate.query.clone());
-                                  let unread = delegate.unread_count();
-                                  NotificationCountStore::set(cx, unread);
-                                  set_dock_badge(unread);
-                                  cx.notify();
-                                });
-
-                                cx.spawn(async move |_| {
-                                  let _ =
-                                    unblock(move || api.mark_notification_done(&thread_id)).await;
-                                })
-                                .detach();
+                                GithubNotificationListDelegate::mark_done(
+                                  &list_entity,
+                                  api.clone(),
+                                  notification_id.clone(),
+                                  cx,
+                                );
                               }
                             }),
                         ),
@@ -3330,6 +3347,24 @@ impl GithubPage {
     self.open_command_palette(window, cx);
   }
 
+  fn mark_notification_done_action(
+    &mut self,
+    _: &crate::MarkNotificationDone,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(thread_id) = self
+      .notifications
+      .read(cx)
+      .delegate()
+      .selected_notification_id()
+    else {
+      return;
+    };
+    GithubNotificationListDelegate::mark_done(&self.notifications, self.api.clone(), thread_id, cx);
+    cx.stop_propagation();
+  }
+
   fn pull_request_tab_count(&self) -> usize {
     self.pull_request_tabs.len() + 1
   }
@@ -3847,7 +3882,15 @@ impl Render for GithubPage {
       .when_some(self.notifications_error.clone(), |this, error| {
         this.child(div().text_sm().text_color(theme.status_red()).child(error))
       })
-      .child(notifications_list);
+      .child(
+        div()
+          .flex()
+          .flex_col()
+          .flex_1()
+          .min_h_0()
+          .key_context(crate::shortcuts::GITHUB_NOTIFICATIONS_LIST_CONTEXT)
+          .child(notifications_list),
+      );
 
     let repositories_count = self.repositories.read(cx).delegate().matched_rows.len();
     let create_repo_api = self.api.clone();
@@ -3932,6 +3975,7 @@ impl Render for GithubPage {
       .on_action(cx.listener(GithubPage::show_command_palette_action))
       .on_action(cx.listener(GithubPage::previous_page_tab_action))
       .on_action(cx.listener(GithubPage::next_page_tab_action))
+      .on_action(cx.listener(GithubPage::mark_notification_done_action))
       .child(
         v_flex()
           .w_full()

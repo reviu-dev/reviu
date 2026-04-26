@@ -16,13 +16,13 @@ use std::collections::HashSet;
 
 use crate::config::ConfigStore;
 use crate::{
-  AcceptBothConflict, CloseWorkspacePage, CommitChanges, ForcePushChanges, NavigateBack,
-  NextAnnotation, NextPageTab, NextReviewComment, OpenGitChangesSidebar, OpenGitHistorySidebar,
-  OpenGitPage, OpenGithubPage, OpenRepository, OpenSettingsPage, PreviousAnnotation,
-  PreviousPageTab, PreviousReviewComment, PullChanges, PushChanges, RefreshCurrentPage,
-  RestoreFile, RestoreHunk, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
-  SwitchToPrBranch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage,
-  ToggleTerminalSidebar,
+  AcceptBothConflict, CloseWorkspacePage, CommitChanges, ForcePushChanges, MarkNotificationDone,
+  NavigateBack, NextAnnotation, NextPageTab, NextReviewComment, OpenGitChangesSidebar,
+  OpenGitHistorySidebar, OpenGitPage, OpenGithubPage, OpenRepository, OpenSettingsPage,
+  PreviousAnnotation, PreviousPageTab, PreviousReviewComment, PullChanges, PushChanges,
+  RefreshCurrentPage, RestoreFile, RestoreHunk, ShowBranchSwitcher, ShowCommandPalette,
+  ShowFileSearch, SwitchToPrBranch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace,
+  ToggleHunkStage, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -30,6 +30,7 @@ const SHORTCUT_KEYMAP_GENERATION_CONTEXT_KEY: &str = "workspace_shortcuts_genera
 pub const WORKSPACE_SHORTCUT_RECORDING_CONTEXT: &str = "WorkspaceShortcutRecording";
 pub const GIT_HISTORY_TREE_CONTEXT: &str = "GitHistoryTree";
 pub const GITHUB_PR_CHANGES_TREE_CONTEXT: &str = "GithubPrChangesTree";
+pub const GITHUB_NOTIFICATIONS_LIST_CONTEXT: &str = "GithubNotificationsList";
 
 pub const WORKSPACE_CONTEXT: &str = "Workspace";
 pub const WORKSPACE_GIT_CONTEXT: &str = "Workspace WorkspaceGit";
@@ -164,6 +165,7 @@ pub enum ShortcutId {
   ToggleFileStage,
   RestoreFile,
   AcceptBothConflict,
+  MarkNotificationDone,
   PreviousPageTab,
   NextPageTab,
 }
@@ -200,6 +202,7 @@ impl ShortcutId {
       ShortcutId::ToggleFileStage => "toggle_file_stage",
       ShortcutId::RestoreFile => "restore_file",
       ShortcutId::AcceptBothConflict => "accept_both_conflict",
+      ShortcutId::MarkNotificationDone => "mark_notification_done",
       ShortcutId::PreviousPageTab => "previous_page_tab",
       ShortcutId::NextPageTab => "next_page_tab",
     }
@@ -236,6 +239,7 @@ impl ShortcutId {
       "toggle_file_stage" => Some(ShortcutId::ToggleFileStage),
       "restore_file" => Some(ShortcutId::RestoreFile),
       "accept_both_conflict" => Some(ShortcutId::AcceptBothConflict),
+      "mark_notification_done" => Some(ShortcutId::MarkNotificationDone),
       "previous_page_tab" => Some(ShortcutId::PreviousPageTab),
       "next_page_tab" => Some(ShortcutId::NextPageTab),
       _ => None,
@@ -264,7 +268,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 31] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 32] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -429,6 +433,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 31] = [
     context: HUNK_ACTION_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
     active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::MarkNotificationDone,
+    title: "Mark Notification as Done",
+    description: "Mark the focused GitHub notification as done.",
+    scope_label: "GitHub home",
+    category: ShortcutCategory::Review,
+    keystroke: "cmd-d",
+    context: "WorkspaceGithubHome",
+    display_context: WORKSPACE_GITHUB_HOME_CONTEXT,
+    active_contexts: &[WORKSPACE_GITHUB_HOME_CONTEXT],
   },
   ShortcutDefinition {
     id: ShortcutId::PreviousPageTab,
@@ -873,6 +888,9 @@ impl ShortcutDefinition {
       ShortcutId::CommitChanges => {
         format!("({}) > ({})", base, COMMIT_CHANGES_DESCENDANT_FOCUS)
       }
+      ShortcutId::MarkNotificationDone => {
+        format!("({}) > ({})", base, GITHUB_NOTIFICATIONS_LIST_CONTEXT)
+      }
       _ => base,
     };
 
@@ -929,6 +947,9 @@ impl ShortcutDefinition {
       ShortcutId::RestoreFile => KeyBinding::new(keystroke, RestoreFile, Some(&context)),
       ShortcutId::AcceptBothConflict => {
         KeyBinding::new(keystroke, AcceptBothConflict, Some(&context))
+      }
+      ShortcutId::MarkNotificationDone => {
+        KeyBinding::new(keystroke, MarkNotificationDone, Some(&context))
       }
       ShortcutId::PreviousPageTab => KeyBinding::new(keystroke, PreviousPageTab, Some(&context)),
       ShortcutId::NextPageTab => KeyBinding::new(keystroke, NextPageTab, Some(&context)),
@@ -1299,6 +1320,7 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::ToggleFileStage => f(&ToggleFileStage),
     ShortcutId::RestoreFile => f(&RestoreFile),
     ShortcutId::AcceptBothConflict => f(&AcceptBothConflict),
+    ShortcutId::MarkNotificationDone => f(&MarkNotificationDone),
     ShortcutId::PreviousPageTab => f(&PreviousPageTab),
     ShortcutId::NextPageTab => f(&NextPageTab),
   }
