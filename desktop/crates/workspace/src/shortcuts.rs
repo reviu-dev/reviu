@@ -16,12 +16,12 @@ use std::collections::HashSet;
 
 use crate::config::ConfigStore;
 use crate::{
-  CloseWorkspacePage, CommitChanges, ForcePushChanges, NavigateBack, NextAnnotation, NextPageTab,
-  NextReviewComment, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenGitPage, OpenGithubPage,
-  OpenRepository, OpenSettingsPage, PreviousAnnotation, PreviousPageTab, PreviousReviewComment,
-  PullChanges, PushChanges, RefreshCurrentPage, RestoreFile, RestoreHunk, ShowBranchSwitcher,
-  ShowCommandPalette, ShowFileSearch, SwitchToPrBranch, ToggleDiffView, ToggleFileStage,
-  ToggleHunkStage, ToggleTerminalSidebar,
+  AcceptBothConflict, CloseWorkspacePage, CommitChanges, ForcePushChanges, NavigateBack,
+  NextAnnotation, NextPageTab, NextReviewComment, OpenGitChangesSidebar, OpenGitHistorySidebar,
+  OpenGitPage, OpenGithubPage, OpenRepository, OpenSettingsPage, PreviousAnnotation,
+  PreviousPageTab, PreviousReviewComment, PullChanges, PushChanges, RefreshCurrentPage,
+  RestoreFile, RestoreHunk, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
+  SwitchToPrBranch, ToggleDiffView, ToggleFileStage, ToggleHunkStage, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -160,6 +160,7 @@ pub enum ShortcutId {
   RestoreHunk,
   ToggleFileStage,
   RestoreFile,
+  AcceptBothConflict,
   PreviousPageTab,
   NextPageTab,
 }
@@ -194,6 +195,7 @@ impl ShortcutId {
       ShortcutId::RestoreHunk => "restore_hunk",
       ShortcutId::ToggleFileStage => "toggle_file_stage",
       ShortcutId::RestoreFile => "restore_file",
+      ShortcutId::AcceptBothConflict => "accept_both_conflict",
       ShortcutId::PreviousPageTab => "previous_page_tab",
       ShortcutId::NextPageTab => "next_page_tab",
     }
@@ -228,6 +230,7 @@ impl ShortcutId {
       "restore_hunk" => Some(ShortcutId::RestoreHunk),
       "toggle_file_stage" => Some(ShortcutId::ToggleFileStage),
       "restore_file" => Some(ShortcutId::RestoreFile),
+      "accept_both_conflict" => Some(ShortcutId::AcceptBothConflict),
       "previous_page_tab" => Some(ShortcutId::PreviousPageTab),
       "next_page_tab" => Some(ShortcutId::NextPageTab),
       _ => None,
@@ -256,7 +259,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 29] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 30] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -369,8 +372,8 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 29] = [
   },
   ShortcutDefinition {
     id: ShortcutId::ToggleHunkStage,
-    title: "Stage / Unstage Hunk",
-    description: "Stage the focused hunk, or unstage it if already staged.",
+    title: "Stage / Unstage Hunk · Accept Current",
+    description: "Stage the focused hunk (or unstage it if staged). On a file with unresolved conflicts, accept the active conflict's current change instead.",
     scope_label: "Git page",
     category: ShortcutCategory::LocalGit,
     keystroke: "shift-enter",
@@ -380,8 +383,8 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 29] = [
   },
   ShortcutDefinition {
     id: ShortcutId::RestoreHunk,
-    title: "Restore Hunk",
-    description: "Discard the focused hunk and restore the file to its previous state.",
+    title: "Restore Hunk · Accept Incoming",
+    description: "Discard the focused hunk and restore the file. On a file with unresolved conflicts, accept the active conflict's incoming change instead.",
     scope_label: "Git page",
     category: ShortcutCategory::LocalGit,
     keystroke: "shift-backspace",
@@ -407,6 +410,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 29] = [
     scope_label: "Git page",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-backspace",
+    context: HUNK_ACTION_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::AcceptBothConflict,
+    title: "Accept Both Conflict Changes",
+    description: "Keep the current and incoming changes in the active conflict.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-shift-enter",
     context: HUNK_ACTION_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
     active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
@@ -836,7 +850,8 @@ impl ShortcutDefinition {
       ShortcutId::ToggleHunkStage
       | ShortcutId::RestoreHunk
       | ShortcutId::ToggleFileStage
-      | ShortcutId::RestoreFile => {
+      | ShortcutId::RestoreFile
+      | ShortcutId::AcceptBothConflict => {
         format!("({}) > ({})", base, HUNK_ACTION_DESCENDANT_FOCUS)
       }
       ShortcutId::CommitChanges => {
@@ -893,6 +908,9 @@ impl ShortcutDefinition {
       ShortcutId::RestoreHunk => KeyBinding::new(keystroke, RestoreHunk, Some(&context)),
       ShortcutId::ToggleFileStage => KeyBinding::new(keystroke, ToggleFileStage, Some(&context)),
       ShortcutId::RestoreFile => KeyBinding::new(keystroke, RestoreFile, Some(&context)),
+      ShortcutId::AcceptBothConflict => {
+        KeyBinding::new(keystroke, AcceptBothConflict, Some(&context))
+      }
       ShortcutId::PreviousPageTab => KeyBinding::new(keystroke, PreviousPageTab, Some(&context)),
       ShortcutId::NextPageTab => KeyBinding::new(keystroke, NextPageTab, Some(&context)),
     }
@@ -1260,6 +1278,7 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::RestoreHunk => f(&RestoreHunk),
     ShortcutId::ToggleFileStage => f(&ToggleFileStage),
     ShortcutId::RestoreFile => f(&RestoreFile),
+    ShortcutId::AcceptBothConflict => f(&AcceptBothConflict),
     ShortcutId::PreviousPageTab => f(&PreviousPageTab),
     ShortcutId::NextPageTab => f(&NextPageTab),
   }

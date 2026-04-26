@@ -25,6 +25,7 @@ actions!(
     RestoreHunk,
     ToggleFileStage,
     RestoreFile,
+    AcceptBothConflict,
     PreviousPageTab,
     NextPageTab,
     OpenBillingPage,
