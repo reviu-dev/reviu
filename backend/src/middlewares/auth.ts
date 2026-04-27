@@ -1,6 +1,7 @@
 import type { AuthType, UserContext } from '../lib/auth.js'
 import { createMiddleware } from 'hono/factory'
 import { auth } from '../lib/auth.js'
+import { logger } from '../lib/logger.js'
 
 const FREE_PRO_ROLES: NonNullable<AuthType['user']>['role'][] = ['admin', 'pro']
 
@@ -9,6 +10,8 @@ function authMiddleware(roleRequired: 'user' | 'admin' | 'pro') {
     const session = await auth.api.getSession({ headers: c.req.raw.headers })
 
     const user = (session?.user as AuthType['user']) ?? null
+
+    logger.info(user, 'Authenticating user for route')
 
     if (!user) {
       return c.json({ error: 'Unauthorized' }, 401)
