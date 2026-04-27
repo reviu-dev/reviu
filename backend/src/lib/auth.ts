@@ -108,38 +108,47 @@ export const auth = betterAuth({
         webhooks({
           secret: env.POLAR_WEBHOOK_SECRET,
           onSubscriptionActive: async (payload) => {
-            const { email } = payload.data.customer
-
-            if (!email) {
-              logger.error('Received Polar webhook for active subscription without email, skipping user update')
-              return
-            }
-
-            await db.update(user)
-              .set({
-                proGrantedAt: new Date(),
-              })
-              .where(eq(user.email, email))
+            await updateProGrantedAtByEmail({ email: payload.data.customer.email, context: 'active' })
           },
           onSubscriptionRevoked: async (payload) => {
-            const { email } = payload.data.customer
-
-            if (!email) {
-              logger.error('Received Polar webhook for revoked subscription without email, skipping user update')
-              return
-            }
-
-            await db.update(user)
-              .set({
-                proGrantedAt: null,
-              })
-              .where(eq(user.email, email))
+            await updateProGrantedAtByEmail({ email: payload.data.customer.email, context: 'revoked' })
           },
         }),
       ],
     }),
   ],
 })
+
+async function updateProGrantedAtByEmail({
+  email,
+  context,
+}:
+{
+  email: string | null | undefined
+  context: 'active' | 'revoked'
+}): Promise<void> {
+  if (!email) {
+    logger.error({ context }, 'Received Polar webhook without customer email, skipping user update')
+    return
+  }
+
+  const existing = await db.query.user.findFirst({
+    where: eq(user.email, email),
+    columns: { id: true },
+  })
+
+  if (!existing) {
+    logger.error({ email, context }, 'No user matched Polar webhook customer email, skipping update')
+    return
+  }
+
+  const ctx = await auth.$context
+  const proGrantedAt = context === 'active' ? new Date() : null
+
+  logger.info({ email, context, proGrantedAt }, 'Updating user proGrantedAt based on Polar webhook')
+
+  await ctx.internalAdapter.updateUser(existing.id, { proGrantedAt })
+}
 
 export interface AuthType {
   user: (Merge<typeof auth.$Infer.Session.user, { role: 'user' | 'pro' | 'admin' }>) | null
