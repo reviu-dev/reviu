@@ -19,11 +19,13 @@ Core product shape:
 
 ## Current product truth
 
-- Public platform messaging that is safe today: `macOS (Apple Silicon and Intel)`, `Windows (ARM64 and x64)`, and `Linux` (install script).
+- Public platform messaging that is safe today: `macOS (Apple Silicon and Intel)`, `Windows (ARM64 and x64)`, and `Linux` (install script for `x86_64` and `aarch64`).
 - Local Git features do not require an account.
 - GitHub features require `Sign in with GitHub` and `Reviu Pro`.
 - Current pricing shown in the app and landing: `$9/month` or `$79/year`.
 - Current landing and terms also message a `14-day free trial`.
+- Browser extensions are shipped for Chrome and Firefox. Safe claim: open GitHub repositories, pull requests, and issues in Reviu from the browser.
+- The dashboard is an internal/admin surface, not a marketing surface.
 
 If pricing changes, update desktop billing, landing copy, structured data, and terms together.
 
@@ -33,56 +35,80 @@ If pricing changes, update desktop billing, landing copy, structured data, and t
 
 - Open local repositories and switch between recent repositories.
 - Review repository status with staged, unstaged, partially staged, and conflicted files.
-- View local changes in inline and split diff modes.
-- Stage, unstage, and restore by file or by hunk.
+- View and edit local changes in the real-time diff editor with inline and split diff modes.
+- Stage, unstage, and restore by file or by hunk, including stage all and unstage all flows.
 - Commit changes, amend the latest commit, and undo the last commit.
-- Switch branches and create branches from local or remote refs.
+- Switch, create, create from base, and delete branches from local or remote refs.
+- Merge branches and abort in-progress merges.
 - Fetch, pull, push, and force push with lease.
-- Rebase flows: start, continue, skip, abort, and interactive rebase.
+- Rebase flows: start, continue, skip, abort, rebase onto a branch, edit branch commits, rebase the last N commits, and interactive rebase.
 - Cherry-pick one or more commits.
 - Stash flows: stash, stash with untracked files, apply, pop, and drop.
-- Resolve conflicts with dedicated conflict actions.
+- Resolve conflicts with dedicated current, incoming, both, and accept-all actions.
+- Navigate hunks and conflicts from the keyboard with focused hunk highlighting.
 
 ### Local UX strengths
 
-- Keyboard-first command palette for local Git actions.
+- Keyboard-first command palette for local Git actions, with grouped commands, recent commands, and success/error feedback.
+- Configurable keyboard shortcuts for core Git, navigation, review, and app actions.
 - File search on code and diff pages.
-- Persistent app settings for theme, font size, diff view, and editor display options.
+- Persistent app settings for theme, font size, diff view, whitespace handling, indentation guides, and editor display options.
 - Dedicated Git config page inside the app.
+- Contextual refresh from the app header.
 
 ## Reviu Pro
 
 ### GitHub home
 
-- GitHub notifications feed in-app.
-- Unread counts in the app, macOS menu bar, and Windows/Linux system tray.
-- Saved pull request lists and repository sections on the GitHub home page.
+- GitHub notifications feed in-app, with search, repository grouping, unread state, mark-as-done, and click navigation.
+- Unread counts in the app, user avatar, macOS dock and menu bar, and Windows/Linux system tray.
+- Saved pull request lists with filters for repositories, labels, authors, assignees, requested reviewers, review state, draft visibility, base branch, and sorting.
+- Manage saved pull request lists: create, edit, delete, and reorder.
+- Repository sections with search, recently updated repositories, pinned repositories, private repository visibility, and collapsible groups.
+- Search GitHub repositories from the command palette.
 - Upgrade and sign-in flows directly in the desktop app.
 
 ### GitHub repository context
 
 - Browse repository `Overview`, `Readme`, `Code`, `Pull Requests`, and `Issues`.
+- View repository overview metadata: README, description, language breakdown, contributors, recent commits, stars, and forks.
 - Keep `Readme` and `Code` aligned with the selected branch.
 - Open files directly inside Reviu instead of bouncing to the browser.
-- Render repository content with Markdown support and file previews where supported.
-- View issue details and work with issue descriptions and issue comments in-app.
+- Render repository content with Markdown, SVG, and image previews where supported.
+- Open README relative links inside the repository `Code` tab.
+- Star, unstar, watch, fork, clone, and create GitHub repositories from Reviu.
+- Open GitHub user profiles with profile links, follower counts, repository totals, language mix, and recent repositories.
+- Open repository commit details with metadata, co-authors, changed files, and inline or split diffs.
+- Browse repository pull requests with open, merged, and closed tabs plus search and filters.
+- Browse repository issues with open, closed, and not-planned tabs plus search and filters.
+- View issue details, edit issue descriptions, create/edit/delete issue comments, and add/remove issue reactions in-app.
 
 ### Pull request review
 
 - Open pull requests directly inside the desktop app.
-- Review changed files in inline or split diff modes.
-- Render Markdown and SVG content in review flows.
+- Review changed files in inline or split diff modes, with syntax highlighting, file navigation, and optional unchanged local files.
+- Render Markdown, SVG, image previews, GitHub-hosted assets, and suggested-change diffs in review flows.
 - Create, reply to, edit, and delete review comments.
+- Resolve and unresolve pull request review threads.
+- Apply suggested changes as commits to the pull request branch with reviewer co-author support.
+- Add and remove reactions on pull request descriptions, issue comments, review comments, and reviews.
+- Use emoji autocomplete and drag-and-drop image upload in pull request and issue composers.
 - Submit reviews from the PR page, including comment, approve, and request changes flows.
-- See merge readiness and checks information inside the PR view.
-- Merge pull requests from Reviu when the repository state allows it.
+- Manage pull request labels, assignees, reviewers, and draft/ready-for-review state.
+- See merge readiness, conflicts, out-of-date state, skipped checks, required checks, and provider images inside the PR view.
+- Merge pull requests from Reviu when the repository state allows it, including merge commit, squash, and rebase methods.
+- Enable and disable auto-merge when the pull request is blocked by pending checks or reviews.
+- Browse pull request commits with search and filtering.
+- Keep pull request commit links inside Reviu when they point to the current review.
 
 ### Local-to-GitHub bridge
 
 - Jump from the local Git page to the pull request for the current branch.
-- Create a pull request from the Git page when a branch is ready to publish.
+- Create a pull request from the Git page when a branch is ready to publish, including pull request templates and draft mode.
 - Switch a local repository to the current pull request branch from the PR flow.
+- Copy the current pull request branch name.
 - Open GitHub URLs in Reviu through the command palette.
+- Open GitHub repositories, pull requests, and issues in Reviu through the Chrome and Firefox extensions.
 
 ## Desktop surfaces beyond the core pitch
 
@@ -91,6 +117,7 @@ If pricing changes, update desktop billing, landing copy, structured data, and t
 - Startup crash recovery notification with one-click crash reporting.
 - Desktop update checking and release download flow.
 - Settings and About pages inside the app.
+- Native macOS app menu, macOS menu bar notifications, Windows/Linux tray notifications, and dock badge support where available.
 
 These are not the main hero features, but they matter for polish, support, and retention.
 
@@ -100,29 +127,35 @@ The backend is not just auth glue. It carries core product behavior for Pro.
 
 - GitHub OAuth sign-in and authenticated user state.
 - Subscription and billing lifecycle for Reviu Pro.
-- GitHub API-backed routes for notifications, repositories, pull requests, issues, comments, checks, and merge readiness.
+- GitHub API-backed routes for notifications, repositories, pull requests, issues, comments, reactions, checks, merge readiness, user profiles, repository creation, and repository forking.
+- GitHub API caching with public/viewer/installation scopes, conditional requests, and admin cache metrics.
+- Asset upload and private GitHub asset resolution for comment images.
 - Desktop update metadata and download routes.
 - Feedback submission and crash report intake.
+- Admin dashboard routes for health checks, user management, and GitHub cache inspection.
 
 ## What the landing is currently saying
 
-The landing is directionally correct, but it still compresses the product too much.
+The landing is broadly aligned with the current product, but it still compresses the deepest Pro workflows.
 
 Accurate themes already present on the landing:
 
 - Reviu is a desktop Git client.
 - The local Git workflow is keyboard-first.
 - Reviu Pro is the GitHub layer.
+- Pricing is `$9/month` or `$79/year` with a `14-day free trial`.
 - Platform messaging covers `macOS (Apple Silicon and Intel)`, `Windows (ARM64 and x64)`, and `Linux` (install script).
+- Browser extensions for Chrome and Firefox are present.
+- Saved pull request lists, GitHub notifications, repository browsing, pull request review, checks, merge, and issue browsing are present.
 
 What the current landing underrepresents:
 
-- The depth of the local Git workflow.
-- Hunk-level review and restore actions.
-- The strength of the GitHub home surface.
-- PR checks, merge readiness, and merge flows.
-- Issue editing and issue comment flows.
-- Desktop polish like crash recovery and in-app updates.
+- The depth of the local Git workflow: merge, branch deletion, advanced rebase modes, stash variants, hunk-level restore, conflict keyboard actions, and configurable shortcuts.
+- Diff editor polish: histogram diffs, precise word highlights, hide-whitespace mode, image previews, and indentation guide options.
+- Repository actions: star, watch, fork, clone, create repository, commit details, and GitHub profiles.
+- PR review depth: suggested changes, resolve/unresolve conversations, reactions, emoji autocomplete, image upload, labels, assignees, reviewers, draft/ready state, auto-merge, and commit browsing.
+- Issue editing and issue comment/reaction flows.
+- Desktop and support polish like crash recovery, in-app updates, feedback, menu/tray/dock badges, and the internal admin dashboard.
 
 ## Copy guardrails
 
@@ -132,13 +165,16 @@ Good claims:
 - "Keyboard-first Git workflow."
 - "GitHub notifications, repositories, pull request reviews, and issues in Reviu Pro."
 - "Native desktop app built with Rust and GPUI."
+- "Chrome and Firefox extensions open GitHub repositories, pull requests, and issues in Reviu."
 
 Avoid these unless they are explicitly shipped and verified:
 
-- Browser extension claims.
 - Team workflows or enterprise features that do not exist yet.
+- AI review, code generation, or automated code-fix claims.
+- Self-hosted Git provider support.
+- Free GitHub workflow claims. GitHub workflows are Pro-gated.
 - Pricing that does not match app billing and landing copy.
 
 ## Suggested short description
 
-Reviu is a native desktop Git client for fast review workflows. Use Free for local Git, then upgrade to Reviu Pro for GitHub notifications, repository browsing, pull request review, and issues in one keyboard-first app.
+Reviu is a native Rust + GPUI desktop Git client for fast review workflows. Use Free for full local Git, then upgrade to Reviu Pro for GitHub notifications, repository browsing, pull request review, issues, and browser-to-desktop GitHub shortcuts in one keyboard-first app.
