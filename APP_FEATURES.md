@@ -136,7 +136,7 @@ The backend is not just auth glue. It carries core product behavior for Pro.
 
 ## What the landing is currently saying
 
-The landing is broadly aligned with the current product, but it still compresses the deepest Pro workflows.
+The landing is broadly aligned with the current product and now leads with Reviu as a native Git client for GitHub pull request review. It still compresses the deepest Pro workflows in the details.
 
 Accurate themes already present on the landing:
 
@@ -147,13 +147,15 @@ Accurate themes already present on the landing:
 - Platform messaging covers `macOS (Apple Silicon and Intel)`, `Windows (ARM64 and x64)`, and `Linux` (install script).
 - Browser extensions for Chrome and Firefox are present.
 - Saved pull request lists, GitHub notifications, repository browsing, pull request review, checks, merge, and issue browsing are present.
+- The hero, workflow section, and pricing copy now position Pro as the GitHub review layer on top of free local Git.
+- Switcher copy speaks directly to developers coming from Fork, GitHub Desktop, Tower, or GitKraken.
 
 What the current landing underrepresents:
 
 - The depth of the local Git workflow: merge, branch deletion, advanced rebase modes, stash variants, hunk-level restore, conflict keyboard actions, and configurable shortcuts.
 - Diff editor polish: histogram diffs, precise word highlights, hide-whitespace mode, image previews, and indentation guide options.
 - Repository actions: star, watch, fork, clone, create repository, commit details, and GitHub profiles.
-- PR review depth: suggested changes, resolve/unresolve conversations, reactions, emoji autocomplete, image upload, labels, assignees, reviewers, draft/ready state, auto-merge, and commit browsing.
+- PR review depth is present at a high level, but still compresses suggested changes, reactions, emoji autocomplete, image upload, labels, assignees, reviewers, draft/ready state, auto-merge, and commit browsing.
 - Issue editing and issue comment/reaction flows.
 - Desktop and support polish like crash recovery, in-app updates, feedback, menu/tray/dock badges, and the internal admin dashboard.
 
