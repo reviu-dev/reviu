@@ -1,5 +1,7 @@
 import type { AuthType, UserContext } from '../lib/auth.js'
 import { createMiddleware } from 'hono/factory'
+import { db } from '../db/index.js'
+import { user } from '../db/schemas/index.js'
 import { auth } from '../lib/auth.js'
 import { logger } from '../lib/logger.js'
 
@@ -9,7 +11,15 @@ function authMiddleware(roleRequired: 'user' | 'admin' | 'pro') {
   return createMiddleware<{ Variables: { user: UserContext } }>(async (c, next) => {
     const session = await auth.api.getSession({ headers: c.req.raw.headers })
 
-    const user = (session?.user as AuthType['user']) ?? null
+    const userId = session?.user.id
+
+    if (!userId) {
+      return c.json({ error: 'Unauthorized' }, 401)
+    }
+
+    const user = await db.query.user.findFirst({
+      where: (table, { eq }) => eq(table.id, userId),
+    })
 
     logger.info(user, 'Authenticating user for route')
 
