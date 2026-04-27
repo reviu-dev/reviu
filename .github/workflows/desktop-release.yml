@@ -173,7 +173,7 @@ jobs:
   #         fi
   #         sentry-cli debug-files upload "${app_path}"
   #     - name: Upload release assets
-  #       uses: actions/upload-artifact@v4
+  #       uses: actions/upload-artifact@v7
   #       with:
   #         name: desktop-release-macos-${{ matrix.arch }}
   #         if-no-files-found: error
@@ -245,7 +245,7 @@ jobs:
           bash ./desktop/scripts/build-linux-archive.sh "${VERSION}" "${MANIFEST_ARCH}"
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-release-linux-${{ matrix.arch }}
           if-no-files-found: error
@@ -312,7 +312,7 @@ jobs:
           bash ./desktop/scripts/build-windows-installer.sh "${VERSION}" "${MANIFEST_ARCH}"
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-release-windows-${{ matrix.arch }}
           if-no-files-found: error
