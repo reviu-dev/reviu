@@ -14,17 +14,19 @@ const readDistFile = async (relativePath) => {
 test('homepage ships crawlable metadata and content', async () => {
   const html = await readDistFile('index.html')
 
-  assert.match(html, /<title>Reviu - Desktop Git Client<\/title>/)
+  assert.match(html, /<title>Reviu - Rust Desktop Git Client<\/title>/)
   assert.match(
     html,
-    /<meta name="description" content="Reviu is a desktop Git client with a real-time diff editor, keyboard-first workflows/,
+    /<meta name="description" content="Reviu is a native Rust desktop Git client for pull request review/,
   )
   assert.match(html, /<link rel="canonical" href="https:\/\/reviu\.dev\/"/)
-  assert.match(html, /<meta property="og:title" content="Reviu - Desktop Git Client"/)
+  assert.match(html, /<meta property="og:title" content="Reviu - Rust Desktop Git Client"/)
   assert.match(html, /<meta name="twitter:card" content="summary_large_image"/)
   assert.match(html, /SoftwareApplication/)
   assert.match(html, /FAQPage/)
-  assert.match(html, /A free Git client with a real-time diff editor\./)
+  assert.match(html, /Review GitHub pull requests from a native Git client\./)
+  assert.match(html, /One desktop loop for daily GitHub review work\./)
+  assert.match(html, /Coming from Fork\?/)
   assert.match(html, /srcset=/)
   assert.match(html, /--fit: contain;/)
   assert.doesNotMatch(html, /client="only"/)

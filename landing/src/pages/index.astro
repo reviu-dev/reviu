@@ -6,18 +6,30 @@ import GitHubPRFeaturesSection from "../components/GitHubPRFeaturesSection.astro
 import GitFeaturesSection from "../components/GitFeaturesSection.astro";
 import PricingSection from "../components/PricingSection.astro";
 import BrowserExtensionsSection from "../components/BrowserExtensionsSection.astro";
+import ReviewWorkflowSection from "../components/ReviewWorkflowSection.astro";
+import SwitchToReviuSection from "../components/SwitchToReviuSection.astro";
 import FaqSection from "../components/FaqSection.astro";
 import SiteFooter from "../components/SiteFooter.astro";
 import Layout from "../layouts/Layout.astro";
 
 const description =
-  "Reviu is a native Rust desktop Git client with a real-time diff editor, keyboard-first workflows, and GitHub notifications, repos, pull request reviews, and issues in Reviu Pro. No Electron, GPU-accelerated.";
+  "Reviu is a native Rust desktop Git client for pull request review, with free local Git workflows and GitHub notifications, repositories, issues, checks, comments, and merge actions in Reviu Pro.";
 
 const faqItems: { question: string; answer: string }[] = [
   {
     question: "What is Reviu?",
     answer:
-      "Reviu is a native desktop Git client built with Rust. It features a real-time diff editor, keyboard-first navigation, and GitHub integration in one app.",
+      "Reviu is a native desktop Git client built with Rust and GPUI. Use it free for local Git workflows, or upgrade to Reviu Pro for GitHub notifications, repositories, issues, and pull request review in one app.",
+  },
+  {
+    question: "Why use Reviu if I already use Fork, Tower, or GitKraken?",
+    answer:
+      "Reviu is focused on the handoff between local Git and GitHub review. Local Git is free, while Pro adds saved pull request lists, notifications, issue context, inline review comments, checks, merge readiness, and browser-to-desktop shortcuts.",
+  },
+  {
+    question: "How is Reviu different from GitHub Desktop?",
+    answer:
+      "GitHub Desktop is great for opening a pull request branch locally. Reviu Pro goes deeper into review work with inline comments, replies, resolved threads, checks, issue context, and merge actions inside the desktop app.",
   },
   {
     question: "Is Reviu built with a webview?",
@@ -71,9 +83,12 @@ const structuredData = [
       "Real-time diff editor",
       "Inline and split diff views",
       "GitHub notifications",
+      "Saved GitHub pull request lists",
       "GitHub repository browsing",
       "GitHub pull request review",
+      "GitHub pull request checks and merge actions",
       "GitHub issues context",
+      "Browser extensions for GitHub repositories, pull requests, and issues",
     ],
   },
   {
@@ -94,9 +109,11 @@ const structuredData = [
 <Layout description={description} pathname="/" structuredData={structuredData}>
   <main>
     <HeroSection />
-    <GitFeaturesSection />
+    <ReviewWorkflowSection />
     <GitHubHomeFeaturesSection />
     <GitHubPRFeaturesSection />
+    <GitFeaturesSection />
+    <SwitchToReviuSection />
     <PricingSection />
     <BrowserExtensionsSection />
     <DownloadSection />

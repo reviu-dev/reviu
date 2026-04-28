@@ -1,0 +1,68 @@
+---
+import CommandIcon from "@lucide/astro/icons/command";
+import GitBranchIcon from "@lucide/astro/icons/git-branch";
+import MessageCircleReplyIcon from "@lucide/astro/icons/message-circle-reply";
+
+const switchCards = [
+  {
+    title: "Coming from Fork?",
+    description:
+      "Use Reviu free for a complete local Git workflow, then add the Pro layer for saved PR lists, issues, repository actions, review threads, checks, and merge.",
+    icon: GitBranchIcon,
+  },
+  {
+    title: "Coming from GitHub Desktop?",
+    description:
+      "GitHub Desktop helps you inspect a pull request branch. Reviu Pro lets you review it in-app with comments, replies, checks, merge readiness, and merge actions.",
+    icon: MessageCircleReplyIcon,
+  },
+  {
+    title: "Coming from Tower or GitKraken?",
+    description:
+      "Pick Reviu when you want a focused GitHub review surface, a native Rust UI, and keyboard-first commands instead of a broad DevEx platform.",
+    icon: CommandIcon,
+  },
+];
+---
+
+<section
+  class="py-24 sm:py-32"
+  data-reveal-root
+  data-reveal-threshold="0.18"
+>
+  <div class="mx-auto max-w-7xl px-6 lg:px-8">
+    <div class="reviu-reveal mx-auto max-w-3xl text-center">
+      <h2 class="text-base/7 font-semibold text-primary">Why Switch</h2>
+      <p
+        class="mt-2 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-5xl"
+      >
+        Reviu is for developers who review pull requests every day.
+      </p>
+      <p class="mt-6 text-lg/8 text-muted-foreground">
+        Existing Git clients are strong at local history. Reviu focuses on the
+        handoff between local changes and GitHub review.
+      </p>
+    </div>
+
+    <div class="mt-12 grid gap-6 lg:grid-cols-3">
+      {
+        switchCards.map((card, index) => (
+          <article
+            class="reviu-reveal rounded-3xl border border-border bg-background p-8"
+            style={`--reveal-delay: ${index * 125 + 150}ms;`}
+          >
+            <div class="inline-flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+              <card.icon class="size-6" aria-hidden="true" />
+            </div>
+            <h3 class="mt-6 text-xl font-semibold text-foreground">
+              {card.title}
+            </h3>
+            <p class="mt-4 text-sm/7 text-muted-foreground">
+              {card.description}
+            </p>
+          </article>
+        ))
+      }
+    </div>
+  </div>
+</section>
