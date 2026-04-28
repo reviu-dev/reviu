@@ -1,3 +1,4 @@
+name: Reviu
 services:
   pg:
     container_name: postgres
