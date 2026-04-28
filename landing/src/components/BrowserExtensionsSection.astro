@@ -1,8 +1,7 @@
 ---
-import { Image } from "astro:assets";
 import PuzzleIcon from "@lucide/astro/icons/puzzle";
-import FirefoxIcon from "../assets/icons/firefoxbrowser.svg";
-import ChromeIcon from "../assets/icons/googlechrome.svg";
+import FirefoxIcon from "../assets/icons/firefoxbrowser.svg?raw";
+import ChromeIcon from "../assets/icons/googlechrome.svg?raw";
 import { browserExtensionUrls } from "../../constants";
 
 const browsers = [
@@ -35,11 +34,11 @@ const browsers = [
       <p
         class="mt-2 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-5xl"
       >
-        Open GitHub pull requests in Reviu, straight from your browser.
+        Open GitHub work in Reviu, straight from your browser.
       </p>
       <p class="mt-6 text-lg/8 text-muted-foreground">
-        Install the Reviu extension and a button on every GitHub pull request
-        opens it in the desktop app for review.
+        Install the Reviu extension and open GitHub repositories, pull requests,
+        and issues in the desktop app instead of leaving them in another tab.
       </p>
     </div>
 
@@ -56,13 +55,11 @@ const browsers = [
             class="reviu-reveal reviu-hover-lift group flex h-full items-center gap-5 rounded-3xl border border-border bg-background p-6 transition-colors hover:border-primary/40"
             style={`--reveal-delay: ${index * 125 + 150}ms;`}
           >
-            <div class="inline-flex size-14 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
-              <Image
-                src={browser.icon}
-                alt={`${browser.name} logo`}
-                width={32}
-                height={32}
-                class="size-8"
+            <div class="inline-flex size-14 shrink-0 items-center justify-center rounded-2xl bg-muted text-foreground ring-1 ring-border">
+              <span
+                class="inline-flex size-8 [&_svg]:size-8"
+                aria-hidden="true"
+                set:html={browser.icon}
               />
             </div>
             <div class="flex-1">

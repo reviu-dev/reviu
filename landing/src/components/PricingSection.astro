@@ -34,13 +34,13 @@ const tiers = [
     monthlyPriceSuffix: "/month",
     savePercent: "Save 27%",
     description:
-      "14-day free trial included. Git and GitHub stay connected in one workflow.",
+      "14-day free trial included. For developers who review pull requests every day.",
     features: [
-      "Keyboard-first command palette for GitHub actions",
-      "GitHub notifications with a menu bar or system tray badge",
-      "Saved pull request lists with filters",
-      "Browse GitHub repositories, pull requests, and issues in the app",
-      "Review pull requests, comment inline, track checks, and merge",
+      "GitHub notifications, saved PR lists, and repository sections",
+      "Pull request reviews with inline comments and resolved threads",
+      "Checks, merge readiness, merge actions, and auto-merge",
+      "Issues, reactions, labels, assignees, and reviewers",
+      "Browser extensions for GitHub repos, PRs, and issues",
     ],
     featured: true,
     cta: "Download & start free trial",
@@ -74,12 +74,17 @@ const comparisonRows = [
     pro: true,
   },
   {
-    feature: "GitHub notifications and desktop notification badge",
+    feature: "GitHub notifications and desktop notification badges",
     free: false,
     pro: true,
   },
   {
     feature: "Review pull requests, comment inline, track checks, and merge",
+    free: false,
+    pro: true,
+  },
+  {
+    feature: "Resolve review threads and apply suggested changes",
     free: false,
     pro: true,
   },
@@ -98,6 +103,11 @@ const comparisonRows = [
     free: false,
     pro: true,
   },
+  {
+    feature: "Open GitHub repos, pull requests, and issues from the browser",
+    free: false,
+    pro: true,
+  },
 ];
 ---
 
@@ -113,12 +123,12 @@ const comparisonRows = [
       <p
         class="mt-2 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-5xl"
       >
-        Simple pricing for local Git and GitHub workflows.
+        Free for local Git. Pro for GitHub review workflows.
       </p>
       <p
         class="mx-auto mt-6 max-w-2xl text-center text-lg font-medium text-pretty text-gray-600 sm:text-xl/8 dark:text-gray-400"
       >
-        Use Free for full local Git workflows, then upgrade to Pro when you need GitHub notifications, repositories, PR reviews, and issues.
+        Use Free for complete local Git workflows, then upgrade to Pro when GitHub becomes part of your daily review loop.
       </p>
     </div>
 
@@ -230,8 +240,8 @@ const comparisonRows = [
         </h3>
         <p class="mt-3 text-base text-muted-foreground sm:text-lg">
           Free covers the full local Git workflow. Pro keeps all of that and
-          adds GitHub notifications, repository context, and pull request
-          review.
+          adds GitHub notifications, repository context, issue work, and pull
+          request review.
         </p>
       </div>
 
