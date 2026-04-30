@@ -12,6 +12,7 @@ actions!(
     ShowBranchSwitcher,
     OpenGitHistorySidebar,
     OpenGitChangesSidebar,
+    FocusFileTree,
     PullChanges,
     PushChanges,
     ForcePushChanges,

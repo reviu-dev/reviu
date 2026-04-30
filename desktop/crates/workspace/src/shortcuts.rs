@@ -16,13 +16,13 @@ use std::collections::HashSet;
 
 use crate::config::ConfigStore;
 use crate::{
-  AcceptBothConflict, CloseWorkspacePage, CommitChanges, ForcePushChanges, MarkNotificationDone,
-  NavigateBack, NextAnnotation, NextPageTab, NextReviewComment, OpenGitChangesSidebar,
-  OpenGitHistorySidebar, OpenGitPage, OpenGithubPage, OpenRepository, OpenSettingsPage,
-  PreviousAnnotation, PreviousPageTab, PreviousReviewComment, PullChanges, PushChanges,
-  RefreshCurrentPage, RestoreFile, RestoreHunk, ShowBranchSwitcher, ShowCommandPalette,
-  ShowFileSearch, SwitchToPrBranch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace,
-  ToggleHunkStage, ToggleTerminalSidebar,
+  AcceptBothConflict, CloseWorkspacePage, CommitChanges, FocusFileTree, ForcePushChanges,
+  MarkNotificationDone, NavigateBack, NextAnnotation, NextPageTab, NextReviewComment,
+  OpenGitChangesSidebar, OpenGitHistorySidebar, OpenGitPage, OpenGithubPage, OpenRepository,
+  OpenSettingsPage, PreviousAnnotation, PreviousPageTab, PreviousReviewComment, PullChanges,
+  PushChanges, RefreshCurrentPage, RestoreFile, RestoreHunk, ShowBranchSwitcher,
+  ShowCommandPalette, ShowFileSearch, SwitchToPrBranch, ToggleDiffView, ToggleFileStage,
+  ToggleHideWhitespace, ToggleHunkStage, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -66,6 +66,8 @@ const TOGGLE_TERMINAL_CONTEXT: &str = "WorkspaceGit";
 const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceGit";
 const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
 const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
+const FOCUS_FILE_TREE_CONTEXT: &str =
+  "WorkspaceGithubPr || WorkspaceGithubRepo || WorkspaceGithubCommit";
 const TOGGLE_DIFF_VIEW_CONTEXT: &str =
   "WorkspaceGit || WorkspaceGithubPrChanges || WorkspaceGithubCommit";
 const SWITCH_TO_PR_BRANCH_CONTEXT: &str = "WorkspaceGithubPr || WorkspaceGithubPrChanges";
@@ -134,6 +136,14 @@ const REPO_AND_PR_PAGE_ACTIVE_CONTEXTS: [&str; 5] = [
   WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
 ];
 
+const FOCUS_FILE_TREE_ACTIVE_CONTEXTS: [&str; 5] = [
+  WORKSPACE_GITHUB_REPO_CONTEXT,
+  WORKSPACE_GITHUB_REPO_CODE_CONTEXT,
+  WORKSPACE_GITHUB_PR_CONTEXT,
+  WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
+  WORKSPACE_GITHUB_COMMIT_CONTEXT,
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShortcutId {
   ShowCommandPalette,
@@ -153,6 +163,7 @@ pub enum ShortcutId {
   ShowBranchSwitcher,
   OpenGitHistorySidebar,
   OpenGitChangesSidebar,
+  FocusFileTree,
   ToggleDiffView,
   SwitchToPrBranch,
   ToggleHideWhitespace,
@@ -190,6 +201,7 @@ impl ShortcutId {
       ShortcutId::ShowBranchSwitcher => "show_branch_switcher",
       ShortcutId::OpenGitHistorySidebar => "open_git_history_sidebar",
       ShortcutId::OpenGitChangesSidebar => "open_git_changes_sidebar",
+      ShortcutId::FocusFileTree => "focus_file_tree",
       ShortcutId::ToggleDiffView => "toggle_diff_view",
       ShortcutId::SwitchToPrBranch => "switch_to_pr_branch",
       ShortcutId::ToggleHideWhitespace => "toggle_hide_whitespace",
@@ -227,6 +239,7 @@ impl ShortcutId {
       "show_branch_switcher" => Some(ShortcutId::ShowBranchSwitcher),
       "open_git_history_sidebar" => Some(ShortcutId::OpenGitHistorySidebar),
       "open_git_changes_sidebar" => Some(ShortcutId::OpenGitChangesSidebar),
+      "focus_file_tree" => Some(ShortcutId::FocusFileTree),
       "toggle_diff_view" => Some(ShortcutId::ToggleDiffView),
       "switch_to_pr_branch" => Some(ShortcutId::SwitchToPrBranch),
       "toggle_hide_whitespace" => Some(ShortcutId::ToggleHideWhitespace),
@@ -268,7 +281,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 32] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 33] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -600,6 +613,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 32] = [
     active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
+    id: ShortcutId::FocusFileTree,
+    title: "Focus File Tree",
+    description: "Focus the file tree on the repository code, pull request, or commit details page.",
+    scope_label: "Repository, pull request, and commit details pages",
+    category: ShortcutCategory::Review,
+    keystroke: "cmd-shift-e",
+    context: FOCUS_FILE_TREE_CONTEXT,
+    display_context: WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
+    active_contexts: &FOCUS_FILE_TREE_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
     id: ShortcutId::OpenSettingsPage,
     title: "Go to Settings",
     description: "Open settings from anywhere in the workspace.",
@@ -926,6 +950,7 @@ impl ShortcutDefinition {
       ShortcutId::OpenGitChangesSidebar => {
         KeyBinding::new(keystroke, OpenGitChangesSidebar, Some(&context))
       }
+      ShortcutId::FocusFileTree => KeyBinding::new(keystroke, FocusFileTree, Some(&context)),
       ShortcutId::ToggleDiffView => KeyBinding::new(keystroke, ToggleDiffView, Some(&context)),
       ShortcutId::ToggleHideWhitespace => {
         KeyBinding::new(keystroke, ToggleHideWhitespace, Some(&context))
@@ -1308,6 +1333,7 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::ShowBranchSwitcher => f(&ShowBranchSwitcher),
     ShortcutId::OpenGitHistorySidebar => f(&OpenGitHistorySidebar),
     ShortcutId::OpenGitChangesSidebar => f(&OpenGitChangesSidebar),
+    ShortcutId::FocusFileTree => f(&FocusFileTree),
     ShortcutId::ToggleDiffView => f(&ToggleDiffView),
     ShortcutId::ToggleHideWhitespace => f(&ToggleHideWhitespace),
     ShortcutId::SwitchToPrBranch => f(&SwitchToPrBranch),
@@ -1550,7 +1576,6 @@ mod tests {
       "cmd-shift-y",
       "cmd-shift-b",
       "cmd-shift-h",
-      "cmd-shift-e",
     ] {
       assert!(
         has_binding("/git", keystroke),
@@ -1563,6 +1588,31 @@ mod tests {
       assert!(
         !has_binding("/github/owner/repo/pull/42/changes", keystroke),
         "{keystroke} should not be active on PR changes"
+      );
+    }
+  }
+
+  #[test]
+  fn focus_file_tree_shortcut_is_scoped_to_repo_pr_and_commit_pages() {
+    let keystroke = "cmd-shift-e";
+    assert!(
+      has_binding("/git", keystroke),
+      "{keystroke} should remain active on /git for the changes sidebar"
+    );
+    assert!(
+      !has_binding("/github", keystroke),
+      "{keystroke} should not be active on /github home"
+    );
+    for pathname in [
+      "/github/owner/repo",
+      "/github/owner/repo/code",
+      "/github/owner/repo/pull/42",
+      "/github/owner/repo/pull/42/changes",
+      "/github/owner/repo/commit/abc123",
+    ] {
+      assert!(
+        has_binding(pathname, keystroke),
+        "{keystroke} should be active on {pathname}"
       );
     }
   }
