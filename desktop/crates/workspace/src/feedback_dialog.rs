@@ -50,6 +50,7 @@ fn open_feedback_dialog_inner(window: &mut Window, cx: &mut App) {
       div()
         .w_full()
         .flex()
+        .mt_2()
         .flex_col()
         .gap_3()
         .child(Select::new(&type_select).placeholder("Select type..."))
