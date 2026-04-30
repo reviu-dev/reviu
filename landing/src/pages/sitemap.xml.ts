@@ -1,6 +1,12 @@
 import type { APIRoute } from "astro";
+import { blogPosts, getBlogPostUrl } from "../lib/blog";
 
-const urls = ["/", "/changelog"];
+const urls = [
+  "/",
+  "/blog",
+  "/changelog",
+  ...blogPosts.map((post) => getBlogPostUrl(post.slug)),
+];
 
 const renderSitemap = (site: URL) => `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">

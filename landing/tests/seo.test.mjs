@@ -28,7 +28,7 @@ test('homepage ships crawlable metadata and content', async () => {
   assert.match(html, /One desktop loop for daily GitHub review work\./)
   assert.match(html, /Coming from Fork\?/)
   assert.match(html, /srcset=/)
-  assert.match(html, /--fit: contain;/)
+  assert.match(html, /data-astro-image-fit="contain"/)
   assert.doesNotMatch(html, /client="only"/)
 })
 
@@ -38,6 +38,27 @@ test('robots and sitemap are generated', async () => {
 
   assert.match(robots, /Sitemap: https:\/\/reviu\.dev\/sitemap\.xml/)
   assert.match(sitemap, /<loc>https:\/\/reviu\.dev\/<\/loc>/)
+  assert.match(sitemap, /<loc>https:\/\/reviu\.dev\/blog<\/loc>/)
+  assert.match(
+    sitemap,
+    /<loc>https:\/\/reviu\.dev\/blog\/why-github-pr-review-still-feels-slow<\/loc>/,
+  )
+})
+
+test('blog article ships canonical article metadata and crawlable content', async () => {
+  const html = await readDistFile(
+    'blog/why-github-pr-review-still-feels-slow/index.html',
+  )
+
+  assert.match(html, /<title>Reviu - Why GitHub PR Review Still Feels Slow<\/title>/)
+  assert.match(
+    html,
+    /<link rel="canonical" href="https:\/\/reviu\.dev\/blog\/why-github-pr-review-still-feels-slow"/,
+  )
+  assert.match(html, /<meta property="og:type" content="article"/)
+  assert.match(html, /BlogPosting/)
+  assert.match(html, /The browser is not always the right review surface/)
+  assert.match(html, /Try Reviu/)
 })
 
 test('legal pages are marked noindex', async () => {
