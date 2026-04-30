@@ -1,0 +1,101 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import SiteFooter from "../../components/SiteFooter.astro";
+import { blogPosts, getBlogPostUrl } from "../../lib/blog";
+
+const description =
+  "Articles about Git workflows, pull request review, and building a faster local-to-GitHub review loop with Reviu.";
+
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "Blog",
+  name: "Reviu Blog",
+  url: "https://reviu.dev/blog",
+  description,
+  blogPost: blogPosts.map((post) => ({
+    "@type": "BlogPosting",
+    headline: post.title,
+    description: post.description,
+    datePublished: post.publishedAt,
+    url: `https://reviu.dev${getBlogPostUrl(post.slug)}`,
+  })),
+};
+---
+
+<Layout
+  title="Blog"
+  description={description}
+  pathname="/blog"
+  structuredData={structuredData}
+>
+  <main class="py-20 sm:py-24">
+    <section class="mx-auto max-w-5xl px-6 lg:px-8">
+      <a
+        href="/"
+        class="inline-flex items-center rounded-md bg-background px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50"
+      >
+        &larr; Back
+      </a>
+
+      <div class="mt-6" data-reveal-root data-reveal-threshold="0.05">
+        <h1
+          class="reviu-reveal text-4xl font-semibold tracking-tight text-foreground sm:text-5xl"
+        >
+          Blog
+        </h1>
+        <p
+          class="reviu-reveal mt-4 text-lg text-muted-foreground"
+          style="--reveal-delay: 100ms;"
+        >
+          Practical writing on Git workflows, pull request review, and desktop
+          developer tools.
+        </p>
+      </div>
+
+      <div
+        class="mt-12 space-y-6"
+        data-reveal-root
+        data-reveal-threshold="0.05"
+      >
+        {
+          blogPosts.map((post, index) => (
+            <article
+              class="reviu-reveal border-b border-border pb-6 last:border-b-0"
+              style={`--reveal-delay: ${Math.min(index * 80, 600)}ms;`}
+            >
+              <div class="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+                <time datetime={post.publishedAt}>
+                  {new Date(`${post.publishedAt}T00:00:00Z`).toLocaleDateString(
+                    "en-US",
+                    {
+                      year: "numeric",
+                      month: "long",
+                      day: "numeric",
+                    },
+                  )}
+                </time>
+                <span aria-hidden="true">/</span>
+                <span>{post.readingTime}</span>
+              </div>
+              <h2 class="mt-3 text-2xl font-semibold tracking-tight text-foreground">
+                <a href={getBlogPostUrl(post.slug)} class="hover:text-primary">
+                  {post.title}
+                </a>
+              </h2>
+              <p class="mt-3 text-base/7 text-muted-foreground">
+                {post.description}
+              </p>
+              <a
+                href={getBlogPostUrl(post.slug)}
+                class="mt-4 inline-flex text-sm font-semibold text-primary hover:text-primary/80"
+              >
+                Read article
+              </a>
+            </article>
+          ))
+        }
+      </div>
+    </section>
+  </main>
+  <SiteFooter />
+</Layout>

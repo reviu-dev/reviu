@@ -1,0 +1,360 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import SiteFooter from "../../components/SiteFooter.astro";
+import gitLight from "../../assets/app_screenshots/git_light.png";
+import gitDark from "../../assets/app_screenshots/git_dark.png";
+import githubHomeLight from "../../assets/app_screenshots/github_home_light.png";
+import githubHomeDark from "../../assets/app_screenshots/github_home_dark.png";
+import githubPrConvLight from "../../assets/app_screenshots/github_pr_conv_light.png";
+import githubPrConvDark from "../../assets/app_screenshots/github_pr_conv_dark.png";
+import { blogPosts } from "../../lib/blog";
+
+const post = blogPosts.find(
+  (item) => item.slug === "why-github-pr-review-still-feels-slow",
+);
+
+if (!post) {
+  throw new Error("Missing blog post metadata.");
+}
+
+const formattedDate = new Date(
+  `${post.publishedAt}T00:00:00Z`,
+).toLocaleDateString("en-US", {
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+});
+const site = Astro.site ?? new URL("https://reviu.dev");
+const articleImageUrl = new URL(githubPrConvLight.src, site).toString();
+
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  headline: post.title,
+  description: post.description,
+  image: articleImageUrl,
+  datePublished: post.publishedAt,
+  dateModified: post.publishedAt,
+  author: {
+    "@type": "Person",
+    name: "Joris Gallot",
+  },
+  publisher: {
+    "@type": "Organization",
+    name: "Reviu",
+    url: "https://reviu.dev",
+  },
+  mainEntityOfPage:
+    "https://reviu.dev/blog/why-github-pr-review-still-feels-slow",
+};
+---
+
+<Layout
+  title={post.title}
+  description={post.description}
+  pathname="/blog/why-github-pr-review-still-feels-slow"
+  image={githubPrConvLight}
+  type="article"
+  structuredData={structuredData}
+>
+  <main class="py-20 sm:py-24">
+    <article class="mx-auto max-w-5xl px-6 lg:px-8">
+      <a
+        href="/blog"
+        class="inline-flex items-center rounded-md bg-background px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50"
+      >
+        &larr; Blog
+      </a>
+
+      <header class="mt-6" data-reveal-root data-reveal-threshold="0.05">
+        <div
+          class="reviu-reveal flex flex-wrap items-center gap-3 text-sm text-muted-foreground"
+        >
+          <time datetime={post.publishedAt}>{formattedDate}</time>
+          <span aria-hidden="true">/</span>
+          <span>{post.readingTime}</span>
+        </div>
+        <h1
+          class="reviu-reveal mt-4 text-4xl font-semibold tracking-tight text-foreground sm:text-5xl"
+          style="--reveal-delay: 100ms;"
+        >
+          {post.title}
+        </h1>
+        <p
+          class="reviu-reveal mt-5 text-xl/8 text-muted-foreground"
+          style="--reveal-delay: 180ms;"
+        >
+          Pull request review is not slow because developers lack discipline. It
+          is slow because the work is split across local code, GitHub context,
+          comments, checks, notifications, and merge state.
+        </p>
+      </header>
+
+      <figure class="mt-10">
+        <img
+          src={githubPrConvLight.src}
+          width={githubPrConvLight.width}
+          height={githubPrConvLight.height}
+          alt="Reviu pull request review screen with changed files, diff context, and review comments."
+          class="w-full rounded-lg border border-border bg-secondary dark:hidden"
+          loading="eager"
+          decoding="async"
+        />
+        <img
+          src={githubPrConvDark.src}
+          width={githubPrConvDark.width}
+          height={githubPrConvDark.height}
+          alt="Reviu pull request review screen with changed files, diff context, and review comments."
+          class="w-full rounded-lg border border-border bg-secondary not-dark:hidden"
+          loading="eager"
+          decoding="async"
+        />
+      </figure>
+
+      <div class="blog-article mt-12 text-base/8 text-muted-foreground">
+        <p>
+          Most teams talk about pull request review as if the hard part is human
+          behavior, review sooner, write smaller pull requests, leave clearer
+          comments, keep the queue empty.
+        </p>
+
+        <p>
+          Those habits matter, but they do not explain why review still feels
+          slow on teams that already care about quality. The deeper problem is
+          that review work is scattered, the code is local, the conversation is
+          on GitHub, the checks are somewhere else, the branch is in your
+          terminal or Git client, and notifications arrive in a browser tab,
+          email, Slack, or all three.
+        </p>
+
+        <p>
+          A reviewer is not just reading a diff, they are rebuilding context
+          from pieces that live in different places.
+        </p>
+
+        <h2>The review loop is bigger than the diff</h2>
+
+        <p>
+          A useful pull request review usually includes several different
+          actions. You open the PR, scan the description, check the branch and
+          commits, read the changed files, inspect tests, answer a comment, jump
+          to a related issue, maybe run the branch locally, then decide whether
+          the PR is ready to merge.
+        </p>
+
+        <p>
+          None of those steps is unusual, the problem is that each step often
+          happens in a different tool. GitHub gives you the PR conversation and
+          merge state, your editor gives you local code intelligence, the CLI
+          gives you precise Git commands, a desktop Git client gives you branch
+          and diff operations, and CI providers add their own pages and logs.
+        </p>
+
+        <p>
+          Each tool can be good at its own job and still make the complete
+          review loop feel heavy.
+        </p>
+
+        <h2>Context switching changes how you review</h2>
+
+        <p>
+          When review context is split, developers start optimizing around the
+          friction. They scan instead of reading carefully, they defer comments
+          because replying means opening another tab, they approve after only
+          checking the parts that were easy to reach, they postpone a PR because
+          switching to the branch locally feels like a chore.
+        </p>
+
+        <p>
+          This is not laziness, it is the normal result of an interface that
+          charges a small tax for every step.
+        </p>
+
+        <p>
+          The cost is easy to miss because each interruption is tiny. Open a
+          browser tab, find the right notification, copy a branch name, switch
+          repositories, pull the latest changes, reopen the PR, find the file
+          again, jump back to the comment thread, wait for a check page, repeat
+          the same sequence on the next review.
+        </p>
+
+        <p>
+          Over a week, those tiny taxes change behavior, review becomes less
+          continuous, less local, and less confident.
+        </p>
+
+        <figure>
+          <img
+            src={githubHomeLight.src}
+            width={githubHomeLight.width}
+            height={githubHomeLight.height}
+            alt="Reviu GitHub home screen with notifications and pull request lists."
+            class="w-full rounded-lg border border-border bg-secondary dark:hidden"
+            loading="lazy"
+            decoding="async"
+          />
+          <img
+            src={githubHomeDark.src}
+            width={githubHomeDark.width}
+            height={githubHomeDark.height}
+            alt="Reviu GitHub home screen with notifications and pull request lists."
+            class="w-full rounded-lg border border-border bg-secondary not-dark:hidden"
+            loading="lazy"
+            decoding="async"
+          />
+        </figure>
+
+        <h2>The browser is not always the right review surface</h2>
+
+        <p>
+          GitHub is the right source of truth for pull requests. It is where the
+          discussion, checks, permissions, and merge rules live, but that does
+          not mean the browser is always the best place to do the whole review.
+        </p>
+
+        <p>
+          Browser tabs are great for links and broad navigation. Review work is
+          more repetitive and more stateful, you move through files, comments,
+          commits, checks, local branches, and notifications. You benefit from
+          stable keyboard shortcuts, a persistent layout, and fast movement
+          through the same review actions many times a day.
+        </p>
+
+        <p>
+          That is why many developers still keep a Git client, terminal, and
+          editor open next to GitHub, the browser owns the PR, but the work is
+          not fully browser-shaped.
+        </p>
+
+        <h2>Local Git still matters during review</h2>
+
+        <p>
+          A pull request is a Git branch with social context around it. When the
+          local branch is hard to reach, review becomes more shallow, you can
+          read the patch, but you are less likely to inspect surrounding files,
+          test the change, amend small fixes, or understand how the branch is
+          structured.
+        </p>
+
+        <p>
+          Good review tooling should make the local path obvious. Open the PR,
+          switch to its branch, review the changed files, move through hunks,
+          check comments, see merge readiness, return to local changes when
+          needed.
+        </p>
+
+        <p>
+          The important part is not hiding Git, developers already understand
+          Git, the important part is keeping local Git and GitHub review context
+          close enough that moving between them does not break focus.
+        </p>
+
+        <figure>
+          <img
+            src={gitLight.src}
+            width={gitLight.width}
+            height={gitLight.height}
+            alt="Reviu local Git screen with staged and unstaged files plus a split diff."
+            class="w-full rounded-lg border border-border bg-secondary dark:hidden"
+            loading="lazy"
+            decoding="async"
+          />
+          <img
+            src={gitDark.src}
+            width={gitDark.width}
+            height={gitDark.height}
+            alt="Reviu local Git screen with staged and unstaged files plus a split diff."
+            class="w-full rounded-lg border border-border bg-secondary not-dark:hidden"
+            loading="lazy"
+            decoding="async"
+          />
+        </figure>
+
+        <h2>Speed should come from continuity, not rushing</h2>
+
+        <p>
+          Fast review is often misunderstood, it should not mean approving with
+          less care or pushing reviewers to move faster than the code deserves.
+          A faster review workflow should reduce repeated actions so the
+          reviewer can spend more attention on the code itself.
+        </p>
+
+        <p>
+          The best improvements are usually practical, keep notifications close
+          to the PR list, keep comments beside the diff, keep checks and merge
+          state visible, keep branch actions reachable, make file and hunk
+          navigation keyboard-friendly, let the reviewer stay inside one flow
+          long enough to build real context.
+        </p>
+
+        <p>
+          That kind of speed improves review quality because it removes the
+          parts of review that do not require judgment.
+        </p>
+
+        <h2>What Reviu is trying to change</h2>
+
+        <p>
+          Reviu is a native desktop Git client built around that review loop.
+          The free app covers local Git workflows: diffs, staging, commits,
+          branches, rebases, stashes, cherry-picks, and conflict resolution.
+          Reviu Pro adds the GitHub layer: notifications, repositories, pull
+          requests, issues, comments, checks, and merge actions.
+        </p>
+
+        <p>
+          The goal is not to replace GitHub as the source of truth, the goal is
+          to make review feel less fragmented by putting the common path in one
+          keyboard-first desktop app.
+        </p>
+
+        <p>
+          Pull request review will always require judgment, it should not also
+          require reconstructing your workspace from five tools every time a PR
+          needs attention.
+        </p>
+      </div>
+
+      <section class="mt-14 border-t border-border pt-8">
+        <h2 class="text-2xl font-semibold tracking-tight text-foreground">
+          Try Reviu
+        </h2>
+        <p class="mt-3 text-base/7 text-muted-foreground">
+          Use Reviu free for local Git workflows, then start Reviu Pro when you
+          want GitHub notifications, pull request review, issues, and repository
+          context in the desktop app.
+        </p>
+        <a
+          href="/#downloads"
+          data-umami-event="download-blog-why-github-pr-review"
+          class="reviu-hover-lift mt-5 inline-flex items-center gap-2 rounded-md bg-primary px-3.5 py-2.5 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        >
+          Download now
+        </a>
+      </section>
+    </article>
+  </main>
+  <SiteFooter />
+</Layout>
+
+<style is:global>
+  .blog-article h2 {
+    margin-top: 2rem;
+    margin-bottom: 0.75rem;
+    color: var(--foreground);
+    font-size: 1.5rem;
+    line-height: 2rem;
+    font-weight: 600;
+    letter-spacing: 0;
+  }
+
+  .blog-article p {
+    margin-top: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .blog-article figure {
+    margin-top: 2rem;
+    margin-bottom: 2rem;
+  }
+</style>
