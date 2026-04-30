@@ -1694,6 +1694,18 @@ impl GithubCommitDetailsPage {
     cx.stop_propagation();
   }
 
+  fn focus_file_tree_action(
+    &mut self,
+    _: &crate::FocusFileTree,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self
+      .tree_state
+      .update(cx, |state, cx| state.focus(window, cx));
+    cx.stop_propagation();
+  }
+
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = AuthStateStore::has_github_access(cx);
     let commands = CommandPaletteCommand::default_global_commands(
@@ -1834,6 +1846,7 @@ impl Render for GithubCommitDetailsPage {
       .on_action(cx.listener(Self::next_annotation_action))
       .on_action(cx.listener(Self::toggle_diff_view_action))
       .on_action(cx.listener(Self::toggle_hide_whitespace_action))
+      .on_action(cx.listener(Self::focus_file_tree_action))
       .child(self.render_header(cx))
       .child(
         div()

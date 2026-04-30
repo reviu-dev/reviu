@@ -14870,6 +14870,20 @@ impl GithubPrDetailsPage {
     cx.stop_propagation();
   }
 
+  fn focus_file_tree_action(
+    &mut self,
+    _: &crate::FocusFileTree,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix == PR_TAB_CHANGES_IX {
+      self.focus_changes_tree(window, cx);
+    } else {
+      self.set_active_tab(PR_TAB_CHANGES_IX, window, cx);
+    }
+    cx.stop_propagation();
+  }
+
   fn toggle_hide_whitespace_action(
     &mut self,
     _: &crate::ToggleHideWhitespace,
@@ -15440,6 +15454,7 @@ impl Render for GithubPrDetailsPage {
       .on_action(cx.listener(GithubPrDetailsPage::next_review_comment_action))
       .on_action(cx.listener(GithubPrDetailsPage::toggle_diff_view_action))
       .on_action(cx.listener(GithubPrDetailsPage::toggle_hide_whitespace_action))
+      .on_action(cx.listener(GithubPrDetailsPage::focus_file_tree_action))
       .on_action(cx.listener(GithubPrDetailsPage::previous_page_tab_action))
       .on_action(cx.listener(GithubPrDetailsPage::next_page_tab_action))
       .on_action(cx.listener(GithubPrDetailsPage::show_file_search_action))
@@ -16242,6 +16257,37 @@ mod tests {
       let focused = window.focused(cx).expect("changes tree should take focus");
       assert_ne!(focused, external_focus);
       assert_ne!(focused, page_focus);
+    });
+  }
+
+  #[gpui::test]
+  fn focus_file_tree_action_switches_to_changes_tab_and_focuses_tree(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    let files = files_from_api(vec![make_api_file("src/main.rs", "modified", None)]);
+    let (items, lookup, selected_index, selected_id) = build_tree_items(&files);
+
+    page.update_in(cx, |this, window, cx| {
+      this.file_lookup = lookup;
+      this.selected_tree_id = selected_id.clone();
+      this.selected_file = selected_id
+        .as_ref()
+        .and_then(|id| this.file_lookup.get(id).cloned());
+      this.tree_state.update(cx, |state, cx| {
+        state.set_items(items, cx);
+        state.set_selected_index(selected_index, cx);
+      });
+
+      this.active_tab_ix = PR_TAB_OVERVIEW_IX;
+      let external_focus = cx.focus_handle();
+      window.focus(&external_focus, cx);
+
+      this.focus_file_tree_action(&crate::FocusFileTree, window, cx);
+
+      assert_eq!(this.active_tab_ix, PR_TAB_CHANGES_IX);
+      let focused = window.focused(cx).expect("changes tree should take focus");
+      assert_ne!(focused, external_focus);
     });
   }
 

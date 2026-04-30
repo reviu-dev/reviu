@@ -6783,6 +6783,22 @@ impl GithubRepoPage {
     cx.stop_propagation();
   }
 
+  fn focus_file_tree_action(
+    &mut self,
+    _: &crate::FocusFileTree,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix == REPO_TAB_CODE_IX {
+      self
+        .code_tree_state
+        .update(cx, |state, cx| state.focus(window, cx));
+    } else {
+      self.set_active_tab(REPO_TAB_CODE_IX, window, cx);
+    }
+    cx.stop_propagation();
+  }
+
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = AuthStateStore::has_github_access(cx);
     let commands = CommandPaletteCommand::default_global_commands(
@@ -8940,6 +8956,7 @@ impl Render for GithubRepoPage {
       .on_action(cx.listener(GithubRepoPage::show_file_search_action))
       .on_action(cx.listener(GithubRepoPage::previous_page_tab_action))
       .on_action(cx.listener(GithubRepoPage::next_page_tab_action))
+      .on_action(cx.listener(GithubRepoPage::focus_file_tree_action))
       .child(self.render_header(cx))
       .child(
         div()
