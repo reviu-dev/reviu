@@ -62,12 +62,11 @@ use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, ConfirmDialog, DropdownSelectConfig,
-  DropdownSelectItem, FILE_ICON_SIZE_PX, GithubEmojiInput, Input, InputState, Popover, ReactionBar,
-  ScrollAxes, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusTag, StatusThemeExt,
-  UiIconName, WindowExt, dropdown_select, file_icon_path_for_name_with_theme, h_resizable,
-  parse_github_url_action, resizable_panel, restrict_scroll_to_wheel_axis, scrollable_node,
-  selectable_list_item,
+  CommandPaletteHandler, CommandPalettePage, ConfirmDialog, FILE_ICON_SIZE_PX, GithubEmojiInput,
+  Input, InputState, Popover, ReactionBar, ScrollAxes, SearchFileEntry, SearchFileHandler,
+  SelectableRowStyle, StatusTag, StatusThemeExt, UiIconName, WindowExt,
+  file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
+  restrict_scroll_to_wheel_axis, scrollable_node, selectable_list_item,
 };
 
 use crate::{
@@ -208,8 +207,6 @@ enum TabNavigationDirection {
   Previous,
   Next,
 }
-const PR_COMMIT_SELECT_WIDTH: f32 = 260.0;
-const PR_COMMIT_SELECT_MENU_WIDTH: f32 = 320.0;
 const PR_MERGE_POPOVER_WIDTH: f32 = 520.0;
 const PR_MERGE_MESSAGE_INPUT_HEIGHT_PX: f32 = 100.0;
 const PR_REVIEW_POPOVER_WIDTH: f32 = 500.0;
@@ -222,8 +219,6 @@ const GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str =
 const GITHUB_PR_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str =
   "github-pr-markdown-preview-render-pane";
 const GITHUB_PR_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR: &str = "github-pr-binary-preview-render-pane";
-
-type CommitSelectHandler = Rc<dyn Fn(Option<String>, &mut Window, &mut App)>;
 
 struct GithubPrStatusActionNotificationId;
 
@@ -376,6 +371,12 @@ fn status_color(status: GithubPrFileStatus, theme: &gpui_component::Theme) -> gp
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReviewCommentNavigationDirection {
+  Previous,
+  Next,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommitNavigationDirection {
   Previous,
   Next,
 }
@@ -2326,94 +2327,6 @@ fn overview_change_stats(
   ]
 }
 
-#[derive(Clone)]
-struct GithubPrCommitSelectItem {
-  sha: Option<String>,
-  label: SharedString,
-  search_text: String,
-  is_selected: bool,
-}
-
-impl GithubPrCommitSelectItem {
-  fn all_changes(is_selected: bool) -> Self {
-    Self {
-      sha: None,
-      label: "All changes".into(),
-      search_text: "all changes".to_string(),
-      is_selected,
-    }
-  }
-
-  fn for_commit(commit: &GithubPullRequestCommit, is_selected: bool) -> Self {
-    let short = github_shared::short_sha(&commit.sha);
-    let subject = github_shared::commit_subject(&commit.message);
-    let author = commit
-      .author
-      .as_ref()
-      .map(|user| user.login.as_str())
-      .unwrap_or("unknown");
-    let search_text = format!("{short} {subject} {} {author}", commit.sha);
-    Self {
-      sha: Some(commit.sha.clone()),
-      label: subject.into(),
-      search_text: search_text.to_lowercase(),
-      is_selected,
-    }
-  }
-}
-
-impl DropdownSelectItem for GithubPrCommitSelectItem {
-  type Value = Option<String>;
-
-  fn value(&self) -> &Self::Value {
-    &self.sha
-  }
-
-  fn selected(&self) -> bool {
-    self.is_selected
-  }
-
-  fn matches(&self, query: &str) -> bool {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
-      return true;
-    }
-
-    self.search_text.contains(query.as_str())
-  }
-
-  fn render_item(&self, _window: &mut Window, _cx: &mut App) -> gpui::AnyElement {
-    h_flex()
-      .max_w(px(PR_COMMIT_SELECT_MENU_WIDTH - 40.0))
-      .min_w_0()
-      .text_sm()
-      .child(
-        div()
-          .min_w_0()
-          .overflow_hidden()
-          .text_ellipsis()
-          .child(self.label.clone()),
-      )
-      .into_any_element()
-  }
-
-  fn render_selected(&self, _window: &mut Window, cx: &mut App) -> gpui::AnyElement {
-    h_flex()
-      .w_full()
-      .min_w_0()
-      .text_sm()
-      .text_color(cx.theme().foreground)
-      .child(
-        div()
-          .min_w_0()
-          .text_ellipsis()
-          .overflow_hidden()
-          .child(self.label.clone()),
-      )
-      .into_any_element()
-  }
-}
-
 fn file_for_review_comment_path(
   file_lookup: &HashMap<String, Rc<GithubPrFileDiff>>,
   path: &str,
@@ -2886,7 +2799,6 @@ pub struct GithubPrDetailsPage {
   tree_search_error: Option<SharedString>,
   tree_search_generation: u64,
   tree_search_reset_pending: bool,
-  file_sidebar_options_open: bool,
   show_local_project_files: bool,
   hide_whitespace: bool,
   saved_pr_selected_tree_id: Option<String>,
@@ -3451,7 +3363,6 @@ impl GithubPrDetailsPage {
       tree_search_error: None,
       tree_search_generation: 0,
       tree_search_reset_pending: false,
-      file_sidebar_options_open: false,
       show_local_project_files: false,
       hide_whitespace: AppSettings::get(cx).hide_whitespace,
       saved_pr_selected_tree_id: None,
@@ -6437,30 +6348,49 @@ impl GithubPrDetailsPage {
     self.tree_search_task = Some(task);
   }
 
-  fn build_commit_dropdown_items(
-    commits: &[GithubPullRequestCommit],
-    selected_commit_sha: Option<&str>,
-  ) -> Vec<GithubPrCommitSelectItem> {
-    let selected_commit_sha = selected_commit_sha
-      .map(str::trim)
-      .filter(|sha| !sha.is_empty());
-    let mut items = vec![GithubPrCommitSelectItem::all_changes(
-      selected_commit_sha.is_none(),
-    )];
-    items.extend(commits.iter().map(|commit| {
-      GithubPrCommitSelectItem::for_commit(commit, selected_commit_sha == Some(commit.sha.as_str()))
-    }));
-    items
+  fn selected_commit_index(&self) -> Option<usize> {
+    let sha = self.selected_commit_sha.as_deref()?;
+    self.commits.iter().position(|commit| commit.sha == sha)
   }
 
-  fn commit_select_handler(&self, cx: &Context<Self>) -> CommitSelectHandler {
-    let view = cx.entity();
-    Rc::new(move |selected_commit_sha, window, cx| {
-      view.update(cx, |this, cx| {
-        this.select_commit_filter(selected_commit_sha.clone(), cx);
-        this.refocus_page_shortcuts(window, cx);
-      });
-    })
+  fn enter_commit_by_commit_review(&mut self, cx: &mut Context<Self>) {
+    // Commits are sorted newest-first, so start at the oldest (last entry).
+    let Some(first_sha) = self.commits.last().map(|commit| commit.sha.clone()) else {
+      return;
+    };
+    self.select_commit_filter(Some(first_sha), cx);
+  }
+
+  fn exit_commit_by_commit_review(&mut self, cx: &mut Context<Self>) {
+    self.select_commit_filter(None, cx);
+  }
+
+  fn navigate_commit_by_commit(
+    &mut self,
+    direction: CommitNavigationDirection,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(current_index) = self.selected_commit_index() else {
+      return;
+    };
+    // Commits are newest-first; "Next" = newer (index - 1), "Previous" = older (index + 1).
+    let new_index = match direction {
+      CommitNavigationDirection::Next => current_index.checked_sub(1),
+      CommitNavigationDirection::Previous => {
+        let next = current_index + 1;
+        if next < self.commits.len() {
+          Some(next)
+        } else {
+          None
+        }
+      }
+    };
+    if let Some(new_index) = new_index
+      && let Some(commit) = self.commits.get(new_index)
+    {
+      let sha = commit.sha.clone();
+      self.select_commit_filter(Some(sha), cx);
+    }
   }
 
   fn refocus_page_shortcuts(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -10288,7 +10218,6 @@ impl GithubPrDetailsPage {
     };
 
     let tab_bar = TabBar::new("pr-details-tabs")
-      .w_full()
       .segmented()
       .selected_index(self.active_tab_ix)
       .on_click(cx.listener(|this, ix: &usize, window, cx| {
@@ -10296,6 +10225,8 @@ impl GithubPrDetailsPage {
       }))
       .child(Tab::new().label("Overview"))
       .child(changes_tab);
+
+    let changes_tools = self.render_pr_changes_header_tools(cx);
 
     let back_button = || {
       Button::new("pr-back")
@@ -10388,7 +10319,238 @@ impl GithubPrDetailsPage {
           .child(left_area)
           .child(right_area),
       )
-      .child(tab_bar)
+      .child(
+        h_flex()
+          .items_center()
+          .gap_4()
+          .child(tab_bar)
+          .when_some(changes_tools, |this, tools| this.child(tools)),
+      )
+  }
+
+  fn render_commit_by_commit_row(
+    &self,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> Option<AnyElement> {
+    let current_index = self.selected_commit_index()?;
+    let total = self.commits.len();
+    let commit = self.commits.get(current_index)?;
+    // Commits are newest-first; older commits live at higher indices.
+    let has_previous = current_index + 1 < total;
+    let has_next = current_index > 0;
+    // Display chronological position (oldest = 1, newest = total).
+    let position = total.saturating_sub(current_index);
+    let subject = github_shared::commit_subject(&commit.message);
+    let prev_view = cx.entity();
+    let next_view = cx.entity();
+
+    Some(
+      h_flex()
+        .gap_2()
+        .px_3()
+        .py_2()
+        .items_center()
+        .justify_between()
+        .border_b_1()
+        .border_color(theme.border)
+        .child(
+          div()
+            .min_w_0()
+            .flex_1()
+            .text_sm()
+            .text_color(theme.foreground)
+            .overflow_hidden()
+            .text_ellipsis()
+            .child(subject),
+        )
+        .child(
+          h_flex()
+            .items_center()
+            .gap_1()
+            .child(
+              Button::new("github-pr-commit-prev")
+                .ghost()
+                .xsmall()
+                .compact()
+                .icon(IconName::ChevronLeft)
+                .tooltip_with_action(
+                  "Previous commit",
+                  &crate::PreviousPrCommit,
+                  Some(crate::shortcuts::PR_CHANGES_ONLY_CONTEXT),
+                )
+                .disabled(!has_previous)
+                .on_click(move |_, _, cx| {
+                  prev_view.update(cx, |this, cx| {
+                    this.navigate_commit_by_commit(CommitNavigationDirection::Previous, cx);
+                  });
+                }),
+            )
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(format!("{}/{}", position, total)),
+            )
+            .child(
+              Button::new("github-pr-commit-next")
+                .ghost()
+                .xsmall()
+                .compact()
+                .icon(IconName::ChevronRight)
+                .tooltip_with_action(
+                  "Next commit",
+                  &crate::NextPrCommit,
+                  Some(crate::shortcuts::PR_CHANGES_ONLY_CONTEXT),
+                )
+                .disabled(!has_next)
+                .on_click(move |_, _, cx| {
+                  next_view.update(cx, |this, cx| {
+                    this.navigate_commit_by_commit(CommitNavigationDirection::Next, cx);
+                  });
+                }),
+            ),
+        )
+        .into_any_element(),
+    )
+  }
+
+  fn render_pr_changes_header_tools(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX || self.pull_request.is_none() {
+      return None;
+    }
+    let theme = cx.theme().clone();
+    let tree_search_active = self.tree_search_query_normalized().is_some();
+    let local_project_controls = self.render_local_project_controls(&theme, cx);
+
+    Some(
+      h_flex()
+        .items_center()
+        .gap_3()
+        .child(
+          div()
+            .relative()
+            .w(px(280.0))
+            .child(Input::new(&self.tree_search_input).w_full().pr(px(28.0)))
+            .when(tree_search_active && self.tree_search_loading, |this| {
+              this.child(
+                h_flex()
+                  .absolute()
+                  .top_0()
+                  .right_2()
+                  .bottom_0()
+                  .items_center()
+                  .child(Spinner::new().small()),
+              )
+            }),
+        )
+        .when_some(local_project_controls, |this, controls| {
+          this.child(controls)
+        })
+        .into_any_element(),
+    )
+  }
+
+  fn render_local_project_controls(
+    &self,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> Option<AnyElement> {
+    let availability = self.local_project_availability(cx);
+    if matches!(availability, GithubPrLocalProjectAvailability::Hidden) {
+      return None;
+    }
+
+    if matches!(availability, GithubPrLocalProjectAvailability::Ready { .. }) {
+      let local_project_mode = self.local_project_mode_active(cx);
+      return Some(
+        Switch::new("github-pr-local-project-switch")
+          .label("Show unchanged files")
+          .small()
+          .checked(local_project_mode)
+          .disabled(self.local_project_update_loading || self.local_branch_switch_loading)
+          .on_click(cx.listener(move |this, checked, _, cx| {
+            this.set_show_local_project_files(*checked, cx);
+          }))
+          .into_any_element(),
+      );
+    }
+
+    let (status_text, action_button): (Option<String>, Option<Button>) = match &availability {
+      GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+        current_branch,
+        has_uncommitted_changes,
+        ..
+      } => {
+        let text = match (current_branch, has_uncommitted_changes) {
+          (Some(branch), true) => Some(format!("Local changes detected on {}.", branch)),
+          (Some(_), false) => None,
+          (None, true) => Some("Local changes detected.".to_string()),
+          (None, false) => Some("Local repo is not on this PR branch.".to_string()),
+        };
+        let view = cx.entity();
+        let button_label = if self.local_branch_switch_loading {
+          "Switching..."
+        } else if *has_uncommitted_changes {
+          "Stash and switch to PR branch"
+        } else {
+          "Switch to PR branch"
+        };
+        let button = Button::new("github-pr-local-project-switch-branch")
+          .label(button_label)
+          .xsmall()
+          .ghost()
+          .disabled(self.local_branch_switch_loading || self.local_project_update_loading)
+          .on_click(move |_, window, cx| {
+            view.update(cx, |this, cx| {
+              this.prompt_or_switch_local_branch_to_pr_branch(window, cx);
+            });
+          });
+        (text, Some(button))
+      }
+      GithubPrLocalProjectAvailability::NeedsUpdate { .. } => {
+        let view = cx.entity();
+        let button = Button::new("github-pr-local-project-update")
+          .label(if self.local_project_update_loading {
+            "Updating..."
+          } else {
+            "Update to PR head"
+          })
+          .xsmall()
+          .ghost()
+          .disabled(self.local_project_update_loading)
+          .on_click(move |_, window, cx| {
+            view.update(cx, |this, cx| {
+              this.update_local_branch_to_pr_head(false, None, window, cx);
+            });
+          });
+        (
+          Some("Local branch is not at this PR head.".to_string()),
+          Some(button),
+        )
+      }
+      GithubPrLocalProjectAvailability::Dirty { .. } => (
+        Some("Local branch is not at this PR head and has local changes.".to_string()),
+        None,
+      ),
+      _ => (None, None),
+    };
+
+    Some(
+      h_flex()
+        .items_center()
+        .gap_2()
+        .when_some(action_button, |this, button| this.child(button))
+        .when_some(status_text, |this, text| {
+          this.child(
+            div()
+              .text_xs()
+              .text_color(theme.status_orange())
+              .child(text),
+          )
+        })
+        .into_any_element(),
+    )
   }
 
   fn render_review_requested_alert(&self, cx: &App) -> Option<AnyElement> {
@@ -13894,11 +14056,7 @@ impl GithubPrDetailsPage {
   ) -> impl IntoElement {
     let theme = cx.theme().clone();
     let local_project_mode = self.local_project_mode_active(cx);
-    let local_project_availability = self.local_project_availability(cx);
     let count = self.active_file_count(cx);
-    let commit_options =
-      Self::build_commit_dropdown_items(&self.commits, self.selected_commit_sha.as_deref());
-    let on_commit_select = self.commit_select_handler(cx);
     let tree_search_active = self.tree_search_query_normalized().is_some();
 
     if self.tree_search_reset_pending {
@@ -13924,8 +14082,43 @@ impl GithubPrDetailsPage {
       });
     }
 
+    let in_commit_by_commit_mode = self.selected_commit_sha.is_some();
+    let commits_disabled =
+      self.commits.is_empty() || self.commits_loading || self.commits_error.is_some();
+    let toggle_view = cx.entity();
+    let commit_by_commit_toggle = Button::new("github-pr-commit-by-commit-toggle")
+      .ghost()
+      .xsmall()
+      .compact()
+      .icon(UiIconName::GitCommitHorizontal)
+      .label(if in_commit_by_commit_mode {
+        "All changes"
+      } else {
+        "Commit by commit"
+      })
+      .tooltip_with_action(
+        if in_commit_by_commit_mode {
+          "Show all changes"
+        } else {
+          "Review commit by commit"
+        },
+        &crate::ToggleCommitByCommit,
+        Some(crate::shortcuts::PR_CHANGES_ONLY_CONTEXT),
+      )
+      .disabled(commits_disabled)
+      .on_click(move |_, _, cx| {
+        toggle_view.update(cx, |this, cx| {
+          if this.selected_commit_sha.is_some() {
+            this.exit_commit_by_commit_review(cx);
+          } else {
+            this.enter_commit_by_commit_review(cx);
+          }
+        });
+      });
+
     let header = h_flex()
       .pl_3()
+      .pr_2()
       .items_center()
       .justify_between()
       .h(px(DIFF_HEADER_HEIGHT))
@@ -13943,231 +14136,9 @@ impl GithubPrDetailsPage {
               .child(count.to_string()),
           ),
       )
-      .child(
-        div()
-          .border_l_1()
-          .border_color(theme.border)
-          .child(dropdown_select(
-            DropdownSelectConfig::new("github-pr-commit-select")
-              .placeholder("All changes")
-              .search_placeholder("Search commits...")
-              .options(commit_options)
-              .width(px(PR_COMMIT_SELECT_WIDTH))
-              .menu_width(px(PR_COMMIT_SELECT_MENU_WIDTH))
-              .trigger_height(px(DIFF_HEADER_HEIGHT - 1.))
-              .disabled(self.commits_loading || self.commits_error.is_some())
-              .on_select(on_commit_select),
-          )),
-      );
+      .child(commit_by_commit_toggle);
 
-    let local_project_options = if matches!(
-      local_project_availability,
-      GithubPrLocalProjectAvailability::Hidden
-    ) {
-      None
-    } else {
-      let (status_text, status_color): (Option<String>, Hsla) = match &local_project_availability {
-        GithubPrLocalProjectAvailability::NeedsBranchSwitch {
-          current_branch: Some(current_branch),
-          has_uncommitted_changes,
-          ..
-        } => (
-          if *has_uncommitted_changes {
-            Some(format!(
-              "Local changes detected on {}. Stash before switching to this PR branch.",
-              current_branch
-            ))
-          } else {
-            Some(format!(
-              "Current branch is {}. Switch to this PR branch to browse unchanged files.",
-              current_branch
-            ))
-          },
-          theme.status_orange(),
-        ),
-        GithubPrLocalProjectAvailability::NeedsBranchSwitch {
-          current_branch: None,
-          has_uncommitted_changes,
-          ..
-        } => (
-          if *has_uncommitted_changes {
-            Some("Local changes detected. Stash before switching to this PR branch.".to_string())
-          } else {
-            Some("Local repo is not on this PR branch.".to_string())
-          },
-          theme.status_orange(),
-        ),
-        GithubPrLocalProjectAvailability::Ready { .. } => (None, theme.muted_foreground),
-        GithubPrLocalProjectAvailability::NeedsUpdate { .. } => (
-          Some("Local branch is not at this PR head".to_string()),
-          theme.status_orange(),
-        ),
-        GithubPrLocalProjectAvailability::Dirty { .. } => (
-          Some("Local branch is not at this PR head and has local changes".to_string()),
-          theme.status_orange(),
-        ),
-        GithubPrLocalProjectAvailability::Hidden => (None, theme.muted_foreground),
-      };
-      let can_toggle_local_project = matches!(
-        local_project_availability,
-        GithubPrLocalProjectAvailability::Ready { .. }
-      );
-      let view = cx.entity();
-      let switch_branch_button = if matches!(
-        local_project_availability,
-        GithubPrLocalProjectAvailability::NeedsBranchSwitch { .. }
-      ) {
-        Some(
-          Button::new("github-pr-local-project-switch-branch")
-            .label(if self.local_branch_switch_loading {
-              "Switching..."
-            } else {
-              "Switch to PR branch"
-            })
-            .xsmall()
-            .ghost()
-            .disabled(self.local_branch_switch_loading || self.local_project_update_loading)
-            .on_click(move |_, window, cx| {
-              view.update(cx, |this, cx| {
-                this.prompt_or_switch_local_branch_to_pr_branch(window, cx);
-              });
-            }),
-        )
-      } else {
-        None
-      };
-      let view = cx.entity();
-      let update_button = if matches!(
-        local_project_availability,
-        GithubPrLocalProjectAvailability::NeedsUpdate { .. }
-      ) {
-        Some(
-          Button::new("github-pr-local-project-update")
-            .label(if self.local_project_update_loading {
-              "Updating..."
-            } else {
-              "Update to PR head"
-            })
-            .xsmall()
-            .ghost()
-            .disabled(self.local_project_update_loading)
-            .on_click(move |_, window, cx| {
-              view.update(cx, |this, cx| {
-                this.update_local_branch_to_pr_head(false, None, window, cx);
-              });
-            }),
-        )
-      } else {
-        None
-      };
-
-      Some(
-        v_flex()
-          .w(px(280.0))
-          .gap_3()
-          .child(
-            Switch::new("github-pr-local-project-switch")
-              .label("Show unchanged files")
-              .small()
-              .checked(local_project_mode)
-              .disabled(
-                !can_toggle_local_project
-                  || self.local_project_update_loading
-                  || self.local_branch_switch_loading,
-              )
-              .on_click(cx.listener(move |this, checked, _, cx| {
-                this.set_show_local_project_files(*checked, cx);
-              })),
-          )
-          .when(
-            switch_branch_button.is_some() || update_button.is_some(),
-            |this| {
-              this.child(
-                h_flex()
-                  .items_center()
-                  .gap_2()
-                  .when_some(switch_branch_button, |this, button| this.child(button))
-                  .when_some(update_button, |this, button| this.child(button)),
-              )
-            },
-          )
-          .when_some(status_text, |this, status_text| {
-            this.child(div().text_xs().text_color(status_color).child(status_text))
-          })
-          .when_some(self.local_branch_switch_error.clone(), |this, error| {
-            this.child(div().text_xs().text_color(theme.status_red()).child(error))
-          })
-          .when_some(self.local_project_update_error.clone(), |this, error| {
-            this.child(div().text_xs().text_color(theme.status_red()).child(error))
-          }),
-      )
-    };
-
-    let search_controls = {
-      let file_options_popover = local_project_options.map(|options| {
-        Popover::new("github-pr-file-sidebar-options-popover")
-          .anchor(Corner::TopRight)
-          .open(self.file_sidebar_options_open)
-          .on_open_change(cx.listener(|this, open, _window, cx| {
-            this.file_sidebar_options_open = *open;
-            cx.notify();
-          }))
-          .trigger(
-            Button::new("github-pr-file-sidebar-options")
-              .ghost()
-              .xsmall()
-              .compact()
-              .icon(UiIconName::SlidersHorizontal)
-              .tooltip("File options"),
-          )
-          .child(options)
-      });
-
-      v_flex()
-        .gap_1()
-        .px_3()
-        .py_2()
-        .border_b_1()
-        .border_color(theme.border)
-        .child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child(
-              div()
-                .relative()
-                .min_w_0()
-                .flex_1()
-                .child(Input::new(&self.tree_search_input).w_full().pr(px(28.0)))
-                .when(tree_search_active && self.tree_search_loading, |this| {
-                  this.child(
-                    h_flex()
-                      .absolute()
-                      .top_0()
-                      .right_2()
-                      .bottom_0()
-                      .items_center()
-                      .child(Spinner::new().small()),
-                  )
-                }),
-            )
-            .when_some(file_options_popover, |this, popover| {
-              this.child(
-                div()
-                  .debug_selector(|| "github-pr-file-sidebar-options-button".to_string())
-                  .child(popover),
-              )
-            }),
-        )
-        .when_some(self.tree_search_error.clone(), |this, message| {
-          this.child(
-            div()
-              .text_xs()
-              .text_color(theme.status_red())
-              .child(message),
-          )
-        })
-    };
+    let commit_by_commit_row = self.render_commit_by_commit_row(&theme, cx);
 
     let comment_counts = if self.selected_commit_sha.is_none() && !self.review_comments.is_empty() {
       visible_review_comment_counts_by_path(&self.file_lookup, &self.review_comments)
@@ -14335,7 +14306,7 @@ impl GithubPrDetailsPage {
       .bg(theme.sidebar)
       .size_full()
       .child(header)
-      .child(search_controls)
+      .when_some(commit_by_commit_row, |this, row| this.child(row))
       .child(
         div()
           .pb_1()
@@ -14870,6 +14841,58 @@ impl GithubPrDetailsPage {
     cx.stop_propagation();
   }
 
+  fn toggle_commit_by_commit_action(
+    &mut self,
+    _: &crate::ToggleCommitByCommit,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
+      return;
+    }
+    if self.commits.is_empty() || self.commits_loading || self.commits_error.is_some() {
+      return;
+    }
+    if self.selected_commit_sha.is_some() {
+      self.exit_commit_by_commit_review(cx);
+    } else {
+      self.enter_commit_by_commit_review(cx);
+    }
+    cx.stop_propagation();
+  }
+
+  fn previous_pr_commit_action(
+    &mut self,
+    _: &crate::PreviousPrCommit,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
+      return;
+    }
+    if self.selected_commit_sha.is_none() {
+      return;
+    }
+    self.navigate_commit_by_commit(CommitNavigationDirection::Previous, cx);
+    cx.stop_propagation();
+  }
+
+  fn next_pr_commit_action(
+    &mut self,
+    _: &crate::NextPrCommit,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
+      return;
+    }
+    if self.selected_commit_sha.is_none() {
+      return;
+    }
+    self.navigate_commit_by_commit(CommitNavigationDirection::Next, cx);
+    cx.stop_propagation();
+  }
+
   fn focus_file_tree_action(
     &mut self,
     _: &crate::FocusFileTree,
@@ -15169,8 +15192,8 @@ impl GithubPrDetailsPage {
       .into_any_element()
   }
 
-  fn render_changes_diff_skeleton(theme: &gpui_component::Theme) -> AnyElement {
-    let header = h_flex()
+  fn render_changes_diff_header_skeleton(theme: &gpui_component::Theme) -> AnyElement {
+    h_flex()
       .h(px(DIFF_HEADER_HEIGHT))
       .bg(theme.sidebar)
       .px_3()
@@ -15223,9 +15246,12 @@ impl GithubPrDetailsPage {
               .h(px(20.0))
               .rounded(theme.radius),
           ),
-      );
+      )
+      .into_any_element()
+  }
 
-    let body = v_flex()
+  fn render_changes_diff_body_skeleton(theme: &gpui_component::Theme) -> AnyElement {
+    v_flex()
       .flex_1()
       .min_h_0()
       .p_4()
@@ -15259,13 +15285,16 @@ impl GithubPrDetailsPage {
               .h(px(12.0))
               .rounded(theme.radius),
           )
-      }));
+      }))
+      .into_any_element()
+  }
 
+  fn render_changes_diff_skeleton(theme: &gpui_component::Theme) -> AnyElement {
     v_flex()
       .flex_1()
       .min_h_0()
-      .child(header)
-      .child(body)
+      .child(Self::render_changes_diff_header_skeleton(theme))
+      .child(Self::render_changes_diff_body_skeleton(theme))
       .into_any_element()
   }
 
@@ -15279,7 +15308,15 @@ impl GithubPrDetailsPage {
     let is_markdown = self.selected_file_is_markdown();
     let is_svg = self.selected_file_is_svg();
     let editor_content: gpui::AnyElement = if self.file_loading {
-      Self::render_changes_diff_skeleton(&theme)
+      // editor_panel already renders the real header for the selected file
+      // skip the header skeleton to avoid stacking it on top of the live header.
+      let header_already_rendered =
+        self.selected_file.is_some() || self.selected_local_project_file.is_some();
+      if header_already_rendered {
+        Self::render_changes_diff_body_skeleton(&theme)
+      } else {
+        Self::render_changes_diff_skeleton(&theme)
+      }
     } else if self.file_error.is_some() {
       v_flex()
         .flex_1()
@@ -15453,6 +15490,9 @@ impl Render for GithubPrDetailsPage {
       .on_action(cx.listener(GithubPrDetailsPage::previous_review_comment_action))
       .on_action(cx.listener(GithubPrDetailsPage::next_review_comment_action))
       .on_action(cx.listener(GithubPrDetailsPage::toggle_diff_view_action))
+      .on_action(cx.listener(GithubPrDetailsPage::toggle_commit_by_commit_action))
+      .on_action(cx.listener(GithubPrDetailsPage::previous_pr_commit_action))
+      .on_action(cx.listener(GithubPrDetailsPage::next_pr_commit_action))
       .on_action(cx.listener(GithubPrDetailsPage::toggle_hide_whitespace_action))
       .on_action(cx.listener(GithubPrDetailsPage::focus_file_tree_action))
       .on_action(cx.listener(GithubPrDetailsPage::previous_page_tab_action))
@@ -16528,30 +16568,6 @@ mod tests {
       .size;
     assert!(count_bounds.width > gpui::px(0.0));
     assert!(count_bounds.height > gpui::px(0.0));
-  }
-
-  #[gpui::test]
-  fn changes_file_sidebar_renders_options_button_when_local_project_is_available(
-    cx: &mut TestAppContext,
-  ) {
-    init_gpui_test(cx);
-    cx.update(|cx| {
-      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("head", false)));
-    });
-    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
-
-    page.update_in(cx, |this, _window, cx| {
-      this.pull_request = Some(make_pr_details_for_stats());
-      this.active_tab_ix = PR_TAB_CHANGES_IX;
-      cx.notify();
-    });
-
-    let button_bounds = cx
-      .debug_bounds("github-pr-file-sidebar-options-button")
-      .expect("file sidebar options button bounds")
-      .size;
-    assert!(button_bounds.width > gpui::px(0.0));
-    assert!(button_bounds.height > gpui::px(0.0));
   }
 
   #[gpui::test]
@@ -19113,57 +19129,6 @@ mod tests {
       "https://github.com/acme/widget/commit/abcdef",
     );
     assert!(ambiguous.is_none());
-  }
-
-  #[test]
-  fn build_commit_dropdown_items_includes_all_changes_first() {
-    let commits = vec![make_api_commit(
-      "1111111111111111111111111111111111111111",
-      "feat: add filter",
-      Some("2026-02-26T10:00:00Z"),
-      Some("0000000000000000000000000000000000000000"),
-    )];
-    let items = GithubPrDetailsPage::build_commit_dropdown_items(&commits, None);
-    assert_eq!(items.len(), 2);
-    assert_eq!(items[0].value(), &None);
-    assert!(items[0].selected());
-    assert_eq!(
-      items[1].value().as_deref(),
-      Some("1111111111111111111111111111111111111111")
-    );
-    assert!(!items[1].selected());
-  }
-
-  #[test]
-  fn build_commit_dropdown_items_marks_selected_commit() {
-    let commits = vec![
-      make_api_commit(
-        "1111111111111111111111111111111111111111",
-        "feat: add filter",
-        Some("2026-02-26T10:00:00Z"),
-        Some("0000000000000000000000000000000000000000"),
-      ),
-      make_api_commit(
-        "2222222222222222222222222222222222222222",
-        "fix: adjust theme colors",
-        Some("2026-02-26T11:00:00Z"),
-        Some("1111111111111111111111111111111111111111"),
-      ),
-    ];
-
-    let items = GithubPrDetailsPage::build_commit_dropdown_items(
-      &commits,
-      Some("2222222222222222222222222222222222222222"),
-    );
-
-    assert_eq!(items.len(), 3);
-    assert!(!items[0].selected());
-    assert!(!items[1].selected());
-    assert!(items[2].selected());
-    assert_eq!(
-      items[2].value().as_deref(),
-      Some("2222222222222222222222222222222222222222")
-    );
   }
 
   #[test]

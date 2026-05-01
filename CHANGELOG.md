@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.9.0
+
+### Review Pull Requests Commit by Commit
+
+A new toggle in the PR Changes header switches between reviewing all changes at once and stepping through one commit at a time, starting from the oldest. Previous and next buttons walk through the commits with a position indicator showing where you are, and Cmd-Shift-C, Cmd-Alt-Shift-Left, and Cmd-Alt-Shift-Right drive the same flow from the keyboard.
+
 ## 0.8.0
 
 ### Keyboard Navigation on the Git Page
